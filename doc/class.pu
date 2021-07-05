@@ -1,0 +1,67 @@
+﻿@startuml クラス図
+
+class Renderer {
+    + void renderScene(Scene scene)
+}
+
+
+class Scene {
+    + cameras
+    + models
+    + directionalLights
+}
+
+class Camera {
+    + isActive
+    + position
+    + rotation
+    + near
+    + far
+    + type
+    + perspectiveParameter
+    + orthographicParameter
+    + renderTarget
+}
+
+class Model {
+    + mesh
+    + materials
+    + materialAssignment
+}
+
+class Mesh {
+    + verticies
+    + indicies
+    + subMeshes
+}
+
+class SubMesh {
+    + startingIndex
+    + indexCount
+    + topology
+}
+
+class DirectionalLight
+class RenderTarget
+
+Renderer --> Scene
+/'
+Renderer --> Camera
+Renderer --> Model
+Renderer --> DirectionalLight
+Renderer --> RenderTarget
+'/
+
+Scene o--> Camera
+Scene o--> Model
+Scene o--> DirectionalLight
+
+Camera o--> RenderTarget
+DirectionalLight o--> RenderTarget
+Model o--> Mesh
+Model o--> Material
+Mesh *--> VertexBuffer
+Mesh *--> IndexBuffer
+Mesh *--> SubMesh
+
+@enduml
