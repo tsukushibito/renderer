@@ -1,3 +1,4 @@
+use crate::renderer::Renderer;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -20,6 +21,7 @@ fn main() {
         }
         Ok(w) => w,
     };
+    let renderer = Renderer::new(&window);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
