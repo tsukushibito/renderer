@@ -7,15 +7,34 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'renderer'",
+            "name": "Debug unit tests in library 'renderer'",
             "cargo": {
                 "args": [
-                    "build",
-                    "--bin=renderer",
+                    "test",
+                    "--no-run",
+                    "--lib",
                     "--package=renderer"
                 ],
                 "filter": {
                     "name": "renderer",
+                    "kind": "lib"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'bin'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=bin",
+                    "--package=renderer"
+                ],
+                "filter": {
+                    "name": "bin",
                     "kind": "bin"
                 }
             },
@@ -25,16 +44,16 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'renderer'",
+            "name": "Debug unit tests in executable 'bin'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=renderer",
+                    "--bin=bin",
                     "--package=renderer"
                 ],
                 "filter": {
-                    "name": "renderer",
+                    "name": "bin",
                     "kind": "bin"
                 }
             },
