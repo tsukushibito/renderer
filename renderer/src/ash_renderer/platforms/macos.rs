@@ -7,12 +7,12 @@ use std::os::raw::c_void;
 #[cfg(target_os = "macos")]
 use ash::extensions::mvk::MacOSSurface;
 
-#[cfg(target_os = "macos")]
-use cocoa::appkit::{NSView, NSWindow};
-#[cfg(target_os = "macos")]
-use cocoa::base::id as cocoa_id;
-#[cfg(target_os = "macos")]
-use objc::runtime::YES;
+// #[cfg(target_os = "macos")]
+// use cocoa::appkit::{NSView, NSWindow};
+// #[cfg(target_os = "macos")]
+// use cocoa::base::id as cocoa_id;
+// #[cfg(target_os = "macos")]
+// use objc::runtime::YES;
 #[cfg(target_os = "macos")]
 extern crate metal;
 #[cfg(target_os = "macos")]

@@ -1,5 +1,4 @@
 use ash::vk;
-use ash::Entry;
 
 use std::ffi::CStr;
 use std::os::raw::c_void;
@@ -39,7 +38,7 @@ pub struct ValidationInfo {
 
 pub fn check_validation_layer_support(
     entry: &ash::Entry,
-    required_validation_layers: &Vec<&str>,
+    required_validation_layers: &Vec<String>,
 ) -> bool {
     // if support validation layer, then return true
 

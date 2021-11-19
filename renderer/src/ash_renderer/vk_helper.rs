@@ -90,8 +90,8 @@ pub fn create_instance(
     engine_version: u32,
     api_version: u32,
     is_enable_debug: bool,
-    required_validation_layers: &Vec<&str>,
-    required_extension_layers: &Vec<&str>,
+    required_validation_layers: &Vec<String>,
+    required_extension_layers: &Vec<String>,
 ) -> ash::Instance {
     if is_enable_debug
         && debug::check_validation_layer_support(entry, required_validation_layers) == false
@@ -117,7 +117,7 @@ pub fn create_instance(
     // VK_EXT debug report has been requested here.
     let temp_extension_names: Vec<CString> = required_extension_layers
         .iter()
-        .map(|name| CString::new(*name).unwrap())
+        .map(|name| CString::new(name.as_bytes().to_vec()).unwrap())
         .collect();
     let extension_names: Vec<*const i8> = temp_extension_names
         .iter()
@@ -126,7 +126,7 @@ pub fn create_instance(
 
     let temp_layer_names: Vec<CString> = required_validation_layers
         .iter()
-        .map(|name| CString::new(*name).unwrap())
+        .map(|name| CString::new(name.as_bytes().to_vec()).unwrap())
         .collect();
     let layer_names: Vec<*const i8> = temp_layer_names.iter().map(|name| name.as_ptr()).collect();
 
@@ -185,7 +185,7 @@ pub fn create_surface(
 pub fn pick_physical_device(
     instance: &ash::Instance,
     surface_stuff: &SurfaceStuff,
-    device_extensions: &Vec<&str>,
+    device_extensions: &Vec<String>,
 ) -> vk::PhysicalDevice {
     let physical_devices = unsafe {
         instance
@@ -220,7 +220,7 @@ pub fn is_physical_device_suitable(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     surface_stuff: &SurfaceStuff,
-    device_extensions: &Vec<&str>,
+    device_extensions: &Vec<String>,
 ) -> bool {
     let device_features = unsafe { instance.get_physical_device_features(physical_device) };
 
@@ -288,7 +288,7 @@ pub fn find_queue_family(
 pub fn check_device_extension_support(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
-    device_extensions: &Vec<&str>,
+    device_extensions: &Vec<String>,
 ) -> bool {
     let available_extensions = unsafe {
         instance
@@ -347,7 +347,7 @@ pub fn create_logical_device(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     validation: &super::debug::ValidationInfo,
-    device_extensions: &Vec<&str>,
+    device_extensions: &Vec<String>,
     surface_stuff: &SurfaceStuff,
 ) -> (ash::Device, QueueFamilyIndices) {
     let indices = find_queue_family(instance, physical_device, surface_stuff);
@@ -388,7 +388,7 @@ pub fn create_logical_device(
 
     let requred_extension_raw_names: Vec<CString> = device_extensions
         .iter()
-        .map(|name| CString::new(*name).unwrap())
+        .map(|name| CString::new(name.as_bytes().to_vec()).unwrap())
         .collect();
     let enable_extension_names: Vec<*const c_char> = requred_extension_raw_names
         .iter()

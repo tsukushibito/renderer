@@ -5,7 +5,7 @@ use std::ptr;
 
 use super::constants::*;
 use super::debug;
-use super::platform;
+use super::platforms;
 
 use super::vk_helper;
 
@@ -58,14 +58,17 @@ impl AshRenderer {
         window_width: u32,
         window_height: u32,
     ) -> AshRenderer {
-        let varidation_layers: Vec<&str> = vec!["VK_LAYER_KHRONOS_validation"];
-        let device_extensions: Vec<&str> = vec!["VK_KHR_portability_subset", "VK_KHR_swapchain"];
+        let varidation_layers: Vec<String> = vec!["VK_LAYER_KHRONOS_validation".to_string()];
+        let device_extensions: Vec<String> = vec![
+            "VK_KHR_portability_subset".to_string(),
+            "VK_KHR_swapchain".to_string(),
+        ];
         unsafe {
             let is_debug = true;
             // init vulkan stuff
             let entry = ash::Entry::new().unwrap();
             let varidation_layers = varidation_layers;
-            let extensions = platform::required_instance_extension_names();
+            let extensions = platforms::required_instance_extension_names();
             let instance = vk_helper::create_instance(
                 &entry,
                 app_name,
