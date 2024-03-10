@@ -1,31 +1,42 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
-use ash::{vk, Device, Instance};
+use ash::vk;
 
 use super::super::Result;
 use super::{vk_physical_device::VkPhysicalDevice, VkRenderBackend};
 
 pub struct VkDevice {
-    pub(crate) device: Device,
+    pub(crate) device: ash::Device,
     pub(crate) swapchain_loader: ash::extensions::khr::Swapchain,
+    pub(crate) physical_device: Arc<VkPhysicalDevice>,
 }
 
 impl VkDevice {
     pub fn new(
         backend: &VkRenderBackend,
-        physical_device: &VkPhysicalDevice,
-    ) -> Result<Rc<VkDevice>> {
+        physical_device: &Arc<VkPhysicalDevice>,
+    ) -> Result<VkDevice> {
         let device = create_device(backend, physical_device)?;
         let swapchain_loader = ash::extensions::khr::Swapchain::new(&backend.instance, &device);
 
-        Ok(Rc::new(Self {
+        Ok(Self {
             device,
             swapchain_loader,
-        }))
+            physical_device: physical_device.clone(),
+        })
     }
 }
 
-fn create_device(backend: &VkRenderBackend, physical_device: &VkPhysicalDevice) -> Result<Device> {
+impl Drop for VkDevice {
+    fn drop(&mut self) {
+        unsafe { self.device.destroy_device(None) };
+    }
+}
+
+fn create_device(
+    backend: &VkRenderBackend,
+    physical_device: &VkPhysicalDevice,
+) -> Result<ash::Device> {
     let extension_names = [
         ash::extensions::khr::Swapchain::name().as_ptr(),
         #[cfg(any(target_os = "macos", target_os = "ios"))]

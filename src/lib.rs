@@ -1,11 +1,11 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 pub mod vulkan;
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub trait RenderBackend {
     type PhysDev: PhysicalDevice;
-    fn physical_devices(&self) -> &Vec<Rc<Self::PhysDev>>;
+    fn physical_devices(&self) -> &Vec<Arc<Self::PhysDev>>;
 }
 
 pub enum DeviceType {

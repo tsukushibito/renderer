@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use raw_window_handle::HasRawDisplayHandle;
 use renderer::{
     vulkan::{VkDevice, VkRenderBackend},
@@ -28,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         physical_devices.first().unwrap()
     };
     println!("vram size: {}", physical_device.vram_size());
-    let device = VkDevice::new(&render_backend, &physical_device);
+    let device = Rc::new(VkDevice::new(&render_backend, physical_device));
 
     // event_loop.run(move |event, control_flow| match event {
     //     Event::WindowEvent { window_id, event } if window_id == window_id => match event {

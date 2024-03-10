@@ -16,17 +16,17 @@ impl VkPhysicalDevice {
     pub(crate) fn new(
         instance: &Instance,
         physical_device: vk::PhysicalDevice,
-    ) -> Rc<VkPhysicalDevice> {
+    ) -> VkPhysicalDevice {
         let properties = unsafe { instance.get_physical_device_properties(physical_device) };
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
-        Rc::new(Self {
+        Self {
             physical_device,
             properties,
             memory_properties,
             graphics_family: 0,
             present_family: 0,
-        })
+        }
     }
 }
 

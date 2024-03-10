@@ -1,6 +1,6 @@
 use std::{
     ffi::{c_char, CStr, CString},
-    rc::Rc,
+    sync::Arc,
 };
 
 use crate::{RenderBackend, Result};
@@ -18,29 +18,29 @@ pub struct VkRenderBackend {
     pub(crate) entry: Entry,
     pub(crate) instance: Instance,
     pub(crate) surface_loader: khr::Surface,
-    pub(crate) physical_devices: Vec<Rc<VkPhysicalDevice>>,
+    pub(crate) physical_devices: Vec<Arc<VkPhysicalDevice>>,
 }
 
 impl VkRenderBackend {
-    pub fn new(display_handle: &RawDisplayHandle) -> Result<Rc<Self>> {
+    pub fn new(display_handle: &RawDisplayHandle) -> Result<Self> {
         let entry = unsafe { Entry::load()? };
         let instance = create_instance(&entry, display_handle)?;
         let surface_loader = khr::Surface::new(&entry, &instance);
         let physical_devices = unsafe { instance.enumerate_physical_devices()? };
         let physical_devices = physical_devices
             .iter()
-            .map(|pdev| VkPhysicalDevice::new(&instance, *pdev))
-            .collect::<Vec<Rc<VkPhysicalDevice>>>();
+            .map(|pdev| Arc::new(VkPhysicalDevice::new(&instance, *pdev)))
+            .collect::<Vec<Arc<VkPhysicalDevice>>>();
         if physical_devices.is_empty() {
             return Err("No Vulkan-compatible devices found".into());
         }
 
-        let output = Rc::new(Self {
+        let output = Self {
             entry,
             instance,
             surface_loader,
             physical_devices,
-        });
+        };
         Ok(output)
     }
 }
@@ -54,7 +54,7 @@ impl Drop for VkRenderBackend {
 impl RenderBackend for VkRenderBackend {
     type PhysDev = VkPhysicalDevice;
 
-    fn physical_devices(&self) -> &Vec<Rc<Self::PhysDev>> {
+    fn physical_devices(&self) -> &Vec<Arc<Self::PhysDev>> {
         &self.physical_devices
     }
 }
