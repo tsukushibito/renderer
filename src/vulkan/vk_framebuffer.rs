@@ -13,5 +13,7 @@ pub struct VkFramebuffer {
 }
 
 impl VkFramebuffer {
-    fn new() -> Self {}
+    fn new() -> Self {
+        todo!()
+    }
 }
