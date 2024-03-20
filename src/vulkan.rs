@@ -9,3 +9,4 @@ mod vk_texture;
 pub use vk_device::*;
 pub use vk_render_backend::*;
 pub use vk_render_backend::*;
+pub use vk_texture::*;
