@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use super::VkDevice;
+use super::vk_device::VkDevice;
 
 pub struct VkImage {
     device: Arc<VkDevice>,

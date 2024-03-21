@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use super::{VkDevice, VkTexture};
+use super::{vk_device::VkDevice, vk_image_view::VkImageView};
 
 pub struct VkFramebuffer {
     device: Arc<VkDevice>,
-    pub(crate) color_textures: Vec<Arc<VkTexture>>,
-    pub(crate) depth_texture: Arc<VkTexture>,
+    pub(crate) color_image_views: Vec<Arc<VkImageView>>,
+    pub(crate) depth_image_view: Arc<VkImageView>,
     pub(crate) framebuffer: vk::Framebuffer,
     pub(crate) render_pass: vk::RenderPass,
 }

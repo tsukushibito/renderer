@@ -5,10 +5,10 @@ use ash::vk;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use super::super::Result;
-use super::{vk_device::VkDevice, vk_framebuffer::VkFramebuffer, vk_texture::VkTexture};
+use super::{vk_device::VkDevice, vk_framebuffer::VkFramebuffer, vk_image_view::VkImageView};
 
 pub(crate) struct VkFrameResource {
-    pub texture: Arc<VkTexture>,
+    pub texture: Arc<VkImageView>,
     pub framebuffer: Arc<VkFramebuffer>,
     pub command_pool: vk::CommandPool,
     pub command_buffer: vk::CommandBuffer,

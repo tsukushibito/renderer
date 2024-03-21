@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::super::Result;
-use super::{vk_physical_device::VkPhysicalDevice, VkRenderBackend};
+use super::{vk_physical_device::VkPhysicalDevice, vk_render_backend::VkRenderBackend};
 
 pub struct VkDevice {
     pub(crate) device: ash::Device,
