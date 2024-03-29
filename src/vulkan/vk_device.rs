@@ -6,8 +6,7 @@ use super::super::Result;
 use super::{vk_physical_device::VkPhysicalDevice, vk_render_backend::VkRenderBackend};
 
 pub struct VkDevice {
-    pub(crate) device: ash::Device,
-    pub(crate) swapchain_loader: ash::extensions::khr::Swapchain,
+    pub(crate) native_handle: ash::Device,
     pub(crate) physical_device: Arc<VkPhysicalDevice>,
 }
 
@@ -17,11 +16,9 @@ impl VkDevice {
         physical_device: &Arc<VkPhysicalDevice>,
     ) -> Result<VkDevice> {
         let device = create_device(backend, physical_device)?;
-        let swapchain_loader = ash::extensions::khr::Swapchain::new(&backend.instance, &device);
 
         Ok(Self {
-            device,
-            swapchain_loader,
+            native_handle: device,
             physical_device: physical_device.clone(),
         })
     }
@@ -29,7 +26,7 @@ impl VkDevice {
 
 impl Drop for VkDevice {
     fn drop(&mut self) {
-        unsafe { self.device.destroy_device(None) };
+        unsafe { self.native_handle.destroy_device(None) };
     }
 }
 
@@ -68,7 +65,7 @@ fn create_device(
     let device = unsafe {
         backend
             .instance
-            .create_device(physical_device.physical_device, &create_info, None)?
+            .create_device(physical_device.native_handle, &create_info, None)?
     };
     Ok(device)
 }

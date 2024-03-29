@@ -5,7 +5,7 @@ use ash::{vk, Instance};
 use crate::{DeviceType, PhysicalDevice};
 
 pub struct VkPhysicalDevice {
-    pub(crate) physical_device: vk::PhysicalDevice,
+    pub(crate) native_handle: vk::PhysicalDevice,
     pub(crate) properties: vk::PhysicalDeviceProperties,
     pub(crate) memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub(crate) graphics_family: u32,
@@ -21,7 +21,7 @@ impl VkPhysicalDevice {
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
         Self {
-            physical_device,
+            native_handle: physical_device,
             properties,
             memory_properties,
             graphics_family: 0,

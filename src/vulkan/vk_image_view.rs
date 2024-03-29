@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::super::Result;
-use super::{vk_device::VkDevice, vk_image::VkImage};
+use super::{vk_device::VkDevice, vk_image::VkImage, vk_image::VkSwapchainImage};
 
 pub struct VkImageViewCreateInfo {
     pub flags: vk::ImageViewCreateFlags,
@@ -16,23 +16,23 @@ pub struct VkImageViewCreateInfo {
 #[derive(Clone)]
 pub enum VkImageResource {
     Image(Arc<VkImage>),
-    SwapchainImage(Arc<VkImage>),
+    SwapchainImage(Arc<VkSwapchainImage>),
 }
 
 impl VkImageResource {
     fn image(&self) -> vk::Image {
         match self {
-            VkImageResource::Image(i) => i.image,
-            VkImageResource::SwapchainImage(i) => i.image,
+            VkImageResource::Image(i) => i.native_handle,
+            VkImageResource::SwapchainImage(i) => i.native_handle,
         }
     }
 }
 
 pub struct VkImageView {
     device: Arc<VkDevice>,
+    pub(crate) native_handle: vk::ImageView,
     pub(crate) image_resource: VkImageResource,
     pub(crate) create_info: vk::ImageViewCreateInfo,
-    pub(crate) image_view: vk::ImageView,
 }
 
 impl VkImageView {
@@ -48,13 +48,13 @@ impl VkImageView {
             .format(create_info.format)
             .components(create_info.components)
             .subresource_range(create_info.subresource_range);
-        let image_view = unsafe { device.device.create_image_view(&info, None) }?;
+        let image_view = unsafe { device.native_handle.create_image_view(&info, None) }?;
 
         Ok(Self {
             device: device.clone(),
             image_resource: image_resource.clone(),
             create_info: *info,
-            image_view,
+            native_handle: image_view,
         })
     }
 }
