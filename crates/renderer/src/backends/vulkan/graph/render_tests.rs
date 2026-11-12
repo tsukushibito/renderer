@@ -159,7 +159,8 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 Err(error) => error,
             };
             assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
-            assert!(error.message.contains("index exceeds"));
+            assert!(error.message.contains("index 999"), "{error}");
+            assert!(error.message.contains("vertex count 8"), "{error}");
             let rejected = runtime.stats();
             assert_eq!(
                 (rejected.upload_live_ranges, rejected.readback_live_ranges),
@@ -206,8 +207,13 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
         let compiled = graph.compile().unwrap();
         let expected_first = transform(&bytes, ComputeTransform::Invert);
         let expected_second = transform(&expected_first, ComputeTransform::SwapRedBlue);
+        let mut compute_pipeline = None;
         for _ in 0..4 {
             let mut submission = runtime.submit(&compiled).unwrap();
+            let handles = runtime.programs.as_ref().unwrap().handles();
+            assert_ne!(handles[0], vk::Pipeline::null());
+            assert_eq!(handles[1..], [vk::Pipeline::null(); 2]);
+            assert_eq!(*compute_pipeline.get_or_insert(handles[0]), handles[0]);
             let mut result = submission
                 .wait(WAIT)
                 .unwrap()
@@ -226,6 +232,92 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
             (stats.upload_live_ranges, stats.readback_live_ranges),
             (0, 0)
         );
+    });
+}
+
+#[test]
+#[ignore = "explicit real-GPU lazy program creation with pending work; requires Core/SyncVal"]
+fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
+    real_gpu(|runtime| {
+        let mut producer = Graph::new();
+        let source = producer
+            .image("lazy-source", ImageDesc::rgba8(4, 4))
+            .unwrap();
+        let output = producer
+            .image("lazy-computed", ImageDesc::rgba8(4, 4))
+            .unwrap();
+        let bytes = [13, 29, 87, 173].repeat(16);
+        producer
+            .upload_image("lazy-upload", source, bytes.clone())
+            .unwrap();
+        producer
+            .compute("lazy-compute", source, output, ComputeTransform::Invert)
+            .unwrap();
+        producer.export_image(output).unwrap();
+        let mut pending_compute = runtime.submit(&producer.compile().unwrap()).unwrap();
+        let exported = pending_compute.export_image(output).unwrap();
+        let first = runtime.programs.as_ref().unwrap().handles();
+        assert_ne!(first[0], vk::Pipeline::null());
+        assert_eq!(first[1..], [vk::Pipeline::null(); 2]);
+
+        // Add composite while the Compute submission still owns its program.
+        let mut consumer = Graph::new();
+        let source = consumer.import_image("lazy-import", &exported).unwrap();
+        let output = consumer
+            .image("lazy-composite", ImageDesc::rgba8(4, 4))
+            .unwrap();
+        consumer.composite("lazy-compose", source, output).unwrap();
+        let read = consumer
+            .readback_image("lazy-read-composite", output)
+            .unwrap();
+        let mut pending_composite = runtime.submit(&consumer.compile().unwrap()).unwrap();
+        let second = runtime.programs.as_ref().unwrap().handles();
+        assert_eq!(second[0], first[0]);
+        assert_eq!(second[1], vk::Pipeline::null());
+        assert_ne!(second[2], vk::Pipeline::null());
+
+        // Add mesh without replacing either earlier program. All three kinds
+        // coexist while the prior submissions still retain their leases.
+        let mut mesh = Graph::new();
+        let (vertices, indices) = add_mesh(&mut mesh, false);
+        let color = mesh.image("lazy-color", ImageDesc::rgba8(16, 16)).unwrap();
+        let depth = mesh
+            .image("lazy-depth", ImageDesc::depth32(16, 16))
+            .unwrap();
+        mesh.raster(
+            "lazy-mesh",
+            vertices,
+            indices,
+            12,
+            color,
+            depth,
+            AttachmentOps::CLEAR_STORE,
+            AttachmentOps::CLEAR_STORE,
+            [0.0; 4],
+            1.0,
+        )
+        .unwrap();
+        let mesh_read = mesh.readback_image("lazy-read-mesh", color).unwrap();
+        let mut pending_mesh = runtime.submit(&mesh.compile().unwrap()).unwrap();
+        let third = runtime.programs.as_ref().unwrap().handles();
+        assert_eq!(third[0], first[0]);
+        assert_eq!(third[2], second[2]);
+        assert_ne!(third[1], vk::Pipeline::null());
+        let mut mesh_result = pending_mesh.wait(WAIT).unwrap().expect("mesh must finish");
+        assert_eq!(
+            mesh_result.readback(mesh_read).unwrap(),
+            expected_mesh([0; 4])
+        );
+        let mut composite_result = pending_composite
+            .wait(WAIT)
+            .unwrap()
+            .expect("composite must finish");
+        assert_eq!(
+            composite_result.readback(read).unwrap(),
+            transform(&bytes, ComputeTransform::Invert)
+        );
+        assert!(pending_compute.wait(WAIT).unwrap().is_some());
+        runtime.delete(exported.key()).unwrap();
     });
 }
 

@@ -1,4 +1,5 @@
 use renderer::graph::{AttachmentOps, BufferDesc, ComputeTransform, Graph, ImageDesc};
+use std::sync::Arc;
 
 /// A consumer of the public API can build the whole offscreen pipeline without
 /// enabling Vulkan, loading a native library, or constructing a window.
@@ -10,7 +11,7 @@ fn offscreen_pipeline_builds_and_compiles_without_a_backend() {
         .unwrap();
     let indices = graph.buffer("indices", BufferDesc { size: 3 * 4 }).unwrap();
     graph
-        .upload_buffer("upload vertices", vertices, 0, vec![0; 3 * 28])
+        .upload_buffer_shared("upload vertices", vertices, 0, Arc::from(vec![0; 3 * 28]))
         .unwrap();
     graph
         .upload_buffer("upload indices", indices, 0, vec![0; 3 * 4])
@@ -52,7 +53,7 @@ fn offscreen_pipeline_builds_and_compiles_without_a_backend() {
     graph.readback_image("final readback", final_image).unwrap();
     let unused = graph.image("unused image", ImageDesc::rgba8(1, 1)).unwrap();
     graph
-        .upload_image("unused upload", unused, vec![0; 4])
+        .upload_image_shared("unused upload", unused, Arc::from([0; 4]))
         .unwrap();
     let plan = graph.compile().unwrap();
     assert_eq!(plan.pass_count(), 6);

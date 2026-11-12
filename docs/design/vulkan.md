@@ -135,6 +135,20 @@ framebuffer／viewport上限を照会する。Graph画像はallocationとImageVi
 固定usageはexport後に対応操作へ再importできるようにするためであり、
 usage削減による最適化や、未確認GPUでの対応を主張しない。
 
+初回のnative画像layout遷移には、先行COPYを待つexecution依存を置く。
+未使用画像のUNDEFINEDからの遷移に、Vulkan仕様がこの依存を一律要求するわけではない。
+RTX 3060／driver 610.88では、buffer upload→小画像upload→buffer readbackでbuffer内容が
+ゼロになる経路を観測し、初回画像遷移のsourceをCOPY、accessをNONEとすると解消した。
+修正前の実装でも再現し、Validation無効、transfer-only画像、別の専用Allocationでも再現した。
+VMAの配置は実測のbufferImageGranularityを満たしており、原因をaliasing違反と断定しない。
+
+これはdriver内部の原因が未確定の、出力の正しさを保つための保守的な対策である。
+全体idleやhost待機を追加せず、既存のwriter可視性も維持する。
+同じキューの先行submitも対象にできるため、Graph内だけの初期遷移の前倒しより優先した。
+物理画像を初めて使う際に独立したCOPYとの重なりを減らす可能性があり、GPU時間への影響と
+別GPU／driverでの比較は未計測である。再利用時の既存layout遷移にはこの追加依存を適用しない。
+回帰試験と追跡先は`renderer-j17`に記録する。
+
 ## GraphのShaderと描画
 
 管理下のGLSLと生成済みSPIR-Vを保持し、通常のRustビルドへshaderコンパイラーを要求しない。
@@ -148,7 +162,11 @@ hostでもworkgroup size・invocation数・dispatch数・descriptor・push const
 合成はset 0 binding 0のcombined image samplerから同じ座標を`texelFetch`し、
 別の同寸画像へfullscreen triangleで書く。filterやsRGB変換はしない。
 
-pipeline・layout・samplerはruntimeごとに一度保持する。
+pipeline・layout・samplerはCompute／Raster／Compositeの必要な種類ごとに遅延作成し、
+成功した不変のProgramをruntimeで保持する。不使用の種類の能力を要求せず、native資源も作らない。
+RasterのD32 depth対応を含む形式・ABI上限を、その種類のnative作成前に検査する。
+公開したProgramを置き換えないため、未完了Computeがある間にもRaster等を追加できる。
+作成に失敗したProgramをキャッシュせず、部分作成分を解放して再試行可能な状態を維持する。
 descriptor arenaは同時実行数とGraph内binding数に上限を持ち、
 GPU完了または未投入キャンセルを確認してから再利用する。
 更新済みdescriptorを参照する記録済み／未完了命令を、別の更新で無効にしない。
@@ -159,6 +177,8 @@ clear depthは1、compareはLESS、viewportの高さは正、cullingは無効と
 front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段階では向きも再検証する。
 行列・座標系変換・sRGB／HDR・tone mappingはまだ提供しない。
 色はlinear RGBA8_UNORMで、alphaを保持し、blendingは無効とする。
+u32 indexは頂点bufferの範囲と、起動時に保持した実際の`maxDrawIndexedIndexValue`の両方を検査する。
+Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有効化だけで上限を推定しない。
 
 ## 投入・完了・異常時の保持
 

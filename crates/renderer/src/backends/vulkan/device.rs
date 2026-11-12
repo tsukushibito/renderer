@@ -341,6 +341,7 @@ pub(super) struct VulkanDevice {
     debug_utils: Option<ash::ext::debug_utils::Device>,
     selected: SelectedDevice,
     max_buffer_size: vk::DeviceSize,
+    max_draw_indexed_index_value: u32,
     queue: vk::Queue,
     queue_lock: Mutex<()>,
     state: AtomicU8,
@@ -377,6 +378,10 @@ impl VulkanDevice {
 
     pub(super) fn max_buffer_size(&self) -> vk::DeviceSize {
         self.max_buffer_size
+    }
+
+    pub(super) fn max_draw_indexed_index_value(&self) -> u32 {
+        self.max_draw_indexed_index_value
     }
 
     pub(super) fn name(&self) -> &str {
@@ -487,6 +492,10 @@ impl VulkanDevice {
                 .raw()
                 .get_physical_device_properties2(selected.physical_device, &mut properties);
         }
+        // Optional feature enablement does not change the reported limit. Use
+        // this adapter's actual value rather than assuming either 24 or 32 bits.
+        let max_draw_indexed_index_value =
+            properties.properties.limits.max_draw_indexed_index_value;
         let max_buffer_size = maintenance4.max_buffer_size;
         tracing::info!(target: LOG_TARGET, device = %selected.info.name,
             device_type = ?selected.info.device_type, family = selected.queue_family_index,
@@ -517,6 +526,7 @@ impl VulkanDevice {
             debug_utils: None,
             selected,
             max_buffer_size,
+            max_draw_indexed_index_value,
             queue: vk::Queue::null(),
             queue_lock: Mutex::new(()),
             state: AtomicU8::new(DeviceState::Active as u8),

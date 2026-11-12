@@ -20,14 +20,17 @@ use super::memory::{AllocatorInitError, MemoryOwner, VulkanAllocator};
 use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
 use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{
-    AccessPurpose, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat, ImageHandle,
-    ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, ResourceDesc, ResourceKey, StoreOp,
+    AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
+    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, ResourceDesc,
+    ResourceKey, StoreOp,
 };
 
+mod provenance;
 mod resources;
 mod shaders;
+use provenance::{BufferProvenance, IndexError};
 use resources::GraphBuffer;
-use shaders::{GraphImage, ShaderBindings, ShaderPrograms};
+use shaders::{GraphImage, ShaderBindings, ShaderNeeds, ShaderPrograms};
 
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 
@@ -271,85 +274,6 @@ pub struct RuntimeStats {
     pub descriptor_arenas_reused: usize,
 }
 
-#[derive(Clone, Default)]
-struct Shadow(Vec<ShadowSegment>);
-#[derive(Clone)]
-struct ShadowSegment {
-    start: u64,
-    bytes: Arc<[u8]>,
-    range: Range<usize>,
-}
-
-impl ShadowSegment {
-    fn end(&self) -> u64 {
-        self.start + self.range.len() as u64
-    }
-}
-
-impl Shadow {
-    fn write(&mut self, target: Range<u64>, bytes: Option<Arc<[u8]>>) {
-        let mut next = Vec::new();
-        for segment in self.0.drain(..) {
-            if segment.end() <= target.start || segment.start >= target.end {
-                next.push(segment);
-                continue;
-            }
-            if segment.start < target.start {
-                let count = (target.start - segment.start) as usize;
-                next.push(ShadowSegment {
-                    start: segment.start,
-                    bytes: Arc::clone(&segment.bytes),
-                    range: segment.range.start..segment.range.start + count,
-                });
-            }
-            if segment.end() > target.end {
-                let skip = (target.end - segment.start) as usize;
-                next.push(ShadowSegment {
-                    start: target.end,
-                    bytes: segment.bytes,
-                    range: segment.range.start + skip..segment.range.end,
-                });
-            }
-        }
-        if let Some(bytes) = bytes {
-            let length = bytes.len();
-            next.push(ShadowSegment {
-                start: target.start,
-                bytes,
-                range: 0..length,
-            });
-        }
-        next.sort_by_key(|segment| segment.start);
-        self.0 = next;
-    }
-
-    fn read(&self, target: Range<u64>) -> Option<Vec<u8>> {
-        let length = usize::try_from(target.end.checked_sub(target.start)?).ok()?;
-        if length > isize::MAX as usize {
-            return None;
-        }
-        let mut bytes = Vec::with_capacity(length);
-        let mut cursor = target.start;
-        for segment in &self.0 {
-            if segment.end() <= cursor {
-                continue;
-            }
-            if segment.start > cursor {
-                return None;
-            }
-            let end = target.end.min(segment.end());
-            let begin = segment.range.start + usize::try_from(cursor - segment.start).ok()?;
-            let count = usize::try_from(end - cursor).ok()?;
-            bytes.extend_from_slice(&segment.bytes[begin..begin + count]);
-            cursor = end;
-            if cursor == target.end {
-                return Some(bytes);
-            }
-        }
-        (cursor == target.end).then_some(bytes)
-    }
-}
-
 #[derive(Clone)]
 struct Snapshot {
     revision: u64,
@@ -360,7 +284,7 @@ struct Snapshot {
     access: vk::AccessFlags2,
     writer_stage: vk::PipelineStageFlags2,
     writer_access: vk::AccessFlags2,
-    shadow: Shadow,
+    provenance: BufferProvenance,
 }
 
 impl Default for Snapshot {
@@ -374,7 +298,7 @@ impl Default for Snapshot {
             access: vk::AccessFlags2::NONE,
             writer_stage: vk::PipelineStageFlags2::NONE,
             writer_access: vk::AccessFlags2::NONE,
-            shadow: Shadow::default(),
+            provenance: BufferProvenance::default(),
         }
     }
 }
@@ -593,9 +517,9 @@ impl VulkanRuntime {
             // Preserve actual native layout/access, but never inherit old bytes
             // as initialized content of a new logical resource.
             state.scheduled.initialized.clear();
-            state.scheduled.shadow = Shadow::default();
+            state.scheduled.provenance = BufferProvenance::default();
             state.completed.initialized.clear();
-            state.completed.shadow = Shadow::default();
+            state.completed.provenance = BufferProvenance::default();
             drop(state);
             self.resources_reused += 1;
             return Ok((
@@ -726,24 +650,33 @@ impl VulkanRuntime {
             keys[index] = Some(key);
             physical[index] = Some(value);
         }
-        let uses_shaders = graph.order.iter().any(|&pass| {
-            matches!(
-                graph.passes[pass].operation,
-                Operation::Compute { .. } | Operation::Raster { .. } | Operation::Composite { .. }
-            )
-        });
-        if uses_shaders && self.programs.is_none() {
+        let mut shader_needs = ShaderNeeds::default();
+        for &pass in &graph.order {
+            match graph.passes[pass].operation {
+                Operation::Compute { .. } => shader_needs.compute = true,
+                Operation::Raster { .. } => shader_needs.raster = true,
+                Operation::Composite { .. } => shader_needs.composite = true,
+                _ => {}
+            }
+        }
+        if shader_needs.any() && self.programs.is_none() {
             self.programs = Some(ShaderPrograms::new(
                 Arc::clone(&self.owner),
                 self.config.execution_slots,
                 self.config.max_shader_bindings,
             )?);
         }
-        let programs = uses_shaders.then(|| Arc::clone(self.programs.as_ref().unwrap()));
-        let bindings = programs
-            .as_ref()
-            .map(|programs| programs.acquire_bindings())
-            .transpose()?;
+        let programs = shader_needs
+            .any()
+            .then(|| Arc::clone(self.programs.as_ref().unwrap()));
+        if let Some(programs) = &programs {
+            programs.ensure(shader_needs)?;
+        }
+        let bindings = if shader_needs.compute || shader_needs.composite {
+            Some(programs.as_ref().unwrap().acquire_bindings()?)
+        } else {
+            None
+        };
         let work = GraphWork::prepare(
             Arc::clone(&self.owner),
             graph,
@@ -893,9 +826,164 @@ impl SubmissionResult {
     }
 }
 
+/// Recording operands contain no CPU upload payload. The shared input's last
+/// owner can disappear as soon as staging/provenance no longer needs it.
+enum PreparedOperation {
+    UploadBuffer {
+        dst: usize,
+        offset: u64,
+    },
+    CopyBuffer {
+        src: usize,
+        dst: usize,
+        src_offset: u64,
+        dst_offset: u64,
+        size: u64,
+    },
+    UploadImage {
+        dst: usize,
+    },
+    CopyImage {
+        src: usize,
+        dst: usize,
+    },
+    ReadbackBuffer {
+        src: usize,
+        offset: u64,
+        size: u64,
+    },
+    ReadbackImage {
+        src: usize,
+    },
+    Compute {
+        dst: usize,
+        transform: ComputeTransform,
+    },
+    Raster {
+        vertices: usize,
+        indices: usize,
+        index_count: u32,
+        color: usize,
+        depth: usize,
+        color_ops: AttachmentOps,
+        depth_ops: AttachmentOps,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+    },
+    Composite {
+        dst: usize,
+    },
+}
+
+impl TryFrom<&Operation> for PreparedOperation {
+    type Error = RuntimeError;
+
+    fn try_from(operation: &Operation) -> Result<Self, Self::Error> {
+        Ok(match *operation {
+            Operation::UploadBuffer { dst, offset, .. } => Self::UploadBuffer { dst, offset },
+            Operation::CopyBuffer {
+                src,
+                dst,
+                src_offset,
+                dst_offset,
+                size,
+            } => Self::CopyBuffer {
+                src,
+                dst,
+                src_offset,
+                dst_offset,
+                size,
+            },
+            Operation::UploadImage { dst, .. } => Self::UploadImage { dst },
+            Operation::CopyImage { src, dst } => Self::CopyImage { src, dst },
+            Operation::ReadbackBuffer { src, offset, size } => {
+                Self::ReadbackBuffer { src, offset, size }
+            }
+            Operation::ReadbackImage { src } => Self::ReadbackImage { src },
+            Operation::Compute { dst, transform, .. } => Self::Compute { dst, transform },
+            Operation::Raster {
+                vertices,
+                indices,
+                index_count,
+                color,
+                depth,
+                color_ops,
+                depth_ops,
+                clear_color,
+                clear_depth,
+            } => Self::Raster {
+                vertices,
+                indices,
+                index_count,
+                color,
+                depth,
+                color_ops,
+                depth_ops,
+                clear_color,
+                clear_depth,
+            },
+            Operation::Composite { dst, .. } => Self::Composite { dst },
+            Operation::Culled | Operation::Declared(_) => {
+                return Err(RuntimeError::unsupported(
+                    "pass has no executable operation",
+                ));
+            }
+        })
+    }
+}
+
+fn index_error(error: IndexError) -> RuntimeError {
+    match error {
+        IndexError::UnknownContents => {
+            RuntimeError::unsupported("raster indices must have CPU-known upload/copy contents")
+        }
+        IndexError::VertexBounds {
+            index,
+            vertex_count,
+        } => RuntimeError::invalid(format!(
+            "raster index {index} exceeds declared vertex count {vertex_count}",
+        )),
+        IndexError::DeviceLimit { index, maximum } => RuntimeError::unsupported(format!(
+            "raster index {index} exceeds Device maxDrawIndexedIndexValue {maximum}",
+        )),
+    }
+}
+
+fn provenance_requirements(graph: &CompiledGraph) -> (Vec<bool>, Vec<bool>) {
+    // Every canonical buffer may become indices in a future graph, even when
+    // this graph does not export it again. Transient vertex/transfer-only data
+    // needs no CPU provenance. Mark sources of copies feeding required buffers.
+    let mut retained = graph
+        .resources
+        .iter()
+        .map(|resource| {
+            resource.import.is_some() && matches!(resource.desc, ResourceDesc::Buffer(_))
+        })
+        .collect::<Vec<_>>();
+    for &resource in &graph.exports {
+        if matches!(graph.resources[resource].desc, ResourceDesc::Buffer(_)) {
+            retained[resource] = true;
+        }
+    }
+    let mut needed = retained.clone();
+    for &pass in &graph.order {
+        if let Operation::Raster { indices, .. } = graph.passes[pass].operation {
+            needed[indices] = true;
+        }
+    }
+    for &pass in graph.order.iter().rev() {
+        if let Operation::CopyBuffer { src, dst, .. } = graph.passes[pass].operation
+            && needed[dst]
+        {
+            needed[src] = true;
+        }
+    }
+    (needed, retained)
+}
+
 struct PreparedPass {
     name: CString,
-    operation: Operation,
+    operation: PreparedOperation,
     buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
     images: Vec<vk::ImageMemoryBarrier2<'static>>,
     staging: Option<usize>,
@@ -930,6 +1018,7 @@ impl GraphWork {
             .iter()
             .map(|value| value.as_ref().map(|value| value.lock().scheduled.clone()))
             .collect::<Vec<_>>();
+        let (provenance_needed, retain_provenance) = provenance_requirements(graph);
         let mut passes = Vec::new();
         let mut uploads = Vec::new();
         let mut readbacks = Vec::new();
@@ -938,7 +1027,7 @@ impl GraphWork {
             let mut prepared = PreparedPass {
                 name: CString::new(pass.name.as_str())
                     .map_err(|_| RuntimeError::invalid("pass debug name contains a NUL byte"))?,
-                operation: pass.operation.clone(),
+                operation: PreparedOperation::try_from(&pass.operation)?,
                 buffers: Vec::new(),
                 images: Vec::new(),
                 staging: None,
@@ -946,10 +1035,17 @@ impl GraphWork {
             };
             // Aggregate one pass's uses before modifying previous-access state;
             // disjoint self-copies must not appear to depend on themselves.
-            let mut uses = vec![None; physical.len()];
+            let mut uses: Vec<(usize, Use)> = Vec::with_capacity(pass.accesses.len());
             for access in &pass.accesses {
                 let current = usage(access.purpose);
-                let target = uses[access.resource].get_or_insert(Use::default());
+                let position = uses
+                    .iter()
+                    .position(|(resource, _)| *resource == access.resource);
+                let position = position.unwrap_or_else(|| {
+                    uses.push((access.resource, Use::default()));
+                    uses.len() - 1
+                });
+                let target = &mut uses[position].1;
                 target.stage |= current.stage;
                 target.access |= current.access;
                 target.writes |= access.write;
@@ -957,11 +1053,7 @@ impl GraphWork {
                     target.layout = current.layout;
                 }
             }
-            for (resource, current) in uses
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, value)| value.map(|value| (index, value)))
-            {
+            for (resource, current) in uses {
                 let native = physical[resource].as_ref().unwrap();
                 let previous = states[resource].as_mut().unwrap();
                 let layout_change = matches!(native.native, NativeResource::Image(_))
@@ -1027,10 +1119,13 @@ impl GraphWork {
                         range.write(bytes)?;
                         prepared.staging = Some(uploads.len());
                         uploads.push(range);
-                        states[*dst].as_mut().unwrap().shadow.write(
-                            *offset..*offset + bytes.len() as u64,
-                            Some(Arc::from(bytes.clone())),
-                        );
+                        if provenance_needed[*dst] {
+                            states[*dst]
+                                .as_mut()
+                                .unwrap()
+                                .provenance
+                                .write(*offset..*offset + bytes.len() as u64, Arc::clone(bytes));
+                        }
                     }
                     Operation::CopyBuffer {
                         src,
@@ -1039,17 +1134,18 @@ impl GraphWork {
                         dst_offset,
                         size,
                     } => {
-                        let bytes = states[*src]
-                            .as_ref()
-                            .unwrap()
-                            .shadow
-                            .read(*src_offset..*src_offset + *size)
-                            .map(Arc::from);
-                        states[*dst]
-                            .as_mut()
-                            .unwrap()
-                            .shadow
-                            .write(*dst_offset..*dst_offset + *size, bytes);
+                        if provenance_needed[*dst] {
+                            let contents = states[*src]
+                                .as_ref()
+                                .unwrap()
+                                .provenance
+                                .copied(*src_offset..*src_offset + *size, *dst_offset);
+                            states[*dst]
+                                .as_mut()
+                                .unwrap()
+                                .provenance
+                                .replace(*dst_offset..*dst_offset + *size, contents);
+                        }
                     }
                     Operation::UploadImage { bytes, .. } => {
                         let mut range = upload.allocate(bytes.len() as u64)?;
@@ -1088,30 +1184,20 @@ impl GraphWork {
                         index_count,
                         ..
                     } => {
-                        let bytes = states[*indices]
+                        let vertex_count = graph.resources[*vertices].desc.units() / 28;
+                        states[*indices]
                             .as_ref()
                             .unwrap()
-                            .shadow
-                            .read(0..u64::from(*index_count) * 4)
-                            .ok_or_else(|| {
-                                RuntimeError::unsupported(
-                                    "raster indices must have CPU-known upload/copy contents",
-                                )
-                            })?;
-                        let vertex_count = graph.resources[*vertices].desc.units() / 28;
-                        if bytes
-                            .as_chunks::<4>()
-                            .0
-                            .iter()
-                            .any(|bytes| u64::from(u32::from_le_bytes(*bytes)) >= vertex_count)
-                        {
-                            return Err(RuntimeError::invalid(
-                                "raster index exceeds declared vertex count",
-                            ));
-                        }
+                            .provenance
+                            .validate_indices(
+                                *index_count,
+                                vertex_count,
+                                owner.device.max_draw_indexed_index_value(),
+                            )
+                            .map_err(index_error)?;
                     }
                     Operation::CopyImage { .. } => {}
-                    Operation::Declared(_) => {
+                    Operation::Culled | Operation::Declared(_) => {
                         return Err(RuntimeError::unsupported(
                             "declaration-only pass is not executable",
                         ));
@@ -1127,6 +1213,11 @@ impl GraphWork {
                 state.revision = serial;
                 state.serial = serial;
                 state.initialized = graph.final_contents[index].clone();
+                // Transient index validation has finished. Only canonical imports
+                // and exports can acquire a future index role in another graph.
+                if !retain_provenance[index] {
+                    state.provenance = BufferProvenance::default();
+                }
             }
         }
         let completed_states = states.clone();
@@ -1236,10 +1327,22 @@ fn source_scope(
     layout_change: bool,
 ) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
     if current.writes || layout_change {
-        (
+        let scope = (
             previous.stage | previous.writer_stage,
             previous.access | previous.writer_access,
-        )
+        );
+        if layout_change && previous.layout == vk::ImageLayout::UNDEFINED && scope.0.is_empty() {
+            // A fresh, unaliased image permits an empty source scope by the API.
+            // On the tested stack an earlier, unrelated buffer copy lost data
+            // with an empty transition source; ordering COPY prevented this
+            // (renderer-j17). The driver-internal cause remains unconfirmed.
+            // Order prior copies, including pending graphs on this same queue,
+            // before that transition. This is execution-only, with no host wait
+            // or claim that fresh images require a source memory dependency.
+            (vk::PipelineStageFlags2::COPY, vk::AccessFlags2::NONE)
+        } else {
+            scope
+        }
     } else {
         // A COPY read does not by itself make an older COPY write visible to
         // vertex/index/shader reads. Preserve the last writer across readers,
@@ -1292,7 +1395,7 @@ impl TransferPayload for GraphWork {
                     );
                 }
                 match &pass.operation {
-                    Operation::UploadBuffer { dst, offset, .. } => {
+                    PreparedOperation::UploadBuffer { dst, offset, .. } => {
                         let range = &self.uploads[pass.staging.unwrap()];
                         device.raw().cmd_copy_buffer(
                             command,
@@ -1304,7 +1407,7 @@ impl TransferPayload for GraphWork {
                                 .size(range.size())],
                         );
                     }
-                    Operation::CopyBuffer {
+                    PreparedOperation::CopyBuffer {
                         src,
                         dst,
                         src_offset,
@@ -1319,7 +1422,7 @@ impl TransferPayload for GraphWork {
                             .dst_offset(*dst_offset)
                             .size(*size)],
                     ),
-                    Operation::ReadbackBuffer { src, offset, size } => {
+                    PreparedOperation::ReadbackBuffer { src, offset, size } => {
                         let range = self.readbacks[pass.staging.unwrap()].1.as_ref().unwrap();
                         device.raw().cmd_copy_buffer(
                             command,
@@ -1331,7 +1434,7 @@ impl TransferPayload for GraphWork {
                                 .size(*size)],
                         );
                     }
-                    Operation::UploadImage { dst, .. } => {
+                    PreparedOperation::UploadImage { dst, .. } => {
                         let range = &self.uploads[pass.staging.unwrap()];
                         let image = self.resource(*dst).image();
                         device.raw().cmd_copy_buffer_to_image(
@@ -1342,7 +1445,7 @@ impl TransferPayload for GraphWork {
                             &[image_copy(image, range.offset())],
                         );
                     }
-                    Operation::CopyImage { src, dst } => {
+                    PreparedOperation::CopyImage { src, dst } => {
                         let source = self.resource(*src).image();
                         let target = self.resource(*dst).image();
                         device.raw().cmd_copy_image(
@@ -1361,7 +1464,7 @@ impl TransferPayload for GraphWork {
                                 })],
                         );
                     }
-                    Operation::ReadbackImage { src } => {
+                    PreparedOperation::ReadbackImage { src } => {
                         let range = self.readbacks[pass.staging.unwrap()].1.as_ref().unwrap();
                         let image = self.resource(*src).image();
                         device.raw().cmd_copy_image_to_buffer(
@@ -1372,7 +1475,7 @@ impl TransferPayload for GraphWork {
                             &[image_copy(image, range.offset())],
                         );
                     }
-                    Operation::Compute { dst, transform, .. } => {
+                    PreparedOperation::Compute { dst, transform, .. } => {
                         self.programs.as_ref().unwrap().record_compute(
                             command,
                             pass.descriptor.unwrap(),
@@ -1383,7 +1486,7 @@ impl TransferPayload for GraphWork {
                             },
                         )
                     }
-                    Operation::Raster {
+                    PreparedOperation::Raster {
                         vertices,
                         indices,
                         index_count,
@@ -1407,15 +1510,12 @@ impl TransferPayload for GraphWork {
                         store(depth_ops.store),
                         *clear_depth,
                     ),
-                    Operation::Composite { dst, .. } => {
+                    PreparedOperation::Composite { dst, .. } => {
                         self.programs.as_ref().unwrap().record_composite(
                             command,
                             pass.descriptor.unwrap(),
                             self.resource(*dst).image(),
                         )
-                    }
-                    Operation::Declared(_) => {
-                        unreachable!("unsupported operation rejected before recording")
                     }
                 }
                 device.debug_utils().cmd_end_debug_utils_label(command);
@@ -1457,6 +1557,7 @@ impl TransferPayload for GraphWork {
                 range.as_mut().unwrap().establish_contents();
             }
         }
+        self.passes.clear();
         self.uploads.clear();
         self.physical.clear();
         self.bindings.take();

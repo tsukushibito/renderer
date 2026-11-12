@@ -34,6 +34,12 @@ deadなreadも未初期化ならエラーになり、不要な処理で入力ミ
 解析専用の`declare_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
 任意の実行callbackはまだ提供しないので、Graph構築や除去をCPUのゲーム更新の代わりにしない。
 
+upload本文は不変の`Arc<[u8]>`で共有し、compileで全量を複製しない。
+既存の`upload_buffer`／`upload_image`はVec入力を受け取り、共有表現へ一度変換する。
+`upload_buffer_shared`／`upload_image_shared`へ同じArcを渡せば、Graphの再構築でも入力を共有できる。
+compiled planには除去したパスの名前・アクセス等の診断情報を残し、実行本文は保持しない。
+dumpは要求時に一度生成する。
+
 Attachmentは画像全域をrender areaとする。`Load`は既存内容を要求し、
 `Clear`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
 確立したとみなさない。storeの`Discard`は後続の内容を無効にする。
@@ -43,7 +49,14 @@ exportする資源の全域にも有効な内容を要求する。
 メッシュは7個のf32（xyz、linear rgba）、stride 28 byte、u32の三角形indexを使う。
 CPUのRust構造体を直接キャストせず、各値を明示的にbyteへ変換する。
 runtimeはupload・copyから既知のindex内容を追跡し、index値が頂点数未満であることを確認する。
-確認できない内容や範囲外indexはnative命令の記録前に拒否する。
+Deviceの実際の`maxDrawIndexedIndexValue`も確認し、確認できない内容や範囲外indexを
+native命令の記録前に拒否する。featureを有効化していないことから上限を固定値へ置き換えない。
+
+内容追跡はupload入力の共有sliceを参照し、GPU copyではbyte列をCPUで複製しない。
+部分書き換え・copyの未知の穴を保持し、sliceを跨ぐindexも一時bufferを作らず検査する。
+現在のindex用途とそのcopy元、import／exportしたbufferに必要な内容だけを追跡する。
+import／exportしたbufferは後のGraphでindexに使えるため、元の入力を共有したまま保持する。
+この保持は新しいCPUミラーの作成とは異なるが、小さなsliceが元の入力全体を保持する場合はある。
 
 ## 論理的な依存と実行順
 
@@ -52,6 +65,10 @@ runtimeはupload・copyから既知のindex内容を追跡し、index値が頂�
 必要なproducerを辿る。上書き済みwriterや不要なreaderを、順序制約だけで残さない。
 nativeのstage・access・layoutは、残った実際の操作から具体化する。
 トポロジカル順序だけではVulkanのメモリ依存は成立しない。
+
+順序依存は資源の区間ごとのwriterと未処理readerから作り、全先行パスとの総当たりを行わない。
+全宣言の循環を確認してから、残ったパスだけで順序依存を組み直す。
+除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
 
 ## GPU状態と所有
 
@@ -87,6 +104,8 @@ CPUコピー成功時にそのstaging領域を解放し、二重消費と別Grap
 
 記録から完了まで、使用するbuffer・image・View・pipeline・descriptor・stagingを保持する。
 論理的な削除だけでGPU使用中の資源を破棄しない。
+記録用の操作はstagingとnative命令に必要な引数を持ち、upload本文を持たない。
+正常完了後の結果にはreadback用の保持を残し、記録用の操作は解放する。
 投入前のキャンセルや未投入を証明できる失敗と、完了不明の処理を区別する。
 timeoutは内容を有効にせず、未完了の所有を維持する。
 Device loss後は有効な出力を返さず、新しい仕事を止める。

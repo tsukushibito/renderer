@@ -26,6 +26,7 @@ struct State {
     queue_names: Vec<(vk::Queue, String)>,
     debug_lookups: usize,
     property_queries: usize,
+    max_draw_indexed_index_value: u32,
 }
 
 thread_local! {
@@ -54,6 +55,7 @@ fn instance(fail_create: bool) -> VulkanInstance {
     STATE.with(|state| {
         *state.borrow_mut() = State {
             fail_create,
+            max_draw_indexed_index_value: u32::MAX,
             ..State::default()
         };
     });
@@ -77,6 +79,7 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
     });
     assert_eq!(owner.queue, vk::Queue::from_raw(5));
     assert_eq!(owner.max_buffer_size(), 1024);
+    assert_eq!(owner.max_draw_indexed_index_value(), u32::MAX);
     STATE.with(|state| assert_eq!(state.borrow().property_queries, 1));
     let lookups = STATE.with(|state| {
         let state = state.borrow();
@@ -103,6 +106,18 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
             ]
         );
     });
+}
+
+#[test]
+fn indexed_draw_limit_preserves_the_reported_value_and_is_cached() {
+    for limit in [0x00ff_ffff, u32::MAX] {
+        let instance = instance(false);
+        STATE.with(|state| state.borrow_mut().max_draw_indexed_index_value = limit);
+        let owner = VulkanDevice::create_selected(instance, selected()).unwrap();
+        assert_eq!(owner.max_draw_indexed_index_value(), limit);
+        assert_eq!(owner.max_draw_indexed_index_value(), limit);
+        STATE.with(|state| assert_eq!(state.borrow().property_queries, 1));
+    }
 }
 
 #[test]
@@ -231,10 +246,19 @@ unsafe extern "system" fn get_physical_device_properties2(
     _physical_device: vk::PhysicalDevice,
     properties: *mut vk::PhysicalDeviceProperties2<'_>,
 ) {
-    STATE.with(|state| state.borrow_mut().property_queries += 1);
+    let index_limit = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.property_queries += 1;
+        state.max_draw_indexed_index_value
+    });
     // SAFETY: The real Device constructor passes a live Properties2 output
     // chained to its sole Maintenance4Properties output. This narrow boundary
-    // supplies only the cached buffer limit needed by that constructor.
+    // supplies only the cached buffer and indexed-draw limits needed here.
+    unsafe {
+        (*properties).properties.limits.max_draw_indexed_index_value = index_limit;
+    }
+    // SAFETY: The constructor's sole pNext entry is the live, uniquely borrowed
+    // Maintenance4Properties output described above.
     let maintenance4 = unsafe {
         &mut *(*properties)
             .p_next

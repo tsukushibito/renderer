@@ -10,7 +10,10 @@
 use std::{
     fmt,
     ops::Range,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 mod compile;
@@ -287,10 +290,12 @@ pub(crate) struct ResourceAccess {
     )
 )]
 pub(crate) enum Operation {
+    /// Retains a culled pass's metadata without retaining its execution payload.
+    Culled,
     UploadBuffer {
         dst: usize,
         offset: u64,
-        bytes: Vec<u8>,
+        bytes: Arc<[u8]>,
     },
     CopyBuffer {
         src: usize,
@@ -301,7 +306,7 @@ pub(crate) enum Operation {
     },
     UploadImage {
         dst: usize,
-        bytes: Vec<u8>,
+        bytes: Arc<[u8]>,
     },
     CopyImage {
         src: usize,
@@ -544,8 +549,19 @@ impl Graph {
         offset: u64,
         bytes: impl Into<Vec<u8>>,
     ) -> Result<PassHandle, GraphError> {
+        self.upload_buffer_shared(name, dst, offset, bytes.into().into())
+    }
+
+    /// Retains shared immutable bytes without copying them during compilation.
+    /// Reuse the same allocation when building graphs with the same upload data.
+    pub fn upload_buffer_shared(
+        &mut self,
+        name: impl Into<String>,
+        dst: BufferHandle,
+        offset: u64,
+        bytes: Arc<[u8]>,
+    ) -> Result<PassHandle, GraphError> {
         let dst = self.buffer_id(dst)?;
-        let bytes = bytes.into();
         let range = self.buffer_range(dst, offset, bytes.len() as u64, true)?;
         Ok(self.push(
             name,
@@ -608,9 +624,18 @@ impl Graph {
         dst: ImageHandle,
         bytes: impl Into<Vec<u8>>,
     ) -> Result<PassHandle, GraphError> {
+        self.upload_image_shared(name, dst, bytes.into().into())
+    }
+
+    /// Retains one complete packed RGBA8 image as shared immutable upload data.
+    pub fn upload_image_shared(
+        &mut self,
+        name: impl Into<String>,
+        dst: ImageHandle,
+        bytes: Arc<[u8]>,
+    ) -> Result<PassHandle, GraphError> {
         let dst = self.image_id(dst)?;
         self.color(dst)?;
-        let bytes = bytes.into();
         if self.image_desc(dst)?.byte_len() != Some(bytes.len() as u64) {
             return Err(GraphError::new(
                 "image upload must provide every packed RGBA8 texel",
@@ -1028,6 +1053,81 @@ fn validate_purpose(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compilation_shares_live_uploads_and_releases_culled_payloads() {
+        let buffer_bytes: Arc<[u8]> = vec![1; 4].into();
+        let image_bytes: Arc<[u8]> = vec![2; 4].into();
+        let dead_buffer_bytes: Arc<[u8]> = vec![3; 4].into();
+        let dead_image_bytes: Arc<[u8]> = vec![4; 4].into();
+        let buffer_lifetime = Arc::downgrade(&buffer_bytes);
+        let image_lifetime = Arc::downgrade(&image_bytes);
+        let dead_buffer_lifetime = Arc::downgrade(&dead_buffer_bytes);
+        let dead_image_lifetime = Arc::downgrade(&dead_image_bytes);
+        let mut graph = Graph::new();
+        let buffer = graph.buffer("live buffer", BufferDesc { size: 4 }).unwrap();
+        let image = graph.image("live image", ImageDesc::rgba8(1, 1)).unwrap();
+        let dead_buffer = graph.buffer("dead buffer", BufferDesc { size: 4 }).unwrap();
+        let dead_image = graph.image("dead image", ImageDesc::rgba8(1, 1)).unwrap();
+        let buffer_upload = graph
+            .upload_buffer_shared("live buffer upload", buffer, 0, Arc::clone(&buffer_bytes))
+            .unwrap();
+        let image_upload = graph
+            .upload_image_shared("live image upload", image, Arc::clone(&image_bytes))
+            .unwrap();
+        let dead_buffer_upload = graph
+            .upload_buffer_shared(
+                "dead buffer upload",
+                dead_buffer,
+                0,
+                Arc::clone(&dead_buffer_bytes),
+            )
+            .unwrap();
+        let dead_image_upload = graph
+            .upload_image_shared(
+                "dead image upload",
+                dead_image,
+                Arc::clone(&dead_image_bytes),
+            )
+            .unwrap();
+        graph.export_buffer(buffer).unwrap();
+        graph.export_image(image).unwrap();
+
+        let plan = graph.compile().unwrap();
+        let Operation::UploadBuffer { bytes, .. } = &plan.passes[buffer_upload.index].operation
+        else {
+            panic!("live buffer upload must remain executable");
+        };
+        assert!(Arc::ptr_eq(bytes, &buffer_bytes));
+        let Operation::UploadImage { bytes, .. } = &plan.passes[image_upload.index].operation
+        else {
+            panic!("live image upload must remain executable");
+        };
+        assert!(Arc::ptr_eq(bytes, &image_bytes));
+        assert!(matches!(
+            plan.passes[dead_buffer_upload.index].operation,
+            Operation::Culled
+        ));
+        assert!(matches!(
+            plan.passes[dead_image_upload.index].operation,
+            Operation::Culled
+        ));
+
+        drop((
+            buffer_bytes,
+            image_bytes,
+            dead_buffer_bytes,
+            dead_image_bytes,
+        ));
+        drop(graph);
+        assert!(buffer_lifetime.upgrade().is_some());
+        assert!(image_lifetime.upgrade().is_some());
+        assert!(dead_buffer_lifetime.upgrade().is_none());
+        assert!(dead_image_lifetime.upgrade().is_none());
+        drop(plan);
+        assert!(buffer_lifetime.upgrade().is_none());
+        assert!(image_lifetime.upgrade().is_none());
+    }
 
     #[test]
     fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {

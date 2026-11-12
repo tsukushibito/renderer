@@ -32,9 +32,9 @@ GPU性能の比較測定は追加実行していない。以下の実装検証�
 | 確認 | 結果 |
 |---|---|
 | fmt、CPUのみ／Vulkanの全target check・Clippy `-D warnings` | 成功 |
-| CPUのみの通常試験 | 単体14件＋公開API 2件成功、Vulkan初期化なし |
-| Vulkan feature付き通常試験 | CPU単体77件＋公開API 2件成功、明示実行用16件はignored |
-| 実Vulkan正しさ試験 | 15件成功、1.94秒。既存9件＋Graph 6件 |
+| CPUのみの通常試験 | 単体19件＋公開API 2件成功、Vulkan初期化なし |
+| Vulkan feature付き通常試験 | CPU単体88件＋公開API 2件成功、明示実行用18件はignored |
+| 実Vulkan正しさ試験 | 17件成功、2.27秒。既存9件＋Graph 8件 |
 | batchの全byte照合 | 2回の生成・終了で計56回、うち順不同の部分転送32回 |
 | Validation warning / error、callback内部失敗 | ゼロ |
 | Shader再生成一致 | 5種すべて`spirv-val`成功、チェックイン済みbinaryとSHA-256一致 |
@@ -57,7 +57,7 @@ Attachmentのclear／load／store／discard、循環、明示依存、出力・�
 上書き済みwriterと不要readerを除去しつつ、liveなRAW／WAR／WAWを保つ回帰試験、
 同じ入力のdumpが一致する試験、公開APIだけで描画フローを構築する試験が成功した。
 
-Graphの実GPU試験6件では次を確認した。
+Graphの実GPU試験8件では次を確認した。
 
 | 対象 | 実際に確認した動作 |
 |---|---|
@@ -67,13 +67,15 @@ Graphの実GPU試験6件では次を確認した。
 | indexed meshと深度 | 16×16の遠い赤い四角形と近い緑の四角形を両描画順で全画素厳密照合。別rendering scopeのcolor／depth LOAD、vertex／indexのCopy read後の入力stageも確認 |
 | 完全なM2フロー | mesh＋depth→依存するCompute 2段→別画像へsampled composite→export／readbackを全画素照合。不要branchの除去、未完了Graphへの引き継ぎ、削除と再利用も確認 |
 | 記録前の拒否と回収 | descriptor容量不足と、実際のupload・部分書き換えから得た範囲外indexをnative draw前に拒否。取得済みleaseを返し、次の正常Graphが成功 |
+| 用途別Programの追加 | ComputeだけではRaster／Compositeを作らず、既存の未完了投入がある間に別種類を追加しても以前のpipelineを保持。出力と終了時までの所有を確認 |
+| 入力の寿命と将来のindex利用 | upload元とplanを破棄した未完了処理でもbuffer／画像のreadbackが正しい。importへ部分copyした内容を再exportなしで将来のindexに利用。先行Graphのbufferと新しい小画像の非同期引き継ぎも確認 |
 
 描画fixtureは整数pixel境界と0／1の色、Computeは0〜255の既知byteパターンを使い、
 どちらも浮動小数点の許容誤差を設けずに厳密比較した。
 すべてCore validation＋SyncValの実効設定と、破棄後までの診断を検査した。
 入力拒否を確認するアプリケーションERRORログは、Validationの異常とは区別する。
 pipelineはruntimeで保持し、再実行で画像／View、descriptor arena、実行枠の作成・再利用カウンターを確認した。
-新たな速度改善やFPSを測った結果ではない。
+GPU時間やFPSの新しい測定ではない。compilerと内容追跡のCPU比較は下記に分けて記録する。
 
 最終の実行コマンドは次のとおり。通常の全target check・Clippy・testはCPUのみとVulkanの両構成で成功した。
 
@@ -91,8 +93,8 @@ cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan
 cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
 ```
 
-生ログは`.tools/vulkan-research/m2-final-{cpu,vulkan,gpu,shaders,deny,example}.log`、
-描画例は`.tools/m2.ppm`に保存した。Rustのincremental cacheでhard linkが使えないという
+生ログは`.tools/vulkan-research/m2-fixes-{cpu,vulkan,gpu,shaders,deny,example}.log`、
+描画例は`.tools/m2-fixes.ppm`に保存した。Rustのincremental cacheでhard linkが使えないという
 実行環境のwarningはあったが、ソースのClippy `-D warnings`は成功した。
 
 ## CPU転送計画の性能測定
@@ -187,8 +189,74 @@ VMA呼び出し前に上限超過を拒否するよう修正した。RTX 3060の
 submit後のログpanicでもrevisionを再利用しないこと、export登録guard、
 不確実なsubmit失敗時の停止、型付きエラーと元の原因の保持を確認した。
 未投入OOM・未知submit結果・timeout・lossのCPU境界試験は実際のdriver障害の誘発ではない。
-現時点で未解決のレビュー指摘はないが、実機non-coherentメモリ、native OOM／Device loss／
-reset失敗、別GPU・ローカルLinuxでの確認範囲は拡大していない。
+実機non-coherentメモリ、native OOM／Device loss／reset失敗、別GPU・ローカルLinuxでの
+確認範囲は拡大していない。保守性・実用性の追加レビューへの対応は次に記す。
+
+## 保守性・実用性のレビュー
+
+比較元は`64ed71a`。同期・寿命・失敗時の所有、Graphとnative実行の境界、
+通常経路の検証負担、規模に対するCPUコストを独立に読み直した。
+owner／世代／revision、実index境界、submit受理と実完了の区別は必要な検査であり、
+既存の出力・寿命・失敗試験に不要な大量モックの拡張は見つからなかった。
+Beadsの`renderer-ddd`で発見した5件を修正し、必要な検証を維持した。
+
+| 課題 | 現在の対応 |
+|---|---|
+| `renderer-wvz` | 資源の区間ごとのwriter／readerで順序依存を作り、全宣言の循環検査後にliveパスだけで再構築。除去された途中パスを跨ぐ順序も維持し、dumpを要求時に生成 |
+| `renderer-2uo` | upload本文をArcで共有。culled操作は本文を持たず、記録用の操作からも本文を除去。完了後は記録計画を解放 |
+| `renderer-9da` | GPU copyで共有sliceを追跡し、全量CPUコピーを除去。indexとそのcopy元・import／exportに必要な内容を保持し、他の一時bufferは省略。部分byte・未知の穴・sliceを跨ぐindexも検証 |
+| `renderer-082` | Programを用途別に遅延作成し、必要なD32・color・vertex形式とABI上限を事前検査。成功時だけ公開し、未完了処理が参照するProgramを置き換えない |
+| `renderer-ujn` | 既存のDevice照会で実際の`maxDrawIndexedIndexValue`を保持し、実indexを頂点数とDevice上限の両方で検証 |
+
+formatの必須対応は[仕様の対応表](https://docs.vulkan.org/spec/latest/chapters/formats.html#formats-required-format-support)、
+pipeline作成条件は[VkGraphicsPipelineCreateInfo](https://docs.vulkan.org/refpages/latest/refpages/source/VkGraphicsPipelineCreateInfo.html)、
+index上限は[VkPhysicalDeviceLimits](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceLimits.html)と照合した。
+VUID 06585は固定SDKの`validusage.json`でも確認した。
+能力不足はCPU境界試験で検査したが、その能力を持たない実機での再現は未実行である。
+RTX 3060でのValidationゼロだけを、それらの経路の正しさの証明とはしない。
+
+CPUプローブでは比較元と修正後のGraph／compilerをGit対象外の`.tools/m2-fixes-probes/`へコピーし、
+Rust 1.99.0の`rustc --edition 2024 -O`で実行した。
+頂点・indexを一度uploadし、同じ16×16 color／depthへ先頭をCLEAR_STORE、以降をLOAD_STOREで
+描画してcolorをexportする。Graph構築は計測外で、`compile()`全体を測定する。
+Vulkan・Validation・tracingは使わない。各規模で1回warm-up後の3回の単純測定の中央値は次のとおり。
+比較元はcompile内でdumpを作り、修正後は要求時のdump生成を別に測定した。
+
+| mesh数 | 比較元compile（ms） | 修正後compile（ms） | 修正後dump初回生成（ms） |
+|---|---:|---:|---:|
+| 100 | 4.322 | 0.326 | 0.083 |
+| 200 | 18.786 | 0.743 | 0.175 |
+| 400 | 92.613 | 1.137 | 0.296 |
+| 800 | 382.865 | 2.094 | 0.469 |
+
+800描画のdumpは20,133,644 byteから301,141 byteになった。
+生ログは`m2-fixes-compile-{before,after}.log`。同じ内容の順序制約を、推移的な全組の辺で
+保存する必要がなくなったことと、通常のcompileから診断文字列の生成を外した効果を区別する。
+OS負荷・affinityは固定せず、正式なthroughputやGPU性能の測定ではない。
+
+内容追跡は、比較元のShadow実装と修正後の実際のprovenance helperをCPUだけで比較した。
+既知の8 MiB入力を16段copyし、各段の内容を保持して最後に破棄する区間で、
+1回warm-up後の3回中央値は48.321 msから0.002 msになった。
+byte列を複製する処理を共有sliceのmetadata操作へ変更した比較であり、入力生成・Graph構築、
+staging書き込み・flush、native転送・GPU実行は含まない。生ログは`m2-fixes-provenance.log`。
+
+独立した比較では、旧compilerとの25,000ケースで受理／拒否・順序・cullingが一致し、
+内容追跡は300,000ケースで単純なbyte oracleと部分書き込み・copy・未知の穴・index判定が一致した。
+通常の回帰試験には必要な境界と失敗契約を残し、GPU API全体の模擬実装は追加していない。
+
+追加したGPU試験は、buffer upload→小画像upload→両者のreadbackでbuffer内容がゼロになる
+既存の経路も検出した（`renderer-j17`）。比較元・Validation無効・transfer-only画像・専用Allocationで
+再現し、VMA配置とCPU staging内容に不整合は見つからなかった。
+初回の画像遷移にCOPY／access NONEのexecution依存を加えると解消したため、
+[Vulkan設計](../design/vulkan.md)に理由・代案・影響・未確認事項を記録し、元の追加順と期待値を
+保つ回帰試験を追加した。内部原因は未確定で、全初回遷移に対するVulkanの一般要件とはしない。
+同じキューの先行GraphをCPUで待たずに引き継ぐ場合も確認した。
+
+CPUのみ19単体＋2公開API、Vulkan付き88単体＋2公開API、明示実GPU17件を実行し成功した。
+全target check・Clippy、fmt、5つのShader再生成一致と依存監査、128×96の描画例も成功した。
+Core／SyncVal・callback・終了時の問題はゼロ。上記5件と追加の出力不一致への対策は検証済みである。
+Validation必須の公開runtime、read-only importも更新されるrevisionと毎回のrefresh／再compileは
+文書化済みのM2の制限であり、配布用runtime・一般的な反復frame運用の完成を意味しない。
 
 生ログと配布物はGit対象外の`.tools/`、Criterionの保存値は`target/criterion/`にある。
 過去の完全な比較表が必要な場合は、たとえば次のようにGit履歴から参照する。

@@ -2,8 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
+use std::sync::OnceLock;
 
-use super::{Graph, GraphError, Pass, Resource};
+use super::{Graph, GraphError, Operation, Pass, Resource};
 
 /// Validated, culled logical work. This contains no native synchronization plan.
 #[derive(Clone, Debug)]
@@ -22,6 +23,7 @@ pub struct CompiledGraph {
     pub(crate) order: Vec<usize>,
     pub(crate) final_contents: Vec<Vec<Range<u64>>>,
     analysis: Analysis,
+    dump: OnceLock<String>,
 }
 
 impl CompiledGraph {
@@ -52,7 +54,8 @@ impl CompiledGraph {
 
     /// Stable diagnostic text, with data dependencies separate from ordering.
     pub fn dump(&self) -> &str {
-        &self.analysis.dump
+        self.dump
+            .get_or_init(|| dump(&self.resources, &self.passes, &self.exports, &self.analysis))
     }
 }
 
@@ -116,11 +119,27 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
     Ok(CompiledGraph {
         id: graph.id,
         resources: graph.resources.clone(),
-        passes: graph.passes.clone(),
+        passes: graph
+            .passes
+            .iter()
+            .enumerate()
+            .map(|(index, pass)| Pass {
+                name: pass.name.clone(),
+                operation: if analysis.live[index] {
+                    pass.operation.clone()
+                } else {
+                    Operation::Culled
+                },
+                accesses: pass.accesses.clone(),
+                side_effect: pass.side_effect,
+                dependencies: pass.dependencies.clone(),
+            })
+            .collect(),
         exports: graph.exports.clone(),
         order: analysis.order.clone(),
         final_contents: contents.iter().map(ContentMap::initialized).collect(),
         analysis,
+        dump: OnceLock::new(),
     })
 }
 
@@ -173,7 +192,6 @@ pub(super) struct Analysis {
     pub ordering_dependencies: Vec<Dependency>,
     /// Inclusive positions in `order`, absent for resources unused by live work.
     pub lifetimes: Vec<Option<(usize, usize)>>,
-    pub dump: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,42 +259,10 @@ pub(super) fn analyze(
 
     // Scheduling edges do not define liveness. In particular WAW cannot keep
     // an overwritten writer alive, and WAR cannot keep an unrelated reader.
-    let mut dependencies = BTreeSet::new();
-    for (index, pass) in passes.iter().enumerate() {
-        for &from in &pass.dependencies {
-            dependencies.insert(Dependency {
-                from,
-                to: index,
-                kind: DependencyKind::Explicit,
-            });
-        }
-        for (earlier, predecessor) in passes[..index].iter().enumerate() {
-            for previous in &predecessor.accesses {
-                for current in &pass.accesses {
-                    if previous.resource != current.resource
-                        || !overlaps(&previous.range, &current.range)
-                    {
-                        continue;
-                    }
-                    for (condition, kind) in [
-                        (previous.write && current.read, DependencyKind::Raw),
-                        (previous.read && current.write, DependencyKind::War),
-                        (previous.write && current.write, DependencyKind::Waw),
-                    ] {
-                        if condition {
-                            dependencies.insert(Dependency {
-                                from: earlier,
-                                to: index,
-                                kind,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let all = vec![true; passes.len()];
+    let dependencies = ordering(resources, passes, &all);
     // Invalid declarations remain invalid even when their outputs are dead.
-    topological(passes, &dependencies, &vec![true; passes.len()])?;
+    topological(passes, &dependencies, &all)?;
 
     let mut live = vec![false; passes.len()];
     let mut pending = roots.into_iter().collect::<Vec<_>>();
@@ -286,11 +272,11 @@ pub(super) fn analyze(
             pending.extend(data[index].iter().copied());
         }
     }
+    // A culled access must not hide ordering between the remaining accesses.
+    // Rebuild the frontier rather than filtering edges through removed passes.
+    let dependencies = ordering(resources, passes, &live);
     let order = topological(passes, &dependencies, &live)?;
-    let ordering_dependencies = dependencies
-        .into_iter()
-        .filter(|dependency| live[dependency.from] && live[dependency.to])
-        .collect::<Vec<_>>();
+    let ordering_dependencies = dependencies.into_iter().collect::<Vec<_>>();
     let mut lifetimes = vec![None; resources.len()];
     for (position, &index) in order.iter().enumerate() {
         for access in &passes[index].accesses {
@@ -305,16 +291,158 @@ pub(super) fn analyze(
         .into_iter()
         .map(|dependencies| dependencies.into_iter().collect())
         .collect::<Vec<_>>();
-    let mut analysis = Analysis {
+    Ok(Analysis {
         order,
         live,
         data_dependencies,
         ordering_dependencies,
         lifetimes,
-        dump: String::new(),
-    };
-    analysis.dump = dump(resources, passes, exports, &analysis);
-    Ok(analysis)
+    })
+}
+
+/// A resource-range frontier is sufficient to preserve every conflicting
+/// access's order without storing transitive edges to all earlier passes.
+fn ordering(
+    resources: &[CompileResource],
+    passes: &[CompilePass],
+    live: &[bool],
+) -> BTreeSet<Dependency> {
+    let mut frontiers = resources
+        .iter()
+        .map(|resource| HazardMap::new(resource.size))
+        .collect::<Vec<_>>();
+    let mut dependencies = BTreeSet::new();
+    for (index, pass) in passes.iter().enumerate().filter(|&(index, _)| live[index]) {
+        for &from in &pass.dependencies {
+            if live[from] {
+                dependencies.insert(Dependency {
+                    from,
+                    to: index,
+                    kind: DependencyKind::Explicit,
+                });
+            }
+        }
+        // All uses are compared with earlier passes before this pass is added;
+        // overlapping reads and disjoint self-copies cannot create self edges.
+        for access in &pass.accesses {
+            frontiers[access.resource].dependencies(index, access, &mut dependencies);
+        }
+        for access in &pass.accesses {
+            frontiers[access.resource].record(index, access);
+        }
+    }
+    dependencies
+}
+
+#[derive(Clone)]
+struct HazardSegment {
+    end: u64,
+    writer: Option<usize>,
+    readers: BTreeSet<usize>,
+}
+
+struct HazardMap {
+    segments: BTreeMap<u64, HazardSegment>,
+}
+
+impl HazardMap {
+    fn new(size: u64) -> Self {
+        Self {
+            segments: BTreeMap::from([(
+                0,
+                HazardSegment {
+                    end: size,
+                    writer: None,
+                    readers: BTreeSet::new(),
+                },
+            )]),
+        }
+    }
+
+    fn dependencies(
+        &self,
+        to: usize,
+        access: &CompileAccess,
+        dependencies: &mut BTreeSet<Dependency>,
+    ) {
+        let (&first, _) = self
+            .segments
+            .range(..=access.range.start)
+            .next_back()
+            .expect("validated nonempty resource range");
+        for segment in self
+            .segments
+            .range(first..access.range.end)
+            .map(|(_, value)| value)
+        {
+            if let Some(from) = segment.writer {
+                if access.read {
+                    dependencies.insert(Dependency {
+                        from,
+                        to,
+                        kind: DependencyKind::Raw,
+                    });
+                }
+                if access.write {
+                    dependencies.insert(Dependency {
+                        from,
+                        to,
+                        kind: DependencyKind::Waw,
+                    });
+                }
+            }
+            if access.write {
+                dependencies.extend(segment.readers.iter().map(|&from| Dependency {
+                    from,
+                    to,
+                    kind: DependencyKind::War,
+                }));
+            }
+        }
+    }
+
+    fn split(&mut self, point: u64) {
+        let Some((&start, segment)) = self.segments.range(..=point).next_back() else {
+            return;
+        };
+        if start == point || point >= segment.end {
+            return;
+        }
+        let tail = segment.clone();
+        self.segments.get_mut(&start).expect("existing segment").end = point;
+        self.segments.insert(point, tail);
+    }
+
+    fn record(&mut self, pass: usize, access: &CompileAccess) {
+        self.split(access.range.start);
+        self.split(access.range.end);
+        if access.write {
+            let keys = self
+                .segments
+                .range(access.range.clone())
+                .map(|(&start, _)| start)
+                .collect::<Vec<_>>();
+            for key in keys {
+                self.segments.remove(&key);
+            }
+            self.segments.insert(
+                access.range.start,
+                HazardSegment {
+                    end: access.range.end,
+                    writer: Some(pass),
+                    readers: BTreeSet::new(),
+                },
+            );
+        } else {
+            for segment in self
+                .segments
+                .range_mut(access.range.clone())
+                .map(|(_, value)| value)
+            {
+                segment.readers.insert(pass);
+            }
+        }
+    }
 }
 
 fn overlaps(left: &Range<u64>, right: &Range<u64>) -> bool {
@@ -450,12 +578,7 @@ fn topological(
     Ok(order)
 }
 
-fn dump(
-    resources: &[CompileResource],
-    passes: &[CompilePass],
-    exports: &[(usize, Range<u64>)],
-    analysis: &Analysis,
-) -> String {
+fn dump(resources: &[Resource], passes: &[Pass], exports: &[usize], analysis: &Analysis) -> String {
     use std::fmt::Write;
 
     let mut output = String::from("RenderGraph plan (construction-order contents)\n");
@@ -463,7 +586,10 @@ fn dump(
         writeln!(
             output,
             "resource {index} {:?} size={} external={} lifetime={:?}",
-            resource.name, resource.size, resource.external, analysis.lifetimes[index]
+            resource.name,
+            resource.desc.units(),
+            resource.import.is_some(),
+            analysis.lifetimes[index]
         )
         .expect("writing String");
     }
@@ -484,7 +610,11 @@ fn dump(
             writeln!(
                 output,
                 "  resource={} range={:?} read={} write={} valid_after={}",
-                access.resource, access.range, access.read, access.write, access.valid_after
+                access.resource,
+                access.range,
+                access.read,
+                access.write,
+                access.initializes && !access.discard_after
             )
             .expect("writing String");
         }
@@ -497,7 +627,8 @@ fn dump(
         )
         .expect("writing String");
     }
-    for (resource, range) in exports {
+    for &resource in exports {
+        let range = 0..resources[resource].desc.units();
         writeln!(output, "export resource={resource} range={range:?}").expect("writing String");
     }
     writeln!(output, "execution {:?}", analysis.order).expect("writing String");
@@ -723,6 +854,226 @@ mod tests {
     }
 
     #[test]
+    fn culled_middle_accesses_do_not_remove_live_war_or_waw_ordering() {
+        for reader in [false, true] {
+            let mut graph = Graph::new();
+            let resource = buffer(&mut graph, 4);
+            let first = if reader {
+                graph
+                    .upload_buffer("initial", resource, 0, vec![0; 4])
+                    .unwrap();
+                read_pass(&mut graph, "live first", resource, 0..4, true)
+            } else {
+                graph
+                    .upload_buffer("live first", resource, 0, vec![0; 4])
+                    .unwrap()
+            };
+            graph
+                .upload_buffer("dead overwrite", resource, 0, vec![1; 4])
+                .unwrap();
+            let last = graph
+                .upload_buffer("live last", resource, 0, vec![2; 4])
+                .unwrap();
+            let gate = graph
+                .declare_pass("gate", PassKind::Copy, vec![], false)
+                .unwrap();
+            graph.depends_on(first, gate).unwrap();
+            if !reader {
+                // An independent observable operation keeps the first writer;
+                // the overwritten contents alone must not keep it live.
+                let observed = graph
+                    .declare_pass("observe first", PassKind::Copy, vec![], true)
+                    .unwrap();
+                graph.depends_on(observed, first).unwrap();
+            }
+            graph.export_buffer(resource).unwrap();
+            let compiled = graph.compile().unwrap();
+            let first_position = compiled
+                .order
+                .iter()
+                .position(|&index| index == first.index)
+                .unwrap();
+            let last_position = compiled
+                .order
+                .iter()
+                .position(|&index| index == last.index)
+                .unwrap();
+            assert!(first_position < last_position);
+            assert_eq!(compiled.culled_pass_names(), ["dead overwrite"]);
+            assert!(
+                compiled
+                    .analysis
+                    .ordering_dependencies
+                    .contains(&Dependency {
+                        from: first.index,
+                        to: last.index,
+                        kind: if reader {
+                            DependencyKind::War
+                        } else {
+                            DependencyKind::Waw
+                        },
+                    })
+            );
+        }
+    }
+
+    #[test]
+    fn sparse_hazards_preserve_dense_scheduling_and_cycle_decisions() {
+        // The simple all-pairs reference states the ordering contract. Small
+        // generated sequences exercise split/bridged ranges, culling masks and
+        // forward explicit edges without a wall-clock performance assertion.
+        fn reference(passes: &[CompilePass], live: &[bool]) -> BTreeSet<Dependency> {
+            let mut result = BTreeSet::new();
+            for (to, pass) in passes.iter().enumerate().filter(|&(index, _)| live[index]) {
+                for &from in &pass.dependencies {
+                    if live[from] {
+                        result.insert(Dependency {
+                            from,
+                            to,
+                            kind: DependencyKind::Explicit,
+                        });
+                    }
+                }
+                for (from, previous) in passes[..to]
+                    .iter()
+                    .enumerate()
+                    .filter(|&(index, _)| live[index])
+                {
+                    for before in &previous.accesses {
+                        for after in &pass.accesses {
+                            if before.resource == after.resource
+                                && overlaps(&before.range, &after.range)
+                            {
+                                for (required, kind) in [
+                                    (before.write && after.read, DependencyKind::Raw),
+                                    (before.read && after.write, DependencyKind::War),
+                                    (before.write && after.write, DependencyKind::Waw),
+                                ] {
+                                    if required {
+                                        result.insert(Dependency { from, to, kind });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            result
+        }
+        let resources = (0..2)
+            .map(|index| CompileResource {
+                name: format!("resource {index}"),
+                size: 16,
+                initial: Vec::from_iter(std::iter::once(0..16)),
+                external: false,
+            })
+            .collect::<Vec<_>>();
+        for seed in 0u64..32 {
+            let mut state = seed;
+            let mut next = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                state >> 32
+            };
+            let passes = (0..6)
+                .map(|index| {
+                    let resource = (next() % 2) as usize;
+                    let start = next() % 4 * 4;
+                    let end = start + (1 + next() % ((16 - start) / 4)) * 4;
+                    let mode = next() % 3;
+                    CompilePass {
+                        name: format!("pass {index}"),
+                        accesses: vec![CompileAccess {
+                            resource,
+                            range: start..end,
+                            read: mode != 1,
+                            write: mode != 0,
+                            valid_after: true,
+                        }],
+                        dependencies: if next() % 3 == 0 {
+                            vec![(next() % 6) as usize]
+                        } else {
+                            vec![]
+                        },
+                        side_effect: false,
+                    }
+                })
+                .collect::<Vec<_>>();
+            for mask in 0u64..64 {
+                let live = (0..6)
+                    .map(|index| mask & (1 << index) != 0)
+                    .collect::<Vec<_>>();
+                let sparse = topological(&passes, &ordering(&resources, &passes, &live), &live);
+                let dense = topological(&passes, &reference(&passes, &live), &live);
+                match (sparse, dense) {
+                    (Ok(sparse), Ok(dense)) => assert_eq!(sparse, dense, "seed={seed} mask={mask}"),
+                    (Err(_), Err(_)) => {}
+                    pair => panic!("different cycle decision seed={seed} mask={mask}: {pair:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_attachments_keep_sparse_dependencies_and_generate_dump_on_demand() {
+        let mut graph = Graph::new();
+        let vertices = buffer(&mut graph, 84);
+        let indices = buffer(&mut graph, 12);
+        graph
+            .upload_buffer("vertices", vertices, 0, vec![0; 84])
+            .unwrap();
+        graph
+            .upload_buffer("indices", indices, 0, vec![0; 12])
+            .unwrap();
+        let color = graph.image("color", ImageDesc::rgba8(16, 16)).unwrap();
+        let depth = graph.image("depth", ImageDesc::depth32(16, 16)).unwrap();
+        let draws = 256;
+        for index in 0..draws {
+            let ops = if index == 0 {
+                AttachmentOps::CLEAR_STORE
+            } else {
+                AttachmentOps::LOAD_STORE
+            };
+            graph
+                .raster(
+                    "mesh", vertices, indices, 3, color, depth, ops, ops, [0.0; 4], 1.0,
+                )
+                .unwrap();
+        }
+        graph.export_image(color).unwrap();
+        let compiled = graph.compile().unwrap();
+        assert_eq!(compiled.pass_count(), draws + 2);
+        assert!(compiled.analysis.ordering_dependencies.len() <= draws * 4);
+        assert!(compiled.dump.get().is_none());
+        let first = compiled.dump();
+        assert!(first.contains("execution"));
+        assert_eq!(first, graph.compile().unwrap().dump());
+        assert_eq!(first.as_ptr(), compiled.dump().as_ptr());
+    }
+
+    #[test]
+    fn disjoint_self_copy_reads_the_earlier_writer_without_self_dependencies() {
+        let mut graph = Graph::new();
+        let resource = buffer(&mut graph, 12);
+        graph
+            .upload_buffer("source", resource, 0, vec![0; 12])
+            .unwrap();
+        graph
+            .copy_buffer("self copy", resource, 0, resource, 8, 4)
+            .unwrap();
+        graph.export_buffer(resource).unwrap();
+        let compiled = graph.compile().unwrap();
+        assert_eq!(compiled.ordered_pass_names(), ["source", "self copy"]);
+        assert_eq!(compiled.analysis.data_dependencies[1], [0]);
+        assert!(
+            compiled
+                .analysis
+                .ordering_dependencies
+                .iter()
+                .all(|edge| edge.from != edge.to)
+        );
+    }
+
+    #[test]
     fn dead_undefined_reads_and_holes_are_rejected_with_resource_and_pass_names() {
         let mut graph = Graph::new();
         let resource = buffer(&mut graph, 12);
@@ -796,6 +1147,22 @@ mod tests {
         assert!(error.message.contains("cycle"));
         assert!(error.message.contains("first"));
         assert!(error.message.contains("second"));
+
+        // A forward explicit edge also cannot contradict the resource ordering
+        // of an otherwise wholly dead chain of overwrites and a final read.
+        let mut dead = Graph::new();
+        let resource = buffer(&mut dead, 4);
+        let first = dead
+            .upload_buffer("first writer", resource, 0, vec![0; 4])
+            .unwrap();
+        dead.upload_buffer("middle writer", resource, 0, vec![1; 4])
+            .unwrap();
+        let last = read_pass(&mut dead, "last reader", resource, 0..4, false);
+        dead.depends_on(first, last).unwrap();
+        let error = dead.compile().unwrap_err();
+        assert!(error.message.contains("cycle"));
+        assert!(error.message.contains("first writer"));
+        assert!(error.message.contains("last reader"));
 
         let mut graph = Graph::new();
         let consumer = graph
