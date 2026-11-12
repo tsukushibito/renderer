@@ -103,7 +103,10 @@ impl VulkanEngine {
             .fold((0usize, 0u64), |(count, bytes), (_, entry)| {
                 (count + 1, bytes.saturating_add(entry.bytes))
             });
-        if pinned_count.saturating_add(required.len()) > self.config.max_meshes
+        // Mesh registrations must leave room for the standard color/depth
+        // targets, even when logical cache limits are larger than the registry.
+        let physical_mesh_limit = self.runtime.resource_capacity().saturating_sub(2) / 2;
+        if pinned_count.saturating_add(required.len()) > self.config.max_meshes.min(physical_mesh_limit)
             || pinned_bytes.saturating_add(required_bytes) > self.config.max_bytes
         {
             return Err(MeshPreparationError::ResidencyPinned.into());
@@ -134,7 +137,7 @@ impl VulkanEngine {
         for (_, key) in candidates {
             let retiring = self.residents[&key].retiring;
             if !retiring
-                && total_count <= self.config.max_meshes
+                && total_count <= self.config.max_meshes.min(physical_mesh_limit)
                 && total_bytes <= u128::from(self.config.max_bytes)
             {
                 continue;
