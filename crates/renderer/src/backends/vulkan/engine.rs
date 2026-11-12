@@ -1,25 +1,90 @@
-//! Engine input bridge. Asset identity and draw construction are separate from
-//! native resource keys, Graph lowering and asynchronous frame retirement.
+//! Backend residency and explicit upload progress for backend-independent input.
 
-use std::{collections::BTreeMap, fmt};
-
-use super::graph::{FrameSubmission, RuntimeError, VulkanRuntime};
+use super::graph::{FrameSubmission, RuntimeError, Submission, VulkanRuntime};
 use crate::{
-    engine::{
-        Draw, Engine, EngineError, FrameSnapshot, Material, MaterialHandle, MeshData, MeshHandle,
-        View,
-    },
-    graph::{
-        BufferDesc, BufferHandle, CompiledGraph, Graph, GraphError, ImageHandle, ImportImage,
-        PassHandle, ResourceKey,
-    },
+    engine::{EngineError, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle},
+    graph::{CompiledGraph, Graph, GraphError, ImageHandle, ImportImage, PassHandle, ResourceKey},
 };
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
+mod residency;
+use residency::{MeshVersionKey, ResidentBuffers, ResidentMesh};
 
+/// Logical registered mesh bounds; not total VRAM or pending-native limits.
+#[derive(Clone, Copy, Debug)]
+pub struct MeshCacheConfig {
+    pub max_meshes: usize,
+    pub max_bytes: u64,
+    pub max_upload_submissions: usize,
+}
+impl Default for MeshCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_meshes: 16,
+            max_bytes: 64 * 1024 * 1024,
+            max_upload_submissions: 1,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum MeshPreparationError {
+    WorkingSetTooLarge {
+        required_meshes: usize,
+        required_bytes: u64,
+        max_meshes: usize,
+        max_bytes: u64,
+    },
+    ResourceCapacityTooSmall {
+        required_resources: usize,
+        capacity: usize,
+    },
+    UploadBusy,
+    ResidencyPinned,
+    NotResident,
+}
+impl fmt::Display for MeshPreparationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WorkingSetTooLarge {
+                required_meshes,
+                required_bytes,
+                max_meshes,
+                max_bytes,
+            } => write!(
+                f,
+                "mesh working set requires {required_meshes} meshes/{required_bytes} bytes; residency permits {max_meshes}/{max_bytes}"
+            ),
+            Self::ResourceCapacityTooSmall {
+                required_resources,
+                capacity,
+            } => write!(
+                f,
+                "snapshot needs at least {required_resources} physical resources including view targets; runtime permits {capacity}"
+            ),
+            Self::UploadBusy => {
+                f.write_str("another mesh working set is uploading; finish or explicitly cancel it")
+            }
+            Self::ResidencyPinned => {
+                f.write_str("prepared frames retain required residency; submit or drop them")
+            }
+            Self::NotResident => f.write_str(
+                "snapshot meshes are not resident; prepare and advance upload progress first",
+            ),
+        }
+    }
+}
+impl std::error::Error for MeshPreparationError {}
 #[derive(Debug)]
 pub enum EngineRenderError {
     Input(EngineError),
     Graph(GraphError),
     Runtime(RuntimeError),
+    Preparation(MeshPreparationError),
 }
 impl fmt::Display for EngineRenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -27,6 +92,7 @@ impl fmt::Display for EngineRenderError {
             Self::Input(e) => e.fmt(f),
             Self::Graph(e) => e.fmt(f),
             Self::Runtime(e) => e.fmt(f),
+            Self::Preparation(e) => e.fmt(f),
         }
     }
 }
@@ -36,6 +102,7 @@ impl std::error::Error for EngineRenderError {
             Self::Input(e) => e,
             Self::Graph(e) => e,
             Self::Runtime(e) => e,
+            Self::Preparation(e) => e,
         })
     }
 }
@@ -54,53 +121,99 @@ impl From<RuntimeError> for EngineRenderError {
         Self::Runtime(e)
     }
 }
-
-struct CachedMesh {
-    revision: u64,
-    vertices: ResourceKey,
-    indices: ResourceKey,
+impl From<MeshPreparationError> for EngineRenderError {
+    fn from(e: MeshPreparationError) -> Self {
+        Self::Preparation(e)
+    }
 }
-
-/// Frame metadata. Dropping it does not wait for the GPU. `output` is registered
-/// until the caller explicitly deletes its key after scheduling its consumers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MeshUploadState {
+    Ready,
+    Submitted,
+    Backpressure,
+}
+/// Ready means all required bytes were accepted, not CPU Fence completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MeshUploadProgress {
+    pub state: MeshUploadState,
+    pub submitted_bytes: u64,
+    pub remaining_bytes: u64,
+    pub pending_submissions: usize,
+}
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MeshCacheStats {
+    pub resident_meshes: usize,
+    pub resident_logical_bytes: u64,
+    pub ready_meshes: usize,
+    pub queued_meshes: usize,
+    pub prepared_retained_meshes: usize,
+    pub pending_upload_submissions: usize,
+    pub evictions: usize,
+}
+/// Output ownership authority is independent of replaceable public metadata.
 pub struct RenderedFrame {
     pub submission: FrameSubmission,
     pub output: ImportImage,
     pub readback: Option<PassHandle>,
+    output_ownership: FrameOutputOwnership,
+    owned_output_key: Option<ResourceKey>,
 }
-
-/// An owned frame ready for extra ordinary Graph declarations and compilation.
-/// Submission revalidates imported revisions. Building does not submit work or
-/// register native resource names, and dropping this value does not wait.
+impl RenderedFrame {
+    pub fn output_ownership(&self) -> FrameOutputOwnership {
+        self.output_ownership
+    }
+}
+/// Pins registered immutable mesh versions until submission or drop.
 pub struct PreparedEngineFrame {
     pub graph: Graph,
     pub output: ImageHandle,
     pub readback: Option<PassHandle>,
-    owner: u64,
+    owner: Arc<()>,
     source_graph: u64,
     source_output: ImageHandle,
-    created: Vec<(MeshHandle, u64, BufferHandle, BufferHandle)>,
+    output_ownership: FrameOutputOwnership,
+    pins: Vec<Arc<ResidentBuffers>>,
 }
-
-/// Minimal engine connection on top of the ordinary Graph and runtime APIs.
-/// Persistent meshes upload once per version; materials and per-draw parameters
-/// are copied into each frame's immutable operation operands.
+impl PreparedEngineFrame {
+    pub fn output_ownership(&self) -> FrameOutputOwnership {
+        self.output_ownership
+    }
+}
+/// GPU residency consumes immutable snapshots from any CPU Engine; no asset registry.
 pub struct VulkanEngine {
     runtime: VulkanRuntime,
-    assets: Engine,
-    meshes: BTreeMap<MeshHandle, CachedMesh>,
+    config: MeshCacheConfig,
+    owner: Arc<()>,
+    residents: BTreeMap<MeshVersionKey, ResidentMesh>,
+    active_upload: Option<Vec<MeshVersionKey>>,
+    pending_uploads: Vec<Submission>,
+    clock: AtomicU64,
+    evictions: usize,
 }
-
 impl VulkanEngine {
-    pub fn new(
-        runtime: VulkanRuntime,
-        mesh_capacity: usize,
-        material_capacity: usize,
-    ) -> Result<Self, EngineError> {
+    pub fn new(runtime: VulkanRuntime, config: MeshCacheConfig) -> Result<Self, EngineError> {
+        if config.max_meshes == 0
+            || config.max_meshes > u32::MAX as usize
+            || config.max_bytes == 0
+            || config.max_upload_submissions == 0
+        {
+            return Err(EngineError::new(
+                "mesh residency and upload bounds must be nonzero; mesh count must fit u32",
+            ));
+        }
+        let mut pending_uploads = Vec::new();
+        pending_uploads
+            .try_reserve_exact(config.max_upload_submissions)
+            .map_err(|_| EngineError::new("unable to reserve bounded upload bookkeeping"))?;
         Ok(Self {
             runtime,
-            assets: Engine::new(mesh_capacity, material_capacity)?,
-            meshes: BTreeMap::new(),
+            config,
+            owner: Arc::new(()),
+            residents: BTreeMap::new(),
+            active_upload: None,
+            pending_uploads,
+            clock: AtomicU64::new(0),
+            evictions: 0,
         })
     }
     pub fn runtime(&self) -> &VulkanRuntime {
@@ -109,73 +222,6 @@ impl VulkanEngine {
     pub fn runtime_mut(&mut self) -> &mut VulkanRuntime {
         &mut self.runtime
     }
-    pub fn assets(&self) -> &Engine {
-        &self.assets
-    }
-    pub fn create_mesh(&mut self, mesh: MeshData) -> Result<MeshHandle, EngineError> {
-        self.assets.create_mesh(mesh)
-    }
-    pub fn create_material(&mut self, material: Material) -> Result<MaterialHandle, EngineError> {
-        self.assets.create_material(material)
-    }
-    pub fn update_material(
-        &mut self,
-        handle: MaterialHandle,
-        material: Material,
-    ) -> Result<(), EngineError> {
-        self.assets.update_material(handle, material)
-    }
-    pub fn delete_material(&mut self, handle: MaterialHandle) -> Result<(), EngineError> {
-        self.assets.delete_material(handle)
-    }
-    pub fn update_mesh(
-        &mut self,
-        handle: MeshHandle,
-        mesh: MeshData,
-    ) -> Result<(), EngineRenderError> {
-        self.assets.update_mesh(handle, mesh)?;
-        self.release_mesh(handle)
-    }
-    pub fn delete_mesh(&mut self, handle: MeshHandle) -> Result<(), EngineRenderError> {
-        self.assets.delete_mesh(handle)?;
-        self.release_mesh(handle)
-    }
-    fn release_mesh(&mut self, handle: MeshHandle) -> Result<(), EngineRenderError> {
-        if let Some(mesh) = self.meshes.remove(&handle) {
-            // Registration ends now; recorded and pending Graph leases retain
-            // these buffers until actual retirement. No resource wait occurs.
-            self.runtime.delete(mesh.vertices)?;
-            self.runtime.delete(mesh.indices)?;
-        }
-        Ok(())
-    }
-    pub fn snapshot(&self, view: &View, draws: &[Draw]) -> Result<FrameSnapshot, EngineError> {
-        self.assets.snapshot(view, draws)
-    }
-    pub fn render_frame(
-        &mut self,
-        view: &View,
-        draws: &[Draw],
-        readback: bool,
-        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-    ) -> Result<RenderedFrame, EngineRenderError> {
-        let prepared = self.build_frame(view, draws, readback, extension)?;
-        let plan = prepared.graph.compile()?;
-        self.submit_frame(prepared, &plan)
-    }
-    pub fn build_frame(
-        &self,
-        view: &View,
-        draws: &[Draw],
-        readback: bool,
-        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-    ) -> Result<PreparedEngineFrame, EngineRenderError> {
-        let snapshot = self.snapshot(view, draws)?;
-        self.build_snapshot(&snapshot, readback, extension)
-    }
-    /// An owned snapshot can outlive CPU asset updates or deletion. Such old
-    /// versions remain usable here, but are transient and do not replace the
-    /// cache for the current asset version. Snapshots from another Engine fail.
     pub fn render_snapshot(
         &mut self,
         snapshot: &FrameSnapshot,
@@ -186,83 +232,53 @@ impl VulkanEngine {
         let plan = prepared.graph.compile()?;
         self.submit_frame(prepared, &plan)
     }
+    /// Construct only: missing residency is reported without hidden uploads.
     pub fn build_snapshot(
         &self,
         snapshot: &FrameSnapshot,
         readback: bool,
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<PreparedEngineFrame, EngineRenderError> {
-        if snapshot.owner != self.assets.id {
-            return Err(EngineError::new("frame snapshot belongs to another Engine").into());
-        }
         let mut graph = Graph::new();
         let mut resolved = BTreeMap::new();
-        let mut created = Vec::new();
+        let mut pins = Vec::new();
+        let serial = self.next_use()?;
         for draw in &snapshot.draws {
             if resolved.contains_key(&draw.mesh) {
                 continue;
             }
-            let current = self.assets.mesh_revision(draw.mesh).ok() == Some(draw.revision);
-            let cached = self
-                .meshes
-                .get(&draw.mesh)
-                .filter(|mesh| current && mesh.revision == draw.revision);
-            let pair = if let Some(mesh) = cached {
-                // Read-only usage also advances scheduled revisions: keep keys,
-                // never a cached ImportBuffer snapshot, between frame builds.
-                (
-                    graph.import_buffer(
-                        "persistent mesh vertices",
-                        &self.runtime.refresh_buffer(mesh.vertices)?,
-                    )?,
-                    graph.import_buffer(
-                        "persistent mesh indices",
-                        &self.runtime.refresh_buffer(mesh.indices)?,
-                    )?,
-                )
-            } else {
-                let vertices = graph.buffer(
-                    "mesh vertices",
-                    BufferDesc {
-                        size: draw.data.vertices.len() as u64,
-                    },
-                )?;
-                let indices = graph.buffer(
-                    "mesh indices",
-                    BufferDesc {
-                        size: draw.data.indices.len() as u64,
-                    },
-                )?;
-                graph.upload_buffer_shared(
-                    "mesh vertex upload",
-                    vertices,
-                    0,
-                    draw.data.vertices.clone(),
-                )?;
-                graph.upload_buffer_shared(
-                    "mesh index upload",
-                    indices,
-                    0,
-                    draw.data.indices.clone(),
-                )?;
-                if current {
-                    graph.export_buffer(vertices)?;
-                    graph.export_buffer(indices)?;
-                    created.push((draw.mesh, draw.revision, vertices, indices));
-                }
-                (vertices, indices)
-            };
-            resolved.insert(draw.mesh, pair);
+            let resident = self
+                .residents
+                .get(&MeshVersionKey::new(draw.mesh, draw.revision))
+                .filter(|entry| entry.ready() && !entry.retiring)
+                .ok_or(MeshPreparationError::NotResident)?;
+            let buffers = resident.buffers.as_ref().expect("ready mesh owns buffers");
+            // Content revisions stay stable for reads; native scopes rebase at submit.
+            let vertices = graph.import_buffer(
+                "resident mesh vertices",
+                &self.runtime.refresh_buffer(buffers.vertices)?,
+            )?;
+            let indices = graph.import_buffer(
+                "resident mesh indices",
+                &self.runtime.refresh_buffer(buffers.indices)?,
+            )?;
+            resident
+                .last_use
+                .store(serial, std::sync::atomic::Ordering::Relaxed);
+            resolved.insert(draw.mesh, (vertices, indices));
+            pins.push(Arc::clone(buffers));
         }
         let frame = snapshot.build_graph_with_meshes(graph, &resolved, readback, extension)?;
+        let output_ownership = frame.output_ownership();
         Ok(PreparedEngineFrame {
             source_graph: frame.graph.id,
             source_output: frame.output,
             graph: frame.graph,
             output: frame.output,
             readback: frame.readback,
-            owner: self.assets.id,
-            created,
+            owner: Arc::clone(&self.owner),
+            output_ownership,
+            pins,
         })
     }
     pub fn submit_frame(
@@ -270,14 +286,11 @@ impl VulkanEngine {
         prepared: PreparedEngineFrame,
         plan: &CompiledGraph,
     ) -> Result<RenderedFrame, EngineRenderError> {
-        if prepared.owner != self.assets.id
+        if !Arc::ptr_eq(&prepared.owner, &self.owner)
             || prepared.source_graph != plan.id
             || prepared.graph.id != plan.id
             || prepared.output != prepared.source_output
-            || !plan.exports.contains(&prepared.output.index)
-            || prepared.created.iter().any(|(_, _, vertices, indices)| {
-                !plan.exports.contains(&vertices.index) || !plan.exports.contains(&indices.index)
-            })
+            || !plan.has_export(prepared.output.index)
         {
             return Err(EngineError::new(
                 "prepared frame or compiled plan belongs to another owner/Graph",
@@ -285,33 +298,24 @@ impl VulkanEngine {
             .into());
         }
         let submission = self.runtime.submit_frame(plan)?;
-        // Cache only accepted exports. If recording or submit fails, no stale
-        // resource key is published as an initialized mesh version.
-        for (handle, revision, vertices, indices) in prepared.created {
-            let vertices = submission.export_buffer(vertices)?.key();
-            let indices = submission.export_buffer(indices)?.key();
-            if self.assets.mesh_revision(handle).ok() == Some(revision) {
-                // A second prepared frame may upload the same version. Retire
-                // the previous cache registration before replacing its keys.
-                self.release_mesh(handle)?;
-                self.meshes.insert(
-                    handle,
-                    CachedMesh {
-                        revision,
-                        vertices,
-                        indices,
-                    },
-                );
-            } else {
-                self.runtime.delete(vertices)?;
-                self.runtime.delete(indices)?;
-            }
-        }
         let output = submission.export_image(prepared.output)?;
+        let ownership = prepared.output_ownership;
+        drop(prepared.pins);
+        self.reap_retiring()?;
         Ok(RenderedFrame {
             submission,
+            owned_output_key: (ownership == FrameOutputOwnership::Frame).then_some(output.key()),
             output,
             readback: prepared.readback,
+            output_ownership: ownership,
         })
+    }
+    /// Release the original frame-created registration exactly once; imported outputs stay caller-owned.
+    pub fn release_output(&mut self, frame: &mut RenderedFrame) -> Result<(), EngineRenderError> {
+        if let Some(key) = frame.owned_output_key {
+            self.runtime.delete(key)?;
+            frame.owned_output_key = None;
+        }
+        Ok(())
     }
 }
