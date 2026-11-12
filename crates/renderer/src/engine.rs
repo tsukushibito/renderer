@@ -349,7 +349,6 @@ impl Engine {
             });
         }
         Ok(FrameSnapshot {
-            owner: self.id,
             view: *view,
             draws: captured,
         })
@@ -374,7 +373,6 @@ impl Engine {
     )
 )]
 pub struct FrameSnapshot {
-    pub(crate) owner: u64,
     pub(crate) view: View,
     pub(crate) draws: Vec<SnapshotDraw>,
 }
