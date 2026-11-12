@@ -2,11 +2,10 @@
 //! No native state or resource ownership escapes with the returned string.
 
 use std::fmt::Write;
-use std::sync::Arc;
 
 use ash::vk;
 
-use super::{NativeResource, Physical, Snapshot, Use};
+use super::{NativeResource, PhysicalLease, Snapshot, Use};
 use crate::graph::{CompiledGraph, Pass, ResourceKey};
 
 pub(super) fn begin(
@@ -14,7 +13,7 @@ pub(super) fn begin(
     serial: u64,
     queue_family: u32,
     keys: &[Option<ResourceKey>],
-    physical: &[Option<Arc<Physical>>],
+    physical: &[Option<PhysicalLease>],
 ) -> String {
     let mut output = format!(
         "Vulkan Graph lowering graph={} submission={serial} queue_family={queue_family} queue_index=0\n",
