@@ -348,3 +348,131 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         "validation through native destruction: {report:#?}"
     );
 }
+
+#[test]
+#[ignore = "explicit physical resource residency/backpressure test; requires effective Core+SyncVal"]
+fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
+    let runtime = VulkanRuntime::new_with_validation(
+        RuntimeConfig {
+            execution_slots: 4,
+            resource_capacity: 4,
+            staging_bytes: STAGING,
+            max_shader_bindings: 8,
+        },
+        ValidationMode::Required,
+    )
+    .unwrap();
+    assert_ne!(
+        runtime.device_info().device_type,
+        "CPU",
+        "real GPU required"
+    );
+    let monitor = runtime.validation_monitor();
+    let mut renderer = VulkanEngine::new(
+        runtime,
+        MeshCacheConfig {
+            max_meshes: 16,
+            max_bytes: 1024 * 1024,
+            max_upload_submissions: 1,
+        },
+    )
+    .unwrap();
+    let mut assets = Engine::new(3, 1).unwrap();
+    let material = assets.create_material(Material::default()).unwrap();
+    let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
+    let mut snapshots = Vec::new();
+    let mut handles = Vec::new();
+    for color in colors {
+        let tint = color.map(|component| component as f32 / 255.0);
+        let vertices = [
+            [-0.75, -0.75, 0.25],
+            [0.75, -0.75, 0.25],
+            [-0.75, 0.75, 0.25],
+            [0.75, 0.75, 0.25],
+        ]
+        .map(|position| crate::engine::Vertex {
+            position,
+            color: tint,
+        });
+        let mesh = assets
+            .create_mesh(crate::engine::MeshData::new(&vertices, &[0, 1, 2, 1, 3, 2]).unwrap())
+            .unwrap();
+        handles.push(mesh);
+        snapshots.push(
+            assets
+                .snapshot(
+                    &View {
+                        width: 32,
+                        height: 32,
+                        clip_from_world: IDENTITY,
+                        clear_color: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    &[Draw {
+                        mesh,
+                        material,
+                        world_from_model: IDENTITY,
+                    }],
+                )
+                .unwrap(),
+        );
+    }
+    let ready = |renderer: &mut VulkanEngine, snapshot: &crate::engine::FrameSnapshot| {
+        let began = Instant::now();
+        let mut progress = renderer.prepare_snapshot(snapshot).unwrap();
+        while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
+            assert!(
+                began.elapsed() < TIMEOUT,
+                "bounded residency made no upload progress"
+            );
+            progress = renderer
+                .wait_uploads(TIMEOUT.saturating_sub(began.elapsed()))
+                .unwrap();
+        }
+    };
+    for (snapshot, color) in snapshots.iter().zip(colors) {
+        ready(&mut renderer, snapshot);
+        let mut frame = renderer
+            .render_snapshot(snapshot, true, |_, image| Ok(image))
+            .unwrap();
+        let pass = frame.readback.unwrap();
+        renderer.release_output(&mut frame).unwrap();
+        let mut completed = renderer
+            .runtime_mut()
+            .wait_frame(TIMEOUT)
+            .unwrap()
+            .expect("four-resource View timed out");
+        assert_eq!(
+            completed.result.readback(pass).unwrap(),
+            engine_geometry::rectangle(32, 32, [4, 4, 28, 28], color, [0, 0, 0, 255],)
+        );
+        drop(completed);
+        assert!(renderer.mesh_cache_stats().resident_meshes <= 1);
+        assert_eq!(renderer.runtime().stats().registered_resources, 2);
+        // Identical descriptors must reuse the four native resources instead
+        // of needing more physical slots when CPU assets stay alive.
+        assert_eq!(renderer.runtime().stats().resources_created, 4);
+        for &mesh in &handles {
+            assert!(assets.mesh_revision(mesh).is_ok());
+        }
+    }
+    ready(&mut renderer, &snapshots[0]);
+    let pinned = renderer
+        .build_snapshot(&snapshots[0], false, |_, image| Ok(image))
+        .unwrap();
+    assert!(matches!(
+        renderer.prepare_snapshot(&snapshots[1]),
+        Err(super::EngineRenderError::Preparation(
+            super::MeshPreparationError::ResidencyPinned
+        ))
+    ));
+    drop(pinned);
+    ready(&mut renderer, &snapshots[1]);
+    drop(renderer);
+    let report = monitor.report();
+    assert_eq!(report.core_validation, Some(true), "{report:#?}");
+    assert_eq!(report.synchronization_validation, Some(true), "{report:#?}");
+    assert!(
+        report.is_clean(),
+        "validation through native destruction: {report:#?}"
+    );
+}
