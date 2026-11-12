@@ -3,6 +3,29 @@
 use renderer::engine::{Draw, IDENTITY, MaterialHandle, MeshHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MeshLayout {
+    Shared,
+    Distinct,
+}
+
+impl MeshLayout {
+    pub(super) fn parse(value: &str) -> Result<Self, &'static str> {
+        match value {
+            "shared" => Ok(Self::Shared),
+            "distinct" => Ok(Self::Distinct),
+            _ => Err("mesh layout must be shared or distinct"),
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Distinct => "distinct",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Layout {
     Overlap,
     Grid,
@@ -32,15 +55,17 @@ pub(super) fn grid_dimensions(count: usize) -> (usize, usize) {
 }
 
 pub(super) fn draws(
-    mesh: MeshHandle,
+    meshes: &[MeshHandle],
     material: MaterialHandle,
     count: usize,
     layout: Layout,
     translation_x: f32,
 ) -> Vec<Draw> {
+    assert!(count == 0 || meshes.len() == 1 || meshes.len() == count);
     let (columns, rows) = grid_dimensions(count);
     (0..count)
         .map(|index| {
+            let mesh = meshes[if meshes.len() == 1 { 0 } else { index }];
             if layout == Layout::Overlap {
                 return super::scene::draw(mesh, material, translation_x);
             }
@@ -115,7 +140,7 @@ mod tests {
             .create_mesh(super::super::scene::triangle([1.0, 0.0, 0.0, 1.0]).unwrap())
             .unwrap();
         let material = assets.create_material(Material::default()).unwrap();
-        let draws = draws(mesh, material, 5, Layout::Grid, 0.0);
+        let draws = draws(&[mesh], material, 5, Layout::Grid, 0.0);
         assert_eq!(grid_dimensions(5), (3, 2));
         assert_eq!(draws.len(), 5);
         assert!(
@@ -137,6 +162,48 @@ mod tests {
         rgba[(12 * width + 12) * 4] = 255;
         rgba[(12 * width + 20) * 4] = 255;
         assert!(verify(&rgba, 24, 16, 5, Layout::Grid, [255, 0, 0, 255]).is_err());
+    }
+
+    #[test]
+    fn distinct_meshes_keep_shared_geometry_placement_and_draw_order() {
+        let mut assets = Engine::new(5, 1).unwrap();
+        let geometry = super::super::scene::triangle([1.0, 0.0, 0.0, 1.0]).unwrap();
+        let meshes = (0..5)
+            .map(|_| assets.create_mesh(geometry.clone()).unwrap())
+            .collect::<Vec<_>>();
+        let material = assets.create_material(Material::default()).unwrap();
+        assert_eq!(
+            meshes
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            5
+        );
+        for layout in [Layout::Overlap, Layout::Grid] {
+            let shared = draws(&meshes[..1], material, 5, layout, 0.0);
+            let distinct = draws(&meshes, material, 5, layout, 0.0);
+            for (index, (shared, distinct)) in shared.iter().zip(&distinct).enumerate() {
+                assert_eq!(distinct.mesh, meshes[index]);
+                assert_eq!(distinct.material, shared.material);
+                assert_eq!(distinct.world_from_model, shared.world_from_model);
+            }
+            let view = super::super::scene::view(64, 64);
+            let frame = assets
+                .snapshot(&view, &distinct)
+                .unwrap()
+                .build_graph(false, |_, color| Ok(color))
+                .unwrap();
+            let plan = frame.graph.compile().unwrap();
+            assert_eq!(
+                plan.ordered_pass_names()
+                    .iter()
+                    .filter(|name| **name == "mesh vertex upload")
+                    .count(),
+                5,
+                "equal immutable geometry must retain distinct mesh resource identities"
+            );
+        }
+        assert!(draws(&[], material, 0, Layout::Grid, 0.0).is_empty());
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
 
 use renderer::{MemoryStats, RuntimeStats};
 
-use super::{IN_FLIGHT, MAX_SHADER_BINDINGS, Options, RESOURCE_CAPACITY, RunReport, Sample};
+use super::{IN_FLIGHT, MAX_SHADER_BINDINGS, Options, RunReport, Sample, frame_scaling};
 
 pub(super) fn host_metadata() -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
@@ -105,6 +105,10 @@ pub(super) fn write_report(
     let height = options.height;
     let draw_count = options.draws;
     let layout = options.layout.as_str();
+    let mesh_layout = options.mesh_layout.as_str();
+    let unique_mesh_count = options.unique_mesh_count();
+    let mesh_asset_capacity = options.mesh_capacity();
+    let resource_capacity = options.resource_capacity();
     let staging_bytes = options.staging_bytes();
     let static_output_checked = !options.churn;
     let mut json = String::from("{\n\"schema\":1,\"mode\":");
@@ -116,9 +120,17 @@ pub(super) fn write_report(
             "verify"
         },
     );
+    let geometry = match options.mesh_layout {
+        frame_scaling::MeshLayout::Shared => {
+            "one shared persistent 3-vertex/3-index triangle mesh; xyz+linear rgba stride 28; no instancing"
+        }
+        frame_scaling::MeshLayout::Distinct => {
+            "independent persistent mesh assets with identical 3-vertex/3-index triangle geometry; one vertex/index buffer pair per draw; xyz+linear rgba stride 28; no instancing"
+        }
+    };
     write!(
         json,
-        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{RESOURCE_CAPACITY},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"one shared persistent 3-vertex/3-index triangle mesh; xyz+linear rgba stride 28; no instancing\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build start through submit return; excludes capacity polling and input draw generation\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
+        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"mesh_layout\":\"{mesh_layout}\",\"unique_mesh_count\":{unique_mesh_count},\"mesh_asset_capacity\":{mesh_asset_capacity},\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{resource_capacity},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"{geometry}\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build start through submit return; excludes capacity polling and input draw generation\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
         options.frames,
         options.warmup,
         options.runs,
