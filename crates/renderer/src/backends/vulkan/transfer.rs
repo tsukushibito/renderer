@@ -218,6 +218,11 @@ pub(super) trait TransferPayload {
     /// subsequent GPU execution. `command` is recording on its owner's Device.
     unsafe fn record(&self, command: vk::CommandBuffer);
 
+    /// Publish precomputed scheduled state immediately after native acceptance,
+    /// before logging or returning control to a caller. Implementations must
+    /// not invoke application code, allocate, or panic. This is not completion.
+    fn submitted(&mut self) {}
+
     /// # Safety
     /// An actual successful Fence wait proved all commands completed, and the
     /// Device remains active. No error or timeout establishes valid contents.
@@ -480,9 +485,13 @@ impl<T: TransferPayload> RecordedTransfer<T> {
             // call, including any unwind or uncertain submission failure.
             let result = unsafe { device.raw().queue_submit2(device.queue(), &submits, fence) };
             if let Err(result) = result {
-                device.observe_result(result);
+                device.observe_submit_result(result);
             }
-            pending.retained.submitted(result)
+            let result = pending.retained.submitted(result);
+            if result.is_ok() {
+                pending.retained.value_mut().unwrap().payload.submitted();
+            }
+            result
         };
         if let Err(result) = submitted {
             let error = native_error(device, "vkQueueSubmit2", result);

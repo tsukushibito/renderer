@@ -25,6 +25,7 @@ struct State {
     fail_queue_name: bool,
     queue_names: Vec<(vk::Queue, String)>,
     debug_lookups: usize,
+    property_queries: usize,
 }
 
 thread_local! {
@@ -75,6 +76,8 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
         assert_eq!(state.queue_request, Some((7, 0)));
     });
     assert_eq!(owner.queue, vk::Queue::from_raw(5));
+    assert_eq!(owner.max_buffer_size(), 1024);
+    STATE.with(|state| assert_eq!(state.borrow().property_queries, 1));
     let lookups = STATE.with(|state| {
         let state = state.borrow();
         assert_eq!(
@@ -145,6 +148,27 @@ fn terminal_device_state_is_shared_and_queue_use_stops() {
 }
 
 #[test]
+fn rejected_submit_oom_is_retryable_but_unknown_submission_stops_future_use() {
+    let owner = VulkanDevice::create_selected(instance(false), selected()).unwrap();
+    for result in [
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+    ] {
+        owner.observe_submit_result(result);
+        assert_eq!(owner.state(), DeviceState::Active);
+        drop(owner.lock_queue().unwrap());
+    }
+    owner.observe_submit_result(vk::Result::ERROR_UNKNOWN);
+    assert_eq!(owner.state(), DeviceState::Stopped);
+    assert!(owner.lock_queue().is_err());
+    // A subsequent completion success does not reactivate old Graph state.
+    owner.observe_result(vk::Result::SUCCESS);
+    assert_eq!(owner.state(), DeviceState::Stopped);
+    owner.observe_submit_result(vk::Result::ERROR_DEVICE_LOST);
+    assert_eq!(owner.state(), DeviceState::Lost);
+}
+
+#[test]
 fn failed_creation_preserves_cause_and_destroys_only_instance() {
     let error = match VulkanDevice::create_selected(instance(true), selected()) {
         Ok(_) => panic!("creation was configured to fail"),
@@ -172,6 +196,16 @@ unsafe extern "system" fn get_instance_proc_addr(
     // SAFETY: ash supplies a live NUL-terminated lookup name.
     let name = unsafe { CStr::from_ptr(name) };
     match name.to_bytes() {
+        b"vkGetPhysicalDeviceProperties2" => {
+            let function: vk::PFN_vkGetPhysicalDeviceProperties2 = get_physical_device_properties2;
+            // SAFETY: ash restores the exact property-query signature.
+            Some(unsafe {
+                std::mem::transmute::<
+                    vk::PFN_vkGetPhysicalDeviceProperties2,
+                    unsafe extern "system" fn(),
+                >(function)
+            })
+        }
         b"vkCreateDevice" => {
             let function: vk::PFN_vkCreateDevice = create_device;
             // SAFETY: Vulkan lookup erases signatures; ash restores this exact
@@ -191,6 +225,22 @@ unsafe extern "system" fn get_instance_proc_addr(
         }
         _ => None,
     }
+}
+
+unsafe extern "system" fn get_physical_device_properties2(
+    _physical_device: vk::PhysicalDevice,
+    properties: *mut vk::PhysicalDeviceProperties2<'_>,
+) {
+    STATE.with(|state| state.borrow_mut().property_queries += 1);
+    // SAFETY: The real Device constructor passes a live Properties2 output
+    // chained to its sole Maintenance4Properties output. This narrow boundary
+    // supplies only the cached buffer limit needed by that constructor.
+    let maintenance4 = unsafe {
+        &mut *(*properties)
+            .p_next
+            .cast::<vk::PhysicalDeviceMaintenance4Properties<'_>>()
+    };
+    maintenance4.max_buffer_size = 1024;
 }
 
 unsafe extern "system" fn create_device(

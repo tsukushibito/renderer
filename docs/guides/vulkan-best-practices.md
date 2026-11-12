@@ -147,6 +147,14 @@ write-combined領域には逐次書き込みを使い、readやread-modify-write
 packed byte数はupload/readbackの論理サイズであり、optimal tilingや内部metadataを含む確保量とは異なる。
 [VkMemoryRequirements](https://docs.vulkan.org/refpages/latest/refpages/source/VkMemoryRequirements.html)
 
+**仕様要件:** Vulkan 1.3のbuffer作成前には、`VkPhysicalDeviceMaintenance4Properties::maxBufferSize`
+を照会し、要求sizeが非ゼロかつ上限以下であることを確認する。
+このsizeのValid Usageは`maintenance4` featureを有効にした場合だけの条件ではない。
+CPUで表現できるサイズ、staging容量、allocation成功の可否とは別の上限であり、
+VMAに渡す前に通常の入力エラーとして拒否する。
+[VkBufferCreateInfo: size-06409](https://docs.vulkan.org/refpages/latest/refpages/source/VkBufferCreateInfo.html)、
+[VkPhysicalDeviceMaintenance4Properties](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceMaintenance4Properties.html)。
+
 format、image type、tiling、usage、flagsの実際の組み合わせを照会し、対応extent・mip・layer・sample数を確認する。
 個別のformat featureがあるだけで、任意の組み合わせの作成成功を保証しない。
 [vkGetPhysicalDeviceImageFormatProperties2](https://docs.vulkan.org/refpages/latest/refpages/source/vkGetPhysicalDeviceImageFormatProperties2.html)

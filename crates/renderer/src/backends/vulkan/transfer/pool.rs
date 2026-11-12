@@ -128,7 +128,10 @@ impl PoolState {
 impl ExecutionPool {
     /// The limit includes idle slots, reservations, and in-flight submissions.
     /// Slots are created lazily and acquisition never waits for GPU completion.
-    pub(super) fn new(owner: Arc<MemoryOwner>, max_slots: usize) -> Result<Self, TransferError> {
+    pub(in crate::backends::vulkan) fn new(
+        owner: Arc<MemoryOwner>,
+        max_slots: usize,
+    ) -> Result<Self, TransferError> {
         let slots = Slots::new(max_slots)?;
         owner
             .device
@@ -144,7 +147,9 @@ impl ExecutionPool {
 
     /// Reserve before accepting caller data when capacity failure must leave
     /// those inputs untouched. Dropping the reservation returns the idle slot.
-    pub(super) fn reserve(&self) -> Result<ExecutionReservation, TransferError> {
+    pub(in crate::backends::vulkan) fn reserve(
+        &self,
+    ) -> Result<ExecutionReservation, TransferError> {
         let result = self
             .state
             .acquire()
@@ -165,13 +170,13 @@ impl ExecutionPool {
         self.reserve()?.record(payload)
     }
 
-    pub(super) fn stats(&self) -> ExecutionPoolStats {
+    pub(in crate::backends::vulkan) fn stats(&self) -> ExecutionPoolStats {
         self.state.lock().stats()
     }
 }
 
 impl ExecutionReservation {
-    pub(super) fn record<T: TransferPayload>(
+    pub(in crate::backends::vulkan) fn record<T: TransferPayload>(
         self,
         payload: T,
     ) -> Result<RecordedTransfer<T>, TransferError> {

@@ -77,6 +77,7 @@ pub(super) enum BufferError {
     InvalidSize {
         role: BufferRole,
         size: vk::DeviceSize,
+        max_buffer_size: vk::DeviceSize,
     },
     OutOfBounds {
         role: BufferRole,
@@ -108,8 +109,15 @@ impl fmt::Display for BufferError {
             Self::DeviceUnavailable(state) => {
                 write!(f, "buffer Device is {state:?}; normal use is stopped")
             }
-            Self::InvalidSize { role, size } => {
-                write!(f, "invalid {role:?} buffer size {size}")
+            Self::InvalidSize {
+                role,
+                size,
+                max_buffer_size,
+            } => {
+                write!(
+                    f,
+                    "invalid {role:?} buffer size {size}; Device maxBufferSize is {max_buffer_size}"
+                )
             }
             Self::OutOfBounds {
                 role,
@@ -151,9 +159,20 @@ impl Error for BufferError {
     }
 }
 
-fn valid_size(role: BufferRole, size: vk::DeviceSize) -> Result<(), BufferError> {
-    if size == 0 || (role != BufferRole::DeviceTransfer && size > isize::MAX as u64) {
-        Err(BufferError::InvalidSize { role, size })
+fn valid_size(
+    role: BufferRole,
+    size: vk::DeviceSize,
+    max_buffer_size: vk::DeviceSize,
+) -> Result<(), BufferError> {
+    if size == 0
+        || size > max_buffer_size
+        || (role != BufferRole::DeviceTransfer && size > isize::MAX as u64)
+    {
+        Err(BufferError::InvalidSize {
+            role,
+            size,
+            max_buffer_size,
+        })
     } else {
         Ok(())
     }
@@ -188,24 +207,32 @@ pub(super) type InitializedRanges = super::ranges::ByteRanges;
 fn create_resource(
     role: BufferRole,
     size: vk::DeviceSize,
+    max_buffer_size: vk::DeviceSize,
     create: impl FnOnce(
         &vk::BufferCreateInfo<'_>,
         &vk_mem::AllocationCreateInfo,
     ) -> Result<(vk::Buffer, vk_mem::Allocation), vk::Result>,
 ) -> Result<(vk::Buffer, vk_mem::Allocation), BufferError> {
-    create_resource_with_flags(role, size, vk_mem::AllocationCreateFlags::empty(), create)
+    create_resource_with_flags(
+        role,
+        size,
+        max_buffer_size,
+        vk_mem::AllocationCreateFlags::empty(),
+        create,
+    )
 }
 
 fn create_resource_with_flags(
     role: BufferRole,
     size: vk::DeviceSize,
+    max_buffer_size: vk::DeviceSize,
     extra_flags: vk_mem::AllocationCreateFlags,
     create: impl FnOnce(
         &vk::BufferCreateInfo<'_>,
         &vk_mem::AllocationCreateInfo,
     ) -> Result<(vk::Buffer, vk_mem::Allocation), vk::Result>,
 ) -> Result<(vk::Buffer, vk_mem::Allocation), BufferError> {
-    valid_size(role, size)?;
+    valid_size(role, size, max_buffer_size)?;
     let (usage, mut allocation_info) = role.create_info();
     allocation_info.flags |= extra_flags;
     let buffer_info = vk::BufferCreateInfo::default()
@@ -269,12 +296,17 @@ impl VulkanAllocator {
                 .device
                 .ensure_active()
                 .map_err(BufferError::DeviceUnavailable)?;
-            let (buffer, allocation) =
-                create_resource_with_flags(role, size, flags, |buffer_info, allocation_info| {
+            let (buffer, allocation) = create_resource_with_flags(
+                role,
+                size,
+                self.owner.device.max_buffer_size(),
+                flags,
+                |buffer_info, allocation_info| {
                     // SAFETY: The live allocator owns its Vulkan dependencies. The
                     // request creates a uniquely owned, unaliased transfer buffer.
                     unsafe { self.owner.raw.create_buffer(buffer_info, allocation_info) }
-                })?;
+                },
+            )?;
             // Own successful native results before information queries or logging.
             let mut owner = VulkanBuffer {
                 owner: Arc::clone(&self.owner),
@@ -606,9 +638,9 @@ mod tests {
                 Err(BufferError::OutOfBounds { .. })
             ));
         }
-        assert!(valid_size(role, 0).is_err());
-        assert!(valid_size(role, isize::MAX as u64 + 1).is_err());
-        assert!(valid_size(BufferRole::DeviceTransfer, isize::MAX as u64 + 1).is_ok());
+        assert!(valid_size(role, 0, u64::MAX).is_err());
+        assert!(valid_size(role, isize::MAX as u64 + 1, u64::MAX).is_err());
+        assert!(valid_size(BufferRole::DeviceTransfer, isize::MAX as u64 + 1, u64::MAX).is_ok());
     }
 
     #[test]
@@ -644,6 +676,26 @@ mod tests {
     }
 
     #[test]
+    fn device_buffer_limit_rejects_requests_before_vma_for_every_role() {
+        for role in [
+            BufferRole::Upload,
+            BufferRole::DeviceTransfer,
+            BufferRole::Readback,
+        ] {
+            for size in [0, 97, u64::MAX] {
+                let error = create_resource(role, size, 96, |_, _| {
+                    panic!("invalid device size must not reach VMA")
+                })
+                .unwrap_err();
+                assert!(matches!(error, BufferError::InvalidSize {
+                    size: rejected, max_buffer_size: 96, ..
+                } if rejected == size));
+            }
+            assert!(valid_size(role, 96, 96).is_ok());
+        }
+    }
+
+    #[test]
     fn creation_failure_retains_request_context_and_original_result() {
         for (role, expected_usage, expected_host_flag) in [
             (
@@ -662,7 +714,7 @@ mod tests {
                 vk_mem::AllocationCreateFlags::HOST_ACCESS_RANDOM,
             ),
         ] {
-            let error = create_resource(role, 17, |buffer, allocation| {
+            let error = create_resource(role, 17, 17, |buffer, allocation| {
                 assert_eq!(buffer.size, 17);
                 assert_eq!(buffer.usage, expected_usage);
                 assert_eq!(buffer.sharing_mode, vk::SharingMode::EXCLUSIVE);
@@ -682,6 +734,7 @@ mod tests {
             create_resource_with_flags(
                 BufferRole::Upload,
                 17,
+                17,
                 vk_mem::AllocationCreateFlags::MAPPED,
                 |_, allocation| {
                     assert_eq!(
@@ -696,7 +749,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            create_resource(BufferRole::Upload, 0, |_, _| {
+            create_resource(BufferRole::Upload, 0, 17, |_, _| {
                 panic!("invalid input must not call VMA")
             })
             .is_err()
@@ -721,6 +774,15 @@ mod tests {
                     "CPU fallback does not count as real-GPU acceptance"
                 );
                 let allocator = VulkanAllocator::new(device).unwrap();
+                let maximum = allocator.owner.device.max_buffer_size();
+                assert!(maximum > 0, "Vulkan 1.3 maxBufferSize must be available");
+                if let Some(oversized) = maximum.checked_add(1) {
+                    assert!(matches!(
+                        allocator.create_buffer(BufferRole::DeviceTransfer, oversized),
+                        Err(BufferError::InvalidSize { size, max_buffer_size, .. })
+                            if size == oversized && max_buffer_size == maximum
+                    ));
+                }
                 let lifetime = Arc::downgrade(&allocator.owner);
                 let mut upload = allocator.create_buffer(BufferRole::Upload, 257).unwrap();
                 let mut transfer = allocator

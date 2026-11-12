@@ -340,6 +340,7 @@ pub(super) struct VulkanDevice {
     device: ash::Device,
     debug_utils: Option<ash::ext::debug_utils::Device>,
     selected: SelectedDevice,
+    max_buffer_size: vk::DeviceSize,
     queue: vk::Queue,
     queue_lock: Mutex<()>,
     state: AtomicU8,
@@ -372,6 +373,10 @@ impl VulkanDevice {
 
     pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
         self.selected.physical_device
+    }
+
+    pub(super) fn max_buffer_size(&self) -> vk::DeviceSize {
+        self.max_buffer_size
     }
 
     pub(super) fn name(&self) -> &str {
@@ -409,6 +414,19 @@ impl VulkanDevice {
     pub(super) fn observe_result(&self, result: vk::Result) {
         if result == vk::Result::ERROR_DEVICE_LOST {
             self.state.store(DeviceState::Lost as u8, Ordering::Release);
+        }
+    }
+
+    /// Only native submit OOM guarantees that no recorded operation ran. An
+    /// unexpected submit failure must stop future state planning even if later
+    /// cleanup happens to obtain a successful Fence retirement proof.
+    pub(super) fn observe_submit_result(&self, result: vk::Result) {
+        self.observe_result(result);
+        if !matches!(
+            result,
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+        ) {
+            self.stop();
         }
     }
 
@@ -459,6 +477,17 @@ impl VulkanDevice {
         instance: VulkanInstance,
         selected: SelectedDevice,
     ) -> Result<Self, DeviceInitError> {
+        let mut maintenance4 = vk::PhysicalDeviceMaintenance4Properties::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut maintenance4);
+        // SAFETY: Selection requires Vulkan 1.3 on this retained Instance and
+        // adapter. Core property queries do not require enabling maintenance4;
+        // VkBufferCreateInfo size-06409 applies independently of that feature.
+        unsafe {
+            instance
+                .raw()
+                .get_physical_device_properties2(selected.physical_device, &mut properties);
+        }
+        let max_buffer_size = maintenance4.max_buffer_size;
         tracing::info!(target: LOG_TARGET, device = %selected.info.name,
             device_type = ?selected.info.device_type, family = selected.queue_family_index,
             queue_index = 0, queue_count = 1,
@@ -487,6 +516,7 @@ impl VulkanDevice {
             device,
             debug_utils: None,
             selected,
+            max_buffer_size,
             queue: vk::Queue::null(),
             queue_lock: Mutex::new(()),
             state: AtomicU8::new(DeviceState::Active as u8),

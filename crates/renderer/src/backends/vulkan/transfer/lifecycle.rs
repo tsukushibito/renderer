@@ -29,6 +29,10 @@ impl<T> Retained<T> {
         self.value.as_ref()
     }
 
+    pub(super) fn value_mut(&mut self) -> Option<&mut T> {
+        self.value.as_mut()
+    }
+
     /// Must precede the native call so unwinding cannot retire uncertain work.
     pub(super) fn begin_submit(&mut self) {
         assert_eq!(self.state, State::Recorded);
