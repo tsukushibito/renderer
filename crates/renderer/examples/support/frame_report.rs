@@ -111,7 +111,7 @@ pub(super) fn write_report(
     let resource_capacity = options.resource_capacity();
     let staging_bytes = options.staging_bytes();
     let static_output_checked = !options.churn;
-    let mut json = String::from("{\n\"schema\":1,\"mode\":");
+    let mut json = String::from("{\n\"schema\":2,\"mode\":");
     quote(
         &mut json,
         if options.benchmark {
@@ -130,7 +130,7 @@ pub(super) fn write_report(
     };
     write!(
         json,
-        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"mesh_layout\":\"{mesh_layout}\",\"unique_mesh_count\":{unique_mesh_count},\"mesh_asset_capacity\":{mesh_asset_capacity},\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{resource_capacity},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"{geometry}\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build start through submit return; excludes capacity polling and input draw generation\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
+        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"mesh_layout\":\"{mesh_layout}\",\"unique_mesh_count\":{unique_mesh_count},\"mesh_asset_capacity\":{mesh_asset_capacity},\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{resource_capacity},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"{geometry}\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build start through submit return; excludes capacity waits and input draw generation\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
         options.frames,
         options.warmup,
         options.runs,
@@ -212,10 +212,10 @@ pub(super) fn write_report(
         }
         write!(
             json,
-            "]}},\"polling\":{{\"calls\":{},\"pending_calls\":{},\"total_cpu_ns\":{},\"peak_pending_frames\":{},\"measured_loop_ns\":{}}},\"creation_plateau_checked\":{},\"warmed_stats\":",
-            report.poll_calls,
-            report.pending_polls,
-            report.poll_total_ns,
+            "]}},\"completion_wait\":{{\"calls\":{},\"timeouts\":{},\"total_wall_ns\":{},\"scope\":\"explicit wait_frame calls, including GPU wait and completion retirement; not CPU polling cost\",\"peak_pending_frames\":{},\"measured_loop_ns\":{}}},\"creation_plateau_checked\":{},\"warmed_stats\":",
+            report.wait_calls,
+            report.timed_out_waits,
+            report.wait_total_ns,
             report.peak_pending_frames,
             report.measured_loop_ns,
             report.plateau_checked
@@ -244,7 +244,7 @@ pub(super) fn write_report(
             "cpu_record",
             "cpu_submit",
             "cpu_retire",
-            "completed_poll",
+            "completion_wait",
             "submit_return_to_observed",
             "gpu_graph",
         ]
@@ -272,12 +272,12 @@ pub(super) fn write_report(
             }
             write!(
                 json,
-                "{{\"frame\":{},\"cpu_active_ns\":{},\"cpu_build_ns\":{},\"cpu_compile_ns\":{},\"completed_poll_ns\":{},\"submit_return_to_observed_ns\":{},\"output_checksum_fnv1a64\":\"{:016x}\",\"profile\":",
+                "{{\"frame\":{},\"cpu_active_ns\":{},\"cpu_build_ns\":{},\"cpu_compile_ns\":{},\"completion_wait_ns\":{},\"submit_return_to_observed_ns\":{},\"output_checksum_fnv1a64\":\"{:016x}\",\"profile\":",
                 sample.frame,
                 sample.active_cpu_ns,
                 sample.build_ns,
                 sample.compile_ns,
-                sample.completed_poll_ns,
+                sample.completion_wait_ns,
                 sample.observed_latency_ns,
                 sample.output_checksum
             )?;
@@ -394,7 +394,7 @@ fn value(s: &Sample, field: &str) -> Option<u128> {
         "cpu_active" => Some(s.active_cpu_ns),
         "cpu_build" => Some(s.build_ns),
         "cpu_compile" => Some(s.compile_ns),
-        "completed_poll" => Some(s.completed_poll_ns),
+        "completion_wait" => Some(s.completion_wait_ns),
         "submit_return_to_observed" => Some(s.observed_latency_ns),
         "cpu_prepare" => s.profile.as_ref().map(|p| p.prepare_ns),
         "cpu_record" => s.profile.as_ref().map(|p| p.record_ns),

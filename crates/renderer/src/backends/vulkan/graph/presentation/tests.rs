@@ -292,6 +292,11 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             }
             match runtime.present(&mut presenter, image) {
                 Ok(PresentOutcome::Presented { .. }) => {
+                    assert_eq!(
+                        &runtime.refresh_image(image.key()).unwrap(),
+                        image,
+                        "presentation changes synchronization state, not source contents"
+                    );
                     runtime.delete(image.key()).unwrap();
                     output = None;
                     displayed += 1;
@@ -326,7 +331,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                         );
                     }
                 }
-                Ok(PresentOutcome::Recreated) => {
+                Ok(PresentOutcome::Recreated | PresentOutcome::RecreateRequired) => {
                     runtime.delete(image.key()).unwrap();
                     output = None;
                 }

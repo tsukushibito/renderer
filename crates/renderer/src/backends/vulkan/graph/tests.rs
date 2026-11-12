@@ -422,20 +422,24 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             "waiting A cannot regress B's accepted state"
         );
         drop(state);
-        // A pre-B snapshot remains stale even when A is now complete.
-        let mut stale = Graph::new();
-        let old = stale.import_image("old.snapshot", &image_export).unwrap();
-        stale.readback_image("old.read", old).unwrap();
+        // B only read the image. Its changed native layout/serial must not
+        // invalidate A's unchanged content snapshot.
+        let mut unchanged = Graph::new();
+        let old = unchanged
+            .import_image("unchanged.snapshot", &image_export)
+            .unwrap();
+        let old_read = unchanged.readback_image("unchanged.read", old).unwrap();
+        let (mut reader, _) = runtime
+            .submit_with_diagnostics(&unchanged.compile().unwrap())
+            .unwrap();
+        let mut read_result = reader.wait(Duration::from_secs(10)).unwrap().unwrap();
+        assert_eq!(read_result.readback(old_read).unwrap(), image_bytes);
         assert_eq!(
-            runtime
-                .submit_with_diagnostics(&stale.compile().unwrap())
-                .err()
-                .unwrap()
-                .kind(),
-            RuntimeErrorKind::StaleResource
+            runtime.refresh_image(image_export.key()).unwrap(),
+            image_export
         );
         runtime.delete(image_export.key()).unwrap();
-        drop((first, second, result));
+        drop((first, second, result, reader, read_result));
         let mut repeated = Graph::new();
         let source = repeated
             .buffer("repeat.src", BufferDesc { size: 16 })

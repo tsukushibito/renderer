@@ -20,6 +20,7 @@ pub struct CompiledGraph {
     pub(crate) resources: Vec<Resource>,
     pub(crate) passes: Vec<Pass>,
     pub(crate) exports: Vec<usize>,
+    exported: Vec<bool>,
     pub(crate) order: Vec<usize>,
     pub(crate) final_contents: Vec<Vec<Range<u64>>>,
     analysis: Analysis,
@@ -27,6 +28,15 @@ pub struct CompiledGraph {
 }
 
 impl CompiledGraph {
+    /// Membership is independent of declaration order and resource count.
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        allow(dead_code, reason = "used by the Vulkan engine")
+    )]
+    pub(crate) fn has_export(&self, resource: usize) -> bool {
+        self.exported.get(resource).copied().unwrap_or(false)
+    }
+
     pub fn graph_id(&self) -> u64 {
         self.id
     }
@@ -136,6 +146,7 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
             })
             .collect(),
         exports: graph.exports.clone(),
+        exported: graph.exported.clone(),
         order: analysis.order.clone(),
         final_contents: contents.iter().map(ContentMap::initialized).collect(),
         analysis,

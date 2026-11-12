@@ -118,3 +118,76 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
         );
     });
 }
+
+#[test]
+#[ignore = "explicit real-GPU budgeted frame wait and retained readback results; requires Core/SyncVal"]
+fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
+    let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
+    tracing::dispatcher::with_default(&dispatch, || {
+        let mut runtime = VulkanRuntime::new(RuntimeConfig {
+            execution_slots: 2,
+            resource_capacity: 2,
+            staging_bytes: 4096,
+            max_shader_bindings: 2,
+        })
+        .expect("real Vulkan runtime is required");
+        assert_ne!(
+            runtime.owner.device.device_type(),
+            vk::PhysicalDeviceType::CPU,
+            "CPU fallback is not real-GPU acceptance"
+        );
+        let diagnostics = Arc::clone(&runtime.diagnostics);
+        crate::backends::vulkan::assert_real_validation(&diagnostics);
+
+        let bytes = [7, 43, 101, 239].repeat(16);
+        let mut graph = Graph::new();
+        let buffer = graph
+            .buffer("wait frame buffer", BufferDesc { size: 64 })
+            .unwrap();
+        graph
+            .upload_buffer("wait frame upload", buffer, 0, bytes.clone())
+            .unwrap();
+        let read = graph
+            .readback_buffer("wait frame readback", buffer, 0, 64)
+            .unwrap();
+        let plan = graph.compile().unwrap();
+        let first = runtime.submit_frame(&plan).unwrap().id();
+        let second = runtime.submit_frame(&plan).unwrap().id();
+        assert_eq!(runtime.pending_frames(), 2);
+
+        // A zero timeout is a poll: an already finished frame may be returned,
+        // but success or timeout must not consume any other result.
+        let mut results = HashMap::new();
+        if let Some(completed) = runtime.wait_frame(Duration::ZERO).unwrap() {
+            results.insert(completed.id(), completed.result);
+        }
+        assert_eq!(runtime.pending_frames(), 2 - results.len());
+        while runtime.pending_frames() != 0 {
+            let pending = runtime.pending_frames();
+            let completed = runtime
+                .wait_frame(Duration::from_secs(10))
+                .unwrap()
+                .expect("one accepted frame must finish within the wait budget");
+            assert!(results.insert(completed.id(), completed.result).is_none());
+            assert_eq!(runtime.pending_frames(), pending - 1);
+        }
+        assert_eq!(runtime.stats().readback_live_ranges, 2);
+        assert_eq!(runtime.stats().upload_live_ranges, 0);
+        for id in [first, second] {
+            assert_eq!(results.get_mut(&id).unwrap().readback(read).unwrap(), bytes);
+        }
+        assert_eq!(runtime.stats().readback_live_ranges, 0);
+        assert!(
+            runtime
+                .wait_frame(Duration::from_secs(1))
+                .unwrap()
+                .is_none()
+        );
+        drop((results, graph, plan, runtime));
+        let report = diagnostics.snapshot();
+        assert!(
+            report.is_clean(),
+            "Core/SyncVal and callback failures, including shutdown: {report:#?}"
+        );
+    });
+}
