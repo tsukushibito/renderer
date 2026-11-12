@@ -1050,6 +1050,7 @@ enum PreparedOperation {
     UploadBuffer {
         dst: usize,
         offset: u64,
+        size: u64,
     },
     CopyBuffer {
         src: usize,
@@ -1112,7 +1113,16 @@ impl TryFrom<&Operation> for PreparedOperation {
 
     fn try_from(operation: &Operation) -> Result<Self, Self::Error> {
         Ok(match *operation {
-            Operation::UploadBuffer { dst, offset, .. } => Self::UploadBuffer { dst, offset },
+            Operation::UploadBuffer {
+                dst,
+                offset,
+                ref source,
+                ..
+            } => Self::UploadBuffer {
+                dst,
+                offset,
+                size: source.len() as u64,
+            },
             Operation::CopyBuffer {
                 src,
                 dst,
@@ -1387,17 +1397,23 @@ impl GraphWork {
             }
             (|| -> Result<(), RuntimeError> {
                 match &pass.operation {
-                    Operation::UploadBuffer { dst, offset, bytes } => {
-                        let mut range = upload.allocate(bytes.len() as u64)?;
-                        range.write(bytes)?;
+                    Operation::UploadBuffer {
+                        dst,
+                        offset,
+                        bytes,
+                        source,
+                    } => {
+                        let slice = &bytes[source.clone()];
+                        let mut range = upload.allocate(slice.len() as u64)?;
+                        range.write(slice)?;
                         prepared.staging = Some(uploads.len());
                         uploads.push(range);
                         if provenance_needed[*dst] {
-                            states[*dst]
-                                .as_mut()
-                                .unwrap()
-                                .provenance
-                                .write(*offset..*offset + bytes.len() as u64, Arc::clone(bytes));
+                            states[*dst].as_mut().unwrap().provenance.write_slice(
+                                *offset..*offset + slice.len() as u64,
+                                Arc::clone(bytes),
+                                source.clone(),
+                            );
                         }
                     }
                     Operation::CopyBuffer {
@@ -1696,8 +1712,9 @@ impl TransferPayload for GraphWork {
                     );
                 }
                 match &pass.operation {
-                    PreparedOperation::UploadBuffer { dst, offset, .. } => {
+                    PreparedOperation::UploadBuffer { dst, offset, size } => {
                         let range = &self.uploads[pass.staging.unwrap()];
+                        debug_assert_eq!(range.size(), *size);
                         device.raw().cmd_copy_buffer(
                             command,
                             range.transfer_handle(),
@@ -1705,7 +1722,7 @@ impl TransferPayload for GraphWork {
                             &[vk::BufferCopy::default()
                                 .src_offset(range.offset())
                                 .dst_offset(*offset)
-                                .size(range.size())],
+                                .size(*size)],
                         );
                     }
                     PreparedOperation::CopyBuffer {
