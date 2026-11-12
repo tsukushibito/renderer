@@ -975,6 +975,69 @@ impl ShaderPrograms {
         clear_depth: f32,
         parameters: &RasterParameters,
     ) {
+        // SAFETY: The caller supplies a validated draw and retained attachments.
+        unsafe {
+            self.record_rasters(
+                command,
+                std::iter::once((vertices, indices, index_count, parameters)),
+                color,
+                depth,
+                color_load,
+                color_store,
+                clear_color,
+                depth_load,
+                depth_store,
+                clear_depth,
+            );
+        }
+    }
+
+    /// # Safety
+    /// All fixed-pipeline draws are validated and retained through retirement.
+    /// External dependencies precede this whole scope. No shader storage writes
+    /// occur; draw order preserves primitive-order attachment operations.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn record_raster_batch<'a>(
+        &self,
+        command: vk::CommandBuffer,
+        draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,
+        color: &GraphImage,
+        depth: &GraphImage,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+    ) {
+        // SAFETY: The graph batch declares the full clear and every buffer read;
+        // the caller validates indices and establishes all attachment layouts.
+        unsafe {
+            self.record_rasters(
+                command,
+                draws,
+                color,
+                depth,
+                vk::AttachmentLoadOp::CLEAR,
+                vk::AttachmentStoreOp::STORE,
+                clear_color,
+                vk::AttachmentLoadOp::CLEAR,
+                vk::AttachmentStoreOp::STORE,
+                clear_depth,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn record_rasters<'a>(
+        &self,
+        command: vk::CommandBuffer,
+        draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,
+        color: &GraphImage,
+        depth: &GraphImage,
+        color_load: vk::AttachmentLoadOp,
+        color_store: vk::AttachmentStoreOp,
+        clear_color: [f32; 4],
+        depth_load: vk::AttachmentLoadOp,
+        depth_store: vk::AttachmentStoreOp,
+        clear_depth: f32,
+    ) {
         let color_attachments = [vk::RenderingAttachmentInfo::default()
             .image_view(color.view)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -1015,26 +1078,28 @@ impl ShaderPrograms {
                 self.raster().pipeline,
             );
             self.viewport(command, color.extent);
-            let mut bytes = [0_u8; 80];
-            for (value, output) in parameters
-                .transform
-                .iter()
-                .flatten()
-                .chain(&parameters.tint)
-                .zip(bytes.as_chunks_mut::<4>().0)
-            {
-                output.copy_from_slice(&value.to_ne_bytes());
+            for (vertices, indices, index_count, parameters) in draws {
+                let mut bytes = [0_u8; 80];
+                for (value, output) in parameters
+                    .transform
+                    .iter()
+                    .flatten()
+                    .chain(&parameters.tint)
+                    .zip(bytes.as_chunks_mut::<4>().0)
+                {
+                    output.copy_from_slice(&value.to_ne_bytes());
+                }
+                device.cmd_push_constants(
+                    command,
+                    self.raster().layout,
+                    vk::ShaderStageFlags::VERTEX,
+                    0,
+                    &bytes,
+                );
+                device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
+                device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
+                device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
             }
-            device.cmd_push_constants(
-                command,
-                self.raster().layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                &bytes,
-            );
-            device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
-            device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
-            device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
             device.cmd_end_rendering(command);
         }
     }

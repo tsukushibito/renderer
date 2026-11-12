@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 
 use super::{FrameSnapshot, MeshHandle};
 use crate::graph::{
-    AttachmentOps, BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc,
-    ImageHandle, PassHandle,
+    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc, ImageHandle, PassHandle,
 };
 
 /// A normal graph, its final linear RGBA8 output and optional readback pass.
@@ -75,9 +74,9 @@ impl FrameSnapshot {
         let desc = ImageDesc::rgba8(self.view.width, self.view.height);
         let color = graph.image("view color", desc)?;
         let depth = graph.image("view depth", ImageDesc::depth32(desc.width, desc.height))?;
-        // A clear-only operation covers empty views as well as the pixels not
-        // covered by draws. Every draw then preserves the shared attachments.
-        graph.clear_attachments("view clear", color, depth, self.view.clear_color, 1.0)?;
+        // The fixed opaque list shares one clear and rendering scope. An empty
+        // list retains the clear-only path without requiring a Raster program.
+        let mut draws = Vec::with_capacity(self.draws.len());
         for draw in &self.draws {
             let &(vertices, indices) = meshes.get(&draw.mesh).ok_or_else(|| {
                 GraphError::new(
@@ -85,20 +84,20 @@ impl FrameSnapshot {
                     "missing resolved mesh buffers",
                 )
             })?;
-            graph.raster_with_parameters(
-                "view draw",
-                vertices,
-                indices,
-                draw.data.index_count,
-                color,
-                depth,
-                AttachmentOps::LOAD_STORE,
-                AttachmentOps::LOAD_STORE,
-                self.view.clear_color,
-                1.0,
-                draw.parameters,
-            )?;
+            draws.push((vertices, indices, draw.data.index_count, draw.parameters));
         }
+        graph.raster_batch(
+            if draws.is_empty() {
+                "view clear"
+            } else {
+                "view opaque batch"
+            },
+            draws,
+            color,
+            depth,
+            self.view.clear_color,
+            1.0,
+        )?;
         let transformed = extension(&mut graph, color)?;
         let output = graph.image("view output", desc)?;
         graph.composite("view final composite", transformed, output)?;
@@ -118,7 +117,64 @@ impl FrameSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{Engine, IDENTITY, View};
+    use crate::engine::{Draw, Engine, IDENTITY, Material, MeshData, Vertex, View};
+
+    fn triangle() -> MeshData {
+        MeshData::new(
+            &[[-0.5, -0.5, 0.25], [0.5, -0.5, 0.25], [0.0, 0.5, 0.25]].map(|position| Vertex {
+                position,
+                color: [1.0; 4],
+            }),
+            &[0, 1, 2],
+        )
+        .unwrap()
+    }
+
+    fn view() -> View {
+        View {
+            width: 16,
+            height: 16,
+            clip_from_world: IDENTITY,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn opaque_pass_count_is_independent_of_repeated_draw_count() {
+        let mut assets = Engine::new(1, 1).unwrap();
+        let mesh = assets.create_mesh(triangle()).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
+        let draw = Draw {
+            mesh,
+            material,
+            world_from_model: IDENTITY,
+        };
+        for count in [1, 32, 256] {
+            let snapshot = assets.snapshot(&view(), &vec![draw; count]).unwrap();
+            let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
+            // Two shared mesh uploads, one opaque list, one final composite.
+            assert_eq!(frame.graph.compile().unwrap().pass_count(), 4);
+        }
+    }
+
+    #[test]
+    fn opaque_pass_keeps_every_distinct_mesh_producer() {
+        const MESHES: usize = 128;
+        let mut assets = Engine::new(MESHES, 1).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
+        let draws = (0..MESHES)
+            .map(|_| Draw {
+                mesh: assets.create_mesh(triangle()).unwrap(),
+                material,
+                world_from_model: IDENTITY,
+            })
+            .collect::<Vec<_>>();
+        let snapshot = assets.snapshot(&view(), &draws).unwrap();
+        let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
+        let plan = frame.graph.compile().unwrap();
+        assert_eq!(plan.pass_count(), MESHES * 2 + 2);
+        assert!(plan.culled_pass_names().is_empty());
+    }
 
     #[test]
     fn empty_view_has_initialized_output_without_uploads() {

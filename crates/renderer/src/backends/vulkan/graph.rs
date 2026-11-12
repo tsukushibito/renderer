@@ -3,6 +3,7 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::ops::Range;
@@ -22,8 +23,8 @@ use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
 use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{
     AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
-    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, RasterParameters,
-    ResourceDesc, ResourceKey, StoreOp,
+    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, RasterDraw,
+    RasterParameters, ResourceDesc, ResourceKey, StoreOp,
 };
 
 mod diagnostics;
@@ -750,7 +751,9 @@ impl VulkanRuntime {
         for &pass in &graph.order {
             match graph.passes[pass].operation {
                 Operation::Compute { .. } => shader_needs.compute = true,
-                Operation::Raster { .. } => shader_needs.raster = true,
+                Operation::Raster { .. } | Operation::RasterBatch { .. } => {
+                    shader_needs.raster = true
+                }
                 Operation::Composite { .. } => shader_needs.composite = true,
                 _ => {}
             }
@@ -998,6 +1001,13 @@ enum PreparedOperation {
         clear_depth: f32,
         parameters: RasterParameters,
     },
+    RasterBatch {
+        draws: Arc<[RasterDraw]>,
+        color: usize,
+        depth: usize,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+    },
     ClearAttachments {
         color: usize,
         depth: usize,
@@ -1058,6 +1068,19 @@ impl TryFrom<&Operation> for PreparedOperation {
                 clear_depth,
                 parameters,
             },
+            Operation::RasterBatch {
+                ref draws,
+                color,
+                depth,
+                clear_color,
+                clear_depth,
+            } => Self::RasterBatch {
+                draws: Arc::clone(draws),
+                color,
+                depth,
+                clear_color,
+                clear_depth,
+            },
             Operation::ClearAttachments {
                 color,
                 depth,
@@ -1114,8 +1137,14 @@ fn provenance_requirements(graph: &CompiledGraph) -> (Vec<bool>, Vec<bool>) {
     }
     let mut needed = retained.clone();
     for &pass in &graph.order {
-        if let Operation::Raster { indices, .. } = graph.passes[pass].operation {
-            needed[indices] = true;
+        match &graph.passes[pass].operation {
+            Operation::Raster { indices, .. } => needed[*indices] = true,
+            Operation::RasterBatch { draws, .. } => {
+                for draw in draws.iter() {
+                    needed[draw.indices] = true;
+                }
+            }
+            _ => {}
         }
     }
     for &pass in graph.order.iter().rev() {
@@ -1187,17 +1216,10 @@ impl GraphWork {
             };
             // Aggregate one pass's uses before modifying previous-access state;
             // disjoint self-copies must not appear to depend on themselves.
-            let mut uses: Vec<(usize, Use)> = Vec::with_capacity(pass.accesses.len());
+            let mut uses: BTreeMap<usize, Use> = BTreeMap::new();
             for access in &pass.accesses {
                 let current = usage(access.purpose);
-                let position = uses
-                    .iter()
-                    .position(|(resource, _)| *resource == access.resource);
-                let position = position.unwrap_or_else(|| {
-                    uses.push((access.resource, Use::default()));
-                    uses.len() - 1
-                });
-                let target = &mut uses[position].1;
+                let target = uses.entry(access.resource).or_default();
                 target.stage |= current.stage;
                 target.access |= current.access;
                 target.writes |= access.write;
@@ -1368,6 +1390,23 @@ impl GraphWork {
                                 owner.device.max_draw_indexed_index_value(),
                             )
                             .map_err(index_error)?;
+                    }
+                    Operation::RasterBatch { draws, .. } => {
+                        for (draw_index, draw) in draws.iter().enumerate() {
+                            let vertex_count = graph.resources[draw.vertices].desc.units() / 28;
+                            states[draw.indices]
+                                .as_mut()
+                                .unwrap()
+                                .provenance
+                                .validate_indices(
+                                    draw.index_count,
+                                    vertex_count,
+                                    owner.device.max_draw_indexed_index_value(),
+                                )
+                                .map_err(|error| {
+                                    index_error(error).context(format!("draw {draw_index}"))
+                                })?;
+                        }
                     }
                     Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}
                     Operation::Culled | Operation::Declared(_) => {
@@ -1696,6 +1735,27 @@ impl TransferPayload for GraphWork {
                         store(depth_ops.store),
                         *clear_depth,
                         parameters,
+                    ),
+                    PreparedOperation::RasterBatch {
+                        draws,
+                        color,
+                        depth,
+                        clear_color,
+                        clear_depth,
+                    } => self.programs.as_ref().unwrap().record_raster_batch(
+                        command,
+                        draws.iter().map(|draw| {
+                            (
+                                self.resource(draw.vertices).buffer().handle,
+                                self.resource(draw.indices).buffer().handle,
+                                draw.index_count,
+                                &draw.parameters,
+                            )
+                        }),
+                        self.resource(*color).image(),
+                        self.resource(*depth).image(),
+                        *clear_color,
+                        *clear_depth,
                     ),
                     PreparedOperation::ClearAttachments {
                         color,
