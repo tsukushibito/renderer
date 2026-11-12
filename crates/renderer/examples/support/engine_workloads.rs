@@ -505,35 +505,35 @@ pub(super) fn run(mode: Mode) -> Result<String> {
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
             .unwrap_or_else(|| "unavailable".into())
     };
-    write!(
+    writeln!(
         output,
-        "{{\n\"schema\":1,\"mode\":{},\"device\":{},\"driver\":{},\"api\":{},\n",
+        "{{\n\"schema\":1,\"mode\":{},\"device\":{},\"driver\":{},\"api\":{},",
         json_string(&format!("{mode:?}")),
         json_string(&device.name),
         json_string(&format!("{:?}", device.driver_info)),
         json_string(&device.api_version)
     )?;
-    write!(
+    writeln!(
         output,
-        "\"host\":{{\"source_commit\":{},\"rustc\":{},\"os\":{},\"arch\":{},\"debug_assertions\":{}}},\n",
+        "\"host\":{{\"source_commit\":{},\"rustc\":{},\"os\":{},\"arch\":{},\"debug_assertions\":{}}},",
         json_string(&command("git", &["rev-parse", "HEAD"])),
         json_string(&command("rustc", &["--version"])),
         json_string(std::env::consts::OS),
         json_string(std::env::consts::ARCH),
         cfg!(debug_assertions)
     )?;
-    write!(
+    writeln!(
         output,
-        "\"workload\":{{\"vertices\":{large_vertices},\"indices\":{large_indices},\"mesh_bytes\":{large_bytes},\"stream_cpu_assets\":32,\"views_built_ahead\":2,\"snapshot_renderers\":2,\"staging_bytes\":{STAGING_BYTES},\"cache_meshes\":{CACHE_MESHES},\"cache_bytes\":{CACHE_BYTES},\"in_flight\":{IN_FLIGHT},\"runs\":{runs},\"warmup_per_run\":{warmup},\"measured_frames_per_run\":{frames}}},\n"
+        "\"workload\":{{\"vertices\":{large_vertices},\"indices\":{large_indices},\"mesh_bytes\":{large_bytes},\"stream_cpu_assets\":32,\"views_built_ahead\":2,\"snapshot_renderers\":2,\"staging_bytes\":{STAGING_BYTES},\"cache_meshes\":{CACHE_MESHES},\"cache_bytes\":{CACHE_BYTES},\"in_flight\":{IN_FLIGHT},\"runs\":{runs},\"warmup_per_run\":{warmup},\"measured_frames_per_run\":{frames}}},"
     )?;
-    write!(
+    writeln!(
         output,
-        "\"cold_upload\":{{\"accepted_bytes\":{},\"submissions\":{},\"accepted_us\":{},\"completed_us\":{}}},\n",
+        "\"cold_upload\":{{\"accepted_bytes\":{},\"submissions\":{},\"accepted_us\":{},\"completed_us\":{}}},",
         cold.submitted_bytes, cold.submissions, cold.accepted_us, cold.completed_us
     )?;
-    write!(
+    writeln!(
         output,
-        "\"checks\":{{\"whole_rgba_frames\":{checked},\"max_pending_frames\":{max_pending},\"validation_warnings\":{},\"validation_errors\":{},\"callback_failures\":{},\"core_validation\":{},\"sync_validation\":{}}},\n",
+        "\"checks\":{{\"whole_rgba_frames\":{checked},\"max_pending_frames\":{max_pending},\"validation_warnings\":{},\"validation_errors\":{},\"callback_failures\":{},\"core_validation\":{},\"sync_validation\":{}}},",
         validation.warnings,
         validation.errors,
         validation.callback_failures,
@@ -550,9 +550,9 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         cache.pending_upload_submissions,
         cache.evictions
     );
-    write!(
+    writeln!(
         output,
-        "\"memory\":{{\"registered_logical_bytes\":{},\"retained_logical_bytes\":{},\"cached_logical_bytes\":{},\"vma_allocation_bytes\":{},\"vma_block_bytes\":{},\"upload_peak_reserved_bytes\":{},\"upload_capacity_bytes\":{},\"resource_creates\":{},\"resource_reuses\":{},\"mesh_cache\":{}}},\n",
+        "\"memory\":{{\"registered_logical_bytes\":{},\"retained_logical_bytes\":{},\"cached_logical_bytes\":{},\"vma_allocation_bytes\":{},\"vma_block_bytes\":{},\"upload_peak_reserved_bytes\":{},\"upload_capacity_bytes\":{},\"resource_creates\":{},\"resource_reuses\":{},\"mesh_cache\":{}}},",
         memory.registered_logical_bytes,
         memory.retained_logical_bytes,
         memory.cached_logical_bytes,
@@ -564,9 +564,9 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         stats.resources_reused,
         cache_json
     )?;
-    write!(
+    writeln!(
         output,
-        "\"summary_us\":{{\"active_median\":{},\"active_p95\":{},\"gpu_median\":{},\"gpu_p95\":{},\"observed_latency_p95\":{}}},\n",
+        "\"summary_us\":{{\"active_median\":{},\"active_p95\":{},\"gpu_median\":{},\"gpu_p95\":{},\"observed_latency_p95\":{}}},",
         percentile(samples.iter().map(|s| s.active_us), 0.5),
         percentile(samples.iter().map(|s| s.active_us), 0.95),
         optional_percentile(samples.iter().filter_map(|s| s.gpu_us), 0.5),
