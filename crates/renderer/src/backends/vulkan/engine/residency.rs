@@ -121,9 +121,9 @@ impl VulkanEngine {
         let mut total_bytes = self
             .residents
             .values()
-            .map(|entry| entry.bytes)
-            .sum::<u64>()
-            + missing_bytes;
+            .map(|entry| u128::from(entry.bytes))
+            .sum::<u128>()
+            + u128::from(missing_bytes);
         let mut candidates = self
             .residents
             .iter()
@@ -135,14 +135,14 @@ impl VulkanEngine {
             let retiring = self.residents[&key].retiring;
             if !retiring
                 && total_count <= self.config.max_meshes
-                && total_bytes <= self.config.max_bytes
+                && total_bytes <= u128::from(self.config.max_bytes)
             {
                 continue;
             }
             let bytes = self.residents[&key].bytes;
             self.remove_resident(key)?;
             total_count -= 1;
-            total_bytes -= bytes;
+            total_bytes -= u128::from(bytes);
             if !retiring {
                 self.evictions += 1;
             }
@@ -287,24 +287,32 @@ impl VulkanEngine {
         let alignment = self.runtime.upload_alignment();
         let budget = available / alignment * alignment;
         let remaining = input.len() as u64 - offset;
-        let size = remaining.min(budget);
+        let mut size = remaining.min(budget);
         if size == 0 {
             return Ok(self.progress(0));
         }
-        let bytes: Arc<[u8]> = Arc::from(&input[offset as usize..(offset + size) as usize]);
-        let mut graph = Graph::new();
-        let target = graph.import_buffer(
-            "mesh upload target",
-            &self.runtime.refresh_buffer(buffer_key)?,
-        )?;
-        graph.upload_buffer_shared("mesh upload chunk", target, offset, bytes)?;
-        let plan = graph.compile()?;
-        let submission = match self.runtime.submit(&plan) {
-            Ok(submission) => submission,
-            Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {
-                return Ok(self.progress(0));
+        let submission = loop {
+            let bytes: Arc<[u8]> = Arc::from(&input[offset as usize..(offset + size) as usize]);
+            let mut graph = Graph::new();
+            let target = graph.import_buffer(
+                "mesh upload target",
+                &self.runtime.refresh_buffer(buffer_key)?,
+            )?;
+            graph.upload_buffer_shared("mesh upload chunk", target, offset, bytes)?;
+            let plan = graph.compile()?;
+            match self.runtime.submit(&plan) {
+                Ok(submission) => break submission,
+                Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {
+                    // Free bytes are advisory: other upload leases may fragment
+                    // the arena. Retry smaller four-byte chunks, bounded by the
+                    // bit width; at most one successful submission per call.
+                    size = size / 2 / 4 * 4;
+                    if size == 0 {
+                        return Ok(self.progress(0));
+                    }
+                }
+                Err(error) => return Err(error.into()),
             }
-            Err(error) => return Err(error.into()),
         };
         self.pending_uploads.push(submission);
         let entry = self.residents.get_mut(&key).unwrap();
