@@ -46,7 +46,7 @@ use shaders::{GraphImage, ShaderBindings, ShaderNeeds, ShaderPrograms};
 
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 
-/// Explicit bounds; acquisition reports exhaustion instead of waiting/growing.
+/// Explicit bounds; acquisition never waits or exceeds the configured capacities.
 #[derive(Clone, Copy, Debug)]
 pub struct RuntimeConfig {
     pub execution_slots: usize,
@@ -364,6 +364,29 @@ struct Entry {
     physical: Arc<Physical>,
 }
 
+impl Entry {
+    fn reusable(&self) -> bool {
+        !self.registered && Arc::strong_count(&self.physical) == 1 && self.generation < u32::MAX
+    }
+}
+
+/// Preserve other descriptors until the entry bound is reached. Candidates
+/// exclude registered, leased and generation-exhausted entries. Their serial is
+/// the last accepted use, so failed preparation does not promote cache entries.
+fn cache_insert_target(
+    entry_count: usize,
+    capacity: usize,
+    candidates: impl Iterator<Item = (usize, u64)>,
+) -> Result<Option<usize>, RuntimeError> {
+    if entry_count < capacity {
+        return Ok(None);
+    }
+    candidates
+        .min_by_key(|&(index, serial)| (serial, index))
+        .map(|(index, _)| Some(index))
+        .ok_or_else(|| RuntimeError::capacity("graph physical resource capacity exhausted"))
+}
+
 struct Registration<'a> {
     entries: &'a mut [Entry],
     indices: Vec<usize>,
@@ -549,12 +572,12 @@ impl VulkanRuntime {
         desc: ResourceDesc,
         name: &str,
     ) -> Result<(ResourceKey, Arc<Physical>), RuntimeError> {
-        if let Some((index, entry)) = self.entries.iter_mut().enumerate().find(|(_, entry)| {
-            !entry.registered
-                && Arc::strong_count(&entry.physical) == 1
-                && entry.physical.desc == desc
-                && entry.generation < u32::MAX
-        }) {
+        if let Some((index, entry)) = self
+            .entries
+            .iter_mut()
+            .enumerate()
+            .find(|(_, entry)| entry.reusable() && entry.physical.desc == desc)
+        {
             entry.generation += 1;
             let mut state = entry.physical.lock();
             // Preserve actual native layout/access, but never inherit old bytes
@@ -572,16 +595,17 @@ impl VulkanRuntime {
                 Arc::clone(&entry.physical),
             ));
         }
-        let replace = self.entries.iter().position(|entry| {
-            !entry.registered
-                && Arc::strong_count(&entry.physical) == 1
-                && entry.generation < u32::MAX
-        });
-        if replace.is_none() && self.entries.len() >= self.config.resource_capacity {
-            return Err(RuntimeError::capacity(
-                "graph physical resource capacity exhausted",
-            ));
-        }
+        let replace = cache_insert_target(
+            self.entries.len(),
+            self.config.resource_capacity,
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.reusable())
+                .map(|(index, entry)| (index, entry.physical.lock().scheduled.serial)),
+        )?;
+        // Complete native creation and naming before replacing an idle entry.
+        // Failure must retain its allocation, generation and accepted state.
         let native = match desc {
             ResourceDesc::Buffer(desc) => NativeResource::Buffer(
                 GraphBuffer::new(Arc::clone(&self.owner), desc.size, name)
@@ -1835,6 +1859,9 @@ fn store(value: StoreOp) -> vk::AttachmentStoreOp {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cache_tests;
 
 #[cfg(test)]
 mod render_tests;
