@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 
 use super::{FrameSnapshot, MeshHandle};
 use crate::graph::{
-    AttachmentOps, BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc,
-    ImageHandle, PassHandle,
+    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc, ImageHandle, PassHandle,
 };
 
 /// A normal graph, its final linear RGBA8 output and optional readback pass.
@@ -75,9 +74,9 @@ impl FrameSnapshot {
         let desc = ImageDesc::rgba8(self.view.width, self.view.height);
         let color = graph.image("view color", desc)?;
         let depth = graph.image("view depth", ImageDesc::depth32(desc.width, desc.height))?;
-        // A clear-only operation covers empty views as well as the pixels not
-        // covered by draws. Every draw then preserves the shared attachments.
-        graph.clear_attachments("view clear", color, depth, self.view.clear_color, 1.0)?;
+        // This experiment keeps the opaque list in one rendering scope. The
+        // builder retains a clear-only operation for an empty list.
+        let mut draws = Vec::with_capacity(self.draws.len());
         for draw in &self.draws {
             let &(vertices, indices) = meshes.get(&draw.mesh).ok_or_else(|| {
                 GraphError::new(
@@ -85,20 +84,20 @@ impl FrameSnapshot {
                     "missing resolved mesh buffers",
                 )
             })?;
-            graph.raster_with_parameters(
-                "view draw",
-                vertices,
-                indices,
-                draw.data.index_count,
-                color,
-                depth,
-                AttachmentOps::LOAD_STORE,
-                AttachmentOps::LOAD_STORE,
-                self.view.clear_color,
-                1.0,
-                draw.parameters,
-            )?;
+            draws.push((vertices, indices, draw.data.index_count, draw.parameters));
         }
+        graph.raster_batch(
+            if draws.is_empty() {
+                "view clear"
+            } else {
+                "view opaque batch"
+            },
+            draws,
+            color,
+            depth,
+            self.view.clear_color,
+            1.0,
+        )?;
         let transformed = extension(&mut graph, color)?;
         let output = graph.image("view output", desc)?;
         graph.composite("view final composite", transformed, output)?;

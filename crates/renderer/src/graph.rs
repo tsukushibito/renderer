@@ -404,6 +404,19 @@ pub(crate) struct ResourceAccess {
     pub discard_after: bool,
     pub purpose: AccessPurpose,
 }
+
+/// Owned operands for one draw in the private opaque-batch experiment.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(feature = "vulkan"),
+    allow(dead_code, reason = "native batch recording operands")
+)]
+pub(crate) struct RasterDraw {
+    pub vertices: usize,
+    pub indices: usize,
+    pub index_count: u32,
+    pub parameters: RasterParameters,
+}
 #[derive(Clone, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
@@ -459,6 +472,13 @@ pub(crate) enum Operation {
         clear_color: [f32; 4],
         clear_depth: f32,
         parameters: RasterParameters,
+    },
+    RasterBatch {
+        draws: Arc<[RasterDraw]>,
+        color: usize,
+        depth: usize,
+        clear_color: [f32; 4],
+        clear_depth: f32,
     },
     ClearAttachments {
         color: usize,
@@ -984,6 +1004,111 @@ impl Graph {
                 ],
                 false,
             ))
+        })
+    }
+
+    /// Experimental engine-only opaque list: clear once and store both targets.
+    /// All external buffer dependencies are declared before the rendering scope.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn raster_batch(
+        &mut self,
+        name: impl Into<String>,
+        draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
+        color: ImageHandle,
+        depth: ImageHandle,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+    ) -> Result<PassHandle, GraphError> {
+        if draws.is_empty() {
+            return self.clear_attachments(name, color, depth, clear_color, clear_depth);
+        }
+        self.build_pass(name, |graph| {
+        let color = graph.image_id(color)?;
+        let depth = graph.image_id(depth)?;
+        graph.color(color)?;
+        let c = graph.image_desc_at(color)?;
+        let d = graph.image_desc_at(depth)?;
+        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
+            return Err(graph.resource_error(
+                GraphErrorKind::InvalidInput,
+                "raster batch needs matching RGBA8 color and D32 depth extents",
+                depth,
+            ));
+        }
+        if !clear_depth.is_finite()
+            || !(0.0..=1.0).contains(&clear_depth)
+            || clear_color.iter().any(|x| !x.is_finite())
+        {
+            return Err(GraphError::new(GraphErrorKind::InvalidInput, "invalid attachment clear value"));
+        }
+        let mut encoded = Vec::with_capacity(draws.len());
+        // Preserve both purposes if a buffer supplies vertices and indices.
+        let mut buffers = std::collections::BTreeMap::<usize, [u64; 2]>::new();
+        for (vertices, indices, index_count, parameters) in draws {
+            let vertices = graph.buffer_id(vertices)?;
+            let indices = graph.buffer_id(indices)?;
+            let vs = graph.resources[vertices].desc.units();
+            let ix = u64::from(index_count) * 4;
+            if vs < 28
+                || !vs.is_multiple_of(28)
+                || index_count == 0
+                || !index_count.is_multiple_of(3)
+                || ix > graph.resources[indices].desc.units()
+            {
+                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
+                    "raster batch requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
+                    if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
+                ));
+            }
+            if parameters
+                .transform
+                .iter()
+                .flatten()
+                .chain(&parameters.tint)
+                .any(|x| !x.is_finite())
+            {
+                return Err(GraphError::new(GraphErrorKind::InvalidInput, "non-finite raster transform or tint"));
+            }
+            buffers.entry(vertices).or_default()[0] = vs;
+            let index_range = &mut buffers.entry(indices).or_default()[1];
+            *index_range = (*index_range).max(ix);
+            encoded.push(RasterDraw {
+                vertices,
+                indices,
+                index_count,
+                parameters,
+            });
+        }
+        let mut accesses = Vec::with_capacity(buffers.len() * 2 + 2);
+        for (resource, [vertices, indices]) in buffers {
+            if vertices != 0 {
+                accesses.push(read(resource, 0..vertices, AccessPurpose::Vertex));
+            }
+            if indices != 0 {
+                accesses.push(read(resource, 0..indices, AccessPurpose::Index));
+            }
+        }
+        accesses.push(attachment(
+            color,
+            AttachmentOps::CLEAR_STORE,
+            AccessPurpose::ColorAttachment,
+        ));
+        accesses.push(attachment(
+            depth,
+            AttachmentOps::CLEAR_STORE,
+            AccessPurpose::DepthAttachment,
+        ));
+        Ok((
+            Operation::RasterBatch {
+                draws: encoded.into(),
+                color,
+                depth,
+                clear_color,
+                clear_depth,
+            },
+            accesses,
+            false,
+        ))
         })
     }
 
@@ -1826,5 +1951,53 @@ mod tests {
                 .to_string()
                 .contains("uninitialized")
         );
+    }
+
+    #[test]
+    fn batch_requires_initialized_buffers_from_later_draws() {
+        let mut graph = Graph::new();
+        let (vertices, indices, color, depth) = mesh(&mut graph);
+        let missing = graph
+            .buffer("later vertices", BufferDesc { size: 84 })
+            .unwrap();
+        graph
+            .raster_batch(
+                "opaque batch",
+                vec![
+                    (vertices, indices, 3, RasterParameters::default()),
+                    (missing, indices, 3, RasterParameters::default()),
+                ],
+                color,
+                depth,
+                [0.0; 4],
+                1.0,
+            )
+            .unwrap();
+        graph.export_image(color).unwrap();
+        let error = graph.compile().unwrap_err().to_string();
+        assert!(
+            error.contains("later vertices") && error.contains("uninitialized"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn batch_same_buffer_can_supply_vertex_and_index_reads() {
+        let mut graph = Graph::new();
+        let (vertices, _, color, depth) = mesh(&mut graph);
+        graph
+            .raster_batch(
+                "opaque batch",
+                vec![(vertices, vertices, 3, RasterParameters::default()); 3],
+                color,
+                depth,
+                [0.0; 4],
+                1.0,
+            )
+            .unwrap();
+        graph.export_image(color).unwrap();
+        let compiled = graph.compile().unwrap();
+        let dump = compiled.dump();
+        assert!(dump.contains("purpose=Vertex") && dump.contains("purpose=Index"));
     }
 }
