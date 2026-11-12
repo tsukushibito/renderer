@@ -43,3 +43,7 @@ required-features = ["presentation"]
 
 [lints]
 workspace = true
+
+[[example]]
+name = "engine_workloads"
+required-features = ["vulkan"]

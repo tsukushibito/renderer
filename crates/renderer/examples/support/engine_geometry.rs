@@ -1,6 +1,6 @@
 //! Deterministic geometry and independent full-image expectations for workloads.
 
-use renderer::engine::{MeshData, Vertex};
+use crate::engine::{MeshData, Vertex};
 
 pub(super) struct GridData {
     pub mesh: MeshData,
