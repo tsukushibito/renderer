@@ -13,9 +13,9 @@ use std::{
 };
 
 use renderer::{
-    FrameId, GpuTiming, MemoryStats, RuntimeConfig, RuntimeStats, SubmissionResult, ValidationMode,
-    ValidationReport, VulkanEngine, VulkanRuntime,
-    engine::{Material, MaterialHandle, MeshHandle},
+    FrameId, GpuTiming, MemoryStats, MeshCacheConfig, MeshUploadState, RuntimeConfig, RuntimeStats,
+    SubmissionResult, ValidationMode, ValidationReport, VulkanEngine, VulkanRuntime,
+    engine::{Engine, FrameSnapshot, Material, MaterialHandle, MeshHandle},
     graph::{ComputeTransform, ImageDesc, ImportImage, PassHandle},
 };
 
@@ -183,6 +183,17 @@ impl Options {
         4.max(self.mesh_asset_count())
     }
 
+    fn mesh_cache_config(&self, mesh_bytes: u64) -> Result<MeshCacheConfig, Box<dyn Error>> {
+        let max_meshes = self.unique_mesh_count().max(1);
+        Ok(MeshCacheConfig {
+            max_meshes,
+            max_bytes: mesh_bytes
+                .checked_mul(max_meshes as u64)
+                .ok_or("mesh residency byte budget overflow")?,
+            max_upload_submissions: 1,
+        })
+    }
+
     fn resource_capacity(&self) -> usize {
         // Persistent vertex/index pairs plus color/depth/output and optional
         // custom images for every pending frame. A history chain retains its
@@ -222,6 +233,10 @@ struct ProfileSample {
 
 struct Sample {
     frame: usize,
+    asset_update_ns: u128,
+    snapshot_ns: u128,
+    mesh_upload_prepare_ns: u128,
+    mesh_upload_wait_ns: u128,
     build_ns: u128,
     compile_ns: u128,
     active_cpu_ns: u128,
@@ -232,6 +247,10 @@ struct Sample {
 }
 
 struct RunReport {
+    startup_snapshot_ns: u128,
+    startup_mesh_upload_prepare_ns: u128,
+    startup_mesh_upload_wait_ns: u128,
+    startup_mesh_upload_bytes: u64,
     device: renderer::DeviceInfo,
     validation: ValidationReport,
     samples: Vec<Sample>,
@@ -249,6 +268,10 @@ struct RunReport {
 
 struct PendingSample {
     frame: usize,
+    asset_update_ns: u128,
+    snapshot_ns: u128,
+    mesh_upload_prepare_ns: u128,
+    mesh_upload_wait_ns: u128,
     build_ns: u128,
     compile_ns: u128,
     active_cpu_ns: u128,
@@ -284,9 +307,10 @@ impl Collector {
         &mut self,
         engine: &mut VulkanEngine,
         options: &Options,
+        timeout: Duration,
     ) -> Result<bool, Box<dyn Error>> {
         let start = Instant::now();
-        let completed = engine.runtime_mut().wait_frame(COMPLETION_BUDGET)?;
+        let completed = engine.runtime_mut().wait_frame(timeout)?;
         let elapsed = start.elapsed().as_nanos();
         self.wait_calls += 1;
         self.wait_total_ns += elapsed;
@@ -377,6 +401,10 @@ impl Collector {
         if pending.frame >= options.warmup {
             self.samples.push(Sample {
                 frame: pending.frame - options.warmup,
+                asset_update_ns: pending.asset_update_ns,
+                snapshot_ns: pending.snapshot_ns,
+                mesh_upload_prepare_ns: pending.mesh_upload_prepare_ns,
+                mesh_upload_wait_ns: pending.mesh_upload_wait_ns,
                 build_ns: pending.build_ns,
                 compile_ns: pending.compile_ns,
                 active_cpu_ns: pending.active_cpu_ns,
@@ -399,11 +427,57 @@ impl Collector {
         engine: &mut VulkanEngine,
         options: &Options,
     ) -> Result<(), Box<dyn Error>> {
-        if !self.wait_one(engine, options)? {
+        if !self.wait_one(engine, options, COMPLETION_BUDGET)? {
             return Err("frame wait timed out; pending work remains owned".into());
         }
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct UploadTiming {
+    prepare_ns: u128,
+    wait_ns: u128,
+}
+
+fn prepare_meshes(
+    engine: &mut VulkanEngine,
+    snapshot: &FrameSnapshot,
+    collector: &mut Collector,
+    options: &Options,
+) -> Result<UploadTiming, Box<dyn Error>> {
+    let deadline = Instant::now() + COMPLETION_BUDGET;
+    let mut timing = UploadTiming::default();
+    let start = Instant::now();
+    let mut progress = engine.prepare_snapshot(snapshot)?;
+    timing.prepare_ns += start.elapsed().as_nanos();
+    // Explicitly retire the private uploads too: startup/frame build begins with
+    // reusable execution slots, while application readbacks remain in Collector.
+    while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or("mesh upload preparation timed out")?;
+        if progress.pending_submissions == 0 && progress.state == MeshUploadState::Backpressure {
+            if collector.pending.is_empty() {
+                return Err("mesh upload cannot progress within the configured capacities".into());
+            }
+            let start = Instant::now();
+            if !collector.wait_one(engine, options, remaining)? {
+                return Err("frame wait during mesh upload preparation timed out".into());
+            }
+            timing.wait_ns += start.elapsed().as_nanos();
+            let start = Instant::now();
+            progress = engine.poll_uploads()?;
+            timing.prepare_ns += start.elapsed().as_nanos();
+        } else {
+            let start = Instant::now();
+            progress = engine.wait_uploads(remaining)?;
+            // This is wall time of the explicit wait API, including its bounded
+            // retirement/progress work, and is excluded from active CPU time.
+            timing.wait_ns += start.elapsed().as_nanos();
+        }
+    }
+    Ok(timing)
 }
 
 fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
@@ -422,12 +496,13 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     runtime.set_profiling(options.benchmark)?;
     let device = runtime.device_info();
     let monitor = runtime.validation_monitor();
-    let mut engine = VulkanEngine::new(runtime, options.mesh_capacity(), 4)?;
     let geometry = scene::triangle([1.0, 0.0, 0.0, 1.0])?;
+    let mut engine = VulkanEngine::new(runtime, options.mesh_cache_config(geometry.byte_len())?)?;
+    let mut assets = Engine::new(options.mesh_capacity(), 4)?;
     let mut meshes = (0..options.mesh_asset_count())
-        .map(|_| engine.create_mesh(geometry.clone()))
+        .map(|_| assets.create_mesh(geometry.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut material = engine.create_material(Material::default())?;
+    let mut material = assets.create_material(Material::default())?;
     let view = scene::view(options.width, options.height);
     let mut draws = frame_scaling::draws(&meshes, material, options.draws, options.layout, 0.0);
     let mut collector = Collector {
@@ -441,6 +516,13 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         held_readback: None,
         static_pixels: None,
     };
+    // Initial residency, including its explicit waits, precedes the measured loop.
+    let startup_snapshot_start = Instant::now();
+    let startup_snapshot = assets.snapshot(&view, &draws)?;
+    let startup_snapshot_ns = startup_snapshot_start.elapsed().as_nanos();
+    let startup_upload = prepare_meshes(&mut engine, &startup_snapshot, &mut collector, options)?;
+    let startup_mesh_upload_bytes = geometry.byte_len() * options.unique_mesh_count() as u64;
+    drop(startup_snapshot);
     let mut history: Option<ImportImage> = None;
     let mut warmed_stats = None;
     let mut warmed_memory = None;
@@ -457,8 +539,11 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             measured_start = Some(Instant::now());
         }
         let phase = if options.churn { (frame / 8) % 3 } else { 0 };
+        let mut asset_update_ns = 0;
         if options.churn && frame > 0 && frame.is_multiple_of(8) {
-            change_assets(&mut engine, &mut meshes[0], &mut material, phase)?;
+            let asset_update_start = Instant::now();
+            change_assets(&mut assets, &mut meshes[0], &mut material, phase)?;
+            asset_update_ns = asset_update_start.elapsed().as_nanos();
             draws = frame_scaling::draws(
                 &meshes,
                 material,
@@ -467,8 +552,12 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
                 if phase == 1 { 0.1 } else { 0.0 },
             );
         }
+        let snapshot_start = Instant::now();
+        let snapshot = assets.snapshot(&view, &draws)?;
+        let snapshot_ns = snapshot_start.elapsed().as_nanos();
+        let upload = prepare_meshes(&mut engine, &snapshot, &mut collector, options)?;
         let build_start = Instant::now();
-        let mut prepared = engine.build_frame(&view, &draws, true, |graph, color| {
+        let mut prepared = engine.build_snapshot(&snapshot, true, |graph, color| {
             scene::custom_pass(graph, color, options.custom)
         })?;
         let old_history = history.take();
@@ -500,7 +589,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let compile_start = Instant::now();
         let plan = prepared.graph.compile()?;
         let compile_ns = compile_start.elapsed().as_nanos();
-        let rendered = engine.submit_frame(prepared, &plan)?;
+        let mut rendered = engine.submit_frame(prepared, &plan)?;
         let submitted = Instant::now();
         let active_cpu_ns = submitted.duration_since(build_start).as_nanos();
         if let Some(output) = history_output {
@@ -511,7 +600,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         }
         // No future frame needs this color output. Deleting its registration
         // does not destroy native objects still referenced by submitted work.
-        engine.runtime_mut().delete(rendered.output.key())?;
+        engine.release_output(&mut rendered)?;
         let mut expected_center = match phase {
             0 => [255, 0, 0, 255],
             1 => [0, 0, 0, 255],
@@ -530,6 +619,10 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             rendered.submission.id(),
             PendingSample {
                 frame,
+                asset_update_ns,
+                snapshot_ns,
+                mesh_upload_prepare_ns: upload.prepare_ns,
+                mesh_upload_wait_ns: upload.wait_ns,
                 build_ns,
                 compile_ns,
                 active_cpu_ns,
@@ -575,9 +668,10 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         engine.runtime_mut().delete(previous.key())?;
     }
     for mesh in meshes {
-        engine.delete_mesh(mesh)?;
+        engine.unload_mesh(mesh)?;
+        assets.delete_mesh(mesh)?;
     }
-    engine.delete_material(material)?;
+    assets.delete_material(material)?;
     if let (Some(path), Some(rgba)) = (&options.ppm, &collector.last_pixels) {
         frame_report::write_ppm(path, options.width, options.height, rgba)?;
     }
@@ -608,6 +702,10 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     }
     collector.samples.sort_by_key(|sample| sample.frame);
     Ok(RunReport {
+        startup_snapshot_ns,
+        startup_mesh_upload_prepare_ns: startup_upload.prepare_ns,
+        startup_mesh_upload_wait_ns: startup_upload.wait_ns,
+        startup_mesh_upload_bytes,
         device,
         validation,
         samples: collector.samples,
@@ -633,7 +731,7 @@ fn creations(stats: &RuntimeStats) -> [usize; 3] {
 }
 
 fn change_assets(
-    engine: &mut VulkanEngine,
+    engine: &mut Engine,
     mesh: &mut MeshHandle,
     material: &mut MaterialHandle,
     phase: usize,
@@ -752,6 +850,11 @@ mod tests {
         assert_eq!(distinct.unique_mesh_count(), 1024);
         assert_eq!(distinct.mesh_capacity(), 1024);
         assert_eq!(distinct.resource_capacity(), 2064);
+        let mesh_bytes = scene::triangle([1.0; 4]).unwrap().byte_len();
+        let cache = distinct.mesh_cache_config(mesh_bytes).unwrap();
+        assert_eq!(cache.max_meshes, 1024);
+        assert_eq!(cache.max_bytes, mesh_bytes * 1024);
+        assert!(distinct.mesh_cache_config(u64::MAX).is_err());
         distinct.custom = false;
         distinct.history = false;
         assert_eq!(distinct.resource_capacity(), 2057);
@@ -761,6 +864,9 @@ mod tests {
         assert_eq!(empty.unique_mesh_count(), 0);
         assert_eq!(empty.mesh_capacity(), 4);
         assert_eq!(empty.resource_capacity(), RESOURCE_CAPACITY);
+        let empty_cache = empty.mesh_cache_config(mesh_bytes).unwrap();
+        assert_eq!(empty_cache.max_meshes, 1);
+        assert_eq!(empty_cache.max_bytes, mesh_bytes);
         assert_eq!(options(&["--draws", "0"]).unwrap().unique_mesh_count(), 0);
         assert_eq!(
             options(&["--draws", "1024"]).unwrap().unique_mesh_count(),

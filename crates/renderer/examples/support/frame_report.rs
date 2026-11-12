@@ -111,7 +111,7 @@ pub(super) fn write_report(
     let resource_capacity = options.resource_capacity();
     let staging_bytes = options.staging_bytes();
     let static_output_checked = !options.churn;
-    let mut json = String::from("{\n\"schema\":2,\"mode\":");
+    let mut json = String::from("{\n\"schema\":3,\"mode\":");
     quote(
         &mut json,
         if options.benchmark {
@@ -130,7 +130,7 @@ pub(super) fn write_report(
     };
     write!(
         json,
-        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"mesh_layout\":\"{mesh_layout}\",\"unique_mesh_count\":{unique_mesh_count},\"mesh_asset_capacity\":{mesh_asset_capacity},\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{resource_capacity},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"{geometry}\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build start through submit return; excludes capacity waits and input draw generation\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
+        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"mesh_layout\":\"{mesh_layout}\",\"unique_mesh_count\":{unique_mesh_count},\"mesh_asset_capacity\":{mesh_asset_capacity},\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{resource_capacity},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"{geometry}\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build_snapshot start through submit return; excludes asset update, CPU snapshot, explicit mesh preparation/waits and draw generation\",\"cpu_caller_active_scope\":\"cpu_active plus asset-update, snapshot and non-wait mesh-prepare calls; excludes draw generation and explicit waits\",\"mesh_upload_wait_scope\":\"explicit private wait_uploads and frame-capacity wait calls while preparing residency; includes bounded retirement/progress API work; frame-capacity waits also appear in completion_wait\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured frame preparation through all observed completions; includes in-flight warmup tail, asset/snapshot/upload preparation, explicit upload/frame waits and CPU readback checks; startup uploads excluded\"}},\"host\":{{",
         options.frames,
         options.warmup,
         options.runs,
@@ -235,9 +235,22 @@ pub(super) fn write_report(
         }
         json.push_str(",\"final_memory\":");
         memory(&mut json, &report.final_memory)?;
+        write!(
+            json,
+            ",\"startup_mesh_upload\":{{\"mesh_bytes\":{},\"cpu_snapshot_ns\":{},\"prepare_call_ns\":{},\"wait_call_wall_ns\":{},\"scope\":\"completed before the measured loop; prepare and explicit wait API calls; uploaded data is excluded from steady frame active CPU/GPU samples\"}}",
+            report.startup_mesh_upload_bytes,
+            report.startup_snapshot_ns,
+            report.startup_mesh_upload_prepare_ns,
+            report.startup_mesh_upload_wait_ns,
+        )?;
         json.push_str(",\"summary_ns\":{");
         for (index, field) in [
             "cpu_active",
+            "cpu_caller_active",
+            "cpu_asset_update",
+            "cpu_snapshot",
+            "mesh_upload_prepare",
+            "mesh_upload_wait",
             "cpu_build",
             "cpu_compile",
             "cpu_prepare",
@@ -272,9 +285,17 @@ pub(super) fn write_report(
             }
             write!(
                 json,
-                "{{\"frame\":{},\"cpu_active_ns\":{},\"cpu_build_ns\":{},\"cpu_compile_ns\":{},\"completion_wait_ns\":{},\"submit_return_to_observed_ns\":{},\"output_checksum_fnv1a64\":\"{:016x}\",\"profile\":",
+                "{{\"frame\":{},\"cpu_active_ns\":{},\"cpu_caller_active_ns\":{},\"cpu_asset_update_ns\":{},\"cpu_snapshot_ns\":{},\"mesh_upload_prepare_ns\":{},\"mesh_upload_wait_ns\":{},\"cpu_build_ns\":{},\"cpu_compile_ns\":{},\"completion_wait_ns\":{},\"submit_return_to_observed_ns\":{},\"output_checksum_fnv1a64\":\"{:016x}\",\"profile\":",
                 sample.frame,
                 sample.active_cpu_ns,
+                sample.active_cpu_ns
+                    + sample.asset_update_ns
+                    + sample.snapshot_ns
+                    + sample.mesh_upload_prepare_ns,
+                sample.asset_update_ns,
+                sample.snapshot_ns,
+                sample.mesh_upload_prepare_ns,
+                sample.mesh_upload_wait_ns,
                 sample.build_ns,
                 sample.compile_ns,
                 sample.completion_wait_ns,
@@ -392,6 +413,13 @@ fn staging(output: &mut String, s: &renderer::StagingMemoryStats) -> std::fmt::R
 fn value(s: &Sample, field: &str) -> Option<u128> {
     match field {
         "cpu_active" => Some(s.active_cpu_ns),
+        "cpu_caller_active" => {
+            Some(s.active_cpu_ns + s.asset_update_ns + s.snapshot_ns + s.mesh_upload_prepare_ns)
+        }
+        "cpu_asset_update" => Some(s.asset_update_ns),
+        "cpu_snapshot" => Some(s.snapshot_ns),
+        "mesh_upload_prepare" => Some(s.mesh_upload_prepare_ns),
+        "mesh_upload_wait" => Some(s.mesh_upload_wait_ns),
         "cpu_build" => Some(s.build_ns),
         "cpu_compile" => Some(s.compile_ns),
         "completion_wait" => Some(s.completion_wait_ns),
