@@ -243,6 +243,24 @@ Runtime自身のDropには既存の保守的な後始末を残すが、通常fra
 
 ## 実行資源と共有stagingの再利用
 
+Graphの物理資源cacheは、同じ`ResourceDesc`で登録解除済み・leaseなし・世代を更新可能なentryを
+まず再利用する。一致がなければ`resource_capacity`まではentryを追加し、異なる寸法やbuffer sizeの
+working setを保持する。上限時だけ、同じ再利用条件を満たすentryのうち最後の受理済み利用の
+`scheduled.serial`が最小のものを置換する。同じserialならindexの小さいentryを選ぶ。
+登録中、記録・pendingのleaseが残る資源、世代上限のentryは置換しない。候補がなければ
+内部で待機せず容量不足を返す。失敗した準備を受理済み利用として新しく扱わない。
+
+再利用は旧内容の初期化状態とCPU provenanceを消す一方、実際のlayout・access・writer scopeは保持する。
+新しいnative資源とViewの作成・命名がすべて成功してから置換し、失敗時には既存entryのallocation・
+世代・予定状態を維持する。OOM時に暗黙のevictionや再試行を加えない。
+
+これは空きentryを直ちに異なる作成条件で置換する方式に比べ、交互の寸法でnative作成を繰り返す問題を
+避けるための保持方針である。代わりにidle資源の保持量が増え、上限時の置換中には旧・新資源が一時的に
+共存する。`resource_capacity`は保持するentryの件数上限であり、byte budgetや作成成功の保証ではない。
+byte上限・memory budgetによるevictionは今回追加せず、`memory_stats()`のcache論理byteと
+VMA Allocation／blockの実統計を区別して判断する。作成回数とCPU/GPU時間・メモリの比較は
+[現在の検証状況](../verification/current.md)に記録し、件数削減だけからGPU高速化を主張しない。
+
 `ExecutionPool`はCommandPool・一次CommandBuffer・Fenceの組を上限付きで遅延作成する。
 予約を先に取得でき、空き不足は待たずに返す。待機・再試行は呼び出し元が選ぶ。
 未投入キャンセルまたは実Fence完了後にpoolとFenceをresetし、成功した枠だけを再利用する。
