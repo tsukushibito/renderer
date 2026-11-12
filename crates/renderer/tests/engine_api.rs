@@ -1,4 +1,6 @@
-use renderer::engine::{Draw, Engine, IDENTITY, Material, MeshData, Vertex, View};
+use renderer::engine::{
+    Draw, Engine, FrameOutputOwnership, IDENTITY, Material, MeshData, Vertex, View,
+};
 
 #[test]
 fn owned_frame_inputs_need_no_gpu_or_window() {
@@ -63,6 +65,30 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
             .any(|line| line.contains("unused custom branch") && line.contains("culled"))
     );
     assert!(frame.readback.is_some());
+    assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
     assert!(engine.snapshot(&view, &[draw]).is_err());
     assert_eq!(engine.snapshot(&view, &[]).unwrap().draw_count(), 0);
+}
+
+#[test]
+fn identity_extension_exports_its_input_without_a_copy() {
+    let engine = Engine::new(1, 1).unwrap();
+    let view = View {
+        width: 17,
+        height: 11,
+        clip_from_world: IDENTITY,
+        clear_color: [0.0, 0.0, 0.0, 1.0],
+    };
+    let snapshot = engine.snapshot(&view, &[]).unwrap();
+    let mut returned = None;
+    let frame = snapshot
+        .build_graph(false, |_, color| {
+            returned = Some(color);
+            Ok(color)
+        })
+        .unwrap();
+    assert_eq!(frame.output, returned.unwrap());
+    assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
+    let plan = frame.graph.compile().unwrap();
+    assert_eq!(plan.ordered_pass_names(), ["view clear"]);
 }

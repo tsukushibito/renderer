@@ -14,7 +14,7 @@ use std::{
 use crate::graph::RasterParameters;
 
 mod graph;
-pub use graph::FrameGraph;
+pub use graph::{FrameGraph, FrameOutputOwnership};
 
 /// Four columns, each containing four rows. Vectors are column vectors.
 /// `clip_from_world * world_from_model` transforms a local vertex to clip space.
