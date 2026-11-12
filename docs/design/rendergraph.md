@@ -29,6 +29,26 @@ forwardの明示依存は実行順序を制約するが、readが読むversion�
 明示依存の先は意味的な前提として残し、循環はdeadな部分も含めて拒否する。
 ハンドルはappend-onlyなGraph内だけで有効で、別Graphでの利用を拒否する。
 
+`Graph::image_desc(ImageHandle)`はownerと画像の型を検査し、`ImageDesc`を返す。
+一時画像とimport画像、colorとdepthで同じ問い合わせを使える。
+内容の初期化やGPU完了を要求せず、descriptorの取得がそれらを保証するわけでもない。
+custom処理は入力handleから形式・寸法を取得して出力を作れるため、Viewの寸法を別に渡す必要はない。
+
+構築・compileの失敗は`GraphError::kind()`で分類する。`GraphErrorKind`は非網羅の列挙型で、
+入力不正、無効handle、owner不一致、未対応、import snapshot不一致、未初期化read、循環、
+利用側のcustom失敗を区別する。`pass`／`resource`、名前、`AccessRange`を取得でき、
+bufferは問題のbyte範囲、画像はmip・layer・aspectを返す。内部の画像用論理範囲`0..1`は公開しない。
+循環は`cycle_passes()`で、先頭を末尾に再掲した有向経路として実際の参加passを返す。
+同名passもhandleで区別でき、循環から出るだけの後続passは含めない。
+構築中に拒否したpassはまだhandleを持たず、要求名だけをcontextへ残す。
+別Graphのhandleから現在のGraphの同じindexを参照して名前を取り出すことはしない。
+
+利用側のclosureは`GraphError::custom(message)`で独自の失敗を返せる。
+エラーは名前とcontextを所有するが、GraphやGPU資源を保持しない。読みやすい`Display`と
+`message`は残し、通常の失敗処理に文言解析を要求しない。
+構造化contextの追加により、旧`GraphError { message }`という直接構築はconstructorへ移行する。
+これは今回の公開API変更であり、既存literalとの互換層は追加しない。
+
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
 deadなreadも未初期化ならエラーになり、不要な処理で入力ミスを隠さない。
 解析専用の`declare_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。

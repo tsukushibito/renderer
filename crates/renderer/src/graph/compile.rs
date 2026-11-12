@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::OnceLock;
 
-use super::{Graph, GraphError, Operation, Pass, Resource};
+use super::{Graph, GraphError, GraphErrorKind, Operation, Pass, PassHandle, Resource};
 
 /// Validated, culled logical work. This contains no native synchronization plan.
 #[derive(Clone, Debug)]
@@ -96,7 +96,7 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
         .map(|&resource| (resource, 0..graph.resources[resource].desc.units()))
         .collect::<Vec<_>>();
     let analysis =
-        analyze(&resources, &passes, &exports).map_err(|error| GraphError::new(error.0))?;
+        analyze(&resources, &passes, &exports).map_err(|error| error.into_graph_error(graph))?;
     // Culled writers must not publish valid runtime contents. Recompute the
     // final state using only the operations that will actually execute.
     let mut contents = resources
@@ -195,7 +195,67 @@ pub(super) struct Analysis {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct CompileError(pub String);
+pub(super) struct CompileError {
+    kind: GraphErrorKind,
+    message: String,
+    pass: Option<usize>,
+    resource: Option<usize>,
+    range: Option<Range<u64>>,
+    cycle: Vec<usize>,
+}
+impl CompileError {
+    fn new(kind: GraphErrorKind, message: String) -> Self {
+        Self {
+            kind,
+            message,
+            pass: None,
+            resource: None,
+            range: None,
+            cycle: Vec::new(),
+        }
+    }
+    fn at_pass(mut self, index: usize) -> Self {
+        self.pass = Some(index);
+        self
+    }
+    fn at_resource(mut self, index: usize) -> Self {
+        self.resource = Some(index);
+        self
+    }
+    fn at_range(mut self, range: Range<u64>) -> Self {
+        self.range = Some(range);
+        self
+    }
+    fn into_graph_error(self, graph: &Graph) -> GraphError {
+        let mut error = GraphError::new(self.kind, self.message);
+        if let Some(index) = self.pass {
+            error = error.with_pass(
+                PassHandle {
+                    graph: graph.id,
+                    index,
+                },
+                graph.passes.get(index).map(|pass| pass.name.as_str()),
+            );
+        }
+        if let Some(index) = self.resource {
+            error = graph.resource_context(error, index);
+            if let Some(range) = self.range.filter(|_| graph.resources.get(index).is_some()) {
+                error = error.with_range(graph.access_range(index, range));
+            }
+        }
+        if !self.cycle.is_empty() {
+            error.context_mut().cycle_passes = self
+                .cycle
+                .into_iter()
+                .map(|index| PassHandle {
+                    graph: graph.id,
+                    index,
+                })
+                .collect();
+        }
+        error
+    }
+}
 
 /// Validate every declaration before culling. Construction order determines
 /// which contents a read consumes; explicit edges constrain, but never rewrite,
@@ -224,10 +284,16 @@ pub(super) fn analyze(
                 let producers = contents[access.resource]
                     .read(access.range.clone())
                     .map_err(|hole| {
-                        CompileError(format!(
-                            "pass {:?} reads uninitialized resource {:?} at {}..{}",
-                            pass.name, resources[access.resource].name, hole.start, hole.end
-                        ))
+                        CompileError::new(
+                            GraphErrorKind::UninitializedRead,
+                            format!(
+                                "pass {:?} reads uninitialized resource {:?} at {}..{}",
+                                pass.name, resources[access.resource].name, hole.start, hole.end
+                            ),
+                        )
+                        .at_pass(index)
+                        .at_resource(access.resource)
+                        .at_range(hole)
                     })?;
                 data[index].extend(producers);
             }
@@ -249,10 +315,15 @@ pub(super) fn analyze(
     }
     for (resource, range) in exports {
         let producers = contents[*resource].read(range.clone()).map_err(|hole| {
-            CompileError(format!(
-                "export reads uninitialized resource {:?} at {}..{}",
-                resources[*resource].name, hole.start, hole.end
-            ))
+            CompileError::new(
+                GraphErrorKind::UninitializedRead,
+                format!(
+                    "export reads uninitialized resource {:?} at {}..{}",
+                    resources[*resource].name, hole.start, hole.end
+                ),
+            )
+            .at_resource(*resource)
+            .at_range(hole)
         })?;
         roots.extend(producers);
     }
@@ -480,56 +551,76 @@ fn validate(
     passes: &[CompilePass],
     exports: &[(usize, Range<u64>)],
 ) -> Result<(), CompileError> {
-    for resource in resources {
+    for (resource_index, resource) in resources.iter().enumerate() {
         if resource.size == 0 {
-            return Err(CompileError(format!(
-                "resource {:?} has zero logical size",
-                resource.name
-            )));
+            return Err(CompileError::new(
+                GraphErrorKind::InvalidInput,
+                format!("resource {:?} has zero logical size", resource.name),
+            )
+            .at_resource(resource_index));
         }
         for range in &resource.initial {
             if range.start >= range.end || range.end > resource.size {
-                return Err(CompileError(format!(
-                    "resource {:?} has invalid initial range {:?}",
-                    resource.name, range
-                )));
+                return Err(CompileError::new(
+                    GraphErrorKind::InvalidInput,
+                    format!(
+                        "resource {:?} has invalid initial range {:?}",
+                        resource.name, range
+                    ),
+                )
+                .at_resource(resource_index)
+                .at_range(range.clone()));
             }
         }
     }
-    for pass in passes {
+    for (pass_index, pass) in passes.iter().enumerate() {
         for &dependency in &pass.dependencies {
             if dependency >= passes.len() {
-                return Err(CompileError(format!(
-                    "pass {:?} depends on undefined pass {}",
-                    pass.name, dependency
-                )));
+                return Err(CompileError::new(
+                    GraphErrorKind::InvalidHandle,
+                    format!(
+                        "pass {:?} depends on undefined pass {}",
+                        pass.name, dependency
+                    ),
+                )
+                .at_pass(pass_index));
             }
         }
         for (index, access) in pass.accesses.iter().enumerate() {
-            validate_range(resources, access.resource, &access.range)
-                .map_err(|error| CompileError(format!("pass {:?}: {}", pass.name, error.0)))?;
+            validate_range(resources, access.resource, &access.range).map_err(|mut error| {
+                error.message = format!("pass {:?}: {}", pass.name, error.message);
+                error.at_pass(pass_index)
+            })?;
             if !access.read && !access.write {
-                return Err(CompileError(format!(
-                    "pass {:?} contains an access with no read or write",
-                    pass.name
-                )));
+                return Err(CompileError::new(
+                    GraphErrorKind::InvalidInput,
+                    format!(
+                        "pass {:?} contains an access with no read or write",
+                        pass.name
+                    ),
+                )
+                .at_pass(pass_index)
+                .at_resource(access.resource)
+                .at_range(access.range.clone()));
             }
             for previous in &pass.accesses[..index] {
                 if previous.resource == access.resource
                     && overlaps(&previous.range, &access.range)
                     && (previous.write || access.write)
                 {
-                    return Err(CompileError(format!(
+                    return Err(CompileError::new(GraphErrorKind::InvalidInput, format!(
                         "pass {:?} has overlapping accesses to {:?}; use one read_write access or separate passes",
                         pass.name, resources[access.resource].name
-                    )));
+                    )).at_pass(pass_index).at_resource(access.resource).at_range(access.range.clone()));
                 }
             }
         }
     }
     for (resource, range) in exports {
-        validate_range(resources, *resource, range)
-            .map_err(|error| CompileError(format!("export: {}", error.0)))?;
+        validate_range(resources, *resource, range).map_err(|mut error| {
+            error.message = format!("export: {}", error.message);
+            error
+        })?;
     }
     Ok(())
 }
@@ -539,14 +630,25 @@ fn validate_range(
     resource: usize,
     range: &Range<u64>,
 ) -> Result<(), CompileError> {
-    let Some(resource) = resources.get(resource) else {
-        return Err(CompileError(format!("undefined resource {resource}")));
+    let resource_index = resource;
+    let Some(resource) = resources.get(resource_index) else {
+        return Err(CompileError::new(
+            GraphErrorKind::InvalidHandle,
+            format!("undefined resource {resource_index}"),
+        )
+        .at_resource(resource_index)
+        .at_range(range.clone()));
     };
     if range.start >= range.end || range.end > resource.size {
-        return Err(CompileError(format!(
-            "resource {:?} range {:?} exceeds logical size {} or is empty",
-            resource.name, range, resource.size
-        )));
+        return Err(CompileError::new(
+            GraphErrorKind::InvalidInput,
+            format!(
+                "resource {:?} range {:?} exceeds logical size {} or is empty",
+                resource.name, range, resource.size
+            ),
+        )
+        .at_resource(resource_index)
+        .at_range(range.clone()));
     }
     Ok(())
 }
@@ -587,13 +689,19 @@ fn topological(
         loop {
             if let Some(&position) = positions.get(&current) {
                 path.push(current);
-                let names = path[position..]
+                let cycle = path[position..].iter().rev().copied().collect::<Vec<_>>();
+                let names = cycle
                     .iter()
-                    .rev()
                     .map(|&index| format!("{:?}", passes[index].name))
                     .collect::<Vec<_>>()
                     .join(" -> ");
-                return Err(CompileError(format!("dependency cycle: {names}")));
+                let mut error = CompileError::new(
+                    GraphErrorKind::DependencyCycle,
+                    format!("dependency cycle: {names}"),
+                )
+                .at_pass(cycle[0]);
+                error.cycle = cycle;
+                return Err(error);
             }
             positions.insert(current, path.len());
             path.push(current);

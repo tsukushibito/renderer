@@ -200,7 +200,7 @@ mod demo {
                 let view = scene::view(width, height);
                 let draws = [scene::draw(assets.mesh, assets.material, 0.0)];
                 let prepared = engine.build_frame(&view, &draws, false, |graph, color| {
-                    scene::custom_pass(graph, color, width, height, true)
+                    scene::custom_pass(graph, color, true)
                 })?;
                 let plan = prepared.graph.compile()?;
                 match engine.submit_frame(prepared, &plan) {

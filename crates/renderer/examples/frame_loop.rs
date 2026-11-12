@@ -357,7 +357,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
                 if phase == 1 { 0.1 } else { 0.0 },
             )],
             true,
-            |graph, color| scene::custom_pass(graph, color, WIDTH, HEIGHT, options.custom),
+            |graph, color| scene::custom_pass(graph, color, options.custom),
         )?;
         let old_history = history.take();
         let (history_output, history_readback) = if options.history {

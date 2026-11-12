@@ -202,9 +202,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         }
         let before = engine.runtime().stats().registered_resources;
         let rejected = engine.build_frame(&view, &[], false, |_, _| {
-            Err(GraphError {
-                message: "extension rejected".into(),
-            })
+            Err(GraphError::custom("extension rejected"))
         });
         assert!(matches!(rejected, Err(EngineRenderError::Graph(_))));
         let mut prepared = engine

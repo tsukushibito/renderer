@@ -244,15 +244,116 @@ pub struct Access {
     pub purpose: AccessPurpose,
 }
 
+/// Native-independent categories for handling graph construction and analysis errors.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GraphErrorKind {
+    /// Descriptors, values, access purposes or ranges are incompatible or invalid.
+    InvalidInput,
+    /// A handle has the current owner but no matching declaration of its kind.
+    InvalidHandle,
+    /// A resource or pass handle belongs to another graph.
+    WrongOwner,
+    /// The requested operation or subresource granularity is not supported.
+    Unsupported,
+    /// Repeated imports disagree about the same canonical runtime resource.
+    InconsistentImport,
+    /// A read or export requires contents not established by earlier declarations.
+    UninitializedRead,
+    /// Data, hazard or explicit dependencies contain a directed cycle.
+    DependencyCycle,
+    /// Application-defined failure created with [`GraphError::custom`].
+    Custom,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct GraphErrorContext {
+    pass: Option<PassHandle>,
+    resource: Option<ResourceHandle>,
+    pass_name: Option<String>,
+    resource_name: Option<String>,
+    range: Option<AccessRange>,
+    cycle_passes: Vec<PassHandle>,
+}
+
+/// A classified error with optional owned graph context. Handles identify the
+/// declaration involved; retaining an error does not retain its graph or GPU data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphError {
     pub message: String,
+    kind: GraphErrorKind,
+    context: Option<Box<GraphErrorContext>>,
 }
 impl GraphError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
+    /// Creates an application-defined error, for example from a graph extension.
+    pub fn custom(message: impl Into<String>) -> Self {
+        Self::new(GraphErrorKind::Custom, message)
+    }
+
+    pub fn kind(&self) -> GraphErrorKind {
+        self.kind
+    }
+    /// An existing pass involved in the error. Failed builders have no pass yet.
+    pub fn pass(&self) -> Option<PassHandle> {
+        self.context.as_ref().and_then(|context| context.pass)
+    }
+    /// The resource involved, when known; this may itself be an invalid handle.
+    pub fn resource(&self) -> Option<ResourceHandle> {
+        self.context.as_ref().and_then(|context| context.resource)
+    }
+    /// The existing pass name, or the requested name of a rejected builder.
+    pub fn pass_name(&self) -> Option<&str> {
+        self.context.as_ref()?.pass_name.as_deref()
+    }
+    /// The known resource name. Foreign handles never resolve names in this graph.
+    pub fn resource_name(&self) -> Option<&str> {
+        self.context.as_ref()?.resource_name.as_deref()
+    }
+    /// The offending access or undefined contents, when a range is representable.
+    pub fn range(&self) -> Option<&AccessRange> {
+        self.context.as_ref()?.range.as_ref()
+    }
+    /// The directed cycle, including its repeated first pass at the end.
+    /// Names may be duplicated; these handles identify the actual participants.
+    pub fn cycle_passes(&self) -> &[PassHandle] {
+        self.context
+            .as_ref()
+            .map_or(&[], |context| context.cycle_passes.as_slice())
+    }
+
+    pub(crate) fn new(kind: GraphErrorKind, message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            kind,
+            context: None,
         }
+    }
+    fn context_mut(&mut self) -> &mut GraphErrorContext {
+        self.context.get_or_insert_with(Box::default)
+    }
+    pub(crate) fn with_pass_name(mut self, name: &str) -> Self {
+        self.context_mut().pass_name = Some(name.into());
+        self
+    }
+    fn with_resource_name(mut self, name: &str) -> Self {
+        self.context_mut().resource_name = Some(name.into());
+        self
+    }
+    fn with_pass(mut self, handle: PassHandle, name: Option<&str>) -> Self {
+        let context = self.context_mut();
+        context.pass = Some(handle);
+        context.pass_name = name.map(str::to_owned);
+        self
+    }
+    fn with_resource(mut self, handle: ResourceHandle, name: Option<&str>) -> Self {
+        let context = self.context_mut();
+        context.resource = Some(handle);
+        context.resource_name = name.map(str::to_owned);
+        self
+    }
+    fn with_range(mut self, range: AccessRange) -> Self {
+        self.context_mut().range = Some(range);
+        self
     }
 }
 impl fmt::Display for GraphError {
@@ -419,12 +520,17 @@ impl Graph {
         name: impl Into<String>,
         desc: BufferDesc,
     ) -> Result<BufferHandle, GraphError> {
+        let name = name.into();
         if desc.size == 0 {
-            return Err(GraphError::new("buffer size must be nonzero"));
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "buffer size must be nonzero",
+            )
+            .with_resource_name(&name));
         }
         let index = self.resources.len();
         self.resources.push(Resource {
-            name: name.into(),
+            name,
             desc: ResourceDesc::Buffer(desc),
             import: None,
             import_revision: 0,
@@ -440,14 +546,17 @@ impl Graph {
         name: impl Into<String>,
         desc: ImageDesc,
     ) -> Result<ImageHandle, GraphError> {
+        let name = name.into();
         if desc.width == 0 || desc.height == 0 || desc.byte_len().is_none() {
             return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
                 "image extent must be nonzero and its byte size representable",
-            ));
+            )
+            .with_resource_name(&name));
         }
         let index = self.resources.len();
         self.resources.push(Resource {
-            name: name.into(),
+            name,
             desc: ResourceDesc::Image(desc),
             import: None,
             import_revision: 0,
@@ -458,6 +567,12 @@ impl Graph {
             index,
         })
     }
+    /// Returns the immutable description of a graph-local image. This checks
+    /// graph ownership without initializing a native backend or promising contents.
+    pub fn image_desc(&self, image: ImageHandle) -> Result<ImageDesc, GraphError> {
+        self.image_desc_at(self.image_id(image)?)
+    }
+
     pub fn import_buffer(
         &mut self,
         name: impl Into<String>,
@@ -515,7 +630,11 @@ impl Graph {
                 || existing.import_revision != revision
                 || existing.initial != initial
             {
-                return Err(GraphError::new("inconsistent repeated import snapshot"));
+                return Err(self.resource_error(
+                    GraphErrorKind::InconsistentImport,
+                    "inconsistent repeated import snapshot",
+                    index,
+                ));
             }
             return Ok(index);
         }
@@ -525,8 +644,10 @@ impl Graph {
                 .any(|r| r.start >= r.end || r.end > desc.units())
         {
             return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
                 "invalid runtime import description or initialized range",
-            ));
+            )
+            .with_resource_name(&name));
         }
         let index = self.resources.len();
         self.resources.push(Resource {
@@ -590,14 +711,15 @@ impl Graph {
         offset: u64,
         bytes: Arc<[u8]>,
     ) -> Result<PassHandle, GraphError> {
-        let dst = self.buffer_id(dst)?;
-        let range = self.buffer_range(dst, offset, bytes.len() as u64, true)?;
-        Ok(self.push(
-            name,
-            Operation::UploadBuffer { dst, offset, bytes },
-            vec![write(dst, range, AccessPurpose::CopyDestination)],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let dst = graph.buffer_id(dst)?;
+            let range = graph.buffer_range(dst, offset, bytes.len() as u64, true)?;
+            Ok((
+                Operation::UploadBuffer { dst, offset, bytes },
+                vec![write(dst, range, AccessPurpose::CopyDestination)],
+                false,
+            ))
+        })
     }
     pub fn copy_buffer(
         &mut self,
@@ -608,28 +730,35 @@ impl Graph {
         dst_offset: u64,
         size: u64,
     ) -> Result<PassHandle, GraphError> {
-        let src = self.buffer_id(src)?;
-        let dst = self.buffer_id(dst)?;
-        let source = self.buffer_range(src, src_offset, size, true)?;
-        let target = self.buffer_range(dst, dst_offset, size, true)?;
-        if src == dst && overlaps(&source, &target) {
-            return Err(GraphError::new("overlapping same-buffer copy"));
-        }
-        Ok(self.push(
-            name,
-            Operation::CopyBuffer {
-                src,
-                dst,
-                src_offset,
-                dst_offset,
-                size,
-            },
-            vec![
-                read(src, source, AccessPurpose::CopySource),
-                write(dst, target, AccessPurpose::CopyDestination),
-            ],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let src = graph.buffer_id(src)?;
+            let dst = graph.buffer_id(dst)?;
+            let source = graph.buffer_range(src, src_offset, size, true)?;
+            let target = graph.buffer_range(dst, dst_offset, size, true)?;
+            if src == dst && overlaps(&source, &target) {
+                return Err(graph
+                    .resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "overlapping same-buffer copy",
+                        dst,
+                    )
+                    .with_range(AccessRange::Buffer(target)));
+            }
+            Ok((
+                Operation::CopyBuffer {
+                    src,
+                    dst,
+                    src_offset,
+                    dst_offset,
+                    size,
+                },
+                vec![
+                    read(src, source, AccessPurpose::CopySource),
+                    write(dst, target, AccessPurpose::CopyDestination),
+                ],
+                false,
+            ))
+        })
     }
     pub fn readback_buffer(
         &mut self,
@@ -638,14 +767,15 @@ impl Graph {
         offset: u64,
         size: u64,
     ) -> Result<PassHandle, GraphError> {
-        let src = self.buffer_id(src)?;
-        let range = self.buffer_range(src, offset, size, true)?;
-        Ok(self.push(
-            name,
-            Operation::ReadbackBuffer { src, offset, size },
-            vec![read(src, range, AccessPurpose::CopySource)],
-            true,
-        ))
+        self.build_pass(name, |graph| {
+            let src = graph.buffer_id(src)?;
+            let range = graph.buffer_range(src, offset, size, true)?;
+            Ok((
+                Operation::ReadbackBuffer { src, offset, size },
+                vec![read(src, range, AccessPurpose::CopySource)],
+                true,
+            ))
+        })
     }
     pub fn upload_image(
         &mut self,
@@ -663,19 +793,24 @@ impl Graph {
         dst: ImageHandle,
         bytes: Arc<[u8]>,
     ) -> Result<PassHandle, GraphError> {
-        let dst = self.image_id(dst)?;
-        self.color(dst)?;
-        if self.image_desc(dst)?.byte_len() != Some(bytes.len() as u64) {
-            return Err(GraphError::new(
-                "image upload must provide every packed RGBA8 texel",
-            ));
-        }
-        Ok(self.push(
-            name,
-            Operation::UploadImage { dst, bytes },
-            vec![write(dst, 0..1, AccessPurpose::CopyDestination)],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let dst = graph.image_id(dst)?;
+            graph.color(dst)?;
+            if graph.image_desc_at(dst)?.byte_len() != Some(bytes.len() as u64) {
+                return Err(graph
+                    .resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "image upload must provide every packed RGBA8 texel",
+                        dst,
+                    )
+                    .with_range(graph.access_range(dst, 0..1)));
+            }
+            Ok((
+                Operation::UploadImage { dst, bytes },
+                vec![write(dst, 0..1, AccessPurpose::CopyDestination)],
+                false,
+            ))
+        })
     }
     pub fn copy_image(
         &mut self,
@@ -683,32 +818,34 @@ impl Graph {
         src: ImageHandle,
         dst: ImageHandle,
     ) -> Result<PassHandle, GraphError> {
-        let src = self.image_id(src)?;
-        let dst = self.image_id(dst)?;
-        self.compatible_color_pair(src, dst)?;
-        Ok(self.push(
-            name,
-            Operation::CopyImage { src, dst },
-            vec![
-                read(src, 0..1, AccessPurpose::CopySource),
-                write(dst, 0..1, AccessPurpose::CopyDestination),
-            ],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let src = graph.image_id(src)?;
+            let dst = graph.image_id(dst)?;
+            graph.compatible_color_pair(src, dst)?;
+            Ok((
+                Operation::CopyImage { src, dst },
+                vec![
+                    read(src, 0..1, AccessPurpose::CopySource),
+                    write(dst, 0..1, AccessPurpose::CopyDestination),
+                ],
+                false,
+            ))
+        })
     }
     pub fn readback_image(
         &mut self,
         name: impl Into<String>,
         src: ImageHandle,
     ) -> Result<PassHandle, GraphError> {
-        let src = self.image_id(src)?;
-        self.color(src)?;
-        Ok(self.push(
-            name,
-            Operation::ReadbackImage { src },
-            vec![read(src, 0..1, AccessPurpose::CopySource)],
-            true,
-        ))
+        self.build_pass(name, |graph| {
+            let src = graph.image_id(src)?;
+            graph.color(src)?;
+            Ok((
+                Operation::ReadbackImage { src },
+                vec![read(src, 0..1, AccessPurpose::CopySource)],
+                true,
+            ))
+        })
     }
     pub fn compute(
         &mut self,
@@ -717,22 +854,23 @@ impl Graph {
         dst: ImageHandle,
         transform: ComputeTransform,
     ) -> Result<PassHandle, GraphError> {
-        let src = self.image_id(src)?;
-        let dst = self.image_id(dst)?;
-        self.compatible_color_pair(src, dst)?;
-        Ok(self.push(
-            name,
-            Operation::Compute {
-                src,
-                dst,
-                transform,
-            },
-            vec![
-                read(src, 0..1, AccessPurpose::StorageRead),
-                write(dst, 0..1, AccessPurpose::StorageWrite),
-            ],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let src = graph.image_id(src)?;
+            let dst = graph.image_id(dst)?;
+            graph.compatible_color_pair(src, dst)?;
+            Ok((
+                Operation::Compute {
+                    src,
+                    dst,
+                    transform,
+                },
+                vec![
+                    read(src, 0..1, AccessPurpose::StorageRead),
+                    write(dst, 0..1, AccessPurpose::StorageWrite),
+                ],
+                false,
+            ))
+        })
     }
     /// Draw u32 indexed triangles using tightly packed seven-f32 vertices
     /// (`xyz`, then linear `rgba`). The runtime checks CPU-known index values
@@ -783,67 +921,70 @@ impl Graph {
         clear_depth: f32,
         parameters: RasterParameters,
     ) -> Result<PassHandle, GraphError> {
-        let vertices = self.buffer_id(vertices)?;
-        let indices = self.buffer_id(indices)?;
-        let color = self.image_id(color)?;
-        let depth = self.image_id(depth)?;
-        self.color(color)?;
-        let c = self.image_desc(color)?;
-        let d = self.image_desc(depth)?;
-        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-            return Err(GraphError::new(
-                "raster needs matching RGBA8 color and D32 depth extents",
-            ));
-        }
-        let vs = self.resources[vertices].desc.units();
-        let ix = u64::from(index_count) * 4;
-        if vs < 28
-            || !vs.is_multiple_of(28)
-            || index_count == 0
-            || !index_count.is_multiple_of(3)
-            || ix > self.resources[indices].desc.units()
-        {
-            return Err(GraphError::new(
-                "raster requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
-            ));
-        }
-        if !clear_depth.is_finite()
-            || !(0.0..=1.0).contains(&clear_depth)
-            || clear_color.iter().any(|x| !x.is_finite())
-        {
-            return Err(GraphError::new("invalid attachment clear value"));
-        }
-        if parameters
-            .transform
-            .iter()
-            .flatten()
-            .chain(&parameters.tint)
-            .any(|x| !x.is_finite())
-        {
-            return Err(GraphError::new("non-finite raster transform or tint"));
-        }
-        Ok(self.push(
-            name,
-            Operation::Raster {
-                vertices,
-                indices,
-                index_count,
-                color,
-                depth,
-                color_ops,
-                depth_ops,
-                clear_color,
-                clear_depth,
-                parameters,
-            },
-            vec![
-                read(vertices, 0..vs, AccessPurpose::Vertex),
-                read(indices, 0..ix, AccessPurpose::Index),
-                attachment(color, color_ops, AccessPurpose::ColorAttachment),
-                attachment(depth, depth_ops, AccessPurpose::DepthAttachment),
-            ],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let vertices = graph.buffer_id(vertices)?;
+            let indices = graph.buffer_id(indices)?;
+            let color = graph.image_id(color)?;
+            let depth = graph.image_id(depth)?;
+            graph.color(color)?;
+            let c = graph.image_desc_at(color)?;
+            let d = graph.image_desc_at(depth)?;
+            if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
+                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
+                    "raster needs matching RGBA8 color and D32 depth extents",
+                    depth,
+                ));
+            }
+            let vs = graph.resources[vertices].desc.units();
+            let ix = u64::from(index_count) * 4;
+            if vs < 28
+                || !vs.is_multiple_of(28)
+                || index_count == 0
+                || !index_count.is_multiple_of(3)
+                || ix > graph.resources[indices].desc.units()
+            {
+                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
+                    "raster requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
+                    if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
+                ));
+            }
+            if !clear_depth.is_finite()
+                || !(0.0..=1.0).contains(&clear_depth)
+                || clear_color.iter().any(|x| !x.is_finite())
+            {
+                return Err(GraphError::new(GraphErrorKind::InvalidInput, "invalid attachment clear value"));
+            }
+            if parameters
+                .transform
+                .iter()
+                .flatten()
+                .chain(&parameters.tint)
+                .any(|x| !x.is_finite())
+            {
+                return Err(GraphError::new(GraphErrorKind::InvalidInput, "non-finite raster transform or tint"));
+            }
+            Ok((
+                Operation::Raster {
+                    vertices,
+                    indices,
+                    index_count,
+                    color,
+                    depth,
+                    color_ops,
+                    depth_ops,
+                    clear_color,
+                    clear_depth,
+                    parameters,
+                },
+                vec![
+                    read(vertices, 0..vs, AccessPurpose::Vertex),
+                    read(indices, 0..ix, AccessPurpose::Index),
+                    attachment(color, color_ops, AccessPurpose::ColorAttachment),
+                    attachment(depth, depth_ops, AccessPurpose::DepthAttachment),
+                ],
+                false,
+            ))
+        })
     }
 
     /// Initializes a complete color/depth target even when a view has no draws.
@@ -855,44 +996,50 @@ impl Graph {
         clear_color: [f32; 4],
         clear_depth: f32,
     ) -> Result<PassHandle, GraphError> {
-        let color = self.image_id(color)?;
-        let depth = self.image_id(depth)?;
-        self.color(color)?;
-        let c = self.image_desc(color)?;
-        let d = self.image_desc(depth)?;
-        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-            return Err(GraphError::new(
-                "clear needs matching RGBA8 color and D32 depth extents",
-            ));
-        }
-        if !clear_depth.is_finite()
-            || !(0.0..=1.0).contains(&clear_depth)
-            || clear_color.iter().any(|x| !x.is_finite())
-        {
-            return Err(GraphError::new("invalid attachment clear value"));
-        }
-        Ok(self.push(
-            name,
-            Operation::ClearAttachments {
-                color,
-                depth,
-                clear_color,
-                clear_depth,
-            },
-            vec![
-                attachment(
-                    color,
-                    AttachmentOps::CLEAR_STORE,
-                    AccessPurpose::ColorAttachment,
-                ),
-                attachment(
+        self.build_pass(name, |graph| {
+            let color = graph.image_id(color)?;
+            let depth = graph.image_id(depth)?;
+            graph.color(color)?;
+            let c = graph.image_desc_at(color)?;
+            let d = graph.image_desc_at(depth)?;
+            if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
+                return Err(graph.resource_error(
+                    GraphErrorKind::InvalidInput,
+                    "clear needs matching RGBA8 color and D32 depth extents",
                     depth,
-                    AttachmentOps::CLEAR_STORE,
-                    AccessPurpose::DepthAttachment,
-                ),
-            ],
-            false,
-        ))
+                ));
+            }
+            if !clear_depth.is_finite()
+                || !(0.0..=1.0).contains(&clear_depth)
+                || clear_color.iter().any(|x| !x.is_finite())
+            {
+                return Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "invalid attachment clear value",
+                ));
+            }
+            Ok((
+                Operation::ClearAttachments {
+                    color,
+                    depth,
+                    clear_color,
+                    clear_depth,
+                },
+                vec![
+                    attachment(
+                        color,
+                        AttachmentOps::CLEAR_STORE,
+                        AccessPurpose::ColorAttachment,
+                    ),
+                    attachment(
+                        depth,
+                        AttachmentOps::CLEAR_STORE,
+                        AccessPurpose::DepthAttachment,
+                    ),
+                ],
+                false,
+            ))
+        })
     }
     pub fn composite(
         &mut self,
@@ -900,18 +1047,19 @@ impl Graph {
         src: ImageHandle,
         dst: ImageHandle,
     ) -> Result<PassHandle, GraphError> {
-        let src = self.image_id(src)?;
-        let dst = self.image_id(dst)?;
-        self.compatible_color_pair(src, dst)?;
-        Ok(self.push(
-            name,
-            Operation::Composite { src, dst },
-            vec![
-                read(src, 0..1, AccessPurpose::Sampled),
-                write(dst, 0..1, AccessPurpose::ColorAttachment),
-            ],
-            false,
-        ))
+        self.build_pass(name, |graph| {
+            let src = graph.image_id(src)?;
+            let dst = graph.image_id(dst)?;
+            graph.compatible_color_pair(src, dst)?;
+            Ok((
+                Operation::Composite { src, dst },
+                vec![
+                    read(src, 0..1, AccessPurpose::Sampled),
+                    write(dst, 0..1, AccessPurpose::ColorAttachment),
+                ],
+                false,
+            ))
+        })
     }
     /// Represent analysis-only work. A Vulkan runtime must explicitly reject
     /// live declaration-only operations rather than report successful execution.
@@ -922,66 +1070,83 @@ impl Graph {
         accesses: Vec<Access>,
         side_effect: bool,
     ) -> Result<PassHandle, GraphError> {
-        let mut encoded = Vec::with_capacity(accesses.len());
-        for access in accesses {
-            let id = match access.resource {
-                ResourceHandle::Buffer(h) => self.buffer_id(h)?,
-                ResourceHandle::Image(h) => self.image_id(h)?,
-            };
-            let range = match (&access.range, self.resources[id].desc) {
-                (AccessRange::Buffer(r), ResourceDesc::Buffer(_)) => self.buffer_range(
-                    id,
-                    r.start,
-                    r.end
-                        .checked_sub(r.start)
-                        .ok_or_else(|| GraphError::new("reversed byte range"))?,
-                    false,
-                )?,
-                (
-                    AccessRange::Image {
-                        mip: 0,
-                        layer: 0,
-                        aspect,
-                    },
-                    ResourceDesc::Image(d),
-                ) if *aspect
-                    == if d.format == ImageFormat::Rgba8Unorm {
-                        ImageAspect::Color
-                    } else {
-                        ImageAspect::Depth
-                    } =>
-                {
-                    0..1
-                }
-                _ => {
-                    return Err(GraphError::new(
-                        "unsupported range: only complete mip 0/layer 0 and its matching aspect are supported",
-                    ));
-                }
-            };
-            validate_purpose(kind, self.resources[id].desc, access.kind, access.purpose)?;
-            encoded.push(ResourceAccess {
-                resource: id,
-                range,
-                read: access.kind != AccessKind::Write,
-                write: access.kind != AccessKind::Read,
-                initializes: access.kind != AccessKind::Read,
-                discard_after: false,
-                purpose: access.purpose,
-            });
-        }
-        for (i, a) in encoded.iter().enumerate() {
-            for b in &encoded[i + 1..] {
-                if a.resource == b.resource && overlaps(&a.range, &b.range) && (a.write || b.write)
-                {
-                    return Err(GraphError::new(
-                        "overlapping pass accesses must use one read_write declaration",
-                    ));
+        self.build_pass(name, |graph| {
+            let mut encoded = Vec::with_capacity(accesses.len());
+            for access in accesses {
+                let id = match access.resource {
+                    ResourceHandle::Buffer(h) => graph.buffer_id(h)?,
+                    ResourceHandle::Image(h) => graph.image_id(h)?,
+                };
+                let range = match (&access.range, graph.resources[id].desc) {
+                    (AccessRange::Buffer(r), ResourceDesc::Buffer(_)) => graph.buffer_range(
+                        id,
+                        r.start,
+                        r.end
+                            .checked_sub(r.start)
+                            .ok_or_else(|| graph.resource_error(GraphErrorKind::InvalidInput, "reversed byte range", id)
+                                .with_range(access.range.clone()))?,
+                        false,
+                    )?,
+                    (
+                        AccessRange::Image {
+                            mip: 0,
+                            layer: 0,
+                            aspect,
+                        },
+                        ResourceDesc::Image(d),
+                    ) if *aspect
+                        == if d.format == ImageFormat::Rgba8Unorm {
+                            ImageAspect::Color
+                        } else {
+                            ImageAspect::Depth
+                        } =>
+                    {
+                        0..1
+                    }
+                    _ => {
+                        return Err(graph.resource_error(GraphErrorKind::Unsupported,
+                            "unsupported range: only complete mip 0/layer 0 and its matching aspect are supported",
+                            id,
+                        ).with_range(access.range.clone()));
+                    }
+                };
+                validate_purpose(kind, graph.resources[id].desc, access.kind, access.purpose)
+                    .map_err(|error| graph.resource_context(error, id).with_range(access.range.clone()))?;
+                encoded.push(ResourceAccess {
+                    resource: id,
+                    range,
+                    read: access.kind != AccessKind::Write,
+                    write: access.kind != AccessKind::Read,
+                    initializes: access.kind != AccessKind::Read,
+                    discard_after: false,
+                    purpose: access.purpose,
+                });
+            }
+            for (i, a) in encoded.iter().enumerate() {
+                for b in &encoded[i + 1..] {
+                    if a.resource == b.resource && overlaps(&a.range, &b.range) && (a.write || b.write)
+                    {
+                        return Err(graph.resource_error(GraphErrorKind::InvalidInput,
+                            "overlapping pass accesses must use one read_write declaration",
+                            a.resource,
+                        ).with_range(graph.access_range(a.resource, a.range.clone())));
+                    }
                 }
             }
-        }
-        Ok(self.push(name, Operation::Declared(kind), encoded, side_effect))
+            Ok((Operation::Declared(kind), encoded, side_effect))
+        })
     }
+    fn build_pass(
+        &mut self,
+        name: impl Into<String>,
+        build: impl FnOnce(&Self) -> Result<(Operation, Vec<ResourceAccess>, bool), GraphError>,
+    ) -> Result<PassHandle, GraphError> {
+        let name = name.into();
+        let (operation, accesses, side_effect) =
+            build(self).map_err(|error| error.with_pass_name(&name))?;
+        Ok(self.push(name, operation, accesses, side_effect))
+    }
+
     fn push(
         &mut self,
         name: impl Into<String>,
@@ -1003,34 +1168,62 @@ impl Graph {
         }
     }
     fn buffer_id(&self, handle: BufferHandle) -> Result<usize, GraphError> {
-        if handle.graph != self.id
-            || !matches!(
-                self.resources.get(handle.index).map(|r| r.desc),
-                Some(ResourceDesc::Buffer(_))
-            )
-        {
+        if handle.graph != self.id {
+            return Err(
+                GraphError::new(GraphErrorKind::WrongOwner, "foreign graph buffer handle")
+                    .with_resource(handle.into(), None),
+            );
+        }
+        if !matches!(
+            self.resources.get(handle.index).map(|r| r.desc),
+            Some(ResourceDesc::Buffer(_))
+        ) {
             return Err(GraphError::new(
-                "undefined, wrong-kind or foreign graph buffer handle",
+                GraphErrorKind::InvalidHandle,
+                "undefined or wrong-kind graph buffer handle",
+            )
+            .with_resource(
+                handle.into(),
+                self.resources.get(handle.index).map(|r| r.name.as_str()),
             ));
         }
         Ok(handle.index)
     }
     fn image_id(&self, handle: ImageHandle) -> Result<usize, GraphError> {
-        if handle.graph != self.id
-            || !matches!(
-                self.resources.get(handle.index).map(|r| r.desc),
-                Some(ResourceDesc::Image(_))
-            )
-        {
+        if handle.graph != self.id {
+            return Err(
+                GraphError::new(GraphErrorKind::WrongOwner, "foreign graph image handle")
+                    .with_resource(handle.into(), None),
+            );
+        }
+        if !matches!(
+            self.resources.get(handle.index).map(|r| r.desc),
+            Some(ResourceDesc::Image(_))
+        ) {
             return Err(GraphError::new(
-                "undefined, wrong-kind or foreign graph image handle",
+                GraphErrorKind::InvalidHandle,
+                "undefined or wrong-kind graph image handle",
+            )
+            .with_resource(
+                handle.into(),
+                self.resources.get(handle.index).map(|r| r.name.as_str()),
             ));
         }
         Ok(handle.index)
     }
     fn pass_id(&self, handle: PassHandle) -> Result<usize, GraphError> {
-        if handle.graph != self.id || handle.index >= self.passes.len() {
-            return Err(GraphError::new("undefined or foreign graph pass handle"));
+        if handle.graph != self.id {
+            return Err(
+                GraphError::new(GraphErrorKind::WrongOwner, "foreign graph pass handle")
+                    .with_pass(handle, None),
+            );
+        }
+        if handle.index >= self.passes.len() {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidHandle,
+                "undefined graph pass handle",
+            )
+            .with_pass(handle, None));
         }
         Ok(handle.index)
     }
@@ -1041,40 +1234,88 @@ impl Graph {
         size: u64,
         copy_alignment: bool,
     ) -> Result<Range<u64>, GraphError> {
-        let end = offset
-            .checked_add(size)
-            .ok_or_else(|| GraphError::new("byte range overflow"))?;
+        let end = offset.checked_add(size).ok_or_else(|| {
+            self.resource_error(GraphErrorKind::InvalidInput, "byte range overflow", id)
+        })?;
         if size == 0
             || end > self.resources[id].desc.units()
             || (copy_alignment && !offset.is_multiple_of(4))
         {
-            return Err(GraphError::new(
+            return Err(self.resource_error(GraphErrorKind::InvalidInput,
                 "nonempty byte range must fit the buffer; copy offsets need four-byte alignment",
-            ));
+                id,
+            ).with_range(AccessRange::Buffer(offset..end)));
         }
         Ok(offset..end)
     }
-    fn image_desc(&self, id: usize) -> Result<ImageDesc, GraphError> {
+    fn image_desc_at(&self, id: usize) -> Result<ImageDesc, GraphError> {
         match self.resources[id].desc {
             ResourceDesc::Image(d) => Ok(d),
-            _ => Err(GraphError::new("expected image")),
+            _ => Err(self.resource_error(GraphErrorKind::InvalidHandle, "expected image", id)),
         }
     }
     fn color(&self, id: usize) -> Result<(), GraphError> {
-        if self.image_desc(id)?.format != ImageFormat::Rgba8Unorm {
-            return Err(GraphError::new("operation requires RGBA8_UNORM"));
+        if self.image_desc_at(id)?.format != ImageFormat::Rgba8Unorm {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "operation requires RGBA8_UNORM",
+                id,
+            ));
         }
         Ok(())
     }
     fn compatible_color_pair(&self, src: usize, dst: usize) -> Result<(), GraphError> {
         self.color(src)?;
         self.color(dst)?;
-        if src == dst || self.image_desc(src)? != self.image_desc(dst)? {
-            return Err(GraphError::new(
+        if src == dst || self.image_desc_at(src)? != self.image_desc_at(dst)? {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
                 "image operation requires distinct images with equal RGBA8 descriptions",
+                dst,
             ));
         }
         Ok(())
+    }
+
+    fn resource_error(
+        &self,
+        kind: GraphErrorKind,
+        message: impl Into<String>,
+        id: usize,
+    ) -> GraphError {
+        self.resource_context(GraphError::new(kind, message), id)
+    }
+    fn resource_context(&self, error: GraphError, id: usize) -> GraphError {
+        let Some(resource) = self.resources.get(id) else {
+            return error;
+        };
+        let handle = match resource.desc {
+            ResourceDesc::Buffer(_) => BufferHandle {
+                graph: self.id,
+                index: id,
+            }
+            .into(),
+            ResourceDesc::Image(_) => ImageHandle {
+                graph: self.id,
+                index: id,
+            }
+            .into(),
+        };
+        error.with_resource(handle, Some(&resource.name))
+    }
+    fn access_range(&self, id: usize, range: Range<u64>) -> AccessRange {
+        match self.resources[id].desc {
+            ResourceDesc::Buffer(_) => AccessRange::Buffer(range),
+            ResourceDesc::Image(desc) => AccessRange::Image {
+                mip: 0,
+                layer: 0,
+                aspect: if desc.format == ImageFormat::Rgba8Unorm {
+                    ImageAspect::Color
+                } else {
+                    ImageAspect::Depth
+                },
+            },
+        }
     }
 }
 
@@ -1164,6 +1405,7 @@ fn validate_purpose(
     };
     if !mode || !domain {
         return Err(GraphError::new(
+            GraphErrorKind::InvalidInput,
             "access purpose, kind, resource type and pass kind are incompatible",
         ));
     }
@@ -1330,7 +1572,10 @@ mod tests {
         assert_eq!(graph.resources.len(), 1);
         let mut changed = import.clone();
         changed.revision += 1;
-        assert!(graph.import_buffer("stale alias", &changed).is_err());
+        let error = graph.import_buffer("stale alias", &changed).unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InconsistentImport);
+        assert_eq!(error.resource(), Some(first.into()));
+        assert_eq!(error.resource_name(), Some("first"));
         let image = ImportImage {
             key: import.key,
             revision: 9,
@@ -1338,6 +1583,47 @@ mod tests {
             initialized: true,
         };
         assert!(graph.import_image("wrong kind alias", &image).is_err());
+    }
+
+    #[test]
+    fn image_metadata_preserves_imports_and_rejects_invalid_local_handles() {
+        let mut graph = Graph::new();
+        let source = ImportImage {
+            key: ResourceKey {
+                owner: 7,
+                index: 4,
+                generation: 2,
+            },
+            revision: 3,
+            desc: ImageDesc::depth32(9, 5),
+            initialized: false,
+        };
+        let image = graph.import_image("imported depth", &source).unwrap();
+        assert_eq!(graph.image_desc(image).unwrap(), source.desc);
+        assert_eq!(graph.import_image("alias", &source).unwrap(), image);
+        let mut changed = source.clone();
+        changed.desc = ImageDesc::rgba8(9, 5);
+        let error = graph
+            .import_image("different description", &changed)
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InconsistentImport);
+        assert_eq!(error.resource(), Some(image.into()));
+
+        let buffer = graph.buffer("buffer", BufferDesc { size: 4 }).unwrap();
+        for invalid in [
+            ImageHandle {
+                graph: graph.id,
+                index: buffer.index,
+            },
+            ImageHandle {
+                graph: graph.id,
+                index: usize::MAX,
+            },
+        ] {
+            let error = graph.image_desc(invalid).unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::InvalidHandle);
+            assert_eq!(error.resource(), Some(invalid.into()));
+        }
     }
 
     #[test]
