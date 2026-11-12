@@ -5,6 +5,11 @@ use crate::graph::{BufferDesc, ImportBuffer};
 use super::{ResourceDesc, RuntimeError, VulkanRuntime};
 
 impl VulkanRuntime {
+    /// Physical registry bound including meshes and view targets.
+    pub fn resource_capacity(&self) -> usize {
+        self.config.resource_capacity
+    }
+
     /// Register a device buffer without uploading data or submitting work.
     ///
     /// The returned snapshot has no initialized bytes. Upload to it through
