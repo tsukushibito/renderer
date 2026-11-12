@@ -3,6 +3,7 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
+use std::collections::BTreeMap;
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::ops::Range;
@@ -1215,17 +1216,10 @@ impl GraphWork {
             };
             // Aggregate one pass's uses before modifying previous-access state;
             // disjoint self-copies must not appear to depend on themselves.
-            let mut uses: Vec<(usize, Use)> = Vec::with_capacity(pass.accesses.len());
+            let mut uses: BTreeMap<usize, Use> = BTreeMap::new();
             for access in &pass.accesses {
                 let current = usage(access.purpose);
-                let position = uses
-                    .iter()
-                    .position(|(resource, _)| *resource == access.resource);
-                let position = position.unwrap_or_else(|| {
-                    uses.push((access.resource, Use::default()));
-                    uses.len() - 1
-                });
-                let target = &mut uses[position].1;
+                let target = uses.entry(access.resource).or_default();
                 target.stage |= current.stage;
                 target.access |= current.access;
                 target.writes |= access.write;
@@ -1398,7 +1392,7 @@ impl GraphWork {
                             .map_err(index_error)?;
                     }
                     Operation::RasterBatch { draws, .. } => {
-                        for draw in draws.iter() {
+                        for (draw_index, draw) in draws.iter().enumerate() {
                             let vertex_count = graph.resources[draw.vertices].desc.units() / 28;
                             states[draw.indices]
                                 .as_mut()
@@ -1409,7 +1403,9 @@ impl GraphWork {
                                     vertex_count,
                                     owner.device.max_draw_indexed_index_value(),
                                 )
-                                .map_err(index_error)?;
+                                .map_err(|error| {
+                                    index_error(error).context(format!("draw {draw_index}"))
+                                })?;
                         }
                     }
                     Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}

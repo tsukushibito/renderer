@@ -168,6 +168,108 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
 }
 
 #[test]
+#[ignore = "real-GPU opaque draw-list ownership through pending mesh/material deletion; requires Core/SyncVal"]
+fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
+    with_engine(|engine| {
+        let near = engine.create_mesh(mesh([1.0; 4])).unwrap();
+        let far_vertices =
+            [[-0.4, -0.4, 0.75], [0.4, -0.4, 0.75], [0.0, 0.4, 0.75]].map(|position| Vertex {
+                position,
+                color: [1.0; 4],
+            });
+        let farther = MeshData::new(&far_vertices, &[0, 1, 2]).unwrap();
+        let far = engine.create_mesh(farther).unwrap();
+        let equal = engine.create_mesh(mesh([1.0; 4])).unwrap();
+        let red = engine
+            .create_material(crate::engine::Material {
+                tint: [1.0, 0.0, 0.0, 1.0],
+            })
+            .unwrap();
+        let green = engine
+            .create_material(crate::engine::Material {
+                tint: [0.0, 1.0, 0.0, 1.0],
+            })
+            .unwrap();
+        let blue = engine
+            .create_material(crate::engine::Material {
+                tint: [0.0, 0.0, 1.0, 1.0],
+            })
+            .unwrap();
+        let draws = [
+            Draw {
+                mesh: near,
+                material: red,
+                world_from_model: IDENTITY,
+            },
+            Draw {
+                mesh: far,
+                material: green,
+                world_from_model: IDENTITY,
+            },
+            Draw {
+                mesh: equal,
+                material: blue,
+                world_from_model: IDENTITY,
+            },
+        ]
+        .repeat(32);
+        let view = View {
+            width: 32,
+            height: 32,
+            clip_from_world: IDENTITY,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let extension = |graph: &mut Graph, color| {
+            let output = graph.image("custom swap", graph.image_desc(color)?)?;
+            graph.compute(
+                "swap after opaque",
+                color,
+                output,
+                ComputeTransform::SwapRedBlue,
+            )?;
+            Ok(output)
+        };
+        let first = engine.render_frame(&view, &draws, true, extension).unwrap();
+        engine.runtime_mut().delete(first.output.key()).unwrap();
+        engine
+            .update_material(
+                red,
+                crate::engine::Material {
+                    tint: [0.0, 1.0, 0.0, 1.0],
+                },
+            )
+            .unwrap();
+        engine.update_mesh(near, mesh([1.0; 4])).unwrap();
+        let second = engine.render_frame(&view, &draws, true, extension).unwrap();
+        engine.runtime_mut().delete(second.output.key()).unwrap();
+        for handle in [near, far, equal] {
+            engine.delete_mesh(handle).unwrap();
+        }
+        for handle in [red, green, blue] {
+            engine.delete_material(handle).unwrap();
+        }
+        assert_eq!(engine.runtime().pending_frames(), 2);
+        collect(
+            engine,
+            &[
+                (
+                    first.submission.id(),
+                    first.readback.unwrap(),
+                    16 * 32 + 16,
+                    [0, 0, 255, 255],
+                ),
+                (
+                    second.submission.id(),
+                    second.readback.unwrap(),
+                    16 * 32 + 16,
+                    [0, 255, 0, 255],
+                ),
+            ],
+        );
+    });
+}
+
+#[test]
 #[ignore = "explicit real Vulkan engine Graph extension/cancellation test; requires Core+SyncVal"]
 fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
     with_engine(|engine| {

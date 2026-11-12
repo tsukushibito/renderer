@@ -42,7 +42,7 @@ fn transform(bytes: &[u8], operation: ComputeTransform) -> Vec<u8> {
         .collect()
 }
 
-/// Scalar reference and experimental batch encode exactly the same owned draws.
+/// Scalar reference and opaque batch encode exactly the same owned draws.
 fn opaque_batch_comparison(
     batched: bool,
     reverse: bool,
@@ -153,7 +153,7 @@ fn opaque_batch_comparison(
 }
 
 #[test]
-#[ignore = "experimental real-GPU opaque batch/scalar reference; requires Core/SyncVal"]
+#[ignore = "real-GPU opaque batch/scalar reference; requires Core/SyncVal"]
 fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
     real_gpu(|runtime| {
         for empty in [false, true] {
@@ -186,7 +186,7 @@ fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
 }
 
 #[test]
-#[ignore = "experimental real-GPU batch late index validation; requires Core/SyncVal"]
+#[ignore = "real-GPU batch late index validation; requires Core/SyncVal"]
 fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
     real_gpu(|runtime| {
         let (plan, _) = opaque_batch_comparison(true, false, false, true);
@@ -196,10 +196,107 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
         };
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
         assert!(error.to_string().contains("index 9"));
+        assert!(error.to_string().contains("draw 1"));
+
+        // One index buffer can be legal for the first draw but illegal for the
+        // next draw's smaller vertex extent. Reuse must include those bounds.
+        let mut graph = Graph::new();
+        let full = graph
+            .buffer("three vertices", BufferDesc { size: 84 })
+            .unwrap();
+        let short = graph.buffer("one vertex", BufferDesc { size: 28 }).unwrap();
+        let indices = graph
+            .buffer("shared indices", BufferDesc { size: 12 })
+            .unwrap();
+        graph
+            .upload_buffer("full upload", full, 0, vec![0; 84])
+            .unwrap();
+        graph
+            .upload_buffer("short upload", short, 0, vec![0; 28])
+            .unwrap();
+        graph
+            .upload_buffer(
+                "index upload",
+                indices,
+                0,
+                [0_u32, 1, 2]
+                    .into_iter()
+                    .flat_map(u32::to_ne_bytes)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let color = graph.image("color", ImageDesc::rgba8(1, 1)).unwrap();
+        let depth = graph.image("depth", ImageDesc::depth32(1, 1)).unwrap();
+        graph
+            .raster_batch(
+                "bounds batch",
+                vec![
+                    (full, indices, 3, RasterParameters::default()),
+                    (short, indices, 3, RasterParameters::default()),
+                ],
+                color,
+                depth,
+                [0.0; 4],
+                1.0,
+            )
+            .unwrap();
+        graph.readback_image("read", color).unwrap();
+        let error = match runtime.submit(&graph.compile().unwrap()) {
+            Ok(_) => panic!("each draw needs its own vertex bounds"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
+        assert!(error.to_string().contains("vertex count 1"));
+        assert!(error.to_string().contains("draw 1"));
         let (plan, pass) = opaque_batch_comparison(true, false, false, false);
         let mut submission = runtime.submit(&plan).unwrap();
         let mut result = submission.wait(WAIT).unwrap().unwrap();
         assert_eq!(result.readback(pass).unwrap().len(), 64 * 64 * 4);
+    });
+}
+
+#[test]
+#[ignore = "real-GPU shared vertex/index buffer in an opaque batch; requires Core/SyncVal"]
+fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
+    real_gpu(|runtime| {
+        let mut graph = Graph::new();
+        let buffer = graph
+            .buffer("shared input", BufferDesc { size: 84 })
+            .unwrap();
+        // Zero index values address the first vertex. The degenerate triangles
+        // leave the clear intact while exercising both native read purposes.
+        graph
+            .upload_buffer("shared upload", buffer, 0, vec![0; 84])
+            .unwrap();
+        let color = graph.image("color", ImageDesc::rgba8(4, 4)).unwrap();
+        let depth = graph.image("depth", ImageDesc::depth32(4, 4)).unwrap();
+        graph
+            .raster_batch(
+                "shared input batch",
+                vec![(buffer, buffer, 3, RasterParameters::default()); 3],
+                color,
+                depth,
+                [0.0, 0.0, 1.0, 1.0],
+                1.0,
+            )
+            .unwrap();
+        let readback = graph.readback_image("read", color).unwrap();
+        let (mut submission, lowering) = runtime
+            .submit_with_diagnostics(&graph.compile().unwrap())
+            .unwrap();
+        assert!(
+            lowering.lines().any(|line| {
+                line.trim_start().starts_with("buffer=")
+                    && line.contains("VERTEX_ATTRIBUTE_READ")
+                    && line.contains("INDEX_READ")
+            }),
+            "{lowering}"
+        );
+        let mut result = submission.wait(WAIT).unwrap().unwrap();
+        assert_eq!(
+            result.readback(readback).unwrap(),
+            [0, 0, 255, 255].repeat(16)
+        );
     });
 }
 

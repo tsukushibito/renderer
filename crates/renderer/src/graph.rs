@@ -8,6 +8,7 @@
 //! CPU readiness. Image support is deliberately one complete mip/layer/aspect.
 
 use std::{
+    collections::BTreeMap,
     fmt,
     ops::Range,
     sync::{
@@ -405,7 +406,7 @@ pub(crate) struct ResourceAccess {
     pub purpose: AccessPurpose,
 }
 
-/// Owned operands for one draw in the private opaque-batch experiment.
+/// Owned operands for one fixed-pipeline draw in an engine opaque pass.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
@@ -516,6 +517,7 @@ pub struct Graph {
     pub(crate) resources: Vec<Resource>,
     pub(crate) passes: Vec<Pass>,
     pub(crate) exports: Vec<usize>,
+    imports: BTreeMap<ResourceKey, usize>,
 }
 impl Default for Graph {
     fn default() -> Self {
@@ -533,6 +535,7 @@ impl Graph {
             resources: Vec::new(),
             passes: Vec::new(),
             exports: Vec::new(),
+            imports: BTreeMap::new(),
         }
     }
     pub fn buffer(
@@ -640,12 +643,8 @@ impl Graph {
         revision: u64,
         initial: Vec<Range<u64>>,
     ) -> Result<usize, GraphError> {
-        if let Some((index, existing)) = self
-            .resources
-            .iter()
-            .enumerate()
-            .find(|(_, r)| r.import == Some(key))
-        {
+        if let Some(&index) = self.imports.get(&key) {
+            let existing = &self.resources[index];
             if existing.desc != desc
                 || existing.import_revision != revision
                 || existing.initial != initial
@@ -677,6 +676,7 @@ impl Graph {
             import_revision: revision,
             initial,
         });
+        self.imports.insert(key, index);
         Ok(index)
     }
     pub fn export_buffer(&mut self, buffer: BufferHandle) -> Result<(), GraphError> {
@@ -942,46 +942,31 @@ impl Graph {
         parameters: RasterParameters,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let vertices = graph.buffer_id(vertices)?;
-            let indices = graph.buffer_id(indices)?;
+            let draw = graph.raster_draw(vertices, indices, index_count, parameters)?;
+            let vertices = draw.vertices;
+            let indices = draw.indices;
             let color = graph.image_id(color)?;
             let depth = graph.image_id(depth)?;
             graph.color(color)?;
             let c = graph.image_desc_at(color)?;
             let d = graph.image_desc_at(depth)?;
             if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
+                return Err(graph.resource_error(
+                    GraphErrorKind::InvalidInput,
                     "raster needs matching RGBA8 color and D32 depth extents",
                     depth,
                 ));
             }
             let vs = graph.resources[vertices].desc.units();
-            let ix = u64::from(index_count) * 4;
-            if vs < 28
-                || !vs.is_multiple_of(28)
-                || index_count == 0
-                || !index_count.is_multiple_of(3)
-                || ix > graph.resources[indices].desc.units()
-            {
-                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
-                    "raster requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
-                    if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
-                ));
-            }
+            let ix = u64::from(draw.index_count) * 4;
             if !clear_depth.is_finite()
                 || !(0.0..=1.0).contains(&clear_depth)
                 || clear_color.iter().any(|x| !x.is_finite())
             {
-                return Err(GraphError::new(GraphErrorKind::InvalidInput, "invalid attachment clear value"));
-            }
-            if parameters
-                .transform
-                .iter()
-                .flatten()
-                .chain(&parameters.tint)
-                .any(|x| !x.is_finite())
-            {
-                return Err(GraphError::new(GraphErrorKind::InvalidInput, "non-finite raster transform or tint"));
+                return Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "invalid attachment clear value",
+                ));
             }
             Ok((
                 Operation::Raster {
@@ -1007,8 +992,9 @@ impl Graph {
         })
     }
 
-    /// Experimental engine-only opaque list: clear once and store both targets.
-    /// All external buffer dependencies are declared before the rendering scope.
+    /// Engine-only opaque list: clear once and store both complete targets.
+    /// Draw order is retained. External buffer dependencies precede the single
+    /// rendering scope; this operation admits no arbitrary shader side effects.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn raster_batch(
         &mut self,
@@ -1023,92 +1009,69 @@ impl Graph {
             return self.clear_attachments(name, color, depth, clear_color, clear_depth);
         }
         self.build_pass(name, |graph| {
-        let color = graph.image_id(color)?;
-        let depth = graph.image_id(depth)?;
-        graph.color(color)?;
-        let c = graph.image_desc_at(color)?;
-        let d = graph.image_desc_at(depth)?;
-        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-            return Err(graph.resource_error(
-                GraphErrorKind::InvalidInput,
-                "raster batch needs matching RGBA8 color and D32 depth extents",
-                depth,
-            ));
-        }
-        if !clear_depth.is_finite()
-            || !(0.0..=1.0).contains(&clear_depth)
-            || clear_color.iter().any(|x| !x.is_finite())
-        {
-            return Err(GraphError::new(GraphErrorKind::InvalidInput, "invalid attachment clear value"));
-        }
-        let mut encoded = Vec::with_capacity(draws.len());
-        // Preserve both purposes if a buffer supplies vertices and indices.
-        let mut buffers = std::collections::BTreeMap::<usize, [u64; 2]>::new();
-        for (vertices, indices, index_count, parameters) in draws {
-            let vertices = graph.buffer_id(vertices)?;
-            let indices = graph.buffer_id(indices)?;
-            let vs = graph.resources[vertices].desc.units();
-            let ix = u64::from(index_count) * 4;
-            if vs < 28
-                || !vs.is_multiple_of(28)
-                || index_count == 0
-                || !index_count.is_multiple_of(3)
-                || ix > graph.resources[indices].desc.units()
-            {
-                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
-                    "raster batch requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
-                    if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
+            let color = graph.image_id(color)?;
+            let depth = graph.image_id(depth)?;
+            graph.color(color)?;
+            let c = graph.image_desc_at(color)?;
+            let d = graph.image_desc_at(depth)?;
+            if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
+                return Err(graph.resource_error(
+                    GraphErrorKind::InvalidInput,
+                    "raster batch needs matching RGBA8 color and D32 depth extents",
+                    depth,
                 ));
             }
-            if parameters
-                .transform
-                .iter()
-                .flatten()
-                .chain(&parameters.tint)
-                .any(|x| !x.is_finite())
+            if !clear_depth.is_finite()
+                || !(0.0..=1.0).contains(&clear_depth)
+                || clear_color.iter().any(|x| !x.is_finite())
             {
-                return Err(GraphError::new(GraphErrorKind::InvalidInput, "non-finite raster transform or tint"));
+                return Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "invalid attachment clear value",
+                ));
             }
-            buffers.entry(vertices).or_default()[0] = vs;
-            let index_range = &mut buffers.entry(indices).or_default()[1];
-            *index_range = (*index_range).max(ix);
-            encoded.push(RasterDraw {
-                vertices,
-                indices,
-                index_count,
-                parameters,
-            });
-        }
-        let mut accesses = Vec::with_capacity(buffers.len() * 2 + 2);
-        for (resource, [vertices, indices]) in buffers {
-            if vertices != 0 {
-                accesses.push(read(resource, 0..vertices, AccessPurpose::Vertex));
+            let mut encoded = Vec::with_capacity(draws.len());
+            // Preserve both purposes if a buffer supplies vertices and indices.
+            let mut buffers = BTreeMap::<usize, [u64; 2]>::new();
+            for (vertices, indices, index_count, parameters) in draws {
+                let draw = graph.raster_draw(vertices, indices, index_count, parameters)?;
+                let vs = graph.resources[draw.vertices].desc.units();
+                let ix = u64::from(draw.index_count) * 4;
+                buffers.entry(draw.vertices).or_default()[0] = vs;
+                let index_range = &mut buffers.entry(draw.indices).or_default()[1];
+                *index_range = (*index_range).max(ix);
+                encoded.push(draw);
             }
-            if indices != 0 {
-                accesses.push(read(resource, 0..indices, AccessPurpose::Index));
+            let mut accesses = Vec::with_capacity(buffers.len() * 2 + 2);
+            for (resource, [vertices, indices]) in buffers {
+                if vertices != 0 {
+                    accesses.push(read(resource, 0..vertices, AccessPurpose::Vertex));
+                }
+                if indices != 0 {
+                    accesses.push(read(resource, 0..indices, AccessPurpose::Index));
+                }
             }
-        }
-        accesses.push(attachment(
-            color,
-            AttachmentOps::CLEAR_STORE,
-            AccessPurpose::ColorAttachment,
-        ));
-        accesses.push(attachment(
-            depth,
-            AttachmentOps::CLEAR_STORE,
-            AccessPurpose::DepthAttachment,
-        ));
-        Ok((
-            Operation::RasterBatch {
-                draws: encoded.into(),
+            accesses.push(attachment(
                 color,
+                AttachmentOps::CLEAR_STORE,
+                AccessPurpose::ColorAttachment,
+            ));
+            accesses.push(attachment(
                 depth,
-                clear_color,
-                clear_depth,
-            },
-            accesses,
-            false,
-        ))
+                AttachmentOps::CLEAR_STORE,
+                AccessPurpose::DepthAttachment,
+            ));
+            Ok((
+                Operation::RasterBatch {
+                    draws: encoded.into(),
+                    color,
+                    depth,
+                    clear_color,
+                    clear_depth,
+                },
+                accesses,
+                false,
+            ))
         })
     }
 
@@ -1373,6 +1336,49 @@ impl Graph {
         }
         Ok(offset..end)
     }
+    fn raster_draw(
+        &self,
+        vertices: BufferHandle,
+        indices: BufferHandle,
+        index_count: u32,
+        parameters: RasterParameters,
+    ) -> Result<RasterDraw, GraphError> {
+        let vertices = self.buffer_id(vertices)?;
+        let indices = self.buffer_id(indices)?;
+        let vs = self.resources[vertices].desc.units();
+        let ix = u64::from(index_count) * 4;
+        if vs < 28
+            || !vs.is_multiple_of(28)
+            || index_count == 0
+            || !index_count.is_multiple_of(3)
+            || ix > self.resources[indices].desc.units()
+        {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "raster requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
+                if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
+            ));
+        }
+        if parameters
+            .transform
+            .iter()
+            .flatten()
+            .chain(&parameters.tint)
+            .any(|x| !x.is_finite())
+        {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "non-finite raster transform or tint",
+            ));
+        }
+        Ok(RasterDraw {
+            vertices,
+            indices,
+            index_count,
+            parameters,
+        })
+    }
+
     fn image_desc_at(&self, id: usize) -> Result<ImageDesc, GraphError> {
         match self.resources[id].desc {
             ResourceDesc::Image(d) => Ok(d),
@@ -1999,5 +2005,96 @@ mod tests {
         let compiled = graph.compile().unwrap();
         let dump = compiled.dump();
         assert!(dump.contains("purpose=Vertex") && dump.contains("purpose=Index"));
+    }
+
+    #[test]
+    fn batch_rejections_preserve_builder_context_without_partial_declarations() {
+        let mut graph = Graph::new();
+        let (vertices, indices, color, depth) = mesh(&mut graph);
+        let before = graph.passes.len();
+        let error = graph
+            .raster_batch(
+                "invalid opaque input",
+                vec![
+                    (vertices, indices, 3, RasterParameters::default()),
+                    (vertices, indices, 6, RasterParameters::default()),
+                ],
+                color,
+                depth,
+                [0.0; 4],
+                1.0,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some("invalid opaque input"));
+        assert_eq!(error.pass(), None);
+        assert_eq!(error.resource(), Some(indices.into()));
+        assert_eq!(error.resource_name(), Some("indices"));
+        assert_eq!(graph.passes.len(), before);
+
+        let mut other = Graph::new();
+        let foreign = other
+            .buffer("foreign vertices", BufferDesc { size: 84 })
+            .unwrap();
+        let error = graph
+            .raster_batch(
+                "foreign opaque input",
+                vec![(foreign, indices, 3, RasterParameters::default())],
+                color,
+                depth,
+                [0.0; 4],
+                1.0,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
+        assert_eq!(error.pass_name(), Some("foreign opaque input"));
+        assert_eq!(error.resource(), Some(foreign.into()));
+        assert_eq!(error.resource_name(), None);
+        assert_eq!(graph.passes.len(), before);
+    }
+
+    #[test]
+    fn import_identity_survives_interleaved_transients_and_failed_aliases() {
+        let mut graph = Graph::new();
+        let sources = (0..64)
+            .map(|index| ImportBuffer {
+                key: ResourceKey {
+                    owner: 7,
+                    index,
+                    generation: 1,
+                },
+                revision: u64::from(index) + 1,
+                desc: BufferDesc { size: 12 },
+                initialized: std::iter::once(0..12).collect(),
+            })
+            .collect::<Vec<_>>();
+        let mut handles = Vec::new();
+        for (index, source) in sources.iter().enumerate() {
+            graph.image("transient", ImageDesc::rgba8(2, 2)).unwrap();
+            handles.push(
+                graph
+                    .import_buffer(format!("import {index}"), source)
+                    .unwrap(),
+            );
+        }
+        for (source, &handle) in sources.iter().zip(&handles).rev() {
+            assert_eq!(graph.import_buffer("alias", source).unwrap(), handle);
+        }
+        let first = &sources[0];
+        let image_alias = ImportImage {
+            key: first.key,
+            revision: first.revision,
+            desc: ImageDesc::rgba8(1, 3),
+            initialized: true,
+        };
+        let error = graph.import_image("wrong kind", &image_alias).unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InconsistentImport);
+        assert_eq!(error.resource(), Some(handles[0].into()));
+        assert_eq!(error.resource_name(), Some("import 0"));
+        assert_eq!(
+            graph.import_buffer("still canonical", first).unwrap(),
+            handles[0]
+        );
+        assert_eq!(graph.resources.len(), sources.len() * 2);
     }
 }

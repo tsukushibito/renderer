@@ -74,8 +74,8 @@ impl FrameSnapshot {
         let desc = ImageDesc::rgba8(self.view.width, self.view.height);
         let color = graph.image("view color", desc)?;
         let depth = graph.image("view depth", ImageDesc::depth32(desc.width, desc.height))?;
-        // This experiment keeps the opaque list in one rendering scope. The
-        // builder retains a clear-only operation for an empty list.
+        // The fixed opaque list shares one clear and rendering scope. An empty
+        // list retains the clear-only path without requiring a Raster program.
         let mut draws = Vec::with_capacity(self.draws.len());
         for draw in &self.draws {
             let &(vertices, indices) = meshes.get(&draw.mesh).ok_or_else(|| {
@@ -117,7 +117,64 @@ impl FrameSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{Engine, IDENTITY, View};
+    use crate::engine::{Draw, Engine, IDENTITY, Material, MeshData, Vertex, View};
+
+    fn triangle() -> MeshData {
+        MeshData::new(
+            &[[-0.5, -0.5, 0.25], [0.5, -0.5, 0.25], [0.0, 0.5, 0.25]].map(|position| Vertex {
+                position,
+                color: [1.0; 4],
+            }),
+            &[0, 1, 2],
+        )
+        .unwrap()
+    }
+
+    fn view() -> View {
+        View {
+            width: 16,
+            height: 16,
+            clip_from_world: IDENTITY,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn opaque_pass_count_is_independent_of_repeated_draw_count() {
+        let mut assets = Engine::new(1, 1).unwrap();
+        let mesh = assets.create_mesh(triangle()).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
+        let draw = Draw {
+            mesh,
+            material,
+            world_from_model: IDENTITY,
+        };
+        for count in [1, 32, 256] {
+            let snapshot = assets.snapshot(&view(), &vec![draw; count]).unwrap();
+            let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
+            // Two shared mesh uploads, one opaque list, one final composite.
+            assert_eq!(frame.graph.compile().unwrap().pass_count(), 4);
+        }
+    }
+
+    #[test]
+    fn opaque_pass_keeps_every_distinct_mesh_producer() {
+        const MESHES: usize = 128;
+        let mut assets = Engine::new(MESHES, 1).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
+        let draws = (0..MESHES)
+            .map(|_| Draw {
+                mesh: assets.create_mesh(triangle()).unwrap(),
+                material,
+                world_from_model: IDENTITY,
+            })
+            .collect::<Vec<_>>();
+        let snapshot = assets.snapshot(&view(), &draws).unwrap();
+        let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
+        let plan = frame.graph.compile().unwrap();
+        assert_eq!(plan.pass_count(), MESHES * 2 + 2);
+        assert!(plan.culled_pass_names().is_empty());
+    }
 
     #[test]
     fn empty_view_has_initialized_output_without_uploads() {
