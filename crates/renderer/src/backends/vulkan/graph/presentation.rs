@@ -66,37 +66,75 @@ fn validate_config(config: PresentationConfig) -> Result<(), RuntimeError> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentOutcome {
-    Presented {
-        suboptimal: bool,
-    },
+    /// The presentation request was accepted. This does not prove that the
+    /// image has reached the display or that presentation resources retired.
+    Presented { suboptimal: bool },
     /// No image or WSI slot is currently available; no CPU/GPU wait was added.
     NotReady,
-    /// The output extent may have changed. Rebuild for `Presenter::extent()`.
+    /// The Swapchain was recreated. Rebuild for `Presenter::extent()`.
     Recreated,
+    /// Presentation was rejected because the Swapchain is out of date. Call
+    /// `Presenter::prepare` before rebuilding; `extent()` may still be old.
+    /// A rendering submit and presentation semaphore waits may remain pending.
+    RecreateRequired,
     /// The requested window extent is zero; no acquire is attempted.
     Suspended,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PresentResult {
-    Enqueued { recreate: bool, lost: bool },
+    Enqueued(QueuedPresent),
     Unchanged,
     Uncertain,
 }
+
+/// Enqueued semaphore waits do not imply an accepted presentation request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuedPresent {
+    Accepted { suboptimal: bool },
+    OutOfDate,
+    SurfaceLost,
+}
+
+impl QueuedPresent {
+    fn finish(
+        self,
+        acquired_suboptimal: bool,
+        dirty: &mut bool,
+        surface_lost: &mut bool,
+    ) -> Result<PresentOutcome, RuntimeError> {
+        *dirty |= acquired_suboptimal;
+        match self {
+            Self::Accepted { suboptimal } => {
+                *dirty |= suboptimal;
+                Ok(PresentOutcome::Presented {
+                    suboptimal: acquired_suboptimal || suboptimal,
+                })
+            }
+            Self::OutOfDate => {
+                *dirty = true;
+                Ok(PresentOutcome::RecreateRequired)
+            }
+            Self::SurfaceLost => {
+                *surface_lost = true;
+                Err(RuntimeError::unsupported(
+                    "Surface lost during present; pending presentation retained",
+                ))
+            }
+        }
+    }
+}
+
 fn classify_present(result: vk::Result) -> PresentResult {
     match result {
-        vk::Result::SUCCESS => PresentResult::Enqueued {
-            recreate: false,
-            lost: false,
-        },
-        vk::Result::SUBOPTIMAL_KHR | vk::Result::ERROR_OUT_OF_DATE_KHR => PresentResult::Enqueued {
-            recreate: true,
-            lost: false,
-        },
-        vk::Result::ERROR_SURFACE_LOST_KHR => PresentResult::Enqueued {
-            recreate: false,
-            lost: true,
-        },
+        vk::Result::SUCCESS => {
+            PresentResult::Enqueued(QueuedPresent::Accepted { suboptimal: false })
+        }
+        vk::Result::SUBOPTIMAL_KHR => {
+            PresentResult::Enqueued(QueuedPresent::Accepted { suboptimal: true })
+        }
+        vk::Result::ERROR_OUT_OF_DATE_KHR => PresentResult::Enqueued(QueuedPresent::OutOfDate),
+        vk::Result::ERROR_SURFACE_LOST_KHR => PresentResult::Enqueued(QueuedPresent::SurfaceLost),
         vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
             PresentResult::Unchanged
         }
@@ -895,8 +933,9 @@ impl Presenter {
         Ok(())
     }
 
-    /// Resolve a resize or VSync change before building a new output Graph. `None` means the
-    /// existing extent is ready; Suspended/Recreated carry no submitted work.
+    /// Resolve a resize, VSync change or `RecreateRequired` outcome before
+    /// building a new output Graph. `None` means the existing extent is ready;
+    /// `Recreated` means the new extent is ready. Neither submits rendering.
     pub fn prepare(&mut self) -> Result<Option<PresentOutcome>, RuntimeError> {
         let inner = self
             .inner
@@ -1105,7 +1144,7 @@ impl VulkanRuntime {
             }
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                 inner.dirty = true;
-                return Ok(PresentOutcome::Recreated);
+                return Ok(PresentOutcome::RecreateRequired);
             }
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
                 inner.surface_lost = true;
@@ -1187,19 +1226,13 @@ impl VulkanRuntime {
             }
         };
         match classify_present(result) {
-            PresentResult::Enqueued { recreate, lost } => {
+            PresentResult::Enqueued(outcome) => {
+                // OUT_OF_DATE and SURFACE_LOST reject the presentation request
+                // but still enqueue its semaphore waits. Retain exactly the
+                // same native ownership as an accepted request until retirement.
                 inner.slots[index].present = Some(chain);
                 acquired.handled = true;
-                inner.dirty |= recreate || suboptimal;
-                inner.surface_lost |= lost;
-                if lost {
-                    return Err(RuntimeError::unsupported(
-                        "Surface lost during present; pending presentation retained",
-                    ));
-                }
-                Ok(PresentOutcome::Presented {
-                    suboptimal: suboptimal || recreate,
-                })
+                outcome.finish(suboptimal, &mut inner.dirty, &mut inner.surface_lost)
             }
             PresentResult::Unchanged => {
                 // The error leaves finished unconsumed. Exceptional cleanup
@@ -1235,22 +1268,16 @@ mod state_tests {
         ] {
             assert!(matches!(
                 classify_present(result),
-                PresentResult::Enqueued { .. }
+                PresentResult::Enqueued(_)
             ));
         }
         assert_eq!(
             classify_present(vk::Result::ERROR_OUT_OF_DATE_KHR),
-            PresentResult::Enqueued {
-                recreate: true,
-                lost: false
-            }
+            PresentResult::Enqueued(QueuedPresent::OutOfDate)
         );
         assert_eq!(
             classify_present(vk::Result::ERROR_SURFACE_LOST_KHR),
-            PresentResult::Enqueued {
-                recreate: false,
-                lost: true
-            }
+            PresentResult::Enqueued(QueuedPresent::SurfaceLost)
         );
         for result in [
             vk::Result::ERROR_OUT_OF_HOST_MEMORY,
@@ -1266,6 +1293,80 @@ mod state_tests {
             classify_present(vk::Result::ERROR_UNKNOWN),
             PresentResult::Uncertain
         );
+    }
+
+    #[test]
+    fn only_accepted_present_requests_report_presented() {
+        for (result, acquired_suboptimal, expected, recreate) in [
+            (
+                vk::Result::SUCCESS,
+                false,
+                PresentOutcome::Presented { suboptimal: false },
+                false,
+            ),
+            (
+                vk::Result::SUCCESS,
+                true,
+                PresentOutcome::Presented { suboptimal: true },
+                true,
+            ),
+            (
+                vk::Result::SUBOPTIMAL_KHR,
+                false,
+                PresentOutcome::Presented { suboptimal: true },
+                true,
+            ),
+            (
+                vk::Result::ERROR_OUT_OF_DATE_KHR,
+                false,
+                PresentOutcome::RecreateRequired,
+                true,
+            ),
+            (
+                vk::Result::ERROR_OUT_OF_DATE_KHR,
+                true,
+                PresentOutcome::RecreateRequired,
+                true,
+            ),
+        ] {
+            let PresentResult::Enqueued(queued) = classify_present(result) else {
+                panic!("semaphore waits must remain enqueued for {result:?}");
+            };
+            let mut dirty = false;
+            let mut surface_lost = false;
+            assert_eq!(
+                queued
+                    .finish(acquired_suboptimal, &mut dirty, &mut surface_lost)
+                    .unwrap(),
+                expected,
+                "native result {result:?}"
+            );
+            assert_eq!(dirty, recreate);
+            assert!(!surface_lost);
+        }
+        let PresentResult::Enqueued(queued) = classify_present(vk::Result::ERROR_SURFACE_LOST_KHR)
+        else {
+            panic!("Surface loss does not cancel enqueued semaphore waits");
+        };
+        let mut dirty = false;
+        let mut surface_lost = false;
+        assert_eq!(
+            queued
+                .finish(false, &mut dirty, &mut surface_lost)
+                .unwrap_err()
+                .kind(),
+            super::super::RuntimeErrorKind::Unsupported
+        );
+        assert!(surface_lost);
+        assert!(!dirty);
+
+        // Successful presentation must not cancel an independently queued
+        // resize or VSync request.
+        let mut dirty = true;
+        QueuedPresent::Accepted { suboptimal: false }
+            .finish(false, &mut dirty, &mut surface_lost)
+            .unwrap();
+        assert!(dirty);
     }
 
     #[test]
