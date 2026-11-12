@@ -304,6 +304,18 @@ impl VulkanImage {
     pub(super) unsafe fn establish_transfer_contents(&mut self) {
         self.layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
     }
+
+    /// # Safety
+    /// An actual successful Fence wait on an active Device proved all commands
+    /// using this exclusively owned image completed, its entire contents are
+    /// initialized, and its final layout is the specified transfer layout.
+    pub(super) unsafe fn establish_completed_layout(&mut self, layout: vk::ImageLayout) {
+        debug_assert!(matches!(
+            layout,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL | vk::ImageLayout::TRANSFER_DST_OPTIMAL
+        ));
+        self.layout = layout;
+    }
 }
 
 impl Drop for VulkanImage {

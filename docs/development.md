@@ -7,13 +7,16 @@ privateなVulkan 1.3 Instanceの初期化・診断に加え、`renderer-7ro`で
 `renderer-dj3`では単一キューでのbuffer転送、投入と完了待ち、実GPUからのreadbackを扱います。
 `renderer-9wa`ではVMAによる転送用2D imageの作成、対応能力の検証、所有・解放を扱います。
 `renderer-jya`では画像全体のbuffer → image → readback転送、layout遷移と完了後の再利用を扱います。
+M2前の基盤整備では、command資源の再利用、VMAによる共有staging領域、転送のバッチ化、
+診断処理の重複除去、実効Validation設定の確認と、明示的な検証なし設定による性能測定を扱います。
 描画、RenderGraph、公開APIは後続の実装範囲です。
 採用した契約は[ADR 0002](adr/0002-vulkan-instance-bootstrap.md)、
 [ADR 0003](adr/0003-vulkan-device-bootstrap.md)、
 [ADR 0004](adr/0004-vma-buffer-ownership.md)、
 [ADR 0005](adr/0005-single-queue-buffer-transfer.md)、
 [ADR 0006](adr/0006-vma-image-ownership.md)、
-[ADR 0007](adr/0007-image-transfer.md)に記載しています。
+[ADR 0007](adr/0007-image-transfer.md)、
+[ADR 0008](adr/0008-pre-m2-execution-reuse.md)に記載しています。
 環境構築時の実測記録は[M0の確認結果](m0-baseline.md)を参照してください。
 qhgの実行結果と未検証範囲は[Instance初期化・診断の確認結果](m1-instance-baseline.md)に記載しています。
 Deviceの実行結果と未検証範囲は[Device・単一キューの確認結果](m1-device-baseline.md)を参照してください。
@@ -21,6 +24,8 @@ bufferの実行結果と未検証範囲は[VMA bufferの確認結果](m1-buffer-
 GPU転送の実行結果と未検証範囲は[buffer転送・完了待ちの確認結果](m1-transfer-baseline.md)を参照してください。
 imageの作成・解放の実行結果と未検証範囲は[VMA imageの確認結果](m1-image-baseline.md)を参照してください。
 画像転送とM1全体の対応は[画像転送・M1の確認結果](m1-image-transfer-baseline.md)を参照してください。
+M2前の再利用基盤・バッチ転送の結果、性能測定と未検証範囲は
+[再利用基盤の確認結果](pre-m2-reuse-baseline.md)を参照してください。
 
 ## 必要なツール
 
@@ -114,6 +119,12 @@ bufferの範囲・初期化済み範囲の検証、CPUアクセスの手順と�
 
 次のコマンドで、`#[ignore]`を付けた実Vulkan試験だけを明示実行します。
 通常の`cargo test`ではこれらをスキップします。
+正しさを確認する実Vulkan試験をまとめて実行する場合は、関数名の`::vulkan_`で絞ります。
+後述の性能試験は別の名前と起動条件を持つため、このコマンドに含まれません。
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_ -- --ignored --nocapture
+```
 
 ### Instance初期化・診断
 
@@ -244,6 +255,68 @@ imageとbufferは記録から完了まで移動所有され、成功後に返却
 Allocatorハンドル先行破棄と終了後の診断を確認します。
 部分領域や行長指定、ImageView、描画、Compute、画像ファイル出力はこの試験に含めません。
 
+### Command資源の再利用
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_execution_pool_smoke -- --ignored --nocapture
+```
+
+`ExecutionPool`はCommandPool・一次CommandBuffer・Fenceの組を遅延作成し、
+未投入キャンセルまたは対象Fenceの成功待機後にresetして使い回します。
+共通の記録・投入・完了処理へ、参照する全リソースを所有するpayloadを渡します。
+M1のbuffer／image転送に加え、M2のGraph命令も同じ完了単位へ接続できるprivateな境界です。
+
+同時に保持できる組数は作成時に指定します。上限には空き、記録用の予約、未完了処理を含みます。
+空きがなければ待たずに`CapacityExhausted`を返し、呼び出し元が待機・再試行を選びます。
+入力を渡す前に`reserve`して、空き不足で呼び出し元のリソースを消費しない形も使えます。
+poolを先に破棄しても、貸出中の所有者が必要な状態とVMA・Deviceを保持します。
+
+成功したresetだけを再利用対象に戻します。停止・lostのDeviceやreset失敗ではその組を破棄し、
+明示waitの期限切れや完了を証明しない一般エラーでは資源を保持して再試行できます。
+Dropの有限待機でも完了を証明できない場合は、資源を保持してDeviceを止めます。
+通常の再利用は明示的な完了確認で進め、Dropの10秒待機予算は後始末の経路として維持します。
+
+### 共有staging領域と転送バッチ
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_batch_smoke -- --ignored --nocapture
+```
+
+`TransferPool`は実行資源の上限に加え、Upload／Readbackそれぞれの共有buffer容量を指定します。
+複数バッチが同じbufferを領域単位で使い、空きの配置は`vk_mem::VirtualBlock`へ任せます。
+Rendererは各領域の所有者と利用完了を追跡し、独自の空き領域探索・結合アルゴリズムを持ちません。
+
+容量の指定は4とDeviceの`nonCoherentAtomSize`の大きい方の倍数を要求します。
+各要求のサイズはこの境界へ切り上げて予約し、別バッチの領域が同じcache atomを共有しないようにします。
+指定容量は共有buffer内の利用可能byte数であり、VMAの確保済みblockや画像Allocationを含む
+Device全体のVRAM上限ではありません。native実行枠と領域の空き不足は直ちにエラーを返し、
+暗黙のGPU待機やbufferの無制限な増設は行いません。
+Virtual allocatorの空き不足は、実際のGPUメモリ確保時のOOMとは区別して報告します。
+連続領域が不足すると、空きの合計が要求サイズ以上でも確保できない場合があります。
+`staging_stats`では要求byte数、alignment込みの予約byte数、その最大値、
+利用中の領域数、確保・返却・空き不足の回数を分けて確認できます。
+
+`begin`でnative実行枠を予約してから、buffer／imageをバッチへ移動し、
+upload・GPU内copy・readbackを必要な順に追加します。対象IDはそのバッチに属し、
+異なるバッチのIDを取り違えて使わないようにします。複数copyは一度のsubmitへまとめられます。
+bufferのoffsetとbyte数を扱い、画像は全体・packed RGBA8・mip/layer/sample各1を維持します。
+
+Uploadの共有bufferはVMAの常時mapを利用し、writeではbyte列をコピーして必要なflushを行います。
+ポインターを呼び出し元へ返しません。Readbackは必要なinvalidateとコピーを既存のscoped mapで行います。
+いずれも、自分の領域とalignmentで隔離したcache範囲だけを操作します。
+
+成功したFence待機後、native実行枠とUpload領域は再利用できます。
+Readback領域は`TransferBatch::readback`がCPU出力へのコピーに成功した時点で返します。
+未読の領域は結果所有者を破棄するまで占有し、読み取り失敗時も再試行のために保持します。
+したがってGPU完了後も、保持した結果によってReadbackの空き不足は起こり得ます。
+再予約した領域に以前の内容が残っていても、新しい要求の初期化済みデータとは扱いません。
+未投入キャンセルでは領域を回収し、完了不明のpending処理では領域と共有bufferの所有者ごと保持します。
+
+Readbackを含むバッチだけがHOST_READへの依存を記録します。
+画像のuploadだけなら完了layoutはTRANSFER_DST_OPTIMAL、readback後はTRANSFER_SRC_OPTIMALです。
+バッチ内で書いた内容を後続copyが読む依存も記録し、途中にCPU待機を挟みません。
+描画・Computeへのlayoutやstage/accessの計画は、対応するimage用途・ViewとともにM2で接続します。
+
 ### 判定条件
 
 ローダー、API、必須Layer／extensionが不足した場合は、理由を報告して試験を失敗させます。
@@ -252,12 +325,56 @@ Instance作成時に`VK_EXT_layer_settings`の`validate_sync=true`を指定し�
 レイヤー提供分を含めて必要なextensionを照会し、不足を黙って無効化しません。
 環境変数や設定ファイルはAPI指定より優先されるため、要求ログだけで有効とは判断できません。
 実Vulkan受入では外部設定を確認し、レイヤー起動時のINFOメッセージで同期検証の有効状態も確認します。
+Instance・Device・buffer単独試験も同じ確認を行い、core validationが無効な状態を成功と扱いません。
 設定の優先順位は[LunarGのレイヤー設定](https://vulkan.lunarg.com/doc/view/latest/windows/layer_configuration.html)を参照してください。
 Synchronization Validationはhost memory accessを追跡しないため、CPUアクセスの寿命契約はCPU試験でも確認します。
 実Vulkan受入試験ではwarning／errorが一件でもあれば失敗です。
 例外にできるのは確認済みの誤検出だけで、メッセージID・対象バージョン・発生条件・根拠を
 個別に記録し、ログにも残します。現時点の例外はありません。
 診断コールバック内部の失敗も試験失敗に含め、終了中のメッセージまで集計します。
+
+## 転送の性能測定
+
+正しさ試験の既定は`ValidationMode::Required`です。性能試験だけが
+`VulkanInstance::with_validation(..., ValidationMode::Disabled)`を明示指定します。
+この設定はKhronos Validation Layer・layer_settings・SyncValを要求せず、
+debug_utilsによる名前・ラベル・診断経路は維持します。releaseビルドだけで自動的に検証を外すことはありません。
+
+性能試験はreleaseと`RENDERER_RUN_PERFORMANCE=1`を要求します。PowerShellでの実行例です。
+
+```powershell
+$rendererPreviousPerformance = $env:RENDERER_RUN_PERFORMANCE
+try {
+    $env:RENDERER_RUN_PERFORMANCE = '1'
+    cargo test --release --locked -p renderer --no-default-features --features vulkan performance_transfer_measurements -- --ignored --nocapture --test-threads=1
+} finally {
+    $env:RENDERER_RUN_PERFORMANCE = $rendererPreviousPerformance
+}
+```
+
+Linuxでは次のように指定します。
+
+```sh
+RENDERER_RUN_PERFORMANCE=1 cargo test --release --locked -p renderer --no-default-features --features vulkan performance_transfer_measurements -- --ignored --nocapture --test-threads=1
+```
+
+外部のloader設定でLayerを強制有効化できるため、アプリが要求しない設定だけでは
+検証なしを保証できません。環境変数・Vulkan Configuratorの設定を確認し、
+VVLの起動状態が受信された場合は性能試験を失敗させます。ログ非表示だけを検証なしとは扱いません。
+
+固定負荷をwarm-up後に測定し、CPUのwrite・record・submit・wait（回収を含む）・readbackを分けて、
+中央値・p95とnative資源の作成・再利用回数を報告します。パターン作成と内容照合は測定区間の外です。
+GPU timestampは対応するqueueのvalid bitsとtimestamp periodを確認し、Fence完了後に取得します。
+非対応環境はGPU時間を未取得と報告し、CPU測定の成功をGPU時間の測定結果に置き換えません。
+
+同じcopy命令を使い、native資源を毎回作成するテスト専用の基準経路と再利用経路を比較します。
+基準経路は通常ビルドへ含めず、実装の通常経路は`ExecutionPool`を使います。
+この比較はnative実行資源の管理コストを確認するものです。
+別の比較では、同じcopy回数と転送総量について個別の複数submitと単一バッチを測定し、
+CPU全体時間、submit回数、共有stagingの作成回数と予約量の最大値を報告します。
+個別側もすべての要求をsubmitしてから待機し、一件ずつのCPU待機で不利にしません。
+バッチ比較ではGPU時間を測定せず、どちらの比較も複数フレームのthroughputや描画FPSの改善を証明しません。
+正しさ試験の検証有効結果と、検証なしの性能結果は別々に記録します。
 
 ## 診断ログ
 
@@ -289,7 +406,9 @@ bufferの作成では用途・要求サイズ・ハンドルと、選択され�
 imageの作成では寸法・format・usage・ハンドルと、対応上限・Allocationサイズ・メモリのtype・propertyを記録します。
 失敗時は操作名と元のVulkanエラーを保持し、CPUアクセス時の範囲や用途のエラーも報告します。
 転送ではdebug object名とcommand labelを付け、buffer・command資源・Fenceを診断と対応づけます。
-投入と完了待ち、期限切れ、Device停止、回収できず保持した資源もログに残します。
+Device用のdebug_utils関数テーブルは一度保持し、QueueもDevice作成時に一度命名します。
+転送ごとの記録・投入・完了・期限切れの詳細は`debug`へ記録し、必要時に有効化できます。
+初期化情報と、Device停止・reset失敗・回収できず保持した資源などの異常ログも残します。
 
 診断は直近64件と最初のwarning／error 128件を保持します。件数は保持上限とは独立して数え、
 保持できなかった問題メッセージの件数も報告します。これは全ログの保存先ではありません。

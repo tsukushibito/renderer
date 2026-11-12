@@ -338,6 +338,7 @@ fn with_create_info<T>(
 pub(super) struct VulkanDevice {
     _instance: VulkanInstance,
     device: ash::Device,
+    debug_utils: Option<ash::ext::debug_utils::Device>,
     selected: SelectedDevice,
     queue: vk::Queue,
     queue_lock: Mutex<()>,
@@ -429,8 +430,10 @@ impl VulkanDevice {
         self.selected.queue_family_index
     }
 
-    pub(super) fn debug_utils(&self) -> ash::ext::debug_utils::Device {
-        ash::ext::debug_utils::Device::new(self.instance_raw(), self.raw())
+    pub(super) fn debug_utils(&self) -> &ash::ext::debug_utils::Device {
+        self.debug_utils
+            .as_ref()
+            .expect("Device dispatch initialized")
     }
 
     fn initialize(instance: VulkanInstance) -> Result<Self, DeviceInitError> {
@@ -482,6 +485,7 @@ impl VulkanDevice {
         let mut owner = Self {
             _instance: instance,
             device,
+            debug_utils: None,
             selected,
             queue: vk::Queue::null(),
             queue_lock: Mutex::new(()),
@@ -494,6 +498,27 @@ impl VulkanDevice {
                 .device
                 .get_device_queue(owner.selected.queue_family_index, 0)
         };
+        owner.debug_utils = Some(ash::ext::debug_utils::Device::new(
+            owner.instance_raw(),
+            owner.raw(),
+        ));
+        // SAFETY: The exclusively owned Device/Queue are not yet exposed. The
+        // enabled debug_utils table and static name are live for this call.
+        unsafe {
+            owner.debug_utils().set_debug_utils_object_name(
+                &vk::DebugUtilsObjectNameInfoEXT::default()
+                    .object_handle(owner.queue)
+                    .object_name(c"renderer.graphics-compute.queue"),
+            )
+        }
+        .map_err(|result| {
+            owner.observe_result(result);
+            DeviceInitError::Vulkan {
+                operation: "vkSetDebugUtilsObjectNameEXT(queue)",
+                device_name: Some(owner.name().to_owned()),
+                result,
+            }
+        })?;
         tracing::info!(target: LOG_TARGET, device = %owner.selected.info.name,
             family = owner.selected.queue_family_index, queue_index = 0,
             timeline_semaphore = true, synchronization2 = true, dynamic_rendering = true,
@@ -709,6 +734,7 @@ mod tests {
                             diagnostics.snapshot()
                         )
                     });
+                super::super::assert_real_validation(&diagnostics);
                 let device = VulkanDevice::new(instance).unwrap_or_else(|error| {
                     panic!(
                         "iteration {iteration}: {error}; {:?}",

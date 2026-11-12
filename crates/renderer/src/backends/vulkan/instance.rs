@@ -16,6 +16,24 @@ const REQUIRED_EXTENSIONS: [&CStr; 2] =
     [ash::ext::debug_utils::NAME, ash::ext::layer_settings::NAME];
 pub(super) const LOG_TARGET: &str = "renderer::vulkan";
 
+/// Validation stays mandatory unless the caller explicitly selects a performance
+/// run. Loader environment/settings may still inject layers in either mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ValidationMode {
+    #[default]
+    Required,
+    Disabled,
+}
+
+impl ValidationMode {
+    fn extensions(self) -> &'static [&'static CStr] {
+        match self {
+            Self::Required => &REQUIRED_EXTENSIONS,
+            Self::Disabled => &[ash::ext::debug_utils::NAME],
+        }
+    }
+}
+
 /// One independently discovered problem; unknown query results are not called absent.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PrerequisiteFailure {
@@ -123,7 +141,7 @@ struct Discovery {
 }
 
 impl Discovery {
-    fn check(mut self) -> Result<Self, InitError> {
+    fn check(mut self, validation: ValidationMode) -> Result<Self, InitError> {
         if let Some(available) = self.api {
             if vk::api_version_variant(available) != 0 {
                 self.failures
@@ -135,14 +153,15 @@ impl Discovery {
                 });
             }
         }
-        if let Some(layers) = &self.layers
+        if validation == ValidationMode::Required
+            && let Some(layers) = &self.layers
             && !layers.contains("VK_LAYER_KHRONOS_validation")
         {
             self.failures
                 .push(PrerequisiteFailure::MissingLayer(VALIDATION_LAYER));
         }
         if let Some(extensions) = &self.extensions {
-            for name in REQUIRED_EXTENSIONS {
+            for &name in validation.extensions() {
                 if !extensions.contains(name.to_str().expect("static extension name is UTF-8")) {
                     self.failures
                         .push(PrerequisiteFailure::MissingExtension(name));
@@ -201,7 +220,7 @@ fn extension_names(
     valid.then_some(names)
 }
 
-fn discover(entry: &Entry) -> Result<Discovery, InitError> {
+fn discover(entry: &Entry, validation: ValidationMode) -> Result<Discovery, InitError> {
     let mut discovery = Discovery::default();
     // SAFETY: Entry owns the live loader. These enumeration operations have no
     // instance handles or shared host objects and are called serially here.
@@ -212,12 +231,17 @@ fn discover(entry: &Entry) -> Result<Discovery, InitError> {
     )
     .map(|version| version.unwrap_or(vk::API_VERSION_1_0));
 
-    // SAFETY: Same live Entry; ash manages the enumeration output storage.
-    let layers = query(
-        unsafe { entry.enumerate_instance_layer_properties() },
-        "vkEnumerateInstanceLayerProperties",
-        &mut discovery.failures,
-    );
+    // Disabled mode does not depend on validation-layer installation or queries.
+    let layers = if validation == ValidationMode::Required {
+        // SAFETY: Same live Entry; ash manages the enumeration output storage.
+        query(
+            unsafe { entry.enumerate_instance_layer_properties() },
+            "vkEnumerateInstanceLayerProperties",
+            &mut discovery.failures,
+        )
+    } else {
+        None
+    };
     if let Some(properties) = layers {
         let mut names = BTreeSet::new();
         let mut valid = true;
@@ -279,17 +303,17 @@ fn discover(entry: &Entry) -> Result<Discovery, InitError> {
             (Some(global), Some(layer)) => global.extend(layer),
             _ => discovery.extensions = None,
         }
-    } else if discovery.layers.is_none() {
+    } else if validation == ValidationMode::Required && discovery.layers.is_none() {
         // The layer query failed, so extensions provided by that layer are unknown.
         discovery.extensions = None;
     }
     tracing::info!(target: LOG_TARGET,
         loader_api = ?discovery.api.map(api_version), requested_api = %api_version(REQUIRED_API),
-        required_layer = %VALIDATION_LAYER.to_string_lossy(),
-        required_extensions = ?REQUIRED_EXTENSIONS,
+        validation = ?validation,
+        required_extensions = ?validation.extensions(),
         "Checking Vulkan instance prerequisites");
     tracing::debug!(target: LOG_TARGET, extensions = ?discovery.extensions, "Available Vulkan instance extensions");
-    discovery.check()
+    discovery.check(validation)
 }
 
 /// Owns all dependencies through destruction, including create/destroy callbacks.
@@ -304,7 +328,14 @@ pub(super) struct VulkanInstance {
 
 impl VulkanInstance {
     pub(super) fn new(diagnostics: Arc<Diagnostics>) -> Result<Self, InitError> {
-        let result = Self::load_and_initialize(diagnostics);
+        Self::with_validation(diagnostics, ValidationMode::default())
+    }
+
+    pub(super) fn with_validation(
+        diagnostics: Arc<Diagnostics>,
+        validation: ValidationMode,
+    ) -> Result<Self, InitError> {
+        let result = Self::load_and_initialize(diagnostics, validation);
         if let Err(error) = &result {
             tracing::error!(target: LOG_TARGET, error = %error, "Vulkan instance initialization failed");
         }
@@ -315,11 +346,14 @@ impl VulkanInstance {
         &self.instance
     }
 
-    fn load_and_initialize(diagnostics: Arc<Diagnostics>) -> Result<Self, InitError> {
+    fn load_and_initialize(
+        diagnostics: Arc<Diagnostics>,
+        validation: ValidationMode,
+    ) -> Result<Self, InitError> {
         // SAFETY: Use the platform Vulkan loader, which supplies Vulkan entry
         // points; the resulting Entry is retained until after all instance calls.
         let entry = unsafe { Entry::load() }.map_err(InitError::Loader)?;
-        Self::initialize(entry, diagnostics, || Ok(()))
+        Self::initialize_with_validation(entry, diagnostics, validation, || Ok(()))
     }
 
     /// The narrow creation hook also tests cleanup after a real Instance exists;
@@ -329,13 +363,35 @@ impl VulkanInstance {
         diagnostics: Arc<Diagnostics>,
         before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
     ) -> Result<Self, InitError> {
-        discover(&entry)?;
+        Self::initialize_with_validation(
+            entry,
+            diagnostics,
+            ValidationMode::Required,
+            before_messenger_create,
+        )
+    }
+
+    fn initialize_with_validation(
+        entry: Entry,
+        diagnostics: Arc<Diagnostics>,
+        validation: ValidationMode,
+        before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
+    ) -> Result<Self, InitError> {
+        discover(&entry, validation)?;
         let application_info = vk::ApplicationInfo::default()
             .application_name(c"renderer")
             .engine_name(c"renderer")
             .api_version(REQUIRED_API);
-        let layers = [VALIDATION_LAYER.as_ptr()];
-        let extensions = REQUIRED_EXTENSIONS.map(CStr::as_ptr);
+        let layers = if validation == ValidationMode::Required {
+            vec![VALIDATION_LAYER.as_ptr()]
+        } else {
+            Vec::new()
+        };
+        let extensions: Vec<_> = validation
+            .extensions()
+            .iter()
+            .map(|name| name.as_ptr())
+            .collect();
         let enable_sync: vk::Bool32 = vk::TRUE;
         // ash's byte-slice setter counts bytes rather than BOOL32 values. Keep
         // the correctly typed value and its count explicit for this setting.
@@ -349,12 +405,14 @@ impl VulkanInstance {
         }];
         let mut layer_settings = vk::LayerSettingsCreateInfoEXT::default().settings(&settings);
         let mut callback = diagnostics.messenger_create_info();
-        let create_info = vk::InstanceCreateInfo::default()
+        let mut create_info = vk::InstanceCreateInfo::default()
             .application_info(&application_info)
             .enabled_layer_names(&layers)
             .enabled_extension_names(&extensions)
-            .push_next(&mut layer_settings)
             .push_next(&mut callback);
+        if validation == ValidationMode::Required {
+            create_info = create_info.push_next(&mut layer_settings);
+        }
         // SAFETY: All names and pNext data remain live for the call. The Arc
         // allocation behind user_data remains live through vkDestroyInstance.
         // No surface, Device, queue, or other instance child exists at this stage.
@@ -409,8 +467,8 @@ impl VulkanInstance {
         owner.debug_utils = Some(debug_utils);
         owner.messenger = Some(messenger);
         tracing::info!(target: LOG_TARGET, api = %api_version(REQUIRED_API),
-            layer = %VALIDATION_LAYER.to_string_lossy(), extensions = ?REQUIRED_EXTENSIONS,
-            synchronization_validation_requested = true,
+            validation = ?validation, extensions = ?validation.extensions(),
+            synchronization_validation_requested = validation == ValidationMode::Required,
             "Vulkan instance and debug messenger initialized");
         Ok(owner)
     }

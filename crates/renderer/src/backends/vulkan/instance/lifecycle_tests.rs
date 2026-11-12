@@ -7,7 +7,7 @@ use std::sync::{Arc, Weak};
 
 use ash::vk::Handle;
 
-use super::{Diagnostics, Entry, InitError, VALIDATION_LAYER, VulkanInstance, vk};
+use super::{Diagnostics, Entry, InitError, VALIDATION_LAYER, ValidationMode, VulkanInstance, vk};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Event {
@@ -36,6 +36,9 @@ struct FakeState {
     destruction_observer: Option<Arc<Diagnostics>>,
     callback_delivered: bool,
     sync_validation_requested: bool,
+    layer_queries: usize,
+    requested_layers: Vec<String>,
+    requested_extensions: Vec<String>,
 }
 
 thread_local! {
@@ -45,6 +48,13 @@ thread_local! {
 }
 
 fn initialize(plan: Plan) -> Result<VulkanInstance, InitError> {
+    initialize_with_validation(plan, ValidationMode::Required)
+}
+
+fn initialize_with_validation(
+    plan: Plan,
+    validation: ValidationMode,
+) -> Result<VulkanInstance, InitError> {
     let dispatch = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     tracing::dispatcher::with_default(&dispatch, || {
         let diagnostics = Diagnostics::new();
@@ -64,7 +74,7 @@ fn initialize(plan: Plan) -> Result<VulkanInstance, InitError> {
                 get_instance_proc_addr,
             })
         };
-        VulkanInstance::initialize(entry, diagnostics, || Ok(()))
+        VulkanInstance::initialize_with_validation(entry, diagnostics, validation, || Ok(()))
     })
 }
 
@@ -131,6 +141,35 @@ fn drop_destroys_children_first_and_keeps_instance_callback_data_alive() {
             [Event::CreateInstance, Event::CreateMessenger]
         );
         assert!(state.borrow().sync_validation_requested);
+        assert_eq!(
+            state.borrow().requested_layers,
+            ["VK_LAYER_KHRONOS_validation"]
+        );
+        assert_eq!(
+            state.borrow().requested_extensions,
+            ["VK_EXT_debug_utils", "VK_EXT_layer_settings"]
+        );
+    });
+    drop(owner);
+    assert_destroyed(&[
+        Event::CreateInstance,
+        Event::CreateMessenger,
+        Event::DestroyMessenger,
+        Event::DestroyInstance,
+    ]);
+}
+
+#[test]
+fn disabled_validation_does_not_query_or_request_validation_prerequisites() {
+    assert_eq!(ValidationMode::default(), ValidationMode::Required);
+    let owner = initialize_with_validation(Plan::default(), ValidationMode::Disabled)
+        .expect("debug-utils-only initialization succeeds");
+    STATE.with(|state| {
+        let state = state.borrow();
+        assert_eq!(state.layer_queries, 0);
+        assert!(state.requested_layers.is_empty());
+        assert_eq!(state.requested_extensions, ["VK_EXT_debug_utils"]);
+        assert!(!state.sync_validation_requested);
     });
     drop(owner);
     assert_destroyed(&[
@@ -241,6 +280,7 @@ unsafe extern "system" fn enumerate_instance_layer_properties(
     count: *mut u32,
     properties: *mut vk::LayerProperties,
 ) -> vk::Result {
+    STATE.with(|state| state.borrow_mut().layer_queries += 1);
     let mut property = vk::LayerProperties {
         spec_version: vk::API_VERSION_1_3,
         implementation_version: 1,
@@ -306,9 +346,32 @@ unsafe extern "system" fn create_instance(
     _allocator: *const vk::AllocationCallbacks<'_>,
     instance: *mut vk::Instance,
 ) -> vk::Result {
+    // SAFETY: The real constructor retains both name arrays and their strings
+    // through this call; counts are zero or match their initialized storage.
+    let (layers, extensions) = unsafe {
+        let info = &*create_info;
+        let names = |count, pointers| {
+            if count == 0 {
+                return Vec::new();
+            }
+            std::slice::from_raw_parts(pointers, count as usize)
+                .iter()
+                .map(|&name| CStr::from_ptr(name).to_string_lossy().into_owned())
+                .collect()
+        };
+        (
+            names(info.enabled_layer_count, info.pp_enabled_layer_names),
+            names(
+                info.enabled_extension_count,
+                info.pp_enabled_extension_names,
+            ),
+        )
+    };
     let fail = STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.events.push(Event::CreateInstance);
+        state.requested_layers = layers;
+        state.requested_extensions = extensions;
         state.plan.fail_instance
     });
     if fail {

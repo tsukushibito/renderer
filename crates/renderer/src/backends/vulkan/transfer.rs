@@ -23,12 +23,44 @@ use lifecycle::Retained;
 
 mod image;
 
+pub(super) mod batch;
+pub(super) mod staging;
+
+mod pool;
+use pool::NativeLease;
+
+/// Bounded native execution resources, independent of payload resource storage.
+pub(super) struct ExecutionPool {
+    state: Arc<pool::PoolState>,
+}
+
+/// Reserves capacity before a batch consumes caller-owned resource inputs.
+pub(super) struct ExecutionReservation {
+    native: NativeLease,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ExecutionPoolStats {
+    pub(super) capacity: usize,
+    pub(super) allocated: usize,
+    pub(super) leased: usize,
+    pub(super) idle: usize,
+    pub(super) native_creates: usize,
+    pub(super) reuses: usize,
+    pub(super) resets: usize,
+    pub(super) capacity_exhaustions: usize,
+}
+
 const DROP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(super) enum TransferError {
     InvalidBuffers(&'static str),
     InvalidImage(&'static str),
+    InvalidPool(&'static str),
+    CapacityExhausted {
+        capacity: usize,
+    },
     DeviceUnavailable(DeviceState),
     AlreadyFinished,
     Vulkan {
@@ -43,6 +75,10 @@ impl fmt::Display for TransferError {
         match self {
             Self::InvalidBuffers(reason) => write!(f, "invalid buffer transfer: {reason}"),
             Self::InvalidImage(reason) => write!(f, "invalid image transfer: {reason}"),
+            Self::InvalidPool(reason) => write!(f, "invalid execution pool: {reason}"),
+            Self::CapacityExhausted { capacity } => {
+                write!(f, "execution pool has no free slot (capacity {capacity})")
+            }
             Self::DeviceUnavailable(state) => {
                 write!(f, "transfer Device is {state:?}; normal use is stopped")
             }
@@ -82,6 +118,25 @@ fn timeout_ns(timeout: Duration) -> u64 {
     // Keep even an oversized Duration finite rather than turning it into the
     // Vulkan infinite-timeout sentinel.
     timeout.as_nanos().min((u64::MAX - 1) as u128) as u64
+}
+
+/// # Safety
+/// `command` must be recording on `device`, after the copy writes whose bytes
+/// will be read by the host. Its owner must retain them through completion.
+pub(super) unsafe fn record_host_read(device: &VulkanDevice, command: vk::CommandBuffer) {
+    let barriers = [vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+        .dst_access_mask(vk::AccessFlags2::HOST_READ)];
+    // SAFETY: The caller retains the command/resources and guarantees this
+    // dependency follows their copy writes. A later Fence wait precedes CPU read.
+    unsafe {
+        device.raw().cmd_pipeline_barrier2(
+            command,
+            &vk::DependencyInfo::default().memory_barriers(&barriers),
+        );
+    }
 }
 
 pub(super) struct TransferBuffers {
@@ -150,7 +205,7 @@ impl TransferBuffers {
     }
 }
 
-/// The two closed, private copy paths share only execution and retirement.
+/// Private work items share execution and retirement, without a public encoder.
 /// Each payload owns all resources its commands reference.
 pub(super) trait TransferPayload {
     fn validate(&self) -> Result<(), TransferError>;
@@ -214,6 +269,7 @@ impl TransferPayload for TransferBuffers {
                 self.readback.transfer_handle(),
                 &copy,
             );
+            record_host_read(device, command);
         }
     }
 
@@ -276,19 +332,13 @@ impl NativeTransfer {
         native.name(native.pool, c"renderer.transfer.pool")?;
         native.name(native.command, c"renderer.transfer.commands")?;
         native.name(native.fence, c"renderer.transfer.completion")?;
-        {
-            let _queue = device
-                .lock_queue()
-                .map_err(TransferError::DeviceUnavailable)?;
-            native.name(device.queue(), c"renderer.graphics-compute.queue")?;
-        }
         Ok(native)
     }
 
     fn name<T: vk::Handle>(&self, handle: T, name: &CStr) -> Result<(), TransferError> {
         let device = &self.owner.device;
         // SAFETY: Every named object belongs to this live Device; command/pool/
-        // fence are uniquely owned, and naming the Queue takes its shared lock.
+        // fence are uniquely owned. The Device names its Queue only once.
         unsafe {
             device.debug_utils().set_debug_utils_object_name(
                 &vk::DebugUtilsObjectNameInfoEXT::default()
@@ -301,7 +351,7 @@ impl NativeTransfer {
 
     fn record(&self, payload: &impl TransferPayload) -> Result<(), TransferError> {
         let device = &self.owner.device;
-        // SAFETY: Newly allocated, uniquely owned primary command buffer.
+        // SAFETY: Initially allocated or reset, uniquely owned primary command buffer.
         unsafe {
             device.raw().begin_command_buffer(
                 self.command,
@@ -311,15 +361,10 @@ impl NativeTransfer {
         }
         .map_err(|result| native_error(device, "vkBeginCommandBuffer", result))?;
         let debug = device.debug_utils();
-        let to_host = [vk::MemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::COPY)
-            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::HOST)
-            .dst_access_mask(vk::AccessFlags2::HOST_READ)];
         // SAFETY: The validated payload owns every referenced resource on this
         // Device and is retained by the enclosing recording owner. Source
-        // write/flush precedes submit, making host writes available. The final
-        // HOST dependency plus Fence wait and invalidate establish CPU readback.
+        // write/flush precedes submit. The payload records dependencies for its
+        // actual consumers, including a HOST dependency only for readback.
         unsafe {
             debug.cmd_begin_debug_utils_label(
                 self.command,
@@ -328,16 +373,29 @@ impl NativeTransfer {
                     .color([0.2, 0.7, 1.0, 1.0]),
             );
             payload.record(self.command);
-            device.raw().cmd_pipeline_barrier2(
-                self.command,
-                &vk::DependencyInfo::default().memory_barriers(&to_host),
-            );
             debug.cmd_end_debug_utils_label(self.command);
         }
         // SAFETY: The unique command buffer has balanced command labels and no
         // render pass; all referenced resources remain in the recording owner.
         unsafe { device.raw().end_command_buffer(self.command) }
             .map_err(|result| native_error(device, "vkEndCommandBuffer", result))
+    }
+
+    /// Called only after this slot is unsubmitted or its Fence actually retired.
+    fn reset(&self) -> Result<(), TransferError> {
+        let device = &self.owner.device;
+        // SAFETY: The enclosing lease is uniquely owned and no command from
+        // this pool is pending. Reset before payload resources can be released.
+        unsafe {
+            device
+                .raw()
+                .reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
+        }
+        .map_err(|result| native_error(device, "vkResetCommandPool", result))?;
+        // SAFETY: The same retirement proof excludes a pending Fence operation.
+        // An unsubmitted unsignaled Fence can also be reset before reuse.
+        unsafe { device.raw().reset_fences(&[self.fence]) }
+            .map_err(|result| native_error(device, "vkResetFences", result))
     }
 }
 
@@ -361,7 +419,7 @@ impl Drop for NativeTransfer {
 }
 
 struct TransferResources<T> {
-    native: NativeTransfer,
+    native: NativeLease,
     payload: T,
 }
 
@@ -371,6 +429,9 @@ pub(super) struct RecordedTransfer<T: TransferPayload = TransferBuffers> {
 }
 
 impl<T: TransferPayload> RecordedTransfer<T> {
+    /// Reference path for acceptance and performance comparisons. Normal callers
+    /// reserve reusable execution resources through `ExecutionPool`.
+    #[cfg(test)]
     pub(super) fn new(payload: T) -> Result<Self, TransferError> {
         let result = (|| {
             payload.validate()?;
@@ -379,20 +440,24 @@ impl<T: TransferPayload> RecordedTransfer<T> {
                 .device
                 .ensure_active()
                 .map_err(TransferError::DeviceUnavailable)?;
-            let native = NativeTransfer::new(Arc::clone(payload.owner()))?;
-            let recorded = Self {
-                resources: TransferResources { native, payload },
-            };
-            recorded
-                .resources
-                .native
-                .record(&recorded.resources.payload)?;
-            Ok(recorded)
+            let native = NativeLease::standalone(NativeTransfer::new(Arc::clone(payload.owner()))?);
+            Self::with_native(payload, native)
         })();
         if let Err(error) = &result {
             tracing::error!(target: LOG_TARGET, error = %error, "Vulkan transfer recording failed");
         }
         result
+    }
+
+    fn with_native(payload: T, native: NativeLease) -> Result<Self, TransferError> {
+        let recorded = Self {
+            resources: TransferResources { native, payload },
+        };
+        recorded
+            .resources
+            .native
+            .record(&recorded.resources.payload)?;
+        Ok(recorded)
     }
 
     pub(super) fn submit(self) -> Result<PendingTransfer<T>, TransferError> {
@@ -426,7 +491,7 @@ impl<T: TransferPayload> RecordedTransfer<T> {
             return Err(error);
         }
         let native = &pending.retained.value().unwrap().native;
-        tracing::info!(target: LOG_TARGET, device = device.name(), fence = ?native.fence, command = ?native.command,
+        tracing::debug!(target: LOG_TARGET, device = device.name(), fence = ?native.fence, command = ?native.command,
             bytes = pending.retained.value().unwrap().payload.bytes(),
             path = ?pending.retained.value().unwrap().payload.label(),
             "Vulkan transfer submitted");
@@ -492,7 +557,7 @@ impl<T: TransferPayload> PendingTransfer<T> {
                 unsafe {
                     payload.establish_contents();
                 }
-                tracing::info!(target: LOG_TARGET, device = native.owner.device.name(), fence = ?native.fence,
+                tracing::debug!(target: LOG_TARGET, device = native.owner.device.name(), fence = ?native.fence,
                     bytes = payload.bytes(), path = ?payload.label(), "Vulkan transfer completed");
                 drop(native);
                 Ok(Some(payload))
@@ -520,3 +585,6 @@ impl<T: TransferPayload> Drop for PendingTransfer<T> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod benchmarks;

@@ -16,7 +16,9 @@ pub(super) struct AccessError {
 /// move or free that storage during cache operations. Unmap must not unwind.
 pub(super) unsafe trait MemoryAccess {
     /// # Safety
-    /// The allocation must be live and exclusively available to this access.
+    /// The allocation must be live and its mapping/cache host calls exclusively
+    /// controlled by this access. The copied range and its cache atoms exclude
+    /// GPU conflicts; other atom-disjoint ranges may remain in GPU use.
     unsafe fn map(&mut self) -> VkResult<*mut u8>;
 
     /// # Safety
@@ -46,7 +48,9 @@ impl<'a> VmaAccess<'a> {
 
 // SAFETY: VMA's successful map points to this allocation, not the enclosing
 // memory block, and stays valid through the paired unmap. The buffer owner
-// retains the allocator and allocation, with no defragmentation or GPU access.
+// retains the allocator and allocation without defragmentation. Callers exclude
+// GPU access to the copied range and its cache atoms; shared staging may use
+// other atom-disjoint ranges concurrently.
 unsafe impl MemoryAccess for VmaAccess<'_> {
     unsafe fn map(&mut self) -> VkResult<*mut u8> {
         // SAFETY: The caller supplies the live, exclusively accessed allocation.
@@ -102,9 +106,10 @@ impl<A: MemoryAccess> Drop for Mapping<'_, A> {
 /// Copy bytes into the allocation, flushing before the scoped mapping ends.
 ///
 /// # Safety
-/// The allocation must be live and free of GPU/concurrent CPU access. The
-/// caller must validate `offset..offset + bytes.len()` against the allocation
-/// and the CPU address space, and that this range cannot overlap `bytes`.
+/// The allocation must be live, and this range plus cache atoms touched by a
+/// flush must be free of GPU/concurrent CPU access. Mapping/cache host calls on
+/// the allocation must be serialized. The caller validates the range against
+/// the allocation/CPU address space and excludes overlap with `bytes`.
 pub(super) unsafe fn write(
     access: &mut impl MemoryAccess,
     coherent: bool,
@@ -136,10 +141,10 @@ pub(super) unsafe fn write(
 /// Invalidate the allocation's cache before copying initialized bytes out.
 ///
 /// # Safety
-/// The allocation must be live and free of GPU/concurrent CPU access. The
-/// caller must validate `offset..offset + output.len()` against the allocation
-/// and the CPU address space, establish the contents of every requested byte,
-/// and ensure that this range cannot overlap `output`.
+/// The allocation must be live, and this range plus cache atoms touched by an
+/// invalidate must be free of GPU/concurrent CPU access. Mapping/cache host
+/// calls must be serialized. The caller validates addressable bounds,
+/// establishes every requested byte, and excludes overlap with `output`.
 pub(super) unsafe fn read(
     access: &mut impl MemoryAccess,
     coherent: bool,

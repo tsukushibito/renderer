@@ -181,11 +181,15 @@ fn checked_range(
 }
 
 /// Sorted, disjoint initialized ranges; adjacent writes are merged as well.
-#[derive(Default)]
-struct InitializedRanges(Vec<Range<vk::DeviceSize>>);
+#[derive(Clone, Default)]
+pub(super) struct InitializedRanges(Vec<Range<vk::DeviceSize>>);
 
 impl InitializedRanges {
-    fn contains(&self, range: &Range<vk::DeviceSize>) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(super) fn contains(&self, range: &Range<vk::DeviceSize>) -> bool {
         range.is_empty()
             || self
                 .0
@@ -193,7 +197,7 @@ impl InitializedRanges {
                 .any(|known| known.start <= range.start && known.end >= range.end)
     }
 
-    fn insert(&mut self, mut range: Range<vk::DeviceSize>) {
+    pub(super) fn insert(&mut self, mut range: Range<vk::DeviceSize>) {
         if range.is_empty() {
             return;
         }
@@ -218,8 +222,21 @@ fn create_resource(
         &vk_mem::AllocationCreateInfo,
     ) -> Result<(vk::Buffer, vk_mem::Allocation), vk::Result>,
 ) -> Result<(vk::Buffer, vk_mem::Allocation), BufferError> {
+    create_resource_with_flags(role, size, vk_mem::AllocationCreateFlags::empty(), create)
+}
+
+fn create_resource_with_flags(
+    role: BufferRole,
+    size: vk::DeviceSize,
+    extra_flags: vk_mem::AllocationCreateFlags,
+    create: impl FnOnce(
+        &vk::BufferCreateInfo<'_>,
+        &vk_mem::AllocationCreateInfo,
+    ) -> Result<(vk::Buffer, vk_mem::Allocation), vk::Result>,
+) -> Result<(vk::Buffer, vk_mem::Allocation), BufferError> {
     valid_size(role, size)?;
-    let (usage, allocation_info) = role.create_info();
+    let (usage, mut allocation_info) = role.create_info();
+    allocation_info.flags |= extra_flags;
     let buffer_info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(usage)
@@ -252,13 +269,37 @@ impl VulkanAllocator {
         role: BufferRole,
         size: vk::DeviceSize,
     ) -> Result<VulkanBuffer, BufferError> {
+        self.create_buffer_with_flags(role, size, vk_mem::AllocationCreateFlags::empty())
+    }
+
+    /// Shared Upload buffers keep VMA's native mapping pinned. Individual CPU
+    /// copies still use balanced VMA map references and retain the write API.
+    pub(super) fn create_staging_buffer(
+        &self,
+        role: BufferRole,
+        size: vk::DeviceSize,
+    ) -> Result<VulkanBuffer, BufferError> {
+        let flags = if role == BufferRole::Upload {
+            vk_mem::AllocationCreateFlags::MAPPED
+        } else {
+            vk_mem::AllocationCreateFlags::empty()
+        };
+        self.create_buffer_with_flags(role, size, flags)
+    }
+
+    fn create_buffer_with_flags(
+        &self,
+        role: BufferRole,
+        size: vk::DeviceSize,
+        flags: vk_mem::AllocationCreateFlags,
+    ) -> Result<VulkanBuffer, BufferError> {
         let result = (|| {
             self.owner
                 .device
                 .ensure_active()
                 .map_err(BufferError::DeviceUnavailable)?;
             let (buffer, allocation) =
-                create_resource(role, size, |buffer_info, allocation_info| {
+                create_resource_with_flags(role, size, flags, |buffer_info, allocation_info| {
                     // SAFETY: The live allocator owns its Vulkan dependencies. The
                     // request creates a uniquely owned, unaliased transfer buffer.
                     unsafe { self.owner.raw.create_buffer(buffer_info, allocation_info) }
@@ -344,6 +385,10 @@ impl VulkanBuffer {
         self.initialized.contains(&(0..self.size))
     }
 
+    pub(super) fn initialized_ranges(&self) -> InitializedRanges {
+        self.initialized.clone()
+    }
+
     /// # Safety
     /// The caller must retain exclusive ownership from command recording through
     /// successful completion or lost-device retirement; no concurrent CPU access
@@ -353,9 +398,97 @@ impl VulkanBuffer {
     }
 
     /// # Safety
+    /// A range owner retains this allocation through every recorded GPU use.
+    /// Its copy ranges and their non-coherent cache atoms are disjoint from
+    /// every concurrent CPU access and conflicting GPU use. The shared staging
+    /// owner serializes all CPU mapping/cache operations and never resizes.
+    pub(super) unsafe fn shared_transfer_handle(&self) -> vk::Buffer {
+        self.buffer
+    }
+
+    /// # Safety
     /// The caller has proved successful completion of a full-buffer GPU write.
     pub(super) unsafe fn establish_gpu_contents(&mut self) {
         self.initialized.insert(0..self.size);
+    }
+
+    /// # Safety
+    /// The caller proved successful completion of a GPU write to this exact,
+    /// in-bounds range on an active Device. No failed/unfinished write is valid.
+    pub(super) unsafe fn establish_gpu_range(&mut self, offset: u64, size: u64) {
+        let end = offset.checked_add(size).expect("validated GPU write range");
+        assert!(end <= self.size, "validated GPU write range is in bounds");
+        self.initialized.insert(offset..end);
+    }
+
+    /// # Safety
+    /// The caller exclusively owns this byte range and every cache atom touched
+    /// by its flush. Those atoms have no pending GPU use or concurrent CPU
+    /// access. Other atom-disjoint ranges may remain in GPU use. CPU mapping
+    /// and cache calls on the allocation are externally serialized. This method
+    /// does not establish whole-buffer initialization; the range owner tracks it.
+    pub(super) unsafe fn write_shared_range(
+        &mut self,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), BufferError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(BufferError::DeviceUnavailable)?;
+        self.role.host_access("write")?;
+        let range = checked_range(self.role, self.size, offset, bytes.len())?;
+        let mut access = host_access::VmaAccess::new(&self.owner.raw, &mut self.allocation);
+        // SAFETY: The caller's range/atom ownership excludes GPU conflicts and
+        // checked_range established addressable, allocation-relative bounds.
+        unsafe {
+            host_access::write(
+                &mut access,
+                self.memory_properties
+                    .contains(vk::MemoryPropertyFlags::HOST_COHERENT),
+                range.start,
+                bytes,
+            )
+        }
+        .map_err(|error| {
+            self.owner.device.observe_result(error.result);
+            self.access_error(error, offset, bytes.len())
+        })
+    }
+
+    /// # Safety
+    /// The caller proved readable contents and exclusively owns this range and
+    /// every cache atom touched by invalidate. No GPU operation can still write
+    /// those atoms. Mapping/cache operations are externally serialized; other
+    /// atom-disjoint ranges may remain in GPU use. Initialization is tracked by
+    /// the range lease rather than this buffer's whole-owner bookkeeping.
+    pub(super) unsafe fn read_shared_range(
+        &mut self,
+        offset: u64,
+        output: &mut [u8],
+    ) -> Result<(), BufferError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(BufferError::DeviceUnavailable)?;
+        self.role.host_access("read")?;
+        let range = checked_range(self.role, self.size, offset, output.len())?;
+        let mut access = host_access::VmaAccess::new(&self.owner.raw, &mut self.allocation);
+        // SAFETY: The caller supplies initialized, retired range/cache atoms;
+        // checked_range supplies addressable bounds and no mapped pointer escapes.
+        unsafe {
+            host_access::read(
+                &mut access,
+                self.memory_properties
+                    .contains(vk::MemoryPropertyFlags::HOST_COHERENT),
+                range.start,
+                output,
+            )
+        }
+        .map_err(|error| {
+            self.owner.device.observe_result(error.result);
+            self.access_error(error, offset, output.len())
+        })
     }
 
     pub(super) fn write(
@@ -574,6 +707,23 @@ mod tests {
             assert!(message.contains("17"), "{message}");
         }
         assert!(
+            create_resource_with_flags(
+                BufferRole::Upload,
+                17,
+                vk_mem::AllocationCreateFlags::MAPPED,
+                |_, allocation| {
+                    assert_eq!(
+                        allocation.flags.bits(),
+                        (vk_mem::AllocationCreateFlags::MAPPED
+                            | vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE)
+                            .bits()
+                    );
+                    Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY)
+                }
+            )
+            .is_err()
+        );
+        assert!(
             create_resource(BufferRole::Upload, 0, |_, _| {
                 panic!("invalid input must not call VMA")
             })
@@ -590,6 +740,7 @@ mod tests {
                 let diagnostics = Diagnostics::new();
                 let instance = VulkanInstance::new(Arc::clone(&diagnostics))
                     .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
+                super::super::assert_real_validation(&diagnostics);
                 let device = VulkanDevice::new(instance)
                     .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
                 assert_ne!(

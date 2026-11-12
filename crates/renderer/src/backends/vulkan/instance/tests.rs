@@ -12,7 +12,8 @@ fn available(api: u32, layers: &[&str], extensions: &[&str]) -> Discovery {
 
 #[test]
 fn reports_all_discoverable_missing_prerequisites_together() {
-    let Err(InitError::Prerequisites(failures)) = available(vk::API_VERSION_1_2, &[], &[]).check()
+    let Err(InitError::Prerequisites(failures)) =
+        available(vk::API_VERSION_1_2, &[], &[]).check(ValidationMode::Required)
     else {
         panic!("expected all missing prerequisites");
     };
@@ -48,7 +49,7 @@ fn reports_all_discoverable_missing_prerequisites_together() {
                 &["VK_LAYER_KHRONOS_validation"],
                 &["VK_EXT_debug_utils", "VK_EXT_layer_settings"]
             )
-            .check()
+            .check(ValidationMode::Required)
             .is_ok()
         );
     }
@@ -58,7 +59,7 @@ fn reports_all_discoverable_missing_prerequisites_together() {
         &["VK_LAYER_KHRONOS_validation"],
         &["VK_EXT_debug_utils", "VK_EXT_layer_settings"],
     )
-    .check() else {
+    .check(ValidationMode::Required) else {
         panic!("nonstandard API variant must be rejected");
     };
     assert_eq!(
@@ -81,7 +82,7 @@ fn failed_query_preserves_cause_and_other_known_missing_requirements() {
             result: vk::Result::ERROR_OUT_OF_HOST_MEMORY,
         }],
     };
-    let error = match discovery.check() {
+    let error = match discovery.check(ValidationMode::Required) {
         Err(error) => error,
         Ok(_) => panic!("query failure must reject initialization"),
     };
@@ -153,6 +154,7 @@ fn vulkan_instance_smoke() {
                     diagnostics.snapshot()
                 )
             });
+            super::super::assert_real_validation(&diagnostics);
             let message = vk::DebugUtilsMessengerCallbackDataEXT::default()
                 .message_id_number(0x716867)
                 .message_id_name(c"renderer.qhg.callback-smoke")
@@ -221,6 +223,7 @@ fn vulkan_instance_partial_failure() {
                 1,
                 "failed owner retained diagnostic state"
             );
+            super::super::assert_real_validation(&diagnostics);
             let report = diagnostics.snapshot();
             assert!(
                 report.is_clean(),

@@ -1,4 +1,4 @@
-//! Narrow CPU boundary tests: real Device creation/ownership code with four
+//! Narrow CPU boundary tests: real Device creation/ownership code with limited
 //! typed Vulkan entry points. Capability queries are tested separately.
 
 use std::cell::RefCell;
@@ -22,6 +22,9 @@ struct State {
     events: Vec<Event>,
     create_request: Option<(vk::PhysicalDevice, u32, u32)>,
     queue_request: Option<(u32, u32)>,
+    fail_queue_name: bool,
+    queue_names: Vec<(vk::Queue, String)>,
+    debug_lookups: usize,
 }
 
 thread_local! {
@@ -72,7 +75,49 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
         assert_eq!(state.queue_request, Some((7, 0)));
     });
     assert_eq!(owner.queue, vk::Queue::from_raw(5));
+    let lookups = STATE.with(|state| {
+        let state = state.borrow();
+        assert_eq!(
+            state.queue_names,
+            [(
+                vk::Queue::from_raw(5),
+                "renderer.graphics-compute.queue".to_owned()
+            )]
+        );
+        state.debug_lookups
+    });
+    assert!(lookups > 0, "initial creation loads the debug dispatch");
+    assert!(std::ptr::eq(owner.debug_utils(), owner.debug_utils()));
+    STATE.with(|state| assert_eq!(state.borrow().debug_lookups, lookups));
     drop(owner);
+    STATE.with(|state| {
+        assert_eq!(
+            state.borrow().events,
+            [
+                Event::CreateDevice,
+                Event::DestroyDevice,
+                Event::DestroyInstance
+            ]
+        );
+    });
+}
+
+#[test]
+fn queue_naming_failure_retires_the_created_device_and_preserves_cause() {
+    let instance = instance(false);
+    STATE.with(|state| state.borrow_mut().fail_queue_name = true);
+    let error = VulkanDevice::create_selected(instance, selected())
+        .err()
+        .expect("queue naming fails");
+    assert!(matches!(
+        error,
+        DeviceInitError::Vulkan {
+            operation: "vkSetDebugUtilsObjectNameEXT(queue)",
+            result: vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("ownership test device"));
     STATE.with(|state| {
         assert_eq!(
             state.borrow().events,
@@ -178,6 +223,13 @@ unsafe extern "system" fn get_device_proc_addr(
 ) -> vk::PFN_vkVoidFunction {
     // SAFETY: ash supplies a live NUL-terminated lookup name.
     let name = unsafe { CStr::from_ptr(name) };
+    if name
+        .to_bytes()
+        .windows(b"DebugUtils".len())
+        .any(|part| part == b"DebugUtils")
+    {
+        STATE.with(|state| state.borrow_mut().debug_lookups += 1);
+    }
     match name.to_bytes() {
         b"vkDestroyDevice" => {
             let function: vk::PFN_vkDestroyDevice = destroy_device;
@@ -197,8 +249,41 @@ unsafe extern "system" fn get_device_proc_addr(
                 )
             })
         }
+        b"vkSetDebugUtilsObjectNameEXT" => {
+            let function: vk::PFN_vkSetDebugUtilsObjectNameEXT = set_object_name;
+            // SAFETY: ash restores the exact vkSetDebugUtilsObjectNameEXT signature.
+            Some(unsafe {
+                std::mem::transmute::<
+                    vk::PFN_vkSetDebugUtilsObjectNameEXT,
+                    unsafe extern "system" fn(),
+                >(function)
+            })
+        }
         _ => None,
     }
+}
+
+unsafe extern "system" fn set_object_name(
+    _device: vk::Device,
+    info: *const vk::DebugUtilsObjectNameInfoEXT<'_>,
+) -> vk::Result {
+    // SAFETY: The real constructor passes a live info and static C-string name.
+    let info = unsafe { &*info };
+    // SAFETY: The constructor retains the static NUL-terminated name for the call.
+    let name = unsafe { CStr::from_ptr(info.p_object_name) }
+        .to_string_lossy()
+        .into_owned();
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state
+            .queue_names
+            .push((vk::Queue::from_raw(info.object_handle), name));
+        if state.fail_queue_name {
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY
+        } else {
+            vk::Result::SUCCESS
+        }
+    })
 }
 
 unsafe extern "system" fn destroy_device(

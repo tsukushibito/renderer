@@ -9,7 +9,7 @@ use super::super::buffer::BufferRole;
 use super::super::image::ImageDesc;
 use super::super::instance::LOG_TARGET;
 use super::super::memory::MemoryOwner;
-use super::{BufferSpec, ImageTransfer, TransferError, TransferPayload};
+use super::{BufferSpec, ImageTransfer, TransferError, TransferPayload, record_host_read};
 
 struct CopyPlan {
     extent: vk::Extent3D,
@@ -203,8 +203,9 @@ impl TransferPayload for ImageTransfer {
                 self.readback.transfer_handle(),
                 &region,
             );
+            record_host_read(device, command);
         }
-        tracing::info!(target: LOG_TARGET, device = device.name(), ?image, ?command,
+        tracing::debug!(target: LOG_TARGET, device = device.name(), ?image, ?command,
             width = plan.extent.width, height = plan.extent.height, bytes = self.bytes(),
             old_layout = ?plan.old_layout, final_layout = ?vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             "Vulkan image transfer commands recorded");
