@@ -97,6 +97,37 @@ registryへのVulkan layer登録、global hook、永続PATH、実行ポリシー
 CPU境界試験やソース監査の成功を、それらの実機確認とは扱わない。
 描画・Compute・複数フレーム、完全なBatchBuilderやGPU転送全体の新しい性能値も未確認である。
 
+## 実装指針の資料調査
+
+2026-11-12にKhronos仕様・Guide・Samples、固定SDKのLunarG/VVL、VMA、shaderc／SPIRV-Tools、
+GPUベンダーの一次資料を調べ、[Vulkanベストプラクティス](../guides/vulkan-best-practices.md)へ整理した。
+仕様要件、一般推奨、機材に依存する最適化、本Rendererの方針を区別している。
+VMAは`vk-mem 0.5.0`同梱の3.3.0 headerと公式の固定版ソースを照合した。
+
+分野別の独立レビューで同期・寿命・descriptor・WSI等の記述を確認し、
+文書の相対リンク・節アンカーと差分の空白検査を行った。
+これは文書調査の確認であり、Rendererの実装変更・GPU試験・性能測定は行っていない。
+上記の実行済み結果を再実行した記録や、後続機能の実機確認としては扱わない。
+
+## ベストプラクティス規約に対する現行実装の監査
+
+2026-11-12に、規約化したガイドの該当要件と現行コードを照合した。
+初期化・診断、VMA所有とCPUアクセス、転送・範囲・共有staging、
+実行pool・投入・完了・破棄の4領域を独立にレビューし、必要な契約を一次資料で再確認した。
+現行のCOPY専用・単一キューの実装範囲では、修正対象となる仕様／VMA契約違反や、
+重要な未文書化の一般推奨からの逸脱は見つからなかった。
+
+通常のVulkan feature付き試験はCPU 53件成功・10件ignored、明示実行した実Vulkan正しさ試験は
+RTX 3060で9件成功・1.21秒だった。Core＋SyncValの実効設定を確認し、
+終了後までのValidation warning／errorとcallback内部失敗はゼロだった。
+生ログは`.tools/vulkan-research/audit-cpu.log`と`audit-gpu.log`にある。
+負の試験で期待する入力拒否等のアプリケーションERRORログは、Validationの異常とは区別する。
+
+これは違反が存在しないことの完全な証明ではない。
+描画・Compute・WSI等の未実装部分は評価対象に含めず、実機non-coherentメモリ、
+native OOM／Device loss／reset失敗、別GPU・ローカルLinuxでの確認範囲は拡大していない。
+コード変更と性能の再測定は行っていない。
+
 生ログと配布物はGit対象外の`.tools/`、Criterionの保存値は`target/criterion/`にある。
 過去の完全な比較表が必要な場合は、たとえば次のようにGit履歴から参照する。
 

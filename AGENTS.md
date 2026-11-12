@@ -14,6 +14,33 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
   history is synchronized separately with `bd dolt pull` / `bd dolt push`.
 - Commit and push only within the scope authorized by the user.
 
+# Vulkan implementation and review
+
+- Before Vulkan-related implementation or review, including Graph lowering and
+  runtime resource management, read the relevant sections of the
+  [Vulkan best-practices guide](docs/guides/vulkan-best-practices.md) and the
+  [current Vulkan design](docs/design/vulkan.md). Follow the applicable guidance.
+- Satisfy applicable Vulkan and VMA API contracts and the current Renderer
+  policies. Performance advice or a documented recommendation exception cannot
+  waive synchronization, lifetime, safety, or validation requirements.
+- Follow general recommendations by default. When choosing another approach,
+  record the reason, alternatives, risks and supporting evidence in the relevant
+  existing design document and Beads issue, proportionate to the change.
+- Treat vendor-specific and conditional optimizations as measured choices.
+  Confirm the required capabilities, verify correctness, and measure benefits
+  and tradeoffs on the target workload and hardware before adopting them as an
+  optimization. Keep experiments and unverified performance claims distinct.
+- Apply guidance within the task's scope; future-feature sections do not require
+  implementing those features. Preserve a correct baseline for comparisons.
+- Check advice against the actual API version, enabled extensions/features and
+  pinned bindings/VMA. Resolve conflicts using applicable primary-source
+  contracts and update stale guidance, current design and the Beads issue.
+  Changes to Renderer policy require an explicit documented rationale; existing
+  code or old documentation does not override API requirements.
+- At completion, record applicable guidance, justified departures from general
+  recommendations, and executed/unexecuted verification in the existing issue
+  and relevant documentation. Use the established quality and validation gates.
+
 # Rust module layout
 
 - Do not create or retain `mod.rs` files, including test modules.

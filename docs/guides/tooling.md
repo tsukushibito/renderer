@@ -4,6 +4,8 @@
 以下のコマンドはリポジトリのルートで実行する。
 ローカル配布物と確認用ファイルはGit対象外の`.tools/`へ配置する。
 現在の導入状態と確認範囲は[最新の検証結果](../verification/current.md)を参照する。
+検証機能の使い分け、GPU timestamp、vendor別profilerと測定条件は
+[Vulkanベストプラクティス](vulkan-best-practices.md#measurement)を参照する。
 
 ## cargo-deny
 

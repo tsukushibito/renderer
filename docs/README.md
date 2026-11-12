@@ -1,12 +1,13 @@
 # ドキュメント
 
-このディレクトリには現行実装の文書を置きます。
+このディレクトリには現行の利用手順・設計・実装指針を置きます。
 過去の版の検証記録や置き換え済みの設計判断はGit履歴から参照します。
 
 | 分類 | 文書 | 内容 |
 |---|---|---|
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、ビルド、試験、性能測定 |
 | 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、SPIR-V検証、RenderDoc |
+| 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
 | 設計 | [実装方針](design/implementation-policy.md) | 全体構成、ロードマップ、実装・検証の方針 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |

@@ -5,6 +5,10 @@
 実行コマンドは[開発手順](../guides/development.md)、
 確認済みの環境・結果・制限は[最新の検証状況](../verification/current.md)を参照する。
 
+一般的な実装・レビューの根拠と、M2以降の機能導入時に確認する条件は
+[Vulkanベストプラクティス](../guides/vulkan-best-practices.md)へまとめる。
+同ガイドの後続機能は、この文書の現行実装に追加済みとは扱わない。
+
 ## 実装境界
 
 `crates/renderer`の`vulkan` feature配下に、初期化、診断、VMAによるbuffer／image所有、

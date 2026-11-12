@@ -10,6 +10,7 @@ CPU範囲管理の性能比較にはCriterionを使います。
 - [ドキュメント一覧](docs/README.md)
 - [開発・ビルド・試験](docs/guides/development.md)
 - [開発ツール](docs/guides/tooling.md)
+- [Vulkanベストプラクティス](docs/guides/vulkan-best-practices.md)
 - [実装方針](docs/design/implementation-policy.md)
 - [Vulkan基盤の設計判断](docs/design/vulkan.md)
 - [現在の検証状況](docs/verification/current.md)

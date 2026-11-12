@@ -56,6 +56,10 @@ Windowsジョブはrunner付属のMSVCを使います。
 
 ## ビルド・品質確認
 
+Vulkanの同期・寿命・資源更新・機能導入のレビューには
+[ベストプラクティス](vulkan-best-practices.md)を参照します。
+仕様要件、対象GPUで測る最適化候補、現行実装の契約を区別しています。
+
 Rustのモジュール配置とテスト方針は[AGENTS.md](../../AGENTS.md)に従います。
 `mod.rs`は禁止し、`foo.rs`と`foo/bar.rs`の形式を使います。
 workspaceの`clippy::mod_module_files`を`deny`に設定しています。
