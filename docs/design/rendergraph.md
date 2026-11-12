@@ -129,7 +129,11 @@ Graphのbyte範囲によるproducer解析と、native barrierの粒度を区別�
 `VulkanRuntime::submit`は実行枠を予約してから、一つのGraphを記録・投入する。
 `Submission::export_buffer`／`export_image`は受理済み状態のsnapshotを返す。
 これを次のGraphでimportして投入でき、AをCPUで待つ必要はない。
-snapshotにはowner・世代・revisionがあり、別runtime、削除済み、更新前のsnapshotを拒否する。
+snapshotにはowner・世代・内容revisionがあり、別runtime、削除済み、内容更新前のsnapshotを拒否する。
+読み取り専用の利用や画像layoutの変更だけでは内容revisionを進めない。
+複数のViewやGraphを先に構築しても、内容が変わっていなければ順次投入できる。
+nativeのstage/access/layoutと最後の利用serialは投入時のcanonicalな予定状態から計画し、
+古い同期状態を再利用しない。書き込み・clear・discard後は旧内容のsnapshotを拒否する。
 更新後は`refresh_buffer`／`refresh_image`で取得し直し、Graphを再構築・compileする。
 実行時にもcanonicalな状態と照合するため、compile後の変更を取り逃さない。
 
@@ -155,6 +159,9 @@ CPUコピー成功時にそのstaging領域を解放し、二重消費と別Grap
 返す`FrameSubmission`は`FrameId`とexport snapshotだけを持つ。
 このメタデータをdropしても待機・キャンセル・回収は行わない。
 `poll_frame`はtimeout 0で実Fenceを観測し、正常完了した一件を`FrameCompletion`として返す。
+`wait_frame(timeout)`は結果を保持したまま一件の完了を明示的に待つ。
+先に完了済みの結果を調べ、必要なときだけ最古の未完了Fenceを残り予算で待つ。
+timeoutや完了を証明できない失敗ではpendingの所有を維持する。
 完了したnative枠、upload、descriptor、記録用参照は回収し、未読readbackだけを結果へ残す。
 後続の観測で失敗しても、先に返した結果を失わないよう一件ずつ返す。
 
@@ -201,7 +208,8 @@ vendor依存の高速化や高度なパス統合は採用しておらず、性�
 
 履歴は永続keyからfreshなsnapshotを取得し、前のGraphの予定状態を次のGraphへimportする。
 前フレームのCPU完了待機は不要だが、内容を保持する履歴を単なる一時画像として貸し出さない。
-read-onlyの利用でもrevisionが進む現在の契約を守り、保存済みsnapshotを無条件に繰り返し使わない。
+読み取りだけなら内容revisionは変わらず、保存済みsnapshotからの複数consumerを構築できる。
+内容を書き換える履歴chainでは、受理された更新後にfreshなsnapshotを取得する。
 初回と明示reset、extent変更では内容を初期化し直す。
 旧履歴の登録は最後に使用するGraphの投入後に解除でき、pending側の所有が完了まで維持する。
 二枚交互という番号だけでは安全性を証明せず、予定アクセスと最後の利用を追跡する。
@@ -227,12 +235,32 @@ scene、ECS、asset loader、カメラの意味は呼び出し側が所有する
 頂点は明示byte化し、描画引数も64-byte MVPと16-byte tintへ明示的に変換する。
 
 snapshotの`build_graph`はGPU・windowなしで標準Graphを構築できる。
-持続的な実行には`VulkanEngine`がmeshのGPU bufferを保持し、同じmeshを毎frame uploadしない。
-cacheは永続keyで識別し、使用時にfresh importを取得する。
-更新・削除後も先行frameの所有を維持し、CPUに保存した旧snapshotも独立して扱う。
+この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
+持続的な実行では、利用側の`Engine`がCPU assetとsnapshotを所有し、`VulkanEngine`は
+runtimeとGPU常駐を所有する。同じsnapshotを独立したrendererへ渡すことができ、
+バックエンド別のCPU asset登録は要求しない。
+
+GPU常駐はmeshのowner・index・generation・revisionで識別し、`MeshCacheConfig`で件数と
+論理byte数を制限する。CPU assetの削除と別に`unload_mesh`で常駐を解除でき、
+新しいworking setの準備では、必要でなくpinもない常駐meshを決定的な順に退避する。
+必要working set自体が予算を超える場合と、一時的なpending資源の容量不足を区別する。
+通常Viewのcolor/depth二資源を含む物理容量も入場判定に使い、論理mesh予算内でも
+古い登録が描画先の枠を埋めるときは退避する。prepared pinで必要枠を確保できなければ明示エラーを返す。
+準備済みframeは必要な登録をpinし、submit後のnative所有は通常のGPU leaseへ引き継ぐ。
+CPU更新・削除後の旧snapshotも、そのimmutableな版として独立して準備できる。
+
+`prepare_snapshot`と`poll_uploads`は明示的に分割uploadを進める。
+一つのmeshや全入力がstaging容量を超えても、同じ上限付きpoolを再利用する。
+`Ready`は必要なbyte列がすべてqueueへ受理されていることを意味し、GPU完了ではない。
+内容の版ごとに元のimmutableな入力を共有し、chunkごとのCPUコピーを永続的な鏡像として保持しない。
+同じqueueの後続描画はCPU完了待ちを要求しない。通常の準備・poll・build・submitに暗黙waitを入れず、
+明示的な待機には`wait_uploads(timeout)`を使う。uploadの回収が別の描画frameの結果を消費しないよう、
+所有するsubmissionを分ける。`build_snapshot`は準備済み常駐を使い、uploadや待機を隠して実行しない。
+Fence完了後の結果・計測取得だけが失敗した場合も、退役済みuploadを回収して元のエラーを返す。
+完了不明のFenceエラーやtimeoutは同じ回収扱いにせず、所有を維持する。
 標準の不透明描画はowned draw listを一つの`RasterBatch`操作にする。
 空draw listはclear-only、非空ならcolor/depthを一回clearし、宣言された順に全drawを描いてStoreする。
-Rasterノード数はdraw数によらず一件で、upload・custom Compute・composite・readback等は別ノードのままである。
+Rasterノード数はdraw数によらず一件で、custom Compute・明示的なcomposite・readback等は別ノードのままである。
 同じmeshの再利用と、異なるmeshの組合せの両方を扱い、drawの行列・tint・index数を所有する。
 compileでもdraw配列を`Arc`で共有し、GPU完了まで必要な資源・操作の所有を維持する。
 
@@ -246,14 +274,18 @@ Vulkanの用途集約も資源keyの順序付きmapを使い、多数の異な�
 別の描画先、Compute、copy等の必要な境界と同期は維持する。
 共有mesh／異なるmeshの画像・同期・性能の確認は[検証記録](../verification/current.md#draw-listの本実装と比較計測)を参照する。
 
-拡張点はopaque描画後・最終composite前の完全なlinear RGBA8画像である。
+拡張点はopaque描画後の完全なlinear RGBA8画像である。
 Viewと同じextentで初期化済みの画像を返し、通常のGraph builderで処理を追加する。
 closureはGraph構築時に実行され、GPU記録中にsceneへ再入しない。
 返却画像のhandle・形式・寸法・初期化はGraphの通常の検査を通す。
 不要なcustom branchも通常どおり除去される。
+返された完成画像を直接exportし、無変換の最終compositeと別画像を毎Viewに強制しない。
+`FrameOutputOwnership::Frame`はこのGraphで作った出力、`Caller`は利用側がimportした出力を表す。
+`release_output`はframe所有の元のkeyだけを登録解除し、caller所有の登録には触れない。
 CPU経路の`FrameGraph`、持続的な実行経路の`PreparedEngineFrame`から通常のGraphを取り出し、
 build、compile、submitを分けられる。利用側の履歴処理や測定を標準描画と同じGraphへ接続できる。
 準備済みframeとplanのGraph identity、元の出力と必要exportを投入前に照合する。
-buildはGPU資源の予約ではなく、その後の別submitやCPU更新でimportが古くなった場合は再buildする。
-`RenderedFrame`の出力も明示deleteまで登録されるため、表示や履歴等のconsumerを投入後、
-不要な出力keyの登録を解除する。CPUメタデータのDropに暗黙の登録解除を結び付けない。
+buildはGPU実行枠の予約ではない。内容が変わる別submitや外部keyの削除ではimportが失効するが、
+共有meshの読み取りだけを行う別Viewのsubmitでは失効しない。
+`RenderedFrame`のframe所有出力は明示解放まで登録されるため、表示や履歴等のconsumerを投入後に
+`release_output`を呼ぶ。CPUメタデータのDropに暗黙の登録解除を結び付けない。

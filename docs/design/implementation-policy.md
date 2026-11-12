@@ -335,6 +335,10 @@ pipeline、binding layout、sampler、ImageViewなどは、それぞれを導入
 
 エンジンはシーンとアセットの意味を所有し、RendererはGPUリソースと描画実行を所有する。mesh / material / texture等は安定したRendererハンドルで参照する。
 
+CPU assetの同一性とimmutableな版はバックエンドから独立させる。Vulkanと第二APIへ同じsnapshotを渡すために、
+assetを二重登録する設計にしない。GPU常駐はCPU asset寿命と分け、件数・byte予算、退避、準備済みframeのpin、
+pending参照の保持を契約にする。大きなuploadは固定容量のstaging内で進め、通常frameに暗黙の待機を加えない。
+
 フレームの入力は、レンダリング処理に必要な期間だけ有効なsnapshot、draw list、更新コマンド等として渡す。GPU処理や遅延実行コールバックが、エンジンの一時的なECS借用や可変シーンへ依存し続けない設計にする。
 
 通常のアプリ開発者へは高水準API、描画拡張の作者へはGraph API、特殊な外部連携へは明示的なinterop契約を提供する。すべての利用者へバックエンド内部の知識を要求しない。

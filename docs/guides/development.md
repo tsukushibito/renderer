@@ -134,15 +134,21 @@ PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、
 ### フレーム進行・エンジン入力
 
 持続的なフレームループには`VulkanRuntime::submit_frame`と`poll_frame`を使います。
+容量回復やreadbackを明示的に待つ場合は`wait_frame(timeout)`で一件の完了結果を受け取ります。
 返された`FrameSubmission`はメタデータで、dropしても待機しません。
 Runtimeが未完了処理を所有し、容量不足なら利用側がpollや明示待機を選びます。
 readback結果は`FrameCompletion::result`から消費でき、未読結果の保持中にも完了済みnative資源を再利用できます。
 終了時の`drain_frames(timeout)`は結果を破棄するため、必要な結果を先に受け取ります。
 
 `engine::Engine`はGPUなしでmesh/materialとowned View/draw snapshotを扱い、
-`VulkanEngine`は同じ入力を永続mesh cacheと通常のGraphへ接続します。
-build、compile、submitを分ける入口もあります。
-custom passは描画後・合成前の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
+`VulkanEngine`は外部で作ったsnapshotを上限付きGPU mesh cacheと通常のGraphへ接続します。
+`MeshCacheConfig`で常駐件数・論理byte数・未回収upload数を指定します。
+`prepare_snapshot`／`poll_uploads`で分割転送を進め、必要なら`wait_uploads(timeout)`で明示的に待ちます。
+`Ready`は全uploadの受理済みを表し、GPU完了を待たずにbuild、compile、submitへ進めます。
+`unload_mesh`はCPU assetを削除せずGPU常駐を解除します。準備済みframeと未完了GPU参照は保護します。
+custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
+返した画像を直接exportし、無変換の全画面copyを追加しません。
+出力はconsumer投入後に`release_output`で解放します。callerがimportした出力の登録は維持します。
 任意shaderや生CommandBufferを受け取るAPIではありません。
 詳細は[Graphの契約](../design/rendergraph.md#エンジン入力と標準描画)を参照してください。
 
@@ -184,9 +190,12 @@ cargo test --locked -p renderer --no-default-features --features presentation ::
 ```
 
 表示前に`Presenter::prepare`を呼び、現在の`extent`で出力Graphを構築します。
-`NotReady`はpoll後に再試行、`Suspended`はゼロextentの復帰を待ち、`Recreated`は寸法を取得し直します。
+`NotReady`はpoll後に再試行、`Suspended`はゼロextentの復帰を待ちます。
+`RecreateRequired`は再作成の予約であり、`prepare`を進めるまでextentは更新されません。
+`Recreated`は再作成完了を表し、寸法を取得し直します。
 出力は表示用submitへ渡した後に登録解除できます。
-表示用submit受理後はpresent失敗でもsource revisionが進み得るため、再利用・再試行時はrefreshします。
+表示用submit受理後はpresent失敗でもsourceの予定同期状態が進み得ます。
+読み取りだけでは内容revisionを変えず、後続consumerの同期は投入時の状態から計画します。
 正常終了はframeの回収とPresenterの明示closeを行い、最後に保持したValidationMonitorで
 native所有者の破棄後までwarning／error／callback失敗ゼロを確認します。
 
@@ -194,7 +203,8 @@ native所有者の破棄後までwarning／error／callback失敗ゼロを確認
 
 `windowed`には現在FPS集計を実装していません。追加する場合は、単調増加時計に対する
 `PresentOutcome::Presented`の成功件数を約1秒の窓で割り、**Present要求FPS**として表示します。
-`NotReady`／`Suspended`／`Recreated`を成功件数に数えず、VSync変更・resize・最小化からの復帰で窓をリセットします。
+`NotReady`／`Suspended`／`RecreateRequired`／`Recreated`を成功件数に数えず、
+VSync変更・resize・最小化からの復帰で窓をリセットします。
 窓内の待ち時間は経過時間へ含め、成功Present間隔の中央値・p95・p99も併記します。
 瞬間値`1/dt`の単純平均や、GPU timestamp区間の逆数で表示FPSを算出しません。
 
@@ -223,8 +233,34 @@ cargo run --release --locked -p renderer --no-default-features --features vulkan
 
 性能modeはreleaseを要求し、Validationを明示的にDisabledへ設定して任意timestampを有効にします。
 要求mode、観測したLayer起動状態、環境の上書きを記録し、起動報告の不在だけで外部Layerがないと断定しません。
-CPU各phase、GPU Graph区間、poll費用、観測latency、各runの中央値／p95と生sample、
+CPU各phase、GPU Graph区間、明示的な完了待機、観測latency、各runの中央値／p95と生sample、
 資源作成・再利用、stagingのhigh-water、VMA Allocation／blockをJSONへ保存します。
+schema3の`completion_wait`は、pollと明示的なFence待機を含む壁時計時間です。
+主指標の`cpu_active`はbuild開始からsubmit復帰までで、容量回復の待機を含みません。
+CPU asset更新・snapshot・mesh upload準備とupload待機は別項目です。
+`cpu_caller_active`はそれらのCPU処理と`cpu_active`を足し、明示待機を除いた利用側の費用を表します。
+startup uploadは測定loopの前に完了させ、そのbyte数とCPU・待機時間を別に記録します。
+以前のschema1にあるpoll費用の数値と、名前だけを合わせて比較しないでください。
+
+### 大メッシュ・アセット入れ替え・複数View
+
+`engine_workloads`は400×400 cellのgrid（160,801頂点・960,000 index、約8.34 MB）と
+256 KiBのstagingを使い、大きな単体meshと合計入力を分割転送します。
+32個のCPU assetを保持した入れ替え、3 pending frame中の更新・削除、共有meshからの2 View先行build、
+異なる行列・寸法・材質値とCompute、同一snapshotの独立rendererへの入力も確認します。
+各画像は決定的な全RGBA期待値と照合し、検証modeはnative所有者の破棄後までCore／SyncValを要求します。
+
+```powershell
+cargo run --release --locked -p renderer --no-default-features --features vulkan --example engine_workloads -- --verify .tools/engine-workloads-verify.json
+cargo run --release --locked -p renderer --no-default-features --features vulkan --example engine_workloads -- --benchmark .tools/engine-workloads-benchmark.json
+cargo test --locked -p renderer --no-default-features --features vulkan --test engine_workloads vulkan_ -- --ignored --nocapture --test-threads=1
+```
+
+性能modeはValidation無効を明示し、32 warm-up＋128測定frameを3 run実行します。
+build／compile／prepare／record／submit／retire、GPU Graph区間、CPU中央値／p95と観測latency、
+資源作成・staging・VMA統計を記録します。GPU時間はreadbackを含み、表示時間やFPSではありません。
+性能測定とGPU試験は同時に実行しません。全resident vertex/index byte照合、upload受理直後の描画、
+import出力の解放権限、少ない物理枠での常駐入れ替えは内部のignored GPU試験にも含めます。
 メモリ量はprocess全体のVRAMやRAM使用量とは区別します。
 通常submitの計測は既定無効で、`set_profiling(true)`を明示した場合だけ採取します。
 正しさのverify runと性能runを分け、条件・commit・clock／負荷等の制約も比較時に揃えます。

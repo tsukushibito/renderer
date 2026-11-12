@@ -256,6 +256,8 @@ native資源・payload・VMA・Deviceを含む所有連鎖を保持して早期�
 
 フレームループにはRuntimeがpendingを保持する`submit_frame`を追加した。
 受理済みメタデータのDropは待機せず、`poll_frame`がtimeout 0で完了を観測する。
+`wait_frame(timeout)`は完了済みの結果を先に調べ、必要なときだけ最古の未完了Fenceを待ち、
+一件の`FrameCompletion`を返す。待機予算を各Fenceへ繰り返し適用せず、readback結果も破棄しない。
 正常完了後もreadbackのCPU寿命は独立し、他の資源を先に再利用できる。
 終了時の`drain_frames`は明示的な予算付き待機で、結果を破棄する。
 Runtime自身のDropには既存の保守的な後始末を残すが、通常frameの進行には使わない。
@@ -274,6 +276,11 @@ working setを保持する。上限時だけ、同じ再利用条件を満たす
 登録中、記録・pendingのleaseが残る資源、世代上限のentryは置換しない。候補がなければ
 内部で待機せず容量不足を返す。失敗した準備を受理済み利用として新しく扱わない。
 
+再利用候補はdescriptor別のindex集合と`(serial, index)`の退避順で索引化する。
+登録中やlease保持中のentryを候補に残して全資源を毎回走査しない。
+nativeの外部参照はleaseを通し、解放通知をentryごとに集約して取得時に候補へ戻す。
+通知を消費した時点でも登録・世代・参照数を確認する。候補の選択だけでは旧entryを削除しない。
+
 再利用は旧内容の初期化状態とCPU provenanceを消す一方、実際のlayout・access・writer scopeは保持する。
 新しいnative資源とViewの作成・命名がすべて成功してから置換し、失敗時には既存entryのallocation・
 世代・予定状態を維持する。OOM時に暗黙のevictionや再試行を加えない。
@@ -281,9 +288,11 @@ working setを保持する。上限時だけ、同じ再利用条件を満たす
 これは空きentryを直ちに異なる作成条件で置換する方式に比べ、交互の寸法でnative作成を繰り返す問題を
 避けるための保持方針である。代わりにidle資源の保持量が増え、上限時の置換中には旧・新資源が一時的に
 共存する。`resource_capacity`は保持するentryの件数上限であり、byte budgetや作成成功の保証ではない。
-byte上限・memory budgetによるevictionは今回追加せず、`memory_stats()`のcache論理byteと
+この物理cache自体にはbyte上限・memory budgetによるevictionを追加せず、`memory_stats()`のcache論理byteと
 VMA Allocation／blockの実統計を区別して判断する。作成回数とCPU/GPU時間・メモリの比較は
 [現在の検証状況](../verification/current.md)に記録し、件数削減だけからGPU高速化を主張しない。
+上位のmesh常駐には別に件数・論理byte予算を設ける。常駐解除後のidle物理cacheやpending参照は
+その常駐予算とは寿命が異なるため、この値をDeviceの総VRAM上限と説明しない。
 
 `ExecutionPool`はCommandPool・一次CommandBuffer・Fenceの組を上限付きで遅延作成する。
 予約を先に取得でき、空き不足は待たずに返す。待機・再試行は呼び出し元が選ぶ。
@@ -307,6 +316,19 @@ native実行枠は未読Readbackより先に再利用できる。
 再取得した領域の過去のbyte列を、新しい要求の初期化済み内容として扱わない。
 完了不明の処理はleaseを含めて保持し、領域だけを先に再利用しない。
 
+### 大きなmeshの準備
+
+`VulkanRuntime::create_buffer`は初期化範囲が空の永続bufferを明示登録する。
+途中まで転送したbufferを全域初期化済みとしてexportする回避策は使わない。
+通常のGraph uploadで登録bufferの範囲を更新し、受理後のfreshな内容snapshotから次のchunkを作る。
+readや全域exportは必要範囲が初期化済みになるまでGraphの検査が拒否する。
+
+engineのupload jobは固定staging容量・cache atom整列・未回収submission数の範囲で進む。
+空きbyte照会は予約ではなく、断片化等による容量不足も通常のbackpressureとして扱う。
+進捗offsetはsubmit受理後にだけ更新し、準備失敗や未投入OOMで未転送部分を済んだことにしない。
+最終chunk受理後は同一queueへの描画依存で利用でき、完了FenceのCPU待機を必要としない。
+取消・退避・CPU asset削除の後も、受理済みchunkが参照するstagingとnative資源を完了まで保持する。
+
 ## Windows Presentation
 
 `for_window`は`Arc<winit::window::Window>`を受け取り、Runtimeと`Presenter`を返す。
@@ -325,10 +347,11 @@ HDR、tone mapping、任意の出力形式・拡大縮小はこの経路に含�
 
 Graph本体と表示は同じqueueへの別submitである。Graph解析にSwapchain所有を持ち込まず、
 出力のcanonicalな予定状態からfragment samplingへ依存を記録する。
-表示用submitがsourceの予定layout・stage/access・revisionを進め、leaseを完了まで保持する。
-Graph完了のCPU waitは挟まない。sourceを再利用するときはfresh importを取得する。
-表示用submitが受理された後は、queuePresentが失敗してもsourceのrevisionが進み得る。
-返値だけで旧snapshotへrollbackしたと考えず、再試行前にkeyからrefreshする。
+表示用submitがsourceの予定layout・stage/access・利用serialを進め、leaseを完了まで保持する。
+読み取り専用の表示では内容revisionを変えず、Graph完了のCPU waitも挟まない。
+同じ内容snapshotから次のconsumerを構築でき、同期は投入時のcanonicalな状態から計画する。
+表示用submitが受理された後は、queuePresentが失敗しても予定同期状態は進み得る。
+返値だけで旧同期状態へrollbackしたと考えず、実際に受理された状態を引き継ぐ。
 一つのsubmitに融合する案より境界を小さくする選択で、submit追加のCPU費用・latencyの改善は主張しない。
 GPU timestampのGraph区間には、この表示用submitとpresent待ちを含めない。
 
@@ -363,8 +386,11 @@ IMMEDIATEではtearingが起こり得る。OS compositorやdriver設定による
 acquire後の記録失敗やキャンセルではbinaryを待つ専用submitとFenceで消費を確認し、
 未present画像をreleaseする。この例外的なキャンセル回収には明示した10秒のAPI待機予算がある。
 release失敗の状態を推測して再releaseせず、証明できない所有を保持して停止する。
-presentのOUT_OF_DATE／SURFACE_LOSTはqueue操作がenqueue済みになり得るため、
-OOMの状態不変保証と同じrollbackにしない。
+presentのOUT_OF_DATE／SURFACE_LOSTでは、表示要求が拒否されてもsemaphore待機等のqueue操作は
+enqueue済みとして扱われる。OOMの状態不変保証と同じrollbackにしない。
+公開outcomeもこれを区別し、`Presented`は表示要求の受理、`RecreateRequired`は再作成が必要な拒否、
+`Recreated`は実際の再作成完了を表す。`Presented`を画面への表示完了の証明には使わない。
+`RecreateRequired`後は`prepare`を進め、更新したextentに合わせて描画を準備する。
 
 旧Swapchainは世代として保持し、`oldSwapchain`付き作成が失敗しても旧世代を再acquireしない。
 保持世代数には上限があり、回収前の上限到達は容量不足として返す。

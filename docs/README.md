@@ -15,6 +15,7 @@
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
 | 検証データ | [現在のフレーム計測](verification/current-metrics.json) | 固定ソースの環境、各runの統計と生sample |
 | 検証データ | [RenderGraph比較計測](verification/rendergraph-metrics.json) | 資源cache、標準draw batchの共有／異なるmesh比較、統計・生sample、RGBA照合 |
+| 検証データ | [エンジン負荷の計測](verification/engine-workloads-metrics.json) | 大メッシュ・資源入れ替え・複数Viewの受入とCPU索引化比較、統計・生sample |
 
 ## 更新方針
 
