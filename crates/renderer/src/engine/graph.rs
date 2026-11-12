@@ -7,19 +7,38 @@ use crate::graph::{
     BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc, ImageHandle, PassHandle,
 };
 
+/// Responsibility for the final output's runtime registration. This does not
+/// imply GPU completion or ownership of the native resource itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FrameOutputOwnership {
+    /// This frame creates the registration; release it after scheduling consumers.
+    Frame,
+    /// The output is an imported registration retained by its original caller.
+    Caller,
+}
+
 /// A normal graph, its final linear RGBA8 output and optional readback pass.
 /// The caller can inspect or extend it before compilation.
 pub struct FrameGraph {
     pub graph: Graph,
     pub output: ImageHandle,
     pub readback: Option<PassHandle>,
+    output_ownership: FrameOutputOwnership,
+}
+
+impl FrameGraph {
+    /// Reports who releases the final output registration after GPU consumers
+    /// have been scheduled. Imported outputs remain owned by their caller.
+    pub fn output_ownership(&self) -> FrameOutputOwnership {
+        self.output_ownership
+    }
 }
 
 impl FrameSnapshot {
     /// Builds a self-contained graph without a device or window. This standalone
     /// path uploads each distinct mesh once per graph. `VulkanEngine` reuses
     /// persistent GPU meshes instead. The extension runs during graph building,
-    /// after opaque drawing and before final composite, not during GPU recording.
+    /// after opaque drawing and before output export, not during GPU recording.
     ///
     /// It receives complete linear RGBA8 color at the View extent. Return a
     /// complete, initialized image of the same extent. Existing Graph checks
@@ -98,9 +117,23 @@ impl FrameSnapshot {
             self.view.clear_color,
             1.0,
         )?;
-        let transformed = extension(&mut graph, color)?;
-        let output = graph.image("view output", desc)?;
-        graph.composite("view final composite", transformed, output)?;
+        let output = extension(&mut graph, color)?;
+        let output_desc = graph
+            .image_desc(output)
+            .map_err(|error| error.with_pass_name("view output"))?;
+        if output_desc != desc {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                format!("frame extension output must match View RGBA8 description {desc:?}; got {output_desc:?}"),
+            )
+            .with_pass_name("view output")
+            .with_resource(output.into(), Some(&graph.resources[output.index].name)));
+        }
+        let output_ownership = if graph.resources[output.index].import.is_some() {
+            FrameOutputOwnership::Caller
+        } else {
+            FrameOutputOwnership::Frame
+        };
         graph.export_image(output)?;
         let readback = if readback {
             Some(graph.readback_image("view readback", output)?)
@@ -111,6 +144,7 @@ impl FrameSnapshot {
             graph,
             output,
             readback,
+            output_ownership,
         })
     }
 }
@@ -118,6 +152,9 @@ impl FrameSnapshot {
 #[cfg(test)]
 mod tests {
     use crate::engine::{Draw, Engine, IDENTITY, Material, MeshData, Vertex, View};
+    use crate::graph::{Graph, GraphErrorKind, ImageDesc, ImageHandle, ImportImage, ResourceKey};
+
+    use super::FrameOutputOwnership;
 
     fn triangle() -> MeshData {
         MeshData::new(
@@ -152,8 +189,8 @@ mod tests {
         for count in [1, 32, 256] {
             let snapshot = assets.snapshot(&view(), &vec![draw; count]).unwrap();
             let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
-            // Two shared mesh uploads, one opaque list, one final composite.
-            assert_eq!(frame.graph.compile().unwrap().pass_count(), 4);
+            // Two shared mesh uploads and one opaque list; output is the list's color.
+            assert_eq!(frame.graph.compile().unwrap().pass_count(), 3);
         }
     }
 
@@ -172,7 +209,7 @@ mod tests {
         let snapshot = assets.snapshot(&view(), &draws).unwrap();
         let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
         let plan = frame.graph.compile().unwrap();
-        assert_eq!(plan.pass_count(), MESHES * 2 + 2);
+        assert_eq!(plan.pass_count(), MESHES * 2 + 1);
         assert!(plan.culled_pass_names().is_empty());
     }
 
@@ -195,6 +232,84 @@ mod tests {
         let dump = plan.dump();
         assert!(dump.contains("view clear"));
         assert!(!dump.contains("upload"));
+        assert_eq!(plan.pass_count(), 1);
+        assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
         assert!(frame.readback.is_none());
+    }
+
+    #[test]
+    fn extension_output_checks_owner_format_extent_and_initialization() {
+        let assets = Engine::new(1, 1).unwrap();
+        let snapshot = assets.snapshot(&view(), &[]).unwrap();
+        let mut foreign_graph = Graph::new();
+        let foreign = foreign_graph
+            .image("foreign", ImageDesc::rgba8(16, 16))
+            .unwrap();
+        let error = match snapshot.build_graph(false, |_, _| Ok(foreign)) {
+            Ok(_) => panic!("foreign output must fail during build"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
+        assert_eq!(error.pass_name(), Some("view output"));
+        assert_eq!(error.resource(), Some(foreign.into()));
+        assert_eq!(error.resource_name(), None);
+
+        for (name, desc) in [
+            ("wrong format", ImageDesc::depth32(16, 16)),
+            ("wrong extent", ImageDesc::rgba8(8, 16)),
+        ] {
+            let error = match snapshot.build_graph(false, |graph, _| graph.image(name, desc)) {
+                Ok(_) => panic!("incompatible output must fail during build"),
+                Err(error) => error,
+            };
+            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+            assert_eq!(error.pass_name(), Some("view output"));
+            assert_eq!(error.pass(), None);
+            assert_eq!(error.resource_name(), Some(name));
+            assert!(matches!(
+                error.resource(),
+                Some(crate::graph::ResourceHandle::Image(_))
+            ));
+        }
+
+        let mut uninitialized = None::<ImageHandle>;
+        let frame = snapshot
+            .build_graph(false, |graph, color| {
+                let output = graph.image("uninitialized output", graph.image_desc(color)?)?;
+                uninitialized = Some(output);
+                Ok(output)
+            })
+            .unwrap();
+        let error = frame.graph.compile().unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::UninitializedRead);
+        assert_eq!(error.resource(), Some(uninitialized.unwrap().into()));
+    }
+
+    #[test]
+    fn imported_extension_output_keeps_caller_registration_ownership() {
+        let assets = Engine::new(1, 1).unwrap();
+        let snapshot = assets.snapshot(&view(), &[]).unwrap();
+        let imported = ImportImage {
+            key: ResourceKey {
+                owner: 9,
+                index: 3,
+                generation: 2,
+            },
+            revision: 4,
+            desc: ImageDesc::rgba8(16, 16),
+            initialized: true,
+        };
+        let mut returned = None;
+        let frame = snapshot
+            .build_graph(false, |graph, _| {
+                let handle = graph.import_image("caller image", &imported)?;
+                returned = Some(handle);
+                Ok(handle)
+            })
+            .unwrap();
+        assert_eq!(frame.output, returned.unwrap());
+        assert_eq!(frame.output_ownership(), FrameOutputOwnership::Caller);
+        // No copy or rendering is required to export an already valid image.
+        assert_eq!(frame.graph.compile().unwrap().pass_count(), 0);
     }
 }

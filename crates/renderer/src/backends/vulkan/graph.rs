@@ -27,6 +27,7 @@ use crate::graph::{
     RasterParameters, ResourceDesc, ResourceKey, StoreOp,
 };
 
+mod cache;
 mod diagnostics;
 mod environment;
 mod frames;
@@ -36,6 +37,8 @@ mod presentation;
 mod provenance;
 mod resources;
 mod shaders;
+use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
+mod uploads;
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
 pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
@@ -289,7 +292,9 @@ pub struct RuntimeStats {
 
 #[derive(Clone)]
 struct Snapshot {
+    // Changes only when accepted work writes or invalidates logical contents.
     revision: u64,
+    // Last accepted use, including read-only native state/layout changes.
     serial: u64,
     initialized: Vec<Range<u64>>,
     layout: vk::ImageLayout,
@@ -312,6 +317,23 @@ impl Default for Snapshot {
             writer_stage: vk::PipelineStageFlags2::NONE,
             writer_access: vk::AccessFlags2::NONE,
             provenance: BufferProvenance::default(),
+        }
+    }
+}
+
+impl Snapshot {
+    fn record_access(&mut self, current: Use, layout_change: bool, serial: u64) {
+        if !current.writes && !layout_change {
+            self.stage |= current.stage;
+            self.access |= current.access;
+        } else {
+            self.stage = current.stage;
+            self.access = current.access;
+        }
+        if current.writes {
+            self.writer_stage = current.stage;
+            self.writer_access = current.access;
+            self.revision = serial;
         }
     }
 }
@@ -371,22 +393,26 @@ impl Entry {
     }
 }
 
-/// Preserve other descriptors until the entry bound is reached. Candidates
-/// exclude registered, leased and generation-exhausted entries. Their serial is
-/// the last accepted use, so failed preparation does not promote cache entries.
-fn cache_insert_target(
-    entry_count: usize,
-    capacity: usize,
-    candidates: impl Iterator<Item = (usize, u64)>,
-) -> Result<Option<usize>, RuntimeError> {
-    if entry_count < capacity {
-        return Ok(None);
-    }
-    candidates
-        .min_by_key(|&(index, serial)| (serial, index))
-        .map(|(index, _)| Some(index))
-        .ok_or_else(|| RuntimeError::capacity("graph physical resource capacity exhausted"))
+/// Cache buckets encode the complete currently supported resource descriptor.
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+enum CacheDescriptor {
+    Buffer(u64),
+    Rgba8(u32, u32),
+    Depth32(u32, u32),
 }
+impl From<ResourceDesc> for CacheDescriptor {
+    fn from(desc: ResourceDesc) -> Self {
+        match desc {
+            ResourceDesc::Buffer(desc) => Self::Buffer(desc.size),
+            ResourceDesc::Image(desc) => match desc.format {
+                ImageFormat::Rgba8Unorm => Self::Rgba8(desc.width, desc.height),
+                ImageFormat::Depth32Float => Self::Depth32(desc.width, desc.height),
+            },
+        }
+    }
+}
+
+type PhysicalLease = ResourceLease<Physical>;
 
 struct Registration<'a> {
     entries: &'a mut [Entry],
@@ -413,6 +439,8 @@ pub struct VulkanRuntime {
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
     entries: Vec<Entry>,
+    available: CacheIndex<CacheDescriptor>,
+    recycle: Arc<RecycleQueue>,
     frames: frames::FrameQueue<frames::PendingFrame>,
     timestamp_pool: Option<metrics::TimestampPool>,
     profiling_enabled: bool,
@@ -480,6 +508,8 @@ impl VulkanRuntime {
             readback,
             programs: None,
             entries: Vec::new(),
+            available: CacheIndex::default(),
+            recycle: Arc::new(RecycleQueue::default()),
             frames: frames::FrameQueue::new(config.execution_slots)?,
             timestamp_pool: None,
             profiling_enabled: false,
@@ -552,8 +582,45 @@ impl VulkanRuntime {
     /// keep the allocation alive, and prevent its acquisition for another owner.
     pub fn delete(&mut self, key: ResourceKey) -> Result<(), RuntimeError> {
         self.entry(key)?;
-        self.entries[key.index as usize].registered = false;
+        let index = key.index as usize;
+        self.entries[index].registered = false;
+        self.recycle_entry(index);
         Ok(())
+    }
+
+    /// Exposing a logical resource name removes it from every reuse index.
+    fn register(&mut self, index: usize) {
+        self.available.remove(index);
+        self.entries[index].registered = true;
+    }
+
+    fn recycle_entry(&mut self, index: usize) {
+        let Some(entry) = self.entries.get(index) else {
+            return;
+        };
+        if entry.reusable() {
+            self.available.insert(
+                index,
+                entry.physical.desc.into(),
+                entry.physical.lock().scheduled.serial,
+            );
+        } else {
+            self.available.remove(index);
+        }
+    }
+
+    fn collect_recycled(&mut self) {
+        for index in self.recycle.take() {
+            self.recycle_entry(index);
+        }
+    }
+
+    fn lease(&self, key: ResourceKey) -> Result<PhysicalLease, RuntimeError> {
+        Ok(PhysicalLease::new(
+            Arc::clone(&self.entry(key)?.physical),
+            key.index as usize,
+            Arc::clone(&self.recycle),
+        ))
     }
 
     fn entry(&self, key: ResourceKey) -> Result<&Entry, RuntimeError> {
@@ -572,17 +639,23 @@ impl VulkanRuntime {
         &mut self,
         desc: ResourceDesc,
         name: &str,
-    ) -> Result<(ResourceKey, Arc<Physical>), RuntimeError> {
-        if let Some((index, entry)) = self
-            .entries
-            .iter_mut()
-            .enumerate()
-            .find(|(_, entry)| entry.reusable() && entry.physical.desc == desc)
-        {
+    ) -> Result<(ResourceKey, PhysicalLease), RuntimeError> {
+        self.collect_recycled();
+        let target = self
+            .available
+            .select(
+                desc.into(),
+                self.entries.len(),
+                self.config.resource_capacity,
+                |index| self.entries.get(index).is_some_and(Entry::reusable),
+            )
+            .map_err(|()| RuntimeError::capacity("graph physical resource capacity exhausted"))?;
+        if let CacheTarget::Reuse(index) = target {
+            self.available.remove(index);
+            let entry = &mut self.entries[index];
             entry.generation += 1;
             let mut state = entry.physical.lock();
-            // Preserve actual native layout/access, but never inherit old bytes
-            // as initialized content of a new logical resource.
+            // Preserve actual native synchronization, never old logical contents.
             state.scheduled.initialized.clear();
             state.scheduled.provenance = BufferProvenance::default();
             drop(state);
@@ -593,18 +666,18 @@ impl VulkanRuntime {
                     index: index as u32,
                     generation: entry.generation,
                 },
-                Arc::clone(&entry.physical),
+                PhysicalLease::new(
+                    Arc::clone(&entry.physical),
+                    index,
+                    Arc::clone(&self.recycle),
+                ),
             ));
         }
-        let replace = cache_insert_target(
-            self.entries.len(),
-            self.config.resource_capacity,
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.reusable())
-                .map(|(index, entry)| (index, entry.physical.lock().scheduled.serial)),
-        )?;
+        let replace = match target {
+            CacheTarget::Replace(index) => Some(index),
+            CacheTarget::Create => None,
+            CacheTarget::Reuse(_) => unreachable!("reuse returned above"),
+        };
         // Complete native creation and naming before replacing an idle entry.
         // Failure must retain its allocation, generation and accepted state.
         let native = match desc {
@@ -643,6 +716,7 @@ impl VulkanRuntime {
             physical: Arc::clone(&physical),
         };
         if replace.is_some() {
+            self.available.remove(index);
             self.entries[index] = entry;
         } else {
             self.entries.push(entry);
@@ -654,7 +728,7 @@ impl VulkanRuntime {
                 index: index as u32,
                 generation,
             },
-            physical,
+            PhysicalLease::new(physical, index, Arc::clone(&self.recycle)),
         ))
     }
 
@@ -686,6 +760,7 @@ impl VulkanRuntime {
         graph: &CompiledGraph,
         capture_diagnostics: bool,
     ) -> Result<(Submission, Option<String>), RuntimeError> {
+        self.collect_recycled();
         let profile_started = self.profiling_enabled.then(Instant::now);
         self.owner
             .device
@@ -717,7 +792,9 @@ impl VulkanRuntime {
         for &resource in &graph.exports {
             needed[resource] = true;
         }
-        // Validate all imports, including culled declarations, before allocation.
+        // Validate logical contents, including culled imports, before allocation.
+        // Read-only uses may have advanced native scopes/layouts since compile;
+        // prepare rebases those from the latest canonical scheduled state.
         for resource in &graph.resources {
             if let Some(key) = resource.import {
                 let physical = &self.entry(key)?.physical;
@@ -740,7 +817,7 @@ impl VulkanRuntime {
                 continue;
             }
             let (key, value) = if let Some(key) = resource.import {
-                (key, Arc::clone(&self.entry(key)?.physical))
+                (key, self.lease(key)?)
             } else {
                 self.acquire(resource.desc, &resource.name)?
             };
@@ -803,14 +880,14 @@ impl VulkanRuntime {
             .profile
             .as_ref()
             .map(|profile| Arc::clone(&profile.cpu_pending));
-        let mut exports = Vec::new();
+        let mut exports = BTreeMap::new();
         for &index in &graph.exports {
             let key = keys[index].unwrap();
             let snapshot = work.final_states[index].as_ref().unwrap();
-            exports.push((
+            exports.insert(
                 index,
                 export_snapshot(key, graph.resources[index].desc, snapshot),
-            ));
+            );
         }
         // Slots become externally named only for an actual export. The local
         // payload leases already prevent reuse throughout this transaction.
@@ -828,11 +905,11 @@ impl VulkanRuntime {
             cpu.lock().unwrap_or_else(|error| error.into_inner())[0] = started.elapsed();
         }
         for &index in &new_exports {
-            self.entries[index].registered = true;
+            self.register(index);
         }
         // Consume the serial before submit/logging: even if an application
-        // subscriber panics after acceptance, a subsequent transaction cannot
-        // reuse this revision and accidentally accept an obsolete snapshot.
+        // subscriber panics after acceptance, a later write cannot reuse its
+        // content revision and accidentally accept an obsolete snapshot.
         self.serial = serial;
         // Rejected submit or an application logging unwind must not leave
         // unreachable exported names occupying the bounded registry forever.
@@ -889,7 +966,7 @@ pub struct Submission {
     id: FrameId,
     graph: u64,
     pending: PendingTransfer<GraphWork>,
-    exports: Vec<(usize, Export)>,
+    exports: BTreeMap<usize, Export>,
 }
 
 impl Submission {
@@ -898,9 +975,9 @@ impl Submission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Buffer(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Buffer(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("buffer was not exported"))
@@ -910,9 +987,9 @@ impl Submission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Image(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Image(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("image was not exported"))
@@ -1168,7 +1245,7 @@ struct PreparedPass {
 
 struct GraphWork {
     owner: Arc<MemoryOwner>,
-    physical: Vec<Option<Arc<Physical>>>,
+    physical: Vec<Option<PhysicalLease>>,
     final_states: Vec<Option<Snapshot>>,
     serial: u64,
     passes: Vec<PreparedPass>,
@@ -1185,7 +1262,7 @@ impl GraphWork {
         owner: Arc<MemoryOwner>,
         graph: &CompiledGraph,
         serial: u64,
-        physical: Vec<Option<Arc<Physical>>>,
+        physical: Vec<Option<PhysicalLease>>,
         programs: Option<Arc<ShaderPrograms>>,
         mut bindings: Option<ShaderBindings>,
         upload: &SharedStaging,
@@ -1292,17 +1369,7 @@ impl GraphWork {
                         image,
                     );
                 }
-                if !current.writes && !layout_change {
-                    previous.stage |= current.stage;
-                    previous.access |= current.access;
-                } else {
-                    previous.stage = current.stage;
-                    previous.access = current.access;
-                }
-                if current.writes {
-                    previous.writer_stage = current.stage;
-                    previous.writer_access = current.access;
-                }
+                previous.record_access(current, layout_change, serial);
                 if matches!(native.native, NativeResource::Image(_)) {
                     previous.layout = current.layout;
                 }
@@ -1422,7 +1489,6 @@ impl GraphWork {
         }
         for (index, state) in states.iter_mut().enumerate() {
             if let Some(state) = state {
-                state.revision = serial;
                 state.serial = serial;
                 state.initialized = graph.final_contents[index].clone();
                 // Transient index validation has finished. Only canonical imports
@@ -1922,6 +1988,9 @@ mod tests;
 
 #[cfg(test)]
 mod cache_tests;
+
+#[cfg(test)]
+mod content_revision_tests;
 
 #[cfg(test)]
 mod render_tests;

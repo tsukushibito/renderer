@@ -1,5 +1,6 @@
 //! Bounded runtime ownership of in-flight frames, separate from CPU results.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use super::{
@@ -28,7 +29,7 @@ impl FrameId {
 pub struct FrameSubmission {
     id: FrameId,
     graph: u64,
-    exports: Vec<(usize, Export)>,
+    exports: BTreeMap<usize, Export>,
 }
 
 impl FrameSubmission {
@@ -41,9 +42,9 @@ impl FrameSubmission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Buffer(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Buffer(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("buffer was not exported"))
@@ -54,9 +55,9 @@ impl FrameSubmission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Image(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Image(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("image was not exported"))
@@ -168,12 +169,45 @@ impl<T> FrameQueue<T> {
         }
         Ok(None)
     }
+
+    fn wait_one<R, E>(
+        &mut self,
+        timeout: Duration,
+        mut probe: impl FnMut(&mut T, Duration) -> Observation<R, E>,
+    ) -> Result<Option<R>, E> {
+        let start = Instant::now();
+        // Prefer any result already available, including a later frame, before
+        // blocking on the oldest pending submission from this single queue.
+        let completed = self.observe(|frame| probe(frame, Duration::ZERO))?;
+        if completed.is_some() || self.entries.is_empty() {
+            return Ok(completed);
+        }
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        // Only one native wait receives the remaining budget. Waiting on every
+        // pending frame with the original timeout would multiply the API wait.
+        match probe(&mut self.entries[0], remaining) {
+            Observation::Pending => Ok(None),
+            Observation::Complete(result) => {
+                self.entries.remove(0);
+                Ok(Some(result))
+            }
+            Observation::Failed { error, retired } => {
+                if retired {
+                    self.entries.remove(0);
+                }
+                Err(error)
+            }
+        }
+    }
 }
 
 impl VulkanRuntime {
     /// Submit a frame without transferring pending GPU ownership to the caller.
     /// Exhaustion is reported before submission; completed work is reclaimed by
-    /// `poll_frame` or `drain_frames`, never by dropping the returned metadata.
+    /// `poll_frame`, `wait_frame` or `drain_frames`, never by dropping metadata.
     pub fn submit_frame(&mut self, graph: &CompiledGraph) -> Result<FrameSubmission, RuntimeError> {
         self.ensure_frame_capacity()?;
         let submission = self.submit(graph)?;
@@ -213,22 +247,37 @@ impl VulkanRuntime {
     /// Completed frames are returned individually so a later probe error cannot
     /// discard results already handed to the caller.
     pub fn poll_frame(&mut self) -> Result<Option<FrameCompletion>, RuntimeError> {
+        self.wait_frame(Duration::ZERO)
+    }
+
+    /// Observe one completed frame, explicitly waiting within `timeout` if no
+    /// result is already available. Returns `None` when empty or on timeout.
+    /// Unlike `drain_frames`, this returns the result and its unread readbacks.
+    /// Other pending frames and unproven failed work remain runtime-owned.
+    ///
+    /// All frames are first polled without blocking. If none has completed, only
+    /// the oldest pending frame is waited with the remaining shared budget.
+    /// The budget is subject to Vulkan timeout precision, not a strict wall-clock
+    /// deadline. No queue/device-wide idle operation is used.
+    pub fn wait_frame(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<FrameCompletion>, RuntimeError> {
         // Do not reject a stopped/lost Device before observing each actual Fence
         // result. This preserves the transfer retirement contract after loss.
-        self.frames.observe(|frame| frame.observe(Duration::ZERO))
+        self.frames
+            .wait_one(timeout, |frame, budget| frame.observe(budget))
     }
 
     /// Explicit shutdown/backpressure wait, discarding completed frame results.
     /// Returns false on budget expiry and preserves all unproven pending work.
     /// The budget is shared across frames, subject to Vulkan timeout precision;
     /// it is not a strict wall-clock deadline. Read back desired results through
-    /// `poll_frame` before using this result-discarding operation.
+    /// `poll_frame` or `wait_frame` before this result-discarding operation.
     pub fn drain_frames(&mut self, timeout: Duration) -> Result<bool, RuntimeError> {
         let start = Instant::now();
         while self.pending_frames() != 0 {
-            let completed = self
-                .frames
-                .observe(|frame| frame.observe(timeout.saturating_sub(start.elapsed())))?;
+            let completed = self.wait_frame(timeout.saturating_sub(start.elapsed()))?;
             if completed.is_none() {
                 return Ok(false);
             }
@@ -240,6 +289,85 @@ impl VulkanRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_snapshots_are_indexed_and_still_check_graph_and_resource_kind() {
+        use crate::graph::{BufferDesc, ImageDesc, ResourceKey};
+
+        let graph = 17;
+        let exports = (0..4_096)
+            .rev()
+            .map(|index| {
+                let key = ResourceKey {
+                    owner: 9,
+                    index: index as u32,
+                    generation: 1,
+                };
+                let value = if index % 2 == 0 {
+                    Export::Buffer(ImportBuffer {
+                        key,
+                        revision: 73,
+                        desc: BufferDesc { size: 4 },
+                        initialized: std::iter::once(0..4).collect(),
+                    })
+                } else {
+                    Export::Image(ImportImage {
+                        key,
+                        revision: 73,
+                        desc: ImageDesc::rgba8(1, 1),
+                        initialized: true,
+                    })
+                };
+                (index, value)
+            })
+            .collect();
+        let frame = FrameSubmission {
+            id: FrameId::new(9, 73),
+            graph,
+            exports,
+        };
+        for index in (0..4_096).rev() {
+            let key = if index % 2 == 0 {
+                frame
+                    .export_buffer(BufferHandle { graph, index })
+                    .unwrap()
+                    .key()
+            } else {
+                frame
+                    .export_image(ImageHandle { graph, index })
+                    .unwrap()
+                    .key()
+            };
+            assert_eq!(key.index as usize, index);
+        }
+        assert_eq!(
+            frame
+                .export_buffer(BufferHandle {
+                    graph: 18,
+                    index: 0
+                })
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::WrongOwner
+        );
+        assert_eq!(
+            frame
+                .export_buffer(BufferHandle { graph, index: 1 })
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::InvalidInput
+        );
+        assert_eq!(
+            frame
+                .export_image(ImageHandle {
+                    graph,
+                    index: 4_096
+                })
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::InvalidInput
+        );
+    }
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -298,13 +426,100 @@ mod tests {
         frames.push(false);
         frames.push(true);
         assert_eq!(
-            frames.observe::<_, ()>(|ready| if *ready {
-                Observation::Complete(23)
-            } else {
-                Observation::Pending
+            frames.wait_one::<_, ()>(Duration::from_secs(1), |ready, budget| {
+                assert!(budget.is_zero(), "ready results must avoid blocking");
+                if *ready {
+                    Observation::Complete(23)
+                } else {
+                    Observation::Pending
+                }
             }),
             Ok(Some(23))
         );
         assert_eq!(frames.entries, [false]);
+    }
+
+    #[test]
+    fn zero_timeout_polls_all_frames_and_timeout_waits_only_the_oldest() {
+        let mut frames = FrameQueue::new(2).unwrap();
+        frames.push(10);
+        frames.push(20);
+        let mut probes = Vec::new();
+        assert_eq!(
+            frames.wait_one::<(), ()>(Duration::ZERO, |frame, budget| {
+                probes.push((*frame, budget));
+                Observation::Pending
+            }),
+            Ok(None)
+        );
+        assert_eq!(probes, [(10, Duration::ZERO), (20, Duration::ZERO)]);
+        assert!(frames.is_full());
+
+        probes.clear();
+        let timeout = Duration::from_secs(1);
+        assert_eq!(
+            frames.wait_one::<(), ()>(timeout, |frame, budget| {
+                probes.push((*frame, budget));
+                Observation::Pending
+            }),
+            Ok(None)
+        );
+        assert_eq!(probes.len(), 3);
+        assert_eq!(probes[..2], [(10, Duration::ZERO), (20, Duration::ZERO)]);
+        assert_eq!(probes[2].0, 10);
+        assert!(!probes[2].1.is_zero());
+        assert!(probes[2].1 <= timeout);
+        assert_eq!(frames.entries, [10, 20], "timeout retains all ownership");
+    }
+
+    #[test]
+    fn blocking_wait_returns_one_result_and_preserves_unproven_errors() {
+        let mut frames = FrameQueue::new(2).unwrap();
+        frames.push(10);
+        frames.push(20);
+        let timeout = Duration::from_secs(1);
+        assert_eq!(
+            frames.wait_one::<(), _>(timeout, |_, budget| {
+                if budget.is_zero() {
+                    Observation::Pending
+                } else {
+                    Observation::Failed {
+                        error: "completion unproven",
+                        retired: false,
+                    }
+                }
+            }),
+            Err("completion unproven")
+        );
+        assert_eq!(frames.entries, [10, 20]);
+        assert_eq!(
+            frames.wait_one::<_, ()>(timeout, |frame, budget| {
+                if budget.is_zero() {
+                    Observation::Pending
+                } else {
+                    Observation::Complete(*frame + 1)
+                }
+            }),
+            Ok(Some(11))
+        );
+        assert_eq!(frames.entries, [20]);
+        assert_eq!(
+            frames.wait_one::<(), _>(timeout, |_, budget| {
+                if budget.is_zero() {
+                    Observation::Pending
+                } else {
+                    Observation::Failed {
+                        error: "retired without valid output",
+                        retired: true,
+                    }
+                }
+            }),
+            Err("retired without valid output")
+        );
+        assert!(frames.entries.is_empty());
+        assert_eq!(
+            frames.wait_one::<(), ()>(timeout, |_, _| panic!("empty queue must not wait")),
+            Ok(None)
+        );
     }
 }

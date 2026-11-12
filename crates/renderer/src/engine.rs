@@ -4,6 +4,7 @@
 //! handles and captures immutable data needed to build a frame's graph.
 
 use std::{
+    collections::BTreeSet,
     fmt,
     sync::{
         Arc,
@@ -14,7 +15,7 @@ use std::{
 use crate::graph::RasterParameters;
 
 mod graph;
-pub use graph::FrameGraph;
+pub use graph::{FrameGraph, FrameOutputOwnership};
 
 /// Four columns, each containing four rows. Vectors are column vectors.
 /// `clip_from_world * world_from_model` transforms a local vertex to clip space.
@@ -52,6 +53,11 @@ pub struct MeshData {
 }
 
 impl MeshData {
+    /// Encoded vertex and index payload bytes, independent of sharing and native allocation size.
+    pub fn byte_len(&self) -> u64 {
+        self.vertices.len() as u64 + self.indices.len() as u64
+    }
+
     pub fn new(vertices: &[Vertex], indices: &[u32]) -> Result<Self, EngineError> {
         let index_count = u32::try_from(indices.len())
             .map_err(|_| EngineError::new("mesh index count exceeds u32"))?;
@@ -178,6 +184,8 @@ pub struct Engine {
     pub(crate) id: u64,
     meshes: Vec<Slot<MeshVersion>>,
     materials: Vec<Slot<Material>>,
+    free_meshes: BTreeSet<usize>,
+    free_materials: BTreeSet<usize>,
     mesh_capacity: usize,
     material_capacity: usize,
 }
@@ -200,6 +208,8 @@ impl Engine {
             id,
             meshes: Vec::new(),
             materials: Vec::new(),
+            free_meshes: BTreeSet::new(),
+            free_materials: BTreeSet::new(),
             mesh_capacity,
             material_capacity,
         })
@@ -208,6 +218,7 @@ impl Engine {
     pub fn create_mesh(&mut self, data: MeshData) -> Result<MeshHandle, EngineError> {
         let (index, generation) = insert(
             &mut self.meshes,
+            &mut self.free_meshes,
             self.mesh_capacity,
             MeshVersion {
                 revision: 1,
@@ -237,6 +248,9 @@ impl Engine {
         self.check_owner(handle.owner)?;
         lookup(&self.meshes, handle.index, handle.generation)?;
         self.meshes[handle.index as usize].value = None;
+        if handle.generation < u32::MAX {
+            self.free_meshes.insert(handle.index as usize);
+        }
         Ok(())
     }
     pub fn mesh_revision(&self, handle: MeshHandle) -> Result<u64, EngineError> {
@@ -259,7 +273,12 @@ impl Engine {
 
     pub fn create_material(&mut self, material: Material) -> Result<MaterialHandle, EngineError> {
         validate_material(material)?;
-        let (index, generation) = insert(&mut self.materials, self.material_capacity, material)?;
+        let (index, generation) = insert(
+            &mut self.materials,
+            &mut self.free_materials,
+            self.material_capacity,
+            material,
+        )?;
         Ok(MaterialHandle {
             owner: self.id,
             index,
@@ -280,6 +299,9 @@ impl Engine {
         self.check_owner(handle.owner)?;
         lookup(&self.materials, handle.index, handle.generation)?;
         self.materials[handle.index as usize].value = None;
+        if handle.generation < u32::MAX {
+            self.free_materials.insert(handle.index as usize);
+        }
         Ok(())
     }
 
@@ -401,14 +423,15 @@ fn multiply(a: Matrix4, b: Matrix4) -> Matrix4 {
 }
 fn insert<T>(
     slots: &mut Vec<Slot<T>>,
+    free: &mut BTreeSet<usize>,
     capacity: usize,
     value: T,
 ) -> Result<(u32, u32), EngineError> {
-    if let Some((index, slot)) = slots
-        .iter_mut()
-        .enumerate()
-        .find(|(_, slot)| slot.value.is_none() && slot.generation < u32::MAX)
-    {
+    // Deletion records reusable slots. Cold registration never scans live
+    // assets; reuse preserves the previous lowest-eligible-index policy.
+    if let Some(index) = free.pop_first() {
+        let slot = &mut slots[index];
+        debug_assert!(slot.value.is_none() && slot.generation < u32::MAX);
         slot.generation += 1;
         slot.value = Some(value);
         return Ok((index as u32, slot.generation));
@@ -467,6 +490,7 @@ mod tests {
 
     #[test]
     fn handles_validate_owner_generation_and_capacity() {
+        assert_eq!(mesh(1.0).byte_len(), 28 + 3 * 4);
         let mut first = Engine::new(1, 1).unwrap();
         let second = Engine::new(1, 1).unwrap();
         let old = first.create_mesh(mesh(1.0)).unwrap();
@@ -478,6 +502,105 @@ mod tests {
         assert_ne!(old, new);
         assert!(first.mesh_revision(old).is_err());
         assert_eq!(first.mesh_revision(new).unwrap(), 1);
+    }
+
+    #[test]
+    fn large_registration_reuses_lowest_deleted_indices_independently() {
+        const COUNT: usize = 4_096;
+        let mut engine = Engine::new(COUNT, COUNT).unwrap();
+        let data = mesh(1.0);
+        let meshes = (0..COUNT)
+            .map(|_| engine.create_mesh(data.clone()).unwrap())
+            .collect::<Vec<_>>();
+        let materials = (0..COUNT)
+            .map(|_| engine.create_material(Material::default()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(meshes.last().unwrap().index, (COUNT - 1) as u32);
+        assert_eq!(materials.last().unwrap().index, (COUNT - 1) as u32);
+        assert!(engine.create_mesh(data.clone()).is_err());
+        assert!(engine.create_material(Material::default()).is_err());
+        for index in [3_072, 1, 2_048, 0] {
+            engine.delete_mesh(meshes[index]).unwrap();
+            engine.delete_material(materials[index]).unwrap();
+        }
+        for index in [0, 1, 2_048, 3_072] {
+            let new_mesh = engine.create_mesh(data.clone()).unwrap();
+            let new_material = engine.create_material(Material::default()).unwrap();
+            assert_eq!(new_mesh.index, index as u32);
+            assert_eq!(new_material.index, index as u32);
+            assert_eq!(new_mesh.generation, 2);
+            assert_eq!(new_material.generation, 2);
+            assert!(engine.delete_mesh(meshes[index]).is_err());
+            assert!(engine.delete_material(materials[index]).is_err());
+            assert_eq!(engine.mesh_revision(new_mesh).unwrap(), 1);
+        }
+        assert_eq!(engine.live_mesh_handles().len(), COUNT);
+        assert!(engine.create_mesh(data).is_err());
+        assert!(engine.create_material(Material::default()).is_err());
+    }
+
+    #[test]
+    fn generation_exhausted_slots_are_retired_instead_of_reused() {
+        let mut engine = Engine::new(2, 2).unwrap();
+        for expected_index in 0..2 {
+            let mut mesh_handle = engine.create_mesh(mesh(1.0)).unwrap();
+            let mut material = engine.create_material(Material::default()).unwrap();
+            assert_eq!(mesh_handle.index, expected_index);
+            assert_eq!(material.index, expected_index);
+            engine.meshes[mesh_handle.index as usize].generation = u32::MAX;
+            engine.materials[material.index as usize].generation = u32::MAX;
+            mesh_handle.generation = u32::MAX;
+            material.generation = u32::MAX;
+            engine.delete_mesh(mesh_handle).unwrap();
+            engine.delete_material(material).unwrap();
+        }
+        assert!(engine.create_mesh(mesh(1.0)).is_err());
+        assert!(engine.create_material(Material::default()).is_err());
+        assert!(engine.live_mesh_handles().is_empty());
+    }
+
+    #[test]
+    fn failed_mutations_do_not_consume_reusable_slots_or_replace_live_data() {
+        let mut engine = Engine::new(1, 1).unwrap();
+        let material = engine.create_material(Material::default()).unwrap();
+        engine.delete_material(material).unwrap();
+        assert!(
+            engine
+                .create_material(Material {
+                    tint: [f32::NAN; 4]
+                })
+                .is_err()
+        );
+        let current_material = engine.create_material(Material::default()).unwrap();
+        assert_eq!(current_material.index, material.index);
+        assert_eq!(current_material.generation, material.generation + 1);
+        let mesh_handle = engine.create_mesh(mesh(1.0)).unwrap();
+        let slot = engine.meshes[mesh_handle.index as usize]
+            .value
+            .as_mut()
+            .unwrap();
+        slot.revision = u64::MAX;
+        let old_data = Arc::clone(&slot.data);
+        assert!(engine.update_mesh(mesh_handle, mesh(0.0)).is_err());
+        assert_eq!(engine.mesh_revision(mesh_handle).unwrap(), u64::MAX);
+        assert!(Arc::ptr_eq(
+            &old_data,
+            &engine.meshes[mesh_handle.index as usize]
+                .value
+                .as_ref()
+                .unwrap()
+                .data,
+        ));
+        let other = Engine::new(1, 1).unwrap();
+        assert!(
+            engine
+                .delete_mesh(MeshHandle {
+                    owner: other.id,
+                    ..mesh_handle
+                })
+                .is_err()
+        );
+        assert!(engine.create_mesh(mesh(0.0)).is_err());
     }
 
     #[test]

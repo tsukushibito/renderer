@@ -2,11 +2,10 @@
 //! No native state or resource ownership escapes with the returned string.
 
 use std::fmt::Write;
-use std::sync::Arc;
 
 use ash::vk;
 
-use super::{NativeResource, Physical, Snapshot, Use};
+use super::{NativeResource, PhysicalLease, Snapshot, Use};
 use crate::graph::{CompiledGraph, Pass, ResourceKey};
 
 pub(super) fn begin(
@@ -14,7 +13,7 @@ pub(super) fn begin(
     serial: u64,
     queue_family: u32,
     keys: &[Option<ResourceKey>],
-    physical: &[Option<Arc<Physical>>],
+    physical: &[Option<PhysicalLease>],
 ) -> String {
     let mut output = format!(
         "Vulkan Graph lowering graph={} submission={serial} queue_family={queue_family} queue_index=0\n",
@@ -53,8 +52,8 @@ pub(super) fn begin(
 fn state(output: &mut String, label: &str, snapshot: &Snapshot) {
     writeln!(
         output,
-        "  {label} revision={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?}",
-        snapshot.revision, snapshot.initialized, snapshot.stage, snapshot.access,
+        "  {label} revision={} last_use_serial={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?}",
+        snapshot.revision, snapshot.serial, snapshot.initialized, snapshot.stage, snapshot.access,
         snapshot.layout, snapshot.writer_stage, snapshot.writer_access,
     )
     .expect("writing String");
@@ -150,7 +149,7 @@ pub(super) fn finish(
             writeln!(
                 output,
                 "final resource={index} exported={}",
-                graph.exports.contains(&index),
+                graph.has_export(index),
             )
             .expect("writing String");
             state(output, "accepted_on_submit", snapshot);

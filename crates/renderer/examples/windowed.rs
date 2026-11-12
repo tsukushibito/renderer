@@ -220,7 +220,7 @@ mod demo {
                     self.output = None;
                     self.presented += 1;
                 }
-                Ok(PresentOutcome::Recreated) => {
+                Ok(PresentOutcome::Recreated | PresentOutcome::RecreateRequired) => {
                     engine.runtime_mut().delete(output.key())?;
                     self.output = None;
                 }

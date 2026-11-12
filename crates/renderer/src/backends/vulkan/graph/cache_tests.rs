@@ -5,43 +5,6 @@ use crate::graph::{Graph, ImageDesc};
 
 const WAIT: Duration = Duration::from_secs(10);
 
-#[test]
-fn cache_keeps_other_descriptors_until_capacity_is_reached() {
-    assert_eq!(
-        cache_insert_target(1, 2, [(0, 7)].into_iter()).unwrap(),
-        None
-    );
-    assert_eq!(cache_insert_target(0, 2, std::iter::empty()).unwrap(), None);
-}
-
-#[test]
-fn cache_pressure_evicts_oldest_accepted_use_with_stable_ties() {
-    // Entry zero has been used again after entry one; index order is not LRU.
-    assert_eq!(
-        cache_insert_target(2, 2, [(0, 3), (1, 2)].into_iter()).unwrap(),
-        Some(1)
-    );
-    assert_eq!(
-        cache_insert_target(3, 3, [(2, 4), (1, 4), (0, 8)].into_iter()).unwrap(),
-        Some(1)
-    );
-    assert_eq!(
-        cache_insert_target(2, 2, [(0, 3), (1, 0)].into_iter()).unwrap(),
-        Some(1),
-        "never-submitted leftovers must not displace recently accepted work"
-    );
-}
-
-#[test]
-fn full_cache_without_an_available_entry_reports_capacity() {
-    assert_eq!(
-        cache_insert_target(2, 2, std::iter::empty())
-            .unwrap_err()
-            .kind(),
-        RuntimeErrorKind::CapacityExhausted
-    );
-}
-
 fn real_gpu(capacity: usize, slots: usize, test: impl FnOnce(&mut VulkanRuntime)) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
