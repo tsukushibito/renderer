@@ -131,8 +131,14 @@ snapshotにはowner・世代・revisionがあり、別runtime、削除済み、�
 exportした資源はruntimeへ登録され、明示的な`delete`で登録を解除する。
 CPUハンドルをdropするだけでは登録を解除しない。
 未登録資源は保持参照がなくなってから再利用でき、同じ作成条件ならallocationとViewを保持する。
-異なる作成条件の資源が必要なら、空いている未登録entryを置き換えられる。
+同じ作成条件がなければresource容量までentryを追加し、異なる条件のcacheも保持する。
+上限時だけ、空いている未登録entryのうち最後に受理した利用serialが最も古いものを置き換える。
+同じserialならentryのindex順とし、登録中・保持参照があるentry・世代上限のentryを選ばない。
+置換先の作成・命名が成功するまで旧entryを維持する。再利用時はnative同期状態を保持し、
+以前の内容の初期化情報とCPU provenanceを新しい論理資源へ引き継がない。
 resource容量は保持する物理entry数の上限であり、DeviceのVRAM budgetではない。
+異なる作成条件を保持する分だけidleメモリが増え、置換時は旧資源と新資源が一時的に共存する。
+保持量は論理byteと実際のVMA allocation／blockの統計を分けて観測する。
 exportを保持し続けた場合も、容量不足を返し、内部で待機・無制限増設はしない。
 
 `Submission::wait`のtimeoutは`None`で、同じsubmissionを再度待てる。
@@ -220,6 +226,12 @@ snapshotの`build_graph`はGPU・windowなしで標準Graphを構築できる。
 cacheは永続keyで識別し、使用時にfresh importを取得する。
 更新・削除後も先行frameの所有を維持し、CPUに保存した旧snapshotも独立して扱う。
 標準経路はclear-onlyのノードで空draw listも初期化し、各drawが同じcolor/depthをLoadして描く。
+
+実用的な標準不透明描画は、複数drawを一つのRaster操作と描画スコープへまとめられる構造を目標とする。
+現在のmainは上記のscalar経路を維持する。owned draw listを使う内部batchは別branchの比較試作で、
+公開PassEncoderや任意パス統合を先に固定せずに、clear一回・順序・引数・深度・資源用途を保つ範囲を検証した。
+測定結果とM4前導入の判断は[検証記録](../verification/current.md#draw-listの比較試作と導入判断)を参照する。
+この試作はmainへ統合済みという意味ではなく、任意shaderや別GPUで同じ利益・合法性を保証しない。
 
 拡張点はopaque描画後・最終composite前の完全なlinear RGBA8画像である。
 Viewと同じextentで初期化済みの画像を返し、通常のGraph builderで処理を追加する。
