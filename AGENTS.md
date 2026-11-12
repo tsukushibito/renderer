@@ -14,6 +14,34 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
   history is synchronized separately with `bd dolt pull` / `bd dolt push`.
 - Commit and push only within the scope authorized by the user.
 
+# Git workflow
+
+- Work directly on `main` by default. Before editing, fetch remote changes and
+  bring `main` up to date with a fast-forward; preserve existing local changes.
+- A request to implement a change or edit repository files includes the in-scope
+  validation, documentation and Beads updates, integration into `main`, commit,
+  push to `origin/main`, and CI verification. No separate instruction to merge
+  or push is needed. Explicit user limits or requests to stop earlier take
+  precedence. Read-only questions and reviews do not authorize repository edits
+  or publishing changes.
+- Normal flow: update `main`, make the requested changes, run applicable checks,
+  commit, push `main`, and confirm CI. Fix in-scope CI failures before reporting
+  completion; report any unresolved external blocker explicitly.
+- Only one agent may modify, merge into, or push `main` at a time.
+- For parallel work that edits files, give each worker a dedicated worktree and
+  a `codex/<task>` branch based on the intended `main` commit. Do not check out
+  `main` in multiple worktrees. Read-only investigation and review may share a
+  checkout.
+- Each worker validates and commits its assigned changes. One integration agent
+  merges completed branches into a clean `main`, resolves conflicts, runs the
+  applicable checks on the combined result, and pushes `main`. Workers do not
+  independently merge into or push `main`; task branches normally stay local.
+- Keep Beads issues and the database connection consistent across worktrees.
+  The integration agent coordinates final issue closure and Dolt pull/push;
+  do not assume Git worktrees copy or initialize the ignored Beads database.
+- After integration and push are confirmed, remove task-owned worktrees and
+  branches only when they contain no uncommitted or unmerged work to preserve.
+
 # Vulkan implementation and review
 
 - Before Vulkan-related implementation or review, including Graph lowering and
