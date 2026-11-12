@@ -16,4 +16,5 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
+mod_module_files = "deny"
 undocumented_unsafe_blocks = "deny"

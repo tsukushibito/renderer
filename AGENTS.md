@@ -13,3 +13,10 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
 - The database uses embedded Dolt. Git tracks configuration and hooks; issue
   history is synchronized separately with `bd dolt pull` / `bd dolt push`.
 - Commit and push only within the scope authorized by the user.
+
+# Rust module layout
+
+- Do not create or retain `mod.rs` files, including test modules.
+- Use self-named module files: `foo.rs` defines `foo`, and its child modules
+  belong under `foo/` (for example, `foo/bar.rs`).
+- Keep `clippy::mod_module_files` denied through the workspace lint settings.

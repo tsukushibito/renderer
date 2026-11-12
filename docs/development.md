@@ -58,6 +58,10 @@ CIのVulkanジョブでもg++を用意します。Windowsジョブはrunner付�
 
 ## ビルド・品質確認
 
+Rustのモジュール配置は[AGENTS.md](../AGENTS.md)に従い、`mod.rs`を禁止します。
+`foo.rs`と`foo/bar.rs`の形式を使います。workspaceの`clippy::mod_module_files`を
+`deny`に設定しており、以下のclippyコマンドと既存CIで検出します。
+
 リポジトリのルートで実行します。CPU経路にはVulkan SDK、ローダー、GPU、
 ウィンドウシステムは不要です。最初はoptional依存も含むlockfileの解決・取得に
 ネットワークが必要になる場合があります。
