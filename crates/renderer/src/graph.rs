@@ -346,7 +346,7 @@ impl GraphError {
         context.pass_name = name.map(str::to_owned);
         self
     }
-    fn with_resource(mut self, handle: ResourceHandle, name: Option<&str>) -> Self {
+    pub(crate) fn with_resource(mut self, handle: ResourceHandle, name: Option<&str>) -> Self {
         let context = self.context_mut();
         context.resource = Some(handle);
         context.resource_name = name.map(str::to_owned);
