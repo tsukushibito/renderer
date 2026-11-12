@@ -95,6 +95,14 @@ pub struct RuntimeError {
 }
 
 impl RuntimeError {
+    pub(super) fn is_staging_exhausted(&self) -> bool {
+        matches!(
+            self.source
+                .as_deref()
+                .and_then(|cause| cause.downcast_ref::<StagingError>()),
+            Some(StagingError::CapacityExhausted { .. })
+        )
+    }
     pub fn kind(&self) -> RuntimeErrorKind {
         self.kind
     }
