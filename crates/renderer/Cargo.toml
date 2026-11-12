@@ -1,0 +1,18 @@
+[package]
+name = "renderer"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "RenderGraph-centered renderer for game engine integration"
+
+[features]
+default = []
+vulkan = ["dep:ash", "dep:vk-mem"]
+
+[dependencies]
+ash = { workspace = true, optional = true }
+vk-mem = { workspace = true, optional = true }
+
+[lints]
+workspace = true

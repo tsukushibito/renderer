@@ -1,0 +1,17 @@
+[workspace]
+members = ["crates/renderer"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+
+[workspace.dependencies]
+ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"] }
+vk-mem = "0.5"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"

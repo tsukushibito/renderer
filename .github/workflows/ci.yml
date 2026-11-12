@@ -1,0 +1,46 @@
+name: Rust
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - run: cargo fmt --all -- --check
+
+  check:
+    name: ${{ matrix.os }} / ${{ matrix.backend }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+        backend: [cpu, vulkan]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Install native C++ toolchain (Linux)
+        if: runner.os == 'Linux' && matrix.backend == 'vulkan'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends g++
+      - name: Check, lint, and test
+        shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          $featureArgs = @('--no-default-features')
+          if ($env:BACKEND -eq 'vulkan') { $featureArgs += @('--features', 'vulkan') }
+          cargo check --locked --workspace --all-targets @featureArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --workspace @featureArgs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
