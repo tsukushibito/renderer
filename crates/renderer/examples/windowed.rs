@@ -1,5 +1,6 @@
 //! Minimal Windows presentation example. `--smoke` exercises a bounded run,
 //! resize, minimization, restoration and shutdown while work may be pending.
+//! `--vsync on|off` selects the initial mode; V toggles it at runtime.
 
 #[cfg(windows)]
 #[path = "support/scene.rs"]
@@ -22,14 +23,49 @@ mod demo {
     use winit::{
         application::ApplicationHandler,
         dpi::PhysicalSize,
-        event::WindowEvent,
+        event::{ElementState, WindowEvent},
         event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+        keyboard::{KeyCode, PhysicalKey},
         window::{Window, WindowId},
     };
 
     use super::scene;
 
     const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Options {
+        smoke: bool,
+        vsync: bool,
+    }
+
+    impl Options {
+        fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, String> {
+            let mut options = Self {
+                smoke: false,
+                vsync: true,
+            };
+            let mut arguments = arguments.into_iter();
+            while let Some(argument) = arguments.next() {
+                match argument.as_str() {
+                    "--smoke" => options.smoke = true,
+                    "--vsync" => {
+                        options.vsync = match arguments.next().as_deref() {
+                            Some("on") => true,
+                            Some("off") => false,
+                            _ => return Err("--vsync requires on or off".into()),
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "unknown argument {argument}; use --smoke and/or --vsync on|off"
+                        ));
+                    }
+                }
+            }
+            Ok(options)
+        }
+    }
 
     struct SceneAssets {
         mesh: MeshHandle,
@@ -38,6 +74,8 @@ mod demo {
 
     struct App {
         smoke: bool,
+        vsync: bool,
+        mode_switches: u8,
         window: Option<Arc<Window>>,
         engine: Option<VulkanEngine>,
         presenter: Option<Presenter>,
@@ -53,9 +91,11 @@ mod demo {
     }
 
     impl App {
-        fn new(smoke: bool) -> Self {
+        fn new(options: Options) -> Self {
             Self {
-                smoke,
+                smoke: options.smoke,
+                vsync: options.vsync,
+                mode_switches: 0,
                 window: None,
                 engine: None,
                 presenter: None,
@@ -85,7 +125,10 @@ mod demo {
             let (runtime, presenter) = VulkanRuntime::for_window(
                 RuntimeConfig::default(),
                 Arc::clone(&window),
-                PresentationConfig::default(),
+                PresentationConfig {
+                    vsync: self.vsync,
+                    ..Default::default()
+                },
             )?;
             let validation = runtime.validation_monitor();
             let report = validation.report();
@@ -106,6 +149,25 @@ mod demo {
             self.presenter = Some(presenter);
             self.assets = Some(assets);
             self.validation = Some(validation);
+            self.update_title();
+            Ok(())
+        }
+
+        fn update_title(&self) {
+            if let Some(window) = &self.window {
+                window.set_title(&format!(
+                    "Renderer M3 - VSync {} (V to toggle)",
+                    if self.vsync { "ON" } else { "OFF" }
+                ));
+            }
+        }
+
+        fn toggle_vsync(&mut self) -> Result<(), Box<dyn Error>> {
+            if let Some(presenter) = &mut self.presenter {
+                presenter.set_vsync(!self.vsync)?;
+                self.vsync = !self.vsync;
+                self.update_title();
+            }
             Ok(())
         }
 
@@ -120,14 +182,16 @@ mod demo {
             if self.restore_at.is_some() {
                 return Ok(());
             }
-            match presenter.prepare()? {
-                Some(PresentOutcome::Recreated) => {
+            match presenter.prepare() {
+                Ok(Some(PresentOutcome::Recreated)) => {
                     if let Some(output) = self.output.take() {
                         engine.runtime_mut().delete(output.key())?;
                     }
                 }
-                Some(PresentOutcome::NotReady | PresentOutcome::Suspended) => return Ok(()),
-                _ => {}
+                Ok(Some(PresentOutcome::NotReady | PresentOutcome::Suspended)) => return Ok(()),
+                Ok(_) => {}
+                Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => return Ok(()),
+                Err(error) => return Err(error.into()),
             }
             if self.output.is_none() {
                 let Some((width, height)) = presenter.extent() else {
@@ -235,6 +299,15 @@ mod demo {
                         self.fail(event_loop, error);
                     }
                 }
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed
+                        && !event.repeat
+                        && event.physical_key == PhysicalKey::Code(KeyCode::KeyV) =>
+                {
+                    if let Err(error) = self.toggle_vsync() {
+                        eprintln!("VSync unchanged: {error}");
+                    }
+                }
                 _ => {}
             }
         }
@@ -243,6 +316,16 @@ mod demo {
             if self.smoke && self.started.elapsed() > Duration::from_secs(20) {
                 self.fail(event_loop, "windowed smoke run timed out");
                 return;
+            }
+            if self.smoke
+                && ((self.presented >= 2 && self.mode_switches == 0)
+                    || (self.presented >= 6 && self.mode_switches == 1))
+            {
+                if let Err(error) = self.toggle_vsync() {
+                    self.fail(event_loop, error);
+                    return;
+                }
+                self.mode_switches += 1;
             }
             if self.smoke && self.presented >= 4 && !self.resized {
                 self.resized = true;
@@ -290,9 +373,7 @@ mod demo {
     }
 
     pub fn run() -> Result<(), Box<dyn Error>> {
-        let smoke = std::env::args()
-            .skip(1)
-            .any(|argument| argument == "--smoke");
+        let options = Options::parse(std::env::args().skip(1))?;
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -301,13 +382,42 @@ mod demo {
             .try_init()
             .map_err(|error| error.to_string())?;
         let event_loop = EventLoop::new()?;
-        let mut app = App::new(smoke);
+        let mut app = App::new(options);
         event_loop.run_app(&mut app)?;
         app.shutdown()?;
         if let Some(error) = app.error {
             return Err(error.into());
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Options;
+
+        #[test]
+        fn options_select_vsync_and_reject_invalid_requests() {
+            let parse =
+                |args: &[&str]| Options::parse(args.iter().map(|argument| (*argument).to_owned()));
+            assert_eq!(
+                parse(&[]).unwrap(),
+                Options {
+                    smoke: false,
+                    vsync: true
+                }
+            );
+            assert_eq!(
+                parse(&["--vsync", "off", "--smoke"]).unwrap(),
+                Options {
+                    smoke: true,
+                    vsync: false
+                }
+            );
+            assert!(parse(&["--vsync", "on"]).unwrap().vsync);
+            for arguments in [&["--vsync"][..], &["--vsync", "invalid"], &["--unknown"]] {
+                assert!(parse(arguments).is_err());
+            }
+        }
     }
 }
 

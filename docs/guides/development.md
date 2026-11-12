@@ -167,10 +167,15 @@ OPAQUE合成への対応が必要です。不足は診断して停止し、別qu
 
 ```powershell
 cargo run --locked -p renderer --no-default-features --features presentation --example windowed
+cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --vsync off
 cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --smoke
 ```
 
-`--smoke`は表示、resize、最小化・復帰、処理未完了時の終了を有限回で実行します。
+既定はVSync ON（FIFO）、`--vsync on|off`で起動時に選択し、Vキーで実行中に切り替えます。
+OFFはIMMEDIATE対応が必要で、未対応の起動要求は失敗します。Vキーの未対応要求は診断して設定を維持します。
+タイトルは要求設定を表示し、実際の切り替えは次のSwapchain再作成で反映します。
+`--smoke`は12回のPresent要求、VSync往復切り替え、resize、最小化・復帰、処理未完了時の終了を有限回で実行します。
+両モードの対応が必要です。描画Fenceとpresent fenceを回収し、終了後までCore/SyncValの警告・エラーゼロを要求します。
 headless例と共通のScene、mesh/material/Viewとcustom処理を使います。
 自動受入には、次のignored実ウィンドウ試験も明示実行します。
 
@@ -184,6 +189,25 @@ cargo test --locked -p renderer --no-default-features --features presentation ::
 表示用submit受理後はpresent失敗でもsource revisionが進み得るため、再利用・再試行時はrefreshします。
 正常終了はframeの回収とPresenterの明示closeを行い、最後に保持したValidationMonitorで
 native所有者の破棄後までwarning／error／callback失敗ゼロを確認します。
+
+### 表示FPSの計測方針
+
+`windowed`には現在FPS集計を実装していません。追加する場合は、単調増加時計に対する
+`PresentOutcome::Presented`の成功件数を約1秒の窓で割り、**Present要求FPS**として表示します。
+`NotReady`／`Suspended`／`Recreated`を成功件数に数えず、VSync変更・resize・最小化からの復帰で窓をリセットします。
+窓内の待ち時間は経過時間へ含め、成功Present間隔の中央値・p95・p99も併記します。
+瞬間値`1/dt`の単純平均や、GPU timestamp区間の逆数で表示FPSを算出しません。
+
+WindowsでOSが観測する表示まで調べる場合は[PresentMon](https://github.com/GameTechDev/PresentMon)を併用します。
+[公式CSV定義](https://github.com/GameTechDev/PresentMon/blob/main/README-ConsoleApplication.md)の
+`MsBetweenPresents`と`MsBetweenDisplayChange`／`DisplayedTime`を区別し、未表示frameも記録します。
+present maintenance fenceのsignalを実画面の表示完了と数えることはできません。
+GPU Graph区間とCPU build/compile/record/submitは既存の計測で別に調べます。
+
+最大throughputの比較ではrelease・明示Validation無効・固定解像度・warm-up後の一定時間を複数run測り、
+VSync・実行枠・画像数・driver・モニターの条件を揃えます。正しさは別runでCore/SyncValを有効にして確認します。
+現exampleの`WaitUntil(now + 4ms)`は意図的なイベントループ待機なので、上限を調べる計測モードでは外す必要があります。
+現在のexampleをそのまま最大FPSのbenchmarkとは扱いません。表示FPSやPresentMonの実測値は未取得です。
 詳細な同期・寿命の根拠は[Vulkan設計](../design/vulkan.md#windows-presentation)を参照してください。
 
 ### 再現可能なフレーム基準測定

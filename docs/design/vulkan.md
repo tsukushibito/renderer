@@ -300,7 +300,21 @@ Swapchainの破棄には、その世代への全presentと通常GPU参照の終�
 `present`はacquire前にRuntime実行枠を予約し、acquireはtimeout 0とする。
 容量不足、`NotReady`、ゼロextentの`Suspended`で通常frameに暗黙waitを加えない。
 実行枠はGraphと表示で共有するため、両submitの使用数を見た明示的なbackpressureが必要である。
-FIFOと設定した画像数を出発点にし、実画像数とSurfaceのusage・format・extent・上限を照会する。
+`PresentationConfig::vsync`は既定trueでFIFO、falseでIMMEDIATEを要求する。
+実Surfaceの対応モードを照会し、未対応は`Unsupported`として拒否する。
+MAILBOXも垂直同期を待つため、OFF要求のfallbackには使わない。
+これは最適化済みという判断ではなく、同期する／しないという利用者の選択を明示する契約である。
+IMMEDIATEではtearingが起こり得る。OS compositorやdriver設定による実際の表示挙動は別に確認する。
+[Presentモードの仕様](https://docs.vulkan.org/refpages/latest/refpages/source/VkPresentModeKHR.html)と
+[Swapchain作成の契約](https://docs.vulkan.org/refpages/latest/refpages/source/VkSwapchainCreateInfoKHR.html)に従う。
+
+`Presenter::set_vsync(bool)`は対応確認後に再作成を予約する。同値は再作成せず、
+未対応の要求では設定と現在のSwapchainを保持する。`vsync()`は要求設定を返し、close後はNoneとなる。
+`prepare`の成功した再作成で反映し、ゼロextent中は復帰まで保留する。
+旧世代の進行中presentは元のモードのまま完了させる。resizeと同じbounded retirementを使い、
+通常経路に全体idleを加えない。退役世代の容量不足時はpollして再試行する。
+複数モードを同一Swapchainで動的に切り替える拡張経路は導入せず、
+単一モードのSwapchainを再作成し、実画像数とSurfaceのusage・format・extent・上限を照会する。
 固定3画像が最適であるとは扱わない。
 
 `SUBOPTIMAL`の取得済み画像、未取得のtimeout、`OUT_OF_DATE`、Surface loss、Device lossを分ける。

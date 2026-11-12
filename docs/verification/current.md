@@ -1,6 +1,6 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-12。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日: 2026-11-13。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
@@ -33,14 +33,15 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 | CPU / Vulkan / Windows presentationの全target check・Clippy `-D warnings` | 3構成すべて成功 |
 | CPUのみの通常試験 | 単体25件＋公開API 3件成功 |
 | Vulkan featureの通常試験 | CPU単体107件＋公開API 3件成功、26 ignored |
-| presentation featureの通常試験 | CPU単体110件＋公開API 3件成功、27 ignored |
+| presentation featureの通常試験 | CPU単体111件＋公開API 3件成功、27 ignored |
 | 明示headless実GPU試験 | 25件成功、2.71秒 |
-| headless＋実Win32 Surfaceを含む明示GPU試験 | 26件成功、4.30秒 |
+| headless＋実Win32 Surfaceを含む明示GPU試験 | 26件成功、4.57秒。WSIではVSync切り替えも確認 |
 | Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
 | Shader再生成検証 | 5種類すべてspirv-val成功、固定SDKによる再生成とチェックインbinaryのSHA-256一致 |
 | headless例 | 従来の128×96描画・深度・Compute・合成とPPM出力成功 |
 | engine headless統合例 | 24 frame、3 in-flight、custom処理・history・更新/削除・遅延readbackの照合成功 |
-| engine Windows表示例 | `windowed --smoke`で12表示、resize・最小化復帰・pending終了、終了コード0 |
+| engine Windows表示例 | ON/OFF各起動の`windowed --smoke`で12 Present要求、VSync往復切り替え・resize・最小化復帰・pending終了、終了コード0 |
+| 表示例の引数検査 | VSync既定ON、ON/OFF指定、smoke併用、不正引数拒否のCPU試験1件成功 |
 | JSON出力のCPU試験 | Unicode/control文字escape、中央値とnearest-rank p95の2件成功 |
 | 依存監査 | cargo-deny 0.20.2でadvisories / bans / licenses / sources成功 |
 | 文書 | UTF-8、相対リンク・anchor、fenced block、差分空白を確認 |
@@ -54,6 +55,26 @@ hard-link不可というincremental cacheの環境warningをソース診断と�
 Windows / LinuxのCPU・Vulkan、およびWindows presentationのcheck・Clippy・CPU試験を
 [GitHub Actions](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)に設定している。
 このローカル確認はLinux実行や実GPU CIの合格を意味しない。
+
+### VSyncの選択・切り替え
+
+`renderer-5kp`で`PresentationConfig::vsync`、`Presenter::set_vsync`と要求値getterを追加した。
+既定ONはFIFO、OFFは実Surface対応を確認したIMMEDIATEで、未対応要求は`Unsupported`となる。
+WSIの能力照会・同期・退役世代の指針と単一モードSwapchainのAPI契約に従い、
+既存の再作成とbounded retirementを利用した。通常経路への全体idleや、MAILBOXへのfallbackは追加していない。
+IMMEDIATEの性能・latency改善を実測した変更ではなく、利用側がVSync方針を選べる機能である。
+
+CPU試験では対応モードの選択、MAILBOXがあっても未対応OFFを拒否することを確認した。
+実Win32試験では同値要求で再作成しないこと、presentの所有権保持中のFIFO→IMMEDIATE→FIFO、
+最小化中の変更保留、resize・取得後cancel・pending終了、close後の変更拒否を確認した。
+Graph側の画素照合と、全native所有者を破棄した後までCore/SyncValの診断ゼロを維持した。
+通常3構成のcheck・Clippy・CPU試験と全GPU26件、表示例の両起動モードを再実行した。
+Shaderは変更せず再生成検証は前回結果を継承する。依存の追加・更新はない。
+
+Vキー入力はexampleのhandlerに接続し、同じ切り替え関数をsmokeから自動実行した。
+実際のキー入力の手動試験、別GPU／driverでの両モード、driver／compositor設定の影響、
+表示FPS・PresentMonの記録は未検証である。FPSの推奨計測境界は[開発ガイド](../guides/development.md#表示fpsの計測方針)にまとめた。
+今回のログはGit管理外の`.tools/vsync/`に保存した。headlessの既存性能基準値は更新していない。
 
 ## 動作・寿命・異常経路
 

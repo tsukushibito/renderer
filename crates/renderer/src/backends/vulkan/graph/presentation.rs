@@ -36,6 +36,9 @@ pub struct PresentationConfig {
     pub max_frames: usize,
     pub max_retired_swapchains: usize,
     pub desired_images: u32,
+    /// FIFO when true; IMMEDIATE when false. Unsupported requests fail rather
+    /// than silently falling back to a synchronized presentation mode.
+    pub vsync: bool,
 }
 impl Default for PresentationConfig {
     fn default() -> Self {
@@ -43,6 +46,7 @@ impl Default for PresentationConfig {
             max_frames: 2,
             max_retired_swapchains: 2,
             desired_images: 3,
+            vsync: true,
         }
     }
 }
@@ -148,6 +152,25 @@ fn image_count(caps: &vk::SurfaceCapabilitiesKHR, requested: u32) -> u32 {
     }
 }
 
+fn choose_present_mode(
+    supported: &[vk::PresentModeKHR],
+    vsync: bool,
+) -> Result<vk::PresentModeKHR, RuntimeError> {
+    let mode = if vsync {
+        vk::PresentModeKHR::FIFO
+    } else {
+        vk::PresentModeKHR::IMMEDIATE
+    };
+    if supported.contains(&mode) {
+        Ok(mode)
+    } else {
+        Err(RuntimeError::unsupported(format!(
+            "Surface does not support requested VSync {} ({mode:?})",
+            if vsync { "on" } else { "off" }
+        )))
+    }
+}
+
 struct Swapchain {
     owner: Arc<MemoryOwner>,
     _surface: Arc<WindowSurface>,
@@ -164,6 +187,7 @@ struct SwapchainPlan {
     count: u32,
     alpha: vk::CompositeAlphaFlagsKHR,
     transform: vk::SurfaceTransformFlagsKHR,
+    present_mode: vk::PresentModeKHR,
 }
 impl Swapchain {
     fn new(
@@ -178,6 +202,7 @@ impl Swapchain {
             count,
             alpha,
             transform,
+            present_mode,
         } = plan;
         let info = vk::SwapchainCreateInfoKHR::default()
             .surface(surface.handle)
@@ -190,7 +215,7 @@ impl Swapchain {
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(transform)
             .composite_alpha(alpha)
-            .present_mode(vk::PresentModeKHR::FIFO)
+            .present_mode(present_mode)
             .clipped(true)
             .old_swapchain(old);
         let loader =
@@ -561,6 +586,20 @@ struct Inner {
 }
 
 impl Inner {
+    fn query_present_mode(&self, vsync: bool) -> Result<vk::PresentModeKHR, RuntimeError> {
+        // SAFETY: This live Surface and physical Device were selected together.
+        let supported = unsafe {
+            self.surface
+                .loader
+                .get_physical_device_surface_present_modes(
+                    self.owner.device.physical_device(),
+                    self.surface.handle,
+                )
+        }
+        .map_err(|r| native(&self.owner, "vkGetPhysicalDeviceSurfacePresentModesKHR", r))?;
+        choose_present_mode(&supported, vsync)
+    }
+
     fn poll(&mut self, timeout: Duration) -> Result<usize, RuntimeError> {
         let start = Instant::now();
         let mut retired = 0;
@@ -661,6 +700,9 @@ impl Inner {
         }
         .map_err(|r| native(&self.owner, "vkGetPhysicalDeviceSurfaceFormatsKHR", r))?;
         let format = choose_format(&formats)?;
+        // Validate before retiring the old Swapchain. A mode change uses the
+        // same bounded generation/lifetime path as a resize, without idle waits.
+        let present_mode = self.query_present_mode(self.config.vsync)?;
         if !caps
             .supported_usage_flags
             .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT)
@@ -720,6 +762,7 @@ impl Inner {
             alpha,
             count: image_count(&caps, self.config.desired_images),
             transform: caps.current_transform,
+            present_mode,
         };
         if self.current.is_some() && self.retired.len() >= self.config.max_retired_swapchains {
             return Err(RuntimeError::capacity(
@@ -812,7 +855,47 @@ pub struct Presenter {
     inner: Option<Inner>,
 }
 impl Presenter {
-    /// Resolve a resize before building a new output Graph. `None` means the
+    /// Requested VSync setting, or None after close. A pending change takes
+    /// effect on the next successful Swapchain recreation; old presents retain
+    /// their original mode until their own completion.
+    pub fn vsync(&self) -> Option<bool> {
+        self.inner
+            .as_ref()
+            .filter(|inner| !inner.closed)
+            .map(|inner| inner.config.vsync)
+    }
+
+    /// Request FIFO (on) or IMMEDIATE (off). Checks Surface support before
+    /// changing the request; unsupported modes leave the existing state intact.
+    /// Call `prepare` before building the next output. Recreation may require
+    /// polling bounded retired generations; this method never waits for idle.
+    pub fn set_vsync(&mut self, enabled: bool) -> Result<(), RuntimeError> {
+        let inner = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| RuntimeError::invalid("Presenter is closed"))?;
+        if inner.closed {
+            return Err(RuntimeError::invalid("Presenter is closed"));
+        }
+        if inner.surface_lost {
+            return Err(RuntimeError::unsupported(
+                "Surface was lost; create a new window runtime",
+            ));
+        }
+        inner
+            .owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        if inner.config.vsync != enabled {
+            inner.query_present_mode(enabled)?;
+            inner.config.vsync = enabled;
+            inner.dirty = true;
+        }
+        Ok(())
+    }
+
+    /// Resolve a resize or VSync change before building a new output Graph. `None` means the
     /// existing extent is ready; Suspended/Recreated carry no submitted work.
     pub fn prepare(&mut self) -> Result<Option<PresentOutcome>, RuntimeError> {
         let inner = self
@@ -947,6 +1030,8 @@ impl VulkanRuntime {
             #[cfg(test)]
             cancel_next_acquire: false,
         };
+        // Reject an unsupported initial request even for a minimized Window.
+        inner.query_present_mode(presentation.vsync)?;
         inner.ensure_swapchain()?;
         Ok((runtime, Presenter { inner: Some(inner) }))
     }
@@ -1240,5 +1325,31 @@ mod state_tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn vsync_selects_only_the_requested_supported_mode() {
+        let modes = [
+            vk::PresentModeKHR::IMMEDIATE,
+            vk::PresentModeKHR::FIFO,
+            vk::PresentModeKHR::MAILBOX,
+        ];
+        assert!(PresentationConfig::default().vsync);
+        assert_eq!(
+            choose_present_mode(&modes, true).unwrap(),
+            vk::PresentModeKHR::FIFO
+        );
+        assert_eq!(
+            choose_present_mode(&modes, false).unwrap(),
+            vk::PresentModeKHR::IMMEDIATE
+        );
+        let synchronized = [vk::PresentModeKHR::FIFO, vk::PresentModeKHR::MAILBOX];
+        assert_eq!(
+            choose_present_mode(&synchronized, false)
+                .unwrap_err()
+                .kind(),
+            super::super::RuntimeErrorKind::Unsupported
+        );
+        assert!(choose_present_mode(&[], true).is_err());
     }
 }

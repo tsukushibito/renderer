@@ -192,6 +192,13 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         );
         let diagnostics = Arc::clone(&runtime.diagnostics);
         crate::backends::vulkan::assert_real_validation(&diagnostics);
+        assert_eq!(presenter.vsync(), Some(true));
+        presenter.set_vsync(true).unwrap();
+        assert_eq!(
+            presenter.prepare().unwrap(),
+            None,
+            "unchanged VSync does not recreate"
+        );
         let mesh = mesh(&mut runtime);
         let mut reads = Reads::new();
         let mut verified = 0;
@@ -230,14 +237,16 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                     event_loop.pump_app_events(Some(Duration::ZERO), &mut host);
                 }
             }
-            match presenter.prepare().unwrap() {
-                Some(PresentOutcome::Recreated) => {
+            match presenter.prepare() {
+                Ok(Some(PresentOutcome::Recreated)) => {
                     if let Some(image) = output.take() {
                         runtime.delete(image.key()).unwrap();
                     }
                 }
-                Some(PresentOutcome::NotReady | PresentOutcome::Suspended) => continue,
-                _ => {}
+                Ok(Some(PresentOutcome::NotReady | PresentOutcome::Suspended)) => continue,
+                Ok(_) => {}
+                Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => continue,
+                Err(error) => panic!("Swapchain preparation failed: {error}"),
             }
             if output.is_none() {
                 let (width, height) = presenter.extent().expect("visible window extent");
@@ -261,6 +270,13 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                     runtime.present(&mut presenter, image).unwrap(),
                     PresentOutcome::Suspended
                 ));
+                presenter.set_vsync(false).unwrap();
+                assert_eq!(presenter.vsync(), Some(false));
+                assert_eq!(
+                    presenter.prepare().unwrap(),
+                    Some(PresentOutcome::Suspended)
+                );
+                presenter.set_vsync(true).unwrap();
                 event_loop.pump_app_events(Some(Duration::ZERO), &mut host);
                 window.set_minimized(false);
                 let _ = window.request_inner_size(PhysicalSize::new(160, 112));
@@ -279,6 +295,36 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                     runtime.delete(image.key()).unwrap();
                     output = None;
                     displayed += 1;
+                    if displayed == 3 || displayed == 9 {
+                        // Switch with accepted work still owned, without an
+                        // explicit wait. The following prepare must retain old
+                        // generations until both presentation and GPU retire.
+                        assert!(!presenter.inner.as_ref().unwrap().pending.is_empty());
+                        let old = presenter
+                            .inner
+                            .as_ref()
+                            .unwrap()
+                            .current
+                            .as_ref()
+                            .unwrap()
+                            .handle;
+                        presenter
+                            .set_vsync(displayed == 9)
+                            .expect("FIFO and IMMEDIATE are required for VSync acceptance");
+                        assert_eq!(presenter.vsync(), Some(displayed == 9));
+                        assert_eq!(
+                            presenter
+                                .inner
+                                .as_ref()
+                                .unwrap()
+                                .current
+                                .as_ref()
+                                .unwrap()
+                                .handle,
+                            old,
+                            "setter schedules recreation"
+                        );
+                    }
                 }
                 Ok(PresentOutcome::Recreated) => {
                     runtime.delete(image.key()).unwrap();
@@ -296,8 +342,8 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         );
         assert!(resized && rapid_resized && suspended);
         assert!(
-            runtime.pending_frames() > 0,
-            "close includes unobserved in-flight ownership"
+            !presenter.inner.as_ref().unwrap().pending.is_empty(),
+            "close includes unobserved presentation ownership"
         );
         let weak_window = Arc::downgrade(&window);
         host.window = None;
@@ -309,6 +355,11 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         assert!(
             presenter.close(WAIT).unwrap(),
             "presentation shutdown must complete"
+        );
+        assert_eq!(presenter.vsync(), None);
+        assert_eq!(
+            presenter.set_vsync(false).unwrap_err().kind(),
+            RuntimeErrorKind::InvalidInput
         );
         while runtime.pending_frames() != 0 {
             observe(&mut runtime, &mut reads, &mut verified);
