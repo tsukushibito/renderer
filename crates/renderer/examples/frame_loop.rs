@@ -432,7 +432,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         }
         let build_start = Instant::now();
         let mut prepared = engine.build_frame(&view, &draws, true, |graph, color| {
-            scene::custom_pass(graph, color, options.width, options.height, options.custom)
+            scene::custom_pass(graph, color, options.custom)
         })?;
         let old_history = history.take();
         let (history_output, history_readback) = if options.history {

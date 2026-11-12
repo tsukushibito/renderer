@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use super::{FrameSnapshot, MeshHandle};
 use crate::graph::{
-    AttachmentOps, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle, PassHandle,
+    AttachmentOps, BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc,
+    ImageHandle, PassHandle,
 };
 
 /// A normal graph, its final linear RGBA8 output and optional readback pass.
@@ -78,9 +79,12 @@ impl FrameSnapshot {
         // covered by draws. Every draw then preserves the shared attachments.
         graph.clear_attachments("view clear", color, depth, self.view.clear_color, 1.0)?;
         for draw in &self.draws {
-            let &(vertices, indices) = meshes
-                .get(&draw.mesh)
-                .ok_or_else(|| GraphError::new("missing resolved mesh buffers"))?;
+            let &(vertices, indices) = meshes.get(&draw.mesh).ok_or_else(|| {
+                GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "missing resolved mesh buffers",
+                )
+            })?;
             graph.raster_with_parameters(
                 "view draw",
                 vertices,

@@ -2,7 +2,7 @@
 
 use renderer::{
     engine::{Draw, EngineError, IDENTITY, MaterialHandle, MeshData, MeshHandle, Vertex, View},
-    graph::{ComputeTransform, Graph, GraphError, ImageDesc, ImageHandle},
+    graph::{ComputeTransform, Graph, GraphError, ImageHandle},
 };
 
 pub fn triangle(color: [f32; 4]) -> Result<MeshData, EngineError> {
@@ -47,14 +47,13 @@ pub fn draw(mesh: MeshHandle, material: MaterialHandle, translation_x: f32) -> D
 pub fn custom_pass(
     graph: &mut Graph,
     color: ImageHandle,
-    width: u32,
-    height: u32,
     enabled: bool,
 ) -> Result<ImageHandle, GraphError> {
     if !enabled {
         return Ok(color);
     }
-    let output = graph.image("external custom output", ImageDesc::rgba8(width, height))?;
+    let desc = graph.image_desc(color)?;
+    let output = graph.image("external custom output", desc)?;
     graph.compute(
         "external custom SwapRedBlue",
         color,

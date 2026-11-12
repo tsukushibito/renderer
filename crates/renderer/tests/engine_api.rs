@@ -34,20 +34,15 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
     assert_eq!(*captured.view(), view);
     let frame = captured
         .build_graph(true, |graph, color| {
-            let transformed = graph.image(
-                "external custom output",
-                renderer::graph::ImageDesc::rgba8(32, 24),
-            )?;
+            let desc = graph.image_desc(color)?;
+            let transformed = graph.image("external custom output", desc)?;
             graph.compute(
                 "external custom transform",
                 color,
                 transformed,
                 renderer::graph::ComputeTransform::SwapRedBlue,
             )?;
-            let unused = graph.image(
-                "unused custom output",
-                renderer::graph::ImageDesc::rgba8(32, 24),
-            )?;
+            let unused = graph.image("unused custom output", desc)?;
             graph.compute(
                 "unused custom branch",
                 color,
