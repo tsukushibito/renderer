@@ -98,8 +98,10 @@ mod tests {
         assert_eq!(data.index_count, 24);
         let indices = data
             .indices
-            .chunks_exact(4)
-            .map(|bytes| u32::from_ne_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_ne_bytes(*bytes))
             .collect::<Vec<_>>();
         assert_eq!(&indices[..12], &[0, 1, 3, 1, 4, 3, 1, 2, 4, 2, 5, 4]);
         assert_eq!(indices.iter().copied().max(), Some(8));
@@ -131,9 +133,11 @@ mod tests {
         let bytes = rectangle(4, 3, [1, 1, 3, 2], [255, 0, 0, 255], [0, 0, 0, 255]);
         assert_eq!(bytes.len(), 48);
         let red_pixels = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
-            .filter_map(|(index, color)| (color == [255, 0, 0, 255]).then_some(index))
+            .filter_map(|(index, color)| (*color == [255, 0, 0, 255]).then_some(index))
             .collect::<Vec<_>>();
         assert_eq!(red_pixels, [5, 6]);
         assert_eq!(&bytes[7 * 4..8 * 4], &[0, 0, 0, 255]);
