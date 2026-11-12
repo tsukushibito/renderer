@@ -319,3 +319,6 @@ impl VulkanEngine {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod workload_tests;

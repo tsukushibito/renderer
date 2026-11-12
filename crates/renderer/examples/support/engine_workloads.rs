@@ -333,9 +333,13 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let large_indices = large.index_count;
     let large_bytes = large.vertices.len() + large.indices.len();
     let mesh = assets.create_mesh(large.mesh)?;
+    drop(large.vertices);
+    drop(large.indices);
     let secondary_grid = grid(256);
     let cold_bytes = large_bytes + secondary_grid.vertices.len() + secondary_grid.indices.len();
     let secondary = assets.create_mesh(secondary_grid.mesh)?;
+    drop(secondary_grid.vertices);
+    drop(secondary_grid.indices);
     let both = assets.snapshot(
         &view(64, 64),
         &[
