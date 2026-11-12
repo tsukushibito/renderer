@@ -2,14 +2,13 @@
 //!
 //! `--verify report.json --churn` checks updates/deletion with Validation.
 //! `--benchmark report.json` explicitly disables requested Validation and adds
-//! GPU timestamps. Both modes use bounded frame polling and read back every
+//! GPU timestamps. Both modes use explicit bounded frame waits and read back every
 //! frame; their timings describe this small offscreen workload, not display FPS.
 
 use std::{
     collections::HashMap,
     error::Error,
     path::PathBuf,
-    thread,
     time::{Duration, Instant},
 };
 
@@ -227,7 +226,7 @@ struct Sample {
     compile_ns: u128,
     active_cpu_ns: u128,
     observed_latency_ns: u128,
-    completed_poll_ns: u128,
+    completion_wait_ns: u128,
     profile: Option<ProfileSample>,
     output_checksum: u64,
 }
@@ -240,9 +239,9 @@ struct RunReport {
     final_stats: RuntimeStats,
     warmed_memory: Option<MemoryStats>,
     final_memory: MemoryStats,
-    poll_calls: usize,
-    pending_polls: usize,
-    poll_total_ns: u128,
+    wait_calls: usize,
+    timed_out_waits: usize,
+    wait_total_ns: u128,
     peak_pending_frames: usize,
     measured_loop_ns: u128,
     plateau_checked: bool,
@@ -263,9 +262,9 @@ struct PendingSample {
 struct Collector {
     pending: HashMap<FrameId, PendingSample>,
     samples: Vec<Sample>,
-    poll_calls: usize,
-    pending_polls: usize,
-    poll_total_ns: u128,
+    wait_calls: usize,
+    timed_out_waits: usize,
+    wait_total_ns: u128,
     peak_pending_frames: usize,
     last_pixels: Option<Vec<u8>>,
     held_readback: Option<CompletedReadback>,
@@ -276,23 +275,23 @@ struct CompletedReadback {
     pending: PendingSample,
     profile: Option<ProfileSample>,
     observed_latency_ns: u128,
-    completed_poll_ns: u128,
+    completion_wait_ns: u128,
     result: SubmissionResult,
 }
 
 impl Collector {
-    fn poll_one(
+    fn wait_one(
         &mut self,
         engine: &mut VulkanEngine,
         options: &Options,
     ) -> Result<bool, Box<dyn Error>> {
         let start = Instant::now();
-        let completed = engine.runtime_mut().poll_frame()?;
+        let completed = engine.runtime_mut().wait_frame(COMPLETION_BUDGET)?;
         let elapsed = start.elapsed().as_nanos();
-        self.poll_calls += 1;
-        self.poll_total_ns += elapsed;
+        self.wait_calls += 1;
+        self.wait_total_ns += elapsed;
         let Some(completed) = completed else {
-            self.pending_polls += 1;
+            self.timed_out_waits += 1;
             return Ok(false);
         };
         let pending = self
@@ -332,7 +331,7 @@ impl Collector {
             pending,
             profile,
             observed_latency_ns: latency,
-            completed_poll_ns: elapsed,
+            completion_wait_ns: elapsed,
             result: completed.result,
         };
         // Retain one completed CPU result while the runtime reuses its execution
@@ -382,7 +381,7 @@ impl Collector {
                 compile_ns: pending.compile_ns,
                 active_cpu_ns: pending.active_cpu_ns,
                 observed_latency_ns: completed.observed_latency_ns,
-                completed_poll_ns: completed.completed_poll_ns,
+                completion_wait_ns: completed.completion_wait_ns,
                 profile: completed.profile,
                 output_checksum: checksum(&rgba),
             });
@@ -400,14 +399,8 @@ impl Collector {
         engine: &mut VulkanEngine,
         options: &Options,
     ) -> Result<(), Box<dyn Error>> {
-        let start = Instant::now();
-        while !self.poll_one(engine, options)? {
-            if start.elapsed() >= COMPLETION_BUDGET {
-                return Err(
-                    "nonblocking frame polling timed out; pending work remains owned".into(),
-                );
-            }
-            thread::yield_now();
+        if !self.wait_one(engine, options)? {
+            return Err("frame wait timed out; pending work remains owned".into());
         }
         Ok(())
     }
@@ -440,9 +433,9 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     let mut collector = Collector {
         pending: HashMap::new(),
         samples: Vec::with_capacity(options.frames),
-        poll_calls: 0,
-        pending_polls: 0,
-        poll_total_ns: 0,
+        wait_calls: 0,
+        timed_out_waits: 0,
+        wait_total_ns: 0,
         peak_pending_frames: 0,
         last_pixels: None,
         held_readback: None,
@@ -453,7 +446,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     let mut warmed_memory = None;
     let mut measured_start = None;
     for frame in 0..options.warmup + options.frames {
-        // Fill the bounded slots before polling. This also warms every execution
+        // Fill the bounded slots before waiting. This also warms every execution
         // and descriptor slot even when the GPU has already finished the work.
         while engine.runtime().pending_frames() >= IN_FLIGHT {
             collector.wait_for_one(&mut engine, options)?;
@@ -622,9 +615,9 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         final_stats,
         warmed_memory,
         final_memory,
-        poll_calls: collector.poll_calls,
-        pending_polls: collector.pending_polls,
-        poll_total_ns: collector.poll_total_ns,
+        wait_calls: collector.wait_calls,
+        timed_out_waits: collector.timed_out_waits,
+        wait_total_ns: collector.wait_total_ns,
         peak_pending_frames: collector.peak_pending_frames,
         measured_loop_ns,
         plateau_checked,
