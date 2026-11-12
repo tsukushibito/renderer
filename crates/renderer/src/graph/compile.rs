@@ -546,6 +546,49 @@ fn overlaps(left: &Range<u64>, right: &Range<u64>) -> bool {
     left.start < right.end && right.start < left.end
 }
 
+/// Find a conflicting pair without comparing unrelated resources or readers.
+/// After sorting W writes, valid write intervals are disjoint per resource.
+/// A read therefore needs only the last writer starting before its range ends.
+/// A accesses take O(A log(W + 2)) work and O(W) temporary storage.
+/// Input ranges and access modes must already have been validated.
+fn conflicting_accesses(accesses: &[CompileAccess]) -> Option<(usize, usize)> {
+    let mut writes = accesses
+        .iter()
+        .enumerate()
+        .filter(|(_, access)| access.write)
+        .collect::<Vec<_>>();
+    if writes.is_empty() {
+        return None;
+    }
+    writes.sort_unstable_by_key(|&(index, access)| {
+        (access.resource, access.range.start, access.range.end, index)
+    });
+    for pair in writes.windows(2) {
+        let (left_index, left) = pair[0];
+        let (right_index, right) = pair[1];
+        if left.resource == right.resource && overlaps(&left.range, &right.range) {
+            return Some((left_index, right_index));
+        }
+    }
+    for (index, access) in accesses
+        .iter()
+        .enumerate()
+        .filter(|(_, access)| !access.write)
+    {
+        let end = writes.partition_point(|&(_, writer)| {
+            writer.resource < access.resource
+                || (writer.resource == access.resource && writer.range.start < access.range.end)
+        });
+        if let Some(&(writer_index, writer)) = writes[..end].last()
+            && writer.resource == access.resource
+            && writer.range.end > access.range.start
+        {
+            return Some((writer_index, index));
+        }
+    }
+    None
+}
+
 fn validate(
     resources: &[CompileResource],
     passes: &[CompilePass],
@@ -586,7 +629,8 @@ fn validate(
                 .at_pass(pass_index));
             }
         }
-        for (index, access) in pass.accesses.iter().enumerate() {
+        // Validate in declaration order before interpreting any ranges below.
+        for access in &pass.accesses {
             validate_range(resources, access.resource, &access.range).map_err(|mut error| {
                 error.message = format!("pass {:?}: {}", pass.name, error.message);
                 error.at_pass(pass_index)
@@ -603,17 +647,15 @@ fn validate(
                 .at_resource(access.resource)
                 .at_range(access.range.clone()));
             }
-            for previous in &pass.accesses[..index] {
-                if previous.resource == access.resource
-                    && overlaps(&previous.range, &access.range)
-                    && (previous.write || access.write)
-                {
-                    return Err(CompileError::new(GraphErrorKind::InvalidInput, format!(
-                        "pass {:?} has overlapping accesses to {:?}; use one read_write access or separate passes",
-                        pass.name, resources[access.resource].name
-                    )).at_pass(pass_index).at_resource(access.resource).at_range(access.range.clone()));
-                }
-            }
+        }
+        if let Some((left, right)) = conflicting_accesses(&pass.accesses) {
+            // Attribute the conflict to the later original declaration. Sorting
+            // is deterministic and does not change content/producer semantics.
+            let access = &pass.accesses[left.max(right)];
+            return Err(CompileError::new(GraphErrorKind::InvalidInput, format!(
+                "pass {:?} has overlapping accesses to {:?}; use one read_write access or separate passes",
+                pass.name, resources[access.resource].name
+            )).at_pass(pass_index).at_resource(access.resource).at_range(access.range.clone()));
         }
     }
     for (resource, range) in exports {
@@ -892,6 +934,158 @@ mod tests {
 
     fn buffer(graph: &mut Graph, size: u64) -> BufferHandle {
         graph.buffer("buffer", BufferDesc { size }).unwrap()
+    }
+
+    #[test]
+    fn pass_conflicts_match_pairwise_contract_across_resources_ranges_and_modes() {
+        let resources = (0..4)
+            .map(|index| CompileResource {
+                name: format!("resource {index}"),
+                size: 64,
+                initial: vec![],
+                external: false,
+            })
+            .collect::<Vec<_>>();
+        for seed in 0..4_096u64 {
+            let mut state = seed;
+            let mut next = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                state >> 32
+            };
+            let count = next() as usize % 17;
+            let accesses = (0..count)
+                .map(|_| {
+                    let resource = (next() % 4) as usize;
+                    let start = next() % 16 * 4;
+                    let end = start + (1 + next() % ((64 - start) / 4)) * 4;
+                    let mode = next() % 3;
+                    CompileAccess {
+                        resource,
+                        range: start..end,
+                        read: mode != 1,
+                        write: mode != 0,
+                        valid_after: mode != 0,
+                    }
+                })
+                .collect::<Vec<_>>();
+            // The reference is the public contract, independent of sorting:
+            // overlapping readers are allowed; any overlapping writer is not.
+            let conflict = accesses.iter().enumerate().any(|(index, access)| {
+                accesses[..index].iter().any(|previous| {
+                    access.resource == previous.resource
+                        && access.range.start < previous.range.end
+                        && previous.range.start < access.range.end
+                        && (access.write || previous.write)
+                })
+            });
+            let passes = [CompilePass {
+                name: "generated pass".into(),
+                accesses,
+                dependencies: vec![],
+                side_effect: false,
+            }];
+            let result = validate(&resources, &passes, &[]);
+            assert_eq!(result.is_err(), conflict, "seed={seed}");
+            if let Err(error) = result {
+                assert_eq!(error.kind, GraphErrorKind::InvalidInput);
+                assert_eq!(error.pass, Some(0));
+                assert!(passes[0].accesses.iter().any(|access| {
+                    Some(access.resource) == error.resource
+                        && Some(&access.range) == error.range.as_ref()
+                }));
+                assert_eq!(error, validate(&resources, &passes, &[]).unwrap_err());
+            }
+        }
+    }
+
+    #[test]
+    fn large_passes_allow_many_mesh_inputs_and_overlapping_readers() {
+        let mesh_count = 8_192;
+        let resources = (0..mesh_count + 2)
+            .map(|index| CompileResource {
+                name: format!("resource {index}"),
+                size: 64,
+                initial: vec![],
+                external: false,
+            })
+            .collect::<Vec<_>>();
+        let read = |resource| CompileAccess {
+            resource,
+            range: 0..64,
+            read: true,
+            write: false,
+            valid_after: false,
+        };
+        let mut pass = CompilePass {
+            name: "many mesh inputs and two attachments".into(),
+            accesses: (0..mesh_count).map(read).collect(),
+            dependencies: vec![],
+            side_effect: false,
+        };
+        for resource in mesh_count..mesh_count + 2 {
+            pass.accesses.push(CompileAccess {
+                write: true,
+                read: false,
+                valid_after: true,
+                ..read(resource)
+            });
+        }
+        validate(&resources, std::slice::from_ref(&pass), &[]).unwrap();
+        pass.accesses = vec![read(0); mesh_count];
+        validate(&resources, std::slice::from_ref(&pass), &[]).unwrap();
+        pass.accesses.push(CompileAccess {
+            resource: 0,
+            range: 32..64,
+            read: false,
+            write: true,
+            valid_after: true,
+        });
+        let error = validate(&resources, &[pass], &[]).unwrap_err();
+        assert_eq!(error.resource, Some(0));
+        assert_eq!(error.range, Some(32..64));
+    }
+
+    #[test]
+    fn pass_validation_checks_input_ranges_before_conflicts_and_preserves_context() {
+        let resources = [CompileResource {
+            name: "buffer".into(),
+            size: 8,
+            initial: vec![],
+            external: false,
+        }];
+        let read = |range| CompileAccess {
+            resource: 0,
+            range,
+            read: true,
+            write: false,
+            valid_after: false,
+        };
+        let mut pass = CompilePass {
+            name: "mixed ranges".into(),
+            accesses: vec![
+                read(0..4),
+                CompileAccess {
+                    write: true,
+                    ..read(4..8)
+                },
+            ],
+            dependencies: vec![],
+            side_effect: false,
+        };
+        // Adjacent half-open ranges may read and write the same resource.
+        validate(&resources, std::slice::from_ref(&pass), &[]).unwrap();
+        pass.accesses[1].range = 2..8;
+        pass.accesses.push(read(8..9));
+        let invalid_range = validate(&resources, std::slice::from_ref(&pass), &[]).unwrap_err();
+        assert_eq!(invalid_range.range, Some(8..9));
+        pass.accesses.pop();
+        let overlap = validate(&resources, &[pass], &[]).unwrap_err();
+        assert_eq!(overlap.kind, GraphErrorKind::InvalidInput);
+        assert_eq!(overlap.pass, Some(0));
+        assert_eq!(overlap.resource, Some(0));
+        assert_eq!(overlap.range, Some(2..8));
+        assert!(overlap.message.contains("mixed ranges"));
+        assert!(overlap.message.contains("buffer"));
     }
 
     fn read_pass(
