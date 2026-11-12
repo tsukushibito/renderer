@@ -970,6 +970,9 @@ pub struct Submission {
 }
 
 impl Submission {
+    pub(super) fn is_pending(&self) -> bool {
+        self.pending.is_pending()
+    }
     pub fn export_buffer(&self, handle: BufferHandle) -> Result<ImportBuffer, RuntimeError> {
         if handle.graph != self.graph {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
