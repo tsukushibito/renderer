@@ -227,6 +227,12 @@ cacheは永続keyで識別し、使用時にfresh importを取得する。
 更新・削除後も先行frameの所有を維持し、CPUに保存した旧snapshotも独立して扱う。
 標準経路はclear-onlyのノードで空draw listも初期化し、各drawが同じcolor/depthをLoadして描く。
 
+実用的な標準不透明描画は、複数drawを一つのRaster操作と描画スコープへまとめられる構造を目標とする。
+現在のmainは上記のscalar経路を維持する。owned draw listを使う内部batchは別branchの比較試作で、
+公開PassEncoderや任意パス統合を先に固定せずに、clear一回・順序・引数・深度・資源用途を保つ範囲を検証した。
+測定結果とM4前導入の判断は[検証記録](../verification/current.md#draw-listの比較試作と導入判断)を参照する。
+この試作はmainへ統合済みという意味ではなく、任意shaderや別GPUで同じ利益・合法性を保証しない。
+
 拡張点はopaque描画後・最終composite前の完全なlinear RGBA8画像である。
 Viewと同じextentで初期化済みの画像を返し、通常のGraph builderで処理を追加する。
 closureはGraph構築時に実行され、GPU記録中にsceneへ再入しない。
