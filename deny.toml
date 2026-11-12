@@ -1,0 +1,33 @@
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = []
+
+[licenses]
+# Include the development tools, not just the renderer's runtime dependencies.
+include-dev = true
+include-build = true
+allow = ["Apache-2.0", "ISC", "MIT", "Unicode-3.0"]
+
+[licenses.private]
+# The unpublished workspace crate has no chosen distribution license yet.
+# This does not exempt any third-party dependency or assign the project a license.
+ignore = true
+
+[bans]
+# Incompatible transitive major versions (currently syn 2 and 3) may coexist.
+# Review these warnings rather than forcing unsupported dependency upgrades.
+multiple-versions = "warn"
+multiple-versions-include-dev = true
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

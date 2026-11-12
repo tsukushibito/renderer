@@ -43,12 +43,14 @@ M2前の再利用基盤・バッチ転送の結果、性能測定と未検証範
 | 実Vulkan画像転送試験 | imageとbuffer試験の条件に加え、image copy・layout遷移・Fence完了待ち |
 | 実行環境の調査 | Vulkan SDKのvulkaninfo |
 | 今後のシェーダー生成 | Vulkan SDK 1.4.341.1のglslc（shaderc v2026.1） |
+| 依存・SPIR-V・GPU内容の調査 | cargo-deny 0.20.2、SDKのspirv-val、RenderDoc 1.47。[ツールガイド](tooling.md)を参照 |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../.beads/README.md)を参照 |
 
 `rust-toolchain.toml`がRust・rustfmt・clippyを固定します。
 初回のCargo実行時にrustupが取得するため、ネットワーク接続が必要です。
 `Cargo.lock`もコミットし、通常の確認では`--locked`を使います。
 MSRVはまず検証済みの1.99に設定し、それより古いRustへの対応は約束しません。
+追加ツールの配布物確認・実行結果と未確認範囲は[ツールの確認記録](development-tools-baseline.md)に記載しています。
 
 ### Windows
 
