@@ -5,16 +5,19 @@ privateなVulkan 1.3 Instanceの初期化・診断に加え、`renderer-7ro`で
 デバイスの能力照会・自動選択、Deviceと単一Graphics＋Computeキューの作成・解放を扱います。
 `renderer-yr6`ではVMAによるbufferの所有、CPUアクセス、解放を扱います。
 `renderer-dj3`では単一キューでのbuffer転送、投入と完了待ち、実GPUからのreadbackを扱います。
-image、描画、公開APIはまだありません。
+`renderer-9wa`ではVMAによる転送用2D imageの作成、対応能力の検証、所有・解放を扱います。
+image転送、描画、公開APIはまだありません。
 採用した契約は[ADR 0002](adr/0002-vulkan-instance-bootstrap.md)、
 [ADR 0003](adr/0003-vulkan-device-bootstrap.md)、
 [ADR 0004](adr/0004-vma-buffer-ownership.md)、
-[ADR 0005](adr/0005-single-queue-buffer-transfer.md)に記載しています。
+[ADR 0005](adr/0005-single-queue-buffer-transfer.md)、
+[ADR 0006](adr/0006-vma-image-ownership.md)に記載しています。
 環境構築時の実測記録は[M0の確認結果](m0-baseline.md)を参照してください。
 qhgの実行結果と未検証範囲は[Instance初期化・診断の確認結果](m1-instance-baseline.md)に記載しています。
 Deviceの実行結果と未検証範囲は[Device・単一キューの確認結果](m1-device-baseline.md)を参照してください。
 bufferの実行結果と未検証範囲は[VMA bufferの確認結果](m1-buffer-baseline.md)を参照してください。
 GPU転送の実行結果と未検証範囲は[buffer転送・完了待ちの確認結果](m1-transfer-baseline.md)を参照してください。
+imageの作成・解放の実行結果と未検証範囲は[VMA imageの確認結果](m1-image-baseline.md)を参照してください。
 
 ## 必要なツール
 
@@ -26,6 +29,7 @@ GPU転送の実行結果と未検証範囲は[buffer転送・完了待ちの確�
 | 実Vulkan Device試験 | 上記に加え、Graphics＋Compute対応キューと必須3 featureを持つデバイス |
 | 実Vulkan buffer試験 | Device試験の条件に加え、用途に対応するbufferの作成・CPUアクセスに必要なメモリ |
 | 実Vulkan転送試験 | buffer試験の条件に加え、単一キューでのcopy・Synchronization2・Fence完了待ち |
+| 実Vulkan image試験 | Device試験の条件に加え、RGBA8_UNORMのoptimal 2D imageのtransfer source / destination対応 |
 | 実行環境の調査 | Vulkan SDKのvulkaninfo |
 | 今後のシェーダー生成 | Vulkan SDK 1.4.341.1のglslc（shaderc v2026.1） |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../.beads/README.md)を参照 |
@@ -187,6 +191,32 @@ Device停止後は新たな投入・通常のbuffer作成やCPUアクセスを�
 転送試験ではパターンを変えた再投入と完了後のbuffer再利用、明示wait前の破棄も確認します。
 失敗時の所有権と後始末はCPU境界試験で確認し、実driverのDevice lossやOOMを再現した結果とは区別します。
 
+### VMA 2D imageの作成・所有・解放
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan backends::vulkan::image::tests::vulkan_image_ -- --ignored --nocapture
+```
+
+サイズを指定してRGBA8_UNORMの2D imageを作成します。optimal tiling、transfer source / destination、
+ミップ1段・配列1層・サンプル数1に限定し、初期layoutはUNDEFINEDです。
+作成条件の記述を所有・解放から分け、後でformatや用途の対応範囲を広げられる形にします。
+既に作成したimageの用途やミップ数を変更するAPIではありません。
+
+寸法0を拒否し、実際のformat・type・tiling・usage・flagsの組み合わせをDeviceへ照会して、
+寸法などの上限を確認します。未対応と問い合わせ・作成の失敗を区別して報告します。
+optimal imageの実メモリサイズを`幅 × 高さ × 4`と仮定せず、作成時のメモリ不足も扱います。
+VMAにはAutoPreferDeviceを指定し、作成条件、debug object名、Allocationサイズ、
+選択されたメモリのtype・propertyをログへ残します。
+
+imageとAllocationは単独所有し、bufferと同じAllocator・Device所有者を保持します。
+Allocatorの操作用ハンドルを先に破棄してもimageを維持し、最後のリソースを解放してから
+VMA、Device、Instanceを破棄します。作成後の命名などで失敗しても所有型が後始末します。
+Deviceが停止・lostの場合、新たなimage作成を拒否します。
+
+実Vulkan試験は複数サイズの作成・解放と依存所有者の寿命を反復確認し、終了後まで診断を集計します。
+この試験ではGPUへ命令を投入せず、imageの内容は未初期化のままです。
+ImageView、CPUからのimageアクセス、レイアウト遷移、image転送・画素のreadbackは後続で扱います。
+
 ### 判定条件
 
 ローダー、API、必須Layer／extensionが不足した場合は、理由を報告して試験を失敗させます。
@@ -229,6 +259,7 @@ ERRORは`error`、WARNINGは`warn`、INFOは`info`、VERBOSEは`trace`へ対応�
 driver名・追加情報・ID・生のバージョン値、選択したqueue familyとindexを記録します。
 `driverVersion`の符号化はドライバー依存のため、汎用のVulkan APIバージョンとして分解しません。
 bufferの作成では用途・要求サイズ・ハンドルと、選択されたメモリのtype・propertyを記録します。
+imageの作成では寸法・format・usage・ハンドルと、対応上限・Allocationサイズ・メモリのtype・propertyを記録します。
 失敗時は操作名と元のVulkanエラーを保持し、CPUアクセス時の範囲や用途のエラーも報告します。
 転送ではdebug object名とcommand labelを付け、buffer・command資源・Fenceを診断と対応づけます。
 投入と完了待ち、期限切れ、Device停止、回収できず保持した資源もログに残します。

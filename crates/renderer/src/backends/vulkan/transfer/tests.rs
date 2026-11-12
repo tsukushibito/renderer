@@ -56,38 +56,7 @@ fn vulkan_transfer_smoke() {
         for iteration in 0..4 {
             let diagnostics = Diagnostics::new();
             let instance = VulkanInstance::new(Arc::clone(&diagnostics)).unwrap();
-            // External layer configuration can override API-requested settings.
-            // For the documented SDK, require its startup report to confirm
-            // SyncVal and unchanged core checks before accepting GPU results.
-            let status = diagnostics.snapshot().messages.into_iter().find(|message|
-                message.message_id_name.as_deref() == Some("WARNING-CreateInstance-status-message"))
-                .expect("Validation Layer startup status must be available; unknown versions/configuration require review");
-            let (_, enables) = status
-                .message
-                .split_once("Current Enables:")
-                .expect("recognized Validation Layer startup enables report");
-            let (enables, disables) = enables
-                .split_once("Current Disables:")
-                .expect("recognized Validation Layer startup disables report");
-            assert!(
-                enables.contains("VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT"),
-                "Synchronization Validation must actually be enabled: {}",
-                status.message
-            );
-            assert_eq!(
-                disables
-                    .trim()
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_end_matches('.'),
-                "None",
-                "core validation checks must remain enabled: {}",
-                status.message
-            );
-            tracing::info!(target: LOG_TARGET, iteration, validation_status = %status.message,
-                "Validation Layer confirmed SyncVal enabled and no disabled checks");
+            super::super::assert_real_validation(&diagnostics);
             let device = VulkanDevice::new(instance).unwrap();
             assert_ne!(
                 device.device_type(),

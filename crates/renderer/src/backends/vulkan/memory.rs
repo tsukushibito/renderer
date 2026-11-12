@@ -1,4 +1,4 @@
-//! VMA and its Vulkan dependencies share one lifetime, retained by every buffer.
+//! VMA and its Vulkan dependencies share one lifetime, retained by every resource.
 
 use std::error::Error;
 use std::fmt;
@@ -27,8 +27,9 @@ impl Error for AllocatorInitError {
 }
 
 /// Field order is part of the lifetime contract: VMA is destroyed before Device.
-/// Buffers retain an Arc rather than only borrowing this owner. Forgetting a
-/// buffer therefore also leaks its owner instead of destroying VMA underneath it.
+/// Buffers and images retain an Arc rather than only borrowing this owner.
+/// Forgetting a resource therefore also leaks its owner instead of destroying
+/// VMA underneath it.
 pub(super) struct MemoryOwner {
     pub(super) raw: vk_mem::Allocator,
     pub(super) device: VulkanDevice,
