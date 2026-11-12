@@ -190,6 +190,11 @@ Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有
 timeoutは未完了として資源を保持し、再試行できる。一般的な待機エラーも完了証明にしない。
 正常経路では対象Fenceだけを待ち、Queue／Device全体のidle待ちを使わない。
 
+Graphのcanonicalな予定状態と、Fenceによる完了・回収は別に扱う。
+完了観測には単調なserialだけを保持し、CPU-known入力を含む二つ目の`Snapshot`を保存しない。
+これにより、後続の全面書き換えが正常にDrop経路で完了した場合も、不要な旧upload入力を
+最後に明示waitした時点の状態として保持し続けない。Dropによる回収をCPU読み取り成功とはしない。
+
 submitのメモリ不足は仕様の状態不変保証に従う未投入の失敗として扱う。
 未投入や完了を証明できない投入失敗は、pendingの所有と同じ回収規則で扱う。
 `VK_ERROR_DEVICE_LOST`はDeviceの終端状態とし、自動復旧や有効データとしての返却をしない。

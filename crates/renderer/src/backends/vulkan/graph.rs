@@ -25,6 +25,7 @@ use crate::graph::{
     ResourceKey, StoreOp,
 };
 
+mod diagnostics;
 mod provenance;
 mod resources;
 mod shaders;
@@ -305,7 +306,10 @@ impl Default for Snapshot {
 
 struct State {
     scheduled: Snapshot,
-    completed: Snapshot,
+    // Completion observations need a serial only. Keeping a second content
+    // snapshot here would pin obsolete upload inputs after full replacement,
+    // especially when later submissions retire through Drop rather than wait.
+    completed_serial: u64,
 }
 enum NativeResource {
     Buffer(GraphBuffer),
@@ -518,8 +522,6 @@ impl VulkanRuntime {
             // as initialized content of a new logical resource.
             state.scheduled.initialized.clear();
             state.scheduled.provenance = BufferProvenance::default();
-            state.completed.initialized.clear();
-            state.completed.provenance = BufferProvenance::default();
             drop(state);
             self.resources_reused += 1;
             return Ok((
@@ -566,7 +568,7 @@ impl VulkanRuntime {
             native,
             state: Mutex::new(State {
                 scheduled: Snapshot::default(),
-                completed: Snapshot::default(),
+                completed_serial: 0,
             }),
         });
         let index = replace.unwrap_or(self.entries.len());
@@ -595,6 +597,31 @@ impl VulkanRuntime {
     /// Records one compiled graph and submits it once. It does not wait for any
     /// prior graph. Imported snapshots must still match canonical accepted state.
     pub fn submit(&mut self, graph: &CompiledGraph) -> Result<Submission, RuntimeError> {
+        self.submit_inner(graph, false)
+            .map(|(submission, _)| submission)
+    }
+
+    /// Submit with an owned diagnostic dump of the actual native lowering.
+    /// The dump includes physical identities, accepted import states and the
+    /// barriers recorded for each pass. It is built before native recording and
+    /// returned only after successful submission; it is not a completion token.
+    /// Ordinary `submit` does not build diagnostic strings or retain a trace.
+    pub fn submit_with_diagnostics(
+        &mut self,
+        graph: &CompiledGraph,
+    ) -> Result<(Submission, String), RuntimeError> {
+        let (submission, diagnostic) = self.submit_inner(graph, true)?;
+        Ok((
+            submission,
+            diagnostic.expect("requested lowering diagnostic"),
+        ))
+    }
+
+    fn submit_inner(
+        &mut self,
+        graph: &CompiledGraph,
+        capture_diagnostics: bool,
+    ) -> Result<(Submission, Option<String>), RuntimeError> {
         self.owner
             .device
             .ensure_active()
@@ -677,6 +704,15 @@ impl VulkanRuntime {
         } else {
             None
         };
+        let mut diagnostic = capture_diagnostics.then(|| {
+            diagnostics::begin(
+                graph,
+                serial,
+                self.owner.device.queue_family(),
+                &keys,
+                &physical,
+            )
+        });
         let work = GraphWork::prepare(
             Arc::clone(&self.owner),
             graph,
@@ -686,6 +722,7 @@ impl VulkanRuntime {
             bindings,
             &self.upload,
             &self.readback,
+            diagnostic.as_mut(),
         )?;
         let mut exports = Vec::new();
         for &index in &graph.exports {
@@ -725,11 +762,14 @@ impl VulkanRuntime {
         let pending = recorded.submit()?;
         registration.keep = true;
         drop(registration);
-        Ok(Submission {
-            graph: graph.id,
-            pending,
-            exports,
-        })
+        Ok((
+            Submission {
+                graph: graph.id,
+                pending,
+                exports,
+            },
+            diagnostic,
+        ))
     }
 }
 
@@ -994,7 +1034,7 @@ struct GraphWork {
     owner: Arc<MemoryOwner>,
     physical: Vec<Option<Arc<Physical>>>,
     final_states: Vec<Option<Snapshot>>,
-    completed_states: Vec<Option<Snapshot>>,
+    serial: u64,
     passes: Vec<PreparedPass>,
     uploads: Vec<StagingRange>,
     readbacks: Vec<(usize, Option<StagingRange>)>,
@@ -1013,6 +1053,7 @@ impl GraphWork {
         mut bindings: Option<ShaderBindings>,
         upload: &SharedStaging,
         readback: &SharedStaging,
+        mut diagnostic: Option<&mut String>,
     ) -> Result<Self, RuntimeError> {
         let mut states = physical
             .iter()
@@ -1024,6 +1065,9 @@ impl GraphWork {
         let mut readbacks = Vec::new();
         for &index in &graph.order {
             let pass = &graph.passes[index];
+            if let Some(output) = diagnostic.as_deref_mut() {
+                diagnostics::pass(output, index, pass);
+            }
             let mut prepared = PreparedPass {
                 name: CString::new(pass.name.as_str())
                     .map_err(|_| RuntimeError::invalid("pass debug name contains a NUL byte"))?,
@@ -1096,6 +1140,27 @@ impl GraphWork {
                         );
                     }
                     _ => {}
+                }
+                if let Some(output) = diagnostic.as_deref_mut() {
+                    let buffer = prepared.buffers.last().filter(|barrier| {
+                        dependency
+                            && matches!(&native.native, NativeResource::Buffer(buffer)
+                            if buffer.handle == barrier.buffer)
+                    });
+                    let image = prepared.images.last().filter(|barrier| {
+                        (dependency || layout_change)
+                            && matches!(&native.native, NativeResource::Image(image)
+                                if image.image == barrier.image)
+                    });
+                    diagnostics::dependency(
+                        output,
+                        resource,
+                        previous,
+                        current,
+                        layout_change,
+                        buffer,
+                        image,
+                    );
                 }
                 if !current.writes && !layout_change {
                     previous.stage |= current.stage;
@@ -1186,7 +1251,7 @@ impl GraphWork {
                     } => {
                         let vertex_count = graph.resources[*vertices].desc.units() / 28;
                         states[*indices]
-                            .as_ref()
+                            .as_mut()
                             .unwrap()
                             .provenance
                             .validate_indices(
@@ -1220,12 +1285,14 @@ impl GraphWork {
                 }
             }
         }
-        let completed_states = states.clone();
+        if let Some(output) = diagnostic {
+            diagnostics::finish(output, graph, &states, !readbacks.is_empty());
+        }
         Ok(Self {
             owner,
             physical,
             final_states: states,
-            completed_states,
+            serial,
             passes,
             uploads,
             readbacks,
@@ -1540,16 +1607,11 @@ impl TransferPayload for GraphWork {
     }
 
     unsafe fn establish_contents(&mut self) {
-        for (index, physical) in self.physical.iter().enumerate() {
-            if let Some(physical) = physical {
-                let completed = self.completed_states[index].take().unwrap();
-                let mut state = physical.lock();
-                // Waiting A after B must never overwrite B's accepted state, or
-                // a later completion already observed by another submission.
-                if state.completed.serial <= completed.serial {
-                    state.completed = completed;
-                }
-            }
+        for physical in self.physical.iter().flatten() {
+            let mut state = physical.lock();
+            // Waiting A after B must never overwrite B's accepted state, or
+            // a later completion already observed by another submission.
+            state.completed_serial = state.completed_serial.max(self.serial);
         }
         for (_, range) in &mut self.readbacks {
             // SAFETY: Caller obtained actual completion of this whole payload.

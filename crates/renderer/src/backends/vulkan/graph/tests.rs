@@ -407,15 +407,14 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         let completed = runtime.entries[image_export.key.index as usize]
             .physical
             .lock()
-            .completed
-            .serial;
+            .completed_serial;
         assert_eq!(completed, 2);
         first.wait(Duration::from_secs(10)).unwrap().unwrap();
         let state = runtime.entries[image_export.key.index as usize]
             .physical
             .lock();
         assert_eq!(
-            state.completed.serial, 2,
+            state.completed_serial, 2,
             "waiting A after B cannot regress completion"
         );
         assert_eq!(
@@ -429,7 +428,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         stale.readback_image("old.read", old).unwrap();
         assert_eq!(
             runtime
-                .submit(&stale.compile().unwrap())
+                .submit_with_diagnostics(&stale.compile().unwrap())
                 .err()
                 .unwrap()
                 .kind(),
@@ -450,12 +449,37 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         repeated
             .copy_buffer("repeat.copy", source, 0, target, 0, 16)
             .unwrap();
+        repeated.export_buffer(source).unwrap();
         let read = repeated
             .readback_buffer("repeat.read", target, 0, 16)
             .unwrap();
         let plan = repeated.compile().unwrap();
+        let mut previous_key: Option<ResourceKey> = None;
         for _ in 0..8 {
-            let mut submission = runtime.submit(&plan).unwrap();
+            let (mut submission, lowering) = runtime.submit_with_diagnostics(&plan).unwrap();
+            let key = submission.export_buffer(source).unwrap().key();
+            let physical = &runtime.entry(key).unwrap().physical;
+            let label = format!("resource {} \"repeat.src\"", source.index);
+            let mut lines = lowering
+                .lines()
+                .skip_while(|line| !line.starts_with(&label));
+            let resource_line = lines.next().expect("logical resource is diagnosed");
+            assert!(resource_line.contains(&format!(
+                "physical_key owner={} index={} generation={}",
+                key.owner, key.index, key.generation
+            )));
+            assert!(
+                lines
+                    .next()
+                    .unwrap()
+                    .contains(&format!("native_buffer={:?}", physical.buffer().handle))
+            );
+            if let Some(previous) = previous_key {
+                assert_eq!(previous.index, key.index, "same physical entry is reused");
+                assert!(key.generation > previous.generation);
+            }
+            previous_key = Some(key);
+            runtime.delete(key).unwrap();
             let mut result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
             assert_eq!(runtime.stats().upload_live_ranges, 0);
             assert_eq!(runtime.stats().readback_live_ranges, 1);
@@ -474,6 +498,94 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         assert!(
             diagnostics.snapshot().is_clean(),
             "shutdown diagnostics: {:#?}",
+            diagnostics.snapshot()
+        );
+    });
+}
+
+#[test]
+#[ignore = "explicit real GPU obsolete input retirement; requires Core/SyncVal"]
+fn vulkan_graph_full_replacement_releases_old_completed_input() {
+    let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
+    tracing::dispatcher::with_default(&dispatch, || {
+        let mut runtime = VulkanRuntime::new(RuntimeConfig {
+            execution_slots: 2,
+            resource_capacity: 2,
+            staging_bytes: 4 * 1024 * 1024,
+            max_shader_bindings: 4,
+        })
+        .unwrap();
+        let diagnostics = Arc::clone(&runtime.diagnostics);
+        crate::backends::vulkan::assert_real_validation(&diagnostics);
+        assert_ne!(
+            runtime.owner.device.device_type(),
+            vk::PhysicalDeviceType::CPU
+        );
+
+        let size = 1024 * 1024;
+        let (key, old_input) = {
+            let input: Arc<[u8]> = vec![17; size].into();
+            let weak = Arc::downgrade(&input);
+            let mut graph = Graph::new();
+            let buffer = graph
+                .buffer("persistent", BufferDesc { size: size as u64 })
+                .unwrap();
+            graph
+                .upload_buffer_shared("A.upload", buffer, 0, input)
+                .unwrap();
+            graph.export_buffer(buffer).unwrap();
+            let plan = graph.compile().unwrap();
+            let mut pending = runtime.submit(&plan).unwrap();
+            let key = pending.export_buffer(buffer).unwrap().key();
+            drop(pending.wait(Duration::from_secs(10)).unwrap().unwrap());
+            (key, weak)
+        };
+        assert!(
+            old_input.upgrade().is_some(),
+            "current contents support future index use"
+        );
+
+        let current_input = {
+            let input: Arc<[u8]> = vec![29; size].into();
+            let weak = Arc::downgrade(&input);
+            let mut graph = Graph::new();
+            let buffer = graph
+                .import_buffer("persistent", &runtime.refresh_buffer(key).unwrap())
+                .unwrap();
+            graph
+                .upload_buffer_shared("B.upload", buffer, 0, input)
+                .unwrap();
+            let plan = graph.compile().unwrap();
+            let pending = runtime.submit(&plan).unwrap();
+            drop((graph, plan));
+            // Normal Drop retirement must not require a later explicit wait to
+            // release the superseded version of the CPU-known contents.
+            drop(pending);
+            weak
+        };
+        assert!(
+            old_input.upgrade().is_none(),
+            "obsolete completed contents must not pin A"
+        );
+        assert!(current_input.upgrade().is_some());
+        {
+            let mut graph = Graph::new();
+            let buffer = graph
+                .import_buffer("current", &runtime.refresh_buffer(key).unwrap())
+                .unwrap();
+            let read = graph
+                .readback_buffer("C.read", buffer, 0, size as u64)
+                .unwrap();
+            let mut pending = runtime.submit(&graph.compile().unwrap()).unwrap();
+            let mut result = pending.wait(Duration::from_secs(10)).unwrap().unwrap();
+            assert_eq!(result.readback(read).unwrap(), vec![29; size]);
+        }
+        runtime.delete(key).unwrap();
+        drop(runtime);
+        assert!(current_input.upgrade().is_none());
+        assert!(
+            diagnostics.snapshot().is_clean(),
+            "{:#?}",
             diagnostics.snapshot()
         );
     });

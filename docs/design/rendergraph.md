@@ -39,6 +39,12 @@ upload本文は不変の`Arc<[u8]>`で共有し、compileで全量を複製し�
 `upload_buffer_shared`／`upload_image_shared`へ同じArcを渡せば、Graphの再構築でも入力を共有できる。
 compiled planには除去したパスの名前・アクセス等の診断情報を残し、実行本文は保持しない。
 dumpは要求時に一度生成する。
+論理dumpにはアクセス用途も含む。Vulkanの`submit_with_diagnostics`は、成功した投入と
+実際のloweringの診断文字列を返す。通常の`submit`はこの文字列を生成しない。
+診断にはpass／論理resource、物理key・世代・native handle、import初期予定状態、
+実記録barrierのstage／access／layoutと生成理由、最終予定状態、readbackのHOST_READ依存を含める。
+文字列は資源の所有を保持せず、GPU完了tokenでもない。native handle等は実行ごとに変わるため、
+安定した機械可読形式や実行間で同一のdumpは保証しない。
 
 Attachmentは画像全域をrender areaとする。`Load`は既存内容を要求し、
 `Clear`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
@@ -54,6 +60,11 @@ native命令の記録前に拒否する。featureを有効化していないこ�
 
 内容追跡はupload入力の共有sliceを参照し、GPU copyではbyte列をCPUで複製しない。
 部分書き換え・copyの未知の穴を保持し、sliceを跨ぐindexも一時bufferを作らず検査する。
+既知sliceは開始位置をkeyとする`BTreeMap`で管理し、write／copyでは対象区間と重なる部分だけを
+検索・更新する。全segmentの移動や再sortを更新ごとに行わない。
+index検査は同じ内容・index数・頂点数・Device上限について直近1件の結果を再利用する。
+write／copyによる置換は成功・失敗のどちらのcacheも失効させ、条件が変われば再検査する。
+不変内容のsnapshot cloneはcacheを引き継げるが、元とcloneの後続更新は独立して失効する。
 現在のindex用途とそのcopy元、import／exportしたbufferに必要な内容だけを追跡する。
 import／exportしたbufferは後のGraphでindexに使えるため、元の入力を共有したまま保持する。
 この保持は新しいCPUミラーの作成とは異なるが、小さなsliceが元の入力全体を保持する場合はある。
@@ -67,6 +78,10 @@ nativeのstage・access・layoutは、残った実際の操作から具体化す
 トポロジカル順序だけではVulkanのメモリ依存は成立しない。
 
 順序依存は資源の区間ごとのwriterと未処理readerから作り、全先行パスとの総当たりを行わない。
+reader履歴はindexで参照する不変のarenaへ保持し、区間の分割では履歴を共有する。
+writeで複数区間のreaderを辿る際も共有tailを重複して走査しない。arenaはcompileの解析中だけ存在し、
+長い連鎖の破棄で再帰する所有構造にはしない。複雑な重複範囲で触る区間数や必要な依存自体が
+増える費用は残るため、すべての入力に線形時間を保証するものではない。
 全宣言の循環を確認してから、残ったパスだけで順序依存を組み直す。
 除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
 
@@ -77,6 +92,9 @@ exportハンドルの取得はCPUで内容を読めることを意味しない�
 単一キューへproducer Graph Aとconsumer Graph Bを投入する場合、
 Bは受理済みのAの最終状態を使い、両者の間に必要な依存を記録する。
 CPU readbackと再利用には実際の正常完了が必要である。
+完了観測は単調なserialだけを保持し、完了した時点の入力byte列を含むsnapshotは複製・保存しない。
+最新の予定状態は将来のindex検査に必要な内容を保持するが、全面上書きで不要になった旧入力を
+完了情報のために保持し続けない。実際のGPU完了と資源の回収は従来どおりFenceと所有leaseで判定する。
 
 各資源は直近のread範囲だけでなく、後続用途へ可視化する必要のあるwriterのscopeも引き継ぐ。
 copyの書き込みを一度copyで読んだだけでは、vertex／index入力へも可視になったとはしない。

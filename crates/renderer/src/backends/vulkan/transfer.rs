@@ -120,15 +120,21 @@ fn timeout_ns(timeout: Duration) -> u64 {
     timeout.as_nanos().min((u64::MAX - 1) as u128) as u64
 }
 
+/// Shared by recording and optional Graph diagnostics, so the reported scope
+/// cannot drift from the actual host-read dependency.
+pub(super) fn host_read_barrier() -> vk::MemoryBarrier2<'static> {
+    vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+        .dst_access_mask(vk::AccessFlags2::HOST_READ)
+}
+
 /// # Safety
 /// `command` must be recording on `device`, after the copy writes whose bytes
 /// will be read by the host. Its owner must retain them through completion.
 pub(super) unsafe fn record_host_read(device: &VulkanDevice, command: vk::CommandBuffer) {
-    let barriers = [vk::MemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::COPY)
-        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::HOST)
-        .dst_access_mask(vk::AccessFlags2::HOST_READ)];
+    let barriers = [host_read_barrier()];
     // SAFETY: The caller retains the command/resources and guarantees this
     // dependency follows their copy writes. A later Fence wait precedes CPU read.
     unsafe {

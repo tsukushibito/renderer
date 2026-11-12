@@ -15,6 +15,68 @@ Vulkan／VMA／D3D12／Metalの公式資料を照合した。API契約、一般�
 この変更は文書のみで、Rustのビルド・CPU／実GPU試験、比較対象エンジンの実行、
 GPU性能の比較測定は追加実行していない。以下の実装検証結果を更新するものではない。
 
+## RenderGraph設計ガイドに基づくレビューと改善
+
+2026-11-12、`renderer-6e3`で`7458e3a`の設計・実装・試験を
+[RenderGraphベストプラクティス](../guides/rendergraph-best-practices.md)と照合した。
+producer／hazard、culling後の順序、内容有効性、import/export、同期、所有・完了・失敗、
+CPU解析・保持コスト、診断性を確認し、次の5件を実装・検証した。
+確認した範囲で新しい同期・早期解放・producer意味論の確定バグは見つかっていない。
+
+| 課題 | 実装した改善 | 主な回帰確認 |
+|---|---|---|
+| `renderer-7vg` | reader履歴をarenaのindexで共有し、区間分割時の集合複製を廃止。writeで共有tailの再走査を避ける | metadata量の性質、部分write、既存dense参照との順序・循環比較 |
+| `renderer-ot0` | provenanceをBTreeMapへ変更し、交差する区間だけを更新・copy | 既知byte／未知の穴を参照モデルと照合、部分更新、self-copy、slice境界 |
+| `renderer-jtk` | 内容が不変でindex数・頂点数・Device上限が同じ検査結果を直近1件だけ再利用 | 反復時のscan回数、更新・copyによる失効、異なる境界、cloneの独立性 |
+| `renderer-v6c` | 完了情報を単調serialだけにし、不要なcompleted Snapshotと二重cloneを除去 | 1 MiBのAをBで全面更新し正常Drop後AのWeakが失効、Bの内容・最新provenance保持 |
+| `renderer-9d9` | 通常submitでは作らない、要求時のnative lowering診断を追加 | 実barrier値、import状態、HOST_READ、失敗後の再実行、資源再利用のkey世代とhandle対応 |
+
+### CPU費用の比較
+
+以下は同じCPU・Rust 1.99.0の`rustc --edition 2024 -O`で、変更前`7458e3a`の保存ソースと
+変更後の実装を使った局所的な比較である。Graph解析では構築とdump生成は計測外。
+全域RasterをN回した後に小範囲readbackをN回行う同じ入力を使った（3回中央値）。
+
+| N | compile修正前 | 修正後 | reader格納entry／node数 |
+|---:|---:|---:|---:|
+| 512 | 8.921 ms | 2.307 ms | 263,680 → 1,536 |
+| 1,024 | 32.597 ms | 3.833 ms | 1,051,648 → 3,072 |
+| 2,048 | 126.739 ms | 7.935 ms | 4,200,448 → 6,144 |
+
+小さいwriteとindex検査は実装を直接includeし、前後の実行順を交互に比較した。
+writeはwarm-up 2回＋5 sample、indexはwarm-up 2回＋20 sampleの中央値。
+index検査の各sampleはcacheのない同一内容から開始し、cloneの費用は計測外にした。
+
+| 入力・操作 | 修正前 | 修正後 |
+|---|---:|---:|
+| 4,096件の非重複4-byte write | 26.246 ms | 0.668 ms |
+| 8,192件の非重複4-byte write | 103.462 ms | 1.385 ms |
+| 999,999 indexのcold検査1回 | 0.315 ms | 0.328 ms |
+| 同じindex・境界の検査16回 | 4.560 ms | 0.284 ms |
+| 同じindex・境界の検査256回 | 74.648 ms | 0.285 ms |
+
+16,384 writeと狭いcopyも測定したが、OSの揺れが大きいため改善率の根拠には使わない。
+OS負荷・affinity・clockは固定しておらず、Graph全体のsubmit、GPU時間、FPS、代表sceneの
+性能実証とは区別する。cacheのない単発index検査が速くなる変更ではない。
+BTreeMapにはVecよりnode overheadが増え得る交換条件があり、provenance本体はx64で
+24→56 byte、cacheは1件限定。保持segment数はO(K)、snapshot cloneもO(K)のままである。
+reader arenaは解析終了まで保持し、触る区間数や実際に必要な依存が増える費用は残る。
+
+### 正しさと確認範囲
+
+CPU試験21単体＋2公開API、Vulkan付き95単体＋2公開API（19 ignored）、
+明示実GPU18件（2.29秒）、fmt、CPU／Vulkanの全target checkとClippy `-D warnings`が成功した。
+GPUではCore Validation＋SyncValの実効設定と、終了後までwarning／error／callback失敗ゼロを確認した。
+通常submitと診断付きsubmitの両方で内容を照合し、timeout／順不同wait／失敗後の回収も既存試験を維持した。
+独立した差分レビューでも修正を要する契約違反は見つかっていない。
+incremental cacheのhard link不可という環境warningは、ソースのClippy診断と区別する。
+
+比較の生ログ・再現物はGit対象外の`.tools/review-best-practices/compiler-after/`、
+`compiler-after-counts/`、`scaling/{writes-alternating,index-alternating}.log`、
+全体検証は`.tools/rendergraph-improvements/{cpu,vulkan}-{check,clippy,test}.log`と`gpu.log`にある。
+別GPU／driver、Linux、実native OOM／Device loss、将来のWSI／aliasing／複数queueは追加検証していない。
+Shader・依存versionは変更しておらず、再生成・依存監査・GPU性能測定は今回の確認に含めない。
+
 ## 環境
 
 | 項目 | 確認値 |
@@ -32,9 +94,9 @@ GPU性能の比較測定は追加実行していない。以下の実装検証�
 | 確認 | 結果 |
 |---|---|
 | fmt、CPUのみ／Vulkanの全target check・Clippy `-D warnings` | 成功 |
-| CPUのみの通常試験 | 単体19件＋公開API 2件成功、Vulkan初期化なし |
-| Vulkan feature付き通常試験 | CPU単体88件＋公開API 2件成功、明示実行用18件はignored |
-| 実Vulkan正しさ試験 | 17件成功、2.27秒。既存9件＋Graph 8件 |
+| CPUのみの通常試験 | 単体21件＋公開API 2件成功、Vulkan初期化なし |
+| Vulkan feature付き通常試験 | CPU単体95件＋公開API 2件成功、明示実行用19件はignored |
+| 実Vulkan正しさ試験 | 18件成功、2.29秒。既存9件＋Graph 9件 |
 | batchの全byte照合 | 2回の生成・終了で計56回、うち順不同の部分転送32回 |
 | Validation warning / error、callback内部失敗 | ゼロ |
 | Shader再生成一致 | 5種すべて`spirv-val`成功、チェックイン済みbinaryとSHA-256一致 |
@@ -57,7 +119,8 @@ Attachmentのclear／load／store／discard、循環、明示依存、出力・�
 上書き済みwriterと不要readerを除去しつつ、liveなRAW／WAR／WAWを保つ回帰試験、
 同じ入力のdumpが一致する試験、公開APIだけで描画フローを構築する試験が成功した。
 
-Graphの実GPU試験8件では次を確認した。
+Graphの実GPU試験9件では次を確認した。Copy/import/reuseと完全M2フローでは診断付き投入も使い、
+用途・物理key・世代・handle・scope/layoutを確認し、通常投入と同じ期待内容を照合した。
 
 | 対象 | 実際に確認した動作 |
 |---|---|
@@ -69,6 +132,7 @@ Graphの実GPU試験8件では次を確認した。
 | 記録前の拒否と回収 | descriptor容量不足と、実際のupload・部分書き換えから得た範囲外indexをnative draw前に拒否。取得済みleaseを返し、次の正常Graphが成功 |
 | 用途別Programの追加 | ComputeだけではRaster／Compositeを作らず、既存の未完了投入がある間に別種類を追加しても以前のpipelineを保持。出力と終了時までの所有を確認 |
 | 入力の寿命と将来のindex利用 | upload元とplanを破棄した未完了処理でもbuffer／画像のreadbackが正しい。importへ部分copyした内容を再exportなしで将来のindexに利用。先行Graphのbufferと新しい小画像の非同期引き継ぎも確認 |
+| 全面更新後の旧入力解放 | 1 MiBのAをBで全面上書きし、Bの正常Drop後にAのWeakが失効。最新Bは将来のindex用に保持し、readbackの全byteと終了後の解放も確認 |
 
 描画fixtureは整数pixel境界と0／1の色、Computeは0〜255の既知byteパターンを使い、
 どちらも浮動小数点の許容誤差を設けずに厳密比較した。
@@ -77,7 +141,8 @@ Graphの実GPU試験8件では次を確認した。
 pipelineはruntimeで保持し、再実行で画像／View、descriptor arena、実行枠の作成・再利用カウンターを確認した。
 GPU時間やFPSの新しい測定ではない。compilerと内容追跡のCPU比較は下記に分けて記録する。
 
-最終の実行コマンドは次のとおり。通常の全target check・Clippy・testはCPUのみとVulkanの両構成で成功した。
+品質確認と関連ツールのコマンドは次のとおり。今回の全target check・Clippy・testはCPUのみとVulkanの両構成で成功した。
+Shader再生成・依存監査・描画例の実行結果は前回の記録であり、今回の追加実行範囲とは区別する。
 
 ```powershell
 cargo fmt --all -- --check
@@ -93,7 +158,8 @@ cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan
 cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
 ```
 
-生ログは`.tools/vulkan-research/m2-fixes-{cpu,vulkan,gpu,shaders,deny,example}.log`、
+今回の全体検証ログは`.tools/rendergraph-improvements/`を参照する。Shader・依存監査・描画例の
+前回の生ログは`.tools/vulkan-research/m2-fixes-{cpu,vulkan,gpu,shaders,deny,example}.log`、
 描画例は`.tools/m2-fixes.ppm`に保存した。Rustのincremental cacheでhard linkが使えないという
 実行環境のwarningはあったが、ソースのClippy `-D warnings`は成功した。
 
@@ -215,6 +281,7 @@ VUID 06585は固定SDKの`validusage.json`でも確認した。
 能力不足はCPU境界試験で検査したが、その能力を持たない実機での再現は未実行である。
 RTX 3060でのValidationゼロだけを、それらの経路の正しさの証明とはしない。
 
+以下のM2基盤比較は`7458e3a`までの変更で確認した値であり、今回の5件の最新比較は上の節を参照する。
 CPUプローブでは比較元と修正後のGraph／compilerをGit対象外の`.tools/m2-fixes-probes/`へコピーし、
 Rust 1.99.0の`rustc --edition 2024 -O`で実行した。
 頂点・indexを一度uploadし、同じ16×16 color／depthへ先頭をCLEAR_STORE、以降をLOAD_STOREで
@@ -252,7 +319,7 @@ staging書き込み・flush、native転送・GPU実行は含まない。生ロ�
 保つ回帰試験を追加した。内部原因は未確定で、全初回遷移に対するVulkanの一般要件とはしない。
 同じキューの先行GraphをCPUで待たずに引き継ぐ場合も確認した。
 
-CPUのみ19単体＋2公開API、Vulkan付き88単体＋2公開API、明示実GPU17件を実行し成功した。
+今回の最終確認はCPUのみ21単体＋2公開API、Vulkan付き95単体＋2公開API、明示実GPU18件が成功した。
 全target check・Clippy、fmt、5つのShader再生成一致と依存監査、128×96の描画例も成功した。
 Core／SyncVal・callback・終了時の問題はゼロ。上記5件と追加の出力不一致への対策は検証済みである。
 Validation必須の公開runtime、read-only importも更新されるrevisionと毎回のrefresh／再compileは

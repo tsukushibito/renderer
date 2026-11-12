@@ -566,7 +566,25 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let compiled = graph.compile().unwrap();
             assert_eq!(compiled.culled_pass_names(), ["unused-branch"]);
             assert!(!compiled.ordered_pass_names().contains(&"unused-branch"));
-            let mut producer = runtime.submit(&compiled).unwrap();
+            let (mut producer, lowering) = runtime.submit_with_diagnostics(&compiled).unwrap();
+            for field in [
+                "physical_key owner=",
+                "initial_scheduled revision=",
+                "purpose=Vertex",
+                "purpose=Index",
+                "purpose=StorageRead",
+                "purpose=Sampled",
+                "dst_stage=VERTEX_ATTRIBUTE_INPUT",
+                "dst_stage=INDEX_INPUT",
+                "new_layout=COLOR_ATTACHMENT_OPTIMAL",
+                "new_layout=GENERAL",
+                "new_layout=SHADER_READ_ONLY_OPTIMAL",
+                "dst_stage=HOST dst_access=HOST_READ",
+                "accepted_on_submit revision=",
+            ] {
+                assert!(lowering.contains(field), "missing {field}: {lowering}");
+            }
+            assert!(!lowering.contains("unused-branch"));
             let exported = producer.export_image(final_image).unwrap();
             // No CPU wait occurs between A and B. B inherits accepted native
             // layout/access/content and uses another descriptor arena.
@@ -586,7 +604,14 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let consumer_read = consumer
                 .readback_image("consumer-read", destination)
                 .unwrap();
-            let mut pending_consumer = runtime.submit(&consumer.compile().unwrap()).unwrap();
+            let (mut pending_consumer, lowering) = runtime
+                .submit_with_diagnostics(&consumer.compile().unwrap())
+                .unwrap();
+            assert!(lowering.contains(&format!(
+                "imported=true import_revision={}",
+                exported.revision
+            )));
+            assert!(lowering.contains("pending-final"));
             runtime.delete(exported.key()).unwrap(); // pending users retain allocation/view
             let mut consumer_result = pending_consumer
                 .wait(WAIT)

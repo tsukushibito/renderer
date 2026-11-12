@@ -338,11 +338,20 @@ fn ordering(
 struct HazardSegment {
     end: u64,
     writer: Option<usize>,
-    readers: BTreeSet<usize>,
+    readers: Option<usize>,
+}
+
+/// An immutable reader history. Segment splits share its index rather than
+/// cloning every reader. Arena indices also avoid recursive destruction of long
+/// histories when a frontier or a whole compilation is dropped.
+struct Reader {
+    pass: usize,
+    previous: Option<usize>,
 }
 
 struct HazardMap {
     segments: BTreeMap<u64, HazardSegment>,
+    readers: Vec<Reader>,
 }
 
 impl HazardMap {
@@ -353,9 +362,10 @@ impl HazardMap {
                 HazardSegment {
                     end: size,
                     writer: None,
-                    readers: BTreeSet::new(),
+                    readers: None,
                 },
             )]),
+            readers: Vec::new(),
         }
     }
 
@@ -365,6 +375,9 @@ impl HazardMap {
         access: &CompileAccess,
         dependencies: &mut BTreeSet<Dependency>,
     ) {
+        // Split segments can share an arbitrarily long tail. Visit it only
+        // once per write, even when that write spans many such segments.
+        let mut visited = BTreeSet::new();
         let (&first, _) = self
             .segments
             .range(..=access.range.start)
@@ -392,11 +405,19 @@ impl HazardMap {
                 }
             }
             if access.write {
-                dependencies.extend(segment.readers.iter().map(|&from| Dependency {
-                    from,
-                    to,
-                    kind: DependencyKind::War,
-                }));
+                let mut reader = segment.readers;
+                while let Some(index) = reader {
+                    if !visited.insert(index) {
+                        break;
+                    }
+                    let entry = &self.readers[index];
+                    dependencies.insert(Dependency {
+                        from: entry.pass,
+                        to,
+                        kind: DependencyKind::War,
+                    });
+                    reader = entry.previous;
+                }
             }
         }
     }
@@ -430,7 +451,7 @@ impl HazardMap {
                 HazardSegment {
                     end: access.range.end,
                     writer: Some(pass),
-                    readers: BTreeSet::new(),
+                    readers: None,
                 },
             );
         } else {
@@ -439,7 +460,12 @@ impl HazardMap {
                 .range_mut(access.range.clone())
                 .map(|(_, value)| value)
             {
-                segment.readers.insert(pass);
+                let index = self.readers.len();
+                self.readers.push(Reader {
+                    pass,
+                    previous: segment.readers,
+                });
+                segment.readers = Some(index);
             }
         }
     }
@@ -609,9 +635,10 @@ fn dump(resources: &[Resource], passes: &[Pass], exports: &[usize], analysis: &A
         for access in &pass.accesses {
             writeln!(
                 output,
-                "  resource={} range={:?} read={} write={} valid_after={}",
+                "  resource={} range={:?} purpose={:?} read={} write={} valid_after={}",
                 access.resource,
                 access.range,
+                access.purpose,
                 access.read,
                 access.write,
                 access.initializes && !access.discard_after
@@ -1011,6 +1038,93 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn splitting_read_ranges_shares_history_and_preserves_every_reader_before_a_write() {
+        // Repeated whole-buffer readers followed by tiny readbacks used to
+        // duplicate every earlier reader into every newly split interval.
+        let count = 1_024;
+        let size = count * 4;
+        let mut frontier = HazardMap::new(size);
+        let read = |range| CompileAccess {
+            resource: 0,
+            range,
+            read: true,
+            write: false,
+            valid_after: false,
+        };
+        for pass in 0..count {
+            frontier.record(pass as usize, &read(0..size));
+        }
+        for offset in 0..count {
+            frontier.record((count + offset) as usize, &read(offset * 4..offset * 4 + 4));
+        }
+        // This bound describes the metadata contract, not a timing threshold.
+        // A reader is retained once per touched interval; splitting an existing
+        // interval does not copy its previous readers.
+        assert_eq!(frontier.readers.len(), 2 * count as usize);
+        let mut dependencies = BTreeSet::new();
+        let write = CompileAccess {
+            resource: 0,
+            range: 0..size,
+            read: false,
+            write: true,
+            valid_after: true,
+        };
+        let writer = 2 * count as usize;
+        frontier.dependencies(writer, &write, &mut dependencies);
+        assert_eq!(dependencies.len(), writer);
+        for from in 0..writer {
+            assert!(dependencies.contains(&Dependency {
+                from,
+                to: writer,
+                kind: DependencyKind::War,
+            }));
+        }
+        frontier.record(writer, &write);
+        dependencies.clear();
+        frontier.dependencies(writer + 1, &read(0..size), &mut dependencies);
+        assert_eq!(
+            dependencies,
+            BTreeSet::from([Dependency {
+                from: writer,
+                to: writer + 1,
+                kind: DependencyKind::Raw,
+            }])
+        );
+    }
+
+    #[test]
+    fn partial_writes_retire_only_readers_of_the_overwritten_range() {
+        let mut frontier = HazardMap::new(8);
+        let access = |range, read, write| CompileAccess {
+            resource: 0,
+            range,
+            read,
+            write,
+            valid_after: write,
+        };
+        frontier.record(0, &access(0..8, true, false));
+        frontier.record(1, &access(0..4, true, false));
+        frontier.record(2, &access(0..4, false, true));
+        let mut dependencies = BTreeSet::new();
+        frontier.dependencies(3, &access(0..8, false, true), &mut dependencies);
+        assert_eq!(
+            dependencies,
+            BTreeSet::from([
+                Dependency {
+                    from: 0,
+                    to: 3,
+                    kind: DependencyKind::War,
+                },
+                Dependency {
+                    from: 2,
+                    to: 3,
+                    kind: DependencyKind::Waw,
+                },
+            ])
+        );
     }
 
     #[test]

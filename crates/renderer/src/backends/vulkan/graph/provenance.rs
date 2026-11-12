@@ -1,11 +1,32 @@
 //! CPU-known buffer contents reference immutable upload input; GPU copies move
 //! slice metadata, not bytes. Unknown holes remain unknown after partial copies.
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
 #[derive(Clone, Default)]
-pub(super) struct BufferProvenance(Vec<Segment>);
+pub(super) struct BufferProvenance {
+    segments: BTreeMap<u64, Segment>,
+    // One result bounds cache storage independently of the number of draw
+    // variants. Cloning preserves the same immutable contents and valid result.
+    validation: Option<IndexValidation>,
+    #[cfg(test)]
+    validation_scans: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IndexBounds {
+    count: u32,
+    vertex_count: u64,
+    maximum: u32,
+}
+
+#[derive(Clone, Copy)]
+struct IndexValidation {
+    bounds: IndexBounds,
+    result: Result<(), IndexError>,
+}
 
 #[derive(Clone)]
 struct Segment {
@@ -20,7 +41,7 @@ impl Segment {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum IndexError {
     UnknownContents,
     VertexBounds { index: u32, vertex_count: u64 },
@@ -34,11 +55,17 @@ impl BufferProvenance {
         let length = bytes.len();
         self.replace(
             target.clone(),
-            Self(vec![Segment {
-                start: target.start,
-                bytes,
-                range: 0..length,
-            }]),
+            Self {
+                segments: BTreeMap::from([(
+                    target.start,
+                    Segment {
+                        start: target.start,
+                        bytes,
+                        range: 0..length,
+                    },
+                )]),
+                ..Self::default()
+            },
         );
     }
 
@@ -46,66 +73,122 @@ impl BufferProvenance {
     /// destination ranges are graph-validated; gaps are deliberately preserved.
     /// Obtain this before replacing the destination to support disjoint self-copy.
     pub(super) fn copied(&self, source: Range<u64>, destination: u64) -> Self {
-        Self(
-            self.0
-                .iter()
+        Self {
+            segments: self
+                .overlapping(&source)
                 .filter_map(|segment| {
                     let start = source.start.max(segment.start);
                     let end = source.end.min(segment.end());
-                    (start < end).then(|| Segment {
-                        start: destination + (start - source.start),
-                        bytes: Arc::clone(&segment.bytes),
-                        range: segment.range.start + (start - segment.start) as usize
-                            ..segment.range.start + (end - segment.start) as usize,
+                    (start < end).then(|| {
+                        let position = destination + (start - source.start);
+                        (
+                            position,
+                            Segment {
+                                start: position,
+                                bytes: Arc::clone(&segment.bytes),
+                                range: segment.range.start + (start - segment.start) as usize
+                                    ..segment.range.start + (end - segment.start) as usize,
+                            },
+                        )
                     })
                 })
                 .collect(),
-        )
+            ..Self::default()
+        }
     }
 
     /// Overwrite the whole target, including unknown portions of a GPU copy.
     pub(super) fn replace(&mut self, target: Range<u64>, contents: Self) {
-        let mut next = Vec::with_capacity(self.0.len() + contents.0.len() + 1);
-        for segment in self.0.drain(..) {
-            if segment.end() <= target.start || segment.start >= target.end {
-                next.push(segment);
-                continue;
-            }
+        // Mutation invalidates both successful and failed validation results.
+        // Other clones still describe their old immutable contents.
+        self.validation = None;
+        let keys = self
+            .overlapping(&target)
+            .map(|segment| segment.start)
+            .collect::<Vec<_>>();
+        for key in keys {
+            let segment = self.segments.remove(&key).expect("overlapping segment");
             if segment.start < target.start {
                 let count = (target.start - segment.start) as usize;
-                next.push(Segment {
-                    start: segment.start,
-                    bytes: Arc::clone(&segment.bytes),
-                    range: segment.range.start..segment.range.start + count,
-                });
+                self.segments.insert(
+                    segment.start,
+                    Segment {
+                        start: segment.start,
+                        bytes: Arc::clone(&segment.bytes),
+                        range: segment.range.start..segment.range.start + count,
+                    },
+                );
             }
             if segment.end() > target.end {
                 let skip = (target.end - segment.start) as usize;
-                next.push(Segment {
-                    start: target.end,
-                    bytes: segment.bytes,
-                    range: segment.range.start + skip..segment.range.end,
-                });
+                self.segments.insert(
+                    target.end,
+                    Segment {
+                        start: target.end,
+                        bytes: segment.bytes,
+                        range: segment.range.start + skip..segment.range.end,
+                    },
+                );
             }
         }
-        next.extend(contents.0);
-        next.sort_by_key(|segment| segment.start);
-        self.0 = next;
+        self.segments.extend(contents.segments);
+    }
+
+    /// Include the predecessor only if it overlaps, then visit intersecting
+    /// segments. Updating a narrow range never scans unrelated known contents.
+    fn overlapping(&self, range: &Range<u64>) -> impl Iterator<Item = &Segment> {
+        let first = self
+            .segments
+            .range(..=range.start)
+            .next_back()
+            .map_or(range.start, |(&start, _)| start);
+        self.segments
+            .range(first..range.end)
+            .map(|(_, segment)| segment)
+            .filter(move |segment| segment.end() > range.start)
     }
 
     /// Validate little-endian u32 indices without reconstructing a byte buffer.
     /// Partial writes may split an index across multiple backing slices.
     pub(super) fn validate_indices(
-        &self,
+        &mut self,
         count: u32,
         vertex_count: u64,
         maximum: u32,
     ) -> Result<(), IndexError> {
+        let bounds = IndexBounds {
+            count,
+            vertex_count,
+            maximum,
+        };
+        if let Some(validation) = self.validation
+            && validation.bounds == bounds
+        {
+            return validation.result;
+        }
+        #[cfg(test)]
+        {
+            self.validation_scans += 1;
+        }
+        let result = self.scan_indices(bounds);
+        self.validation = Some(IndexValidation { bounds, result });
+        result
+    }
+
+    fn scan_indices(&self, bounds: IndexBounds) -> Result<(), IndexError> {
+        let IndexBounds {
+            count,
+            vertex_count,
+            maximum,
+        } = bounds;
         let end = u64::from(count) * 4;
+        if end == 0 {
+            return Ok(());
+        }
         let mut cursor = 0;
         let mut pending = [0u8; 4];
         let mut filled = 0;
-        for segment in &self.0 {
+        for segment in self.segments.values() {
             if segment.end() <= cursor {
                 continue;
             }
@@ -168,7 +251,7 @@ mod tests {
     fn bytes(contents: &BufferProvenance, range: Range<u64>) -> Vec<Option<u8>> {
         range
             .map(|offset| {
-                contents.0.iter().find_map(|segment| {
+                contents.segments.values().find_map(|segment| {
                     (segment.start <= offset && offset < segment.end()).then(|| {
                         segment.bytes[segment.range.start + (offset - segment.start) as usize]
                     })
@@ -195,8 +278,8 @@ mod tests {
         assert_eq!(bytes(&target, 14..16), [Some(99), Some(99)]);
         assert!(
             target
-                .0
-                .iter()
+                .segments
+                .values()
                 .any(|segment| Arc::ptr_eq(&segment.bytes, &upload))
         );
         // A disjoint same-buffer copy snapshots its slices before overwriting.
@@ -244,6 +327,102 @@ mod tests {
             Ok(())
         );
         contents.write(0..4, Arc::from([0u8; 4]));
+        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+    }
+
+    #[test]
+    fn partial_updates_and_copies_match_known_byte_model() {
+        let mut contents = BufferProvenance::default();
+        let mut expected = vec![None; 128];
+        let mut random = 0x7265_6e64_6572u64;
+        for step in 0..1_200 {
+            random = random
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let start = (random as usize >> 8) % 112;
+            let length = 1 + (random as usize >> 24) % 16;
+            let range = start as u64..(start + length) as u64;
+            match step % 3 {
+                0 => {
+                    let data: Arc<[u8]> = (0..length)
+                        .map(|i| (step + i) as u8)
+                        .collect::<Vec<_>>()
+                        .into();
+                    expected[start..start + length]
+                        .iter_mut()
+                        .zip(data.iter())
+                        .for_each(|(target, &value)| *target = Some(value));
+                    contents.write(range, data);
+                }
+                1 => {
+                    expected[start..start + length].fill(None);
+                    contents.replace(range, BufferProvenance::default());
+                }
+                _ => {
+                    // Snapshot before replacement, like a disjoint same-buffer
+                    // GPU copy. Both initialized bytes and holes are copied.
+                    let source = start % 48;
+                    let target = 64 + source;
+                    let values = expected[source..source + length].to_vec();
+                    let copied =
+                        contents.copied(source as u64..(source + length) as u64, target as u64);
+                    contents.replace(target as u64..(target + length) as u64, copied);
+                    expected[target..target + length].copy_from_slice(&values);
+                }
+            }
+            assert_eq!(bytes(&contents, 0..128), expected, "update {step}");
+        }
+    }
+
+    #[test]
+    fn validation_reuses_only_unchanged_contents_and_identical_bounds() {
+        let mut contents = BufferProvenance::default();
+        contents.write(0..8, Arc::from([0u8; 8]));
+        for _ in 0..100 {
+            assert_eq!(contents.validate_indices(2, 1, 0), Ok(()));
+        }
+        assert_eq!(contents.validation_scans, 1);
+        let mut old_contents = contents.clone();
+        // Different vertex bounds, Device limits, and index ranges cannot use
+        // another draw's cached result, including when the old result was OK.
+        assert!(matches!(
+            contents.validate_indices(2, 0, 0),
+            Err(IndexError::VertexBounds { .. })
+        ));
+        assert_eq!(contents.validation_scans, 2);
+        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+        assert_eq!(contents.validation_scans, 3);
+        assert_eq!(contents.validate_indices(1, 1, 1), Ok(()));
+        assert_eq!(contents.validation_scans, 4);
+
+        // A partial upload invalidates the cache; clones keep their own old
+        // contents and valid cache because all backing byte slices are immutable.
+        contents.write(0..1, Arc::from([2u8]));
+        assert_eq!(
+            contents.validate_indices(1, 1, 1),
+            Err(IndexError::VertexBounds {
+                index: 2,
+                vertex_count: 1
+            })
+        );
+        assert_eq!(old_contents.validate_indices(2, 1, 0), Ok(()));
+        assert_eq!(old_contents.validation_scans, 1);
+        assert_eq!(
+            contents.validate_indices(1, 3, 1),
+            Err(IndexError::DeviceLimit {
+                index: 2,
+                maximum: 1
+            })
+        );
+        // Copy replacement and unknown holes also invalidate prior failures.
+        contents.replace(0..4, old_contents.copied(0..4, 0));
+        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+        contents.replace(1..2, BufferProvenance::default());
+        assert_eq!(
+            contents.validate_indices(1, 1, 0),
+            Err(IndexError::UnknownContents)
+        );
+        contents.write(1..2, Arc::from([0u8]));
         assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
     }
 }

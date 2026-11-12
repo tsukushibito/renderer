@@ -129,6 +129,20 @@ cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2
 PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、画面出力の色管理は含みません。
 資源の作成・投入は明示的で、CPUの完了待ちは最後のreadback境界にあります。
 
+論理的な依存・用途は`CompiledGraph::dump()`で確認します。
+Vulkanで実際に記録する同期や物理資源との対応が必要な場合は、通常の`submit`の代わりに
+次のAPIを使います。診断は要求した投入だけで生成され、通常経路には文字列構築を追加しません。
+
+```rust,ignore
+let (mut submission, lowering) = runtime.submit_with_diagnostics(&compiled)?;
+eprintln!("{lowering}");
+// 結果の利用・資源回収には、別途submissionの実完了を確認する。
+```
+
+出力は用途、物理keyと世代、native handle、importの初期予定状態、barrierの実際のscope／layout、
+生成理由、最終予定状態を含みます。投入が失敗した場合は既存の型付きエラーを返します。
+診断文字列をGPU完了や外部資源の所有権の証明には使いません。
+
 Shaderのソースと生成済みbinaryは`crates/renderer/shaders/`にあります。
 通常のRustビルドはチェックイン済みSPIR-Vを使います。
 Windowsでは固定SDKの同じcompiler・validatorを使って再生成できます。
