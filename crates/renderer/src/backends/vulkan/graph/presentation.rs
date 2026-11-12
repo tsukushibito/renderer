@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use ash::vk;
 use winit::window::Window;
 
-use super::{MemoryOwner, Physical, RuntimeConfig, RuntimeError, Snapshot, VulkanRuntime};
+use super::{MemoryOwner, PhysicalLease, RuntimeConfig, RuntimeError, Snapshot, VulkanRuntime};
 use crate::backends::vulkan::device::VulkanDevice;
 use crate::backends::vulkan::diagnostics::Diagnostics;
 use crate::backends::vulkan::instance::ValidationMode;
@@ -479,7 +479,7 @@ impl Drop for Acquired {
 
 struct PresentWork {
     owner: Arc<MemoryOwner>,
-    source: Arc<Physical>,
+    source: PhysicalLease,
     previous: Snapshot,
     next: Option<Snapshot>,
     serial: u64,
@@ -1101,7 +1101,7 @@ impl VulkanRuntime {
         if let Some(outcome) = inner.ensure_swapchain()? {
             return Ok(outcome);
         }
-        let source = Arc::clone(&self.entry(image.key)?.physical);
+        let source = self.lease(image.key)?;
         let ResourceDesc::Image(desc) = source.desc else {
             return Err(RuntimeError::invalid("presentation source is not an image"));
         };

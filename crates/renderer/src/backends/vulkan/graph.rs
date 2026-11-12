@@ -27,6 +27,7 @@ use crate::graph::{
     RasterParameters, ResourceDesc, ResourceKey, StoreOp,
 };
 
+mod cache;
 mod diagnostics;
 mod environment;
 mod frames;
@@ -36,6 +37,7 @@ mod presentation;
 mod provenance;
 mod resources;
 mod shaders;
+use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
 pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
@@ -390,22 +392,26 @@ impl Entry {
     }
 }
 
-/// Preserve other descriptors until the entry bound is reached. Candidates
-/// exclude registered, leased and generation-exhausted entries. Their serial is
-/// the last accepted use, so failed preparation does not promote cache entries.
-fn cache_insert_target(
-    entry_count: usize,
-    capacity: usize,
-    candidates: impl Iterator<Item = (usize, u64)>,
-) -> Result<Option<usize>, RuntimeError> {
-    if entry_count < capacity {
-        return Ok(None);
-    }
-    candidates
-        .min_by_key(|&(index, serial)| (serial, index))
-        .map(|(index, _)| Some(index))
-        .ok_or_else(|| RuntimeError::capacity("graph physical resource capacity exhausted"))
+/// Cache buckets encode the complete currently supported resource descriptor.
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+enum CacheDescriptor {
+    Buffer(u64),
+    Rgba8(u32, u32),
+    Depth32(u32, u32),
 }
+impl From<ResourceDesc> for CacheDescriptor {
+    fn from(desc: ResourceDesc) -> Self {
+        match desc {
+            ResourceDesc::Buffer(desc) => Self::Buffer(desc.size),
+            ResourceDesc::Image(desc) => match desc.format {
+                ImageFormat::Rgba8Unorm => Self::Rgba8(desc.width, desc.height),
+                ImageFormat::Depth32Float => Self::Depth32(desc.width, desc.height),
+            },
+        }
+    }
+}
+
+type PhysicalLease = ResourceLease<Physical>;
 
 struct Registration<'a> {
     entries: &'a mut [Entry],
@@ -432,6 +438,8 @@ pub struct VulkanRuntime {
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
     entries: Vec<Entry>,
+    available: CacheIndex<CacheDescriptor>,
+    recycle: Arc<RecycleQueue>,
     frames: frames::FrameQueue<frames::PendingFrame>,
     timestamp_pool: Option<metrics::TimestampPool>,
     profiling_enabled: bool,
@@ -499,6 +507,8 @@ impl VulkanRuntime {
             readback,
             programs: None,
             entries: Vec::new(),
+            available: CacheIndex::default(),
+            recycle: Arc::new(RecycleQueue::default()),
             frames: frames::FrameQueue::new(config.execution_slots)?,
             timestamp_pool: None,
             profiling_enabled: false,
@@ -571,8 +581,45 @@ impl VulkanRuntime {
     /// keep the allocation alive, and prevent its acquisition for another owner.
     pub fn delete(&mut self, key: ResourceKey) -> Result<(), RuntimeError> {
         self.entry(key)?;
-        self.entries[key.index as usize].registered = false;
+        let index = key.index as usize;
+        self.entries[index].registered = false;
+        self.recycle_entry(index);
         Ok(())
+    }
+
+    /// Exposing a logical resource name removes it from every reuse index.
+    fn register(&mut self, index: usize) {
+        self.available.remove(index);
+        self.entries[index].registered = true;
+    }
+
+    fn recycle_entry(&mut self, index: usize) {
+        let Some(entry) = self.entries.get(index) else {
+            return;
+        };
+        if entry.reusable() {
+            self.available.insert(
+                index,
+                entry.physical.desc.into(),
+                entry.physical.lock().scheduled.serial,
+            );
+        } else {
+            self.available.remove(index);
+        }
+    }
+
+    fn collect_recycled(&mut self) {
+        for index in self.recycle.take() {
+            self.recycle_entry(index);
+        }
+    }
+
+    fn lease(&self, key: ResourceKey) -> Result<PhysicalLease, RuntimeError> {
+        Ok(PhysicalLease::new(
+            Arc::clone(&self.entry(key)?.physical),
+            key.index as usize,
+            Arc::clone(&self.recycle),
+        ))
     }
 
     fn entry(&self, key: ResourceKey) -> Result<&Entry, RuntimeError> {
@@ -591,17 +638,23 @@ impl VulkanRuntime {
         &mut self,
         desc: ResourceDesc,
         name: &str,
-    ) -> Result<(ResourceKey, Arc<Physical>), RuntimeError> {
-        if let Some((index, entry)) = self
-            .entries
-            .iter_mut()
-            .enumerate()
-            .find(|(_, entry)| entry.reusable() && entry.physical.desc == desc)
-        {
+    ) -> Result<(ResourceKey, PhysicalLease), RuntimeError> {
+        self.collect_recycled();
+        let target = self
+            .available
+            .select(
+                desc.into(),
+                self.entries.len(),
+                self.config.resource_capacity,
+                |index| self.entries.get(index).is_some_and(Entry::reusable),
+            )
+            .map_err(|()| RuntimeError::capacity("graph physical resource capacity exhausted"))?;
+        if let CacheTarget::Reuse(index) = target {
+            self.available.remove(index);
+            let entry = &mut self.entries[index];
             entry.generation += 1;
             let mut state = entry.physical.lock();
-            // Preserve actual native layout/access, but never inherit old bytes
-            // as initialized content of a new logical resource.
+            // Preserve actual native synchronization, never old logical contents.
             state.scheduled.initialized.clear();
             state.scheduled.provenance = BufferProvenance::default();
             drop(state);
@@ -612,18 +665,18 @@ impl VulkanRuntime {
                     index: index as u32,
                     generation: entry.generation,
                 },
-                Arc::clone(&entry.physical),
+                PhysicalLease::new(
+                    Arc::clone(&entry.physical),
+                    index,
+                    Arc::clone(&self.recycle),
+                ),
             ));
         }
-        let replace = cache_insert_target(
-            self.entries.len(),
-            self.config.resource_capacity,
-            self.entries
-                .iter()
-                .enumerate()
-                .filter(|(_, entry)| entry.reusable())
-                .map(|(index, entry)| (index, entry.physical.lock().scheduled.serial)),
-        )?;
+        let replace = match target {
+            CacheTarget::Replace(index) => Some(index),
+            CacheTarget::Create => None,
+            CacheTarget::Reuse(_) => unreachable!("reuse returned above"),
+        };
         // Complete native creation and naming before replacing an idle entry.
         // Failure must retain its allocation, generation and accepted state.
         let native = match desc {
@@ -662,6 +715,7 @@ impl VulkanRuntime {
             physical: Arc::clone(&physical),
         };
         if replace.is_some() {
+            self.available.remove(index);
             self.entries[index] = entry;
         } else {
             self.entries.push(entry);
@@ -673,7 +727,7 @@ impl VulkanRuntime {
                 index: index as u32,
                 generation,
             },
-            physical,
+            PhysicalLease::new(physical, index, Arc::clone(&self.recycle)),
         ))
     }
 
@@ -705,6 +759,7 @@ impl VulkanRuntime {
         graph: &CompiledGraph,
         capture_diagnostics: bool,
     ) -> Result<(Submission, Option<String>), RuntimeError> {
+        self.collect_recycled();
         let profile_started = self.profiling_enabled.then(Instant::now);
         self.owner
             .device
@@ -761,7 +816,7 @@ impl VulkanRuntime {
                 continue;
             }
             let (key, value) = if let Some(key) = resource.import {
-                (key, Arc::clone(&self.entry(key)?.physical))
+                (key, self.lease(key)?)
             } else {
                 self.acquire(resource.desc, &resource.name)?
             };
@@ -849,7 +904,7 @@ impl VulkanRuntime {
             cpu.lock().unwrap_or_else(|error| error.into_inner())[0] = started.elapsed();
         }
         for &index in &new_exports {
-            self.entries[index].registered = true;
+            self.register(index);
         }
         // Consume the serial before submit/logging: even if an application
         // subscriber panics after acceptance, a later write cannot reuse its
@@ -1189,7 +1244,7 @@ struct PreparedPass {
 
 struct GraphWork {
     owner: Arc<MemoryOwner>,
-    physical: Vec<Option<Arc<Physical>>>,
+    physical: Vec<Option<PhysicalLease>>,
     final_states: Vec<Option<Snapshot>>,
     serial: u64,
     passes: Vec<PreparedPass>,
@@ -1206,7 +1261,7 @@ impl GraphWork {
         owner: Arc<MemoryOwner>,
         graph: &CompiledGraph,
         serial: u64,
-        physical: Vec<Option<Arc<Physical>>>,
+        physical: Vec<Option<PhysicalLease>>,
         programs: Option<Arc<ShaderPrograms>>,
         mut bindings: Option<ShaderBindings>,
         upload: &SharedStaging,
