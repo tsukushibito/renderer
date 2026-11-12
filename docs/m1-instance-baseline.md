@@ -44,6 +44,9 @@ privateなVulkanバックエンドに、ashの実行時ロード、Vulkan 1.3の
 
 明示実行コマンド:
 
+以下は記録当時のモジュールパスである。`renderer-7ro`でInstanceを専用モジュールへ移動したため、
+再実行時は[開発手順](development.md)の現行コマンドを使用する。
+
 ```sh
 cargo test --locked -p renderer --no-default-features --features vulkan backends::vulkan::tests::vulkan_instance_ -- --ignored --nocapture
 ```
@@ -65,4 +68,4 @@ CPUの関数テーブル試験を実ドライバーの検証とは扱わず、�
 
 Instance試験の成功は、GPUの能力照会、Device作成、GPU同期、転送、描画の検証を意味しない。
 Synchronization Validationの明示設定や性能計測も今回の対象外である。
-次は`renderer-7ro`で、Physical Deviceの能力照会とDevice・単一キューを実装する。
+この記録に続く`renderer-7ro`の結果は、[Device・単一キューの確認結果](m1-device-baseline.md)に記載する。

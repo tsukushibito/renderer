@@ -22,6 +22,8 @@ struct Plan {
     fail_instance: bool,
     fail_messenger: bool,
     missing_proc: Option<&'static CStr>,
+    device_lookup: Option<vk::PFN_vkGetInstanceProcAddr>,
+    on_instance_destroy: Option<fn()>,
 }
 
 #[derive(Default)]
@@ -63,6 +65,20 @@ fn initialize(plan: Plan) -> Result<VulkanInstance, InitError> {
         };
         VulkanInstance::initialize(entry, diagnostics, || Ok(()))
     })
+}
+
+/// Reuse the Instance boundary for Device ownership tests without mocking its
+/// physical-device discovery. Only the Device entry points are supplied there.
+pub(in crate::backends::vulkan) fn instance_for_device_test(
+    device_lookup: vk::PFN_vkGetInstanceProcAddr,
+    on_instance_destroy: fn(),
+) -> VulkanInstance {
+    initialize(Plan {
+        device_lookup: Some(device_lookup),
+        on_instance_destroy: Some(on_instance_destroy),
+        ..Plan::default()
+    })
+    .expect("fake Instance initialization succeeds")
 }
 
 #[test]
@@ -204,7 +220,12 @@ unsafe extern "system" fn get_instance_proc_addr(
             erase!(submit_message, vk::PFN_vkSubmitDebugUtilsMessageEXT)
         }
         // ash loads additional optional tables, but these tests never call them.
-        _ => None,
+        _ => {
+            let lookup = STATE.with(|state| state.borrow().plan.device_lookup);
+            // SAFETY: The test supplies typed, process-lifetime functions using
+            // the same Vulkan lookup protocol and the live name from ash.
+            lookup.and_then(|lookup| unsafe { lookup(_instance, name.as_ptr()) })
+        }
     }
 }
 
@@ -372,6 +393,10 @@ unsafe extern "system" fn destroy_instance(
             state.callback_delivered = result == vk::FALSE;
             state.destruction_observer = Some(diagnostics);
         });
+    }
+    let observer = STATE.with(|state| state.borrow().plan.on_instance_destroy);
+    if let Some(observer) = observer {
+        observer();
     }
 }
 

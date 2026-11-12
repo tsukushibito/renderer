@@ -1,3 +1,4 @@
+use super::super::real_vulkan_dispatch;
 use super::*;
 
 fn available(api: u32, layers: &[&str], extensions: &[&str]) -> Discovery {
@@ -135,27 +136,6 @@ fn missing_loader_keeps_underlying_loading_error() {
     let error = InitError::Loader(source);
     assert!(error.to_string().contains("loading the Vulkan loader"));
     assert!(error.source().unwrap().is::<ash::LoadingError>());
-}
-
-fn real_vulkan_dispatch() -> tracing::Dispatch {
-    // Tests own output configuration. The library never installs a subscriber.
-    let filter = match std::env::var("RUST_LOG") {
-        Ok(filter) => filter,
-        Err(std::env::VarError::NotPresent) => {
-            "renderer=info,renderer::vulkan::validation=warn".to_owned()
-        }
-        Err(error) => panic!("invalid RUST_LOG: {error}"),
-    };
-    tracing::Dispatch::new(
-        tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_new(filter).expect("valid RUST_LOG filter"),
-            )
-            .with_test_writer()
-            .with_ansi(false)
-            .without_time()
-            .finish(),
-    )
 }
 
 #[test]
