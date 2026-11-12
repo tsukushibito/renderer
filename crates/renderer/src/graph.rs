@@ -436,6 +436,7 @@ pub(crate) enum Operation {
         dst: usize,
         offset: u64,
         bytes: Arc<[u8]>,
+        source: Range<usize>,
     },
     CopyBuffer {
         src: usize,
@@ -740,11 +741,32 @@ impl Graph {
         offset: u64,
         bytes: Arc<[u8]>,
     ) -> Result<PassHandle, GraphError> {
+        let source = 0..bytes.len();
+        self.upload_buffer_slice(name, dst, offset, bytes, source)
+    }
+
+    /// Retain a slice of shared immutable input without allocating a chunk copy.
+    /// The CPU source offset is independent of the aligned GPU destination offset.
+    pub(crate) fn upload_buffer_slice(
+        &mut self,
+        name: impl Into<String>,
+        dst: BufferHandle,
+        offset: u64,
+        bytes: Arc<[u8]>,
+        source: Range<usize>,
+    ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let dst = graph.buffer_id(dst)?;
-            let range = graph.buffer_range(dst, offset, bytes.len() as u64, true)?;
+            let slice = bytes.get(source.clone()).ok_or_else(|| {
+                graph.resource_error(
+                    GraphErrorKind::InvalidInput,
+                    format!("upload source range {source:?} exceeds shared input length {} or is reversed", bytes.len()),
+                    dst,
+                )
+            })?;
+            let range = graph.buffer_range(dst, offset, slice.len() as u64, true)?;
             Ok((
-                Operation::UploadBuffer { dst, offset, bytes },
+                Operation::UploadBuffer { dst, offset, bytes, source },
                 vec![write(dst, range, AccessPurpose::CopyDestination)],
                 false,
             ))
@@ -1555,6 +1577,63 @@ fn validate_purpose(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
+        let input: Arc<[u8]> = Arc::from([99, 1, 2, 3, 4, 5, 6, 7, 8, 88]);
+        let mut graph = Graph::new();
+        let buffer = graph
+            .buffer("sliced destination", BufferDesc { size: 8 })
+            .unwrap();
+        let first = graph
+            .upload_buffer_slice("first chunk", buffer, 0, Arc::clone(&input), 1..5)
+            .unwrap();
+        let second = graph
+            .upload_buffer_slice("second chunk", buffer, 4, Arc::clone(&input), 5..9)
+            .unwrap();
+        graph.export_buffer(buffer).unwrap();
+        let plan = graph.compile().unwrap();
+        for (pass, expected_source, expected_target) in [(first, 1..5, 0..4), (second, 5..9, 4..8)]
+        {
+            let Operation::UploadBuffer { bytes, source, .. } = &plan.passes[pass.index].operation
+            else {
+                panic!("live sliced upload must retain its source");
+            };
+            assert!(Arc::ptr_eq(bytes, &input));
+            assert_eq!(*source, expected_source);
+            assert_eq!(plan.passes[pass.index].accesses[0].range, expected_target);
+        }
+        let mut partial = Graph::new();
+        let target = partial.buffer("partial", BufferDesc { size: 8 }).unwrap();
+        partial
+            .upload_buffer_slice("tail only", target, 4, input, 1..5)
+            .unwrap();
+        partial.export_buffer(target).unwrap();
+        let error = partial.compile().unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::UninitializedRead);
+        assert_eq!(error.range(), Some(&AccessRange::Buffer(0..4)));
+    }
+
+    #[test]
+    fn invalid_upload_slices_preserve_builder_context_without_a_pass() {
+        let input: Arc<[u8]> = vec![0; 16].into();
+        let mut graph = Graph::new();
+        let buffer = graph.buffer("destination", BufferDesc { size: 8 }).unwrap();
+        for source in [Range { start: 8, end: 4 }, 13..17, 4..4, 0..12] {
+            let error = graph
+                .upload_buffer_slice("invalid chunk", buffer, 0, Arc::clone(&input), source)
+                .unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+            assert_eq!(error.pass_name(), Some("invalid chunk"));
+            assert_eq!(error.resource_name(), Some("destination"));
+            assert!(graph.passes.is_empty());
+        }
+        // Keep the existing copy contract: offsets are aligned, but a source
+        // slice may start anywhere and need not contain a multiple of four bytes.
+        graph
+            .upload_buffer_slice("three bytes", buffer, 0, input, 1..4)
+            .unwrap();
+    }
 
     #[test]
     fn many_exports_keep_declaration_order_and_indexed_membership() {

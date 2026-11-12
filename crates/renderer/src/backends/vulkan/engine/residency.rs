@@ -275,12 +275,12 @@ impl VulkanEngine {
         let buffers = entry.buffers.as_ref().unwrap();
         let vertex_bytes = data.vertices.len() as u64;
         let (buffer_key, offset, input) = if entry.uploaded < vertex_bytes {
-            (buffers.vertices, entry.uploaded, data.vertices.as_ref())
+            (buffers.vertices, entry.uploaded, &data.vertices)
         } else {
             (
                 buffers.indices,
                 entry.uploaded - vertex_bytes,
-                data.indices.as_ref(),
+                &data.indices,
             )
         };
         let available = self.runtime.available_upload_bytes();
@@ -292,13 +292,19 @@ impl VulkanEngine {
             return Ok(self.progress(0));
         }
         let submission = loop {
-            let bytes: Arc<[u8]> = Arc::from(&input[offset as usize..(offset + size) as usize]);
+            let bytes = Arc::clone(input);
             let mut graph = Graph::new();
             let target = graph.import_buffer(
                 "mesh upload target",
                 &self.runtime.refresh_buffer(buffer_key)?,
             )?;
-            graph.upload_buffer_shared("mesh upload chunk", target, offset, bytes)?;
+            graph.upload_buffer_slice(
+                "mesh upload chunk",
+                target,
+                offset,
+                bytes,
+                offset as usize..(offset + size) as usize,
+            )?;
             let plan = graph.compile()?;
             match self.runtime.submit(&plan) {
                 Ok(submission) => break submission,

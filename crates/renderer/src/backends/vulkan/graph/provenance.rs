@@ -50,9 +50,21 @@ pub(super) enum IndexError {
 
 impl BufferProvenance {
     /// `target` and `bytes` describe an already validated graph upload.
+    #[cfg(test)]
     pub(super) fn write(&mut self, target: Range<u64>, bytes: Arc<[u8]>) {
-        debug_assert_eq!(target.end - target.start, bytes.len() as u64);
         let length = bytes.len();
+        self.write_slice(target, bytes, 0..length);
+    }
+
+    /// The source slice is validated by Graph, including its destination length.
+    pub(super) fn write_slice(
+        &mut self,
+        target: Range<u64>,
+        bytes: Arc<[u8]>,
+        source: Range<usize>,
+    ) {
+        debug_assert!(bytes.get(source.clone()).is_some());
+        debug_assert_eq!(target.end - target.start, source.len() as u64);
         self.replace(
             target.clone(),
             Self {
@@ -61,7 +73,7 @@ impl BufferProvenance {
                     Segment {
                         start: target.start,
                         bytes,
-                        range: 0..length,
+                        range: source,
                     },
                 )]),
                 ..Self::default()
@@ -258,6 +270,49 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn source_slices_keep_backing_offsets_across_partial_indices_and_copies() {
+        let mut input = vec![0xcc; 3];
+        for index in [3u32, 7, 1, 9] {
+            input.extend_from_slice(&index.to_le_bytes());
+        }
+        let input: Arc<[u8]> = input.into();
+        let mut contents = BufferProvenance::default();
+        for (target, source) in [(0..2, 3..5), (2..6, 5..9), (6..12, 9..15)] {
+            contents.write_slice(target, Arc::clone(&input), source);
+        }
+        assert!(
+            contents
+                .segments
+                .values()
+                .all(|segment| Arc::ptr_eq(&segment.bytes, &input))
+        );
+        assert_eq!(contents.validate_indices(3, 8, u32::MAX), Ok(()));
+        let copied = contents.copied(2..10, 4);
+        assert_eq!(bytes(&copied, 4..12), bytes(&contents, 2..10));
+        assert!(
+            copied
+                .segments
+                .values()
+                .all(|segment| Arc::ptr_eq(&segment.bytes, &input))
+        );
+        // A patch from another slice of the same allocation invalidates the
+        // previous successful bounds check and uses that slice's exact bytes.
+        contents.write_slice(4..8, Arc::clone(&input), 15..19);
+        assert_eq!(
+            contents.validate_indices(3, 8, u32::MAX),
+            Err(IndexError::VertexBounds {
+                index: 9,
+                vertex_count: 8
+            })
+        );
+        contents.replace(1..2, BufferProvenance::default());
+        assert_eq!(
+            contents.validate_indices(3, 10, u32::MAX),
+            Err(IndexError::UnknownContents)
+        );
     }
 
     #[test]

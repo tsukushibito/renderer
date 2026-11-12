@@ -2,6 +2,34 @@ use super::*;
 use crate::graph::{BufferDesc, Graph, ImageDesc};
 
 #[test]
+fn prepared_upload_uses_slice_length_without_retaining_source_bytes() {
+    let input: Arc<[u8]> = vec![7; 64].into();
+    let weak = Arc::downgrade(&input);
+    let mut graph = Graph::new();
+    let buffer = graph.buffer("slice", BufferDesc { size: 4 }).unwrap();
+    let upload = graph
+        .upload_buffer_slice("upload", buffer, 0, input, 5..9)
+        .unwrap();
+    graph.readback_buffer("read", buffer, 0, 4).unwrap();
+    let plan = graph.compile().unwrap();
+    let operation = PreparedOperation::try_from(&plan.passes[upload.index].operation).unwrap();
+    assert!(matches!(
+        &operation,
+        PreparedOperation::UploadBuffer {
+            offset: 0,
+            size: 4,
+            ..
+        }
+    ));
+    drop(graph);
+    drop(plan);
+    assert!(
+        weak.upgrade().is_none(),
+        "native recording operands must not retain CPU upload input"
+    );
+}
+
+#[test]
 fn provenance_follows_index_copy_sources_and_persistent_imports_only() {
     let mut graph = Graph::new();
     let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
