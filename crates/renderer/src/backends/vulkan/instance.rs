@@ -12,6 +12,8 @@ use super::diagnostics::Diagnostics;
 
 pub(super) const REQUIRED_API: u32 = vk::API_VERSION_1_3;
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
+const REQUIRED_EXTENSIONS: [&CStr; 2] =
+    [ash::ext::debug_utils::NAME, ash::ext::layer_settings::NAME];
 pub(super) const LOG_TARGET: &str = "renderer::vulkan";
 
 /// One independently discovered problem; unknown query results are not called absent.
@@ -139,12 +141,13 @@ impl Discovery {
             self.failures
                 .push(PrerequisiteFailure::MissingLayer(VALIDATION_LAYER));
         }
-        if let Some(extensions) = &self.extensions
-            && !extensions.contains("VK_EXT_debug_utils")
-        {
-            self.failures.push(PrerequisiteFailure::MissingExtension(
-                ash::ext::debug_utils::NAME,
-            ));
+        if let Some(extensions) = &self.extensions {
+            for name in REQUIRED_EXTENSIONS {
+                if !extensions.contains(name.to_str().expect("static extension name is UTF-8")) {
+                    self.failures
+                        .push(PrerequisiteFailure::MissingExtension(name));
+                }
+            }
         }
         if self.failures.is_empty() {
             Ok(self)
@@ -283,7 +286,7 @@ fn discover(entry: &Entry) -> Result<Discovery, InitError> {
     tracing::info!(target: LOG_TARGET,
         loader_api = ?discovery.api.map(api_version), requested_api = %api_version(REQUIRED_API),
         required_layer = %VALIDATION_LAYER.to_string_lossy(),
-        required_extension = %ash::ext::debug_utils::NAME.to_string_lossy(),
+        required_extensions = ?REQUIRED_EXTENSIONS,
         "Checking Vulkan instance prerequisites");
     tracing::debug!(target: LOG_TARGET, extensions = ?discovery.extensions, "Available Vulkan instance extensions");
     discovery.check()
@@ -332,12 +335,25 @@ impl VulkanInstance {
             .engine_name(c"renderer")
             .api_version(REQUIRED_API);
         let layers = [VALIDATION_LAYER.as_ptr()];
-        let extensions = [ash::ext::debug_utils::NAME.as_ptr()];
+        let extensions = REQUIRED_EXTENSIONS.map(CStr::as_ptr);
+        let enable_sync: vk::Bool32 = vk::TRUE;
+        // ash's byte-slice setter counts bytes rather than BOOL32 values. Keep
+        // the correctly typed value and its count explicit for this setting.
+        let settings = [vk::LayerSettingEXT {
+            value_count: 1,
+            p_values: std::ptr::from_ref(&enable_sync).cast(),
+            ..vk::LayerSettingEXT::default()
+                .layer_name(VALIDATION_LAYER)
+                .setting_name(c"validate_sync")
+                .ty(vk::LayerSettingTypeEXT::BOOL32)
+        }];
+        let mut layer_settings = vk::LayerSettingsCreateInfoEXT::default().settings(&settings);
         let mut callback = diagnostics.messenger_create_info();
         let create_info = vk::InstanceCreateInfo::default()
             .application_info(&application_info)
             .enabled_layer_names(&layers)
             .enabled_extension_names(&extensions)
+            .push_next(&mut layer_settings)
             .push_next(&mut callback);
         // SAFETY: All names and pNext data remain live for the call. The Arc
         // allocation behind user_data remains live through vkDestroyInstance.
@@ -393,7 +409,8 @@ impl VulkanInstance {
         owner.debug_utils = Some(debug_utils);
         owner.messenger = Some(messenger);
         tracing::info!(target: LOG_TARGET, api = %api_version(REQUIRED_API),
-            layer = %VALIDATION_LAYER.to_string_lossy(), extension = %ash::ext::debug_utils::NAME.to_string_lossy(),
+            layer = %VALIDATION_LAYER.to_string_lossy(), extensions = ?REQUIRED_EXTENSIONS,
+            synchronization_validation_requested = true,
             "Vulkan instance and debug messenger initialized");
         Ok(owner)
     }

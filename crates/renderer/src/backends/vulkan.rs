@@ -1,4 +1,4 @@
-//! Private Vulkan bootstrap; command execution follows separately.
+//! Private Vulkan bootstrap, memory ownership, and single-queue transfers.
 
 // Compile the implementation in normal Vulkan builds while its runtime caller
 // is still pending; do not expose native APIs merely to suppress dead code.
@@ -12,6 +12,7 @@ mod device;
 mod diagnostics;
 mod instance;
 mod memory;
+mod transfer;
 
 #[cfg(test)]
 fn real_vulkan_dispatch() -> tracing::Dispatch {

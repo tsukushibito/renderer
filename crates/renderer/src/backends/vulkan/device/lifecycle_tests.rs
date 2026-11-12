@@ -86,6 +86,20 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
 }
 
 #[test]
+fn terminal_device_state_is_shared_and_queue_use_stops() {
+    let owner = VulkanDevice::create_selected(instance(false), selected()).unwrap();
+    assert_eq!(owner.state(), DeviceState::Active);
+    drop(owner.lock_queue().unwrap());
+    owner.stop();
+    assert_eq!(owner.ensure_active(), Err(DeviceState::Stopped));
+    assert!(owner.lock_queue().is_err());
+    owner.observe_result(vk::Result::ERROR_DEVICE_LOST);
+    owner.stop();
+    assert_eq!(owner.ensure_active(), Err(DeviceState::Lost));
+    assert!(owner.lock_queue().is_err());
+}
+
+#[test]
 fn failed_creation_preserves_cause_and_destroys_only_instance() {
     let error = match VulkanDevice::create_selected(instance(true), selected()) {
         Ok(_) => panic!("creation was configured to fail"),

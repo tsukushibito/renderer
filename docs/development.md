@@ -4,14 +4,17 @@
 privateなVulkan 1.3 Instanceの初期化・診断に加え、`renderer-7ro`で
 デバイスの能力照会・自動選択、Deviceと単一Graphics＋Computeキューの作成・解放を扱います。
 `renderer-yr6`ではVMAによるbufferの所有、CPUアクセス、解放を扱います。
-転送、描画、公開APIはまだありません。
+`renderer-dj3`では単一キューでのbuffer転送、投入と完了待ち、実GPUからのreadbackを扱います。
+image、描画、公開APIはまだありません。
 採用した契約は[ADR 0002](adr/0002-vulkan-instance-bootstrap.md)、
 [ADR 0003](adr/0003-vulkan-device-bootstrap.md)、
-[ADR 0004](adr/0004-vma-buffer-ownership.md)に記載しています。
+[ADR 0004](adr/0004-vma-buffer-ownership.md)、
+[ADR 0005](adr/0005-single-queue-buffer-transfer.md)に記載しています。
 環境構築時の実測記録は[M0の確認結果](m0-baseline.md)を参照してください。
 qhgの実行結果と未検証範囲は[Instance初期化・診断の確認結果](m1-instance-baseline.md)に記載しています。
 Deviceの実行結果と未検証範囲は[Device・単一キューの確認結果](m1-device-baseline.md)を参照してください。
 bufferの実行結果と未検証範囲は[VMA bufferの確認結果](m1-buffer-baseline.md)を参照してください。
+GPU転送の実行結果と未検証範囲は[buffer転送・完了待ちの確認結果](m1-transfer-baseline.md)を参照してください。
 
 ## 必要なツール
 
@@ -19,9 +22,10 @@ bufferの実行結果と未検証範囲は[VMA bufferの確認結果](m1-buffer-
 |---|---|
 | CPU側の開発 | Git、rustup、Rust 1.99.0（edition 2024）と対象OSのリンカー |
 | Vulkan依存のビルド | 上記に加えてC++コンパイラー。WindowsはMSVC x64、Linuxはg++ |
-| 実Vulkan Instance試験 | Vulkan 1.3対応ドライバー／ローダー、`VK_LAYER_KHRONOS_validation`、`VK_EXT_debug_utils` |
+| 実Vulkan Instance試験 | Vulkan 1.3対応ドライバー／ローダー、`VK_LAYER_KHRONOS_validation`、`VK_EXT_debug_utils`、`VK_EXT_layer_settings` |
 | 実Vulkan Device試験 | 上記に加え、Graphics＋Compute対応キューと必須3 featureを持つデバイス |
 | 実Vulkan buffer試験 | Device試験の条件に加え、用途に対応するbufferの作成・CPUアクセスに必要なメモリ |
+| 実Vulkan転送試験 | buffer試験の条件に加え、単一キューでのcopy・Synchronization2・Fence完了待ち |
 | 実行環境の調査 | Vulkan SDKのvulkaninfo |
 | 今後のシェーダー生成 | Vulkan SDK 1.4.341.1のglslc（shaderc v2026.1） |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../.beads/README.md)を参照 |
@@ -95,6 +99,7 @@ cargo test --locked --workspace --no-default-features --features vulkan
 `.github/workflows/ci.yml`はWindows / LinuxとCPU / Vulkan依存の組み合わせを確認します。
 通常のVulkan featureテストでは、要件判定、デバイス選択と作成設定、診断コールバック、
 bufferの範囲・初期化済み範囲の検証、CPUアクセスの手順と失敗時の後始末を、Vulkan実行環境なしで検証します。
+転送では、投入・完了待ちの失敗時の状態と、未完了リソースの保持・後始末も確認します。
 試験用のash関数テーブルやCPUメモリによる確認は、実ドライバー・VMAとの接続確認と区別します。
 
 ## 実Vulkan試験
@@ -141,22 +146,57 @@ Allocatorとupload用・GPU転送先用・readback用のbufferを作成し、CPU
 uploadはCPU書き込み専用、GPU転送先はCPUアクセス禁止、readbackはCPUから読み書きできる契約です。
 `write`／`read`へ渡したバイト列をコピーし、map／unmapと必要なflush／invalidateは内部で行います。
 マップした領域や生のポインターを呼び出し元へ返しません。
-読み出せる範囲は成功したwriteで初期化した範囲に限り、範囲外や未初期化範囲のreadはエラーにします。
+このbuffer試験では成功したwriteで初期化した範囲を読み出し、範囲外や未初期化範囲のreadはエラーにします。
 
 bufferはAllocationを単独で所有し、Allocator・Deviceの所有者を参照カウントで保持します。
 Allocatorの操作用ハンドルを先に解放してもbufferは有効です。すべてのbufferと操作用ハンドルを
 解放すると、Allocator、Device、Instanceの順で破棄します。これはGPU完了の保証とは別の契約です。
-GPUコマンドの投入・完了待ちと、実GPU転送後のreadback照合は後続の`renderer-dj3`で扱います。
-今回のreadback用bufferの照合はCPUで書き込んだ内容を対象にします。
+このbuffer試験の照合はCPUで書き込んだ内容を対象にします。
+GPU転送後のreadback照合は次の転送試験で扱います。
 
 実際に選ばれたメモリのtypeとpropertyをログへ残し、coherent／non-coherent経路の実行状況を区別します。
 non-coherent向けのflush／invalidateと失敗時の後始末はCPU試験でも確認しますが、
 該当するメモリがないGPUでの成功をnon-coherentの実機確認とは扱いません。
 CPU型を選択した場合も、この実GPU受入試験の成功には数えません。
 
+### 単一キューのbuffer転送・完了待ち
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan backends::vulkan::transfer::tests::vulkan_transfer_ -- --ignored --nocapture
+```
+
+UploadからDeviceTransfer、さらにReadbackへbuffer全体をcopyし、完了待ち後に全byteを照合します。
+各bufferは同じAllocatorの所有者に属し、対応する用途と同じサイズを持ち、
+Uploadの全範囲が初期化済みであることを、記録前に確認します。
+image転送、RenderGraph、描画、フレーム並列化はこの試験に含めません。
+
+記録済みオブジェクトから`submit`すると、完了待ち用のオブジェクトへ所有権が移ります。
+bufferは記録開始から完了確認まで内部で保持され、呼び出し元はCPUアクセス・解放できません。
+`wait`には待機時間を指定します。期限切れは未完了として保持し、再度待つことができます。
+成功した完了確認後にbufferを返し、GPUが書いた範囲を読み出せる状態にします。
+copy間とCPU read前の依存をSynchronization2で記録し、必要なinvalidateは従来の`read`内で行います。
+正常経路では対象のFenceだけを待ち、queue／Device全体のidle待ちは使いません。
+
+未完了オブジェクトの破棄は、10秒の待機予算を指定して後始末します。
+Vulkanの待機時間は実装の精度で調整されるため、壁時計で厳密に10秒以内とは保証しません。
+完了を確認できなければ、原因をログに残し、GPUが使い得るリソースと依存所有者を保持したまま、
+そのDeviceの継続利用を止めます。この異常経路では保持した資源を回収できません。
+`VK_ERROR_DEVICE_LOST`もDeviceを停止扱いにし、データ照合の成功とは扱いません。
+Device停止後は新たな投入・通常のbuffer作成やCPUアクセスを拒否し、既存処理の後始末を行います。
+
+転送試験ではパターンを変えた再投入と完了後のbuffer再利用、明示wait前の破棄も確認します。
+失敗時の所有権と後始末はCPU境界試験で確認し、実driverのDevice lossやOOMを再現した結果とは区別します。
+
 ### 判定条件
 
 ローダー、API、必須Layer／extensionが不足した場合は、理由を報告して試験を失敗させます。
+Instance作成時に`VK_EXT_layer_settings`の`validate_sync=true`を指定し、
+通常のcore validationにSynchronization Validationを追加するよう要求します。
+レイヤー提供分を含めて必要なextensionを照会し、不足を黙って無効化しません。
+環境変数や設定ファイルはAPI指定より優先されるため、要求ログだけで有効とは判断できません。
+実Vulkan受入では外部設定を確認し、レイヤー起動時のINFOメッセージで同期検証の有効状態も確認します。
+設定の優先順位は[LunarGのレイヤー設定](https://vulkan.lunarg.com/doc/view/latest/windows/layer_configuration.html)を参照してください。
+Synchronization Validationはhost memory accessを追跡しないため、CPUアクセスの寿命契約はCPU試験でも確認します。
 実Vulkan受入試験ではwarning／errorが一件でもあれば失敗です。
 例外にできるのは確認済みの誤検出だけで、メッセージID・対象バージョン・発生条件・根拠を
 個別に記録し、ログにも残します。現時点の例外はありません。
@@ -190,6 +230,8 @@ driver名・追加情報・ID・生のバージョン値、選択したqueue fam
 `driverVersion`の符号化はドライバー依存のため、汎用のVulkan APIバージョンとして分解しません。
 bufferの作成では用途・要求サイズ・ハンドルと、選択されたメモリのtype・propertyを記録します。
 失敗時は操作名と元のVulkanエラーを保持し、CPUアクセス時の範囲や用途のエラーも報告します。
+転送ではdebug object名とcommand labelを付け、buffer・command資源・Fenceを診断と対応づけます。
+投入と完了待ち、期限切れ、Device停止、回収できず保持した資源もログに残します。
 
 診断は直近64件と最初のwarning／error 128件を保持します。件数は保持上限とは独立して数え、
 保持できなかった問題メッセージの件数も報告します。これは全ログの保存先ではありません。

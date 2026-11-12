@@ -2,6 +2,8 @@
 
 use std::error::Error;
 use std::fmt;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 use ash::vk;
 
@@ -332,12 +334,22 @@ fn with_create_info<T>(
 }
 
 /// Owns the Instance until the Device is destroyed. Allocator/buffer owners keep
-/// this owner alive until their children are destroyed. No commands are submitted.
+/// this owner alive until all children and submitted work have been retired.
 pub(super) struct VulkanDevice {
     _instance: VulkanInstance,
     device: ash::Device,
     selected: SelectedDevice,
     queue: vk::Queue,
+    queue_lock: Mutex<()>,
+    state: AtomicU8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(super) enum DeviceState {
+    Active,
+    Stopped,
+    Lost,
 }
 
 impl VulkanDevice {
@@ -367,6 +379,58 @@ impl VulkanDevice {
 
     pub(super) fn device_type(&self) -> vk::PhysicalDeviceType {
         self.selected.info.device_type
+    }
+
+    pub(super) fn state(&self) -> DeviceState {
+        match self.state.load(Ordering::Acquire) {
+            0 => DeviceState::Active,
+            2 => DeviceState::Lost,
+            _ => DeviceState::Stopped,
+        }
+    }
+
+    pub(super) fn ensure_active(&self) -> Result<(), DeviceState> {
+        match self.state() {
+            DeviceState::Active => Ok(()),
+            state => Err(state),
+        }
+    }
+
+    pub(super) fn stop(&self) {
+        let _ = self.state.compare_exchange(
+            DeviceState::Active as u8,
+            DeviceState::Stopped as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+
+    pub(super) fn observe_result(&self, result: vk::Result) {
+        if result == vk::Result::ERROR_DEVICE_LOST {
+            self.state.store(DeviceState::Lost as u8, Ordering::Release);
+        }
+    }
+
+    /// Every host operation on the one native Queue takes this Device-owned lock.
+    pub(super) fn lock_queue(&self) -> Result<MutexGuard<'_, ()>, DeviceState> {
+        let guard = self.queue_lock.lock().map_err(|_| {
+            self.stop();
+            self.state()
+        })?;
+        self.ensure_active()?;
+        Ok(guard)
+    }
+
+    pub(super) fn queue(&self) -> vk::Queue {
+        self.queue
+    }
+
+    pub(super) fn queue_family(&self) -> u32 {
+        self.selected.queue_family_index
+    }
+
+    pub(super) fn debug_utils(&self) -> ash::ext::debug_utils::Device {
+        ash::ext::debug_utils::Device::new(self.instance_raw(), self.raw())
     }
 
     fn initialize(instance: VulkanInstance) -> Result<Self, DeviceInitError> {
@@ -420,6 +484,8 @@ impl VulkanDevice {
             device,
             selected,
             queue: vk::Queue::null(),
+            queue_lock: Mutex::new(()),
+            state: AtomicU8::new(DeviceState::Active as u8),
         };
         // SAFETY: Exactly one queue was requested from this family with index 0.
         // It is owned by the Device and requires no separate destruction.
@@ -438,12 +504,12 @@ impl VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
-        // SAFETY: This private bootstrap has never submitted GPU commands.
-        // The containing memory owner drops its Allocator before this Device,
-        // and each live buffer retains that owner. There are no remaining children.
+        // SAFETY: Buffer and submission owners retain the containing MemoryOwner.
+        // Submitted work is completed or retired after Device loss before those
+        // owners are released. Unresolved work instead retains/leaks its owner.
+        // MemoryOwner drops its Allocator before this Device; no children remain.
         // It exclusively owns the Device and Queue;
         // the Instance, loader, and diagnostic callback remain live throughout.
-        // Later submission support must establish its completion contract here.
         unsafe { self.device.destroy_device(None) };
         // Rust drops the owned Instance only after this Drop body returns.
     }

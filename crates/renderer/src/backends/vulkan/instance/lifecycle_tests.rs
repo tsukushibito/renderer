@@ -35,6 +35,7 @@ struct FakeState {
     diagnostics: Weak<Diagnostics>,
     destruction_observer: Option<Arc<Diagnostics>>,
     callback_delivered: bool,
+    sync_validation_requested: bool,
 }
 
 thread_local! {
@@ -129,6 +130,7 @@ fn drop_destroys_children_first_and_keeps_instance_callback_data_alive() {
             state.borrow().events,
             [Event::CreateInstance, Event::CreateMessenger]
         );
+        assert!(state.borrow().sync_validation_requested);
     });
     drop(owner);
     assert_destroyed(&[
@@ -257,15 +259,22 @@ unsafe extern "system" fn enumerate_instance_layer_properties(
 }
 
 unsafe extern "system" fn enumerate_instance_extension_properties(
-    _layer: *const c_char,
+    layer: *const c_char,
     count: *mut u32,
     properties: *mut vk::ExtensionProperties,
 ) -> vk::Result {
+    // Supply layer_settings only through the layer query, exercising discovery
+    // of a required extension that is absent from the global extension list.
+    let name = if layer.is_null() {
+        ash::ext::debug_utils::NAME
+    } else {
+        ash::ext::layer_settings::NAME
+    };
     let mut property = vk::ExtensionProperties::default();
     for (output, byte) in property
         .extension_name
         .iter_mut()
-        .zip(ash::ext::debug_utils::NAME.to_bytes_with_nul())
+        .zip(name.to_bytes_with_nul())
     {
         *output = *byte as c_char;
     }
@@ -320,6 +329,23 @@ unsafe extern "system" fn create_instance(
                 state.instance_callback = callback.pfn_user_callback;
                 state.user_data = callback.p_user_data;
             });
+        }
+        if header.s_type == vk::StructureType::LAYER_SETTINGS_CREATE_INFO_EXT {
+            // SAFETY: The real constructor supplies this concrete structure and
+            // its live setting array, names, and correctly aligned BOOL32 value.
+            let settings = unsafe { &*next.cast::<vk::LayerSettingsCreateInfoEXT<'_>>() };
+            // SAFETY: The setting and all referenced values are supplied by the
+            // real constructor and remain live for this synchronous call.
+            let requested = settings.setting_count == 1
+                && unsafe {
+                    let setting = &*settings.p_settings;
+                    CStr::from_ptr(setting.p_layer_name) == VALIDATION_LAYER
+                        && CStr::from_ptr(setting.p_setting_name) == c"validate_sync"
+                        && setting.ty == vk::LayerSettingTypeEXT::BOOL32
+                        && setting.value_count == 1
+                        && *setting.p_values.cast::<vk::Bool32>() == vk::TRUE
+                };
+            STATE.with(|state| state.borrow_mut().sync_validation_requested = requested);
         }
         next = header.p_next;
     }

@@ -1,9 +1,8 @@
 //! Unique buffer/allocation ownership and bounded, copy-based CPU access.
 //!
-//! No buffer handle escapes this module and no GPU commands are submitted yet.
-//! Submission support must retain buffers from recording through completion,
-//! exclude CPU access while they are in use, and establish written contents only
-//! after successful completion. Rust's mutable borrow alone cannot prove that.
+//! Transfer owners move buffers from recording through successful completion,
+//! excluding CPU access during GPU use. The private raw-handle accessor requires
+//! that ownership contract; only successful completion establishes GPU contents.
 
 use std::error::Error;
 use std::fmt;
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use ash::vk;
 use vk_mem::Alloc;
 
+use super::device::DeviceState;
 use super::instance::LOG_TARGET;
 use super::memory::{MemoryOwner, VulkanAllocator};
 
@@ -73,6 +73,7 @@ impl BufferRole {
 
 #[derive(Debug)]
 pub(super) enum BufferError {
+    DeviceUnavailable(DeviceState),
     InvalidSize {
         role: BufferRole,
         size: vk::DeviceSize,
@@ -104,6 +105,9 @@ pub(super) enum BufferError {
 impl fmt::Display for BufferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DeviceUnavailable(state) => {
+                write!(f, "buffer Device is {state:?}; normal use is stopped")
+            }
             Self::InvalidSize { role, size } => {
                 write!(f, "invalid {role:?} buffer size {size}")
             }
@@ -249,6 +253,10 @@ impl VulkanAllocator {
         size: vk::DeviceSize,
     ) -> Result<VulkanBuffer, BufferError> {
         let result = (|| {
+            self.owner
+                .device
+                .ensure_active()
+                .map_err(BufferError::DeviceUnavailable)?;
             let (buffer, allocation) =
                 create_resource(role, size, |buffer_info, allocation_info| {
                     // SAFETY: The live allocator owns its Vulkan dependencies. The
@@ -273,12 +281,44 @@ impl VulkanAllocator {
             owner.memory_type = info.memory_type;
             owner.memory_properties =
                 properties.memory_types[info.memory_type as usize].property_flags;
+            let name = match role {
+                BufferRole::Upload => c"renderer.upload",
+                BufferRole::DeviceTransfer => c"renderer.device-transfer",
+                BufferRole::Readback => c"renderer.readback",
+            };
+            // SAFETY: The unique live buffer belongs to this Device, debug_utils
+            // is enabled, and the borrowed name remains live through the call.
+            unsafe {
+                owner
+                    .owner
+                    .device
+                    .debug_utils()
+                    .set_debug_utils_object_name(
+                        &vk::DebugUtilsObjectNameInfoEXT::default()
+                            .object_handle(buffer)
+                            .object_name(name),
+                    )
+            }
+            .map_err(|result| {
+                owner.owner.device.observe_result(result);
+                BufferError::Vulkan {
+                    operation: "vkSetDebugUtilsObjectNameEXT",
+                    role,
+                    size,
+                    offset: 0,
+                    len: size,
+                    result,
+                }
+            })?;
             tracing::info!(target: LOG_TARGET, buffer = ?owner.buffer, role = ?role,
                 size, allocation_size = info.size, memory_type = owner.memory_type,
                 memory_properties = ?owner.memory_properties,
                 "Vulkan buffer allocated");
             Ok(owner)
         })();
+        if let Err(BufferError::Vulkan { result, .. }) = &result {
+            self.owner.device.observe_result(*result);
+        }
         if let Err(error) = &result {
             tracing::error!(target: LOG_TARGET, role = ?role, size, error = %error,
                 "Vulkan buffer creation failed");
@@ -288,12 +328,46 @@ impl VulkanAllocator {
 }
 
 impl VulkanBuffer {
+    pub(super) fn owner(&self) -> &Arc<MemoryOwner> {
+        &self.owner
+    }
+
+    pub(super) fn role(&self) -> BufferRole {
+        self.role
+    }
+
+    pub(super) fn size(&self) -> vk::DeviceSize {
+        self.size
+    }
+
+    pub(super) fn fully_initialized(&self) -> bool {
+        self.initialized.contains(&(0..self.size))
+    }
+
+    /// # Safety
+    /// The caller must retain exclusive ownership from command recording through
+    /// successful completion or lost-device retirement; no concurrent CPU access
+    /// or native escape beyond that owner is allowed.
+    pub(super) unsafe fn transfer_handle(&self) -> vk::Buffer {
+        self.buffer
+    }
+
+    /// # Safety
+    /// The caller has proved successful completion of a full-buffer GPU write.
+    pub(super) unsafe fn establish_gpu_contents(&mut self) {
+        self.initialized.insert(0..self.size);
+    }
+
     pub(super) fn write(
         &mut self,
         offset: vk::DeviceSize,
         bytes: &[u8],
     ) -> Result<(), BufferError> {
         let result = (|| {
+            self.owner
+                .device
+                .ensure_active()
+                .map_err(BufferError::DeviceUnavailable)?;
             self.role.host_access("write")?;
             let range = checked_range(self.role, self.size, offset, bytes.len())?;
             if range.is_empty() {
@@ -302,7 +376,7 @@ impl VulkanBuffer {
             let mut access = host_access::VmaAccess::new(&self.owner.raw, &mut self.allocation);
             // SAFETY: The host role requested mappable memory, and the checked
             // range lies within the unique live allocation and is addressable.
-            // No native handle escapes and no GPU commands exist in this stage.
+            // Transfer owners move this buffer away during any GPU use.
             let copied = unsafe {
                 host_access::write(
                     &mut access,
@@ -313,6 +387,7 @@ impl VulkanBuffer {
                 )
             };
             if let Err(error) = copied {
+                self.owner.device.observe_result(error.result);
                 // A failed cache operation does not restore old contents. Stop
                 // assuming any previous initialization until a write succeeds.
                 self.initialized.0.clear();
@@ -331,6 +406,10 @@ impl VulkanBuffer {
         output: &mut [u8],
     ) -> Result<(), BufferError> {
         let result = (|| {
+            self.owner
+                .device
+                .ensure_active()
+                .map_err(BufferError::DeviceUnavailable)?;
             self.role.host_access("read")?;
             let range = checked_range(self.role, self.size, offset, output.len())?;
             if !self
@@ -348,7 +427,7 @@ impl VulkanBuffer {
             let mut access = host_access::VmaAccess::new(&self.owner.raw, &mut self.allocation);
             // SAFETY: Checked range and host-visible allocation as in write.
             // The initialized-range check also establishes readable contents;
-            // no GPU commands can race the copy or invalidate these contents.
+            // no transfer owner can simultaneously own/use this buffer.
             unsafe {
                 host_access::read(
                     &mut access,
@@ -358,7 +437,10 @@ impl VulkanBuffer {
                     output,
                 )
             }
-            .map_err(|error| self.access_error(error, offset, output.len()))
+            .map_err(|error| {
+                self.owner.device.observe_result(error.result);
+                self.access_error(error, offset, output.len())
+            })
         })();
         self.log_access_error("read", &result);
         result
@@ -391,7 +473,8 @@ impl VulkanBuffer {
 impl Drop for VulkanBuffer {
     fn drop(&mut self) {
         // SAFETY: This owner uniquely owns the pair; all scoped mappings have
-        // ended and no native buffer handle or GPU work exists outside here.
+        // ended and any recording/pending transfer owner has retired before
+        // returning the buffer or allowing this destruction.
         // Its Arc keeps VMA and Device alive throughout this destruction.
         unsafe {
             self.owner

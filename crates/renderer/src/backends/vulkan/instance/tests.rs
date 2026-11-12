@@ -25,6 +25,7 @@ fn reports_all_discoverable_missing_prerequisites_together() {
             },
             PrerequisiteFailure::MissingLayer(VALIDATION_LAYER),
             PrerequisiteFailure::MissingExtension(ash::ext::debug_utils::NAME),
+            PrerequisiteFailure::MissingExtension(ash::ext::layer_settings::NAME),
         ]
     );
     let text = InitError::Prerequisites(failures).to_string();
@@ -33,6 +34,7 @@ fn reports_all_discoverable_missing_prerequisites_together() {
         "1.3.0",
         "VK_LAYER_KHRONOS_validation",
         "VK_EXT_debug_utils",
+        "VK_EXT_layer_settings",
     ] {
         assert!(
             text.contains(expected),
@@ -44,7 +46,7 @@ fn reports_all_discoverable_missing_prerequisites_together() {
             available(
                 api,
                 &["VK_LAYER_KHRONOS_validation"],
-                &["VK_EXT_debug_utils"]
+                &["VK_EXT_debug_utils", "VK_EXT_layer_settings"]
             )
             .check()
             .is_ok()
@@ -54,7 +56,7 @@ fn reports_all_discoverable_missing_prerequisites_together() {
     let Err(InitError::Prerequisites(failures)) = available(
         variant_api,
         &["VK_LAYER_KHRONOS_validation"],
-        &["VK_EXT_debug_utils"],
+        &["VK_EXT_debug_utils", "VK_EXT_layer_settings"],
     )
     .check() else {
         panic!("nonstandard API variant must be rejected");
@@ -87,7 +89,7 @@ fn failed_query_preserves_cause_and_other_known_missing_requirements() {
     let InitError::Prerequisites(failures) = error else {
         panic!("wrong error type");
     };
-    assert_eq!(failures.len(), 3);
+    assert_eq!(failures.len(), 4);
     assert!(
         failures
             .iter()
