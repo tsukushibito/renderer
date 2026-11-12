@@ -108,10 +108,11 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
     }
     let resident = renderer
         .residents
-        .get(&MeshVersionKey { mesh, revision: 1 })
+        .get(&MeshVersionKey::new(mesh, 1))
         .unwrap();
-    let vertices = resident.buffers.vertices;
-    let indices = resident.buffers.indices;
+    let buffers = resident.buffers.as_ref().unwrap();
+    let vertices = buffers.vertices;
+    let indices = buffers.indices;
     read_all(&mut renderer, vertices, &generated.vertices);
     read_all(&mut renderer, indices, &generated.indices);
     assert!(

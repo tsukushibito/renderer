@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt::Write as _,
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -54,10 +55,10 @@ struct Sample {
     submit_us: f64,
     active_us: f64,
     observed_latency_us: f64,
-    prepare_us: f64,
-    record_us: f64,
-    native_submit_us: f64,
-    retire_us: f64,
+    prepare_us: Option<f64>,
+    record_us: Option<f64>,
+    native_submit_us: Option<f64>,
+    retire_us: Option<f64>,
     gpu_us: Option<f64>,
 }
 
@@ -213,10 +214,10 @@ impl Driver {
         if let Some(sample) = &mut expected.sample {
             sample.observed_latency_us = micros(expected.submitted.elapsed());
             if let Some(metrics) = completed.result.metrics() {
-                sample.prepare_us = micros(metrics.cpu_prepare);
-                sample.record_us = micros(metrics.cpu_record);
-                sample.native_submit_us = micros(metrics.cpu_submit);
-                sample.retire_us = micros(metrics.cpu_retire);
+                sample.prepare_us = Some(micros(metrics.cpu_prepare));
+                sample.record_us = Some(micros(metrics.cpu_record));
+                sample.native_submit_us = Some(micros(metrics.cpu_submit));
+                sample.retire_us = Some(micros(metrics.cpu_retire));
                 if let GpuTiming::Available { elapsed, .. } = metrics.gpu {
                     sample.gpu_us = Some(micros(elapsed));
                 }
@@ -460,7 +461,10 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     )?;
     driver.drain()?;
 
-    // A CPU snapshot is a backend-independent input, not owned by this renderer.
+    // The same owned snapshot survives CPU deletion and remains an input to a
+    // second independent backend residency cache.
+    assets.delete_mesh(stream[0])?;
+    assets.delete_material(blue)?;
     let mut second = Driver::new(mode)?;
     let second_monitor = second.renderer.runtime().validation_monitor();
     second.ready(&replay)?;
@@ -488,6 +492,15 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let validation = monitor.report();
     assert_validation(mode, &validation)?;
     let mut output = String::new();
+    let command = |program: &str, arguments: &[&str]| {
+        Command::new(program)
+            .args(arguments)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .unwrap_or_else(|| "unavailable".into())
+    };
     write!(
         output,
         "{{\n\"schema\":1,\"mode\":{},\"device\":{},\"driver\":{},\"api\":{},\n",
@@ -495,6 +508,15 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         json_string(&device.name),
         json_string(&format!("{:?}", device.driver_info)),
         json_string(&device.api_version)
+    )?;
+    write!(
+        output,
+        "\"host\":{{\"source_commit\":{},\"rustc\":{},\"os\":{},\"arch\":{},\"debug_assertions\":{}}},\n",
+        json_string(&command("git", &["rev-parse", "HEAD"])),
+        json_string(&command("rustc", &["--version"])),
+        json_string(std::env::consts::OS),
+        json_string(std::env::consts::ARCH),
+        cfg!(debug_assertions)
     )?;
     write!(
         output,
@@ -514,6 +536,16 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         option_bool(validation.core_validation),
         option_bool(validation.synchronization_validation)
     )?;
+    let cache_json = format!(
+        "{{\"resident_meshes\":{},\"resident_logical_bytes\":{},\"ready_meshes\":{},\"queued_meshes\":{},\"prepared_retained_meshes\":{},\"pending_upload_submissions\":{},\"evictions\":{}}}",
+        cache.resident_meshes,
+        cache.resident_logical_bytes,
+        cache.ready_meshes,
+        cache.queued_meshes,
+        cache.prepared_retained_meshes,
+        cache.pending_upload_submissions,
+        cache.evictions
+    );
     write!(
         output,
         "\"memory\":{{\"registered_logical_bytes\":{},\"retained_logical_bytes\":{},\"cached_logical_bytes\":{},\"vma_allocation_bytes\":{},\"vma_block_bytes\":{},\"upload_peak_reserved_bytes\":{},\"upload_capacity_bytes\":{},\"resource_creates\":{},\"resource_reuses\":{},\"mesh_cache\":{}}},\n",
@@ -526,7 +558,7 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         memory.upload.capacity_bytes,
         stats.resources_created,
         stats.resources_reused,
-        json_string(&format!("{cache:?}"))
+        cache_json
     )?;
     write!(
         output,
@@ -566,10 +598,10 @@ pub(super) fn run(mode: Mode) -> Result<String> {
             sample.submit_us,
             sample.active_us,
             sample.observed_latency_us,
-            sample.prepare_us,
-            sample.record_us,
-            sample.native_submit_us,
-            sample.retire_us,
+            optional_number(sample.prepare_us),
+            optional_number(sample.record_us),
+            optional_number(sample.native_submit_us),
+            optional_number(sample.retire_us),
             sample
                 .gpu_us
                 .map_or_else(|| "null".into(), |v| v.to_string())
@@ -577,6 +609,10 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     }
     output.push_str("\n],\"measurement_limits\":\"CPU active excludes capacity waits; GPU includes readback, excludes presentation. Observed latency starts after submit return and ends at completion observation, not scanout. No clock/affinity/power control or performance baseline.\"\n}\n");
     Ok(output)
+}
+
+fn optional_number(value: Option<f64>) -> String {
+    value.map_or_else(|| "null".into(), |value| value.to_string())
 }
 
 fn optional_percentile(values: impl Iterator<Item = f64>, fraction: f64) -> String {
