@@ -91,7 +91,8 @@ impl ImageDesc {
 }
 
 /// Runtime-created snapshot. A pending producer is an availability condition,
-/// not a successful CPU wait. Runtime submission revalidates its revision.
+/// not a successful CPU wait. Submission revalidates its content revision;
+/// read-only uses preserve it and rebase native synchronization state at submit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportBuffer {
     pub(crate) key: ResourceKey,
@@ -108,6 +109,8 @@ impl ImportBuffer {
     }
 }
 
+/// Runtime image contents, independent of the latest scheduled layout/access.
+/// Read-only uses preserve this snapshot; writes or invalidation make it stale.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportImage {
     pub(crate) key: ResourceKey,

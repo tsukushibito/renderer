@@ -53,8 +53,8 @@ pub(super) fn begin(
 fn state(output: &mut String, label: &str, snapshot: &Snapshot) {
     writeln!(
         output,
-        "  {label} revision={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?}",
-        snapshot.revision, snapshot.initialized, snapshot.stage, snapshot.access,
+        "  {label} revision={} last_use_serial={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?}",
+        snapshot.revision, snapshot.serial, snapshot.initialized, snapshot.stage, snapshot.access,
         snapshot.layout, snapshot.writer_stage, snapshot.writer_access,
     )
     .expect("writing String");
