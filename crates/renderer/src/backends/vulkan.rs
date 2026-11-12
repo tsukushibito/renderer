@@ -7,9 +7,11 @@
     allow(dead_code, reason = "private bootstrap awaits runtime integration")
 )]
 
+mod buffer;
 mod device;
 mod diagnostics;
 mod instance;
+mod memory;
 
 #[cfg(test)]
 fn real_vulkan_dispatch() -> tracing::Dispatch {

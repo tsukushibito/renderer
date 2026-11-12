@@ -331,8 +331,8 @@ fn with_create_info<T>(
     create(&create_info)
 }
 
-/// Owns the Instance until the Device is destroyed. There are no submitted GPU
-/// commands, Device child resources, or external queue users in this bootstrap.
+/// Owns the Instance until the Device is destroyed. Allocator/buffer owners keep
+/// this owner alive until their children are destroyed. No commands are submitted.
 pub(super) struct VulkanDevice {
     _instance: VulkanInstance,
     device: ash::Device,
@@ -347,6 +347,26 @@ impl VulkanDevice {
             tracing::error!(target: LOG_TARGET, error = %error, "Vulkan Device initialization failed");
         }
         result
+    }
+
+    pub(super) fn instance_raw(&self) -> &ash::Instance {
+        self._instance.raw()
+    }
+
+    pub(super) fn raw(&self) -> &ash::Device {
+        &self.device
+    }
+
+    pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
+        self.selected.physical_device
+    }
+
+    pub(super) fn name(&self) -> &str {
+        &self.selected.info.name
+    }
+
+    pub(super) fn device_type(&self) -> vk::PhysicalDeviceType {
+        self.selected.info.device_type
     }
 
     fn initialize(instance: VulkanInstance) -> Result<Self, DeviceInitError> {
@@ -418,8 +438,10 @@ impl VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
-        // SAFETY: This private bootstrap has never submitted GPU commands or
-        // created Device children. It exclusively owns the Device and Queue;
+        // SAFETY: This private bootstrap has never submitted GPU commands.
+        // The containing memory owner drops its Allocator before this Device,
+        // and each live buffer retains that owner. There are no remaining children.
+        // It exclusively owns the Device and Queue;
         // the Instance, loader, and diagnostic callback remain live throughout.
         // Later submission support must establish its completion contract here.
         unsafe { self.device.destroy_device(None) };

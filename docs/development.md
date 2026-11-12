@@ -3,12 +3,15 @@
 現時点の対象は[実装方針](renderer-implementation-policy.md)のM1基盤です。
 privateなVulkan 1.3 Instanceの初期化・診断に加え、`renderer-7ro`で
 デバイスの能力照会・自動選択、Deviceと単一Graphics＋Computeキューの作成・解放を扱います。
+`renderer-yr6`ではVMAによるbufferの所有、CPUアクセス、解放を扱います。
 転送、描画、公開APIはまだありません。
-採用した契約は[ADR 0002](adr/0002-vulkan-instance-bootstrap.md)と
+採用した契約は[ADR 0002](adr/0002-vulkan-instance-bootstrap.md)、
 [ADR 0003](adr/0003-vulkan-device-bootstrap.md)、
+[ADR 0004](adr/0004-vma-buffer-ownership.md)に記載しています。
 環境構築時の実測記録は[M0の確認結果](m0-baseline.md)を参照してください。
 qhgの実行結果と未検証範囲は[Instance初期化・診断の確認結果](m1-instance-baseline.md)に記載しています。
 Deviceの実行結果と未検証範囲は[Device・単一キューの確認結果](m1-device-baseline.md)を参照してください。
+bufferの実行結果と未検証範囲は[VMA bufferの確認結果](m1-buffer-baseline.md)を参照してください。
 
 ## 必要なツール
 
@@ -18,6 +21,7 @@ Deviceの実行結果と未検証範囲は[Device・単一キューの確認結�
 | Vulkan依存のビルド | 上記に加えてC++コンパイラー。WindowsはMSVC x64、Linuxはg++ |
 | 実Vulkan Instance試験 | Vulkan 1.3対応ドライバー／ローダー、`VK_LAYER_KHRONOS_validation`、`VK_EXT_debug_utils` |
 | 実Vulkan Device試験 | 上記に加え、Graphics＋Compute対応キューと必須3 featureを持つデバイス |
+| 実Vulkan buffer試験 | Device試験の条件に加え、用途に対応するbufferの作成・CPUアクセスに必要なメモリ |
 | 実行環境の調査 | Vulkan SDKのvulkaninfo |
 | 今後のシェーダー生成 | Vulkan SDK 1.4.341.1のglslc（shaderc v2026.1） |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../.beads/README.md)を参照 |
@@ -89,9 +93,9 @@ cargo test --locked --workspace --no-default-features --features vulkan
 ```
 
 `.github/workflows/ci.yml`はWindows / LinuxとCPU / Vulkan依存の組み合わせを確認します。
-通常のVulkan featureテストでは、要件判定、デバイス選択と作成設定、診断コールバック、失敗時の所有権を
-Vulkan実行環境なしで検証します。試験用のash関数テーブルによる解放順序の確認は、
-実ドライバーの動作検証とは区別します。
+通常のVulkan featureテストでは、要件判定、デバイス選択と作成設定、診断コールバック、
+bufferの範囲・初期化済み範囲の検証、CPUアクセスの手順と失敗時の後始末を、Vulkan実行環境なしで検証します。
+試験用のash関数テーブルやCPUメモリによる確認は、実ドライバー・VMAとの接続確認と区別します。
 
 ## 実Vulkan試験
 
@@ -125,7 +129,30 @@ CPU型も最後の候補として利用できますが、選択をログで明�
 CPU型での成功はソフトウェア実装上の確認として記録し、実GPUでの確認と分けます。
 上記の実GPU受入試験はCPU型を選んだ場合に失敗します。
 選択したデバイスの作成が失敗した場合は、そのデバイスと原因を報告して停止します。
-この段階ではbuffer／imageを作成せず、GPUへコマンドを投入しません。
+このDevice試験ではbuffer／imageを作成せず、GPUへコマンドを投入しません。
+
+### VMA bufferの所有・CPUアクセス
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan backends::vulkan::buffer::tests::vulkan_buffer_ -- --ignored --nocapture
+```
+
+Allocatorとupload用・GPU転送先用・readback用のbufferを作成し、CPUアクセスと解放を反復します。
+uploadはCPU書き込み専用、GPU転送先はCPUアクセス禁止、readbackはCPUから読み書きできる契約です。
+`write`／`read`へ渡したバイト列をコピーし、map／unmapと必要なflush／invalidateは内部で行います。
+マップした領域や生のポインターを呼び出し元へ返しません。
+読み出せる範囲は成功したwriteで初期化した範囲に限り、範囲外や未初期化範囲のreadはエラーにします。
+
+bufferはAllocationを単独で所有し、Allocator・Deviceの所有者を参照カウントで保持します。
+Allocatorの操作用ハンドルを先に解放してもbufferは有効です。すべてのbufferと操作用ハンドルを
+解放すると、Allocator、Device、Instanceの順で破棄します。これはGPU完了の保証とは別の契約です。
+GPUコマンドの投入・完了待ちと、実GPU転送後のreadback照合は後続の`renderer-dj3`で扱います。
+今回のreadback用bufferの照合はCPUで書き込んだ内容を対象にします。
+
+実際に選ばれたメモリのtypeとpropertyをログへ残し、coherent／non-coherent経路の実行状況を区別します。
+non-coherent向けのflush／invalidateと失敗時の後始末はCPU試験でも確認しますが、
+該当するメモリがないGPUでの成功をnon-coherentの実機確認とは扱いません。
+CPU型を選択した場合も、この実GPU受入試験の成功には数えません。
 
 ### 判定条件
 
@@ -161,6 +188,8 @@ ERRORは`error`、WARNINGは`warn`、INFOは`info`、VERBOSEは`trace`へ対応�
 デバイス選択では候補と除外理由、選択理由、デバイス名・種別・API、vendor／device ID、
 driver名・追加情報・ID・生のバージョン値、選択したqueue familyとindexを記録します。
 `driverVersion`の符号化はドライバー依存のため、汎用のVulkan APIバージョンとして分解しません。
+bufferの作成では用途・要求サイズ・ハンドルと、選択されたメモリのtype・propertyを記録します。
+失敗時は操作名と元のVulkanエラーを保持し、CPUアクセス時の範囲や用途のエラーも報告します。
 
 診断は直近64件と最初のwarning／error 128件を保持します。件数は保持上限とは独立して数え、
 保持できなかった問題メッセージの件数も報告します。これは全ログの保存先ではありません。
