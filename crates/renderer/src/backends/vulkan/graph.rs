@@ -38,6 +38,7 @@ mod provenance;
 mod resources;
 mod shaders;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
+mod uploads;
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
 pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
