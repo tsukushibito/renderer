@@ -150,7 +150,7 @@ pub(super) fn finish(
             writeln!(
                 output,
                 "final resource={index} exported={}",
-                graph.exports.contains(&index),
+                graph.has_export(index),
             )
             .expect("writing String");
             state(output, "accepted_on_submit", snapshot);
