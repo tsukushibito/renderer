@@ -8,11 +8,15 @@ description = "RenderGraph-centered renderer for game engine integration"
 
 [features]
 default = []
-vulkan = ["dep:ash", "dep:vk-mem"]
+vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
 
 [dependencies]
 ash = { workspace = true, optional = true }
 vk-mem = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

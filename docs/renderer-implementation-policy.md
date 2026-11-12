@@ -378,7 +378,7 @@ ashを使っていてもGPUの同期や寿命は自動保証されない。Vulka
 | GPU統合・画像テスト | 描画、Compute連携、copy/readback、複数フレーム、遅延破棄、リサイズ、異なるバックエンドでの同等出力。 | 実機の対応バックエンド。 |
 | 性能テスト | グラフ構築・解析、記録・submit、パス別GPU時間、メモリ使用量、フレーム時間分布。 | 条件を固定した実機。 |
 
-GPUテストではValidation Layerを基本とし、対応環境ではSynchronization Validationも利用する。検証を通ることだけを正しさの証明にしない。Validation errorは原則ゼロ、warningは調査・記録し、広範囲な抑制で隠さない。[^validation]
+GPUテストではValidation Layerを基本とし、対応環境ではSynchronization Validationも利用する。検証を通ることだけを正しさの証明にしない。Validationのwarning・errorはともにゼロを要求する。例外は確認済みの誤検出だけとし、メッセージID・対象バージョン・発生条件・根拠を個別に記録し、ログにも残す。意図的な利用や性能上の助言は許容理由にせず、広範囲な抑制で隠さない。[^validation]
 
 画像比較は単純シーンの厳密比較と、浮動小数点差を考慮した許容誤差を使い分ける。seed・カメラ・解像度・描画条件を固定し、変更した基準画像には変更理由を添える。
 
