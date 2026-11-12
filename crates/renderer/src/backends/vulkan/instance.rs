@@ -19,7 +19,7 @@ pub(super) const LOG_TARGET: &str = "renderer::vulkan";
 /// Validation stays mandatory unless the caller explicitly selects a performance
 /// run. Loader environment/settings may still inject layers in either mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum ValidationMode {
+pub enum ValidationMode {
     #[default]
     Required,
     Disabled,
@@ -324,9 +324,14 @@ pub(super) struct VulkanInstance {
     debug_utils: Option<ash::ext::debug_utils::Instance>,
     messenger: Option<vk::DebugUtilsMessengerEXT>,
     _diagnostics: Arc<Diagnostics>,
+    validation: ValidationMode,
 }
 
 impl VulkanInstance {
+    pub(super) fn validation_mode(&self) -> ValidationMode {
+        self.validation
+    }
+
     pub(super) fn new(diagnostics: Arc<Diagnostics>) -> Result<Self, InitError> {
         Self::with_validation(diagnostics, ValidationMode::default())
     }
@@ -344,6 +349,23 @@ impl VulkanInstance {
 
     pub(super) fn raw(&self) -> &ash::Instance {
         &self.instance
+    }
+
+    #[cfg(all(feature = "presentation", windows))]
+    pub(super) fn entry(&self) -> &Entry {
+        &self.entry
+    }
+
+    #[cfg(all(feature = "presentation", windows))]
+    pub(super) fn with_extensions(
+        diagnostics: Arc<Diagnostics>,
+        validation: ValidationMode,
+        extensions: &[&'static CStr],
+    ) -> Result<Self, InitError> {
+        // SAFETY: The platform loader owns these entry points through Instance
+        // destruction, just as on the headless creation path.
+        let entry = unsafe { Entry::load() }.map_err(InitError::Loader)?;
+        Self::initialize_with_extensions(entry, diagnostics, validation, extensions, || Ok(()))
     }
 
     fn load_and_initialize(
@@ -377,7 +399,33 @@ impl VulkanInstance {
         validation: ValidationMode,
         before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
     ) -> Result<Self, InitError> {
-        discover(&entry, validation)?;
+        Self::initialize_with_extensions(
+            entry,
+            diagnostics,
+            validation,
+            &[],
+            before_messenger_create,
+        )
+    }
+
+    fn initialize_with_extensions(
+        entry: Entry,
+        diagnostics: Arc<Diagnostics>,
+        validation: ValidationMode,
+        additional_extensions: &[&'static CStr],
+        before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
+    ) -> Result<Self, InitError> {
+        let discovery = discover(&entry, validation)?;
+        if let Some(available) = discovery.extensions {
+            let missing = additional_extensions
+                .iter()
+                .filter(|name| !available.contains(name.to_string_lossy().as_ref()))
+                .map(|&name| PrerequisiteFailure::MissingExtension(name))
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(InitError::Prerequisites(missing));
+            }
+        }
         let application_info = vk::ApplicationInfo::default()
             .application_name(c"renderer")
             .engine_name(c"renderer")
@@ -390,7 +438,10 @@ impl VulkanInstance {
         let extensions: Vec<_> = validation
             .extensions()
             .iter()
+            .chain(additional_extensions)
             .map(|name| name.as_ptr())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
         let enable_sync: vk::Bool32 = vk::TRUE;
         // ash's byte-slice setter counts bytes rather than BOOL32 values. Keep
@@ -430,6 +481,7 @@ impl VulkanInstance {
             debug_utils: None,
             messenger: None,
             _diagnostics: Arc::clone(&diagnostics),
+            validation,
         };
         for name in [
             c"vkCreateDebugUtilsMessengerEXT",

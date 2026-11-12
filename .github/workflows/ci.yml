@@ -35,6 +35,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-2022]
         backend: [cpu, vulkan]
+        include:
+          - os: windows-2022
+            backend: presentation
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
@@ -51,7 +54,7 @@ jobs:
           BACKEND: ${{ matrix.backend }}
         run: |
           $featureArgs = @('--no-default-features')
-          if ($env:BACKEND -eq 'vulkan') { $featureArgs += @('--features', 'vulkan') }
+          if ($env:BACKEND -ne 'cpu') { $featureArgs += @('--features', $env:BACKEND) }
           cargo check --locked --workspace --all-targets @featureArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings

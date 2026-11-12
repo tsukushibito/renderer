@@ -11,6 +11,8 @@ use tracing::{Dispatch, Level};
 
 const RECENT_MESSAGE_LIMIT: usize = 64;
 const PROBLEM_MESSAGE_LIMIT: usize = 128;
+const STARTUP_STATUS_LIMIT: usize = 8;
+const STARTUP_STATUS_ID: &str = "WARNING-CreateInstance-status-message";
 
 #[derive(Clone, Debug)]
 pub(super) struct DiagnosticMessage {
@@ -35,6 +37,9 @@ pub(super) struct DiagnosticSnapshot {
     /// The first warning/error messages; verbose traffic cannot displace them.
     pub problems: Vec<DiagnosticMessage>,
     pub dropped_problems: usize,
+    /// Distinct layer startup reports must survive later verbose traffic.
+    pub layer_status_messages: Vec<String>,
+    pub dropped_layer_statuses: usize,
 }
 
 impl DiagnosticSnapshot {
@@ -51,6 +56,8 @@ struct RetainedMessages {
     recent: VecDeque<DiagnosticMessage>,
     problems: Vec<DiagnosticMessage>,
     dropped_problems: usize,
+    layer_status_messages: Vec<String>,
+    dropped_layer_statuses: usize,
 }
 
 pub(super) struct Diagnostics {
@@ -105,6 +112,8 @@ impl Diagnostics {
             messages: retained.recent.iter().cloned().collect(),
             problems: retained.problems.clone(),
             dropped_problems: retained.dropped_problems,
+            layer_status_messages: retained.layer_status_messages.clone(),
+            dropped_layer_statuses: retained.dropped_layer_statuses,
         }
     }
 
@@ -129,6 +138,15 @@ impl Diagnostics {
 
     fn retain(&self, message: &DiagnosticMessage) {
         let mut retained = self.lock_retained();
+        if message.message_id_name.as_deref() == Some(STARTUP_STATUS_ID)
+            && !retained.layer_status_messages.contains(&message.message)
+        {
+            if retained.layer_status_messages.len() < STARTUP_STATUS_LIMIT {
+                retained.layer_status_messages.push(message.message.clone());
+            } else {
+                retained.dropped_layer_statuses = retained.dropped_layer_statuses.saturating_add(1);
+            }
+        }
         if message.severity.intersects(
             vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
                 | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,

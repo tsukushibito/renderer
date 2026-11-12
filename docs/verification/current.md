@@ -1,83 +1,11 @@
 # 現行実装の検証状況
 
 最終確認日: 2026-11-12。実行手順は[開発ガイド](../guides/development.md)、
-ツールの使い方は[ツールガイド](../guides/tooling.md)、
-保証する契約は[Vulkanの設計判断](../design/vulkan.md)を参照する。
-ここには現行実装に対する最新の確認を記録し、過去版の記録はGit履歴で参照する。
+現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
+全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
+過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
-## RenderGraph設計ガイドの調査・文書確認
-
-2026-11-12、`renderer-sc3`で[RenderGraphベストプラクティス](../guides/rendergraph-best-practices.md)を追加した。
-Frostbite、Unreal、Unity、Filament、O3DE、RPS、Falcorの一次資料・固定版ソースと、
-Vulkan／VMA／D3D12／Metalの公式資料を照合した。API契約、一般推奨、設計上の選択、
-条件付き最適化、資料からの整理・推論を区別し、現行Graphの設計とは独立したガイドにした。
-文書レビュー、参照定義・相対リンク・目次アンカー・UTF-8と差分の空白検査を実施した。
-この変更は文書のみで、Rustのビルド・CPU／実GPU試験、比較対象エンジンの実行、
-GPU性能の比較測定は追加実行していない。以下の実装検証結果を更新するものではない。
-
-## RenderGraph設計ガイドに基づくレビューと改善
-
-2026-11-12、`renderer-6e3`で`7458e3a`の設計・実装・試験を
-[RenderGraphベストプラクティス](../guides/rendergraph-best-practices.md)と照合した。
-producer／hazard、culling後の順序、内容有効性、import/export、同期、所有・完了・失敗、
-CPU解析・保持コスト、診断性を確認し、次の5件を実装・検証した。
-確認した範囲で新しい同期・早期解放・producer意味論の確定バグは見つかっていない。
-
-| 課題 | 実装した改善 | 主な回帰確認 |
-|---|---|---|
-| `renderer-7vg` | reader履歴をarenaのindexで共有し、区間分割時の集合複製を廃止。writeで共有tailの再走査を避ける | metadata量の性質、部分write、既存dense参照との順序・循環比較 |
-| `renderer-ot0` | provenanceをBTreeMapへ変更し、交差する区間だけを更新・copy | 既知byte／未知の穴を参照モデルと照合、部分更新、self-copy、slice境界 |
-| `renderer-jtk` | 内容が不変でindex数・頂点数・Device上限が同じ検査結果を直近1件だけ再利用 | 反復時のscan回数、更新・copyによる失効、異なる境界、cloneの独立性 |
-| `renderer-v6c` | 完了情報を単調serialだけにし、不要なcompleted Snapshotと二重cloneを除去 | 1 MiBのAをBで全面更新し正常Drop後AのWeakが失効、Bの内容・最新provenance保持 |
-| `renderer-9d9` | 通常submitでは作らない、要求時のnative lowering診断を追加 | 実barrier値、import状態、HOST_READ、失敗後の再実行、資源再利用のkey世代とhandle対応 |
-
-### CPU費用の比較
-
-以下は同じCPU・Rust 1.99.0の`rustc --edition 2024 -O`で、変更前`7458e3a`の保存ソースと
-変更後の実装を使った局所的な比較である。Graph解析では構築とdump生成は計測外。
-全域RasterをN回した後に小範囲readbackをN回行う同じ入力を使った（3回中央値）。
-
-| N | compile修正前 | 修正後 | reader格納entry／node数 |
-|---:|---:|---:|---:|
-| 512 | 8.921 ms | 2.307 ms | 263,680 → 1,536 |
-| 1,024 | 32.597 ms | 3.833 ms | 1,051,648 → 3,072 |
-| 2,048 | 126.739 ms | 7.935 ms | 4,200,448 → 6,144 |
-
-小さいwriteとindex検査は実装を直接includeし、前後の実行順を交互に比較した。
-writeはwarm-up 2回＋5 sample、indexはwarm-up 2回＋20 sampleの中央値。
-index検査の各sampleはcacheのない同一内容から開始し、cloneの費用は計測外にした。
-
-| 入力・操作 | 修正前 | 修正後 |
-|---|---:|---:|
-| 4,096件の非重複4-byte write | 26.246 ms | 0.668 ms |
-| 8,192件の非重複4-byte write | 103.462 ms | 1.385 ms |
-| 999,999 indexのcold検査1回 | 0.315 ms | 0.328 ms |
-| 同じindex・境界の検査16回 | 4.560 ms | 0.284 ms |
-| 同じindex・境界の検査256回 | 74.648 ms | 0.285 ms |
-
-16,384 writeと狭いcopyも測定したが、OSの揺れが大きいため改善率の根拠には使わない。
-OS負荷・affinity・clockは固定しておらず、Graph全体のsubmit、GPU時間、FPS、代表sceneの
-性能実証とは区別する。cacheのない単発index検査が速くなる変更ではない。
-BTreeMapにはVecよりnode overheadが増え得る交換条件があり、provenance本体はx64で
-24→56 byte、cacheは1件限定。保持segment数はO(K)、snapshot cloneもO(K)のままである。
-reader arenaは解析終了まで保持し、触る区間数や実際に必要な依存が増える費用は残る。
-
-### 正しさと確認範囲
-
-CPU試験21単体＋2公開API、Vulkan付き95単体＋2公開API（19 ignored）、
-明示実GPU18件（2.29秒）、fmt、CPU／Vulkanの全target checkとClippy `-D warnings`が成功した。
-GPUではCore Validation＋SyncValの実効設定と、終了後までwarning／error／callback失敗ゼロを確認した。
-通常submitと診断付きsubmitの両方で内容を照合し、timeout／順不同wait／失敗後の回収も既存試験を維持した。
-独立した差分レビューでも修正を要する契約違反は見つかっていない。
-incremental cacheのhard link不可という環境warningは、ソースのClippy診断と区別する。
-
-比較の生ログ・再現物はGit対象外の`.tools/review-best-practices/compiler-after/`、
-`compiler-after-counts/`、`scaling/{writes-alternating,index-alternating}.log`、
-全体検証は`.tools/rendergraph-improvements/{cpu,vulkan}-{check,clippy,test}.log`と`gpu.log`にある。
-別GPU／driver、Linux、実native OOM／Device loss、将来のWSI／aliasing／複数queueは追加検証していない。
-Shader・依存versionは変更しておらず、再生成・依存監査・GPU性能測定は今回の確認に含めない。
-
-## 環境
+## 環境と対応範囲
 
 | 項目 | 確認値 |
 |---|---|
@@ -87,247 +15,122 @@ Shader・依存versionは変更しておらず、再生成・依存監査・GPU�
 | GPU / driver | NVIDIA GeForce RTX 3060 / NVIDIA 610.88 |
 | Vulkan SDK / Loader | 1.4.341.1 / 1.4.341 |
 | Instance / VMA要求API | Vulkan 1.3 |
-| Queue | family 0、index 0、Graphics＋Compute 1本 |
+| Queue | family 0、index 0、Graphics＋Compute、表示時は同じqueueのpresent対応も照会 |
+| bindings / allocator | ash 0.38.0+1.3.281、vk-mem 0.5.0、同梱VMA 3.3.0 |
+| Windows表示依存 | winit 0.30.13、ash-window 0.13.0、raw-window-handle 0.6.2 |
 
-## 正しさと品質確認
+CPUのGraph・engine入力はGPU・windowなしで構築できる。
+表示はWindows、EXT swapchain maintenance1と依存拡張・feature、
+同一Graphics＋Compute＋present queue、SRGB_NONLINEARのRGBA8/BGRA8_SRGB、OPAQUE対応に限定する。
+実機で必要能力を照会した。固定bindingsにあるEXT版を利用し、headlessの必要能力は増やしていない。
+別queue、拡張なしfallback、透明Window、HDR、任意shaderは対応したと扱わない。
+
+## 品質ゲート
 
 | 確認 | 結果 |
 |---|---|
-| fmt、CPUのみ／Vulkanの全target check・Clippy `-D warnings` | 成功 |
-| CPUのみの通常試験 | 単体21件＋公開API 2件成功、Vulkan初期化なし |
-| Vulkan feature付き通常試験 | CPU単体95件＋公開API 2件成功、明示実行用19件はignored |
-| 実Vulkan正しさ試験 | 18件成功、2.29秒。既存9件＋Graph 9件 |
-| batchの全byte照合 | 2回の生成・終了で計56回、うち順不同の部分転送32回 |
-| Validation warning / error、callback内部失敗 | ゼロ |
-| Shader再生成一致 | 5種すべて`spirv-val`成功、チェックイン済みbinaryとSHA-256一致 |
-| ヘッドレス描画例 | 128×96のPPM生成成功、中央の黄色と背景の白を確認 |
-| Criterionの測定なしの実行確認 | 全24 case成功 |
-| 名前付き基準値との比較 | offlineで成功、保存済み基準の内容を保持 |
-| GitHub Actions | [Windows／Linuxの品質確認と依存監査の実行結果](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)を参照 |
+| fmt | 成功 |
+| CPU / Vulkan / Windows presentationの全target check・Clippy `-D warnings` | 3構成すべて成功 |
+| CPUのみの通常試験 | 単体25件＋公開API 3件成功 |
+| Vulkan featureの通常試験 | CPU単体106件＋公開API 3件成功、26 ignored |
+| presentation featureの通常試験 | CPU単体109件＋公開API 3件成功、27 ignored |
+| 明示headless実GPU試験 | 25件成功、2.71秒 |
+| headless＋実Win32 Surfaceを含む明示GPU試験 | 26件成功、4.77秒 |
+| Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
+| Shader再生成検証 | 5種類すべてspirv-val成功、固定SDKによる再生成とチェックインbinaryのSHA-256一致 |
+| headless例 | 従来の128×96描画・深度・Compute・合成とPPM出力成功 |
+| engine headless統合例 | 24 frame、3 in-flight、custom処理・history・更新/削除・遅延readbackの照合成功 |
+| engine Windows表示例 | `windowed --smoke`で12表示、resize・最小化復帰・pending終了、終了コード0 |
+| JSON出力のCPU試験 | Unicode/control文字escape、中央値とnearest-rank p95の2件成功 |
+| 依存監査 | cargo-deny 0.20.2でadvisories / bans / licenses / sources成功 |
+| 文書 | UTF-8、相対リンク・anchor、fenced block、差分空白を確認 |
 
-実GPU試験ではValidationとSyncValの実効設定を確認した。
-半開区間の境界、初期化範囲の穴、範囲統合、各追加順、RAW／WAR／WAW、
-read同士、同じcopy内の照合順、global依存後の追跡更新をCPUで確認した。
-GPUでは順不同の隙間付きupload、未初期化の隙間の拒否、各範囲のreadbackを照合した。
-実GPUの内容照合と、CPUだけで行う範囲管理の試験・性能測定は区別する。
+実GPUはignored試験を明示実行し、前提不足を成功・skipへ置き換えていない。
+CPU fallbackの成功で実GPU受入を代替しない。
+入力拒否を確認するアプリケーションERRORログはValidationの異常とは区別する。
+最終品質ゲートでは`CARGO_INCREMENTAL=0`を使い、初期の並行確認で見られた
+hard-link不可というincremental cacheの環境warningをソース診断と区別した。
 
-## RenderGraphの実行確認
+Windows / LinuxのCPU・Vulkan、およびWindows presentationのcheck・Clippy・CPU試験を
+[GitHub Actions](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)に設定している。
+このローカル確認はLinux実行や実GPU CIの合格を意味しない。
 
-[Graphの契約](../design/rendergraph.md)に従う宣言・解析・実行を追加した。
-GPUなしで型付きハンドル、byte範囲別producer、初期化の穴、read_write、
-Attachmentのclear／load／store／discard、循環、明示依存、出力・副作用の到達性を検査する。
-上書き済みwriterと不要readerを除去しつつ、liveなRAW／WAR／WAWを保つ回帰試験、
-同じ入力のdumpが一致する試験、公開APIだけで描画フローを構築する試験が成功した。
+## 動作・寿命・異常経路
 
-Graphの実GPU試験9件では次を確認した。Copy/import/reuseと完全M2フローでは診断付き投入も使い、
-用途・物理key・世代・handle・scope/layoutを確認し、通常投入と同じ期待内容を照合した。
-
-| 対象 | 実際に確認した動作 |
+| 領域 | 確認した契約 |
 |---|---|
-| Copyと非同期import/export | buffer／17×13画像のupload→Copy→readbackを全byte照合。A→Bを間のCPU waitなしで投入し、B→Aの順で待っても状態が巻き戻らない |
-| 容量・owner・世代 | 実行枠・資源・staging不足、削除・古いsnapshot・別runtimeの拒否。未投入失敗後の回収と再実行、二重readback消費の拒否 |
-| Compute | 17×13の端数dispatchを含むInvert→SwapRedBlueの依存を実行し、両画像の全byteを厳密照合。4回繰り返して画像／View・実行枠・descriptor arenaの再利用を確認 |
-| indexed meshと深度 | 16×16の遠い赤い四角形と近い緑の四角形を両描画順で全画素厳密照合。別rendering scopeのcolor／depth LOAD、vertex／indexのCopy read後の入力stageも確認 |
-| 完全なM2フロー | mesh＋depth→依存するCompute 2段→別画像へsampled composite→export／readbackを全画素照合。不要branchの除去、未完了Graphへの引き継ぎ、削除と再利用も確認 |
-| 記録前の拒否と回収 | descriptor容量不足と、実際のupload・部分書き換えから得た範囲外indexをnative draw前に拒否。取得済みleaseを返し、次の正常Graphが成功 |
-| 用途別Programの追加 | ComputeだけではRaster／Compositeを作らず、既存の未完了投入がある間に別種類を追加しても以前のpipelineを保持。出力と終了時までの所有を確認 |
-| 入力の寿命と将来のindex利用 | upload元とplanを破棄した未完了処理でもbuffer／画像のreadbackが正しい。importへ部分copyした内容を再exportなしで将来のindexに利用。先行Graphのbufferと新しい小画像の非同期引き継ぎも確認 |
-| 全面更新後の旧入力解放 | 1 MiBのAをBで全面上書きし、Bの正常Drop後にAのWeakが失効。最新Bは将来のindex用に保持し、readbackの全byteと終了後の解放も確認 |
+| Graph解析 | byte範囲ごとのproducer、RAW/WAR/WAW、生存解析、循環、未初期化の穴、Attachment load/store/discard、dead宣言も含む検査、安定dump |
+| native同期・内容 | upload/copy→vertex/index、color/depth→Compute→sampled composite→readback、端数dispatch、全byte/画素照合、用途別Programの保持、初回画像遷移の既存driver対策 |
+| import/export | pending producerをCPU waitせずconsumerへ引継ぎ、owner/generation/revision、read-onlyでも進むrevision、fresh import、順不同wait、削除と再利用 |
+| frame進行 | metadata Dropは非待機、Runtimeのbounded pending、投入前capacity拒否、単件poll、timeout保持、明示drain、native完了とreadbackのCPU寿命の分離 |
+| 再利用 | 3 in-flight×4 roundで未読24 readback leaseを保持して再利用、warm-up後の作成数はresource 9 / execution 3 / descriptor arena 3で安定、結果byte不変 |
+| 容量・削除 | pending中の削除と旧key拒否、別entry/世代、size切替、4096-byte readback容量の不足と結果消費後の回復、既存の未投入失敗回収 |
+| history | 18 frameの連鎖＋read-only利用、初回・同extent reset・5×3へのresize、3件連続のhost未待機submit、pending consumer中reset、CPU参照との全byte照合 |
+| engine入力 | owner/世代付きmesh/material CRUD、immutable snapshot、旧snapshotの独立利用、View/model/tintの画素変化、empty draw、実index上限、GPU pending中の更新・削除 |
+| 準備と投入 | 二重prepare、build後CPU更新、旧uploadを含むsubmit、foreign Graph事前拒否、現在版mesh cacheを旧snapshotで置換しない |
+| custom pass | crate外のconsumerによる標準Graphへの処理追加、同寸linear RGBA8の契約、foreign handle/format/extent/未初期化の拒否、不要branchの除去 |
+| 計測query | 通常off、pending lease保持、disable後の受理済みsample回収、完了後即再利用、readbackの遅延消費、有効bit幅・wrap・availability |
+| WSI | 実Win32 Surfaceで18表示、各frameのheadless画素照合、resize/連続resize、ゼロextent/最小化復帰、取得後cancel、pending close、Windowの保持と解放 |
+| 失敗状態 | CPU境界試験でsubmit OOMの状態不変、timeout/不確実失敗の保持、Device loss、presentのenqueue区分、SUBOPTIMAL、上限なし画像数等を確認 |
 
-描画fixtureは整数pixel境界と0／1の色、Computeは0〜255の既知byteパターンを使い、
-どちらも浮動小数点の許容誤差を設けずに厳密比較した。
-すべてCore validation＋SyncValの実効設定と、破棄後までの診断を検査した。
-入力拒否を確認するアプリケーションERRORログは、Validationの異常とは区別する。
-pipelineはruntimeで保持し、再実行で画像／View、descriptor arena、実行枠の作成・再利用カウンターを確認した。
-GPU時間やFPSの新しい測定ではない。compilerと内容追跡のCPU比較は下記に分けて記録する。
+未完了所有の保証は「GPUが遅いはず」という時間の推測に置かず、CPU状態試験と
+実際の複数未待機submit・内容照合で分けて確認した。
+WSI実試験は主に正常/resize/cancel経路であり、native OOM・Device loss・Surface lossを
+実driverへ発生させた試験とは区別する。
 
-品質確認と関連ツールのコマンドは次のとおり。今回の全target check・Clippy・testはCPUのみとVulkanの両構成で成功した。
-Shader再生成・依存監査・描画例の実行結果は前回の記録であり、今回の追加実行範囲とは区別する。
+frame/metrics、engine/custom、WSIを独立レビューした。
+CPU retireにnative実行枠のreset費用が含まれない点、release失敗後の再release、
+terminal pending残留による回収停止は修正し、最終差分を再確認した。
+追加の確定した同期・早期解放問題は見つかっていない。これは未確認環境までの保証ではない。
 
-```powershell
-cargo fmt --all -- --check
-cargo check --locked --workspace --all-targets --no-default-features
-cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
-cargo test --locked --workspace --no-default-features
-cargo check --locked --workspace --all-targets --no-default-features --features vulkan
-cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan -- -D warnings
-cargo test --locked --workspace --no-default-features --features vulkan
-cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_ -- --ignored --nocapture --test-threads=1
-& crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
-& ./.tools/cargo-deny/bin/cargo-deny.exe --locked --color never check
-cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
-```
+## 採用した基準と制限
 
-今回の全体検証ログは`.tools/rendergraph-improvements/`を参照する。Shader・依存監査・描画例の
-前回の生ログは`.tools/vulkan-research/m2-fixes-{cpu,vulkan,gpu,shaders,deny,example}.log`、
-描画例は`.tools/m2-fixes.ppm`に保存した。Rustのincremental cacheでhard linkが使えないという
-実行環境のwarningはあったが、ソースのClippy `-D warnings`は成功した。
+既存ExecutionPool・staging・画像/View・descriptorを活用し、frameごとの新設poolや
+全面idleを導入していない。通常frameはpollで回収し、Dropの待機に依存しない。
+単一queue、物理aliasingなし、通常descriptor set、管理下shaderという基準を維持する。
 
-## CPU転送計画の性能測定
+表示はGraphと同じqueueへの別submitとし、Graph解析にSwapchain所有を持ち込まない。
+sourceのcanonical状態とGPU leaseを共有する。submit追加のCPU費用・latencyを最適化済みとは主張しない。
+EXT maintenance1のpresent fenceと通常GPU参照の両方を回収根拠に使い、描画Fenceだけでpresent終了を推定しない。
+旧Swapchain作成失敗、enqueue済みpresent error、取得後cancelの状態を区別する。
+キャンセル等の例外回収には10秒のAPI待機予算があり、通常frameの待機とは分ける。
+完了やrelease結果を証明できなければ停止し、依存するnative所有連鎖を保持する。
 
-Criterion 0.8.2で、8・128・1,024・8,192範囲の順方向・逆方向・固定seedの並べ替え順を測定した。
-同じbufferに4-byte writeを16-byte間隔でN件計画し、その後N件のreadを計画する。
-40 samples、500 ms warm-up、2秒のmeasurement目標を指定した。
-入力生成、初期状態の構築、最後の所有者の破棄は測定外で、
-範囲管理の検索・挿入・依存判定と、それに伴う割り当てや追跡集合の破棄を含む。
-VMA、byte列のコピー、完全なBatchBuilder、submit、GPU実行は含まない。
+ViewのABIはcolumn-major MVP 64 byte＋linear tint 16 byte。従来rasterはidentityで互換を維持する。
+独自shaderの将来追加にはpipeline/binding metadata/ABI/信頼境界の検証が必要で、
+M3のGraph構築拡張をその完了として扱わない。公開一般PassEncoderは第二APIで検証するM4へ残す。
 
-以下は現行実装の8,192範囲における推定時間と95%信頼区間である。
-中央値、個別転送のp95、描画FPSを表す値ではない。
+## 計測経路と基準値
 
-| 追加順 | 推定時間（ms） | 95%信頼区間（ms） |
-|---|---:|---:|
-| 順方向 | 16.093 | 13.837–18.291 |
-| 逆方向 | 9.710 | 8.105–11.296 |
-| 並べ替え順 | 22.294 | 19.202–25.326 |
+`frame_loop --benchmark`にrelease・明示Validation設定・任意query・raw JSON保存を実装した。
+対象は128×96、3 in-flight、標準描画・custom SwapRedBlue・1×1 history・毎frame readbackのheadless Graph。
+warm-up 32 frame＋測定128 frameを3 run行う。表示/VSync/FPSの測定ではない。
+CPU build/compile/prepare/record/submit/retire、GPU Graph区間、poll費用と観測latency、
+論理byte、staging予約high-water、VMA Allocation/blockを分ける。
+process VRAM/RAMやdriver/Swapchainの確保はこのVMA値に含めず、process budgetは未取得とする。
 
-OSの負荷とthread affinityは固定しておらず、同じソースの実行間にも大きな揺れがあった。
-実行内の信頼区間は、この実行間変動を解消しない。
-小件数では順序付き集合の管理コストが増える場合があり、安定した改善倍率や損益分岐件数は確定していない。
-範囲管理から二次時間の走査・要素移動を除いたことはソース構造で確認している。
-通常のCIに壁時計時間の固定合否閾値は設けていない。
+性能sampleの実行・基準値保存はこの実装の品質確認に続いて行う。
+正しさのRequired runではCore/SyncValの実効値と終了後診断を確認した。
+性能用Disabled要求でLayer起動報告がない場合も、外部Layerが絶対にない証明とは扱わず、
+要求・観測値・環境変数をJSONへ残す。
 
-## 開発ツール
+## 第二APIの選定と未確認範囲
 
-| ツール | 導入・確認結果 |
-|---|---|
-| cargo-deny 0.20.2 | 公式SHA-256に一致。Windows／Linux・全feature・開発用／ビルド用依存の4検査が成功 |
-| SPIRV-Tools v2026.1 | 固定SDKの`spirv-val`、commit `fbe4f3ad`を確認 |
-| shaderc v2026.1 | 一時GLSL ComputeをVulkan 1.3向けSPIR-Vへコンパイルして正常検証 |
-| SPIR-V検証スクリプト | 正常入力2件と、不正binary・欠落入力・欠落tool・ディレクトリ入力の4件が期待どおり終了 |
-| RenderDoc 1.47 x64 | 公式detached GPG署名が有効。CLI起動、DLLのロード、API 1.7.0取得に成功 |
-| RenderDocのVulkan接続 | 子プロセスのmanifest追加パスで、instance／device両方へのcapture layer挿入を確認 |
+M4の第二APIはD3D12を選定した。既存Windows実機とshaderツールを使って、
+同じ入力・Graph・GPUでVulkanと比較しやすいことが理由である。
+D3D12CreateDevice(default adapter, FL11_0)とID3D12Debug取得はS_OK、直後にreleaseし命令投入なし。
+adapterの識別、Debug Layer/GBV有効化、実描画と画像等価性、実GPU CIは未確認。
+準備は`renderer-6qc`、`renderer-k51`に登録し、M3で第二backend実装や一般RHIを先行固定していない。
 
-cargo-denyのadvisory例外はない。Criterionの間接依存による`syn` 2／3の重複warningが1件あり、
-理由と扱いを`deny.toml`へ記載している。実VulkanのValidation warning／errorゼロとは別の検査である。
-SPIR-Vの正常検証は終了コード0、異常4件は終了コード1だった。
-RenderDocでの実GPUキャプチャは未実行である。
-portable版のregistry登録は行わず、子プロセス限定の`VK_ADD_IMPLICIT_LAYER_PATH`と
-capture有効化指定を使った`vulkaninfo --summary`が終了コード0だった。
-通常の利用は[ツールガイド](../guides/tooling.md)のRenderDoc起動方法に従う。
+別GPU/driver、Linux表示・実GPU、Mac/Metal、実native OOM/Device loss/Surface loss、
+拡張なしWSI、透明Window、HDR、物理aliasing、複数queueは今回の追加実機確認に含まない。
+clock・affinity・電力・OS負荷は固定せず、他エンジンとの性能比較も行っていない。
+過去のtransfer-only Criterionや局所compiler比較の数値を、現在のframe基準値やFPSに読み替えない。
 
-現在のWindows配布物の確認値は次のとおり。
+## 再現物
 
-| 配布物 | SHA-256 |
-|---|---|
-| cargo-deny 0.20.2 x64 MSVC | `975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc` |
-| RenderDoc 1.47 x64 ZIP | `b51712e58d40066b34ca30c7869d15f72e4b5c001b2d92232f6783a636d5a3c1` |
-
-RenderDocの署名鍵はfingerprint `1B039DB9A4718A2D699DE031AC612C3120C34695`に照合した。
-registryへのVulkan layer登録、global hook、永続PATH、実行ポリシーの変更は行っていない。
-
-## 確認の範囲
-
-この記録の実行確認は上記Windows環境による。ローカルLinux、別CPU・別GPU、
-実機non-coherentメモリ、native OOM・Device loss・reset失敗は未確認である。
-CPU境界試験やソース監査の成功を、それらの実機確認とは扱わない。
-描画・Compute・Graph間の非同期引き継ぎは上記の固定fixtureで確認済みである。
-WSI、一般的な複数フレーム管理、未信頼shader、別API、完全なBatchBuilderやGPU転送全体の
-新しい性能値は未確認・未実装であり、この結果から対応を主張しない。
-
-## 実装指針の資料調査
-
-2026-11-12にKhronos仕様・Guide・Samples、固定SDKのLunarG/VVL、VMA、shaderc／SPIRV-Tools、
-GPUベンダーの一次資料を調べ、[Vulkanベストプラクティス](../guides/vulkan-best-practices.md)へ整理した。
-仕様要件、一般推奨、機材に依存する最適化、本Rendererの方針を区別している。
-VMAは`vk-mem 0.5.0`同梱の3.3.0 headerと公式の固定版ソースを照合した。
-
-分野別の独立レビューで同期・寿命・descriptor・WSI等の記述を確認し、
-文書の相対リンク・節アンカーと差分の空白検査を行った。
-これは文書調査の確認であり、Rendererの実装変更・GPU試験・性能測定は行っていない。
-上記の実行済み結果を再実行した記録や、後続機能の実機確認としては扱わない。
-
-## ベストプラクティスの適用と追加レビュー
-
-M2ではガイドの能力照会・VMA所有・同期・Shader ABI・binding・描画・検証を適用した。
-独立レビューでGraph内容追跡とculling、資源同一性とGPU寿命、Shaderとdescriptor、
-投入受理と失敗経路を確認し、見つかった問題を修正してから上記の最終検証を実行した。
-単一キュー・全体buffer barrier・固定usage／Shaderは保守的な基準で、
-vendor依存最適化や未測定の性能改善を採用したものではない。
-
-追加レビューでは、既存の転送bufferにも`maxBufferSize`の事前検査不足が見つかった。
-前回の「監査範囲で指摘なし」は網羅性の保証ではなく、この条件は拾えていなかった。
-Vulkan 1.3のpropertyを一度照会し、転送・shared staging・Graphの全buffer経路で
-VMA呼び出し前に上限超過を拒否するよう修正した。RTX 3060の上限1 TiBに対する
-上限＋1の拒否と、zero／上限／上限＋1のCPU境界試験が成功した。
-
-新規Graph経路では、用途の変わるread間でwriter可視性を保つこと、
-submit後のログpanicでもrevisionを再利用しないこと、export登録guard、
-不確実なsubmit失敗時の停止、型付きエラーと元の原因の保持を確認した。
-未投入OOM・未知submit結果・timeout・lossのCPU境界試験は実際のdriver障害の誘発ではない。
-実機non-coherentメモリ、native OOM／Device loss／reset失敗、別GPU・ローカルLinuxでの
-確認範囲は拡大していない。保守性・実用性の追加レビューへの対応は次に記す。
-
-## 保守性・実用性のレビュー
-
-比較元は`64ed71a`。同期・寿命・失敗時の所有、Graphとnative実行の境界、
-通常経路の検証負担、規模に対するCPUコストを独立に読み直した。
-owner／世代／revision、実index境界、submit受理と実完了の区別は必要な検査であり、
-既存の出力・寿命・失敗試験に不要な大量モックの拡張は見つからなかった。
-Beadsの`renderer-ddd`で発見した5件を修正し、必要な検証を維持した。
-
-| 課題 | 現在の対応 |
-|---|---|
-| `renderer-wvz` | 資源の区間ごとのwriter／readerで順序依存を作り、全宣言の循環検査後にliveパスだけで再構築。除去された途中パスを跨ぐ順序も維持し、dumpを要求時に生成 |
-| `renderer-2uo` | upload本文をArcで共有。culled操作は本文を持たず、記録用の操作からも本文を除去。完了後は記録計画を解放 |
-| `renderer-9da` | GPU copyで共有sliceを追跡し、全量CPUコピーを除去。indexとそのcopy元・import／exportに必要な内容を保持し、他の一時bufferは省略。部分byte・未知の穴・sliceを跨ぐindexも検証 |
-| `renderer-082` | Programを用途別に遅延作成し、必要なD32・color・vertex形式とABI上限を事前検査。成功時だけ公開し、未完了処理が参照するProgramを置き換えない |
-| `renderer-ujn` | 既存のDevice照会で実際の`maxDrawIndexedIndexValue`を保持し、実indexを頂点数とDevice上限の両方で検証 |
-
-formatの必須対応は[仕様の対応表](https://docs.vulkan.org/spec/latest/chapters/formats.html#formats-required-format-support)、
-pipeline作成条件は[VkGraphicsPipelineCreateInfo](https://docs.vulkan.org/refpages/latest/refpages/source/VkGraphicsPipelineCreateInfo.html)、
-index上限は[VkPhysicalDeviceLimits](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceLimits.html)と照合した。
-VUID 06585は固定SDKの`validusage.json`でも確認した。
-能力不足はCPU境界試験で検査したが、その能力を持たない実機での再現は未実行である。
-RTX 3060でのValidationゼロだけを、それらの経路の正しさの証明とはしない。
-
-以下のM2基盤比較は`7458e3a`までの変更で確認した値であり、今回の5件の最新比較は上の節を参照する。
-CPUプローブでは比較元と修正後のGraph／compilerをGit対象外の`.tools/m2-fixes-probes/`へコピーし、
-Rust 1.99.0の`rustc --edition 2024 -O`で実行した。
-頂点・indexを一度uploadし、同じ16×16 color／depthへ先頭をCLEAR_STORE、以降をLOAD_STOREで
-描画してcolorをexportする。Graph構築は計測外で、`compile()`全体を測定する。
-Vulkan・Validation・tracingは使わない。各規模で1回warm-up後の3回の単純測定の中央値は次のとおり。
-比較元はcompile内でdumpを作り、修正後は要求時のdump生成を別に測定した。
-
-| mesh数 | 比較元compile（ms） | 修正後compile（ms） | 修正後dump初回生成（ms） |
-|---|---:|---:|---:|
-| 100 | 4.322 | 0.326 | 0.083 |
-| 200 | 18.786 | 0.743 | 0.175 |
-| 400 | 92.613 | 1.137 | 0.296 |
-| 800 | 382.865 | 2.094 | 0.469 |
-
-800描画のdumpは20,133,644 byteから301,141 byteになった。
-生ログは`m2-fixes-compile-{before,after}.log`。同じ内容の順序制約を、推移的な全組の辺で
-保存する必要がなくなったことと、通常のcompileから診断文字列の生成を外した効果を区別する。
-OS負荷・affinityは固定せず、正式なthroughputやGPU性能の測定ではない。
-
-内容追跡は、比較元のShadow実装と修正後の実際のprovenance helperをCPUだけで比較した。
-既知の8 MiB入力を16段copyし、各段の内容を保持して最後に破棄する区間で、
-1回warm-up後の3回中央値は48.321 msから0.002 msになった。
-byte列を複製する処理を共有sliceのmetadata操作へ変更した比較であり、入力生成・Graph構築、
-staging書き込み・flush、native転送・GPU実行は含まない。生ログは`m2-fixes-provenance.log`。
-
-独立した比較では、旧compilerとの25,000ケースで受理／拒否・順序・cullingが一致し、
-内容追跡は300,000ケースで単純なbyte oracleと部分書き込み・copy・未知の穴・index判定が一致した。
-通常の回帰試験には必要な境界と失敗契約を残し、GPU API全体の模擬実装は追加していない。
-
-追加したGPU試験は、buffer upload→小画像upload→両者のreadbackでbuffer内容がゼロになる
-既存の経路も検出した（`renderer-j17`）。比較元・Validation無効・transfer-only画像・専用Allocationで
-再現し、VMA配置とCPU staging内容に不整合は見つからなかった。
-初回の画像遷移にCOPY／access NONEのexecution依存を加えると解消したため、
-[Vulkan設計](../design/vulkan.md)に理由・代案・影響・未確認事項を記録し、元の追加順と期待値を
-保つ回帰試験を追加した。内部原因は未確定で、全初回遷移に対するVulkanの一般要件とはしない。
-同じキューの先行GraphをCPUで待たずに引き継ぐ場合も確認した。
-
-今回の最終確認はCPUのみ21単体＋2公開API、Vulkan付き95単体＋2公開API、明示実GPU18件が成功した。
-全target check・Clippy、fmt、5つのShader再生成一致と依存監査、128×96の描画例も成功した。
-Core／SyncVal・callback・終了時の問題はゼロ。上記5件と追加の出力不一致への対策は検証済みである。
-Validation必須の公開runtime、read-only importも更新されるrevisionと毎回のrefresh／再compileは
-文書化済みのM2の制限であり、配布用runtime・一般的な反復frame運用の完成を意味しない。
-
-生ログと配布物はGit対象外の`.tools/`、Criterionの保存値は`target/criterion/`にある。
-過去の完全な比較表が必要な場合は、たとえば次のようにGit履歴から参照する。
-
-```sh
-git show a032edf:docs/transfer-planning-baseline.md
-```
+最終ゲートは`.tools/m3/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`、
+`gpu-all.log`、`windowed-smoke.log`、`example-cpu.log`、`shader-verify.log`、`headless-example.log`。
+統合verifyのJSON/PPMは`.tools/m3/frame-verify.json`、`frame.ppm`、
+WSI能力の元情報は`.tools/m3/preflight-vulkaninfo.log`、第二API probeは`.tools/m3/second-api-probe.txt`。
+`.tools/`はGit対象外で、再実行方法は開発ガイドに記載する。

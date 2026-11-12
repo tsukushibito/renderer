@@ -23,7 +23,7 @@
 | 自前で管理する部分 | グラフの意味論、実行計画、同期、GPU完了、リソース寿命、再利用、診断。 |
 | RHIの扱い | 形を先に固定しない。必要な境界は初期から設け、複数APIで確認できた契約を共通化する。 |
 | 初期の実行経路 | 単一の描画・Compute用キュー、エイリアシングなし、保守的で正しい同期を基準とする。 |
-| 第二バックエンド | 最小のVulkan経路と計測が成立したら早期に着手する。二つの完成版Rendererを別々に作らない。 |
+| 第二バックエンド | M3でWindows上のD3D12を選定し、M4で同じ論理グラフを実行する。二つの完成版Rendererを別々に作らない。 |
 | 公開API | エンジン向けAPIとGraph APIへ、`ash::vk`や`vk_mem`の型を露出させない。 |
 | 最適化の判断 | 出力の正しさとCPU時間・GPU時間・メモリ使用量の計測で判断する。薄い抽象化だけで高速化を保証しない。 |
 
@@ -453,7 +453,7 @@ M2へ進む前に、[Vulkan基盤の設計](vulkan.md)に従って実行資源�
 
 ### M4: 第二バックエンドと共通契約の抽出
 
-別のネイティブAPIで、M2の同じ論理グラフと同等の処理を実行する。共通グラフを維持しつつ、パス内操作、リソース記述、実行・完了の契約を必要な範囲で抽出する。公開PassEncoderの形もここで検証する。
+第二のネイティブAPIとして選定したD3D12で、M2の同じ論理グラフと同等の処理を実行する。選定理由と準備条件は[第二バックエンドの選定](#161-第二バックエンドの選定と準備条件)を参照する。共通グラフを維持しつつ、パス内操作、リソース記述、実行・完了の契約を必要な範囲で抽出する。公開PassEncoderの形もここで検証する。
 
 自前基盤を選ぶ主な理由である物理エイリアシング・複数キューについては、該当契約を固定する前に小さな実験を行う。実機が対応しない場合は能力として未対応を表現し、未検証の最適化を共通APIで保証しない。
 
@@ -485,13 +485,49 @@ M4を終えただけでゲームエンジン向けRendererが完成したとは�
 | Rust edition / MSRV、shader言語・コンパイラー | M0〜M2。既存コード、再現性、第二APIへの経路を確認する。 |
 | ハンドル、CPU/GPUデータ規約、座標・色規約 | M1〜M2。基本描画機能を増やす前に文書化する。 |
 | Graphのversioningとアクセス範囲の粒度 | M2。初期の簡略化と将来の意味論を区別する。 |
-| 第二バックエンド | 遅くともM3中。機材・CIを確認し、M4で実装する。 |
+| 第二バックエンド | M3でD3D12を選定。機材・ツールの確認範囲とM4の準備条件は次節を参照する。実装・画像比較はM4で行う。 |
 | 内部RHIの型・トレイト・クレート境界 | M4を通じて決める。M0では網羅的に固定しない。 |
 | 物理メモリ配置と複数キューの共通契約 | M4の実験で検証し、M5で本実装する。 |
 | Forward / Deferred、バインドレス、GPU-driven | M5以降。機能要求と測定結果が根拠である。 |
 | 製品としての画質・性能予算と公開API安定化 | 代表シーン・対象機材を定めて段階的に具体化し、M6で検証する。 |
 
 未確定事項は局所的な暫定判断を妨げるものではない。可逆な判断は理由を記録して進める。一方、所有権・安全性・外部API互換性を暗黙の仮定のまま固定しない。
+
+### 16.1 第二バックエンドの選定と準備条件
+
+第二APIは**Windows上のD3D12**とする。M3の表示対象をWindowsから始める方針と、
+利用可能なWindows実機上でVulkanと同じGPU・入力を比較できることを優先した本Rendererの判断である。
+これはD3D12の性能優位や、全対象OSで二つのAPIを提供する方針を意味しない。
+LinuxのVulkan経路とCPUのみのビルドを維持し、第二APIの公開境界にもネイティブ型を露出させない。
+
+Metalも比較候補とした。Apple向けのAPI・shader検証手段がある一方、
+現在利用できるMac実機・runnerは確認できていないため、最初の第二APIには選ばない。[^metal]
+Apple展開が優先要件になった場合やWindows実機を維持できなくなった場合は、
+利用可能な機材・shader変換・検証手段を揃えて選定を見直す。
+
+環境調査で確認した範囲と、M4で追加確認する範囲を区別する。
+
+| 項目 | 確認した範囲と制限 |
+|---|---|
+| 実機 | `nvidia-smi`でRTX 3060、driver 610.88、12 GiBを確認。D3D12が選ぶadapterとの照合は未実施。 |
+| native初期化 | `D3D12CreateDevice(default adapter, FL11_0)`と`D3D12GetDebugInterface(ID3D12Debug)`が`S_OK`。取得した参照は直後に解放し、命令は投入していない。 |
+| ランタイム・SDK | `d3d12.dll`と`d3d12sdklayers.dll`は10.0.26100.9818。Windows SDK 10.0.26100を含む複数版と、Vulkan SDK 1.4.341.1のDXC・SPIRV-Cross・glslangValidator・spirv-valが存在する。 |
+| 検証 | Debug interfaceの取得だけを確認。Debug Layer／GPU-based validation（GBV）の有効化、実描画・readback、終了までの検証ログ確認は未実施。GBVの設定はDevice作成前に行い、性能測定とは分ける。[^d3dvalidation] |
+| CI | 現在のWindows／Linux CIはbuild・check・CPU試験であり、実GPU runnerはない。ローカルの再現手順または実在を確認したrunnerでM4の実GPU受入を行う。 |
+
+M4の最初の実装範囲は、offscreenのcopy、深度付きindexed mesh、Compute、composite、readbackとする。
+同じ論理Graph・入力・解像度を使い、画像と検証結果、CPU負担をVulkanと比較する。
+D3D12での表示経路を、共通契約の検証に先立つ必須条件にはしない。
+
+shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を最初に検証する。[^spirvcross][^dxc]
+binding、combined sampler、行列・座標・データ配置の等価性は生成成功だけで判断せず、実出力と照合する。
+HLSLを単一ソースへ移す案は代案とし、既存Vulkan基準の再生成一致と変更量を比較してから判断する。
+Rust bindingsはM4開始時に固定版のAPI・MSRV・依存量を確認する。
+Microsoftの現行推奨であるfocused crateとprivateな`windows-bindgen`も候補とし、
+再利用ライブラリへumbrella crateを追加する選択は理由を記録する。[^windowsrust]
+
+準備の残件は`renderer-6qc`（adapter・検証・shader経路）と`renderer-k51`（実GPU反復実行基盤）で管理する。
+M3で行うのはこの選定と準備条件の明確化までで、第二バックエンド実装や一般RHIの先行固定は含めない。
 
 ## 17. Codexの作業手順
 
@@ -597,3 +633,13 @@ GPU検証ができない場合は、実行済みの確認と未検証項目を�
 [^debug]: Khronos Vulkan Guide「VK_EXT_debug_utils」。オブジェクト名、ラベル、debug messenger。`https://docs.vulkan.org/guide/latest/extensions/VK_EXT_debug_utils.html`
 
 [^atom]: O3DE Atom「AZ::RHI::FrameGraphCompiler」。共通コンパイルとプラットフォーム固有処理の分担。`https://docs.o3de.org/docs/api/gems/atom/class_a_z_1_1_r_h_i_1_1_frame_graph_compiler`
+
+[^d3dvalidation]: Microsoft「GPU-based validation and the Direct3D 12 Debug Layer」。Device作成前のGBV設定と、計装・非同期出力・性能への影響。`https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-d3d12-debug-layer-gpu-based-validation`
+
+[^dxc]: Microsoft DirectX Shader Compiler公式README。HLSLからDXIL／SPIR-Vへの生成。`https://github.com/microsoft/DirectXShaderCompiler`
+
+[^spirvcross]: Khronos SPIRV-Cross公式README。SPIR-VからHLSL等への変換と制約。`https://github.com/KhronosGroup/SPIRV-Cross`
+
+[^windowsrust]: Microsoft windows-rs公式README。再利用ライブラリのfocused crate・private binding生成の選択指針。実装時には採用版と照合する。`https://github.com/microsoft/windows-rs`
+
+[^metal]: Apple「Metal」。AppleプラットフォームとAPI／shader検証・診断ツールの概要。`https://developer.apple.com/metal/`

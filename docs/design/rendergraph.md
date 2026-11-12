@@ -13,7 +13,7 @@ bufferは半開byte範囲を指定し、未対応の画像subresource指定は�
 論理ハンドルと物理資源の識別、内容の有効性と画像layout、
 予定されたGPU状態と実際の完了を別々に管理する。
 
-通常のパスは、管理下のcopy・Compute・indexed mesh・最終合成という限定した操作を宣言する。
+通常のパスは、管理下のcopy・Compute・Attachment clear・indexed mesh・最終合成という限定した操作を宣言する。
 任意の生CommandBuffer、外部SPIR-V、ネイティブ外部ハンドルは受け入れない。
 これにより、実行する操作と宣言した用途・範囲・bindingを対応づける。
 汎用RHIや未信頼shaderのサンドボックスを提供する契約ではない。
@@ -32,7 +32,7 @@ forwardの明示依存は実行順序を制約するが、readが読むversion�
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
 deadなreadも未初期化ならエラーになり、不要な処理で入力ミスを隠さない。
 解析専用の`declare_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
-任意の実行callbackはまだ提供しないので、Graph構築や除去をCPUのゲーム更新の代わりにしない。
+native記録中の任意の実行callbackは提供しないので、Graph構築や除去をCPUのゲーム更新の代わりにしない。
 
 upload本文は不変の`Arc<[u8]>`で共有し、compileで全量を複製しない。
 既存の`upload_buffer`／`upload_image`はVec入力を受け取り、共有表現へ一度変換する。
@@ -120,6 +120,21 @@ exportを保持し続けた場合も、容量不足を返し、内部で待機�
 CPUコピー成功時にそのstaging領域を解放し、二重消費と別Graphのハンドルを拒否する。
 読み取り前の結果を保持していても、完了した実行枠は先に再利用できる。
 
+継続するフレームには`submit_frame`を使える。Runtimeが上限付きで未完了処理を所有し、
+返す`FrameSubmission`は`FrameId`とexport snapshotだけを持つ。
+このメタデータをdropしても待機・キャンセル・回収は行わない。
+`poll_frame`はtimeout 0で実Fenceを観測し、正常完了した一件を`FrameCompletion`として返す。
+完了したnative枠、upload、descriptor、記録用参照は回収し、未読readbackだけを結果へ残す。
+後続の観測で失敗しても、先に返した結果を失わないよう一件ずつ返す。
+
+`pending_frames`は観測前の処理数であり、既にFenceがsignalされていても回収前は数える。
+上限は`execution_slots`で、満杯なら投入前に容量不足を返す。
+自動waitや無制限な増設でframe数を隠さない。実行枠は従来の`submit`とも共有するため、
+frame数が上限未満でも他の利用によって実行枠が不足する場合がある。
+終了用の`drain_frames(timeout)`は予算内で明示待機し、完了結果を破棄する。
+CPUで必要な結果は先に`poll_frame`で受け取る。予算切れと完了不明の失敗では所有を維持する。
+通常のフレーム進行を、従来の`Submission`のDrop待機へ落とさないための追加経路である。
+
 記録から完了まで、使用するbuffer・image・View・pipeline・descriptor・stagingを保持する。
 論理的な削除だけでGPU使用中の資源を破棄しない。
 記録用の操作はstagingとnative命令に必要な引数を持ち、upload本文を持たない。
@@ -149,4 +164,51 @@ readbackがない処理にはHOST_READ依存を追加しない。
 
 単一キュー、保守的な同期、通常のdescriptor set、固定shaderは正しさを確認する基準である。
 vendor依存の高速化や高度なパス統合は採用しておらず、性能改善を主張しない。
-WSI、複数キュー、物理aliasing、一般的なフレーム履歴とエンジン資源APIは後続の対象とする。
+複数キュー、物理aliasing、一般PassEncoderと任意shaderは後続の対象とする。
+
+## 履歴と段階的な拡張
+
+履歴は永続keyからfreshなsnapshotを取得し、前のGraphの予定状態を次のGraphへimportする。
+前フレームのCPU完了待機は不要だが、内容を保持する履歴を単なる一時画像として貸し出さない。
+read-onlyの利用でもrevisionが進む現在の契約を守り、保存済みsnapshotを無条件に繰り返し使わない。
+初回と明示reset、extent変更では内容を初期化し直す。
+旧履歴の登録は最後に使用するGraphの投入後に解除でき、pending側の所有が完了まで維持する。
+二枚交互という番号だけでは安全性を証明せず、予定アクセスと最後の利用を追跡する。
+
+M3のエンジン入力は、scene/ECSの意味、Graph構築、native記録、GPU寿命を分けて接続する。
+custom passの挿入はGraph構築時に行い、標準描画と同じproducer解析・内容検査・同期を通す。
+現時点の実行操作は管理下のshaderに限定するが、依存解析に固有のshader実装を持ち込まない。
+任意shaderを導入するときはshader/pipelineの所有、binding metadata、宣言との照合、
+ABIと信頼境界の検証が追加で必要になる。現在の限定操作だけでそれらまで保証したとは扱わない。
+一般PassEncoderの公開形は第二APIで実証するM4で検討し、未使用の汎用RHIを先に固定しない。
+
+## エンジン入力と標準描画
+
+GPU非依存の`engine::Engine`は容量付きのmesh/material登録を持つ。
+型付きハンドルはowner・index・generationを検査し、更新は同じハンドルの内容を進め、
+削除と再登録では世代を分ける。meshは不変の入力byte列、materialはlinear RGBA tintに限定する。
+scene、ECS、asset loader、カメラの意味は呼び出し側が所有する。
+
+`View`、`Draw`から作る`FrameSnapshot`はmeshの版とtint・行列を所有し、
+後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
+`clip_from_world * world_from_model`を合成する。clip depthは0〜W、viewport高さは正、通常Zである。
+投影とhandednessは入力行列で選ぶ。Rustのstruct layoutをGPU ABIとせず、
+頂点は明示byte化し、描画引数も64-byte MVPと16-byte tintへ明示的に変換する。
+
+snapshotの`build_graph`はGPU・windowなしで標準Graphを構築できる。
+持続的な実行には`VulkanEngine`がmeshのGPU bufferを保持し、同じmeshを毎frame uploadしない。
+cacheは永続keyで識別し、使用時にfresh importを取得する。
+更新・削除後も先行frameの所有を維持し、CPUに保存した旧snapshotも独立して扱う。
+標準経路はclear-onlyのノードで空draw listも初期化し、各drawが同じcolor/depthをLoadして描く。
+
+拡張点はopaque描画後・最終composite前の完全なlinear RGBA8画像である。
+Viewと同じextentで初期化済みの画像を返し、通常のGraph builderで処理を追加する。
+closureはGraph構築時に実行され、GPU記録中にsceneへ再入しない。
+返却画像のhandle・形式・寸法・初期化はGraphの通常の検査を通す。
+不要なcustom branchも通常どおり除去される。
+CPU経路の`FrameGraph`、持続的な実行経路の`PreparedEngineFrame`から通常のGraphを取り出し、
+build、compile、submitを分けられる。利用側の履歴処理や測定を標準描画と同じGraphへ接続できる。
+準備済みframeとplanのGraph identity、元の出力と必要exportを投入前に照合する。
+buildはGPU資源の予約ではなく、その後の別submitやCPU更新でimportが古くなった場合は再buildする。
+`RenderedFrame`の出力も明示deleteまで登録されるため、表示や履歴等のconsumerを投入後、
+不要な出力keyの登録を解除する。CPUメタデータのDropに暗黙の登録解除を結び付けない。

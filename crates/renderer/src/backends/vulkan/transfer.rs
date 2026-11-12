@@ -233,6 +233,10 @@ pub(super) trait TransferPayload {
     /// An actual successful Fence wait proved all commands completed, and the
     /// Device remains active. No error or timeout establishes valid contents.
     unsafe fn establish_contents(&mut self);
+
+    /// Optional completion bookkeeping after the native execution lease has
+    /// been returned/reset. This does not run for failed waits or Drop cleanup.
+    fn retired(&mut self) {}
 }
 
 impl TransferPayload for TransferBuffers {
@@ -472,6 +476,23 @@ impl<T: TransferPayload> RecordedTransfer<T> {
     }
 
     pub(super) fn submit(self) -> Result<PendingTransfer<T>, TransferError> {
+        // SAFETY: No external semaphore operations are requested.
+        unsafe { self.submit_with_sync(&[], &[]) }
+    }
+
+    /// Submit with native semaphore operations owned by the caller's payload.
+    ///
+    /// # Safety
+    /// Every semaphore must belong to this Device and satisfy Vulkan's pending
+    /// signal/wait and stage-scope rules. Its owner must remain alive through
+    /// every submitted use, including uncertain submission failure. The payload
+    /// (or another retained owner) must provide that lifetime independently of
+    /// these borrowed submit-info arrays.
+    pub(super) unsafe fn submit_with_sync(
+        self,
+        waits: &[vk::SemaphoreSubmitInfo<'_>],
+        signals: &[vk::SemaphoreSubmitInfo<'_>],
+    ) -> Result<PendingTransfer<T>, TransferError> {
         let mut pending = PendingTransfer {
             retained: Retained::new(self.resources),
         };
@@ -483,7 +504,10 @@ impl<T: TransferPayload> RecordedTransfer<T> {
                 .map_err(TransferError::DeviceUnavailable)?;
             let native = &pending.retained.value().unwrap().native;
             let commands = [vk::CommandBufferSubmitInfo::default().command_buffer(native.command)];
-            let submits = [vk::SubmitInfo2::default().command_buffer_infos(&commands)];
+            let submits = [vk::SubmitInfo2::default()
+                .command_buffer_infos(&commands)
+                .wait_semaphore_infos(waits)
+                .signal_semaphore_infos(signals)];
             let fence = native.fence;
             pending.retained.begin_submit();
             // SAFETY: The Device-owned lock serializes every Queue host call.
@@ -519,6 +543,16 @@ pub(super) struct PendingTransfer<T: TransferPayload = TransferBuffers> {
 }
 
 impl<T: TransferPayload> PendingTransfer<T> {
+    pub(super) fn is_pending(&self) -> bool {
+        self.retained.is_pending()
+    }
+
+    /// Observe completion without an API waiting budget. An unresolved owner is
+    /// retained exactly as for a timed wait.
+    pub(super) fn poll(&mut self) -> Result<Option<T>, TransferError> {
+        self.wait(Duration::ZERO)
+    }
+
     fn wait_native(&mut self, timeout: Duration) -> Result<bool, vk::Result> {
         let native = &self.retained.value().unwrap().native;
         let device = &native.owner.device;
@@ -575,6 +609,7 @@ impl<T: TransferPayload> PendingTransfer<T> {
                 tracing::debug!(target: LOG_TARGET, device = native.owner.device.name(), fence = ?native.fence,
                     bytes = payload.bytes(), path = ?payload.label(), "Vulkan transfer completed");
                 drop(native);
+                payload.retired();
                 Ok(Some(payload))
             }
         }

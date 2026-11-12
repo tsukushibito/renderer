@@ -157,6 +157,28 @@ pub enum ComputeTransform {
     SwapRedBlue,
 }
 
+/// Immutable per-draw values for the built-in mesh pipeline. Matrices are
+/// column-major and multiply a column vector: `clip = transform * position`.
+/// This parameter block is independent of asset handles and frame ownership.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RasterParameters {
+    pub transform: [[f32; 4]; 4],
+    pub tint: [f32; 4],
+}
+impl Default for RasterParameters {
+    fn default() -> Self {
+        Self {
+            transform: [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            tint: [1.0; 4],
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PassKind {
     Copy,
@@ -333,6 +355,13 @@ pub(crate) enum Operation {
         depth: usize,
         color_ops: AttachmentOps,
         depth_ops: AttachmentOps,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+        parameters: RasterParameters,
+    },
+    ClearAttachments {
+        color: usize,
+        depth: usize,
         clear_color: [f32; 4],
         clear_depth: f32,
     },
@@ -722,6 +751,38 @@ impl Graph {
         clear_color: [f32; 4],
         clear_depth: f32,
     ) -> Result<PassHandle, GraphError> {
+        self.raster_with_parameters(
+            name,
+            vertices,
+            indices,
+            index_count,
+            color,
+            depth,
+            color_ops,
+            depth_ops,
+            clear_color,
+            clear_depth,
+            RasterParameters::default(),
+        )
+    }
+
+    /// Adds a built-in draw with owned transform and tint values. It neither
+    /// retains a scene borrow nor permits arbitrary shader/native commands.
+    #[allow(clippy::too_many_arguments)]
+    pub fn raster_with_parameters(
+        &mut self,
+        name: impl Into<String>,
+        vertices: BufferHandle,
+        indices: BufferHandle,
+        index_count: u32,
+        color: ImageHandle,
+        depth: ImageHandle,
+        color_ops: AttachmentOps,
+        depth_ops: AttachmentOps,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+        parameters: RasterParameters,
+    ) -> Result<PassHandle, GraphError> {
         let vertices = self.buffer_id(vertices)?;
         let indices = self.buffer_id(indices)?;
         let color = self.image_id(color)?;
@@ -752,6 +813,15 @@ impl Graph {
         {
             return Err(GraphError::new("invalid attachment clear value"));
         }
+        if parameters
+            .transform
+            .iter()
+            .flatten()
+            .chain(&parameters.tint)
+            .any(|x| !x.is_finite())
+        {
+            return Err(GraphError::new("non-finite raster transform or tint"));
+        }
         Ok(self.push(
             name,
             Operation::Raster {
@@ -764,12 +834,62 @@ impl Graph {
                 depth_ops,
                 clear_color,
                 clear_depth,
+                parameters,
             },
             vec![
                 read(vertices, 0..vs, AccessPurpose::Vertex),
                 read(indices, 0..ix, AccessPurpose::Index),
                 attachment(color, color_ops, AccessPurpose::ColorAttachment),
                 attachment(depth, depth_ops, AccessPurpose::DepthAttachment),
+            ],
+            false,
+        ))
+    }
+
+    /// Initializes a complete color/depth target even when a view has no draws.
+    pub fn clear_attachments(
+        &mut self,
+        name: impl Into<String>,
+        color: ImageHandle,
+        depth: ImageHandle,
+        clear_color: [f32; 4],
+        clear_depth: f32,
+    ) -> Result<PassHandle, GraphError> {
+        let color = self.image_id(color)?;
+        let depth = self.image_id(depth)?;
+        self.color(color)?;
+        let c = self.image_desc(color)?;
+        let d = self.image_desc(depth)?;
+        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
+            return Err(GraphError::new(
+                "clear needs matching RGBA8 color and D32 depth extents",
+            ));
+        }
+        if !clear_depth.is_finite()
+            || !(0.0..=1.0).contains(&clear_depth)
+            || clear_color.iter().any(|x| !x.is_finite())
+        {
+            return Err(GraphError::new("invalid attachment clear value"));
+        }
+        Ok(self.push(
+            name,
+            Operation::ClearAttachments {
+                color,
+                depth,
+                clear_color,
+                clear_depth,
+            },
+            vec![
+                attachment(
+                    color,
+                    AttachmentOps::CLEAR_STORE,
+                    AccessPurpose::ColorAttachment,
+                ),
+                attachment(
+                    depth,
+                    AttachmentOps::CLEAR_STORE,
+                    AccessPurpose::DepthAttachment,
+                ),
             ],
             false,
         ))

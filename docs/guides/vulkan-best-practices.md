@@ -932,9 +932,9 @@ Video、保護memory、device group、プラットフォーム固有の表示連
 | Instance/Device | Vulkan 1.3、必要3 feature、Graphics＋Compute単一queue | 新しいfeature・format・limitを照会し、使用と有効化を対応させる |
 | allocation/CPU access | VMA既定pool、所有型、flush/invalidate、atom分離 | 新しいusageとABI・copy制約、実際のmemory typeを確認する |
 | execution/staging | 上限付きpool、batch、shared lease、実Fence完了後回収 | 記録中・pending・完了・CPU消費を分け、資源種類を増やしても同じ回収根拠を保つ |
-| Graph | 未実装。M2で導入 | producerの意味と同期辺、生存解析、内容有効性、canonical import、予定／完了状態を分離する |
-| Shader/Compute/描画 | 未実装。M2で導入 | bindingと宣言の照合、ImageView/pipeline/descriptorの保持再利用、実際の用途に合う同期を実証する |
-| Presentation/複数frame | 未実装。M3で導入 | frame資源とimage別present資源、acquire後キャンセル、旧Swapchain世代の完了を区別する |
+| Graph | producer・hazard・culling・canonical importを分離した単一queueの実行 | producerの意味と同期辺、生存解析、内容有効性、canonical import、予定／完了状態を分離する |
+| Shader/Compute/描画 | 管理下のCompute・indexed mesh・clear・合成、MVP/tint、資源保持再利用 | bindingと宣言の照合、ImageView/pipeline/descriptorの保持再利用、実際の用途に合う同期を実証する |
+| Presentation/複数frame | Runtime所有の非待機frame、Windows表示はEXT maintenance1による限定対応 | frame資源とpresent資源、acquire後キャンセル、旧Swapchain世代の完了を区別する |
 | 第二API/高度な最適化 | 後続段階 | 同じ論理Graphの出力・性能を実機比較し、共通契約とAPI固有条件を抽出する |
 
 この表は現行[Vulkan設計](../design/vulkan.md)と[実装方針](../design/implementation-policy.md)への

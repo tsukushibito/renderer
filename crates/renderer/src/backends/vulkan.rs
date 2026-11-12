@@ -10,12 +10,17 @@
 mod buffer;
 mod device;
 mod diagnostics;
+pub(crate) mod engine;
 pub(crate) mod graph;
 mod image;
 mod instance;
 mod memory;
+#[cfg(all(feature = "presentation", windows))]
+mod presentation;
 mod ranges;
 mod transfer;
+
+pub use instance::ValidationMode;
 
 #[cfg(test)]
 fn real_vulkan_dispatch() -> tracing::Dispatch {

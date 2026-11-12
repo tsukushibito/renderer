@@ -11,6 +11,7 @@ use vk_mem::Alloc;
 
 use super::super::memory::MemoryOwner;
 use super::RuntimeError;
+use crate::graph::RasterParameters;
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
@@ -395,7 +396,8 @@ fn validate_program(
                 && limits.max_descriptor_set_storage_images >= 2
         }
         ProgramKind::Raster => {
-            limits.max_vertex_input_attributes >= 2
+            limits.max_push_constants_size >= 80
+                && limits.max_vertex_input_attributes >= 2
                 && limits.max_vertex_input_bindings >= 1
                 && limits.max_vertex_input_binding_stride >= 28
                 && limits.max_vertex_input_attribute_offset >= 12
@@ -532,15 +534,23 @@ impl Program {
             }
             let layouts = [self.set_layout];
             let pushes = [vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                stage_flags: if matches!(kind, ProgramKind::Raster) {
+                    vk::ShaderStageFlags::VERTEX
+                } else {
+                    vk::ShaderStageFlags::COMPUTE
+                },
                 offset: 0,
-                size: 4,
+                size: if matches!(kind, ProgramKind::Raster) {
+                    80
+                } else {
+                    4
+                },
             }];
             let mut layout_info = vk::PipelineLayoutCreateInfo::default();
             if !bindings.is_empty() {
                 layout_info = layout_info.set_layouts(&layouts);
             }
-            if matches!(kind, ProgramKind::Compute) {
+            if matches!(kind, ProgramKind::Compute | ProgramKind::Raster) {
                 layout_info = layout_info.push_constant_ranges(&pushes);
             }
             self.layout = device
@@ -963,6 +973,7 @@ impl ShaderPrograms {
         depth_load: vk::AttachmentLoadOp,
         depth_store: vk::AttachmentStoreOp,
         clear_depth: f32,
+        parameters: &RasterParameters,
     ) {
         let color_attachments = [vk::RenderingAttachmentInfo::default()
             .image_view(color.view)
@@ -1004,6 +1015,23 @@ impl ShaderPrograms {
                 self.raster().pipeline,
             );
             self.viewport(command, color.extent);
+            let mut bytes = [0_u8; 80];
+            for (value, output) in parameters
+                .transform
+                .iter()
+                .flatten()
+                .chain(&parameters.tint)
+                .zip(bytes.as_chunks_mut::<4>().0)
+            {
+                output.copy_from_slice(&value.to_ne_bytes());
+            }
+            device.cmd_push_constants(
+                command,
+                self.raster().layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                &bytes,
+            );
             device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
             device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
             device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
@@ -1305,6 +1333,7 @@ mod tests {
     #[test]
     fn raster_rejects_missing_depth_or_color_support_before_native_creation() {
         let limits = vk::PhysicalDeviceLimits {
+            max_push_constants_size: 80,
             max_vertex_input_attributes: 2,
             max_vertex_input_bindings: 1,
             max_vertex_input_binding_stride: 28,

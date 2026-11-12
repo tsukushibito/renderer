@@ -9,6 +9,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+use std::time::Instant;
 
 use ash::vk;
 
@@ -21,14 +22,24 @@ use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
 use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{
     AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
-    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, ResourceDesc,
-    ResourceKey, StoreOp,
+    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, RasterParameters,
+    ResourceDesc, ResourceKey, StoreOp,
 };
 
 mod diagnostics;
+mod environment;
+mod frames;
+mod metrics;
+#[cfg(all(feature = "presentation", windows))]
+mod presentation;
 mod provenance;
 mod resources;
 mod shaders;
+pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
+pub use frames::{FrameCompletion, FrameId, FrameSubmission};
+pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
+#[cfg(all(feature = "presentation", windows))]
+pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
 use provenance::{BufferProvenance, IndexError};
 use resources::GraphBuffer;
 use shaders::{GraphImage, ShaderBindings, ShaderNeeds, ShaderPrograms};
@@ -378,6 +389,9 @@ pub struct VulkanRuntime {
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
     entries: Vec<Entry>,
+    frames: frames::FrameQueue<frames::PendingFrame>,
+    timestamp_pool: Option<metrics::TimestampPool>,
+    profiling_enabled: bool,
     id: u64,
     serial: u64,
     config: RuntimeConfig,
@@ -387,6 +401,23 @@ pub struct VulkanRuntime {
 
 impl VulkanRuntime {
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {
+        Self::new_with_validation(config, super::instance::ValidationMode::Required)
+    }
+
+    /// Performance runs may explicitly disable Validation. The default
+    /// constructor and correctness tests continue to require Core + SyncVal.
+    pub fn new_with_validation(
+        config: RuntimeConfig,
+        validation: super::instance::ValidationMode,
+    ) -> Result<Self, RuntimeError> {
+        Self::validate_config(config)?;
+        let diagnostics = Diagnostics::new();
+        let instance = VulkanInstance::with_validation(Arc::clone(&diagnostics), validation)?;
+        let device = VulkanDevice::new(instance)?;
+        Self::from_device(config, diagnostics, device)
+    }
+
+    fn validate_config(config: RuntimeConfig) -> Result<(), RuntimeError> {
         if config.execution_slots == 0
             || config.resource_capacity == 0
             || config.resource_capacity > u32::MAX as usize
@@ -396,9 +427,14 @@ impl VulkanRuntime {
                 "runtime capacities must be nonzero and resource capacity fit u32",
             ));
         }
-        let diagnostics = Diagnostics::new();
-        let instance = VulkanInstance::new(Arc::clone(&diagnostics))?;
-        let device = VulkanDevice::new(instance)?;
+        Ok(())
+    }
+
+    fn from_device(
+        config: RuntimeConfig,
+        diagnostics: Arc<Diagnostics>,
+        device: VulkanDevice,
+    ) -> Result<Self, RuntimeError> {
         let allocator = VulkanAllocator::new(device)?;
         let owner = allocator.owner;
         let execution = ExecutionPool::new(Arc::clone(&owner), config.execution_slots)?;
@@ -420,6 +456,9 @@ impl VulkanRuntime {
             readback,
             programs: None,
             entries: Vec::new(),
+            frames: frames::FrameQueue::new(config.execution_slots)?,
+            timestamp_pool: None,
+            profiling_enabled: false,
             id,
             serial: 0,
             config,
@@ -622,6 +661,7 @@ impl VulkanRuntime {
         graph: &CompiledGraph,
         capture_diagnostics: bool,
     ) -> Result<(Submission, Option<String>), RuntimeError> {
+        let profile_started = self.profiling_enabled.then(Instant::now);
         self.owner
             .device
             .ensure_active()
@@ -632,6 +672,11 @@ impl VulkanRuntime {
             .ok_or_else(|| RuntimeError::capacity("submission serial exhausted"))?;
         // Reserve native capacity before accepting any other bounded resources.
         let reservation = self.execution.reserve()?;
+        let timestamp = if self.profiling_enabled {
+            Some(self.timestamp_pool.as_ref().unwrap().acquire()?)
+        } else {
+            None
+        };
         let mut needed = vec![false; graph.resources.len()];
         for &pass in &graph.order {
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
@@ -713,7 +758,7 @@ impl VulkanRuntime {
                 &physical,
             )
         });
-        let work = GraphWork::prepare(
+        let mut work = GraphWork::prepare(
             Arc::clone(&self.owner),
             graph,
             serial,
@@ -724,6 +769,13 @@ impl VulkanRuntime {
             &self.readback,
             diagnostic.as_mut(),
         )?;
+        work.profile = timestamp.map(|lease| {
+            metrics::WorkProfile::new(lease, profile_started.expect("profiling enabled"))
+        });
+        let cpu_pending = work
+            .profile
+            .as_ref()
+            .map(|profile| Arc::clone(&profile.cpu_pending));
         let mut exports = Vec::new();
         for &index in &graph.exports {
             let key = keys[index].unwrap();
@@ -743,7 +795,11 @@ impl VulkanRuntime {
                 (!self.entries[key.index as usize].registered).then_some(key.index as usize)
             })
             .collect::<Vec<_>>();
+        let record_started = cpu_pending.as_ref().map(|_| Instant::now());
         let recorded = reservation.record(work)?;
+        if let (Some(cpu), Some(started)) = (&cpu_pending, record_started) {
+            cpu.lock().unwrap_or_else(|error| error.into_inner())[0] = started.elapsed();
+        }
         for &index in &new_exports {
             self.entries[index].registered = true;
         }
@@ -759,11 +815,16 @@ impl VulkanRuntime {
             indices: new_exports,
             keep: false,
         };
+        let submit_started = cpu_pending.as_ref().map(|_| Instant::now());
         let pending = recorded.submit()?;
         registration.keep = true;
         drop(registration);
+        if let (Some(cpu), Some(started)) = (&cpu_pending, submit_started) {
+            cpu.lock().unwrap_or_else(|error| error.into_inner())[1] = started.elapsed();
+        }
         Ok((
             Submission {
+                id: FrameId::new(self.id, serial),
                 graph: graph.id,
                 pending,
                 exports,
@@ -773,6 +834,7 @@ impl VulkanRuntime {
     }
 }
 
+#[derive(Clone, Debug)]
 enum Export {
     Buffer(ImportBuffer),
     Image(ImportImage),
@@ -797,6 +859,7 @@ fn export_snapshot(key: ResourceKey, desc: ResourceDesc, snapshot: &Snapshot) ->
 /// Owns a pending submission, never a CPU-readiness promise. Its bounded Drop
 /// cleanup follows the existing transfer retirement contract.
 pub struct Submission {
+    id: FrameId,
     graph: u64,
     pending: PendingTransfer<GraphWork>,
     exports: Vec<(usize, Export)>,
@@ -830,10 +893,10 @@ impl Submission {
     /// Timeout retains all pending resources. Only a real successful Fence wait
     /// on an active Device yields readable output.
     pub fn wait(&mut self, timeout: Duration) -> Result<Option<SubmissionResult>, RuntimeError> {
-        Ok(self.pending.wait(timeout)?.map(|work| SubmissionResult {
-            graph: self.graph,
-            work,
-        }))
+        self.pending
+            .wait(timeout)?
+            .map(|work| SubmissionResult::completed(self.graph, work))
+            .transpose()
     }
 }
 
@@ -909,6 +972,13 @@ enum PreparedOperation {
         depth_ops: AttachmentOps,
         clear_color: [f32; 4],
         clear_depth: f32,
+        parameters: RasterParameters,
+    },
+    ClearAttachments {
+        color: usize,
+        depth: usize,
+        clear_color: [f32; 4],
+        clear_depth: f32,
     },
     Composite {
         dst: usize,
@@ -951,6 +1021,7 @@ impl TryFrom<&Operation> for PreparedOperation {
                 depth_ops,
                 clear_color,
                 clear_depth,
+                parameters,
             } => Self::Raster {
                 vertices,
                 indices,
@@ -959,6 +1030,18 @@ impl TryFrom<&Operation> for PreparedOperation {
                 depth,
                 color_ops,
                 depth_ops,
+                clear_color,
+                clear_depth,
+                parameters,
+            },
+            Operation::ClearAttachments {
+                color,
+                depth,
+                clear_color,
+                clear_depth,
+            } => Self::ClearAttachments {
+                color,
+                depth,
                 clear_color,
                 clear_depth,
             },
@@ -1040,6 +1123,7 @@ struct GraphWork {
     readbacks: Vec<(usize, Option<StagingRange>)>,
     programs: Option<Arc<ShaderPrograms>>,
     bindings: Option<ShaderBindings>,
+    profile: Option<metrics::WorkProfile>,
 }
 
 impl GraphWork {
@@ -1261,7 +1345,7 @@ impl GraphWork {
                             )
                             .map_err(index_error)?;
                     }
-                    Operation::CopyImage { .. } => {}
+                    Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}
                     Operation::Culled | Operation::Declared(_) => {
                         return Err(RuntimeError::unsupported(
                             "declaration-only pass is not executable",
@@ -1298,6 +1382,7 @@ impl GraphWork {
             readbacks,
             programs,
             bindings,
+            profile: None,
         })
     }
 
@@ -1445,6 +1530,15 @@ impl TransferPayload for GraphWork {
 
     unsafe fn record(&self, command: vk::CommandBuffer) {
         let device = &self.owner.device;
+        if let Some(lease) = self
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.lease.as_ref())
+        {
+            // SAFETY: This command and unique query pair are retained by this
+            // recording/pending payload, outside all dynamic rendering scopes.
+            unsafe { lease.begin(command) };
+        }
         for pass in &self.passes {
             // SAFETY: Every command operand is validated and retained in this
             // payload. Pass boundaries lie outside all dynamic rendering scopes.
@@ -1563,6 +1657,7 @@ impl TransferPayload for GraphWork {
                         depth_ops,
                         clear_color,
                         clear_depth,
+                        parameters,
                     } => self.programs.as_ref().unwrap().record_raster(
                         command,
                         self.resource(*vertices).buffer().handle,
@@ -1576,7 +1671,23 @@ impl TransferPayload for GraphWork {
                         load(depth_ops.load),
                         store(depth_ops.store),
                         *clear_depth,
+                        parameters,
                     ),
+                    PreparedOperation::ClearAttachments {
+                        color,
+                        depth,
+                        clear_color,
+                        clear_depth,
+                    } => {
+                        record_clear_attachments(
+                            device.raw(),
+                            command,
+                            self.resource(*color).image(),
+                            self.resource(*depth).image(),
+                            *clear_color,
+                            *clear_depth,
+                        );
+                    }
                     PreparedOperation::Composite { dst, .. } => {
                         self.programs.as_ref().unwrap().record_composite(
                             command,
@@ -1595,6 +1706,15 @@ impl TransferPayload for GraphWork {
                 super::transfer::record_host_read(device, command);
             }
         }
+        if let Some(lease) = self
+            .profile
+            .as_ref()
+            .and_then(|profile| profile.lease.as_ref())
+        {
+            // SAFETY: The matching start precedes every Graph command and this
+            // end timestamp follows all rendering/readback scopes.
+            unsafe { lease.end(command) };
+        }
     }
 
     fn submitted(&mut self) {
@@ -1607,6 +1727,9 @@ impl TransferPayload for GraphWork {
     }
 
     unsafe fn establish_contents(&mut self) {
+        if let Some(profile) = &mut self.profile {
+            profile.begin_retire();
+        }
         for physical in self.physical.iter().flatten() {
             let mut state = physical.lock();
             // Waiting A after B must never overwrite B's accepted state, or
@@ -1624,6 +1747,60 @@ impl TransferPayload for GraphWork {
         self.physical.clear();
         self.bindings.take();
         self.programs.take();
+    }
+
+    fn retired(&mut self) {
+        if let Some(profile) = &mut self.profile {
+            profile.end_retire();
+        }
+    }
+}
+
+/// # Safety
+/// The caller records outside rendering and has transitioned both retained
+/// images into their attachment layouts with the planned dependencies.
+unsafe fn record_clear_attachments(
+    device: &ash::Device,
+    command: vk::CommandBuffer,
+    color: &GraphImage,
+    depth: &GraphImage,
+    clear_color: [f32; 4],
+    clear_depth: f32,
+) {
+    let colors = [vk::RenderingAttachmentInfo::default()
+        .image_view(color.view)
+        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .clear_value(vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: clear_color,
+            },
+        })];
+    let depth = vk::RenderingAttachmentInfo::default()
+        .image_view(depth.view)
+        .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .clear_value(vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue {
+                depth: clear_depth,
+                stencil: 0,
+            },
+        });
+    let info = vk::RenderingInfo::default()
+        .render_area(vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent: color.extent,
+        })
+        .layer_count(1)
+        .color_attachments(&colors)
+        .depth_attachment(&depth);
+    // SAFETY: The caller establishes the documented layout, dependency,
+    // lifetime and recording conditions; no pipeline is needed for load clears.
+    unsafe {
+        device.cmd_begin_rendering(command, &info);
+        device.cmd_end_rendering(command);
     }
 }
 
@@ -1661,6 +1838,15 @@ mod tests;
 
 #[cfg(test)]
 mod render_tests;
+
+#[cfg(test)]
+mod engine_tests;
+
+#[cfg(test)]
+mod frame_scenarios;
+
+#[cfg(test)]
+mod frame_tests;
 
 #[cfg(test)]
 mod error_tests {

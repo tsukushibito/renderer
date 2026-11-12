@@ -86,6 +86,8 @@ cargo test --locked --workspace --no-default-features --features vulkan
 
 [CI](../../.github/workflows/ci.yml)はWindows／LinuxとCPU／Vulkan featureを確認し、
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
+Windowsには`presentation` featureの全target check・Clippy・CPU試験も追加しています。
+これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
 
 ## 実Vulkan試験
@@ -128,6 +130,80 @@ cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2
 別の最終画像へ合成します。中央が黄色、背景が白であることを確認してPPMへ保存します。
 PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、画面出力の色管理は含みません。
 資源の作成・投入は明示的で、CPUの完了待ちは最後のreadback境界にあります。
+
+### フレーム進行・エンジン入力
+
+持続的なフレームループには`VulkanRuntime::submit_frame`と`poll_frame`を使います。
+返された`FrameSubmission`はメタデータで、dropしても待機しません。
+Runtimeが未完了処理を所有し、容量不足なら利用側がpollや明示待機を選びます。
+readback結果は`FrameCompletion::result`から消費でき、未読結果の保持中にも完了済みnative資源を再利用できます。
+終了時の`drain_frames(timeout)`は結果を破棄するため、必要な結果を先に受け取ります。
+
+`engine::Engine`はGPUなしでmesh/materialとowned View/draw snapshotを扱い、
+`VulkanEngine`は同じ入力を永続mesh cacheと通常のGraphへ接続します。
+build、compile、submitを分ける入口もあります。
+custom passは描画後・合成前の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
+任意shaderや生CommandBufferを受け取るAPIではありません。
+詳細は[Graphの契約](../design/rendergraph.md#エンジン入力と標準描画)を参照してください。
+
+次の例は標準描画、外部custom処理、1×1の履歴chainを同じGraphで動かします。
+`--churn`はCPU入力の更新・削除も行い、各frameの画像と履歴を照合します。
+完了済みreadbackを一件遅らせて消費し、3件まで未回収frameを保持します。
+
+```powershell
+cargo run --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --verify .tools/frame-verify.json --churn --ppm .tools/frame.ppm
+```
+
+JSONには終了後のValidation件数とCore／SyncValの実効設定を含めます。
+情報が認識できない場合も成功扱いにしません。PPMはlinear RGBです。
+
+### Windows表示
+
+Windowsでは`presentation` featureを使います。winitのイベントループは例側が所有し、
+ライブラリは`Arc<Window>`をSurfaceとともに保持します。
+Vulkan 1.3基盤に加え、同一Graphics＋Compute＋present queue、swapchainと
+EXT swapchain maintenance1等の依存拡張・feature、SRGB_NONLINEARのRGBA8/BGRA8_SRGB、
+OPAQUE合成への対応が必要です。不足は診断して停止し、別queueや拡張なしのfallbackは提供しません。
+
+```powershell
+cargo run --locked -p renderer --no-default-features --features presentation --example windowed
+cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --smoke
+```
+
+`--smoke`は表示、resize、最小化・復帰、処理未完了時の終了を有限回で実行します。
+headless例と共通のScene、mesh/material/Viewとcustom処理を使います。
+自動受入には、次のignored実ウィンドウ試験も明示実行します。
+
+```powershell
+cargo test --locked -p renderer --no-default-features --features presentation ::vulkan_ -- --ignored --nocapture --test-threads=1
+```
+
+表示前に`Presenter::prepare`を呼び、現在の`extent`で出力Graphを構築します。
+`NotReady`はpoll後に再試行、`Suspended`はゼロextentの復帰を待ち、`Recreated`は寸法を取得し直します。
+出力は表示用submitへ渡した後に登録解除できます。
+表示用submit受理後はpresent失敗でもsource revisionが進み得るため、再利用・再試行時はrefreshします。
+正常終了はframeの回収とPresenterの明示closeを行い、最後に保持したValidationMonitorで
+native所有者の破棄後までwarning／error／callback失敗ゼロを確認します。
+詳細な同期・寿命の根拠は[Vulkan設計](../design/vulkan.md#windows-presentation)を参照してください。
+
+### 再現可能なフレーム基準測定
+
+```powershell
+cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/frame-baseline.json
+```
+
+既定は128×96、3 in-flight、warm-up 32 frame、測定128 frameを3 runです。
+標準描画・custom処理・履歴と毎frameのreadbackを含むheadless workloadで、表示FPSではありません。
+`--frames`、`--warmup`、`--runs`、`--no-history`、`--no-custom`で条件を変えられます。
+固定負荷ではwarm-up後にnative作成数が増え続けないことも確認します。
+
+性能modeはreleaseを要求し、Validationを明示的にDisabledへ設定して任意timestampを有効にします。
+要求mode、観測したLayer起動状態、環境の上書きを記録し、起動報告の不在だけで外部Layerがないと断定しません。
+CPU各phase、GPU Graph区間、poll費用、観測latency、各runの中央値／p95と生sample、
+資源作成・再利用、stagingのhigh-water、VMA Allocation／blockをJSONへ保存します。
+メモリ量はprocess全体のVRAMやRAM使用量とは区別します。
+通常submitの計測は既定無効で、`set_profiling(true)`を明示した場合だけ採取します。
+正しさのverify runと性能runを分け、条件・commit・clock／負荷等の制約も比較時に揃えます。
 
 論理的な依存・用途は`CompiledGraph::dump()`で確認します。
 Vulkanで実際に記録する同期や物理資源との対応が必要な場合は、通常の`submit`の代わりに

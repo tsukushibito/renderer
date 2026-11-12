@@ -21,7 +21,8 @@ CPUのテスト・benchmark用依存が要求するツールは開発手順で�
 公開Graph APIはGPU非依存で、Vulkanの実行は`VulkanRuntime`から明示的に開始する。
 固定shaderによるCompute、indexed meshと深度、sampled imageの最終合成を扱う。
 Graphの宣言・producer・範囲・culling・import/exportは[RenderGraphの契約](rendergraph.md)を参照する。
-Swapchain、表示、任意shader、一般的なPassEncoderは未実装である。
+Windows表示はoptionalな`presentation` featureで追加する。
+任意shader、一般的なPassEncoderは未実装である。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
 ## Instance・Device・キュー
@@ -45,6 +46,11 @@ CPU型も最後の候補として利用できるが、その選択をログに�
 family番号を固定せず、共有Queueのホスト操作はDevice所有のロックで直列化する。
 複数キューの割当・同期・所有権移譲・寿命管理を必要になる前に増やさず、
 現在の単一キューを基準として後続の実処理を比較する。
+
+Windows表示の初期化はInstance→Win32 Surface→実Surface対応adapter/queue→Deviceの順とする。
+同じGraphics＋Compute queueでpresentできる候補だけを採用し、別present familyは対応外として診断する。
+Presentationのみswapchain、EXT swapchain maintenance1とその依存拡張・featureを要求する。
+固定ashで利用できるEXT版を選び、headlessの必要拡張・featureは増やさない。
 
 作成したnative資源は直ちに所有型へ収め、後続の命名や情報照会が失敗しても解放する。
 DeviceはInstanceを所有し、InstanceはEntryと診断状態を維持する。
@@ -75,6 +81,16 @@ subscriberがpanicした後は外部ログ転送を停止し、集計を続け�
 例外は個別に根拠を記録した確認済み誤検出だけで、現在の例外はない。
 転送ごとの詳細はdebug、初期化情報と異常は通常の診断へ記録し、
 object名・command label・Fenceを調査時の対応づけに使う。
+
+公開`ValidationMonitor`は診断状態だけを保持し、Instance・Deviceの寿命は延ばさない。
+native所有者を破棄した後にも、警告・エラー・callback失敗と問題原文を確認できる。
+Layer起動状態は直近messageとは別にdistinct原文を最大8件保持し、overflowも報告する。
+固定SDKの認識できる一貫した起動報告だけからCore／SyncValの実効設定を判断する。
+欠落、未知形式、矛盾、切断、overflowは未確認として扱う。
+Disabledを要求した際の起動報告の不在から、外部Layer注入が絶対にないとは断定しない。
+`is_clean()`の件数ゼロと、実際に検証が有効だった証明も別の条件である。
+`device_info()`はadapter・API・driver情報の所有値を返し、vendor固有のdriver versionを
+Vulkan API versionの形式として誤decodeしない。
 
 ## メモリ所有とCPUアクセス
 
@@ -172,10 +188,15 @@ GPU完了または未投入キャンセルを確認してから再利用する�
 更新済みdescriptorを参照する記録済み／未完了命令を、別の更新で無効にしない。
 pipeline作成に失敗した際も、部分的に作成できたhandleを解放する。
 
-頂点はclip座標xyz（W=1）とlinear rgba、深度範囲は0〜1の通常Z、
+頂点はmodel座標xyz（入力W=1）とlinear rgbaで、描画ごとのMVPでclip座標へ変換する。
+既存`Graph::raster`はidentity MVPと白tintを使うため、従来のclip-space入力を維持する。
+頂点shader用push constantはcolumn-major mat4がoffset 0、linear tint vec4がoffset 64の計80 byte。
+実Deviceの上限を照会し、pipeline layoutと記録のstage・offset・sizeを一致させる。
+色と行列はGraphの不変operandとして保持し、後続frameのCPU入力変更に依存しない。
+深度範囲は0〜1の通常Z、
 clear depthは1、compareはLESS、viewportの高さは正、cullingは無効とする。
 front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段階では向きも再検証する。
-行列・座標系変換・sRGB／HDR・tone mappingはまだ提供しない。
+汎用projection builder、HDR、tone mappingは提供しない。
 色はlinear RGBA8_UNORMで、alphaを保持し、blendingは無効とする。
 u32 indexは頂点bufferの範囲と、起動時に保持した実際の`maxDrawIndexedIndexValue`の両方を検査する。
 Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有効化だけで上限を推定しない。
@@ -207,6 +228,17 @@ native資源・payload・VMA・Deviceを含む所有連鎖を保持して早期�
 この異常経路では保持した資源を回収できない。
 通常の回収は明示的な完了確認で進め、Drop待機へ依存しない。
 
+フレームループにはRuntimeがpendingを保持する`submit_frame`を追加した。
+受理済みメタデータのDropは待機せず、`poll_frame`がtimeout 0で完了を観測する。
+正常完了後もreadbackのCPU寿命は独立し、他の資源を先に再利用できる。
+終了時の`drain_frames`は明示的な予算付き待機で、結果を破棄する。
+Runtime自身のDropには既存の保守的な後始末を残すが、通常frameの進行には使わない。
+停止やDevice lossを別操作で検出した場合も、各処理の実Fence結果を観測してから退役する。
+
+この経路は既存Fence・所有leaseを活かし、timelineへの置換や別のframe poolを導入しない。
+予定状態の引継ぎ、完了によるnative回収、CPU結果の保持を分けることで、
+単一queueの正しい基準を保ったままPresentationや履歴の利用を追加する。
+
 ## 実行資源と共有stagingの再利用
 
 `ExecutionPool`はCommandPool・一次CommandBuffer・Fenceの組を上限付きで遅延作成する。
@@ -231,6 +263,58 @@ native実行枠は未読Readbackより先に再利用できる。
 再取得した領域の過去のbyte列を、新しい要求の初期化済み内容として扱わない。
 完了不明の処理はleaseを含めて保持し、領域だけを先に再利用しない。
 
+## Windows Presentation
+
+`for_window`は`Arc<winit::window::Window>`を受け取り、Runtimeと`Presenter`を返す。
+Surface所有者がWindowとInstanceを保持し、Deviceと同じInstanceに由来することを保証する。
+イベントループは利用側に置く。M3では確実なWindow寿命を優先した限定adapterとし、
+他のwindow libraryへの接続はPresentation内の境界で追加できるよう、Graph・engine入力から分離する。
+CPUのみの構築とheadless Vulkanはwindow依存を持たず、表示依存はWindows targetのoptional依存に限定する。
+
+`Presenter::prepare`で再作成を進め、`extent`に合うGraph出力を作る。
+Graphのlinear RGBA8_UNORM出力を`present`へ渡し、BGRA8_SRGBまたはRGBA8_SRGB、
+SRGB_NONLINEARのSwapchainへfullscreen描画する。形式の違いを無変換copyで隠さない。
+既存shaderのtexelFetchを使うためsourceとSwapchainのextentは一致を要求し、resize時は再構築する。
+composite alphaはOPAQUE対応を要求する。straight RGBAをPRE_MULTIPLIED等へ無検証で流す
+fallbackは置かず、透明Windowの合成方式をM3の機能へ広げない。
+HDR、tone mapping、任意の出力形式・拡大縮小はこの経路に含めない。
+
+Graph本体と表示は同じqueueへの別submitである。Graph解析にSwapchain所有を持ち込まず、
+出力のcanonicalな予定状態からfragment samplingへ依存を記録する。
+表示用submitがsourceの予定layout・stage/access・revisionを進め、leaseを完了まで保持する。
+Graph完了のCPU waitは挟まない。sourceを再利用するときはfresh importを取得する。
+表示用submitが受理された後は、queuePresentが失敗してもsourceのrevisionが進み得る。
+返値だけで旧snapshotへrollbackしたと考えず、再試行前にkeyからrefreshする。
+一つのsubmitに融合する案より境界を小さくする選択で、submit追加のCPU費用・latencyの改善は主張しない。
+GPU timestampのGraph区間には、この表示用submitとpresent待ちを含めない。
+
+frame bookkeeping、実行枠、Swapchainのimage index、表示slotは別のものとして管理する。
+表示slotはacquire用binary、present待機binary、present fence、キャンセル用Fenceとbindingを所有する。
+EXT maintenance1を必須にしたため、画像ごとのbinary再利用に頼る拡張なしの方式ではなく、
+各slotのpresent fenceと通常GPU参照の両方が終わったことを再利用の根拠にする。
+present fenceのsignalは画面への表示完了そのものではない。
+Swapchainの破棄には、その世代への全presentと通常GPU参照の終了が必要になる。
+
+`present`はacquire前にRuntime実行枠を予約し、acquireはtimeout 0とする。
+容量不足、`NotReady`、ゼロextentの`Suspended`で通常frameに暗黙waitを加えない。
+実行枠はGraphと表示で共有するため、両submitの使用数を見た明示的なbackpressureが必要である。
+FIFOと設定した画像数を出発点にし、実画像数とSurfaceのusage・format・extent・上限を照会する。
+固定3画像が最適であるとは扱わない。
+
+`SUBOPTIMAL`の取得済み画像、未取得のtimeout、`OUT_OF_DATE`、Surface loss、Device lossを分ける。
+acquire後の記録失敗やキャンセルではbinaryを待つ専用submitとFenceで消費を確認し、
+未present画像をreleaseする。この例外的なキャンセル回収には明示した10秒のAPI待機予算がある。
+release失敗の状態を推測して再releaseせず、証明できない所有を保持して停止する。
+presentのOUT_OF_DATE／SURFACE_LOSTはqueue操作がenqueue済みになり得るため、
+OOMの状態不変保証と同じrollbackにしない。
+
+旧Swapchainは世代として保持し、`oldSwapchain`付き作成が失敗しても旧世代を再acquireしない。
+保持世代数には上限があり、回収前の上限到達は容量不足として返す。
+`poll`はGPU Fenceとpresent fenceを観測し、`wait_idle`／`close`はこのPresenterの処理だけを待つ。
+Queue／Device全体のidleをpresent完了の証明には使わない。
+正常終了はGraph frameを回収し、Presenterを明示closeしてからnative所有者を破棄する。
+Dropの保守的回収でも完了を証明できない場合は、Window・Surface・同期・Device等の所有連鎖を保持する。
+
 ## 範囲計画と性能評価
 
 `ByteRanges`は半開区間を`BTreeMap`で保持し、隣接・重複を統合する。
@@ -248,6 +332,35 @@ CPUの範囲計画はCriterionで測定し、実際のprivateな範囲集合と�
 GPUの区間別時間、timestamp、個別転送のp95と内容照合は、明示実行のGPU計測で扱う。
 CPU時間、GPU時間、完了までのlatency、throughputを区別し、描画FPSへ読み替えない。
 性能値とその揺れは最新の検証状況へ記録し、通常のCIに壁時計時間の固定合否閾値を設けない。
+
+### Graphの任意計測
+
+`set_profiling(true)`を明示した投入だけ、CPU prepare・record・submit・retireと
+同一queue上のGraph全体のGPU timestampを採取する。buildとcompileは利用側で測る。
+既定は無効で、通常submitにquery pool作成やCPU各phaseのtimerを追加しない。
+無効へ戻しても、既に受理したsampleの所有・回収は変えない。
+
+timestampは実queueの`timestampValidBits`と`timestampPeriod`を確認し、
+上限付きquery pairを記録中・pendingのpayloadが保持する。
+同じcommand bufferでquery reset、TOP_OF_PIPEの開始、Graph命令、BOTTOM_OF_PIPEの終了を記録し、
+実Fence完了後に64-bit値とavailabilityをWAITなしで取得する。
+未完了queryのresetや、結果取得のための毎frame待機は行わない。
+値を結果へコピーしたらquery枠を返し、未読readbackに保持させない。
+
+差分は有効bit幅のmoduloで扱う。submit前から回収までのCPU経過時間がcounterのwrap期間以上なら、
+複数wrapを排除できないsampleとして未測定にする。これは保守的なRenderer側の測定方針である。
+availability不足も時間ゼロとして扱わない。GPU時間はGraphの記録区間であり、
+表示用submit・present/VSync待ち・画面への表示完了を含まない。
+CPU retireはpayload整理、query取得、native実行枠のreset・返却を含み、Fenceでblockした時間を除く。
+失敗したpollの反復費用はそのsampleに含めず、利用側のpoll全体時間と区別する。
+
+`memory_stats()`は要求時にVMA統計を取得する。登録済み、pending等で保持中、再利用可能なcacheの
+論理byte数、stagingの要求byte・整列予約byte・high-water、VMA Allocationとblockの件数・byte数を分ける。
+画像の論理byte数はpacked texel量であり、optimal imageのAllocation sizeでもprocess VRAM使用量でもない。
+このVMA統計はdriverやSwapchainの確保を含まない。
+`EXT_memory_budget`は有効にしておらず、process budgetは未取得とする。
+性能用の検証設定は明示的な`new_with_validation`で選び、既定Requiredは維持する。
+要求したmodeとLayerから実際に観測した設定、未確認の情報を区別して記録する。
 
 ## 参照する仕様
 

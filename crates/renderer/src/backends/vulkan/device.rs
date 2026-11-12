@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash::vk;
 
@@ -31,10 +31,15 @@ struct AdapterInfo {
 #[derive(Debug, PartialEq, Eq)]
 enum RequirementFailure {
     ApiVariant(u32),
-    ApiVersion { available: u32, required: u32 },
+    ApiVersion {
+        available: u32,
+        required: u32,
+    },
     Feature(&'static str),
     GraphicsComputeQueue,
     InvalidProperty(&'static str),
+    #[cfg(all(feature = "presentation", windows))]
+    Presentation(&'static str),
 }
 
 impl fmt::Display for RequirementFailure {
@@ -57,6 +62,8 @@ impl fmt::Display for RequirementFailure {
             Self::Feature(name) => write!(f, "missing feature {name}"),
             Self::GraphicsComputeQueue => write!(f, "no Graphics+Compute queue family"),
             Self::InvalidProperty(name) => write!(f, "invalid driver property {name}"),
+            #[cfg(all(feature = "presentation", windows))]
+            Self::Presentation(name) => write!(f, "missing presentation requirement {name}"),
         }
     }
 }
@@ -318,6 +325,14 @@ fn with_create_info<T>(
     queue_family_index: u32,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
+    with_presentation_create_info(queue_family_index, false, create)
+}
+
+fn with_presentation_create_info<T>(
+    queue_family_index: u32,
+    presentation: bool,
+    create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
+) -> T {
     let priorities = [1.0];
     let queues = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(queue_family_index)
@@ -326,17 +341,28 @@ fn with_create_info<T>(
     let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
         .synchronization2(true)
         .dynamic_rendering(true);
-    let create_info = vk::DeviceCreateInfo::default()
+    let mut maintenance =
+        vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
+    let extensions = [
+        ash::khr::swapchain::NAME.as_ptr(),
+        ash::ext::swapchain_maintenance1::NAME.as_ptr(),
+    ];
+    let mut create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queues)
         .push_next(&mut features12)
         .push_next(&mut features13);
+    if presentation {
+        create_info = create_info
+            .enabled_extension_names(&extensions)
+            .push_next(&mut maintenance);
+    }
     create(&create_info)
 }
 
 /// Owns the Instance until the Device is destroyed. Allocator/buffer owners keep
 /// this owner alive until all children and submitted work have been retired.
 pub(super) struct VulkanDevice {
-    _instance: VulkanInstance,
+    _instance: Arc<VulkanInstance>,
     device: ash::Device,
     debug_utils: Option<ash::ext::debug_utils::Device>,
     selected: SelectedDevice,
@@ -356,12 +382,112 @@ pub(super) enum DeviceState {
 }
 
 impl VulkanDevice {
+    pub(super) fn validation_mode(&self) -> super::instance::ValidationMode {
+        self._instance.validation_mode()
+    }
+
     pub(super) fn new(instance: VulkanInstance) -> Result<Self, DeviceInitError> {
         let result = Self::initialize(instance);
         if let Err(error) = &result {
             tracing::error!(target: LOG_TARGET, error = %error, "Vulkan Device initialization failed");
         }
         result
+    }
+
+    #[cfg(all(feature = "presentation", windows))]
+    pub(super) fn for_surface(
+        instance: Arc<VulkanInstance>,
+        surface: &super::presentation::WindowSurface,
+    ) -> Result<Self, DeviceInitError> {
+        // SAFETY: Surface retains this Instance, and all handles are queried
+        // synchronously before the selected Device is created.
+        let physical =
+            unsafe { instance.raw().enumerate_physical_devices() }.map_err(|result| {
+                DeviceInitError::Vulkan {
+                    operation: "vkEnumeratePhysicalDevices(presentation)",
+                    device_name: None,
+                    result,
+                }
+            })?;
+        let mut candidates = Vec::new();
+        for physical in physical {
+            let mut candidate = inspect(instance.raw(), physical);
+            let supported_surface = surface
+                .assess_device(physical, &mut candidate.queues)
+                .map_err(|result| DeviceInitError::Vulkan {
+                    operation: "query Surface presentation support",
+                    device_name: Some(candidate.info.name.clone()),
+                    result,
+                })?;
+            if !supported_surface {
+                candidate
+                    .property_failures
+                    .push(RequirementFailure::Presentation(
+                        "opaque sRGB color-attachment Surface",
+                    ));
+            }
+            if !candidate.queues.iter().any(|queue| {
+                queue.queue_count != 0
+                    && queue
+                        .queue_flags
+                        .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+            }) {
+                candidate
+                    .property_failures
+                    .push(RequirementFailure::Presentation(
+                        "same Graphics+Compute+Present queue",
+                    ));
+            }
+            // SAFETY: This physical Device was enumerated from this Instance.
+            let extensions = unsafe {
+                instance
+                    .raw()
+                    .enumerate_device_extension_properties(physical)
+            }
+            .map_err(|result| DeviceInitError::Vulkan {
+                operation: "vkEnumerateDeviceExtensionProperties(presentation)",
+                device_name: Some(candidate.info.name.clone()),
+                result,
+            })?;
+            for required in [
+                ash::khr::swapchain::NAME,
+                ash::ext::swapchain_maintenance1::NAME,
+            ] {
+                if !extensions
+                    .iter()
+                    .any(|p| p.extension_name_as_c_str() == Ok(required))
+                {
+                    candidate
+                        .property_failures
+                        .push(RequirementFailure::Presentation(
+                            required.to_str().expect("static Vulkan extension name"),
+                        ));
+                }
+            }
+            if supported_api(candidate.info.api_version)
+                && extensions.iter().any(|p| {
+                    p.extension_name_as_c_str() == Ok(ash::ext::swapchain_maintenance1::NAME)
+                })
+            {
+                let mut maintenance = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
+                let mut features =
+                    vk::PhysicalDeviceFeatures2::default().push_next(&mut maintenance);
+                // SAFETY: The extension was enumerated; live query output is
+                // separate from the explicitly enabled feature structure.
+                unsafe {
+                    instance
+                        .raw()
+                        .get_physical_device_features2(physical, &mut features)
+                };
+                if maintenance.swapchain_maintenance1 != vk::TRUE {
+                    candidate
+                        .property_failures
+                        .push(RequirementFailure::Presentation("swapchainMaintenance1"));
+                }
+            }
+            candidates.push(candidate);
+        }
+        Self::create_selected_shared(instance, select_device(candidates)?, true)
     }
 
     pub(super) fn instance_raw(&self) -> &ash::Instance {
@@ -482,6 +608,14 @@ impl VulkanDevice {
         instance: VulkanInstance,
         selected: SelectedDevice,
     ) -> Result<Self, DeviceInitError> {
+        Self::create_selected_shared(Arc::new(instance), selected, false)
+    }
+
+    fn create_selected_shared(
+        instance: Arc<VulkanInstance>,
+        selected: SelectedDevice,
+        presentation: bool,
+    ) -> Result<Self, DeviceInitError> {
         let mut maintenance4 = vk::PhysicalDeviceMaintenance4Properties::default();
         let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut maintenance4);
         // SAFETY: Selection requires Vulkan 1.3 on this retained Instance and
@@ -503,16 +637,20 @@ impl VulkanDevice {
             selection_rule = "discrete > integrated > virtual > other > CPU; enumeration order on ties",
             cpu_fallback = selected.info.device_type == vk::PhysicalDeviceType::CPU,
             "Selected Vulkan physical device");
-        let device = with_create_info(selected.queue_family_index, |create_info| {
-            // SAFETY: Selected features and queue family were queried from this
-            // Instance/device. All create-info storage remains live for the call.
-            // No extensions, children, custom allocator, or work are introduced.
-            unsafe {
-                instance
-                    .raw()
-                    .create_device(selected.physical_device, create_info, None)
-            }
-        })
+        let device = with_presentation_create_info(
+            selected.queue_family_index,
+            presentation,
+            |create_info| {
+                // SAFETY: Selected features and queue family were queried from this
+                // Instance/device. All create-info storage remains live for the call.
+                // No extensions, children, custom allocator, or work are introduced.
+                unsafe {
+                    instance
+                        .raw()
+                        .create_device(selected.physical_device, create_info, None)
+                }
+            },
+        )
         .map_err(|result| DeviceInitError::Vulkan {
             operation: "vkCreateDevice",
             device_name: Some(selected.info.name.clone()),

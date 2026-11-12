@@ -9,11 +9,17 @@ description = "RenderGraph-centered renderer for game engine integration"
 [features]
 default = []
 vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]
+presentation = ["vulkan", "dep:ash-window", "dep:raw-window-handle", "dep:winit"]
 
 [dependencies]
 ash = { workspace = true, optional = true }
 vk-mem = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+ash-window = { version = "0.13", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
 
 [dev-dependencies]
 criterion.workspace = true
@@ -26,6 +32,14 @@ harness = false
 [[example]]
 name = "headless"
 required-features = ["vulkan"]
+
+[[example]]
+name = "frame_loop"
+required-features = ["vulkan"]
+
+[[example]]
+name = "windowed"
+required-features = ["presentation"]
 
 [lints]
 workspace = true
