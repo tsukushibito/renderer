@@ -109,10 +109,47 @@ CPU build/compile/prepare/record/submit/retire、GPU Graph区間、poll費用と
 論理byte、staging予約high-water、VMA Allocation/blockを分ける。
 process VRAM/RAMやdriver/Swapchainの確保はこのVMA値に含めず、process budgetは未取得とする。
 
-性能sampleの実行・基準値保存はこの実装の品質確認に続いて行う。
+実装commit `752e7859cb55d50fd270dc7d74b67274d8c191a6`、worktree cleanで3 runを実行した。
+[計測JSON](current-metrics.json)に環境、要求/観測Validation、各runの統計、全384 sampleを保存する。
+全sampleでGPU timestampは64 valid bits、1 ns/tick、availabilityを確認できた。
+次の範囲は各runの中央値とnearest-rank p95の最小〜最大で、単位はµs。
+
+| 区間 | runごとの中央値の範囲 | runごとのp95の範囲 |
+|---|---:|---:|
+| CPU build | 1.30–1.60 | 1.50–2.00 |
+| CPU compile | 9.40–10.90 | 10.10–12.40 |
+| CPU prepare | 2.40–2.90 | 2.60–3.80 |
+| CPU record | 8.40–10.35 | 8.90–15.90 |
+| CPU submit | 7.40–8.00 | 8.60–10.00 |
+| CPU retire | 1.00–1.10 | 1.10–1.40 |
+| 完了を返したpoll全体 | 1.50–1.70 | 1.70–2.10 |
+| submit returnから完了観測 | 147.35–187.65 | 153.70–259.20 |
+| GPU Graph区間 | 22.080–22.304 | 22.496–22.752 |
+
+phase別中央値の和をframe全体の中央値として扱わない。観測latencyはpoll頻度と他frameのCPU作業にも依存する。
+run 1にはCPU compile最大89.9 µs、record最大83.8 µsの外れ値があり、全sampleとrun間変動を残した。
+測定loop時間はwarm-upのin-flight tail、最後の回収とCPU内容照合も含み、GPU区間とは異なる。
+clock・affinity・外部負荷は固定しておらず、この小さな基準負荷を代表sceneの性能や表示FPSへ一般化しない。
+
+3 runともwarm-up後のnative作成数はresource 18 / execution 3 / descriptor arena 3で増加なし。
+各runの160 frameでresource再利用785回、execution/descriptor再利用各157回を確認した。
+frame回収後・永続meshとhistoryをまだ登録している時点のメモリは次のとおり。
+
+| 指標 | 3 runで共通の値 |
+|---|---:|
+| 登録済み論理byte | 100 |
+| pending等で保持中の未登録論理byte | 0 |
+| 再利用cacheの論理byte | 589,836 |
+| VMA Allocation | 20件、9,177,200 byte |
+| VMA確保block | 3件、100,663,296 byte（96 MiB） |
+| upload予約high-water | 256 byte |
+| readback予約high-water | 196,864 byte |
+| 回収後upload / readbackのlive range | 両方0 |
+
+正しさと同じbyte/画素照合を性能runでも実施し、native破棄後の診断件数はゼロだった。
 正しさのRequired runではCore/SyncValの実効値と終了後診断を確認した。
 性能用Disabled要求でLayer起動報告がない場合も、外部Layerが絶対にない証明とは扱わず、
-要求・観測値・環境変数をJSONへ残す。
+要求・観測値・環境変数をJSONへ残した。今回の性能runは起動報告なし、実効値は未確認のnullである。
 
 ## 第二APIの選定と未確認範囲
 
@@ -134,3 +171,5 @@ clock・affinity・電力・OS負荷は固定せず、他エンジンとの性�
 統合verifyのJSON/PPMは`.tools/m3/frame-verify.json`、`frame.ppm`、
 WSI能力の元情報は`.tools/m3/preflight-vulkaninfo.log`、第二API probeは`.tools/m3/second-api-probe.txt`。
 `.tools/`はGit対象外で、再実行方法は開発ガイドに記載する。
+性能runの生ログは`.tools/m3/gates/frame-baseline.log`、Gitで共有する基準データは
+[current-metrics.json](current-metrics.json)を正とする。

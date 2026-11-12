@@ -13,6 +13,7 @@
 | 設計 | [RenderGraph](design/rendergraph.md) | 宣言・依存解析、import/export・履歴、フレーム寿命、エンジン入力と拡張 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
+| 検証データ | [現在のフレーム計測](verification/current-metrics.json) | 固定ソースの環境、各runの統計と生sample |
 
 ## 更新方針
 
