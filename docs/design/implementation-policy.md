@@ -526,9 +526,16 @@ D3D12での表示経路を、共通契約の検証に先立つ必須条件には
 shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を最初に検証する。[^spirvcross][^dxc]
 binding、combined sampler、行列・座標・データ配置の等価性は生成成功だけで判断せず、実出力と照合する。
 HLSLを単一ソースへ移す案は代案とし、既存Vulkan基準の再生成一致と変更量を比較してから判断する。
-Rust bindingsはM4開始時に固定版のAPI・MSRV・依存量を確認する。
-Microsoftの現行推奨であるfocused crateとprivateな`windows-bindgen`も候補とし、
-再利用ライブラリへumbrella crateを追加する選択は理由を記録する。[^windowsrust]
+Rust bindingsはMicrosoftの`windows-bindgen`によるbackend-private生成を採用する。
+D3D12・DXGIと必要なWin32／DXC APIだけを生成し、生成型はD3D12バックエンド内部に閉じる。
+再利用ライブラリの依存量と版の衝突を抑える公式推奨に従う選択である。[^windowsrust]
+M4準備で公開済みgenerator・入力metadata・生成コードのruntime依存を照合し、API・MSRV・license・依存量を確認して版を固定する。
+生成filter・手順・入力の版を管理し、同じ入力からの再生成が一致することを検証する。
+生成物をGit管理するかbuild時に生成するかは、この再現性と非Windows／CPUのみのビルドを維持できる方法で決める。
+
+代案の`windows 0.62.2`は既存allocatorとの接続が容易だが、0.62系への長期保守・修正backportの保証は確認できていない。
+この短期互換性だけを理由に旧系列へ固定せず、allocatorは採用bindingsとの型・ABI・所有権・保守状況を別途検証して選ぶ。[^windowsallocator]
+COM参照の保持とGPUの利用期間を区別し、resource・heap allocation・descriptor領域・command allocator等の解放や再利用をFence完了で保護する。[^d3dlifetime]
 
 準備の残件は`renderer-6qc`（adapter・検証・shader経路）と`renderer-k51`（実GPU反復実行基盤）で管理する。
 M3で行うのはこの選定と準備条件の明確化までで、第二バックエンド実装や一般RHIの先行固定は含めない。
@@ -645,5 +652,9 @@ GPU検証ができない場合は、実行済みの確認と未検証項目を�
 [^spirvcross]: Khronos SPIRV-Cross公式README。SPIR-VからHLSL等への変換と制約。`https://github.com/KhronosGroup/SPIRV-Cross`
 
 [^windowsrust]: Microsoft windows-rs公式README。再利用ライブラリのfocused crate・private binding生成の選択指針。実装時には採用版と照合する。`https://github.com/microsoft/windows-rs`
+
+[^windowsallocator]: gpu-allocator 0.28.0の公開manifestは`windows >=0.53, <=0.62`を要求する。新しい生成型との接続を未検証のまま互換と扱わない。`https://docs.rs/crate/gpu-allocator/0.28.0/source/Cargo.toml`。Microsoft担当者の旧系列の不具合への回答はmasterでの修正と0.62での回避策を示し、0.62へのbackportを約束していない。`https://github.com/microsoft/windows-rs/issues/5189#issuecomment-6448298133`
+
+[^d3dlifetime]: Microsoft「Important Changes from Direct3D 11 to Direct3D 12」。明示同期と、アプリが管理する資源・descriptorメモリの寿命。`https://learn.microsoft.com/en-us/windows/win32/direct3d12/important-changes-from-directx-11-to-directx-12`
 
 [^metal]: Apple「Metal」。AppleプラットフォームとAPI／shader検証・診断ツールの概要。`https://developer.apple.com/metal/`

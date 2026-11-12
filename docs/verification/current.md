@@ -359,6 +359,11 @@ D3D12CreateDevice(default adapter, FL11_0)とID3D12Debug取得はS_OK、直後�
 adapterの識別、Debug Layer/GBV有効化、実描画と画像等価性、実GPU CIは未確認。
 準備は`renderer-6qc`、`renderer-k51`に登録し、M3で第二backend実装や一般RHIを先行固定していない。
 
+Rust bindingsは[設計方針](../design/implementation-policy.md#161-第二バックエンドの選定と準備条件)のとおり、
+Microsoftの`windows-bindgen`によるbackend-private生成を採用する方針を確定した。
+固定するgenerator・metadata・runtime依存の照合、生成・再生成一致・compile、allocator接続と新bindings経由のnative実行は未実施で、`renderer-6qc`の準備範囲に残る。
+既存probeの`S_OK`は、この採用bindingsでの検証結果として扱わない。
+
 別GPU/driver、Linux表示・実GPU、Mac/Metal、実native OOM/Device loss/Surface loss、
 拡張なしWSI、透明Window、HDR、物理aliasing、複数queueは今回の追加実機確認に含まない。
 上記の追加affinity controlを除き、clock・affinity・電力・OS負荷は固定せず、他エンジンとの性能比較も行っていない。
