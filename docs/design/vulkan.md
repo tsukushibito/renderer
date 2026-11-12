@@ -31,6 +31,8 @@ InstanceとVMAが要求するAPIはVulkan 1.3とする。
 初期化前にAPI、Layer、extension、物理デバイスの能力を照会する。
 取得できた不足条件をまとめ、照会失敗で不明な条件を不足と決めつけない。
 エラーには操作と元の原因を残す。
+要求extensionはC文字列の内容で重複除去・整列してからFFI用pointerへ変換する。
+同名でも保存場所が異なり得るため、pointerの数値を名前の同一性や順序に使わない。
 
 物理デバイスにはAPI variant 0のVulkan 1.3以上、Graphics＋Compute対応キュー、
 `timelineSemaphore`、`synchronization2`、`dynamicRendering`を要求する。

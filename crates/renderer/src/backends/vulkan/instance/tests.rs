@@ -1,6 +1,25 @@
 use super::super::real_vulkan_dispatch;
 use super::*;
 
+#[test]
+fn extension_names_deduplicate_equal_contents_from_distinct_storage() {
+    let debug = std::ffi::CString::new("VK_EXT_debug_utils").unwrap();
+    let surface = std::ffi::CString::new("VK_KHR_surface").unwrap();
+    let surface_copy = surface.clone();
+    assert_ne!(debug.as_ptr(), ash::ext::debug_utils::NAME.as_ptr());
+    assert_ne!(surface.as_ptr(), surface_copy.as_ptr());
+    let names =
+        requested_extension_names(ValidationMode::Required, &[&surface, &debug, &surface_copy]);
+    assert_eq!(
+        names.into_iter().collect::<Vec<_>>(),
+        [
+            c"VK_EXT_debug_utils",
+            c"VK_EXT_layer_settings",
+            c"VK_KHR_surface"
+        ]
+    );
+}
+
 fn available(api: u32, layers: &[&str], extensions: &[&str]) -> Discovery {
     Discovery {
         api: Some(api),

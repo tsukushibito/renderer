@@ -32,10 +32,10 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 | fmt | 成功 |
 | CPU / Vulkan / Windows presentationの全target check・Clippy `-D warnings` | 3構成すべて成功 |
 | CPUのみの通常試験 | 単体25件＋公開API 3件成功 |
-| Vulkan featureの通常試験 | CPU単体106件＋公開API 3件成功、26 ignored |
-| presentation featureの通常試験 | CPU単体109件＋公開API 3件成功、27 ignored |
+| Vulkan featureの通常試験 | CPU単体107件＋公開API 3件成功、26 ignored |
+| presentation featureの通常試験 | CPU単体110件＋公開API 3件成功、27 ignored |
 | 明示headless実GPU試験 | 25件成功、2.71秒 |
-| headless＋実Win32 Surfaceを含む明示GPU試験 | 26件成功、4.77秒 |
+| headless＋実Win32 Surfaceを含む明示GPU試験 | 26件成功、4.30秒 |
 | Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
 | Shader再生成検証 | 5種類すべてspirv-val成功、固定SDKによる再生成とチェックインbinaryのSHA-256一致 |
 | headless例 | 従来の128×96描画・深度・Compute・合成とPPM出力成功 |
@@ -83,6 +83,11 @@ CPU retireにnative実行枠のreset費用が含まれない点、release失敗�
 terminal pending残留による回収停止は修正し、最終差分を再確認した。
 追加の確定した同期・早期解放問題は見つかっていない。これは未確認環境までの保証ではない。
 
+push後のLinux CIで、Instance拡張名をpointerの値で整列する実装がOSごとに異なる順序を返し、
+既存lifecycle試験が失敗した。C文字列の内容による整列・重複除去へ修正し、
+別heapの同名文字列を使う回帰試験を追加した（`renderer-u4h.14`）。
+修正後のVulkan／presentation全target check・Clippy・CPU試験と実GPU26件を再実行して成功した。
+
 ## 採用した基準と制限
 
 既存ExecutionPool・staging・画像/View・descriptorを活用し、frameごとの新設poolや
@@ -110,6 +115,7 @@ CPU build/compile/prepare/record/submit/retire、GPU Graph区間、poll費用と
 process VRAM/RAMやdriver/Swapchainの確保はこのVMA値に含めず、process budgetは未取得とする。
 
 実装commit `752e7859cb55d50fd270dc7d74b67274d8c191a6`、worktree cleanで3 runを実行した。
+後続の拡張名集約修正はcold初期化とCPU回帰試験だけを変更し、測定対象のframe経路・shaderは変更していない。
 [計測JSON](current-metrics.json)に環境、要求/観測Validation、各runの統計、全384 sampleを保存する。
 全sampleでGPU timestampは64 valid bits、1 ns/tick、availabilityを確認できた。
 次の範囲は各runの中央値とnearest-rank p95の最小〜最大で、単位はµs。
@@ -168,6 +174,7 @@ clock・affinity・電力・OS負荷は固定せず、他エンジンとの性�
 
 最終ゲートは`.tools/m3/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`、
 `gpu-all.log`、`windowed-smoke.log`、`example-cpu.log`、`shader-verify.log`、`headless-example.log`。
+Linux CI修正後の追加確認は`ci-fix-{vulkan,presentation}-{check,clippy,test}.log`と`ci-fix-gpu.log`。
 統合verifyのJSON/PPMは`.tools/m3/frame-verify.json`、`frame.ppm`、
 WSI能力の元情報は`.tools/m3/preflight-vulkaninfo.log`、第二API probeは`.tools/m3/second-api-probe.txt`。
 `.tools/`はGit対象外で、再実行方法は開発ガイドに記載する。

@@ -34,6 +34,20 @@ impl ValidationMode {
     }
 }
 
+// Compare extension names, never the addresses of independently stored names.
+// The references retain their input lifetime until the native call finishes.
+fn requested_extension_names<'a>(
+    validation: ValidationMode,
+    additional: &[&'a CStr],
+) -> BTreeSet<&'a CStr> {
+    validation
+        .extensions()
+        .iter()
+        .copied()
+        .chain(additional.iter().copied())
+        .collect()
+}
+
 /// One independently discovered problem; unknown query results are not called absent.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PrerequisiteFailure {
@@ -435,13 +449,9 @@ impl VulkanInstance {
         } else {
             Vec::new()
         };
-        let extensions: Vec<_> = validation
-            .extensions()
-            .iter()
-            .chain(additional_extensions)
-            .map(|name| name.as_ptr())
-            .collect::<BTreeSet<_>>()
+        let extensions: Vec<_> = requested_extension_names(validation, additional_extensions)
             .into_iter()
+            .map(CStr::as_ptr)
             .collect();
         let enable_sync: vk::Bool32 = vk::TRUE;
         // ash's byte-slice setter counts bytes rather than BOOL32 values. Keep
