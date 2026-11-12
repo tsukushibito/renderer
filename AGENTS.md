@@ -69,6 +69,14 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
   recommendations, and executed/unexecuted verification in the existing issue
   and relevant documentation. Use the established quality and validation gates.
 
+# API compatibility
+
+- Backward compatibility is not a default constraint. Prefer the appropriate API
+  and update in-repository consumers and documentation together; do not add
+  compatibility wrappers or parallel APIs solely to preserve existing callers.
+- If compatibility becomes a requirement, revise this policy explicitly before
+  treating it as a constraint.
+
 # Rust module layout
 
 - Do not create or retain `mod.rs` files, including test modules.
