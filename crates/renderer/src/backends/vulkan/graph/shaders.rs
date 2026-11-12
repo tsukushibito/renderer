@@ -1,0 +1,1146 @@
+//! Trusted M2 shaders, images/views, pipelines and bounded descriptor leases.
+//!
+//! The graph executor owns synchronization. Every object referenced by recorded
+//! commands, including a descriptor lease, stays alive through proven retirement.
+
+use std::ffi::{CStr, CString};
+use std::sync::{Arc, Mutex};
+
+use ash::vk;
+use vk_mem::Alloc;
+
+use super::super::memory::MemoryOwner;
+use super::RuntimeError;
+
+fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
+    owner.device.observe_result(result);
+    RuntimeError::native(operation, owner.device.name(), result)
+}
+
+fn name_object<H: vk::Handle>(
+    owner: &MemoryOwner,
+    handle: H,
+    name: &CStr,
+) -> Result<(), RuntimeError> {
+    let info = vk::DebugUtilsObjectNameInfoEXT::default()
+        .object_handle(handle)
+        .object_name(name);
+    // SAFETY: Every caller owns a live handle on this Device; the name remains
+    // live through this immediate call and debug_utils is required at startup.
+    unsafe {
+        owner
+            .device
+            .debug_utils()
+            .set_debug_utils_object_name(&info)
+    }
+    .map_err(|r| native(owner, "vkSetDebugUtilsObjectNameEXT(Graph)", r))
+}
+
+/// Allocation and its view are one owner; layout/content state belongs to the
+/// canonical runtime entry, independently of this immutable storage identity.
+pub(super) struct GraphImage {
+    owner: Arc<MemoryOwner>,
+    allocation: vk_mem::Allocation,
+    pub(super) image: vk::Image,
+    pub(super) view: vk::ImageView,
+    pub(super) extent: vk::Extent2D,
+    pub(super) format: vk::Format,
+    pub(super) aspect: vk::ImageAspectFlags,
+}
+
+impl GraphImage {
+    pub(super) fn new(
+        owner: Arc<MemoryOwner>,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        name: &str,
+    ) -> Result<Self, RuntimeError> {
+        owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        let (usage, aspect) = match format {
+            vk::Format::R8G8B8A8_UNORM => (
+                vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                vk::ImageAspectFlags::COLOR,
+            ),
+            vk::Format::D32_SFLOAT => (
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                vk::ImageAspectFlags::DEPTH,
+            ),
+            _ => {
+                return Err(RuntimeError::unsupported(format!(
+                    "unsupported Graph image format {format:?}"
+                )));
+            }
+        };
+        if width == 0 || height == 0 {
+            return Err(RuntimeError::invalid(
+                "Graph image dimensions must be nonzero",
+            ));
+        }
+        let query = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(format)
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage);
+        let mut support = vk::ImageFormatProperties2::default();
+        // SAFETY: Live Device retains its Instance and adapter; the typed input
+        // describes exactly the format/type/tiling/usage created below.
+        unsafe {
+            owner
+                .device
+                .instance_raw()
+                .get_physical_device_image_format_properties2(
+                    owner.device.physical_device(),
+                    &query,
+                    &mut support,
+                )
+        }
+        .map_err(|result| {
+            native(
+                &owner,
+                "vkGetPhysicalDeviceImageFormatProperties2(Graph)",
+                result,
+            )
+        })?;
+        let limits = support.image_format_properties;
+        if width > limits.max_extent.width
+            || height > limits.max_extent.height
+            || limits.max_extent.depth < 1
+            || limits.max_mip_levels < 1
+            || limits.max_array_layers < 1
+            || !limits.sample_counts.contains(vk::SampleCountFlags::TYPE_1)
+        {
+            return Err(RuntimeError::unsupported(format!(
+                "Graph image {width}x{height} {format:?} exceeds format limits {limits:?}"
+            )));
+        }
+        // SAFETY: The live adapter belongs to this retained Instance.
+        let properties = unsafe {
+            owner
+                .device
+                .instance_raw()
+                .get_physical_device_properties(owner.device.physical_device())
+        };
+        if width > properties.limits.max_framebuffer_width
+            || height > properties.limits.max_framebuffer_height
+            || width > properties.limits.max_viewport_dimensions[0]
+            || height > properties.limits.max_viewport_dimensions[1]
+            || width as f32 > properties.limits.viewport_bounds_range[1]
+            || height as f32 > properties.limits.viewport_bounds_range[1]
+            || properties.limits.viewport_bounds_range[0] > 0.0
+        {
+            return Err(RuntimeError::unsupported(
+                "Graph image exceeds framebuffer/viewport dimensions",
+            ));
+        }
+        let extent = vk::Extent2D { width, height };
+        let info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let allocation_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::AutoPreferDevice,
+            ..Default::default()
+        };
+        // SAFETY: VMA retains this Device, internally synchronizes allocation,
+        // and satisfies the exact native image's requirements/bind operation.
+        let (image, allocation) = unsafe { owner.raw.create_image(&info, &allocation_info) }
+            .map_err(|result| native(&owner, "vmaCreateImage(Graph)", result))?;
+        let mut result = Self {
+            owner,
+            allocation,
+            image,
+            view: vk::ImageView::null(),
+            extent,
+            format,
+            aspect,
+        };
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(aspect)
+            .level_count(1)
+            .layer_count(1);
+        let view_info = vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(range);
+        // SAFETY: Image and allocation are immediately owned by result. A failed
+        // view creation releases the image through Drop; no GPU use exists yet.
+        result.view = unsafe {
+            result
+                .owner
+                .device
+                .raw()
+                .create_image_view(&view_info, None)
+        }
+        .map_err(|error| native(&result.owner, "vkCreateImageView(Graph)", error))?;
+        let name = CString::new(name)
+            .map_err(|_| RuntimeError::invalid("Graph image name contains NUL"))?;
+        let naming = vk::DebugUtilsObjectNameInfoEXT::default()
+            .object_handle(image)
+            .object_name(&name);
+        // SAFETY: The Device owns this live image and consumes the name inline.
+        unsafe {
+            result
+                .owner
+                .device
+                .debug_utils()
+                .set_debug_utils_object_name(&naming)
+        }
+        .map_err(|error| {
+            native(
+                &result.owner,
+                "vkSetDebugUtilsObjectNameEXT(Graph image)",
+                error,
+            )
+        })?;
+        let view_name = CString::new(format!("{}-view", name.to_string_lossy()))
+            .expect("image name already checked for NUL");
+        name_object(&result.owner, result.view, &view_name)?;
+        Ok(result)
+    }
+}
+
+impl Drop for GraphImage {
+    fn drop(&mut self) {
+        // SAFETY: Runtime leases retain storage through recording and GPU use.
+        // The view is destroyed before its image, then the retained VMA/Device.
+        unsafe {
+            self.owner.device.raw().destroy_image_view(self.view, None);
+            self.owner
+                .raw
+                .destroy_image(self.image, &mut self.allocation);
+        }
+    }
+}
+
+struct ShaderModule {
+    owner: Arc<MemoryOwner>,
+    module: vk::ShaderModule,
+}
+
+impl ShaderModule {
+    fn new(owner: Arc<MemoryOwner>, bytes: &[u8]) -> Result<Self, RuntimeError> {
+        let words = spirv_words(bytes)?;
+        // SAFETY: Only fixed, validated, repository-owned shaders enter here;
+        // words are aligned and stay live through synchronous module creation.
+        let module = unsafe {
+            owner
+                .device
+                .raw()
+                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
+        }
+        .map_err(|result| native(&owner, "vkCreateShaderModule(Graph)", result))?;
+        Ok(Self { owner, module })
+    }
+}
+
+fn spirv_words(bytes: &[u8]) -> Result<Vec<u32>, RuntimeError> {
+    if !bytes.len().is_multiple_of(4) || bytes.len() < 20 {
+        return Err(RuntimeError::invalid("invalid embedded SPIR-V word length"));
+    }
+    let words: Vec<u32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
+        .collect();
+    if words[0] != 0x0723_0203 {
+        return Err(RuntimeError::invalid("invalid embedded SPIR-V magic"));
+    }
+    Ok(words)
+}
+
+impl Drop for ShaderModule {
+    fn drop(&mut self) {
+        // SAFETY: Module creation use ends with synchronous pipeline creation;
+        // pipelines do not retain a lifetime dependency on ShaderModule.
+        unsafe {
+            self.owner
+                .device
+                .raw()
+                .destroy_shader_module(self.module, None)
+        };
+    }
+}
+
+struct DescriptorArena {
+    owner: Arc<MemoryOwner>,
+    pool: vk::DescriptorPool,
+}
+
+impl DescriptorArena {
+    fn new(
+        owner: Arc<MemoryOwner>,
+        max_bindings: u32,
+        ordinal: usize,
+    ) -> Result<Self, RuntimeError> {
+        let sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_IMAGE,
+                descriptor_count: max_bindings * 2,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: max_bindings,
+            },
+        ];
+        let info = vk::DescriptorPoolCreateInfo::default()
+            .max_sets(max_bindings)
+            .pool_sizes(&sizes);
+        // SAFETY: Counts checked at ShaderPrograms creation; this arena is
+        // exclusively leased, and its pool remains live through recorded use.
+        let pool = unsafe { owner.device.raw().create_descriptor_pool(&info, None) }
+            .map_err(|result| native(&owner, "vkCreateDescriptorPool(Graph)", result))?;
+        let result = Self { owner, pool };
+        let name = CString::new(format!("m2-descriptor-arena-{ordinal}"))
+            .expect("numeric name has no NUL");
+        name_object(&result.owner, pool, &name)?;
+        Ok(result)
+    }
+}
+
+impl Drop for DescriptorArena {
+    fn drop(&mut self) {
+        // SAFETY: A checked-out arena cannot reach Drop before its executor
+        // proves retirement (or cancellation); unknown completion retains it.
+        unsafe {
+            self.owner
+                .device
+                .raw()
+                .destroy_descriptor_pool(self.pool, None)
+        };
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ShaderStats {
+    pub(super) descriptor_arenas_created: usize,
+    pub(super) descriptor_arenas_reused: usize,
+    pub(super) descriptor_arenas_leased: usize,
+}
+
+#[derive(Default)]
+struct DescriptorCache {
+    idle: Vec<DescriptorArena>,
+    stats: ShaderStats,
+}
+
+/// Fixed shaders and immutable pipeline state live once per runtime. Descriptor
+/// arenas are bounded by concurrent_slots, with at most max_bindings per graph.
+pub(super) struct ShaderPrograms {
+    owner: Arc<MemoryOwner>,
+    compute_set_layout: vk::DescriptorSetLayout,
+    composite_set_layout: vk::DescriptorSetLayout,
+    compute_layout: vk::PipelineLayout,
+    raster_layout: vk::PipelineLayout,
+    composite_layout: vk::PipelineLayout,
+    compute_pipeline: vk::Pipeline,
+    raster_pipeline: vk::Pipeline,
+    composite_pipeline: vk::Pipeline,
+    sampler: vk::Sampler,
+    slots: usize,
+    max_bindings: u32,
+    compute_groups: [u32; 3],
+    descriptors: Mutex<DescriptorCache>,
+}
+
+impl ShaderPrograms {
+    pub(super) fn new(
+        owner: Arc<MemoryOwner>,
+        concurrent_slots: usize,
+        max_bindings: u32,
+    ) -> Result<Arc<Self>, RuntimeError> {
+        owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        if concurrent_slots == 0 || max_bindings == 0 || max_bindings > u32::MAX / 2 {
+            return Err(RuntimeError::invalid(
+                "Graph shader capacities must be nonzero and descriptor counts representable",
+            ));
+        }
+        // SAFETY: Device retains its adapter/Instance through this query.
+        let properties = unsafe {
+            owner
+                .device
+                .instance_raw()
+                .get_physical_device_properties(owner.device.physical_device())
+        };
+        let limits = properties.limits;
+        if limits.max_compute_work_group_size[0] < 8
+            || limits.max_compute_work_group_size[1] < 8
+            || limits.max_compute_work_group_invocations < 64
+            || limits.max_push_constants_size < 4
+            || limits.max_per_stage_descriptor_storage_images < 2
+            || limits.max_descriptor_set_storage_images < 2
+            || limits.max_per_stage_descriptor_samplers < 1
+            || limits.max_per_stage_descriptor_sampled_images < 1
+            || limits.max_descriptor_set_samplers < 1
+            || limits.max_descriptor_set_sampled_images < 1
+            || limits.max_vertex_input_attributes < 2
+            || limits.max_vertex_input_bindings < 1
+            || limits.max_vertex_input_binding_stride < 28
+            || limits.max_vertex_input_attribute_offset < 12
+            || limits.max_color_attachments < 1
+        {
+            return Err(RuntimeError::unsupported(
+                "adapter limits do not support the fixed M2 shader ABI",
+            ));
+        }
+        for format in [
+            vk::Format::R32G32B32_SFLOAT,
+            vk::Format::R32G32B32A32_SFLOAT,
+        ] {
+            // SAFETY: Device retains its adapter/Instance. These are the exact
+            // formats in the fixed vertex input ABI, with no optional feature.
+            let support = unsafe {
+                owner
+                    .device
+                    .instance_raw()
+                    .get_physical_device_format_properties(owner.device.physical_device(), format)
+            };
+            if !support
+                .buffer_features
+                .contains(vk::FormatFeatureFlags::VERTEX_BUFFER)
+            {
+                return Err(RuntimeError::unsupported(format!(
+                    "Graph vertex format {format:?} is unsupported"
+                )));
+            }
+        }
+        let mut result = Self {
+            owner,
+            compute_set_layout: vk::DescriptorSetLayout::null(),
+            composite_set_layout: vk::DescriptorSetLayout::null(),
+            compute_layout: vk::PipelineLayout::null(),
+            raster_layout: vk::PipelineLayout::null(),
+            composite_layout: vk::PipelineLayout::null(),
+            compute_pipeline: vk::Pipeline::null(),
+            raster_pipeline: vk::Pipeline::null(),
+            composite_pipeline: vk::Pipeline::null(),
+            sampler: vk::Sampler::null(),
+            slots: concurrent_slots,
+            max_bindings,
+            compute_groups: limits.max_compute_work_group_count,
+            descriptors: Mutex::new(DescriptorCache::default()),
+        };
+        result.initialize()?;
+        Ok(Arc::new(result))
+    }
+
+    fn initialize(&mut self) -> Result<(), RuntimeError> {
+        let device = self.owner.device.raw();
+        let compute_bindings = [0, 1].map(|binding| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(binding)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        });
+        let composite_bindings = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
+        // SAFETY: Fixed descriptor ABI matches the validated repository shaders;
+        // each successful handle is immediately owned by self for error cleanup.
+        unsafe {
+            self.compute_set_layout = device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&compute_bindings),
+                    None,
+                )
+                .map_err(|r| native(&self.owner, "vkCreateDescriptorSetLayout(Compute)", r))?;
+            self.composite_set_layout = device
+                .create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&composite_bindings),
+                    None,
+                )
+                .map_err(|r| native(&self.owner, "vkCreateDescriptorSetLayout(Composite)", r))?;
+            let compute_layouts = [self.compute_set_layout];
+            let pushes = [vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::COMPUTE,
+                offset: 0,
+                size: 4,
+            }];
+            self.compute_layout = device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default()
+                        .set_layouts(&compute_layouts)
+                        .push_constant_ranges(&pushes),
+                    None,
+                )
+                .map_err(|r| native(&self.owner, "vkCreatePipelineLayout(Compute)", r))?;
+            self.raster_layout = device
+                .create_pipeline_layout(&vk::PipelineLayoutCreateInfo::default(), None)
+                .map_err(|r| native(&self.owner, "vkCreatePipelineLayout(Raster)", r))?;
+            let composite_layouts = [self.composite_set_layout];
+            self.composite_layout = device
+                .create_pipeline_layout(
+                    &vk::PipelineLayoutCreateInfo::default().set_layouts(&composite_layouts),
+                    None,
+                )
+                .map_err(|r| native(&self.owner, "vkCreatePipelineLayout(Composite)", r))?;
+            self.sampler = device
+                .create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::NEAREST)
+                        .min_filter(vk::Filter::NEAREST)
+                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .max_lod(0.0),
+                    None,
+                )
+                .map_err(|r| native(&self.owner, "vkCreateSampler(Graph)", r))?;
+        }
+        let compute = ShaderModule::new(
+            Arc::clone(&self.owner),
+            include_bytes!("../../../../shaders/image.comp.spv"),
+        )?;
+        let stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(compute.module)
+            .name(c"main");
+        let info = [vk::ComputePipelineCreateInfo::default()
+            .stage(stage)
+            .layout(self.compute_layout)];
+        // SAFETY: Stage and ABI match trusted module; local arrays remain live
+        // through synchronous pipeline creation. Partial successes are owned.
+        self.compute_pipeline = match unsafe {
+            device.create_compute_pipelines(vk::PipelineCache::null(), &info, None)
+        } {
+            Ok(pipelines) => pipelines[0],
+            Err((partial, error)) => {
+                for pipeline in partial {
+                    // SAFETY: Partial pipelines have not been used by commands.
+                    unsafe { device.destroy_pipeline(pipeline, None) };
+                }
+                return Err(native(
+                    &self.owner,
+                    "vkCreateComputePipelines(Graph)",
+                    error,
+                ));
+            }
+        };
+        self.raster_pipeline = self.graphics_pipeline(true)?;
+        self.composite_pipeline = self.graphics_pipeline(false)?;
+        for (layout, name) in [
+            (self.compute_layout, c"m2-image-compute-layout"),
+            (self.raster_layout, c"m2-indexed-mesh-layout"),
+            (self.composite_layout, c"m2-sampled-composite-layout"),
+        ] {
+            name_object(&self.owner, layout, name)?;
+        }
+        name_object(&self.owner, self.sampler, c"m2-composite-nearest-sampler")?;
+        name_object(
+            &self.owner,
+            self.compute_set_layout,
+            c"m2-image-compute-set-layout",
+        )?;
+        name_object(
+            &self.owner,
+            self.composite_set_layout,
+            c"m2-sampled-composite-set-layout",
+        )?;
+        for (pipeline, name) in [
+            (self.compute_pipeline, c"m2-image-compute"),
+            (self.raster_pipeline, c"m2-indexed-mesh-depth"),
+            (self.composite_pipeline, c"m2-sampled-composite"),
+        ] {
+            let info = vk::DebugUtilsObjectNameInfoEXT::default()
+                .object_handle(pipeline)
+                .object_name(name);
+            // SAFETY: Pipeline belongs to this live Device; name is static and
+            // consumed inline. Errors retain ownership for ordinary cleanup.
+            unsafe {
+                self.owner
+                    .device
+                    .debug_utils()
+                    .set_debug_utils_object_name(&info)
+            }
+            .map_err(|r| {
+                native(
+                    &self.owner,
+                    "vkSetDebugUtilsObjectNameEXT(Graph pipeline)",
+                    r,
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    fn graphics_pipeline(&self, mesh: bool) -> Result<vk::Pipeline, RuntimeError> {
+        let vertex = ShaderModule::new(
+            Arc::clone(&self.owner),
+            if mesh {
+                include_bytes!("../../../../shaders/mesh.vert.spv")
+            } else {
+                include_bytes!("../../../../shaders/composite.vert.spv")
+            },
+        )?;
+        let fragment = ShaderModule::new(
+            Arc::clone(&self.owner),
+            if mesh {
+                include_bytes!("../../../../shaders/mesh.frag.spv")
+            } else {
+                include_bytes!("../../../../shaders/composite.frag.spv")
+            },
+        )?;
+        let stages = [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vertex.module)
+                .name(c"main"),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment.module)
+                .name(c"main"),
+        ];
+        let bindings = [vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: 28,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }];
+        let attributes = [
+            vk::VertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 0,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                format: vk::Format::R32G32B32A32_SFLOAT,
+                offset: 12,
+            },
+        ];
+        let mut vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+        if mesh {
+            vertex_input = vertex_input
+                .vertex_binding_descriptions(&bindings)
+                .vertex_attribute_descriptions(&attributes);
+        }
+        let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+        let viewport = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+        let raster = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+            .line_width(1.0);
+        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let depth = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(mesh)
+            .depth_write_enable(mesh)
+            .depth_compare_op(vk::CompareOp::LESS);
+        let color_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA)];
+        let blend =
+            vk::PipelineColorBlendStateCreateInfo::default().attachments(&color_attachments);
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+        let formats = [vk::Format::R8G8B8A8_UNORM];
+        let mut rendering = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&formats)
+            .depth_attachment_format(if mesh {
+                vk::Format::D32_SFLOAT
+            } else {
+                vk::Format::UNDEFINED
+            });
+        let infos = [vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input)
+            .input_assembly_state(&assembly)
+            .viewport_state(&viewport)
+            .rasterization_state(&raster)
+            .multisample_state(&multisample)
+            .depth_stencil_state(&depth)
+            .color_blend_state(&blend)
+            .dynamic_state(&dynamic)
+            .layout(if mesh {
+                self.raster_layout
+            } else {
+                self.composite_layout
+            })
+            .push_next(&mut rendering)];
+        // SAFETY: All pointers refer to local live arrays and the fixed shader
+        // ABI; Dynamic Rendering1.3 and the queried attachment formats are used.
+        match unsafe {
+            self.owner.device.raw().create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &infos,
+                None,
+            )
+        } {
+            Ok(pipelines) => Ok(pipelines[0]),
+            Err((partial, error)) => {
+                for pipeline in partial {
+                    // SAFETY: Returned partial pipelines have no recorded uses.
+                    unsafe { self.owner.device.raw().destroy_pipeline(pipeline, None) };
+                }
+                Err(native(
+                    &self.owner,
+                    "vkCreateGraphicsPipelines(Graph)",
+                    error,
+                ))
+            }
+        }
+    }
+
+    pub(super) fn acquire_bindings(self: &Arc<Self>) -> Result<ShaderBindings, RuntimeError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        let mut cache = self
+            .descriptors
+            .lock()
+            .map_err(|_| RuntimeError::invalid("Graph descriptor cache lock poisoned"))?;
+        if cache.stats.descriptor_arenas_leased == self.slots {
+            return Err(RuntimeError::capacity(
+                "Graph descriptor arena capacity exhausted",
+            ));
+        }
+        let arena = if let Some(arena) = cache.idle.pop() {
+            cache.stats.descriptor_arenas_reused += 1;
+            arena
+        } else {
+            let arena = DescriptorArena::new(
+                Arc::clone(&self.owner),
+                self.max_bindings,
+                cache.stats.descriptor_arenas_created,
+            )?;
+            cache.stats.descriptor_arenas_created += 1;
+            arena
+        };
+        cache.stats.descriptor_arenas_leased += 1;
+        Ok(ShaderBindings {
+            programs: Arc::clone(self),
+            arena: Some(arena),
+            used: 0,
+        })
+    }
+
+    pub(super) fn stats(&self) -> ShaderStats {
+        self.descriptors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stats
+    }
+
+    /// # Safety
+    /// `command` is recording outside rendering. Bindings/images/programs are
+    /// retained through GPU retirement; prior dependencies establish GENERAL
+    /// src/dst layouts and shader read/write visibility. `mode` is 0 or 1.
+    pub(super) unsafe fn record_compute(
+        &self,
+        command: vk::CommandBuffer,
+        set: vk::DescriptorSet,
+        destination: &GraphImage,
+        mode: u32,
+    ) {
+        let device = self.owner.device.raw();
+        // SAFETY: The executor satisfies the documented retention/layout/ABI
+        // contract; validated descriptor set is immutable during command use.
+        unsafe {
+            device.cmd_bind_pipeline(
+                command,
+                vk::PipelineBindPoint::COMPUTE,
+                self.compute_pipeline,
+            );
+            device.cmd_bind_descriptor_sets(
+                command,
+                vk::PipelineBindPoint::COMPUTE,
+                self.compute_layout,
+                0,
+                &[set],
+                &[],
+            );
+            device.cmd_push_constants(
+                command,
+                self.compute_layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                &mode.to_ne_bytes(),
+            );
+            device.cmd_dispatch(
+                command,
+                destination.extent.width.div_ceil(8),
+                destination.extent.height.div_ceil(8),
+                1,
+            );
+        }
+    }
+
+    /// # Safety
+    /// Command records outside rendering; all supplied resources and programs
+    /// survive retirement. Vertex/index ranges obey the fixed ABI and validated
+    /// indices. Color/depth are distinct, equal extents and in attachment layouts
+    /// after dependencies, with valid contents for LOAD. Attachments are whole.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) unsafe fn record_raster(
+        &self,
+        command: vk::CommandBuffer,
+        vertices: vk::Buffer,
+        indices: vk::Buffer,
+        index_count: u32,
+        color: &GraphImage,
+        depth: &GraphImage,
+        color_load: vk::AttachmentLoadOp,
+        color_store: vk::AttachmentStoreOp,
+        clear_color: [f32; 4],
+        depth_load: vk::AttachmentLoadOp,
+        depth_store: vk::AttachmentStoreOp,
+        clear_depth: f32,
+    ) {
+        let color_attachments = [vk::RenderingAttachmentInfo::default()
+            .image_view(color.view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(color_load)
+            .store_op(color_store)
+            .clear_value(vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: clear_color,
+                },
+            })];
+        let depth_attachment = vk::RenderingAttachmentInfo::default()
+            .image_view(depth.view)
+            .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+            .load_op(depth_load)
+            .store_op(depth_store)
+            .clear_value(vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: clear_depth,
+                    stencil: 0,
+                },
+            });
+        let info = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent: color.extent,
+            })
+            .layer_count(1)
+            .color_attachments(&color_attachments)
+            .depth_attachment(&depth_attachment);
+        let device = self.owner.device.raw();
+        // SAFETY: Caller establishes outside-scope dependencies and valid
+        // resource/range/binding/layout state. No barrier occurs in this scope.
+        unsafe {
+            device.cmd_begin_rendering(command, &info);
+            device.cmd_bind_pipeline(
+                command,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.raster_pipeline,
+            );
+            self.viewport(command, color.extent);
+            device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
+            device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
+            device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
+            device.cmd_end_rendering(command);
+        }
+    }
+
+    /// # Safety
+    /// Recording outside rendering; descriptor source is SHADER_READ_ONLY and
+    /// destination COLOR_ATTACHMENT_OPTIMAL with required dependencies. Both
+    /// images, immutable descriptor set and programs survive retirement; extents
+    /// match, source and destination differ. Fullscreen draw initializes all pixels.
+    pub(super) unsafe fn record_composite(
+        &self,
+        command: vk::CommandBuffer,
+        set: vk::DescriptorSet,
+        destination: &GraphImage,
+    ) {
+        let colors = [vk::RenderingAttachmentInfo::default()
+            .image_view(destination.view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::DONT_CARE)
+            .store_op(vk::AttachmentStoreOp::STORE)];
+        let info = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent: destination.extent,
+            })
+            .layer_count(1)
+            .color_attachments(&colors);
+        let device = self.owner.device.raw();
+        // SAFETY: The caller guarantees the documented synchronization and
+        // descriptor/resource retention. Fixed triangle covers every pixel.
+        unsafe {
+            device.cmd_begin_rendering(command, &info);
+            device.cmd_bind_pipeline(
+                command,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.composite_pipeline,
+            );
+            self.viewport(command, destination.extent);
+            device.cmd_bind_descriptor_sets(
+                command,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.composite_layout,
+                0,
+                &[set],
+                &[],
+            );
+            device.cmd_draw(command, 3, 1, 0, 0);
+            device.cmd_end_rendering(command);
+        }
+    }
+
+    unsafe fn viewport(&self, command: vk::CommandBuffer, extent: vk::Extent2D) {
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent,
+        };
+        // SAFETY: Called only inside our rendering scope with queried dimensions
+        // and dynamically enabled viewport/scissor state.
+        unsafe {
+            self.owner
+                .device
+                .raw()
+                .cmd_set_viewport(command, 0, &[viewport]);
+            self.owner
+                .device
+                .raw()
+                .cmd_set_scissor(command, 0, &[scissor]);
+        }
+    }
+}
+
+impl Drop for ShaderPrograms {
+    fn drop(&mut self) {
+        // Checked-out descriptor leases retain self; when the final Arc drops,
+        // no commands use these programs. Destroy cached descriptor pools first.
+        self.descriptors
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .idle
+            .clear();
+        // SAFETY: Every handle is null or exclusively owned here, all GPU uses
+        // have retired; pipeline before layout, descriptors before set layouts.
+        unsafe {
+            let device = self.owner.device.raw();
+            device.destroy_pipeline(self.compute_pipeline, None);
+            device.destroy_pipeline(self.raster_pipeline, None);
+            device.destroy_pipeline(self.composite_pipeline, None);
+            device.destroy_pipeline_layout(self.compute_layout, None);
+            device.destroy_pipeline_layout(self.raster_layout, None);
+            device.destroy_pipeline_layout(self.composite_layout, None);
+            device.destroy_descriptor_set_layout(self.compute_set_layout, None);
+            device.destroy_descriptor_set_layout(self.composite_set_layout, None);
+            device.destroy_sampler(self.sampler, None);
+        }
+    }
+}
+
+/// Exclusive arena. Executor may release only for canceled/proven-unsubmitted
+/// commands or after actual GPU retirement. Unknown completion must retain it.
+pub(super) struct ShaderBindings {
+    programs: Arc<ShaderPrograms>,
+    arena: Option<DescriptorArena>,
+    used: u32,
+}
+
+impl ShaderBindings {
+    fn allocate(
+        &mut self,
+        layout: vk::DescriptorSetLayout,
+    ) -> Result<vk::DescriptorSet, RuntimeError> {
+        if self.used >= self.programs.max_bindings {
+            return Err(RuntimeError::capacity(
+                "Graph descriptor binding capacity exhausted",
+            ));
+        }
+        let layouts = [layout];
+        let info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(self.arena.as_ref().expect("live descriptor lease").pool)
+            .set_layouts(&layouts);
+        // SAFETY: This lease has exclusive host access to its pool. A freshly
+        // allocated set has no command references and can be updated once.
+        let sets = unsafe {
+            self.programs
+                .owner
+                .device
+                .raw()
+                .allocate_descriptor_sets(&info)
+        }
+        .map_err(|r| native(&self.programs.owner, "vkAllocateDescriptorSets(Graph)", r))?;
+        self.used += 1;
+        Ok(sets[0])
+    }
+
+    pub(super) fn compute(
+        &mut self,
+        source: &GraphImage,
+        destination: &GraphImage,
+    ) -> Result<vk::DescriptorSet, RuntimeError> {
+        if !Arc::ptr_eq(&self.programs.owner, &source.owner)
+            || !Arc::ptr_eq(&source.owner, &destination.owner)
+            || source.format != vk::Format::R8G8B8A8_UNORM
+            || destination.format != source.format
+            || source.image == destination.image
+            || source.extent != destination.extent
+        {
+            return Err(RuntimeError::invalid(
+                "Compute bindings require distinct same-Device equal RGBA8 images",
+            ));
+        }
+        if destination.extent.width.div_ceil(8) > self.programs.compute_groups[0]
+            || destination.extent.height.div_ceil(8) > self.programs.compute_groups[1]
+            || self.programs.compute_groups[2] < 1
+        {
+            return Err(RuntimeError::unsupported(
+                "Compute dispatch exceeds adapter workgroup counts",
+            ));
+        }
+        let set = self.allocate(self.programs.compute_set_layout)?;
+        let source_info = [vk::DescriptorImageInfo::default()
+            .image_view(source.view)
+            .image_layout(vk::ImageLayout::GENERAL)];
+        let destination_info = [vk::DescriptorImageInfo::default()
+            .image_view(destination.view)
+            .image_layout(vk::ImageLayout::GENERAL)];
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(&source_info),
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(&destination_info),
+        ];
+        // SAFETY: Set is fresh/unbound and exclusively owned. Image views belong
+        // to Device and match shader ABI; executor retains them until retirement.
+        unsafe {
+            self.programs
+                .owner
+                .device
+                .raw()
+                .update_descriptor_sets(&writes, &[])
+        };
+        Ok(set)
+    }
+
+    pub(super) fn composite(
+        &mut self,
+        source: &GraphImage,
+    ) -> Result<vk::DescriptorSet, RuntimeError> {
+        if !Arc::ptr_eq(&self.programs.owner, &source.owner)
+            || source.format != vk::Format::R8G8B8A8_UNORM
+        {
+            return Err(RuntimeError::invalid(
+                "Composite binding requires same-Device RGBA8 image",
+            ));
+        }
+        let set = self.allocate(self.programs.composite_set_layout)?;
+        let image_info = [vk::DescriptorImageInfo::default()
+            .sampler(self.programs.sampler)
+            .image_view(source.view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
+        let writes = [vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+        // SAFETY: Fresh set, immutable after this update, fixed combined sampler
+        // ABI; executor retains image/view and this lease through retirement.
+        unsafe {
+            self.programs
+                .owner
+                .device
+                .raw()
+                .update_descriptor_sets(&writes, &[])
+        };
+        Ok(set)
+    }
+}
+
+impl Drop for ShaderBindings {
+    fn drop(&mut self) {
+        let Some(arena) = self.arena.take() else {
+            return;
+        };
+        let mut cache = self
+            .programs
+            .descriptors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        cache.stats.descriptor_arenas_leased -= 1;
+        if self.programs.owner.device.ensure_active().is_err() {
+            return;
+        }
+        // SAFETY: Executor releases this lease only after cancellation or proven
+        // retirement. No pending command uses these sets; executable commands
+        // invalidated by reset are never submitted again and reset before reuse.
+        let reset = unsafe {
+            self.programs
+                .owner
+                .device
+                .raw()
+                .reset_descriptor_pool(arena.pool, vk::DescriptorPoolResetFlags::empty())
+        };
+        match reset {
+            Ok(()) => cache.idle.push(arena),
+            Err(result) => {
+                self.programs.owner.device.observe_result(result);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_shader_bytes_are_decoded_without_alignment_assumptions() {
+        let bytes = include_bytes!("../../../../shaders/image.comp.spv");
+        let mut unaligned = vec![0xff];
+        unaligned.extend_from_slice(bytes);
+        let words = spirv_words(&unaligned[1..]).unwrap();
+        assert_eq!(words[0], 0x0723_0203);
+        assert_eq!(
+            words[1], 0x0001_0300,
+            "fixed SPIR-V1.3 avoids optional maintenance4 LocalSizeId"
+        );
+        for malformed in [&bytes[..bytes.len() - 1], &bytes[..16], &[0u8; 20][..]] {
+            assert!(spirv_words(malformed).is_err());
+        }
+    }
+}

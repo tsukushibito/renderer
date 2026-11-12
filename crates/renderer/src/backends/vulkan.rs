@@ -10,6 +10,7 @@
 mod buffer;
 mod device;
 mod diagnostics;
+pub(crate) mod graph;
 mod image;
 mod instance;
 mod memory;

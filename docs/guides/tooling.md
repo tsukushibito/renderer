@@ -59,7 +59,8 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 明示したtoolや`VULKAN_SDK`が無効な場合は、その原因を報告して失敗する。
 複数SDKが入っている環境では、上の例のように版の分かるパスを渡す。
 
-現在はshader資産と生成処理がないため、M2のシェーダービルド接続時にこの検証を組み込む。
+管理下のShaderと生成済みSPIR-Vは`crates/renderer/shaders/`にある。
+固定compilerでの再生成・validator・binary一致確認は[開発手順](development.md#rendergraphとヘッドレス描画)を参照する。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
 

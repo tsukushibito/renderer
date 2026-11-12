@@ -1,6 +1,6 @@
 # Vulkanバックエンドの設計
 
-現在のprivateなVulkan基盤で有効な契約と、その判断理由をまとめる。
+現在のVulkan基盤とGraph実行で有効な契約と、その判断理由をまとめる。
 全体の構成と実装順序は[実装方針](implementation-policy.md)、
 実行コマンドは[開発手順](../guides/development.md)、
 確認済みの環境・結果・制限は[最新の検証状況](../verification/current.md)を参照する。
@@ -12,13 +12,16 @@
 ## 実装境界
 
 `crates/renderer`の`vulkan` feature配下に、初期化、診断、VMAによるbuffer／image所有、
-単一キューのcopy、投入・完了管理、資源再利用を実装する。
+単一キューのcopy・Compute・Dynamic Rendering、投入・完了管理、資源再利用を実装する。
 ashはVulkanローダーを実行時に読み込み、通常のCPUライブラリビルドへSDK依存を広げない。
 CPUのテスト・benchmark用依存が要求するツールは開発手順で分けて管理する。
 
 ネイティブ型や生のハンドルはバックエンド内部に閉じる。
 未使用の公開RHI、汎用encoder、Backend traitを先に固定しない。
-RenderGraph、shader実行、ImageView、描画、Compute、Swapchainの実行経路は未実装である。
+公開Graph APIはGPU非依存で、Vulkanの実行は`VulkanRuntime`から明示的に開始する。
+固定shaderによるCompute、indexed meshと深度、sampled imageの最終合成を扱う。
+Graphの宣言・producer・範囲・culling・import/exportは[RenderGraphの契約](rendergraph.md)を参照する。
+Swapchain、表示、任意shader、一般的なPassEncoderは未実装である。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
 ## Instance・Device・キュー
@@ -94,6 +97,8 @@ Allocatorの操作用ハンドルを先に破棄しても資源を無効にし�
 
 CPU APIは渡されたバイト列をコピーする`write`／`read`とし、mapped pointerを返さない。
 bufferの要求sizeを基準に範囲・加算・変換を検証し、Allocationの余白を利用可能領域とみなさない。
+転送用・共有staging・GraphのbufferはVulkan 1.3の`maxBufferSize`も照会し、
+上限を超えるsizeをVMAへ渡す前に拒否する。CPUアドレス空間の上限やnative OOMとは区別する。
 全面ゼロ埋めの代わりに確立済み範囲を追跡し、穴を含むreadを拒否する。
 write失敗時に旧内容へ戻る保証は設けない。
 
@@ -108,7 +113,7 @@ VMAのmap／unmap呼び出しを、毎回必ずnative mappingを作り直す処�
 
 ## 画像とcopyの範囲
 
-画像はRGBA8_UNORM、2D、optimal tiling、mip・layer・sample各1、
+既存の転送試験用`VulkanImage`はRGBA8_UNORM、2D、optimal tiling、mip・layer・sample各1、
 transfer source／destination、EXCLUSIVE共有、初期layout UNDEFINEDに限定する。
 作成時に実際のformat・type・tiling・usage・flagsで能力を照会し、返された上限を確認する。
 optimal imageの必要メモリ量をpacked pixel byte数から推定せず、native作成時のOOMも扱う。
@@ -120,8 +125,40 @@ byte数は`幅 × 高さ × 4`をchecked計算する。色変換やファイル�
 buffer copyは範囲と初期化状態を確認し、同一bufferの重複するsource／destinationを拒否する。
 copyのoffsetは4-byte境界、sizeは非ゼロを要求する。
 upload-only、readback-only、複数copyの一括投入、同一バッチ内の再書き込みに対応する。
-画像のlayoutと初期化状態を記録時に先取りせず、実Fence完了後に確定する。
-現在の同期・layout計画はCOPY専用であり、shader／attachment用途は拡張時に計画へ加える。
+既存の転送payloadは画像のlayoutと初期化状態を記録時に先取りせず、実Fence完了後に確定する。
+そのCOPY専用計画と、下記のGraphの予定／完了状態は別の実行契約である。
+
+GraphのRGBA8_UNORM画像はtransfer source／destination、storage、sampled、color attachmentの
+固定usage組を持つ。D32_SFLOATはdepth attachmentとして使う。
+両者とも2D・optimal tiling・mip／layer／sample各1とし、実際のusage組の能力とextent、
+framebuffer／viewport上限を照会する。Graph画像はallocationとImageViewを一緒に保持する。
+固定usageはexport後に対応操作へ再importできるようにするためであり、
+usage削減による最適化や、未確認GPUでの対応を主張しない。
+
+## GraphのShaderと描画
+
+管理下のGLSLと生成済みSPIR-Vを保持し、通常のRustビルドへshaderコンパイラーを要求しない。
+固定SDKでVulkan 1.3をtargetにし、SPIR-V 1.3を明示する。
+Deviceで有効にしていない`maintenance4`の`LocalSizeId`へ暗黙に依存しない。
+再生成とbinary一致確認は[開発手順](../guides/development.md)に従う。
+
+Computeは8×8のlocal size、set 0のbinding 0／1に各1個のRGBA8 storage imageを使う。
+push constantはoffset 0のu32 1個で変換を選ぶ。端数のinvocationはshader内で除外し、
+hostでもworkgroup size・invocation数・dispatch数・descriptor・push constantの上限を確認する。
+合成はset 0 binding 0のcombined image samplerから同じ座標を`texelFetch`し、
+別の同寸画像へfullscreen triangleで書く。filterやsRGB変換はしない。
+
+pipeline・layout・samplerはruntimeごとに一度保持する。
+descriptor arenaは同時実行数とGraph内binding数に上限を持ち、
+GPU完了または未投入キャンセルを確認してから再利用する。
+更新済みdescriptorを参照する記録済み／未完了命令を、別の更新で無効にしない。
+pipeline作成に失敗した際も、部分的に作成できたhandleを解放する。
+
+頂点はclip座標xyz（W=1）とlinear rgba、深度範囲は0〜1の通常Z、
+clear depthは1、compareはLESS、viewportの高さは正、cullingは無効とする。
+front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段階では向きも再検証する。
+行列・座標系変換・sRGB／HDR・tone mappingはまだ提供しない。
+色はlinear RGBA8_UNORMで、alphaを保持し、blendingは無効とする。
 
 ## 投入・完了・異常時の保持
 

@@ -1,11 +1,19 @@
 //! RenderGraph-centered renderer for game engine integration.
 //!
-//! No engine-facing rendering API is implemented yet.
+//! The graph API builds and analyzes GPU-independent operation declarations.
 //! The default configuration has no GPU, window-system, or native dependencies.
-//! The `vulkan` feature includes a private, validation-required Vulkan 1.3 instance
-//! bootstrap. Only explicitly selected ignored tests initialize Vulkan at this stage.
+//! The `vulkan` feature adds a validation-required, headless Vulkan 1.3 runtime.
+//! Building a graph never initializes Vulkan; runtime creation is explicit.
 //!
-//! Engine-facing and graph APIs will remain independent of Vulkan and VMA types.
+//! Engine-facing and graph APIs remain independent of Vulkan and VMA types.
+
+pub mod graph;
 
 #[cfg(feature = "vulkan")]
 mod backends;
+
+#[cfg(feature = "vulkan")]
+pub use backends::vulkan::graph::{
+    RuntimeConfig, RuntimeError, RuntimeErrorKind, RuntimeStats, Submission, SubmissionResult,
+    VulkanRuntime,
+};

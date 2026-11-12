@@ -112,6 +112,38 @@ cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan
 | 実行資源の再利用 | `::vulkan_execution_pool_smoke` |
 | 共有staging・転送バッチ | `::vulkan_batch_smoke` |
 
+### RenderGraphとヘッドレス描画
+
+Graphの宣言・解析と公開APIのintegration testは既定のCPU構成で実行できます。
+producer・不要パス除去・Attachment・import/exportの契約は
+[RenderGraphの設計](../design/rendergraph.md)を参照してください。
+Vulkan環境では、ウィンドウなしで次の例を実行できます。
+
+```powershell
+cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
+```
+
+出力先の親ディレクトリは事前に用意します。
+例は近い赤い三角形と遠い緑の三角形を描き、invertと赤青入れ替えの2つのComputeを経て、
+別の最終画像へ合成します。中央が黄色、背景が白であることを確認してPPMへ保存します。
+PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、画面出力の色管理は含みません。
+資源の作成・投入は明示的で、CPUの完了待ちは最後のreadback境界にあります。
+
+Shaderのソースと生成済みbinaryは`crates/renderer/shaders/`にあります。
+通常のRustビルドはチェックイン済みSPIR-Vを使います。
+Windowsでは固定SDKの同じcompiler・validatorを使って再生成できます。
+
+```powershell
+& crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+```
+
+`-Verify`は一時ファイルへコンパイルし、`spirv-val --target-env vulkan1.3`の成功と
+チェックイン済みbinaryとのSHA-256一致を要求します。意図的なShader変更では
+`-Verify`を外して再生成し、ソース・binary・ABI・GPU出力を一緒に確認します。
+生成条件はshaderc v2026.1、SPIRV-Tools v2026.1、GLSL 450 core、entry point `main`、
+`--target-env=vulkan1.3 --target-spv=spv1.3 -O -Werror`で、include・macro・debug情報はありません。
+スクリプトはtoolのversionも検査します。ローカルLinuxでの同一生成は未確認です。
+
 Deviceを使う試験にはGraphics＋Computeキュー、`timelineSemaphore`、
 `synchronization2`、`dynamicRendering`が必要です。
 image試験にはRGBA8_UNORMのoptimal 2D imageのtransfer source／destination対応も必要です。

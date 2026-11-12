@@ -23,5 +23,9 @@ tracing-subscriber.workspace = true
 name = "transfer_planning"
 harness = false
 
+[[example]]
+name = "headless"
+required-features = ["vulkan"]
+
 [lints]
 workspace = true

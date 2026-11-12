@@ -22,11 +22,13 @@
 | 確認 | 結果 |
 |---|---|
 | fmt、CPUのみ／Vulkanの全target check・Clippy `-D warnings` | 成功 |
-| CPUのみの通常試験 | 0件、Vulkan初期化なし |
-| Vulkan feature付き通常試験 | CPU 53件成功、明示実行用10件はignored |
-| 実Vulkan正しさ試験 | 9件成功、1.21秒 |
+| CPUのみの通常試験 | 単体14件＋公開API 2件成功、Vulkan初期化なし |
+| Vulkan feature付き通常試験 | CPU単体77件＋公開API 2件成功、明示実行用16件はignored |
+| 実Vulkan正しさ試験 | 15件成功、1.94秒。既存9件＋Graph 6件 |
 | batchの全byte照合 | 2回の生成・終了で計56回、うち順不同の部分転送32回 |
 | Validation warning / error、callback内部失敗 | ゼロ |
+| Shader再生成一致 | 5種すべて`spirv-val`成功、チェックイン済みbinaryとSHA-256一致 |
+| ヘッドレス描画例 | 128×96のPPM生成成功、中央の黄色と背景の白を確認 |
 | Criterionの測定なしの実行確認 | 全24 case成功 |
 | 名前付き基準値との比較 | offlineで成功、保存済み基準の内容を保持 |
 | GitHub Actions | [Windows／Linuxの品質確認と依存監査の実行結果](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)を参照 |
@@ -36,6 +38,52 @@
 read同士、同じcopy内の照合順、global依存後の追跡更新をCPUで確認した。
 GPUでは順不同の隙間付きupload、未初期化の隙間の拒否、各範囲のreadbackを照合した。
 実GPUの内容照合と、CPUだけで行う範囲管理の試験・性能測定は区別する。
+
+## RenderGraphの実行確認
+
+[Graphの契約](../design/rendergraph.md)に従う宣言・解析・実行を追加した。
+GPUなしで型付きハンドル、byte範囲別producer、初期化の穴、read_write、
+Attachmentのclear／load／store／discard、循環、明示依存、出力・副作用の到達性を検査する。
+上書き済みwriterと不要readerを除去しつつ、liveなRAW／WAR／WAWを保つ回帰試験、
+同じ入力のdumpが一致する試験、公開APIだけで描画フローを構築する試験が成功した。
+
+Graphの実GPU試験6件では次を確認した。
+
+| 対象 | 実際に確認した動作 |
+|---|---|
+| Copyと非同期import/export | buffer／17×13画像のupload→Copy→readbackを全byte照合。A→Bを間のCPU waitなしで投入し、B→Aの順で待っても状態が巻き戻らない |
+| 容量・owner・世代 | 実行枠・資源・staging不足、削除・古いsnapshot・別runtimeの拒否。未投入失敗後の回収と再実行、二重readback消費の拒否 |
+| Compute | 17×13の端数dispatchを含むInvert→SwapRedBlueの依存を実行し、両画像の全byteを厳密照合。4回繰り返して画像／View・実行枠・descriptor arenaの再利用を確認 |
+| indexed meshと深度 | 16×16の遠い赤い四角形と近い緑の四角形を両描画順で全画素厳密照合。別rendering scopeのcolor／depth LOAD、vertex／indexのCopy read後の入力stageも確認 |
+| 完全なM2フロー | mesh＋depth→依存するCompute 2段→別画像へsampled composite→export／readbackを全画素照合。不要branchの除去、未完了Graphへの引き継ぎ、削除と再利用も確認 |
+| 記録前の拒否と回収 | descriptor容量不足と、実際のupload・部分書き換えから得た範囲外indexをnative draw前に拒否。取得済みleaseを返し、次の正常Graphが成功 |
+
+描画fixtureは整数pixel境界と0／1の色、Computeは0〜255の既知byteパターンを使い、
+どちらも浮動小数点の許容誤差を設けずに厳密比較した。
+すべてCore validation＋SyncValの実効設定と、破棄後までの診断を検査した。
+入力拒否を確認するアプリケーションERRORログは、Validationの異常とは区別する。
+pipelineはruntimeで保持し、再実行で画像／View、descriptor arena、実行枠の作成・再利用カウンターを確認した。
+新たな速度改善やFPSを測った結果ではない。
+
+最終の実行コマンドは次のとおり。通常の全target check・Clippy・testはCPUのみとVulkanの両構成で成功した。
+
+```powershell
+cargo fmt --all -- --check
+cargo check --locked --workspace --all-targets --no-default-features
+cargo clippy --locked --workspace --all-targets --no-default-features -- -D warnings
+cargo test --locked --workspace --no-default-features
+cargo check --locked --workspace --all-targets --no-default-features --features vulkan
+cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan -- -D warnings
+cargo test --locked --workspace --no-default-features --features vulkan
+cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_ -- --ignored --nocapture --test-threads=1
+& crates/renderer/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& ./.tools/cargo-deny/bin/cargo-deny.exe --locked --color never check
+cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
+```
+
+生ログは`.tools/vulkan-research/m2-final-{cpu,vulkan,gpu,shaders,deny,example}.log`、
+描画例は`.tools/m2.ppm`に保存した。Rustのincremental cacheでhard linkが使えないという
+実行環境のwarningはあったが、ソースのClippy `-D warnings`は成功した。
 
 ## CPU転送計画の性能測定
 
@@ -95,7 +143,9 @@ registryへのVulkan layer登録、global hook、永続PATH、実行ポリシー
 この記録の実行確認は上記Windows環境による。ローカルLinux、別CPU・別GPU、
 実機non-coherentメモリ、native OOM・Device loss・reset失敗は未確認である。
 CPU境界試験やソース監査の成功を、それらの実機確認とは扱わない。
-描画・Compute・複数フレーム、完全なBatchBuilderやGPU転送全体の新しい性能値も未確認である。
+描画・Compute・Graph間の非同期引き継ぎは上記の固定fixtureで確認済みである。
+WSI、一般的な複数フレーム管理、未信頼shader、別API、完全なBatchBuilderやGPU転送全体の
+新しい性能値は未確認・未実装であり、この結果から対応を主張しない。
 
 ## 実装指針の資料調査
 
@@ -109,24 +159,26 @@ VMAは`vk-mem 0.5.0`同梱の3.3.0 headerと公式の固定版ソースを照合
 これは文書調査の確認であり、Rendererの実装変更・GPU試験・性能測定は行っていない。
 上記の実行済み結果を再実行した記録や、後続機能の実機確認としては扱わない。
 
-## ベストプラクティス規約に対する現行実装の監査
+## ベストプラクティスの適用と追加レビュー
 
-2026-11-12に、規約化したガイドの該当要件と現行コードを照合した。
-初期化・診断、VMA所有とCPUアクセス、転送・範囲・共有staging、
-実行pool・投入・完了・破棄の4領域を独立にレビューし、必要な契約を一次資料で再確認した。
-現行のCOPY専用・単一キューの実装範囲では、修正対象となる仕様／VMA契約違反や、
-重要な未文書化の一般推奨からの逸脱は見つからなかった。
+M2ではガイドの能力照会・VMA所有・同期・Shader ABI・binding・描画・検証を適用した。
+独立レビューでGraph内容追跡とculling、資源同一性とGPU寿命、Shaderとdescriptor、
+投入受理と失敗経路を確認し、見つかった問題を修正してから上記の最終検証を実行した。
+単一キュー・全体buffer barrier・固定usage／Shaderは保守的な基準で、
+vendor依存最適化や未測定の性能改善を採用したものではない。
 
-通常のVulkan feature付き試験はCPU 53件成功・10件ignored、明示実行した実Vulkan正しさ試験は
-RTX 3060で9件成功・1.21秒だった。Core＋SyncValの実効設定を確認し、
-終了後までのValidation warning／errorとcallback内部失敗はゼロだった。
-生ログは`.tools/vulkan-research/audit-cpu.log`と`audit-gpu.log`にある。
-負の試験で期待する入力拒否等のアプリケーションERRORログは、Validationの異常とは区別する。
+追加レビューでは、既存の転送bufferにも`maxBufferSize`の事前検査不足が見つかった。
+前回の「監査範囲で指摘なし」は網羅性の保証ではなく、この条件は拾えていなかった。
+Vulkan 1.3のpropertyを一度照会し、転送・shared staging・Graphの全buffer経路で
+VMA呼び出し前に上限超過を拒否するよう修正した。RTX 3060の上限1 TiBに対する
+上限＋1の拒否と、zero／上限／上限＋1のCPU境界試験が成功した。
 
-これは違反が存在しないことの完全な証明ではない。
-描画・Compute・WSI等の未実装部分は評価対象に含めず、実機non-coherentメモリ、
-native OOM／Device loss／reset失敗、別GPU・ローカルLinuxでの確認範囲は拡大していない。
-コード変更と性能の再測定は行っていない。
+新規Graph経路では、用途の変わるread間でwriter可視性を保つこと、
+submit後のログpanicでもrevisionを再利用しないこと、export登録guard、
+不確実なsubmit失敗時の停止、型付きエラーと元の原因の保持を確認した。
+未投入OOM・未知submit結果・timeout・lossのCPU境界試験は実際のdriver障害の誘発ではない。
+現時点で未解決のレビュー指摘はないが、実機non-coherentメモリ、native OOM／Device loss／
+reset失敗、別GPU・ローカルLinuxでの確認範囲は拡大していない。
 
 生ログと配布物はGit対象外の`.tools/`、Criterionの保存値は`target/criterion/`にある。
 過去の完全な比較表が必要な場合は、たとえば次のようにGit履歴から参照する。

@@ -1,0 +1,21 @@
+#version 450 core
+
+// M2 trusted interface: set 0, bindings 0/1, one rgba8 storage image each.
+// Mode is a single u32 at push-constant offset 0 (4 bytes).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba8) uniform readonly image2D source_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D destination_image;
+layout(push_constant) uniform Parameters {
+    uint mode;
+} parameters;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    // The host requires equal extents. Guard ceil-divided dispatch fringes.
+    if (any(greaterThanEqual(pixel, imageSize(destination_image)))) {
+        return;
+    }
+    vec4 value = imageLoad(source_image, pixel);
+    vec3 rgb = parameters.mode == 0u ? vec3(1.0) - value.rgb : value.bgr;
+    imageStore(destination_image, pixel, vec4(rgb, value.a));
+}
