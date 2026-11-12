@@ -289,7 +289,9 @@ pub struct RuntimeStats {
 
 #[derive(Clone)]
 struct Snapshot {
+    // Changes only when accepted work writes or invalidates logical contents.
     revision: u64,
+    // Last accepted use, including read-only native state/layout changes.
     serial: u64,
     initialized: Vec<Range<u64>>,
     layout: vk::ImageLayout,
@@ -312,6 +314,23 @@ impl Default for Snapshot {
             writer_stage: vk::PipelineStageFlags2::NONE,
             writer_access: vk::AccessFlags2::NONE,
             provenance: BufferProvenance::default(),
+        }
+    }
+}
+
+impl Snapshot {
+    fn record_access(&mut self, current: Use, layout_change: bool, serial: u64) {
+        if !current.writes && !layout_change {
+            self.stage |= current.stage;
+            self.access |= current.access;
+        } else {
+            self.stage = current.stage;
+            self.access = current.access;
+        }
+        if current.writes {
+            self.writer_stage = current.stage;
+            self.writer_access = current.access;
+            self.revision = serial;
         }
     }
 }
@@ -717,7 +736,9 @@ impl VulkanRuntime {
         for &resource in &graph.exports {
             needed[resource] = true;
         }
-        // Validate all imports, including culled declarations, before allocation.
+        // Validate logical contents, including culled imports, before allocation.
+        // Read-only uses may have advanced native scopes/layouts since compile;
+        // prepare rebases those from the latest canonical scheduled state.
         for resource in &graph.resources {
             if let Some(key) = resource.import {
                 let physical = &self.entry(key)?.physical;
@@ -831,8 +852,8 @@ impl VulkanRuntime {
             self.entries[index].registered = true;
         }
         // Consume the serial before submit/logging: even if an application
-        // subscriber panics after acceptance, a subsequent transaction cannot
-        // reuse this revision and accidentally accept an obsolete snapshot.
+        // subscriber panics after acceptance, a later write cannot reuse its
+        // content revision and accidentally accept an obsolete snapshot.
         self.serial = serial;
         // Rejected submit or an application logging unwind must not leave
         // unreachable exported names occupying the bounded registry forever.
@@ -1292,17 +1313,7 @@ impl GraphWork {
                         image,
                     );
                 }
-                if !current.writes && !layout_change {
-                    previous.stage |= current.stage;
-                    previous.access |= current.access;
-                } else {
-                    previous.stage = current.stage;
-                    previous.access = current.access;
-                }
-                if current.writes {
-                    previous.writer_stage = current.stage;
-                    previous.writer_access = current.access;
-                }
+                previous.record_access(current, layout_change, serial);
                 if matches!(native.native, NativeResource::Image(_)) {
                     previous.layout = current.layout;
                 }
@@ -1422,7 +1433,6 @@ impl GraphWork {
         }
         for (index, state) in states.iter_mut().enumerate() {
             if let Some(state) = state {
-                state.revision = serial;
                 state.serial = serial;
                 state.initialized = graph.final_contents[index].clone();
                 // Transient index validation has finished. Only canonical imports
@@ -1922,6 +1932,9 @@ mod tests;
 
 #[cfg(test)]
 mod cache_tests;
+
+#[cfg(test)]
+mod content_revision_tests;
 
 #[cfg(test)]
 mod render_tests;

@@ -330,8 +330,8 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                         assert_eq!(completed.result.readback(read).unwrap(), bytes);
                     }
                 }
-                // A read-only use advances the scheduled revision too. A previously
-                // compiled consumer must fail until its import is refreshed.
+                // Read-only work advances native queue state, not the content
+                // revision. Independently accepted uses share the compiled plan.
                 let current = runtime
                     .refresh_image(previous.as_ref().unwrap().key())
                     .unwrap();
@@ -340,24 +340,22 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                 let read = graph
                     .readback_image("readonly history result", history)
                     .unwrap();
-                let stale_plan = graph.compile().unwrap();
-                drop(runtime.submit_frame(&stale_plan).unwrap());
-                let stale = match runtime.submit_frame(&stale_plan) {
-                    Ok(_) => panic!("read-only history snapshot must be refreshed after use"),
-                    Err(error) => error,
-                };
-                assert_eq!(stale.kind(), RuntimeErrorKind::StaleResource);
-                assert!(runtime.refresh_image(current.key()).is_ok());
+                let shared_plan = graph.compile().unwrap();
+                drop(runtime.submit_frame(&shared_plan).unwrap());
+                drop(runtime.submit_frame(&shared_plan).unwrap());
+                assert_eq!(runtime.refresh_image(current.key()).unwrap(), current);
                 let old = previous.take().unwrap();
                 runtime.delete(old.key()).unwrap();
-                assert_eq!(runtime.pending_frames(), 1);
+                assert_eq!(runtime.pending_frames(), 2);
                 assert_eq!(
                     runtime.refresh_image(old.key()).unwrap_err().kind(),
                     RuntimeErrorKind::StaleResource
                 );
                 // Invalidating a history registration must not retire the
                 // accepted reader or overwrite its still-unconsumed output.
-                assert_eq!(completion(runtime).result.readback(read).unwrap(), pixels);
+                for _ in 0..2 {
+                    assert_eq!(completion(runtime).result.readback(read).unwrap(), pixels);
+                }
             }
             assert_eq!(runtime.stats().registered_resources, 0);
             assert_eq!(runtime.stats().readback_live_ranges, 0);

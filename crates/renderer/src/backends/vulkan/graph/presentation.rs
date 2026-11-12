@@ -1077,8 +1077,8 @@ impl VulkanRuntime {
 
     /// Sample a fresh exported linear RGBA8 image into this Window's SRGB
     /// output. This is a second same-queue submit, with no intervening CPU wait.
-    /// Accepted rendering advances the source's canonical revision, including
-    /// when the later present call fails. Refresh the source before retrying.
+    /// Sampling preserves its content revision while advancing canonical native
+    /// scopes/layout. A snapshot remains valid until its contents are mutated.
     pub fn present(
         &mut self,
         presenter: &mut Presenter,
@@ -1172,7 +1172,6 @@ impl VulkanRuntime {
             .ok_or_else(|| RuntimeError::capacity("submission serial exhausted"))?;
         let mut next = previous.clone();
         next.serial = serial;
-        next.revision = serial;
         next.stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
         next.access = vk::AccessFlags2::SHADER_SAMPLED_READ;
         next.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
