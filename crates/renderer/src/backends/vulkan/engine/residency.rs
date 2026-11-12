@@ -339,6 +339,9 @@ impl VulkanEngine {
             match self.runtime.submit(&plan) {
                 Ok(submission) => break submission,
                 Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {
+                    if !error.is_staging_exhausted() {
+                        return Ok(self.progress(0));
+                    }
                     // Free bytes are advisory: other upload leases may fragment
                     // the arena. Retry smaller four-byte chunks, bounded by the
                     // bit width; at most one successful submission per call.
@@ -445,6 +448,20 @@ impl VulkanEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fragment_retry_distinguishes_staging_from_execution_backpressure() {
+        use crate::backends::vulkan::transfer::{TransferError, staging::StagingError};
+        let staging = RuntimeError::from(StagingError::CapacityExhausted {
+            capacity: 1024,
+            requested: 512,
+            reserved: 512,
+        });
+        let execution = RuntimeError::from(TransferError::CapacityExhausted { capacity: 1 });
+        assert_eq!(staging.kind(), execution.kind());
+        assert!(staging.is_staging_exhausted());
+        assert!(!execution.is_staging_exhausted());
+    }
 
     #[test]
     fn retired_upload_error_is_returned_once_without_blocking_remaining_work() {
