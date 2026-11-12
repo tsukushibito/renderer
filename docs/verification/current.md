@@ -5,6 +5,16 @@
 保証する契約は[Vulkanの設計判断](../design/vulkan.md)を参照する。
 ここには現行実装に対する最新の確認を記録し、過去版の記録はGit履歴で参照する。
 
+## RenderGraph設計ガイドの調査・文書確認
+
+2026-11-12、`renderer-sc3`で[RenderGraphベストプラクティス](../guides/rendergraph-best-practices.md)を追加した。
+Frostbite、Unreal、Unity、Filament、O3DE、RPS、Falcorの一次資料・固定版ソースと、
+Vulkan／VMA／D3D12／Metalの公式資料を照合した。API契約、一般推奨、設計上の選択、
+条件付き最適化、資料からの整理・推論を区別し、現行Graphの設計とは独立したガイドにした。
+文書レビュー、参照定義・相対リンク・目次アンカー・UTF-8と差分の空白検査を実施した。
+この変更は文書のみで、Rustのビルド・CPU／実GPU試験、比較対象エンジンの実行、
+GPU性能の比較測定は追加実行していない。以下の実装検証結果を更新するものではない。
+
 ## 環境
 
 | 項目 | 確認値 |
