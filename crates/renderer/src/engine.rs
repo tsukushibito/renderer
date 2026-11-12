@@ -53,6 +53,11 @@ pub struct MeshData {
 }
 
 impl MeshData {
+    /// Encoded vertex and index payload bytes, independent of sharing and native allocation size.
+    pub fn byte_len(&self) -> u64 {
+        self.vertices.len() as u64 + self.indices.len() as u64
+    }
+
     pub fn new(vertices: &[Vertex], indices: &[u32]) -> Result<Self, EngineError> {
         let index_count = u32::try_from(indices.len())
             .map_err(|_| EngineError::new("mesh index count exceeds u32"))?;
@@ -485,6 +490,7 @@ mod tests {
 
     #[test]
     fn handles_validate_owner_generation_and_capacity() {
+        assert_eq!(mesh(1.0).byte_len(), 28 + 3 * 4);
         let mut first = Engine::new(1, 1).unwrap();
         let second = Engine::new(1, 1).unwrap();
         let old = first.create_mesh(mesh(1.0)).unwrap();
