@@ -8,6 +8,7 @@ rust-version = "1.99"
 
 [workspace.dependencies]
 ash = { version = "0.38", default-features = false, features = ["std", "loaded", "debug"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 vk-mem = "0.5"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }

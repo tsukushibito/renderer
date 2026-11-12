@@ -1,6 +1,5 @@
 //! Ordered copy work retaining resources and shared staging ranges until completion.
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::CStr;
 use std::fmt;
@@ -13,11 +12,15 @@ use ash::vk;
 use super::super::buffer::{BufferRole, InitializedRanges, VulkanBuffer};
 use super::super::image::{ImageDesc, VulkanImage};
 use super::super::memory::MemoryOwner;
+use super::super::ranges::ByteRanges;
 use super::staging::{SharedStaging, StagingError, StagingRange, StagingStats};
 use super::{
     ExecutionPool, ExecutionPoolStats, ExecutionReservation, RecordedTransfer, TransferError,
     TransferPayload, record_host_read,
 };
+
+mod hazards;
+use hazards::{BufferAccess, BufferHazards};
 
 static NEXT_BATCH: AtomicU64 = AtomicU64::new(1);
 
@@ -144,42 +147,6 @@ struct BufferState {
     initialized: InitializedRanges,
     written: Vec<Range<u64>>,
     prior_contents: bool,
-}
-
-#[derive(Clone)]
-struct BufferAccess {
-    resource: usize,
-    range: Range<u64>,
-    write: bool,
-}
-
-/// Only copy hazards within this batch, not a second RenderGraph. Independent
-/// resources are indexed separately; a global dependency retires the whole set.
-#[derive(Default)]
-struct BufferHazards(HashMap<usize, Vec<BufferAccess>>);
-
-impl BufferHazards {
-    fn before(&mut self, accesses: &[BufferAccess]) -> bool {
-        let needed = accesses.iter().any(|next| {
-            self.0.get(&next.resource).is_some_and(|earlier| {
-                earlier.iter().any(|prior| {
-                    (prior.write || next.write)
-                        && prior.range.start < next.range.end
-                        && next.range.start < prior.range.end
-                })
-            })
-        });
-        if needed {
-            self.0.clear();
-        }
-        for access in accesses {
-            self.0
-                .entry(access.resource)
-                .or_default()
-                .push(access.clone());
-        }
-        needed
-    }
 }
 
 struct ImageState {

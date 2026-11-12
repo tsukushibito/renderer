@@ -437,6 +437,46 @@ fn repeated_uploads_preserve_each_readback(
     assert_eq!(pool.staging_stats().1.live_ranges, 0);
 }
 
+fn gapped_shuffled_uploads(allocator: &VulkanAllocator, pool: &TransferPool) {
+    const COUNT: usize = 32;
+    let mut batch = pool.begin().unwrap();
+    let buffer = batch
+        .add_buffer(
+            allocator
+                .create_buffer(BufferRole::DeviceTransfer, (COUNT * 8) as u64)
+                .unwrap(),
+        )
+        .unwrap();
+    for step in 0..COUNT {
+        let index = (step * 13) % COUNT;
+        batch
+            .upload_buffer(buffer, (index * 8) as u64, &[index as u8; 4])
+            .unwrap();
+    }
+    // Adjacent tracking must not fill gaps in initialization or introduce
+    // dependencies between these independently writable byte ranges.
+    assert!(batch.readback_buffer(buffer, 0, 8).is_err());
+    let results: Vec<_> = (0..COUNT)
+        .rev()
+        .map(|index| {
+            (
+                index,
+                batch
+                    .readback_buffer(buffer, (index * 8) as u64, 4)
+                    .unwrap(),
+            )
+        })
+        .collect();
+    let mut done = finish(batch.record().unwrap().submit().unwrap());
+    for (index, result) in results {
+        let mut output = [0; 4];
+        done.readback(result, &mut output).unwrap();
+        assert_eq!(output, [index as u8; 4]);
+    }
+    assert_eq!(pool.staging_stats().0.live_ranges, 0);
+    assert_eq!(pool.staging_stats().1.live_ranges, 0);
+}
+
 #[test]
 #[ignore = "explicit shared-staging GPU batch test; requires validation, SyncVal and debug_utils"]
 fn vulkan_batch_smoke() {
@@ -466,6 +506,9 @@ fn vulkan_batch_smoke() {
                 TransferPool::new(Arc::clone(&allocator.owner), 2, capacity, capacity).unwrap();
             cancellation_and_inputs(&allocator, &pool);
             independent_batches(&allocator, &pool, iteration);
+            if iteration == 0 {
+                gapped_shuffled_uploads(&allocator, &pool);
+            }
             repeated_uploads_preserve_each_readback(&allocator, &pool, iteration);
             held_readback_limits_staging_not_native(&allocator, &pool, iteration);
             assert_eq!(pool.execution_stats().native_creates, 2);

@@ -13,6 +13,8 @@ M2に向けた基盤では、上限付きのcommand資源再利用、VMAによ�
 複数copyのバッチ投入と、正しさ試験から分けた性能測定用の明示的な検証なし設定を扱います。
 判断と契約は[再利用基盤のADR](docs/adr/0008-pre-m2-execution-reuse.md)を参照してください。
 実行結果・性能測定・未検証範囲は[M2前の再利用基盤の確認結果](docs/pre-m2-reuse-baseline.md)に記録します。
+部分転送のCPU範囲管理とCriterionによる比較は[転送計画のADR](docs/adr/0009-ordered-transfer-planning.md)を参照してください。
+測定条件・結果と制限は[転送計画の確認結果](docs/transfer-planning-baseline.md)に記録します。
 描画機能・RenderGraph・公開APIは後続の実装範囲です。
 
 - [実装方針](docs/renderer-implementation-policy.md)
@@ -25,6 +27,7 @@ M2に向けた基盤では、上限付きのcommand資源再利用、VMAによ�
 - [VMA imageの確認結果](docs/m1-image-baseline.md)
 - [画像転送・M1の確認結果](docs/m1-image-transfer-baseline.md)
 - [M2前の再利用基盤の確認結果](docs/pre-m2-reuse-baseline.md)
+- [転送計画・Criterionの確認結果](docs/transfer-planning-baseline.md)
 - [初期環境と境界のADR](docs/adr/0001-development-baseline.md)
 - [Instance初期化・診断・試験のADR](docs/adr/0002-vulkan-instance-bootstrap.md)
 - [Device・自動選択・単一キューのADR](docs/adr/0003-vulkan-device-bootstrap.md)
@@ -33,6 +36,7 @@ M2に向けた基盤では、上限付きのcommand資源再利用、VMAによ�
 - [VMA 2D imageの作成・所有のADR](docs/adr/0006-vma-image-ownership.md)
 - [画像全体の転送・再利用のADR](docs/adr/0007-image-transfer.md)
 - [M2前の実行資源再利用・性能測定のADR](docs/adr/0008-pre-m2-execution-reuse.md)
+- [転送計画の範囲検索・CriterionのADR](docs/adr/0009-ordered-transfer-planning.md)
 
 課題管理には [Beads](https://github.com/gastownhall/beads) を使用します。
 導入・日常操作・同期の手順は [.beads/README.md](.beads/README.md) を参照してください。

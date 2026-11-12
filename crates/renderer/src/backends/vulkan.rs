@@ -13,6 +13,7 @@ mod diagnostics;
 mod image;
 mod instance;
 mod memory;
+mod ranges;
 mod transfer;
 
 #[cfg(test)]

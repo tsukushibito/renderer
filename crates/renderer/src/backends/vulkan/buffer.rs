@@ -180,37 +180,8 @@ fn checked_range(
         ..usize::try_from(end).map_err(|_| invalid())?)
 }
 
-/// Sorted, disjoint initialized ranges; adjacent writes are merged as well.
-#[derive(Clone, Default)]
-pub(super) struct InitializedRanges(Vec<Range<vk::DeviceSize>>);
-
-impl InitializedRanges {
-    pub(super) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub(super) fn contains(&self, range: &Range<vk::DeviceSize>) -> bool {
-        range.is_empty()
-            || self
-                .0
-                .iter()
-                .any(|known| known.start <= range.start && known.end >= range.end)
-    }
-
-    pub(super) fn insert(&mut self, mut range: Range<vk::DeviceSize>) {
-        if range.is_empty() {
-            return;
-        }
-        let first = self.0.partition_point(|known| known.end < range.start);
-        let mut after = first;
-        while after < self.0.len() && self.0[after].start <= range.end {
-            range.start = range.start.min(self.0[after].start);
-            range.end = range.end.max(self.0[after].end);
-            after += 1;
-        }
-        self.0.splice(first..after, [range]);
-    }
-}
+/// Initialization and hazard tracking share the same ordered byte-range union.
+pub(super) type InitializedRanges = super::ranges::ByteRanges;
 
 /// Construct the actual request through one narrow boundary. This also allows a
 /// creation error to be tested without inventing a VMA allocation or fake driver.
@@ -523,7 +494,7 @@ impl VulkanBuffer {
                 self.owner.device.observe_result(error.result);
                 // A failed cache operation does not restore old contents. Stop
                 // assuming any previous initialization until a write succeeds.
-                self.initialized.0.clear();
+                self.initialized.clear();
                 return Err(self.access_error(error, offset, bytes.len()));
             }
             self.initialized.insert(offset..offset + bytes.len() as u64);
@@ -657,8 +628,9 @@ mod tests {
         assert!(initialized.contains(&(0..16)));
         initialized.insert(4..5);
         initialized.insert(20..20);
-        assert_eq!(initialized.0.len(), 1);
-        assert_eq!(initialized.0[0], 0..16);
+        assert!(initialized.contains(&(0..16)));
+        assert!(!initialized.contains(&(0..17)));
+        assert!(!initialized.overlaps(&(16..21)));
     }
 
     #[test]

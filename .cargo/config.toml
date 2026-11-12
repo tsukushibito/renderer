@@ -1,0 +1,4 @@
+[env]
+# Keep benchmark data in the workspace even when Cargo metadata is unavailable.
+# An existing CRITERION_HOME environment variable takes precedence.
+CRITERION_HOME = { value = "target/criterion", relative = true }

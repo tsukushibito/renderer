@@ -16,7 +16,8 @@ M2前の基盤整備では、command資源の再利用、VMAによる共有stagi
 [ADR 0005](adr/0005-single-queue-buffer-transfer.md)、
 [ADR 0006](adr/0006-vma-image-ownership.md)、
 [ADR 0007](adr/0007-image-transfer.md)、
-[ADR 0008](adr/0008-pre-m2-execution-reuse.md)に記載しています。
+[ADR 0008](adr/0008-pre-m2-execution-reuse.md)、
+[ADR 0009](adr/0009-ordered-transfer-planning.md)に記載しています。
 環境構築時の実測記録は[M0の確認結果](m0-baseline.md)を参照してください。
 qhgの実行結果と未検証範囲は[Instance初期化・診断の確認結果](m1-instance-baseline.md)に記載しています。
 Deviceの実行結果と未検証範囲は[Device・単一キューの確認結果](m1-device-baseline.md)を参照してください。
@@ -31,8 +32,9 @@ M2前の再利用基盤・バッチ転送の結果、性能測定と未検証範
 
 | 用途 | 必要なもの |
 |---|---|
-| CPU側の開発 | Git、rustup、Rust 1.99.0（edition 2024）と対象OSのリンカー |
-| Vulkan依存のビルド | 上記に加えてC++コンパイラー。WindowsはMSVC x64、Linuxはg++ |
+| CPU側の通常ライブラリビルド | Git、rustup、Rust 1.99.0（edition 2024）と対象OSのリンカー |
+| CPU側のテスト・benchmark・全target確認 | 上記に加えてCコンパイラー。Criterionの依存allocaがC helperをビルドする。WindowsはMSVC x64、Linuxはgcc |
+| Vulkan依存のビルド | 通常ビルドの条件に加えてC++コンパイラー。WindowsはMSVC x64、Linuxはg++ |
 | 実Vulkan Instance試験 | Vulkan 1.3対応ドライバー／ローダー、`VK_LAYER_KHRONOS_validation`、`VK_EXT_debug_utils`、`VK_EXT_layer_settings` |
 | 実Vulkan Device試験 | 上記に加え、Graphics＋Compute対応キューと必須3 featureを持つデバイス |
 | 実Vulkan buffer試験 | Device試験の条件に加え、用途に対応するbufferの作成・CPUアクセスに必要なメモリ |
@@ -53,7 +55,9 @@ MSRVはまず検証済みの1.99に設定し、それより古いRustへの対�
 rustupの`x86_64-pc-windows-msvc`を使います。
 Visual Studio 2022またはBuild Tools 2022の「C++によるデスクトップ開発」から、
 MSVC x64/x86ビルドツールとWindows SDKをインストールしてください。
-`vk-mem`は同梱VMAのC++をコンパイルするため、Rustのインストールだけでは不足します。
+CPU側のテスト・benchmarkでは、Criterion 0.8.2の依存alloca 0.4.0がC helperをコンパイルします。
+Vulkan featureを有効にする場合は、さらに`vk-mem`が同梱VMAのC++をコンパイルします。
+このMSVC構成で両方をビルドできます。
 通常のPowerShellからビルドできます。MSVCが検出されない場合は
 Developer PowerShell for VS 2022で再実行してください。
 
@@ -78,7 +82,9 @@ sudo apt-get install -y build-essential
 rustup show active-toolchain
 ```
 
-CIのVulkanジョブでもg++を用意します。Windowsジョブはrunner付属のMSVCを使います。
+CPU側のテスト・benchmarkにはgcc、Vulkan featureにはg++も必要で、`build-essential`に含まれます。
+CIのLinux確認ジョブではgccを明示的に用意し、Vulkanジョブではg++も追加します。
+Windowsジョブはrunner付属のMSVCを使います。
 これらはビルド対象であり、Linux実GPUの動作確認済みという意味ではありません。
 
 ## ビルド・品質確認
@@ -88,7 +94,9 @@ Rustのモジュール配置は[AGENTS.md](../AGENTS.md)に従い、`mod.rs`を�
 `deny`に設定しており、以下のclippyコマンドと既存CIで検出します。
 
 リポジトリのルートで実行します。CPU経路にはVulkan SDK、ローダー、GPU、
-ウィンドウシステムは不要です。最初はoptional依存も含むlockfileの解決・取得に
+ウィンドウシステムは不要です。テスト・全target確認には、上記のCコンパイラーが必要です。
+通常ライブラリのCPUビルドは開発用依存を使わず、native依存を持ちません。
+最初はoptional依存も含むlockfileの解決・取得に
 ネットワークが必要になる場合があります。
 
 ```sh
@@ -333,7 +341,54 @@ Synchronization Validationはhost memory accessを追跡しないため、CPUア
 個別に記録し、ログにも残します。現時点の例外はありません。
 診断コールバック内部の失敗も試験失敗に含め、終了中のメッセージまで集計します。
 
-## 転送の性能測定
+## CPU転送計画の性能測定（Criterion）
+
+同じbufferへの多数の部分転送について、同期判定と初期化済み範囲の管理をCriterionで測定します。
+専用targetは本番で使う範囲集合・同期判定のRustソースを組み込み、GPUを初期化せずに実行します。
+内部APIをベンチマークのために公開しません。
+Criterionの依存allocaがC helperをビルドするためCコンパイラーが必要ですが、
+Vulkan SDK、ローダー、GPU、VMA用のC++コンパイラーは不要です。
+
+```sh
+cargo bench --locked -p renderer --no-default-features --bench transfer_planning
+```
+
+測定・統計解析を行わずに全caseを短く確認する場合は、末尾に`-- --test`を付けます。
+
+旧方式のVecを使う比較用実装と、順序付き範囲集合を使う現行実装を同じ入力で比較します。
+同じbufferの隙間を持つ範囲を、順方向・逆方向・固定seedで並べ替えた順に追加します。
+件数は8・128・1,024・8,192で、N件のwrite後にN件のreadを計画します。
+表示上のthroughputは2N件のメタデータアクセスで、転送byte数ではありません。
+入力生成、初期状態の構築、測定後の所有者の破棄は計測区間から外し、
+範囲の検索・挿入・依存判定と、それに伴う割り当てや追跡集合の破棄は測定に含めます。
+これはCPUの範囲管理の測定であり、bufferの作成、stagingへのコピー、submit、GPU実行時間は含みません。
+既定は30 samples、250 msのwarm-up、1秒のmeasurementで、CriterionのCLIから変更できます。
+
+継続的な比較では、同じ機材・負荷・設定で名前付きの基準値を保存します。
+次の例では最初の実行で基準を保存し、変更後の実行で上書きせず比較します。
+
+```sh
+cargo bench --locked -p renderer --no-default-features --bench transfer_planning -- --save-baseline planning-main
+cargo bench --locked -p renderer --no-default-features --bench transfer_planning -- --baseline planning-main
+```
+
+保存先の既定はworkspaceのGit対象外ディレクトリ`target/criterion/`です。
+[Cargo設定](../.cargo/config.toml)が`CRITERION_HOME`を絶対パスへ展開して渡すため、
+CriterionによるCargo metadataの取得可否に左右されず同じ場所へ保存します。
+既存の環境変数`CRITERION_HOME`があればそちらを優先します。
+保存先を変更する場合は`CRITERION_HOME`を明示指定してください。
+Cargoのビルド出力先`CARGO_TARGET_DIR`とは独立した設定です。
+名前付き基準値による実行間比較と、同一実行内の旧Vec方式との比較は区別します。
+同じbenchmark IDの基準値が存在しない場合、`--baseline`は失敗します。
+操作と基準値の意味は[CriterionのCLI文書](https://criterion-rs.github.io/book/user_guide/command_line_options.html)を参照してください。
+
+Criterionの推定時間と信頼区間は、個々の転送のp95とは異なります。
+件数に対するCPU時間の増え方と、小件数での管理コストも確認し、
+通常のCIに壁時計時間の固定合否閾値を設けません。
+GPUの正しさ試験と、次のGPU転送の区間別・p95・timestamp測定は引き続き別に実行します。
+実行条件、全caseの値と測定間の揺れは[転送計画の確認結果](transfer-planning-baseline.md)を参照してください。
+
+## GPU転送の性能測定
 
 正しさ試験の既定は`ValidationMode::Required`です。性能試験だけが
 `VulkanInstance::with_validation(..., ValidationMode::Disabled)`を明示指定します。
@@ -420,6 +475,9 @@ Device用のdebug_utils関数テーブルは一度保持し、QueueもDevice作�
 
 `cargo tree --locked --features vulkan`で、ashが一つのバージョンに解決されることを確認できます。
 `tracing`はVulkan featureのoptional依存、ログ出力設定用の`tracing-subscriber`はテスト用依存です。
+Criterionは開発用依存です。採用版0.8.2はWindows／Unixでalloca 0.4を利用し、
+[alloca 0.4.0のbuild script](https://docs.rs/crate/alloca/0.4.0/source/build.rs)がC helperをコンパイルします。
+通常のCPUライブラリビルドの依存と、テスト・benchmark用依存の条件を区別します。
 依存更新は独立した変更としてlockfile差分と両経路のビルドを検証します。
 `target/`と一時ツール用の`.tools/`はGit管理対象外です。
 シェーダーのビルド接続はM2までに実装し、手元だけのSPIR-Vファイルに依存しません。
