@@ -1,8 +1,8 @@
 //! Unique VMA image ownership, with a deliberately narrow creation contract.
 //!
 //! Creation descriptions are independent of ownership so later image usages can
-//! extend validation without replacing the lifetime model. Images currently
-//! remain in UNDEFINED layout with no established contents or GPU-use API.
+//! extend validation without replacing the lifetime model. Transfer owners retain
+//! images through GPU completion and only then establish their resulting layout.
 
 use std::error::Error;
 use std::fmt;
@@ -186,12 +186,13 @@ fn create_resource<T>(
 }
 
 /// Owns one image/allocation pair, retaining VMA and its Vulkan dependencies.
-/// This private owner does not expose a raw handle or permit GPU use yet.
+/// The transfer path moves this owner through recording and GPU completion.
 pub(super) struct VulkanImage {
     owner: Arc<MemoryOwner>,
     image: vk::Image,
     allocation: vk_mem::Allocation,
     desc: ImageDesc,
+    layout: vk::ImageLayout,
 }
 
 impl VulkanAllocator {
@@ -236,6 +237,7 @@ impl VulkanAllocator {
                 image,
                 allocation,
                 desc,
+                layout: vk::ImageLayout::UNDEFINED,
             };
             let info = owner.owner.raw.get_allocation_info(&owner.allocation);
             // SAFETY: VMA keeps the immutable memory-properties table alive for
@@ -275,12 +277,41 @@ impl VulkanAllocator {
     }
 }
 
+impl VulkanImage {
+    pub(super) fn owner(&self) -> &Arc<MemoryOwner> {
+        &self.owner
+    }
+
+    pub(super) fn desc(&self) -> ImageDesc {
+        self.desc
+    }
+
+    /// Last successfully completed whole-image state, never a recorded intent.
+    pub(super) fn layout(&self) -> vk::ImageLayout {
+        self.layout
+    }
+
+    /// # Safety
+    /// Retain exclusive ownership from command recording through successful
+    /// completion or lost-device retirement. No native escape is permitted.
+    pub(super) unsafe fn transfer_handle(&self) -> vk::Image {
+        self.image
+    }
+
+    /// # Safety
+    /// A successful Fence wait on an active Device proved a whole-image upload
+    /// and the final transition to TRANSFER_SRC_OPTIMAL completed.
+    pub(super) unsafe fn establish_transfer_contents(&mut self) {
+        self.layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+    }
+}
+
 impl Drop for VulkanImage {
     fn drop(&mut self) {
-        // SAFETY: This owner uniquely owns the live image/allocation pair. No
-        // raw image/GPU-use API exists, so it cannot have pending commands or
-        // dependent ImageViews. The Arc keeps VMA and Device alive through
-        // destruction. Future GPU-use APIs must add completion-based retention.
+        // SAFETY: This owner uniquely owns the image/allocation pair. Transfer
+        // owners retain it through pending use and retire only before submit,
+        // after completion or under lost-device rules. There are no ImageViews.
+        // Its Arc keeps VMA and Device alive through destruction.
         unsafe {
             self.owner
                 .raw

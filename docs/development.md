@@ -6,18 +6,21 @@ privateなVulkan 1.3 Instanceの初期化・診断に加え、`renderer-7ro`で
 `renderer-yr6`ではVMAによるbufferの所有、CPUアクセス、解放を扱います。
 `renderer-dj3`では単一キューでのbuffer転送、投入と完了待ち、実GPUからのreadbackを扱います。
 `renderer-9wa`ではVMAによる転送用2D imageの作成、対応能力の検証、所有・解放を扱います。
-image転送、描画、公開APIはまだありません。
+`renderer-jya`では画像全体のbuffer → image → readback転送、layout遷移と完了後の再利用を扱います。
+描画、RenderGraph、公開APIは後続の実装範囲です。
 採用した契約は[ADR 0002](adr/0002-vulkan-instance-bootstrap.md)、
 [ADR 0003](adr/0003-vulkan-device-bootstrap.md)、
 [ADR 0004](adr/0004-vma-buffer-ownership.md)、
 [ADR 0005](adr/0005-single-queue-buffer-transfer.md)、
-[ADR 0006](adr/0006-vma-image-ownership.md)に記載しています。
+[ADR 0006](adr/0006-vma-image-ownership.md)、
+[ADR 0007](adr/0007-image-transfer.md)に記載しています。
 環境構築時の実測記録は[M0の確認結果](m0-baseline.md)を参照してください。
 qhgの実行結果と未検証範囲は[Instance初期化・診断の確認結果](m1-instance-baseline.md)に記載しています。
 Deviceの実行結果と未検証範囲は[Device・単一キューの確認結果](m1-device-baseline.md)を参照してください。
 bufferの実行結果と未検証範囲は[VMA bufferの確認結果](m1-buffer-baseline.md)を参照してください。
 GPU転送の実行結果と未検証範囲は[buffer転送・完了待ちの確認結果](m1-transfer-baseline.md)を参照してください。
 imageの作成・解放の実行結果と未検証範囲は[VMA imageの確認結果](m1-image-baseline.md)を参照してください。
+画像転送とM1全体の対応は[画像転送・M1の確認結果](m1-image-transfer-baseline.md)を参照してください。
 
 ## 必要なツール
 
@@ -30,6 +33,7 @@ imageの作成・解放の実行結果と未検証範囲は[VMA imageの確認�
 | 実Vulkan buffer試験 | Device試験の条件に加え、用途に対応するbufferの作成・CPUアクセスに必要なメモリ |
 | 実Vulkan転送試験 | buffer試験の条件に加え、単一キューでのcopy・Synchronization2・Fence完了待ち |
 | 実Vulkan image試験 | Device試験の条件に加え、RGBA8_UNORMのoptimal 2D imageのtransfer source / destination対応 |
+| 実Vulkan画像転送試験 | imageとbuffer試験の条件に加え、image copy・layout遷移・Fence完了待ち |
 | 実行環境の調査 | Vulkan SDKのvulkaninfo |
 | 今後のシェーダー生成 | Vulkan SDK 1.4.341.1のglslc（shaderc v2026.1） |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../.beads/README.md)を参照 |
@@ -215,7 +219,30 @@ Deviceが停止・lostの場合、新たなimage作成を拒否します。
 
 実Vulkan試験は複数サイズの作成・解放と依存所有者の寿命を反復確認し、終了後まで診断を集計します。
 この試験ではGPUへ命令を投入せず、imageの内容は未初期化のままです。
-ImageView、CPUからのimageアクセス、レイアウト遷移、image転送・画素のreadbackは後続で扱います。
+ImageView、CPUからのimage直接アクセスは後続で扱います。
+レイアウト遷移、image転送・画素のreadbackは次の転送試験で扱います。
+
+### 画像全体の転送・再利用
+
+```sh
+cargo test --locked -p renderer --no-default-features --features vulkan backends::vulkan::transfer::image::tests::vulkan_image_transfer_ -- --ignored --nocapture
+```
+
+Upload buffer → RGBA8_UNORM image → Readback bufferを通し、Fence待機後に全byteを照合します。
+転送は画像全体、mip・layer・sample各1、buffer offset 0で、行間の余白を持たないRGBA列に限定します。
+bufferの要求サイズは`幅 × 高さ × 4`と一致させ、overflow、用途違い、所有者違い、
+Uploadの未初期化を記録前に拒否します。optimal imageのAllocationサイズとは区別します。
+
+初回はUNDEFINED → TRANSFER_DST_OPTIMAL → TRANSFER_SRC_OPTIMALへ遷移します。
+同じimage・bufferを完了後に再利用し、次回はTRANSFER_SRC_OPTIMALから開始します。
+記録中は完了済みlayoutを変更せず、成功した待機後だけ新しい状態を確定します。
+copy間とCPU read前の依存はSynchronization2で記録し、既存のflush / invalidateを使います。
+
+submit / waitと未完了時のDrop・保持・Device停止はbuffer転送と共通の処理です。
+imageとbufferは記録から完了まで移動所有され、成功後に返却されます。
+複数寸法・パターンの照合、再利用、記録キャンセル、ゼロ時間pollと未完了時の再待機、Drop待機、
+Allocatorハンドル先行破棄と終了後の診断を確認します。
+部分領域や行長指定、ImageView、描画、Compute、画像ファイル出力はこの試験に含めません。
 
 ### 判定条件
 
