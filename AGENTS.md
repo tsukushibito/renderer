@@ -40,4 +40,13 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
   `#[ignore]` and run them explicitly; missing runtime prerequisites must fail
   rather than silently skip. Require zero validation warnings and errors, with
   only individually documented, confirmed false positives eligible for exceptions.
-  Keep excepted messages in logs; follow [the development guide](docs/development.md).
+  Keep excepted messages in logs; follow [the development guide](docs/guides/development.md).
+
+# Documentation
+
+- Keep current documentation under `docs/guides/` and `docs/design/`, with the
+  latest verification results in `docs/verification/current.md`.
+- Update existing topic documents rather than adding milestone baseline reports
+  or chronological ADR files. Keep superseded content in Git history.
+- Maintain [the documentation index](docs/README.md) and relative links when
+  adding, consolidating, or moving documents. Track tasks in Beads.

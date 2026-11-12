@@ -3,7 +3,7 @@
 通常のビルドと試験は[開発手順](development.md)を参照する。
 以下のコマンドはリポジトリのルートで実行する。
 ローカル配布物と確認用ファイルはGit対象外の`.tools/`へ配置する。
-導入時の版・配布物の検証・実行結果は[ツールの確認記録](development-tools-baseline.md)に分けて保存する。
+現在の導入状態と確認範囲は[最新の検証結果](../verification/current.md)を参照する。
 
 ## cargo-deny
 
@@ -22,7 +22,7 @@
 cargo install --locked --version 0.20.2 --root .tools/cargo-deny cargo-deny
 ```
 
-検査条件は[deny.toml](../deny.toml)で管理する。
+検査条件は[deny.toml](../../deny.toml)で管理する。
 Windows MSVCとLinux GNU、全feature、開発用・ビルド用依存を対象に、
 advisory、ライセンス、重複・wildcard、取得元を確認する。
 CIの`dependencies` jobも同じ設定を使い、公式Action v2.1.1を完全SHA、
@@ -40,7 +40,7 @@ advisoryの個別除外はない。設定の意味は[公式ライセンス設�
 ## SPIR-Vの検証
 
 Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
-シェーダーの生成・変換後に、[検証スクリプト](../scripts/validate-spirv.ps1)へ
+シェーダーの生成・変換後に、[検証スクリプト](../../scripts/validate-spirv.ps1)へ
 検証対象のファイルを明示して渡す。
 
 ```powershell
@@ -70,8 +70,33 @@ SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view
 
 ```powershell
 & ./.tools/renderdoc/RenderDoc_1.47_64/renderdoccmd.exe version
-& ./.tools/renderdoc/RenderDoc_1.47_64/qrenderdoc.exe
 ```
+
+このportable配置のcapture layerはregistryへ登録していない。
+確認済みのVulkan Loader 1.4.341では、通常権限で起動するRenderDocへ
+`VK_ADD_IMPLICIT_LAYER_PATH`を渡してmanifestを発見させる。
+次の例は既存値を保ち、RenderDoc終了後に元へ戻す。
+
+```powershell
+if ($env:VK_IMPLICIT_LAYER_PATH) {
+    throw 'VK_IMPLICIT_LAYER_PATH overrides the additional layer path; review the current loader settings.'
+}
+$rendererCapturePath = (Resolve-Path -LiteralPath './.tools/renderdoc/RenderDoc_1.47_64').Path
+$rendererPreviousLayerPath = $env:VK_ADD_IMPLICIT_LAYER_PATH
+try {
+    $rendererLayerPaths = @($rendererCapturePath, $rendererPreviousLayerPath) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $env:VK_ADD_IMPLICIT_LAYER_PATH = $rendererLayerPaths -join [IO.Path]::PathSeparator
+    & (Join-Path $rendererCapturePath 'qrenderdoc.exe')
+} finally {
+    $env:VK_ADD_IMPLICIT_LAYER_PATH = $rendererPreviousLayerPath
+}
+```
+
+RenderDocが対象プロセスへcapture有効化の環境変数を渡すため、
+共通の開発環境へ`ENABLE_VULKAN_RENDERDOC_CAPTURE`を設定しない。
+管理者権限のアプリでは環境変数によるmanifest指定が無視される。
+この動作は[使用中のloaderの仕様](https://raw.githubusercontent.com/KhronosGroup/Vulkan-Loader/v1.4.341/docs/LoaderLayerInterface.md)を参照する。
 
 描画・Compute処理ができたら、qrenderdocから対象実行ファイルを起動して捕捉し、
 コマンド列、pipelineやbinding、buffer／imageの内容を確認する。
@@ -81,4 +106,5 @@ offscreen試験の捕捉は、M2で必要な範囲へ`StartFrameCapture`／`EndF
 [公式APIの推奨](https://raw.githubusercontent.com/baldurk/renderdoc/v1.47/docs/in_application_api.rst)に従い、
 RenderDocから起動されたときに読み込まれたAPIを利用する。
 通常実行や公開Renderer APIへRenderDocを必須依存として持ち込まない。
-導入確認ではCLIとDLLのAPI取得までを確認し、実際のGPUキャプチャはまだ行っていない。
+導入確認ではCLIとDLLのAPI取得に加え、子プロセスでinstance／deviceのcapture layer挿入を確認した。
+実際のGPUキャプチャはまだ行っていない。
