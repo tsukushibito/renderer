@@ -131,8 +131,14 @@ snapshotにはowner・世代・revisionがあり、別runtime、削除済み、�
 exportした資源はruntimeへ登録され、明示的な`delete`で登録を解除する。
 CPUハンドルをdropするだけでは登録を解除しない。
 未登録資源は保持参照がなくなってから再利用でき、同じ作成条件ならallocationとViewを保持する。
-異なる作成条件の資源が必要なら、空いている未登録entryを置き換えられる。
+同じ作成条件がなければresource容量までentryを追加し、異なる条件のcacheも保持する。
+上限時だけ、空いている未登録entryのうち最後に受理した利用serialが最も古いものを置き換える。
+同じserialならentryのindex順とし、登録中・保持参照があるentry・世代上限のentryを選ばない。
+置換先の作成・命名が成功するまで旧entryを維持する。再利用時はnative同期状態を保持し、
+以前の内容の初期化情報とCPU provenanceを新しい論理資源へ引き継がない。
 resource容量は保持する物理entry数の上限であり、DeviceのVRAM budgetではない。
+異なる作成条件を保持する分だけidleメモリが増え、置換時は旧資源と新資源が一時的に共存する。
+保持量は論理byteと実際のVMA allocation／blockの統計を分けて観測する。
 exportを保持し続けた場合も、容量不足を返し、内部で待機・無制限増設はしない。
 
 `Submission::wait`のtimeoutは`None`で、同じsubmissionを再度待てる。
