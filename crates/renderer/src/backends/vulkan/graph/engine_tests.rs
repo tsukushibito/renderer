@@ -7,8 +7,9 @@ use std::{
 
 use super::{RuntimeConfig, VulkanRuntime};
 use crate::{
-    EngineRenderError, FrameId, VulkanEngine,
-    engine::{Draw, IDENTITY, Material, MeshData, Vertex, View},
+    EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
+    RenderedFrame, VulkanEngine,
+    engine::{Draw, Engine, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
     graph::{ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
 };
 
@@ -21,7 +22,7 @@ fn mesh(color: [f32; 4]) -> MeshData {
     .unwrap()
 }
 
-fn with_engine(test: impl FnOnce(&mut VulkanEngine)) {
+fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
         let runtime = VulkanRuntime::new(RuntimeConfig {
@@ -35,8 +36,18 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine)) {
         );
         let diagnostics = Arc::clone(&runtime.diagnostics);
         crate::backends::vulkan::assert_real_validation(&diagnostics);
-        let mut engine = VulkanEngine::new(runtime, 4, 4).unwrap();
-        test(&mut engine);
+        let mut engine = VulkanEngine::new(
+            runtime,
+            MeshCacheConfig {
+                max_meshes: 8,
+                max_bytes: mesh([1.0; 4]).byte_len() * 8,
+                max_upload_submissions: 1,
+            },
+        )
+        .unwrap();
+        let mut assets = Engine::new(4, 4).unwrap();
+        test(&mut engine, &mut assets);
+        engine.unload_all_meshes().unwrap();
         assert!(
             engine
                 .runtime_mut()
@@ -52,32 +63,78 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine)) {
     });
 }
 
+fn prepare_meshes(engine: &mut VulkanEngine, snapshot: &FrameSnapshot) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut progress = engine.prepare_snapshot(snapshot).unwrap();
+    while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("explicit mesh upload preparation timed out");
+        progress = engine.wait_uploads(remaining).unwrap();
+    }
+}
+
+fn build_frame(
+    engine: &mut VulkanEngine,
+    assets: &Engine,
+    view: &View,
+    draws: &[Draw],
+    readback: bool,
+    extension: impl FnOnce(
+        &mut Graph,
+        crate::graph::ImageHandle,
+    ) -> Result<crate::graph::ImageHandle, GraphError>,
+) -> Result<PreparedEngineFrame, EngineRenderError> {
+    let snapshot = assets.snapshot(view, draws)?;
+    prepare_meshes(engine, &snapshot);
+    engine.build_snapshot(&snapshot, readback, extension)
+}
+
+fn render_frame(
+    engine: &mut VulkanEngine,
+    assets: &Engine,
+    view: &View,
+    draws: &[Draw],
+    readback: bool,
+    extension: impl FnOnce(
+        &mut Graph,
+        crate::graph::ImageHandle,
+    ) -> Result<crate::graph::ImageHandle, GraphError>,
+) -> Result<RenderedFrame, EngineRenderError> {
+    let prepared = build_frame(engine, assets, view, draws, readback, extension)?;
+    let plan = prepared.graph.compile()?;
+    engine.submit_frame(prepared, &plan)
+}
+
 fn collect(engine: &mut VulkanEngine, expected: &[(FrameId, PassHandle, usize, [u8; 4])]) {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut completed = Vec::new();
     while completed.len() != expected.len() {
-        if let Some(mut completion) = engine.runtime_mut().poll_frame().unwrap() {
-            let &(_, pass, pixel, color) = expected
-                .iter()
-                .find(|(id, ..)| *id == completion.id())
-                .unwrap();
-            let bytes = completion.result.readback(pass).unwrap();
-            assert_eq!(&bytes[pixel * 4..pixel * 4 + 4], &color);
-            assert_eq!(&bytes[..4], &[0, 0, 0, 255]);
-            completed.push(completion.id());
-        } else {
-            assert!(Instant::now() < deadline, "engine GPU completion timed out");
-            std::thread::yield_now();
-        }
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("engine GPU completion timed out");
+        let mut completion = engine
+            .runtime_mut()
+            .wait_frame(remaining)
+            .unwrap()
+            .expect("engine GPU completion timed out");
+        let &(_, pass, pixel, color) = expected
+            .iter()
+            .find(|(id, ..)| *id == completion.id())
+            .unwrap();
+        let bytes = completion.result.readback(pass).unwrap();
+        assert_eq!(&bytes[pixel * 4..pixel * 4 + 4], &color);
+        assert_eq!(&bytes[..4], &[0, 0, 0, 255]);
+        completed.push(completion.id());
     }
 }
 
 #[test]
 #[ignore = "explicit real Vulkan engine input/lifetime test; requires Core+SyncVal"]
 fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
-    with_engine(|engine| {
-        let mesh_handle = engine.create_mesh(mesh([1.0; 4])).unwrap();
-        let material = engine
+    with_engine(|engine, assets| {
+        let mesh_handle = assets.create_mesh(mesh([1.0; 4])).unwrap();
+        let material = assets
             .create_material(Material {
                 tint: [1.0, 0.0, 0.0, 1.0],
             })
@@ -93,17 +150,16 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             material,
             world_from_model: IDENTITY,
         };
-        let first = engine
-            .render_frame(&view, &[draw], true, |_, color| Ok(color))
-            .unwrap();
-        engine.runtime_mut().delete(first.output.key()).unwrap();
+        let mut first =
+            render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
+        engine.release_output(&mut first).unwrap();
         let mut expected = vec![(
             first.submission.id(),
             first.readback.unwrap(),
             16 * 32 + 16,
             [255, 0, 0, 255],
         )];
-        engine
+        assets
             .update_material(
                 material,
                 Material {
@@ -112,10 +168,9 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             )
             .unwrap();
         draw.world_from_model[3][0] = -0.75;
-        let shifted = engine
-            .render_frame(&view, &[draw], true, |_, color| Ok(color))
-            .unwrap();
-        engine.runtime_mut().delete(shifted.output.key()).unwrap();
+        let mut shifted =
+            render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
+        engine.release_output(&mut shifted).unwrap();
         expected.push((
             shifted.submission.id(),
             shifted.readback.unwrap(),
@@ -123,7 +178,7 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             [0, 255, 0, 255],
         ));
         view.clip_from_world[3][0] = 0.75;
-        engine
+        assets
             .update_material(
                 material,
                 Material {
@@ -131,10 +186,9 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
                 },
             )
             .unwrap();
-        let camera = engine
-            .render_frame(&view, &[draw], true, |_, color| Ok(color))
-            .unwrap();
-        engine.runtime_mut().delete(camera.output.key()).unwrap();
+        let mut camera =
+            render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
+        engine.release_output(&mut camera).unwrap();
         expected.push((
             camera.submission.id(),
             camera.readback.unwrap(),
@@ -143,54 +197,54 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
         ));
         // Replace vertex content while all three accepted frames are owned by
         // the runtime. The old mesh buffers remain retained by their work.
-        engine
+        assets
             .update_mesh(mesh_handle, mesh([1.0, 0.0, 1.0, 1.0]))
             .unwrap();
-        engine
+        assets
             .update_material(material, Material::default())
             .unwrap();
-        let replaced = engine
-            .render_frame(&view, &[draw], true, |_, color| Ok(color))
-            .unwrap();
-        engine.runtime_mut().delete(replaced.output.key()).unwrap();
+        let mut replaced =
+            render_frame(engine, assets, &view, &[draw], true, |_, color| Ok(color)).unwrap();
+        engine.release_output(&mut replaced).unwrap();
         expected.push((
             replaced.submission.id(),
             replaced.readback.unwrap(),
             16 * 32 + 16,
             [255, 0, 255, 255],
         ));
-        engine.delete_mesh(mesh_handle).unwrap();
-        engine.delete_material(material).unwrap();
+        assets.delete_mesh(mesh_handle).unwrap();
+        engine.unload_mesh(mesh_handle).unwrap();
+        assets.delete_material(material).unwrap();
         assert_eq!(engine.runtime().pending_frames(), 4);
         collect(engine, &expected);
-        assert!(engine.snapshot(&view, &[draw]).is_err());
+        assert!(assets.snapshot(&view, &[draw]).is_err());
     });
 }
 
 #[test]
 #[ignore = "real-GPU opaque draw-list ownership through pending mesh/material deletion; requires Core/SyncVal"]
 fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
-    with_engine(|engine| {
-        let near = engine.create_mesh(mesh([1.0; 4])).unwrap();
+    with_engine(|engine, assets| {
+        let near = assets.create_mesh(mesh([1.0; 4])).unwrap();
         let far_vertices =
             [[-0.4, -0.4, 0.75], [0.4, -0.4, 0.75], [0.0, 0.4, 0.75]].map(|position| Vertex {
                 position,
                 color: [1.0; 4],
             });
         let farther = MeshData::new(&far_vertices, &[0, 1, 2]).unwrap();
-        let far = engine.create_mesh(farther).unwrap();
-        let equal = engine.create_mesh(mesh([1.0; 4])).unwrap();
-        let red = engine
+        let far = assets.create_mesh(farther).unwrap();
+        let equal = assets.create_mesh(mesh([1.0; 4])).unwrap();
+        let red = assets
             .create_material(crate::engine::Material {
                 tint: [1.0, 0.0, 0.0, 1.0],
             })
             .unwrap();
-        let green = engine
+        let green = assets
             .create_material(crate::engine::Material {
                 tint: [0.0, 1.0, 0.0, 1.0],
             })
             .unwrap();
-        let blue = engine
+        let blue = assets
             .create_material(crate::engine::Material {
                 tint: [0.0, 0.0, 1.0, 1.0],
             })
@@ -229,9 +283,9 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
             )?;
             Ok(output)
         };
-        let first = engine.render_frame(&view, &draws, true, extension).unwrap();
-        engine.runtime_mut().delete(first.output.key()).unwrap();
-        engine
+        let mut first = render_frame(engine, assets, &view, &draws, true, extension).unwrap();
+        engine.release_output(&mut first).unwrap();
+        assets
             .update_material(
                 red,
                 crate::engine::Material {
@@ -239,14 +293,15 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
                 },
             )
             .unwrap();
-        engine.update_mesh(near, mesh([1.0; 4])).unwrap();
-        let second = engine.render_frame(&view, &draws, true, extension).unwrap();
-        engine.runtime_mut().delete(second.output.key()).unwrap();
+        assets.update_mesh(near, mesh([1.0; 4])).unwrap();
+        let mut second = render_frame(engine, assets, &view, &draws, true, extension).unwrap();
+        engine.release_output(&mut second).unwrap();
         for handle in [near, far, equal] {
-            engine.delete_mesh(handle).unwrap();
+            assets.delete_mesh(handle).unwrap();
+            engine.unload_mesh(handle).unwrap();
         }
         for handle in [red, green, blue] {
-            engine.delete_material(handle).unwrap();
+            assets.delete_material(handle).unwrap();
         }
         assert_eq!(engine.runtime().pending_frames(), 2);
         collect(
@@ -272,44 +327,39 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
 #[test]
 #[ignore = "explicit real Vulkan engine Graph extension/cancellation test; requires Core+SyncVal"]
 fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
-    with_engine(|engine| {
+    with_engine(|engine, assets| {
         let view = View {
             width: 8,
             height: 8,
             clip_from_world: IDENTITY,
             clear_color: [0.0, 0.0, 1.0, 1.0],
         };
-        let frame = engine
-            .render_frame(&view, &[], true, |graph, color| {
-                let target = graph.image("external custom invert", ImageDesc::rgba8(8, 8))?;
-                graph.compute(
-                    "external inversion",
-                    color,
-                    target,
-                    ComputeTransform::Invert,
-                )?;
-                Ok(target)
-            })
-            .unwrap();
-        engine.runtime_mut().delete(frame.output.key()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if let Some(mut complete) = engine.runtime_mut().poll_frame().unwrap() {
-                let bytes = complete.result.readback(frame.readback.unwrap()).unwrap();
-                assert_eq!(bytes, [255, 255, 0, 255].repeat(64));
-                break;
-            }
-            assert!(Instant::now() < deadline);
-            std::thread::yield_now();
-        }
+        let mut frame = render_frame(engine, assets, &view, &[], true, |graph, color| {
+            let target = graph.image("external custom invert", ImageDesc::rgba8(8, 8))?;
+            graph.compute(
+                "external inversion",
+                color,
+                target,
+                ComputeTransform::Invert,
+            )?;
+            Ok(target)
+        })
+        .unwrap();
+        engine.release_output(&mut frame).unwrap();
+        let mut complete = engine
+            .runtime_mut()
+            .wait_frame(Duration::from_secs(10))
+            .unwrap()
+            .expect("engine GPU completion timed out");
+        let bytes = complete.result.readback(frame.readback.unwrap()).unwrap();
+        assert_eq!(bytes, [255, 255, 0, 255].repeat(64));
         let before = engine.runtime().stats().registered_resources;
-        let rejected = engine.build_frame(&view, &[], false, |_, _| {
+        let rejected = build_frame(engine, assets, &view, &[], false, |_, _| {
             Err(GraphError::custom("extension rejected"))
         });
         assert!(matches!(rejected, Err(EngineRenderError::Graph(_))));
-        let mut prepared = engine
-            .build_frame(&view, &[], false, |_, color| Ok(color))
-            .unwrap();
+        let mut prepared =
+            build_frame(engine, assets, &view, &[], false, |_, color| Ok(color)).unwrap();
         prepared.graph = Graph::new();
         let foreign = prepared.graph.compile().unwrap();
         assert!(matches!(
@@ -323,14 +373,15 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             clear_color: [0.0, 0.0, 0.0, 1.0],
             ..view
         };
-        let handle = engine.create_mesh(mesh([1.0; 4])).unwrap();
-        let material = engine.create_material(Material::default()).unwrap();
+        let handle = assets.create_mesh(mesh([1.0; 4])).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
         let draw = Draw {
             mesh: handle,
             material,
             world_from_model: IDENTITY,
         };
-        let captured = engine.snapshot(&black_view, &[draw]).unwrap();
+        let captured = assets.snapshot(&black_view, &[draw]).unwrap();
+        prepare_meshes(engine, &captured);
         let old_a = engine
             .build_snapshot(&captured, true, |_, c| Ok(c))
             .unwrap();
@@ -339,31 +390,27 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             .unwrap();
         let old_a_plan = old_a.graph.compile().unwrap();
         let old_b_plan = old_b.graph.compile().unwrap();
-        // Both prepared graphs own uploads of the old version. Updating CPU
-        // assets before acceptance must not publish those exports as current.
-        engine
+        // Both prepared graphs pin the same resident old version. Later CPU
+        // updates do not alter their immutable content or registration pins.
+        assets
             .update_mesh(handle, mesh([0.0, 0.0, 1.0, 1.0]))
             .unwrap();
-        let a = engine.submit_frame(old_a, &old_a_plan).unwrap();
-        let b = engine.submit_frame(old_b, &old_b_plan).unwrap();
-        engine.runtime_mut().delete(a.output.key()).unwrap();
-        engine.runtime_mut().delete(b.output.key()).unwrap();
-        assert_eq!(engine.runtime().stats().registered_resources, 0);
-        let new_a = engine
-            .build_frame(&black_view, &[draw], true, |_, c| Ok(c))
-            .unwrap();
-        let new_b = engine
-            .build_frame(&black_view, &[draw], true, |_, c| Ok(c))
-            .unwrap();
+        let mut a = engine.submit_frame(old_a, &old_a_plan).unwrap();
+        let mut b = engine.submit_frame(old_b, &old_b_plan).unwrap();
+        engine.release_output(&mut a).unwrap();
+        engine.release_output(&mut b).unwrap();
+        assert_eq!(engine.runtime().stats().registered_resources, 2);
+        let new_a = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
+        let new_b = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
         let plan_a = new_a.graph.compile().unwrap();
         let plan_b = new_b.graph.compile().unwrap();
-        let c = engine.submit_frame(new_a, &plan_a).unwrap();
-        let d = engine.submit_frame(new_b, &plan_b).unwrap();
-        engine.runtime_mut().delete(c.output.key()).unwrap();
-        engine.runtime_mut().delete(d.output.key()).unwrap();
-        // Two independently prepared uploads of one version replace the cache
-        // without leaving the first pair registered forever.
-        assert_eq!(engine.runtime().stats().registered_resources, 2);
+        let mut c = engine.submit_frame(new_a, &plan_a).unwrap();
+        let mut d = engine.submit_frame(new_b, &plan_b).unwrap();
+        engine.release_output(&mut c).unwrap();
+        engine.release_output(&mut d).unwrap();
+        // Two views share each immutable resident version: the old and new
+        // content each have one buffer pair, independent of CPU asset lifetime.
+        assert_eq!(engine.runtime().stats().registered_resources, 4);
         collect(
             engine,
             &[
@@ -383,15 +430,14 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
                 ),
             ],
         );
-        let cached = engine
-            .build_frame(&black_view, &[draw], true, |_, c| Ok(c))
-            .unwrap();
+        let cached = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
         let plan = cached.graph.compile().unwrap();
         assert!(!plan.dump().contains("mesh vertex upload"));
-        let pending = engine.submit_frame(cached, &plan).unwrap();
-        engine.runtime_mut().delete(pending.output.key()).unwrap();
-        engine.delete_mesh(handle).unwrap();
-        engine.delete_material(material).unwrap();
+        let mut pending = engine.submit_frame(cached, &plan).unwrap();
+        engine.release_output(&mut pending).unwrap();
+        assets.delete_mesh(handle).unwrap();
+        engine.unload_mesh(handle).unwrap();
+        assets.delete_material(material).unwrap();
         collect(
             engine,
             &[(
@@ -401,11 +447,12 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
                 [0, 0, 255, 255],
             )],
         );
-        let old = engine
+        prepare_meshes(engine, &captured);
+        let mut old = engine
             .render_snapshot(&captured, true, |_, c| Ok(c))
             .unwrap();
-        engine.runtime_mut().delete(old.output.key()).unwrap();
-        assert_eq!(engine.runtime().stats().registered_resources, 0);
+        engine.release_output(&mut old).unwrap();
+        assert_eq!(engine.runtime().stats().registered_resources, 2);
         collect(
             engine,
             &[(

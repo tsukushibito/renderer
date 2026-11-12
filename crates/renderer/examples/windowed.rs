@@ -15,10 +15,10 @@ mod demo {
     };
 
     use renderer::{
-        EngineRenderError, PresentOutcome, PresentationConfig, Presenter, RuntimeConfig,
-        RuntimeErrorKind, ValidationMonitor, VulkanEngine, VulkanRuntime,
-        engine::{Material, MaterialHandle, MeshHandle},
-        graph::ImportImage,
+        EngineRenderError, MeshCacheConfig, MeshUploadState, PresentOutcome, PresentationConfig,
+        Presenter, RenderedFrame, RuntimeConfig, RuntimeErrorKind, ValidationMonitor, VulkanEngine,
+        VulkanRuntime,
+        engine::{Engine, Material, MaterialHandle, MeshHandle},
     };
     use winit::{
         application::ApplicationHandler,
@@ -68,6 +68,7 @@ mod demo {
     }
 
     struct SceneAssets {
+        inputs: Engine,
         mesh: MeshHandle,
         material: MaterialHandle,
     }
@@ -81,7 +82,7 @@ mod demo {
         presenter: Option<Presenter>,
         assets: Option<SceneAssets>,
         validation: Option<ValidationMonitor>,
-        output: Option<ImportImage>,
+        output: Option<RenderedFrame>,
         presented: u32,
         resized: bool,
         minimized: bool,
@@ -139,10 +140,22 @@ mod demo {
                     format!("Core/SyncVal effective settings are unverified: {report:?}").into(),
                 );
             }
-            let mut engine = VulkanEngine::new(runtime, 4, 4)?;
+            let geometry = scene::triangle([1.0, 0.0, 0.0, 1.0])?;
+            let engine = VulkanEngine::new(
+                runtime,
+                MeshCacheConfig {
+                    max_meshes: 1,
+                    max_bytes: geometry.byte_len(),
+                    max_upload_submissions: 1,
+                },
+            )?;
+            let mut inputs = Engine::new(1, 1)?;
+            let mesh = inputs.create_mesh(geometry)?;
+            let material = inputs.create_material(Material::default())?;
             let assets = SceneAssets {
-                mesh: engine.create_mesh(scene::triangle([1.0, 0.0, 0.0, 1.0])?)?,
-                material: engine.create_material(Material::default())?,
+                inputs,
+                mesh,
+                material,
             };
             self.window = Some(window);
             self.engine = Some(engine);
@@ -178,14 +191,15 @@ mod demo {
                 return Ok(());
             };
             while engine.runtime_mut().poll_frame()?.is_some() {}
+            engine.poll_uploads()?;
             presenter.poll()?;
             if self.restore_at.is_some() {
                 return Ok(());
             }
             match presenter.prepare() {
                 Ok(Some(PresentOutcome::Recreated)) => {
-                    if let Some(output) = self.output.take() {
-                        engine.runtime_mut().delete(output.key())?;
+                    if let Some(mut output) = self.output.take() {
+                        engine.release_output(&mut output)?;
                     }
                 }
                 Ok(Some(PresentOutcome::NotReady | PresentOutcome::Suspended)) => return Ok(()),
@@ -199,12 +213,17 @@ mod demo {
                 };
                 let view = scene::view(width, height);
                 let draws = [scene::draw(assets.mesh, assets.material, 0.0)];
-                let prepared = engine.build_frame(&view, &draws, false, |graph, color| {
+                let snapshot = assets.inputs.snapshot(&view, &draws)?;
+                let upload = engine.prepare_snapshot(&snapshot)?;
+                if upload.state != MeshUploadState::Ready {
+                    return Ok(());
+                }
+                let prepared = engine.build_snapshot(&snapshot, false, |graph, color| {
                     scene::custom_pass(graph, color, true)
                 })?;
                 let plan = prepared.graph.compile()?;
                 match engine.submit_frame(prepared, &plan) {
-                    Ok(rendered) => self.output = Some(rendered.output),
+                    Ok(rendered) => self.output = Some(rendered),
                     Err(EngineRenderError::Runtime(error))
                         if error.kind() == RuntimeErrorKind::CapacityExhausted =>
                     {
@@ -213,15 +232,15 @@ mod demo {
                     Err(error) => return Err(error.into()),
                 }
             }
-            let output = self.output.as_ref().expect("output created above");
-            match engine.runtime_mut().present(presenter, output) {
+            let output = self.output.as_mut().expect("output created above");
+            match engine.runtime_mut().present(presenter, &output.output) {
                 Ok(PresentOutcome::Presented { .. }) => {
-                    engine.runtime_mut().delete(output.key())?;
+                    engine.release_output(output)?;
                     self.output = None;
                     self.presented += 1;
                 }
                 Ok(PresentOutcome::Recreated | PresentOutcome::RecreateRequired) => {
-                    engine.runtime_mut().delete(output.key())?;
+                    engine.release_output(output)?;
                     self.output = None;
                 }
                 Ok(PresentOutcome::NotReady | PresentOutcome::Suspended) => {}
@@ -241,12 +260,24 @@ mod demo {
                 if !engine.runtime_mut().drain_frames(SHUTDOWN_BUDGET)? {
                     return Err("frame shutdown timed out".into());
                 }
-                if let Some(output) = self.output.take() {
-                    engine.runtime_mut().delete(output.key())?;
+                let deadline = Instant::now() + SHUTDOWN_BUDGET;
+                loop {
+                    let remaining = deadline
+                        .checked_duration_since(Instant::now())
+                        .ok_or("mesh upload shutdown timed out")?;
+                    let progress = engine.wait_uploads(remaining)?;
+                    if progress.state == MeshUploadState::Ready && progress.pending_submissions == 0
+                    {
+                        break;
+                    }
                 }
-                if let Some(assets) = self.assets.take() {
-                    engine.delete_mesh(assets.mesh)?;
-                    engine.delete_material(assets.material)?;
+                if let Some(mut output) = self.output.take() {
+                    engine.release_output(&mut output)?;
+                }
+                engine.unload_all_meshes()?;
+                if let Some(mut assets) = self.assets.take() {
+                    assets.inputs.delete_mesh(assets.mesh)?;
+                    assets.inputs.delete_material(assets.material)?;
                 }
             }
             self.presenter = None;
