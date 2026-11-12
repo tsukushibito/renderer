@@ -229,6 +229,33 @@ CPU各phase、GPU Graph区間、poll費用、観測latency、各runの中央値�
 通常submitの計測は既定無効で、`set_profiling(true)`を明示した場合だけ採取します。
 正しさのverify runと性能runを分け、条件・commit・clock／負荷等の制約も比較時に揃えます。
 
+### 描画数を変えた比較計測
+
+`frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`を受け付けます。
+指定しなければ従来の1 draw・128×96・history/custom有効の負荷です。
+`overlap`は同じ三角形を重ね、最初のdrawより後は深度で除外されるため、主にdraw管理の負担を調べます。
+`grid`は共有meshを格子へ配置し、占有・空きcellの内部画素を検査します。
+gridの各cellは検査に必要な8×8 pixel以上を要求します。
+
+```powershell
+cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/draw-scaling.json --draws 512 --layout grid --extent 512x512 --no-history --no-custom --rgba .tools/draw-scaling.rgba
+```
+
+比較するdraw数は0、1、8、32、128、512、1024、管理負担用はoverlap・64×64、
+可視描画用はgrid・512×512を使います。asset churnを無効にし、永続mesh cacheを使って
+毎frameのmesh uploadを測定へ混ぜません。入力draw list生成はframe計測の外です。
+CPU activeは容量不足時のpollを済ませてから、build開始〜submit復帰を直接測ります。
+phaseごとの中央値の合計ではありません。GPU値はreadbackを含むGraph全体で、Rasterだけの時間やFPSではありません。
+
+正しさは`--verify`でCore/SyncValを有効にし、同じ負荷と`--rgba`で比較します。
+`.rgba`はheaderなしのpacked RGBA8で、JSONの幅・高さと組にして全byteを照合します。
+静的負荷では各frameの全RGBA byteも照合し、ファイル出力は計測loopの外で行います。
+性能はrelease・明示Validation無効、3 in-flight、warm-up 32＋測定128 frameを3 runとし、
+比較対象の実行順を交互にします。GPUを使う別の試験・計測を同時に走らせません。
+run間の揺れ、p95、GPU時間、作成数、cacheとVMAの保持量を併記し、通常CIに壁時計の閾値を設けません。
+
+### Graphのlowering診断
+
 論理的な依存・用途は`CompiledGraph::dump()`で確認します。
 Vulkanで実際に記録する同期や物理資源との対応が必要な場合は、通常の`submit`の代わりに
 次のAPIを使います。診断は要求した投入だけで生成され、通常経路には文字列構築を追加しません。
