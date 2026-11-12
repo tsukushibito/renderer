@@ -49,6 +49,7 @@ struct Options {
     rgba: Option<PathBuf>,
     draws: usize,
     layout: frame_scaling::Layout,
+    mesh_layout: frame_scaling::MeshLayout,
     width: u32,
     height: u32,
 }
@@ -86,6 +87,7 @@ impl Options {
             rgba: None,
             draws: 1,
             layout: frame_scaling::Layout::Overlap,
+            mesh_layout: frame_scaling::MeshLayout::Shared,
             width: WIDTH,
             height: HEIGHT,
         };
@@ -95,6 +97,11 @@ impl Options {
                 "--layout" => {
                     options.layout =
                         frame_scaling::Layout::parse(&args.next().ok_or("missing layout")?)?;
+                }
+                "--mesh-layout" => {
+                    options.mesh_layout = frame_scaling::MeshLayout::parse(
+                        &args.next().ok_or("missing mesh layout")?,
+                    )?;
                 }
                 "--extent" => {
                     let extent = args.next().ok_or("missing extent")?;
@@ -128,6 +135,9 @@ impl Options {
         if options.draws > 1_024 {
             return Err("draw count must be between 0 and 1024".into());
         }
+        if options.mesh_layout == frame_scaling::MeshLayout::Distinct && options.churn {
+            return Err("distinct mesh layout does not support asset churn".into());
+        }
         if !(8..=4_096).contains(&options.width) || !(8..=4_096).contains(&options.height) {
             return Err("extent dimensions must be between 8 and 4096 pixels".into());
         }
@@ -154,6 +164,36 @@ impl Options {
         // Leave capacity for alignment and the optional tiny history readback.
         STAGING_BYTES.max(u64::from(self.width) * u64::from(self.height) * 4 * 4 + 65_536)
     }
+
+    fn mesh_asset_count(&self) -> usize {
+        match self.mesh_layout {
+            frame_scaling::MeshLayout::Shared => 1,
+            frame_scaling::MeshLayout::Distinct => self.draws,
+        }
+    }
+
+    fn unique_mesh_count(&self) -> usize {
+        if self.draws == 0 {
+            0
+        } else {
+            self.mesh_asset_count()
+        }
+    }
+
+    fn mesh_capacity(&self) -> usize {
+        4.max(self.mesh_asset_count())
+    }
+
+    fn resource_capacity(&self) -> usize {
+        // Persistent vertex/index pairs plus color/depth/output and optional
+        // custom images for every pending frame. A history chain retains its
+        // predecessor as well as the pending frames' outputs.
+        RESOURCE_CAPACITY.max(
+            2 * self.unique_mesh_count()
+                + (3 + usize::from(self.custom)) * IN_FLIGHT
+                + usize::from(self.history) * (IN_FLIGHT + 1),
+        )
+    }
 }
 
 fn print_usage() {
@@ -161,7 +201,8 @@ fn print_usage() {
         "frame_loop --verify|--benchmark report.json \
          [--frames N] [--warmup N] [--runs N] [--no-history] [--no-custom] \
          [--churn] [--ppm last-frame.ppm] [--draws 0..1024] \
-         [--layout overlap|grid] [--extent WxH] [--rgba last-frame.rgba]\n\
+         [--layout overlap|grid] [--mesh-layout shared|distinct] \
+         [--extent WxH] [--rgba last-frame.rgba]\n\
          Defaults: verify=24 frames/0 warmup/1 run; benchmark=128/32/3.\n\
          Defaults: 128x96, one overlapping draw, 3 in-flight frames, shared mesh,\n\
          custom SwapRedBlue,\n\
@@ -380,7 +421,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     };
     let config = RuntimeConfig {
         execution_slots: IN_FLIGHT,
-        resource_capacity: RESOURCE_CAPACITY,
+        resource_capacity: options.resource_capacity(),
         staging_bytes: options.staging_bytes(),
         max_shader_bindings: MAX_SHADER_BINDINGS,
     };
@@ -388,11 +429,14 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     runtime.set_profiling(options.benchmark)?;
     let device = runtime.device_info();
     let monitor = runtime.validation_monitor();
-    let mut engine = VulkanEngine::new(runtime, 4, 4)?;
-    let mut mesh = engine.create_mesh(scene::triangle([1.0, 0.0, 0.0, 1.0])?)?;
+    let mut engine = VulkanEngine::new(runtime, options.mesh_capacity(), 4)?;
+    let geometry = scene::triangle([1.0, 0.0, 0.0, 1.0])?;
+    let mut meshes = (0..options.mesh_asset_count())
+        .map(|_| engine.create_mesh(geometry.clone()))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut material = engine.create_material(Material::default())?;
     let view = scene::view(options.width, options.height);
-    let mut draws = frame_scaling::draws(mesh, material, options.draws, options.layout, 0.0);
+    let mut draws = frame_scaling::draws(&meshes, material, options.draws, options.layout, 0.0);
     let mut collector = Collector {
         pending: HashMap::new(),
         samples: Vec::with_capacity(options.frames),
@@ -421,9 +465,9 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         }
         let phase = if options.churn { (frame / 8) % 3 } else { 0 };
         if options.churn && frame > 0 && frame.is_multiple_of(8) {
-            change_assets(&mut engine, &mut mesh, &mut material, phase)?;
+            change_assets(&mut engine, &mut meshes[0], &mut material, phase)?;
             draws = frame_scaling::draws(
-                mesh,
+                &meshes,
                 material,
                 options.draws,
                 options.layout,
@@ -537,7 +581,9 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     if let Some(previous) = history {
         engine.runtime_mut().delete(previous.key())?;
     }
-    engine.delete_mesh(mesh)?;
+    for mesh in meshes {
+        engine.delete_mesh(mesh)?;
+    }
     engine.delete_material(material)?;
     if let (Some(path), Some(rgba)) = (&options.ppm, &collector.last_pixels) {
         frame_report::write_ppm(path, options.width, options.height, rgba)?;
@@ -678,6 +724,10 @@ mod tests {
             (1, WIDTH, HEIGHT)
         );
         assert_eq!(defaults.layout, frame_scaling::Layout::Overlap);
+        assert_eq!(defaults.mesh_layout, frame_scaling::MeshLayout::Shared);
+        assert_eq!(defaults.unique_mesh_count(), 1);
+        assert_eq!(defaults.mesh_capacity(), 4);
+        assert_eq!(defaults.resource_capacity(), RESOURCE_CAPACITY);
         assert_eq!(defaults.staging_bytes(), STAGING_BYTES);
         assert!(defaults.history && defaults.custom && !defaults.churn);
         assert_eq!(options(&["--draws", "0"]).unwrap().draws, 0);
@@ -704,11 +754,36 @@ mod tests {
     }
 
     #[test]
+    fn distinct_mesh_capacity_covers_persistent_assets_and_optional_frame_resources() {
+        let mut distinct = options(&["--mesh-layout", "distinct", "--draws", "1024"]).unwrap();
+        assert_eq!(distinct.unique_mesh_count(), 1024);
+        assert_eq!(distinct.mesh_capacity(), 1024);
+        assert_eq!(distinct.resource_capacity(), 2064);
+        distinct.custom = false;
+        distinct.history = false;
+        assert_eq!(distinct.resource_capacity(), 2057);
+
+        let empty = options(&["--mesh-layout", "distinct", "--draws", "0"]).unwrap();
+        assert_eq!(empty.mesh_asset_count(), 0);
+        assert_eq!(empty.unique_mesh_count(), 0);
+        assert_eq!(empty.mesh_capacity(), 4);
+        assert_eq!(empty.resource_capacity(), RESOURCE_CAPACITY);
+        assert_eq!(options(&["--draws", "0"]).unwrap().unique_mesh_count(), 0);
+        assert_eq!(
+            options(&["--draws", "1024"]).unwrap().unique_mesh_count(),
+            1
+        );
+    }
+
+    #[test]
     fn invalid_workloads_fail_before_runtime_initialization() {
         for args in [
             vec!["--draws", "1025"],
             vec!["--rgba"],
             vec!["--layout", "other"],
+            vec!["--mesh-layout", "other"],
+            vec!["--mesh-layout"],
+            vec!["--mesh-layout", "distinct", "--churn"],
             vec!["--extent", "512"],
             vec!["--extent", "0x512"],
             vec!["--extent", "5000x512"],
