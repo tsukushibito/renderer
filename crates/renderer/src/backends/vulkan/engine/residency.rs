@@ -40,6 +40,36 @@ impl ResidentMesh {
     }
 }
 
+enum UploadObservation<E> {
+    Pending,
+    Complete,
+    Failed { error: E, pending: bool },
+}
+
+fn observe_queue<T, E>(
+    queue: &mut Vec<T>,
+    timeout: Duration,
+    mut probe: impl FnMut(&mut T, Duration) -> UploadObservation<E>,
+) -> Result<(), E> {
+    let start = Instant::now();
+    let mut index = 0;
+    while index < queue.len() {
+        match probe(&mut queue[index], timeout.saturating_sub(start.elapsed())) {
+            UploadObservation::Pending => index += 1,
+            UploadObservation::Complete => {
+                queue.remove(index);
+            }
+            UploadObservation::Failed { error, pending } => {
+                if !pending {
+                    queue.remove(index);
+                }
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
 impl VulkanEngine {
     pub(super) fn next_use(&self) -> Result<u64, EngineRenderError> {
         self.clock
@@ -106,7 +136,8 @@ impl VulkanEngine {
         // Mesh registrations must leave room for the standard color/depth
         // targets, even when logical cache limits are larger than the registry.
         let physical_mesh_limit = self.runtime.resource_capacity().saturating_sub(2) / 2;
-        if pinned_count.saturating_add(required.len()) > self.config.max_meshes.min(physical_mesh_limit)
+        if pinned_count.saturating_add(required.len())
+            > self.config.max_meshes.min(physical_mesh_limit)
             || pinned_bytes.saturating_add(required_bytes) > self.config.max_bytes
         {
             return Err(MeshPreparationError::ResidencyPinned.into());
@@ -182,16 +213,18 @@ impl VulkanEngine {
         self.pump_chunk()
     }
     fn observe_uploads(&mut self, timeout: Duration) -> Result<(), EngineRenderError> {
-        let start = Instant::now();
-        let mut index = 0;
-        while index < self.pending_uploads.len() {
-            let budget = timeout.saturating_sub(start.elapsed());
-            if self.pending_uploads[index].wait(budget)?.is_some() {
-                self.pending_uploads.remove(index);
-            } else {
-                index += 1;
-            }
-        }
+        observe_queue(
+            &mut self.pending_uploads,
+            timeout,
+            |submission, budget| match submission.wait(budget) {
+                Ok(Some(_)) => UploadObservation::Complete,
+                Ok(None) => UploadObservation::Pending,
+                Err(error) => UploadObservation::Failed {
+                    error,
+                    pending: submission.is_pending(),
+                },
+            },
+        )?;
         self.reap_retiring()
     }
     fn remaining_bytes(&self) -> u64 {
@@ -406,5 +439,53 @@ impl VulkanEngine {
             pending_upload_submissions: self.pending_uploads.len(),
             evictions: self.evictions,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_upload_error_is_returned_once_without_blocking_remaining_work() {
+        let mut queue = vec!["retired query failure", "next upload"];
+        let error = observe_queue(&mut queue, Duration::ZERO, |work, _| {
+            if *work == "retired query failure" {
+                UploadObservation::Failed {
+                    error: "query result OOM",
+                    pending: false,
+                }
+            } else {
+                UploadObservation::Complete
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "query result OOM");
+        assert_eq!(queue, ["next upload"]);
+        observe_queue::<_, ()>(&mut queue, Duration::ZERO, |_, _| {
+            UploadObservation::Complete
+        })
+        .unwrap();
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn unresolved_upload_failure_and_timeout_retain_ownership() {
+        let mut queue = vec!["unproven upload"];
+        assert_eq!(
+            observe_queue(&mut queue, Duration::ZERO, |_, _| {
+                UploadObservation::Failed {
+                    error: "Fence error",
+                    pending: true,
+                }
+            }),
+            Err("Fence error")
+        );
+        assert_eq!(queue, ["unproven upload"]);
+        observe_queue::<_, ()>(&mut queue, Duration::ZERO, |_, _| {
+            UploadObservation::Pending
+        })
+        .unwrap();
+        assert_eq!(queue, ["unproven upload"]);
     }
 }
