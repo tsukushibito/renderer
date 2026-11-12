@@ -1,5 +1,6 @@
 //! Bounded runtime ownership of in-flight frames, separate from CPU results.
 
+use std::collections::BTreeMap;
 use std::time::Instant;
 
 use super::{
@@ -28,7 +29,7 @@ impl FrameId {
 pub struct FrameSubmission {
     id: FrameId,
     graph: u64,
-    exports: Vec<(usize, Export)>,
+    exports: BTreeMap<usize, Export>,
 }
 
 impl FrameSubmission {
@@ -41,9 +42,9 @@ impl FrameSubmission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Buffer(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Buffer(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("buffer was not exported"))
@@ -54,9 +55,9 @@ impl FrameSubmission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Image(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Image(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("image was not exported"))
@@ -240,6 +241,85 @@ impl VulkanRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_snapshots_are_indexed_and_still_check_graph_and_resource_kind() {
+        use crate::graph::{BufferDesc, ImageDesc, ResourceKey};
+
+        let graph = 17;
+        let exports = (0..4_096)
+            .rev()
+            .map(|index| {
+                let key = ResourceKey {
+                    owner: 9,
+                    index: index as u32,
+                    generation: 1,
+                };
+                let value = if index % 2 == 0 {
+                    Export::Buffer(ImportBuffer {
+                        key,
+                        revision: 73,
+                        desc: BufferDesc { size: 4 },
+                        initialized: std::iter::once(0..4).collect(),
+                    })
+                } else {
+                    Export::Image(ImportImage {
+                        key,
+                        revision: 73,
+                        desc: ImageDesc::rgba8(1, 1),
+                        initialized: true,
+                    })
+                };
+                (index, value)
+            })
+            .collect();
+        let frame = FrameSubmission {
+            id: FrameId::new(9, 73),
+            graph,
+            exports,
+        };
+        for index in (0..4_096).rev() {
+            let key = if index % 2 == 0 {
+                frame
+                    .export_buffer(BufferHandle { graph, index })
+                    .unwrap()
+                    .key()
+            } else {
+                frame
+                    .export_image(ImageHandle { graph, index })
+                    .unwrap()
+                    .key()
+            };
+            assert_eq!(key.index as usize, index);
+        }
+        assert_eq!(
+            frame
+                .export_buffer(BufferHandle {
+                    graph: 18,
+                    index: 0
+                })
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::WrongOwner
+        );
+        assert_eq!(
+            frame
+                .export_buffer(BufferHandle { graph, index: 1 })
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::InvalidInput
+        );
+        assert_eq!(
+            frame
+                .export_image(ImageHandle {
+                    graph,
+                    index: 4_096
+                })
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::InvalidInput
+        );
+    }
     use std::cell::Cell;
     use std::rc::Rc;
 

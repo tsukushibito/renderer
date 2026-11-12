@@ -517,6 +517,7 @@ pub struct Graph {
     pub(crate) resources: Vec<Resource>,
     pub(crate) passes: Vec<Pass>,
     pub(crate) exports: Vec<usize>,
+    exported: Vec<bool>,
     imports: BTreeMap<ResourceKey, usize>,
 }
 impl Default for Graph {
@@ -535,6 +536,7 @@ impl Graph {
             resources: Vec::new(),
             passes: Vec::new(),
             exports: Vec::new(),
+            exported: Vec::new(),
             imports: BTreeMap::new(),
         }
     }
@@ -690,7 +692,11 @@ impl Graph {
         Ok(())
     }
     fn export(&mut self, id: usize) {
-        if !self.exports.contains(&id) {
+        if self.exported.len() <= id {
+            self.exported.resize(id + 1, false);
+        }
+        if !self.exported[id] {
+            self.exported[id] = true;
             self.exports.push(id);
         }
     }
@@ -1546,6 +1552,42 @@ fn validate_purpose(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_exports_keep_declaration_order_and_indexed_membership() {
+        let mut graph = Graph::new();
+        let bytes: Arc<[u8]> = vec![1; 4].into();
+        let buffers = (0..4_096)
+            .map(|_| {
+                let buffer = graph.buffer("asset", BufferDesc { size: 4 }).unwrap();
+                graph
+                    .upload_buffer_shared("upload", buffer, 0, Arc::clone(&bytes))
+                    .unwrap();
+                buffer
+            })
+            .collect::<Vec<_>>();
+        let unused = graph.buffer("unexported", BufferDesc { size: 4 }).unwrap();
+        for &buffer in buffers.iter().rev() {
+            graph.export_buffer(buffer).unwrap();
+            graph.export_buffer(buffer).unwrap();
+        }
+        let expected = buffers
+            .iter()
+            .rev()
+            .map(|buffer| buffer.index)
+            .collect::<Vec<_>>();
+        assert_eq!(graph.exports, expected);
+        let compiled = graph.compile().unwrap();
+        assert_eq!(compiled.exports, expected);
+        assert_eq!(compiled.pass_count(), buffers.len());
+        assert!(
+            buffers
+                .iter()
+                .all(|buffer| compiled.has_export(buffer.index))
+        );
+        assert!(!compiled.has_export(unused.index));
+        assert!(!compiled.has_export(usize::MAX));
+    }
 
     #[test]
     fn compilation_shares_live_uploads_and_releases_culled_payloads() {

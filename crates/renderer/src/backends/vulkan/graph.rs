@@ -803,14 +803,14 @@ impl VulkanRuntime {
             .profile
             .as_ref()
             .map(|profile| Arc::clone(&profile.cpu_pending));
-        let mut exports = Vec::new();
+        let mut exports = BTreeMap::new();
         for &index in &graph.exports {
             let key = keys[index].unwrap();
             let snapshot = work.final_states[index].as_ref().unwrap();
-            exports.push((
+            exports.insert(
                 index,
                 export_snapshot(key, graph.resources[index].desc, snapshot),
-            ));
+            );
         }
         // Slots become externally named only for an actual export. The local
         // payload leases already prevent reuse throughout this transaction.
@@ -889,7 +889,7 @@ pub struct Submission {
     id: FrameId,
     graph: u64,
     pending: PendingTransfer<GraphWork>,
-    exports: Vec<(usize, Export)>,
+    exports: BTreeMap<usize, Export>,
 }
 
 impl Submission {
@@ -898,9 +898,9 @@ impl Submission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Buffer(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Buffer(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("buffer was not exported"))
@@ -910,9 +910,9 @@ impl Submission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .iter()
-            .find_map(|(index, value)| match value {
-                Export::Image(value) if *index == handle.index => Some(value.clone()),
+            .get(&handle.index)
+            .and_then(|value| match value {
+                Export::Image(value) => Some(value.clone()),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("image was not exported"))
