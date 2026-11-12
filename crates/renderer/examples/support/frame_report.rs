@@ -7,10 +7,7 @@ use std::{
 
 use renderer::{MemoryStats, RuntimeStats};
 
-use super::{
-    HEIGHT, IN_FLIGHT, MAX_SHADER_BINDINGS, Options, RESOURCE_CAPACITY, RunReport, STAGING_BYTES,
-    Sample, WIDTH,
-};
+use super::{IN_FLIGHT, MAX_SHADER_BINDINGS, Options, RESOURCE_CAPACITY, RunReport, Sample};
 
 pub(super) fn host_metadata() -> BTreeMap<String, String> {
     let mut values = BTreeMap::new();
@@ -104,6 +101,12 @@ pub(super) fn write_report(
     reports: &[RunReport],
     host: &BTreeMap<String, String>,
 ) -> Result<(), Box<dyn Error>> {
+    let width = options.width;
+    let height = options.height;
+    let draw_count = options.draws;
+    let layout = options.layout.as_str();
+    let staging_bytes = options.staging_bytes();
+    let static_output_checked = !options.churn;
     let mut json = String::from("{\n\"schema\":1,\"mode\":");
     quote(
         &mut json,
@@ -115,7 +118,7 @@ pub(super) fn write_report(
     );
     write!(
         json,
-        ",\"workload\":{{\"width\":{WIDTH},\"height\":{HEIGHT},\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{RESOURCE_CAPACITY},\"upload_and_readback_capacity_bytes_each\":{STAGING_BYTES},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
+        ",\"workload\":{{\"width\":{width},\"height\":{height},\"draw_count\":{draw_count},\"draw_layout\":\"{layout}\",\"in_flight_capacity\":{IN_FLIGHT},\"resource_capacity\":{RESOURCE_CAPACITY},\"upload_and_readback_capacity_bytes_each\":{staging_bytes},\"max_shader_bindings\":{MAX_SHADER_BINDINGS},\"frames_per_run\":{},\"warmup_frames_per_run\":{},\"runs\":{},\"history\":{},\"custom_swap_red_blue\":{},\"asset_churn\":{},\"seed\":0,\"geometry\":\"one shared persistent 3-vertex/3-index triangle mesh; xyz+linear rgba stride 28; no instancing\",\"static_rgba_compared_every_frame\":{static_output_checked},\"readback\":\"every frame color plus optional 1x1 history; one completed result held until next completion\",\"presentation\":\"headless; no VSync\",\"timestamp_scope\":\"whole Graph including readback copies\",\"cpu_active_scope\":\"build start through submit return; excludes capacity polling and input draw generation\",\"overlap_depth\":\"identical depths; later overlapping triangles fail LESS\",\"measured_loop_scope\":\"first measured build through all observed completions; includes in-flight warmup tail and CPU readback checks\"}},\"host\":{{",
         options.frames,
         options.warmup,
         options.runs,
@@ -222,6 +225,7 @@ pub(super) fn write_report(
         memory(&mut json, &report.final_memory)?;
         json.push_str(",\"summary_ns\":{");
         for (index, field) in [
+            "cpu_active",
             "cpu_build",
             "cpu_compile",
             "cpu_prepare",
@@ -256,8 +260,9 @@ pub(super) fn write_report(
             }
             write!(
                 json,
-                "{{\"frame\":{},\"cpu_build_ns\":{},\"cpu_compile_ns\":{},\"completed_poll_ns\":{},\"submit_return_to_observed_ns\":{},\"output_checksum_fnv1a64\":\"{:016x}\",\"profile\":",
+                "{{\"frame\":{},\"cpu_active_ns\":{},\"cpu_build_ns\":{},\"cpu_compile_ns\":{},\"completed_poll_ns\":{},\"submit_return_to_observed_ns\":{},\"output_checksum_fnv1a64\":\"{:016x}\",\"profile\":",
                 sample.frame,
+                sample.active_cpu_ns,
                 sample.build_ns,
                 sample.compile_ns,
                 sample.completed_poll_ns,
@@ -374,6 +379,7 @@ fn staging(output: &mut String, s: &renderer::StagingMemoryStats) -> std::fmt::R
 
 fn value(s: &Sample, field: &str) -> Option<u128> {
     match field {
+        "cpu_active" => Some(s.active_cpu_ns),
         "cpu_build" => Some(s.build_ns),
         "cpu_compile" => Some(s.compile_ns),
         "completed_poll" => Some(s.completed_poll_ns),
@@ -413,6 +419,12 @@ fn ensure_parent(path: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+/// Headerless packed RGBA8; dimensions and workload are stored in the JSON.
+pub(super) fn write_rgba(path: &Path, rgba: &[u8]) -> std::io::Result<()> {
+    ensure_parent(path)?;
+    std::fs::write(path, rgba)
 }
 
 pub(super) fn write_ppm(path: &Path, width: u32, height: u32, rgba: &[u8]) -> std::io::Result<()> {

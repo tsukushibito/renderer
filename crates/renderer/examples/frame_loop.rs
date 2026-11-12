@@ -22,6 +22,8 @@ use renderer::{
 
 #[path = "support/frame_report.rs"]
 mod frame_report;
+#[path = "support/frame_scaling.rs"]
+mod frame_scaling;
 #[path = "support/scene.rs"]
 mod scene;
 
@@ -44,11 +46,20 @@ struct Options {
     custom: bool,
     churn: bool,
     ppm: Option<PathBuf>,
+    rgba: Option<PathBuf>,
+    draws: usize,
+    layout: frame_scaling::Layout,
+    width: u32,
+    height: u32,
 }
 
 impl Options {
     fn parse() -> Result<Option<Self>, Box<dyn Error>> {
-        let mut args = std::env::args().skip(1);
+        Self::parse_args(std::env::args().skip(1))
+    }
+
+    fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Self>, Box<dyn Error>> {
+        let mut args = args.into_iter();
         let Some(mode) = args.next() else {
             print_usage();
             return Ok(None);
@@ -72,9 +83,25 @@ impl Options {
             custom: true,
             churn: false,
             ppm: None,
+            rgba: None,
+            draws: 1,
+            layout: frame_scaling::Layout::Overlap,
+            width: WIDTH,
+            height: HEIGHT,
         };
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--draws" => options.draws = args.next().ok_or("missing draw count")?.parse()?,
+                "--layout" => {
+                    options.layout =
+                        frame_scaling::Layout::parse(&args.next().ok_or("missing layout")?)?;
+                }
+                "--extent" => {
+                    let extent = args.next().ok_or("missing extent")?;
+                    let (width, height) = extent.split_once('x').ok_or("extent must be WxH")?;
+                    options.width = width.parse()?;
+                    options.height = height.parse()?;
+                }
                 "--frames" => options.frames = args.next().ok_or("missing frame count")?.parse()?,
                 "--warmup" => {
                     options.warmup = args.next().ok_or("missing warmup count")?.parse()?
@@ -83,6 +110,7 @@ impl Options {
                 "--no-history" => options.history = false,
                 "--no-custom" => options.custom = false,
                 "--churn" => options.churn = true,
+                "--rgba" => options.rgba = Some(args.next().ok_or("missing RGBA path")?.into()),
                 "--ppm" => options.ppm = Some(args.next().ok_or("missing PPM path")?.into()),
                 _ => return Err(format!("unknown argument: {arg}").into()),
             }
@@ -97,6 +125,21 @@ impl Options {
                 "frames/runs must be nonzero; limits are 100000 frames and 100 runs".into(),
             );
         }
+        if options.draws > 1_024 {
+            return Err("draw count must be between 0 and 1024".into());
+        }
+        if !(8..=4_096).contains(&options.width) || !(8..=4_096).contains(&options.height) {
+            return Err("extent dimensions must be between 8 and 4096 pixels".into());
+        }
+        if options.layout == frame_scaling::Layout::Grid {
+            let (columns, rows) = frame_scaling::grid_dimensions(options.draws);
+            if options.width < (columns * 8) as u32 || options.height < (rows * 8) as u32 {
+                return Err("grid extent must provide at least 8x8 pixels per cell".into());
+            }
+            if options.churn {
+                return Err("grid layout does not support asset churn".into());
+            }
+        }
         if benchmark && options.warmup < IN_FLIGHT * 2 {
             return Err("benchmark warmup must be at least twice the in-flight capacity".into());
         }
@@ -105,15 +148,23 @@ impl Options {
         }
         Ok(Some(options))
     }
+
+    fn staging_bytes(&self) -> u64 {
+        // Four color readbacks may coexist: three pending and one held result.
+        // Leave capacity for alignment and the optional tiny history readback.
+        STAGING_BYTES.max(u64::from(self.width) * u64::from(self.height) * 4 * 4 + 65_536)
+    }
 }
 
 fn print_usage() {
     println!(
         "frame_loop --verify|--benchmark report.json \
          [--frames N] [--warmup N] [--runs N] [--no-history] [--no-custom] \
-         [--churn] [--ppm last-frame.ppm]\n\
+         [--churn] [--ppm last-frame.ppm] [--draws 0..1024] \
+         [--layout overlap|grid] [--extent WxH] [--rgba last-frame.rgba]\n\
          Defaults: verify=24 frames/0 warmup/1 run; benchmark=128/32/3.\n\
-         Fixed workload: 128x96, 3 in-flight frames, one mesh, custom SwapRedBlue,\n\
+         Defaults: 128x96, one overlapping draw, 3 in-flight frames, shared mesh,\n\
+         custom SwapRedBlue,\n\
          optional 1x1 history recurrence, output/history readback on every frame."
     );
 }
@@ -133,6 +184,7 @@ struct Sample {
     frame: usize,
     build_ns: u128,
     compile_ns: u128,
+    active_cpu_ns: u128,
     observed_latency_ns: u128,
     completed_poll_ns: u128,
     profile: Option<ProfileSample>,
@@ -159,6 +211,7 @@ struct PendingSample {
     frame: usize,
     build_ns: u128,
     compile_ns: u128,
+    active_cpu_ns: u128,
     submitted: Instant,
     color_readback: PassHandle,
     history_readback: Option<PassHandle>,
@@ -175,6 +228,7 @@ struct Collector {
     peak_pending_frames: usize,
     last_pixels: Option<Vec<u8>>,
     held_readback: Option<CompletedReadback>,
+    static_pixels: Option<Vec<u8>>,
 }
 
 struct CompletedReadback {
@@ -255,7 +309,23 @@ impl Collector {
     ) -> Result<(), Box<dyn Error>> {
         let pending = completed.pending;
         let rgba = completed.result.readback(pending.color_readback)?;
-        verify_color(&rgba, pending.expected_center)?;
+        frame_scaling::verify(
+            &rgba,
+            options.width,
+            options.height,
+            options.draws,
+            options.layout,
+            pending.expected_center,
+        )?;
+        if !options.churn {
+            if let Some(reference) = &self.static_pixels {
+                if reference != &rgba {
+                    return Err(format!("static output changed at frame {}", pending.frame).into());
+                }
+            } else {
+                self.static_pixels = Some(rgba.clone());
+            }
+        }
         if let Some(pass) = pending.history_readback {
             let history = completed.result.readback(pass)?;
             if history != pending.expected_history {
@@ -269,13 +339,16 @@ impl Collector {
                 frame: pending.frame - options.warmup,
                 build_ns: pending.build_ns,
                 compile_ns: pending.compile_ns,
+                active_cpu_ns: pending.active_cpu_ns,
                 observed_latency_ns: completed.observed_latency_ns,
                 completed_poll_ns: completed.completed_poll_ns,
                 profile: completed.profile,
                 output_checksum: checksum(&rgba),
             });
         }
-        if pending.frame == options.warmup + options.frames - 1 && options.ppm.is_some() {
+        if pending.frame == options.warmup + options.frames - 1
+            && (options.ppm.is_some() || options.rgba.is_some())
+        {
             self.last_pixels = Some(rgba);
         }
         Ok(())
@@ -308,7 +381,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     let config = RuntimeConfig {
         execution_slots: IN_FLIGHT,
         resource_capacity: RESOURCE_CAPACITY,
-        staging_bytes: STAGING_BYTES,
+        staging_bytes: options.staging_bytes(),
         max_shader_bindings: MAX_SHADER_BINDINGS,
     };
     let mut runtime = VulkanRuntime::new_with_validation(config, validation)?;
@@ -318,7 +391,8 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     let mut engine = VulkanEngine::new(runtime, 4, 4)?;
     let mut mesh = engine.create_mesh(scene::triangle([1.0, 0.0, 0.0, 1.0])?)?;
     let mut material = engine.create_material(Material::default())?;
-    let view = scene::view(WIDTH, HEIGHT);
+    let view = scene::view(options.width, options.height);
+    let mut draws = frame_scaling::draws(mesh, material, options.draws, options.layout, 0.0);
     let mut collector = Collector {
         pending: HashMap::new(),
         samples: Vec::with_capacity(options.frames),
@@ -328,6 +402,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         peak_pending_frames: 0,
         last_pixels: None,
         held_readback: None,
+        static_pixels: None,
     };
     let mut history: Option<ImportImage> = None;
     let mut warmed_stats = None;
@@ -347,18 +422,18 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let phase = if options.churn { (frame / 8) % 3 } else { 0 };
         if options.churn && frame > 0 && frame.is_multiple_of(8) {
             change_assets(&mut engine, &mut mesh, &mut material, phase)?;
-        }
-        let build_start = Instant::now();
-        let mut prepared = engine.build_frame(
-            &view,
-            &[scene::draw(
+            draws = frame_scaling::draws(
                 mesh,
                 material,
+                options.draws,
+                options.layout,
                 if phase == 1 { 0.1 } else { 0.0 },
-            )],
-            true,
-            |graph, color| scene::custom_pass(graph, color, WIDTH, HEIGHT, options.custom),
-        )?;
+            );
+        }
+        let build_start = Instant::now();
+        let mut prepared = engine.build_frame(&view, &draws, true, |graph, color| {
+            scene::custom_pass(graph, color, options.width, options.height, options.custom)
+        })?;
         let old_history = history.take();
         let (history_output, history_readback) = if options.history {
             let source = if let Some(previous) = old_history.as_ref() {
@@ -390,6 +465,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let compile_ns = compile_start.elapsed().as_nanos();
         let rendered = engine.submit_frame(prepared, &plan)?;
         let submitted = Instant::now();
+        let active_cpu_ns = submitted.duration_since(build_start).as_nanos();
         if let Some(output) = history_output {
             history = Some(rendered.submission.export_image(output)?);
         }
@@ -419,6 +495,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
                 frame,
                 build_ns,
                 compile_ns,
+                active_cpu_ns,
                 submitted,
                 color_readback: rendered
                     .readback
@@ -463,7 +540,10 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     engine.delete_mesh(mesh)?;
     engine.delete_material(material)?;
     if let (Some(path), Some(rgba)) = (&options.ppm, &collector.last_pixels) {
-        frame_report::write_ppm(path, WIDTH, HEIGHT, rgba)?;
+        frame_report::write_ppm(path, options.width, options.height, rgba)?;
+    }
+    if let (Some(path), Some(rgba)) = (&options.rgba, &collector.last_pixels) {
+        frame_report::write_rgba(path, rgba)?;
     }
     drop(engine);
     let validation = monitor.report();
@@ -543,22 +623,6 @@ fn change_assets(
     Ok(())
 }
 
-fn verify_color(rgba: &[u8], expected_center: [u8; 4]) -> Result<(), Box<dyn Error>> {
-    if rgba.len() != (WIDTH * HEIGHT * 4) as usize {
-        return Err("unexpected output byte length".into());
-    }
-    let center = ((HEIGHT / 2 * WIDTH + WIDTH / 2) * 4) as usize;
-    if rgba[..4] != [0, 0, 0, 255] || rgba[center..center + 4] != expected_center {
-        return Err(format!(
-            "unexpected output: corner={:?}, center={:?}, expected={expected_center:?}",
-            &rgba[..4],
-            &rgba[center..center + 4]
-        )
-        .into());
-    }
-    Ok(())
-}
-
 fn checksum(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
@@ -592,4 +656,66 @@ fn main() -> Result<(), Box<dyn Error>> {
     frame_report::write_report(&options, &reports, &host)?;
     println!("Saved {}", options.output.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(extra: &[&str]) -> Result<Options, Box<dyn Error>> {
+        let args = ["--verify", "report.json"]
+            .into_iter()
+            .chain(extra.iter().copied())
+            .map(str::to_owned);
+        Options::parse_args(args)?.ok_or_else(|| "missing options".into())
+    }
+
+    #[test]
+    fn scaling_options_preserve_defaults_and_accept_clear_and_full_grids() {
+        let defaults = options(&[]).unwrap();
+        assert_eq!(
+            (defaults.draws, defaults.width, defaults.height),
+            (1, WIDTH, HEIGHT)
+        );
+        assert_eq!(defaults.layout, frame_scaling::Layout::Overlap);
+        assert_eq!(defaults.staging_bytes(), STAGING_BYTES);
+        assert!(defaults.history && defaults.custom && !defaults.churn);
+        assert_eq!(options(&["--draws", "0"]).unwrap().draws, 0);
+        let grid = options(&[
+            "--draws",
+            "1024",
+            "--layout",
+            "grid",
+            "--extent",
+            "512x512",
+            "--no-history",
+            "--no-custom",
+            "--ppm",
+            "last.ppm",
+            "--rgba",
+            "last.rgba",
+        ])
+        .unwrap();
+        assert_eq!((grid.draws, grid.width, grid.height), (1024, 512, 512));
+        assert!(!grid.history && !grid.custom);
+        assert_eq!(grid.ppm, Some(PathBuf::from("last.ppm")));
+        assert_eq!(grid.rgba, Some(PathBuf::from("last.rgba")));
+        assert!(grid.staging_bytes() >= 4 * 512 * 512 * 4);
+    }
+
+    #[test]
+    fn invalid_workloads_fail_before_runtime_initialization() {
+        for args in [
+            vec!["--draws", "1025"],
+            vec!["--rgba"],
+            vec!["--layout", "other"],
+            vec!["--extent", "512"],
+            vec!["--extent", "0x512"],
+            vec!["--extent", "5000x512"],
+            vec!["--draws", "1024", "--layout", "grid", "--extent", "64x64"],
+            vec!["--layout", "grid", "--churn"],
+        ] {
+            assert!(options(&args).is_err(), "accepted {args:?}");
+        }
+    }
 }
