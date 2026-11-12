@@ -231,18 +231,24 @@ CPU各phase、GPU Graph区間、poll費用、観測latency、各runの中央値�
 
 ### 描画数を変えた比較計測
 
-`frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`を受け付けます。
+`frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`、
+`--mesh-layout shared|distinct`を受け付けます。
 指定しなければ従来の1 draw・128×96・history/custom有効の負荷です。
 `overlap`は同じ三角形を重ね、最初のdrawより後は深度で除外されるため、主にdraw管理の負担を調べます。
 `grid`は共有meshを格子へ配置し、占有・空きcellの内部画素を検査します。
 gridの各cellは検査に必要な8×8 pixel以上を要求します。
+`shared`は一つのmeshを繰り返し使い、`distinct`は同じ三角形データを持つ独立mesh資源をdrawごとに使います。
+distinctはasset churnと併用できません。meshは開始時に登録し、warm-upでuploadしてから計測します。
+必要なasset容量と物理entry容量は実行前に計算してJSONへ記録し、実行中に無制限に増設しません。
+history/customなしの1024 distinct drawでは、物理entry容量は2057です。
 
 ```powershell
 cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/draw-scaling.json --draws 512 --layout grid --extent 512x512 --no-history --no-custom --rgba .tools/draw-scaling.rgba
+cargo run --release --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --benchmark .tools/distinct-scaling.json --draws 512 --layout grid --extent 512x512 --mesh-layout distinct --no-history --no-custom --rgba .tools/distinct-scaling.rgba
 ```
 
 比較するdraw数は0、1、8、32、128、512、1024、管理負担用はoverlap・64×64、
-可視描画用はgrid・512×512を使います。asset churnを無効にし、永続mesh cacheを使って
+可視描画用はgrid・512×512、meshはshared/distinctを使います。asset churnを無効にし、永続mesh cacheを使って
 毎frameのmesh uploadを測定へ混ぜません。入力draw list生成はframe計測の外です。
 CPU activeは容量不足時のpollを済ませてから、build開始〜submit復帰を直接測ります。
 phaseごとの中央値の合計ではありません。GPU値はreadbackを含むGraph全体で、Rasterだけの時間やFPSではありません。

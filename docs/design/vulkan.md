@@ -203,6 +203,30 @@ front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段�
 u32 indexは頂点bufferの範囲と、起動時に保持した実際の`maxDrawIndexedIndexValue`の両方を検査する。
 Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有効化だけで上限を推定しない。
 
+標準opaqueの`RasterBatch`は一つのDynamic Rendering区間でcolor/depthをClear/Storeし、
+pipelineとviewportを設定してから、owned draw列の順にbuffer binding・80-byte引数・indexed drawを記録する。
+draw命令自体はdraw数分あり、instancingやmulti-drawへの変換、描画順の並べ替えは行わない。
+空listにはclear-onlyの既存経路を使い、Raster Programの作成を要求しない。
+参照用の単一draw Rasterも同じoperand検査・描画引数の記録を使う。
+
+最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
+scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と
+内容有効性の整合が必要になる。Storeを保つ分の帯域負担、とくに未測定のtile GPUでの影響は残り、
+省略の採用は別の出力・同期・性能比較で判断する。APIが常にdepth Storeを要求するという意味ではない。
+
+固定vertex/fragment shaderにはstorage副作用がなく、同じattachmentへのdepth/color操作は
+[rasterization order](https://docs.vulkan.org/spec/latest/chapters/fragops.html#fragops-order)に従う。
+この契約のdraw間へ旧scalarパス間barrierを機械的に残さず、全buffer/imageの必要な依存とlayout遷移を
+描画区間の前へ、後続Compute/composite等への依存を区間の後へ置く。
+Vulkan 1.3基準のまま、追加featureなしで区間内へ任意のbarrierを挿入しない。
+任意shaderや異なるパスへこの統合条件を自動適用するものではない。
+
+用途は資源keyの`BTreeMap`へ集約してstage/access/writeを合成し、同じbufferのVertex/Index両用途も保つ。
+全drawのindexを各頂点範囲・Device上限で記録前に確認し、失敗はpassとdraw番号の文脈を伴って返す。
+GraphWorkはdraw列・全物理資源・不変Programを完了まで保持し、pending中のasset更新・削除でも上書きしない。
+clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・pending所有と、
+共有/異なる多数meshの比較結果を[現在の検証状況](../verification/current.md#draw-listの本実装と比較計測)へ記録する。
+
 ## 投入・完了・異常時の保持
 
 `submit`と`wait`を分け、記録済み・未完了の所有者が命令から参照される全資源を保持する。

@@ -31,18 +31,18 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 |---|---|
 | fmt | 成功 |
 | CPU / Vulkan / Windows presentationの全target check・Clippy `-D warnings` | 3構成すべて成功 |
-| CPUのみの通常試験 | 単体26件＋公開API 8件成功 |
-| Vulkan featureの通常試験 | CPU単体111件＋公開API 8件成功、30 ignored |
-| presentation featureの通常試験 | CPU単体115件＋公開API 8件成功、31 ignored |
-| 明示headless実GPU試験 | 29件成功、3.06秒 |
-| headless＋実Win32 Surfaceを含む明示GPU試験 | 単独実行30件成功、4.76秒。確認runも30件成功、5.41秒。初回native異常は後述 |
+| CPUのみの通常試験 | 単体35件＋公開API 8件成功 |
+| Vulkan featureの通常試験 | CPU単体120件＋公開API 8件成功、34 ignored |
+| presentation featureの通常試験 | CPU単体124件＋公開API 8件成功、35 ignored |
+| 明示headless実GPU試験 | 33件成功、4.73秒 |
+| headless＋実Win32 Surfaceを含む明示GPU試験 | 単独実行34件成功、6.99秒。今回の全GPU試験でnative異常は再現せず。前回の観測は後述 |
 | Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
 | Shader再生成検証 | 5種類すべてspirv-val成功、固定SDKによる再生成とチェックインbinaryのSHA-256一致 |
 | headless例 | 従来の128×96描画・深度・Compute・合成とPPM出力成功 |
 | engine headless統合例 | 24 frame、3 in-flight、custom処理・history・更新/削除・遅延readbackの照合成功 |
 | engine Windows表示例 | ON/OFF各起動の`windowed --smoke`で12 Present要求、VSync往復切り替え・resize・最小化復帰・pending終了、終了コード0 |
 | 表示例の引数検査 | VSync既定ON、ON/OFF指定、smoke併用、不正引数拒否のCPU試験1件成功 |
-| frame計測exampleのCPU試験 | JSON escape・中央値/p95・draw配置/検証・CLI検査の7件成功 |
+| frame計測exampleのCPU試験 | JSON escape・中央値/p95・draw/mesh配置と検証・CLI検査の9件成功 |
 | 依存監査 | cargo-deny 0.20.2でadvisories / bans / licenses / sources成功 |
 | 文書 | UTF-8、相対リンク・anchor、fenced block、差分空白を確認 |
 
@@ -211,65 +211,76 @@ before→after順に測り、clock/affinity/電力/OS負荷は固定していな
 交互サイズのGPU Graph中央値も変更前6.368–6.640 µs、変更後6.320–6.448 µsで、GPU高速化は主張しない。
 再利用と引き換えに保持allocationは増える。block容量が今回増えなかったことを、VRAM budgetや全負荷の保証にしない。
 
-### Draw listの比較試作と導入判断
+### Draw listの本実装と比較計測
 
-**現在の標準不透明描画への内部batch化は、M4前に本実装することを推奨する。**
-現在のmainはscalar経路のままで、試作はローカル`codex/pre-m4-batch-prototype`に保持している。
-main基準は`ba91f3b`、試作は`86f06a1`（base `16cfb39`）で、両方cleanなsource状態を記録した。
-mainの追加差分はcache契約の文書のみで、比較対象のRustコード差分には含まれない。
+**標準の不透明描画はbatch経路を既定としてmainへ統合した。**
+非空draw listは一つのGraph Raster操作とnative描画区間にし、color/depthを一度clearする。
+draw順・MVP/tint・各drawのindex/provenance検査・最終Storeを維持し、空listはclear-onlyとする。
+単一drawの`Graph::raster`は参照経路として残し、公開PassEncoder・任意shader・汎用パス統合は追加していない。
 
-試作は標準opaqueのowned draw listを一つのRaster操作へまとめ、color/depthのclearを一回、
-draw順・MVP/tint・index/provenance検査・最終Storeを維持する。
-公開PassEncoder、任意shader、汎用パス統合、depth store discardは追加していない。
-独立static reviewと、scalar参照との全RGBA比較、空draw、逆順、同深度、異なるmesh・行列・tint、
-後続Compute/composite、後半drawの不正index拒否を含む追加GPU試験2件が成功した。
-試作側のheadless GPU全31件も成功し、native破棄後までCore/SyncValの診断はゼロだった。
+同じmeshだけでなく、多数の異なるmeshに対応するため、Graph importのcanonical索引とnative用途集約を
+順序付きmapにした。compile側のパス内競合検査はwriter列を使う検索へ変更し、入力全組合せの走査を除去した。
+CPUで4096通りの独立pairwise参照との比較、8192入力、重複read、半開区間、失敗contextを確認した。
+さらにRasterノード数、128種類のmesh producer、構築失敗とimport同一性を検査した。
+strict GPU試験ではscalarとの全RGBA一致、空draw、逆順、同深度、異なるmesh/行列/tint、後続Compute/composite、
+後半drawの不正index、同じindex bufferで頂点範囲が異なるdraw、共有Vertex/Indexのscope合成、
+96 draw・3 meshのpending中更新/削除と所有の維持を確認した。独立static reviewで追加の修正指摘はなかった。
 
-計測は共有する小さい1 mesh、draw数0/1/8/32/128/512/1024、overlap 64×64とgrid 512×512の14負荷。
-history/custom/churnなし、永続mesh、3 in-flight、release・Disabled要求、warm-up 32＋測定128 frameを3 run。
-各負荷でbaseline→prototype、prototype→baseline、baseline→prototypeの順に単独実行した。
-全10752測定frameでGPU timestamp available、warm-up後の作成数安定を確認した。
-別のRequired/Core/SyncVal有効28 runでは、各8 frameを照合し、14負荷すべての最終RGBAが全byte一致した。
-測定frameのchecksumも負荷ごとに両実装・全runで同一だった。
+比較sourceはscalar `bf0d61c`（`776cbab`＋distinct計測ハーネス）と本実装`97d41cc`。
+実装のRustコードを変更せず、両方cleanな状態でreleaseを作り、実行時のsource commitと実行ファイルhashを記録した。
+共有1 meshとdrawごとに独立したmesh資源を使うdistinctの両方で、同じ3頂点/3 indexの小さい三角形を描く。
+draw数0/1/8/32/128/512/1024、overlap 64×64とgrid 512×512で、計28負荷を使った。
+history/custom/churnなし、永続mesh、3 in-flight、Disabled要求、warm-up 32＋測定128 frameを各3 run。
+各負荷でscalar→batch、batch→scalar、scalar→batchの順に単独実行した。
+全168 run・21504測定frameでGPU timestamp availableとwarm-up後のnative作成数安定を確認した。
+別のRequired/Core/SyncVal有効56 runでは各8 frameを照合し、28負荷すべての最終RGBAが全byte一致した。
+測定frameのchecksumも配置/draw数ごとに両実装・mesh条件・全runで同一だった。
 
-以下はrunごとの中央値の範囲。単位はµsで、CPUはpollを除くbuild〜submit復帰の直接計測、
-GPUはcompositeとreadbackを含むGraph全体である。
+以下はrunごとの中央値の範囲。単位はµs。CPUはpollを除くbuild〜submit復帰の直接計測、
+GPUはcompositeとreadbackを含むGraph全体で、draw数自体の削減やinstancingは行っていない。
 
-| 負荷 | CPU scalar | CPU batch試作 | GPU scalar | GPU batch試作 |
+| 負荷 | CPU scalar | CPU batch | GPU scalar | GPU batch |
 |---|---:|---:|---:|---:|
-| grid・8 draw | 58.70–60.15 | 37.95–39.40 | 70.336–70.432 | 54.400–54.496 |
-| grid・128 draw | 415.40–482.40 | 54.15–65.35 | 314.096–315.840 | 56.032–56.096 |
-| grid・1024 draw | 3280.35–3376.45 | 151.10–194.15 | 1923.680–1924.240 | 68.576–68.640 |
-| overlap・1024 draw | 3266.95–3327.85 | 187.15–209.05 | 1478.480–1480.576 | 32.928–33.024 |
+| shared grid・8 draw | 56.75–59.65 | 36.70–38.65 | 70.304–70.336 | 54.400–54.496 |
+| shared grid・128 draw | 394.20–423.25 | 51.50–52.45 | 314.592–315.408 | 56.128–56.144 |
+| shared grid・1024 draw | 3303.05–3387.45 | 141.90–214.80 | 1914.976–1917.072 | 68.512–68.544 |
+| distinct grid・128 draw | 679.05–736.00 | 381.45–408.00 | 315.056–315.136 | 55.840–55.872 |
+| distinct grid・1024 draw | 6814.90–6977.00 | 3349.95–3521.70 | 2156.848–2171.040 | 71.232–71.280 |
+| distinct overlap・1024 draw | 6720.30–6874.55 | 3332.35–3389.15 | 1636.272–1848.432 | 36.048–36.112 |
 
-8 draw以上のgridでは全runでCPU中央値・p95とGPUが改善し、多数drawの差はrun間変動より大きい。
-ただし小規模sceneのCPU tailに回帰がないとは断定しない。
-元のgrid 0 drawではscalarのCPU中央値34.20–34.55 µs／p95 53.10–64.20 µsに対し、
-試作は中央値34.15–76.40 µs／p95 59.20–176.50 µsだった。overlap 0 drawでも遅いrunが双方に現れた。
-0 drawは試作でも同じclear/composite/readbackへ進むが、これだけで変動の原因をschedulerと断定しない。
+gridの8 draw以上ではshared/distinctとも全runでCPU中央値・p95とGPUが改善した。
+distinctではCPU側に多数の資源のsnapshot・検証・命令準備の負担が残り、sharedと同じCPU時間にはならない。
+1024 distinctの物理entry容量は2057、warm-up後の作成数も2057で安定した。
+最後の統計はmeshを登録中に取得しており、登録済み論理byteはshared 96、distinct 98,304。
+その後に全meshを削除し、native所有者の破棄後まで診断ゼロを確認した。
 
-追加controlは**別条件**として、子processを同じ論理CPU（affinity mask 1）へ固定し、
-0/1 draw・両配置をwarm-up 64＋測定512 frame、各3 runの交互順で測った。
-grid 0 drawの中央値はscalar 32.10–33.00 µs、試作32.40–33.20 µsでほぼ同等、
-p95は41.80–42.90 µsと40.70–48.30 µsだった。
-overlap 0 drawの中央値も14.60–16.20 µsと14.90–16.10 µsで範囲が重なる。
-1 drawは両配置の全runで試作の中央値が小さかったが、p95の変動は残り、通常desktop条件の非回帰の証明にはしない。
-本実装時にはscalar基準を残し、小規模sceneのtailを再確認する。
+小規模sceneのCPU tailの変動は引き続き残す。
+通常条件のshared grid 0 drawはscalarの中央値34.15–35.85 µs／p95 46.10–69.20 µsに対し、
+batchは中央値33.25–55.00 µs／p95 43.60–214.50 µsだった。overlap 0 drawでも遅いrunが双方に現れた。
+0 drawはどちらもclear/composite/readbackへ進むが、変動の原因をschedulerと断定していない。
+別条件の追加controlでは子processを同じ論理CPU（affinity mask 1）へ固定し、
+sharedの0/1 draw・両配置をwarm-up 64＋測定512 frame、各3 runの交互順で測った。
+overlap 0 drawの中央値はscalar 15.90–16.50 µs、batch 16.20–16.40 µs、
+p95は19.10–23.00 µsと19.10–21.20 µsだった。
+grid 0 drawの中央値は32.80–34.90 µsと32.55–32.90 µs、p95は40.80–63.60 µsと41.40–75.80 µsだった。
+1 drawは両配置の全runでbatch中央値が小さかったが、p95の変動は残り、通常desktopでの非回帰は保証しない。
 
-利益はGraph粒度・barrier・描画scope・冗長な状態設定をまとめた変更の結果で、begin/end削減だけへ帰属しない。
-CPU readback照合とchecksumもloop時間へ影響するため、これをFPSや比例したthroughput改善とは呼ばない。
-多数の固有mesh、別GPU/vendor、tile GPU、任意shaderへの一般化もしていない。
-[比較JSON](rendergraph-metrics.json)には環境、source/実行ファイルhash、全runの統計・生sample、
-保持メモリ、affinity control、RGBAのSHA-256と採否を保存した。
+利益はGraph粒度、import/競合/用途検索、barrier、描画scope、状態設定を合わせた変更の結果で、
+begin/end削減だけへ帰属しない。CPU readback照合とchecksumもloop時間へ影響するため、FPS倍率とは呼ばない。
+distinctも同じ小さいgeometryの独立資源であり、重いmesh、別GPU/vendor、tile GPU、任意shaderの性能は未確認。
+[比較JSON](rendergraph-metrics.json)のschema 2に環境・source/実行ファイルhash、全runの統計・生sample、
+保持メモリ、affinity control、RGBAのSHA-256を保存した。以前の試作測定はGit履歴に残す。
+cache単独変更時の比較は同じJSON内に元のsourceと条件で保持する。
 性能runの実効Core/SyncValは未観測のnullであり、Disabled要求と外部Layerが絶対にない証明は区別する。
 
 ### 初回GPU実行のnative異常
 
-最初のpresentation全GPU実行はbuffer試験後のDevice smoke開始付近で`0xc0000005`により終了した。
+前回の`ba91f3b`での最初のpresentation全GPU実行は、buffer試験後のDevice smoke開始付近で`0xc0000005`により終了した。
 Windows Application Errorのmoduleはunknown、offsetは`0xcb`で、直前のValidation警告・エラーはなかった。
 同時期に試作側のGPU suiteも実行していたが、並行実行を直接原因とは断定していない。
 Device単独、その後のpresentation全30件を2 run、headless全29件、上記比較と例の単独実行では再現しなかった。
 失敗ログを保存し、原因未確定の観測を`renderer-0pb`で追跡する。driver原因や解決済みとは扱わない。
+今回の本実装`97d41cc`でもheadless 33件・表示込み34件、56比較runと各例を単独実行し、再現しなかった。
 
 ## 第二APIの選定と未確認範囲
 
@@ -286,14 +297,14 @@ adapterの識別、Debug Layer/GBV有効化、実描画と画像等価性、実G
 
 ## 再現物
 
-今回のゲートは`.tools/pre-m4/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`と`fmt.log`、
-`examples.log`、`gpu-headless.log`、`gpu-all.log`、`gpu-all-confirmation.log`、
-`frame-default-verify.log`、`windowed-{on,off}.log`。
-初回のnative異常は`gpu-all-initial-native-crash.log`、単独Device確認は`gpu-device-isolated.log`へ残した。
-cache比較のprobeとログ、draw比較の各run JSON/RGBAは`.tools/pre-m4/`にあり、
-共有する条件・統計・生sampleは[RenderGraph比較JSON](rendergraph-metrics.json)を正とする。
-試作のbranchとworktreeは未統合のままローカルに保持し、第三者がmainだけで同じ試作を取得できるとは扱わない。
-Shader/binaryと依存は今回変更せず、Shader再生成とローカル依存監査は既存結果を引き継ぐ。
+今回のゲートは`.tools/opaque-batching/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`と`fmt.log`、
+`examples.log`、`gpu-{vulkan,presentation}.log`、`default-verify.log`、`windowed-{on,off}.log`。
+比較の各run JSON/RGBAと追加controlは`.tools/opaque-batching/{comparison,controls}/`へ保存した。
+共有する条件・統計・生sampleは[RenderGraph比較JSON](rendergraph-metrics.json)を正とし、比較sourceはmainのGit履歴から取得できる。
+cache比較のprobeとログは`.tools/pre-m4/`にあり、前回のnative異常は同ディレクトリの
+`gates/gpu-all-initial-native-crash.log`、単独Device確認は`gates/gpu-device-isolated.log`へ残した。
+ローカルの`.tools/`自体を共有sourceの代わりにはしない。
+GLSL/SPIR-V binaryと依存は今回変更せず、Shader再生成とローカル依存監査は既存結果を引き継ぐ。
 
 従来のM3ゲートは`.tools/m3/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`、
 `gpu-all.log`、`windowed-smoke.log`、`example-cpu.log`、`shader-verify.log`、`headless-example.log`。

@@ -105,6 +105,11 @@ writeで複数区間のreaderを辿る際も共有tailを重複して走査し�
 全宣言の循環を確認してから、残ったパスだけで順序依存を組み直す。
 除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
 
+compile時のパス内競合検査は、範囲・用途を宣言順で検査してからwrite範囲を資源ごとに並べる。
+write同士の重複を拒否し、readは整列済みwrite列から重複候補を検索する。
+read/readの組や無関係な資源の全組合せを調べず、Aアクセス・W writeに対して
+O(A log(W+2))の処理とO(W)の一時情報で検査する。dataflowとパス間hazardの意味は変えない。
+
 ## GPU状態と所有
 
 同じruntime資源のimportは、物理資源と状態の同一性を維持する。
@@ -225,13 +230,21 @@ snapshotの`build_graph`はGPU・windowなしで標準Graphを構築できる。
 持続的な実行には`VulkanEngine`がmeshのGPU bufferを保持し、同じmeshを毎frame uploadしない。
 cacheは永続keyで識別し、使用時にfresh importを取得する。
 更新・削除後も先行frameの所有を維持し、CPUに保存した旧snapshotも独立して扱う。
-標準経路はclear-onlyのノードで空draw listも初期化し、各drawが同じcolor/depthをLoadして描く。
+標準の不透明描画はowned draw listを一つの`RasterBatch`操作にする。
+空draw listはclear-only、非空ならcolor/depthを一回clearし、宣言された順に全drawを描いてStoreする。
+Rasterノード数はdraw数によらず一件で、upload・custom Compute・composite・readback等は別ノードのままである。
+同じmeshの再利用と、異なるmeshの組合せの両方を扱い、drawの行列・tint・index数を所有する。
+compileでもdraw配列を`Arc`で共有し、GPU完了まで必要な資源・操作の所有を維持する。
 
-実用的な標準不透明描画は、複数drawを一つのRaster操作と描画スコープへまとめられる構造を目標とする。
-現在のmainは上記のscalar経路を維持する。owned draw listを使う内部batchは別branchの比較試作で、
-公開PassEncoderや任意パス統合を先に固定せずに、clear一回・順序・引数・深度・資源用途を保つ範囲を検証した。
-測定結果とM4前導入の判断は[検証記録](../verification/current.md#draw-listの比較試作と導入判断)を参照する。
-この試作はmainへ統合済みという意味ではなく、任意shaderや別GPUで同じ利益・合法性を保証しない。
+外部bufferアクセスは資源ごとに範囲を集約し、同じbufferがVertexとIndexの両方なら両用途を残す。
+indexは各drawの頂点範囲とDevice上限について記録前に検査し、後のdrawが不正でも部分的にsubmitしない。
+canonical importは`ResourceKey`をkeyとするprivateな索引で検索し、同一性とsnapshot整合性の検査を保つ。
+Vulkanの用途集約も資源keyの順序付きmapを使い、多数の異なるmeshを一つのパスへ集めても全入力対を走査しない。
+
+`Graph::raster`等の単一draw操作は参照経路と明示的なGraph構築に残す。
+今回のbatchは固定shaderの標準opaque描画をまとめる契約で、公開PassEncoderや任意パスの自動統合ではない。
+別の描画先、Compute、copy等の必要な境界と同期は維持する。
+共有mesh／異なるmeshの画像・同期・性能の確認は[検証記録](../verification/current.md#draw-listの本実装と比較計測)を参照する。
 
 拡張点はopaque描画後・最終composite前の完全なlinear RGBA8画像である。
 Viewと同じextentで初期化済みの画像を返し、通常のGraph builderで処理を追加する。
