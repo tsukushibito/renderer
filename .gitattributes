@@ -1,2 +1,11 @@
 # Generated Rust is byte-compared with fixed-input regeneration.
 /crates/renderer/src/backends/d3d12/bindings.rs text eol=lf
+/.beads/hooks/* text eol=lf
+
+# Bistro source, verified interchange assets, and comparison image.
+/assets/bistro/source/*.zip filter=lfs diff=lfs merge=lfs -text
+# Preserve upstream text bytes, including its original whitespace.
+/assets/bistro/source/*.txt -text -whitespace
+/assets/bistro/converted/** filter=lfs diff=lfs merge=lfs -text
+/assets/bistro/environment/*.hdr filter=lfs diff=lfs merge=lfs -text
+/docs/verification/bistro-assets-preview.png filter=lfs diff=lfs merge=lfs -text

@@ -1,4 +1,12 @@
 #!/usr/bin/env sh
+# Preserve Git's ref input for both LFS and Beads (including any chained hook).
+command -v git-lfs >/dev/null 2>&1 || { echo >&2 'Git LFS is required; install git-lfs before pushing.'; exit 2; }
+_renderer_push_input=$(mktemp) || exit 1
+trap 'rm -f "$_renderer_push_input"' 0
+trap 'exit 1' HUP INT TERM
+cat > "$_renderer_push_input" || exit 1
+git lfs pre-push "$@" < "$_renderer_push_input" || exit $?
+exec < "$_renderer_push_input"
 # --- BEGIN BEADS INTEGRATION v1.3.4 ---
 # This section is managed by beads. Do not remove these markers.
 if command -v bd >/dev/null 2>&1; then

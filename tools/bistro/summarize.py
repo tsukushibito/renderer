@@ -1,4 +1,4 @@
-"""Publish compact current asset evidence; keep source/converted multi-GB payloads ignored."""
+"""Publish current asset evidence from ignored working files; shared payloads live in Git LFS."""
 import argparse
 from datetime import datetime, timezone
 import hashlib

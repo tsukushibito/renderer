@@ -57,3 +57,5 @@ if command -v bd >/dev/null 2>&1; then
   if [ "$_bd_exit" -ne 0 ]; then exit "$_bd_exit"; fi
 fi
 # --- END BEADS INTEGRATION v1.3.4 ---
+command -v git-lfs >/dev/null 2>&1 || { echo >&2 'Git LFS is required; install git-lfs.'; exit 2; }
+git lfs post-checkout "$@"

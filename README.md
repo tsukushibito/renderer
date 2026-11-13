@@ -1,5 +1,8 @@
 # renderer
 
+Bistroの原本・検証済み素材と比較画像はGit LFSで共有します。
+取得・ライセンス・容量は[素材ガイド](assets/bistro/README.md)を参照してください。
+
 ゲームエンジン向けの、RenderGraphを中心としたRust製3Dレンダラーです。
 初期バックエンドにはVulkan（ash / vk-mem）を使います。
 GPUに依存しないRenderGraphの宣言・解析と、Vulkan 1.3のオフスクリーン実行を扱います。

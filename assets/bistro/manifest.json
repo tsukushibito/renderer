@@ -1,0 +1,2056 @@
+{
+  "schema_version": 1,
+  "scope": "Exact original archive, verified exterior interchange, bundled environment and conversion comparison image. Host-only caches and tools excluded.",
+  "files": [
+    {
+      "path": "assets/bistro/converted/BistroExterior.bin",
+      "size": 130016888,
+      "sha256": "31d7f353fb0110f0d37e6079e3c85090f3be2e0cf160b08678cb06a9ac6c8d58"
+    },
+    {
+      "path": "assets/bistro/converted/BistroExterior.gltf",
+      "size": 2257681,
+      "sha256": "326b401da516c5f7c78b317b8eb92e79bccd60f8aab679559b800ca857df247e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Metal_BaseColor.png",
+      "size": 935919,
+      "sha256": "ffc2bd2208cf807d1ebc8164eb8c377f8de0f35a4219d65fe1fea531a4419c2f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Metal_Normal.png",
+      "size": 2031200,
+      "sha256": "e7a5a52bf0bfe3893f9e98bd6b7963ede73854b1953a6949459e00be4b9ca89b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Plastic_BaseColor.png",
+      "size": 94,
+      "sha256": "246647be49f1c65edab0d5792ff21dfa1af0aa30c4ff8f7a9c586090a139805a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Plastic_Blue_BaseColor.png",
+      "size": 94,
+      "sha256": "246647be49f1c65edab0d5792ff21dfa1af0aa30c4ff8f7a9c586090a139805a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Plastic_Blue_Normal.png",
+      "size": 324618,
+      "sha256": "a384b0928b12e60e4970bfc166b3e3c4ad3b8965ae756a0f0d2448b65311ca7f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Plastic_Blue_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Plastic_Normal.png",
+      "size": 324618,
+      "sha256": "a384b0928b12e60e4970bfc166b3e3c4ad3b8965ae756a0f0d2448b65311ca7f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Antenna_Plastic_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Ashtray_BaseColor.png",
+      "size": 94,
+      "sha256": "247f470d260f9b921a9cceefa9c84edc0f337ec1d9ada30664b463e8093f474f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Ashtray_Normal.png",
+      "size": 1270919,
+      "sha256": "a73d7aa45ba7c858ca662e32dfad73ec9e7fde3fce139f42831cdbdd0dc8c411"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Ashtray_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Beams_BaseColor.png",
+      "size": 1709367,
+      "sha256": "17ac01c6febb299502757803dfc11ef462bbea2c43583745db372336d2046ee9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Beams_Normal.png",
+      "size": 1515067,
+      "sha256": "1ed98c0dd458aba6f88956478846734b01e10311a857668a48a7d89aec966442"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Beams_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Fabric_BaseColor.png",
+      "size": 2201639,
+      "sha256": "fa063310e2de3f5218a6c50313c7d786f0c2ec09b90b46719ae524d5a6299752"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Fabric_Normal.png",
+      "size": 1004670,
+      "sha256": "480d12182999e8b0d9459f0b743105909a3f1ea623ea0f0e71824e6df5cd3125"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Fabric_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Hotel_Fabric_BaseColor.png",
+      "size": 2930186,
+      "sha256": "7bf69da629dceb0f30ca6b92b7f9efeae736c3509cea3b6061cec3f62116f9ca"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Hotel_Fabric_Normal.png",
+      "size": 5034135,
+      "sha256": "d109858f106d8c3b2367b5229a79bfb470596fa6fc38d9a555600eee5822b7f6"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Awnings_Hotel_Fabric_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Concrete_BaseColor.png",
+      "size": 2516226,
+      "sha256": "7d598c2d44507babeba9d475a6aae297eaed7772c2c6260d269ff80b0eb40b3a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Concrete_Normal.png",
+      "size": 3162240,
+      "sha256": "526d22a70c7f5b0f9e829c6e6fa95fdfb3d72e7f11ad18c97c41d5e126db48b9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Concrete_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Green_Wood_BaseColor.png",
+      "size": 1417637,
+      "sha256": "5eee4aa6aeb2444aced11db296600c16da544d7b21dc5549c09001ae578beb9b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Green_Wood_Normal.png",
+      "size": 16915,
+      "sha256": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Green_Wood_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Ornaments_BaseColor.png",
+      "size": 3049117,
+      "sha256": "0f583782543789f2fdca37c08f0c6f665dcf2aee36bf0bad29651fe04053a913"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Ornaments_Normal.png",
+      "size": 6489192,
+      "sha256": "7975bf3b996db378332128ca0ae849e8981116f7cf42c0ee77a4a45ce5bf295b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Ornaments_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Trims_BaseColor.png",
+      "size": 2363111,
+      "sha256": "a623fd5e263a3bf14de378d79b823f1d96e104f4e1ed3a8dee4b8052be91b55f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Trims_Normal.png",
+      "size": 5192176,
+      "sha256": "dd62ea4839eb391f74b9e6e003c0ae2297434b856281438fab7f1542caf00a3b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Balcony_Trims_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Banner_Metal_BaseColor.png",
+      "size": 2028896,
+      "sha256": "b64f6cf4e98d5a1a9e54e138b04e37db2244f960b9bb70d0c84858a6482632de"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Banner_Metal_Normal.png",
+      "size": 1613112,
+      "sha256": "3665fffe0acf6adb8ac1f3db07950a88cfaf1dc3c9e4233bacf95be0bc3c4d8f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Banner_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bistro_Sign_Letters_BaseColor.png",
+      "size": 94,
+      "sha256": "175c3bf327444dab60485ae916cdf512ba862ee4ce243ee2247ec979dba19eaa"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bistro_Sign_Letters_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bistro_Sign_Letters_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bistro_Sign_Main_BaseColor.png",
+      "size": 1138830,
+      "sha256": "c2618f3a3d980e52a57f5c7cee1f0ed41472a595f26d64c30a1ea08f8a29d21b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bistro_Sign_Main_Normal.png",
+      "size": 1620956,
+      "sha256": "c28f1a19dfa8765fbb809402f6a91d41bb2f0644c3165e1ec72e6456f03f7dc9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bistro_Sign_Main_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bollards_BaseColor.png",
+      "size": 2614231,
+      "sha256": "d3f71584394f6e5fdfbd6a1ada350757961f25e66e0410573e427e5f21b27cb1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bollards_Normal.png",
+      "size": 2639797,
+      "sha256": "d036164f8f286509824000fb38c7087ff12596659092c9fad557c9bf0d6e883c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Bollards_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Chimneys_Metal_BaseColor.png",
+      "size": 94,
+      "sha256": "97b6f5d5c78490ee3d1abe8a4dcce6d804d42525a4d25f689c9494382c2fe90e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Chimneys_Metal_Normal.png",
+      "size": 7990767,
+      "sha256": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Chimneys_Metal_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete2_BaseColor.png",
+      "size": 2937156,
+      "sha256": "b035a34844cfd872d379d172937c598676a61add138541cfee562481a783528d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete2_Normal.png",
+      "size": 3553200,
+      "sha256": "5826caa5003e4969a36d622e1175a198bde708fff65f64afe3bc89872380631f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete2_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete3_BaseColor.png",
+      "size": 4898595,
+      "sha256": "f9b0ff92c1c470c8111d1ac0e6dce4e2195701d4b836e3d4a38006a2da76fa51"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete3_Normal.png",
+      "size": 7460947,
+      "sha256": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete3_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete_BaseColor.png",
+      "size": 4898595,
+      "sha256": "f9b0ff92c1c470c8111d1ac0e6dce4e2195701d4b836e3d4a38006a2da76fa51"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete_Normal.png",
+      "size": 9443886,
+      "sha256": "c1c4caea18d907ab682466cbd829d1b284ea9888bdad86afa2581154593583a4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete_Striped_BaseColor.png",
+      "size": 4652705,
+      "sha256": "2544f05ecf9d580944cf750464a57cb7d22663aec85a6797eaa4645429b8aa5b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete_Striped_Normal.png",
+      "size": 7384791,
+      "sha256": "6344e4430141468ab72a40eaa5df7e642b226e59227e5f93dfc47020fb011947"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Concrete_Striped_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/ElectricBox_BaseColor.png",
+      "size": 1851403,
+      "sha256": "7a101de0f56964259312a22287aa5a35a08ab8174295a2f26469c4bdc35b3731"
+    },
+    {
+      "path": "assets/bistro/converted/textures/ElectricBox_Normal.png",
+      "size": 1697554,
+      "sha256": "3854b44f82d830c38e31c54bfc5533af4e4682f1430cdddfefa335db05f4fc70"
+    },
+    {
+      "path": "assets/bistro/converted/textures/ElectricBox_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Emissive_StreetLight_BaseColor.png",
+      "size": 94,
+      "sha256": "97b6f5d5c78490ee3d1abe8a4dcce6d804d42525a4d25f689c9494382c2fe90e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Emissive_StreetLight_Emissive.png",
+      "size": 184,
+      "sha256": "eba7d5534ef72adecc0ce128578cf18d3f302da94899ede8309b03fff93c4462"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Emissive_StreetLight_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Emissive_StreetLight_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Bux_Hedges46_BaseColor.png",
+      "size": 3839064,
+      "sha256": "172cbf5510b45e1f35c7047ca3f7b412924ad97f9b03eac269c701af6b582cd2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Bux_Hedges46_Normal.png",
+      "size": 7699611,
+      "sha256": "ee46e52fb7fc88d9f0fef7dca0af30274e776718b5401cfb45923d47ddb450bd"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Bux_Hedges46_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Flowers_BaseColor.png",
+      "size": 1825145,
+      "sha256": "92076753b0b481e2153621ef756fc6e0b6a88080eb342f55a829bf9136695bb0"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Flowers_Normal.png",
+      "size": 3056339,
+      "sha256": "9d46c952f1cba13064ed3cbedc113f83c8c38c094a0333ab35e85627d9a28f0a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Flowers_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Ivy_branches_BaseColor.png",
+      "size": 3116973,
+      "sha256": "09c6f5acbf16ae30888e80b195eb705e68a18919f9354086652b6f810e82d3b2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Ivy_branches_Normal.png",
+      "size": 5550720,
+      "sha256": "ae8c7b9b8483d66f1088c3ede837b6d3a1a89e8043303888b96ee7e9df7ed1a1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Ivy_branches_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Ivy_leaf_a_BaseColor.png",
+      "size": 1230476,
+      "sha256": "e514e0b092f80bbf204996cb390d459c1e2f5ebe890bc722a18b7e64ed175f5a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Ivy_leaf_a_Normal.png",
+      "size": 2461956,
+      "sha256": "2210b45da0f3c653a2bad94dd9f126091625a8527a2d0adbf3c6bb1f2c44df13"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Ivy_leaf_a_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Leaves_BaseColor.png",
+      "size": 1633300,
+      "sha256": "76c5351885115c01f6d8e56832f4210eb46d1f5f6db14d0557d345a47e8b4364"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Leaves_Normal.png",
+      "size": 865912,
+      "sha256": "0fd7d86cccc82391fbc9b5c53e03b8946412f2237fc2fd74ffc0a8cc4d463c11"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Leaves_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Green_Leaves_BaseColor.png",
+      "size": 892610,
+      "sha256": "2aab9e3ecac0c2c230f5a1ba6668784e16c0f0963eff355a5633df91943d4ee1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Green_Leaves_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Green_Leaves_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Orange_Leaves_BaseColor.png",
+      "size": 845655,
+      "sha256": "ccf6396d4c5f4352d21f53c3aed999ae336b3098dccdaa4b72343fc2e273947c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Orange_Leaves_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Orange_Leaves_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Trunk_BaseColor.png",
+      "size": 5538745,
+      "sha256": "5e1dd1656edf37478ebac72d3b3f35d9b9a2d42e89b6e935e223e72db8e76594"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Trunk_Normal.png",
+      "size": 9071404,
+      "sha256": "be67b0fec0ab6ef72bf3c7859277f058330fc80778a1e913f3df1dfe8eafab41"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Linde_Tree_Large_Trunk_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Paris_Flowers_BaseColor.png",
+      "size": 2007311,
+      "sha256": "5966dd5cf65c7b29a5cfbd1845a5f448f9c55b19494c6baf142c58e59d125290"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Paris_Flowers_Normal.png",
+      "size": 2985718,
+      "sha256": "e6caf081d1df42cc7ee2f11e33a0b3af991b2de0ec08b7b72cfaa2187112fe0e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Paris_Flowers_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Trunk_BaseColor.png",
+      "size": 2372642,
+      "sha256": "11a44273bc9dc253c9be3f5ab5db29922c20a3fee9807a9982c407543067cbea"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Trunk_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Foliage_Trunk_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/LanternEmissive_BaseColor.png",
+      "size": 1406079,
+      "sha256": "d1a6200526cd4e8c6feab7948c658a3d6c009f423580e4bf9756c9094ee3c734"
+    },
+    {
+      "path": "assets/bistro/converted/textures/LanternEmissive_Normal.png",
+      "size": 3362841,
+      "sha256": "4a4e2d6181c34d526e09976a65ecdf18df9866e18d121047febb5a982aa3b40d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/LanternEmissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Beams_BaseColor.png",
+      "size": 1891059,
+      "sha256": "a961db58457f125d8a1aa8f9bf4a3f4fb46404154e8806ffbe73346445e0300c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Beams_Normal.png",
+      "size": 1515067,
+      "sha256": "1ed98c0dd458aba6f88956478846734b01e10311a857668a48a7d89aec966442"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Beams_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Fabric_Cyan_BaseColor.png",
+      "size": 2980370,
+      "sha256": "7556ea81c4d80683c0624803fe49d88ce4e9ee163423c60db447a026e4255281"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Fabric_Cyan_Normal.png",
+      "size": 1004670,
+      "sha256": "480d12182999e8b0d9459f0b743105909a3f1ea623ea0f0e71824e6df5cd3125"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Fabric_Cyan_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Fabric_Red_BaseColor.png",
+      "size": 2201639,
+      "sha256": "fa063310e2de3f5218a6c50313c7d786f0c2ec09b90b46719ae524d5a6299752"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Fabric_Red_Normal.png",
+      "size": 1004670,
+      "sha256": "480d12182999e8b0d9459f0b743105909a3f1ea623ea0f0e71824e6df5cd3125"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Awning_Fabric_Red_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Bistro_Main_Door_BaseColor.png",
+      "size": 2020027,
+      "sha256": "a4cf50d52d5f21eeba58a654c64f5db92494f09297b99f0685be0e4339d6a239"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Bistro_Main_Door_Normal.png",
+      "size": 3403392,
+      "sha256": "85de937f7ebc12d00786336dd9dd283914511ef70ef8d47ff1c3c0876a51d7e9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Bistro_Main_Door_Specular.png",
+      "size": 20460,
+      "sha256": "fcd9c5f07624324a7a9edda4bd23c9540820b3cd50263c73f5a66cb33eb651b4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Black_Metal_BaseColor.png",
+      "size": 94,
+      "sha256": "e0a382cb9478c8d4089fe29268110d69d4a7c36e2e907d3a147b98c6ebb8aad2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Black_Metal_Normal.png",
+      "size": 7990767,
+      "sha256": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Black_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Book_Covers_BaseColor.png",
+      "size": 3462482,
+      "sha256": "865b46da402aca94028b51b3759929d2887ecbddb7ab36f868834d94e1999001"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Book_Covers_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Book_Covers_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Boulangerie_BaseColor.png",
+      "size": 2795828,
+      "sha256": "1fb1f26bccfd0bfa411daf8e3328bf829e11c30ca02d422e1dc19cf3d0da10ae"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Boulangerie_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Boulangerie_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Large_Beige_BLENDSHADER_BaseColor.png",
+      "size": 5150092,
+      "sha256": "b6b7f8c285d7a650820d370708d220131ba3459d42818e5403587139806e0177"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Large_Beige_BLENDSHADER_Normal.png",
+      "size": 8995382,
+      "sha256": "47fd9c753bad63e90afb288811879992d686e6636cdc3ccdfd2c55e67a2a9ead"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Large_Beige_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Large_White_BaseColor.png",
+      "size": 2400611,
+      "sha256": "fe6702fa37361a0e2bc8eab85adfb5e5c600e56b8afea4fc44fd080a4368bab5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Large_White_Normal.png",
+      "size": 3197233,
+      "sha256": "c357c6e300a4134c92a30f7b82cd182e3ed1deee42e8cf7b90eba00441b2125b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Large_White_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Small_Red_BLENDSHADER_BaseColor.png",
+      "size": 5512448,
+      "sha256": "2041673e54ad16d9362a41578129d94157f5824179f56e2ac4fbfe4c2fbfc1d5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Small_Red_BLENDSHADER_Normal.png",
+      "size": 7468009,
+      "sha256": "6b21ab4e6eb531751ec659f1a4f2a8dbdfe7a1b040165c876f4118393a2058c4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Small_Red_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Small_Red_BaseColor.png",
+      "size": 4855087,
+      "sha256": "2ad9626a3cd79a26984a60ea5e25db2e7e58dc4d4e9dc5452ce0504b0bc6498d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Small_Red_Normal.png",
+      "size": 7602813,
+      "sha256": "11bcd7a489bf736bb1a0d3fd9e5158abe140609dd33bacd9f239c5ab17c74bd1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Brick_Small_Red_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Bronze_BLENDSHADER_BaseColor.png",
+      "size": 94,
+      "sha256": "326120155474fa6ffb71d90948dc8d8cbdb1ed12de0b476dd44f99e1fb3d3abc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Bronze_BLENDSHADER_Normal.png",
+      "size": 2031200,
+      "sha256": "e7a5a52bf0bfe3893f9e98bd6b7963ede73854b1953a6949459e00be4b9ca89b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Bronze_BLENDSHADER_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Building_Details_BaseColor.png",
+      "size": 4092212,
+      "sha256": "5f28f980fac7b1f3bf917cb07279b4c1b678bd51e128bc1aa6ce31e49cdd7121"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Building_Details_Normal.png",
+      "size": 4824528,
+      "sha256": "9d882d227b212f23f54d9d805bc507225f65c6dd058e8c736fefc4c3b286a16d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Building_Details_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete1_BaseColor.png",
+      "size": 3259937,
+      "sha256": "a13e0c5b5e71bfb543d3cad6b996c67c0dc90beb7c95a67c1ebd1fb62ef12c5f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete1_Normal.png",
+      "size": 1782850,
+      "sha256": "90cafa3167208bf46500cb914b43a27c3bd21edaf33eb22acba98a8d5a23dd01"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete1_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_BaseColor.png",
+      "size": 4898595,
+      "sha256": "f9b0ff92c1c470c8111d1ac0e6dce4e2195701d4b836e3d4a38006a2da76fa51"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Grooved_BaseColor.png",
+      "size": 4652705,
+      "sha256": "2544f05ecf9d580944cf750464a57cb7d22663aec85a6797eaa4645429b8aa5b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Grooved_Normal.png",
+      "size": 7384791,
+      "sha256": "6344e4430141468ab72a40eaa5df7e642b226e59227e5f93dfc47020fb011947"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Grooved_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Normal.png",
+      "size": 7460947,
+      "sha256": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Plaster1_BLENDSHADER_BaseColor.png",
+      "size": 3964808,
+      "sha256": "85ba92f3f78b4765b477962d5b2f3307524c04a0c63e1d3354879e505537727d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Plaster1_BLENDSHADER_Normal.png",
+      "size": 7460947,
+      "sha256": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Plaster1_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Plaster_BaseColor.png",
+      "size": 3964808,
+      "sha256": "85ba92f3f78b4765b477962d5b2f3307524c04a0c63e1d3354879e505537727d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Plaster_Normal.png",
+      "size": 5725707,
+      "sha256": "40140408cb32df1c3404f08937c09205f3a5120e7bfb5b51a8373ce052bbd89e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Plaster_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Smooth_BLENDSHADER_BaseColor.png",
+      "size": 2937156,
+      "sha256": "b035a34844cfd872d379d172937c598676a61add138541cfee562481a783528d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Smooth_BLENDSHADER_Normal.png",
+      "size": 3553200,
+      "sha256": "5826caa5003e4969a36d622e1175a198bde708fff65f64afe3bc89872380631f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Smooth_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Smooth_BaseColor.png",
+      "size": 3964808,
+      "sha256": "85ba92f3f78b4765b477962d5b2f3307524c04a0c63e1d3354879e505537727d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Smooth_Normal.png",
+      "size": 5725707,
+      "sha256": "40140408cb32df1c3404f08937c09205f3a5120e7bfb5b51a8373ce052bbd89e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Smooth_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_White_BaseColor.png",
+      "size": 1759185,
+      "sha256": "29598b8f817e5de684d5d6eec92b9da9252c61e52d9ff818ef1290b3f5e1f58b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_White_Normal.png",
+      "size": 7460947,
+      "sha256": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_White_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Yellow_BaseColor.png",
+      "size": 2017363,
+      "sha256": "1faaa0c027f436dc3109443014e36893c492fb6d0a47e80d4fbeb9287f55fcc1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Yellow_Normal.png",
+      "size": 7460947,
+      "sha256": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Concrete_Yellow_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Curtains_BaseColor.png",
+      "size": 1808784,
+      "sha256": "9723efb0e61dc566b1a2984a466990ac06a2e7b462c7f0cf0cab533ee1a53c74"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Curtains_Normal.png",
+      "size": 2758433,
+      "sha256": "a701d19a45bc1069c9caad4ee9be0f69cc4cb24d509c89a75d26c30712e4d663"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Curtains_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Details_Dark_BaseColor.png",
+      "size": 4092212,
+      "sha256": "5f28f980fac7b1f3bf917cb07279b4c1b678bd51e128bc1aa6ce31e49cdd7121"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Details_Dark_Normal.png",
+      "size": 4824528,
+      "sha256": "9d882d227b212f23f54d9d805bc507225f65c6dd058e8c736fefc4c3b286a16d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Details_Dark_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Doors_BaseColor.png",
+      "size": 2050823,
+      "sha256": "93aa27a5a9d259579c81e6f0bd36cbfccfdc572e12ba621253079b01b9f91ce1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Doors_Normal.png",
+      "size": 1892728,
+      "sha256": "d96866ad212b1051543f97a197b36022c46dbf18a76be88198d3a7d07b4999e3"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Doors_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Focus_BaseColor.png",
+      "size": 1428530,
+      "sha256": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Focus_Normal.png",
+      "size": 781207,
+      "sha256": "88ccb6dccf7c2fe73dec372a093f9e62738a455d10ecaf67b41655fb25d49e3c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Focus_Ornament_BaseColor.png",
+      "size": 2433068,
+      "sha256": "48b53c400a7d403fb5686a20d85924d1b934cf7c5ff03bd81ca1dc540d629e4e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Focus_Ornament_Normal.png",
+      "size": 3065880,
+      "sha256": "93c63a2acaae94e2d4cb32330361309a3567a6292ff8c23f4b40075b012133c4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Focus_Ornament_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Focus_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Forge_Metal_BaseColor.png",
+      "size": 1689507,
+      "sha256": "0519235a85f844b12cd6f1e2993d9352916e2e7cc3fcc1b15d4ff2df472a60da"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Forge_Metal_Normal.png",
+      "size": 1747189,
+      "sha256": "66bf10ecce01f2fd5731ef0eec285d426642ab858afd322386780e4117348a86"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Forge_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Frosted_Glass_BaseColor.png",
+      "size": 94,
+      "sha256": "e65709bd1155f866bfe8de8b0614a1aa86a9a58c06a9ca12d85b5f8d41984761"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Frosted_Glass_Normal.png",
+      "size": 5931734,
+      "sha256": "a99e294ffff4818a76c0cd821c5a9975362febbc589105180d65f1d4adf5c8b5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Frosted_Glass_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Dirty_BaseColor.png",
+      "size": 1573733,
+      "sha256": "c936fef8acc8b0a88db68f80221fec5965904fdd5ab40b83999f202c7e2d931e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Dirty_MASKED_BaseColor.png",
+      "size": 1573469,
+      "sha256": "b614d09ac27e569333435a6d74aa565d7cfa1ead9ff1f895e64609a3c33cfdc9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Dirty_MASKED_Normal.png",
+      "size": 16915,
+      "sha256": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Dirty_MASKED_Specular.png",
+      "size": 74,
+      "sha256": "5848ad2f0b3b116bbdcef826615d09364970b5124d666ce1abf9ee8b10f9fd36"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Dirty_Normal.png",
+      "size": 16915,
+      "sha256": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Dirty_Specular.png",
+      "size": 74,
+      "sha256": "5848ad2f0b3b116bbdcef826615d09364970b5124d666ce1abf9ee8b10f9fd36"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Exterior_BaseColor.png",
+      "size": 1573733,
+      "sha256": "c936fef8acc8b0a88db68f80221fec5965904fdd5ab40b83999f202c7e2d931e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Exterior_Normal.png",
+      "size": 16915,
+      "sha256": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Glass_Exterior_Specular.png",
+      "size": 74,
+      "sha256": "5848ad2f0b3b116bbdcef826615d09364970b5124d666ce1abf9ee8b10f9fd36"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Grain_Metal_BaseColor.png",
+      "size": 94,
+      "sha256": "e0a382cb9478c8d4089fe29268110d69d4a7c36e2e907d3a147b98c6ebb8aad2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Grain_Metal_Normal.png",
+      "size": 7990767,
+      "sha256": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Grain_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Light_Bulb_BaseColor.png",
+      "size": 1428530,
+      "sha256": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Light_Bulb_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Light_Bulb_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Metal_BaseColor.png",
+      "size": 94,
+      "sha256": "3e7b77f56b44b142b0e1437f9722a137ab6d90fecf7d0978176b932cbc3a578d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Metal_Normal.png",
+      "size": 1613112,
+      "sha256": "3665fffe0acf6adb8ac1f3db07950a88cfaf1dc3c9e4233bacf95be0bc3c4d8f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Metal_Pipe_BaseColor.png",
+      "size": 94,
+      "sha256": "e0a382cb9478c8d4089fe29268110d69d4a7c36e2e907d3a147b98c6ebb8aad2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Metal_Pipe_Normal.png",
+      "size": 7990767,
+      "sha256": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Metal_Pipe_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Plastic_BaseColor.png",
+      "size": 849240,
+      "sha256": "e006ac396658a5b330471f3535a17c32001f828724f5fcfdc9e5a113da022765"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Plastic_Normal.png",
+      "size": 7990767,
+      "sha256": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Plastic_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Rollup_Door_BaseColor.png",
+      "size": 94,
+      "sha256": "97b6f5d5c78490ee3d1abe8a4dcce6d804d42525a4d25f689c9494382c2fe90e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Rollup_Door_Normal.png",
+      "size": 4028713,
+      "sha256": "ae77ac9ea8862f46053e29207cdbcc27bbe0b1e28a5a851281e1f7c6a37ed1e4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Rollup_Door_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Metal_01_BaseColor.png",
+      "size": 2026868,
+      "sha256": "b010489dbd2b0eea76be987810b4641f6377339d252b4655761252754c76f573"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Metal_01_Normal.png",
+      "size": 4659421,
+      "sha256": "9b559616bc4fa795c239be699f8235afb6d02633e72172ad15b23e67d5941ea8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Metal_01_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Shingle_Green_BaseColor.png",
+      "size": 5441808,
+      "sha256": "97a62776c7475988f4c9603f91af178cc0d670ddd5dfc9bdb4f966b80c2dd4c7"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Shingle_Green_Normal.png",
+      "size": 4187216,
+      "sha256": "d9810d082555ccb258bf354f5c3b2acba062f8a7a9830dd32c9580bf60d31148"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Shingle_Green_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Shingle_Grey_BaseColor.png",
+      "size": 3999899,
+      "sha256": "beaacaddd8be0ecdb216c5484819c9de40e152422e594f92f907cf230651e7ba"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Shingle_Grey_Normal.png",
+      "size": 8523580,
+      "sha256": "6f18e728bd27335fbcbd83cb7e81e60115919a1056c6c3f499d4ce42497418e9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Roofing_Shingle_Grey_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Room_Interior_BaseColor.png",
+      "size": 653376,
+      "sha256": "9e0f36149993b0c9b98e69756078a7465271c259d1af2d2f0a1e2e53c30d6473"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Room_Interior_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Room_Interior_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Side_Letters_BaseColor.png",
+      "size": 1338268,
+      "sha256": "a73d6cea793c5db3ef390ddaa9ed253fff6d7400d46c3aa38ccee520d32d8865"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Side_Letters_Normal.png",
+      "size": 2128817,
+      "sha256": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Side_Letters_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Trim_Cornice_BaseColor.png",
+      "size": 80528,
+      "sha256": "61efa695c56c180da0d8fcb3e83dcb124f4456a3efc005d2161b3220fe156483"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Trim_Cornice_Normal.png",
+      "size": 90171,
+      "sha256": "ea1534f69a5e9d07deaec73bda76089cec16e8fcc9b09d2645279557a780548a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Trim_Cornice_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Brown_BaseColor.png",
+      "size": 4535467,
+      "sha256": "8a875fcb9741b33b788de5585081ffc501e7b424a94e6f1b460027c569fd02e5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Brown_Normal.png",
+      "size": 1132729,
+      "sha256": "12d56456ec768aaf1f5419fd3dceb1ff6c63b5e1b20304d4770b4506d12140a4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Brown_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted3_BaseColor.png",
+      "size": 1557052,
+      "sha256": "f7be1f0bc21574b528787786d1ebb2b3d88fccbbf3c2a3e12e7d13cc2a3721ac"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted3_Normal.png",
+      "size": 2128817,
+      "sha256": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted3_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Cyan_BaseColor.png",
+      "size": 1086339,
+      "sha256": "575e34a8d5ac6421a1ae5870f7a766120de08db91e292120c48347a45c651dfc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Cyan_Normal.png",
+      "size": 2128817,
+      "sha256": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Cyan_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Green_BLENDSHADER_BaseColor.png",
+      "size": 1557052,
+      "sha256": "f7be1f0bc21574b528787786d1ebb2b3d88fccbbf3c2a3e12e7d13cc2a3721ac"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Green_BLENDSHADER_Normal.png",
+      "size": 2128817,
+      "sha256": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Green_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Green_BaseColor.png",
+      "size": 1163251,
+      "sha256": "7f75aebe619d485434957258145a45ca88c27d46d04e248bf29733980b9c202b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Green_Normal.png",
+      "size": 2128817,
+      "sha256": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Painted_Green_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Polished_BaseColor.png",
+      "size": 4535467,
+      "sha256": "8a875fcb9741b33b788de5585081ffc501e7b424a94e6f1b460027c569fd02e5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Polished_Normal.png",
+      "size": 1132729,
+      "sha256": "12d56456ec768aaf1f5419fd3dceb1ff6c63b5e1b20304d4770b4506d12140a4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MASTER_Wood_Polished_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_01_BaseColor.png",
+      "size": 2463616,
+      "sha256": "d9c68eb6b88a922cd97b6ec6733c682ae255c375f1af109e3efa36cd8d6929cc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_01_Normal.png",
+      "size": 2244215,
+      "sha256": "62074f452ca6330f82fbd0200a7a0ff46145cd8fa932ab0b9558fe25b9681213"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_01_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_02_Glass_BaseColor.png",
+      "size": 1573733,
+      "sha256": "c936fef8acc8b0a88db68f80221fec5965904fdd5ab40b83999f202c7e2d931e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_02_Glass_Normal.png",
+      "size": 16915,
+      "sha256": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_02_Glass_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_02_Mesh_BaseColor.png",
+      "size": 1215633,
+      "sha256": "3599b407ddf5f126591d7239b2ec0c4a828939f1d998b70f12566ac0afa7e859"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_02_Mesh_Normal.png",
+      "size": 1323426,
+      "sha256": "0b22d94c59aea3983a1dbb946f6b209832580633e1e55044d7ccfb153c6a48c8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/MenuSign_02_Mesh_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/NapkinHolder_BaseColor.png",
+      "size": 1325847,
+      "sha256": "da8ba010d6a26f435705b8101dfe7b3e6993c0a7009c00cad102c10b82e86133"
+    },
+    {
+      "path": "assets/bistro/converted/textures/NapkinHolder_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/NapkinHolder_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_Chair_01_BaseColor.png",
+      "size": 1686517,
+      "sha256": "12df2d143c8678e4081c2969cacd34135ba6661a7af06e126748d63825c62c1a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_Chair_01_Normal.png",
+      "size": 3468883,
+      "sha256": "a62b33d4403e3dd85dd9e81de12656e4e3b4890a457d352a82e7048992c4a961"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_Chair_01_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Caps_BaseColor.png",
+      "size": 364210,
+      "sha256": "6ef5cbb50754c17a63059079eafceea56648aa56d6ef904fa6a6f319c771d40d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Caps_Normal.png",
+      "size": 1326068,
+      "sha256": "a470985264934f9dcd123c33b12a95a538f67c9d423ead3924489e47f73227bd"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Caps_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Glass_Wine_BaseColor.png",
+      "size": 94,
+      "sha256": "1081ca34263872d14c9ed64a7e1e283afc098f9dcfc7ecbe721bd93cc272c70c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Glass_Wine_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Glass_Wine_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Labels_BaseColor.png",
+      "size": 76,
+      "sha256": "232c2eac760eae604f9dd43352c0b272396b7cfaf220081b54583b6d0cbc2320"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_LiquorBottle_01_Labels_Normal.png",
+      "size": 16917,
+      "sha256": "f13e765618939828b3477d0670e8cc564ea80bc55c191196fcde0106d1317604"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StreetPivot_BaseColor.png",
+      "size": 913825,
+      "sha256": "fb22c2929f2118044cfaf07d26e98b69995ed5ecd5073123016967818029fbee"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StreetPivot_Normal.png",
+      "size": 1456316,
+      "sha256": "bbec76279b03b4009954c64152db220cb960765dfd61bd4e6c03629e31080591"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StreetPivot_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StreetSign_01_BaseColor.png",
+      "size": 2317973,
+      "sha256": "a36bb029b8c9dafc8afed7995ef92962d35cf61c3d6292b6b9a6350e65b849ca"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StreetSign_01_Normal.png",
+      "size": 3050034,
+      "sha256": "db41a0d7043074088e27c5946385ae5ed036c2f966958866ee9f0ce4c617ac75"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StreetSign_01_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Blue_Color_Emissive_BaseColor.png",
+      "size": 94,
+      "sha256": "47d07644bc83d51e76af2c7375664ee8612d900e75ef2f1c4701454aedffc8c1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Blue_Color_Emissive_Emissive.png",
+      "size": 183,
+      "sha256": "e2b6ead33e453c7d6908a2b7863604412fd6df8f4e7f5655f6c624c3fa9e0f42"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Blue_Color_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Blue_Color_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Green_Color_Emissive_BaseColor.png",
+      "size": 94,
+      "sha256": "dd29b72481d842dcc575c6ef294058d1fde280ce905b4bb12bae7323d048ff42"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Green_Color_Emissive_Emissive.png",
+      "size": 183,
+      "sha256": "d01dbee98ac89c39ad91912e307b8c4d44708055f1ab586e32c14a70be665400"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Green_Color_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Green_Color_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Orange_Color_Emissive_BaseColor.png",
+      "size": 94,
+      "sha256": "00bae71d01f12848cc31d186d82de07c940b74bdb98abc0ecdb37fb79bf55336"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Orange_Color_Emissive_Emissive.png",
+      "size": 184,
+      "sha256": "86769db0bff8593846422790c7645c9705627754ac872ac467423372f4608bbd"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Orange_Color_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Orange_Color_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Pink_Color_Emissive_BaseColor.png",
+      "size": 94,
+      "sha256": "33ab2e981d296c9d78c6f0df806e4375ef781f4a81199728e06200c668cb3cc9"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Pink_Color_Emissive_Emissive.png",
+      "size": 183,
+      "sha256": "886f2fd576b62b0c86322bb30a3bb038ecebc72c0b14bd3dbff8a25419142be0"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Pink_Color_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Pink_Color_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Red_Color_Emissive_BaseColor.png",
+      "size": 94,
+      "sha256": "eb19b0368a05ed8b2030241305c54be47b94dde076ccafc23eb137f1ea883617"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Red_Color_Emissive_Emissive.png",
+      "size": 181,
+      "sha256": "d7a2f254d41689ea526c7597564bb8aa0e92cdbd28341bcd8699f02fe3cb9994"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Red_Color_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_Red_Color_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_BaseColor.png",
+      "size": 94,
+      "sha256": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_Emissive_BaseColor.png",
+      "size": 94,
+      "sha256": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_Emissive_Emissive.png",
+      "size": 181,
+      "sha256": "df43710cdc7477a2e85a02cbdb383e85fbaf56e036e6fdd0f2c449be0fd00662"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_StringLights_01_White_Color_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_Table_Terrace_BaseColor.png",
+      "size": 2145708,
+      "sha256": "9c3bab3515b8f744c0f93720755b317dbfa7e032775a15c1c640917cbcc48cbd"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_Table_Terrace_Normal.png",
+      "size": 4309110,
+      "sha256": "a21bc3159bb07a09741128bb86578619eb84026134a277cc7448a8d605ae86ba"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_Table_Terrace_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_TrafficSign_A_BaseColor.png",
+      "size": 412301,
+      "sha256": "9db9b3ce9b2c1e9556c80e218782e87c83202ec103f293703fc24d6d874ef8de"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_TrafficSign_A_Normal.png",
+      "size": 1354012,
+      "sha256": "8680b7da0c94869ba8730cb1ce4600003d59cfff7c0d7042cbc186429d23a7e2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Paris_TrafficSign_A_Specular.png",
+      "size": 177458,
+      "sha256": "7bfa6b291cd0a80c15ece7eab9339a6e5cbf6aa9e28c8c37f99fa22c5775767c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Brick_BLENDSHADER_BaseColor.png",
+      "size": 5464506,
+      "sha256": "4adc65ae615b872eed9ead884fd44d91a522b3ae00f419f7ab2f1de29b2eeffd"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Brick_BLENDSHADER_Normal.png",
+      "size": 9693391,
+      "sha256": "d362ac025e425a9fcaa22b4b29326fa4ac9164ab82225be6a41559142b941f78"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Brick_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobble_Leaves_BLENDSHADER_BaseColor.png",
+      "size": 5357285,
+      "sha256": "1e25f1458e373b7f15798466efc2077a55f0b1ea6f000f6b7e9effe8b76fe3d4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobble_Leaves_BLENDSHADER_Normal.png",
+      "size": 7224109,
+      "sha256": "e1be597a83c79e3615e41933ffb800b78350fae38612edf7801a47909e75a7a2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobble_Leaves_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_01_BLENDSHADER_BaseColor.png",
+      "size": 5357285,
+      "sha256": "1e25f1458e373b7f15798466efc2077a55f0b1ea6f000f6b7e9effe8b76fe3d4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_01_BLENDSHADER_Normal.png",
+      "size": 7224109,
+      "sha256": "e1be597a83c79e3615e41933ffb800b78350fae38612edf7801a47909e75a7a2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_01_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_02_BaseColor.png",
+      "size": 6069649,
+      "sha256": "5c4a63cd7b8bde56fa27db7c8a5968c077cdd584cac054ee1eb6341b82eebdc5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_02_Normal.png",
+      "size": 9212627,
+      "sha256": "381b1e56dee3852ff77e88cf9dc4eaf2373906d9bd82d0ac5e4e455bf7695316"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_02_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Big_BLENDSHADER_BaseColor.png",
+      "size": 3219328,
+      "sha256": "4b8d170e58b87be3a171713d759e670354c83dc1d204df3b678a99bec76fb65c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Big_BLENDSHADER_Normal.png",
+      "size": 8299098,
+      "sha256": "d1e7312276d6ed0f5fc1eeb8007c2e983dc8d06b37b27c7f90d5dfa8a4396e3a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Big_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Small_BLENDSHADER_BaseColor.png",
+      "size": 2626119,
+      "sha256": "03d9bed5048072ab3130e622171913d52386dd6eaafda150a9cea6a7e0a814ed"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Small_BLENDSHADER_Normal.png",
+      "size": 8029935,
+      "sha256": "f3365a0f5f8d86d5ad00e5a808dc947c43f39cae5567874b0c38c0c06d421e92"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Small_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Wet_BLENDSHADER_BaseColor.png",
+      "size": 4984490,
+      "sha256": "180e0de6692fd88d6e16e0d5ce201e1be93d34ebabe0ee0a8a6c6d1bb426afc4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Wet_BLENDSHADER_Normal.png",
+      "size": 6137600,
+      "sha256": "0847e04b70838b37c5f27cac361da0299b52c98ea06e4e859e77db1d15cd7249"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Wet_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_BaseColor.png",
+      "size": 4984490,
+      "sha256": "180e0de6692fd88d6e16e0d5ce201e1be93d34ebabe0ee0a8a6c6d1bb426afc4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_Normal.png",
+      "size": 6137600,
+      "sha256": "0847e04b70838b37c5f27cac361da0299b52c98ea06e4e859e77db1d15cd7249"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Curbstones_BaseColor.png",
+      "size": 3960442,
+      "sha256": "6ddc0c9666baf82b16894f1dba3cb17864c29f1c777db48bad4c3d6bcf81e716"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Curbstones_Normal.png",
+      "size": 5374467,
+      "sha256": "d52c034f68bfa77a4165a34f74ac3df084290c2a4aee1572245e66733bb3f8f6"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Curbstones_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Ground_Wet_BaseColor.png",
+      "size": 5799854,
+      "sha256": "fa7e49b1278d58b74d834b1516b43103bcffffee3f324c2a1c98159aba989995"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Ground_Wet_Normal.png",
+      "size": 8714520,
+      "sha256": "157355562abbc6ddb937edee1ad53b664dc2958dc8a31f6bc8785404476cac6b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Ground_Wet_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Manhole_Cover_BaseColor.png",
+      "size": 5557915,
+      "sha256": "5dd894a3f9d68e0ce4fd9c4f9fb06be40e6092793e3a36424c3ffa6addaf7d2f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Manhole_Cover_Normal.png",
+      "size": 7501681,
+      "sha256": "c8550f5d637642294e2d5cac68664382de3a44c6421f08382530852358b00090"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Pavement_Manhole_Cover_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Plantpots_BaseColor.png",
+      "size": 4484899,
+      "sha256": "d8c25e7bf05144cf0a9afad2dd5e581d791c1f029a75c6e7eaebd6390ba54397"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Plantpots_Normal.png",
+      "size": 5612924,
+      "sha256": "b43134bf33da5cbd87b68660a9df40723d3eeed8a327496280060d48e8f3dad1"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Plantpots_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Plaster_BaseColor.png",
+      "size": 5261007,
+      "sha256": "bf1e114b4ac856956c945f963abeeb9ff9a54762c581a55264227a9494aba5da"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Plaster_Normal.png",
+      "size": 9475227,
+      "sha256": "817e84a8c89502d021cf6acc76add6f9ac66bae45379fec5a09c84a4c548c93b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Plaster_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Bakery_BaseColor.png",
+      "size": 2101508,
+      "sha256": "dcf317b2a4241eb1e73f5ab683ccd583df0cafe030aeded42b4506f9bf58eafb"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Bakery_Normal.png",
+      "size": 195960,
+      "sha256": "629895acb60101471c8eea19808fae67acbde777fcdbe19381fd467b20275d7e"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Bakery_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Book_Store_Emissive_BaseColor.png",
+      "size": 2419213,
+      "sha256": "d794e1e75418cf12cd3fdf5f0bb0ebbd6b57b65ca7b6ed1c1e4b0681caf59edc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Book_Store_Emissive_Emissive.png",
+      "size": 2275768,
+      "sha256": "e325bf2d740a9b4eb267a3f589e4429600e4e5dce21d224087b8442ca584fca3"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Book_Store_Emissive_Normal.png",
+      "size": 607942,
+      "sha256": "dab22783073435d15483fdec6df44d4b32a4aa1eabbbde4b62eab99e7e8e7ccb"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Book_Store_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Pharmacy_Emissive_BaseColor.png",
+      "size": 1462147,
+      "sha256": "3dd9204e7152711d8e29803bd40185bf92103ac3d9390a54de0d63671e34557d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Pharmacy_Emissive_Emissive.png",
+      "size": 1698720,
+      "sha256": "b05e604e5a1a8df4d27d3daee3bfe61933cc01365060403b4a2af3de823eac01"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Pharmacy_Emissive_Normal.png",
+      "size": 26469,
+      "sha256": "8c9ae9a04dd320d741f920c3aea90456574e7cde9cd51fd35998fdd0fbb8ad12"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Pharmacy_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Ties_Shop_BaseColor.png",
+      "size": 240071,
+      "sha256": "3f0ca7a47522eae44c08b6f61014f9577710538da23a9fdfe673b5d28d526da8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Ties_Shop_Normal.png",
+      "size": 655406,
+      "sha256": "63d5a322d42fa451bf3442052595098d2c7f84dede9d188c3fd2f21d58b91c6b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Shopsign_Ties_Shop_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Sidewalkbarrier_BaseColor.png",
+      "size": 1467379,
+      "sha256": "ec73463156c63c7e3db266c0defe775b636880f39cdbf3b7b986a92a6d23aaa2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Sidewalkbarrier_Normal.png",
+      "size": 3023314,
+      "sha256": "bbb1c883958e1a7c7daa13ab9976d8062df7a0304157888651357d38d9a06756"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Sidewalkbarrier_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Emissive_BaseColor.png",
+      "size": 1428530,
+      "sha256": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Emissive_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Glass_Emissive_BaseColor.png",
+      "size": 811050,
+      "sha256": "fc770ad05255391931a7a247ad5bc347ff8a5f64ece8993d282ca344f4256295"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Glass_Emissive_Emissive.png",
+      "size": 181,
+      "sha256": "df43710cdc7477a2e85a02cbdb383e85fbaf56e036e6fdd0f2c449be0fd00662"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Glass_Emissive_Normal.png",
+      "size": 3489973,
+      "sha256": "86b15a507b19f4fea3425e69a6fe371964894e782749e2287f75ad621bf92cec"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Glass_Emissive_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Main_BaseColor.png",
+      "size": 1428530,
+      "sha256": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Main_Normal.png",
+      "size": 781207,
+      "sha256": "88ccb6dccf7c2fe73dec372a093f9e62738a455d10ecaf67b41655fb25d49e3c"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Spotlight_Main_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Chains_BaseColor.png",
+      "size": 131707,
+      "sha256": "fa4189ddc750d95c1e976c8f3ca2097c6ef708ffdd2346db225c11f07a70344f"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Chains_Normal.png",
+      "size": 1064288,
+      "sha256": "f477c7e8de1df1177d403bfd2c62898a5c1cd03b81fd616ea61b2b1a58897c3b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Chains_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Metal_BaseColor.png",
+      "size": 1486048,
+      "sha256": "7119a92a218ab069fdffc3357a7dd616c056f8f9dc4b7f5aea0ed77aeae5f976"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Metal_Normal.png",
+      "size": 5957173,
+      "sha256": "80747c4269138ee959ced52cadc72bb24f0093d3eb305da91fd54ac9bc17c0a8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Metal_Specular.png",
+      "size": 91,
+      "sha256": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Support_Bulb_BaseColor.png",
+      "size": 94,
+      "sha256": "69ae864a1e891a42735135999761c923da1b0b733ecd36994e6de4c21450a162"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Support_Bulb_Normal.png",
+      "size": 16915,
+      "sha256": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Streetlight_Support_Bulb_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Stringlights_BaseColor.png",
+      "size": 441411,
+      "sha256": "b035651eb42758f2b27849690c38359b3b78f4dcce35e58f8eff15d60b40c81d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Stringlights_Normal.png",
+      "size": 1444945,
+      "sha256": "9b3ce628d75dd3a7f882e04942da789a45ef3c239727e076f77ca8ff645ad1a4"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Stringlights_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Trashcan_BaseColor.png",
+      "size": 2547667,
+      "sha256": "48a37eeffc9533a3c8aff0b861f991402250cff3171d99a2c09c12fb4f1284b5"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Trashcan_Normal.png",
+      "size": 2176660,
+      "sha256": "242331b6d046303983b3f8a69ee4ddceac1952e06aea1461dc6160dc1e7e1190"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Trashcan_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_BaseColor.png",
+      "size": 1902309,
+      "sha256": "9f4639abe7164c797227dade10e67e7cfcc2f5e5e8f97e84d503a4dbdc7e657d"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Headlight_BaseColor.png",
+      "size": 94,
+      "sha256": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Headlight_Normal.png",
+      "size": 3778429,
+      "sha256": "edbbcee656971a39143ae5cee0c55d85d37a2800b96ddad28e9d3a3f0fc199f7"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Headlight_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Normal.png",
+      "size": 3778429,
+      "sha256": "edbbcee656971a39143ae5cee0c55d85d37a2800b96ddad28e9d3a3f0fc199f7"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Odometer_BaseColor.png",
+      "size": 1034743,
+      "sha256": "daf7a582b21f6c03cd431745b0cef98f2f228e30af323c39342f362c625cbff2"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Odometer_Glass_BaseColor.png",
+      "size": 94,
+      "sha256": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Odometer_Glass_Normal.png",
+      "size": 69,
+      "sha256": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Odometer_Glass_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Odometer_Normal.png",
+      "size": 342106,
+      "sha256": "f4d0ab4872530f3bd6cb73e198186ea82ff110788686ce0cfa6a10aa9ffb32d8"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Odometer_Specular.png",
+      "size": 90,
+      "sha256": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a"
+    },
+    {
+      "path": "assets/bistro/converted/textures/Vespa_Specular.png",
+      "size": 811350,
+      "sha256": "40bb296db550dc83fce4d6c13658aa93b69cd5e5ed8e8e715f34a41bc2b55a1d"
+    },
+    {
+      "path": "assets/bistro/environment/san_giuseppe_bridge_4k.hdr",
+      "size": 23695717,
+      "sha256": "5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1eec65a50"
+    },
+    {
+      "path": "assets/bistro/source/Bistro_v5_2.zip",
+      "size": 894377473,
+      "sha256": "0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1"
+    },
+    {
+      "path": "docs/verification/bistro-assets-preview.png",
+      "size": 3422828,
+      "sha256": "b70ffa4e9f9f0727acdf6a0c2f83dadfc86b39eace115c73a87c365db86d6a5a"
+    }
+  ]
+}

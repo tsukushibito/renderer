@@ -520,6 +520,8 @@ UV/normal境界での頂点分割を考慮し、FBXからの変換を無損失�
 
 実配布`Bistro_v5_2.zip`は894,377,473 byteで、FBX独立解析は1,296 mesh Model・2,832,120三角形、
 132材質・405画像を確認した。全meshにauthored normalとTextureUV/LightMapUVがあり、tangent/colorはない。
+原本ZIP・検証済みglTF一式・環境HDRと比較PNGは[素材一覧](../../assets/bistro/README.md)のとおりGit LFSで共有し、
+パス・byte数・SHA-256をmanifestへ固定する。作業用展開・Blender・host用中間データは`.tools/`に分ける。
 標準のBlender処理が削除する2,894重複面には、逆向き980面、異なる法線やUVも含まれる。
 検証profileでは頂点indexだけを分離し、全三角形・向き・材質・属性を保持して通常のMesh検査を通す。
 FBXのraw CORNER normalを別属性に保存し、Blender内部の圧縮normalを経由せずglTFへ正規化出力する。

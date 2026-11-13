@@ -17,6 +17,7 @@
 | 実行環境・シェーダーの調査 | Vulkan SDK 1.4.341.1のvulkaninfo、glslc、spirv-val |
 | 依存・GPU内容の調査 | cargo-deny 0.20.2、RenderDoc 1.47。[ツールガイド](tooling.md)を参照 |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../../.beads/README.md)を参照 |
+| Bistro素材・比較画像の共有 | Git LFS。[素材一覧とライセンス](../../assets/bistro/README.md)を参照 |
 
 [rust-toolchain.toml](../../rust-toolchain.toml)がRust・rustfmt・clippyを固定します。
 初回のrustupやCargoによる取得にはネットワーク接続が必要です。
@@ -61,15 +62,39 @@ Windowsジョブはrunner付属のMSVCを使います。
 
 対象と描画条件は[実装方針の確定要件](../design/implementation-policy.md#bistro-requirements)に従う。
 このoffline検証はPython 3.11、NumPy 1.26.4、Pillow 11.1.0、Node 24、Blender 4.5.16 LTSを使う。
-素材・portable tool・全量reportはGit管理外の`.tools/bistro/`へ置く。通常のRustビルドはこれらへ依存しない。
-CIの`asset-tools`は小fixtureの検査だけを行い、BistroやBlenderをダウンロードしない。
+公式原本ZIP、検証済み屋外glTF一式と環境HDRは`assets/bistro/`、比較PNGは`docs/verification/`でGit LFS管理する。
+[素材manifest](../../assets/bistro/manifest.json)の410ファイルは合計1,772,787,715 byteである。
+作業用の展開・portable tool・全量reportはGit管理外の`.tools/bistro/`へ置く。通常のRustビルドはこれらへ依存しない。
+CIの`asset-tools`は小fixtureとLFSポインタを検査し、Bistro実体やBlenderをダウンロードしない。
+
+Git LFSを導入済みのcloneで、次を一度実行する。共用hooksはBeadsの処理とLFSの送信処理を保持し、
+pre-pushのref入力を両方へ渡す。`git lfs install --force`で上書きしない。
+
+```powershell
+git config --local core.hooksPath .beads/hooks
+git lfs install --local --skip-repo
+git lfs pull --include="assets/bistro/**,docs/verification/bistro-assets-preview.png" --exclude=""
+python -B tools/bistro/verify_lfs_assets.py
+```
+
+通常CIと同様に実体を取得しないclone/pullには`GIT_LFS_SKIP_SMUDGE=1`を設定する。
+そのcheckoutでは`python -B tools/bistro/verify_lfs_assets.py --pointers`で全ポインタのOID/sizeを照合できる。
+実体照合は`git lfs pull`後に行い、ポインタを実画像やZIPと取り違えない。
+`bd hooks install --beads`による更新でも、Beadsマーカー外のLFS処理を保持する。
 
 [NVIDIA公式ページ](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)のDownload入口は
 `https://developer.nvidia.com/bistro`である。redirect先の期限付きtokenは再現情報へ保存しない。
 `Bistro_v5_2.zip`のSHA-256は`0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1`。
 [Blender公式4.5配布](https://download.blender.org/release/Blender4.5/)の
 `blender-4.5.16-windows-x64.zip`は`e258e90a1ebc14798ad65b3426bc5f11f5e0e013541c61cc7c3ee9bbf4ca0ce6`。
-取得後にSHA-256を照合してから、それぞれ`source/`と`tools/`へ初回展開する。
+素材は共有済みの`assets/bistro/source/Bistro_v5_2.zip`を使える。公式から取得する場合も同じSHA-256を要求する。
+素材とBlenderはSHA-256を照合してから、それぞれ`.tools/bistro/source/`と`.tools/bistro/tools/`へ初回展開する。
+原本ZIPは`Bistro_v5_2/`を含むため、素材の初回展開は次で行う。既存の展開物を`-Force`で上書きしない。
+
+```powershell
+New-Item -ItemType Directory -Force .tools/bistro/source | Out-Null
+Expand-Archive -LiteralPath assets/bistro/source/Bistro_v5_2.zip -DestinationPath .tools/bistro/source
+```
 入力の変更は別配布物として再監査し、既存入力を上書きしない。同梱licenseとクレジットを保持する。
 
 次はルートからの実行例である。Python依存は専用venvへ導入してよい。
@@ -108,6 +133,7 @@ Blenderの63 byte超の名前短縮も固定版の規則で追跡し、Model/Geo
 
 別の出力先で変換コマンドをもう一度実行し、
 `tools/bistro/compare_outputs.py <first.gltf> <second.gltf> --output <report.json>`で全参照fileのbyte一致を確認する。
+共有済みの変換結果は`assets/bistro/converted/BistroExterior.gltf`であり、再生成物と同じコマンドで比較できる。
 `render_validation.py <source.blendまたは出力.gltf> <同じviews.json> <画像directory>`を同じBlender引数で実行すると、
 固定camera/lightのCycles CPU 8 sample・960×540画像を作る。`compare_previews.py`で比較画像と数値を保存する。
 これは変換QAであり、最終1920×1080の描画品質・Vulkan/D3D12の受入画像や性能値ではない。

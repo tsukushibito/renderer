@@ -58,9 +58,14 @@ SSH 認証とリポジトリへのアクセス権が必要です。
 
 ```powershell
 bd bootstrap --yes
-bd hooks install
+bd hooks install --beads
+git lfs install --local --skip-repo
 bd ready
 ```
+
+Git LFSも事前に導入してください。`--beads`はGit追跡済みの`.beads/hooks/`を使い、
+Beadsマーカー外にあるLFS処理を保持します。`git lfs install --force`で共用hooksを上書きしないでください。
+素材の取得とhash照合は[Bistro素材ガイド](../assets/bistro/README.md)に従います。
 
 同期先に課題 DB がまだ公開されていない場合、`bd bootstrap` は失敗することがあります。
 その場合は元の環境から先に `bd dolt push` を実行してください。

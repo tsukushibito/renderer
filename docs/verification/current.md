@@ -31,6 +31,13 @@ BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12�
 [機械可読の現在データ](bistro-assets.json)、見た目は[比較画像](bistro-assets-preview.png)、
 再現は[開発ガイド](../guides/development.md#bistro-preparation)を参照する。
 
+原本ZIP・検証済み屋外glTF一式・環境HDRと上記比較PNGはGit LFSで共有する。
+[素材一覧とライセンス](../../assets/bistro/README.md)、[全410ファイルのmanifest](../../assets/bistro/manifest.json)で
+パス・byte数・SHA-256を固定した。配置済み実体は計1,772,787,715 byteで、既存の検証済み407ファイルとbyte一致する。
+重複画像を共有するLFSオブジェクトは208個、計1,598,854,040 byteである。
+公開済み履歴は変更せず、比較PNGは今回のtipからLFSポインタへ移す。
+ライセンス・検証JSON・manifestは通常Git、toolや作業中間物は引き続きGit管理外である。
+
 | 確認 | 結果 |
 |---|---|
 | 公式入力 | `Bistro_v5_2.zip` 894,377,473 byte、SHA-256 `0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1`。FBXは`471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195`。同梱README/licenseもhash保存 |
@@ -59,7 +66,7 @@ PNGはbase mipだけで、元DDSとmip情報は保持する。これらの警告
 素材はAmazon Lumberyard Bistro / NVIDIA ORCA / [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
 配布元は[公式ページ](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)であり、画像は本検証で変換・描画した。
 
-検証ツールのローカルCPU試験はPython 30件・Node 5件成功。独立レビューで材質検査のAO用UV/transformと
+検証ツールのローカルCPU試験はPython 34件・Node 5件成功。独立レビューで材質検査のAO用UV/transformと
 予期しない発光の検出、重複三角形の対応、元FBXから正規化normalへの照合を補強し、回帰試験を追加した。
 文書4件のUTF-8/fence・相対link/anchor 79件・既存policyへのbacklinkと`git diff --check`を確認した。
 通常CIへ小fixtureの`asset-tools`を追加した。ローカルのRust/native GPU再実行はRenderer実装変更がないため対象外とし、
