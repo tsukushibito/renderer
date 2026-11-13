@@ -149,7 +149,7 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
             source_buffer
         );
         {
-            let latest = runtime.entry(source_image.key()).unwrap().physical.lock();
+            let latest = runtime.entry(source_image.key()).unwrap().physical().lock();
             assert_eq!(latest.scheduled.revision, source_image.revision);
             assert_eq!(
                 latest.scheduled.layout,

@@ -3,7 +3,7 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, CString};
 use std::fmt;
 use std::ops::Range;
@@ -392,12 +392,26 @@ impl Physical {
 struct Entry {
     generation: u32,
     registered: bool,
-    physical: Arc<Physical>,
+    // Trimming leaves the generation in place: a later allocation must never
+    // resurrect an old public ResourceKey, even when the native object is gone.
+    physical: Option<Arc<Physical>>,
 }
 
 impl Entry {
+    fn physical(&self) -> &Arc<Physical> {
+        self.physical.as_ref().expect("live resource entry")
+    }
+
+    fn idle(&self) -> bool {
+        !self.registered
+            && self
+                .physical
+                .as_ref()
+                .is_some_and(|physical| Arc::strong_count(physical) == 1)
+    }
+
     fn reusable(&self) -> bool {
-        !self.registered && Arc::strong_count(&self.physical) == 1 && self.generation < u32::MAX
+        self.idle() && self.generation < u32::MAX
     }
 }
 
@@ -447,6 +461,7 @@ pub struct VulkanRuntime {
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
     entries: Vec<Entry>,
+    vacant: BTreeSet<usize>,
     available: CacheIndex<CacheDescriptor>,
     recycle: Arc<RecycleQueue>,
     frames: frames::FrameQueue<frames::PendingFrame>,
@@ -516,6 +531,7 @@ impl VulkanRuntime {
             readback,
             programs: None,
             entries: Vec::new(),
+            vacant: BTreeSet::new(),
             available: CacheIndex::default(),
             recycle: Arc::new(RecycleQueue::default()),
             frames: frames::FrameQueue::new(config.execution_slots)?,
@@ -555,7 +571,7 @@ impl VulkanRuntime {
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        let physical = &self.entry(key)?.physical;
+        let physical = self.entry(key)?.physical();
         let ResourceDesc::Buffer(desc) = physical.desc else {
             return Err(RuntimeError::invalid("resource is not a buffer"));
         };
@@ -572,7 +588,7 @@ impl VulkanRuntime {
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        let physical = &self.entry(key)?.physical;
+        let physical = self.entry(key)?.physical();
         let ResourceDesc::Image(desc) = physical.desc else {
             return Err(RuntimeError::invalid("resource is not an image"));
         };
@@ -596,6 +612,34 @@ impl VulkanRuntime {
         Ok(())
     }
 
+    /// Release all unregistered physical resources without escaped leases.
+    ///
+    /// This is an explicit working-set boundary, for example after resizing or
+    /// leaving a level. It does not wait for or poll GPU completion, unregister
+    /// live resources, or release resources retained by recorded/pending work.
+    /// Call again after those owners retire to release the newly idle resources.
+    ///
+    /// Returns the number of native resource allocations released. VMA may keep
+    /// empty memory blocks for reuse; this is not a process VRAM byte guarantee.
+    pub fn trim_idle_resources(&mut self) -> usize {
+        self.collect_recycled();
+        let mut released = 0;
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            if !entry.idle() {
+                continue;
+            }
+            self.available.remove(index);
+            // The registry is the sole owner. Dropping its Arc destroys the
+            // native allocation and any content metadata, without a GPU wait.
+            entry.physical = None;
+            if entry.generation < u32::MAX {
+                self.vacant.insert(index);
+            }
+            released += 1;
+        }
+        released
+    }
+
     /// Exposing a logical resource name removes it from every reuse index.
     fn register(&mut self, index: usize) {
         self.available.remove(index);
@@ -609,8 +653,8 @@ impl VulkanRuntime {
         if entry.reusable() {
             self.available.insert(
                 index,
-                entry.physical.desc.into(),
-                entry.physical.lock().scheduled.serial,
+                entry.physical().desc.into(),
+                entry.physical().lock().scheduled.serial,
             );
         } else {
             self.available.remove(index);
@@ -625,7 +669,7 @@ impl VulkanRuntime {
 
     fn lease(&self, key: ResourceKey) -> Result<PhysicalLease, RuntimeError> {
         Ok(PhysicalLease::new(
-            Arc::clone(&self.entry(key)?.physical),
+            Arc::clone(self.entry(key)?.physical()),
             key.index as usize,
             Arc::clone(&self.recycle),
         ))
@@ -655,6 +699,7 @@ impl VulkanRuntime {
                 desc.into(),
                 self.entries.len(),
                 self.config.resource_capacity,
+                self.vacant.first().copied(),
                 |index| self.entries.get(index).is_some_and(Entry::reusable),
             )
             .map_err(|()| RuntimeError::capacity("graph physical resource capacity exhausted"))?;
@@ -662,7 +707,7 @@ impl VulkanRuntime {
             self.available.remove(index);
             let entry = &mut self.entries[index];
             entry.generation += 1;
-            let mut state = entry.physical.lock();
+            let mut state = entry.physical().lock();
             // Preserve actual native synchronization, never old logical contents.
             state.scheduled.initialized.clear();
             state.scheduled.provenance = BufferProvenance::default();
@@ -675,7 +720,7 @@ impl VulkanRuntime {
                     generation: entry.generation,
                 },
                 PhysicalLease::new(
-                    Arc::clone(&entry.physical),
+                    Arc::clone(entry.physical()),
                     index,
                     Arc::clone(&self.recycle),
                 ),
@@ -721,10 +766,11 @@ impl VulkanRuntime {
         let entry = Entry {
             generation,
             registered: false,
-            physical: Arc::clone(&physical),
+            physical: Some(Arc::clone(&physical)),
         };
         if replace.is_some() {
             self.available.remove(index);
+            self.vacant.remove(&index);
             self.entries[index] = entry;
         } else {
             self.entries.push(entry);
@@ -805,7 +851,7 @@ impl VulkanRuntime {
         // prepare rebases those from the latest canonical scheduled state.
         for resource in &graph.resources {
             if let Some(key) = resource.import {
-                let physical = &self.entry(key)?.physical;
+                let physical = self.entry(key)?.physical();
                 let state = physical.lock();
                 if physical.desc != resource.desc
                     || state.scheduled.revision != resource.import_revision

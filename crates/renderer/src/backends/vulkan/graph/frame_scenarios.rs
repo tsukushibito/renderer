@@ -189,7 +189,7 @@ fn vulkan_frames_delete_pending_resources_and_recover_readback_capacity() {
                 runtime.refresh_buffer(first_key).unwrap_err().kind(),
                 RuntimeErrorKind::StaleResource
             );
-            assert!(Arc::strong_count(&runtime.entries[first_key.index as usize].physical) > 1);
+            assert!(Arc::strong_count(runtime.entries[first_key.index as usize].physical()) > 1);
             drop(submitted);
             let (second, second_buffer, second_read) = make(2048, 41);
             let submitted = runtime.submit_frame(&second).unwrap();
