@@ -663,6 +663,15 @@ fn source_scope(
         } else {
             scope
         }
+    } else if previous.stage == current.stage && previous.access == current.access {
+        // A prior read-only layout transition already exposed this writer to
+        // this exact destination scope. A pipeline barrier's second scope also
+        // includes later commands on the same queue; no intervening write or
+        // layout transition has invalidated that visibility. Equality keeps
+        // this deliberately narrow and does not infer stage/access pairings
+        // from independently accumulated masks. Keep the writer below for a
+        // different reader scope and for subsequent writes/layout changes.
+        (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE)
     } else {
         // A COPY read does not by itself make an older COPY write visible to
         // vertex/index/shader reads. Preserve the last writer across readers,
@@ -883,6 +892,156 @@ mod tests {
         assert!(access.contains(vk::AccessFlags2::TRANSFER_WRITE));
         state.record_access(write, true, 11);
         assert_eq!(state.revision, 11);
+    }
+
+    #[test]
+    fn repeated_read_scope_reuses_visibility_without_losing_the_writer() {
+        let mut state = Snapshot {
+            revision: 7,
+            stage: vk::PipelineStageFlags2::COPY,
+            access: vk::AccessFlags2::TRANSFER_WRITE,
+            writer_stage: vk::PipelineStageFlags2::COPY,
+            writer_access: vk::AccessFlags2::TRANSFER_WRITE,
+            layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            ..Snapshot::default()
+        };
+        let sampled = usage(AccessPurpose::Sampled);
+        let mut dependencies = 0;
+        for reader in 0..8 {
+            let transition = state.layout != sampled.layout;
+            let source = source_scope(&state, sampled, transition);
+            dependencies += usize::from(!source.0.is_empty());
+            state.record_access(sampled, transition, 8 + reader);
+            state.layout = sampled.layout;
+        }
+        assert_eq!(
+            dependencies, 1,
+            "one writer-to-reader dependency covers all eight reads"
+        );
+        assert_eq!(state.revision, 7);
+        assert_eq!(
+            source_scope(&state.clone(), sampled, false),
+            (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE),
+            "an accepted read-only import snapshot keeps the same visibility"
+        );
+        for different_scope in [
+            usage(AccessPurpose::StorageRead),
+            Use {
+                access: vk::AccessFlags2::SHADER_STORAGE_READ,
+                ..sampled
+            },
+        ] {
+            assert_eq!(
+                source_scope(&state, different_scope, false),
+                (
+                    vk::PipelineStageFlags2::COPY,
+                    vk::AccessFlags2::TRANSFER_WRITE
+                ),
+                "a new reader stage or access type still needs writer visibility"
+            );
+        }
+        assert!(
+            !source_scope(&state, sampled, true).0.is_empty(),
+            "layout transitions remain ordered"
+        );
+        let mut write = usage(AccessPurpose::CopyDestination);
+        write.writes = true;
+        let (stage, access) = source_scope(&state, write, false);
+        assert!(
+            stage
+                .contains(vk::PipelineStageFlags2::FRAGMENT_SHADER | vk::PipelineStageFlags2::COPY)
+        );
+        assert!(
+            access
+                .contains(vk::AccessFlags2::SHADER_SAMPLED_READ | vk::AccessFlags2::TRANSFER_WRITE)
+        );
+        state.record_access(write, false, 16);
+        assert_eq!(state.revision, 16);
+        assert!(
+            !source_scope(&state, sampled, false).0.is_empty(),
+            "a later write invalidates read visibility"
+        );
+    }
+
+    #[test]
+    fn read_write_access_does_not_establish_visibility_for_a_later_read() {
+        let mut state = Snapshot::default();
+        let mut read_write = usage(AccessPurpose::StorageReadWrite);
+        read_write.writes = true;
+        state.record_access(read_write, false, 1);
+        assert_eq!(
+            source_scope(&state, read_write, false),
+            (read_write.stage, read_write.access),
+            "identical read/write scopes still need a write dependency"
+        );
+        assert_eq!(
+            source_scope(&state, usage(AccessPurpose::StorageRead), false),
+            (
+                vk::PipelineStageFlags2::COMPUTE_SHADER,
+                vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE
+            )
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit real GPU repeated reader visibility; run strict and shipping separately"]
+    fn vulkan_graph_repeated_reader_visibility() {
+        let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
+        tracing::dispatcher::with_default(&dispatch, || {
+            let mut runtime = VulkanRuntime::new(RuntimeConfig {
+                execution_slots: 3,
+                resource_capacity: 8,
+                staging_bytes: 4096,
+                max_shader_bindings: 4,
+            })
+            .unwrap();
+            let diagnostics = runtime.diagnostics.clone();
+            #[cfg(feature = "development-validation")]
+            crate::backends::vulkan::assert_real_validation(&diagnostics);
+            assert_ne!(
+                runtime.owner.device.device_type(),
+                vk::PhysicalDeviceType::CPU
+            );
+            let pixels = [
+                11, 23, 37, 255, 41, 53, 67, 255, 71, 83, 97, 255, 101, 113, 127, 255,
+            ];
+            let mut graph = Graph::new();
+            let source = graph.image("source", ImageDesc::rgba8(2, 2)).unwrap();
+            graph.upload_image("source.upload", source, pixels).unwrap();
+            graph.export_image(source).unwrap();
+            let mut producer = runtime.submit(&graph.compile().unwrap()).unwrap();
+            let exported = producer.export_image(source).unwrap();
+
+            let mut graph = Graph::new();
+            let source = graph.import_image("source", &exported).unwrap();
+            let mut reads = Vec::new();
+            for index in 0..3 {
+                let output = graph
+                    .image(format!("output.{index}"), ImageDesc::rgba8(2, 2))
+                    .unwrap();
+                graph
+                    .composite(format!("sample.{index}"), source, output)
+                    .unwrap();
+                reads.push(
+                    graph
+                        .readback_image(format!("read.{index}"), output)
+                        .unwrap(),
+                );
+            }
+            let mut consumer = runtime.submit(&graph.compile().unwrap()).unwrap();
+            let mut result = consumer.wait(Duration::from_secs(10)).unwrap().unwrap();
+            for read in reads {
+                assert_eq!(result.readback(read).unwrap(), pixels);
+            }
+            producer.wait(Duration::from_secs(10)).unwrap().unwrap();
+            runtime.delete(exported.key()).unwrap();
+            drop((producer, consumer, result, runtime));
+            assert!(
+                diagnostics.snapshot().is_clean(),
+                "{:#?}",
+                diagnostics.snapshot()
+            );
+        });
     }
     #[test]
     #[ignore = "explicit real GPU upload ownership and future index import test; requires Core/SyncVal"]
