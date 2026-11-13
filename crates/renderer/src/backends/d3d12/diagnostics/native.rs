@@ -27,11 +27,24 @@ impl State {
             D3D12_MESSAGE_SEVERITY_WARNING => report.warnings += 1,
             _ => {}
         }
-        if report.messages.len() < 1024 {
-            report.messages.push(message);
-        } else {
-            report.dropped_messages += 1;
+        if report.messages.len() == 1024 {
+            if message.severity > D3D12_MESSAGE_SEVERITY_WARNING {
+                // Keep bounded informational context without making a healthy
+                // long-lived runtime fail strict validation due to INFO volume.
+                return;
+            }
+            if let Some(index) = report
+                .messages
+                .iter()
+                .position(|stored| stored.severity > D3D12_MESSAGE_SEVERITY_WARNING)
+            {
+                report.messages.remove(index);
+            } else {
+                report.dropped_messages += 1;
+                return;
+            }
         }
+        report.messages.push(message);
     }
     fn fail(&self) {
         self.report
@@ -443,5 +456,39 @@ impl Drop for Session {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .teardown_checked = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn informational_history_is_bounded_and_preserves_problem_text_priority() {
+        let monitor = D3D12ValidationMonitor::new();
+        for id in 0..2048 {
+            monitor.state.push(D3D12ValidationMessage {
+                source: "D3D12",
+                severity: D3D12_MESSAGE_SEVERITY_INFO,
+                id,
+                message: "informational context".to_owned(),
+            });
+        }
+        let healthy = monitor.snapshot();
+        assert_eq!(healthy.messages.len(), 1024);
+        assert_eq!(healthy.dropped_messages, 0);
+        assert!(healthy.is_clean());
+        monitor.state.push(D3D12ValidationMessage {
+            source: "D3D12",
+            severity: D3D12_MESSAGE_SEVERITY_WARNING,
+            id: 3000,
+            message: "first warning must survive INFO truncation".to_owned(),
+        });
+        let problem = monitor.snapshot();
+        assert_eq!(problem.messages.len(), 1024);
+        assert_eq!(problem.warnings, 1);
+        assert_eq!(problem.dropped_messages, 0);
+        assert!(problem.messages.iter().any(|message| message.id == 3000));
+        assert!(!problem.is_clean());
     }
 }
