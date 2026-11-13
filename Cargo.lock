@@ -1135,6 +1135,7 @@ dependencies = [
  "ash-window",
  "criterion",
  "raw-window-handle",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "vk-mem",

@@ -1,0 +1,2 @@
+# Generated Rust is byte-compared with fixed-input regeneration.
+/crates/renderer/src/backends/d3d12/bindings.rs text eol=lf

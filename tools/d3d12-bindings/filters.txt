@@ -5,7 +5,7 @@ ID3D12Debug::EnableDebugLayer
 ID3D12Debug1::SetEnableGPUBasedValidation
 ID3D12DebugDevice::ReportLiveDeviceObjects
 ID3D12InfoQueue1::{RegisterMessageCallback,UnregisterMessageCallback}
-ID3D12InfoQueue::{GetNumStoredMessages,GetNumMessagesDeniedByStorageFilter,GetNumMessagesDiscardedByMessageCountLimit,GetMessage,SetMessageCountLimit}
+ID3D12InfoQueue::{GetNumStoredMessages,GetNumMessagesDeniedByStorageFilter,GetNumMessagesDiscardedByMessageCountLimit,GetMessage,SetMessageCountLimit,GetStorageFilter,ClearStorageFilter,ClearRetrievalFilter}
 ID3D12Device::{CheckFeatureSupport,CreateCommittedResource,GetResourceAllocationInfo}
 ID3D12Resource::{GetDesc,GetHeapProperties,Map,Unmap}
 D3D12_FEATURE_DATA_D3D12_OPTIONS
@@ -22,6 +22,7 @@ DXGIGetDebugInterface1
 IDXGIFactory1::EnumAdapters1
 IDXGIAdapter1::GetDesc1
 IDXGIAdapter::CheckInterfaceSupport
+IDXGIDevice::{}
 IDXGIInfoQueue::{GetNumStoredMessages,GetNumMessagesDeniedByStorageFilter,GetNumMessagesDiscardedByMessageCountLimit,GetMessage,SetMessageCountLimit}
 DXGI_DEBUG_ALL
 DXGI_CREATE_FACTORY_DEBUG
@@ -31,3 +32,19 @@ DXGI_FORMAT_R8G8B8A8_UNORM
 
 ID3D12DebugDevice1::GetDebugParameter
 D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS
+D3D12_DEBUG_DEVICE_PARAMETER_TYPE
+D3D12_FEATURE
+D3D_SHADER_MODEL
+D3D_ROOT_SIGNATURE_VERSION
+D3D12_FORMAT_SUPPORT1
+D3D12_FORMAT_SUPPORT2
+D3D12_RESOURCE_DIMENSION
+D3D12_TEXTURE_LAYOUT
+D3D12_HEAP_TYPE
+D3D12_CPU_PAGE_PROPERTY
+D3D12_MEMORY_POOL
+D3D12_HEAP_FLAGS
+D3D12_MESSAGE_SEVERITY
+DXGI_INFO_QUEUE_MESSAGE_SEVERITY
+DXGI_FORMAT_UNKNOWN
+D3D12_MESSAGE_ID_CREATEDEVICE_DEBUG_LAYER_STARTUP_OPTIONS
