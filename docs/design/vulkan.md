@@ -199,7 +199,7 @@ GPU完了または未投入キャンセルを確認してから再利用する�
 pipeline作成に失敗した際も、部分的に作成できたhandleを解放する。
 
 頂点はmodel座標xyz（入力W=1）とlinear rgbaで、描画ごとのMVPでclip座標へ変換する。
-既存`Graph::raster`はidentity MVPと白tintを使うため、従来のclip-space入力を維持する。
+`RasterDraw.parameters`へ`RasterParameters::default()`を指定するとidentity MVPと白tintを使う。
 頂点shader用push constantはcolumn-major mat4がoffset 0、linear tint vec4がoffset 64の計80 byte。
 実Deviceの上限を照会し、pipeline layoutと記録のstage・offset・sizeを一致させる。
 色と行列はGraphの不変operandとして保持し、後続frameのCPU入力変更に依存しない。
@@ -230,7 +230,10 @@ Vulkan 1.3基準のまま、追加featureなしで区間内へ任意のbarrier�
 任意shaderや異なるパスへこの統合条件を自動適用するものではない。
 
 用途は資源keyの`BTreeMap`へ集約してstage/access/writeを合成し、同じbufferのVertex/Index両用途も保つ。
-全drawのindexを各頂点範囲・Device上限で記録前に確認し、失敗はpassとdraw番号の文脈を伴って返す。
+全drawのindex保証を各頂点範囲・Device上限で記録前に確認し、失敗はpassとdraw番号の文脈を伴って返す。
+管理下meshは取込時に確立した不変count／最大値を使い、index本文や検査用CPU byte列を再保持しない。
+任意Graph入力では部分byte更新にも必要な内容追跡を維持し、同countの最大値要約を再利用する。
+保証の継承・失効・未知内容の拒否は[Graphの内容契約](rendergraph.md#producer範囲attachment)に従う。
 GraphWorkはdraw列・全物理資源・不変Programを完了まで保持し、pending中のasset更新・削除でも上書きしない。
 clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・pending所有と、
 共有/異なる多数meshの比較結果を[現在の検証状況](../verification/current.md#draw-listの本実装と比較計測)へ記録する。

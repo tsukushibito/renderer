@@ -6,7 +6,7 @@ Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出�
 [Vulkanの設計](vulkan.md)、実行済みの確認は[検証状況](../verification/current.md)を参照する。
 
 検証処理の配置・製品構成からの除去には[製品版と開発用の検証方針](../guides/validation-policy.md)を適用する。
-以下は現在のAPI・動作の契約であり、方針の制定だけで検査を無効化できるようになったとは扱わない。
+以下は現在のAPI・動作の契約である。backend選択、追加検証、診断保持は独立に選ぶ。
 
 ## 対応範囲と処理の境界
 
@@ -29,7 +29,8 @@ bufferの異なるbyte範囲には異なるproducerがあり得る。
 一つのパスのreadをすべて検査してからwriteを反映するため、
 `read_write`宣言自体では未初期化内容を初期化できない。
 forwardの明示依存は実行順序を制約するが、readが読むversionを変更しない。
-明示依存の先は意味的な前提として残し、循環はdeadな部分も含めて拒否する。
+明示依存の先は意味的な前提として残す。liveな循環は常に拒否し、
+`development-validation`ではdeadな部分の循環も診断する。製品構成は除去されるだけの循環を拒否しない。
 ハンドルはappend-onlyなGraph内だけで有効で、別Graphでの利用を拒否する。
 
 `Graph::image_desc(ImageHandle)`はownerと画像の型を検査し、`ImageDesc`を返す。
@@ -60,8 +61,10 @@ native記録中の任意の実行callbackは提供しないので、Graph構築�
 upload本文は不変の`Arc<[u8]>`で共有し、compileで全量を複製しない。
 既存の`upload_buffer`／`upload_image`はVec入力を受け取り、共有表現へ一度変換する。
 `upload_buffer_shared`／`upload_image_shared`へ同じArcを渡せば、Graphの再構築でも入力を共有できる。
-compiled planには除去したパスの名前・アクセス等の診断情報を残し、実行本文は保持しない。
-dumpは要求時に一度生成する。
+compiled planは除去したパスの実行本文を保持しない。確定した順序に不要な明示依存列も保持しない。
+`graph-diagnostics`だけがdump用の依存・寿命の解析情報とculled accessを保持し、
+`CompiledGraph::dump()`を提供する。文字列は要求時に一度生成する。
+`culled_pass_names()`は保持済みのculled操作を参照し、独立したlive索引を要求しない。
 論理dumpにはアクセス用途も含む。Vulkanの`submit_with_diagnostics`は、成功した投入と
 実際のloweringの診断文字列を返す。通常の`submit`はこの文字列を生成しない。
 診断にはpass／論理resource、物理key・世代・native handle、import初期予定状態、
@@ -69,15 +72,27 @@ dumpは要求時に一度生成する。
 文字列は資源の所有を保持せず、GPU完了tokenでもない。native handle等は実行ごとに変わるため、
 安定した機械可読形式や実行間で同一のdumpは保証しない。
 
+`Graph::raster(name, draw, attachments)`は名前付きの`RasterDraw`と`RasterAttachments`を受け取る。
+drawはvertex／index buffer・index count・`RasterParameters`をまとめ、
+attachmentsはcolorの`Attachment<[f32; 4]>`とdepthの`Attachment<f32>`を区別する。
+各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
+`Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
+既定の描画引数には`RasterParameters::default()`を明示する。
+
 Attachmentは画像全域をrender areaとする。`Load`は既存内容を要求し、
-`Clear`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
+`Clear(value)`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
 確立したとみなさない。storeの`Discard`は後続の内容を無効にする。
 `Load`／`Clear`と`Store`の組だけが、meshの外側も含めた有効内容を引き継げる。
 exportする資源の全域にも有効な内容を要求する。
 
 メッシュは7個のf32（xyz、linear rgba）、stride 28 byte、u32の三角形indexを使う。
 CPUのRust構造体を直接キャストせず、各値を明示的にbyteへ変換する。
-runtimeはupload・copyから既知のindex内容を追跡し、index値が頂点数未満であることを確認する。
+`MeshData::new`はindex内容を一度検査し、最大値とcountを不変byte列に対応づける。
+privateな管理下uploadはこの保証と既知のprefixを引き継ぐ。全量が確立した通常mesh描画は
+index本文を走査せず、頂点数と実Device上限を要約から照合する。検査用のupload Arcも保持しない。
+CPU assetや投入前のstaging入力自体の所有は別の必要な寿命である。
+
+任意Graph入力ではruntimeがupload・copyから既知のindex内容を追跡し、index値が頂点数未満であることを確認する。
 Deviceの実際の`maxDrawIndexedIndexValue`も確認し、確認できない内容や範囲外indexを
 native命令の記録前に拒否する。featureを有効化していないことから上限を固定値へ置き換えない。
 
@@ -85,17 +100,17 @@ native命令の記録前に拒否する。featureを有効化していないこ�
 部分書き換え・copyの未知の穴を保持し、sliceを跨ぐindexも一時bufferを作らず検査する。
 既知sliceは開始位置をkeyとする`BTreeMap`で管理し、write／copyでは対象区間と重なる部分だけを
 検索・更新する。全segmentの移動や再sortを更新ごとに行わない。
-index検査は同じ内容・index数・頂点数・Device上限について直近1件の結果を再利用する。
-write／copyによる置換は成功・失敗のどちらのcacheも失効させ、条件が変われば再検査する。
-不変内容のsnapshot cloneはcacheを引き継げるが、元とcloneの後続更新は独立して失効する。
+一般入力のindex検査は同じ内容・index数について最大値を一度求める。
+頂点数／Device上限が変わってもこの要約を比較し、同じindex本文を再走査しない。
+write／copyによる置換で要約を失効し、snapshot cloneの後続更新も独立して扱う。
 現在のindex用途とそのcopy元、import／exportしたbufferに必要な内容だけを追跡する。
 import／exportしたbufferは後のGraphでindexに使えるため、元の入力を共有したまま保持する。
 この保持は新しいCPUミラーの作成とは異なるが、小さなsliceが元の入力全体を保持する場合はある。
 
-これは現在のruntimeの保証方法である。製品向けには、取込済みの不変meshの保証を引き継ぎ、
-全index走査と検証専用CPU保持を描画経路から外すことを優先する。
-任意のGraph upload／copyに同じ保証があるとは仮定せず、範囲・内容更新・Device条件での失効を設計する。
-追加診断と、safeな計画・必要な同期を成立させる処理を分離してから変更する。
+管理下要約はprivate markerに結び付け、一般writeでは失効する。位置を保つ完全copyだけが保証を継承する。
+全countより短いdrawや部分copyを要約だけから保証済みとみなさず、証明できなければ`UnknownContents`として拒否する。
+任意の部分byte更新・copy・将来のindex importに必要なprovenanceは、safe入力の保証として製品にも残る。
+全Graph uploadのCPU保持を削除した実装とは説明しない。
 [保証の移動](../guides/validation-policy.md#guarantees)と[Graphの分類](../guides/validation-policy.md#graph)を参照する。
 
 ## 論理的な依存と実行順
@@ -111,13 +126,14 @@ reader履歴はindexで参照する不変のarenaへ保持し、区間の分割�
 writeで複数区間のreaderを辿る際も共有tailを重複して走査しない。arenaはcompileの解析中だけ存在し、
 長い連鎖の破棄で再帰する所有構造にはしない。複雑な重複範囲で触る区間数や必要な依存自体が
 増える費用は残るため、すべての入力に線形時間を保証するものではない。
-全宣言の循環を確認してから、残ったパスだけで順序依存を組み直す。
+開発構成では全宣言の循環を確認し、通常の実行順は残ったパスだけで順序依存を組み直す。
 除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
 
-compile時のパス内競合検査は、範囲・用途を宣言順で検査してからwrite範囲を資源ごとに並べる。
-write同士の重複を拒否し、readは整列済みwrite列から重複候補を検索する。
-read/readの組や無関係な資源の全組合せを調べず、Aアクセス・W writeに対して
-O(A log(W+2))の処理とO(W)の一時情報で検査する。dataflowとパス間hazardの意味は変えない。
+解析専用の`declare_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
+共有の競合検査は宣言順で最初の衝突pairを選び、read/readや無関係な資源の総当たりをしない。
+Aアクセスに対してO(A log A)の処理とO(A)の一時情報で、全readならO(A)、一時allocationなしとなる。
+private builderが保証した入力のcompile再点検は`development-validation`へ分離する。
+producer・初期化・culling・live hazard／topological計画・最終内容の確定は製品でも実行する。
 
 ## GPU状態と所有
 
