@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
-use crate::graph::{BufferDesc, ComputeTransform, Graph, ImageDesc};
+use crate::graph::{BufferDesc, ComputeTransform, Graph, ImageDesc, RasterParameters};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -290,9 +290,12 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
             )
             .unwrap();
         let readback = graph.readback_image("read", color).unwrap();
-        let (mut submission, lowering) = runtime
-            .submit_with_diagnostics(&graph.compile().unwrap())
-            .unwrap();
+        let compiled = graph.compile().unwrap();
+        #[cfg(feature = "graph-diagnostics")]
+        let (mut submission, lowering) = runtime.submit_with_diagnostics(&compiled).unwrap();
+        #[cfg(not(feature = "graph-diagnostics"))]
+        let mut submission = runtime.submit(&compiled).unwrap();
+        #[cfg(feature = "graph-diagnostics")]
         assert!(
             lowering.lines().any(|line| {
                 line.trim_start().starts_with("buffer=")
@@ -879,7 +882,11 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             #[cfg(feature = "graph-diagnostics")]
             assert_eq!(compiled.culled_pass_names(), ["unused-branch"]);
             assert!(!compiled.ordered_pass_names().contains(&"unused-branch"));
+            #[cfg(feature = "graph-diagnostics")]
             let (mut producer, lowering) = runtime.submit_with_diagnostics(&compiled).unwrap();
+            #[cfg(not(feature = "graph-diagnostics"))]
+            let mut producer = runtime.submit(&compiled).unwrap();
+            #[cfg(feature = "graph-diagnostics")]
             for field in [
                 "physical_key owner=",
                 "initial_scheduled revision=",
@@ -897,6 +904,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             ] {
                 assert!(lowering.contains(field), "missing {field}: {lowering}");
             }
+            #[cfg(feature = "graph-diagnostics")]
             assert!(!lowering.contains("unused-branch"));
             let exported = producer.export_image(final_image).unwrap();
             // No CPU wait occurs between A and B. B inherits accepted native
@@ -917,13 +925,18 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let consumer_read = consumer
                 .readback_image("consumer-read", destination)
                 .unwrap();
-            let (mut pending_consumer, lowering) = runtime
-                .submit_with_diagnostics(&consumer.compile().unwrap())
-                .unwrap();
+            let consumer = consumer.compile().unwrap();
+            #[cfg(feature = "graph-diagnostics")]
+            let (mut pending_consumer, lowering) =
+                runtime.submit_with_diagnostics(&consumer).unwrap();
+            #[cfg(not(feature = "graph-diagnostics"))]
+            let mut pending_consumer = runtime.submit(&consumer).unwrap();
+            #[cfg(feature = "graph-diagnostics")]
             assert!(lowering.contains(&format!(
                 "imported=true import_revision={}",
                 exported.revision
             )));
+            #[cfg(feature = "graph-diagnostics")]
             assert!(lowering.contains("pending-final"));
             runtime.delete(exported.key()).unwrap(); // pending users retain allocation/view
             let mut consumer_result = pending_consumer

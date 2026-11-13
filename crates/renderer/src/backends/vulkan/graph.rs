@@ -4,9 +4,6 @@
 //! recorded reference, and accepted state is distinct from actual completion.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::CStr;
-#[cfg(feature = "vulkan-diagnostics")]
-use std::ffi::CString;
 use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,16 +18,16 @@ use super::device::{DeviceInitError, DeviceState, VulkanDevice};
 use super::diagnostics::{Diagnostics, DiagnosticsHandle};
 use super::instance::{InitError, PrerequisiteFailure, VulkanInstance};
 use super::memory::{AllocatorInitError, MemoryOwner, VulkanAllocator};
-use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
-use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPayload};
+use super::transfer::staging::{SharedStaging, StagingError};
+use super::transfer::{ExecutionPool, PendingTransfer, TransferError};
 use crate::graph::{
-    AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
-    ImageHandle, ImportBuffer, ImportImage, LoadAction, MeshUpload, Operation, PassHandle,
-    RasterDrawOperands, RasterParameters, ResourceDesc, ResourceKey, StoreOp,
+    BufferHandle, CompiledGraph, ImageFormat, ImageHandle, ImportBuffer, ImportImage, Operation,
+    PassHandle, ResourceDesc, ResourceKey,
 };
 
 mod cache;
-mod diagnostics;
+#[cfg(feature = "graph-diagnostics")]
+use work::diagnostics;
 mod environment;
 mod frames;
 mod metrics;
@@ -41,16 +38,23 @@ mod resources;
 mod shaders;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
+mod work;
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
 pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
 #[cfg(all(feature = "presentation", windows))]
 pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
-use provenance::{BufferProvenance, IndexError};
-use resources::GraphBuffer;
-use shaders::{GraphImage, ShaderBindings, ShaderNeeds, ShaderPrograms};
+use provenance::BufferProvenance;
+use resources::{GraphBuffer, GraphImage};
+use shaders::{ShaderNeeds, ShaderPrograms};
+use work::GraphWork;
 
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(feature = "graph-diagnostics")]
+type LoweringCapture = Option<String>;
+#[cfg(not(feature = "graph-diagnostics"))]
+type LoweringCapture = ();
 
 /// Explicit bounds; acquisition never waits or exceeds the configured capacities.
 #[derive(Clone, Copy, Debug)]
@@ -330,23 +334,6 @@ impl Default for Snapshot {
             writer_stage: vk::PipelineStageFlags2::NONE,
             writer_access: vk::AccessFlags2::NONE,
             provenance: BufferProvenance::default(),
-        }
-    }
-}
-
-impl Snapshot {
-    fn record_access(&mut self, current: Use, layout_change: bool, serial: u64) {
-        if !current.writes && !layout_change {
-            self.stage |= current.stage;
-            self.access |= current.access;
-        } else {
-            self.stage = current.stage;
-            self.access = current.access;
-        }
-        if current.writes {
-            self.writer_stage = current.stage;
-            self.writer_access = current.access;
-            self.revision = serial;
         }
     }
 }
@@ -794,8 +781,12 @@ impl VulkanRuntime {
     /// Records one compiled graph and submits it once. It does not wait for any
     /// prior graph. Imported snapshots must still match canonical accepted state.
     pub fn submit(&mut self, graph: &CompiledGraph) -> Result<Submission, RuntimeError> {
-        self.submit_inner(graph, false)
-            .map(|(submission, _)| submission)
+        self.submit_inner(
+            graph,
+            #[cfg(feature = "graph-diagnostics")]
+            false,
+        )
+        .map(|(submission, _)| submission)
     }
 
     /// Submit with an owned diagnostic dump of the actual native lowering.
@@ -803,6 +794,7 @@ impl VulkanRuntime {
     /// barriers recorded for each pass. It is built before native recording and
     /// returned only after successful submission; it is not a completion token.
     /// Ordinary `submit` does not build diagnostic strings or retain a trace.
+    #[cfg(feature = "graph-diagnostics")]
     pub fn submit_with_diagnostics(
         &mut self,
         graph: &CompiledGraph,
@@ -817,8 +809,8 @@ impl VulkanRuntime {
     fn submit_inner(
         &mut self,
         graph: &CompiledGraph,
-        capture_diagnostics: bool,
-    ) -> Result<(Submission, Option<String>), RuntimeError> {
+        #[cfg(feature = "graph-diagnostics")] capture_diagnostics: bool,
+    ) -> Result<(Submission, LoweringCapture), RuntimeError> {
         self.collect_recycled();
         let profile_started = self.profiling_enabled.then(Instant::now);
         self.owner
@@ -912,6 +904,7 @@ impl VulkanRuntime {
         } else {
             None
         };
+        #[cfg(feature = "graph-diagnostics")]
         let mut diagnostic = capture_diagnostics.then(|| {
             diagnostics::begin(
                 graph,
@@ -921,6 +914,8 @@ impl VulkanRuntime {
                 &physical,
             )
         });
+        #[cfg(not(feature = "graph-diagnostics"))]
+        let diagnostic = ();
         let mut work = GraphWork::prepare(
             Arc::clone(&self.owner),
             graph,
@@ -930,6 +925,7 @@ impl VulkanRuntime {
             bindings,
             &self.upload,
             &self.readback,
+            #[cfg(feature = "graph-diagnostics")]
             diagnostic.as_mut(),
         )?;
         work.profile = timestamp.map(|lease| {
@@ -1092,988 +1088,6 @@ impl SubmissionResult {
         value.read(&mut bytes)?;
         range.take();
         Ok(bytes)
-    }
-}
-
-/// Recording operands contain no CPU upload payload. The shared input's last
-/// owner can disappear as soon as staging/provenance no longer needs it.
-enum PreparedOperation {
-    UploadBuffer {
-        dst: usize,
-        offset: u64,
-        size: u64,
-    },
-    CopyBuffer {
-        src: usize,
-        dst: usize,
-        src_offset: u64,
-        dst_offset: u64,
-        size: u64,
-    },
-    UploadImage {
-        dst: usize,
-    },
-    CopyImage {
-        src: usize,
-        dst: usize,
-    },
-    ReadbackBuffer {
-        src: usize,
-        offset: u64,
-        size: u64,
-    },
-    ReadbackImage {
-        src: usize,
-    },
-    Compute {
-        dst: usize,
-        transform: ComputeTransform,
-    },
-    Raster {
-        vertices: usize,
-        indices: usize,
-        index_count: u32,
-        color: usize,
-        depth: usize,
-        color_ops: AttachmentOps,
-        depth_ops: AttachmentOps,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-        parameters: RasterParameters,
-    },
-    RasterBatch {
-        draws: Arc<[RasterDrawOperands]>,
-        color: usize,
-        depth: usize,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-    },
-    ClearAttachments {
-        color: usize,
-        depth: usize,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-    },
-    Composite {
-        dst: usize,
-    },
-}
-
-impl TryFrom<&Operation> for PreparedOperation {
-    type Error = RuntimeError;
-
-    fn try_from(operation: &Operation) -> Result<Self, Self::Error> {
-        Ok(match *operation {
-            Operation::UploadBuffer {
-                dst,
-                offset,
-                ref source,
-                ..
-            } => Self::UploadBuffer {
-                dst,
-                offset,
-                size: source.len() as u64,
-            },
-            Operation::CopyBuffer {
-                src,
-                dst,
-                src_offset,
-                dst_offset,
-                size,
-            } => Self::CopyBuffer {
-                src,
-                dst,
-                src_offset,
-                dst_offset,
-                size,
-            },
-            Operation::UploadImage { dst, .. } => Self::UploadImage { dst },
-            Operation::CopyImage { src, dst } => Self::CopyImage { src, dst },
-            Operation::ReadbackBuffer { src, offset, size } => {
-                Self::ReadbackBuffer { src, offset, size }
-            }
-            Operation::ReadbackImage { src } => Self::ReadbackImage { src },
-            Operation::Compute { dst, transform, .. } => Self::Compute { dst, transform },
-            Operation::Raster {
-                vertices,
-                indices,
-                index_count,
-                color,
-                depth,
-                color_ops,
-                depth_ops,
-                clear_color,
-                clear_depth,
-                parameters,
-            } => Self::Raster {
-                vertices,
-                indices,
-                index_count,
-                color,
-                depth,
-                color_ops,
-                depth_ops,
-                clear_color,
-                clear_depth,
-                parameters,
-            },
-            Operation::RasterBatch {
-                ref draws,
-                color,
-                depth,
-                clear_color,
-                clear_depth,
-            } => Self::RasterBatch {
-                draws: Arc::clone(draws),
-                color,
-                depth,
-                clear_color,
-                clear_depth,
-            },
-            Operation::ClearAttachments {
-                color,
-                depth,
-                clear_color,
-                clear_depth,
-            } => Self::ClearAttachments {
-                color,
-                depth,
-                clear_color,
-                clear_depth,
-            },
-            Operation::Composite { dst, .. } => Self::Composite { dst },
-            Operation::Culled | Operation::Declared(_) => {
-                return Err(RuntimeError::unsupported(
-                    "pass has no executable operation",
-                ));
-            }
-        })
-    }
-}
-
-fn index_error(error: IndexError) -> RuntimeError {
-    match error {
-        IndexError::UnknownContents => {
-            RuntimeError::unsupported("raster indices must have CPU-known upload/copy contents")
-        }
-        IndexError::VertexBounds {
-            index,
-            vertex_count,
-        } => RuntimeError::invalid(format!(
-            "raster index {index} exceeds declared vertex count {vertex_count}",
-        )),
-        IndexError::DeviceLimit { index, maximum } => RuntimeError::unsupported(format!(
-            "raster index {index} exceeds Device maxDrawIndexedIndexValue {maximum}",
-        )),
-    }
-}
-
-fn provenance_requirements(graph: &CompiledGraph) -> (Vec<bool>, Vec<bool>) {
-    // Every canonical buffer may become indices in a future graph, even when
-    // this graph does not export it again. Transient vertex/transfer-only data
-    // needs no CPU provenance. Mark sources of copies feeding required buffers.
-    let mut retained = graph
-        .resources
-        .iter()
-        .map(|resource| {
-            resource.import.is_some() && matches!(resource.desc, ResourceDesc::Buffer(_))
-        })
-        .collect::<Vec<_>>();
-    for &resource in &graph.exports {
-        if matches!(graph.resources[resource].desc, ResourceDesc::Buffer(_)) {
-            retained[resource] = true;
-        }
-    }
-    let mut needed = retained.clone();
-    for &pass in &graph.order {
-        match &graph.passes[pass].operation {
-            Operation::Raster { indices, .. } => needed[*indices] = true,
-            Operation::RasterBatch { draws, .. } => {
-                for draw in draws.iter() {
-                    needed[draw.indices] = true;
-                }
-            }
-            _ => {}
-        }
-    }
-    for &pass in graph.order.iter().rev() {
-        if let Operation::CopyBuffer { src, dst, .. } = graph.passes[pass].operation
-            && needed[dst]
-        {
-            needed[src] = true;
-        }
-    }
-    (needed, retained)
-}
-
-struct PreparedPass {
-    #[cfg(feature = "vulkan-diagnostics")]
-    name: CString,
-    operation: PreparedOperation,
-    buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
-    images: Vec<vk::ImageMemoryBarrier2<'static>>,
-    staging: Option<usize>,
-    descriptor: Option<vk::DescriptorSet>,
-}
-
-struct GraphWork {
-    owner: Arc<MemoryOwner>,
-    physical: Vec<Option<PhysicalLease>>,
-    final_states: Vec<Option<Snapshot>>,
-    serial: u64,
-    passes: Vec<PreparedPass>,
-    uploads: Vec<StagingRange>,
-    readbacks: Vec<(usize, Option<StagingRange>)>,
-    programs: Option<Arc<ShaderPrograms>>,
-    bindings: Option<ShaderBindings>,
-    profile: Option<metrics::WorkProfile>,
-}
-
-impl GraphWork {
-    #[allow(clippy::too_many_arguments)]
-    fn prepare(
-        owner: Arc<MemoryOwner>,
-        graph: &CompiledGraph,
-        serial: u64,
-        physical: Vec<Option<PhysicalLease>>,
-        programs: Option<Arc<ShaderPrograms>>,
-        mut bindings: Option<ShaderBindings>,
-        upload: &SharedStaging,
-        readback: &SharedStaging,
-        mut diagnostic: Option<&mut String>,
-    ) -> Result<Self, RuntimeError> {
-        let mut states = physical
-            .iter()
-            .map(|value| value.as_ref().map(|value| value.lock().scheduled.clone()))
-            .collect::<Vec<_>>();
-        let (provenance_needed, retain_provenance) = provenance_requirements(graph);
-        let mut passes = Vec::new();
-        let mut uploads = Vec::new();
-        let mut readbacks = Vec::new();
-        for &index in &graph.order {
-            let pass = &graph.passes[index];
-            if let Some(output) = diagnostic.as_deref_mut() {
-                diagnostics::pass(output, index, pass);
-            }
-            let mut prepared = PreparedPass {
-                #[cfg(feature = "vulkan-diagnostics")]
-                name: CString::new(pass.name.as_str())
-                    .map_err(|_| RuntimeError::invalid("pass debug name contains a NUL byte"))?,
-                operation: PreparedOperation::try_from(&pass.operation)?,
-                buffers: Vec::new(),
-                images: Vec::new(),
-                staging: None,
-                descriptor: None,
-            };
-            // Aggregate one pass's uses before modifying previous-access state;
-            // disjoint self-copies must not appear to depend on themselves.
-            let mut uses: BTreeMap<usize, Use> = BTreeMap::new();
-            for access in &pass.accesses {
-                let current = usage(access.purpose);
-                let target = uses.entry(access.resource).or_default();
-                target.stage |= current.stage;
-                target.access |= current.access;
-                target.writes |= access.write;
-                if current.layout != vk::ImageLayout::UNDEFINED {
-                    target.layout = current.layout;
-                }
-            }
-            for (resource, current) in uses {
-                let native = physical[resource].as_ref().unwrap();
-                let previous = states[resource].as_mut().unwrap();
-                let layout_change = matches!(native.native, NativeResource::Image(_))
-                    && previous.layout != current.layout;
-                let (source_stage, source_access) = source_scope(previous, current, layout_change);
-                let dependency = !source_stage.is_empty();
-                match &native.native {
-                    NativeResource::Buffer(buffer) if dependency => {
-                        prepared.buffers.push(
-                            vk::BufferMemoryBarrier2::default()
-                                .src_stage_mask(source_stage)
-                                .src_access_mask(source_access)
-                                .dst_stage_mask(current.stage)
-                                .dst_access_mask(current.access)
-                                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                                .buffer(buffer.handle)
-                                .offset(0)
-                                .size(buffer.size),
-                        );
-                    }
-                    NativeResource::Image(image) if dependency || layout_change => {
-                        prepared.images.push(
-                            vk::ImageMemoryBarrier2::default()
-                                .src_stage_mask(source_stage)
-                                .src_access_mask(source_access)
-                                .dst_stage_mask(current.stage)
-                                .dst_access_mask(current.access)
-                                .old_layout(previous.layout)
-                                .new_layout(current.layout)
-                                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                                .image(image.image)
-                                .subresource_range(
-                                    vk::ImageSubresourceRange::default()
-                                        .aspect_mask(image.aspect)
-                                        .level_count(1)
-                                        .layer_count(1),
-                                ),
-                        );
-                    }
-                    _ => {}
-                }
-                if let Some(output) = diagnostic.as_deref_mut() {
-                    let buffer = prepared.buffers.last().filter(|barrier| {
-                        dependency
-                            && matches!(&native.native, NativeResource::Buffer(buffer)
-                            if buffer.handle == barrier.buffer)
-                    });
-                    let image = prepared.images.last().filter(|barrier| {
-                        (dependency || layout_change)
-                            && matches!(&native.native, NativeResource::Image(image)
-                                if image.image == barrier.image)
-                    });
-                    diagnostics::dependency(
-                        output,
-                        resource,
-                        previous,
-                        current,
-                        layout_change,
-                        buffer,
-                        image,
-                    );
-                }
-                previous.record_access(current, layout_change, serial);
-                if matches!(native.native, NativeResource::Image(_)) {
-                    previous.layout = current.layout;
-                }
-            }
-            (|| -> Result<(), RuntimeError> {
-                match &pass.operation {
-                    Operation::UploadBuffer {
-                        dst,
-                        offset,
-                        bytes,
-                        source,
-                        mesh,
-                    } => {
-                        let slice = &bytes[source.clone()];
-                        let mut range = upload.allocate(slice.len() as u64)?;
-                        range.write(slice)?;
-                        prepared.staging = Some(uploads.len());
-                        uploads.push(range);
-                        if provenance_needed[*dst] {
-                            let target = *offset..*offset + slice.len() as u64;
-                            let provenance = &mut states[*dst].as_mut().unwrap().provenance;
-                            match mesh {
-                                Some(MeshUpload::Vertices) => {
-                                    *provenance = BufferProvenance::default()
-                                }
-                                Some(MeshUpload::Indices { byte_len, maximum }) => {
-                                    provenance.write_mesh_indices(target, *byte_len, *maximum);
-                                }
-                                None => provenance.write_slice(
-                                    target,
-                                    Arc::clone(bytes),
-                                    source.clone(),
-                                ),
-                            }
-                        }
-                    }
-                    Operation::CopyBuffer {
-                        src,
-                        dst,
-                        src_offset,
-                        dst_offset,
-                        size,
-                    } => {
-                        if provenance_needed[*dst] {
-                            let contents = states[*src]
-                                .as_ref()
-                                .unwrap()
-                                .provenance
-                                .copied(*src_offset..*src_offset + *size, *dst_offset);
-                            states[*dst]
-                                .as_mut()
-                                .unwrap()
-                                .provenance
-                                .replace(*dst_offset..*dst_offset + *size, contents);
-                        }
-                    }
-                    Operation::UploadImage { bytes, .. } => {
-                        let mut range = upload.allocate(bytes.len() as u64)?;
-                        range.write(bytes)?;
-                        prepared.staging = Some(uploads.len());
-                        uploads.push(range);
-                    }
-                    Operation::ReadbackBuffer { size, .. } => {
-                        prepared.staging = Some(readbacks.len());
-                        readbacks.push((index, Some(readback.allocate(*size)?)));
-                    }
-                    Operation::ReadbackImage { src } => {
-                        let ResourceDesc::Image(desc) = graph.resources[*src].desc else {
-                            unreachable!()
-                        };
-                        prepared.staging = Some(readbacks.len());
-                        readbacks.push((index, Some(readback.allocate(desc.byte_len().unwrap())?)));
-                    }
-                    Operation::Compute { src, dst, .. } => {
-                        prepared.descriptor = Some(bindings.as_mut().unwrap().compute(
-                            physical[*src].as_ref().unwrap().image(),
-                            physical[*dst].as_ref().unwrap().image(),
-                        )?);
-                    }
-                    Operation::Composite { src, .. } => {
-                        prepared.descriptor = Some(
-                            bindings
-                                .as_mut()
-                                .unwrap()
-                                .composite(physical[*src].as_ref().unwrap().image())?,
-                        );
-                    }
-                    Operation::Raster {
-                        vertices,
-                        indices,
-                        index_count,
-                        ..
-                    } => {
-                        let vertex_count = graph.resources[*vertices].desc.units() / 28;
-                        states[*indices]
-                            .as_mut()
-                            .unwrap()
-                            .provenance
-                            .validate_indices(
-                                *index_count,
-                                vertex_count,
-                                owner.device.max_draw_indexed_index_value(),
-                            )
-                            .map_err(index_error)?;
-                    }
-                    Operation::RasterBatch { draws, .. } => {
-                        for (draw_index, draw) in draws.iter().enumerate() {
-                            let vertex_count = graph.resources[draw.vertices].desc.units() / 28;
-                            states[draw.indices]
-                                .as_mut()
-                                .unwrap()
-                                .provenance
-                                .validate_indices(
-                                    draw.index_count,
-                                    vertex_count,
-                                    owner.device.max_draw_indexed_index_value(),
-                                )
-                                .map_err(|error| {
-                                    index_error(error).context(format!("draw {draw_index}"))
-                                })?;
-                        }
-                    }
-                    Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}
-                    Operation::Culled | Operation::Declared(_) => {
-                        return Err(RuntimeError::unsupported(
-                            "declaration-only pass is not executable",
-                        ));
-                    }
-                }
-                Ok(())
-            })()
-            .map_err(|error| error.context(format!("pass {:?}", pass.name)))?;
-            passes.push(prepared);
-        }
-        for (index, state) in states.iter_mut().enumerate() {
-            if let Some(state) = state {
-                state.serial = serial;
-                state.initialized = graph.final_contents[index].clone();
-                // Transient index validation has finished. Only canonical imports
-                // and exports can acquire a future index role in another graph.
-                if !retain_provenance[index] {
-                    state.provenance = BufferProvenance::default();
-                }
-            }
-        }
-        if let Some(output) = diagnostic {
-            diagnostics::finish(output, graph, &states, !readbacks.is_empty());
-        }
-        Ok(Self {
-            owner,
-            physical,
-            final_states: states,
-            serial,
-            passes,
-            uploads,
-            readbacks,
-            programs,
-            bindings,
-            profile: None,
-        })
-    }
-
-    fn resource(&self, index: usize) -> &Physical {
-        self.physical[index].as_ref().unwrap()
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Use {
-    stage: vk::PipelineStageFlags2,
-    access: vk::AccessFlags2,
-    layout: vk::ImageLayout,
-    writes: bool,
-}
-impl Default for Use {
-    fn default() -> Self {
-        Self {
-            stage: vk::PipelineStageFlags2::NONE,
-            access: vk::AccessFlags2::NONE,
-            layout: vk::ImageLayout::UNDEFINED,
-            writes: false,
-        }
-    }
-}
-
-fn usage(purpose: AccessPurpose) -> Use {
-    use AccessPurpose::*;
-    let (stage, access, layout) = match purpose {
-        CopySource => (
-            vk::PipelineStageFlags2::COPY,
-            vk::AccessFlags2::TRANSFER_READ,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        ),
-        CopyDestination => (
-            vk::PipelineStageFlags2::COPY,
-            vk::AccessFlags2::TRANSFER_WRITE,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        ),
-        StorageRead => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::SHADER_STORAGE_READ,
-            vk::ImageLayout::GENERAL,
-        ),
-        StorageWrite => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::SHADER_STORAGE_WRITE,
-            vk::ImageLayout::GENERAL,
-        ),
-        StorageReadWrite => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
-            vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE,
-            vk::ImageLayout::GENERAL,
-        ),
-        Sampled => (
-            vk::PipelineStageFlags2::FRAGMENT_SHADER,
-            vk::AccessFlags2::SHADER_SAMPLED_READ,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        ),
-        Vertex => (
-            vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT,
-            vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-            vk::ImageLayout::UNDEFINED,
-        ),
-        Index => (
-            vk::PipelineStageFlags2::INDEX_INPUT,
-            vk::AccessFlags2::INDEX_READ,
-            vk::ImageLayout::UNDEFINED,
-        ),
-        ColorAttachment => (
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        ),
-        DepthAttachment => (
-            vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
-                | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
-            vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
-                | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
-            vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
-        ),
-    };
-    Use {
-        stage,
-        access,
-        layout,
-        writes: false,
-    }
-}
-
-fn source_scope(
-    previous: &Snapshot,
-    current: Use,
-    layout_change: bool,
-) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
-    if current.writes || layout_change {
-        let scope = (
-            previous.stage | previous.writer_stage,
-            previous.access | previous.writer_access,
-        );
-        if layout_change && previous.layout == vk::ImageLayout::UNDEFINED && scope.0.is_empty() {
-            // A fresh, unaliased image permits an empty source scope by the API.
-            // On the tested stack an earlier, unrelated buffer copy lost data
-            // with an empty transition source; ordering COPY prevented this
-            // (renderer-j17). The driver-internal cause remains unconfirmed.
-            // Order prior copies, including pending graphs on this same queue,
-            // before that transition. This is execution-only, with no host wait
-            // or claim that fresh images require a source memory dependency.
-            (vk::PipelineStageFlags2::COPY, vk::AccessFlags2::NONE)
-        } else {
-            scope
-        }
-    } else {
-        // A COPY read does not by itself make an older COPY write visible to
-        // vertex/index/shader reads. Preserve the last writer across readers,
-        // including imports, and expose it to each actual destination access.
-        (previous.writer_stage, previous.writer_access)
-    }
-}
-
-impl TransferPayload for GraphWork {
-    fn validate(&self) -> Result<(), TransferError> {
-        self.owner
-            .device
-            .ensure_active()
-            .map_err(TransferError::DeviceUnavailable)
-    }
-    fn owner(&self) -> &Arc<MemoryOwner> {
-        &self.owner
-    }
-    fn bytes(&self) -> u64 {
-        self.uploads
-            .iter()
-            .chain(
-                self.readbacks
-                    .iter()
-                    .filter_map(|(_, range)| range.as_ref()),
-            )
-            .map(StagingRange::size)
-            .sum()
-    }
-    fn label(&self) -> &'static CStr {
-        c"renderer.graph"
-    }
-
-    unsafe fn record(&self, command: vk::CommandBuffer) {
-        let device = &self.owner.device;
-        if let Some(lease) = self
-            .profile
-            .as_ref()
-            .and_then(|profile| profile.lease.as_ref())
-        {
-            // SAFETY: This command and unique query pair are retained by this
-            // recording/pending payload, outside all dynamic rendering scopes.
-            unsafe { lease.begin(command) };
-        }
-        for pass in &self.passes {
-            // SAFETY: Every command operand is validated and retained in this
-            // payload. Pass boundaries lie outside all dynamic rendering scopes.
-            unsafe {
-                #[cfg(feature = "vulkan-diagnostics")]
-                device.debug_utils().cmd_begin_debug_utils_label(
-                    command,
-                    &vk::DebugUtilsLabelEXT::default().label_name(&pass.name),
-                );
-                if !pass.buffers.is_empty() || !pass.images.is_empty() {
-                    device.raw().cmd_pipeline_barrier2(
-                        command,
-                        &vk::DependencyInfo::default()
-                            .buffer_memory_barriers(&pass.buffers)
-                            .image_memory_barriers(&pass.images),
-                    );
-                }
-                match &pass.operation {
-                    PreparedOperation::UploadBuffer { dst, offset, size } => {
-                        let range = &self.uploads[pass.staging.unwrap()];
-                        debug_assert_eq!(range.size(), *size);
-                        device.raw().cmd_copy_buffer(
-                            command,
-                            range.transfer_handle(),
-                            self.resource(*dst).buffer().handle,
-                            &[vk::BufferCopy::default()
-                                .src_offset(range.offset())
-                                .dst_offset(*offset)
-                                .size(*size)],
-                        );
-                    }
-                    PreparedOperation::CopyBuffer {
-                        src,
-                        dst,
-                        src_offset,
-                        dst_offset,
-                        size,
-                    } => device.raw().cmd_copy_buffer(
-                        command,
-                        self.resource(*src).buffer().handle,
-                        self.resource(*dst).buffer().handle,
-                        &[vk::BufferCopy::default()
-                            .src_offset(*src_offset)
-                            .dst_offset(*dst_offset)
-                            .size(*size)],
-                    ),
-                    PreparedOperation::ReadbackBuffer { src, offset, size } => {
-                        let range = self.readbacks[pass.staging.unwrap()].1.as_ref().unwrap();
-                        device.raw().cmd_copy_buffer(
-                            command,
-                            self.resource(*src).buffer().handle,
-                            range.transfer_handle(),
-                            &[vk::BufferCopy::default()
-                                .src_offset(*offset)
-                                .dst_offset(range.offset())
-                                .size(*size)],
-                        );
-                    }
-                    PreparedOperation::UploadImage { dst, .. } => {
-                        let range = &self.uploads[pass.staging.unwrap()];
-                        let image = self.resource(*dst).image();
-                        device.raw().cmd_copy_buffer_to_image(
-                            command,
-                            range.transfer_handle(),
-                            image.image,
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            &[image_copy(image, range.offset())],
-                        );
-                    }
-                    PreparedOperation::CopyImage { src, dst } => {
-                        let source = self.resource(*src).image();
-                        let target = self.resource(*dst).image();
-                        device.raw().cmd_copy_image(
-                            command,
-                            source.image,
-                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                            target.image,
-                            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            &[vk::ImageCopy::default()
-                                .src_subresource(layers(source))
-                                .dst_subresource(layers(target))
-                                .extent(vk::Extent3D {
-                                    width: source.extent.width,
-                                    height: source.extent.height,
-                                    depth: 1,
-                                })],
-                        );
-                    }
-                    PreparedOperation::ReadbackImage { src } => {
-                        let range = self.readbacks[pass.staging.unwrap()].1.as_ref().unwrap();
-                        let image = self.resource(*src).image();
-                        device.raw().cmd_copy_image_to_buffer(
-                            command,
-                            image.image,
-                            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                            range.transfer_handle(),
-                            &[image_copy(image, range.offset())],
-                        );
-                    }
-                    PreparedOperation::Compute { dst, transform, .. } => {
-                        self.programs.as_ref().unwrap().record_compute(
-                            command,
-                            pass.descriptor.unwrap(),
-                            self.resource(*dst).image(),
-                            match transform {
-                                ComputeTransform::Invert => 0,
-                                ComputeTransform::SwapRedBlue => 1,
-                            },
-                        )
-                    }
-                    PreparedOperation::Raster {
-                        vertices,
-                        indices,
-                        index_count,
-                        color,
-                        depth,
-                        color_ops,
-                        depth_ops,
-                        clear_color,
-                        clear_depth,
-                        parameters,
-                    } => self.programs.as_ref().unwrap().record_raster(
-                        command,
-                        self.resource(*vertices).buffer().handle,
-                        self.resource(*indices).buffer().handle,
-                        *index_count,
-                        self.resource(*color).image(),
-                        self.resource(*depth).image(),
-                        load(color_ops.load),
-                        store(color_ops.store),
-                        *clear_color,
-                        load(depth_ops.load),
-                        store(depth_ops.store),
-                        *clear_depth,
-                        parameters,
-                    ),
-                    PreparedOperation::RasterBatch {
-                        draws,
-                        color,
-                        depth,
-                        clear_color,
-                        clear_depth,
-                    } => self.programs.as_ref().unwrap().record_raster_batch(
-                        command,
-                        draws.iter().map(|draw| {
-                            (
-                                self.resource(draw.vertices).buffer().handle,
-                                self.resource(draw.indices).buffer().handle,
-                                draw.index_count,
-                                &draw.parameters,
-                            )
-                        }),
-                        self.resource(*color).image(),
-                        self.resource(*depth).image(),
-                        *clear_color,
-                        *clear_depth,
-                    ),
-                    PreparedOperation::ClearAttachments {
-                        color,
-                        depth,
-                        clear_color,
-                        clear_depth,
-                    } => {
-                        record_clear_attachments(
-                            device.raw(),
-                            command,
-                            self.resource(*color).image(),
-                            self.resource(*depth).image(),
-                            *clear_color,
-                            *clear_depth,
-                        );
-                    }
-                    PreparedOperation::Composite { dst, .. } => {
-                        self.programs.as_ref().unwrap().record_composite(
-                            command,
-                            pass.descriptor.unwrap(),
-                            self.resource(*dst).image(),
-                        )
-                    }
-                }
-                #[cfg(feature = "vulkan-diagnostics")]
-                device.debug_utils().cmd_end_debug_utils_label(command);
-            }
-        }
-        if !self.readbacks.is_empty() {
-            // SAFETY: Only retained copy-written readback ranges are host-read.
-            // CPU access additionally requires successful Fence wait/invalidate.
-            unsafe {
-                super::transfer::record_host_read(device, command);
-            }
-        }
-        if let Some(lease) = self
-            .profile
-            .as_ref()
-            .and_then(|profile| profile.lease.as_ref())
-        {
-            // SAFETY: The matching start precedes every Graph command and this
-            // end timestamp follows all rendering/readback scopes.
-            unsafe { lease.end(command) };
-        }
-    }
-
-    fn submitted(&mut self) {
-        // No allocation, logging or application callbacks at this commit point.
-        for (index, physical) in self.physical.iter().enumerate() {
-            if let Some(physical) = physical {
-                physical.lock().scheduled = self.final_states[index].take().unwrap();
-            }
-        }
-    }
-
-    unsafe fn establish_contents(&mut self) {
-        if let Some(profile) = &mut self.profile {
-            profile.begin_retire();
-        }
-        for physical in self.physical.iter().flatten() {
-            let mut state = physical.lock();
-            // Waiting A after B must never overwrite B's accepted state, or
-            // a later completion already observed by another submission.
-            state.completed_serial = state.completed_serial.max(self.serial);
-        }
-        for (_, range) in &mut self.readbacks {
-            // SAFETY: Caller obtained actual completion of this whole payload.
-            unsafe {
-                range.as_mut().unwrap().establish_contents();
-            }
-        }
-        self.passes.clear();
-        self.uploads.clear();
-        self.physical.clear();
-        self.bindings.take();
-        self.programs.take();
-    }
-
-    fn retired(&mut self) {
-        if let Some(profile) = &mut self.profile {
-            profile.end_retire();
-        }
-    }
-}
-
-/// # Safety
-/// The caller records outside rendering and has transitioned both retained
-/// images into their attachment layouts with the planned dependencies.
-unsafe fn record_clear_attachments(
-    device: &ash::Device,
-    command: vk::CommandBuffer,
-    color: &GraphImage,
-    depth: &GraphImage,
-    clear_color: [f32; 4],
-    clear_depth: f32,
-) {
-    let colors = [vk::RenderingAttachmentInfo::default()
-        .image_view(color.view)
-        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .clear_value(vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: clear_color,
-            },
-        })];
-    let depth = vk::RenderingAttachmentInfo::default()
-        .image_view(depth.view)
-        .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .clear_value(vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: clear_depth,
-                stencil: 0,
-            },
-        });
-    let info = vk::RenderingInfo::default()
-        .render_area(vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent: color.extent,
-        })
-        .layer_count(1)
-        .color_attachments(&colors)
-        .depth_attachment(&depth);
-    // SAFETY: The caller establishes the documented layout, dependency,
-    // lifetime and recording conditions; no pipeline is needed for load clears.
-    unsafe {
-        device.cmd_begin_rendering(command, &info);
-        device.cmd_end_rendering(command);
-    }
-}
-
-fn layers(image: &GraphImage) -> vk::ImageSubresourceLayers {
-    vk::ImageSubresourceLayers::default()
-        .aspect_mask(image.aspect)
-        .layer_count(1)
-}
-fn image_copy(image: &GraphImage, offset: u64) -> vk::BufferImageCopy {
-    vk::BufferImageCopy::default()
-        .buffer_offset(offset)
-        .image_subresource(layers(image))
-        .image_extent(vk::Extent3D {
-            width: image.extent.width,
-            height: image.extent.height,
-            depth: 1,
-        })
-}
-fn load(value: LoadAction) -> vk::AttachmentLoadOp {
-    match value {
-        LoadAction::Clear => vk::AttachmentLoadOp::CLEAR,
-        LoadAction::Load => vk::AttachmentLoadOp::LOAD,
-        LoadAction::Discard => vk::AttachmentLoadOp::DONT_CARE,
-    }
-}
-fn store(value: StoreOp) -> vk::AttachmentStoreOp {
-    match value {
-        StoreOp::Store => vk::AttachmentStoreOp::STORE,
-        StoreOp::Discard => vk::AttachmentStoreOp::DONT_CARE,
     }
 }
 

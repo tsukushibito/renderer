@@ -8,7 +8,7 @@ use ash::vk;
 use super::{NativeResource, PhysicalLease, Snapshot, Use};
 use crate::graph::{CompiledGraph, Pass, ResourceKey};
 
-pub(super) fn begin(
+pub(in super::super) fn begin(
     graph: &CompiledGraph,
     serial: u64,
     queue_family: u32,
@@ -135,7 +135,7 @@ pub(super) fn finish(
     has_readbacks: bool,
 ) {
     if has_readbacks {
-        let barrier = super::super::transfer::host_read_barrier();
+        let barrier = super::super::super::transfer::host_read_barrier();
         writeln!(
             output,
             "epilogue reason=readback host visibility src_stage={:?} src_access={:?} dst_stage={:?} dst_access={:?}",
@@ -160,7 +160,7 @@ pub(super) fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{AccessPurpose, BufferDesc, Graph};
+    use crate::graph::{BufferDesc, Graph};
 
     #[test]
     fn dump_reports_actual_barrier_fields_and_writer_reason() {
@@ -170,7 +170,12 @@ mod tests {
             writer_access: vk::AccessFlags2::TRANSFER_WRITE,
             ..Snapshot::default()
         };
-        let current = super::super::usage(AccessPurpose::Index);
+        let current = Use {
+            stage: vk::PipelineStageFlags2::INDEX_INPUT,
+            access: vk::AccessFlags2::INDEX_READ,
+            layout: vk::ImageLayout::UNDEFINED,
+            writes: false,
+        };
         // Deliberately supply a scope different from the planner's normal choice:
         // the diagnostic must describe its actual operand, not regenerate one.
         let barrier = vk::BufferMemoryBarrier2::default()
@@ -200,7 +205,12 @@ mod tests {
     #[test]
     fn layout_and_no_dependency_reasons_are_distinct() {
         let mut output = String::new();
-        let current = super::super::usage(AccessPurpose::CopyDestination);
+        let current = Use {
+            stage: vk::PipelineStageFlags2::COPY,
+            access: vk::AccessFlags2::TRANSFER_WRITE,
+            layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            writes: false,
+        };
         let barrier = vk::ImageMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COPY)
             .dst_stage_mask(current.stage)
