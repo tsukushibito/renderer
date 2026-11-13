@@ -23,6 +23,10 @@ pub struct DeviceInfo {
     pub driver_id_raw: i32,
     pub vendor_id: u32,
     pub device_id: u32,
+    /// Locally unique adapter identity when the driver reports a valid LUID.
+    /// On Windows these bytes identify the corresponding DXGI adapter. This is
+    /// an environment fact, not a persistent asset or resource identifier.
+    pub device_luid: Option<[u8; 8]>,
     pub device_type: String,
     pub queue_family: u32,
 }
@@ -129,10 +133,15 @@ impl VulkanRuntime {
     pub fn device_info(&self) -> DeviceInfo {
         let device = &self.owner.device;
         let mut driver = vk::PhysicalDeviceDriverProperties::default();
-        let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
+        let mut identity = vk::PhysicalDeviceIDProperties::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut driver)
+            .push_next(&mut identity);
         // SAFETY: The retained Device owns the Instance and enumerated physical
-        // adapter. Vulkan 1.3 provides driver properties; all output/pNext storage
-        // is live for this read-only call and only owned values escape.
+        // adapter. Vulkan 1.3 provides both driver and ID properties; their
+        // distinct, initialized output/pNext storage is live for this read-only
+        // call. Only owned values escape, and undefined LUID bytes are ignored
+        // unless deviceLUIDValid is VK_TRUE.
         unsafe {
             device
                 .instance_raw()
@@ -156,6 +165,7 @@ impl VulkanRuntime {
             driver_id_raw: driver.driver_id.as_raw(),
             vendor_id: properties.vendor_id,
             device_id: properties.device_id,
+            device_luid: (identity.device_luid_valid == vk::TRUE).then_some(identity.device_luid),
             device_type: format!("{:?}", properties.device_type),
             queue_family: device.queue_family(),
         }
