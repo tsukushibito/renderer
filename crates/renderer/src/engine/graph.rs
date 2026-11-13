@@ -231,9 +231,7 @@ mod tests {
             .unwrap();
         let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
         let plan = frame.graph.compile().unwrap();
-        let dump = plan.dump();
-        assert!(dump.contains("view clear"));
-        assert!(!dump.contains("upload"));
+        assert_eq!(plan.ordered_pass_names(), ["view clear"]);
         assert_eq!(plan.pass_count(), 1);
         assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
         assert!(frame.readback.is_none());

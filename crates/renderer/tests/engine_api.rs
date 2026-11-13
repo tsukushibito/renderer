@@ -55,15 +55,11 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
         })
         .unwrap();
     let plan = frame.graph.compile().unwrap();
-    let dump = plan.dump();
     assert!(
-        dump.lines()
-            .any(|line| line.contains("external custom transform") && line.contains("live"))
+        plan.ordered_pass_names()
+            .contains(&"external custom transform")
     );
-    assert!(
-        dump.lines()
-            .any(|line| line.contains("unused custom branch") && line.contains("culled"))
-    );
+    assert!(plan.culled_pass_names().contains(&"unused custom branch"));
     assert!(frame.readback.is_some());
     assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
     assert!(engine.snapshot(&view, &[draw]).is_err());

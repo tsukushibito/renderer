@@ -84,9 +84,12 @@ fn offscreen_pipeline_builds_and_compiles_without_a_backend() {
             "final readback"
         ]
     );
-    assert_eq!(plan.dump(), graph.compile().unwrap().dump());
-    assert!(plan.dump().contains("purpose=Index"));
-    assert!(plan.dump().contains("purpose=StorageRead"));
+    #[cfg(feature = "graph-diagnostics")]
+    {
+        assert_eq!(plan.dump(), graph.compile().unwrap().dump());
+        assert!(plan.dump().contains("purpose=Index"));
+        assert!(plan.dump().contains("purpose=StorageRead"));
+    }
 }
 
 #[test]

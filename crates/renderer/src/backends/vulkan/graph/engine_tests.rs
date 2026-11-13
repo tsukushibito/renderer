@@ -432,7 +432,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         );
         let cached = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
         let plan = cached.graph.compile().unwrap();
-        assert!(!plan.dump().contains("mesh vertex upload"));
+        assert!(!plan.ordered_pass_names().contains(&"mesh vertex upload"));
         let mut pending = engine.submit_frame(cached, &plan).unwrap();
         engine.release_output(&mut pending).unwrap();
         assets.delete_mesh(handle).unwrap();

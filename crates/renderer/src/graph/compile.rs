@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
+#[cfg(feature = "graph-diagnostics")]
 use std::sync::OnceLock;
 
 use super::accesses::conflicting_accesses;
@@ -24,7 +25,9 @@ pub struct CompiledGraph {
     exported: Vec<bool>,
     pub(crate) order: Vec<usize>,
     pub(crate) final_contents: Vec<Vec<Range<u64>>>,
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     analysis: Analysis,
+    #[cfg(feature = "graph-diagnostics")]
     dump: OnceLock<String>,
 }
 
@@ -57,13 +60,14 @@ impl CompiledGraph {
     pub fn culled_pass_names(&self) -> Vec<&str> {
         self.passes
             .iter()
-            .enumerate()
-            .filter(|&(index, _)| !self.analysis.live[index])
-            .map(|(_, pass)| pass.name.as_str())
+            .filter(|pass| matches!(pass.operation, Operation::Culled))
+            .map(|pass| pass.name.as_str())
             .collect()
     }
 
     /// Stable diagnostic text, with data dependencies separate from ordering.
+    /// Available with `graph-diagnostics`, independently of development validation.
+    #[cfg(feature = "graph-diagnostics")]
     pub fn dump(&self) -> &str {
         self.dump
             .get_or_init(|| dump(&self.resources, &self.passes, &self.exports, &self.analysis))
@@ -141,16 +145,26 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
                 } else {
                     Operation::Culled
                 },
-                accesses: pass.accesses.clone(),
+                // Culled access metadata only serves the optional dump. Live
+                // accesses are still needed for native synchronization planning.
+                accesses: if analysis.live[index] || cfg!(feature = "graph-diagnostics") {
+                    pass.accesses.clone()
+                } else {
+                    Vec::new()
+                },
                 side_effect: pass.side_effect,
-                dependencies: pass.dependencies.clone(),
+                // The order is already fixed; explicit edges are not runtime
+                // operands. The optional Analysis carries their diagnostic view.
+                dependencies: Vec::new(),
             })
             .collect(),
         exports: graph.exports.clone(),
         exported: graph.exported.clone(),
         order: analysis.order.clone(),
         final_contents: contents.iter().map(ContentMap::initialized).collect(),
+        #[cfg(any(test, feature = "graph-diagnostics"))]
         analysis,
+        #[cfg(feature = "graph-diagnostics")]
         dump: OnceLock::new(),
     })
 }
@@ -200,9 +214,12 @@ pub(super) struct Dependency {
 pub(super) struct Analysis {
     pub order: Vec<usize>,
     pub live: Vec<bool>,
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     pub data_dependencies: Vec<Vec<usize>>,
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     pub ordering_dependencies: Vec<Dependency>,
     /// Inclusive positions in `order`, absent for resources unused by live work.
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     pub lifetimes: Vec<Option<(usize, usize)>>,
 }
 
@@ -277,6 +294,11 @@ pub(super) fn analyze(
     passes: &[CompilePass],
     exports: &[(usize, Range<u64>)],
 ) -> Result<Analysis, CompileError> {
+    // Graph's private builder establishes resource sizes, owner/range/purpose
+    // validity and per-pass conflicts before producing this internal input.
+    // Rechecking those immutable declarations is an independent development
+    // diagnostic, not a prerequisite for execution planning below.
+    #[cfg(feature = "development-validation")]
     validate(resources, passes, exports)?;
     let mut contents = resources
         .iter()
@@ -342,10 +364,14 @@ pub(super) fn analyze(
 
     // Scheduling edges do not define liveness. In particular WAW cannot keep
     // an overwritten writer alive, and WAR cannot keep an unrelated reader.
-    let all = vec![true; passes.len()];
-    let dependencies = ordering(resources, passes, &all);
-    // Invalid declarations remain invalid even when their outputs are dead.
-    topological(passes, &dependencies, &all)?;
+    #[cfg(feature = "development-validation")]
+    {
+        let all = vec![true; passes.len()];
+        let dependencies = ordering(resources, passes, &all);
+        // Detect cycles even when all involved work will be culled. Live cycles
+        // are rejected by the mandatory scheduling step in every configuration.
+        topological(passes, &dependencies, &all)?;
+    }
 
     let mut live = vec![false; passes.len()];
     let mut pending = roots.into_iter().collect::<Vec<_>>();
@@ -359,8 +385,11 @@ pub(super) fn analyze(
     // Rebuild the frontier rather than filtering edges through removed passes.
     let dependencies = ordering(resources, passes, &live);
     let order = topological(passes, &dependencies, &live)?;
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     let ordering_dependencies = dependencies.into_iter().collect::<Vec<_>>();
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     let mut lifetimes = vec![None; resources.len()];
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     for (position, &index) in order.iter().enumerate() {
         for access in &passes[index].accesses {
             let lifetime = &mut lifetimes[access.resource];
@@ -370,6 +399,7 @@ pub(super) fn analyze(
             }
         }
     }
+    #[cfg(any(test, feature = "graph-diagnostics"))]
     let data_dependencies = data
         .into_iter()
         .map(|dependencies| dependencies.into_iter().collect())
@@ -377,8 +407,11 @@ pub(super) fn analyze(
     Ok(Analysis {
         order,
         live,
+        #[cfg(any(test, feature = "graph-diagnostics"))]
         data_dependencies,
+        #[cfg(any(test, feature = "graph-diagnostics"))]
         ordering_dependencies,
+        #[cfg(any(test, feature = "graph-diagnostics"))]
         lifetimes,
     })
 }
@@ -559,6 +592,7 @@ fn overlaps(left: &Range<u64>, right: &Range<u64>) -> bool {
     left.start < right.end && right.start < left.end
 }
 
+#[cfg(any(test, feature = "development-validation"))]
 fn validate(
     resources: &[CompileResource],
     passes: &[CompilePass],
@@ -639,6 +673,7 @@ fn validate(
     Ok(())
 }
 
+#[cfg(any(test, feature = "development-validation"))]
 fn validate_range(
     resources: &[CompileResource],
     resource: usize,
@@ -726,6 +761,7 @@ fn topological(
     Ok(order)
 }
 
+#[cfg(feature = "graph-diagnostics")]
 fn dump(resources: &[Resource], passes: &[Pass], exports: &[usize], analysis: &Analysis) -> String {
     use std::fmt::Write;
 
@@ -1458,11 +1494,14 @@ mod tests {
         let compiled = graph.compile().unwrap();
         assert_eq!(compiled.pass_count(), draws + 2);
         assert!(compiled.analysis.ordering_dependencies.len() <= draws * 4);
-        assert!(compiled.dump.get().is_none());
-        let first = compiled.dump();
-        assert!(first.contains("execution"));
-        assert_eq!(first, graph.compile().unwrap().dump());
-        assert_eq!(first.as_ptr(), compiled.dump().as_ptr());
+        #[cfg(feature = "graph-diagnostics")]
+        {
+            assert!(compiled.dump.get().is_none());
+            let first = compiled.dump();
+            assert!(first.contains("execution"));
+            assert_eq!(first, graph.compile().unwrap().dump());
+            assert_eq!(first.as_ptr(), compiled.dump().as_ptr());
+        }
     }
 
     #[test]
@@ -1548,7 +1587,7 @@ mod tests {
     }
 
     #[test]
-    fn dead_explicit_cycles_are_errors_and_forward_dependencies_schedule_deterministically() {
+    fn dead_cycles_are_development_diagnostics_and_live_cycles_always_fail() {
         let mut graph = Graph::new();
         let first = graph
             .declare_pass("first", PassKind::Copy, vec![], false)
@@ -1558,6 +1597,19 @@ mod tests {
             .unwrap();
         graph.depends_on(first, second).unwrap();
         graph.depends_on(second, first).unwrap();
+        #[cfg(feature = "development-validation")]
+        {
+            let error = graph.compile().unwrap_err();
+            assert!(error.message.contains("cycle"));
+            assert!(error.message.contains("first"));
+            assert!(error.message.contains("second"));
+        }
+        #[cfg(not(feature = "development-validation"))]
+        assert_eq!(graph.compile().unwrap().pass_count(), 0);
+
+        // Making either node observable makes the same cycle part of the live
+        // schedule, so disabled development diagnostics cannot hide it.
+        graph.passes[first.index].side_effect = true;
         let error = graph.compile().unwrap_err();
         assert!(error.message.contains("cycle"));
         assert!(error.message.contains("first"));
@@ -1574,10 +1626,15 @@ mod tests {
             .unwrap();
         let last = read_pass(&mut dead, "last reader", resource, 0..4, false);
         dead.depends_on(first, last).unwrap();
-        let error = dead.compile().unwrap_err();
-        assert!(error.message.contains("cycle"));
-        assert!(error.message.contains("first writer"));
-        assert!(error.message.contains("last reader"));
+        #[cfg(feature = "development-validation")]
+        {
+            let error = dead.compile().unwrap_err();
+            assert!(error.message.contains("cycle"));
+            assert!(error.message.contains("first writer"));
+            assert!(error.message.contains("last reader"));
+        }
+        #[cfg(not(feature = "development-validation"))]
+        assert_eq!(dead.compile().unwrap().pass_count(), 0);
 
         let mut graph = Graph::new();
         let consumer = graph
@@ -1589,8 +1646,11 @@ mod tests {
         graph.depends_on(consumer, producer).unwrap();
         let compiled = graph.compile().unwrap();
         assert_eq!(compiled.ordered_pass_names(), ["producer", "consumer"]);
-        assert_eq!(compiled.dump(), graph.compile().unwrap().dump());
-        assert!(compiled.dump().contains("Explicit"));
+        #[cfg(feature = "graph-diagnostics")]
+        {
+            assert_eq!(compiled.dump(), graph.compile().unwrap().dump());
+            assert!(compiled.dump().contains("Explicit"));
+        }
     }
 
     #[test]
@@ -1624,6 +1684,8 @@ mod tests {
             compiled.final_contents[dead.index],
             Vec::<Range<u64>>::new()
         );
+        assert_eq!(compiled.culled_pass_names(), ["dead private write"]);
+        #[cfg(feature = "graph-diagnostics")]
         assert!(compiled.dump().contains("dead private write\" culled"));
 
         graph.export_buffer(dead).unwrap();
