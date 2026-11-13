@@ -10,5 +10,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let pixel = vec2<i32>(id.xy);
     let source = textureLoad(color, pixel, 0);
     let z = textureLoad(depth, pixel, 0);
-    textureStore(output, pixel, vec4(source.b, source.r, z * 4.0, 1.0));
+    // Keep rendered depth 0.25 distinguishable from the clear value 1.0.
+    textureStore(output, pixel, vec4(source.b, source.r, z, 1.0));
 }
