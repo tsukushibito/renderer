@@ -34,7 +34,7 @@ def compose(directory, preview, report_path):
     report = json.loads((directory / "renders.json").read_text(encoding="utf-8"))
     records = []
     columns = ("source alpha (selected)", "force opaque (diagnostic)", "absolute RGB difference x4", "target visible coverage")
-    sheet = Image.new("RGB", (1920, 68 + 300 * len(report["views"])), "#17191d")
+    sheet = Image.new("RGB", (1920, 80 + 300 * len(report["views"])), "#17191d")
     draw = ImageDraw.Draw(sheet)
     draw.text((12, 10), "Bistro alpha interpretation | all scene meshes retained | CPU diagnostic, not Renderer/GPU acceptance", fill="white")
     draw.text((12, 30), f"Cycles CPU, {report['settings']['samples']} samples, seed 0 | forced opacity changes only the named material", fill="white")
