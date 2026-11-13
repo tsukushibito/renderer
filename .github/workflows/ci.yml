@@ -78,21 +78,28 @@ jobs:
             cargo test --locked --workspace @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Check optimized Vulkan execution with and without development validation
-        if: matrix.backend == 'vulkan'
+      - name: Check optimized backend execution with and without development validation
+        if: matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12')
         shell: pwsh
         env:
+          BACKEND: ${{ matrix.backend }}
           CARGO_INCREMENTAL: "0"
         run: |
-          foreach ($features in @('vulkan', 'vulkan,development-validation,graph-diagnostics')) {
+          foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
             cargo test --locked --workspace --release --no-default-features --features $features
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Check independent diagnostic features
-        if: matrix.backend == 'vulkan'
+        if: matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12')
         shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
         run: |
-          foreach ($features in @('vulkan,vulkan-diagnostics', 'vulkan,graph-diagnostics', 'vulkan,development-validation')) {
+          $diagnostics = @('graph-diagnostics', 'development-validation')
+          if ($env:BACKEND.Contains('vulkan')) { $diagnostics += 'vulkan-diagnostics' }
+          if ($env:BACKEND.Contains('d3d12')) { $diagnostics += 'd3d12-diagnostics' }
+          foreach ($diagnostic in $diagnostics) {
+            $features = "$($env:BACKEND),$diagnostic"
             cargo check --locked --workspace --all-targets --no-default-features --features $features
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
