@@ -66,6 +66,8 @@ compiled planは除去したパスの実行本文を保持しない。確定し�
 `CompiledGraph::dump()`を提供する。文字列は要求時に一度生成する。
 `culled_pass_names()`も`graph-diagnostics`構成で提供し、保持済みのculled操作を参照する。
 offではculled pass名を複製せず、live pass名は運用エラーの文脈と実行順の問い合わせに残す。
+使われないtransient資源名もoffでは複製しない。live／exportと、投入時の再照合があるimport名は維持する。
+この区分はcompile中の既存live access走査で求め、一時索引をplanに保持しない。
 論理dumpにはアクセス用途も含む。`graph-diagnostics`構成のVulkanの`submit_with_diagnostics`は、成功した投入と
 実際のloweringの診断文字列を返す。通常の`submit`はこの文字列を生成しない。
 診断にはpass／論理resource、物理key・世代・native handle、import初期予定状態、

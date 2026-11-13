@@ -25,6 +25,20 @@ Windows表示はoptionalな`presentation` featureで追加する。
 任意shader、一般的なPassEncoderは未実装である。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
+Graphのnative実行は次の責務に分ける。公開APIや汎用backend traitを増やす分割ではない。
+
+| 内部module | 所有する責務 |
+|---|---|
+| `graph.rs` | 登録・世代・cache、import/export、投入の受理と公開状態 |
+| `graph/resources.rs` | bufferとimage／viewのVMA allocation所有・破棄 |
+| `graph/work.rs` | 不変の準備operand、staging、必要な依存の計画 |
+| `graph/work/record.rs` | native記録、投入受理・退役時のpayload処理 |
+| `graph/work/diagnostics.rs` | `graph-diagnostics`だけで生成するlowering dump |
+| `graph/shaders.rs` | 管理下Program、pipeline、descriptor lease |
+
+記録の子moduleは準備operandへprivateにアクセスする。テストのためだけにfieldを公開せず、
+資源の所有者を分散させない。記録から退役までのlease・実Fenceによる完了・失敗時の保持は同じ契約を使う。
+
 ## Instance・Device・キュー
 
 InstanceとVMAが要求するAPIはVulkan 1.3とする。
