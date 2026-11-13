@@ -38,15 +38,27 @@ mod demo {
 
     struct RedrawSchedule {
         next: Instant,
+        drawable: bool,
     }
 
     impl RedrawSchedule {
         fn new(now: Instant) -> Self {
-            Self { next: now }
+            Self {
+                next: now,
+                drawable: false,
+            }
+        }
+
+        fn resize(&mut self, width: u32, height: u32) {
+            self.drawable = width != 0 && height != 0;
+        }
+
+        fn next_wake(&self) -> Option<Instant> {
+            self.drawable.then_some(self.next)
         }
 
         fn request_due(&mut self, now: Instant) -> bool {
-            if now < self.next {
+            if !self.drawable || now < self.next {
                 return false;
             }
             // Schedule from this request instead of issuing catch-up redraws.
@@ -190,6 +202,8 @@ mod demo {
                 mesh,
                 material,
             };
+            let size = window.inner_size();
+            self.redraw.resize(size.width, size.height);
             self.window = Some(window);
             self.engine = Some(engine);
             self.presenter = Some(presenter);
@@ -358,6 +372,7 @@ mod demo {
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
+                    self.redraw.resize(size.width, size.height);
                     if let Some(presenter) = &mut self.presenter {
                         presenter.resize(size.width, size.height);
                     }
@@ -410,6 +425,7 @@ mod demo {
                 if let Some(presenter) = &mut self.presenter {
                     presenter.resize(0, 0);
                 }
+                self.redraw.resize(0, 0);
                 self.restore_at = Some(now + Duration::from_millis(50));
             }
             if self.restore_at.is_some_and(|deadline| now >= deadline) {
@@ -421,6 +437,7 @@ mod demo {
                 if let Some(presenter) = &mut self.presenter {
                     presenter.resize(640, 480);
                 }
+                self.redraw.resize(640, 480);
             }
             if self.smoke && self.presented >= 12 {
                 if let Err(error) = self.shutdown() {
@@ -429,19 +446,13 @@ mod demo {
                 event_loop.exit();
                 return;
             }
-            let next_redraw = if self.restore_at.is_none()
-                && self
-                    .presenter
-                    .as_ref()
-                    .and_then(Presenter::extent)
-                    .is_some()
-            {
+            let next_redraw = if self.restore_at.is_none() {
                 if self.redraw.request_due(now)
                     && let Some(window) = &self.window
                 {
                     window.request_redraw();
                 }
-                Some(self.redraw.next)
+                self.redraw.next_wake()
             } else {
                 // A zero-extent Window has nothing to draw. Resume on a resize
                 // event, or the explicit smoke-test restoration deadline.
@@ -490,6 +501,7 @@ mod demo {
         fn redraw_deadline_survives_early_wakeups_and_does_not_catch_up() {
             let start = Instant::now();
             let mut schedule = RedrawSchedule::new(start);
+            schedule.resize(640, 480);
             assert!(schedule.request_due(start));
             let deadline = start + REDRAW_INTERVAL;
             assert_eq!(schedule.next, deadline);
@@ -503,6 +515,28 @@ mod demo {
             assert!(schedule.request_due(late));
             assert_eq!(schedule.next, late + REDRAW_INTERVAL);
             assert!(!schedule.request_due(late));
+        }
+
+        #[test]
+        fn nonzero_window_size_schedules_first_draw_without_a_swapchain() {
+            let start = Instant::now();
+            let mut schedule = RedrawSchedule::new(start);
+            assert_eq!(schedule.next_wake(), None);
+            assert!(!schedule.request_due(start));
+
+            // Only a Window size is needed to enter the draw/prepare path,
+            // including when construction was minimized and no chain exists.
+            schedule.resize(640, 480);
+            assert!(schedule.request_due(start));
+            assert_eq!(schedule.next_wake(), Some(start + REDRAW_INTERVAL));
+
+            schedule.resize(0, 480);
+            assert_eq!(schedule.next_wake(), None);
+            let restored = start + Duration::from_secs(1);
+            assert!(!schedule.request_due(restored));
+            schedule.resize(640, 480);
+            assert!(schedule.request_due(restored));
+            assert_eq!(schedule.next_wake(), Some(restored + REDRAW_INTERVAL));
         }
 
         #[test]
