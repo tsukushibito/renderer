@@ -25,6 +25,10 @@ Windows表示はoptionalな`presentation` featureで追加する。
 任意shader、一般的なPassEncoderは未実装である。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
+これは現行実装の境界であり、基盤の維持義務ではない。
+[Bistro計画のB0](implementation-policy.md#bistro-roadmap)で維持・改修・置換・外部基盤を比較する。
+採用判断で置換する場合も、同期・GPU寿命・native失敗等の必要な保証と移行時の検証を明示する。
+
 Graphのnative実行は次の責務に分ける。公開APIや汎用backend traitを増やす分割ではない。
 
 | 内部module | 所有する責務 |

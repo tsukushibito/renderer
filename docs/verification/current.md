@@ -5,6 +5,19 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## Bistro計画と現行実装の区別
+
+開発計画を[実装方針のB0〜B5](../design/implementation-policy.md#bistro-roadmap)へ改訂した。
+追跡は`renderer-7ft`、次の実作業は`renderer-7ft.1.1`のBistro対象・描画品質・受入条件の具体化である。
+既存基盤の再利用は必須にせず、B0で維持・改修・置換・外部基盤を比較する。
+旧M4の6/22完了は準備・Device・buffer実行の実績であり、新計画の進捗率へ流用しない。
+旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
+
+今回の変更は文書とBeadsの計画再編だけで、下記のGPU・CPU実行結果は従来の固定ソースでの実績である。
+Bistroの素材取得・変換、テクスチャ付きPBR・影・HDR、独自Bloom、公開パスAPIの二API実証は未実行である。
+文書差分・相対リンク/anchor・課題対応と依存循環を確認した。独立レビューで残っていた旧M4の将来指示とVMA固有選択の適用範囲を修正した。
+実装・shader・依存・ビルド設定の変更がないため、今回のためのローカルGPU/CPU試験は再実行しない。
+
 ## 環境と対応範囲
 
 | 項目 | 確認値 |
@@ -168,7 +181,7 @@ EXT maintenance1のpresent fenceと通常GPU参照の両方を回収根拠に使
 
 ViewのABIはcolumn-major MVP 64 byte＋linear tint 16 byte。従来rasterはidentityで互換を維持する。
 独自shaderの将来追加にはpipeline/binding metadata/ABI/信頼境界の検証が必要で、
-M3のGraph構築拡張をその完了として扱わない。公開一般PassEncoderは第二APIで検証するM4へ残す。
+M3のGraph構築拡張をその完了として扱わない。一般の公開パスAPIは未実装であり、新計画のB0で設計しB1で二API実行を検証する。
 
 ## 計測経路と基準値
 
@@ -438,7 +451,7 @@ readbackなしの空Graphについて正常完了と最後のnative参照の解�
 製品構成の診断件数0は観測を組み込まない結果であり、外部からの検証注入がなかった証明には使わない。
 GBVを有効にしてbuffer copyを確認したが、shaderの計装を実行した証拠ではない。
 画像等価性と二APIの性能比較、長時間耐久、実VRAM飽和は未実行で、性能優位や閾値を受入条件にしていない。
-M4-04までの6／22課題を確認した区切りであり、M4全体の完了ではない。
+旧M4-04までの6／22課題を確認した実績であり、旧M4全体や新Bistro計画の完了ではない。
 実GPU CIは追加せず、既存CIはCPU／buildと依存監査を担当する。
 
 別GPU/driver、Linux表示・実GPU、Mac/Metal、実native OOM/Device loss/Surface loss、
