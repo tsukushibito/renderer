@@ -328,17 +328,16 @@ impl VulkanEngine {
             return Ok(self.progress(0));
         }
         let submission = loop {
-            let bytes = Arc::clone(input);
             let mut graph = Graph::new();
             let target = graph.import_buffer(
                 "mesh upload target",
                 &self.runtime.refresh_buffer(buffer_key)?,
             )?;
-            graph.upload_buffer_slice(
+            graph.upload_mesh_slice(
                 "mesh upload chunk",
                 target,
-                offset,
-                bytes,
+                data,
+                entry.uploaded >= vertex_bytes,
                 offset as usize..(offset + size) as usize,
             )?;
             let plan = graph.compile()?;

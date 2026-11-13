@@ -470,6 +470,14 @@ pub(crate) struct RasterDrawOperands {
     pub index_count: u32,
     pub parameters: RasterParameters,
 }
+/// Created only from immutable `MeshData`, never from a caller-supplied flag.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "vulkan"), allow(dead_code))]
+pub(crate) enum MeshUpload {
+    Vertices,
+    Indices { byte_len: u64, maximum: u32 },
+}
+
 #[derive(Clone, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
@@ -486,6 +494,7 @@ pub(crate) enum Operation {
         offset: u64,
         bytes: Arc<[u8]>,
         source: Range<usize>,
+        mesh: Option<MeshUpload>,
     },
     CopyBuffer {
         src: usize,
@@ -815,12 +824,55 @@ impl Graph {
             })?;
             let range = graph.buffer_range(dst, offset, slice.len() as u64, true)?;
             Ok((
-                Operation::UploadBuffer { dst, offset, bytes, source },
+                Operation::UploadBuffer { dst, offset, bytes, source, mesh: None },
                 vec![write(dst, range, AccessPurpose::CopyDestination)],
                 false,
             ))
         })
     }
+    /// Internal immutable-mesh upload. The destination has exactly this mesh
+    /// stream's size, and each chunk preserves its byte position. No proof or
+    /// purportedly validated flag is accepted from the public Graph API.
+    pub(crate) fn upload_mesh_slice(
+        &mut self,
+        name: impl Into<String>,
+        dst: BufferHandle,
+        data: &crate::engine::MeshData,
+        indices: bool,
+        source: Range<usize>,
+    ) -> Result<PassHandle, GraphError> {
+        let id = self.buffer_id(dst)?;
+        let bytes = if indices {
+            &data.indices
+        } else {
+            &data.vertices
+        };
+        if self.resources[id].desc.units() != bytes.len() as u64
+            || !source.start.is_multiple_of(4)
+            || !source.end.is_multiple_of(4)
+        {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "managed mesh upload must preserve the stream size and aligned byte positions",
+                id,
+            ));
+        }
+        let pass =
+            self.upload_buffer_slice(name, dst, source.start as u64, Arc::clone(bytes), source)?;
+        let Operation::UploadBuffer { mesh, .. } = &mut self.passes[pass.index].operation else {
+            unreachable!("newly constructed upload")
+        };
+        *mesh = Some(if indices {
+            MeshUpload::Indices {
+                byte_len: bytes.len() as u64,
+                maximum: data.index_maximum,
+            }
+        } else {
+            MeshUpload::Vertices
+        });
+        Ok(pass)
+    }
+
     pub fn copy_buffer(
         &mut self,
         name: impl Into<String>,

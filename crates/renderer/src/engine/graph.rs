@@ -66,17 +66,19 @@ impl FrameSnapshot {
                     size: draw.data.indices.len() as u64,
                 },
             )?;
-            graph.upload_buffer_shared(
+            graph.upload_mesh_slice(
                 "mesh vertex upload",
                 vertices,
-                0,
-                draw.data.vertices.clone(),
+                &draw.data,
+                false,
+                0..draw.data.vertices.len(),
             )?;
-            graph.upload_buffer_shared(
+            graph.upload_mesh_slice(
                 "mesh index upload",
                 indices,
-                0,
-                draw.data.indices.clone(),
+                &draw.data,
+                true,
+                0..draw.data.indices.len(),
             )?;
             meshes.insert(draw.mesh, (vertices, indices));
         }

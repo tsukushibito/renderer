@@ -50,6 +50,7 @@ pub struct MeshData {
     pub(crate) vertices: Arc<[u8]>,
     pub(crate) indices: Arc<[u8]>,
     pub(crate) index_count: u32,
+    pub(crate) index_maximum: u32,
 }
 
 impl MeshData {
@@ -72,10 +73,8 @@ impl MeshData {
         {
             return Err(EngineError::new("mesh vertex components must be finite"));
         }
-        if indices
-            .iter()
-            .any(|&index| index as usize >= vertices.len())
-        {
+        let index_maximum = indices.iter().copied().max().expect("nonempty indices");
+        if index_maximum as usize >= vertices.len() {
             return Err(EngineError::new("mesh index exceeds its vertex count"));
         }
         let vertex_bytes = vertices
@@ -100,6 +99,7 @@ impl MeshData {
             vertices: encoded_vertices.into(),
             indices: encoded_indices.into(),
             index_count,
+            index_maximum,
         })
     }
 }
