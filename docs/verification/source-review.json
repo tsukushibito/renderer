@@ -60,7 +60,7 @@
     ],
     "limitations": [
       "Synthetic CPU fixtures; no wall-clock, GPU, Bistro, or general performance claim.",
-      "Compile fixture has empty initial ranges and explicit dependencies; it measures borrowed names and moved order, not reductions from borrowing nonempty ranges/dependencies.",
+      "Compile fixture has empty initial ranges and no explicit dependencies; it measures borrowed names and moved order, not reductions from borrowing nonempty ranges/dependencies.",
       "Frame fixture measures graph building after snapshot creation; finite-parameter scan removal is established by private immutable validated value, not this allocator counter."
     ],
     "patched_renderer_commit": "f0906eff1b338ef4ff5a500371afd8002ceff132"
@@ -243,5 +243,9 @@
     ],
     "native_gpu_tests": 54,
     "window_smoke_runs": 2
-  }
+  },
+  "tool_verification_commits": [
+    "c145a0427f2b5bf1f97d8586cf4843a18bee0229",
+    "23f5d66781ff368c6a40152fa7a024dcd80b7755"
+  ]
 }
