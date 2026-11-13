@@ -1,5 +1,6 @@
 //! Deterministic dataflow analysis. Native barriers remain a backend decision.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 #[cfg(feature = "graph-diagnostics")]
@@ -83,9 +84,9 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
         .resources
         .iter()
         .map(|resource| CompileResource {
-            name: resource.name.clone(),
+            name: Cow::Borrowed(&resource.name),
             size: resource.desc.units(),
-            initial: resource.initial.clone(),
+            initial: Cow::Borrowed(&resource.initial),
             external: resource.import.is_some(),
         })
         .collect::<Vec<_>>();
@@ -93,7 +94,7 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
         .passes
         .iter()
         .map(|pass| CompilePass {
-            name: pass.name.clone(),
+            name: Cow::Borrowed(&pass.name),
             accesses: pass
                 .accesses
                 .iter()
@@ -105,7 +106,7 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
                     valid_after: access.initializes && !access.discard_after,
                 })
                 .collect(),
-            dependencies: pass.dependencies.clone(),
+            dependencies: Cow::Borrowed(&pass.dependencies),
             side_effect: pass.side_effect,
         })
         .collect::<Vec<_>>();
@@ -168,6 +169,10 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
             initial: resource.initial.clone(),
         })
         .collect();
+    #[cfg(any(test, feature = "graph-diagnostics"))]
+    let order = analysis.order.clone();
+    #[cfg(not(any(test, feature = "graph-diagnostics")))]
+    let order = analysis.order;
     Ok(CompiledGraph {
         id: graph.id,
         resources: compiled_resources,
@@ -201,7 +206,7 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
             .collect(),
         exports: graph.exports.clone(),
         exported: graph.exported.clone(),
-        order: analysis.order.clone(),
+        order,
         final_contents: contents.iter().map(ContentMap::initialized).collect(),
         #[cfg(any(test, feature = "graph-diagnostics"))]
         analysis,
@@ -211,10 +216,10 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct CompileResource {
-    pub name: String,
+pub(super) struct CompileResource<'a> {
+    pub name: Cow<'a, str>,
     pub size: u64,
-    pub initial: Vec<Range<u64>>,
+    pub initial: Cow<'a, [Range<u64>]>,
     pub external: bool,
 }
 
@@ -228,11 +233,11 @@ pub(super) struct CompileAccess {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct CompilePass {
-    pub name: String,
+pub(super) struct CompilePass<'a> {
+    pub name: Cow<'a, str>,
     pub accesses: Vec<CompileAccess>,
     /// Explicit prerequisites are semantic dependencies and keep producers live.
-    pub dependencies: Vec<usize>,
+    pub dependencies: Cow<'a, [usize]>,
     pub side_effect: bool,
 }
 
@@ -470,7 +475,7 @@ fn ordering(
         .collect::<Vec<_>>();
     let mut dependencies = BTreeSet::new();
     for (index, pass) in passes.iter().enumerate().filter(|&(index, _)| live[index]) {
-        for &from in &pass.dependencies {
+        for &from in pass.dependencies.iter() {
             if live[from] {
                 dependencies.insert(Dependency {
                     from,
@@ -647,7 +652,7 @@ fn validate(
             )
             .at_resource(resource_index));
         }
-        for range in &resource.initial {
+        for range in resource.initial.iter() {
             if range.start >= range.end || range.end > resource.size {
                 return Err(CompileError::new(
                     GraphErrorKind::InvalidInput,
@@ -662,7 +667,7 @@ fn validate(
         }
     }
     for (pass_index, pass) in passes.iter().enumerate() {
-        for &dependency in &pass.dependencies {
+        for &dependency in pass.dependencies.iter() {
             if dependency >= passes.len() {
                 return Err(CompileError::new(
                     GraphErrorKind::InvalidHandle,
@@ -1051,9 +1056,9 @@ mod tests {
     fn pass_conflicts_match_pairwise_contract_across_resources_ranges_and_modes() {
         let resources = (0..4)
             .map(|index| CompileResource {
-                name: format!("resource {index}"),
+                name: format!("resource {index}").into(),
                 size: 64,
-                initial: vec![],
+                initial: vec![].into(),
                 external: false,
             })
             .collect::<Vec<_>>();
@@ -1092,7 +1097,7 @@ mod tests {
             let passes = [CompilePass {
                 name: "generated pass".into(),
                 accesses,
-                dependencies: vec![],
+                dependencies: vec![].into(),
                 side_effect: false,
             }];
             let result = validate(&resources, &passes, &[]);
@@ -1114,9 +1119,9 @@ mod tests {
         let mesh_count = 8_192;
         let resources = (0..mesh_count + 2)
             .map(|index| CompileResource {
-                name: format!("resource {index}"),
+                name: format!("resource {index}").into(),
                 size: 64,
-                initial: vec![],
+                initial: vec![].into(),
                 external: false,
             })
             .collect::<Vec<_>>();
@@ -1130,7 +1135,7 @@ mod tests {
         let mut pass = CompilePass {
             name: "many mesh inputs and two attachments".into(),
             accesses: (0..mesh_count).map(read).collect(),
-            dependencies: vec![],
+            dependencies: vec![].into(),
             side_effect: false,
         };
         for resource in mesh_count..mesh_count + 2 {
@@ -1161,7 +1166,7 @@ mod tests {
         let resources = [CompileResource {
             name: "buffer".into(),
             size: 8,
-            initial: vec![],
+            initial: vec![].into(),
             external: false,
         }];
         let read = |range| CompileAccess {
@@ -1180,7 +1185,7 @@ mod tests {
                     ..read(4..8)
                 },
             ],
-            dependencies: vec![],
+            dependencies: vec![].into(),
             side_effect: false,
         };
         // Adjacent half-open ranges may read and write the same resource.
@@ -1367,7 +1372,7 @@ mod tests {
         fn reference(passes: &[CompilePass], live: &[bool]) -> BTreeSet<Dependency> {
             let mut result = BTreeSet::new();
             for (to, pass) in passes.iter().enumerate().filter(|&(index, _)| live[index]) {
-                for &from in &pass.dependencies {
+                for &from in pass.dependencies.iter() {
                     if live[from] {
                         result.insert(Dependency {
                             from,
@@ -1404,9 +1409,9 @@ mod tests {
         }
         let resources = (0..2)
             .map(|index| CompileResource {
-                name: format!("resource {index}"),
+                name: format!("resource {index}").into(),
                 size: 16,
-                initial: Vec::from_iter(std::iter::once(0..16)),
+                initial: Vec::from_iter(std::iter::once(0..16)).into(),
                 external: false,
             })
             .collect::<Vec<_>>();
@@ -1423,7 +1428,7 @@ mod tests {
                     let end = start + (1 + next() % ((16 - start) / 4)) * 4;
                     let mode = next() % 3;
                     CompilePass {
-                        name: format!("pass {index}"),
+                        name: format!("pass {index}").into(),
                         accesses: vec![CompileAccess {
                             resource,
                             range: start..end,
@@ -1431,11 +1436,12 @@ mod tests {
                             write: mode != 0,
                             valid_after: true,
                         }],
-                        dependencies: if next() % 3 == 0 {
+                        dependencies: (if next() % 3 == 0 {
                             vec![(next() % 6) as usize]
                         } else {
                             vec![]
-                        },
+                        })
+                        .into(),
                         side_effect: false,
                     }
                 })

@@ -97,18 +97,17 @@ impl FrameSnapshot {
         let depth = graph.image("view depth", ImageDesc::depth32(desc.width, desc.height))?;
         // The fixed opaque list shares one clear and rendering scope. An empty
         // list retains the clear-only path without requiring a Raster program.
-        let mut draws = Vec::with_capacity(self.draws.len());
-        for draw in &self.draws {
+        let draws = self.draws.iter().map(|draw| {
             let &(vertices, indices) = meshes.get(&draw.mesh).ok_or_else(|| {
                 GraphError::new(
                     GraphErrorKind::InvalidInput,
                     "missing resolved mesh buffers",
                 )
             })?;
-            draws.push((vertices, indices, draw.data.index_count, draw.parameters));
-        }
+            Ok((vertices, indices, draw.data.index_count, draw.parameters))
+        });
         graph.raster_batch(
-            if draws.is_empty() {
+            if self.draws.is_empty() {
                 "view clear"
             } else {
                 "view opaque batch"
