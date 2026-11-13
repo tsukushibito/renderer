@@ -88,6 +88,7 @@ cargo test --locked --workspace --no-default-features --features vulkan
 [CI](../../.github/workflows/ci.yml)はWindows／LinuxとCPU／Vulkan featureを確認し、
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
 Windowsには`presentation` featureの全target check・Clippy・CPU試験も追加しています。
+各backendは製品／開発検証＋dumpの両構成を確認し、Vulkanはrelease両構成と独立診断featureも確認します。
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
 
@@ -291,6 +292,9 @@ cargo run --locked -p renderer --no-default-features --features presentation --e
 cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --vsync off
 cargo run --locked -p renderer --no-default-features --features presentation,development-validation --example windowed -- --smoke
 ```
+
+表示例もCargo featureに従います。製品構成はLayerを要求せず、`development-validation`構成は
+Core＋SyncValの実効を起動時に確認し、native所有者の破棄後まで診断を確認します。
 
 既定はVSync ON（FIFO）、`--vsync on|off`で起動時に選択し、Vキーで実行中に切り替えます。
 OFFはIMMEDIATE対応が必要で、未対応の起動要求は失敗します。Vキーの未対応要求は診断して設定を維持します。

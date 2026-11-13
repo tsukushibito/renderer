@@ -30,23 +30,25 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 | 確認 | 結果 |
 |---|---|
 | fmt | 成功 |
-| CPU / Vulkan / Windows presentation / D3D12 / Vulkan＋D3D12の全target check・Clippy `-D warnings` | 5構成すべて成功 |
-| CPUのみの通常試験 | 単体43件＋公開API 9件＋負荷fixture 3件成功 |
-| Vulkan featureの通常試験 | CPU単体143件＋公開API 9件＋負荷fixture 4件成功、42 ignored |
-| presentation featureの通常試験 | CPU単体148件＋公開API 9件＋負荷fixture 4件成功、43 ignored |
-| D3D12 featureの通常試験 | CPU単体43件＋公開API 9件＋負荷fixture 3件成功、1 ignored |
-| Vulkan＋D3D12 featureの通常試験 | CPU単体143件＋公開API 9件＋負荷fixture 4件成功、43 ignored |
-| 明示headless実GPU試験 | Vulkan＋D3D12構成で40件成功、5.26秒、逐次実行 |
-| D3D12準備の反復実機試験 | 統合mainのclean状態で3回成功。同一GPU、Debug Layer／GBV起動報告、最終解放後の診断を確認 |
-| headless＋実Win32 Surfaceを含む明示GPU試験 | 前回の単独41件成功、公開API offscreen負荷1件成功を継承。今回の準備変更では実Surfaceを再実行していない |
+| CPU / Vulkan / Windows presentation / D3D12 / Vulkan＋D3D12の全target check・Clippy `-D warnings` | 各backendの製品／開発＋dump、計10構成成功 |
+| CPUのみの通常試験 | 両構成とも単体53件＋公開API 9件＋負荷fixture 3件成功 |
+| Vulkan featureの通常試験 | 製品145／開発157単体＋公開API 9件＋負荷fixture 4件成功、45／44 ignored |
+| presentation featureの通常試験 | 製品150／開発162単体＋公開API 9件＋負荷fixture 4件成功、46／45 ignored |
+| D3D12 featureの通常試験 | 両構成とも単体53件＋公開API 9件＋負荷fixture 3件成功、1 ignored |
+| Vulkan＋D3D12 featureの通常試験 | 製品145／開発157単体＋公開API 9件＋負荷fixture 4件成功、46／45 ignored |
+| 最適化・独立feature | releaseのVulkan両構成のCPU試験、native診断だけ／Graph診断だけ／開発検証・dumpなしのClippy成功 |
+| native検証ありの明示GPU試験 | release、実Win32 Surfaceを含む43件成功、7.21秒、逐次実行 |
+| 製品経路の明示GPU試験 | release・診断featureなし・native Disabledのmesh画素照合1件成功。CPU upload Arc解放・provenance保持0・index走査0も確認 |
+| D3D12準備の反復実機試験 | ライブラリ最終ソースのclean状態で3回成功。同一GPU、Debug Layer／GBV、最終解放後の診断を確認 |
 | Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
 | Shader再生成検証 | 固定SDKの5種類のSPIR-V検証・再生成一致に加え、HLSL・検証済みDXIL・reflection・manifestの再生成一致 |
-| headless例 | 従来の128×96描画・深度・Compute・合成とPPM出力成功 |
-| engine headless統合例 | 24 frame、3 in-flight、custom処理・history・更新/削除・遅延readbackの照合成功 |
-| engine Windows表示例 | ON/OFF各起動の`windowed --smoke`で12 Present要求、VSync往復切り替え・resize・最小化復帰・pending終了、終了コード0 |
+| headless例／frame loop例 | 既存のPPM・24-frame照合結果を継承。今回CLI本体の再実行はなく、同じ操作・寿命はGPU試験と下記負荷でも確認 |
+| engine負荷 | releaseの開発検証あり45画像／製品519画像が全RGBA一致。大mesh、47 chunk upload、更新・削除、複数View、3 in-flightを確認 |
+| engine Windows表示例 | releaseの開発検証ありでVSync ON/OFF各起動、製品構成でも`windowed --smoke`成功。各12 Present要求、VSync往復・resize・最小化復帰・pending終了 |
 | 表示例の引数検査 | VSync既定ON、ON/OFF指定、smoke併用、不正引数拒否のCPU試験1件成功 |
 | exampleのCPU試験 | frame計測9件、大メッシュfixture・統計4件、windowed引数1件成功 |
-| 依存監査 | cargo-deny 0.20.2で通常workspace・独立bindings generatorのadvisories / bans / licenses / sources成功 |
+| 依存監査 | 依存追加・lockfile変更なし。cargo-denyの既存成功結果を継承し、CIでもworkspace・独立generatorを再確認する |
+| Rustdoc | 製品／開発＋dump構成で`RUSTDOCFLAGS=-D warnings`成功 |
 | 文書 | UTF-8、相対リンク・anchor、fenced block、差分空白を確認 |
 
 実GPUはignored試験を明示実行し、前提不足を成功・skipへ置き換えていない。
@@ -59,42 +61,53 @@ Windows / LinuxのCPU・Vulkan、およびWindows presentationのcheck・Clippy�
 [GitHub Actions](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)に設定している。
 このローカル確認はLinux実行や実GPU CIの合格を意味しない。
 
-### 製品版と開発用の検証方針
+### 製品版と開発用の検証分離
 
-2026-11-13に[検証方針](../guides/validation-policy.md)を制定し、AGENTS.mdと既存の設計・開発ガイドへ反映した。
-Vulkan／Rust／Cargo／VMA、Unreal、D3D12、Metalの一次資料24件を確認し、API条件の保証と
-反復検査、開発用診断、同期・寿命・容量・native失敗の実行機能を区別した。
-製品の保証済み入力は再走査せず、開発用の検証専用処理・保持情報をコンパイル除外する方針とする。
+ライブラリの最終確認点は`e96d270`、表示例の追補は`aa5f1eb`。
+`renderer-y7e`／`fa3`／`585`／`vmj`／`kyt`／`jp2`を統合した。
+profileと独立した`development-validation`、`vulkan-diagnostics`、`graph-diagnostics`を実装した。
+製品の既定native modeはDisabledで、診断なしのRequired要求は明示的に拒否する。
 
-今回の変更は文書とAPIコメントのみで、runtime動作やCargo featureは変更していない。
-`ValidationMode::Disabled`は引き続きLayerの切替だけで、内部検査・CPU provenance・debug_utilsは残る。
-新しい製品構成、検証除去のCPU／メモリ効果、実GPUの追加確認は未実装・未測定／未実行である。
-既存のGPU結果を今回の新しい確認として扱わない。文書の確認結果とCIはBeads `renderer-pwx`にも記録する。
+Graph構築が保証したowner・範囲・用途の独立再検査とdead部分だけの循環検出を開発用へ移した。
+producer・初期化・culling・live hazard／循環・最終内容・import revisionの保証は維持する。
+管理下meshは生成時の不変count／最大値をprivate uploadへ引き継ぎ、一般writeで失効する。
+位置を保つ完全copyだけが継承し、証明できない部分範囲は拒否する。
+任意Graphの部分byte更新には入力保証としてprovenanceを残す。
+同count・交互の頂点数の32 drawで、一般入力の走査は旧32回から1回、管理下meshは0回となるCPU回帰を確認した。
 
-ローカルではMarkdown 13文書のUTF-8・fence、相対リンク／anchor 166件、一次資料参照24件と
-検証JSONのparse、`git diff --check`、`cargo fmt --all -- --check`が成功した。
-`RUSTDOCFLAGS="-D warnings"`でCPUのみとVulkan featureの`cargo doc --locked --workspace --no-deps`も成功した。
-文書とコメントだけの変更のため、新しいCPU挙動試験・実GPU試験・性能測定は追加していない。
+native診断offのmonitor／内部handleはZSTで、診断専用Arc・callback・履歴・debug_utils・命名／label構築を持たない。
+Graph診断offはdump API・専用依存／寿命metadata・culled名・未使用transient名を除外する。
+live／export／importの運用エラー用の名前は残す。通常のreleaseライブラリを使う外部allocation probeで、
+1024資源の保持量を447,488→352,256 byte（全culled）、899,072→774,144 byte（2048 live pass）と確認した。
+開発検証のon/offでは変わらず、Graph診断だけが保持を追加する。各caseでplan破棄後の収支は0。
+これはallocatorへの要求byteで、overhead・stack・process RSS・VRAMではない。
 
-### VSyncの選択・切り替え
+release LLVM IRでもlowering dump固有の4文字列が製品構成に存在せず、Graph診断ありのpositive controlには存在した。
+operational log用のtracingは残る。同期・完了・容量・native失敗を検証用cfgへ移していない。
+最適化＋検証あり／なしのCPUと実GPUの両経路を確認した。
 
-`renderer-5kp`で`PresentationConfig::vsync`、`Presenter::set_vsync`と要求値getterを追加した。
-既定ONはFIFO、OFFは実Surface対応を確認したIMMEDIATEで、未対応要求は`Unsupported`となる。
-WSIの能力照会・同期・退役世代の指針と単一モードSwapchainのAPI契約に従い、
-既存の再作成とbounded retirementを利用した。通常経路への全体idleや、MAILBOXへのfallbackは追加していない。
-IMMEDIATEの性能・latency改善を実測した変更ではなく、利用側がVSync方針を選べる機能である。
+trim_idle_resourcesは明示的なworking set境界で、登録中・pending・escaped leaseを保護する。
+実GPUでidle画像2個を解放し、VMA allocationは7→5件、9,888→8,864 byte、cache論理byteは320→0。
+登録中64 byteとretained 132 byteは維持し、全owner退役後はstagingの2件／8,192 byteへ戻った。
+VMA blockは100,663,296 byteのままなので、process VRAM削減やbyte budgetの保証とはしない。
+世代上限・古いkey・失敗後の空きslot再利用も確認し、hidden waitを追加していない。
 
-CPU試験では対応モードの選択、MAILBOXがあっても未対応OFFを拒否することを確認した。
-実Win32試験では同値要求で再作成しないこと、presentの所有権保持中のFIFO→IMMEDIATE→FIFO、
-最小化中の変更保留、resize・取得後cancel・pending終了、close後の変更拒否を確認した。
-Graph側の画素照合と、全native所有者を破棄した後までCore/SyncValの診断ゼロを維持した。
-通常3構成のcheck・Clippy・CPU試験と全GPU26件、表示例の両起動モードを再実行した。
-Shaderは変更せず再生成検証は前回結果を継承する。依存の追加・更新はない。
+Rasterは名前付きdraw／typed attachmentとClear(value)へ移行し、未使用clear入力を除去した。
+解析専用declare_passの競合拒否は安全な構築境界に残し、共有O(A log A)の検査へ変更した。
+全read 8192宣言は線形・一時allocationなしで、元のbuilderの最初の衝突pair／error contextを保つ。
+資源所有・準備・記録を既存private moduleへ分離し、独立レビューでも契約の欠落は見つからなかった。
 
-Vキー入力はexampleのhandlerに接続し、同じ切り替え関数をsmokeから自動実行した。
-実際のキー入力の手動試験、別GPU／driverでの両モード、driver／compositor設定の影響、
-表示FPS・PresentMonの記録は未検証である。FPSの推奨計測境界は[開発ガイド](../guides/development.md#表示fpsの計測方針)にまとめた。
-今回のログはGit管理外の`.tools/vsync/`に保存した。headlessの既存性能基準値は更新していない。
+native検証ありのrelease GPU43件はCore／SyncValの実効を確認し、native破棄後までwarning・error・callback失敗ゼロ。
+別runの製品mesh試験は画素とCPU upload Arcの解放、保持segment・走査ゼロを確認した。
+製品monitorは収集しないため、件数0や起動報告の不在を外部Layer非注入の証明にしない。
+
+### VSyncと表示例
+
+既定ONはFIFO、OFFは実Surface対応を確認したIMMEDIATEで、未対応要求はUnsupportedとなる。
+同値変更、acquire／present、resize、最小化復帰、取消とpending終了を実Surface試験で再確認した。
+表示例は開発構成のVSync ON/OFF各起動と製品構成の3回、releaseのsmokeが終了コード0。
+開発構成はCore＋SyncValの実効と終了後の診断ゼロを要求し、製品構成はmonitor処理を持たない。
+実際のVキー手動入力、別GPU／driver、driver／compositor設定、表示FPSやPresentMonは未確認である。
 
 ## 動作・寿命・異常経路
 
@@ -310,66 +323,39 @@ Device単独、その後のpresentation全30件を2 run、headless全29件、上
 batch本実装`97d41cc`のheadless 33件・表示込み34件、56比較runと各例でも再現しなかった。
 今回の`2e543b4`のheadless 40件・表示込み41件・公開負荷1件、release検証・計測と各例も単独実行し、再現していない。
 
-## エンジン負荷とM4前の入力・資源管理
+## エンジン負荷と入力・資源管理
 
-検証したRust実装は`2e543b40c03f857618a8bd7126826fd1c6543a1c`。
-`renderer-m5y`／`km2`／`7mi`／`t99`／`v0s`／`9ve`／`b6n`／`2d0`で、
-共有CPU asset入力、独立したGPU常駐、分割upload、内容versionと同期状態、索引化、
-直接出力、一件待機、present outcomeを修正した。API互換用の別経路は増やしていない。
+最終ライブラリソースe96d270をreleaseで確認した。
+大meshは400×400 cell、160,801頂点・960,000 index、8,342,428 byte。
+別meshと合わせた11,764,664 byteを256 KiB stagingから47 chunkで受理し、
+最後の受理からCPU完了待ちなしで描画へ進む。頂点／index byteの照合も含む。
 
-CPU assetを削除しなくてもGPU常駐を退避でき、件数・論理byte予算とView用物理枠を守る。
-物理容量4・論理mesh上限16でCPU側にA/B/Cを残した入れ替えが進み、資源作成は4件で安定した。
-prepared pinで枠が不足する場合はエラーにし、解放後に進むことも確認した。
-共有meshを使う2 Viewを先にbuildしてから順次submitし、異なる寸法・行列・tintとComputeの
-全RGBAを照合した。同一snapshotは元のCPU mesh/material削除後も別rendererで利用できた。
+engine_workloadsのverifyは開発検証・native Core＋SyncValありで45画像、
+benchmarkはRenderer診断なし・native Disabledで519画像が全RGBA期待値と一致した。
+32個のCPU assetを保持した4-mesh cacheの入れ替え、3 pending中の更新・削除／再登録、
+2 Viewの先行build、独立renderer入力を含む。verifyはnative破棄後まで診断ゼロ。
+製品runのnative実効フラグは未観測としてnullを記録した。
 
-大meshは400×400 cell、160,801頂点・960,000 index、8,342,428 byteで、vertex入力だけでも4 MiBを超える。
-別の256×256 cellのmeshを加えた11,764,664 byteを、256 KiB stagingから47 chunkで受理した。
-単体meshの全vertex/index byteは小さいreadback領域に分けて照合した。
-最後のupload受理直後、Fence完了を観測せずに描画できることも確認した。
-chunkは元の`Arc`とsource範囲を共有し、CPU側に永続的なbyte複製を増やさない。
+変更前d61ca29と製品構成を、32 warm-up＋128測定frame×3 run、3 in-flightで比較した。
+大meshを64×64へ描くwarm経路で、CPU activeはbuild開始からsubmit復帰まで、
+cold upload・snapshot作成・容量待機を含まない。GPUはreadback込みで表示・VSyncを含まない。
 
-releaseの`engine_workloads --verify`では45画像、明示Validation無効の`--benchmark`では519画像が
-全RGBA期待値と一致した。両方とも32個のCPU assetを保持した4-mesh cacheの入れ替え、
-3 pending frame中の更新・削除／再登録、複数View、独立renderer入力を含む。
-verifyはnative破棄後までCore／SyncValが有効で、warning・error・callback失敗ゼロ。
-Disabled要求時の実効フラグは未確認としてnullを記録し、Layer非注入の証明とはしない。
-
-性能測定は32 warm-up＋128測定frameを3 run、3 in-flightで単独実行した。
-大meshを64×64へ描くwarm経路で、cold upload・snapshot作成・容量待機をCPU activeへ含めない。
-GPU区間はreadback込み、表示・VSyncは含まない。p50／p95はnearest-rankで算出した。
-
-| 指標 | 各runのp50 | 各runのp95 |
+| 指標 | 変更前 | 製品構成 |
 |---|---:|---:|
-| CPU build開始〜submit復帰 | 21.7–24.0 µs | 28.4–35.0 µs |
-| GPU Graph | 110.816–110.880 µs | 111.136–111.328 µs |
+| CPU active p50／p95 | 56.0／93.2 µs | 21.3／49.7 µs |
+| GPU Graph p50／p95 | 111.072／112.128 µs | 110.688／114.240 µs |
+| cold upload受理／完了観測 | 5.623／5.673 ms | 7.291／7.369 ms |
 
-pooled 384 sampleのCPU p50／p95は23.3／32.0 µs、GPUは110.816／111.232 µs。
-submit復帰後から完了観測までのlatency p95は335.4 µsで、scanoutや総frame latencyではない。
-benchmarkのcold upload受理は5.542 ms、完了観測まで5.596 msだった。
-転送前のmesh生成・byte化を含むlevel load時間ではなく、明示waitを選んだstartup操作の値である。
-staging予約high-waterは262,144 byteで容量内、最終常駐は4 mesh／19,600論理byte。
-VMA Allocationは12,459,488 byte、blockは100,663,296 byteで、常駐予算やprocess VRAMとは別の値である。
+検証・診断の設定を意図的に変えた作業環境サンプルで、個別修正の因果効果やGPU高速化を示さない。
+clock・affinity・電力・OS負荷を固定せず、統計的な有意差やFPSを主張しない。
+cold uploadは事前生成済みmeshの転送操作で、level load全体の時間ではない。
+最終常駐4 mesh／19,600論理byte、staging high-water 262,144 byte、
+VMA Allocation 12,459,488 byte、block 100,663,296 byteは前後で同じだった。
+trimは明示APIであり、この負荷へ暗黙のevictionを追加していない。
 
-CPU索引化比較は、公開Engine登録・Graph exportと、production CacheIndexを含むmetadataモデルを分けた。
-変更前`7b851c6`、変更後のCPU実装相当`5fd39cf`／cache索引`ab48f57`、release、AB／BA／AB、
-各case・processで7 sample、合計882 sample。入力生成と最終破棄を計測外とした。
-
-| 8192件のCPU処理・run中央値 | 変更前 | 変更後 |
-|---|---:|---:|
-| mesh登録 | 13.388–13.509 ms | 0.376–0.383 ms |
-| material登録 | 17.580–17.733 ms | 0.0965–0.1049 ms |
-| Graph export宣言 | 3.732–3.787 ms | 0.0621–0.0872 ms |
-| cache metadata：8192登録＋1024一時資源 | 2.025–2.038 ms | 0.1949–0.1995 ms |
-
-小さいcacheモデル（32登録＋32一時資源）では0.5–0.6から3.6–3.7 µsへ管理費が増えた。
-このモデルはArc・通知lock・native作成・GPU実行を含まず、frame時間の比較へ読み替えない。
-clock・affinity・電力・OS負荷は固定していない。固定shader／UNORMの結果で、PBR・多vendor・FPSの保証ではない。
-
-既存のchurn付き24-frame出力は前回保存したRGBAと全byte一致し、128 distinct drawの512×512 gridも
-前回公表したRGBA SHA-256と一致した。無変換composite除去で出力を変えていない。
-全sample・条件・CPU probe本体とhash・出力hashは[エンジン負荷データ](engine-workloads-metrics.json)へ保存した。
-CPU probeは埋め込みsourceから再構築でき、ローカル`.tools/`だけを再現用sourceにしていない。
+条件・生sample・ソースhash・再構築可能な通常ライブラリallocation probeとLLVM文字列検査結果は
+[現在のエンジン負荷データ](engine-workloads-metrics.json)へ保存した。
+以前の登録／cache索引化比較と出力hashはGit履歴に残す。
 
 ## 第二APIの準備と未確認範囲
 
@@ -391,7 +377,7 @@ GPU Validationとは別の依存監査診断として確認した。ライセン
 [ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記録した。
 生成物の改変とSDK不足が失敗することも確認した。
 
-統合ソース`cad88dfcde254b95bf5ff0b5ebfa32a7dd28cef8`、clean mainで
+統合ソース`e96d270410db3f528bfec2df9ff067d6200c489d`、clean mainで
 [反復スクリプト](../../scripts/verify-m4-preparation.ps1)でprobeを3回実行して全回成功した。
 機材・実行担当・再実行方法は[開発手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を参照する。
 
@@ -420,16 +406,17 @@ M4-03の製品runtime、M4-04以降のGraph実行・Fence寿命、M4-08〜10の�
 
 ## 再現物
 
-M4準備の生成一致・5構成の品質確認・依存監査・Vulkan実GPU40件のログは`.tools/m4/gates/`、
-3回反復の環境・source commit・shader hash・全probe JSON／logは
-`.tools/m4/preparation/20261113T043516239Z-4a752b57/`へ保存した。
+今回の10構成の品質・release両構成・独立feature・Rustdoc・実GPU・表示例のログは`.tools/graph-review/gates/`、
+3回反復の環境・clean source commit・shader hash・全probe JSON／logは
+`.tools/graph-review/preparation-final/`へ保存した。最初のPython経由起動はPowerShell module探索で失敗し、
+その証拠は`.tools/graph-review/preparation/`に保持した。PowerShellからの直接起動で前提検査を省かず成功した。
 再実行sourceと生成済みbindings／shaderはGit管理し、`.tools/`だけに依存しない。
 
 M4前の入力・資源管理のゲートは`.tools/engine-readiness/gates/`へ保存した。
 `{cpu,vulkan,presentation}-{check,clippy,test}.log`、`fmt.log`、`examples-test.log`、
 `gpu-{vulkan,presentation}.log`、`gpu-game-public.log`、`workloads-{verify,benchmark}.log`、
 `frame-verify.log`、`distinct-verify.log`、`headless.log`、`windowed-{on,off}.log`を含む。
-共有するデータとCPU probe sourceは[エンジン負荷JSON](engine-workloads-metrics.json)に収めた。
+現在の負荷とCPU保持量probeは[エンジン負荷JSON](engine-workloads-metrics.json)に収めた。以前の索引化probeはGit履歴を参照する。
 大メッシュの再実行は開発ガイドの`engine_workloads`を使う。性能値だけの固定合否閾値はCIに追加していない。
 
 今回のゲートは`.tools/opaque-batching/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`と`fmt.log`、
