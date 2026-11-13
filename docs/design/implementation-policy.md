@@ -216,6 +216,8 @@ Forward/GGX、静的IBL、CSM/PCF、RGBA16F、Neutral、FXAAを第15章の出発
 比較試作の再現・実行範囲は[開発手順](../guides/development.md#foundation-comparison)と
 [現在の検証状況](../verification/current.md#foundation-comparison)を参照する。
 
+<a id="source-boundaries"></a>
+
 ### 3.4 全体レビューから定めたソース整理の境界
 
 `renderer-420`で第一者のRust、shader、素材tool、生成・検証script、CIと文書構成を確認した。

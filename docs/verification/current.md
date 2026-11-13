@@ -5,6 +5,58 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="repository-review"></a>
+
+## ソース全体のレビューと効率修正
+
+`renderer-420`、比較元`f649bcf`。第一者のRenderer Rust 64ファイル、example 11、
+integration test 4、Bistro Python 28、validator 2、PowerShell 6と、benchmark、
+独立試作、生成・依存設定、CI、文書構成を分担レビューし、主要な修正を別担当が再レビューした。
+生成bindingsとshader成果物はFFI・ABI・所有・固定入力による再生成の境界で確認した。
+配布asset全体の任意の破損や全driverの動作を証明するレビューではない。
+
+| 課題 | 確認した問題と修正 |
+|---|---|
+| `renderer-420.1` | compile解析用の名前・初期範囲・依存の複製を借用へ変更。drawの中間配列を除去し、不変snapshotのパラメーター保証をprivateな値で引き継ぐ |
+| `.2` | mesh uploadの完了prefix・残byte・全resident退役走査をcursor、残量、retiring索引へ変更。不要なLRU sortと重複Arc cloneを除去。readbackは退役後に一度sortして検索。importはowner/generation/revisionを維持し、深い不変metadata再比較だけ開発診断へ移す |
+| `.3` | resize時とsampleの重複Fence pollを除去。再描画の期限を固定し、ゼロ寸法で待機する。非ゼロ寸法への復帰はSwapchain作成済みかどうかに依存しない |
+| `.4` | 同一file/archive/FBXの重複hash、画像sourceの全量保持、Node Bufferの複製、出力されないtangent計算を除去。validatorによる入力上書きと、失敗した比較結果をsummaryが成功として公開する不具合も修正 |
+| `.5` | 不変Device限界値を初期化時から再利用。参照transferの二重検査・初期化範囲の複製/書込ごとの再反映・記録後のplan保持を除去。広域dead-code抑止を撤去し、参照専用経路とprivate INFO履歴をtest構成へ限定 |
+| `.6` | D3D12 readbackの全量zero-fill後の上書きを除去。結果検索/残数判定の二乗走査をsort・二分探索・残数へ変更し、保証されたCOM親interfaceへのQueryInterfaceを除去 |
+| `.7` | 同一queueで既に可視化済みの完全に同じread scopeだけ、重複barrierを省略。CPU回帰は8読取の依存8件から1件。新stage/access、write、WAR、layout変更への依存は保持 |
+| `.8` | PPMのpixelごとの小書込をbuffer化。計測reportにcompile featureを記録し、観測したnative検証のbenchmark混入を拒否。shader hashをstream化、照合textをLF固定、全SPIR-Vのcompile/検証成功後に公開 |
+
+[機械可読の証拠と同一CPU harness](source-review.json)を保存した。Rust 1.99.0、release、
+default featureなしで、2,048資源/4,096passのcompileはallocation要求46,146→40,001回、
+総要求byte 7,230,276→7,125,062。8,192drawのframe構築は19→18回、
+2,689,489→1,706,449 byteだった。後者はsnapshot作成後の測定で、常駐量・peakではない。
+GPU速度、wall-clock、Bistro性能の改善率は測定していない。
+
+Blender 4.5.16 LTSの同一入力でtangent計算の有無を比較し、1,296mesh/
+2,832,120triangle、11,664配列比較とmetadata、全407個のglTF関連fileが一致した。
+alpha再検証の出力39,662 byteも変更前後で一致した。
+shaderは最後のcompileを故障させても全5個の既存SPIR-Vを保持し、
+`core.autocrlf=true`のcheckout相当で13個のtextがLFとなって再生成照合に成功した。
+
+構成上はGraphとengineの相互依存、Program/bindingと記録、物理資源とGraph、
+WSIの複数所有境界の同居を整理対象とした。[既存設計の整理範囲](../design/implementation-policy.md#source-boundaries)を
+`renderer-7ft.2.1`/`.2.2`/`.2.6`へ記録した。backendのprivate分離、生成bindingsの隔離、
+`foo.rs`と`foo/`、integration test/実GPUignoredの区分は維持する。
+現在のraw Graph作成境界のextent/clear検査、動的なowner/revision、同期・寿命・容量・native失敗は保持する。
+将来の一般Programではread scope省略の成立条件を再確認する。
+既知の未再現native起動crash `renderer-0pb`は未解決で、このレビューで解決したとは扱わない。
+
+統合したRustソースでfmt、製品/開発の全target Clippy（`-D warnings`）、CPU通常66件、
+`presentation,d3d12`のrelease通常180件、追加検証/Graph診断ありのrelease通常191件が成功した。
+RTX 3060で逐次実行したreleaseの厳格Vulkan 46件、製品経路/新規回帰4件、
+Renderer追加scanなしのbatch 1件、D3D12寿命1件、二API共有bufferの厳格/製品各1件の
+合計54件が成功し、表示smokeも厳格/製品の両方で成功した。
+各厳格gateは正常終了とnative最終解放後まで既存の診断判定を維持し、新規native警告/エラーはない。
+製品構成の成功をnative検証が実効有効だった証拠へ流用しない。
+Python 60件、Node 10件とshader再生成照合が成功した。
+公式offline glTF validatorの0 error/1,591 warning/1,591 infoは従来の`issues`全体と一致し、
+nativeの診断ゼロと区別する。Linuxは実GPU未実行で、CIのCPU/build確認を別に記録する。
+
 ## Bistro計画と現行実装の区別
 
 開発計画を[実装方針のB0〜B5](../design/implementation-policy.md#bistro-roadmap)へ改訂した。
@@ -20,7 +72,7 @@ B0で維持・改修・置換・外部基盤を比較し、[native上位置換�
 素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
 全ゼロalphaに加え、最終camera/path/light/IBL/露出と再現・比較手順を下記のとおり固定した。
 要求・比較入力の固定に続き、公開APIの利用例と基盤比較・採用・移行範囲を設計し、B0の設計を完了した。
-Renderer本体・管理下shader・native経路は変更せず、以降の既存GPU・Rust試験表は従来の固定ソースの実績として保持する。
+B0ではRenderer本体・管理下shader・native経路は変更せず、以降の既存GPU・Rust試験表は従来の固定ソースの実績として保持する。
 BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
 画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
 

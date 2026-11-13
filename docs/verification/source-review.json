@@ -97,12 +97,151 @@
     "array_comparisons": 11664,
     "baseline_metadata_equal": true,
     "gltf_linked_files": 407,
-    "gltf_linked_files_byte_identical": true
+    "gltf_linked_files_byte_identical": true,
+    "source_blend_sha256": "5ce3d96164261a2419ae8b803ac0737af8c453098d071ea60cf3597b051b4e38",
+    "proof_script_sha256": "0d673bff8753db0d96f283e913aa0d6f21730af16068ecad5207f710673d9cef",
+    "command": "blender.exe --background .tools/bistro/output/export-e/source.blend --python .tools/worktrees/audit-tools/.tools/tangent-equivalence.py"
   },
   "limits": [
     "Static review and focused tests do not prove all bugs absent.",
     "No wall-clock/GPU/Bistro speedup or memory-budget claim.",
     "Future general Program/subresource changes must re-establish the narrower current fixed-operation synchronization guarantees.",
     "Pre-existing unreproduced native startup crash renderer-0pb remains open."
-  ]
+  ],
+  "rust_verification_commit": "ed639374bf0d2ce66a4d6f8858451ed24db088c3",
+  "integrated_gates": [
+    {
+      "name": "cpu",
+      "command": "cargo test --locked --workspace --no-default-features",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\cpu.log",
+      "elapsed_seconds": 3.4701879
+    },
+    {
+      "name": "shipping-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets --no-default-features --features presentation,d3d12 -- -D warnings",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\shipping-clippy.log",
+      "elapsed_seconds": 0.5801562
+    },
+    {
+      "name": "strict-clippy",
+      "command": "cargo clippy --locked --workspace --all-targets --no-default-features --features presentation,d3d12,development-validation,graph-diagnostics -- -D warnings",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\strict-clippy.log",
+      "elapsed_seconds": 2.688774
+    },
+    {
+      "name": "shipping-release-cpu",
+      "command": "cargo test --locked --workspace --release --no-default-features --features presentation,d3d12",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\shipping-release-cpu.log",
+      "elapsed_seconds": 19.2251273
+    },
+    {
+      "name": "strict-release-cpu",
+      "command": "cargo test --locked --workspace --release --no-default-features --features presentation,d3d12,development-validation,graph-diagnostics",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\strict-release-cpu.log",
+      "elapsed_seconds": 19.3099503
+    },
+    {
+      "name": "strict-gpu",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features presentation,d3d12,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\strict-gpu.log",
+      "elapsed_seconds": 11.8021681
+    },
+    {
+      "name": "shipping-gpu",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features presentation,d3d12 ::vulkan_shipping_ -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\shipping-gpu.log",
+      "elapsed_seconds": 0.4758723
+    },
+    {
+      "name": "vulkan_graph_repeated_reader_visibility",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_graph_repeated_reader_visibility -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\vulkan_graph_repeated_reader_visibility.log",
+      "elapsed_seconds": 16.0665141
+    },
+    {
+      "name": "vulkan_graph_readback_identity_survives_reordered_execution",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_graph_readback_identity_survives_reordered_execution -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\vulkan_graph_readback_identity_survives_reordered_execution.log",
+      "elapsed_seconds": 0.3949137
+    },
+    {
+      "name": "vulkan_engine_cancelled_upload_can_readmit_same_snapshot",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_engine_cancelled_upload_can_readmit_same_snapshot -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\vulkan_engine_cancelled_upload_can_readmit_same_snapshot.log",
+      "elapsed_seconds": 0.4933131
+    },
+    {
+      "name": "batch-no-renderer-scan",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,vulkan-diagnostics vulkan_batch_smoke -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\batch-no-renderer-scan.log",
+      "elapsed_seconds": 16.3322897
+    },
+    {
+      "name": "d3d12-lifetime-strict",
+      "command": "cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation buffer_graph_lifetimes_partial_creation_and_pending_drop -- --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\d3d12-lifetime-strict.log",
+      "elapsed_seconds": 4.3605346
+    },
+    {
+      "name": "shared-buffer-strict",
+      "command": "cargo test --locked --release -p renderer --test d3d12_graph --no-default-features --features vulkan,d3d12,development-validation m4_buffer_shared_graph_strict -- --exact --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\shared-buffer-strict.log",
+      "elapsed_seconds": 8.6628854
+    },
+    {
+      "name": "shared-buffer-shipping",
+      "command": "cargo test --locked --release -p renderer --test d3d12_graph --no-default-features --features vulkan,d3d12 m4_buffer_shared_graph_shipping -- --exact --ignored --nocapture --test-threads=1",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\shared-buffer-shipping.log",
+      "elapsed_seconds": 9.2928059
+    },
+    {
+      "name": "window-shipping",
+      "command": "cargo run --locked --release -p renderer --no-default-features --features presentation --example windowed -- --smoke",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\window-shipping.log",
+      "elapsed_seconds": 9.5236109
+    },
+    {
+      "name": "window-strict",
+      "command": "cargo run --locked --release -p renderer --no-default-features --features presentation,development-validation --example windowed -- --smoke",
+      "exit_code": 0,
+      "log": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\source-review\\window-strict.log",
+      "elapsed_seconds": 8.9705012
+    }
+  ],
+  "tool_verification": {
+    "python_passed": 60,
+    "node_passed": 10,
+    "full_bistro_validator_issues_unchanged": true,
+    "gltf_errors": 0,
+    "gltf_existing_warnings": 1591,
+    "gltf_existing_infos": 1591,
+    "alpha_before_after_custom_equal_bytes": 39662,
+    "validator_source_guard_regressions": [
+      "model",
+      "external buffer",
+      "image",
+      "symlink",
+      "hardlink",
+      "invalid-version glTF",
+      "invalid-version GLB",
+      "unfetched traversal declaration"
+    ],
+    "native_gpu_tests": 54,
+    "window_smoke_runs": 2
+  }
 }

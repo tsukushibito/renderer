@@ -57,6 +57,8 @@ InstanceとVMAが要求するAPIはVulkan 1.3とする。
 物理デバイスにはAPI variant 0のVulkan 1.3以上、Graphics＋Compute対応キュー、
 `timelineSemaphore`、`synchronization2`、`dynamicRendering`を要求する。
 対応確認とDevice作成用のfeature構造体を分け、必要な3 featureだけを有効化する。
+初期化で取得した不変な`VkPhysicalDeviceLimits`をDevice所有者に保持し、画像/Program作成でも再利用する。
+実際のformat/type/usage/extentの対応確認とnative作成失敗は別に処理する。
 
 適合候補は専用GPU、内蔵GPU、仮想GPU、その他、CPU型の順で自動選択し、同順位は列挙順とする。
 CPU型も最後の候補として利用できるが、その選択をログに残す。
@@ -123,6 +125,12 @@ Disabledを要求した際の起動報告の不在から、外部Layer注入が�
 Vulkan API versionの形式として誤decodeしない。
 
 ## メモリ所有とCPUアクセス
+
+standaloneなwhole-buffer/image transferとbatchは現在test/性能参照経路である。
+その専用資源型・初期化metadata・planは通常libraryへコンパイルしない。
+本番Graphの物理資源、共有staging、実行pool、退役・readback所有は引き続き通常経路に残す。
+参照batchでもprivate builderの保証済みleaseを再走査する独立診断だけを開発構成へ分け、
+正常なFence完了後に初期化範囲のunionを一度移す。native記録後には不要なcopy operandを解放する。
 
 VMAの既定pool・メモリタイプ選択・suballocationを利用する。
 物理メモリの割り当てアルゴリズムや、用途のないcustom poolを独自実装しない。
@@ -260,6 +268,12 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 
 ## 投入・完了・異常時の保持
 
+同じqueueで前のread-only layout遷移が既にwriterを可視化した後、write/layout変更がなく、
+stage/accessが完全に同じ次のreadにはwriter→reader barrierを重複記録しない。
+最後のwriter自体は保持し、異なるread scope、後続writeとlayout変更では既存の依存を使う。
+累積maskから任意のstage/accessの組合せの可視性を推論しない。一般Programへの拡張時は再検証する。
+根拠は[`vkCmdPipelineBarrier2`の同一queueの後続命令への第2scope](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdPipelineBarrier2.html)である。
+
 `submit`と`wait`を分け、記録済み・未完了の所有者が命令から参照される全資源を保持する。
 所有する対象をGPU実行中にCPUへ返さず、通常のアクセス・解放・再利用との競合を避ける。
 投入前にpending状態を確立し、submit後のログ出力がunwindしても安全性を失わない。
@@ -358,6 +372,10 @@ native実行枠は未読Readbackより先に再利用できる。
 
 ### 大きなmeshの準備
 
+入場したupload集合はcursorと未投入byte数を持ち、chunkごとに完了prefixと全meshを再走査しない。
+進捗はsubmit受理後だけ更新し、cancel/unload/再入場で残量と退役索引を更新する。
+通常のpollでは実際のretiring登録だけを調べ、予算内の常駐済み準備でLRU候補をsortしない。
+
 `VulkanRuntime::create_buffer`は初期化範囲が空の永続bufferを明示登録する。
 途中まで転送したbufferを全域初期化済みとしてexportする回避策は使わない。
 通常のGraph uploadで登録bufferの範囲を更新し、受理後のfreshな内容snapshotから次のchunkを作る。
@@ -370,6 +388,10 @@ engineのupload jobは固定staging容量・cache atom整列・未回収submissi
 取消・退避・CPU asset削除の後も、受理済みchunkが参照するstagingとnative資源を完了まで保持する。
 
 ## Windows Presentation
+
+公開`prepare`/`present`がそれぞれpollを行ってから再作成へ進み、内部で同じpollを繰り返さない。
+表示例は次回再描画期限を早期eventで後ろへ動かさず、ゼロ寸法ではevent/明示復帰期限を待つ。
+復帰時の描画可否はWindow寸法から決め、Swapchain作成済みかどうかには依存させない。
 
 `for_window`は`Arc<winit::window::Window>`を受け取り、Runtimeと`Presenter`を返す。
 Surface所有者がWindowとInstanceを保持し、Deviceと同じInstanceに由来することを保証する。

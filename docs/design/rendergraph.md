@@ -135,6 +135,10 @@ import／exportしたbufferは後のGraphでindexに使えるため、元の入�
 
 ## 論理的な依存と実行順
 
+compile解析用の名前、初期化範囲と明示依存は構築Graphから借用する。
+完成した`CompiledGraph`は必要な命令・資源・名前を独立所有し、呼出元の借用を残さない。
+通常構成では解析済み実行順をmoveし、optional診断が同じ情報を保持するときだけ複製する。
+
 内容のproducerを特定するdataflowと、同じ物理資源のRAW・WAR・WAWによる順序制約は区別する。
 不要パス除去はexport・readback・外部に観測される書き込み・明示的な副作用から
 必要なproducerを辿る。上書き済みwriterや不要なreaderを、順序制約だけで残さない。
@@ -184,6 +188,8 @@ nativeのstage/access/layoutと最後の利用serialは投入時のcanonicalな�
 古い同期状態を再利用しない。書き込み・clear・discard後は旧内容のsnapshotを拒否する。
 更新後は`refresh_buffer`／`refresh_image`で取得し直し、Graphを再構築・compileする。
 実行時にもcanonicalな状態と照合するため、compile後の変更を取り逃さない。
+owner・世代・内容revisionの照合は製品でも行う。同じ世代のdescriptorは不変で、初期化状態の
+変更はrevisionを進めるため、descriptor/初期範囲の全量再比較は`development-validation`だけで行う。
 
 exportした資源はruntimeへ登録され、明示的な`delete`で登録を解除する。
 CPUハンドルをdropするだけでは登録を解除しない。
@@ -315,6 +321,9 @@ Modelを含めない責務境界と理由は[実装方針](implementation-policy
 `View`、`Draw`から作る`FrameSnapshot`はmeshの版とtint・行列を所有し、
 後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
 `clip_from_world * world_from_model`を合成する。clip depthは0〜W、viewport高さは正、通常Zである。
+有限なdrawパラメーターはsnapshotでprivateな検証済み値として確立し、batch構築で再走査しない。
+public `Graph::raster`のraw入力検査は維持する。batchのowned operandはfallible iteratorから直接作り、
+途中失敗時はpassを追加しない。
 投影とhandednessは入力行列で選ぶ。Rustのstruct layoutをGPU ABIとせず、
 頂点は明示byte化し、描画引数も64-byte MVPと16-byte tintへ明示的に変換する。
 
