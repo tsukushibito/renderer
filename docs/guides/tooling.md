@@ -64,6 +64,40 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
 
+## D3D12 bindingsの生成
+
+`d3d12` featureはWindows限定のprivate bindingsを使う。公開Graph／Engineへnative型を出さず、
+通常ビルドは[生成済みRust](../../crates/renderer/src/backends/d3d12/bindings.rs)を使う。
+製品のD3D12 Graph runtimeはM4-03以降で実装する。
+
+[生成tool](../../tools/d3d12-bindings/Cargo.toml)は独立したCargo workspaceとlockfileを持ち、
+`windows-bindgen`、`windows-default`、間接依存の`windows-metadata`を0.100.0へ固定する。
+runtimeの`windows-core`も0.100.0。各crateのMSRVは1.95で、リポジトリのRust 1.99.0を使う。
+入力は固定`windows-default`の`Windows.Win32.winmd`、
+API一覧は[filters.txt](../../tools/d3d12-bindings/filters.txt)を正とする。
+固定crateのchecksumは二つのlockfileに保存し、生成コードのMIT／Apache-2.0ライセンスをtoolディレクトリへ同梱する。
+
+```powershell
+& ./scripts/regenerate-d3d12-bindings.ps1
+& ./scripts/regenerate-d3d12-bindings.ps1 -Verify
+```
+
+`-Verify`は一時ファイルへ再生成し、固定Rustのrustfmt適用後に全byteのSHA-256一致を確認する。
+生成toolの取得・実行にはRustと初回のネットワーク接続が必要だが、Windows SDKは不要である。
+DXCのnative loaderはこの準備範囲で使わず、固定shaderの生成は次節のCLIを使う。
+必要APIは後続の実装でfiltersへ明示追加し、再生成・compile・検証を繰り返す。
+
+通常workspaceとは別に、生成toolの依存も監査する。
+
+```powershell
+& ./.tools/cargo-deny/bin/cargo-deny.exe --locked --manifest-path tools/d3d12-bindings/Cargo.toml --config deny.toml check
+cargo fmt --manifest-path tools/d3d12-bindings/Cargo.toml -- --check
+```
+
+`windows-link` 0.100.0と既存Vulkanの依存が使う0.2は、各crateの要求版が異なるため併存する。
+COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust型互換性は保証しない。
+初期のcommitted-resource基準と所有条件は[設計方針](../design/implementation-policy.md#161-第二バックエンドの選定と準備条件)を参照する。
+
 ## D3D12の固定shader生成
 
 管理下5種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
