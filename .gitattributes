@@ -9,3 +9,8 @@
 /assets/bistro/converted/** filter=lfs diff=lfs merge=lfs -text
 /assets/bistro/environment/*.hdr filter=lfs diff=lfs merge=lfs -text
 /docs/verification/bistro-*-preview.png filter=lfs diff=lfs merge=lfs -text
+
+# Preserve bytes hashed by the fixed-conditions render record on every OS.
+/tools/bistro/conditions.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+/tools/bistro/*conditions*.py text eol=lf
+/docs/verification/bistro-*.json text eol=lf

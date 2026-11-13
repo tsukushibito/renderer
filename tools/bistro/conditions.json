@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "purpose": "Pinned B0 exterior composition and later two-API acceptance inputs. CPU preview is not runtime reference ground truth.",
+  "coordinate_system": {
+    "handedness": "right",
+    "up": "+Y",
+    "units": "metres",
+    "camera_forward": "-Z",
+    "camera_image_up": "+Y",
+    "gltf_to_blender": "(x, -z, y)",
+    "projection": "Perspective, vertical FOV; logical top-left output; normal-Z zero-to-one depth (near 0, far 1); backend conversion must preserve rays and front faces."
+  },
+  "resolution": [
+    1920,
+    1080
+  ],
+  "camera": {
+    "near_m": 0.02,
+    "far_m": 500,
+    "jitter": false,
+    "auto_exposure": false,
+    "depth_of_field": false,
+    "motion_blur": false
+  },
+  "inputs": [
+    {
+      "path": "assets/bistro/source/Bistro_v5_2.zip",
+      "size": 894377473,
+      "sha256": "0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1"
+    },
+    {
+      "path": "assets/bistro/converted/BistroExterior.gltf",
+      "size": 2257681,
+      "sha256": "326b401da516c5f7c78b317b8eb92e79bccd60f8aab679559b800ca857df247e"
+    },
+    {
+      "path": "assets/bistro/converted/BistroExterior.bin",
+      "size": 130016888,
+      "sha256": "31d7f353fb0110f0d37e6079e3c85090f3be2e0cf160b08678cb06a9ac6c8d58"
+    },
+    {
+      "path": "assets/bistro/environment/san_giuseppe_bridge_4k.hdr",
+      "size": 23695717,
+      "sha256": "5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1eec65a50"
+    }
+  ],
+  "views": [
+    {
+      "name": "overview",
+      "position": [
+        153.515,
+        137.857,
+        133.365
+      ],
+      "target": [
+        24.422,
+        -20,
+        4.272
+      ],
+      "vertical_fov_degrees": 48,
+      "purpose": "Whole exterior fits camera frustum with margin; target is a virtual aim point below ground, not a camera position. Occlusion still applies."
+    },
+    {
+      "name": "street",
+      "position": [
+        14.612072,
+        4.293145,
+        -41.809284
+      ],
+      "target": [
+        8.249157,
+        2.90426,
+        -22.899369
+      ],
+      "vertical_fov_degrees": 53,
+      "purpose": "Street, sun/shadow boundary, building materials and foliage."
+    },
+    {
+      "name": "material-detail",
+      "position": [
+        -2.779674,
+        5.092149,
+        6.990835
+      ],
+      "target": [
+        -7.388865,
+        1.404795,
+        0.537966
+      ],
+      "vertical_fov_degrees": 24,
+      "purpose": "Vespa, normal/roughness and pavement near-field detail."
+    },
+    {
+      "name": "glass-detail",
+      "position": [
+        12.55,
+        9.5,
+        16.92
+      ],
+      "target": [
+        16.23,
+        9.5,
+        7.62
+      ],
+      "vertical_fov_degrees": 24,
+      "purpose": "Alpha-zero glass and curtains behind; no diagnostic fill."
+    },
+    {
+      "name": "label-detail",
+      "position": [
+        12.045,
+        2.05,
+        7.53
+      ],
+      "target": [
+        11.605,
+        1.9983,
+        7.1235
+      ],
+      "vertical_fov_degrees": 18,
+      "purpose": "Alpha-zero labels and bottle behind; no diagnostic fill."
+    },
+    {
+      "name": "street-mid",
+      "position": [
+        12.66,
+        4.293145,
+        -36
+      ],
+      "target": [
+        6.297085,
+        2.90426,
+        -17.090085
+      ],
+      "vertical_fov_degrees": 53,
+      "purpose": "Tour intermediate street pose."
+    },
+    {
+      "name": "street-end",
+      "position": [
+        10.64,
+        4.293145,
+        -30
+      ],
+      "target": [
+        4.277085,
+        2.90426,
+        -11.090085
+      ],
+      "vertical_fov_degrees": 53,
+      "purpose": "Tour turnaround street pose."
+    }
+  ],
+  "route": {
+    "fps": 60,
+    "duration_seconds": 30,
+    "interpolation": "Linear position, target and vertical FOV between named keyframes, +Y look-at up.",
+    "keyframes": [
+      {
+        "seconds": 0,
+        "view": "street"
+      },
+      {
+        "seconds": 10,
+        "view": "street-mid"
+      },
+      {
+        "seconds": 15,
+        "view": "street-end"
+      },
+      {
+        "seconds": 20,
+        "view": "street-mid"
+      },
+      {
+        "seconds": 30,
+        "view": "street"
+      }
+    ],
+    "capture_frames": [
+      0,
+      300,
+      600,
+      900,
+      1200,
+      1500,
+      1799
+    ],
+    "collision": "No collision or walking-physics requirement; composition/clearance audit recorded separately."
+  },
+  "lighting": {
+    "sun": {
+      "direction_to_light": [
+        0.6123724356957945,
+        0.5,
+        0.6123724356957945
+      ],
+      "irradiance_rgb": [
+        1,
+        1,
+        1
+      ],
+      "angular_diameter_degrees": 0.53,
+      "units": "Scene-linear benchmark irradiance; not measured lux or calibrated daylight."
+    },
+    "ibl": {
+      "path": "assets/bistro/environment/san_giuseppe_bridge_4k.hdr",
+      "sha256": "5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1eec65a50",
+      "yaw_degrees": 0,
+      "strength": 3,
+      "preprocess": {
+        "mode": "luminance-cap",
+        "cap": 4,
+        "luminance_coefficients": [
+          0.2126,
+          0.7152,
+          0.0722
+        ],
+        "formula": "c=max(decoded linear RGB,0); L=dot(c,coefficients); c*=min(1,cap/max(L,1e-20)); source texels before resampling/prefilter, then strength. Bright-source suppression, not physical sun removal."
+      },
+      "mapping": "u=fract(0.5+atan2(direction.z,direction.x)/(2*pi)); v=acos(clamp(direction.y,-1,1))/pi; source top row v=0; sample inverse R_y(yaw)*direction; repeat U, clamp V.",
+      "prefilter": "B3 generates diffuse irradiance, roughness-dependent specular and BRDF integration from processed source; tool and output hashes fixed before B3 acceptance."
+    }
+  },
+  "output": {
+    "exposure_ev": 1,
+    "tone_mapper": "Khronos PBR Neutral",
+    "tone_mapper_commit": "180b1a7bddec33f73fe41712a2963cc3ad8e5547",
+    "srgb": true,
+    "color_space": "Scene-linear Rec.709/sRGB primaries, D65.",
+    "order": "Linear HDR -> external Bloom if enabled -> multiply by 2^exposure_ev -> PBR Neutral -> sRGB OETF exactly once -> RGB8 round nearest, alpha 1.",
+    "diagnostic_bloom": false,
+    "diagnostic_aa": false,
+    "background_linear_rgb": [
+      0.18,
+      0.18,
+      0.18
+    ],
+    "background": "Constant camera-visible background, processed with same exposure/tone/sRGB; IBL stays visible to illumination and reflections."
+  },
+  "preview": {
+    "resolution": [
+      960,
+      540
+    ],
+    "samples": 32,
+    "seed": 0,
+    "max_bounces": 1,
+    "denoising": true,
+    "adaptive_sampling": false,
+    "note": "Cycles CPU composition/exposure diagnostic with denoised visualization and separately retained noisy EXR; not matching runtime PBR/IBL/CSM/Bloom/AA. No native depth/shadow acceptance or performance claims.",
+    "denoiser": "OpenImageDenoise, CPU compositor, accurate HDR with normal/albedo guides; independent noisy EXR retained"
+  },
+  "alternatives": [
+    {
+      "name": "ibl-only",
+      "sun_multiplier": 0,
+      "ibl_strength": 3,
+      "exposure_ev": 1,
+      "ibl_cap": 4,
+      "views": [
+        "street"
+      ]
+    },
+    {
+      "name": "uncapped-ibl-plus-sun",
+      "sun_multiplier": 1,
+      "ibl_strength": 3,
+      "exposure_ev": 1,
+      "ibl_cap": null,
+      "views": [
+        "street"
+      ]
+    }
+  ],
+  "runtime_quality": {
+    "pbr": "Metallic-roughness GGX and Lambert diffuse with normal maps; audited AO/alpha/double-sided recipe retained. Details fixed with selected B0 foundation.",
+    "shadow": "CSM+PCF starting profile: 4 cascades, 2048 square each, distance 120m, practical split lambda .6, 3x3 PCF, texel snapping, last 10% blend. Bias calibrated B3 before acceptance.",
+    "hdr": "RGBA16F starting profile; actual format usages checked on both APIs.",
+    "tone_mapping": "PBR Neutral pinned reference formula.",
+    "aa": "FXAA starting profile after tone mapping before sRGB, AA-off diagnostics; parameters fixed/calibrated B3.",
+    "bloom": "External effect on for B5 final output, bypass also saved; threshold/knee/radius/strength fixed B4 before acceptance."
+  },
+  "acceptance": {
+    "scope": "Full exterior, no mesh/material silently omitted. Indoor/GI/path tracing/native HDR display not required.",
+    "cpu_preview": "Composition/exposure only. Runtime image thresholds cannot derive from these noisy previews.",
+    "gpu_comparison": "Optimized strict-validation and optimized no-diagnostics/no-native-validation runs; Vulkan/D3D12 sequential on Windows RTX3060. Save SDR, pre-Bloom HDR, depth, shadow and Bloom bypass at named views and scheduled route frames.",
+    "threshold_calibration": "Before each acceptance: same API >=3 repeats, both APIs and known material/sRGB/alpha/shadow errors; freeze absolute/relative RGB/HDR, differing-pixel count and named ROI thresholds with settings hash. Retain edge pixels, fail shape/NaN/inf. Numeric thresholds await B2/B3/B5 GPU calibration.",
+    "performance": "Cold first-load separate; 2 complete 1800-frame warm-up tours then 3 measured 1800-frame tours at 60Hz logical time (30s scene time each; wall duration is measured, not forced to 30s). Offscreen VSync off; raw samples and per-run p50/p95, no fixed FPS budget before RTX3060 measurement. CPU build/compile/record/submit/retire, GPU timestamps, frame wall time, memory residency/high-water/budget; present/VSync measured separately.",
+    "named_rois": [
+      {
+        "name": "whole-exterior",
+        "view": "overview",
+        "normalized_xyxy": [
+          0,
+          0,
+          1,
+          1
+        ]
+      },
+      {
+        "name": "street-shadow-boundary",
+        "view": "street",
+        "normalized_xyxy": [
+          0.2,
+          0.3,
+          0.85,
+          0.95
+        ]
+      },
+      {
+        "name": "vespa-material",
+        "view": "material-detail",
+        "normalized_xyxy": [
+          0.15,
+          0.05,
+          0.85,
+          0.95
+        ]
+      },
+      {
+        "name": "glass-curtains",
+        "view": "glass-detail",
+        "normalized_xyxy": [
+          0.1,
+          0.05,
+          0.9,
+          0.95
+        ]
+      },
+      {
+        "name": "bottle-label-occlusion",
+        "view": "label-detail",
+        "normalized_xyxy": [
+          0.15,
+          0.05,
+          0.9,
+          0.95
+        ]
+      }
+    ],
+    "alpha_note": "Label view remains naturally dark with no interior/fill lighting. Its CPU color preview is not evidence of zero depth/shadow coverage; require explicit GPU depth/shadow and opaque-override sensitivity fixtures in B2/B3."
+  }
+}

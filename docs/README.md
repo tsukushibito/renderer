@@ -16,6 +16,7 @@
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
 | 検証データ | [Bistro素材検証](verification/bistro-assets.json)・[比較画像](verification/bistro-assets-preview.png) | 公式入力hash、全mesh/材質/画像の対応、変換・再生成・CPU画像QA |
 | 検証データ | [Bistro alpha解釈](verification/bistro-alpha.json)・[近景比較画像](verification/bistro-alpha-preview.png) | 2材質の元値・全mip、Falcor一次ソース、alpha保持と不透明化の比較・確定方針 |
+| 検証データ | [Bistro描画条件](../tools/bistro/conditions.json)・[設定検証と実行記録](verification/bistro-conditions.json)・[CPUプレビュー](verification/bistro-conditions-preview.png) | 固定7視点・巡回・sun/IBL/露出、照明候補、二API比較と性能校正の条件 |
 | 素材 | [Bistro LFS素材](../assets/bistro/README.md)・[manifest](../assets/bistro/manifest.json) | 公式原本・検証済み屋外glTF・環境HDR、取得・ライセンスと全ファイルhash |
 | 検証データ | [現在のフレーム計測](verification/current-metrics.json) | 固定ソースの環境、各runの統計と生sample |
 | 検証データ | [RenderGraph比較計測](verification/rendergraph-metrics.json) | 資源cache、標準draw batchの共有／異なるmesh比較、統計・生sample、RGBA照合 |

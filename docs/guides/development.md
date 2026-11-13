@@ -63,7 +63,7 @@ Windowsジョブはrunner付属のMSVCを使います。
 対象と描画条件は[実装方針の確定要件](../design/implementation-policy.md#bistro-requirements)に従う。
 このoffline検証はPython 3.11、NumPy 1.26.4、Pillow 11.1.0、Node 24、Blender 4.5.16 LTSを使う。
 公式原本ZIP、検証済み屋外glTF一式と環境HDRは`assets/bistro/`、比較PNGは`docs/verification/`でGit LFS管理する。
-[素材manifest](../../assets/bistro/manifest.json)の411ファイルは合計1,773,518,180 byteである。
+[素材manifest](../../assets/bistro/manifest.json)の412ファイルは合計1,775,343,744 byteである。
 作業用の展開・portable tool・全量reportはGit管理外の`.tools/bistro/`へ置く。通常のRustビルドはこれらへ依存しない。
 CIの`asset-tools`は小fixtureとLFSポインタを検査し、Bistro実体やBlenderをダウンロードしない。
 
@@ -169,6 +169,56 @@ CPU比較と採用理由をまとめる。Falcorコードの実行結果とは�
 `--alpha-report docs/verification/bistro-alpha.json`を渡す。元FBX hashが異なる判断は拒否する。
 材質・texture・recipeの変更時はこの調査を再実行し、基準画像を更新する理由を記録する。
 
+<a id="bistro-conditions"></a>
+
+### Bistroの固定視点・照明・比較手順
+
+[conditions.json](../../tools/bistro/conditions.json)が固定視点7件、30秒の巡回、sun/IBL/露出と再現入力である。
+[設計上の理由と完了の境界](../design/implementation-policy.md#bistro-conditions)、
+[CPUプレビュー](../verification/bistro-conditions-preview.png)も参照する。
+入力検査は準備境界で一度行い、変更時に再実行する。Rendererのdraw/submitへscanや診断payloadを加えない。
+
+```powershell
+python -B tools/bistro/conditions.py tools/bistro/conditions.json --verify-inputs --frames-output .tools/bistro-conditions/route-frames.json
+& $bistroBlender --background --factory-startup --threads 4 --python-exit-code 1 --python tools/bistro/render_conditions.py -- assets/bistro/converted/BistroExterior.gltf tools/bistro/conditions.json .tools/bistro-conditions/renders --asset-root .
+python -B tools/bistro/compare_conditions.py .tools/bistro-conditions/renders docs/verification/bistro-conditions-preview.png .tools/bistro-conditions/comparison.json --config tools/bistro/conditions.json
+```
+
+最初のコマンドはZIP/glTF/bin/HDRのsize/SHAとcamera/光/経路の有限値・範囲・参照・補間時の視線を検証する。
+全textureを含むLFS実体の照合は先の`verify_lfs_assets.py`を使う。
+フレーム列はframe `i`の論理時刻を`i/60`とする0〜1799で、終端30秒は開始poseと重複するため出力しない。
+実測の壁時計やマウス入力で経路を進めず、同じframe番号には同じposition/target/FOVを渡す。
+自由カメラ・衝突判定とは別の仕組みで、閉路の折返しは線形補間である。
+
+Blender 4.5.16 LTS/固定buildで全mesh/materialを保持し、Cycles CPU・960×540・32 sample・seed 0、
+adaptive samplingなしで構図・露出を確認する。CPU OpenImageDenoise（accurate/HDR/normal・albedo guide）の
+表示用32-bit scene-linear EXRと、別のnoise除去前EXR、固定Khronos PBR Neutral→sRGBのPNGを出力する。
+入力/設定/tool/image hashと実効設定も保存する。noise除去は本番のAAを追加した意味ではない。
+hash対象の設定JSONは`.gitattributes`の`-text`で実行時のbyteを保持し、新規condition toolと検証JSONはLFへ固定する。
+OSの改行自動変換で実行記録とcheckoutのhashが変わらないよう、index内のblobも照合する。
+本番の1920×1080、GGX/IBL前処理/CSM、AA/BloomやGPUの正しさ・性能をこの結果で受け入れない。
+HDRは原本byteを維持し、Rec.709輝度4のcapを元texelへ適用して高輝度源を抑える。
+太陽の物理的な完全分離や、撮影時の照度復元とは扱わない。
+
+二APIの画像比較はB2/B3/B5で次の順に進める。
+
+1. `conditions.json`と全入力・shader/compiler・IBL cook出力・Graph/画質設定、commit/build/driverをhash付きで保存する。
+   投影のray・Y方向・depth・front faceは単純fixtureでも確認する。
+2. 各APIを同じ機材で3回以上反復し、同APIの揺れと二API差を分ける。
+   全7視点と巡回frame 0/300/600/900/1200/1500/1799のSDR、Bloom前HDR、depth、shadow、Bloom bypassを保存する。
+3. 材質欠落、sRGB二重変換、alpha不透明化、shadowずれの既知の誤りを入れた補助出力で感度を確認する。
+   RGB/HDRの絶対・相対誤差、誤差画素数、名前付きROIの閾値を決め、受入runより前に設定hashを固定する。
+   輪郭を一括除外せず、解像度違い・NaN/Infは失敗とする。CPUプレビューのnoiseから数値閾値を借りない。
+4. 最適化＋厳格検証と、最適化＋Renderer追加検証/専用診断のコンパイル除外＋native検証無効を別runで照合する。
+   alpha 0の2材質はcolor/depth/shadow被覆0を確認する。表示・resize/最小化復帰・pending終了は別に確認する。
+
+性能予算はRTX 3060での実測から設定する。cold読込/変換・upload・shader/pipeline準備を定常描画と分け、
+2巡回（各1800 frame）をwarm-up、続く3巡回を計測する。30秒は各巡回の論理時刻であり、
+実行を30秒へ引き伸ばしたり打ち切ったりしない。offscreenはVSyncなしでCPU build/compile/record/submit/retire、
+GPU timestamp、frame壁時計、GPU常駐量・使用量/予算・high-waterを生sampleとrun別p50/p95で保存する。
+APIは逐次実行し、温度/clock・背景負荷・電源設定と変動を記録する。windowedのpresent/VSync待ちは別測定とする。
+固定FPSやVRAM予算、二APIの性能優位は現時点で主張しない。
+
 今後の実GPU受入では、両APIを同時に負荷実行せず、同じ機材で逐次確認する。
 offscreenの最終SDR・Bloom前HDR・必要な中間出力と差分を保存し、画面表示・自由操作・resize・最小化復帰・
 pending終了も別に確認する。最適化＋Renderer追加検証あり＋Vulkan Core/SyncValまたはD3D12 Debug Layer/適用するGBVの厳格受入と、
@@ -177,7 +227,7 @@ Renderer追加検証・専用診断をコンパイル除外しnative検証を無
 [GBVはshader・commandを計装する](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-d3d12-debug-layer-gpu-based-validation)ため、
 その実行時間を通常性能として扱わない。既存の警告/エラーゼロと破棄後までの確認を維持する。
 画像閾値は既知の誤りを検出できる条件から受入前に固定し、性能予算は同条件の実測から決める。
-記録先は[現在の検証状況](../verification/current.md)、未完了の追跡は`renderer-7ft.1.1`と各実装課題を使う。
+記録先は[現在の検証状況](../verification/current.md)、実GPUの未完了追跡はB2/B3/B4/B5の各実装課題を使う。
 
 ## ビルド・品質確認
 

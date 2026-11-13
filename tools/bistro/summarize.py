@@ -16,13 +16,27 @@ def main():
     parser.add_argument("work", type=Path)
     parser.add_argument("export", type=Path)
     parser.add_argument("output", type=Path)
-    for name in ("source-bindings", "geometry", "materials", "validator", "reproduction", "preview", "views", "alpha"):
+    for name in ("source-bindings", "geometry", "materials", "validator", "reproduction", "preview", "views", "alpha", "conditions"):
         parser.add_argument(f"--{name}-report", type=Path, required=True)
     args = parser.parse_args()
     load = lambda path: json.loads(path.read_text(encoding="utf-8"))
     audit = load(args.work / "logs/source-inventory.json")
     baseline = load(args.export / "baseline.json")
     alpha = load(args.alpha_report)
+    conditions = load(args.conditions_report)
+    root = Path(__file__).resolve().parents[2]
+    config_path = (root / conditions["config"]["path"]).resolve()
+    if not config_path.is_relative_to(root) or sha(config_path) != conditions["config"]["sha256"]:
+        raise ValueError("Conditions configuration differs from verified report")
+    conditions_config = load(config_path)
+    pinned = {entry["path"]: entry["sha256"] for entry in conditions_config["inputs"]}
+    rendered = conditions["comparison"]["render_report"]
+    if rendered["config_sha256"] != conditions["config"]["sha256"]:
+        raise ValueError("Conditions images were produced from another configuration")
+    gltf_sha = sha(args.export / "BistroExterior.gltf")
+    if (pinned["assets/bistro/converted/BistroExterior.gltf"] != gltf_sha
+            or rendered["input_files_sha256"]["BistroExterior.gltf"] != gltf_sha):
+        raise ValueError("Conditions do not cover this converted glTF")
     if alpha["decision"]["source_fbx_sha256"] != baseline["source_sha256"]:
         raise ValueError("Alpha decision does not cover this source FBX")
     textures = load(args.work / "logs/textures.json")
@@ -75,15 +89,17 @@ def main():
                    "preview_views": load(args.views_report)},
         "alpha_interpretation": {"issue": "renderer-7ft.1.1.2", "report": args.alpha_report.name,
                                  "report_sha256": sha(args.alpha_report), "decision": alpha["decision"]},
+        "render_conditions": {"issue": "renderer-7ft.1.1", "report": args.conditions_report.name,
+                              "report_sha256": sha(args.conditions_report), "config": conditions["config"]},
         "unresolved": [
             {"issue": "renderer-7ft.3", "problem": "Runtime/cook MikkTSpace generation, degenerate-input fallback and DDS/native mip policy remain required; source contains no tangents and this glTF stores base image mip only"},
-            {"issue": "renderer-7ft.1.1", "problem": "Final camera/path/sun/IBL/exposure and runtime image thresholds/performance budgets not fixed by CPU conversion QA"},
+            {"issue": "renderer-7ft.6", "problem": "Runtime image threshold calibration, GPU performance/VRAM budgets and integrated two-API acceptance remain unexecuted; fixed B0 camera/light conditions are inputs, not proof of runtime correctness"},
         ],
         "not_executed": ["Renderer Bistro implementation", "Vulkan/D3D12 image or window acceptance",
                          "GPU performance/VRAM capacity", "All original DDS mip pixels in glTF", "Proof of original artist alpha-mode intent"],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps({"report": str(args.output), "geometry": geometry["ok"], "materials": materials["passed"],
                       "reproduced": reproduction["passed"], "validator_errors": validator["issues"]["numErrors"]}))
 

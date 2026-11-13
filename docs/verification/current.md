@@ -18,7 +18,8 @@
 旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
 
 素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
-全ゼロalphaの解釈は下記のとおり確定した。最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中である。
+全ゼロalphaに加え、最終camera/path/light/IBL/露出と再現・比較手順を下記のとおり固定した。
+`renderer-7ft.1.1`の成果は要求・比較入力の固定であり、公開APIや基盤選定のB0全体完了ではない。
 Renderer本体・shader・native経路は変更せず、以降のGPU・Rust試験表は従来の固定ソースの実績として保持する。
 BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
 画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
@@ -32,9 +33,9 @@ BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12�
 再現は[開発ガイド](../guides/development.md#bistro-preparation)を参照する。
 
 原本ZIP・検証済み屋外glTF一式・環境HDRと上記比較PNGはGit LFSで共有する。
-[素材一覧とライセンス](../../assets/bistro/README.md)、[全411ファイルのmanifest](../../assets/bistro/manifest.json)で
-パス・byte数・SHA-256を固定した。alpha近景PNGを含む実体は計1,773,518,180 byteで、既存の検証済み407ファイルもbyte一致する。
-重複画像を共有するLFSオブジェクトは209個、計1,599,584,505 byteである。
+[素材一覧とライセンス](../../assets/bistro/README.md)、[全412ファイルのmanifest](../../assets/bistro/manifest.json)で
+パス・byte数・SHA-256を固定した。固定条件PNGを含む実体は計1,775,343,744 byteで、既存の検証済み407ファイルもbyte一致する。
+重複画像を共有するLFSオブジェクトは210個、計1,601,410,069 byteである。
 原本・変換済み素材・従来の比較PNGは今回もbyteを変更していない。
 ライセンス・検証JSON・manifestは通常Git、toolや作業中間物は引き続きGit管理外である。
 既存410ファイルのLFS共有時には、originへ208/208オブジェクトの送信が成功し、ローカルキャッシュを共有しないdetached checkoutで
@@ -80,7 +81,8 @@ texture alphaによる除外を照合した。4.0-previewと4.4でも整合を�
 瓶の近景には全条件共通の固定area lightを追加し、暗所での見落としを避けた。
 不透明copyの対象coverageは窓97,308／瓶164,497画素で、その領域内のRGB差>2は59,855／126,290画素だった。
 値は低sampleのnoise・間接光変化も含む診断結果であり、runtimeの合否閾値へ使わない。
-作者の意図の証明・Falcor実行・Renderer実GPU画像/性能・最終camera/lightの受入は未実行である。
+このalpha調査で作者の意図・Falcor実行・Renderer実GPU画像/性能・最終camera/lightの受入は確認していない。
+構図・照明入力の選定は下記の別CPUプレビューで確認し、実GPU受入は後続に残す。
 取込/cook境界の保証と変更時の再検証に限定し、draw/submitへ検査や診断payloadを追加していない。
 alpha追加分を含むPython 41件と既存Node 5件が成功した。Nodeのsymlink試験はsandbox内のEPERM後、
 通常権限で5件すべてを再実行して成功した。Rust/native実装変更がないためローカル実GPU試験は今回対象外である。
@@ -100,6 +102,48 @@ PNGはbase mipだけで、元DDSとmip情報は保持する。これらの警告
 LFS共有追加では文書7件のUTF-8/fence・相対link/anchor 106件も確認した。
 通常CIへ小fixtureの`asset-tools`を追加した。ローカルのRust/native GPU再実行はRenderer実装変更がないため対象外とし、
 pushした組合せのbuild/testはCIで別に確認する。
+
+<a id="bistro-conditions"></a>
+
+### Bistroの描画・比較条件
+
+`renderer-7ft.1.1`の固定入力は[conditions.json](../../tools/bistro/conditions.json)、
+判断と再現条件は[実装方針](../design/implementation-policy.md#bistro-conditions)、
+手順は[開発ガイド](../guides/development.md#bistro-conditions)にまとめた。
+[機械可読の実行記録](bistro-conditions.json)と[CPUプレビュー](bistro-conditions-preview.png)に、
+入力/設定/tool/画像のhash、全scene保持、照明候補と未実行の範囲を記録する。
+
+固定7視点（全景・路地・材質・glass・label・巡回中間・折返し）と、
+30秒/60 Hz/1800 frameの往復巡回を指定した。基準は1920×1080、near 0.02/far 500 m、
+右手Y-up/m・縦FOV・論理上原点の画像・通常Zの0〜1とし、native変換は同じrayを保つ。
+cameraの自動露出・jitter・DOF・motion blurは使わない。設定の有限値・参照・視線の補間特異点、
+閉路と半開frame列、入力4件のsize/SHA、HDR方向のcardinal/逆yawをCPUで検証した。
+
+同梱HDRの原本を保持し、元texelのRec.709輝度を4へcapして高輝度源を抑え、別太陽を加える。
+輝度100超の213 texelが全周の立体角加重輝度積分の44.902%を占め、cap 4で変更するtexelは68,105件だった。
+この処理は太陽の完全な分離でも照度の物理校正でもない。未処理IBL＋太陽、IBLのみとの比較を保存する。
+cameraに見える背景は一定の線形RGB .18とし、環境内の別建築をBistroのgeometryに見せない。
+IBLは照明・反射へ残す。固定露出EV +1、commit固定のKhronos PBR NeutralとsRGB一回で出力する。
+
+CPU画像はBlender 4.5.16 LTS build `3f6797307da5`、Cycles CPU・960×540・32 sample・seed 0、
+adaptiveなし、限定したbounce数、CPU OpenImageDenoiseの表示用画像で構図・露出を判断した。
+全1,296 mesh・132材質・2,832,120三角形を保持し、元glTF/buffer/textureのbyteは変更していない。
+全景は全mesh境界を各辺5%以上の余白でfrustum内へ収めた。巡回のeye経路4 segmentと
+全1800 frame×5本のnear-plane rayで侵入0を確認するが、連続したfrustum体積や歩行可能性の証明ではない。
+noise除去前/後のscene-linear 32-bit EXRとPNGを生成し、CSM/PBR/IBL前処理/Bloom/AAの実GPU正解画像とは扱わない。
+太陽は仰角30度/RGB 1、IBLはcap 4/強度3、露出はEV +1とした。
+瓶の近景はfillを追加しておらず暗いため、alpha被覆を色画像だけで受け入れない。
+
+画像閾値は同API反復3回以上・二API差・既知の誤りへの検出感度で受入前に校正する手順とし、
+性能はcold準備、1800 frame×2 warm-up＋×3計測、生sampleとphase別p50/p95を記録する手順を固定した。
+数値閾値・FPS/VRAM予算は未校正で、B2/B3/B4/B5の実装・RTX 3060実GPU受入に残る。
+alpha 0のcolor/depth/shadow被覆0、二APIの表示/操作/resize/終了と破棄後の厳格native検証も未実行である。
+near .02/far 500 mの通常Zにおける遠方のdepth精度も未検証であり、B1/B3の実GPUで確認し、必要なら条件を改訂する。
+Python 57件・Node 5件、文書5件のUTF-8/fence・相対link/anchor 124件、全412 payloadのsize/SHA、
+固定条件を含む素材reportの再生成とdiff checkを確認した。改行変換による記録hashの不一致を防ぐため、
+条件JSONの元byteと新規tool/検証JSONのLFを属性へ固定し、既存alpha reportの参照SHAもGit blobに一致させた。
+Rust/native変更がないため、ローカル実GPU試験は今回対象外である。
+Rust/native/shader・製品版の検証経路は変更せず、入力走査をdraw/submitへ追加していない。
 
 ## 環境と対応範囲
 

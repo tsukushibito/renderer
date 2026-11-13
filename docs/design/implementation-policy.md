@@ -602,6 +602,59 @@ CSM資料のD3D10/11向け実装説明をD3D12のAPI契約へ流用しない。
 採用基盤・公開APIの選定は後続のB0課題で行い、Vulkan/VMA等の同期・寿命・能力契約と
 [製品・開発の検証方針](../guides/validation-policy.md)を維持する。一般推奨からの新しい例外は設けない。
 
+<a id="bistro-conditions"></a>
+
+#### 固定した描画・比較入力
+
+`renderer-7ft.1.1`の再現入力は[conditions.json](../../tools/bistro/conditions.json)にまとめる。
+素材版・全mesh/material・alphaは上記の確定方針を引き継ぎ、屋外全体を対象とする。
+固定視点は全景、路地、Vespaの材質近景、glass、瓶のlabel、巡回中間・折返しの7件とした。
+全景は縦FOV 48度・JSONの仮想注視点を使い、全meshの保守的な境界を各辺5%以上の余白付きで画面内へ収める。
+隠れた面まで一枚から見えるという保証ではない。
+全景は全体の収容と欠落、路地は建物・植生と影境界、近景はnormal/roughnessとalphaを確認する。
+同じ視点・入力・出力条件をVulkan/D3D12で使う。自由カメラ操作を固定画像の再現手段にしない。
+
+| 固定項目 | 条件 |
+|---|---|
+| 座標とカメラ | glTF準拠の右手・Y-up・m。cameraは−Z前方、+Y上方。position/targetと縦FOVをJSONに保存し、near 0.02 m / far 500 m、1920×1080。論理画像は上原点、深度は通常Zの0〜1。各backendでclip-space/Y/front-face変換を行い同じrayを保つ。 |
+| 巡回 | street → street-mid → street-end → street-mid → street、時刻0/10/15/20/30秒。position/target/縦FOVを線形補間し、world-up +Yからlook-atを求める。60 Hzの論理時刻でframe 0〜1799を生成し、重複する30秒終端は含めない。比較frameは0/300/600/900/1200/1500/1799。衝突判定や歩行物理の要件ではない。 |
+| 太陽光 | surfaceから光源への単位方向`(√(3/8),0.5,√(3/8))`（仰角30度）、RGB照射値1/1/1、角直径0.53度。scene-linear benchmark用の値で、撮影時のluxや物理的な屋外照度の校正を主張しない。 |
+| 環境 | 原本同梱`san_giuseppe_bridge_4k.hdr`、4096×2048、SHA-256 `5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1eec65a50`。yaw 0度、強度3。原本byteは保持する。 |
+| 高輝度源の抑制 | 非負の線形RGBに対し`L=dot(rgb,(0.2126,0.7152,0.0722))`、`rgb *= min(1,4/max(L,1e-20))`を元texelへ適用し、その後でresample/prefilter・強度を適用する。太陽を完全分離する算法ではなく、他のhighlightも変える明示的なbenchmark処理である。 |
+| 環境の向き | 単位方向`d`へsource yawの逆回転を適用し、`u=fract(0.5+atan2(d.z,d.x)/(2π))`、上原点`v=acos(clamp(d.y,-1,1))/π`。U repeat / V clamp。+Xはu=.5、+Zは.75、−Zは.25、+Yはv=0。 |
+| 色と露出 | scene-linear Rec.709/D65、固定露出EV +1（線形値×2）。自動露出・時刻変化・camera jitter・DOF・motion blurなし。HDR→利用側Bloom→露出→Khronos PBR Neutral→sRGB OETFを一度だけ適用し、最終SDRはRGB8/alpha 1。Bloom/AAを外した診断出力も保存する。 |
+| 背景 | cameraに見える背景は一定の線形RGB .18（上記と同じ露出・表示変換）。IBLは照明・反射に使い、HDR内の別の建築をBistroのgeometryとして写さない。 |
+
+cameraの座標と縦FOVは[glTF仕様](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#cameras)、
+環境の向きは[固定Blender buildの投影処理](https://github.com/blender/blender/blob/3f6797307da5/intern/cycles/kernel/camera/projection.h#L19-L46)、
+tone mapperは[commit固定のKhronos参照](https://github.com/KhronosGroup/ToneMapping/blob/180b1a7bddec33f73fe41712a2963cc3ad8e5547/PBR_Neutral/pbrNeutral.glsl)を根拠とする。
+glTFからBlenderへの座標変換は`(x,-z,y)`。縦FOVはdegreeからradianへ変換し、
+glTFの参考projectionを両native APIへ無変換で流用しない。Blenderの下原点pixel配列とHDR元画像の上原点も区別する。
+near 0.02/far 500 mの通常Zは遠方のdepth精度にリスクがあり、Cyclesの構図確認ではnative depthの量子化を検証できない。
+B1/B3で対象depth formatの重なった面・窓・影を実GPU確認し、不十分ならreversed-Zや視点別near等を比較して
+条件を明示的に改訂する。改訂時は設定hashを更新し、両APIを同じ条件で再受入する。
+
+原本pysceneは環境強度10のみを指定しており、この光・露出案は作者の意図の復元ではない。
+元HDRの最大Rec.709輝度は約82,638で、輝度100超の213 texelが全周の立体角加重輝度積分の44.902%を占めた。
+cap 4は68,105 texelに作用する。平均の立体角加重輝度は0.784567から0.416680へ変わり、
+太陽の一点だけを除く処理ではないことも計測へ残した。
+未処理IBLへ別太陽を重ねると高輝度源が重なるため、抑制した環境で空・周囲からの光を保ち、別太陽で影を制御する。
+IBLのみの候補とも同じcamera/露出で比較する。光の物理的分離・エネルギー保存や、別HDRへの一般的な最適値は主張しない。
+太陽RGB 3/IBL 1からの試行では路地が暗く、太陽RGB 3/IBL 3では外壁が白くなりすぎたため、
+太陽RGB 1/IBL 3とEV +1を選んだ。強い太陽や露出だけの増加では暗部と明部の両方を確認しにくいことをCPU画像で確認した。
+[設定のCPUプレビューと照明候補](../verification/bistro-conditions-preview.png)は構図・露出の判断材料であり、
+CyclesのBSDF/環境積分/影をRendererのGGX/IBL/CSMと等価な正解画像にはしない。
+32 sampleのCPU OpenImageDenoise表示画像で構図を確認し、別に保存したnoise除去前のEXRも記録する。
+瓶の近景は室内fillを追加していないため暗く、色画像だけからalphaのdepth/shadow被覆を受け入れない。
+名前付きROIと、alpha不透明化等の既知の誤りへの感度確認をJSONと下記の実GPU受入手順へ記録した。
+B3ではこの処理済み環境からdiffuse irradiance・roughness別specular・BRDF積分を生成し、
+前処理tool・全設定・出力hashを固定して受け入れる。
+
+上記のForward/CSM/PCF/RGBA16F/FXAAは初期実装案のままで、基盤選定・実GPU能力と画質確認を代替しない。
+JSONにCSMの4分割/2048/120 m/λ=.6/3×3 PCF/texel安定化/末尾10% blendという出発profileを明記した。
+depth/slope/normal bias、FXAA、Bloomの詳細値は採用実装に依存するためB3/B4で校正し、受入前に固定する。
+太陽の角直径を記録したことを、CSM+PCFが物理的な面光源影を再現する保証へ読み替えない。
+
 #### 再現・比較と完了の境界
 
 asset/IBL/shader/設定のhash、座標・単位・projection、camera pose/FOV/near/far、巡回keyframeと固定時刻、
@@ -620,7 +673,8 @@ warm-up・複数runのp50/p95・揺れ・VSyncと表示待ちを記録する。
 
 準備の記録手順は[開発ガイド](../guides/development.md#bistro-preparation)に置く。
 素材の版/hash・全材質/画像の棚卸しと、glTF/全参照fileのbyte一致による変換再現性は確認した。
-全ゼロalphaの解釈は上記のとおり確定した。最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中とする。
+全ゼロalphaと最終camera/path/light/IBL/露出を上記のとおり固定した。
+`renderer-7ft.1.1`は描画要求と再現・比較手順の固定を完了条件とし、Renderer実装・実GPU受入とは区別する。
 画像閾値の校正と性能予算は各段階の実GPU結果で具体化し、最新の実行/未実行は
 [検証状況](../verification/current.md)へ記録する。
 

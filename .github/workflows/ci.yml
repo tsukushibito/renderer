@@ -22,6 +22,8 @@ jobs:
           node-version: "24"
       - run: python -m pip install -r tools/bistro/requirements.txt
       - run: python -B -m unittest discover -s tools/bistro -p 'test_*.py'
+      - name: Validate pinned Bistro camera and lighting conditions without hydrating assets
+        run: python -B tools/bistro/conditions.py tools/bistro/conditions.json
       - name: Check Bistro LFS pointers against the payload manifest
         run: python -B tools/bistro/verify_lfs_assets.py --pointers
       - run: npm ci --ignore-scripts --prefix tools/bistro-validator

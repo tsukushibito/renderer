@@ -13,15 +13,19 @@ Amazon Lumberyard Bistro（Amazon Lumberyard、2017年）、NVIDIA Open Research
 | `environment/san_giuseppe_bridge_4k.hdr` | 原本からbyteを変えず取り出した、直接利用する環境画像 | 23,695,717 |
 | [比較PNG](../../docs/verification/bistro-assets-preview.png) | 元FBXとglTF再取込のCPU比較画像 | 3,422,828 |
 | [alpha近景PNG](../../docs/verification/bistro-alpha-preview.png) | 元alpha保持・対象だけ不透明化・差分・対象coverageのCPU比較画像 | 730,465 |
+| [固定条件PNG](../../docs/verification/bistro-conditions-preview.png) | 固定7視点とstreetの照明候補を並べたCPU構図プレビュー | 1,825,564 |
 
-上記411ファイル、合計1,773,518,180 byteをGit LFSで管理する。
+上記412ファイル、合計1,775,343,744 byteをGit LFSで管理する。
 [manifest.json](manifest.json)が各パス・byte数・SHA-256を固定する。
 素材と比較PNGのLFSポインタをGitで管理し、実体はoriginのLFSストレージで共有する。
 検証JSON・ライセンス・本書は通常Gitで管理する。屋内を原本ZIPに保持することは屋内描画を受入範囲へ追加する意味ではない。
 
 環境画像はGreg Zaalによる[San Giuseppe Bridge / Poly Haven](https://polyhaven.com/a/san_giuseppe_bridge)、
 [CC0](https://polyhaven.com/license)として出典を保持する。同梱版は現在の配布版とのbyte一致を検証していない。
-環境内の太陽と解析光の扱い、最終露出などは未確定である。
+環境の高輝度源は元texelのRec.709輝度4で抑え、別太陽RGB 1・仰角30度、環境強度3・yaw 0、固定露出EV +1を使う。
+camera背景は一定色とし、IBLは照明と反射へ残す。原本のbyteは変更せず、物理的な太陽分離や照度校正は主張しない。
+[固定設定と理由](../../docs/design/implementation-policy.md#bistro-conditions)、
+[再現入力](../../tools/bistro/conditions.json)と[CPUプレビュー](../../docs/verification/bistro-conditions-preview.png)を参照する。
 
 変換でDDSのbase mipをPNG化し、BC5 normalの正Z復元・DirectXからの緑成分反転、
 明示的PBR/alpha recipe、重複面の頂点分離、raw normal保持を行った。

@@ -255,7 +255,7 @@ def main():
         frames = list(route_frames(config))
         if args.frames_output:
             args.frames_output.parent.mkdir(parents=True, exist_ok=True)
-            args.frames_output.write_text(json.dumps(frames, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+            args.frames_output.write_text(json.dumps(frames, indent=2, allow_nan=False) + "\n", encoding="utf-8", newline="\n")
         print(json.dumps({"passed": True, "views": len(config["views"]), "route_frames": len(frames),
                           "duration_seconds": config["route"]["duration_seconds"],
                           "inputs_verified": args.verify_inputs}))

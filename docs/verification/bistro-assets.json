@@ -75078,27 +75078,10 @@
       ]
     }
   },
-  "unresolved": [
-    {
-      "issue": "renderer-7ft.3",
-      "problem": "Runtime/cook MikkTSpace generation, degenerate-input fallback and DDS/native mip policy remain required; source contains no tangents and this glTF stores base image mip only"
-    },
-    {
-      "issue": "renderer-7ft.1.1",
-      "problem": "Final camera/path/sun/IBL/exposure and runtime image thresholds/performance budgets not fixed by CPU conversion QA"
-    }
-  ],
-  "not_executed": [
-    "Renderer Bistro implementation",
-    "Vulkan/D3D12 image or window acceptance",
-    "GPU performance/VRAM capacity",
-    "All original DDS mip pixels in glTF",
-    "Proof of original artist alpha-mode intent"
-  ],
   "alpha_interpretation": {
     "issue": "renderer-7ft.1.1.2",
     "report": "bistro-alpha.json",
-    "report_sha256": "a8e2eaa1ec0a8137f2acff98ac62bee3f870d18b34065947e75c3076f2a6781a",
+    "report_sha256": "0871f659a309947857cb8996e1cfc19630cd8d0a694fb5f66e00cc1c03d6dcd5",
     "decision": {
       "source_fbx_sha256": "471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195",
       "policy": "Preserve original BaseColor alpha; no opaque override for either material. Retain all mesh/material records and unchanged source/converted payload bytes.",
@@ -75132,5 +75115,31 @@
       ],
       "invalidation": "Re-audit at import/cook when archive, source textures, alpha mode/cutoff, conversion recipe or explicit display overrides change; no per-draw/submit scans or diagnostic payloads."
     }
-  }
+  },
+  "render_conditions": {
+    "issue": "renderer-7ft.1.1",
+    "report": "bistro-conditions.json",
+    "report_sha256": "3339010190960d244c895e9b715581c9f6421850cd27adfd2e13f3cb70d34c44",
+    "config": {
+      "path": "tools/bistro/conditions.json",
+      "sha256": "119ce2c36ecb423a503ed60bde25a94bf0b961fda9dce4025b8606b904816fb5"
+    }
+  },
+  "unresolved": [
+    {
+      "issue": "renderer-7ft.3",
+      "problem": "Runtime/cook MikkTSpace generation, degenerate-input fallback and DDS/native mip policy remain required; source contains no tangents and this glTF stores base image mip only"
+    },
+    {
+      "issue": "renderer-7ft.6",
+      "problem": "Runtime image threshold calibration, GPU performance/VRAM budgets and integrated two-API acceptance remain unexecuted; fixed B0 camera/light conditions are inputs, not proof of runtime correctness"
+    }
+  ],
+  "not_executed": [
+    "Renderer Bistro implementation",
+    "Vulkan/D3D12 image or window acceptance",
+    "GPU performance/VRAM capacity",
+    "All original DDS mip pixels in glTF",
+    "Proof of original artist alpha-mode intent"
+  ]
 }

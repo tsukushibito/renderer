@@ -1,0 +1,1723 @@
+{
+  "schema_version": 1,
+  "issue": "renderer-7ft.1.1",
+  "scope": "Fixed B0 rendering requirements, deterministic inputs and CPU composition evidence; not native Renderer/GPU or complete B0 foundation acceptance",
+  "config": {
+    "path": "tools/bistro/conditions.json",
+    "sha256": "119ce2c36ecb423a503ed60bde25a94bf0b961fda9dce4025b8606b904816fb5"
+  },
+  "decision": {
+    "lighting": "Directional sun RGB1 at elevation30/azimuth45, capped original IBL strength3 yaw0, EV+1, camera background linear .18; retain source payload bytes and all mesh/materials.",
+    "rationale": "SunRGB3/IBL1 left dark street regions; sunRGB3/IBL3 washed out facades. RGB1/IBL3/EV+1 keeps material detail and shadow fill. Capped IBL with analytic sun gives an explicit controllable shadow source; IBL-only and uncapped-IBL-plus-sun are compared at identical camera/exposure.",
+    "hdr_limit": "Luminance cap4 suppresses bright sources including reflections/building highlights; no claim of complete sun separation, physical energy conservation or photometric calibration. Original pyscene specifies environment intensity10 only.",
+    "camera": "7 named views, 30-second closed out-and-back route sampled at60Hz, 1800 half-open frames. No walking physics or continuous-volume clearance claim.",
+    "label_limit": "Label view remains naturally dark with no interior/fill lighting. Its CPU color preview is not evidence of zero depth/shadow coverage; require explicit GPU depth/shadow and opaque-override sensitivity fixtures in B2/B3.",
+    "runtime_quality": {
+      "pbr": "Metallic-roughness GGX and Lambert diffuse with normal maps; audited AO/alpha/double-sided recipe retained. Details fixed with selected B0 foundation.",
+      "shadow": "CSM+PCF starting profile: 4 cascades, 2048 square each, distance 120m, practical split lambda .6, 3x3 PCF, texel snapping, last 10% blend. Bias calibrated B3 before acceptance.",
+      "hdr": "RGBA16F starting profile; actual format usages checked on both APIs.",
+      "tone_mapping": "PBR Neutral pinned reference formula.",
+      "aa": "FXAA starting profile after tone mapping before sRGB, AA-off diagnostics; parameters fixed/calibrated B3.",
+      "bloom": "External effect on for B5 final output, bypass also saved; threshold/knee/radius/strength fixed B4 before acceptance."
+    },
+    "invalidation": "Revalidate at setup/cook when source assets, conversion, conditions, shaders, IBL cook or quality settings change. No per-draw/submit scans or diagnostic payloads."
+  },
+  "primary_sources": [
+    {
+      "purpose": "glTF RH/Y-up/metres and camera vertical FOV/clip distances",
+      "url": "https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#cameras"
+    },
+    {
+      "purpose": "Pinned PBR Neutral, nonnegative linear Rec709 input and linear output; sRGB transfer applied separately once",
+      "commit": "180b1a7bddec33f73fe41712a2963cc3ad8e5547",
+      "url": "https://github.com/KhronosGroup/ToneMapping/blob/180b1a7bddec33f73fe41712a2963cc3ad8e5547/PBR_Neutral/pbrNeutral.glsl"
+    },
+    {
+      "purpose": "Actual pinned Blender build equirectangular direction projection",
+      "url": "https://github.com/blender/blender/blob/3f6797307da5/intern/cycles/kernel/camera/projection.h#L19-L46",
+      "sha256": "a6ec753936187b48bcf274f8e36a2fc32fa6c95f823eb4717c06cf410c1f0f2c"
+    },
+    {
+      "purpose": "Bundled HDR attribution Greg Zaal, CC0, no current remote byte equality claim",
+      "url": "https://polyhaven.com/a/san_giuseppe_bridge",
+      "license_url": "https://polyhaven.com/license"
+    }
+  ],
+  "route_schedule": {
+    "frames": 1800,
+    "fps": 60,
+    "duration_scene_seconds": 30,
+    "last_time_seconds": 29.983333333333334,
+    "sampler_sha256": "4cc859f22c872f41c878ac87eb9b92eaaf169eda1613ed48e0f31b32a962ebbf",
+    "schedule_json_sha256": "fb22c3330afcf12c7d768bcd211ce488adf28834b09cb28724c8a400b5c45106",
+    "captured_samples": [
+      {
+        "frame": 0,
+        "time_seconds": 0.0,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          14.612072,
+          4.293145,
+          -41.809284
+        ],
+        "target": [
+          8.249157,
+          2.90426,
+          -22.899369
+        ],
+        "vertical_fov_degrees": 53.0
+      },
+      {
+        "frame": 300,
+        "time_seconds": 5.0,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          13.636036,
+          4.293145,
+          -38.904641999999996
+        ],
+        "target": [
+          7.273121,
+          2.90426,
+          -19.994726999999997
+        ],
+        "vertical_fov_degrees": 53.0
+      },
+      {
+        "frame": 600,
+        "time_seconds": 10.0,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          12.66,
+          4.293145,
+          -36.0
+        ],
+        "target": [
+          6.297085,
+          2.90426,
+          -17.090085
+        ],
+        "vertical_fov_degrees": 53.0
+      },
+      {
+        "frame": 900,
+        "time_seconds": 15.0,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          10.64,
+          4.293145,
+          -30.0
+        ],
+        "target": [
+          4.277085,
+          2.90426,
+          -11.090085
+        ],
+        "vertical_fov_degrees": 53.0
+      },
+      {
+        "frame": 1200,
+        "time_seconds": 20.0,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          12.66,
+          4.293145,
+          -36.0
+        ],
+        "target": [
+          6.297085,
+          2.90426,
+          -17.090085
+        ],
+        "vertical_fov_degrees": 53.0
+      },
+      {
+        "frame": 1500,
+        "time_seconds": 25.0,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          13.636036,
+          4.293145,
+          -38.904641999999996
+        ],
+        "target": [
+          7.273121,
+          2.90426,
+          -19.994726999999997
+        ],
+        "vertical_fov_degrees": 53.0
+      },
+      {
+        "frame": 1799,
+        "time_seconds": 29.983333333333334,
+        "near_m": 0.02,
+        "far_m": 500,
+        "jitter": false,
+        "auto_exposure": false,
+        "depth_of_field": false,
+        "motion_blur": false,
+        "position": [
+          14.608818546666667,
+          4.293145,
+          -41.799601859999996
+        ],
+        "target": [
+          8.245903546666668,
+          2.90426,
+          -22.88968686
+        ],
+        "vertical_fov_degrees": 53.0
+      }
+    ]
+  },
+  "comparison": {
+    "schema_version": 1,
+    "render_report": {
+      "schema_version": 1,
+      "purpose": "B0 composition, light and exposure evidence only; not native GPU acceptance, exact raster reference or performance evidence",
+      "blender": "4.5.16 LTS",
+      "blender_build": "3f6797307da5",
+      "script_sha256": "658b343cbd21f2236c6ac1610b1a334830dc74827b3c86d4516e323ca33d42c4",
+      "config_sha256": "119ce2c36ecb423a503ed60bde25a94bf0b961fda9dce4025b8606b904816fb5",
+      "input_files_sha256": {
+        "BistroExterior.bin": "31d7f353fb0110f0d37e6079e3c85090f3be2e0cf160b08678cb06a9ac6c8d58",
+        "BistroExterior.gltf": "326b401da516c5f7c78b317b8eb92e79bccd60f8aab679559b800ca857df247e",
+        "textures/Antenna_Metal_BaseColor.png": "ffc2bd2208cf807d1ebc8164eb8c377f8de0f35a4219d65fe1fea531a4419c2f",
+        "textures/Antenna_Metal_Normal.png": "e7a5a52bf0bfe3893f9e98bd6b7963ede73854b1953a6949459e00be4b9ca89b",
+        "textures/Antenna_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/Antenna_Plastic_BaseColor.png": "246647be49f1c65edab0d5792ff21dfa1af0aa30c4ff8f7a9c586090a139805a",
+        "textures/Antenna_Plastic_Blue_BaseColor.png": "246647be49f1c65edab0d5792ff21dfa1af0aa30c4ff8f7a9c586090a139805a",
+        "textures/Antenna_Plastic_Blue_Normal.png": "a384b0928b12e60e4970bfc166b3e3c4ad3b8965ae756a0f0d2448b65311ca7f",
+        "textures/Antenna_Plastic_Blue_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Antenna_Plastic_Normal.png": "a384b0928b12e60e4970bfc166b3e3c4ad3b8965ae756a0f0d2448b65311ca7f",
+        "textures/Antenna_Plastic_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Ashtray_BaseColor.png": "247f470d260f9b921a9cceefa9c84edc0f337ec1d9ada30664b463e8093f474f",
+        "textures/Ashtray_Normal.png": "a73d7aa45ba7c858ca662e32dfad73ec9e7fde3fce139f42831cdbdd0dc8c411",
+        "textures/Ashtray_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Awnings_Beams_BaseColor.png": "17ac01c6febb299502757803dfc11ef462bbea2c43583745db372336d2046ee9",
+        "textures/Awnings_Beams_Normal.png": "1ed98c0dd458aba6f88956478846734b01e10311a857668a48a7d89aec966442",
+        "textures/Awnings_Beams_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Awnings_Fabric_BaseColor.png": "fa063310e2de3f5218a6c50313c7d786f0c2ec09b90b46719ae524d5a6299752",
+        "textures/Awnings_Fabric_Normal.png": "480d12182999e8b0d9459f0b743105909a3f1ea623ea0f0e71824e6df5cd3125",
+        "textures/Awnings_Fabric_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Awnings_Hotel_Fabric_BaseColor.png": "7bf69da629dceb0f30ca6b92b7f9efeae736c3509cea3b6061cec3f62116f9ca",
+        "textures/Awnings_Hotel_Fabric_Normal.png": "d109858f106d8c3b2367b5229a79bfb470596fa6fc38d9a555600eee5822b7f6",
+        "textures/Awnings_Hotel_Fabric_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Balcony_Concrete_BaseColor.png": "7d598c2d44507babeba9d475a6aae297eaed7772c2c6260d269ff80b0eb40b3a",
+        "textures/Balcony_Concrete_Normal.png": "526d22a70c7f5b0f9e829c6e6fa95fdfb3d72e7f11ad18c97c41d5e126db48b9",
+        "textures/Balcony_Concrete_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Balcony_Green_Wood_BaseColor.png": "5eee4aa6aeb2444aced11db296600c16da544d7b21dc5549c09001ae578beb9b",
+        "textures/Balcony_Green_Wood_Normal.png": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08",
+        "textures/Balcony_Green_Wood_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Balcony_Ornaments_BaseColor.png": "0f583782543789f2fdca37c08f0c6f665dcf2aee36bf0bad29651fe04053a913",
+        "textures/Balcony_Ornaments_Normal.png": "7975bf3b996db378332128ca0ae849e8981116f7cf42c0ee77a4a45ce5bf295b",
+        "textures/Balcony_Ornaments_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Balcony_Trims_BaseColor.png": "a623fd5e263a3bf14de378d79b823f1d96e104f4e1ed3a8dee4b8052be91b55f",
+        "textures/Balcony_Trims_Normal.png": "dd62ea4839eb391f74b9e6e003c0ae2297434b856281438fab7f1542caf00a3b",
+        "textures/Balcony_Trims_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Banner_Metal_BaseColor.png": "b64f6cf4e98d5a1a9e54e138b04e37db2244f960b9bb70d0c84858a6482632de",
+        "textures/Banner_Metal_Normal.png": "3665fffe0acf6adb8ac1f3db07950a88cfaf1dc3c9e4233bacf95be0bc3c4d8f",
+        "textures/Banner_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/Bistro_Sign_Letters_BaseColor.png": "175c3bf327444dab60485ae916cdf512ba862ee4ce243ee2247ec979dba19eaa",
+        "textures/Bistro_Sign_Letters_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Bistro_Sign_Letters_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Bistro_Sign_Main_BaseColor.png": "c2618f3a3d980e52a57f5c7cee1f0ed41472a595f26d64c30a1ea08f8a29d21b",
+        "textures/Bistro_Sign_Main_Normal.png": "c28f1a19dfa8765fbb809402f6a91d41bb2f0644c3165e1ec72e6456f03f7dc9",
+        "textures/Bistro_Sign_Main_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Bollards_BaseColor.png": "d3f71584394f6e5fdfbd6a1ada350757961f25e66e0410573e427e5f21b27cb1",
+        "textures/Bollards_Normal.png": "d036164f8f286509824000fb38c7087ff12596659092c9fad557c9bf0d6e883c",
+        "textures/Bollards_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/Chimneys_Metal_BaseColor.png": "97b6f5d5c78490ee3d1abe8a4dcce6d804d42525a4d25f689c9494382c2fe90e",
+        "textures/Chimneys_Metal_Normal.png": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54",
+        "textures/Chimneys_Metal_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Concrete2_BaseColor.png": "b035a34844cfd872d379d172937c598676a61add138541cfee562481a783528d",
+        "textures/Concrete2_Normal.png": "5826caa5003e4969a36d622e1175a198bde708fff65f64afe3bc89872380631f",
+        "textures/Concrete2_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Concrete3_BaseColor.png": "f9b0ff92c1c470c8111d1ac0e6dce4e2195701d4b836e3d4a38006a2da76fa51",
+        "textures/Concrete3_Normal.png": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a",
+        "textures/Concrete3_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Concrete_BaseColor.png": "f9b0ff92c1c470c8111d1ac0e6dce4e2195701d4b836e3d4a38006a2da76fa51",
+        "textures/Concrete_Normal.png": "c1c4caea18d907ab682466cbd829d1b284ea9888bdad86afa2581154593583a4",
+        "textures/Concrete_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Concrete_Striped_BaseColor.png": "2544f05ecf9d580944cf750464a57cb7d22663aec85a6797eaa4645429b8aa5b",
+        "textures/Concrete_Striped_Normal.png": "6344e4430141468ab72a40eaa5df7e642b226e59227e5f93dfc47020fb011947",
+        "textures/Concrete_Striped_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/ElectricBox_BaseColor.png": "7a101de0f56964259312a22287aa5a35a08ab8174295a2f26469c4bdc35b3731",
+        "textures/ElectricBox_Normal.png": "3854b44f82d830c38e31c54bfc5533af4e4682f1430cdddfefa335db05f4fc70",
+        "textures/ElectricBox_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Emissive_StreetLight_BaseColor.png": "97b6f5d5c78490ee3d1abe8a4dcce6d804d42525a4d25f689c9494382c2fe90e",
+        "textures/Emissive_StreetLight_Emissive.png": "eba7d5534ef72adecc0ce128578cf18d3f302da94899ede8309b03fff93c4462",
+        "textures/Emissive_StreetLight_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Emissive_StreetLight_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Bux_Hedges46_BaseColor.png": "172cbf5510b45e1f35c7047ca3f7b412924ad97f9b03eac269c701af6b582cd2",
+        "textures/Foliage_Bux_Hedges46_Normal.png": "ee46e52fb7fc88d9f0fef7dca0af30274e776718b5401cfb45923d47ddb450bd",
+        "textures/Foliage_Bux_Hedges46_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Flowers_BaseColor.png": "92076753b0b481e2153621ef756fc6e0b6a88080eb342f55a829bf9136695bb0",
+        "textures/Foliage_Flowers_Normal.png": "9d46c952f1cba13064ed3cbedc113f83c8c38c094a0333ab35e85627d9a28f0a",
+        "textures/Foliage_Flowers_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Ivy_branches_BaseColor.png": "09c6f5acbf16ae30888e80b195eb705e68a18919f9354086652b6f810e82d3b2",
+        "textures/Foliage_Ivy_branches_Normal.png": "ae8c7b9b8483d66f1088c3ede837b6d3a1a89e8043303888b96ee7e9df7ed1a1",
+        "textures/Foliage_Ivy_branches_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Ivy_leaf_a_BaseColor.png": "e514e0b092f80bbf204996cb390d459c1e2f5ebe890bc722a18b7e64ed175f5a",
+        "textures/Foliage_Ivy_leaf_a_Normal.png": "2210b45da0f3c653a2bad94dd9f126091625a8527a2d0adbf3c6bb1f2c44df13",
+        "textures/Foliage_Ivy_leaf_a_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Leaves_BaseColor.png": "76c5351885115c01f6d8e56832f4210eb46d1f5f6db14d0557d345a47e8b4364",
+        "textures/Foliage_Leaves_Normal.png": "0fd7d86cccc82391fbc9b5c53e03b8946412f2237fc2fd74ffc0a8cc4d463c11",
+        "textures/Foliage_Leaves_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Linde_Tree_Large_Green_Leaves_BaseColor.png": "2aab9e3ecac0c2c230f5a1ba6668784e16c0f0963eff355a5633df91943d4ee1",
+        "textures/Foliage_Linde_Tree_Large_Green_Leaves_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Foliage_Linde_Tree_Large_Green_Leaves_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Linde_Tree_Large_Orange_Leaves_BaseColor.png": "ccf6396d4c5f4352d21f53c3aed999ae336b3098dccdaa4b72343fc2e273947c",
+        "textures/Foliage_Linde_Tree_Large_Orange_Leaves_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Foliage_Linde_Tree_Large_Orange_Leaves_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Linde_Tree_Large_Trunk_BaseColor.png": "5e1dd1656edf37478ebac72d3b3f35d9b9a2d42e89b6e935e223e72db8e76594",
+        "textures/Foliage_Linde_Tree_Large_Trunk_Normal.png": "be67b0fec0ab6ef72bf3c7859277f058330fc80778a1e913f3df1dfe8eafab41",
+        "textures/Foliage_Linde_Tree_Large_Trunk_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Paris_Flowers_BaseColor.png": "5966dd5cf65c7b29a5cfbd1845a5f448f9c55b19494c6baf142c58e59d125290",
+        "textures/Foliage_Paris_Flowers_Normal.png": "e6caf081d1df42cc7ee2f11e33a0b3af991b2de0ec08b7b72cfaa2187112fe0e",
+        "textures/Foliage_Paris_Flowers_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Foliage_Trunk_BaseColor.png": "11a44273bc9dc253c9be3f5ab5db29922c20a3fee9807a9982c407543067cbea",
+        "textures/Foliage_Trunk_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Foliage_Trunk_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/LanternEmissive_BaseColor.png": "d1a6200526cd4e8c6feab7948c658a3d6c009f423580e4bf9756c9094ee3c734",
+        "textures/LanternEmissive_Normal.png": "4a4e2d6181c34d526e09976a65ecdf18df9866e18d121047febb5a982aa3b40d",
+        "textures/LanternEmissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Awning_Beams_BaseColor.png": "a961db58457f125d8a1aa8f9bf4a3f4fb46404154e8806ffbe73346445e0300c",
+        "textures/MASTER_Awning_Beams_Normal.png": "1ed98c0dd458aba6f88956478846734b01e10311a857668a48a7d89aec966442",
+        "textures/MASTER_Awning_Beams_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Awning_Fabric_Cyan_BaseColor.png": "7556ea81c4d80683c0624803fe49d88ce4e9ee163423c60db447a026e4255281",
+        "textures/MASTER_Awning_Fabric_Cyan_Normal.png": "480d12182999e8b0d9459f0b743105909a3f1ea623ea0f0e71824e6df5cd3125",
+        "textures/MASTER_Awning_Fabric_Cyan_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Awning_Fabric_Red_BaseColor.png": "fa063310e2de3f5218a6c50313c7d786f0c2ec09b90b46719ae524d5a6299752",
+        "textures/MASTER_Awning_Fabric_Red_Normal.png": "480d12182999e8b0d9459f0b743105909a3f1ea623ea0f0e71824e6df5cd3125",
+        "textures/MASTER_Awning_Fabric_Red_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Bistro_Main_Door_BaseColor.png": "a4cf50d52d5f21eeba58a654c64f5db92494f09297b99f0685be0e4339d6a239",
+        "textures/MASTER_Bistro_Main_Door_Normal.png": "85de937f7ebc12d00786336dd9dd283914511ef70ef8d47ff1c3c0876a51d7e9",
+        "textures/MASTER_Bistro_Main_Door_Specular.png": "fcd9c5f07624324a7a9edda4bd23c9540820b3cd50263c73f5a66cb33eb651b4",
+        "textures/MASTER_Black_Metal_BaseColor.png": "e0a382cb9478c8d4089fe29268110d69d4a7c36e2e907d3a147b98c6ebb8aad2",
+        "textures/MASTER_Black_Metal_Normal.png": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54",
+        "textures/MASTER_Black_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/MASTER_Book_Covers_BaseColor.png": "865b46da402aca94028b51b3759929d2887ecbddb7ab36f868834d94e1999001",
+        "textures/MASTER_Book_Covers_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/MASTER_Book_Covers_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Boulangerie_BaseColor.png": "1fb1f26bccfd0bfa411daf8e3328bf829e11c30ca02d422e1dc19cf3d0da10ae",
+        "textures/MASTER_Boulangerie_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/MASTER_Boulangerie_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Brick_Large_Beige_BLENDSHADER_BaseColor.png": "b6b7f8c285d7a650820d370708d220131ba3459d42818e5403587139806e0177",
+        "textures/MASTER_Brick_Large_Beige_BLENDSHADER_Normal.png": "47fd9c753bad63e90afb288811879992d686e6636cdc3ccdfd2c55e67a2a9ead",
+        "textures/MASTER_Brick_Large_Beige_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Brick_Large_White_BaseColor.png": "fe6702fa37361a0e2bc8eab85adfb5e5c600e56b8afea4fc44fd080a4368bab5",
+        "textures/MASTER_Brick_Large_White_Normal.png": "c357c6e300a4134c92a30f7b82cd182e3ed1deee42e8cf7b90eba00441b2125b",
+        "textures/MASTER_Brick_Large_White_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Brick_Small_Red_BLENDSHADER_BaseColor.png": "2041673e54ad16d9362a41578129d94157f5824179f56e2ac4fbfe4c2fbfc1d5",
+        "textures/MASTER_Brick_Small_Red_BLENDSHADER_Normal.png": "6b21ab4e6eb531751ec659f1a4f2a8dbdfe7a1b040165c876f4118393a2058c4",
+        "textures/MASTER_Brick_Small_Red_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Brick_Small_Red_BaseColor.png": "2ad9626a3cd79a26984a60ea5e25db2e7e58dc4d4e9dc5452ce0504b0bc6498d",
+        "textures/MASTER_Brick_Small_Red_Normal.png": "11bcd7a489bf736bb1a0d3fd9e5158abe140609dd33bacd9f239c5ab17c74bd1",
+        "textures/MASTER_Brick_Small_Red_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Bronze_BLENDSHADER_BaseColor.png": "326120155474fa6ffb71d90948dc8d8cbdb1ed12de0b476dd44f99e1fb3d3abc",
+        "textures/MASTER_Bronze_BLENDSHADER_Normal.png": "e7a5a52bf0bfe3893f9e98bd6b7963ede73854b1953a6949459e00be4b9ca89b",
+        "textures/MASTER_Bronze_BLENDSHADER_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/MASTER_Building_Details_BaseColor.png": "5f28f980fac7b1f3bf917cb07279b4c1b678bd51e128bc1aa6ce31e49cdd7121",
+        "textures/MASTER_Building_Details_Normal.png": "9d882d227b212f23f54d9d805bc507225f65c6dd058e8c736fefc4c3b286a16d",
+        "textures/MASTER_Building_Details_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete1_BaseColor.png": "a13e0c5b5e71bfb543d3cad6b996c67c0dc90beb7c95a67c1ebd1fb62ef12c5f",
+        "textures/MASTER_Concrete1_Normal.png": "90cafa3167208bf46500cb914b43a27c3bd21edaf33eb22acba98a8d5a23dd01",
+        "textures/MASTER_Concrete1_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_BaseColor.png": "f9b0ff92c1c470c8111d1ac0e6dce4e2195701d4b836e3d4a38006a2da76fa51",
+        "textures/MASTER_Concrete_Grooved_BaseColor.png": "2544f05ecf9d580944cf750464a57cb7d22663aec85a6797eaa4645429b8aa5b",
+        "textures/MASTER_Concrete_Grooved_Normal.png": "6344e4430141468ab72a40eaa5df7e642b226e59227e5f93dfc47020fb011947",
+        "textures/MASTER_Concrete_Grooved_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_Normal.png": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a",
+        "textures/MASTER_Concrete_Plaster1_BLENDSHADER_BaseColor.png": "85ba92f3f78b4765b477962d5b2f3307524c04a0c63e1d3354879e505537727d",
+        "textures/MASTER_Concrete_Plaster1_BLENDSHADER_Normal.png": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a",
+        "textures/MASTER_Concrete_Plaster1_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_Plaster_BaseColor.png": "85ba92f3f78b4765b477962d5b2f3307524c04a0c63e1d3354879e505537727d",
+        "textures/MASTER_Concrete_Plaster_Normal.png": "40140408cb32df1c3404f08937c09205f3a5120e7bfb5b51a8373ce052bbd89e",
+        "textures/MASTER_Concrete_Plaster_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_Smooth_BLENDSHADER_BaseColor.png": "b035a34844cfd872d379d172937c598676a61add138541cfee562481a783528d",
+        "textures/MASTER_Concrete_Smooth_BLENDSHADER_Normal.png": "5826caa5003e4969a36d622e1175a198bde708fff65f64afe3bc89872380631f",
+        "textures/MASTER_Concrete_Smooth_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_Smooth_BaseColor.png": "85ba92f3f78b4765b477962d5b2f3307524c04a0c63e1d3354879e505537727d",
+        "textures/MASTER_Concrete_Smooth_Normal.png": "40140408cb32df1c3404f08937c09205f3a5120e7bfb5b51a8373ce052bbd89e",
+        "textures/MASTER_Concrete_Smooth_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_White_BaseColor.png": "29598b8f817e5de684d5d6eec92b9da9252c61e52d9ff818ef1290b3f5e1f58b",
+        "textures/MASTER_Concrete_White_Normal.png": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a",
+        "textures/MASTER_Concrete_White_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Concrete_Yellow_BaseColor.png": "1faaa0c027f436dc3109443014e36893c492fb6d0a47e80d4fbeb9287f55fcc1",
+        "textures/MASTER_Concrete_Yellow_Normal.png": "3dcbcf552f5890043c50b7b98526ff19c8a5a3f1d23e4fd0a401f010a4f8921a",
+        "textures/MASTER_Concrete_Yellow_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Curtains_BaseColor.png": "9723efb0e61dc566b1a2984a466990ac06a2e7b462c7f0cf0cab533ee1a53c74",
+        "textures/MASTER_Curtains_Normal.png": "a701d19a45bc1069c9caad4ee9be0f69cc4cb24d509c89a75d26c30712e4d663",
+        "textures/MASTER_Curtains_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Details_Dark_BaseColor.png": "5f28f980fac7b1f3bf917cb07279b4c1b678bd51e128bc1aa6ce31e49cdd7121",
+        "textures/MASTER_Details_Dark_Normal.png": "9d882d227b212f23f54d9d805bc507225f65c6dd058e8c736fefc4c3b286a16d",
+        "textures/MASTER_Details_Dark_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Doors_BaseColor.png": "93aa27a5a9d259579c81e6f0bd36cbfccfdc572e12ba621253079b01b9f91ce1",
+        "textures/MASTER_Doors_Normal.png": "d96866ad212b1051543f97a197b36022c46dbf18a76be88198d3a7d07b4999e3",
+        "textures/MASTER_Doors_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Focus_BaseColor.png": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5",
+        "textures/MASTER_Focus_Normal.png": "88ccb6dccf7c2fe73dec372a093f9e62738a455d10ecaf67b41655fb25d49e3c",
+        "textures/MASTER_Focus_Ornament_BaseColor.png": "48b53c400a7d403fb5686a20d85924d1b934cf7c5ff03bd81ca1dc540d629e4e",
+        "textures/MASTER_Focus_Ornament_Normal.png": "93c63a2acaae94e2d4cb32330361309a3567a6292ff8c23f4b40075b012133c4",
+        "textures/MASTER_Focus_Ornament_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Focus_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Forge_Metal_BaseColor.png": "0519235a85f844b12cd6f1e2993d9352916e2e7cc3fcc1b15d4ff2df472a60da",
+        "textures/MASTER_Forge_Metal_Normal.png": "66bf10ecce01f2fd5731ef0eec285d426642ab858afd322386780e4117348a86",
+        "textures/MASTER_Forge_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/MASTER_Frosted_Glass_BaseColor.png": "e65709bd1155f866bfe8de8b0614a1aa86a9a58c06a9ca12d85b5f8d41984761",
+        "textures/MASTER_Frosted_Glass_Normal.png": "a99e294ffff4818a76c0cd821c5a9975362febbc589105180d65f1d4adf5c8b5",
+        "textures/MASTER_Frosted_Glass_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Glass_Dirty_BaseColor.png": "c936fef8acc8b0a88db68f80221fec5965904fdd5ab40b83999f202c7e2d931e",
+        "textures/MASTER_Glass_Dirty_MASKED_BaseColor.png": "b614d09ac27e569333435a6d74aa565d7cfa1ead9ff1f895e64609a3c33cfdc9",
+        "textures/MASTER_Glass_Dirty_MASKED_Normal.png": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08",
+        "textures/MASTER_Glass_Dirty_MASKED_Specular.png": "5848ad2f0b3b116bbdcef826615d09364970b5124d666ce1abf9ee8b10f9fd36",
+        "textures/MASTER_Glass_Dirty_Normal.png": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08",
+        "textures/MASTER_Glass_Dirty_Specular.png": "5848ad2f0b3b116bbdcef826615d09364970b5124d666ce1abf9ee8b10f9fd36",
+        "textures/MASTER_Glass_Exterior_BaseColor.png": "c936fef8acc8b0a88db68f80221fec5965904fdd5ab40b83999f202c7e2d931e",
+        "textures/MASTER_Glass_Exterior_Normal.png": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08",
+        "textures/MASTER_Glass_Exterior_Specular.png": "5848ad2f0b3b116bbdcef826615d09364970b5124d666ce1abf9ee8b10f9fd36",
+        "textures/MASTER_Grain_Metal_BaseColor.png": "e0a382cb9478c8d4089fe29268110d69d4a7c36e2e907d3a147b98c6ebb8aad2",
+        "textures/MASTER_Grain_Metal_Normal.png": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54",
+        "textures/MASTER_Grain_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/MASTER_Light_Bulb_BaseColor.png": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5",
+        "textures/MASTER_Light_Bulb_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/MASTER_Light_Bulb_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Metal_BaseColor.png": "3e7b77f56b44b142b0e1437f9722a137ab6d90fecf7d0978176b932cbc3a578d",
+        "textures/MASTER_Metal_Normal.png": "3665fffe0acf6adb8ac1f3db07950a88cfaf1dc3c9e4233bacf95be0bc3c4d8f",
+        "textures/MASTER_Metal_Pipe_BaseColor.png": "e0a382cb9478c8d4089fe29268110d69d4a7c36e2e907d3a147b98c6ebb8aad2",
+        "textures/MASTER_Metal_Pipe_Normal.png": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54",
+        "textures/MASTER_Metal_Pipe_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/MASTER_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/MASTER_Plastic_BaseColor.png": "e006ac396658a5b330471f3535a17c32001f828724f5fcfdc9e5a113da022765",
+        "textures/MASTER_Plastic_Normal.png": "43bc1e0e548bd2727a93702a11f9be52ffe731573c57f97699c3e6f80b88be54",
+        "textures/MASTER_Plastic_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Rollup_Door_BaseColor.png": "97b6f5d5c78490ee3d1abe8a4dcce6d804d42525a4d25f689c9494382c2fe90e",
+        "textures/MASTER_Rollup_Door_Normal.png": "ae77ac9ea8862f46053e29207cdbcc27bbe0b1e28a5a851281e1f7c6a37ed1e4",
+        "textures/MASTER_Rollup_Door_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Roofing_Metal_01_BaseColor.png": "b010489dbd2b0eea76be987810b4641f6377339d252b4655761252754c76f573",
+        "textures/MASTER_Roofing_Metal_01_Normal.png": "9b559616bc4fa795c239be699f8235afb6d02633e72172ad15b23e67d5941ea8",
+        "textures/MASTER_Roofing_Metal_01_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Roofing_Shingle_Green_BaseColor.png": "97a62776c7475988f4c9603f91af178cc0d670ddd5dfc9bdb4f966b80c2dd4c7",
+        "textures/MASTER_Roofing_Shingle_Green_Normal.png": "d9810d082555ccb258bf354f5c3b2acba062f8a7a9830dd32c9580bf60d31148",
+        "textures/MASTER_Roofing_Shingle_Green_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Roofing_Shingle_Grey_BaseColor.png": "beaacaddd8be0ecdb216c5484819c9de40e152422e594f92f907cf230651e7ba",
+        "textures/MASTER_Roofing_Shingle_Grey_Normal.png": "6f18e728bd27335fbcbd83cb7e81e60115919a1056c6c3f499d4ce42497418e9",
+        "textures/MASTER_Roofing_Shingle_Grey_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Room_Interior_BaseColor.png": "9e0f36149993b0c9b98e69756078a7465271c259d1af2d2f0a1e2e53c30d6473",
+        "textures/MASTER_Room_Interior_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/MASTER_Room_Interior_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Side_Letters_BaseColor.png": "a73d6cea793c5db3ef390ddaa9ed253fff6d7400d46c3aa38ccee520d32d8865",
+        "textures/MASTER_Side_Letters_Normal.png": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047",
+        "textures/MASTER_Side_Letters_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Trim_Cornice_BaseColor.png": "61efa695c56c180da0d8fcb3e83dcb124f4456a3efc005d2161b3220fe156483",
+        "textures/MASTER_Trim_Cornice_Normal.png": "ea1534f69a5e9d07deaec73bda76089cec16e8fcc9b09d2645279557a780548a",
+        "textures/MASTER_Trim_Cornice_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Wood_Brown_BaseColor.png": "8a875fcb9741b33b788de5585081ffc501e7b424a94e6f1b460027c569fd02e5",
+        "textures/MASTER_Wood_Brown_Normal.png": "12d56456ec768aaf1f5419fd3dceb1ff6c63b5e1b20304d4770b4506d12140a4",
+        "textures/MASTER_Wood_Brown_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Wood_Painted3_BaseColor.png": "f7be1f0bc21574b528787786d1ebb2b3d88fccbbf3c2a3e12e7d13cc2a3721ac",
+        "textures/MASTER_Wood_Painted3_Normal.png": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047",
+        "textures/MASTER_Wood_Painted3_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Wood_Painted_Cyan_BaseColor.png": "575e34a8d5ac6421a1ae5870f7a766120de08db91e292120c48347a45c651dfc",
+        "textures/MASTER_Wood_Painted_Cyan_Normal.png": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047",
+        "textures/MASTER_Wood_Painted_Cyan_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Wood_Painted_Green_BLENDSHADER_BaseColor.png": "f7be1f0bc21574b528787786d1ebb2b3d88fccbbf3c2a3e12e7d13cc2a3721ac",
+        "textures/MASTER_Wood_Painted_Green_BLENDSHADER_Normal.png": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047",
+        "textures/MASTER_Wood_Painted_Green_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Wood_Painted_Green_BaseColor.png": "7f75aebe619d485434957258145a45ca88c27d46d04e248bf29733980b9c202b",
+        "textures/MASTER_Wood_Painted_Green_Normal.png": "b517624c60c93f9cbe3c898e8b44e33b103868d595efb88aa0e4de4ee5950047",
+        "textures/MASTER_Wood_Painted_Green_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MASTER_Wood_Polished_BaseColor.png": "8a875fcb9741b33b788de5585081ffc501e7b424a94e6f1b460027c569fd02e5",
+        "textures/MASTER_Wood_Polished_Normal.png": "12d56456ec768aaf1f5419fd3dceb1ff6c63b5e1b20304d4770b4506d12140a4",
+        "textures/MASTER_Wood_Polished_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MenuSign_01_BaseColor.png": "d9c68eb6b88a922cd97b6ec6733c682ae255c375f1af109e3efa36cd8d6929cc",
+        "textures/MenuSign_01_Normal.png": "62074f452ca6330f82fbd0200a7a0ff46145cd8fa932ab0b9558fe25b9681213",
+        "textures/MenuSign_01_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MenuSign_02_Glass_BaseColor.png": "c936fef8acc8b0a88db68f80221fec5965904fdd5ab40b83999f202c7e2d931e",
+        "textures/MenuSign_02_Glass_Normal.png": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08",
+        "textures/MenuSign_02_Glass_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/MenuSign_02_Mesh_BaseColor.png": "3599b407ddf5f126591d7239b2ec0c4a828939f1d998b70f12566ac0afa7e859",
+        "textures/MenuSign_02_Mesh_Normal.png": "0b22d94c59aea3983a1dbb946f6b209832580633e1e55044d7ccfb153c6a48c8",
+        "textures/MenuSign_02_Mesh_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/NapkinHolder_BaseColor.png": "da8ba010d6a26f435705b8101dfe7b3e6993c0a7009c00cad102c10b82e86133",
+        "textures/NapkinHolder_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/NapkinHolder_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_Chair_01_BaseColor.png": "12df2d143c8678e4081c2969cacd34135ba6661a7af06e126748d63825c62c1a",
+        "textures/Paris_Chair_01_Normal.png": "a62b33d4403e3dd85dd9e81de12656e4e3b4890a457d352a82e7048992c4a961",
+        "textures/Paris_Chair_01_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_LiquorBottle_01_Caps_BaseColor.png": "6ef5cbb50754c17a63059079eafceea56648aa56d6ef904fa6a6f319c771d40d",
+        "textures/Paris_LiquorBottle_01_Caps_Normal.png": "a470985264934f9dcd123c33b12a95a538f67c9d423ead3924489e47f73227bd",
+        "textures/Paris_LiquorBottle_01_Caps_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_LiquorBottle_01_Glass_Wine_BaseColor.png": "1081ca34263872d14c9ed64a7e1e283afc098f9dcfc7ecbe721bd93cc272c70c",
+        "textures/Paris_LiquorBottle_01_Glass_Wine_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_LiquorBottle_01_Glass_Wine_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_LiquorBottle_01_Labels_BaseColor.png": "232c2eac760eae604f9dd43352c0b272396b7cfaf220081b54583b6d0cbc2320",
+        "textures/Paris_LiquorBottle_01_Labels_Normal.png": "f13e765618939828b3477d0670e8cc564ea80bc55c191196fcde0106d1317604",
+        "textures/Paris_StreetPivot_BaseColor.png": "fb22c2929f2118044cfaf07d26e98b69995ed5ecd5073123016967818029fbee",
+        "textures/Paris_StreetPivot_Normal.png": "bbec76279b03b4009954c64152db220cb960765dfd61bd4e6c03629e31080591",
+        "textures/Paris_StreetPivot_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StreetSign_01_BaseColor.png": "a36bb029b8c9dafc8afed7995ef92962d35cf61c3d6292b6b9a6350e65b849ca",
+        "textures/Paris_StreetSign_01_Normal.png": "db41a0d7043074088e27c5946385ae5ed036c2f966958866ee9f0ce4c617ac75",
+        "textures/Paris_StreetSign_01_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_Blue_Color_Emissive_BaseColor.png": "47d07644bc83d51e76af2c7375664ee8612d900e75ef2f1c4701454aedffc8c1",
+        "textures/Paris_StringLights_01_Blue_Color_Emissive_Emissive.png": "e2b6ead33e453c7d6908a2b7863604412fd6df8f4e7f5655f6c624c3fa9e0f42",
+        "textures/Paris_StringLights_01_Blue_Color_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_Blue_Color_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_Green_Color_Emissive_BaseColor.png": "dd29b72481d842dcc575c6ef294058d1fde280ce905b4bb12bae7323d048ff42",
+        "textures/Paris_StringLights_01_Green_Color_Emissive_Emissive.png": "d01dbee98ac89c39ad91912e307b8c4d44708055f1ab586e32c14a70be665400",
+        "textures/Paris_StringLights_01_Green_Color_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_Green_Color_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_Orange_Color_Emissive_BaseColor.png": "00bae71d01f12848cc31d186d82de07c940b74bdb98abc0ecdb37fb79bf55336",
+        "textures/Paris_StringLights_01_Orange_Color_Emissive_Emissive.png": "86769db0bff8593846422790c7645c9705627754ac872ac467423372f4608bbd",
+        "textures/Paris_StringLights_01_Orange_Color_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_Orange_Color_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_Pink_Color_Emissive_BaseColor.png": "33ab2e981d296c9d78c6f0df806e4375ef781f4a81199728e06200c668cb3cc9",
+        "textures/Paris_StringLights_01_Pink_Color_Emissive_Emissive.png": "886f2fd576b62b0c86322bb30a3bb038ecebc72c0b14bd3dbff8a25419142be0",
+        "textures/Paris_StringLights_01_Pink_Color_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_Pink_Color_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_Red_Color_Emissive_BaseColor.png": "eb19b0368a05ed8b2030241305c54be47b94dde076ccafc23eb137f1ea883617",
+        "textures/Paris_StringLights_01_Red_Color_Emissive_Emissive.png": "d7a2f254d41689ea526c7597564bb8aa0e92cdbd28341bcd8699f02fe3cb9994",
+        "textures/Paris_StringLights_01_Red_Color_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_Red_Color_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_White_Color_BaseColor.png": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b",
+        "textures/Paris_StringLights_01_White_Color_Emissive_BaseColor.png": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b",
+        "textures/Paris_StringLights_01_White_Color_Emissive_Emissive.png": "df43710cdc7477a2e85a02cbdb383e85fbaf56e036e6fdd0f2c449be0fd00662",
+        "textures/Paris_StringLights_01_White_Color_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_White_Color_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_StringLights_01_White_Color_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Paris_StringLights_01_White_Color_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_Table_Terrace_BaseColor.png": "9c3bab3515b8f744c0f93720755b317dbfa7e032775a15c1c640917cbcc48cbd",
+        "textures/Paris_Table_Terrace_Normal.png": "a21bc3159bb07a09741128bb86578619eb84026134a277cc7448a8d605ae86ba",
+        "textures/Paris_Table_Terrace_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Paris_TrafficSign_A_BaseColor.png": "9db9b3ce9b2c1e9556c80e218782e87c83202ec103f293703fc24d6d874ef8de",
+        "textures/Paris_TrafficSign_A_Normal.png": "8680b7da0c94869ba8730cb1ce4600003d59cfff7c0d7042cbc186429d23a7e2",
+        "textures/Paris_TrafficSign_A_Specular.png": "7bfa6b291cd0a80c15ece7eab9339a6e5cbf6aa9e28c8c37f99fa22c5775767c",
+        "textures/Pavement_Brick_BLENDSHADER_BaseColor.png": "4adc65ae615b872eed9ead884fd44d91a522b3ae00f419f7ab2f1de29b2eeffd",
+        "textures/Pavement_Brick_BLENDSHADER_Normal.png": "d362ac025e425a9fcaa22b4b29326fa4ac9164ab82225be6a41559142b941f78",
+        "textures/Pavement_Brick_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobble_Leaves_BLENDSHADER_BaseColor.png": "1e25f1458e373b7f15798466efc2077a55f0b1ea6f000f6b7e9effe8b76fe3d4",
+        "textures/Pavement_Cobble_Leaves_BLENDSHADER_Normal.png": "e1be597a83c79e3615e41933ffb800b78350fae38612edf7801a47909e75a7a2",
+        "textures/Pavement_Cobble_Leaves_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobblestone_01_BLENDSHADER_BaseColor.png": "1e25f1458e373b7f15798466efc2077a55f0b1ea6f000f6b7e9effe8b76fe3d4",
+        "textures/Pavement_Cobblestone_01_BLENDSHADER_Normal.png": "e1be597a83c79e3615e41933ffb800b78350fae38612edf7801a47909e75a7a2",
+        "textures/Pavement_Cobblestone_01_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobblestone_02_BaseColor.png": "5c4a63cd7b8bde56fa27db7c8a5968c077cdd584cac054ee1eb6341b82eebdc5",
+        "textures/Pavement_Cobblestone_02_Normal.png": "381b1e56dee3852ff77e88cf9dc4eaf2373906d9bd82d0ac5e4e455bf7695316",
+        "textures/Pavement_Cobblestone_02_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobblestone_Big_BLENDSHADER_BaseColor.png": "4b8d170e58b87be3a171713d759e670354c83dc1d204df3b678a99bec76fb65c",
+        "textures/Pavement_Cobblestone_Big_BLENDSHADER_Normal.png": "d1e7312276d6ed0f5fc1eeb8007c2e983dc8d06b37b27c7f90d5dfa8a4396e3a",
+        "textures/Pavement_Cobblestone_Big_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobblestone_Small_BLENDSHADER_BaseColor.png": "03d9bed5048072ab3130e622171913d52386dd6eaafda150a9cea6a7e0a814ed",
+        "textures/Pavement_Cobblestone_Small_BLENDSHADER_Normal.png": "f3365a0f5f8d86d5ad00e5a808dc947c43f39cae5567874b0c38c0c06d421e92",
+        "textures/Pavement_Cobblestone_Small_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobblestone_Wet_BLENDSHADER_BaseColor.png": "180e0de6692fd88d6e16e0d5ce201e1be93d34ebabe0ee0a8a6c6d1bb426afc4",
+        "textures/Pavement_Cobblestone_Wet_BLENDSHADER_Normal.png": "0847e04b70838b37c5f27cac361da0299b52c98ea06e4e859e77db1d15cd7249",
+        "textures/Pavement_Cobblestone_Wet_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_BaseColor.png": "180e0de6692fd88d6e16e0d5ce201e1be93d34ebabe0ee0a8a6c6d1bb426afc4",
+        "textures/Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_Normal.png": "0847e04b70838b37c5f27cac361da0299b52c98ea06e4e859e77db1d15cd7249",
+        "textures/Pavement_Cobblestone_Wet_Leaves_BLENDSHADER_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Curbstones_BaseColor.png": "6ddc0c9666baf82b16894f1dba3cb17864c29f1c777db48bad4c3d6bcf81e716",
+        "textures/Pavement_Curbstones_Normal.png": "d52c034f68bfa77a4165a34f74ac3df084290c2a4aee1572245e66733bb3f8f6",
+        "textures/Pavement_Curbstones_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Ground_Wet_BaseColor.png": "fa7e49b1278d58b74d834b1516b43103bcffffee3f324c2a1c98159aba989995",
+        "textures/Pavement_Ground_Wet_Normal.png": "157355562abbc6ddb937edee1ad53b664dc2958dc8a31f6bc8785404476cac6b",
+        "textures/Pavement_Ground_Wet_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Pavement_Manhole_Cover_BaseColor.png": "5dd894a3f9d68e0ce4fd9c4f9fb06be40e6092793e3a36424c3ffa6addaf7d2f",
+        "textures/Pavement_Manhole_Cover_Normal.png": "c8550f5d637642294e2d5cac68664382de3a44c6421f08382530852358b00090",
+        "textures/Pavement_Manhole_Cover_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Plantpots_BaseColor.png": "d8c25e7bf05144cf0a9afad2dd5e581d791c1f029a75c6e7eaebd6390ba54397",
+        "textures/Plantpots_Normal.png": "b43134bf33da5cbd87b68660a9df40723d3eeed8a327496280060d48e8f3dad1",
+        "textures/Plantpots_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Plaster_BaseColor.png": "bf1e114b4ac856956c945f963abeeb9ff9a54762c581a55264227a9494aba5da",
+        "textures/Plaster_Normal.png": "817e84a8c89502d021cf6acc76add6f9ac66bae45379fec5a09c84a4c548c93b",
+        "textures/Plaster_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Shopsign_Bakery_BaseColor.png": "dcf317b2a4241eb1e73f5ab683ccd583df0cafe030aeded42b4506f9bf58eafb",
+        "textures/Shopsign_Bakery_Normal.png": "629895acb60101471c8eea19808fae67acbde777fcdbe19381fd467b20275d7e",
+        "textures/Shopsign_Bakery_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Shopsign_Book_Store_Emissive_BaseColor.png": "d794e1e75418cf12cd3fdf5f0bb0ebbd6b57b65ca7b6ed1c1e4b0681caf59edc",
+        "textures/Shopsign_Book_Store_Emissive_Emissive.png": "e325bf2d740a9b4eb267a3f589e4429600e4e5dce21d224087b8442ca584fca3",
+        "textures/Shopsign_Book_Store_Emissive_Normal.png": "dab22783073435d15483fdec6df44d4b32a4aa1eabbbde4b62eab99e7e8e7ccb",
+        "textures/Shopsign_Book_Store_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Shopsign_Pharmacy_Emissive_BaseColor.png": "3dd9204e7152711d8e29803bd40185bf92103ac3d9390a54de0d63671e34557d",
+        "textures/Shopsign_Pharmacy_Emissive_Emissive.png": "b05e604e5a1a8df4d27d3daee3bfe61933cc01365060403b4a2af3de823eac01",
+        "textures/Shopsign_Pharmacy_Emissive_Normal.png": "8c9ae9a04dd320d741f920c3aea90456574e7cde9cd51fd35998fdd0fbb8ad12",
+        "textures/Shopsign_Pharmacy_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Shopsign_Ties_Shop_BaseColor.png": "3f0ca7a47522eae44c08b6f61014f9577710538da23a9fdfe673b5d28d526da8",
+        "textures/Shopsign_Ties_Shop_Normal.png": "63d5a322d42fa451bf3442052595098d2c7f84dede9d188c3fd2f21d58b91c6b",
+        "textures/Shopsign_Ties_Shop_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Sidewalkbarrier_BaseColor.png": "ec73463156c63c7e3db266c0defe775b636880f39cdbf3b7b986a92a6d23aaa2",
+        "textures/Sidewalkbarrier_Normal.png": "bbb1c883958e1a7c7daa13ab9976d8062df7a0304157888651357d38d9a06756",
+        "textures/Sidewalkbarrier_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Spotlight_Emissive_BaseColor.png": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5",
+        "textures/Spotlight_Emissive_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Spotlight_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Spotlight_Glass_Emissive_BaseColor.png": "fc770ad05255391931a7a247ad5bc347ff8a5f64ece8993d282ca344f4256295",
+        "textures/Spotlight_Glass_Emissive_Emissive.png": "df43710cdc7477a2e85a02cbdb383e85fbaf56e036e6fdd0f2c449be0fd00662",
+        "textures/Spotlight_Glass_Emissive_Normal.png": "86b15a507b19f4fea3425e69a6fe371964894e782749e2287f75ad621bf92cec",
+        "textures/Spotlight_Glass_Emissive_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Spotlight_Main_BaseColor.png": "4272a5f6882d39cbd2e0865ef9c64314f03975fb0a549ea9e1e6dc1a1b6cc8e5",
+        "textures/Spotlight_Main_Normal.png": "88ccb6dccf7c2fe73dec372a093f9e62738a455d10ecaf67b41655fb25d49e3c",
+        "textures/Spotlight_Main_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Streetlight_Chains_BaseColor.png": "fa4189ddc750d95c1e976c8f3ca2097c6ef708ffdd2346db225c11f07a70344f",
+        "textures/Streetlight_Chains_Normal.png": "f477c7e8de1df1177d403bfd2c62898a5c1cd03b81fd616ea61b2b1a58897c3b",
+        "textures/Streetlight_Chains_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Streetlight_Metal_BaseColor.png": "7119a92a218ab069fdffc3357a7dd616c056f8f9dc4b7f5aea0ed77aeae5f976",
+        "textures/Streetlight_Metal_Normal.png": "80747c4269138ee959ced52cadc72bb24f0093d3eb305da91fd54ac9bc17c0a8",
+        "textures/Streetlight_Metal_Specular.png": "14375a1ec6f411938b04c2b5fd2668cb7a736f6f692f4a105a3b23557e160cc8",
+        "textures/Streetlight_Support_Bulb_BaseColor.png": "69ae864a1e891a42735135999761c923da1b0b733ecd36994e6de4c21450a162",
+        "textures/Streetlight_Support_Bulb_Normal.png": "895d1a934d4e99903d7d37154e871f4d65867932ae327e01cd5a14bd1c725d08",
+        "textures/Streetlight_Support_Bulb_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Stringlights_BaseColor.png": "b035651eb42758f2b27849690c38359b3b78f4dcce35e58f8eff15d60b40c81d",
+        "textures/Stringlights_Normal.png": "9b3ce628d75dd3a7f882e04942da789a45ef3c239727e076f77ca8ff645ad1a4",
+        "textures/Stringlights_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Trashcan_BaseColor.png": "48a37eeffc9533a3c8aff0b861f991402250cff3171d99a2c09c12fb4f1284b5",
+        "textures/Trashcan_Normal.png": "242331b6d046303983b3f8a69ee4ddceac1952e06aea1461dc6160dc1e7e1190",
+        "textures/Trashcan_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Vespa_BaseColor.png": "9f4639abe7164c797227dade10e67e7cfcc2f5e5e8f97e84d503a4dbdc7e657d",
+        "textures/Vespa_Headlight_BaseColor.png": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b",
+        "textures/Vespa_Headlight_Normal.png": "edbbcee656971a39143ae5cee0c55d85d37a2800b96ddad28e9d3a3f0fc199f7",
+        "textures/Vespa_Headlight_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Vespa_Normal.png": "edbbcee656971a39143ae5cee0c55d85d37a2800b96ddad28e9d3a3f0fc199f7",
+        "textures/Vespa_Odometer_BaseColor.png": "daf7a582b21f6c03cd431745b0cef98f2f228e30af323c39342f362c625cbff2",
+        "textures/Vespa_Odometer_Glass_BaseColor.png": "e409180ea882b7f9b1ea064cdafa116a0ee42ccef451430a6a4381f4bdfa513b",
+        "textures/Vespa_Odometer_Glass_Normal.png": "8654793cf44e226a20efdf100202fd0b162e6110b3833b2b8d6aa49033b640dc",
+        "textures/Vespa_Odometer_Glass_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Vespa_Odometer_Normal.png": "f4d0ab4872530f3bd6cb73e198186ea82ff110788686ce0cfa6a10aa9ffb32d8",
+        "textures/Vespa_Odometer_Specular.png": "684e47f00673afda2ef0811c0dd0ffe98ac3a9c70406cc4c216c55197575113a",
+        "textures/Vespa_Specular.png": "40bb296db550dc83fce4d6c13658aa93b69cd5e5ed8e8e715f34a41bc2b55a1d"
+      },
+      "ibl": {
+        "path": "assets/bistro/environment/san_giuseppe_bridge_4k.hdr",
+        "sha256": "5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1eec65a50",
+        "resolution": [
+          4096,
+          2048
+        ],
+        "original_luminance_max": 82637.71875,
+        "capped_luminance_max": 4.000000693035125,
+        "capped_texels": 68105,
+        "texels_luminance_above_100": 213,
+        "solid_angle_weighted_luminance_above_100_fraction": 0.4490217407519912,
+        "solid_angle_weighted_luminance_mean_original": 0.7845665696010202,
+        "solid_angle_weighted_luminance_mean_capped": 0.41668004028760686,
+        "peak_texel_top_origin": [
+          2456,
+          698
+        ],
+        "cap": 4,
+        "preprocessed_float32_rgba_sha256": "42be24d218245adfafab0ac2d136ecc52db89d369efaf3186f5b7480d8e762e0",
+        "pixel_order": "Blender bottom-to-top image rows; preprocessing is per texel, independent of row orientation"
+      },
+      "settings": {
+        "engine": "Cycles CPU",
+        "samples": 32,
+        "seed": 0,
+        "resolution": [
+          960,
+          540
+        ],
+        "denoising": true,
+        "denoiser": "CPU compositor OpenImageDenoise, accurate prefilter, HDR, Cycles normal/albedo guides; original noisy EXR also retained",
+        "adaptive_sampling": false,
+        "max_bounces": 1,
+        "diffuse_bounces": 1,
+        "glossy_bounces": 1,
+        "transmission_bounces": 1,
+        "transparent_max_bounces": 16,
+        "persistent_data": true,
+        "motion_blur": false,
+        "depth_of_field": false,
+        "compositor_device": "CPU",
+        "tone_mapping": "Khronos PBR Neutral applied to nonnegative scene-linear Rec.709 * 2^EV; one sRGB OETF",
+        "exr": "Scene-linear Rec.709 RGBA float32 ZIP, before exposure/tone mapping",
+        "light": {
+          "sun": {
+            "direction_to_light": [
+              0.6123724356957945,
+              0.5,
+              0.6123724356957945
+            ],
+            "irradiance_rgb": [
+              1,
+              1,
+              1
+            ],
+            "angular_diameter_degrees": 0.53,
+            "units": "Scene-linear benchmark irradiance; not measured lux or calibrated daylight."
+          },
+          "ibl": {
+            "path": "assets/bistro/environment/san_giuseppe_bridge_4k.hdr",
+            "sha256": "5eb82f21bced3f7e901774083cfee1a05fd2bcf22f56ff699f3171c1eec65a50",
+            "yaw_degrees": 0,
+            "strength": 3,
+            "preprocess": {
+              "mode": "luminance-cap",
+              "cap": 4,
+              "luminance_coefficients": [
+                0.2126,
+                0.7152,
+                0.0722
+              ],
+              "formula": "c=max(decoded linear RGB,0); L=dot(c,coefficients); c*=min(1,cap/max(L,1e-20)); source texels before resampling/prefilter, then strength. Bright-source suppression, not physical sun removal."
+            },
+            "mapping": "u=fract(0.5+atan2(direction.z,direction.x)/(2*pi)); v=acos(clamp(direction.y,-1,1))/pi; source top row v=0; sample inverse R_y(yaw)*direction; repeat U, clamp V.",
+            "prefilter": "B3 generates diffuse irradiance, roughness-dependent specular and BRDF integration from processed source; tool and output hashes fixed before B3 acceptance."
+          }
+        }
+      },
+      "inventory_unchanged": true,
+      "mesh_objects": 1296,
+      "materials": 132,
+      "triangles": 2832120,
+      "inventory_sha256": "f7fe1393309cf8ce0d686b5f39df0da9b16d82bc0089531b4272736ede398893",
+      "route_clearance": {
+        "logical_frames": 1800,
+        "near_plane_rays": 9000,
+        "eye_path_segments": 4,
+        "blocked_eye_path_segments": [],
+        "near_plane_intrusions": [],
+        "limitation": "Point eye path and five near-plane rays per logical frame, not swept volume, continuous frustum clearance or walkability; alpha-zero audited materials skipped."
+      },
+      "views": [
+        {
+          "view": {
+            "name": "overview",
+            "position": [
+              153.515,
+              137.857,
+              133.365
+            ],
+            "target": [
+              24.422,
+              -20,
+              4.272
+            ],
+            "vertical_fov_degrees": 48,
+            "purpose": "Whole exterior fits camera frustum with margin; target is a virtual aim point below ground, not a camera position. Occlusion still applies."
+          },
+          "blender_camera": {
+            "position": [
+              153.51499938964844,
+              -133.36500549316406,
+              137.85699462890625
+            ],
+            "matrix_world": [
+              [
+                0.7071067690849304,
+                -0.4624931216239929,
+                0.5348833203315735,
+                153.51499938964844
+              ],
+              [
+                0.7071067690849304,
+                0.46249300241470337,
+                -0.5348833799362183,
+                -133.36500549316406
+              ],
+              [
+                8.362517434079564e-08,
+                0.7564392685890198,
+                0.6540639400482178,
+                137.85699462890625
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 26.952442169189453,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 47.9999979206271
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "overview-selected-noisy.exr",
+                "sha256": "9b976801f9039ca55da93cd7829117eb7cfa5b29aa4ce9b47fd8770b9e2321de"
+              },
+              "exr": {
+                "file": "overview-selected.exr",
+                "sha256": "078320eef947fc9168565b52de5074a4851935481361276529d918147319608e"
+              },
+              "png": {
+                "file": "overview-selected.png",
+                "sha256": "a4f8119186c83fd303fc5001b113483f54cd088275fcefc9068130dadc6c2e7a"
+              },
+              "linear_max": 1.5015486478805542,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                156.44305555555556,
+                157.98450038580248,
+                159.33925540123457
+              ],
+              "rgb8_black_pixels": 0,
+              "rgb8_black_fraction": 0.0,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 0,
+              "behind_camera": 0,
+              "mesh_instances_with_any_outside": 0,
+              "mesh_instances_with_all_points_outside": 0,
+              "positive_depth_ndc_min": [
+                -0.337149163925005,
+                -0.831189362743843
+              ],
+              "positive_depth_ndc_max": [
+                0.35727775843500414,
+                0.8358184183516014
+              ],
+              "depth_range_m": [
+                133.94534841385803,
+                305.0181576756993
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 0,
+              "behind_camera": 0,
+              "mesh_instances_with_any_outside": 0,
+              "mesh_instances_with_all_points_outside": 0,
+              "positive_depth_ndc_min": [
+                -0.5813726547010312,
+                -0.8797008535685652
+              ],
+              "positive_depth_ndc_max": [
+                0.6503987830986903,
+                0.8406798554132893
+              ],
+              "depth_range_m": [
+                128.71178719843238,
+                313.50070271176605
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        },
+        {
+          "view": {
+            "name": "street",
+            "position": [
+              14.612072,
+              4.293145,
+              -41.809284
+            ],
+            "target": [
+              8.249157,
+              2.90426,
+              -22.899369
+            ],
+            "vertical_fov_degrees": 53,
+            "purpose": "Street, sun/shadow boundary, building materials and foliage."
+          },
+          "blender_camera": {
+            "position": [
+              14.612071990966797,
+              41.80928421020508,
+              4.293145179748535
+            ],
+            "matrix_world": [
+              [
+                -0.9477831721305847,
+                -0.02214673161506653,
+                0.3181454539299011,
+                14.612071990966797
+              ],
+              [
+                0.31891536712646484,
+                -0.06581810861825943,
+                0.945495069026947,
+                41.80928421020508
+              ],
+              [
+                1.0515516635223321e-07,
+                0.9975858330726624,
+                0.06944422423839569,
+                4.293145179748535
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 24.06827735900879,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 52.99999692139992
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "street-selected-noisy.exr",
+                "sha256": "68043c166502ea7093369d61ac4963b9fbb1206de734f15f5975535aa6b2bd84"
+              },
+              "exr": {
+                "file": "street-selected.exr",
+                "sha256": "e05bdfa9db3a4fa3b4590cf3b364ae123cb899cae869473f3dfe79639a288550"
+              },
+              "png": {
+                "file": "street-selected.png",
+                "sha256": "7cae5288b8d70fd1fb2b7985d2b418a49635041b03038a56cde629862e75427d"
+              },
+              "linear_max": 0.9113814830780029,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                37.1700887345679,
+                47.37968171296296,
+                62.84987847222222
+              ],
+              "rgb8_black_pixels": 5399,
+              "rgb8_black_fraction": 0.010414737654320988,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            },
+            {
+              "name": "ibl-only",
+              "sun_multiplier": 0,
+              "ibl_strength": 3,
+              "exposure_ev": 1,
+              "ibl_cap": 4,
+              "views": [
+                "street"
+              ],
+              "noisy_exr": {
+                "file": "street-ibl-only-noisy.exr",
+                "sha256": "c30a97a7c9c64afe5e4d41338a53021dd47a7e4325c58a5a51d5ed18e68c23f9"
+              },
+              "exr": {
+                "file": "street-ibl-only.exr",
+                "sha256": "287af9bee4c209e974f87037f9579370e4ab0215f1d162d5168ce1a530404da4"
+              },
+              "png": {
+                "file": "street-ibl-only.png",
+                "sha256": "34140ccb06dd8f3c99d6561ff97a3dd098c1dee5db5631c6eb42d36b952f85fc"
+              },
+              "linear_max": 0.784775972366333,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                36.66671682098765,
+                47.05136574074074,
+                62.60020061728395
+              ],
+              "rgb8_black_pixels": 5504,
+              "rgb8_black_fraction": 0.010617283950617284,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            },
+            {
+              "name": "uncapped-ibl-plus-sun",
+              "sun_multiplier": 1,
+              "ibl_strength": 3,
+              "exposure_ev": 1,
+              "ibl_cap": null,
+              "views": [
+                "street"
+              ],
+              "noisy_exr": {
+                "file": "street-uncapped-ibl-plus-sun-noisy.exr",
+                "sha256": "2a2809061c079cc07848e581794a8c8473be2c1bc02096389036b376f7f07bc1"
+              },
+              "exr": {
+                "file": "street-uncapped-ibl-plus-sun.exr",
+                "sha256": "3211dc15001d1ce9069b90ceb81d83b0a5a6e35d56d32deb27d3fa7dcd730234"
+              },
+              "png": {
+                "file": "street-uncapped-ibl-plus-sun.png",
+                "sha256": "3e00545c9ec0970123cecd032594a83c427a967570cdd9f8d97a109850b72d40"
+              },
+              "linear_max": 2.649635076522827,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                46.12663966049383,
+                53.301950231481484,
+                65.11383101851852
+              ],
+              "rgb8_black_pixels": 5241,
+              "rgb8_black_fraction": 0.010109953703703704,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 1290501,
+              "behind_camera": 201538,
+              "mesh_instances_with_any_outside": 438,
+              "mesh_instances_with_all_points_outside": 324,
+              "positive_depth_ndc_min": [
+                -15772.928870240716,
+                -14449.158609449234
+              ],
+              "positive_depth_ndc_max": [
+                23387.710293594802,
+                37766.588462154716
+              ],
+              "depth_range_m": [
+                -50.870081123162095,
+                112.59728219788144
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 3103,
+              "behind_camera": 938,
+              "mesh_instances_with_any_outside": 449,
+              "mesh_instances_with_all_points_outside": 307,
+              "positive_depth_ndc_min": [
+                -39.64942462276199,
+                -98.60660552656014
+              ],
+              "positive_depth_ndc_max": [
+                58.13976053123175,
+                198.88372962909665
+              ],
+              "depth_range_m": [
+                -62.92078233543374,
+                133.855970733623
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        },
+        {
+          "view": {
+            "name": "material-detail",
+            "position": [
+              -2.779674,
+              5.092149,
+              6.990835
+            ],
+            "target": [
+              -7.388865,
+              1.404795,
+              0.537966
+            ],
+            "vertical_fov_degrees": 24,
+            "purpose": "Vespa, normal/roughness and pavement near-field detail."
+          },
+          "blender_camera": {
+            "position": [
+              -2.7796740531921387,
+              -6.990835189819336,
+              5.092148780822754
+            ],
+            "matrix_world": [
+              [
+                0.8137335777282715,
+                -0.2450714111328125,
+                0.5270462036132812,
+                -2.7796740531921387
+              ],
+              [
+                0.5812380909919739,
+                0.34310010075569153,
+                -0.7378649115562439,
+                -6.990835189819336
+              ],
+              [
+                2.8029418785990856e-09,
+                0.9067647457122803,
+                0.4216368794441223,
+                5.092148780822754
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 56.455562591552734,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 23.99999896031355
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "material-detail-selected-noisy.exr",
+                "sha256": "e3c099ea4436ff82c70d03fb1241013cb5f322bfae7531ae5e165410b1bdd395"
+              },
+              "exr": {
+                "file": "material-detail-selected.exr",
+                "sha256": "27efc801310bfdc5ff8b22ae563fd88ae5f4dc4b4bec6840bbbe586e0bd5f366"
+              },
+              "png": {
+                "file": "material-detail-selected.png",
+                "sha256": "32f934339140fe3e6a2c6c20bc3eaa8b1b99635e757381a7c59cb029131df2fe"
+              },
+              "linear_max": 3.3179209232330322,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                68.75711419753087,
+                82.52134259259259,
+                102.51203703703703
+              ],
+              "rgb8_black_pixels": 7,
+              "rgb8_black_fraction": 1.3503086419753087e-05,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 2856639,
+              "behind_camera": 1394864,
+              "mesh_instances_with_any_outside": 1289,
+              "mesh_instances_with_all_points_outside": 1277,
+              "positive_depth_ndc_min": [
+                -136990.1043693004,
+                -45732.4894409269
+              ],
+              "positive_depth_ndc_max": [
+                25098.496362890124,
+                285163.08422202326
+              ],
+              "depth_range_m": [
+                -116.81983919364995,
+                79.86807352963262
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 10281,
+              "behind_camera": 5173,
+              "mesh_instances_with_any_outside": 1290,
+              "mesh_instances_with_all_points_outside": 1277,
+              "positive_depth_ndc_min": [
+                -41.79769726502258,
+                -294.84386522144274
+              ],
+              "positive_depth_ndc_max": [
+                8723.708000153516,
+                8399.556907772232
+              ],
+              "depth_range_m": [
+                -120.55389298876202,
+                91.04238237893011
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        },
+        {
+          "view": {
+            "name": "glass-detail",
+            "position": [
+              12.55,
+              9.5,
+              16.92
+            ],
+            "target": [
+              16.23,
+              9.5,
+              7.62
+            ],
+            "vertical_fov_degrees": 24,
+            "purpose": "Alpha-zero glass and curtains behind; no diagnostic fill."
+          },
+          "blender_camera": {
+            "position": [
+              12.550000190734863,
+              -16.920000076293945,
+              9.5
+            ],
+            "matrix_world": [
+              [
+                0.92984938621521,
+                -1.608318278556453e-08,
+                -0.36794033646583557,
+                12.550000190734863
+              ],
+              [
+                -0.36794033646583557,
+                -4.064500913614211e-08,
+                -0.92984938621521,
+                -16.920000076293945
+              ],
+              [
+                0.0,
+                1.0,
+                -4.371138828673793e-08,
+                9.5
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 56.455562591552734,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 23.99999896031355
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "glass-detail-selected-noisy.exr",
+                "sha256": "a4554f612721a7ab7616853c45e0d2d268c4b86537d9f43788f5097ff8c6a7e5"
+              },
+              "exr": {
+                "file": "glass-detail-selected.exr",
+                "sha256": "0917eb2bbbc283034ed88d346d54c223d90425af88ecb1d4a8983fd34e342beb"
+              },
+              "png": {
+                "file": "glass-detail-selected.png",
+                "sha256": "fb4b3ff7eaaefaab76c25231440256c690f074028e42be1559b1db7968095d5f"
+              },
+              "linear_max": 0.21403208374977112,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                28.992858796296296,
+                38.51640625,
+                54.035746527777775
+              ],
+              "rgb8_black_pixels": 23783,
+              "rgb8_black_fraction": 0.045877700617283954,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 2708370,
+              "behind_camera": 817823,
+              "mesh_instances_with_any_outside": 1198,
+              "mesh_instances_with_all_points_outside": 1109,
+              "positive_depth_ndc_min": [
+                -638278.4905025945,
+                -233392.71012961265
+              ],
+              "positive_depth_ndc_max": [
+                1109796.33913041,
+                78757.4083373395
+              ],
+              "depth_range_m": [
+                -52.4593650455225,
+                104.24951368373259
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 9306,
+              "behind_camera": 2494,
+              "mesh_instances_with_any_outside": 1199,
+              "mesh_instances_with_all_points_outside": 1109,
+              "positive_depth_ndc_min": [
+                -1369.959620051474,
+                -623.3301317557411
+              ],
+              "positive_depth_ndc_max": [
+                2343.224894270679,
+                667.8579920149251
+              ],
+              "depth_range_m": [
+                -79.76760770149272,
+                122.64420735945352
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        },
+        {
+          "view": {
+            "name": "label-detail",
+            "position": [
+              12.045,
+              2.05,
+              7.53
+            ],
+            "target": [
+              11.605,
+              1.9983,
+              7.1235
+            ],
+            "vertical_fov_degrees": 18,
+            "purpose": "Alpha-zero labels and bottle behind; no diagnostic fill."
+          },
+          "blender_camera": {
+            "position": [
+              12.045000076293945,
+              -7.53000020980835,
+              2.049999952316284
+            ],
+            "matrix_world": [
+              [
+                0.6785918474197388,
+                -0.06315778940916061,
+                0.7317951917648315,
+                12.045000076293945
+              ],
+              [
+                0.7345156073570251,
+                0.058349158614873886,
+                -0.6760785579681396,
+                -7.53000020980835
+              ],
+              [
+                -5.435694561128912e-09,
+                0.9962964057922363,
+                0.08598563820123672,
+                2.049999952316284
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 75.7650146484375,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 18.000000500895634
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "label-detail-selected-noisy.exr",
+                "sha256": "b69869ea238fb5fe9f77943fd5ea66cda43e749ca5c97b783737ca73e886e37e"
+              },
+              "exr": {
+                "file": "label-detail-selected.exr",
+                "sha256": "26fed8fd7050b11715fd28fac2bf341e3ba82b8fe301606bce177d726d9c9c5f"
+              },
+              "png": {
+                "file": "label-detail-selected.png",
+                "sha256": "20d568386a54f24a824a81261d4bf55ff31f465192d984750455724471435cf5"
+              },
+              "linear_max": 0.14289742708206177,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                0.7829166666666667,
+                2.004519675925926,
+                4.562318672839506
+              ],
+              "rgb8_black_pixels": 289029,
+              "rgb8_black_fraction": 0.5575405092592592,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 2626097,
+              "behind_camera": 1105496,
+              "mesh_instances_with_any_outside": 1235,
+              "mesh_instances_with_all_points_outside": 1135,
+              "positive_depth_ndc_min": [
+                -513000.4765195083,
+                -7715.544190346279
+              ],
+              "positive_depth_ndc_max": [
+                33557.677089527344,
+                1649078.7468390414
+              ],
+              "depth_range_m": [
+                -114.02998357392391,
+                95.15129407270939
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 9605,
+              "behind_camera": 3564,
+              "mesh_instances_with_any_outside": 1238,
+              "mesh_instances_with_all_points_outside": 1128,
+              "positive_depth_ndc_min": [
+                -26630.737096567624,
+                -257.1701314466946
+              ],
+              "positive_depth_ndc_max": [
+                684.3510999323271,
+                19927.2907566217
+              ],
+              "depth_range_m": [
+                -117.12869393090898,
+                105.63248571461634
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        },
+        {
+          "view": {
+            "name": "street-mid",
+            "position": [
+              12.66,
+              4.293145,
+              -36
+            ],
+            "target": [
+              6.297085,
+              2.90426,
+              -17.090085
+            ],
+            "vertical_fov_degrees": 53,
+            "purpose": "Tour intermediate street pose."
+          },
+          "blender_camera": {
+            "position": [
+              12.65999984741211,
+              36.0,
+              4.293145179748535
+            ],
+            "matrix_world": [
+              [
+                -0.9477831721305847,
+                -0.02214673161506653,
+                0.3181454539299011,
+                12.65999984741211
+              ],
+              [
+                0.31891536712646484,
+                -0.06581810861825943,
+                0.945495069026947,
+                36.0
+              ],
+              [
+                1.0515516635223321e-07,
+                0.9975858330726624,
+                0.06944422423839569,
+                4.293145179748535
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 24.06827735900879,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 52.99999692139992
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "street-mid-selected-noisy.exr",
+                "sha256": "8c2229112f21b6942411ee875efe9a0d203f6d1fb418bd401db4c927c35c3885"
+              },
+              "exr": {
+                "file": "street-mid-selected.exr",
+                "sha256": "4dbc1264fe6024894772a6485eb4235d474f1fdf47ccf6e61bb484356e2e9039"
+              },
+              "png": {
+                "file": "street-mid-selected.png",
+                "sha256": "3cc3d2ab64ab703fc589dbfc8ab5d7237a9dea1b33ec3fedcd568b57a961c591"
+              },
+              "linear_max": 1.0643798112869263,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                38.58618055555556,
+                50.98147183641975,
+                66.63440007716049
+              ],
+              "rgb8_black_pixels": 10712,
+              "rgb8_black_fraction": 0.02066358024691358,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 1512818,
+              "behind_camera": 257106,
+              "mesh_instances_with_any_outside": 524,
+              "mesh_instances_with_all_points_outside": 407,
+              "positive_depth_ndc_min": [
+                -29516.686288430894,
+                -14590.065442826162
+              ],
+              "positive_depth_ndc_max": [
+                60953.798886447184,
+                62895.030656158786
+              ],
+              "depth_range_m": [
+                -56.98377436046678,
+                106.48358896057675
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 3784,
+              "behind_camera": 1235,
+              "mesh_instances_with_any_outside": 540,
+              "mesh_instances_with_all_points_outside": 390,
+              "positive_depth_ndc_min": [
+                -463.05738686515286,
+                -64.22370423941412
+              ],
+              "positive_depth_ndc_max": [
+                229.60226781807023,
+                344.5133310937669
+              ],
+              "depth_range_m": [
+                -69.03447557273843,
+                127.74227749631831
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        },
+        {
+          "view": {
+            "name": "street-end",
+            "position": [
+              10.64,
+              4.293145,
+              -30
+            ],
+            "target": [
+              4.277085,
+              2.90426,
+              -11.090085
+            ],
+            "vertical_fov_degrees": 53,
+            "purpose": "Tour turnaround street pose."
+          },
+          "blender_camera": {
+            "position": [
+              10.640000343322754,
+              30.0,
+              4.293145179748535
+            ],
+            "matrix_world": [
+              [
+                -0.9477831125259399,
+                -0.022146781906485558,
+                0.3181456923484802,
+                10.640000343322754
+              ],
+              [
+                0.31891557574272156,
+                -0.06581808626651764,
+                0.9454950094223022,
+                30.0
+              ],
+              [
+                6.79224854138738e-08,
+                0.9975858330726624,
+                0.06944422423839569,
+                4.293145179748535
+              ],
+              [
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            ],
+            "lens_mm": 24.06827735900879,
+            "sensor_height_mm": 24.0,
+            "sensor_fit": "VERTICAL",
+            "angle_y_degrees": 52.99999692139992
+          },
+          "variants": [
+            {
+              "name": "selected",
+              "ibl_strength": 3,
+              "sun_multiplier": 1,
+              "exposure_ev": 1,
+              "uncapped_ibl": false,
+              "noisy_exr": {
+                "file": "street-end-selected-noisy.exr",
+                "sha256": "6e61e52c181588c75b9a1e4dd1466c21cee96ba91c17d8c58ee2ccb2f6c0561b"
+              },
+              "exr": {
+                "file": "street-end-selected.exr",
+                "sha256": "bb1f878e3f169536de74ca3b2536cc64504fd638c117f9cf6495b7d5d6110b32"
+              },
+              "png": {
+                "file": "street-end-selected.png",
+                "sha256": "3203e873bf6cd5d89daf35058f866cf232dd1e077049d148816642e827ae9475"
+              },
+              "linear_max": 1.0774643421173096,
+              "negative_channels_clamped": 0,
+              "rgb8_mean": [
+                34.83777584876543,
+                53.3363850308642,
+                70.98453317901235
+              ],
+              "rgb8_black_pixels": 2379,
+              "rgb8_black_fraction": 0.00458912037037037,
+              "rgb8_white_pixels": 0,
+              "rgb8_white_fraction": 0.0
+            }
+          ],
+          "projection": {
+            "vertices": {
+              "instances": 2890844,
+              "outside_frustum": 1714239,
+              "behind_camera": 366320,
+              "mesh_instances_with_any_outside": 607,
+              "mesh_instances_with_all_points_outside": 493,
+              "positive_depth_ndc_min": [
+                -5045.539465423798,
+                -10697.621653701719
+              ],
+              "positive_depth_ndc_max": [
+                80885.72742873615,
+                209490.00011530708
+              ],
+              "depth_range_m": [
+                -63.29939708914412,
+                100.16793729078404
+              ]
+            },
+            "bounding_box_corners": {
+              "instances": 10368,
+              "outside_frustum": 4415,
+              "behind_camera": 1508,
+              "mesh_instances_with_any_outside": 611,
+              "mesh_instances_with_all_points_outside": 471,
+              "positive_depth_ndc_min": [
+                -100.93426607703685,
+                -267.79963625684275
+              ],
+              "positive_depth_ndc_max": [
+                212.4734407359673,
+                237.3783031072384
+              ],
+              "depth_range_m": [
+                -75.35011349339884,
+                121.42664994801578
+              ]
+            },
+            "limitation": "All imported mesh vertices and eight conservative local bounding-box corners per instance; frustum framing only, not occlusion visibility or material coverage. NDC [-1,1] with image-up +Y."
+          }
+        }
+      ]
+    },
+    "measurements": [
+      {
+        "view": "street",
+        "alternative": "ibl-only",
+        "mean_absolute_rgb8": 0.9916152263374486,
+        "maximum_rgb8": 59,
+        "pixels_any_rgb_difference_above_2": 71604
+      },
+      {
+        "view": "street",
+        "alternative": "uncapped-ibl-plus-sun",
+        "mean_absolute_rgb8": 6.253750643004115,
+        "maximum_rgb8": 234,
+        "pixels_any_rgb_difference_above_2": 347528
+      }
+    ],
+    "preview": {
+      "file": "bistro-conditions-preview.png",
+      "sha256": "b2b531fea1fc4f648fc6b6c141dc838c5d0803691627b3e3ac224ac5b6e4cdfc",
+      "size": 1825564,
+      "resolution": [
+        1440,
+        1370
+      ]
+    },
+    "compositor_sha256": "66a4b193d7464f56e3488675c9edda6e3ec1ee25cb9be520de42ddd8357074cd",
+    "interpretation": "Composition and lighting alternatives in a finite-sample CPU path tracer. No two-API raster image threshold, native depth/shadow proof, performance claim or guarantee of original author intent."
+  },
+  "verification_tools": {
+    "python": "3.11.9",
+    "numpy": "1.26.4",
+    "pillow": "11.1.0"
+  },
+  "checks": {
+    "python_tests_passed": 57,
+    "node_tests_passed": 5,
+    "documents_utf8_fences": 5,
+    "local_links_anchors": 124,
+    "full_lfs_payloads_passed": 412,
+    "pinned_input_files_passed": 4,
+    "overview_all_vertices_and_bounds_inside_frustum_with_5_percent_margin": true,
+    "route_eye_and_near_rays_clear": true,
+    "cross_platform_provenance": "Raw conditions JSON preserved with -text; hashed new Python tools and Bistro verification JSON forced LF; frame schedule serializer emits LF. Staged Git blobs must match recorded hashes."
+  },
+  "not_executed": [
+    "B0 public API UX/foundation selection",
+    "Renderer Bistro shaders/PBR/IBL cook/CSM/Bloom/FXAA implementation",
+    "Vulkan/D3D12 native rendering, display, resize or teardown acceptance",
+    "Calibrated GPU image thresholds and performance/VRAM budgets",
+    "Complete continuous frustum/walking collision validation",
+    "Physical daylight or original author-intent reconstruction"
+  ]
+}
