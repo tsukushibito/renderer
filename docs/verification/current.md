@@ -18,6 +18,7 @@
 | Queue | family 0、index 0、Graphics＋Compute、表示時は同じqueueのpresent対応も照会 |
 | bindings / allocator | ash 0.38.0+1.3.281、vk-mem 0.5.0、同梱VMA 3.3.0 |
 | Windows表示依存 | winit 0.30.13、ash-window 0.13.0、raw-window-handle 0.6.2 |
+| D3D12 | Windows限定、private bindings 0.100.0、単一DIRECT queue、committed buffer、legacy barrier |
 
 CPUのGraph・engine入力はGPU・windowなしで構築できる。
 表示はWindows、EXT swapchain maintenance1と依存拡張・feature、
@@ -34,12 +35,15 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 | CPUのみの通常試験 | 両構成とも単体53件＋公開API 9件＋負荷fixture 3件成功 |
 | Vulkan featureの通常試験 | 製品145／開発157単体＋公開API 9件＋負荷fixture 4件成功、45／44 ignored |
 | presentation featureの通常試験 | 製品150／開発162単体＋公開API 9件＋負荷fixture 4件成功、46／45 ignored |
-| D3D12 featureの通常試験 | 両構成とも単体53件＋公開API 9件＋負荷fixture 3件成功、1 ignored |
-| Vulkan＋D3D12 featureの通常試験 | 製品145／開発157単体＋公開API 9件＋負荷fixture 4件成功、46／45 ignored |
-| 最適化・独立feature | releaseのVulkan両構成のCPU試験、native診断だけ／Graph診断だけ／開発検証・dumpなしのClippy成功 |
-| native検証ありの明示GPU試験 | release、実Win32 Surfaceを含む43件成功、7.21秒、逐次実行 |
+| D3D12 featureの通常試験 | 製品63／開発62単体＋公開API 9件＋負荷fixture 3件成功、2／3 ignored |
+| Vulkan＋D3D12 featureの通常試験 | 製品155／開発166単体＋公開API 9件＋負荷fixture 4件成功、各48 ignored（公開二API受入と負荷fixtureを含む） |
+| 最適化・独立feature | releaseのVulkan／D3D12／併用、各製品・開発構成のCPU試験成功。各backendのnative診断だけ／Graph診断だけ／開発検証・dumpなしのcheck、受入workerの併用5構成Clippy成功 |
+| native検証ありの明示GPU試験 | release、実Win32 Surfaceを含むVulkan 43件を再実行して成功、逐次実行 |
 | 製品経路の明示GPU試験 | release・診断featureなし・native Disabledのmesh画素照合1件成功。CPU upload Arc解放・provenance保持0・index走査0も確認 |
-| D3D12準備の反復実機試験 | ライブラリ最終ソースのclean状態で3回成功。同一GPU、Debug Layer／GBV、最終解放後の診断を確認 |
+| D3D12 runtime | releaseの厳格検証／製品構成各1件成功。共有所有、設定不一致拒否、終了と同一process内再作成を確認 |
+| D3D12 buffer寿命 | release厳格検証1件成功。未投入キャンセル、作成途中の注入失敗、逆順待機、runtime先行終了、pending Drop、空Graphの最終解放順を確認 |
+| 二API共通buffer Graph | clean `2b15cd0`でrelease厳格検証3回＋製品3回成功。同じ10-pass Graph・同じGPUで各308 byteが全一致 |
+| D3D12準備の実機回帰 | 既存3回の準備受入に加え、clean `2b15cd0`で反復scriptを1回再実行して成功。固定shader再生成・同一GPU・厳格診断を確認 |
 | Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
 | Shader再生成検証 | 固定SDKの5種類のSPIR-V検証・再生成一致に加え、HLSL・検証済みDXIL・reflection・manifestの再生成一致 |
 | headless例／frame loop例 | 既存のPPM・24-frame照合結果を継承。今回CLI本体の再実行はなく、同じ操作・寿命はGPU試験と下記負荷でも確認 |
@@ -47,12 +51,15 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 | engine Windows表示例 | releaseの開発検証ありでVSync ON/OFF各起動、製品構成でも`windowed --smoke`成功。各12 Present要求、VSync往復・resize・最小化復帰・pending終了 |
 | 表示例の引数検査 | VSync既定ON、ON/OFF指定、smoke併用、不正引数拒否のCPU試験1件成功 |
 | exampleのCPU試験 | frame計測9件、大メッシュfixture・統計4件、windowed引数1件成功 |
-| 依存監査 | 依存追加・lockfile変更なし。cargo-denyの既存成功結果を継承し、CIでもworkspace・独立generatorを再確認する |
+| 依存監査 | 今回は依存追加・lockfile変更なし。cargo-denyの既存成功結果を継承し、CIでもworkspace・独立generatorを再確認する |
 | Rustdoc | 製品／開発＋dump構成で`RUSTDOCFLAGS=-D warnings`成功 |
 | 文書 | UTF-8、相対リンク・anchor、fenced block、差分空白を確認 |
 
 実GPUはignored試験を明示実行し、前提不足を成功・skipへ置き換えていない。
 CPU fallbackの成功で実GPU受入を代替しない。
+今回のM4-03/04統合確認のソースは`2b15cd0bc7ca68892f433c1a67d5033278f7252f`、実行時のmainはcleanである。
+品質確認の全コマンド・終了値は`.tools/m4/runtime-buffer/gates/summary.json`、
+実GPUの逐次実行は同`gpu/summary.json`へ保存した。既存engine負荷・表示smokeの数値は各節の固定ソース結果を継承する。
 入力拒否を確認するアプリケーションERRORログはValidationの異常とは区別する。
 最終品質ゲートでは`CARGO_INCREMENTAL=0`を使い、初期の並行確認で見られた
 hard-link不可というincremental cacheの環境warningをソース診断と区別した。
@@ -357,16 +364,19 @@ trimは明示APIであり、この負荷へ暗黙のevictionを追加してい�
 [現在のエンジン負荷データ](engine-workloads-metrics.json)へ保存した。
 以前の登録／cache索引化比較と出力hashはGit履歴に残す。
 
-## 第二APIの準備と未確認範囲
+## 第二APIの準備とbuffer実行
 
 M4の第二APIはD3D12を選定した。既存Windows実機とshaderツールを使って、
 同じ入力・Graph・GPUでVulkanと比較しやすいことが理由である。
-準備4課題（`renderer-we8.1`・`.2`、`renderer-6qc`・`renderer-k51`）の実装を追加した。
-`d3d12` featureはWindows限定のprivate bindingsとtest専用probeであり、公開D3D12 runtimeはまだない。
+準備4課題（`renderer-we8.1`・`.2`、`renderer-6qc`・`renderer-k51`）に続き、
+M4-03の公開`D3D12Runtime`とM4-04の共有Graph buffer実行を追加した。
+Windows限定の`d3d12` featureで、単一DIRECT queueのupload／copy／readbackを使える。
+画像、import/export、上限付き再利用と一般RHIの実装は後続課題へ残す。
 
 bindingsは`windows-bindgen`／`windows-default`／`windows-core` 0.100.0、MSRV 1.95で固定した。
 入力`Windows.Win32.winmd`のSHA-256は`818706A4908FE51447EBFD88F1E54195CEDA5EC437F95FE17F1250471680811D`、
-LF固定の生成Rustは`F8D56EA7AC3CD5C41E456FDF04E31856CF4C18549F376F1F42C5B3AC545CDB25`で再生成一致した。
+M4-03/04で必要APIのfilterを拡張したLF固定の生成Rustは
+`05ADD69A1266EF2B3EF24D73CDCAC193A0D603B441ACCEDD6D1B1EB7A490D9C0`で再生成一致した。
 通常ビルドは生成済みRustを使い、generatorとmetadataの依存は独立workspaceで監査する。
 既存依存の`windows-link` 0.2と新規0.100.0の併存、tool監査の未使用license許可に関するwarningは
 GPU Validationとは別の依存監査診断として確認した。ライセンスやadvisoryの除外追加はない。
@@ -377,11 +387,12 @@ GPU Validationとは別の依存監査診断として確認した。ライセン
 [ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記録した。
 生成物の改変とSDK不足が失敗することも確認した。
 
-統合ソース`e96d270410db3f528bfec2df9ff067d6200c489d`、clean mainで
-[反復スクリプト](../../scripts/verify-m4-preparation.ps1)でprobeを3回実行して全回成功した。
+準備段階のソース`e96d270410db3f528bfec2df9ff067d6200c489d`での3回成功に加え、
+統合ソース`2b15cd0bc7ca68892f433c1a67d5033278f7252f`、clean mainで
+[準備スクリプト](../../scripts/verify-m4-preparation.ps1)を1回再実行して成功した。
 機材・実行担当・再実行方法は[開発手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を参照する。
 
-| 確認 | 3回共通の結果 |
+| 確認 | 準備probeの結果 |
 |---|---|
 | GPU同一性 | NVIDIA RTX 3060、vendor/device IDとDXGI／Vulkan LUIDが一致 |
 | 能力 | SM6.0、RGBA8 typed UAV load/store、resource binding tier 3、heap tier 2 |
@@ -395,8 +406,39 @@ GPU Validationとは別の依存監査診断として確認した。ライセン
 解除後の追加抑制はゼロ。既存メッセージを消去して成功扱いにはしていない。
 最初のprobeで検出したDEFAULT bufferの初期状態に関する警告1328は`COMMON`への修正で解消し、例外は追加していない。
 
-queue投入、buffer copy/readbackの内容、shaderのGBV実行、二APIの画像等価性と性能比較は未実行。
-M4-03の製品runtime、M4-04以降のGraph実行・Fence寿命、M4-08〜10の画像比較へ残す。
+M4-03/04の通常経路は、Graph構築／compileの不変保証と実行順を共有し、
+D3D12でlive操作の対応可否と作成上限をprepare時に確定する。submit時に同じGraph内容を再走査しない。
+DEFAULTは`COMMON`から明示legacy transitionを記録し、同一buffer内の非重複copyはscratch経由で実行する。
+1 bufferの2 GiB制限はライブラリの対応上限であり、実native allocation成功やVRAM予算の保証ではない。
+DeviceのCOM所有共有、processで固定した検証設定、最終所有者の解放順とcallback寿命は独立レビューで確認した。
+診断なしではnative診断module・Session fieldを除外し、monitorはZSTとなることをCPU試験でも確認した。
+同期計画、native作成失敗、Fence、Device異常、GPU利用中の所有は製品にも残る。
+
+最適化済みの厳格runtime試験では、共有する二つのruntimeの先行shutdown、設定不一致の拒否、
+最終shutdown後の同一process内再作成と再終了が成功した。
+buffer寿命試験では未投入キャンセル、最初の実committed resource作成後の注入失敗、
+二つの投入の逆順待機、runtimeを先に終了したpending、pending Drop、readbackのowner／二重消費拒否、
+readbackなしの空Graphについて正常完了と最後のnative参照の解放順を確認した。
+別途CPU試験で、voidのExecuteより前の所有確立と後続Signal失敗／unwind時の保持を確認した。
+実native OOMやDevice removalを発生させた試験ではない。Device部分初期化の解放はRAIIと静的レビューで確認した。
+
+[二API反復スクリプト](../../scripts/verify-m4-buffer.ps1)は同じcleanソースで
+`-Runs 3 -OutputDirectory .tools/m4/runtime-buffer/acceptance-final`を実行した。
+各構成は別processのreleaseで、各回VulkanとD3D12のGPU作業を逐次実行した。
+
+| 比較 | 3回共通の結果 |
+|---|---|
+| 実adapter | RTX 3060、vendor `4318`／device `9351`、両APIの有効LUID `[116,226,0,0,0,0,0,0]`が一致 |
+| 入力 | 一度compileした同じ10-pass Graph。3 upload、4 copy（同一buffer内1件）、3 readback |
+| 内容 | 部分offsetと未変更領域を含む308 byte／backendが、期待値・Vulkan・D3D12で全一致 |
+| 厳格構成 | `vulkan,d3d12,development-validation`。Debug Layer／GBV、Core／SyncValの実効を確認。最終解放までwarning／error／corruption／callback失敗／問題本文欠落ゼロ |
+| 製品構成 | `vulkan,d3d12`。開発検証・両native診断・Graph診断・debug assertionsが無効。明示native Disabledで同じ全byte一致 |
+| 証拠 | `summary.json`、各構成のfeature tree、6回分のJSON／ログに原byte・checksum・実効設定・終了診断を保持 |
+
+製品構成の診断件数0は観測を組み込まない結果であり、外部からの検証注入がなかった証明には使わない。
+GBVを有効にしてbuffer copyを確認したが、shaderの計装を実行した証拠ではない。
+画像等価性と二APIの性能比較、長時間耐久、実VRAM飽和は未実行で、性能優位や閾値を受入条件にしていない。
+M4-04までの6／22課題を確認した区切りであり、M4全体の完了ではない。
 実GPU CIは追加せず、既存CIはCPU／buildと依存監査を担当する。
 
 別GPU/driver、Linux表示・実GPU、Mac/Metal、実native OOM/Device loss/Surface loss、
