@@ -25,8 +25,14 @@ def prepare(source, references, output):
         role = ref["role"]
         if role not in ("base_color", "normal", "orm", "emissive"):
             raise ValueError(f"Unknown texture role: {role}")
-        raw = path.read_bytes()
-        fourcc = raw[84:88].decode("ascii") if raw[:4] == b"DDS " else None
+        # Only the header is needed after hashing. Do not retain the complete
+        # compressed source alongside the decoded pixel arrays.
+        with path.open("rb") as stream:
+            header = stream.read(128)
+            source_size = stream.seek(0, 2)
+            stream.seek(0)
+            source_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+        fourcc = header[84:88].decode("ascii") if header[:4] == b"DDS " else None
         with Image.open(path) as image:
             pixels = np.array(image.convert("RGBA"))
         decoded_hash = hashlib.sha256(pixels.tobytes()).hexdigest()
@@ -53,10 +59,10 @@ def prepare(source, references, output):
                 raise ValueError(f"PNG pixel roundtrip failed: {destination}")
         record = {
             "source": path.relative_to(source).as_posix(), "role": role,
-            "source_sha256": file_hash(path), "source_size": len(raw),
+            "source_sha256": source_hash, "source_size": source_size,
             "dds_fourcc": fourcc,
-            "source_mip_levels_raw": int.from_bytes(raw[28:32], "little") if fourcc else 1,
-            "source_mip_levels": max(1, int.from_bytes(raw[28:32], "little")) if fourcc else 1,
+            "source_mip_levels_raw": int.from_bytes(header[28:32], "little") if fourcc else 1,
+            "source_mip_levels": max(1, int.from_bytes(header[28:32], "little")) if fourcc else 1,
             "width": pixels.shape[1], "height": pixels.shape[0],
             "decoded_rgba_sha256": decoded_hash,
             "output": destination.name, "output_sha256": file_hash(destination),

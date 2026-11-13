@@ -199,7 +199,7 @@ def save_baseline(output):
     for index, obj in enumerate(sorted((o for o in bpy.context.scene.objects if o.type == "MESH"), key=lambda o: o.name)):
         mesh = obj.data
         mesh.calc_loop_triangles()
-        mesh.calc_tangents(uvmap="TextureUV")
+        # Snapshot normals/UVs directly; tangent generation belongs to consumer cook.
         positions = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
         mesh.vertices.foreach_get("co", positions)
         triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int32)

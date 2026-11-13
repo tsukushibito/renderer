@@ -2,7 +2,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import compare_outputs
 from compare_outputs import compare
 
 
@@ -31,6 +33,25 @@ class ReproductionTests(unittest.TestCase):
             (root / "first/scene.gltf").write_text('{"buffers":[{"uri":"../private.bin"}]}')
             with self.assertRaisesRegex(ValueError, "escapes"):
                 compare(root / "first/scene.gltf", root / "second/scene.gltf")
+
+    def test_each_export_file_is_hashed_once_and_recorded_hash_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inputs = []
+            for name in ("first", "second"):
+                target = root / name
+                target.mkdir()
+                model = target / "scene.gltf"
+                model.write_text('{"buffers":[{"uri":"scene.bin"}]}')
+                buffer = target / "scene.bin"
+                buffer.write_bytes(b"1234")
+                inputs.extend((model, buffer))
+            expected = compare_outputs.digest(root / "second/scene.bin")
+            with patch("compare_outputs.digest", wraps=compare_outputs.digest) as digest:
+                report = compare(root / "first/scene.gltf", root / "second/scene.gltf")
+            self.assertCountEqual([call.args[0] for call in digest.call_args_list], inputs)
+            self.assertEqual(report["files"][1]["sha256"], expected)
+            self.assertTrue(report["passed"])
 
 
 if __name__ == "__main__":

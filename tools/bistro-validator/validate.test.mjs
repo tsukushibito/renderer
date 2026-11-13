@@ -1,12 +1,24 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const cli = fileURLToPath(new URL("./validate.mjs", import.meta.url));
+
+function glbBytes(model) {
+  const bytes = Buffer.from(JSON.stringify(model));
+  const padded = Buffer.concat([bytes, Buffer.alloc((4 - bytes.length % 4) % 4, 0x20)]);
+  const header = Buffer.alloc(20);
+  header.writeUInt32LE(0x46546c67, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(20 + padded.length, 8);
+  header.writeUInt32LE(padded.length, 12);
+  header.writeUInt32LE(0x4e4f534a, 16);
+  return Buffer.concat([header, padded]);
+}
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), "renderer-gltf-validator-"));
@@ -49,6 +61,17 @@ test("validates external geometry and preserves the official report", async (t) 
   assert.equal(JSON.parse(result.stdout).validatorVersion, "2.0.0-dev.3.10");
 });
 
+test("validates GLB external geometry and preserves the official report", async (t) => {
+  const data = await fixture(t);
+  const model = path.join(data.assets, "model.glb");
+  await writeFile(model, glbBytes(data.model));
+  const result = spawnSync(process.execPath, [cli, model, data.report], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(await readFile(data.report, "utf8"));
+  assert.equal(report.issues.numErrors, 0);
+  assert.equal(report.info.totalTriangleCount, 1);
+});
+
 test("rejects missing external buffers and validates image bytes", async (t) => {
   const data = await fixture(t);
   data.model.buffers[0].uri = "missing.bin";
@@ -83,6 +106,66 @@ test("rejects a symlink that resolves outside the model directory", async (t) =>
   const result = await data.run();
   assert.equal(result.status, 1);
   assert.ok(result.report.issues.messages.some((issue) => issue.message.includes("escapes the model directory")));
+});
+
+test("refuses to overwrite the model or its external buffer and image", async (t) => {
+  const data = await fixture(t);
+  const image = path.join(data.assets, "image.png");
+  await writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"));
+  data.model.images = [{ uri: "image.png" }];
+  await writeFile(data.input, JSON.stringify(data.model));
+  for (const output of [data.input, path.join(data.assets, "geometry.bin"), image]) {
+    const original = await readFile(output);
+    const result = spawnSync(process.execPath, [cli, data.input, output], { encoding: "utf8" });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /must not overwrite/);
+    assert.deepEqual(await readFile(output), original);
+  }
+});
+
+test("refuses a report alias that resolves to an external input", async (t) => {
+  const data = await fixture(t);
+  await writeFile(data.input, JSON.stringify(data.model));
+  const alias = path.join(data.root, "input-alias");
+  await symlink(data.assets, alias, "junction");
+  const input = path.join(data.assets, "geometry.bin");
+  const original = await readFile(input);
+  const result = spawnSync(process.execPath,
+    [cli, data.input, path.join(alias, "geometry.bin")], { encoding: "utf8" });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /must not overwrite/);
+  assert.deepEqual(await readFile(input), original);
+});
+
+test("refuses to replace a hard link to input data", async (t) => {
+  const data = await fixture(t);
+  await writeFile(data.input, JSON.stringify(data.model));
+  const input = path.join(data.assets, "geometry.bin");
+  const original = await readFile(input);
+  await link(input, data.report);
+  const result = spawnSync(process.execPath, [cli, data.input, data.report], { encoding: "utf8" });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /must not overwrite/);
+  assert.deepEqual(await readFile(input), original);
+});
+
+test("protects declared glTF and GLB inputs even when validation stops before fetching", async (t) => {
+  const data = await fixture(t);
+  data.model.asset.version = "1.0";
+  const glb = path.join(data.assets, "model.glb");
+  await writeFile(data.input, JSON.stringify(data.model));
+  await writeFile(glb, glbBytes(data.model));
+  const input = path.join(data.assets, "geometry.bin");
+  const original = await readFile(input);
+  for (const model of [data.input, glb]) {
+    const result = spawnSync(process.execPath, [cli, model, input], { encoding: "utf8" });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /must not overwrite/);
+    assert.deepEqual(await readFile(input), original);
+    const failure = spawnSync(process.execPath, [cli, model, data.report], { encoding: "utf8" });
+    assert.equal(failure.status, 1, failure.stderr);
+    assert.ok(JSON.parse(await readFile(data.report, "utf8")).issues.numErrors > 0);
+  }
 });
 
 test("fails malformed input without claiming success", async (t) => {
