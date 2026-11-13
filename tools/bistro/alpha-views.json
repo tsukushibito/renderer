@@ -1,0 +1,43 @@
+{
+  "views": [
+    {
+      "name": "glass-detail",
+      "position": [
+        12.55,
+        -16.92,
+        9.5
+      ],
+      "target": [
+        16.23,
+        -7.62,
+        9.5
+      ],
+      "lens": 50,
+      "material": "MASTER_Glass_Dirty_MASKED"
+    },
+    {
+      "name": "label-detail",
+      "position": [
+        12.045,
+        -7.53,
+        2.05
+      ],
+      "target": [
+        11.605,
+        -7.1235,
+        1.9983
+      ],
+      "lens": 70,
+      "material": "Paris_LiquorBottle_01_Labels",
+      "fill_light": {
+        "energy": 10,
+        "size": 0.5,
+        "position": [
+          12.045,
+          -7.53,
+          2.25
+        ]
+      }
+    }
+  ]
+}

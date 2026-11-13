@@ -12,8 +12,9 @@ Amazon Lumberyard Bistro（Amazon Lumberyard、2017年）、NVIDIA Open Research
 | `converted/BistroExterior.gltf`、`BistroExterior.bin`、`textures/` | 検証済み屋外glTF・buffer・405 PNG、計407ファイル | 851,291,697 |
 | `environment/san_giuseppe_bridge_4k.hdr` | 原本からbyteを変えず取り出した、直接利用する環境画像 | 23,695,717 |
 | [比較PNG](../../docs/verification/bistro-assets-preview.png) | 元FBXとglTF再取込のCPU比較画像 | 3,422,828 |
+| [alpha近景PNG](../../docs/verification/bistro-alpha-preview.png) | 元alpha保持・対象だけ不透明化・差分・対象coverageのCPU比較画像 | 730,465 |
 
-上記410ファイル、合計1,772,787,715 byteをGit LFSで管理する。
+上記411ファイル、合計1,773,518,180 byteをGit LFSで管理する。
 [manifest.json](manifest.json)が各パス・byte数・SHA-256を固定する。
 素材と比較PNGのLFSポインタをGitで管理し、実体はoriginのLFSストレージで共有する。
 検証JSON・ライセンス・本書は通常Gitで管理する。屋内を原本ZIPに保持することは屋内描画を受入範囲へ追加する意味ではない。
@@ -24,7 +25,9 @@ Amazon Lumberyard Bistro（Amazon Lumberyard、2017年）、NVIDIA Open Research
 
 変換でDDSのbase mipをPNG化し、BC5 normalの正Z復元・DirectXからの緑成分反転、
 明示的PBR/alpha recipe、重複面の頂点分離、raw normal保持を行った。
-元DDSの全mipをPNGへ収録したとは扱わない。使用中2材質の全ゼロalpha解釈とruntimeの接線/mip生成は未解決で、
+元DDSの全mipをPNGへ収録したとは扱わない。使用中2材質は[alphaの確定方針](../../docs/design/implementation-policy.md#bistro-alpha)に従い、
+元alphaを保持して不透明化しない。元DDSの全mipでalpha 0を確認し、窓・瓶の近景比較とFalcor一次ソースを記録した。
+mesh/materialは保持する。runtimeの接線/mip生成は後続課題であり、
 このglTFはRendererの完成済みcook形式でもVulkan/D3D12の受入済み画像でもない。
 詳細と完全性の証拠は[現在の検証結果](../../docs/verification/current.md#bistro-assets)を参照する。
 
@@ -33,7 +36,7 @@ Amazon Lumberyard Bistro（Amazon Lumberyard、2017年）、NVIDIA Open Research
 ```powershell
 git config --local core.hooksPath .beads/hooks
 git lfs install --local --skip-repo
-git lfs pull --include="assets/bistro/**,docs/verification/bistro-assets-preview.png" --exclude=""
+git lfs pull --include="assets/bistro/**,docs/verification/bistro-*-preview.png" --exclude=""
 python -B tools/bistro/verify_lfs_assets.py
 ```
 

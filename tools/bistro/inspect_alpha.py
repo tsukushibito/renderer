@@ -234,7 +234,7 @@ def inspect(source, audit_path, gltf_path, *, root, archive=None, prepared=None)
             "source_fbx": fbx_record, "source_audit": file_record(audit_path),
             "source_documents": documents, "materials": materials,
             "unchanged_payloads": {**manifest_result, "manifest": file_record(root / "assets/bistro/manifest.json"),
-                                   "meaning": "Every shared source/converted/environment/original-preview payload matches the existing manifest"},
+                                   "meaning": "Every shared source/converted/environment/comparison-preview payload matches the current manifest"},
             "not_executed": ["Original Falcor executable rendering", "Renderer/native GPU rendering",
                              "Artist-intent confirmation", "Final runtime camera/lighting selection"]}
 

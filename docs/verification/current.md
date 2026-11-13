@@ -18,7 +18,7 @@
 旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
 
 素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
-全ゼロalphaの解釈と最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中である。
+全ゼロalphaの解釈は下記のとおり確定した。最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中である。
 Renderer本体・shader・native経路は変更せず、以降のGPU・Rust試験表は従来の固定ソースの実績として保持する。
 BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
 画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
@@ -32,12 +32,12 @@ BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12�
 再現は[開発ガイド](../guides/development.md#bistro-preparation)を参照する。
 
 原本ZIP・検証済み屋外glTF一式・環境HDRと上記比較PNGはGit LFSで共有する。
-[素材一覧とライセンス](../../assets/bistro/README.md)、[全410ファイルのmanifest](../../assets/bistro/manifest.json)で
-パス・byte数・SHA-256を固定した。配置済み実体は計1,772,787,715 byteで、既存の検証済み407ファイルとbyte一致する。
-重複画像を共有するLFSオブジェクトは208個、計1,598,854,040 byteである。
-公開済み履歴は変更せず、比較PNGは今回のtipからLFSポインタへ移す。
+[素材一覧とライセンス](../../assets/bistro/README.md)、[全411ファイルのmanifest](../../assets/bistro/manifest.json)で
+パス・byte数・SHA-256を固定した。alpha近景PNGを含む実体は計1,773,518,180 byteで、既存の検証済み407ファイルもbyte一致する。
+重複画像を共有するLFSオブジェクトは209個、計1,599,584,505 byteである。
+原本・変換済み素材・従来の比較PNGは今回もbyteを変更していない。
 ライセンス・検証JSON・manifestは通常Git、toolや作業中間物は引き続きGit管理外である。
-originへ208/208オブジェクトの送信が成功し、ローカルキャッシュを共有しないdetached checkoutで
+既存410ファイルのLFS共有時には、originへ208/208オブジェクトの送信が成功し、ローカルキャッシュを共有しないdetached checkoutで
 全410ポインタと空キャッシュを確認した後、originから全量取得して全ファイルのsize/SHA-256一致を確認した。
 元checkoutと取得先の`git lfs fsck --objects --pointers`も成功した。
 共有hooksは全6本を実行可能として追跡し、pre-pushのstdin保持・LFS失敗時停止と
@@ -61,10 +61,32 @@ CPU previewにはBlenderの再符号化・sample noise等の差が残り、屋�
 glTF再import後のBlender終了ログには24 byteの未解放block報告が1件あり、tool診断として保持する。
 Rendererのnative所有・GPU完了の受入を行った結果ではない。
 
-**未解決の素材解釈:** `MASTER_Glass_Dirty_MASKED`は68面/13mesh、`Paris_LiquorBottle_01_Labels`は154面/11meshで
-使われるが、BaseColor alphaが全0である。いずれも非退化面であり、未使用として削除しない。
-現在は元alphaを保持する。原作者の意図や不透明overrideを確定しておらず、`renderer-7ft.1.1.2`で追跡する。
+**確定した素材解釈（`renderer-7ft.1.1.2`）:** `MASTER_Glass_Dirty_MASKED`は68面/13mesh、
+`Paris_LiquorBottle_01_Labels`は154面/11meshで使われる。元alphaを保持し、不透明overrideは加えない。
+両材質の面はopacity 0によって不可視で、shadowにも被覆を作らないことを後続実装の受入条件とする。
+いずれも非退化面であり、mesh/materialを削除する決定ではない。
+原本・glTF・全画像はbyteを変更せず、glassはMASK/cutoff 0.5、labelsはBLENDを維持する。
 mask/blendの分類と、ORMのないラベル材質のnonmetal/roughness 0.5も明示した変換方針である。
+
+元DDSのDXT5 alphaを独立に全mip復号し、glassの12段・labelsの5段で全sample 0を確認した。
+既存PNGへのbase mip変換もRGBA一致し、labelsはRGBも全0である。不透明化でラベル画は復元されない。
+同梱READMEの不透明度規約・屋外pysceneのoverride不在と、Falcor 4.0.1のBC3読込・alpha付きtextureのmask分類・
+texture alphaによる除外を照合した。4.0-previewと4.4でも整合を確認したが、配布物はexact Falcor commitを指定していない。
+現行labelsのBLENDとFalcorのMASKを一般に等価とは扱わず、固定したalpha 0での被覆0が整合するという判断である。
+[確定方針と代替案](../design/implementation-policy.md#bistro-alpha)、[入力・一次ソース・計測](bistro-alpha.json)、
+[alpha保持／不透明化／差分／対象coverageの比較画像](bistro-alpha-preview.png)を保存する。
+比較は全sceneのmesh・材質を保持し、対象材質だけを変更するCycles CPU診断である。
+1,296 mesh・2,832,120面を保持し、32 sample・seed 0・960×540、固定camera/lightで6画像を生成した。
+瓶の近景には全条件共通の固定area lightを追加し、暗所での見落としを避けた。
+不透明copyの対象coverageは窓97,308／瓶164,497画素で、その領域内のRGB差>2は59,855／126,290画素だった。
+値は低sampleのnoise・間接光変化も含む診断結果であり、runtimeの合否閾値へ使わない。
+作者の意図の証明・Falcor実行・Renderer実GPU画像/性能・最終camera/lightの受入は未実行である。
+取込/cook境界の保証と変更時の再検証に限定し、draw/submitへ検査や診断payloadを追加していない。
+alpha追加分を含むPython 41件と既存Node 5件が成功した。Nodeのsymlink試験はsandbox内のEPERM後、
+通常権限で5件すべてを再実行して成功した。Rust/native実装変更がないためローカル実GPU試験は今回対象外である。
+文書5件のUTF-8/fence・相対link/anchor 107件、全411 payloadのsize/SHA-256、
+alpha判断を含む素材reportの再生成と`git diff --check`も成功した。独立レビューの指摘を反映し、
+glTFで省略されたMASK cutoffの実効既定値0.5を判断データへ記録した。
 
 元にないTANGENTはこのglTFへ生成収録していない。標準生成を試した別条件ではzero tangent 345個が形式エラーとなったため、
 MikkTSpace生成と退化入力fallback・実行用mipをB2の取込/cook要件へ記録した。

@@ -63,7 +63,7 @@ Windowsジョブはrunner付属のMSVCを使います。
 対象と描画条件は[実装方針の確定要件](../design/implementation-policy.md#bistro-requirements)に従う。
 このoffline検証はPython 3.11、NumPy 1.26.4、Pillow 11.1.0、Node 24、Blender 4.5.16 LTSを使う。
 公式原本ZIP、検証済み屋外glTF一式と環境HDRは`assets/bistro/`、比較PNGは`docs/verification/`でGit LFS管理する。
-[素材manifest](../../assets/bistro/manifest.json)の410ファイルは合計1,772,787,715 byteである。
+[素材manifest](../../assets/bistro/manifest.json)の411ファイルは合計1,773,518,180 byteである。
 作業用の展開・portable tool・全量reportはGit管理外の`.tools/bistro/`へ置く。通常のRustビルドはこれらへ依存しない。
 CIの`asset-tools`は小fixtureとLFSポインタを検査し、Bistro実体やBlenderをダウンロードしない。
 
@@ -73,7 +73,7 @@ pre-pushのref入力を両方へ渡す。`git lfs install --force`で上書き�
 ```powershell
 git config --local core.hooksPath .beads/hooks
 git lfs install --local --skip-repo
-git lfs pull --include="assets/bistro/**,docs/verification/bistro-assets-preview.png" --exclude=""
+git lfs pull --include="assets/bistro/**,docs/verification/bistro-*-preview.png" --exclude=""
 python -B tools/bistro/verify_lfs_assets.py
 ```
 
@@ -139,9 +139,35 @@ Blenderの63 byte超の名前短縮も固定版の規則で追跡し、Model/Geo
 これは変換QAであり、最終1920×1080の描画品質・Vulkan/D3D12の受入画像や性能値ではない。
 `summarize.py --help`の各report引数を指定し、[素材検証データ](../verification/bistro-assets.json)へ現在の証拠をまとめる。
 
-検証profileのTANGENT省略による警告、未使用UVのinfo、全ゼロalphaの解釈は
+検証profileのTANGENT省略による警告、未使用UVのinfo、確定した全ゼロalphaの扱いは
 [検証結果](../verification/current.md#bistro-assets)を参照する。警告を黙って抑制せず、全量reportと失敗した変換条件も保持する。
 検査の保証は取込・作成・更新境界へ置き、描画ごとのasset全量検査や診断専用payload保持を前提にしない。
+
+### 2材質のalpha根拠と比較画像の再現
+
+[確定方針](../design/implementation-policy.md#bistro-alpha)は元alpha保持・不透明overrideなしである。
+`inspect_alpha.py`は固定原本ZIPと展開物・FBX audit・現行glTFの対応、元DXT5の全17 mipのalpha、
+DDS base mipと既存PNGの全RGBA、manifestの全payloadを照合する。上記のsource inventoryを先に生成する。
+prepared PNGがない場合は`--prepared`だけを省ける。原本DDSと現行PNGの照合は省かない。
+
+```powershell
+python -B tools/bistro/inspect_alpha.py --source .tools/bistro/source/Bistro_v5_2 --audit .tools/bistro/logs/source-inventory.json --gltf assets/bistro/converted/BistroExterior.gltf --output .tools/bistro-alpha/alpha-evidence.json
+& $bistroBlender --background --factory-startup --threads 4 --python-exit-code 1 --python tools/bistro/render_alpha_comparison.py -- assets/bistro/converted/BistroExterior.gltf tools/bistro/alpha-views.json .tools/bistro-alpha/renders --samples 32
+python -B tools/bistro/compare_alpha.py .tools/bistro-alpha/renders .tools/bistro-alpha/preview.png .tools/bistro-alpha/comparison.json
+```
+
+追跡済みviewsは窓と瓶の近景で、瓶には確認しやすい固定area fill lightを追加する。
+各視点のcamera/lightはalpha保持・対象だけ強制不透明・対象coverageの3条件で共通である。
+全sceneのmeshを保持し、対象材質のcopyだけを変更して終了時に元slotへ戻す。
+coverageは不透明copyのmaterial index passを用い、他の幾何による遮蔽も残す。
+比較ツールはcoverageと交差する画素差がない視点を失敗にする。有限sampleの間接光・noiseも差分へ含まれるため、
+差分値をruntimeの合否閾値や性能値へ転用しない。設定・入力/resource/script hashとfull-size画像のhashはreportへ残す。
+
+[共有検証データ](../verification/bistro-alpha.json)は原本値、commit固定のFalcor参照path/行/hash、
+CPU比較と採用理由をまとめる。Falcorコードの実行結果とは扱わない。
+`summarize.py`で素材reportを再作成するときは、他のreportに加えて
+`--alpha-report docs/verification/bistro-alpha.json`を渡す。元FBX hashが異なる判断は拒否する。
+材質・texture・recipeの変更時はこの調査を再実行し、基準画像を更新する理由を記録する。
 
 今後の実GPU受入では、両APIを同時に負荷実行せず、同じ機材で逐次確認する。
 offscreenの最終SDR・Bloom前HDR・必要な中間出力と差分を保存し、画面表示・自由操作・resize・最小化復帰・

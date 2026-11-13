@@ -34,7 +34,7 @@ def compose(directory, preview, report_path):
     report = json.loads((directory / "renders.json").read_text(encoding="utf-8"))
     records = []
     columns = ("source alpha (selected)", "force opaque (diagnostic)", "absolute RGB difference x4", "target visible coverage")
-    sheet = Image.new("RGB", (1920, 80 + 300 * len(report["views"])), "#17191d")
+    sheet = Image.new("RGB", (1920, 80 + 320 * len(report["views"])), "#17191d")
     draw = ImageDraw.Draw(sheet)
     draw.text((12, 10), "Bistro alpha interpretation | all scene meshes retained | CPU diagnostic, not Renderer/GPU acceptance", fill="white")
     draw.text((12, 30), f"Cycles CPU, {report['settings']['samples']} samples, seed 0 | forced opacity changes only the named material", fill="white")
@@ -48,10 +48,10 @@ def compose(directory, preview, report_path):
         a, b = images["source-alpha"], images["force-opaque"]
         difference, metrics = compare(a, b, images["coverage"][:, :, 0])
         records.append(dict(view=view["name"], material=view["material"], resolution=[a.shape[1], a.shape[0]], **metrics))
-        draw.text((12, 68 + row * 300), f"{view['name']} | {view['material']}", fill="white")
+        draw.text((12, 68 + row * 320), f"{view['name']} | {view['material']}", fill="white")
         panels = (a, b, np.minimum(difference * 4, 255).astype(np.uint8), images["coverage"])
         for column, pixels in enumerate(panels):
-            x, y = column * 480, 88 + row * 300
+            x, y = column * 480, 88 + row * 320
             draw.text((x + 8, y), columns[column], fill="white")
             sheet.paste(Image.fromarray(pixels).resize((480, 270), Image.Resampling.LANCZOS), (x, y + 20))
     metadata = PngImagePlugin.PngInfo()

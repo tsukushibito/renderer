@@ -75080,20 +75080,6 @@
   },
   "unresolved": [
     {
-      "issue": "renderer-7ft.1.1.2",
-      "material": "MASTER_Glass_Dirty_MASKED",
-      "triangles": 68,
-      "mesh_models": 13,
-      "problem": "Used nondegenerate faces, BaseColor alpha entirely zero; preserve source alpha pending interpretation, no opaque repair assumed"
-    },
-    {
-      "issue": "renderer-7ft.1.1.2",
-      "material": "Paris_LiquorBottle_01_Labels",
-      "triangles": 154,
-      "mesh_models": 11,
-      "problem": "Used nondegenerate faces, BaseColor alpha entirely zero; preserve source alpha pending interpretation, no opaque repair assumed"
-    },
-    {
       "issue": "renderer-7ft.3",
       "problem": "Runtime/cook MikkTSpace generation, degenerate-input fallback and DDS/native mip policy remain required; source contains no tangents and this glTF stores base image mip only"
     },
@@ -75108,5 +75094,43 @@
     "GPU performance/VRAM capacity",
     "All original DDS mip pixels in glTF",
     "Proof of original artist alpha-mode intent"
-  ]
+  ],
+  "alpha_interpretation": {
+    "issue": "renderer-7ft.1.1.2",
+    "report": "bistro-alpha.json",
+    "report_sha256": "a8e2eaa1ec0a8137f2acff98ac62bee3f870d18b34065947e75c3076f2a6781a",
+    "decision": {
+      "source_fbx_sha256": "471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195",
+      "policy": "Preserve original BaseColor alpha; no opaque override for either material. Retain all mesh/material records and unchanged source/converted payload bytes.",
+      "preserve_source_alpha": true,
+      "opaque_overrides": [],
+      "materials": [
+        {
+          "name": "MASTER_Glass_Dirty_MASKED",
+          "triangles": 68,
+          "mesh_models": 13,
+          "alpha_mode": "MASK",
+          "alpha_cutoff": 0.5,
+          "all_source_mips_alpha_zero": true
+        },
+        {
+          "name": "Paris_LiquorBottle_01_Labels",
+          "triangles": 154,
+          "mesh_models": 11,
+          "alpha_mode": "BLEND",
+          "alpha_cutoff": null,
+          "all_source_mips_alpha_zero": true
+        }
+      ],
+      "future_acceptance": "B2/B3 must apply zero opacity to color/depth and shadow, with no occlusion from these faces. glTF BLEND alone does not establish depth/shadow behavior.",
+      "mode_equivalence_limit": "Current Glass MASK/0.5 and Labels BLEND are retained. Falcor classifies both MASK; zero-opacity/color outcome agrees only for these fixed alpha-zero inputs and does not prove arbitrary-alpha/depth/shadow equivalence.",
+      "rationale": "Bundled README opacity convention, no exterior scene override, all original DDS mip alpha zero, and version-pinned Falcor texture-alpha source path agree. Opaque diagnostic changes panes to solid dirty surfaces and creates black label faces; label RGB is also zero.",
+      "alternatives_rejected": [
+        "Force alpha=1: conflicts with original opacity and inspected Falcor behavior; does not recover label artwork.",
+        "Delete affected geometry/materials: loses source correspondence.",
+        "Invent glass transmission/refraction or label artwork: requires an explicit separate asset/display requirement."
+      ],
+      "invalidation": "Re-audit at import/cook when archive, source textures, alpha mode/cutoff, conversion recipe or explicit display overrides change; no per-draw/submit scans or diagnostic payloads."
+    }
+  }
 }

@@ -37,7 +37,7 @@ def verify(root, *, pointers=False):
         total += size
     actual = {path.relative_to(root).as_posix()
               for pattern in ("assets/bistro/source/*.zip", "assets/bistro/converted/**/*",
-                              "assets/bistro/environment/*.hdr", "docs/verification/bistro-assets-preview.png")
+                              "assets/bistro/environment/*.hdr", "docs/verification/bistro-*-preview.png")
               for path in root.glob(pattern) if path.is_file()}
     if actual != expected:
         raise ValueError(f"Manifest coverage differs: missing={sorted(expected - actual)}, extra={sorted(actual - expected)}")

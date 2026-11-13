@@ -535,11 +535,53 @@ alphaはopaque 120、mask 7、blend 5とした。maskのcutoff 0.5と分類は�
 ORM画像がない瓶ラベル1材質はnonmetal/roughness 0.5を明示した暫定値とし、元Phong値をPBR値と断定しない。
 
 使用中の`MASTER_Glass_Dirty_MASKED`と`Paris_LiquorBottle_01_Labels`は画像alphaが全0で、計222面に影響する。
-元の値を保持して`renderer-7ft.1.1.2`で解釈を追跡し、推測で不透明化した結果を忠実変換とは呼ばない。
+`renderer-7ft.1.1.2`では下記の根拠と近景比較から、**元alphaを保持し、不透明overrideを加えない**方針を確定した。
 PNGはbase mipだけの中間形式であり、元DDS・mip情報は保存する。実行用のmipとMikkTSpace生成はB2で確定する。
 TANGENTは元にも検証glTFにもなく、[glTF仕様](https://github.com/KhronosGroup/glTF/blob/main/specification/2.0/Specification.adoc)に従いconsumerで生成する。
 この構成の公式Validator警告1,591件と、保持した未使用LightMapUVに関するinfo 1,591件は原文を残す。
 native API受入の警告/エラーゼロを緩和する例外ではない。
+
+<a id="bistro-alpha"></a>
+
+#### 全ゼロalphaの2材質に対する確定方針
+
+対象は上記SHA-256で固定したBistro v5.2屋外である。両材質のBaseColor alphaを不透明度として保持し、
+color/depthとshadowの両方へ同じ不透明度を適用し、この2材質の面が被覆や影を作らないことをB2/B3の受入条件とする。
+68面/13meshの`MASTER_Glass_Dirty_MASKED`と154面/11meshの`Paris_LiquorBottle_01_Labels`を
+mesh/material対応表と資源から削除する決定ではない。原本・変換済みglTF・全画像のbyteは変更しない。
+現行glTFのglassは`MASK`/cutoff 0.5、labelsは`BLEND`のままとする。
+この分類は既存の明示変換recipeであり、後述のFalcorの分類と同一だとは扱わない。
+固定入力ではどちらもalphaが常に0なので不透明度・色結果が整合する。
+`BLEND`という分類だけでdepth writeやshadowの動作まで保証したとは扱わず、後続実装でopacity 0の除外を明示して確認する。
+
+根拠を次の順で照合した。
+
+- 配布同梱[README](../../assets/bistro/source/README.txt)はBaseColor alphaを不透明度と定義する。
+  FBXの両材質には`Opacity=1`と`TransparencyFactor=1`があるが、texture接続もある。
+  scalar値だけからtexture alphaを無視することはできない。屋外`.pyscene`にはFBX読込と環境画像の設定だけがあり、材質overrideはない。
+- [CHANGELOG](../../assets/bistro/source/CHANGELOG.txt)のv5はFalcor 4.0向けと記載する。v5.2は屋外alphaの修正を記載しない。
+  配布物にFalcorのexact commitは指定されていないため、4.0.1の固定ソースを参照実装として調べた。
+  [DDS loader](https://github.com/NVIDIAGameWorks/Falcor/blob/c53908dd7930c031eb28b7ee49025eb27a833d64/Source/Falcor/Core/API/TextureLoader.cpp#L388)のDXT5からBC3への対応、
+  alpha付きformat、[material](https://github.com/NVIDIAGameWorks/Falcor/blob/c53908dd7930c031eb28b7ee49025eb27a833d64/Source/Falcor/Scene/Material/Material.cpp)のmask選択と
+  [shading](https://github.com/NVIDIAGameWorks/Falcor/blob/c53908dd7930c031eb28b7ee49025eb27a833d64/Source/Falcor/Scene/ShadingData.slang)のtexture alpha評価・cutoffによる除外を追跡した。
+  texture alphaを不透明へ自動修復する経路はなく、両DDSは通常のalpha testで除外される。
+  [texture sample関数](https://github.com/NVIDIAGameWorks/Falcor/blob/c53908dd7930c031eb28b7ee49025eb27a833d64/Source/Falcor/Scene/TextureSampler.slang#L80)は
+  texture使用時にtexture値を返すため、scalar opacity 1でalpha 0は打ち消されない。4.0-previewと後続4.4でも整合を確認した。
+  Falcor実機描画の照合や作者の意図の証明ではない。[検証データ](../verification/bistro-alpha.json)へ参照path・行・hashを保存する。
+- 元DDSのDXT5/BC3 alphaを全mipで独立に復号した。glassは2048²から1²まで12段、labelsは16²から1²まで5段すべて0。
+  既存PNGのalphaも一致する。labelsはRGBも全0であり、不透明化はラベル画を復元せず黒い面を追加する。
+- [近景比較画像](../verification/bistro-alpha-preview.png)では全sceneの幾何を保持し、各対象材質だけを
+  alpha保持／強制不透明へ切り替えて同じcamera/light/seedで比較する。対象面のcoverage診断と差分を併記し、
+  画面内に対象があることを確認する。強制不透明は比較候補としてのみ使用し、配布glTFへ適用しない。
+
+代替案の不透明化は元の不透明度と参照実装に反し、窓を不透明な汚れ面、瓶を黒いラベル面へ変えるため採用しない。
+物理的なガラス透過・屈折や架空のラベル画像の追加も、この入力にない材質情報を作るため今回の基準へ追加しない。
+将来、別の表示要件や修正版素材を採用する場合は、利用側asset層の明示overrideとして原値・理由・比較画像を別途固定する。
+
+保証は取込/cook時の材質・texture照合で確立する。配布物、texture、alpha mode/cutoff、変換recipeを変更した場合に再検証し、
+draw/submitへ全mip走査や専用診断payloadを追加しない。[検証方針](../guides/validation-policy.md)を適用する。
+今回のCPU比較は材質方針の証拠であり、最終照明・Vulkan/D3D12の画像受入・性能測定ではない。
+適用したVulkan指針は色/dataと入力境界の区別で、native実装変更や一般推奨からの新規例外はない。
 
 #### 描画方式の出発案
 
@@ -578,7 +620,7 @@ warm-up・複数runのp50/p95・揺れ・VSyncと表示待ちを記録する。
 
 準備の記録手順は[開発ガイド](../guides/development.md#bistro-preparation)に置く。
 素材の版/hash・全材質/画像の棚卸しと、glTF/全参照fileのbyte一致による変換再現性は確認した。
-全ゼロalphaの解釈、最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中とする。
+全ゼロalphaの解釈は上記のとおり確定した。最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中とする。
 画像閾値の校正と性能予算は各段階の実GPU結果で具体化し、最新の実行/未実行は
 [検証状況](../verification/current.md)へ記録する。
 

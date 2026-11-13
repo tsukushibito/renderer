@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Exact original archive, verified exterior interchange, bundled environment and conversion comparison image. Host-only caches and tools excluded.",
+  "scope": "Exact original archive, verified exterior interchange, bundled environment, conversion and alpha comparison images. Host-only caches and tools excluded.",
   "files": [
     {
       "path": "assets/bistro/converted/BistroExterior.bin",
@@ -2046,6 +2046,11 @@
       "path": "assets/bistro/source/Bistro_v5_2.zip",
       "size": 894377473,
       "sha256": "0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1"
+    },
+    {
+      "path": "docs/verification/bistro-alpha-preview.png",
+      "size": 730465,
+      "sha256": "ce6057c51f5d9c62ce86a839360652b23ad2e3999a299dd714ecc7b2eb8d84de"
     },
     {
       "path": "docs/verification/bistro-assets-preview.png",

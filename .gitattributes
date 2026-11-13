@@ -8,4 +8,4 @@
 /assets/bistro/source/*.txt -text -whitespace
 /assets/bistro/converted/** filter=lfs diff=lfs merge=lfs -text
 /assets/bistro/environment/*.hdr filter=lfs diff=lfs merge=lfs -text
-/docs/verification/bistro-assets-preview.png filter=lfs diff=lfs merge=lfs -text
+/docs/verification/bistro-*-preview.png filter=lfs diff=lfs merge=lfs -text

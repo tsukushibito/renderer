@@ -16,12 +16,15 @@ def main():
     parser.add_argument("work", type=Path)
     parser.add_argument("export", type=Path)
     parser.add_argument("output", type=Path)
-    for name in ("source-bindings", "geometry", "materials", "validator", "reproduction", "preview", "views"):
+    for name in ("source-bindings", "geometry", "materials", "validator", "reproduction", "preview", "views", "alpha"):
         parser.add_argument(f"--{name}-report", type=Path, required=True)
     args = parser.parse_args()
     load = lambda path: json.loads(path.read_text(encoding="utf-8"))
     audit = load(args.work / "logs/source-inventory.json")
     baseline = load(args.export / "baseline.json")
+    alpha = load(args.alpha_report)
+    if alpha["decision"]["source_fbx_sha256"] != baseline["source_sha256"]:
+        raise ValueError("Alpha decision does not cover this source FBX")
     textures = load(args.work / "logs/textures.json")
     geometry = load(args.geometry_report)
     materials = load(args.materials_report)
@@ -70,11 +73,9 @@ def main():
                    "validator": validator["issues"], "reproduction": reproduction,
                    "preview": load(args.preview_report),
                    "preview_views": load(args.views_report)},
+        "alpha_interpretation": {"issue": "renderer-7ft.1.1.2", "report": args.alpha_report.name,
+                                 "report_sha256": sha(args.alpha_report), "decision": alpha["decision"]},
         "unresolved": [
-            {"issue": "renderer-7ft.1.1.2", "material": "MASTER_Glass_Dirty_MASKED", "triangles": 68,
-             "mesh_models": 13, "problem": "Used nondegenerate faces, BaseColor alpha entirely zero; preserve source alpha pending interpretation, no opaque repair assumed"},
-            {"issue": "renderer-7ft.1.1.2", "material": "Paris_LiquorBottle_01_Labels", "triangles": 154,
-             "mesh_models": 11, "problem": "Used nondegenerate faces, BaseColor alpha entirely zero; preserve source alpha pending interpretation, no opaque repair assumed"},
             {"issue": "renderer-7ft.3", "problem": "Runtime/cook MikkTSpace generation, degenerate-input fallback and DDS/native mip policy remain required; source contains no tangents and this glTF stores base image mip only"},
             {"issue": "renderer-7ft.1.1", "problem": "Final camera/path/sun/IBL/exposure and runtime image thresholds/performance budgets not fixed by CPU conversion QA"},
         ],

@@ -100,6 +100,9 @@ def main():
     sun = bpy.data.objects.new("Alpha QA sun", light)
     scene.collection.objects.link(sun)
     sun.rotation_euler = tuple(math.radians(x) for x in (25, -30, -25))
+    fill_data = bpy.data.lights.new("Alpha QA detail fill", "AREA")
+    fill = bpy.data.objects.new("Alpha QA detail fill", fill_data)
+    scene.collection.objects.link(fill)
     data = bpy.data.cameras.new("Alpha QA camera")
     camera = bpy.data.objects.new("Alpha QA camera", data)
     scene.collection.objects.link(camera)
@@ -142,6 +145,12 @@ def main():
         camera.location = view["position"]
         camera.rotation_euler = (Vector(view["target"]) - camera.location).to_track_quat("-Z", "Y").to_euler()
         data.lens = view["lens"]
+        detail_fill = view.get("fill_light")
+        fill_data.energy = detail_fill["energy"] if detail_fill else 0
+        if detail_fill:
+            fill_data.size = detail_fill["size"]
+            fill.location = detail_fill["position"]
+            fill.rotation_euler = (Vector(view["target"]) - fill.location).to_track_quat("-Z", "Y").to_euler()
         record = dict(view, images={})
         for variant in ("source-alpha", "force-opaque", "coverage"):
             for obj, index in target["slots"]:
@@ -172,7 +181,8 @@ def main():
                 "resolution": args.resolution, "view_transform": "Standard", "look": "None",
                 "exposure": 0, "gamma": 1, "world_color": [0.15] * 3, "world_strength": 1,
                 "sun_energy": 3, "sun_angle_radians": 0.02, "sun_rotation_degrees": [25, -30, -25],
-                "camera_clip": [data.clip_start, data.clip_end]}
+                "camera_clip": [data.clip_start, data.clip_end],
+                "detail_fill": "Optional fixed per-view area light, shared by all three variants; parameters in views"}
     report = {"schema_version": 1, "purpose": "Material-only CPU alpha diagnostic, not Renderer/GPU acceptance or proof of artist intent",
               "script_sha256": digest(Path(__file__)), "views_sha256": digest(args.views),
               "input_files_sha256": files, "settings": settings,
