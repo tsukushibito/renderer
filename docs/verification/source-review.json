@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "verification_date": "2026-11-14",
+  "issue": "renderer-420",
+  "baseline_commit": "f649bcf58709fd97315e3693b75beb8b790ef8be",
+  "review_scope": {
+    "renderer_src_rust_files": 64,
+    "example_rust_files": 11,
+    "integration_rust_files": 4,
+    "bistro_python_files": 28,
+    "validator_mjs_files": 2,
+    "powershell_files": 6,
+    "docs_markdown_files": 10,
+    "other": "CPU benchmark, pinned generators/config/CI, independent foundation experiment; generated bindings/shader artifacts reviewed at contracts and reproduction boundaries"
+  },
+  "cpu_allocation_probe": {
+    "schema_version": 1,
+    "baseline_renderer_commit": "f649bcf58709fd97315e3693b75beb8b790ef8be",
+    "patched_renderer_branch": "codex/audit-cpu",
+    "configuration": {
+      "profile": "release",
+      "default_features": false,
+      "features": [],
+      "incremental": false,
+      "gpu_execution": false,
+      "allocator": "std::alloc::System wrapped by alloc/realloc call-and-requested-byte counter; dealloc not counted"
+    },
+    "source_sha256": "2a33a6302697b76b11a87d68f84929632ab865d0351767a152d5d24c5f7b4f19",
+    "source_identical": true,
+    "results": [
+      {
+        "fixture": "compile",
+        "resources": 2048,
+        "passes": 4096,
+        "baseline": {
+          "allocation_calls": 46146,
+          "allocated_bytes": 7230276
+        },
+        "patched": {
+          "allocation_calls": 40001,
+          "allocated_bytes": 7125062
+        }
+      },
+      {
+        "fixture": "frame_build",
+        "repeated_draws": 8192,
+        "baseline": {
+          "allocation_calls": 19,
+          "allocated_bytes": 2689489
+        },
+        "patched": {
+          "allocation_calls": 18,
+          "allocated_bytes": 1706449
+        }
+      }
+    ],
+    "commands": [
+      "cargo run --release --offline --manifest-path .tools/audit-cpu-evidence/baseline/Cargo.toml",
+      "cargo run --release --offline --manifest-path .tools/audit-cpu-evidence/patched/Cargo.toml"
+    ],
+    "limitations": [
+      "Synthetic CPU fixtures; no wall-clock, GPU, Bistro, or general performance claim.",
+      "Compile fixture has empty initial ranges and explicit dependencies; it measures borrowed names and moved order, not reductions from borrowing nonempty ranges/dependencies.",
+      "Frame fixture measures graph building after snapshot creation; finite-parameter scan removal is established by private immutable validated value, not this allocator counter."
+    ],
+    "patched_renderer_commit": "f0906eff1b338ef4ff5a500371afd8002ceff132"
+  },
+  "reproduction": {
+    "harness_source_utf8": "use renderer::engine::{Draw, Engine, IDENTITY, Material, MeshData, Vertex, View};\r\nuse renderer::graph::{BufferDesc, Graph};\r\nuse std::alloc::{GlobalAlloc, Layout, System};\r\nuse std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};\r\n\r\nstruct Counter;\r\nstatic COUNTING: AtomicBool = AtomicBool::new(false);\r\nstatic ALLOCS: AtomicUsize = AtomicUsize::new(0);\r\nstatic BYTES: AtomicUsize = AtomicUsize::new(0);\r\n#[global_allocator]\r\nstatic ALLOCATOR: Counter = Counter;\r\nunsafe impl GlobalAlloc for Counter {\r\n    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {\r\n        if COUNTING.load(Ordering::Relaxed) {\r\n            ALLOCS.fetch_add(1, Ordering::Relaxed);\r\n            BYTES.fetch_add(layout.size(), Ordering::Relaxed);\r\n        }\r\n        unsafe { System.alloc(layout) }\r\n    }\r\n    unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {\r\n        unsafe { System.dealloc(pointer, layout) }\r\n    }\r\n    unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {\r\n        if COUNTING.load(Ordering::Relaxed) {\r\n            ALLOCS.fetch_add(1, Ordering::Relaxed);\r\n            BYTES.fetch_add(size, Ordering::Relaxed);\r\n        }\r\n        unsafe { System.realloc(pointer, layout, size) }\r\n    }\r\n}\r\nfn measure<T>(f: impl FnOnce() -> T) -> (T, usize, usize) {\r\n    ALLOCS.store(0, Ordering::Relaxed);\r\n    BYTES.store(0, Ordering::Relaxed);\r\n    COUNTING.store(true, Ordering::Relaxed);\r\n    let result = std::hint::black_box(f());\r\n    COUNTING.store(false, Ordering::Relaxed);\r\n    (result, ALLOCS.load(Ordering::Relaxed), BYTES.load(Ordering::Relaxed))\r\n}\r\nfn main() {\r\n    let mut graph = Graph::new();\r\n    for index in 0..2048 {\r\n        let buffer = graph.buffer(format!(\"resource {index}\"), BufferDesc { size: 4 }).unwrap();\r\n        graph.upload_buffer(format!(\"upload {index}\"), buffer, 0, vec![0; 4]).unwrap();\r\n        graph.readback_buffer(format!(\"readback {index}\"), buffer, 0, 4).unwrap();\r\n    }\r\n    let (plan, calls, bytes) = measure(|| graph.compile().unwrap());\r\n    assert_eq!(plan.pass_count(),4096);\r\n    println!(\"compile resources=2048 passes=4096 allocations={calls} allocated_bytes={bytes}\");\r\n    let mut engine = Engine::new(1,1).unwrap();\r\n    let mesh = engine.create_mesh(MeshData::new(&[\r\n        Vertex { position:[-1.0,-1.0,0.5], color:[1.0;4] },\r\n        Vertex { position:[1.0,-1.0,0.5], color:[1.0;4] },\r\n        Vertex { position:[0.0,1.0,0.5], color:[1.0;4] },\r\n    ], &[0,1,2]).unwrap()).unwrap();\r\n    let material=engine.create_material(Material::default()).unwrap();\r\n    let view=View{ width:32,height:32,clip_from_world:IDENTITY,clear_color:[0.0;4] };\r\n    let draws=vec![Draw{mesh,material,world_from_model:IDENTITY};8192];\r\n    let snapshot=engine.snapshot(&view,&draws).unwrap();\r\n    let (frame,calls,bytes)=measure(||snapshot.build_graph(false,|_,color| Ok(color)).unwrap());\r\n    assert_eq!(frame.graph.compile().unwrap().pass_count(),3);\r\n    println!(\"frame_build draws=8192 allocations={calls} allocated_bytes={bytes}\");\r\n}\r\n",
+    "manifest_template": "[package]\nname=\"cpu-allocation-probe\"\nversion=\"0.0.0\"\nedition=\"2024\"\npublish=false\n[workspace]\n[dependencies]\nrenderer={path=\"<absolute checkout>/crates/renderer\",default-features=false}\n",
+    "instructions": "Use two isolated checkout paths at baseline and patched commits; create one temporary crate per checkout from the identical harness source and manifest template. Run pinned Rust 1.99.0 cargo run --release --offline --manifest-path <probe>/Cargo.toml with CARGO_INCREMENTAL=0. Source hash preserves CRLF. Counters measure allocation/reallocation calls and requested bytes, not retained or peak memory."
+  },
+  "shader_reproduction": {
+    "late_compile_failure": {
+      "sourceChanged": "image.comp vec3(1.0) to vec3(0.5)",
+      "lateFailure": "composite.frag invalid",
+      "failedAsExpected": true,
+      "allFiveFixturesPreserved": true,
+      "evidence": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\audit-examples\\late-failure-66851c5a110c427aa43f268f7cf7e998"
+    },
+    "autocrlf_checkout": {
+      "gitAutocrlf": "true",
+      "checkedTextFiles": 13,
+      "allCanonicalLf": true,
+      "verifyPassed": true,
+      "evidence": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\audit-examples\\autocrlf-checkout-7d1ae7369b8b4492b16d27f033b4228d"
+    }
+  },
+  "blender_tangent_equivalence": {
+    "passed": true,
+    "blender": "4.5.16 LTS",
+    "blender_build": "3f6797307da5",
+    "source_blend": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\bistro\\output\\export-e\\source.blend",
+    "source_function_sha256": "160592592c8c7ffeb99574af2f5a7f50fb09fbd6f88673f5af3e18cd75ad6900",
+    "objects": 1296,
+    "triangles": 2832120,
+    "array_comparisons": 11664,
+    "baseline_metadata_equal": true,
+    "gltf_linked_files": 407,
+    "gltf_linked_files_byte_identical": true
+  },
+  "limits": [
+    "Static review and focused tests do not prove all bugs absent.",
+    "No wall-clock/GPU/Bistro speedup or memory-budget claim.",
+    "Future general Program/subresource changes must re-establish the narrower current fixed-operation synchronization guarantees.",
+    "Pre-existing unreproduced native startup crash renderer-0pb remains open."
+  ]
+}
