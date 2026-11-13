@@ -23,7 +23,7 @@ use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
 use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{
     AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
-    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, RasterDraw,
+    ImageHandle, ImportBuffer, ImportImage, LoadAction, Operation, PassHandle, RasterDrawOperands,
     RasterParameters, ResourceDesc, ResourceKey, StoreOp,
 };
 
@@ -1137,7 +1137,7 @@ enum PreparedOperation {
         parameters: RasterParameters,
     },
     RasterBatch {
-        draws: Arc<[RasterDraw]>,
+        draws: Arc<[RasterDrawOperands]>,
         color: usize,
         depth: usize,
         clear_color: [f32; 4],
@@ -2043,11 +2043,11 @@ fn image_copy(image: &GraphImage, offset: u64) -> vk::BufferImageCopy {
             depth: 1,
         })
 }
-fn load(value: LoadOp) -> vk::AttachmentLoadOp {
+fn load(value: LoadAction) -> vk::AttachmentLoadOp {
     match value {
-        LoadOp::Clear => vk::AttachmentLoadOp::CLEAR,
-        LoadOp::Load => vk::AttachmentLoadOp::LOAD,
-        LoadOp::Discard => vk::AttachmentLoadOp::DONT_CARE,
+        LoadAction::Clear => vk::AttachmentLoadOp::CLEAR,
+        LoadAction::Load => vk::AttachmentLoadOp::LOAD,
+        LoadAction::Discard => vk::AttachmentLoadOp::DONT_CARE,
     }
 }
 fn store(value: StoreOp) -> vk::AttachmentStoreOp {

@@ -1,6 +1,7 @@
 //! Content versions remain stable across read-only queue-state changes.
 
 use super::*;
+use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
 use crate::graph::{BufferDesc, Graph, GraphErrorKind, ImageDesc};
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -239,21 +240,38 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
             .upload_buffer("indices", indices, 0, vec![0; 12])
             .unwrap();
         let discard_ops = AttachmentOps {
-            load: LoadOp::Load,
+            load: LoadAction::Load,
             store: StoreOp::Discard,
         };
         discard
             .raster(
                 "discard",
-                vertices,
-                indices,
-                3,
-                color_target,
-                depth_target,
-                discard_ops,
-                discard_ops,
-                [0.0; 4],
-                1.0,
+                RasterDraw {
+                    vertices,
+                    indices,
+                    index_count: 3,
+                    parameters: RasterParameters::default(),
+                },
+                RasterAttachments {
+                    color: Attachment {
+                        image: color_target,
+                        load: match discard_ops.load {
+                            LoadAction::Clear => LoadOp::Clear([0.0; 4]),
+                            LoadAction::Load => LoadOp::Load,
+                            LoadAction::Discard => LoadOp::Discard,
+                        },
+                        store: discard_ops.store,
+                    },
+                    depth: Attachment {
+                        image: depth_target,
+                        load: match discard_ops.load {
+                            LoadAction::Clear => LoadOp::Clear(1.0),
+                            LoadAction::Load => LoadOp::Load,
+                            LoadAction::Discard => LoadOp::Discard,
+                        },
+                        store: discard_ops.store,
+                    },
+                },
             )
             .unwrap();
         let mut discarded = runtime.submit(&discard.compile().unwrap()).unwrap();

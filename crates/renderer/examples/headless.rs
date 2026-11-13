@@ -1,11 +1,14 @@
 //! Offscreen indexed mesh -> two dependent Compute passes -> sampled composite.
 //! Run with an output path, for example `.tools/m2.ppm`. No window is created.
 
+use renderer::graph::{
+    Attachment, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
+};
 use std::{error::Error, io::Write, time::Duration};
 
 use renderer::{
     RuntimeConfig, VulkanRuntime,
-    graph::{AttachmentOps, BufferDesc, ComputeTransform, Graph, ImageDesc},
+    graph::{BufferDesc, ComputeTransform, Graph, ImageDesc},
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -52,15 +55,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     let final_image = graph.image("final composite", desc)?;
     graph.raster(
         "indexed mesh and depth",
-        vertex_buffer,
-        index_buffer,
-        6,
-        color,
-        depth,
-        AttachmentOps::CLEAR_STORE,
-        AttachmentOps::CLEAR_STORE,
-        [0.0, 0.0, 0.0, 1.0],
-        1.0,
+        RasterDraw {
+            vertices: vertex_buffer,
+            indices: index_buffer,
+            index_count: 6,
+            parameters: RasterParameters::default(),
+        },
+        RasterAttachments {
+            color: Attachment {
+                image: color,
+                load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                store: StoreOp::Store,
+            },
+            depth: Attachment {
+                image: depth,
+                load: LoadOp::Clear(1.0),
+                store: StoreOp::Store,
+            },
+        },
     )?;
     graph.compute("invert", color, inverted, ComputeTransform::Invert)?;
     graph.compute(

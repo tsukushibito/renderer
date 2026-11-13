@@ -1,6 +1,9 @@
 use renderer::graph::{
-    Access, AccessKind, AccessPurpose, AccessRange, AttachmentOps, BufferDesc, ComputeTransform,
-    Graph, GraphError, GraphErrorKind, ImageAspect, ImageDesc, ImageHandle, PassKind,
+    Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, ComputeTransform, Graph,
+    GraphError, GraphErrorKind, ImageAspect, ImageDesc, ImageHandle, PassKind,
+};
+use renderer::graph::{
+    Attachment, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use std::sync::Arc;
 
@@ -30,15 +33,24 @@ fn offscreen_pipeline_builds_and_compiles_without_a_backend() {
     graph
         .raster(
             "mesh",
-            vertices,
-            indices,
-            3,
-            color,
-            depth,
-            AttachmentOps::CLEAR_STORE,
-            AttachmentOps::CLEAR_STORE,
-            [0.0, 0.0, 0.0, 1.0],
-            1.0,
+            RasterDraw {
+                vertices,
+                indices,
+                index_count: 3,
+                parameters: RasterParameters::default(),
+            },
+            RasterAttachments {
+                color: Attachment {
+                    image: color,
+                    load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                    store: StoreOp::Store,
+                },
+                depth: Attachment {
+                    image: depth,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                },
+            },
         )
         .unwrap();
     graph
