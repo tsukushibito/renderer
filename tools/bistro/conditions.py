@@ -13,6 +13,9 @@ from pathlib import Path, PurePosixPath
 import re
 
 
+PBR_NEUTRAL_COMMIT = "180b1a7bddec33f73fe41712a2963cc3ad8e5547"
+
+
 def _number(value, label):
     if type(value) not in (int, float) or not math.isfinite(value):
         raise ValueError(f"{label} must be a finite number")
@@ -80,6 +83,9 @@ def validate_conditions(config):
     far = _number(config["camera"]["far_m"], "camera.far_m")
     if not 0 < near < far:
         raise ValueError("Require 0 < near_m < far_m")
+    for option in ("jitter", "auto_exposure", "depth_of_field", "motion_blur"):
+        if config["camera"].get(option, False) is not False:
+            raise ValueError(f"Fixed comparison camera requires {option}=false")
     views = {}
     for view in config["views"]:
         name = view["name"]
@@ -143,8 +149,14 @@ def validate_conditions(config):
     if ibl["preprocess"].get("luminance_coefficients", [0.2126, 0.7152, 0.0722]) != [0.2126, 0.7152, 0.0722]:
         raise ValueError("Require linear Rec.709 luminance coefficients")
     _number(config["output"]["exposure_ev"], "output.exposure_ev")
-    if not config["output"]["tone_mapper"] or config["output"]["srgb"] is not True:
-        raise ValueError("Require a named tone mapper and one sRGB output transfer")
+    output = config["output"]
+    if output["tone_mapper"] != "Khronos PBR Neutral" or output["srgb"] is not True:
+        raise ValueError("Require Khronos PBR Neutral and one sRGB output transfer")
+    if output.get("tone_mapper_commit", PBR_NEUTRAL_COMMIT) != PBR_NEUTRAL_COMMIT:
+        raise ValueError("Unsupported pinned PBR Neutral reference commit")
+    if "background_linear_rgb" in output:
+        if min(_vector(output["background_linear_rgb"], "background_linear_rgb")) < 0:
+            raise ValueError("Background linear RGB must be nonnegative")
     paths = set()
     for entry in config.get("inputs", []):
         name = _safe_path(entry["path"])

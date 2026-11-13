@@ -95,7 +95,13 @@ class ConditionsTests(unittest.TestCase):
                      lambda c: c["lighting"]["sun"].__setitem__("direction_to_light", [0, 2, 0]),
                      lambda c: c["lighting"]["ibl"].__setitem__("strength", float("inf")),
                      lambda c: c["lighting"]["ibl"]["preprocess"].__setitem__("cap", 5),
-                     lambda c: c["output"].__setitem__("srgb", False)]
+                     lambda c: c["lighting"]["ibl"]["preprocess"].__setitem__("luminance_coefficients", [1, 0, 0]),
+                     lambda c: c["output"].__setitem__("srgb", False),
+                     lambda c: c["output"].__setitem__("tone_mapper", "Unknown operator"),
+                     lambda c: c["output"].__setitem__("tone_mapper_commit", "0" * 40),
+                     lambda c: c["output"].__setitem__("background_linear_rgb", [-0.01, 0, 0]),
+                     lambda c: c["camera"].__setitem__("auto_exposure", True),
+                     lambda c: c["camera"].__setitem__("jitter", True)]
         for mutate in mutations:
             config = fixture()
             mutate(config)
