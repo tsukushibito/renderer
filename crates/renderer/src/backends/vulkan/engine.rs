@@ -6,13 +6,13 @@ use crate::{
     graph::{CompiledGraph, Graph, GraphError, ImageHandle, ImportImage, PassHandle, ResourceKey},
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 mod residency;
-use residency::{MeshVersionKey, ResidentBuffers, ResidentMesh};
+use residency::{ActiveUpload, MeshVersionKey, ResidentBuffers, ResidentMesh};
 
 /// Logical registered mesh bounds; not total VRAM or pending-native limits.
 #[derive(Clone, Copy, Debug)]
@@ -185,7 +185,8 @@ pub struct VulkanEngine {
     config: MeshCacheConfig,
     owner: Arc<()>,
     residents: BTreeMap<MeshVersionKey, ResidentMesh>,
-    active_upload: Option<Vec<MeshVersionKey>>,
+    retiring: BTreeSet<MeshVersionKey>,
+    active_upload: Option<ActiveUpload>,
     pending_uploads: Vec<Submission>,
     clock: AtomicU64,
     evictions: usize,
@@ -210,6 +211,7 @@ impl VulkanEngine {
             config,
             owner: Arc::new(()),
             residents: BTreeMap::new(),
+            retiring: BTreeSet::new(),
             active_upload: None,
             pending_uploads,
             clock: AtomicU64::new(0),

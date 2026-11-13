@@ -26,7 +26,10 @@ impl VulkanRuntime {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         let name = name.as_ref();
-        // Validate names even when acquisition can reuse an existing allocation.
+        // C-string validity belongs to optional native debug naming. Logical
+        // Graph/resource names remain arbitrary Rust strings in shipping.
+        // Validate even when acquisition can reuse an existing allocation.
+        #[cfg(feature = "vulkan-diagnostics")]
         if name.as_bytes().contains(&0) {
             return Err(RuntimeError::invalid(
                 "graph buffer debug name contains a NUL byte",

@@ -241,6 +241,7 @@ fn parse_status(message: &str) -> Option<EffectiveValidation> {
     })
 }
 
+#[cfg(any(test, feature = "vulkan-diagnostics"))]
 fn parse_flags<'a>(line: &'a str, known: &[&str]) -> Option<Vec<&'a str>> {
     let value = line.trim().strip_suffix('.')?;
     if value == "None" {

@@ -447,6 +447,7 @@ impl Drop for Registration<'_> {
 /// no Vulkan handles. One mutable submit transaction serializes state planning.
 pub struct VulkanRuntime {
     owner: Arc<MemoryOwner>,
+    #[cfg(any(test, feature = "vulkan-diagnostics"))]
     diagnostics: DiagnosticsHandle,
     execution: ExecutionPool,
     upload: SharedStaging,
@@ -499,7 +500,7 @@ impl VulkanRuntime {
 
     fn from_device(
         config: RuntimeConfig,
-        diagnostics: DiagnosticsHandle,
+        _diagnostics: DiagnosticsHandle,
         device: VulkanDevice,
     ) -> Result<Self, RuntimeError> {
         let allocator = VulkanAllocator::new(device)?;
@@ -517,7 +518,8 @@ impl VulkanRuntime {
             .map_err(|_| RuntimeError::capacity("runtime identity exhausted"))?;
         Ok(Self {
             owner,
-            diagnostics,
+            #[cfg(any(test, feature = "vulkan-diagnostics"))]
+            diagnostics: _diagnostics,
             execution,
             upload,
             readback,
@@ -850,10 +852,16 @@ impl VulkanRuntime {
             if let Some(key) = resource.import {
                 let physical = self.entry(key)?.physical();
                 let state = physical.lock();
-                if physical.desc != resource.desc
-                    || state.scheduled.revision != resource.import_revision
-                    || state.scheduled.initialized != resource.initial
-                {
+                // Public imports retain private immutable descriptors/contents.
+                // Owner+generation select that descriptor, and every accepted
+                // write/invalidation changes revision. Recheck the live revision
+                // in shipping; deep metadata equality is an internal diagnostic.
+                let inconsistent = state.scheduled.revision != resource.import_revision;
+                #[cfg(feature = "development-validation")]
+                let inconsistent = inconsistent
+                    || physical.desc != resource.desc
+                    || state.scheduled.initialized != resource.initial;
+                if inconsistent {
                     return Err(RuntimeError::stale(format!(
                         "stale or inconsistent import snapshot for {}; refresh and recompile",
                         resource.name
@@ -1073,12 +1081,12 @@ impl SubmissionResult {
         if pass.graph != self.graph {
             return Err(RuntimeError::wrong_owner("foreign graph readback handle"));
         }
-        let (_, range) = self
+        let index = self
             .work
             .readbacks
-            .iter_mut()
-            .find(|(index, _)| *index == pass.index)
-            .ok_or_else(|| RuntimeError::invalid("pass has no readback result"))?;
+            .binary_search_by_key(&pass.index, |(index, _)| *index)
+            .map_err(|_| RuntimeError::invalid("pass has no readback result"))?;
+        let (_, range) = &mut self.work.readbacks[index];
         let value = range
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
