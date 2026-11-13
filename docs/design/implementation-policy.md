@@ -239,6 +239,158 @@ UXの受入条件は、入出力と処理を近くで読めること、同じ資
 
 その際、色空間、解像度、サンプル数、深度・法線の表現、有効なタイミング、必要な描画設定を明記する。利用できない入力を要求された場合は、診断可能なエラーまたは明示的な代替経路にする。
 
+<a id="public-api-comparison"></a>
+
+### 7.1 代表利用コードによる比較と第一案
+
+`renderer-7ft.1.2`の設計対象は利用側から見た契約である。以下は**B1で実証する第一案**であり、
+現行`Graph`の実装済み機能や基盤採用の決定ではない。
+[CPU試作](../../crates/renderer/examples/graph_api_comparison.rs)は二案を同じ入力で比較する。
+[利用コードと試作本体](../../crates/renderer/examples/support/graph_api_comparison.rs)の`Study::add`が
+両案の呼出し、`scenario`が代表入力、`bloom`が利用側の多段処理である。
+固定effectの選択肢を増やす方式は、独自shaderをGraph本体の変更なしで追加する条件を満たさない。
+
+比較では二つの軸を分ける。**いつ命令を記録するか**と、**何から資源アクセスを導くか**は独立である。
+callbackでも型付きpass data／bindingから宣言を作れるため、callback案だけへ資源の二重記述を課さない。
+
+| 方式 | 所有・利用コード | 保証と費用の違い |
+|---|---|---|
+| A: 構築時に命令を所有 | 即時closureでframeのdraw slice等を借用し、終了後は命令・定数・資源参照をplanが所有する | 実際のbinding／attachmentから用途・範囲を導ける。除去される処理も命令生成する。命令列の格納とnative記録時の走査が必要 |
+| B: frame内の遅延callback | 宣言時に型付きpass dataを渡し、同じdataと制限されたencoderで後から記録する。`FnOnce + 'frame`で借用できる | 不要passのcallbackを呼ばずに済む。先に宣言したアクセス集合を実命令が越えない保証、captureの寿命、record時の失敗処理が必要 |
+| 現行固定操作 | `Graph::raster`、固定`ComputeTransform`、build時custom closure | 現在の正しい比較基準。公開rasterは一draw＋color/depth、標準描画の内部batchは複数draw。独自program・depth-only・HDR等の代わりにはならない |
+
+**第一案はAと、binding／attachmentからアクセスを導く公開builderの組合せ**とする。
+通常作者が入出力とdraw／dispatchを同じ場所で書け、実命令が確定した境界で検査でき、
+任意captureをnative記録まで保持する契約を標準経路へ増やさずに済むためである。
+Bも借用可能で、`'static`や全資源の`Arc::clone`を必須にはしない。
+大量の除去対象drawやlate bindingではBの利益があり得るが、CPU速度の優劣は今回の試作から結論しない。
+基盤によってBが自然でAへの変換費用が大きい場合は、`.1.3`で同じ利用例と契約を使って再評価する。
+型名・crate構成・内部enum・backendを凍結する判断ではない。
+
+### 7.2 同じ入力で確認する利用例
+
+試作の型は設計比較専用で、実Rendererへ接続しない。新しいshaderはpipelineの入力であり、
+Bloom等のeffect名をGraphの実行命令へ追加しない。共通のdraw／dispatchと型付きbindingを使う。
+
+| 利用例 | 比較・受入で確認する点 |
+|---|---|
+| 複数draw | 一Raster passでdraw順を保つ。mesh／materialを借用して記述でき、完成planは短命な借用に依存しない |
+| depth-onlyとcolor-only | color配列0個＋depth、color1個＋depthなしを自然に書く。未使用attachmentやダミー資源を要求しない |
+| 利用側の独自Compute | programと入力sampled／出力storage binding、dispatchを近くに書く。別途同じread／write一覧を要求しない |
+| 多段Bloomの部品化 | 明部抽出→縮小→ぼかし→合成をmodule内で配線し、HDR handleを返す。無効化は入力を返す。依存するdispatchは別pass |
+| 履歴import／export | 初回・resetは明示初期化し、通常frameは永続画像をimportして結果をexportする。extent変更時に旧内容を読まない |
+| 将来のMRT／mip範囲 | attachment配列と同じ画像のView範囲で表す。別Viewを別資源とみなさない。非重複mipと重複範囲を区別する |
+
+範囲はbufferの半開byte区間、画像のaspect／mip／layerとする。shader stageとsampled／storage／
+vertex／index／attachment等の用途をbindingや操作から得る。画像内の任意矩形を追跡する約束はしない。
+readはpassを追加した時点で直前のwriteに結び付け、後の順序制約で読む内容を変更しない。
+write後の内容と、同じ物理資源に必要なRAW／WAR／WAWの順序は別に計画する。
+利用側に明示version管理を必須とする案は採用せず、現行の宣言順による意味を出発点にする。
+旧内容の保持や同時利用が必要な場合は別画像へ書く。部分writeを全域初期化として扱わない。
+`storage_write`というアクセス指定だけでも全面初期化を認めない。clearで有効内容を確立するか、
+管理下shaderの全域write保証を対象extent・dispatch条件とともに定める。後者の保証はshader変更時に失効する。
+
+### 7.3 pipeline・binding・shaderの保証境界
+
+| 境界 | 保証と失効条件 |
+|---|---|
+| shader生成・取込 | source/include、compiler/options、entry、stage、対象API／feature、binding ABIを特定する。binary形式検査とreflectionは任意shaderの挙動の証明ではない |
+| program／pipeline作成 | Device能力、layout、定数のoffset/size/stride、vertex形式、attachment形式／数／sample、固定状態を確定する。不変の版として保持し、reloadは新しい版を作る |
+| binding作成・更新 | program layoutと種別／配列数／stage、資源owner・世代、View範囲、offset/alignmentを照合する。参照するprogram・資源の版を保持し、更新は旧記録を変更しない |
+| pass追加・compile | attachment操作、binding用途、範囲、同一資源の重複、初期化、出力とproducerを確定する。実命令と宣言を別管理しない。Bでは宣言集合を越える実行をrecord時にも拒否する |
+| prepare／submit | 実Deviceでの対応、importの最新予定状態／revision、容量とnative戻り値を扱う。保証済みmesh本文やbinding ABIの全量再走査をdrawごとに行わない |
+
+通常APIは管理下のshader生成・検査経路と、制限されたencoderを使うsafeな入口とする。
+ここでの管理下shaderは、範囲・競合・同期・write保証をレビューする信頼されたassetを指す。
+任意のsourceを同じcompilerへ通すだけでは信頼済みに昇格しない。任意sourceの取込にも、
+binary取込と同じ保証を要求するか、その機能を提供しない。
+資源を隠して参照するGPU address、bindlessの動的参照、外部native命令を通常経路へ混ぜない。
+それらを後から導入する場合は到達可能な資源集合・更新・同期・所有を別途定義する。
+外部binaryを無条件にsafeで受け入れず、保証できない取込には明示した`unsafe`境界か対応外を選ぶ。
+`unsafe`の責務には有効なbinary／feature／ABIだけでなく、宣言外アクセス、範囲外アクセス、race、
+必要なshader内同期を防ぐことを含める。checksumや`spirv-val`成功だけへその保証を委ねない。
+Graphがshaderの値依存挙動まで証明する契約でも、未信頼shaderのsandboxでもない。
+
+複数drawのRasterでは通常のattachment順序を使い、storage副作用やfeedbackを暗黙に許可しない。
+同じ画像の重複subresourceをsampleしながら書く操作、依存dispatch、パス内部の同期が必要な操作は分割するか、
+必要な機能・同期を提供できる場合に限り別契約で受け入れる。通常作者へnative barrierを要求しない。
+Vulkan 1.3のDynamic Rendering区間へ任意barrierを入れる前提を置かない。
+[Vulkan指針](../guides/vulkan-best-practices.md#synchronization)と
+[検証方針](../guides/validation-policy.md#guarantees)を適用し、API契約からの例外は設けない。
+
+### 7.4 所有・履歴・失敗と拡張の契約
+
+構築closureの借用は終了時に解消する。planは必要な命令・定数と資源の不変な版を所有し、
+compileでmesh／texture本文を複製しない。planからrecord済み・pendingの所有へ必要な参照を引き継ぐ。
+CPUの最後のhandle、frame番号、callback終了をGPU完了とみなさない。
+descriptor／View／pipelineと参照先は、記録から未投入cancelまたは実完了まで適切に保持する。
+不要なCPU命令本文はnative記録後に解放できるが、native参照の寿命は別に維持する。
+Bの借用callbackは同期prepare内で消費し、borrowを含まない仕事を返す。別threadへ送る場合の`Send`、
+永続callbackの`'static`／共有所有は追加契約であり、frame内借用の標準経路へ強制しない。
+callbackはcullingで呼ばれないことがある。ゲーム更新・乱数列の進行・外部通知等のCPU副作用を置かず、
+frame入力は記録開始まで不変とする。再試行時もCPU処理の意味が変わらないよう分離する。
+`FnOnce`のBはrecord失敗時に一部callbackが消費済みになり得るため、失敗したplanを破棄して再構築する。
+Aの不変命令は未投入なら再記録できるが、再試行時もimportの状態・容量・Deviceの適合を確認する。
+
+履歴は登録keyの番号だけを渡すのでなく、同じ物理資源のcanonicalな予定状態へ結び付ける。
+成功したsubmit受理後に次frame用の状態／revisionを公開し、未投入失敗では進めない。
+前のGPU完了をCPUで毎frame待たず、queue依存とpending所有をruntimeが維持する。
+初回、reset、extent／format変更、Device再作成では内容保証を失効させる。
+同じ履歴を競合する古いsnapshotから投入した場合は診断可能な失敗にする。
+swapchainはacquire世代・extent・present失敗も含む別の外部資源契約であり、履歴番号だけで代用しない。
+
+| 失敗段階 | 利用側へ返す意味と保持 |
+|---|---|
+| program／binding／pass構築 | unsupported、layout／範囲／owner不一致等を分類。pass追加は失敗したpassの半端な命令を公開しない。module途中の失敗ではframeの構築を打ち切れる |
+| compile | 未初期化read、衝突用途、循環、必要な出力の欠落を文脈付きで返す。GPUへは未投入 |
+| prepare／record | 容量不足、native作成・記録失敗、Bのcallback失敗。全記録が成功するまで一部だけsubmitしない。未投入資源を解放する |
+| submit未受理 | APIが未投入・状態不変を保証する失敗だけrollbackする。一般の失敗へ拡張しない |
+| 受理済み／timeout／Device loss | 受理は正常完了ではない。timeoutは保持を継続。lossは停止状態へ移し、内容を正常結果として返さない。present失敗でも受理済み仕事を取り消した扱いにしない |
+
+エラーは安定した種別とpass／resource／binding／rangeの適用可能な文脈を持ち、文言解析を要求しない。
+開発用の詳細名・履歴・dumpを製品でも常時保持する要件にはせず、運用上必要な原因とIDは残す。
+構築保証に必要な拒否、計画・同期、import照合、容量・native失敗・退役は製品にも残す。
+追加の独立再検査や診断scanは`development-validation`等でコンパイル除外し、最適化と独立に選ぶ。
+これは目標契約であり、現行実装の未対応経路の検証を削除する変更ではない。
+
+標準の挿入点は**tone mapping前、露出倍率適用前のscene-linear Rec.709／D65 HDR**とする。
+Bistroでは1920×1080、sample 1、RGBA16Fを出発形式とし、Bloom後に固定EV、Neutral、sRGB変換を各一回適用する。
+`conditions.json`の光・背景・色の規約を引き継ぐ。返却画像は同じextent／sample／HDR形式で内容が有効なものを要求する。
+深度は任意入力として通常Zのdevice depth 0..1、near／farと逆投影情報を伴う。
+法線を提供する場合はworld-spaceの正規化xyzと表現形式を明示し、未提供なら要求時にエラーか明示fallbackにする。
+Bloomだけのために深度・法線を常設しない。挿入の時点と色の意味を安定契約とし、Graph内部のpass番号へ依存させない。
+effect moduleはGraphと入力・設定を受け取り出力handleを返す。新effectは利用側moduleとshaderを追加し、
+登録した挿入点へ渡すだけで接続できる。Graph／backendのeffect分岐の追加を通常手順にしない。
+
+### 7.5 根拠・CPU費用と未実証の範囲
+
+公開例の事実とRendererの判断を区別する。
+[Filamentの説明](https://google.github.io/filament/notes/framegraph.html)と
+[固定版header](https://github.com/google/filament/blob/65eaf091d7236b64094c59354c8632a86b911f92/filament/src/fg/FrameGraph.h#L248-L295)は
+setupの即時実行とexecuteの遅延実行を分ける。
+[Unreal RDG](https://dev.epicgames.com/documentation/unreal-engine/render-dependency-graph-in-unreal-engine)は
+pass parameterに基づく依存と、遅延lambdaの寿命・CPU副作用への注意を示す。
+[Unity 6000.0](https://docs.unity.com/en-us/engine/6000.0/manual/render-pipelines/universal-render-pipeline/customizing-urp/render-graph/write-render-pass)は
+資源宣言とrender functionを分ける。これらはcallbackの実用例であり、Rustの第一案Aが高速・唯一という根拠ではない。
+[Rustのclosure](https://doc.rust-lang.org/reference/types/closure.html)は借用とmove captureを許す。
+`move`は参照先の所有まで移さず、trait objectの寿命も[明示できる](https://doc.rust-lang.org/reference/lifetime-elision.html#default-trait-object-lifetimes)。
+調査は2026-11-14。動的資料の版と固定ソースの区別は[Graph指針](../guides/rendergraph-best-practices.md#sources)に従う。
+
+| CPU段階 | Aで必要な仕事 | Bで必要な仕事 |
+|---|---|---|
+| build | 全宣言の命令生成・格納、入力から用途導出 | pass data／宣言集合とcallbackの保持。capture所有は選択方式による |
+| compile | live解析・初期化／hazard／順序等。除去命令を解放 | 同じ解析。保守的な宣言集合が広ければ余分な依存・生存を作り得る |
+| record | live命令の走査とnative変換 | live callback呼出し、命令生成／native変換、宣言集合の逸脱を防ぐ処理 |
+| retain／retire | 命令payloadとnative leaseを必要期間だけ保持 | callback／captureはrecordまで、native leaseは実完了まで保持 |
+
+CPU試作のpass・命令・用途件数はこの違いを観察する構造的証拠であり、allocator回数・byte全量・
+Rustのcode size・cache効率・native record時間の計測ではない。
+実測時はbuild／compile／prepare-record／submit／retire、確保回数／保持byteを同じdraw数とculling率で分ける。
+同じ資源を繰り返す場合と異なる資源、動的binding、解像度変更、検証on/offを比較し、
+pipeline初回作成と定常状態を分離する。専用arena、plan cache、並列recordは測定後の選択とする。
+GPU同期・寿命・shader ABI・画像結果・Windows表示・性能の確認はB1以降の実機受入へ残す。
+基盤の維持／改修／置換／外部利用と総工数の決定は`.1.3`で行う。
+
 ## 8. リソース所有権とGPU寿命
 
 ### 8.1 寿命を分ける

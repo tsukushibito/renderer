@@ -1,6 +1,6 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-13。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日: 2026-11-14。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
@@ -23,6 +23,45 @@
 Renderer本体・shader・native経路は変更せず、以降のGPU・Rust試験表は従来の固定ソースの実績として保持する。
 BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
 画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
+
+<a id="public-api-comparison"></a>
+
+### 公開APIのUXと拡張契約の比較
+
+`renderer-7ft.1.2`の[比較と第一案](../design/implementation-policy.md#public-api-comparison)を記録した。
+構築時owned命令案Aとframe内借用callback案Bに同じ型付きpass dataを使い、記録時期と依存宣言の軸を分けた。
+第一案はA＋binding／attachment由来のアクセスである。理由は実命令の確定境界と所有契約の単純さで、
+CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`とB1の二API実証は未完了である。
+
+[Rust試作](../../crates/renderer/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較する。
+複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
+将来のMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
+短命なdraw slice終了後のAの命令保持、Bのframe借用と不要callback非実行、
+owner／範囲／bindingの不一致と宣言外アクセスの拒否を対象にする。
+再現は[開発ガイド](../guides/development.md#public-api-comparison)を参照する。
+
+Windows x64／Rust 1.99.0でworkspaceの既存CPU試験65件と新規9件が成功し、
+新規9件はdebug／release双方で確認した。fmt、CPU全target Clippy（`-D warnings`）、release比較実行も成功した。
+独立レビューの指摘を反映し、Loadのread用途、Bloomの抽出／blur／無効化、重複writeとcallbackの出力欠落を補った。
+
+| 比較入力 | probeが保持したpass | CPU命令 | 資源用途 | Aのbuild／record callback | Bのbuild／record callback |
+|---|---:|---:|---:|---:|---:|
+| 履歴初回 | 12 | 22 | 24 | 13／0 | 0／12 |
+| 同extentの履歴継続 | 12 | 22 | 25 | 13／0 | 0／12 |
+| extent変更によるreset | 12 | 22 | 24 | 13／0 | 0／12 |
+
+各入力で13passを登録し、未使用effectを1pass除去した。両案の命令・用途は各入力で一致した。
+Aは除去前のbuild時にenum本文1,840 byteを構築し、Bはその時点で命令を構築しない。
+Bにもpass dataとcaptureの保持があり、この値だけで総メモリや速度を比較しない。
+文書のUTF-8／fenceと相対link／anchor、`git diff --check`を確認した。
+
+試作の選択処理は画像単位の保守的な後方到達性probeであり、現Rendererのcompilerを実装し直すものではない。
+範囲の局所検査と利用コードの一致を確認するが、mip単位のproducer／culling、初期化、
+完全なRAW／WAR／WAW、native barrierを検証しない。mesh／programの識別、history import／exportも記号的表現で、
+native参照の強い保持、canonicalな予定状態、revision、submit失敗・GPU完了の実証ではない。
+件数・enum本文byteは構造的な観測であり、nested Vec、callback capture、allocator、catalog等を含む全保持量ではない。
+shader生成・ABI・GPU内容・Windows表示・実GPU性能は今回未実行で、Renderer本体とshaderの実装を変更していない。
+Vulkan指針の用途由来同期・記録から完了までの寿命と検証方針を設計へ適用し、API契約からの例外はない。
 
 <a id="bistro-assets"></a>
 

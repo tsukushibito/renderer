@@ -116,6 +116,16 @@ jobs:
             cargo test --locked --workspace --release --no-default-features --features $features
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Exercise the CPU public API comparison study
+        if: matrix.backend == 'cpu'
+        shell: pwsh
+        run: |
+          cargo test --locked -p renderer --example graph_api_comparison --no-default-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p renderer --example graph_api_comparison --release --no-default-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo run --locked -p renderer --example graph_api_comparison --no-default-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check independent diagnostic features
         if: matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12')
         shell: pwsh

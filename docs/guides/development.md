@@ -266,6 +266,26 @@ Windowsには`presentation` featureの全target check・Clippy・CPU試験も追
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
 
+<a id="public-api-comparison"></a>
+
+## 公開APIのCPU比較試作
+
+[設計比較と第一案](../design/implementation-policy.md#public-api-comparison)の利用コードは
+[graph_api_comparison](../../crates/renderer/examples/graph_api_comparison.rs)で再現する。
+GPU・Vulkan SDK・Bistro素材の取得は不要で、workspaceの通常のRust開発環境を使う。
+
+```powershell
+cargo run --locked -p renderer --example graph_api_comparison --no-default-features
+cargo test --locked -p renderer --example graph_api_comparison --no-default-features
+cargo test --locked -p renderer --example graph_api_comparison --release --no-default-features
+```
+
+命令所有案とframe内遅延callback案を同じ代表入力で組み立て、正規化した資源用途・命令の一致と
+構造的な件数を確認する。試作の型はRendererの公開APIではなく、GPUのrecord／submitも行わない。
+exportは次frameの内容・同期・寿命の実機検証ではない。件数を処理時間・確保量の測定へ読み替えない。
+通常の`cargo test --workspace`はexample内の試験を実行しないため、上記の明示指定を使う。
+CIもCPU構成でこの試験と実行を行い、その他の構成では全target check／Clippyを適用する。
+
 ## 製品・開発用の検証設定
 
 実装・レビューでは[製品版と開発用の検証方針](validation-policy.md)に従います。

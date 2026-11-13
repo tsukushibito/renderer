@@ -295,6 +295,12 @@ ABIと信頼境界の検証が追加で必要になる。現在の限定操作�
 独自の効果を追加するためにGraph本体やeffect列挙型を変更しないことを受入条件とする。
 構築時に所有された命令を蓄える方式、実行callback方式などは比較して選び、記録時期や型名を先に固定しない。
 
+代表利用コードによる[公開API比較と第一案](implementation-policy.md#public-api-comparison)では、
+型付きbinding／attachmentからアクセスを導き、構築時に命令を所有する案をB1の出発点とした。
+frame内借用が可能な遅延callbackとも同じ利用例で比較する。CPU試作は将来の独自program、
+depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、上記の現行対応範囲を拡張しない。
+基盤選定は別途B0で行い、実装変更までは現行のproducer・import・寿命契約を維持する。
+
 ## エンジン入力と標準描画
 
 GPU非依存の`engine::Engine`は容量付きのmesh/material登録を持つ。
