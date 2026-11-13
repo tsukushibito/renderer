@@ -100,11 +100,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     if rgba[center..center + 4] != [255, 255, 0, 255] || rgba[..4] != [255, 255, 255, 255] {
         return Err("unexpected mesh/depth/Compute/composite output".into());
     }
-    let mut file = std::fs::File::create(output)?;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(output)?);
     write!(file, "P6\n{} {}\n255\n", desc.width, desc.height)?;
     for pixel in rgba.as_chunks::<4>().0 {
         file.write_all(&pixel[..3])?;
     }
+    file.flush()?;
     println!(
         "Verified {}x{} output; {:?}",
         desc.width,

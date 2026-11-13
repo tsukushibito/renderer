@@ -1,5 +1,5 @@
 {
-  "scope": "Trusted fixed fixtures only. Compilation/reflection is verified; D3D12 execution and two-API image equivalence remain M4-08 through M4-10 acceptance work.",
+  "scope": "Trusted fixed fixtures only. Compilation/reflection is verified; D3D12 execution and two-API image equivalence remain B1 acceptance work (renderer-7ft.2.3 and renderer-7ft.2.4).",
   "entry_point": "main",
   "shader_model": "6.0",
   "dxil_version": "1.0",

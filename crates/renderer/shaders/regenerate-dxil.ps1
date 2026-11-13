@@ -13,7 +13,12 @@ Set-StrictMode -Version Latest
 function Get-Sha256([string]$Path) {
     $hasher = [Security.Cryptography.SHA256]::Create()
     try {
-        return ([BitConverter]::ToString($hasher.ComputeHash([IO.File]::ReadAllBytes($Path)))).Replace('-', '').ToLowerInvariant()
+        $stream = [IO.File]::OpenRead($Path)
+        try {
+            return ([BitConverter]::ToString($hasher.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $stream.Dispose()
+        }
     } finally {
         $hasher.Dispose()
     }
