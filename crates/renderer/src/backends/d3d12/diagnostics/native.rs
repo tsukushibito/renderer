@@ -106,6 +106,9 @@ unsafe extern "system" fn receive_message(
 pub(in super::super) struct Session {
     monitor: D3D12ValidationMonitor,
     global: Option<IDXGIInfoQueue>,
+    global_start: u64,
+    global_denied: u64,
+    global_discarded: u64,
     token: Option<usize>,
     enabled: bool,
 }
@@ -119,13 +122,16 @@ impl Session {
             return Ok(Self {
                 monitor,
                 global: None,
+                global_start: 0,
+                global_denied: 0,
+                global_discarded: 0,
                 token: None,
                 enabled: false,
             });
         }
         // SAFETY: Acquire global DXGI diagnostics before creating native objects
         // and retain them after every owned Device reference has been released.
-        let global = unsafe { DXGIGetDebugInterface1(0) }.map_err(|error| {
+        let global: IDXGIInfoQueue = unsafe { DXGIGetDebugInterface1(0) }.map_err(|error| {
             D3D12RuntimeError::native("DXGIGetDebugInterface1", "DXGI diagnostics", error)
         })?;
         if first {
@@ -147,9 +153,21 @@ impl Session {
                 debug1.SetEnableGPUBasedValidation(true);
             }
         }
+        // SAFETY: Live global queue. Retain cursors instead of clearing history;
+        // a later runtime reports only diagnostics emitted during its own life.
+        let (global_start, global_denied, global_discarded) = unsafe {
+            (
+                global.GetNumStoredMessages(DXGI_DEBUG_ALL),
+                global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL),
+                global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL),
+            )
+        };
         Ok(Self {
             monitor,
             global: Some(global),
+            global_start,
+            global_denied,
+            global_discarded,
             token: None,
             enabled: true,
         })
@@ -351,14 +369,16 @@ impl Drop for Session {
             // observes destruction diagnostics without keeping the Device alive.
             let outcome = unsafe {
                 (|| -> Result<(), D3D12RuntimeError> {
-                    if global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL) != 0
-                        || global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL) != 0
+                    if global.GetNumMessagesDeniedByStorageFilter(DXGI_DEBUG_ALL)
+                        != self.global_denied
+                        || global.GetNumMessagesDiscardedByMessageCountLimit(DXGI_DEBUG_ALL)
+                            != self.global_discarded
                     {
                         return Err(D3D12RuntimeError::unsupported(
                             "DXGI diagnostic messages were filtered or discarded",
                         ));
                     }
-                    for index in 0..global.GetNumStoredMessages(DXGI_DEBUG_ALL) {
+                    for index in self.global_start..global.GetNumStoredMessages(DXGI_DEBUG_ALL) {
                         let mut size = 0;
                         global
                             .GetMessage(DXGI_DEBUG_ALL, index, None, &mut size)

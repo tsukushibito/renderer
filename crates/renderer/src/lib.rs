@@ -2,9 +2,11 @@
 //!
 //! The graph API builds and analyzes GPU-independent operation declarations.
 //! The default configuration has no GPU, window-system, or native dependencies.
-//! The `vulkan` feature adds a headless Vulkan 1.3 runtime with validation on by
-//! default. The optional `presentation` feature adds Windows window integration.
-//! Building a graph never initializes Vulkan; runtime creation is explicit.
+//! The `vulkan` feature adds a headless Vulkan 1.3 runtime; `d3d12` adds a Windows
+//! hardware runtime. Native validation defaults to enabled with the independent
+//! `development-validation` feature and disabled otherwise. The optional
+//! `presentation` feature adds Windows window integration. Building a graph
+//! never initializes a native backend; runtime creation is explicit.
 //!
 //! Engine-facing and graph APIs remain independent of Vulkan and VMA types.
 
