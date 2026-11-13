@@ -1,0 +1,22 @@
+{
+  "sdk": "Vulkan SDK 1.4.341.1 Windows x64",
+  "spirv_cross_revision": "Git commit: vulkan-sdk-1.4.341.0 Timestamp: 2026-02-03T16:24:03",
+  "dxc_version": "dxcompiler.dll: 1.10(5180-e3554182)(1.9.0.5180) - 1.9.0.5180 (e35541826)",
+  "validation": "DXC internal validator, enabled; no -Vd or external dxil.dll required",
+  "files": {
+    "glslc.exe": "6193189b7855666d1ef5104c4a759ca26d15fa85e2c1c5ea6c1e1b24a37c0e4b",
+    "spirv-val.exe": "14b9820bcdcfea88b0e0db5688c2fd5fe87b957497e689f3bbf535bbd0400979",
+    "spirv-cross.exe": "d615c9f56601193b6363bdaca3d9cc9928753d5434b3565c9f9eb979afe5a815",
+    "dxc.exe": "74b2ab9fb05270ca1f1d7b6ced979b40cb65afdfb5842eeda1f98c5181859661",
+    "dxcompiler.dll": "5474eda4f2d177ba20fb9c63c9c48d3d20788fd5b7d2278c6608ab761f9f5c47"
+  },
+  "spirv_cross_arguments": ["--hlsl", "--shader-model", "60", "--entry", "main"],
+  "dxc_arguments": ["-E", "main", "-HV", "2021", "-O3", "-WX", "-Zpc"],
+  "shaders": [
+    {"source": "image.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
+    {"source": "mesh.vert", "stage": "vert", "profile": "vs_6_0", "spirv_cross_arguments": ["--flip-vert-y"]},
+    {"source": "mesh.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []},
+    {"source": "composite.vert", "stage": "vert", "profile": "vs_6_0", "spirv_cross_arguments": ["--flip-vert-y"]},
+    {"source": "composite.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []}
+  ]
+}

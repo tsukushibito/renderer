@@ -64,6 +64,51 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
 
+## D3D12の固定shader生成
+
+管理下5種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
+入力のSPIR-Vは既存のVulkan基準を維持し、この手順では書き換えない。
+通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
+
+```powershell
+& ./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+```
+
+`-Verify`は生成済みファイルを変更せず、不足・差分・tool不一致・変換失敗をエラーにする。
+先に既存の`regenerate.ps1 -Verify`で5種類のSPIR-V再生成一致と`spirv-val`を確認する。
+[toolchain定義](../../crates/renderer/shaders/dxil-toolchain.json)でWindows x64 SDKの
+glslc・spirv-val・SPIRV-Cross・DXC・dxcompiler.dllのSHA-256と、変換引数を固定する。
+SPIRV-Crossは`vulkan-sdk-1.4.341.0`、DXCは`1.9.0.5180 (e35541826)`である。
+DXCの`-WX`と通常の内部validatorを使い、`-Vd`は使わない。
+採用版は外部`dxil.dll`を探索せず、常に内部validatorを使う変更後の版である。
+[DXCのvalidator変更](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2505)と
+[CLI・reflectionの公式説明](https://github.com/microsoft/DirectXShaderCompiler/wiki/Using-dxc.exe-and-dxcompiler.dll)を参照する。
+
+[生成物](../../crates/renderer/shaders/dxil/)にはHLSL、検証付きコンパイルで生成したDXIL、
+DXCのsignature／binding／constant offsetのreflection、入力と出力のSHA-256 manifestを保存する。
+shader modelは6.0、entry pointは`main`、HLSLは2021、最適化は`-O3`、debug情報・include・macroはない。
+GLSLの入力hashだけはGitの改行設定に依存しないUTF-8／LFへ正規化し、binaryは全byteを比較する。
+HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固定し、reflectionの行末空白は除く。
+
+[固定ABIの契約](../../crates/renderer/shaders/dxil-contracts.json)には次を記録する。
+
+- Computeは8×8×1で、RGBA8 sourceは`u0`、destinationは`u1`、modeのu32は`b0`のoffset 0、4 byte。
+  読み取り専用のstorage imageも既定変換ではUAVになるため、D3D12側はRGBA8 typed UAV load/store能力を照会する。
+  型の扱いに注意が必要な`--hlsl-nonwritable-uav-texture-as-srv`は使わない。
+- Meshは28-byte頂点、MVPはoffset 0の64 byte、tintはoffset 64の16 byte。
+  HLSLの`row_major`と`mul(position, matrix)`が組になるため、CPUのcolumn-major行列bytesは転置しない。
+  cbufferの`b0`はDXCが割り当てた実reflectionで確認し、明示register指定と混同しない。
+- 両vertex shaderへ`--flip-vert-y`を指定し、Vulkanの正のviewport高さとの向きを揃える。
+  深度は両APIで0〜1のためclip-space Z補正は行わず、culling無効・通常Z・linear RGBA8を前提にする。
+- Compositeのcombined samplerはHLSLで`t0`と`s0`へ分かれるが、`texelFetch`は`Texture2D.Load`になる。
+  DXCは未使用の`s0`を除去し、実reflectionのactive bindingは`t0`だけである。
+
+変換optionの意味は[採用版SPIRV-Cross CLI](https://github.com/KhronosGroup/SPIRV-Cross/blob/vulkan-sdk-1.4.341.0/main.cpp)を参照する。
+この確認は生成・静的ABI・再現性の証拠であり、D3D12での実行や二APIの画像等価性は未確認である。
+非identity MVP、非対称なgeometry、深度、Compute／合成の全画素比較はM4-08〜10で確認する。
+4／80 byteの論理定数ABIと、後続runtimeのroot constants／CBVの配置・range要件も区別する。
+
 ## RenderDoc
 
 採用版は**1.47 x64**。この環境では[公式portable ZIP](https://renderdoc.org/stable/1.47/RenderDoc_1.47_64.zip)を
