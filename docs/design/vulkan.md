@@ -62,21 +62,20 @@ debug_utilsのDevice用関数テーブルは一度保持し、Queueも作成時�
 ## 検証と診断
 
 製品・開発・性能・障害調査の分類は[検証方針](../guides/validation-policy.md)に従う。
-製品はValidation Layersを既定無効とし、開発用検証へ依存しない実行を目指す。
-次の既定値・切替は現行実装の説明であり、この文書変更で内部検証を除去したものではない。
+製品構成は既定feature空からbackendだけを選び、Validation Layersと診断拡張へ依存しない。
+最適化と独立した`development-validation`は、Graphの追加再検査と`vulkan-diagnostics`を有効にする。
 
-既定の`ValidationMode::Required`はValidation Layer、debug_utils、layer_settingsを要求し、
+`development-validation`ありの既定`ValidationMode::Required`はValidation Layer、debug_utils、layer_settingsを要求し、
 core validationを維持したままSynchronization Validationを追加するよう指定する。
 受入試験ではレイヤー起動情報を確認し、外部設定で検証を無効にした成功を受け入れない。
 
-製品でのLayer無効化と性能測定には`ValidationMode::Disabled`を明示できる。
-この場合はValidation Layerとlayer_settingsを要求せず、debug_utilsと診断を維持する。
-releaseだけで暗黙に検証を外さない。外部loader設定によるLayer注入は別途確認する。
-
-この切替はGraph検査、index全走査、CPU provenance、debug名等を除去する機能ではない。
-内部の開発用検証を製品から除外するビルド切替と、診断拡張を不要にする経路は未実装である。
-今後は最適化と追加検証を独立に選び、同期・寿命・容量・native失敗の処理を維持したまま保証を上流へ移す。
-[現行との差分](../guides/validation-policy.md#current)を参照する。
+上記featureなしの既定は`ValidationMode::Disabled`で、Layerとlayer_settingsを要求しない。
+`vulkan-diagnostics`は単独でも選択でき、native Layer要求とは別にdebug_utils・命名・label・monitorを追加する。
+offではそれらの専用構築・保持をコンパイル除外し、明示`Required`は対応できない要求として拒否する。
+releaseかどうかでこの選択を変えない。外部loader設定によるLayer注入は別の確認事項であり、
+診断を組み込まない実行から「Layerが存在しなかった」と断定しない。
+Graph入力の保証・同期・寿命・容量・native失敗は維持する。
+[適用と残る保証処理](../guides/validation-policy.md#current)を参照する。
 
 `tracing`のsubscriber・出力先・表示レベルは利用側が設定する。
 ライブラリはglobal subscriberを設置せず、初期化時の`Dispatch`を保持して別スレッドのcallbackにも使う。
@@ -297,8 +296,17 @@ nativeの外部参照はleaseを通し、解放通知をentryごとに集約し�
 これは空きentryを直ちに異なる作成条件で置換する方式に比べ、交互の寸法でnative作成を繰り返す問題を
 避けるための保持方針である。代わりにidle資源の保持量が増え、上限時の置換中には旧・新資源が一時的に
 共存する。`resource_capacity`は保持するentryの件数上限であり、byte budgetや作成成功の保証ではない。
-この物理cache自体にはbyte上限・memory budgetによるevictionを追加せず、`memory_stats()`のcache論理byteと
-VMA Allocation／blockの実統計を区別して判断する。作成回数とCPU/GPU時間・メモリの比較は
+resizeやlevel切替後には登録を`delete`してから`trim_idle_resources()`を明示呼出しできる。
+これは未登録かつleaseなしの物理資源だけを解放し、登録やpendingを解除せず、pollやwaitも行わない。
+pending・記録済み参照の退役後に再呼出しすると、新たにidleとなった資源を解放する。
+返値は解放したnative資源数で、tombstoneに世代を残し、後の作成で古いkeyを復活させない。
+世代上限のslotは解放できるが再利用しない。native作成失敗では空きslot・世代を変更しない。
+
+代案の自動byte budget／resize専用evictionより、明示的なworking set境界を選ぶ。
+通常の交互寸法再利用を保ち、隠れた待機や生存snapshotの無効化を避けるためである。
+解放の時機はアプリが選ぶ必要があり、trim自体はregistryを一度走査する。
+VMAは空blockを保持し得るので、解放数や論理byte減少をprocess VRAM減少と同一視しない。
+`memory_stats()`のcache論理byteとVMA Allocation／blockの実統計を区別する。作成回数とCPU/GPU時間・メモリの比較は
 [現在の検証状況](../verification/current.md)に記録し、件数削減だけからGPU高速化を主張しない。
 上位のmesh常駐には別に件数・論理byte予算を設ける。常駐解除後のidle物理cacheやpending参照は
 その常駐予算とは寿命が異なるため、この値をDeviceの総VRAM上限と説明しない。

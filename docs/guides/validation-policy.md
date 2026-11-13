@@ -10,7 +10,7 @@ API仕様の要件、一次資料の推奨・公開事例、そこから採用�
 必要な同期・所有・容量管理・失敗処理は製品版でも維持する。
 Vulkan Valid UsageやRustの安全性を免除する方針ではなく、条件を満たす方法と場所を整理する方針である。
 
-本書の制定だけではコードの動作は変わらない。[現行実装との差分](#current)を確認する。
+[現行実装への適用](#current)で、実装済みの切替と残る保証処理を確認する。
 現行の具体的な契約は[RenderGraph設計](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 実行済みの確認は[現在の検証状況](../verification/current.md)を参照する。
 
@@ -175,7 +175,8 @@ payload保持・文字列化・依存関係まで、該当するものを条件�
 Cargo featureを使う場合は追加型の検証featureを基本とし、負のfeatureで安全性を消す設計を避ける。
 featureは依存経路で統合されるため、製品の最終的なfeature集合・profile・環境設定を確認する。
 `--no-default-features`や`--all-features`成功だけで製品構成を確認したとはしない。
-機能名・既定値・公開方法は実装時に決める。本書では未実装のfeatureをコマンドとして案内しない。
+現行の`development-validation`、独立した`vulkan-diagnostics`／`graph-diagnostics`と実行例は
+[開発手順](development.md#製品開発用の検証設定)を参照する。
 [Cargo Features][cargo-features]
 
 debug_utils、名前・label、profiling、障害ログは検証と独立した選択である。
@@ -215,19 +216,20 @@ native検証の要求設定と、Layer等から観測した実効状態は別に
 
 <a id="current"></a>
 
-## 9. 現行実装との差分と採用理由
+## 9. 現行実装への適用と採用理由
 
-制定時の実装確認点は`698c936`。この文書変更は検証処理を無効化・削除する実装ではない。
+制定時の実装確認点は`698c936`。レビュー修正では次の境界を実装する。
 
 | 現行の状態 | 本方針との関係 |
 |---|---|
-| `ValidationMode::Required`が既定。`Disabled`を明示指定可能 | 製品のVulkan Layer無効化には現在も明示指定が必要。releaseだけでは切り替わらない |
-| `Disabled`でもdebug_utils、命名、診断を維持 | 内部検証の除去や診断拡張の不要化を意味しない |
-| 内部検証を除去するCargo featureは未提供 | 現在のfeatureはbackend選択用。新しい製品構成が実装済みとは扱わない |
-| `MeshData::new`で入力を検査してimmutableなbyte列を保持 | 保証を取込境界へ置く既存の出発点。GPU能力等まで保証するものではない |
-| runtimeでindex内容を再検査し、upload／copyのCPU provenanceを保持 | 検証済みmeshの保証継承と削減の対象。任意Graph upload／copyには同じ保証がまだない |
-| Graph構築・compileでdead branchも検証し、投入時にimportを再照合 | 現行契約を維持している。診断の分離と、変動状態への保証を設計してから変更する |
-| dumpとprofilingは明示opt-in | 既存の良い分離。全診断費用が除去済みという意味ではない |
+| `development-validation`は既定off、profileと独立 | Graphの保証済み入力の独立再検査とdead部分だけの循環診断をコンパイル除外できる。live計画の拒否・同期は維持 |
+| native検証の既定は上記featureありで`Required`、なしで`Disabled` | `vulkan-diagnostics`なしの明示`Required`は失敗。検証を省いて成功扱いにはしない |
+| `vulkan-diagnostics`を独立選択 | offならdebug_utils・callback・名前／labelの構築・診断履歴を除外。運用エラーの処理・ログは維持 |
+| `graph-diagnostics`を独立選択 | offならdumpとその解析情報の保持を除外。実行順・内容・必要なアクセスは維持 |
+| `MeshData::new`で入力を検査しimmutableな内容要約を生成 | privateな管理下uploadへ保証を引き継ぎ、mesh描画時のindex本文再走査・検査用CPU保持を省く。実Device上限は別に適合確認 |
+| 任意Graph upload／copyのCPU provenance | 部分byte更新や未知の穴からindex安全性を確立するために必要な経路は残す。開発用診断として一括削除しない |
+| Graph構築のowner・範囲・用途、producer／hazard、live循環、投入時のimport照合 | safe入力と変動状態を保証するために維持。公開されたimportの更新・削除は不変mesh保証では代替しない |
+| profilingは実行時opt-in | 検証・詳細dumpとは独立し、計測用queryや費用を記録する |
 
 採用理由は、製品の反復scan・CPU保持・診断依存を抑え、保証を成立させる場所を明確にするためである。
 代案の「全検証を常設」は単純だが、保証済みの大量データをdrawごとに読む費用が残る。
