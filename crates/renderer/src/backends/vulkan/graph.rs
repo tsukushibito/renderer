@@ -26,8 +26,7 @@ use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPay
 use crate::graph::{
     AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
     ImageHandle, ImportBuffer, ImportImage, LoadAction, MeshUpload, Operation, PassHandle,
-    RasterDrawOperands,
-    RasterParameters, ResourceDesc, ResourceKey, StoreOp,
+    RasterDrawOperands, RasterParameters, ResourceDesc, ResourceKey, StoreOp,
 };
 
 mod cache;

@@ -469,6 +469,8 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
 #[test]
 #[ignore = "explicit shipping Vulkan content/ownership acceptance; native layers disabled"]
 fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
+    use std::sync::Arc;
+
     let runtime = VulkanRuntime::new_with_validation(
         RuntimeConfig::default(),
         crate::ValidationMode::Disabled,

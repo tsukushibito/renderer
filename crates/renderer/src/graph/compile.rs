@@ -5,6 +5,7 @@ use std::ops::Range;
 #[cfg(feature = "graph-diagnostics")]
 use std::sync::OnceLock;
 
+#[cfg(any(test, feature = "development-validation"))]
 use super::accesses::conflicting_accesses;
 use super::{Graph, GraphError, GraphErrorKind, Operation, Pass, PassHandle, Resource};
 
