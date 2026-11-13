@@ -13,6 +13,7 @@
 | テスト・benchmark・全target確認 | 上記に加えてCコンパイラー。Criterionの依存allocaがC helperをビルドする |
 | Vulkan featureのビルド | C++コンパイラー。vk-memが同梱VMAのC++をビルドする |
 | 実Vulkan試験 | Vulkan 1.3対応ドライバー／ローダー、Validation Layer、debug_utils、layer_settings |
+| M4のD3D12準備試験 | Windows x64、D3D12対応実GPU、Windows Graphics ToolsのDebug Layer／GBV、Vulkan比較環境 |
 | 実行環境・シェーダーの調査 | Vulkan SDK 1.4.341.1のvulkaninfo、glslc、spirv-val |
 | 依存・GPU内容の調査 | cargo-deny 0.20.2、RenderDoc 1.47。[ツールガイド](tooling.md)を参照 |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../../.beads/README.md)を参照 |
@@ -89,6 +90,72 @@ cargo test --locked --workspace --no-default-features --features vulkan
 Windowsには`presentation` featureの全target check・Clippy・CPU試験も追加しています。
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
+
+## M4のD3D12準備と実GPU受入経路
+
+M4の実GPU受入は、現在利用できるWindows x64機（Core i5-14600KF、RTX 3060）で
+VulkanとD3D12を逐次実行するローカル手順を採用します。
+機材・実行の担当はリポジトリ管理者の`tsukushibito`で、Codexは許可されたCLI操作を実行します。
+各実行では選択adapterとdriverを記録し、二APIが同じhardwareを使うことをLUIDで確認します。
+現在のGitHub Actionsはbuild・Clippy・CPU試験を担当し、実GPU runnerは用意していません。
+外部runnerの契約や常設サービスの導入は必要ありません。
+
+準備試験には通常のRust／MSVC環境に加えて、D3D12ランタイム、Windows Graphics Toolsの
+Debug LayerとGPU-based validation（GBV）、Vulkan 1.3の実行環境とValidation Layerが必要です。
+shader再生成の確認にはVulkan SDK **1.4.341.1**の固定toolを使います。
+bindingsとshaderの生成手順・固定入力は[ツールガイド](tooling.md)を参照してください。
+通常のRustビルドは管理下の生成物を使い、生成toolやSDKを要求しません。
+
+Windowsの`d3d12`と`vulkan,d3d12`構成にも、実GPUを起動しない品質確認を実行します。
+
+```powershell
+cargo check --locked --workspace --all-targets --no-default-features --features d3d12
+cargo clippy --locked --workspace --all-targets --no-default-features --features d3d12 -- -D warnings
+cargo test --locked --workspace --no-default-features --features d3d12
+cargo check --locked --workspace --all-targets --no-default-features --features vulkan,d3d12
+cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12 -- -D warnings
+cargo test --locked --workspace --no-default-features --features vulkan,d3d12
+```
+
+実GPUの準備probeはignored試験として分離します。次のスクリプトはshader再生成一致を確認し、
+対象のignored試験が存在することを検査してから、同じprobeを既定3回、同時実行せずに実行します。
+64-bitのWindows PowerShell 5.1またはpwshで、リポジトリのルートから呼び出します。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-m4-preparation.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Runs 3
+```
+
+出力は共有checkout直下のGit対象外の`.tools/m4/preparation/<実行ID>/`へ保存します。
+worktreeから呼んだ場合も、この既定の保存先は共有checkout側です。
+`-OutputDirectory .tools/m4/preparation/my-run`で新しい保存先を明示することもできます。
+既存ディレクトリへの上書きは拒否します。
+`summary.json`にcommit・worktree差分の有無・OS／CPU・Rust／Cargo・実行者・tool引数・
+Cargo.lockとshader生成物のSHA-256・関連するValidation環境変数を記録します。
+`shader-verification.log`、`probe-inventory.log`、各回の`probe-NN.log`と`probe-NN.json`を保持し、
+失敗した回もログと失敗理由を残します。実行の経過時間は準備手順の壁時計時間です。
+
+probeの単独実行コマンドは次のとおりです。レポートを保存するときは
+`RENDERER_M4_PREPARATION_REPORT`へ新しいJSON出力先を指定します。
+反復スクリプトはこの環境変数を各回へ渡し、終了時に元の値へ戻します。
+
+```powershell
+cargo test --locked -p renderer --lib --no-default-features --features vulkan,d3d12 ::d3d12_preparation_ -- --ignored --nocapture --test-threads=1
+```
+
+準備段階では実hardware adapterの照合、Device作成前のDebug Layer／GBV要求と診断interface、
+最小のallocation作成、およびnative資源の終了までの診断を確認します。
+検証設定の要求・成功したinterface照会・実際に取得できる設定情報は区別してレポートへ残し、
+取得できない実効設定を推測で確認済みにしません。
+warning／error／corruptionはゼロを要求し、Vulkan側も終了後まで既存の厳格な診断条件を適用します。
+tool・Debug Layer・実GPUの不足、LUID照合不能、probeの不在、JSON欠落を成功やskipへ置き換えません。
+
+この準備probeはGraphの実行や二APIの画像等価性の受入には数えません。
+M4-04で同じ論理Graphのbuffer byte、M4-08〜10でCompute・深度付きmesh・合成の画像を照合し、
+M4-18では同じ入力・解像度・期待値と寿命／失敗条件を二APIで反復確認します。
+各段階でraw byte／RGBAまたはPPM、Graph条件、終了後の検証ログを同じ実行IDへ保存する形に接続します。
+M4-19のCPU／GPU時間とメモリ比較は別のrelease実行とし、GBV等を有効にした正しさ試験の時間を
+性能値へ流用しません。両APIの対応する負荷と計測経路が揃うまで、性能比較は未実行として記録します。
+実GPU試験・計測を並行実行せず、機材を使えない場合は受入未完了として理由を残します。
 
 ## 実Vulkan試験
 
