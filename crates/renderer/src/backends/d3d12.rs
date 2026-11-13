@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 mod device;
 mod diagnostics;
+mod graph;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
 pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12ValidationReport};
+pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 
 /// Native validation is independent of optimization and Renderer diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
