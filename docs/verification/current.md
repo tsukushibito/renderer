@@ -37,6 +37,12 @@ BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12�
 重複画像を共有するLFSオブジェクトは208個、計1,598,854,040 byteである。
 公開済み履歴は変更せず、比較PNGは今回のtipからLFSポインタへ移す。
 ライセンス・検証JSON・manifestは通常Git、toolや作業中間物は引き続きGit管理外である。
+originへ208/208オブジェクトの送信が成功し、ローカルキャッシュを共有しないdetached checkoutで
+全410ポインタと空キャッシュを確認した後、originから全量取得して全ファイルのsize/SHA-256一致を確認した。
+元checkoutと取得先の`git lfs fsck --objects --pointers`も成功した。
+共有hooksは全6本を実行可能として追跡し、pre-pushのstdin保持・LFS失敗時停止と
+`bd hooks install --beads`による全hookのbyte保持を確認した。
+manifest・ポインタ・素材の変更時は取得境界で再照合する。Rendererのdraw/submitへ全量走査を追加していない。
 
 | 確認 | 結果 |
 |---|---|
@@ -69,6 +75,7 @@ PNGはbase mipだけで、元DDSとmip情報は保持する。これらの警告
 検証ツールのローカルCPU試験はPython 34件・Node 5件成功。独立レビューで材質検査のAO用UV/transformと
 予期しない発光の検出、重複三角形の対応、元FBXから正規化normalへの照合を補強し、回帰試験を追加した。
 文書4件のUTF-8/fence・相対link/anchor 79件・既存policyへのbacklinkと`git diff --check`を確認した。
+LFS共有追加では文書7件のUTF-8/fence・相対link/anchor 106件も確認した。
 通常CIへ小fixtureの`asset-tools`を追加した。ローカルのRust/native GPU再実行はRenderer実装変更がないため対象外とし、
 pushした組合せのbuild/testはCIで別に確認する。
 
