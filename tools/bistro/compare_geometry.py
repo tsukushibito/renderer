@@ -7,12 +7,12 @@ triangle, and cyclic corner reorder. Material assignment participates in matchin
 The export must preserve mesh-local coordinates (apart from Blender Z-up -> glTF
 Y-up) and node names/transforms; baking arbitrary transforms is not accepted.
 
-Correspondence is deliberately conservative: triangles are ordered by their
-unrounded mesh-local corner values, including normals and UVs to distinguish
-coincident faces. Attribute comparisons then use explicit float32 tolerances.
-Very close values whose relative order changes can therefore cause a false
-failure; this must be investigated, never resolved by silently dropping faces
-or rounding away a material/attribute discrepancy.
+Correspondence first orders unrounded mesh-local triangle geometry. Coincident
+faces then require a one-to-one full-attribute match under the explicit
+tolerances; neither coincident faces nor different UV/normal payloads are
+deduplicated. Very close but distinct positions whose relative order changes
+can still cause a conservative false failure. Investigate such failures rather
+than dropping faces or rounding away a material/attribute discrepancy.
 """
 
 from __future__ import annotations
@@ -220,6 +220,51 @@ def transformed(values, world):
     return result
 
 
+def match_coincident(local_a, local_b, world_a, world_b, normal_atol, uv_atol):
+    """Reorder only equal-geometry groups after a full-attribute perfect match.
+
+    Sorting near-equal normals is not a reliable identity for coincident faces:
+    float32 conversion can reverse that ordering while preserving every face.
+    A bipartite match proves multiplicity and all normal/UV payloads together.
+    If no perfect match exists, retain the original order and report failure.
+    """
+    if len(local_a) < 2:
+        return world_b, 0, []
+    positions_a = local_a[:, :, :3].reshape(len(local_a), 9)
+    positions_b = local_b[:, :, :3].reshape(len(local_b), 9)
+    shared = np.all(positions_a[1:] == positions_a[:-1], axis=1) & np.all(positions_b[1:] == positions_b[:-1], axis=1)
+    bounds = np.r_[0, np.where(~shared)[0] + 1, len(local_a)]
+    result = world_b.copy()
+    matched_groups, failed = 0, []
+    for start, end in zip(bounds[:-1], bounds[1:]):
+        if end - start < 2 or not np.array_equal(positions_a[start], positions_b[start]):
+            continue
+        a, b = world_a[start:end], world_b[start:end]
+        close_normal = np.all(np.abs(a[:, None, :, 3:6] - b[None, :, :, 3:6]) <= normal_atol, axis=(2, 3))
+        close_uv = np.all(np.abs(a[:, None, :, 6:] - b[None, :, :, 6:]) <= uv_atol, axis=(2, 3))
+        edges = close_normal & close_uv
+        assigned_b = np.full(end - start, -1, dtype=np.int64)
+
+        def augment(index, visited):
+            for candidate in np.flatnonzero(edges[index]):
+                if visited[candidate]:
+                    continue
+                visited[candidate] = True
+                if assigned_b[candidate] < 0 or augment(assigned_b[candidate], visited):
+                    assigned_b[candidate] = index
+                    return True
+            return False
+
+        if all(augment(index, np.zeros(end - start, dtype=bool)) for index in range(end - start)):
+            order = np.empty(end - start, dtype=np.int64)
+            order[assigned_b] = np.arange(end - start)
+            result[start:end] = b[order]
+            matched_groups += 1
+        else:
+            failed.append({"first_triangle": int(start), "count": int(end - start)})
+    return result, matched_groups, failed
+
+
 def source_triangles(path, entry):
     with np.load(path, allow_pickle=False) as raw:
         positions = np.asarray(raw["positions"], dtype=np.float64)
@@ -274,7 +319,7 @@ def compare(source_path, gltf_path, *, position_atol=2e-5, position_rtol=2e-6,
               "tolerance": {"position_atol": position_atol, "position_rtol": position_rtol,
                             "normal_atol": normal_atol, "uv_atol": uv_atol,
                             "matrix_atol": matrix_atol, "matrix_rtol": matrix_rtol},
-              "correspondence": "unrounded local-value cyclic triangle sort; multiplicity and winding preserved"}
+              "correspondence": "unrounded local geometry + coincident full-attribute bipartite matching; multiplicity and winding preserved"}
 
     def error(message):
         report["ok"] = False
@@ -313,7 +358,12 @@ def compare(source_path, gltf_path, *, position_atol=2e-5, position_rtol=2e-6,
                     continue
                 a, b = canonical(a), canonical(b)
                 local_ok = np.allclose(a[:, :, :3], b[:, :, :3], atol=position_atol, rtol=position_rtol)
-                a, b = transformed(a, expected_world), transformed(b, actual_world)
+                world_a, world_b = transformed(a, expected_world), transformed(b, actual_world)
+                world_b, matched_groups, failed_groups = match_coincident(a, b, world_a, world_b, normal_atol, uv_atol)
+                item["coincident_groups_matched"] = item.get("coincident_groups_matched", 0) + matched_groups
+                if failed_groups:
+                    error(f"{name}/{material}: {len(failed_groups)} coincident geometry groups have no full-attribute correspondence")
+                a, b = world_a, world_b
                 fields = [("position", slice(0, 3), position_atol, position_rtol),
                           ("normal", slice(3, 6), normal_atol, 0)]
                 fields.extend((f"uv_{index}", slice(6 + 2*index, 8 + 2*index), uv_atol, 0)

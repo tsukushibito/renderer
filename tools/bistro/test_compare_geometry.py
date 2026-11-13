@@ -186,6 +186,35 @@ class GeometryComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(geometry.ComparisonError, "ambiguous duplicate glTF material names"):
             geometry.compare(self.source, self.target)
 
+    def test_coincident_faces_match_payloads_when_small_normal_rounding_reverses_sort(self):
+        self.triangles = np.array([[0, 1, 2], [0, 1, 2]], dtype=np.int32)
+        self.normals[0] = [0, 1, 0]
+        self.normals[3] = [1e-8, 1, 0]
+        self.normals[4] = [1, 0, 0]
+        self.uv[3:] = self.uv[:3] + 0.125
+        self.write_source()
+        source = json.loads(self.source.read_text(encoding="utf-8"))
+        source["objects"][0]["materials"] = ["Brick", "Brick"]
+        self.source.write_text(json.dumps(source), encoding="utf-8")
+        self.export(corrupt="normal_rounding", reordered=True)
+        target = json.loads(self.target.read_text(encoding="utf-8"))
+        target["materials"].pop()
+        for primitive in target["meshes"][0]["primitives"]:
+            primitive["material"] = 0
+        self.target.write_text(json.dumps(target), encoding="utf-8")
+        report = geometry.compare(self.source, self.target)
+        self.assertTrue(report["ok"], report["errors"])
+        self.assertEqual(report["source_triangles"], 2)
+        self.assertEqual(report["objects"][0]["coincident_groups_matched"], 1)
+
+        # Duplicating one payload instead of preserving both must still fail.
+        first = target["meshes"][0]["primitives"][0]
+        target["meshes"][0]["primitives"][1]["attributes"] = first["attributes"]
+        self.target.write_text(json.dumps(target), encoding="utf-8")
+        report = geometry.compare(self.source, self.target)
+        self.assertFalse(report["ok"])
+        self.assertTrue(any("no full-attribute correspondence" in message for message in report["errors"]))
+
 
 if __name__ == "__main__":
     unittest.main()
