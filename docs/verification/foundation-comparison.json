@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "issue": "renderer-7ft.1.3",
+  "base_renderer_commit": "4585ccca17637fd2dd7a6d69f2bee03e62b65cba",
+  "purpose": "Foundation feasibility experiment, not production backend acceptance or a performance comparison",
+  "metadata": {
+    "measured_at": "2026-11-14T06:52:11.2227827+09:00",
+    "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "files": [
+      {
+        "path": "tools/foundation-probe/.gitattributes",
+        "sha256": "5147c32361ff073b2f875714976da923737cf42390d2bea0d968ddd8f4588d7c"
+      },
+      {
+        "path": "tools/foundation-probe/Cargo.toml",
+        "sha256": "dbcf25f1a255fe71d7f6c7d49a849364312f42141edbb4062e5de12dfb4be860"
+      },
+      {
+        "path": "tools/foundation-probe/Cargo.lock",
+        "sha256": "759bc02b2af6796b40e693536f34f58b013b697e55aa84b8bf0ff17e386fa0ef"
+      },
+      {
+        "path": "tools/foundation-probe/deny.toml",
+        "sha256": "db3f246c03445b5f30a3badbe526e4a85e4468abdeca48f0e45adbaf975bce98"
+      },
+      {
+        "path": "tools/foundation-probe/src/main.rs",
+        "sha256": "ba33bac17583f4fbd44a127d557afe8adaf38a1ed244c4beef6557f25ee98a78"
+      },
+      {
+        "path": "tools/foundation-probe/src/raster.wgsl",
+        "sha256": "21c35a8fb9b362406ec409baf464da56678f7c598d16f88f2543d464df7b8953"
+      },
+      {
+        "path": "tools/foundation-probe/src/effect.wgsl",
+        "sha256": "df08c145b5a174616d92dcbdf7307e7238ec0fcf6ebc9ec6e0d19cee83df3c35"
+      },
+      {
+        "path": "tools/foundation-probe/target/release/renderer-foundation-probe.exe",
+        "sha256": "f271c9e7e56e7a0cda661eb07b219623b85c70d6631ffb6fba462b9054ffefa4"
+      }
+    ]
+  },
+  "commands": [
+    "cargo run --locked --release --manifest-path tools/foundation-probe/Cargo.toml",
+    "cargo run --locked --release --manifest-path tools/foundation-probe/Cargo.toml -- --native-validation"
+  ],
+  "fixture": {
+    "extent": [
+      8,
+      4
+    ],
+    "format": "Rgba8Unorm",
+    "depth": "Depth32Float",
+    "owned_passes": 3,
+    "draws": 4,
+    "dispatches": 1,
+    "description": "Depth-only and color-only raster, two scissored draws each; caller WGSL Compute samples color and depth into storage image; padded copy and map readback",
+    "ownership": "Frame draw Vec and raster shader CPU handle end before native record; plan and caller texture handles dropped after submit; submission wait and map callback complete before readback",
+    "expected_left_rgba8": [
+      0,
+      255,
+      64,
+      255
+    ],
+    "expected_right_rgba8": [
+      255,
+      0,
+      64,
+      255
+    ]
+  },
+  "runs": [
+    {
+      "backend": "Vulkan",
+      "device": 9351,
+      "dispatches": 1,
+      "draws": 4,
+      "driver": "NVIDIA",
+      "driver_info": "610.88",
+      "expected_match": true,
+      "extent": [
+        8,
+        4
+      ],
+      "gpu": "NVIDIA GeForce RTX 3060",
+      "native_diagnostics_after_destruction": null,
+      "native_validation_effective": null,
+      "negative_control_rejected_draw_without_pipeline": true,
+      "passes": 3,
+      "requested_flags_bits": 0,
+      "rgba8_hex": "00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff",
+      "valid_fixture_api_validation_errors": 0,
+      "vendor": 4318,
+      "wgpu": "30.0.2"
+    },
+    {
+      "backend": "Dx12",
+      "device": 9351,
+      "dispatches": 1,
+      "draws": 4,
+      "driver": "32.0.16.1088",
+      "driver_info": "",
+      "expected_match": true,
+      "extent": [
+        8,
+        4
+      ],
+      "gpu": "NVIDIA GeForce RTX 3060",
+      "native_diagnostics_after_destruction": null,
+      "native_validation_effective": null,
+      "negative_control_rejected_draw_without_pipeline": true,
+      "passes": 3,
+      "requested_flags_bits": 0,
+      "rgba8_hex": "00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff",
+      "valid_fixture_api_validation_errors": 0,
+      "vendor": 4318,
+      "wgpu": "30.0.2"
+    },
+    {
+      "backend": "Vulkan",
+      "device": 9351,
+      "dispatches": 1,
+      "draws": 4,
+      "driver": "NVIDIA",
+      "driver_info": "610.88",
+      "expected_match": true,
+      "extent": [
+        8,
+        4
+      ],
+      "gpu": "NVIDIA GeForce RTX 3060",
+      "native_diagnostics_after_destruction": null,
+      "native_validation_effective": null,
+      "negative_control_rejected_draw_without_pipeline": true,
+      "passes": 3,
+      "requested_flags_bits": 3,
+      "rgba8_hex": "00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff",
+      "valid_fixture_api_validation_errors": 0,
+      "vendor": 4318,
+      "wgpu": "30.0.2"
+    },
+    {
+      "backend": "Dx12",
+      "device": 9351,
+      "dispatches": 1,
+      "draws": 4,
+      "driver": "32.0.16.1088",
+      "driver_info": "",
+      "expected_match": true,
+      "extent": [
+        8,
+        4
+      ],
+      "gpu": "NVIDIA GeForce RTX 3060",
+      "native_diagnostics_after_destruction": null,
+      "native_validation_effective": null,
+      "negative_control_rejected_draw_without_pipeline": true,
+      "passes": 3,
+      "requested_flags_bits": 3,
+      "rgba8_hex": "00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff00ff40ff00ff40ff00ff40ff00ff40ffff0040ffff0040ffff0040ffff0040ff",
+      "valid_fixture_api_validation_errors": 0,
+      "vendor": 4318,
+      "wgpu": "30.0.2"
+    }
+  ],
+  "comparison": {
+    "all_expected_pixels_match": true,
+    "all_rgba_bytes_equal": true,
+    "all_vendor_device_fields_equal": true,
+    "physical_adapter_identity_proven": false,
+    "adapter_identity_limit": "Vendor/device/name agree; LUID identity was not measured",
+    "negative_control": "All four runs reject a draw with no pipeline through wgpu API validation, before submit"
+  },
+  "unexecuted": [
+    "Full Study::scenario and multi-stage bloom native lowering",
+    "MRT, mip/subresource, history/reset and native canonical revision tests",
+    "wgpu Surface/Windows display, free camera, resize/minimize and pending shutdown acceptance",
+    "wgpu-hal standalone implementation and safety audit",
+    "Effective Core/SyncVal, D3D12 Debug Layer/GBV and post-destruction warning/error collection",
+    "Failure injection, actual OOM/device loss and long-running resource stress",
+    "CPU/GPU performance or memory comparison; full Bistro GPU rendering"
+  ],
+  "production_renderer_changed": false,
+  "probe_commit": "f3b17a7f686bb4f29ca87153124f871959a73473",
+  "depth_mutation_control": {
+    "mutation": "In scenario(), use empty draws for the depth-only pass; color draws unchanged",
+    "command": "renderer-foundation-probe.exe",
+    "observed_backend": "Vulkan",
+    "exit_code": 1,
+    "expected_blue": 64,
+    "observed_blue": 255,
+    "later_dx12_run": false,
+    "log": "depth-negative-control.log",
+    "temporary_mutation_committed": false,
+    "failure_log": "Error: \"NVIDIA GeForce RTX 3060 fixture pixels differ: 00ffffff00ffffff00ffffff00ffffffff00ffffff00ffffff00ffffff00ffff00ffffff00ffffff00ffffff00ffffffff00ffffff00ffffff00ffffff00ffff00ffffff00ffffff00ffffff00ffffffff00ffffff00ffffff00ffffff00ffff00ffffff00ffffff00ffffff00ffffffff00ffffff00ffffff00ffffff00ffff\""
+  }
+}

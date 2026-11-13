@@ -2,9 +2,9 @@
 
 **対象:** Codexおよび実装担当者  
 **作成日:** 2026-11-12  
-**文書バージョン:** 2.0
+**文書バージョン:** 2.1
 
-**実装言語・対象API:** Rust / Vulkan / D3D12（実行基盤はB0で再評価）
+**実装言語・対象API:** Rust / Vulkan / D3D12（native基盤を改修、上位の固定操作を置換）
 **設計の中心:** RenderGraphによる描画処理の宣言・解析・実行
 
 > 到達目標は、Bistroをテクスチャ付きPBR・影・線形HDRとトーンマッピングで描画し、利用側の独自shaderによる多段Bloomを追加・交換できる、ゲームエンジン向けRendererである。
@@ -19,7 +19,7 @@
 | 項目 | 方針 |
 |---|---|
 | GPU処理の標準的な投入経路 | RenderGraphとする。標準描画機能もカスタムパスも、原則として同じ経路を使う。 |
-| 採用基盤 | 現行の`ash`・`vk-mem`による自前実装も含め、改修・置換・外部基盤利用をB0で比較する。自前実装を目的にしない。 |
+| 採用基盤 | [B0の比較](#foundation-selection)により、nativeの低レベル所有・同期・退役を再利用し、上位の固定操作をowned命令・Program/bindingへ置換する。自前実装を目的にしない。 |
 | 資源割当・同期・寿命 | Rendererとして保証する責任を明確にし、採用基盤へ委譲する範囲と自前で実装する範囲を決める。既存allocator等を利用し、用途のない自作を増やさない。 |
 | Graphとパスの境界 | パス作者が処理と資源アクセスを定義し、基盤がフレーム全体の依存・資源・実行を管理する。新しい効果の追加でGraph本体を編集しない。 |
 | RHIの扱い | 代表的な利用コードから必要な契約を設計する。型名や共通コマンド体系の形を先に固定せず、二APIの実行で確認する。 |
@@ -28,7 +28,7 @@
 | 公開API | エンジン向けAPIとGraph APIへ、`ash::vk`や`vk_mem`の型を露出させない。 |
 | 最適化の判断 | 出力の正しさとCPU時間・GPU時間・メモリ使用量の計測で判断する。薄い抽象化だけで高速化を保証しない。 |
 
-従来の`wgpu`不採用と自前の同期・物理配置を優先する選択も、B0の比較対象へ戻す。外部基盤の採用は未決定であり、二API、独自パス、所有・寿命、診断、製品費用を満たすか採用versionの一次資料と小試作で確認する。物理aliasingや複数queueの直接制御を、Bistro初期描画の一律要件にしない。
+`wgpu`もB0で再評価した。二APIをまとめて委譲する利点と、製品経路の保証・検査の配置を比較した採用理由を下記へ記す。物理aliasingや複数queueの直接制御を、Bistro初期描画の一律要件にしない。
 
 ## 2. 最終目標と対象範囲
 
@@ -65,7 +65,7 @@ Renderer内には、Mesh・Material等をモデル単位に集約するModel構�
 
 ### 3.1 現行のashとvk-memの役割
 
-以下は現行実装の構成であり、新計画での維持義務ではない。B0の採用判断までは現行の契約を適用し、置換時は移行先の契約と検証方法を更新する。
+以下は現行実装の構成である。B0では低レベルの再利用を選んだが、固定操作と内部構成の維持義務はない。置換時は移行先の契約と検証方法を更新する。
 
 `ash`はVulkanに近いバインディングであり、独自のRenderGraphやGPU寿命管理を提供する層ではない。`vk.xml`から生成された型と関数を使い、Vulkanバックエンドの処理を記述する。[^ash]
 
@@ -88,6 +88,133 @@ vk-mem = "0.5"
 Vulkanローダー、対応ドライバー、検証レイヤーの有無は、ビルド可否と分けて確認する。SDK・バインディングに定義があるだけでGPUが対応するとは判断せず、使用するfeatureは問い合わせと有効化を行う。[^features]
 
 Rustのedition、MSRV、シェーダーコンパイラー、ウィンドウ接続用クレートは既存環境との整合を見て決定する。外部ツールに依存する場合はバージョンと再現手順を固定し、開発者個人の環境にだけ存在する生成物へ依存しない。
+
+<a id="foundation-selection"></a>
+
+### 3.3 Bistro到達から選んだ基盤と移行範囲
+
+`renderer-7ft.1.3`、調査日2026-11-14。**native基盤の改修と上位操作の置換を採用する。**
+Vulkanはash 0.38／vk-mem 0.5、D3D12は現行の生成bindingsとDevice/Fence所有を出発点にする。
+第7章のA（構築時owned命令＋binding/attachment由来アクセス）を両APIへ接続し、
+固定`ComputeTransform`やeffect別`ProgramKind`を一般パスの拡張手段にしない。
+これはB1以降の実装方針の決定であり、現行Rendererへの汎用パス追加の完了ではない。
+
+判断の順序は、確定要件への適合、保証・製品費用を管理できる境界、Bistroまでの総作業、保守負担とする。
+既存コード量や過去の工数を採用理由にしない。再利用するのは、将来も必要な契約を実装し、
+失敗・pending・最終解放までの回帰試験を持つ部品である。汎用化で前提が変わる箇所は再検証する。
+aliasing、複数queue、vendor固有最適化の直接制御は今回の選定条件にしていない。
+
+#### 同じ利用コードで比較した適合
+
+入力は第7章の`Study::add`／`scenario`／`bloom`で固定する。
+下表の「対応可能」は一次資料とAPI写像からの設計判断であり、全入力のnative実行済みを意味しない。
+
+| 同一入力 | 固定操作を維持 | native上位置換 | safe wgpu 30.0.2 | wgpu-hal 30.0.2系を直接利用 |
+|---|---|---|---|---|
+| 一passの複数draw、短命sliceの借用 | 内部batchのみ。公開APIの一般化が必要 | owned列へ変換しnative記録へ渡す | owned列からRenderPassへ変換可能。RenderBundleも選べる | owned列からunsafe encoderへ変換可能 |
+| depth-only／color-only、MRT／mip View | color+depth固定、mip0/layer0限定 | attachment配列とsubresource計画を追加 | optional depthとcolor配列、TextureViewへ写像 | 同様。ただし状態・範囲・寿命を自前保証 |
+| 独自Computeと多段Bloom | 固定変換の追加では要件未達 | Program/binding/dispatch。依存dispatchを別passにする | ComputePipeline/BindGroup/ComputePassへ写像 | pipeline/bindingと明示barrierへ写像 |
+| 履歴初回／継続／resize | Vulkanに既存契約、D3D12未対応 | canonical identity/revisionを拡張 | 強いhandleとqueue追跡を委譲。Graphの内容version/resetは自前 | identity、状態、所有、完了を自前で実装 |
+| Windows二API表示と操作 | Vulkan表示のみ、自由cameraなし | Vulkan WSI再利用＋D3D12 DXGI新規 | 両backendのSurfaceを委譲。camera/event loopは利用側 | Surface機構を利用し、世代・完了・失敗を統合 |
+| CPU/Linuxと既存受入 | 維持できるが最終要件未達 | GPU非依存GraphとLinux Vulkan build/CPU試験を維持 | GPU非依存Graphを残す設計が必要 | 同左。unsafe契約の二APIレビューも必要 |
+
+全候補でModel、素材cook、PBR/IBL/CSM、Bloom、自由camera、画像差分の校正と性能測定は利用側／Rendererで作る。
+外部基盤がBistroの描画機能やGraphのproducer/cullingを完成させるわけではない。
+現行範囲は[Graphの形式・固定操作](../../crates/renderer/src/graph.rs)、
+[Vulkanの固定Program](../../crates/renderer/src/backends/vulkan/graph/shaders.rs)、
+[D3D12のprepare対応範囲](../../crates/renderer/src/backends/d3d12/graph.rs)から確認した。
+高位のrenderer/engineをさらに採用する案は、そのscene/material/Graph境界を第7章へ再適合する費用が増えるため、
+直接二APIを提供するwgpuを外部案の代表とした。候補網羅を採用の前提にしない。
+
+#### 外部案の利点と製品方針との境界
+
+[wgpu 30.0.2の固定版](https://github.com/gfx-rs/wgpu/releases/tag/v30.0.2)を比較対象とする。
+native Vulkan/D3D12、資源の強い所有、同期・退役、shader変換、Surfaceをまとめて委譲できるため、
+**二APIの最初の画像へ到達する実装負担が最も小さいと見込む外部案**である。速度の実測順位ではない。
+即時のpass encoderにAのowned列を走査して渡せるため、callback案Bへの変更やnative型の公開は必須ではない。
+WGSLから両backendへ生成する選択も可能だが、既存SPIR-V/DXIL生成との移行・ABI再検証が要る。
+
+ただし、[`InstanceFlags::VALIDATION`](https://github.com/gfx-rs/wgpu/blob/v30.0.2/wgpu-types/src/instance.rs)はVulkan layer／D3D12 Debug Layer等の制御であり、
+[wgpu-coreのpublic API検査](https://github.com/gfx-rs/wgpu/blob/v30.0.2/wgpu-core/Cargo.toml)を
+製品からコンパイル除外するスイッチではない。
+`strict_asserts`の追加検査とも区別する。
+[draw記録](https://github.com/gfx-rs/wgpu/blob/v30.0.2/wgpu-core/src/command/render.rs)は
+pipeline/bindingとdraw範囲等を扱い、Rendererが不変な命令として保証した後にもcoreへ渡すたびに検査する。
+これらは一般的なsafe wgpu APIの保証に必要であり、wgpuの不具合や不要な診断という意味ではない。
+一方、privateな保証済み入力についてdraw/submitで同じ内容を再検査しない本Rendererの規約とは境界が異なる。
+
+対案として[RenderBundle](https://github.com/gfx-rs/wgpu/blob/v30.0.2/wgpu-core/src/command/bundle.rs)は
+finishで検査したdrawを再実行でき、固定sceneの再検査を減らせる。
+execute時の同一Device、attachment適合、resource liveness、使用scope、必要な初期化は別に残る。
+それらを一括して開発診断とは分類しない。動的なdraw列の再構築とCompute記録には同じ回避策を適用できず、
+publicなunchecked draw/dispatchや全core検査offの設定としては使えない。
+raw HAL encoderへの[escape hatch](https://github.com/gfx-rs/wgpu/blob/v30.0.2/wgpu-core/src/as_hal.rs)も
+通常のwgpu記録済みencoderへそのまま混在できる経路ではなく、状態・barrier・寿命の責務を戻す。
+
+safe wgpuへ保証境界を委譲し、Renderer側の重複検査だけを避ける案は合理的な代案である。
+採るなら「独立した追加診断の除去」と「coreの反復契約検査の許容」を区別した明示的な方針改訂が要る。
+今回は[検証方針](../guides/validation-policy.md)とAGENTSの製品規約を維持し、
+core forkや非公開unchecked経路を採用の前提にしない。safe wgpuを遅いと測定したための不採用ではない。
+
+[wgpu-hal](https://docs.rs/wgpu-hal/30.0.2/wgpu_hal/)を直接使えば、二APIのnative変換とallocator等を利用しつつ、
+呼出側が検査・状態追跡・barrier・生存期間を保証できる。
+ただしunsafe APIであり、公式文書自身も安全性要件の記述が完全でないと説明する。
+coreを外しても安全なGraph/runtimeは得られず、二APIの状態と実装固有契約の調査、所有・失敗処理・WSI受入が残る。
+既存native所有者とHAL所有者を併用して曖昧な回収にせず、一貫した所有連鎖へ移す費用も要る。
+今回の小試作はsafe wgpuの実現可能性を調べるもので、HAL単独の健全性を実証していない。
+HALへの置換は候補として残すが、Bistroまでに減る作業の確実な根拠が不足するため選ばない。
+
+#### 工数・試験・保守の比較
+
+以下は**熟練担当1名の計画用人日レンジ**で、実測工数・納期・性能の予測保証ではない。
+外部案にも同じ画質・対象全量・二API表示・最終解放後までの検証を含める。
+共通のB2/B3/B4/B5は各10–17／10–18／4–7／7–12人日、合計31–54人日を仮置きする。
+仕様探索、失敗経路、画像校正、ガイドを含み、別OS実GPUや高度な最適化は含まない。B1後に再見積もりする。
+
+| 候補 | B1とWindows二API表示・camera統合 | 共通分込みBistro総工数 | 移行・保守と判断 |
+|---|---|---|---|
+| 固定Operation維持／D3D12へ完全移植後に一般化 | 要件未達の移植に手戻りが加わる | 固定操作のままでは完了できない | effect列挙と二系統APIを温存するため不採用 |
+| **native上位置換＋低レベル再利用** | B1 18–32＋表示5–10 | **54–96** | unsafe native実装は自前保守。既存の所有・WSI回帰を拡張し、保証境界と製品費用を管理できるため採用 |
+| native全面置換 | 上記に再初期化・転送・退役・WSI等15–30を追加 | 69–126 | 同じnative契約の再確立が必要。上位置換で解ける要求に全面置換を課さない |
+| safe wgpu（保証の委譲に合わせた方針改訂を許す比較） | 17–31 | 48–85 | native実装負担は小さい。ただし現規約のままcore除去済みとはできず、今回の適合案ではない |
+| wgpu-hal直接 | 29–50 | 60–104 | backend実装を共有できるが、core相当の保証と移行受入は自前。HAL単独の縦切りは未実証で、費用削減を確定しない |
+| wgpu/core forkで保証済み命令の検査を除去 | safe案に10–25以上を仮加算 | 58–110以上、上限未確定 | unsafe契約再確立とupstream更新への追従が増える。未設計部分を確実な短縮として採用しない |
+
+外部版更新によるAPI変更・shader出力差・依存監査と、nativeのSDK/bindings/VMA更新・VUID追従は、
+いずれも将来の保守費用である。たとえばwgpu 30の表示はacquire→submit→`Queue::present`であり、
+古いSurfaceTexture::presentの例をそのまま使わない。
+[Surface::configure](https://docs.rs/wgpu/30.0.2/wgpu/struct.Surface.html#method.configure)のidle待機、
+ゼロextentや旧SurfaceTexture保持時の制約も、最小化・resize・pending終了の統合費用へ含めた。
+submit完了callbackを画面への表示完了と同一視しない。
+現行一crateを分割することや互換wrapperは移行の先行条件にしない。
+採用案の最大のリスクは、D3D12画像・PSO/descriptor・DXGI表示の新規量と一般化の安全性である。
+まずB1の二API縦切りで見積もりと所有設計を更新し、scopeを超える費用が判明すれば本比較へ戻す。
+
+#### 採用案の責務と移行順
+
+| 対象 | 再利用／置換と保証 |
+|---|---|
+| Vulkan低レベル | Instance/Device、VMA資源所有、flush/invalidate、staging lease、Fence/timeout、pending/退役、WSI世代とpresent fence、最終破棄診断を再利用する。一般binding参照を含む保持へ拡張 |
+| D3D12低レベル | COM Device/queue/Fence、投入前の所有確立とSignal失敗時の保持、診断lifetimeを再利用。画像、PSO/root signature/descriptor、registry/import、再利用、DXGIは新規 |
+| Graph | producer/hazard/cullingと回帰fixtureを再利用候補にする。owned draw/dispatch/copy、attachment配列、stageとsubresourceを導出する上位表現へ置換し、範囲解析を再検証 |
+| Program/binding | 固定Program群を不変なshader/pipeline/layout/binding版へ置換。生成・作成・更新境界でABI/owner/範囲/Device能力を保証し、更新は新しい版を作る |
+| shader/tool | 固定SDKのGLSL→SPIR-V、SPIRV-Cross→HLSL→DXILを出発点にし、任意の管理下programにmanifest/reflectionを拡張。新effectは利用側shader。未信頼shaderのsandbox化はしない |
+| engine/sample | Modelとcookは利用側。旧Vertex/Materialと固定合成を標準APIとして温存せず、in-repo consumerを更新。表示event loop、自由camera、固定巡回は利用側に置く |
+| allocation | VulkanはVMAを継続。D3D12の最初の画像fixtureはcommitted allocationで成立させ、B2で全素材の常駐量・budget・粒度を測ってsuballocationの必要性と外部allocator採否を決める。収容可能とは未証明 |
+
+初回対象は既存Windows x64／RTX 3060のVulkan 1.3とD3D12。
+GPU非依存のCPU経路、LinuxのCPU/Vulkan build・通常試験を維持し、Linux表示・実GPUを新たな受入済み範囲へ広げない。
+Vulkanの必要featureとWSI拡張は現行契約を維持し、新しいformat/binding能力は作成時に照会・有効化する。
+Forward/GGX、静的IBL、CSM/PCF、RGBA16F、Neutral、FXAAを第15章の出発案として採用し、
+具体的なshadow設定・mip・tangent・budgetは各縦切りで校正する。
+
+移行はB1のProgram/binding保証→独自Raster二API→Compute/copy→永続資源・失敗/退役→二API表示の順を基本とする。
+共通契約を先に巨大なRHI traitへ固定せず、同じfixtureの二API結果から抽出する。
+各段階で適用範囲のrelease＋追加検証＋厳格native検証と、release＋追加検証/専用診断除外＋native Disabledを別実行する。
+保証済み本文の再走査を移す場合は、保証期間・失効条件・残る同期/容量/失敗/完了処理を記録する。
+既存のnative受入を落とさず、旧経路は新経路の該当回帰が揃ってから置換する。互換APIの長期併存は目的にしない。
+比較試作の再現・実行範囲は[開発手順](../guides/development.md#foundation-comparison)と
+[現在の検証状況](../verification/current.md#foundation-comparison)を参照する。
 
 ## 4. 設計の中心は「グラフを実行する基盤」
 
@@ -143,7 +270,7 @@ docs/
 
 Vulkan・D3D12・Metalの全操作を列挙した巨大な`Backend`トレイト、共通コマンドバッファの全仕様、全拡張を表す列挙型、独立利用可能なRHIクレートは先に作らない。
 
-B0で自前基盤を選ぶ場合、Vulkanバックエンド内でashを直接使ってよい。外部基盤を選ぶ場合は、その公開契約と委譲範囲を記録する。少数の検証用パスにネイティブな命令記録が必要な場合も、実験用・バックエンド内部の経路として局所化する。
+B0で選んだnative基盤では、Vulkanバックエンド内でashを直接使ってよい。少数の検証用パスにネイティブな命令記録が必要な場合も、実験用・バックエンド内部の経路として局所化する。
 
 ### 5.2 最初から守る境界
 
@@ -264,7 +391,7 @@ callbackでも型付きpass data／bindingから宣言を作れるため、callb
 任意captureをnative記録まで保持する契約を標準経路へ増やさずに済むためである。
 Bも借用可能で、`'static`や全資源の`Arc::clone`を必須にはしない。
 大量の除去対象drawやlate bindingではBの利益があり得るが、CPU速度の優劣は今回の試作から結論しない。
-基盤によってBが自然でAへの変換費用が大きい場合は、`.1.3`で同じ利用例と契約を使って再評価する。
+基盤によってBが自然でAへの変換費用が大きい場合も比較し、[基盤選定](#foundation-selection)ではAを維持した。
 型名・crate構成・内部enum・backendを凍結する判断ではない。
 
 ### 7.2 同じ入力で確認する利用例
@@ -389,7 +516,7 @@ Rustのcode size・cache効率・native record時間の計測ではない。
 同じ資源を繰り返す場合と異なる資源、動的binding、解像度変更、検証on/offを比較し、
 pipeline初回作成と定常状態を分離する。専用arena、plan cache、並列recordは測定後の選択とする。
 GPU同期・寿命・shader ABI・画像結果・Windows表示・性能の確認はB1以降の実機受入へ残す。
-基盤の維持／改修／置換／外部利用と総工数の決定は`.1.3`で行う。
+基盤の維持／改修／置換／外部利用と総工数の比較は[3.3節](#foundation-selection)に記す。
 
 ## 8. リソース所有権とGPU寿命
 
@@ -751,7 +878,7 @@ PBR/IBLの算法は[Filamentの解説](https://google.github.io/filament/main/fi
 tone mappingは[Khronosの参照shader](https://github.com/KhronosGroup/ToneMapping/blob/main/PBR_Neutral/pbrNeutral.glsl)を根拠にする。
 CSM資料のD3D10/11向け実装説明をD3D12のAPI契約へ流用しない。
 これは画質・構成の出発案であり、vendor固有の最適化や未計測の高速化ではない。
-採用基盤・公開APIの選定は後続のB0課題で行い、Vulkan/VMA等の同期・寿命・能力契約と
+採用基盤・公開APIは[基盤選定](#foundation-selection)に従い、Vulkan/VMA等の同期・寿命・能力契約と
 [製品・開発の検証方針](../guides/validation-policy.md)を維持する。一般推奨からの新しい例外は設けない。
 
 <a id="bistro-conditions"></a>
@@ -802,7 +929,7 @@ CyclesのBSDF/環境積分/影をRendererのGGX/IBL/CSMと等価な正解画像�
 B3ではこの処理済み環境からdiffuse irradiance・roughness別specular・BRDF積分を生成し、
 前処理tool・全設定・出力hashを固定して受け入れる。
 
-上記のForward/CSM/PCF/RGBA16F/FXAAは初期実装案のままで、基盤選定・実GPU能力と画質確認を代替しない。
+上記のForward/CSM/PCF/RGBA16F/FXAAを初期実装案として採用したが、実GPU能力と画質確認を代替しない。
 JSONにCSMの4分割/2048/120 m/λ=.6/3×3 PCF/texel安定化/末尾10% blendという出発profileを明記した。
 depth/slope/normal bias、FXAA、Bloomの詳細値は採用実装に依存するためB3/B4で校正し、受入前に固定する。
 太陽の角直径を記録したことを、CSM+PCFが物理的な面光源影を再現する保証へ読み替えない。
@@ -845,6 +972,11 @@ warm-up・複数runのp50/p95・揺れ・VSyncと表示待ちを記録する。
 設計検証は広く行い、全将来機能の即実装や公開APIの凍結は要求しない。
 候補を網羅する調査で長期化させず、共通の小さな描画・Compute例と比較観点を揃えて採用可能な第一案を選ぶ。
 採用後にB1以降をbackend/契約/描画成果ごとの検証可能な縦切り課題へ分割する。
+
+要求・利用コード・[基盤と移行範囲](#foundation-selection)の設計を完了した。
+後続はBeadsのB1 `.2.1`〜`.2.6`（作成保証、owned Graph、Raster、Compute/copy、寿命、表示）、
+B2 `.3.1`〜`.3.3`、B3 `.4.1`〜`.4.3`、B4 `.5.1`〜`.5.2`、B5 `.6.1`〜`.6.3`へ分解した。
+課題の状態・依存と詳細な受入条件はBeadsを正とする。B0完了をBistro実装・実GPU受入の完了とは扱わない。
 
 ### B1: 公開パスと資源・shader契約の二API実証
 
@@ -906,10 +1038,10 @@ B0〜B5の一律blockerにはせず、採用時は能力・正しさ・利益と
 |---|---|
 | Bistroの版・対象・変換・camera/lights・品質 | B0の最初に棚卸しして固定する。部分実証と最終対象を区別する。 |
 | APIの形、Graph意味論、資源範囲、所有・error | B0の代表利用コードで設計し、B1の二API実行とB2以降の実シーンから改訂する。 |
-| 採用基盤、依存、内部RHI、crate配置 | B0で既存維持・改修・置換・外部基盤を比較する。現在の選択は維持義務ではない。 |
-| 対象OS/GPU、最低能力、shader言語・compiler | 現行環境を材料にB0で再評価し、採用versionと再現条件を記録する。対象APIはVulkan/D3D12。 |
+| 採用基盤、依存、内部RHI、crate配置 | B0でnative上位置換＋低レベル再利用を採用。B1の二API縦切りで見積もりと内部契約を改訂。独立RHI/crate分割は先行しない。 |
+| 対象OS/GPU、最低能力、shader言語・compiler | 初回Windows/RTX3060、Vulkan1.3/D3D12、固定GLSL/SPIR-V→HLSL/DXILを採用。新format/binding能力はB1で照会・実証。Linux CPU/Vulkan buildを維持。 |
 | 座標・色、texture/material、pipeline/binding/ABI | B0で要求を定め、B1で実証しB2/B3の素材・画質で確認する。 |
-| Forward/Deferred、影、HDR format、alpha方式 | B0のBistro要求と実装費用から出発案を選び、B2/B3で検証する。 |
+| Forward/Deferred、影、HDR format、alpha方式 | Forward/GGX、静的IBL、CSM/PCF、RGBA16F、Neutral/FXAAを出発案に採用。alphaは原本保持。B2/B3で具体値を校正・検証。 |
 | 物理aliasing・複数queue等 | Bistro実測で必要性を判断する後続候補。先行実験や自前制御を一律必須にしない。 |
 | 画質・性能予算とAPI採用範囲 | B0で比較方法を決め、各段階の実測とB5の統合受入で具体化する。API変更ゼロは保証しない。 |
 
@@ -927,7 +1059,7 @@ Metalも比較候補とした。Apple向けのAPI・shader検証手段がある�
 Apple展開が優先要件になった場合やWindows実機を維持できなくなった場合は、
 利用可能な機材・shader変換・検証手段を揃えて選定を見直す。
 
-以下は旧M4で確認した現行実装の範囲である。新計画の採用基盤と追加確認はB0/B1で決める。
+以下は旧M4で確認した現行実装の範囲である。新計画の採用基盤は[3.3節](#foundation-selection)、追加実装と確認はB1以降に従う。
 
 | 項目 | 確認した範囲と制限 |
 |---|---|
@@ -937,7 +1069,7 @@ Apple展開が優先要件になった場合やWindows実機を維持できな�
 | 検証 | Device作成前のDebug Layer／GBV設定、InfoQueueとGBV有効の起動報告、最終COM Release後までの診断を3回反復確認。shaderのGBV実行と画像等価性は未実施。GBVは性能測定と分ける。[^d3dvalidation] |
 | CI | Windows／Linuxのbuild・check・CPU試験を維持し、WindowsのD3D12単独／Vulkan併用を追加。実GPU runnerはなく、管理者のWindows実機で逐次受入する。[実行手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を使う。 |
 
-旧M4は固定操作をD3D12へ移植してから公開契約を抽出する計画だった。未着手分はB0〜B5へ置換し、次の作業をB0の要求・利用例・方式選定とする。二APIで同じパスと入力を比較する目標は維持する。
+旧M4は固定操作をD3D12へ移植してから公開契約を抽出する計画だった。未着手分はB0〜B5へ置換した。B0の設計に続き、次の作業はB1の一般Program/bindingとownedパスの二API実証とする。
 D3D12での表示経路を、共通契約の検証に先立つ必須条件にはしない。
 ただし[Bistroの確定要件](#bistro-requirements)により、両APIでのWindows表示は最終受入の必須条件である。
 
@@ -1094,7 +1226,7 @@ CPUテスト、実GPUテスト、性能測定を分けて実行・報告する�
 目標はBistroのテクスチャ付きPBR・影・HDR/トーンマッピングと、
 利用側独自Bloomを、同じパス定義でVulkan/D3D12へ接続することです。
 
-B0で素材・画質・API利用例を具体化し、既存維持・改修・置換・外部基盤を比較してください。
+B0で決定した素材・画質・API利用例と3.3節の採用基盤・移行範囲を入力に、B1の縦切り実装へ進んでください。
 既存基盤の維持や自前実装を目的にせず、進めやすさ・総工数・UX・品質で選んでください。
 公開APIを少数の成功例だけで決めず、実装は検証可能な縦切りに分けてください。
 

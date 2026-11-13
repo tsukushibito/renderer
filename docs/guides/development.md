@@ -286,6 +286,42 @@ exportは次frameの内容・同期・寿命の実機検証ではない。件数
 通常の`cargo test --workspace`はexample内の試験を実行しないため、上記の明示指定を使う。
 CIもCPU構成でこの試験と実行を行い、その他の構成では全target check／Clippyを適用する。
 
+<a id="foundation-comparison"></a>
+
+## 採用基盤を比較する独立試作
+
+[基盤比較と採用理由](../design/implementation-policy.md#foundation-selection)の外部案は
+[tools/foundation-probe](../../tools/foundation-probe/Cargo.toml)で再現する。
+wgpu 30.0.2の独立workspaceであり、Rendererの依存・featureへ追加しない。
+Windowsの物理GPUとVulkan/D3D12の両runtimeが必要。backend欠落やsoftware adapterは失敗し、skip/fallbackしない。
+GPU作業は他のprobeと並行実行しない。
+
+```powershell
+cargo fmt --manifest-path tools/foundation-probe/Cargo.toml -- --check
+cargo check --locked --manifest-path tools/foundation-probe/Cargo.toml --all-targets
+cargo clippy --locked --manifest-path tools/foundation-probe/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path tools/foundation-probe/Cargo.toml
+cargo run --locked --release --manifest-path tools/foundation-probe/Cargo.toml
+cargo run --locked --release --manifest-path tools/foundation-probe/Cargo.toml -- --native-validation
+cargo deny --manifest-path tools/foundation-probe/Cargo.toml --locked --config tools/foundation-probe/deny.toml check
+```
+
+各runはVulkan→D3D12を逐次実行し、8×4のdepth-only/color-only Raster→利用側Compute→readbackと
+期待128byte／二APIの一致を確認する。通常testは実GPU試験をignoreし、明示実行は
+`cargo test --locked --release --manifest-path tools/foundation-probe/Cargo.toml -- --ignored`を使う。
+CIは両OSのbuild/Clippy、format、依存監査を担当し、実GPUを実行しない。
+独立監査設定はfoldhash 0.2.0のZlibを対象packageだけ許可し、ライセンス本文の条件を確認した。
+Rendererのruntime allowlistとadvisory除外は変更していない。
+
+flags空と`--native-validation`（DEBUG＋VALIDATION要求）を区別し、
+両方でpipelineなしdrawをcoreが拒否する負の対照も実行する。無効命令はsubmitしない。
+この要求はnative検証の実効や破棄後の診断ゼロを証明しない。結果の該当値は未観測のnullであり、
+既存のCore/SyncVal・D3D12 Debug Layer/GBVの厳格受入を代替しない。
+CPUの全`Study::scenario`は従来の比較試作で確認し、この実機fixtureでは多段Bloom/MRT/mip/履歴等を実行しない。
+Windows表示・自由camera・resize/最小化・pending終了とnative失敗注入もB1以降の受入へ残す。
+source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/foundation-comparison.json)を参照する。
+試作の計時・性能比較・全Bistro常駐の合否は取得しない。
+
 ## 製品・開発用の検証設定
 
 実装・レビューでは[製品版と開発用の検証方針](validation-policy.md)に従います。

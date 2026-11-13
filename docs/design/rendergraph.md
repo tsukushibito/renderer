@@ -12,7 +12,8 @@ Graphの宣言・解析と、各backendが実行できる操作の範囲は区�
 以下は現在のAPI・動作の契約である。backend選択、追加検証、診断保持は独立に選ぶ。
 
 次の開発は[実装方針のBistro計画](implementation-policy.md#bistro-roadmap)に従う。
-まずB0で実シーンの要求・公開API利用例・採用基盤を設計し、B1で利用側独自パスを二APIで実証する。
+B0で実シーンの要求・公開API利用例と[基盤の採用・移行範囲](implementation-policy.md#foundation-selection)を設計した。
+B1では構築時owned命令とbinding/attachment由来アクセスを一般化し、nativeの低レベル所有を再利用して二APIで実証する。
 現行の固定操作、内部表現、構築順による意味論、runtimeの再利用は維持義務ではない。
 以下の現行契約は、変更を実装・検証するまで有効であり、計画だけで対応済みとは扱わない。
 
@@ -299,7 +300,8 @@ ABIと信頼境界の検証が追加で必要になる。現在の限定操作�
 型付きbinding／attachmentからアクセスを導き、構築時に命令を所有する案をB1の出発点とした。
 frame内借用が可能な遅延callbackとも同じ利用例で比較する。CPU試作は将来の独自program、
 depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、上記の現行対応範囲を拡張しない。
-基盤選定は別途B0で行い、実装変更までは現行のproducer・import・寿命契約を維持する。
+基盤は[B0の比較](implementation-policy.md#foundation-selection)でnative上位置換＋低レベル再利用を選んだ。
+実装変更までは現行のproducer・import・寿命契約を維持する。
 
 ## エンジン入力と標準描画
 

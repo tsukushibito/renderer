@@ -13,14 +13,14 @@
 対象は屋外全体、太陽光＋IBL＋影、PBR/HDR/tone mappingと利用側Bloom、基準1920×1080、
 自由カメラと固定視点・自動巡回、両APIのWindows表示・操作、初回受入は既存RTX 3060である。
 要件の合意を実装・実GPU受入の成功とは扱わない。
-既存基盤の再利用は必須にせず、B0で維持・改修・置換・外部基盤を比較する。
+B0で維持・改修・置換・外部基盤を比較し、[native上位置換＋低レベル再利用](../design/implementation-policy.md#foundation-selection)を採用した。
 旧M4の6/22完了は準備・Device・buffer実行の実績であり、新計画の進捗率へ流用しない。
 旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
 
 素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
 全ゼロalphaに加え、最終camera/path/light/IBL/露出と再現・比較手順を下記のとおり固定した。
-`renderer-7ft.1.1`の成果は要求・比較入力の固定であり、公開APIや基盤選定のB0全体完了ではない。
-Renderer本体・shader・native経路は変更せず、以降のGPU・Rust試験表は従来の固定ソースの実績として保持する。
+要求・比較入力の固定に続き、公開APIの利用例と基盤比較・採用・移行範囲を設計し、B0の設計を完了した。
+Renderer本体・管理下shader・native経路は変更せず、以降の既存GPU・Rust試験表は従来の固定ソースの実績として保持する。
 BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
 画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
 
@@ -31,7 +31,7 @@ BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12�
 `renderer-7ft.1.2`の[比較と第一案](../design/implementation-policy.md#public-api-comparison)を記録した。
 構築時owned命令案Aとframe内借用callback案Bに同じ型付きpass dataを使い、記録時期と依存宣言の軸を分けた。
 第一案はA＋binding／attachment由来のアクセスである。理由は実命令の確定境界と所有契約の単純さで、
-CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`とB1の二API実証は未完了である。
+CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。B1の実Renderer二API実証は未完了である。
 
 [Rust試作](../../crates/renderer/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較する。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
@@ -62,6 +62,52 @@ native参照の強い保持、canonicalな予定状態、revision、submit失敗
 件数・enum本文byteは構造的な観測であり、nested Vec、callback capture、allocator、catalog等を含む全保持量ではない。
 shader生成・ABI・GPU内容・Windows表示・実GPU性能は今回未実行で、Renderer本体とshaderの実装を変更していない。
 Vulkan指針の用途由来同期・記録から完了までの寿命と検証方針を設計へ適用し、API契約からの例外はない。
+
+<a id="foundation-comparison"></a>
+
+### 基盤の比較・採用と小試作
+
+`renderer-7ft.1.3`の[採用理由・代案・工数・移行範囲](../design/implementation-policy.md#foundation-selection)を記録した。
+固定操作の維持は独自パス要件を満たさず、全面native置換、safe wgpu、wgpu-hal直接利用と比較した。
+採用はnativeの低レベル所有・同期・退役・WSIの再利用と、上位の一般owned命令／Program/bindingへの置換である。
+safe wgpuのnative実装負担の小ささとRenderBundleによる事前検査を認めたうえで、
+現AGENTSの保証済み内容の反復検査を製品経路から外す規約を維持する判断とした。
+nativeの速度優位や工数実績を証明したものではない。B1〜B5に受入条件・依存を持つ17子課題を作成した。
+
+[独立試作](../../tools/foundation-probe/src/main.rs)はwgpu 30.0.2を固定し、Rendererのruntimeへ接続しない。
+短命draw Vecを即時closureからowned planへ移し、depth-only／color-only各2draw、
+利用側WGSL Computeでcolor/depthを読む3passを8×4で記録した。
+submit直後にplanと呼出側textureをDropし、実submissionとmap callbackの完了を待って128byteを照合した。
+source／lockfile／shader／実行ファイルのSHA-256、原byte、adapter情報と4runを
+[共有JSON](foundation-comparison.json)へ保存した。再現は[開発手順](../guides/development.md#foundation-comparison)を参照する。
+
+| 実行要求（release、二backend逐次） | Vulkan | D3D12 |
+|---|---|---|
+| native flags空（bits 0） | 全128byte期待値一致 | 同左、Vulkanとも全byte一致 |
+| DEBUG＋VALIDATION要求（bits 3） | 全128byte期待値一致 | 同左、Vulkanとも全byte一致 |
+| pipelineなしdrawの負の対照 | 両flagsでcore Validation errorを返した。無効命令は未submit | 同左 |
+
+Windows x64、Rust 1.99.0、NVIDIA GeForce RTX 3060、vendor 4318/device 9351、
+Vulkan driver 610.88／D3D12 driver 32.0.16.1088を観測した。
+vendor/device/nameの一致を確認したが、この試作ではLUIDを照合せず、同型複数adapterの同一性を証明しない。
+有効fixtureのwgpu API Validation errorはゼロ。負の対照の期待errorと区別する。
+depthの読取りが結果へ反映されるよう、出力blueは描画depth 0.25のUNORM値64を期待する。
+depth drawを空にした一時変異ではclear値1.0からblue255となり、内容不一致で失敗することを確認して復元した。
+native検証の実効、SyncVal/GBV、最終native解放後のwarning/errorは未観測でJSONのnullとし、
+**この小試作を既存の厳格native受入の合格として数えない。**
+
+全`Study::scenario`／多段Bloom、MRT/mip、履歴revision/reset、Windows表示・自由camera・resize/最小化・
+pending終了、native失敗注入、HAL単独の安全性、全Bistro実行と性能・メモリは今回未実証である。
+全代表入力の比較表はAPI写像の設計判断であり、この3passだけで同期・寿命の全契約を証明しない。
+wgpuは独立workspaceの採用実験に限定し、Rendererの依存とnative実装を変更していない。
+Vulkan指針の能力照会・用途由来同期・所有と実完了、検証方針の保証境界を選定へ適用した。
+API契約・一般推奨・既存GPU受入からの新しい例外、vendor固有最適化、性能主張はない。
+
+統合時にworkspaceのCPU試験65件、API比較9件のdebug/releaseと比較実行、fmt、CPU全target Clippyを確認した。
+独立試作のfmt/check/全target Clippy/通常test（実GPU1件はignore）、release buildと上記4実行が成功した。
+独立依存のcargo-deny 0.20.2はadvisories/bans/licenses/sourcesが成功。
+hashbrown 0.16/0.17とsyn 2/3の重複warningを確認し、advisory除外は追加していない。
+foldhash 0.2.0のZlibは独立試作の監査設定だけで個別許可し、Rendererの依存方針を拡張していない。
 
 <a id="bistro-assets"></a>
 

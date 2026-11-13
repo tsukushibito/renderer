@@ -26,8 +26,10 @@ Windows表示はoptionalな`presentation` featureで追加する。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
 これは現行実装の境界であり、基盤の維持義務ではない。
-[Bistro計画のB0](implementation-policy.md#bistro-roadmap)で維持・改修・置換・外部基盤を比較する。
-採用判断で置換する場合も、同期・GPU寿命・native失敗等の必要な保証と移行時の検証を明示する。
+[B0の基盤比較](implementation-policy.md#foundation-selection)ではnativeの低レベル所有・同期・退役・WSIを再利用し、
+上位の固定Program/Operationを一般ownedパスへ置換する方針を採用した。
+B1で資源用途・format・bindingを拡張するときも、同期・GPU寿命・native失敗等の必要な保証と移行時の検証を明示する。
+本書以下は移行前の実装済み契約であり、一般Program/encoder/HDR等を追加済みとは扱わない。
 
 Graphのnative実行は次の責務に分ける。公開APIや汎用backend traitを増やす分割ではない。
 

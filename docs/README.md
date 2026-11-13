@@ -10,13 +10,14 @@
 | 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
 | 実装指針 | [RenderGraphベストプラクティス](guides/rendergraph-best-practices.md) | 公開設計の比較、依存・内容・寿命、コンパイル、同期、資源配置、並列化、検証 |
-| 設計 | [実装方針](design/implementation-policy.md) | Bistro確定要件と素材検証、[公開API比較と第一案](design/implementation-policy.md#public-api-comparison)、基盤選定、B0〜B5計画、現行D3D12の契約 |
+| 設計 | [実装方針](design/implementation-policy.md) | Bistro確定要件と素材検証、[公開API比較と第一案](design/implementation-policy.md#public-api-comparison)、[基盤比較と採用・移行範囲](design/implementation-policy.md#foundation-selection)、B0〜B5計画、現行D3D12の契約 |
 | 設計 | [RenderGraph](design/rendergraph.md) | 共通宣言・依存解析、二APIのbuffer実行、Vulkanのimport/export・履歴、エンジン入力と拡張 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
 | 検証データ | [Bistro素材検証](verification/bistro-assets.json)・[比較画像](verification/bistro-assets-preview.png) | 公式入力hash、全mesh/材質/画像の対応、変換・再生成・CPU画像QA |
 | 検証データ | [Bistro alpha解釈](verification/bistro-alpha.json)・[近景比較画像](verification/bistro-alpha-preview.png) | 2材質の元値・全mip、Falcor一次ソース、alpha保持と不透明化の比較・確定方針 |
 | 検証データ | [Bistro描画条件](../tools/bistro/conditions.json)・[設定検証と実行記録](verification/bistro-conditions.json)・[CPUプレビュー](verification/bistro-conditions-preview.png) | 固定7視点・巡回・sun/IBL/露出、照明候補、二API比較と性能校正の条件 |
+| 検証データ | [基盤比較の実機小試作](verification/foundation-comparison.json) | 固定wgpu、二APIのowned Raster/Compute、期待byte、検証flagsの負の対照、source hashと未確認範囲 |
 | 素材 | [Bistro LFS素材](../assets/bistro/README.md)・[manifest](../assets/bistro/manifest.json) | 公式原本・検証済み屋外glTF・環境HDR、取得・ライセンスと全ファイルhash |
 | 検証データ | [現在のフレーム計測](verification/current-metrics.json) | 固定ソースの環境、各runの統計と生sample |
 | 検証データ | [RenderGraph比較計測](verification/rendergraph-metrics.json) | 資源cache、標準draw batchの共有／異なるmesh比較、統計・生sample、RGBA照合 |
