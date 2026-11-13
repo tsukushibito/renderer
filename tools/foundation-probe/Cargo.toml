@@ -1,0 +1,21 @@
+[package]
+name = "renderer-foundation-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+# An adoption experiment; renderer consumers do not depend on wgpu.
+[workspace]
+
+[dependencies]
+pollster = "=0.4.0"
+serde_json = "=1.0.154"
+wgpu = { version = "=30.0.2", default-features = false, features = ["std", "vulkan", "dx12", "wgsl"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+mod_module_files = "deny"
+undocumented_unsafe_blocks = "deny"

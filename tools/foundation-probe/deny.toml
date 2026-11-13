@@ -1,0 +1,37 @@
+# Isolated experiment policy. Does not expand the renderer's runtime allowlist.
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = []
+
+[licenses]
+include-dev = true
+include-build = true
+allow = ["Apache-2.0", "ISC", "MIT", "Unicode-3.0"]
+
+[licenses.private]
+ignore = true
+
+[[licenses.exceptions]]
+# wgpu/naga's hashbrown dependency. Reviewed foldhash 0.2.0 LICENSE:
+# preserve the notice in source distributions, mark altered source, and do not
+# misrepresent origin. No copyleft or binary acknowledgment requirement.
+name = "foldhash"
+version = "=0.2.0"
+allow = ["Zlib"]
+
+[bans]
+multiple-versions = "warn"
+multiple-versions-include-dev = true
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
