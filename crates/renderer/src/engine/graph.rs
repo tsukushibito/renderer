@@ -212,6 +212,7 @@ mod tests {
         let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
         let plan = frame.graph.compile().unwrap();
         assert_eq!(plan.pass_count(), MESHES * 2 + 1);
+        #[cfg(feature = "graph-diagnostics")]
         assert!(plan.culled_pass_names().is_empty());
     }
 

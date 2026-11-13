@@ -72,6 +72,7 @@ fn offscreen_pipeline_builds_and_compiles_without_a_backend() {
         .unwrap();
     let plan = graph.compile().unwrap();
     assert_eq!(plan.pass_count(), 6);
+    #[cfg(feature = "graph-diagnostics")]
     assert_eq!(plan.culled_pass_names(), ["unused upload"]);
     assert_eq!(
         plan.ordered_pass_names(),

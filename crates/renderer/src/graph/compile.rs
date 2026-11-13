@@ -58,6 +58,9 @@ impl CompiledGraph {
             .collect()
     }
 
+    /// Names of declarations excluded from execution. Retaining these names is
+    /// optional diagnostic work, independent of development validation.
+    #[cfg(feature = "graph-diagnostics")]
     pub fn culled_pass_names(&self) -> Vec<&str> {
         self.passes
             .iter()
@@ -140,7 +143,11 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
             .iter()
             .enumerate()
             .map(|(index, pass)| Pass {
-                name: pass.name.clone(),
+                name: if analysis.live[index] || cfg!(feature = "graph-diagnostics") {
+                    pass.name.clone()
+                } else {
+                    String::new()
+                },
                 operation: if analysis.live[index] {
                     pass.operation.clone()
                 } else {
@@ -1142,6 +1149,7 @@ mod tests {
             compiled.ordered_pass_names(),
             ["live producer", "observable reader", "final partial writer"]
         );
+        #[cfg(feature = "graph-diagnostics")]
         assert_eq!(
             compiled.culled_pass_names(),
             ["obsolete writer", "unrelated reader"]
@@ -1238,6 +1246,7 @@ mod tests {
                 .position(|&index| index == last.index)
                 .unwrap();
             assert!(first_position < last_position);
+            #[cfg(feature = "graph-diagnostics")]
             assert_eq!(compiled.culled_pass_names(), ["dead overwrite"]);
             assert!(
                 compiled
@@ -1685,7 +1694,19 @@ mod tests {
             compiled.final_contents[dead.index],
             Vec::<Range<u64>>::new()
         );
+        #[cfg(feature = "graph-diagnostics")]
         assert_eq!(compiled.culled_pass_names(), ["dead private write"]);
+        #[cfg(not(feature = "graph-diagnostics"))]
+        {
+            let culled = compiled
+                .passes
+                .iter()
+                .filter(|pass| matches!(pass.operation, Operation::Culled))
+                .collect::<Vec<_>>();
+            assert_eq!(culled.len(), 1);
+            assert!(culled[0].name.is_empty());
+            assert!(culled[0].accesses.is_empty());
+        }
         #[cfg(feature = "graph-diagnostics")]
         assert!(compiled.dump().contains("dead private write\" culled"));
 

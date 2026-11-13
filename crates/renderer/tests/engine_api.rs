@@ -59,6 +59,8 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
         plan.ordered_pass_names()
             .contains(&"external custom transform")
     );
+    assert!(!plan.ordered_pass_names().contains(&"unused custom branch"));
+    #[cfg(feature = "graph-diagnostics")]
     assert!(plan.culled_pass_names().contains(&"unused custom branch"));
     assert!(frame.readback.is_some());
     assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);

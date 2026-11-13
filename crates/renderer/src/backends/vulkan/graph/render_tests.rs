@@ -876,6 +876,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             graph.export_image(final_image).unwrap();
             let final_read = graph.readback_image("read-final", final_image).unwrap();
             let compiled = graph.compile().unwrap();
+            #[cfg(feature = "graph-diagnostics")]
             assert_eq!(compiled.culled_pass_names(), ["unused-branch"]);
             assert!(!compiled.ordered_pass_names().contains(&"unused-branch"));
             let (mut producer, lowering) = runtime.submit_with_diagnostics(&compiled).unwrap();

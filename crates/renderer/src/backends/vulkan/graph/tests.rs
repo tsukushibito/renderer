@@ -399,6 +399,8 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         producer.export_buffer(buffer).unwrap();
         producer.export_image(image).unwrap();
         let plan = producer.compile().unwrap();
+        assert!(!plan.ordered_pass_names().contains(&"unused.upload"));
+        #[cfg(feature = "graph-diagnostics")]
         assert_eq!(plan.culled_pass_names(), ["unused.upload"]);
         let mut first = runtime.submit(&plan).unwrap();
         let buffer_export = first.export_buffer(buffer).unwrap();
