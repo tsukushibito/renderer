@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use windows_core::{Error, HRESULT, Interface};
+use windows_core::{Error, HRESULT};
 
 use crate::graph::{CompiledGraph, Operation, PassHandle, ResourceDesc};
 
@@ -226,7 +226,6 @@ impl Buffer {
         bytes
             .try_reserve_exact(size)
             .map_err(|_| D3D12RuntimeError::capacity("CPU allocation for readback failed"))?;
-        bytes.resize(size, 0);
         let read = D3D12_RANGE {
             Begin: 0,
             End: size,
@@ -235,10 +234,11 @@ impl Buffer {
         let mapping = Mapping::new(owner, &self.raw, read, empty)?;
         // SAFETY: Only a completed result exposes this readback allocation;
         // size is its checked logical length, and Map does not offset pointers.
-        // The new CPU vector cannot overlap the native mapping.
-        unsafe {
-            ptr::copy_nonoverlapping(mapping.pointer.cast(), bytes.as_mut_ptr(), size);
-        }
+        // All bytes were initialized by the completed GPU copy. The slice is
+        // borrowed only while the mapping guard remains live, and size does not
+        // exceed Rust's slice limit. The reserved vector needs no zero-fill.
+        let mapped = unsafe { std::slice::from_raw_parts(mapping.pointer.cast::<u8>(), size) };
+        bytes.extend_from_slice(mapped);
         Ok(bytes)
     }
 }
@@ -610,10 +610,9 @@ impl D3D12Runtime {
             ));
         }
         self.device.ensure_active()?;
-        let list = work.list.cast::<ID3D12CommandList>().map_err(|error| {
-            self.device
-                .native("ID3D12GraphicsCommandList::QueryInterface", error)
-        })?;
+        // The generated interface hierarchy guarantees this parent conversion;
+        // no native QueryInterface is needed for an immutable recording.
+        let list: ID3D12CommandList = work.list.clone().into();
         let owner = Arc::clone(&work.owner);
         let queue_guard = owner.queue_gate.lock().map_err(|_| {
             owner.mark_stopped();
@@ -682,7 +681,7 @@ impl D3D12Submission {
         let work = self.retained.take_retired().unwrap();
         let Work {
             graph,
-            readbacks,
+            mut readbacks,
             owner,
             buffers,
             staging,
@@ -695,6 +694,11 @@ impl D3D12Submission {
         // releasing the last owner. The owner keeps final-release diagnostics
         // active; a partial pattern with `..` would defer these fields too far.
         drop((buffers, staging, scratch, list, _allocator, fence));
+        // Recording order is the Graph's execution order, which need not match
+        // pass indices. No command operands refer to these entries after the
+        // completed work has retired; index them once for result consumption.
+        readbacks.sort_unstable_by_key(|readback| readback.pass);
+        let remaining_readbacks = readbacks.len();
         let owner = if readbacks.is_empty() {
             None
         } else {
@@ -703,6 +707,7 @@ impl D3D12Submission {
         Ok(Some(D3D12SubmissionResult {
             graph,
             readbacks,
+            remaining_readbacks,
             owner,
         }))
     }
@@ -781,6 +786,7 @@ fn execute_and_signal<T, E>(
 pub struct D3D12SubmissionResult {
     graph: u64,
     readbacks: Vec<Readback>,
+    remaining_readbacks: usize,
     owner: Option<Arc<DeviceOwner>>,
 }
 impl D3D12SubmissionResult {
@@ -792,11 +798,11 @@ impl D3D12SubmissionResult {
                 "foreign Graph readback handle",
             ));
         }
-        let readback = self
+        let index = self
             .readbacks
-            .iter_mut()
-            .find(|readback| readback.pass == pass.index)
-            .ok_or_else(|| D3D12RuntimeError::invalid("pass has no readback result"))?;
+            .binary_search_by_key(&pass.index, |readback| readback.pass)
+            .map_err(|_| D3D12RuntimeError::invalid("pass has no readback result"))?;
+        let readback = &mut self.readbacks[index];
         let buffer = readback
             .buffer
             .as_ref()
@@ -808,11 +814,8 @@ impl D3D12SubmissionResult {
         // copied. Do not publish bytes as a valid result after native failure.
         owner.check_native_active()?;
         readback.buffer.take();
-        if self
-            .readbacks
-            .iter()
-            .all(|readback| readback.buffer.is_none())
-        {
+        self.remaining_readbacks -= 1;
+        if self.remaining_readbacks == 0 {
             self.owner.take();
         }
         Ok(bytes)
@@ -826,16 +829,21 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     #[cfg(feature = "d3d12-diagnostics")]
-    fn copy_graph() -> (CompiledGraph, PassHandle) {
+    fn copy_graph() -> (CompiledGraph, [PassHandle; 3], PassHandle) {
         let mut graph = Graph::new();
         let a = graph.buffer("a", BufferDesc { size: 32 }).unwrap();
         let b = graph.buffer("b", BufferDesc { size: 32 }).unwrap();
-        graph
+        let upload = graph
             .upload_buffer("upload", a, 4, (0u8..24).collect::<Vec<_>>())
             .unwrap();
         graph.copy_buffer("copy", a, 8, b, 12, 12).unwrap();
-        let readback = graph.readback_buffer("readback", b, 12, 12).unwrap();
-        (graph.compile().unwrap(), readback)
+        let copied = graph.readback_buffer("copied", b, 12, 12).unwrap();
+        let source = graph.readback_buffer("source", a, 4, 8).unwrap();
+        let tail = graph.readback_buffer("tail", b, 16, 8).unwrap();
+        // Ensure native recording order differs from pass-index order; result
+        // lookup must work after completed entries are indexed independently.
+        graph.depends_on(copied, tail).unwrap();
+        (graph.compile().unwrap(), [copied, source, tail], upload)
     }
 
     #[test]
@@ -977,7 +985,7 @@ mod tests {
         .expect("real D3D12 hardware and strict validation prerequisites");
         let monitor = runtime.validation_monitor();
         let weak = Arc::downgrade(&runtime.device);
-        let (graph, readback) = copy_graph();
+        let (graph, [copied, source, tail], upload) = copy_graph();
         let baseline = Arc::strong_count(&runtime.device);
 
         let canceled = runtime.prepare(&graph).expect("recorded work");
@@ -1028,11 +1036,34 @@ mod tests {
             D3D12RuntimeErrorKind::WrongOwner
         );
         assert_eq!(
-            result.readback(readback).unwrap(),
+            result.readback(upload).unwrap_err().kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
+        // Consume independently of declaration order. Failed API calls must
+        // neither consume another readback nor release its native owner.
+        assert_eq!(
+            result.readback(source).unwrap(),
+            (0u8..8).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            result.readback(source).unwrap_err().kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
+        assert!(
+            result.owner.is_some(),
+            "unconsumed readbacks retain the owner"
+        );
+        assert_eq!(
+            result.readback(copied).unwrap(),
             (4u8..16).collect::<Vec<_>>()
         );
         assert_eq!(
-            result.readback(readback).unwrap_err().kind(),
+            result.readback(tail).unwrap(),
+            (8u8..16).collect::<Vec<_>>()
+        );
+        assert!(result.owner.is_none(), "last readback releases the owner");
+        assert_eq!(
+            result.readback(copied).unwrap_err().kind(),
             D3D12RuntimeErrorKind::InvalidInput
         );
         drop(result);
