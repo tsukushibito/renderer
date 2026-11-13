@@ -533,7 +533,7 @@ Apple展開が優先要件になった場合やWindows実機を維持できな�
 | 項目 | 確認した範囲と制限 |
 |---|---|
 | 実機 | RTX 3060、driver 610.88、12 GiB。準備probeでDXGI hardware adapterと実Vulkan選択のvendor/device ID・LUID一致を確認した。 |
-| native初期化 | private bindingsでhardware Device、SM6.0、RGBA8 typed UAV load/store、committed bufferの作成・map・破棄を確認。queue投入は未実施。 |
+| native初期化 | 準備probeでhardware Device、SM6.0、RGBA8 typed UAV load/store、committed bufferの作成・map・破棄を確認した。製品runtimeとbuffer投入の範囲は後述する。 |
 | ランタイム・SDK | `d3d12.dll`と`d3d12sdklayers.dll`は10.0.26100.9818。Windows SDK 10.0.26100を含む複数版と、Vulkan SDK 1.4.341.1のDXC・SPIRV-Cross・glslangValidator・spirv-valが存在する。 |
 | 検証 | Device作成前のDebug Layer／GBV設定、InfoQueueとGBV有効の起動報告、最終COM Release後までの診断を3回反復確認。shaderのGBV実行と画像等価性は未実施。GBVは性能測定と分ける。[^d3dvalidation] |
 | CI | Windows／Linuxのbuild・check・CPU試験を維持し、WindowsのD3D12単独／Vulkan併用を追加。実GPU runnerはなく、管理者のWindows実機で逐次受入する。[実行手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を使う。 |
@@ -563,17 +563,75 @@ M4の最初のD3D12 buffer基準には`CreateCommittedResource`を使う。
 resourceと暗黙のheapを一つの所有者で保持でき、private生成型と既存allocatorの公開型を
 未検証のcastで接続する必要がない。DEFAULT bufferは`COMMON`、UPLOADは`GENERIC_READ`、
 READBACKは`COPY_DEST`で作成する。[^committed]
-現行runtimeはDEFAULT bufferの初期`COPY_DEST`を無視して`COMMON`とし、警告1328を報告するため、
-準備probeでも実状態と一致する`COMMON`を使う。後続Graph実装はこの状態から依存を計画する。
+採用D3D12ランタイムはDEFAULT bufferの初期`COPY_DEST`を無視して`COMMON`とし、警告1328を報告するため、
+準備probeと製品runtimeは実状態と一致する`COMMON`を使う。Graph実行はこの状態から依存を計画する。
 代案の外部suballocatorは型・COM所有権・配置条件の接続確認を要するため、この基準には導入しない。
 resourceごとのheapによるメモリ・作成費用を許容する単純な基準であり、性能改善とは扱わない。
 上限付きの資源再利用はM4-06、物理aliasingの限定実験はM4-16で別に検証する。
-準備probeは作成と破棄だけを確認し、投入後の寿命とreadback内容はM4-04以降で実証する。
+準備probeは作成と破棄だけの確認であり、buffer投入後の寿命とreadback内容は製品runtimeの受入で扱う。
 
 準備は`renderer-we8.1`・`.2`、`renderer-6qc`（adapter・検証・shader経路）、
 `renderer-k51`（ローカル実GPU反復実行基盤）で実施した。
-現在の`d3d12` featureはprivate bindingsとtest専用probeまでであり、
-M4-03の製品runtime、M4-04以降のGraph実行、一般RHIは実装済みとしない。
+現在の`d3d12` featureは、次のDeviceとbuffer実行までを提供する。
+
+<a id="d3d12-runtime"></a>
+
+### D3D12のDeviceとbuffer実行
+
+Windows限定の`D3D12Runtime`が、hardware adapter、Device、単一DIRECT queueと明示終了を所有する。
+adapterのvendor／device IDとLUID、照会した能力をnative型なしで公開する。
+CPUだけのGraph構築とLinuxのVulkan経路には、D3D12のnative依存を追加しない。
+
+D3D12 Deviceはadapter LUIDごとのsingletonであり、作成済みDeviceへのDebug Layer／GBV再設定は
+Device removalを起こし得る。[^d3ddevice][^d3ddebug]
+このruntimeはprocess内の最初の診断設定を固定し、同じ設定の生存runtimeではDevice所有者を共有する。
+設定を切り替える要求はnative設定前に拒否する。複数runtimeのqueue操作も共有所有者で直列化する。
+外部のD3D12 Deviceが既に作成されたprocessで後から診断を有効にする使い方は対象外とし、
+診断を使う場合はアプリ内のD3D12 Device作成より先に初期化する。
+
+`development-validation`は`d3d12-diagnostics`も有効にし、native検証の既定を
+`D3D12ValidationMode::Required`にする。追加検証なしの既定は`Disabled`である。
+独立した`d3d12-diagnostics`なしの明示`Required`は対応外として拒否する。
+診断なし構成ではDebug Layer／GBV設定、InfoQueue、callback、診断専用の履歴をコンパイル除外する。
+nativeエラーと元の原因、実完了、Device removal、資源保持は製品構成にも残す。
+monitorは診断状態だけを保持し、Deviceやqueueの寿命を延ばさない。
+runtimeを終了しても、別runtimeや未完了処理がnative所有者を保持する間は終了後診断の確認済みとは扱わない。
+最終native解放まで観測し、診断の有効要求と取得できた実効状態を区別する。
+終了確認の対象はRendererが所有するnative参照の解放までであり、外部ライブラリが保持する
+同じsingleton Deviceの最終破棄まで証明するものではない。
+
+`D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackを
+native資源と命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
+Graph構築で保証した内容を再走査せず、未対応操作、D3D12固有の上限と資源作成条件を準備境界で扱う。
+現在はtransient bufferだけを受け入れ、export、liveなimport・画像・その他の操作は明示エラーとする。
+不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
+bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
+
+DEFAULT、UPLOAD、READBACKのcommitted resourceを使い、legacy barrierで全bufferの状態を追跡する。
+DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit promotion／decayによるbarrier削減は
+現段階では採用しない。状態と命令の対応を確認しやすい基準を優先する選択であり、余分なbarrier費用は残る。[^d3dbarriers]
+同じbufferの非重複copyは、別のscratch bufferを介した二段copyで共通Graphの意味を保つ。
+一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
+Enhanced Barriers、外部suballocator、資源pool、画像、import／exportをこの範囲へ先行導入しない。
+
+`submit`または`submit_prepared`は待機せずに投入し、`D3D12Submission`がcommand allocator／list、
+全buffer・allocationとDevice所有者を実GPU完了まで保持する。
+未投入のprepared処理の破棄はキャンセルであり、通常に解放できる。
+`poll`／`wait(timeout)`で対象Fenceの正常完了を確認してから、`D3D12SubmissionResult::readback`で
+CPUへコピーする。timeoutは結果を返さず、同じsubmissionを再度待てる。readbackは一度だけ消費する。
+Fenceの`UINT64_MAX`やDevice removalを正常完了とみなさない。[^d3dfence]
+
+`ExecuteCommandLists`後の`Signal`失敗は未投入rollbackを保証できない。[^d3dexecute][^d3dsignal]
+その場合はDeviceを停止し、GPU利用終了を証明できない所有連鎖を保持する。
+未完了submissionのDropは対象Fenceだけを最大5秒の予算で待ち、完了を証明できなければ同じ保持を行う。
+この異常経路では保持資源を回収できない。通常経路は明示的な完了確認で回収し、Drop待機へ依存しない。
+通常のsubmitへQueue／Device全体の暗黙waitを追加しない。
+
+共通Graphの全byte一致、終了後までの厳格診断、最適化された診断なし経路の内容を別runで確認する。
+実行方法は[開発手順](../guides/development.md#d3d12-buffer-acceptance)、
+実行済み・未実行の範囲は[現在の検証状況](../verification/current.md)に記す。
+画像はM4-05、上限付き再利用はM4-06、canonical import／exportはM4-07へ残す。
+一般RHIや将来の描画・binding契約をこのbuffer実行だけで確定したとは扱わない。
 
 ## 17. Codexの作業手順
 
@@ -693,5 +751,17 @@ GPU検証ができない場合は、実行済みの確認と未検証項目を�
 [^d3dlifetime]: Microsoft「Important Changes from Direct3D 11 to Direct3D 12」。明示同期と、アプリが管理する資源・descriptorメモリの寿命。`https://learn.microsoft.com/en-us/windows/win32/direct3d12/important-changes-from-directx-11-to-directx-12`
 
 [^committed]: Microsoft「ID3D12Device::CreateCommittedResource」。resourceと暗黙のheapの所有、UPLOAD/READBACKの初期状態、最後の参照を解放する前のGPU利用終了条件。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createcommittedresource`
+
+[^d3ddevice]: Microsoft「D3D12CreateDevice」。adapter LUIDごとのDevice singletonと、removed Deviceの再作成失敗。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-d3d12createdevice`
+
+[^d3ddebug]: Microsoft「ID3D12Debug::EnableDebugLayer」。Device作成後の有効化はDeviceをremoveする。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12sdklayers/nf-d3d12sdklayers-id3d12debug-enabledebuglayer`
+
+[^d3dfence]: Microsoft「ID3D12Fence::GetCompletedValue」。Device removal時の戻り値は`UINT64_MAX`。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-getcompletedvalue`
+
+[^d3dexecute]: Microsoft「ID3D12CommandQueue::ExecuteCommandLists」。投入呼び出し自体は戻り値を持たない。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-executecommandlists`
+
+[^d3dsignal]: Microsoft「ID3D12CommandQueue::Signal」。queue上のGPU側signalをHRESULTで報告する。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-signal`
+
+[^d3dbarriers]: Microsoft「Using Resource Barriers to Synchronize Resource States in Direct3D 12」。read／write stateの制限、bufferのpromotion／decayと明示遷移、barrier削減の推奨。`https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12`
 
 [^metal]: Apple「Metal」。AppleプラットフォームとAPI／shader検証・診断ツールの概要。`https://developer.apple.com/metal/`

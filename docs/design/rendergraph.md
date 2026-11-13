@@ -2,15 +2,18 @@
 
 Graphの宣言・解析はGPUとウィンドウに依存せず、通常のCPU構成で利用する。
 Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出さない。
+Windowsの`d3d12` featureは同じ`CompiledGraph`のbuffer upload・copy・readbackを実行する。
+Graphの宣言・解析と、各backendが実行できる操作の範囲は区別する。
 全体方針は[実装方針](implementation-policy.md)、native資源と完了管理は
-[Vulkanの設計](vulkan.md)、実行済みの確認は[検証状況](../verification/current.md)を参照する。
+[Vulkanの設計](vulkan.md)と[D3D12の設計](implementation-policy.md#d3d12-runtime)、
+実行済みの確認は[検証状況](../verification/current.md)を参照する。
 
 検証処理の配置・製品構成からの除去には[製品版と開発用の検証方針](../guides/validation-policy.md)を適用する。
 以下は現在のAPI・動作の契約である。backend選択、追加検証、診断保持は独立に選ぶ。
 
 ## 対応範囲と処理の境界
 
-最初の経路は、単一Graphics＋Computeキュー、物理aliasingなし、
+Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなし、
 2D画像のmip・layer・sample各1を対象とする。
 bufferは半開byte範囲を指定し、未対応の画像subresource指定は拒否する。
 論理ハンドルと物理資源の識別、内容の有効性と画像layout、
@@ -21,6 +24,14 @@ bufferは半開byte範囲を指定し、未対応の画像subresource指定は�
 これにより、実行する操作と宣言した用途・範囲・bindingを対応づける。
 汎用RHIや未信頼shaderのサンドボックスを提供する契約ではない。
 依存するCompute処理は別ノードとし、パス間の同期を実行基盤が記録する。
+
+| 実行基盤 | 現在の範囲 |
+|---|---|
+| Vulkan | buffer／画像copy、固定Compute、Attachment clear、indexed mesh、合成、import／export、上限付き再利用 |
+| D3D12 | transient bufferのupload・copy・readback。単一DIRECT queue、committed resource、物理aliasingなし |
+
+D3D12のprepareはexportとliveなimport・画像・未対応操作を明示エラーにする。
+共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 ## producer・範囲・Attachment
 
@@ -140,6 +151,9 @@ producer・初期化・culling・live hazard／topological計画・最終内容�
 
 ## GPU状態と所有
 
+この節のcanonical state、import／export、cacheとframe APIは現在のVulkan実行の契約である。
+D3D12の限定したbuffer実行の所有と完了は[次節](#d3d12-buffer-lifetime)に記す。
+
 同じruntime資源のimportは、物理資源と状態の同一性を維持する。
 exportハンドルの取得はCPUで内容を読めることを意味しない。
 単一キューへproducer Graph Aとconsumer Graph Bを投入する場合、
@@ -219,6 +233,30 @@ native submitのOOMは未投入として扱えるが、それ以外の不確実�
 Device loss／利用停止・native失敗に分類する。
 `std::error::Error::source`から元の操作・Device・native結果を調べられる。
 native OOMと、設定済みpoolの空き不足は別の分類とする。
+
+<a id="d3d12-buffer-lifetime"></a>
+
+## D3D12のbuffer状態と所有
+
+`D3D12Runtime::prepare`は、共有`CompiledGraph`のculling後の順序を使ってnative命令を準備する。
+producerや範囲の解析をD3D12用に作り直さず、Graph構築で確立した不変の保証を引き継ぐ。
+native固有の資源条件・上限と、未対応操作の拒否は準備境界で行う。
+不要パスにしか現れない画像・操作は実行しないため、それらだけを理由に拒否しない。
+
+DEFAULT bufferの`COMMON`から、legacy barrierでcopy source／destinationへ状態を追跡する。
+Graphはbyte範囲を解析し、native状態遷移は全bufferを対象にする。
+同一buffer内の非重複copyは独立したscratch bufferを介し、宣言したbyteの結果を保つ。
+
+`D3D12PreparedGraph`は未投入のcommand・資源を保持し、Dropでキャンセルできる。
+`submit`／`submit_prepared`は非同期で、`D3D12Submission`がGPU参照を所有する。
+`poll`または`wait(timeout)`が正常完了を返した後だけ、結果の`readback(PassHandle)`でCPUへコピーする。
+timeout後も保持して再待機でき、別Graphのhandleとreadbackの二重消費は拒否する。
+runtimeを先に終了しても、prepared／submission／未読結果が必要なnative所有者を保持する。
+
+Device removalや投入後のsignal失敗を有効な内容として返さない。
+完了不明の処理は停止と所有保持へ進め、未投入の作成・記録失敗と区別する。
+Drop時の対象Fence待機と保持の規則は[D3D12 runtimeの設計](implementation-policy.md#d3d12-runtime)を参照する。
+この段階にはcanonical import／export、永続key、資源poolや上限付きpending frame管理を追加していない。
 
 ## 同期と一般推奨の適用
 

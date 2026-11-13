@@ -68,7 +68,8 @@ SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view
 
 `d3d12` featureはWindows限定のprivate bindingsを使う。公開Graph／Engineへnative型を出さず、
 通常ビルドは[生成済みRust](../../crates/renderer/src/backends/d3d12/bindings.rs)を使う。
-製品のD3D12 Graph runtimeはM4-03以降で実装する。
+Device・単一DIRECT queue・buffer Graph実行もこのprivate生成型を使う。
+COM参照やnative handleを公開runtime／Graph APIへ露出させない。
 
 [生成tool](../../tools/d3d12-bindings/Cargo.toml)は独立したCargo workspaceとlockfileを持ち、
 `windows-bindgen`、`windows-default`、間接依存の`windows-metadata`を0.100.0へ固定する。
@@ -84,8 +85,9 @@ API一覧は[filters.txt](../../tools/d3d12-bindings/filters.txt)を正とする
 
 `-Verify`は一時ファイルへ再生成し、固定Rustのrustfmt適用後に全byteのSHA-256一致を確認する。
 生成toolの取得・実行にはRustと初回のネットワーク接続が必要だが、Windows SDKは不要である。
-DXCのnative loaderはこの準備範囲で使わず、固定shaderの生成は次節のCLIを使う。
-必要APIは後続の実装でfiltersへ明示追加し、再生成・compile・検証を繰り返す。
+DXCのnative loaderは使わず、固定shaderの生成は次節のCLIを使う。
+Device・診断に加えてcommand allocator／list、Fence、buffer copy・barrier・待機に必要なAPIを
+filtersへ明示し、再生成・compile・検証を繰り返す。
 
 通常workspaceとは別に、生成toolの依存も監査する。
 

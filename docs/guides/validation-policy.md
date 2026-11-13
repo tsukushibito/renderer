@@ -1,7 +1,7 @@
 # 製品版と開発用の検証方針
 
 調査・制定日: **2026-11-13**。対象はゲームへ組み込むRenderer全体であり、
-Rustの公開API、asset入力、RenderGraph、Vulkanと後続バックエンドへ適用する。
+Rustの公開API、asset入力、RenderGraph、VulkanとD3D12を含む各バックエンドへ適用する。
 本書は[AGENTS.md](../../AGENTS.md#production-and-development-validation)から参照するリポジトリ規約である。
 API仕様の要件、一次資料の推奨・公開事例、そこから採用するRendererの方針を区別する。
 
@@ -47,7 +47,7 @@ VulkanのValid Usageは定義された動作を得る条件であり、同じ条
 | 他APIの検証・実行契約 | D3D12 GBVはshader・commandを計装する。Fenceの完了値はDevice removalも表す | 計装の時間を製品性能にしない。正常完了とDevice異常の判別は製品にも残す [GBV][d3d-gbv]・[Fence][d3d-fence] |
 | 他APIの診断事例 | Metal API ValidationはCPU費用があり、追加設定でattachment内容も変更できる | 検証はログ表示だけではない。実効設定・負荷・出力への影響を分ける [Metal API Validation][metal-validation] |
 
-上表は比較・根拠であり、本Rendererに未実装のcook、D3D12 Graph実行、Metal対応を追加したとは扱わない。
+上表は比較・根拠であり、本Rendererに未実装のcook、D3D12画像実行、Metal対応を追加したとは扱わない。
 
 <a id="classification"></a>
 
@@ -175,7 +175,7 @@ payload保持・文字列化・依存関係まで、該当するものを条件�
 Cargo featureを使う場合は追加型の検証featureを基本とし、負のfeatureで安全性を消す設計を避ける。
 featureは依存経路で統合されるため、製品の最終的なfeature集合・profile・環境設定を確認する。
 `--no-default-features`や`--all-features`成功だけで製品構成を確認したとはしない。
-現行の`development-validation`、独立した`vulkan-diagnostics`／`graph-diagnostics`と実行例は
+現行の`development-validation`、独立した`vulkan-diagnostics`／`d3d12-diagnostics`／`graph-diagnostics`と実行例は
 [開発手順](development.md#製品開発用の検証設定)を参照する。
 [Cargo Features][cargo-features]
 
@@ -223,9 +223,11 @@ native検証の要求設定と、Layer等から観測した実効状態は別に
 | 現行の状態 | 本方針との関係 |
 |---|---|
 | `development-validation`は既定off、profileと独立 | Graphの保証済み入力の独立再検査とdead部分だけの循環診断をコンパイル除外できる。live計画の拒否・同期は維持 |
-| native検証の既定は上記featureありで`Required`、なしで`Disabled` | `vulkan-diagnostics`なしの明示`Required`は失敗。検証を省いて成功扱いにはしない |
+| native検証の既定は上記featureありで`Required`、なしで`Disabled` | 対応するnative診断featureなしの明示`Required`は失敗。検証を省いて成功扱いにはしない |
 | `vulkan-diagnostics`を独立選択 | offならdebug_utils・callback・名前／labelの構築・診断履歴を除外。運用エラーの処理・ログは維持 |
-| `graph-diagnostics`を独立選択 | offなら論理／lowering dumpと専用解析情報の保持を除外。実行順・内容・必要なアクセスは維持 |
+| `d3d12-diagnostics`を独立選択 | offならDebug Layer／GBVの設定・InfoQueue・callbackと専用履歴をコンパイル除外。native失敗、Fence完了・Device removal、資源保持は維持 |
+| `graph-diagnostics`を独立選択 | offなら論理Graph／Vulkan loweringのdumpと専用解析情報の保持を除外。実行順・内容・必要なアクセスは維持 |
+| D3D12のbuffer loweringは不変`CompiledGraph`から準備する | Graphが保証するbyte範囲を反復再走査しない。未対応操作の拒否、実Deviceへの適合、配置・命令記録・完了・CPU copyを成立させる処理は製品にも残す |
 | `MeshData::new`で入力を検査しimmutableな内容要約を生成 | privateな管理下uploadへ保証を引き継ぎ、mesh描画時のindex本文再走査・検査用CPU保持を省く。実Device上限は別に適合確認 |
 | 任意Graph upload／copyのCPU provenance | 部分byte更新や未知の穴からindex安全性を確立するために必要な経路は残す。開発用診断として一括削除しない |
 | Graph構築のowner・範囲・用途、producer／hazard、live循環、投入時のimport照合 | safe入力と変動状態を保証するために維持。公開されたimportの更新・削除は不変mesh保証では代替しない |

@@ -103,13 +103,15 @@ Windowsには`presentation` featureの全target check・Clippy・CPU試験も追
 
 | feature | 追加する処理 |
 |---|---|
-| `development-validation` | Graphの独立再検査・dead部分の循環診断。`vulkan-diagnostics`も有効にする |
+| `development-validation` | Graphの独立再検査・dead部分の循環診断。`vulkan-diagnostics`と`d3d12-diagnostics`も有効にする |
 | `vulkan-diagnostics` | debug_utils、native callback・monitor、命名・label。単独でも選択可能 |
-| `graph-diagnostics` | 論理Graph／native loweringのdumpと専用解析情報。検証とは独立 |
+| `d3d12-diagnostics` | D3D12のDebug Layer／GBV要求、InfoQueue・callback・終了後monitor。単独でも選択可能 |
+| `graph-diagnostics` | 論理Graph／Vulkan loweringのdumpと専用解析情報。検証とは独立 |
 
 `development-validation`ありではnative検証の既定が`ValidationMode::Required`、なしでは`Disabled`です。
 `ValidationMode`はnative Layer要求を選び、Renderer側の追加検証はCargo featureで選びます。
 `vulkan-diagnostics`なしで`Required`を明示すると、検証できない要求として失敗します。
+WindowsのD3D12も`D3D12ValidationMode`で同じ既定を選び、`d3d12-diagnostics`なしの明示`Required`は失敗します。
 製品構成は`--release --no-default-features --features vulkan`で、診断拡張やLayerを要求しません。
 任意Graph入力の保証、実行計画・同期・寿命・容量・native失敗の処理は両構成に残ります。
 
@@ -144,6 +146,10 @@ VulkanとD3D12を逐次実行するローカル手順を採用します。
 現在のGitHub Actionsはbuild・Clippy・CPU試験を担当し、実GPU runnerは用意していません。
 外部runnerの契約や常設サービスの導入は必要ありません。
 
+`d3d12`はDevice・単一DIRECT queueと、共通Graphのtransient buffer upload・copy・readbackを提供します。
+現在の画像、import／export、資源pool等の対応範囲と、process内で固定するnative診断設定の制約は
+[D3D12 runtimeの設計](../design/implementation-policy.md#d3d12-runtime)を参照してください。
+
 準備試験には通常のRust／MSVC環境に加えて、D3D12ランタイム、Windows Graphics Toolsの
 Debug LayerとGPU-based validation（GBV）、Vulkan 1.3の実行環境とValidation Layerが必要です。
 shader再生成の確認にはVulkan SDK **1.4.341.1**の固定toolを使います。
@@ -160,6 +166,12 @@ cargo check --locked --workspace --all-targets --no-default-features --features 
 cargo clippy --locked --workspace --all-targets --no-default-features --features vulkan,d3d12 -- -D warnings
 cargo test --locked --workspace --no-default-features --features vulkan,d3d12
 ```
+
+両backend構成について、`development-validation,graph-diagnostics`を追加した構成も確認します。
+CIはD3D12単独／Vulkan併用のrelease CPU試験、および独立したnative診断featureのcheckも実行します。
+CPU試験・build CIの成功は実GPUの内容・同期確認と分けて扱います。
+
+### 準備probe
 
 実GPUの準備probeはignored試験として分離します。次のスクリプトはshader再生成一致を確認し、
 対象のignored試験が存在することを検査してから、同じprobeを既定3回、同時実行せずに実行します。
@@ -199,12 +211,54 @@ warning／error／corruptionはゼロを要求し、Vulkan側も終了後まで�
 tool・Debug Layer・実GPUの不足、LUID照合不能、probeの不在、JSON欠落を成功やskipへ置き換えません。
 
 この準備probeはGraphの実行や二APIの画像等価性の受入には数えません。
-M4-04で同じ論理Graphのbuffer byte、M4-08〜10でCompute・深度付きmesh・合成の画像を照合し、
+buffer byteの受入は次節、M4-08〜10ではCompute・深度付きmesh・合成の画像を照合し、
 M4-18では同じ入力・解像度・期待値と寿命／失敗条件を二APIで反復確認します。
 各段階でraw byte／RGBAまたはPPM、Graph条件、終了後の検証ログを同じ実行IDへ保存する形に接続します。
 M4-19のCPU／GPU時間とメモリ比較は別のrelease実行とし、GBV等を有効にした正しさ試験の時間を
 性能値へ流用しません。両APIの対応する負荷と計測経路が揃うまで、性能比較は未実行として記録します。
 実GPU試験・計測を並行実行せず、機材を使えない場合は受入未完了として理由を残します。
+
+<a id="d3d12-buffer-acceptance"></a>
+
+### D3D12のbuffer Graph実行
+
+[公開APIの二API試験](../../crates/renderer/tests/d3d12_graph.rs)は、一度compileした同じGraphを
+実際のVulkan／D3D12 Deviceで逐次実行します。vendor／device IDと有効なLUIDを照合し、
+部分範囲・複数copy・同一bufferの非重複copyを含むreadbackの全byteを期待値と両API間で比較します。
+この段階はbufferの受入であり、画像・shaderのGBV実行や性能の優位を確認したとは扱いません。
+
+厳格検証と製品構成の内容照合は、設定を切り替える同一processに混ぜず、別processで実行します。
+D3D12のDebug Layer／GBV設定は最初のDevice作成前に固定する必要があります。
+厳格検証ではD3D12のDebug Layer／GBVとVulkan Core＋SyncValの実効を確認し、
+試験が所有する全native参照の解放後までwarning／error、corruption、callback失敗等がゼロであることを要求します。
+前提不足、LUID照合不能、診断の実効未確認、試験・レポート不在は失敗です。
+
+```powershell
+cargo test --locked -p renderer --release --test d3d12_graph --no-default-features --features vulkan,d3d12,development-validation m4_buffer_shared_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer --release --test d3d12_graph --no-default-features --features vulkan,d3d12 m4_buffer_shared_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+```
+
+製品構成は追加検証・両native診断featureをコンパイル除外し、native検証の要求は`Disabled`です。
+offのmonitorは診断を収集しないため、件数0を外部のLayer注入がなかった証明には使いません。
+strictとshippingのどちらも最適化された通常のprepare／submit／wait／readbackを通します。
+
+[反復スクリプト](../../scripts/verify-m4-buffer.ps1)は両構成のignored試験が存在することを確認し、
+既定3回、strictとshippingを逐次実行します。buffer copyにはshader生成がないためSDKの引数は不要です。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/verify-m4-buffer.ps1 -Runs 3
+```
+
+出力先は既定で共有checkoutの`.tools/m4/buffer/<実行ID>/`です。
+`-OutputDirectory`で新しい保存先を指定でき、既存の証拠への上書きは拒否します。
+`summary.json`、ignored試験のinventory・featureログ、各回の`strict-NN.json`／`.log`と
+`shipping-NN.json`／`.log`に、source・差分状態・環境、実adapterと検証設定、全byte照合と終了後の診断を保存します。
+単独実行時は`RENDERER_M4_BUFFER_REPORT`に新しいJSON出力先を指定できます。
+レポートはログにも`M4_BUFFER_REPORT=`で出力します。
+
+backend内の試験では未投入キャンセル・作成失敗の後始末、Fence完了と資源保持も確認します。
+長時間耐久・VRAM飽和や性能閾値を、このbuffer機能の受入条件へ追加しません。
+性能改善を主張するときの比較測定は、正しさの受入と別に実施します。
 
 ## 実Vulkan試験
 

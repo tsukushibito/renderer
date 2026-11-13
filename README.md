@@ -7,6 +7,12 @@ indexed meshと深度、Computeによる画像変換、別画像への最終合�
 単一キューで実行し、実行資源・画像・pipeline・descriptorと共有staging領域を再利用します。
 CPU範囲管理の性能比較にはCriterionを使います。
 
+Windowsの`d3d12` featureでは、同じGPU非依存Graphのbuffer upload・copy・readbackを
+単一queueで実行します。Device・GPU完了・資源寿命を明示的に扱う最初の基準経路で、
+画像、描画、import／export、資源poolは後続の実装範囲です。
+[D3D12の設計と制約](docs/design/implementation-policy.md#d3d12-runtime)と
+[二APIの実GPU受入手順](docs/guides/development.md#d3d12-buffer-acceptance)を参照してください。
+
 - [ドキュメント一覧](docs/README.md)
 - [開発・ビルド・試験](docs/guides/development.md)
 - [開発ツール](docs/guides/tooling.md)
