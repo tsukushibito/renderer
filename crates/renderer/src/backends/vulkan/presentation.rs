@@ -6,7 +6,7 @@ use ash::vk;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
-use super::diagnostics::Diagnostics;
+use super::diagnostics::DiagnosticsHandle;
 use super::graph::RuntimeError;
 use super::instance::{ValidationMode, VulkanInstance};
 
@@ -21,7 +21,7 @@ pub(super) struct WindowSurface {
 impl WindowSurface {
     pub(super) fn new(
         window: Arc<Window>,
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
     ) -> Result<Arc<Self>, RuntimeError> {
         let extensions = [

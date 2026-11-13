@@ -336,7 +336,7 @@ mod tests {
         let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
         tracing::dispatcher::with_default(&dispatch, || {
             let diagnostics = Diagnostics::new();
-            let instance = VulkanInstance::new(Arc::clone(&diagnostics)).unwrap();
+            let instance = VulkanInstance::new(diagnostics.clone()).unwrap();
             crate::backends::vulkan::assert_real_validation(&diagnostics);
             let device = VulkanDevice::new(instance).unwrap();
             assert_ne!(device.device_type(), vk::PhysicalDeviceType::CPU);

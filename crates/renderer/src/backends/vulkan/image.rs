@@ -245,20 +245,23 @@ impl VulkanAllocator {
             let properties = unsafe { owner.owner.raw.get_memory_properties() };
             let memory_properties =
                 properties.memory_types[info.memory_type as usize].property_flags;
-            // SAFETY: The image belongs to this live Device, debug_utils is
-            // enabled, and the static name is valid for the complete call.
-            unsafe {
-                device.debug_utils().set_debug_utils_object_name(
-                    &vk::DebugUtilsObjectNameInfoEXT::default()
-                        .object_handle(image)
-                        .object_name(c"renderer.transfer-image"),
-                )
+            #[cfg(feature = "vulkan-diagnostics")]
+            {
+                // SAFETY: The image belongs to this live Device, debug_utils is
+                // enabled, and the static name is valid for the complete call.
+                unsafe {
+                    device.debug_utils().set_debug_utils_object_name(
+                        &vk::DebugUtilsObjectNameInfoEXT::default()
+                            .object_handle(image)
+                            .object_name(c"renderer.transfer-image"),
+                    )
+                }
+                .map_err(|result| ImageError::Vulkan {
+                    operation: "vkSetDebugUtilsObjectNameEXT",
+                    desc,
+                    result,
+                })?;
             }
-            .map_err(|result| ImageError::Vulkan {
-                operation: "vkSetDebugUtilsObjectNameEXT",
-                desc,
-                result,
-            })?;
             tracing::info!(target: LOG_TARGET, device = device.name(), image = ?owner.image,
                 description = ?owner.desc, allocation_size = info.size,
                 memory_type = info.memory_type, memory_properties = ?memory_properties,
@@ -482,7 +485,7 @@ mod tests {
         tracing::dispatcher::with_default(&dispatch, || {
             for iteration in 0..4 {
                 let diagnostics = Diagnostics::new();
-                let instance = VulkanInstance::new(Arc::clone(&diagnostics))
+                let instance = VulkanInstance::new(diagnostics.clone())
                     .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
                 super::super::assert_real_validation(&diagnostics);
                 let device = VulkanDevice::new(instance)

@@ -364,6 +364,7 @@ fn with_presentation_create_info<T>(
 pub(super) struct VulkanDevice {
     _instance: Arc<VulkanInstance>,
     device: ash::Device,
+    #[cfg(feature = "vulkan-diagnostics")]
     debug_utils: Option<ash::ext::debug_utils::Device>,
     selected: SelectedDevice,
     max_buffer_size: vk::DeviceSize,
@@ -382,6 +383,7 @@ pub(super) enum DeviceState {
 }
 
 impl VulkanDevice {
+    #[cfg(feature = "vulkan-diagnostics")]
     pub(super) fn validation_mode(&self) -> super::instance::ValidationMode {
         self._instance.validation_mode()
     }
@@ -579,6 +581,7 @@ impl VulkanDevice {
         self.selected.queue_family_index
     }
 
+    #[cfg(feature = "vulkan-diagnostics")]
     pub(super) fn debug_utils(&self) -> &ash::ext::debug_utils::Device {
         self.debug_utils
             .as_ref()
@@ -661,6 +664,7 @@ impl VulkanDevice {
         let mut owner = Self {
             _instance: instance,
             device,
+            #[cfg(feature = "vulkan-diagnostics")]
             debug_utils: None,
             selected,
             max_buffer_size,
@@ -676,27 +680,30 @@ impl VulkanDevice {
                 .device
                 .get_device_queue(owner.selected.queue_family_index, 0)
         };
-        owner.debug_utils = Some(ash::ext::debug_utils::Device::new(
-            owner.instance_raw(),
-            owner.raw(),
-        ));
-        // SAFETY: The exclusively owned Device/Queue are not yet exposed. The
-        // enabled debug_utils table and static name are live for this call.
-        unsafe {
-            owner.debug_utils().set_debug_utils_object_name(
-                &vk::DebugUtilsObjectNameInfoEXT::default()
-                    .object_handle(owner.queue)
-                    .object_name(c"renderer.graphics-compute.queue"),
-            )
-        }
-        .map_err(|result| {
-            owner.observe_result(result);
-            DeviceInitError::Vulkan {
-                operation: "vkSetDebugUtilsObjectNameEXT(queue)",
-                device_name: Some(owner.name().to_owned()),
-                result,
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            owner.debug_utils = Some(ash::ext::debug_utils::Device::new(
+                owner.instance_raw(),
+                owner.raw(),
+            ));
+            // SAFETY: The exclusively owned Device/Queue are not yet exposed. The
+            // enabled debug_utils table and static name are live for this call.
+            unsafe {
+                owner.debug_utils().set_debug_utils_object_name(
+                    &vk::DebugUtilsObjectNameInfoEXT::default()
+                        .object_handle(owner.queue)
+                        .object_name(c"renderer.graphics-compute.queue"),
+                )
             }
-        })?;
+            .map_err(|result| {
+                owner.observe_result(result);
+                DeviceInitError::Vulkan {
+                    operation: "vkSetDebugUtilsObjectNameEXT(queue)",
+                    device_name: Some(owner.name().to_owned()),
+                    result,
+                }
+            })?;
+        }
         tracing::info!(target: LOG_TARGET, device = %owner.selected.info.name,
             family = owner.selected.queue_family_index, queue_index = 0,
             timeline_semaphore = true, synchronization2 = true, dynamic_rendering = true,
@@ -726,7 +733,6 @@ mod tests {
     use super::super::diagnostics::Diagnostics;
     use super::*;
     use ash::vk::Handle;
-    use std::sync::Arc;
 
     fn candidate(index: u64, device_type: vk::PhysicalDeviceType) -> Candidate {
         Candidate {
@@ -905,13 +911,12 @@ mod tests {
         tracing::dispatcher::with_default(&dispatch, || {
             for iteration in 0..4 {
                 let diagnostics = Diagnostics::new();
-                let instance =
-                    VulkanInstance::new(Arc::clone(&diagnostics)).unwrap_or_else(|error| {
-                        panic!(
-                            "iteration {iteration}: {error}; {:?}",
-                            diagnostics.snapshot()
-                        )
-                    });
+                let instance = VulkanInstance::new(diagnostics.clone()).unwrap_or_else(|error| {
+                    panic!(
+                        "iteration {iteration}: {error}; {:?}",
+                        diagnostics.snapshot()
+                    )
+                });
                 super::super::assert_real_validation(&diagnostics);
                 let device = VulkanDevice::new(instance).unwrap_or_else(|error| {
                     panic!(

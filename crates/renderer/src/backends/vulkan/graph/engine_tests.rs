@@ -1,9 +1,6 @@
 //! Real engine-input contracts, including pending versions and external passes.
 
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use super::{RuntimeConfig, VulkanRuntime};
 use crate::{
@@ -34,7 +31,7 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
             runtime.owner.device.device_type(),
             ash::vk::PhysicalDeviceType::CPU
         );
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         let mut engine = VulkanEngine::new(
             runtime,

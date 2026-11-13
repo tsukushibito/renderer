@@ -22,7 +22,7 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
             vk::PhysicalDeviceType::CPU,
             "CPU fallback is not real-GPU acceptance"
         );
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
 
         let bytes = [17, 29, 83, 211].repeat(4);
@@ -136,7 +136,7 @@ fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
             vk::PhysicalDeviceType::CPU,
             "CPU fallback is not real-GPU acceptance"
         );
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
 
         let bytes = [7, 43, 101, 239].repeat(16);

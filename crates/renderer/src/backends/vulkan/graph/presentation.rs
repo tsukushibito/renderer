@@ -1020,7 +1020,7 @@ impl VulkanRuntime {
         window: Arc<Window>,
         presentation: PresentationConfig,
     ) -> Result<(Self, Presenter), RuntimeError> {
-        Self::for_window_with_validation(config, window, presentation, ValidationMode::Required)
+        Self::for_window_with_validation(config, window, presentation, ValidationMode::default())
     }
     pub fn for_window_with_validation(
         config: RuntimeConfig,
@@ -1050,7 +1050,7 @@ impl VulkanRuntime {
             })?;
         let size = window.inner_size();
         let diagnostics = Diagnostics::new();
-        let surface = WindowSurface::new(window, Arc::clone(&diagnostics), validation)?;
+        let surface = WindowSurface::new(window, diagnostics.clone(), validation)?;
         let device = VulkanDevice::for_surface(Arc::clone(&surface.instance), &surface)?;
         let runtime = Self::from_device(config, diagnostics, device)?;
         let mut inner = Inner {

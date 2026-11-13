@@ -45,7 +45,7 @@ fn real_gpu(test: impl FnOnce(&mut VulkanRuntime)) {
             runtime.owner.device.device_type(),
             vk::PhysicalDeviceType::CPU
         );
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         test(&mut runtime);
         drop(runtime);

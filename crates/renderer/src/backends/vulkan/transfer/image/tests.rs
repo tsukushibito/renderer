@@ -210,7 +210,7 @@ fn vulkan_image_transfer_smoke() {
     tracing::dispatcher::with_default(&dispatch, || {
         for iteration in 0..4 {
             let diagnostics = Diagnostics::new();
-            let instance = VulkanInstance::new(Arc::clone(&diagnostics)).unwrap();
+            let instance = VulkanInstance::new(diagnostics.clone()).unwrap();
             super::super::super::assert_real_validation(&diagnostics);
             let device = VulkanDevice::new(instance).unwrap();
             assert_ne!(

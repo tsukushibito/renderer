@@ -493,7 +493,7 @@ fn performance_transfer_measurements() {
     tracing::dispatcher::with_default(&dispatch, || {
         let diagnostics = Diagnostics::new();
         let instance =
-            VulkanInstance::with_validation(Arc::clone(&diagnostics), ValidationMode::Disabled)
+            VulkanInstance::with_validation(diagnostics.clone(), ValidationMode::Disabled)
                 .expect("explicit performance Instance");
         // Catch ordinary loader injection, but do not treat banner absence as
         // proof against all overrides: external settings can suppress INFO.

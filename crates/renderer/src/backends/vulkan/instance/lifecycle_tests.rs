@@ -48,7 +48,14 @@ thread_local! {
 }
 
 fn initialize(plan: Plan) -> Result<VulkanInstance, InitError> {
-    initialize_with_validation(plan, ValidationMode::Required)
+    initialize_with_validation(
+        plan,
+        if cfg!(feature = "vulkan-diagnostics") {
+            ValidationMode::Required
+        } else {
+            ValidationMode::Disabled
+        },
+    )
 }
 
 fn initialize_with_validation(
@@ -61,6 +68,7 @@ fn initialize_with_validation(
         STATE.with(|state| {
             *state.borrow_mut() = FakeState {
                 plan,
+                #[cfg(feature = "vulkan-diagnostics")]
                 diagnostics: Arc::downgrade(&diagnostics),
                 ..FakeState::default()
             };
@@ -113,6 +121,7 @@ fn instance_creation_failure_does_not_destroy_an_uncreated_instance() {
 }
 
 #[test]
+#[cfg(feature = "vulkan-diagnostics")]
 fn messenger_creation_failure_destroys_the_instance_once() {
     let result = initialize(Plan {
         fail_messenger: true,
@@ -133,6 +142,7 @@ fn messenger_creation_failure_destroys_the_instance_once() {
 }
 
 #[test]
+#[cfg(feature = "vulkan-diagnostics")]
 fn drop_destroys_children_first_and_keeps_instance_callback_data_alive() {
     let owner = initialize(Plan::default()).expect("fake initialization succeeds");
     STATE.with(|state| {
@@ -151,36 +161,59 @@ fn drop_destroys_children_first_and_keeps_instance_callback_data_alive() {
         );
     });
     drop(owner);
-    assert_destroyed(&[
-        Event::CreateInstance,
-        Event::CreateMessenger,
-        Event::DestroyMessenger,
-        Event::DestroyInstance,
-    ]);
+    assert_destroyed(if cfg!(feature = "vulkan-diagnostics") {
+        &[
+            Event::CreateInstance,
+            Event::CreateMessenger,
+            Event::DestroyMessenger,
+            Event::DestroyInstance,
+        ]
+    } else {
+        &[Event::CreateInstance, Event::DestroyInstance]
+    });
 }
 
 #[test]
 fn disabled_validation_does_not_query_or_request_validation_prerequisites() {
-    assert_eq!(ValidationMode::default(), ValidationMode::Required);
+    assert_eq!(
+        ValidationMode::default(),
+        if cfg!(feature = "development-validation") {
+            ValidationMode::Required
+        } else {
+            ValidationMode::Disabled
+        }
+    );
     let owner = initialize_with_validation(Plan::default(), ValidationMode::Disabled)
         .expect("debug-utils-only initialization succeeds");
     STATE.with(|state| {
         let state = state.borrow();
         assert_eq!(state.layer_queries, 0);
         assert!(state.requested_layers.is_empty());
-        assert_eq!(state.requested_extensions, ["VK_EXT_debug_utils"]);
+        assert_eq!(
+            state.requested_extensions,
+            if cfg!(feature = "vulkan-diagnostics") {
+                vec!["VK_EXT_debug_utils"]
+            } else {
+                vec![]
+            }
+        );
         assert!(!state.sync_validation_requested);
     });
     drop(owner);
-    assert_destroyed(&[
-        Event::CreateInstance,
-        Event::CreateMessenger,
-        Event::DestroyMessenger,
-        Event::DestroyInstance,
-    ]);
+    assert_destroyed(if cfg!(feature = "vulkan-diagnostics") {
+        &[
+            Event::CreateInstance,
+            Event::CreateMessenger,
+            Event::DestroyMessenger,
+            Event::DestroyInstance,
+        ]
+    } else {
+        &[Event::CreateInstance, Event::DestroyInstance]
+    });
 }
 
 #[test]
+#[cfg(feature = "vulkan-diagnostics")]
 fn missing_debug_entry_points_destroy_the_instance_without_creating_a_messenger() {
     for missing in [
         c"vkCreateDebugUtilsMessengerEXT",
@@ -203,18 +236,61 @@ fn assert_destroyed(expected_events: &[Event]) {
     STATE.with(|state| {
         let state = state.borrow();
         assert_eq!(state.events, expected_events);
-        assert!(state.callback_delivered);
-        let snapshot = state
-            .destruction_observer
-            .as_ref()
-            .expect("callback state was live during Instance destruction")
-            .snapshot();
-        assert!(snapshot.is_clean(), "{snapshot:?}");
-        assert!(snapshot.messages.iter().any(|message| {
-            message.message_id_name.as_deref() == Some("lifecycle-destruction")
-                && message.message == "Instance destruction callback received"
-        }));
+        #[cfg(not(feature = "vulkan-diagnostics"))]
+        {
+            assert!(!state.callback_delivered);
+            assert!(state.instance_callback.is_none());
+        }
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            assert!(state.callback_delivered);
+            let snapshot = state
+                .destruction_observer
+                .as_ref()
+                .expect("callback state was live during Instance destruction")
+                .snapshot();
+            assert!(snapshot.is_clean(), "{snapshot:?}");
+            assert!(snapshot.messages.iter().any(|message| {
+                message.message_id_name.as_deref() == Some("lifecycle-destruction")
+                    && message.message == "Instance destruction callback received"
+            }));
+        }
     });
+}
+
+#[test]
+#[cfg(not(feature = "vulkan-diagnostics"))]
+fn shipping_instance_needs_no_debug_entry_points_or_messenger() {
+    let owner = initialize_with_validation(
+        Plan {
+            missing_proc: Some(c"vkCreateDebugUtilsMessengerEXT"),
+            fail_messenger: true,
+            ..Plan::default()
+        },
+        ValidationMode::Disabled,
+    )
+    .expect("shipping needs no diagnostic extension functions");
+    STATE.with(|state| {
+        let state = state.borrow();
+        assert!(state.requested_extensions.is_empty());
+        assert!(state.requested_layers.is_empty());
+        assert!(state.instance_callback.is_none());
+        assert_eq!(state.layer_queries, 0);
+        assert_eq!(state.events, [Event::CreateInstance]);
+    });
+    drop(owner);
+    assert_destroyed(&[Event::CreateInstance, Event::DestroyInstance]);
+}
+
+#[test]
+#[cfg(not(feature = "vulkan-diagnostics"))]
+fn shipping_required_validation_fails_before_native_creation() {
+    let error = initialize_with_validation(Plan::default(), ValidationMode::Required)
+        .err()
+        .expect("missing feature must fail");
+    assert!(matches!(error, InitError::DiagnosticsNotCompiled));
+    STATE.with(|state| assert!(state.borrow().events.is_empty()));
+    assert_eq!(std::mem::size_of::<Diagnostics>(), 0);
 }
 
 unsafe extern "system" fn get_instance_proc_addr(

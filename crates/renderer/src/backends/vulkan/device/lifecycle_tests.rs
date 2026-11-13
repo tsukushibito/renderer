@@ -81,20 +81,28 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
     assert_eq!(owner.max_buffer_size(), 1024);
     assert_eq!(owner.max_draw_indexed_index_value(), u32::MAX);
     STATE.with(|state| assert_eq!(state.borrow().property_queries, 1));
-    let lookups = STATE.with(|state| {
-        let state = state.borrow();
-        assert_eq!(
-            state.queue_names,
-            [(
-                vk::Queue::from_raw(5),
-                "renderer.graphics-compute.queue".to_owned()
-            )]
-        );
-        state.debug_lookups
+    #[cfg(feature = "vulkan-diagnostics")]
+    {
+        let lookups = STATE.with(|state| {
+            let state = state.borrow();
+            assert_eq!(
+                state.queue_names,
+                [(
+                    vk::Queue::from_raw(5),
+                    "renderer.graphics-compute.queue".to_owned()
+                )]
+            );
+            state.debug_lookups
+        });
+        assert!(lookups > 0, "initial creation loads the debug dispatch");
+        assert!(std::ptr::eq(owner.debug_utils(), owner.debug_utils()));
+        STATE.with(|state| assert_eq!(state.borrow().debug_lookups, lookups));
+    }
+    #[cfg(not(feature = "vulkan-diagnostics"))]
+    STATE.with(|state| {
+        assert!(state.borrow().queue_names.is_empty());
+        assert_eq!(state.borrow().debug_lookups, 0);
     });
-    assert!(lookups > 0, "initial creation loads the debug dispatch");
-    assert!(std::ptr::eq(owner.debug_utils(), owner.debug_utils()));
-    STATE.with(|state| assert_eq!(state.borrow().debug_lookups, lookups));
     drop(owner);
     STATE.with(|state| {
         assert_eq!(
@@ -121,6 +129,7 @@ fn indexed_draw_limit_preserves_the_reported_value_and_is_cached() {
 }
 
 #[test]
+#[cfg(feature = "vulkan-diagnostics")]
 fn queue_naming_failure_retires_the_created_device_and_preserves_cause() {
     let instance = instance(false);
     STATE.with(|state| state.borrow_mut().fail_queue_name = true);
