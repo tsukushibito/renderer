@@ -1,7 +1,8 @@
 //! Real-GPU shader, depth and complete M2 integration contracts.
 
 use super::*;
-use crate::graph::{AttachmentOps, BufferDesc, ComputeTransform, Graph, ImageDesc};
+use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
+use crate::graph::{BufferDesc, ComputeTransform, Graph, ImageDesc};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -119,18 +120,26 @@ fn opaque_batch_comparison(
             .unwrap();
         for (vertices, indices, count, parameters) in draws {
             graph
-                .raster_with_parameters(
+                .raster(
                     "scalar draw",
-                    vertices,
-                    indices,
-                    count,
-                    color,
-                    depth,
-                    AttachmentOps::LOAD_STORE,
-                    AttachmentOps::LOAD_STORE,
-                    [0.0; 4],
-                    1.0,
-                    parameters,
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: count,
+                        parameters,
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                    },
                 )
                 .unwrap();
         }
@@ -400,15 +409,24 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             invalid
                 .raster(
                     "reject-invalid-index",
-                    vertices,
-                    indices,
-                    12,
-                    color,
-                    depth,
-                    AttachmentOps::CLEAR_STORE,
-                    AttachmentOps::CLEAR_STORE,
-                    [0.0, 0.0, 0.0, 1.0],
-                    1.0,
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                            store: StoreOp::Store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        },
+                    },
                 )
                 .unwrap();
             invalid.readback_image("invalid-index-read", color).unwrap();
@@ -544,15 +562,24 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
             .unwrap();
         mesh.raster(
             "lazy-mesh",
-            vertices,
-            indices,
-            12,
-            color,
-            depth,
-            AttachmentOps::CLEAR_STORE,
-            AttachmentOps::CLEAR_STORE,
-            [0.0; 4],
-            1.0,
+            RasterDraw {
+                vertices,
+                indices,
+                index_count: 12,
+                parameters: RasterParameters::default(),
+            },
+            RasterAttachments {
+                color: Attachment {
+                    image: color,
+                    load: LoadOp::Clear([0.0; 4]),
+                    store: StoreOp::Store,
+                },
+                depth: Attachment {
+                    image: depth,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                },
+            },
         )
         .unwrap();
         let mesh_read = mesh.readback_image("lazy-read-mesh", color).unwrap();
@@ -682,15 +709,24 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             graph
                 .raster(
                     "mesh-clear",
-                    vertices,
-                    indices,
-                    12,
-                    color,
-                    depth,
-                    AttachmentOps::CLEAR_STORE,
-                    AttachmentOps::CLEAR_STORE,
-                    [0.0, 0.0, 0.0, 1.0],
-                    1.0,
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                            store: StoreOp::Store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        },
+                    },
                 )
                 .unwrap();
             let initial = graph.readback_image("read-before-load", color).unwrap();
@@ -725,15 +761,24 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             graph
                 .raster(
                     "mesh-load",
-                    blue_vertices,
-                    blue_indices,
-                    6,
-                    color,
-                    depth,
-                    AttachmentOps::LOAD_STORE,
-                    AttachmentOps::LOAD_STORE,
-                    [1.0; 4],
-                    0.0,
+                    RasterDraw {
+                        vertices: blue_vertices,
+                        indices: blue_indices,
+                        index_count: 6,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Load,
+                            store: StoreOp::Store,
+                        },
+                    },
                 )
                 .unwrap();
             let loaded = graph.readback_image("read-after-load", color).unwrap();
@@ -791,15 +836,24 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             graph
                 .raster(
                     "scene-mesh-depth",
-                    vertices,
-                    indices,
-                    12,
-                    color,
-                    depth,
-                    AttachmentOps::CLEAR_STORE,
-                    AttachmentOps::CLEAR_STORE,
-                    [0.0, 0.0, 0.0, 1.0],
-                    1.0,
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                            store: StoreOp::Store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        },
+                    },
                 )
                 .unwrap();
             graph

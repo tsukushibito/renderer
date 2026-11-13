@@ -1,4 +1,5 @@
 use super::*;
+use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
 use crate::graph::{BufferDesc, Graph, ImageDesc};
 
 #[test]
@@ -53,15 +54,24 @@ fn provenance_follows_index_copy_sources_and_persistent_imports_only() {
     graph
         .raster(
             "mesh",
-            vertices,
-            indices,
-            3,
-            color,
-            depth,
-            AttachmentOps::CLEAR_STORE,
-            AttachmentOps::CLEAR_STORE,
-            [0.0; 4],
-            1.0,
+            RasterDraw {
+                vertices,
+                indices,
+                index_count: 3,
+                parameters: RasterParameters::default(),
+            },
+            RasterAttachments {
+                color: Attachment {
+                    image: color,
+                    load: LoadOp::Clear([0.0; 4]),
+                    store: StoreOp::Store,
+                },
+                depth: Attachment {
+                    image: depth,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                },
+            },
         )
         .unwrap();
     graph.readback_image("color.read", color).unwrap();
@@ -311,15 +321,24 @@ fn vulkan_graph_upload_input_retirement_and_future_index_import() {
         let depth = draw.image("depth", ImageDesc::depth32(1, 1)).unwrap();
         draw.raster(
             "degenerate-mesh",
-            vertices,
-            indices,
-            3,
-            color,
-            depth,
-            AttachmentOps::CLEAR_STORE,
-            AttachmentOps::CLEAR_STORE,
-            [1.0, 0.0, 0.0, 1.0],
-            1.0,
+            RasterDraw {
+                vertices,
+                indices,
+                index_count: 3,
+                parameters: RasterParameters::default(),
+            },
+            RasterAttachments {
+                color: Attachment {
+                    image: color,
+                    load: LoadOp::Clear([1.0, 0.0, 0.0, 1.0]),
+                    store: StoreOp::Store,
+                },
+                depth: Attachment {
+                    image: depth,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                },
+            },
         )
         .unwrap();
         let read = draw.readback_image("color.read", color).unwrap();

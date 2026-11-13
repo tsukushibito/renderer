@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::OnceLock;
 
+use super::accesses::conflicting_accesses;
 use super::{Graph, GraphError, GraphErrorKind, Operation, Pass, PassHandle, Resource};
 
 /// Validated, culled logical work. This contains no native synchronization plan.
@@ -553,51 +554,9 @@ impl HazardMap {
     }
 }
 
+#[cfg(test)]
 fn overlaps(left: &Range<u64>, right: &Range<u64>) -> bool {
     left.start < right.end && right.start < left.end
-}
-
-/// Find a conflicting pair without comparing unrelated resources or readers.
-/// After sorting W writes, valid write intervals are disjoint per resource.
-/// A read therefore needs only the last writer starting before its range ends.
-/// A accesses take O(A log(W + 2)) work and O(W) temporary storage.
-/// Input ranges and access modes must already have been validated.
-fn conflicting_accesses(accesses: &[CompileAccess]) -> Option<(usize, usize)> {
-    let mut writes = accesses
-        .iter()
-        .enumerate()
-        .filter(|(_, access)| access.write)
-        .collect::<Vec<_>>();
-    if writes.is_empty() {
-        return None;
-    }
-    writes.sort_unstable_by_key(|&(index, access)| {
-        (access.resource, access.range.start, access.range.end, index)
-    });
-    for pair in writes.windows(2) {
-        let (left_index, left) = pair[0];
-        let (right_index, right) = pair[1];
-        if left.resource == right.resource && overlaps(&left.range, &right.range) {
-            return Some((left_index, right_index));
-        }
-    }
-    for (index, access) in accesses
-        .iter()
-        .enumerate()
-        .filter(|(_, access)| !access.write)
-    {
-        let end = writes.partition_point(|&(_, writer)| {
-            writer.resource < access.resource
-                || (writer.resource == access.resource && writer.range.start < access.range.end)
-        });
-        if let Some(&(writer_index, writer)) = writes[..end].last()
-            && writer.resource == access.resource
-            && writer.range.end > access.range.start
-        {
-            return Some((writer_index, index));
-        }
-    }
-    None
 }
 
 fn validate(
@@ -659,7 +618,9 @@ fn validate(
                 .at_range(access.range.clone()));
             }
         }
-        if let Some((left, right)) = conflicting_accesses(&pass.accesses) {
+        if let Some((left, right)) = conflicting_accesses(&pass.accesses, |access| {
+            (access.resource, access.range.clone(), access.write)
+        }) {
             // Attribute the conflict to the later original declaration. Sorting
             // is deterministic and does not change content/producer semantics.
             let access = &pass.accesses[left.max(right)];
@@ -942,6 +903,7 @@ mod tests {
         Access, AccessKind, AccessPurpose, AccessRange, AttachmentOps, BufferDesc, BufferHandle,
         ImageDesc, ImportBuffer, LoadOp, PassKind, ResourceKey, StoreOp,
     };
+    use crate::graph::{Attachment, LoadAction, RasterAttachments, RasterDraw, RasterParameters};
 
     fn buffer(graph: &mut Graph, size: u64) -> BufferHandle {
         graph.buffer("buffer", BufferDesc { size }).unwrap()
@@ -1462,7 +1424,33 @@ mod tests {
             };
             graph
                 .raster(
-                    "mesh", vertices, indices, 3, color, depth, ops, ops, [0.0; 4], 1.0,
+                    "mesh",
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 3,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: match ops.load {
+                                LoadAction::Clear => LoadOp::Clear([0.0; 4]),
+                                LoadAction::Load => LoadOp::Load,
+                                LoadAction::Discard => LoadOp::Discard,
+                            },
+                            store: ops.store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: match ops.load {
+                                LoadAction::Clear => LoadOp::Clear(1.0),
+                                LoadAction::Load => LoadOp::Load,
+                                LoadAction::Discard => LoadOp::Discard,
+                            },
+                            store: ops.store,
+                        },
+                    },
                 )
                 .unwrap();
         }
@@ -1664,30 +1652,56 @@ mod tests {
             graph
                 .raster(
                     "first draw",
-                    vertices,
-                    indices,
-                    3,
-                    color,
-                    depth,
-                    first,
-                    AttachmentOps::CLEAR_STORE,
-                    [0.0; 4],
-                    1.0,
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 3,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: match first.load {
+                                LoadAction::Clear => LoadOp::Clear([0.0; 4]),
+                                LoadAction::Load => LoadOp::Load,
+                                LoadAction::Discard => LoadOp::Discard,
+                            },
+                            store: first.store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        },
+                    },
                 )
                 .unwrap();
             if let Some(second) = second {
                 graph
                     .raster(
                         "second draw",
-                        vertices,
-                        indices,
-                        3,
-                        color,
-                        depth,
-                        second,
-                        AttachmentOps::LOAD_STORE,
-                        [0.0; 4],
-                        1.0,
+                        RasterDraw {
+                            vertices,
+                            indices,
+                            index_count: 3,
+                            parameters: RasterParameters::default(),
+                        },
+                        RasterAttachments {
+                            color: Attachment {
+                                image: color,
+                                load: match second.load {
+                                    LoadAction::Clear => LoadOp::Clear([0.0; 4]),
+                                    LoadAction::Load => LoadOp::Load,
+                                    LoadAction::Discard => LoadOp::Discard,
+                                },
+                                store: second.store,
+                            },
+                            depth: Attachment {
+                                image: depth,
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            },
+                        },
                     )
                     .unwrap();
             }
@@ -1708,7 +1722,7 @@ mod tests {
         assert_eq!(compiled.analysis.data_dependencies[3], [0, 1, 2]);
 
         let discard = AttachmentOps {
-            load: LoadOp::Clear,
+            load: LoadAction::Clear,
             store: StoreOp::Discard,
         };
         assert!(
@@ -1726,7 +1740,7 @@ mod tests {
                 .contains("pixels")
         );
         let uninitialized = AttachmentOps {
-            load: LoadOp::Discard,
+            load: LoadAction::Discard,
             store: StoreOp::Store,
         };
         assert!(

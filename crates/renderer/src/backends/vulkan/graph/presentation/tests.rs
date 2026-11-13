@@ -5,14 +5,14 @@ use super::super::{
     FrameId, FrameSubmission, RuntimeConfig, RuntimeError, RuntimeErrorKind, VulkanRuntime,
 };
 use super::{PresentOutcome, PresentationConfig};
+use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp};
 use ash::vk;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::graph::{
-    AttachmentOps, BufferDesc, ComputeTransform, Graph, ImageDesc, ImportImage, PassHandle,
-    ResourceKey,
+    BufferDesc, ComputeTransform, Graph, ImageDesc, ImportImage, PassHandle, ResourceKey,
 };
 use winit::{
     application::ApplicationHandler,
@@ -122,15 +122,24 @@ fn image_frame(
     graph
         .raster(
             "wsi.standard.mesh",
-            vertices,
-            indices,
-            3,
-            color,
-            depth,
-            AttachmentOps::CLEAR_STORE,
-            AttachmentOps::CLEAR_STORE,
-            [0.0, 0.0, 0.0, 1.0],
-            1.0,
+            RasterDraw {
+                vertices,
+                indices,
+                index_count: 3,
+                parameters: RasterParameters::default(),
+            },
+            RasterAttachments {
+                color: Attachment {
+                    image: color,
+                    load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                    store: StoreOp::Store,
+                },
+                depth: Attachment {
+                    image: depth,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                },
+            },
         )
         .unwrap();
     graph

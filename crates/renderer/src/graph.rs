@@ -17,7 +17,10 @@ use std::{
     },
 };
 
+mod accesses;
 mod compile;
+
+use accesses::conflicting_accesses;
 
 pub use compile::CompiledGraph;
 
@@ -127,8 +130,44 @@ impl ImportImage {
     }
 }
 
+/// How an attachment begins. Only a clear operation carries a clear value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LoadOp<T> {
+    Load,
+    Clear(T),
+    Discard,
+}
+
+/// A complete image and the operations applied to its contents.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Attachment<T> {
+    pub image: ImageHandle,
+    pub load: LoadOp<T>,
+    pub store: StoreOp,
+}
+
+impl<T> Attachment<T> {
+    fn ops(&self) -> AttachmentOps {
+        AttachmentOps {
+            load: match self.load {
+                LoadOp::Load => LoadAction::Load,
+                LoadOp::Clear(_) => LoadAction::Clear,
+                LoadOp::Discard => LoadAction::Discard,
+            },
+            store: self.store,
+        }
+    }
+}
+
+/// Named color and depth targets for the built-in mesh pipeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RasterAttachments {
+    pub color: Attachment<[f32; 4]>,
+    pub depth: Attachment<f32>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LoadOp {
+pub(crate) enum LoadAction {
     Load,
     Clear,
     Discard,
@@ -139,17 +178,18 @@ pub enum StoreOp {
     Discard,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct AttachmentOps {
-    pub load: LoadOp,
+pub(crate) struct AttachmentOps {
+    pub load: LoadAction,
     pub store: StoreOp,
 }
 impl AttachmentOps {
     pub const CLEAR_STORE: Self = Self {
-        load: LoadOp::Clear,
+        load: LoadAction::Clear,
         store: StoreOp::Store,
     };
+    #[cfg(test)]
     pub const LOAD_STORE: Self = Self {
-        load: LoadOp::Load,
+        load: LoadAction::Load,
         store: StoreOp::Store,
     };
 }
@@ -181,6 +221,15 @@ impl Default for RasterParameters {
             tint: [1.0; 4],
         }
     }
+}
+
+/// One indexed triangle draw using the built-in mesh shader ABI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RasterDraw {
+    pub vertices: BufferHandle,
+    pub indices: BufferHandle,
+    pub index_count: u32,
+    pub parameters: RasterParameters,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -415,7 +464,7 @@ pub(crate) struct ResourceAccess {
     not(feature = "vulkan"),
     allow(dead_code, reason = "native batch recording operands")
 )]
-pub(crate) struct RasterDraw {
+pub(crate) struct RasterDrawOperands {
     pub vertices: usize,
     pub indices: usize,
     pub index_count: u32,
@@ -479,7 +528,7 @@ pub(crate) enum Operation {
         parameters: RasterParameters,
     },
     RasterBatch {
-        draws: Arc<[RasterDraw]>,
+        draws: Arc<[RasterDrawOperands]>,
         color: usize,
         depth: usize,
         clear_color: [f32; 4],
@@ -926,58 +975,25 @@ impl Graph {
     /// Draw u32 indexed triangles using tightly packed seven-f32 vertices
     /// (`xyz`, then linear `rgba`). The runtime checks CPU-known index values
     /// against the vertex extent and rejects unknown index contents.
-    #[allow(clippy::too_many_arguments)]
+    /// Transform and tint are owned values; no scene borrow or arbitrary shader
+    /// or native commands are retained. Load/Discard require no clear value.
     pub fn raster(
         &mut self,
         name: impl Into<String>,
-        vertices: BufferHandle,
-        indices: BufferHandle,
-        index_count: u32,
-        color: ImageHandle,
-        depth: ImageHandle,
-        color_ops: AttachmentOps,
-        depth_ops: AttachmentOps,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-    ) -> Result<PassHandle, GraphError> {
-        self.raster_with_parameters(
-            name,
-            vertices,
-            indices,
-            index_count,
-            color,
-            depth,
-            color_ops,
-            depth_ops,
-            clear_color,
-            clear_depth,
-            RasterParameters::default(),
-        )
-    }
-
-    /// Adds a built-in draw with owned transform and tint values. It neither
-    /// retains a scene borrow nor permits arbitrary shader/native commands.
-    #[allow(clippy::too_many_arguments)]
-    pub fn raster_with_parameters(
-        &mut self,
-        name: impl Into<String>,
-        vertices: BufferHandle,
-        indices: BufferHandle,
-        index_count: u32,
-        color: ImageHandle,
-        depth: ImageHandle,
-        color_ops: AttachmentOps,
-        depth_ops: AttachmentOps,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-        parameters: RasterParameters,
+        draw: RasterDraw,
+        attachments: RasterAttachments,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let draw = graph.raster_draw(vertices, indices, index_count, parameters)?;
+            let draw = graph.raster_draw(
+                draw.vertices,
+                draw.indices,
+                draw.index_count,
+                draw.parameters,
+            )?;
             let vertices = draw.vertices;
             let indices = draw.indices;
-            let color = graph.image_id(color)?;
-            let depth = graph.image_id(depth)?;
+            let color = graph.image_id(attachments.color.image)?;
+            let depth = graph.image_id(attachments.depth.image)?;
             graph.color(color)?;
             let c = graph.image_desc_at(color)?;
             let d = graph.image_desc_at(depth)?;
@@ -990,27 +1006,44 @@ impl Graph {
             }
             let vs = graph.resources[vertices].desc.units();
             let ix = u64::from(draw.index_count) * 4;
-            if !clear_depth.is_finite()
-                || !(0.0..=1.0).contains(&clear_depth)
-                || clear_color.iter().any(|x| !x.is_finite())
-            {
-                return Err(GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "invalid attachment clear value",
-                ));
-            }
+            let clear_color = match attachments.color.load {
+                LoadOp::Clear(value) => {
+                    if value.iter().any(|x| !x.is_finite()) {
+                        return Err(GraphError::new(
+                            GraphErrorKind::InvalidInput,
+                            "invalid attachment clear value",
+                        ));
+                    }
+                    value
+                }
+                LoadOp::Load | LoadOp::Discard => [0.0; 4],
+            };
+            let clear_depth = match attachments.depth.load {
+                LoadOp::Clear(value) => {
+                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                        return Err(GraphError::new(
+                            GraphErrorKind::InvalidInput,
+                            "invalid attachment clear value",
+                        ));
+                    }
+                    value
+                }
+                LoadOp::Load | LoadOp::Discard => 0.0,
+            };
+            let color_ops = attachments.color.ops();
+            let depth_ops = attachments.depth.ops();
             Ok((
                 Operation::Raster {
                     vertices,
                     indices,
-                    index_count,
+                    index_count: draw.index_count,
                     color,
                     depth,
                     color_ops,
                     depth_ops,
                     clear_color,
                     clear_depth,
-                    parameters,
+                    parameters: draw.parameters,
                 },
                 vec![
                     read(vertices, 0..vs, AccessPurpose::Vertex),
@@ -1241,16 +1274,16 @@ impl Graph {
                     purpose: access.purpose,
                 });
             }
-            for (i, a) in encoded.iter().enumerate() {
-                for b in &encoded[i + 1..] {
-                    if a.resource == b.resource && overlaps(&a.range, &b.range) && (a.write || b.write)
-                    {
-                        return Err(graph.resource_error(GraphErrorKind::InvalidInput,
-                            "overlapping pass accesses must use one read_write declaration",
-                            a.resource,
-                        ).with_range(graph.access_range(a.resource, a.range.clone())));
-                    }
-                }
+            // This public input boundary establishes pass-local disjointness.
+            // Rechecking the immutable encoded accesses at submit is unnecessary.
+            if let Some((left, _)) = conflicting_accesses(&encoded, |access| {
+                (access.resource, access.range.clone(), access.write)
+            }) {
+                let access = &encoded[left];
+                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
+                    "overlapping pass accesses must use one read_write declaration",
+                    access.resource,
+                ).with_range(graph.access_range(access.resource, access.range.clone())));
             }
             Ok((Operation::Declared(kind), encoded, side_effect))
         })
@@ -1373,7 +1406,7 @@ impl Graph {
         indices: BufferHandle,
         index_count: u32,
         parameters: RasterParameters,
-    ) -> Result<RasterDraw, GraphError> {
+    ) -> Result<RasterDrawOperands, GraphError> {
         let vertices = self.buffer_id(vertices)?;
         let indices = self.buffer_id(indices)?;
         let vs = self.resources[vertices].desc.units();
@@ -1402,7 +1435,7 @@ impl Graph {
                 "non-finite raster transform or tint",
             ));
         }
-        Ok(RasterDraw {
+        Ok(RasterDrawOperands {
             vertices,
             indices,
             index_count,
@@ -1510,9 +1543,9 @@ fn attachment(resource: usize, ops: AttachmentOps, purpose: AccessPurpose) -> Re
     ResourceAccess {
         resource,
         range: 0..1,
-        read: ops.load == LoadOp::Load,
+        read: ops.load == LoadAction::Load,
         write: true,
-        initializes: ops.load != LoadOp::Discard,
+        initializes: ops.load != LoadAction::Discard,
         discard_after: ops.store == StoreOp::Discard,
         purpose,
     }
@@ -1940,6 +1973,85 @@ mod tests {
     }
 
     #[test]
+    fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
+        let mut graph = Graph::new();
+        let earlier_resource = graph
+            .buffer("earlier resource", BufferDesc { size: 16 })
+            .unwrap();
+        let first_access = graph
+            .buffer("first access", BufferDesc { size: 16 })
+            .unwrap();
+        let access = |buffer: BufferHandle, range, write| Access {
+            resource: buffer.into(),
+            range: AccessRange::Buffer(range),
+            kind: if write {
+                AccessKind::Write
+            } else {
+                AccessKind::Read
+            },
+            purpose: if write {
+                AccessPurpose::CopyDestination
+            } else {
+                AccessPurpose::CopySource
+            },
+        };
+        let mut accesses = vec![
+            access(first_access, 4..12, false),
+            access(earlier_resource, 0..4, true),
+            access(first_access, 8..16, true),
+            access(earlier_resource, 0..4, true),
+        ];
+        let before = graph.passes.len();
+        let error = graph
+            .declare_pass("conflicts", PassKind::Copy, accesses.clone(), false)
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some("conflicts"));
+        assert_eq!(error.resource(), Some(first_access.into()));
+        assert_eq!(error.range(), Some(&AccessRange::Buffer(4..12)));
+        assert_eq!(graph.passes.len(), before);
+
+        accesses.push(access(earlier_resource, 16..20, false));
+        let error = graph
+            .declare_pass("invalid range first", PassKind::Copy, accesses, false)
+            .unwrap_err();
+        assert_eq!(error.resource(), Some(earlier_resource.into()));
+        assert_eq!(error.range(), Some(&AccessRange::Buffer(16..20)));
+        assert!(error.message.contains("byte range"));
+        assert_eq!(graph.passes.len(), before);
+    }
+
+    #[test]
+    fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
+        let mut graph = Graph::new();
+        let buffer = graph.buffer("source", BufferDesc { size: 64 }).unwrap();
+        let mut accesses = vec![
+            Access {
+                resource: buffer.into(),
+                range: AccessRange::Buffer(0..64),
+                kind: AccessKind::Read,
+                purpose: AccessPurpose::CopySource,
+            };
+            8_192
+        ];
+        graph
+            .declare_pass("many readers", PassKind::Copy, accesses.clone(), false)
+            .unwrap();
+        accesses.push(Access {
+            resource: buffer.into(),
+            range: AccessRange::Buffer(32..64),
+            kind: AccessKind::Write,
+            purpose: AccessPurpose::CopyDestination,
+        });
+        let error = graph
+            .declare_pass("reader and writer", PassKind::Copy, accesses, false)
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.resource(), Some(buffer.into()));
+        assert_eq!(error.range(), Some(&AccessRange::Buffer(0..64)));
+    }
+
+    #[test]
     fn fixed_operations_check_binding_formats_extents_and_aliasing() {
         let mut graph = Graph::new();
         let a = graph.image("a", ImageDesc::rgba8(2, 2)).unwrap();
@@ -1998,21 +2110,72 @@ mod tests {
     }
 
     #[test]
+    fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
+        for (color_load, depth_load, valid) in [
+            (LoadOp::Load, LoadOp::Load, true),
+            (LoadOp::Discard, LoadOp::Discard, true),
+            (LoadOp::Clear([0.0; 4]), LoadOp::Clear(1.0), true),
+            (LoadOp::Clear([f32::NAN; 4]), LoadOp::Load, false),
+            (LoadOp::Load, LoadOp::Clear(f32::NAN), false),
+            (LoadOp::Discard, LoadOp::Clear(-0.1), false),
+            (LoadOp::Load, LoadOp::Clear(1.1), false),
+        ] {
+            let mut graph = Graph::new();
+            let (vertices, indices, color, depth) = mesh(&mut graph);
+            let result = graph.raster(
+                "attachment input",
+                RasterDraw {
+                    vertices,
+                    indices,
+                    index_count: 3,
+                    parameters: RasterParameters::default(),
+                },
+                RasterAttachments {
+                    color: Attachment {
+                        image: color,
+                        load: color_load,
+                        store: StoreOp::Store,
+                    },
+                    depth: Attachment {
+                        image: depth,
+                        load: depth_load,
+                        store: StoreOp::Store,
+                    },
+                },
+            );
+            assert_eq!(result.is_ok(), valid);
+            if let Err(error) = result {
+                assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+                assert_eq!(error.pass_name(), Some("attachment input"));
+            }
+        }
+    }
+
+    #[test]
     fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
         let mut graph = Graph::new();
         let (v, i, c, d) = mesh(&mut graph);
         graph
             .raster(
                 "undefined load",
-                v,
-                i,
-                3,
-                c,
-                d,
-                AttachmentOps::LOAD_STORE,
-                AttachmentOps::CLEAR_STORE,
-                [0.0; 4],
-                1.0,
+                RasterDraw {
+                    vertices: v,
+                    indices: i,
+                    index_count: 3,
+                    parameters: RasterParameters::default(),
+                },
+                RasterAttachments {
+                    color: Attachment {
+                        image: c,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                    depth: Attachment {
+                        image: d,
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    },
+                },
             )
             .unwrap();
         assert!(
@@ -2028,18 +2191,24 @@ mod tests {
         graph
             .raster(
                 "discarded",
-                v,
-                i,
-                3,
-                c,
-                d,
-                AttachmentOps {
-                    load: LoadOp::Clear,
-                    store: StoreOp::Discard,
+                RasterDraw {
+                    vertices: v,
+                    indices: i,
+                    index_count: 3,
+                    parameters: RasterParameters::default(),
                 },
-                AttachmentOps::CLEAR_STORE,
-                [0.0; 4],
-                1.0,
+                RasterAttachments {
+                    color: Attachment {
+                        image: c,
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Discard,
+                    },
+                    depth: Attachment {
+                        image: d,
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    },
+                },
             )
             .unwrap();
         graph.readback_image("read discarded", c).unwrap();
@@ -2059,18 +2228,24 @@ mod tests {
         graph
             .raster(
                 "partial",
-                v,
-                i,
-                3,
-                c,
-                d,
-                AttachmentOps {
-                    load: LoadOp::Discard,
-                    store: StoreOp::Store,
+                RasterDraw {
+                    vertices: v,
+                    indices: i,
+                    index_count: 3,
+                    parameters: RasterParameters::default(),
                 },
-                AttachmentOps::CLEAR_STORE,
-                [0.0; 4],
-                1.0,
+                RasterAttachments {
+                    color: Attachment {
+                        image: c,
+                        load: LoadOp::Discard,
+                        store: StoreOp::Store,
+                    },
+                    depth: Attachment {
+                        image: d,
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    },
+                },
             )
             .unwrap();
         graph.export_image(c).unwrap();
