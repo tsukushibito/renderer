@@ -19,6 +19,8 @@ pub struct D3D12ValidationReport {
     pub errors: u64,
     pub corruption: u64,
     pub callback_failures: u64,
+    /// Warning/error/corruption texts that exceeded bounded problem storage.
+    /// Truncating informational history does not increment this counter.
     pub dropped_messages: u64,
     pub messages: Vec<D3D12ValidationMessage>,
 }
