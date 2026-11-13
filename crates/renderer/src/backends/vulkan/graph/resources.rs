@@ -220,20 +220,14 @@ impl GraphImage {
                 "Graph image {width}x{height} {format:?} exceeds format limits {limits:?}"
             )));
         }
-        // SAFETY: The live adapter belongs to this retained Instance.
-        let properties = unsafe {
-            owner
-                .device
-                .instance_raw()
-                .get_physical_device_properties(owner.device.physical_device())
-        };
-        if width > properties.limits.max_framebuffer_width
-            || height > properties.limits.max_framebuffer_height
-            || width > properties.limits.max_viewport_dimensions[0]
-            || height > properties.limits.max_viewport_dimensions[1]
-            || width as f32 > properties.limits.viewport_bounds_range[1]
-            || height as f32 > properties.limits.viewport_bounds_range[1]
-            || properties.limits.viewport_bounds_range[0] > 0.0
+        let limits = owner.device.limits();
+        if width > limits.max_framebuffer_width
+            || height > limits.max_framebuffer_height
+            || width > limits.max_viewport_dimensions[0]
+            || height > limits.max_viewport_dimensions[1]
+            || width as f32 > limits.viewport_bounds_range[1]
+            || height as f32 > limits.viewport_bounds_range[1]
+            || limits.viewport_bounds_range[0] > 0.0
         {
             return Err(RuntimeError::unsupported(
                 "Graph image exceeds framebuffer/viewport dimensions",

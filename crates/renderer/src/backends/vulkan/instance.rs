@@ -433,6 +433,7 @@ impl VulkanInstance {
 
     /// The narrow creation hook also tests cleanup after a real Instance exists;
     /// it is not a Backend abstraction or a configurable production failure mode.
+    #[cfg(test)]
     fn initialize(
         entry: Entry,
         diagnostics: DiagnosticsHandle,

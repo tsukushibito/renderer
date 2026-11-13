@@ -167,7 +167,17 @@ impl TransferPayload for ImageTransfer {
     }
 
     unsafe fn record(&self, command: vk::CommandBuffer) {
-        let plan = self.plan().expect("payload validated before recording");
+        // validate established this payload's immutable creation/layout/ABI
+        // contract before native recording. Derive operands without rechecking.
+        let extent = self.image.desc().extent;
+        let plan = CopyPlan {
+            extent: vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            },
+            old_layout: self.image.layout(),
+        };
         let device = &self.owner().device;
         // SAFETY: The caller exclusively retains this validated payload through
         // GPU completion; the raw image cannot escape that ownership boundary.

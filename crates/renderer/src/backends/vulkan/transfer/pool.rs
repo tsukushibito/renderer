@@ -162,11 +162,11 @@ impl ExecutionPool {
     }
 
     /// Convenience for already-owned payloads; errors consume the payload.
+    #[cfg(test)]
     pub(super) fn record<T: TransferPayload>(
         &self,
         payload: T,
     ) -> Result<RecordedTransfer<T>, TransferError> {
-        payload.validate()?;
         self.reserve()?.record(payload)
     }
 

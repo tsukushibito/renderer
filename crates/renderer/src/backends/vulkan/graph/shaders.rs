@@ -605,14 +605,7 @@ impl ShaderPrograms {
                 "Graph shader capacities must be nonzero and descriptor counts representable",
             ));
         }
-        // SAFETY: Device retains its adapter/Instance through this query.
-        let limits = unsafe {
-            owner
-                .device
-                .instance_raw()
-                .get_physical_device_properties(owner.device.physical_device())
-                .limits
-        };
+        let limits = *owner.device.limits();
         Ok(Arc::new(Self {
             owner,
             compute: OnceLock::new(),

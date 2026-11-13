@@ -12,8 +12,10 @@ use std::time::Duration;
 
 use ash::vk;
 
+#[cfg(test)]
 use super::buffer::{BufferRole, VulkanBuffer};
 use super::device::{DeviceState, VulkanDevice};
+#[cfg(test)]
 use super::image::VulkanImage;
 use super::instance::LOG_TARGET;
 use super::memory::MemoryOwner;
@@ -21,8 +23,10 @@ use super::memory::MemoryOwner;
 mod lifecycle;
 use lifecycle::Retained;
 
+#[cfg(test)]
 mod image;
 
+#[cfg(test)]
 pub(super) mod batch;
 pub(super) mod staging;
 
@@ -55,7 +59,9 @@ const DROP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(super) enum TransferError {
+    #[cfg(test)]
     InvalidBuffers(&'static str),
+    #[cfg(test)]
     InvalidImage(&'static str),
     InvalidPool(&'static str),
     CapacityExhausted {
@@ -73,7 +79,9 @@ pub(super) enum TransferError {
 impl fmt::Display for TransferError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(test)]
             Self::InvalidBuffers(reason) => write!(f, "invalid buffer transfer: {reason}"),
+            #[cfg(test)]
             Self::InvalidImage(reason) => write!(f, "invalid image transfer: {reason}"),
             Self::InvalidPool(reason) => write!(f, "invalid execution pool: {reason}"),
             Self::CapacityExhausted { capacity } => {
@@ -145,12 +153,14 @@ pub(super) unsafe fn record_host_read(device: &VulkanDevice, command: vk::Comman
     }
 }
 
+#[cfg(test)]
 pub(super) struct TransferBuffers {
     pub(super) upload: VulkanBuffer,
     pub(super) transfer: VulkanBuffer,
     pub(super) readback: VulkanBuffer,
 }
 
+#[cfg(test)]
 pub(super) struct ImageTransfer {
     pub(super) upload: VulkanBuffer,
     pub(super) image: VulkanImage,
@@ -158,12 +168,14 @@ pub(super) struct ImageTransfer {
 }
 
 #[derive(Clone, Copy)]
+#[cfg(test)]
 struct BufferSpec {
     role: BufferRole,
     size: u64,
     initialized: bool,
 }
 
+#[cfg(test)]
 fn validate_request(specs: [BufferSpec; 3], same_owner: bool) -> Result<(), TransferError> {
     if !same_owner {
         return Err(TransferError::InvalidBuffers(
@@ -196,6 +208,7 @@ fn validate_request(specs: [BufferSpec; 3], same_owner: bool) -> Result<(), Tran
     Ok(())
 }
 
+#[cfg(test)]
 impl TransferBuffers {
     fn validate(&self) -> Result<(), TransferError> {
         let buffers = [&self.upload, &self.transfer, &self.readback];
@@ -239,6 +252,7 @@ pub(super) trait TransferPayload {
     fn retired(&mut self) {}
 }
 
+#[cfg(test)]
 impl TransferPayload for TransferBuffers {
     fn validate(&self) -> Result<(), TransferError> {
         self.validate()
@@ -446,7 +460,7 @@ struct TransferResources<T> {
 }
 
 /// Dropping this unsubmitted owner cancels the recording and releases resources.
-pub(super) struct RecordedTransfer<T: TransferPayload = TransferBuffers> {
+pub(super) struct RecordedTransfer<T: TransferPayload> {
     resources: TransferResources<T>,
 }
 
@@ -545,7 +559,7 @@ impl<T: TransferPayload> RecordedTransfer<T> {
     }
 }
 
-pub(super) struct PendingTransfer<T: TransferPayload = TransferBuffers> {
+pub(super) struct PendingTransfer<T: TransferPayload> {
     retained: Retained<TransferResources<T>>,
 }
 
