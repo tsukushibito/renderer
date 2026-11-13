@@ -146,7 +146,6 @@ fn run_shared_graph(strict_validation: bool) {
         } else {
             D3D12ValidationMode::Disabled
         },
-        ..Default::default()
     })
     .expect("D3D12 hardware and requested validation are required");
     let vulkan_info = vulkan.device_info();
