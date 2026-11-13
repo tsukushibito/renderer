@@ -1,5 +1,6 @@
-//! CPU-known buffer contents reference immutable upload input; GPU copies move
-//! slice metadata, not bytes. Unknown holes remain unknown after partial copies.
+//! Immutable mesh bounds replace CPU byte retention. Arbitrary Graph input
+//! retains byte provenance because partial writes/copies must establish a sound
+//! index guarantee. Unknown holes never become initialized index contents.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -8,24 +9,27 @@ use std::sync::Arc;
 #[derive(Clone, Default)]
 pub(super) struct BufferProvenance {
     segments: BTreeMap<u64, Segment>,
-    // One result bounds cache storage independently of the number of draw
-    // variants. Cloning preserves the same immutable contents and valid result.
+    // A content maximum is independent of a draw's vertex/Device bounds. Keep
+    // one prefix summary; changing only those bounds never rescans the bytes.
     validation: Option<IndexValidation>,
+    // Managed meshes need no CPU copy. This private proof is installed only by
+    // uploads carrying MeshData's immutable bound, at the same byte positions.
+    mesh: Option<MeshIndexSummary>,
     #[cfg(test)]
     validation_scans: usize,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct IndexBounds {
+#[derive(Clone, Copy)]
+struct IndexValidation {
     count: u32,
-    vertex_count: u64,
-    maximum: u32,
+    maximum: Result<u32, IndexError>,
 }
 
 #[derive(Clone, Copy)]
-struct IndexValidation {
-    bounds: IndexBounds,
-    result: Result<(), IndexError>,
+struct MeshIndexSummary {
+    byte_len: u64,
+    known_prefix: u64,
+    maximum: u32,
 }
 
 #[derive(Clone)]
@@ -49,6 +53,30 @@ pub(super) enum IndexError {
 }
 
 impl BufferProvenance {
+    #[cfg(test)]
+    pub(super) fn test_evidence(&self) -> (usize, usize) {
+        (self.segments.len(), self.validation_scans)
+    }
+
+    /// Mesh uploads are generated in stream order, at four-byte boundaries.
+    /// Only a complete stream can become the immutable mesh's index proof.
+    /// Sparse/out-of-order writes remain unproven, never initialized by fiat.
+    pub(super) fn write_mesh_indices(&mut self, target: Range<u64>, byte_len: u64, maximum: u32) {
+        self.segments.clear();
+        self.validation = None;
+        let previous = self.mesh.take().filter(|proof| proof.byte_len == byte_len);
+        let mut proof = previous.unwrap_or(MeshIndexSummary {
+            byte_len,
+            known_prefix: 0,
+            maximum,
+        });
+        proof.maximum = proof.maximum.max(maximum);
+        if target.start <= proof.known_prefix && target.end <= byte_len {
+            proof.known_prefix = proof.known_prefix.max(target.end);
+        }
+        self.mesh = Some(proof);
+    }
+
     /// `target` and `bytes` describe an already validated graph upload.
     #[cfg(test)]
     pub(super) fn write(&mut self, target: Range<u64>, bytes: Arc<[u8]>) {
@@ -85,7 +113,15 @@ impl BufferProvenance {
     /// destination ranges are graph-validated; gaps are deliberately preserved.
     /// Obtain this before replacing the destination to support disjoint self-copy.
     pub(super) fn copied(&self, source: Range<u64>, destination: u64) -> Self {
+        // An exact complete mesh stream keeps its proof. Arbitrary byte slices
+        // cannot reconstruct an exact index maximum without the source bytes.
+        let mesh = self.mesh.filter(|proof| {
+            destination == 0
+                && source == (0..proof.byte_len)
+                && proof.known_prefix == proof.byte_len
+        });
         Self {
+            mesh,
             segments: self
                 .overlapping(&source)
                 .filter_map(|segment| {
@@ -110,10 +146,16 @@ impl BufferProvenance {
     }
 
     /// Overwrite the whole target, including unknown portions of a GPU copy.
-    pub(super) fn replace(&mut self, target: Range<u64>, contents: Self) {
+    pub(super) fn replace(&mut self, target: Range<u64>, mut contents: Self) {
         // Mutation invalidates both successful and failed validation results.
         // Other clones still describe their old immutable contents.
         self.validation = None;
+        // A generic mutation invalidates a managed proof. Only a complete,
+        // position-preserving copy can install another such proof.
+        self.mesh = contents
+            .mesh
+            .take()
+            .filter(|proof| target == (0..proof.byte_len));
         let keys = self
             .overlapping(&target)
             .map(|segment| segment.start)
@@ -168,35 +210,33 @@ impl BufferProvenance {
         vertex_count: u64,
         maximum: u32,
     ) -> Result<(), IndexError> {
-        let bounds = IndexBounds {
-            count,
-            vertex_count,
-            maximum,
-        };
-        if let Some(validation) = self.validation
-            && validation.bounds == bounds
-        {
-            return validation.result;
-        }
-        #[cfg(test)]
-        {
-            self.validation_scans += 1;
-        }
-        let result = self.scan_indices(bounds);
-        self.validation = Some(IndexValidation { bounds, result });
-        result
-    }
-
-    fn scan_indices(&self, bounds: IndexBounds) -> Result<(), IndexError> {
-        let IndexBounds {
-            count,
-            vertex_count,
-            maximum,
-        } = bounds;
-        let end = u64::from(count) * 4;
-        if end == 0 {
+        if count == 0 {
             return Ok(());
         }
+        if let Some(proof) = self.mesh {
+            if u64::from(count) * 4 != proof.byte_len || proof.known_prefix != proof.byte_len {
+                return Err(IndexError::UnknownContents);
+            }
+            return validate_index(proof.maximum, vertex_count, maximum);
+        }
+        let content_maximum = match self.validation {
+            Some(validation) if validation.count == count => validation.maximum,
+            _ => {
+                #[cfg(test)]
+                {
+                    self.validation_scans += 1;
+                }
+                let maximum = self.scan_indices(count);
+                self.validation = Some(IndexValidation { count, maximum });
+                maximum
+            }
+        }?;
+        validate_index(content_maximum, vertex_count, maximum)
+    }
+
+    fn scan_indices(&self, count: u32) -> Result<u32, IndexError> {
+        let end = u64::from(count) * 4;
+        let mut content_maximum = 0;
         let mut cursor = 0;
         let mut pending = [0u8; 4];
         let mut filled = 0;
@@ -217,13 +257,13 @@ impl BufferProvenance {
                 filled += length;
                 bytes = &bytes[length..];
                 if filled == 4 {
-                    validate_index(u32::from_le_bytes(pending), vertex_count, maximum)?;
+                    content_maximum = content_maximum.max(u32::from_le_bytes(pending));
                     filled = 0;
                 }
             }
             let (indices, tail) = bytes.as_chunks::<4>();
             for index in indices {
-                validate_index(u32::from_le_bytes(*index), vertex_count, maximum)?;
+                content_maximum = content_maximum.max(u32::from_le_bytes(*index));
             }
             if !tail.is_empty() {
                 pending[..tail.len()].copy_from_slice(tail);
@@ -232,11 +272,11 @@ impl BufferProvenance {
             cursor = next;
             if cursor == end {
                 debug_assert_eq!(filled, 0);
-                return Ok(());
+                return Ok(content_maximum);
             }
         }
         if cursor == end {
-            Ok(())
+            Ok(content_maximum)
         } else {
             Err(IndexError::UnknownContents)
         }
@@ -430,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn validation_reuses_only_unchanged_contents_and_identical_bounds() {
+    fn validation_reuses_content_maximum_across_vertex_and_device_bounds() {
         let mut contents = BufferProvenance::default();
         contents.write(0..8, Arc::from([0u8; 8]));
         for _ in 0..100 {
@@ -438,17 +478,18 @@ mod tests {
         }
         assert_eq!(contents.validation_scans, 1);
         let mut old_contents = contents.clone();
-        // Different vertex bounds, Device limits, and index ranges cannot use
-        // another draw's cached result, including when the old result was OK.
+        // Vertex and Device bounds are applied to the content maximum, so
+        // changing them does not scan again. A different prefix is summarized
+        // independently, including when the previous draw's bounds failed.
         assert!(matches!(
             contents.validate_indices(2, 0, 0),
             Err(IndexError::VertexBounds { .. })
         ));
-        assert_eq!(contents.validation_scans, 2);
+        assert_eq!(contents.validation_scans, 1);
         assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
-        assert_eq!(contents.validation_scans, 3);
+        assert_eq!(contents.validation_scans, 2);
         assert_eq!(contents.validate_indices(1, 1, 1), Ok(()));
-        assert_eq!(contents.validation_scans, 4);
+        assert_eq!(contents.validation_scans, 2);
 
         // A partial upload invalidates the cache; clones keep their own old
         // contents and valid cache because all backing byte slices are immutable.
@@ -479,5 +520,109 @@ mod tests {
         );
         contents.write(1..2, Arc::from([0u8]));
         assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+    }
+
+    #[test]
+    fn managed_mesh_has_no_payload_or_scans_and_rechecks_dynamic_bounds() {
+        let mut contents = BufferProvenance::default();
+        contents.write_mesh_indices(0..4, 12, 2);
+        assert_eq!(
+            contents.validate_indices(3, 3, 2),
+            Err(IndexError::UnknownContents)
+        );
+        let mut unaccepted = contents.clone();
+        contents.write_mesh_indices(4..12, 12, 2);
+        for draw in 0..32 {
+            assert_eq!(contents.validate_indices(3, 3 + draw % 2, 2), Ok(()));
+        }
+        assert_eq!(contents.test_evidence(), (0, 0));
+        assert_eq!(
+            unaccepted.validate_indices(3, 3, 2),
+            Err(IndexError::UnknownContents),
+            "preparing another snapshot must not publish its accepted contents"
+        );
+        assert!(matches!(
+            contents.validate_indices(3, 2, 2),
+            Err(IndexError::VertexBounds { .. })
+        ));
+        assert!(matches!(
+            contents.validate_indices(3, 3, 1),
+            Err(IndexError::DeviceLimit { .. })
+        ));
+        assert_eq!(
+            contents.validate_indices(1, 3, 2),
+            Err(IndexError::UnknownContents),
+            "a whole-mesh maximum is not an exact prefix maximum"
+        );
+        assert_eq!(contents.test_evidence(), (0, 0));
+        // Replacing a stream with another mesh of the same byte length must
+        // never lower the bound while old chunks can still contribute bytes.
+        let mut mixed = BufferProvenance::default();
+        mixed.write_mesh_indices(0..4, 12, 7);
+        mixed.write_mesh_indices(4..12, 12, 2);
+        assert_eq!(mixed.validate_indices(3, 8, 7), Ok(()));
+        assert_eq!(
+            mixed.validate_indices(3, 3, 7),
+            Err(IndexError::VertexBounds {
+                index: 7,
+                vertex_count: 3
+            })
+        );
+    }
+
+    #[test]
+    fn managed_mesh_copy_and_mutation_have_explicit_proof_boundaries() {
+        let mut original = BufferProvenance::default();
+        original.write_mesh_indices(0..12, 12, 2);
+        let mut copied = BufferProvenance::default();
+        copied.replace(0..12, original.copied(0..12, 0));
+        assert_eq!(copied.validate_indices(3, 3, 2), Ok(()));
+        assert_eq!(copied.test_evidence(), (0, 0));
+        let mut partial = original.copied(0..4, 0);
+        assert_eq!(
+            partial.validate_indices(1, 3, 2),
+            Err(IndexError::UnknownContents)
+        );
+        copied.write(4..8, Arc::from(0u32.to_le_bytes()));
+        assert_eq!(
+            copied.validate_indices(3, 3, 2),
+            Err(IndexError::UnknownContents),
+            "arbitrary writes cannot reuse the unmodified mesh proof"
+        );
+        assert_eq!(
+            original.validate_indices(3, 3, 2),
+            Ok(()),
+            "immutable old snapshots keep their own proof"
+        );
+        copied.write(0..12, Arc::from([0u8; 12]));
+        assert_eq!(
+            copied.validate_indices(3, 1, 0),
+            Ok(()),
+            "a complete generic replacement re-establishes byte provenance"
+        );
+        let mut sparse = BufferProvenance::default();
+        sparse.write_mesh_indices(4..12, 12, 2);
+        sparse.write_mesh_indices(0..4, 12, 2);
+        assert_eq!(
+            sparse.validate_indices(3, 3, 2),
+            Err(IndexError::UnknownContents)
+        );
+    }
+
+    #[test]
+    fn generic_alternating_vertex_bounds_share_one_content_summary() {
+        let mut contents = BufferProvenance::default();
+        contents.write(
+            0..12,
+            [0u32, 1, 2]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        for draw in 0..32 {
+            assert_eq!(contents.validate_indices(3, 3 + draw % 2, u32::MAX), Ok(()));
+        }
+        assert_eq!(contents.validation_scans, 1);
     }
 }

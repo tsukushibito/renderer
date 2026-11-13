@@ -23,7 +23,7 @@ use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
 use super::transfer::{ExecutionPool, PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{
     AccessPurpose, AttachmentOps, BufferHandle, CompiledGraph, ComputeTransform, ImageFormat,
-    ImageHandle, ImportBuffer, ImportImage, LoadOp, Operation, PassHandle, RasterDraw,
+    ImageHandle, ImportBuffer, ImportImage, LoadOp, MeshUpload, Operation, PassHandle, RasterDraw,
     RasterParameters, ResourceDesc, ResourceKey, StoreOp,
 };
 
@@ -1402,6 +1402,7 @@ impl GraphWork {
                         offset,
                         bytes,
                         source,
+                        mesh,
                     } => {
                         let slice = &bytes[source.clone()];
                         let mut range = upload.allocate(slice.len() as u64)?;
@@ -1409,11 +1410,21 @@ impl GraphWork {
                         prepared.staging = Some(uploads.len());
                         uploads.push(range);
                         if provenance_needed[*dst] {
-                            states[*dst].as_mut().unwrap().provenance.write_slice(
-                                *offset..*offset + slice.len() as u64,
-                                Arc::clone(bytes),
-                                source.clone(),
-                            );
+                            let target = *offset..*offset + slice.len() as u64;
+                            let provenance = &mut states[*dst].as_mut().unwrap().provenance;
+                            match mesh {
+                                Some(MeshUpload::Vertices) => {
+                                    *provenance = BufferProvenance::default()
+                                }
+                                Some(MeshUpload::Indices { byte_len, maximum }) => {
+                                    provenance.write_mesh_indices(target, *byte_len, *maximum);
+                                }
+                                None => provenance.write_slice(
+                                    target,
+                                    Arc::clone(bytes),
+                                    source.clone(),
+                                ),
+                            }
                         }
                     }
                     Operation::CopyBuffer {

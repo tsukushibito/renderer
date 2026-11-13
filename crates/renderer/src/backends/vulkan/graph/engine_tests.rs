@@ -464,3 +464,96 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         );
     });
 }
+
+/// The shipping path needs neither Renderer diagnostic state nor native layers.
+/// This is a separate content acceptance run; strict Core/SyncVal tests above
+/// remain unchanged and are run independently with development diagnostics.
+#[cfg(not(feature = "vulkan-diagnostics"))]
+#[test]
+#[ignore = "explicit shipping Vulkan content/ownership acceptance; native layers disabled"]
+fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
+    let runtime = VulkanRuntime::new_with_validation(
+        RuntimeConfig::default(),
+        crate::ValidationMode::Disabled,
+    )
+    .unwrap();
+    assert_ne!(
+        runtime.owner.device.device_type(),
+        ash::vk::PhysicalDeviceType::CPU
+    );
+    let monitor = runtime.validation_monitor();
+    let mut engine = VulkanEngine::new(runtime, MeshCacheConfig::default()).unwrap();
+    let mut assets = Engine::new(4, 4).unwrap();
+    let data = mesh([1.0, 0.0, 0.0, 1.0]);
+    let vertices = Arc::downgrade(&data.vertices);
+    let indices = Arc::downgrade(&data.indices);
+    let mesh_handle = assets.create_mesh(data).unwrap();
+    let material = assets.create_material(Material::default()).unwrap();
+    let view = View {
+        width: 32,
+        height: 32,
+        clip_from_world: IDENTITY,
+        clear_color: [0.0, 0.0, 0.0, 1.0],
+    };
+    let draw = Draw {
+        mesh: mesh_handle,
+        material,
+        world_from_model: IDENTITY,
+    };
+    let snapshot = assets.snapshot(&view, &[draw]).unwrap();
+    prepare_meshes(&mut engine, &snapshot);
+    let prepared = engine
+        .build_snapshot(&snapshot, true, |_, color| Ok(color))
+        .unwrap();
+    let plan = prepared.graph.compile().unwrap();
+    drop(snapshot);
+    assets.delete_mesh(mesh_handle).unwrap();
+    assets.delete_material(material).unwrap();
+    assert!(
+        vertices.upgrade().is_none(),
+        "resident vertex buffers retain no CPU mesh payload"
+    );
+    assert!(
+        indices.upgrade().is_none(),
+        "resident index buffers retain only their immutable bound"
+    );
+    let mut frame = engine.submit_frame(prepared, &plan).unwrap();
+    engine.release_output(&mut frame).unwrap();
+    drop(plan);
+    for entry in &engine.runtime().entries {
+        if entry.registered {
+            assert_eq!(
+                entry.physical.lock().scheduled.provenance.test_evidence(),
+                (0, 0),
+                "managed streams retain no byte provenance and perform zero index scans"
+            );
+        }
+    }
+    collect(
+        &mut engine,
+        &[(
+            frame.submission.id(),
+            frame.readback.unwrap(),
+            16 * 32 + 16,
+            [255, 0, 0, 255],
+        )],
+    );
+    engine.unload_all_meshes().unwrap();
+    assert!(
+        engine
+            .runtime_mut()
+            .drain_frames(Duration::from_secs(10))
+            .unwrap()
+    );
+    drop(engine);
+    let report = monitor.report();
+    assert_eq!(report.requested, crate::ValidationMode::Disabled);
+    assert!(report.is_clean());
+    assert!(report.layer_status_messages.is_empty());
+    assert!(!report.startup_status_recognized);
+    assert_eq!(report.core_validation, None);
+    assert_eq!(report.synchronization_validation, None);
+    eprintln!(
+        "shipping mesh acceptance: diagnostic feature absent; native Disabled requested; pixels checked; retained provenance=0; index scans=0; external layer injection unobserved, not disproved"
+    );
+}
