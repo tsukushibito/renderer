@@ -122,8 +122,20 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
         .iter()
         .map(|resource| ContentMap::new(resource.size, &resource.initial))
         .collect::<Vec<_>>();
+    #[cfg(not(feature = "graph-diagnostics"))]
+    let mut used_resources = {
+        // Reuse export membership, then mark live accesses in the existing pass
+        // walk. This temporary index is not retained in the completed plan.
+        let mut used = graph.exported.clone();
+        used.resize(resources.len(), false);
+        used
+    };
     for &index in &analysis.order {
         for access in &passes[index].accesses {
+            #[cfg(not(feature = "graph-diagnostics"))]
+            {
+                used_resources[access.resource] = true;
+            }
             if access.write {
                 contents[access.resource].write(
                     access.range.clone(),
@@ -135,9 +147,30 @@ pub(super) fn compile(graph: &Graph) -> Result<CompiledGraph, GraphError> {
             }
         }
     }
+    #[cfg(feature = "graph-diagnostics")]
+    let compiled_resources = graph.resources.clone();
+    #[cfg(not(feature = "graph-diagnostics"))]
+    let compiled_resources = graph
+        .resources
+        .iter()
+        .enumerate()
+        .map(|(index, resource)| Resource {
+            // Imports can fail the submit-time canonical revision check even
+            // without a live access; retain their operational error context.
+            name: if used_resources[index] || resource.import.is_some() {
+                resource.name.clone()
+            } else {
+                String::new()
+            },
+            desc: resource.desc,
+            import: resource.import,
+            import_revision: resource.import_revision,
+            initial: resource.initial.clone(),
+        })
+        .collect();
     Ok(CompiledGraph {
         id: graph.id,
-        resources: graph.resources.clone(),
+        resources: compiled_resources,
         passes: graph
             .passes
             .iter()
@@ -951,6 +984,67 @@ mod tests {
 
     fn buffer(graph: &mut Graph, size: u64) -> BufferHandle {
         graph.buffer("buffer", BufferDesc { size }).unwrap()
+    }
+
+    #[test]
+    fn diagnostic_resource_names_are_retained_only_when_execution_can_use_them() {
+        let mut graph = Graph::new();
+        let dead = graph
+            .buffer("dead transient", BufferDesc { size: 4 })
+            .unwrap();
+        graph
+            .upload_buffer("dead upload", dead, 0, vec![0; 4])
+            .unwrap();
+        let live = graph
+            .buffer("live transient", BufferDesc { size: 4 })
+            .unwrap();
+        graph
+            .upload_buffer("live upload", live, 0, vec![0; 4])
+            .unwrap();
+        graph.readback_buffer("live readback", live, 0, 4).unwrap();
+        let exported = graph.buffer("exported", BufferDesc { size: 4 }).unwrap();
+        graph
+            .upload_buffer("export upload", exported, 0, vec![0; 4])
+            .unwrap();
+        graph.export_buffer(exported).unwrap();
+        let unused_import = graph
+            .import_buffer(
+                "unused import",
+                &ImportBuffer {
+                    key: ResourceKey {
+                        owner: 1,
+                        index: 0,
+                        generation: 1,
+                    },
+                    revision: 7,
+                    desc: BufferDesc { size: 4 },
+                    initialized: vec![],
+                },
+            )
+            .unwrap();
+
+        let plan = graph.compile().unwrap();
+        assert_eq!(plan.pass_count(), 3);
+        assert_eq!(plan.resources[live.index].name, "live transient");
+        assert_eq!(plan.resources[exported.index].name, "exported");
+        assert_eq!(plan.resources[unused_import.index].name, "unused import");
+        assert_eq!(
+            plan.resources[dead.index].name,
+            if cfg!(feature = "graph-diagnostics") {
+                "dead transient"
+            } else {
+                ""
+            },
+        );
+        // The string policy does not change resource indices, descriptions,
+        // imported revisions or initialization used by execution planning.
+        assert_eq!(plan.resources.len(), graph.resources.len());
+        for (compiled, original) in plan.resources.iter().zip(&graph.resources) {
+            assert_eq!(compiled.desc, original.desc);
+            assert_eq!(compiled.import, original.import);
+            assert_eq!(compiled.import_revision, original.import_revision);
+            assert_eq!(compiled.initial, original.initial);
+        }
     }
 
     #[test]
