@@ -12,32 +12,76 @@ function requireInside(root, candidate) {
   }
 }
 
+function localResource(model, uri) {
+  if (typeof uri !== "string" || /^[a-z][a-z0-9+.-]*:/i.test(uri) || /^[\\/]/.test(uri) || uri.includes("\\")) {
+    throw new Error("External resources must use relative local URIs");
+  }
+  const url = new URL(uri, pathToFileURL(model));
+  if (url.protocol !== "file:" || url.host || url.search || url.hash) {
+    throw new Error("External resources must be local files without query or fragment");
+  }
+  return fileURLToPath(url);
+}
+
+function declaredResources(bytes) {
+  let json = bytes;
+  if (bytes.length >= 4 && bytes.readUInt32LE(0) === 0x46546c67) {
+    // glTF 2 GLB: inspect only a bounded JSON first chunk, never binary payloads.
+    if (bytes.length < 20 || bytes.readUInt32LE(16) !== 0x4e4f534a) return [];
+    const length = bytes.readUInt32LE(12);
+    if (length > bytes.length - 20) return [];
+    json = bytes.subarray(20, 20 + length);
+  }
+  let document;
+  try {
+    document = JSON.parse(json.toString("utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    return [];
+  }
+  return [document?.buffers, document?.images].flatMap((items) =>
+    Array.isArray(items) ? items.map((item) => item?.uri).filter((uri) => typeof uri === "string") : []);
+}
+
 async function validate(model) {
   const root = path.dirname(model);
   const inputs = new Set([model]);
   // Node Buffers already implement Uint8Array. Keep the file-backed allocation
   // instead of copying every model, external buffer, and image before validation.
-  const report = await validator.validateBytes(await readFile(model), {
+  const bytes = await readFile(model);
+  const unfetched = new Set();
+  for (const uri of declaredResources(bytes)) {
+    try {
+      const resource = localResource(model, uri);
+      inputs.add(resource);
+      unfetched.add(resource);
+    } catch {
+      // The validator diagnoses unsupported URI forms; they name no local input.
+    }
+  }
+  const report = await validator.validateBytes(bytes, {
     uri: path.basename(model),
     maxIssues: 0,
     writeTimestamp: false,
     externalResourceFunction: async (uri) => {
-      if (/^[a-z][a-z0-9+.-]*:/i.test(uri) || /^[\\/]/.test(uri) || uri.includes("\\")) {
-        throw new Error("External resources must use relative local URIs");
-      }
-      const url = new URL(uri, pathToFileURL(model));
-      if (url.protocol !== "file:" || url.host || url.search || url.hash) {
-        throw new Error("External resources must be local files without query or fragment");
-      }
-      const resource = fileURLToPath(url);
+      const resource = localResource(model, uri);
       requireInside(root, resource);
       inputs.add(resource);
       const target = await realpath(resource);
       requireInside(root, target);
       inputs.add(target);
+      unfetched.delete(resource);
       return readFile(target);
     },
   });
+  // Invalid assets can stop validation before resource callbacks. Protect their
+  // declared inputs too, while preserving useful reports for missing resources.
+  for (const resource of unfetched) {
+    try {
+      inputs.add(await realpath(resource));
+    } catch {
+      // Its lexical name remains protected if the target cannot be resolved.
+    }
+  }
   return { report, inputs };
 }
 

@@ -8,6 +8,18 @@ import test from "node:test";
 
 const cli = fileURLToPath(new URL("./validate.mjs", import.meta.url));
 
+function glbBytes(model) {
+  const bytes = Buffer.from(JSON.stringify(model));
+  const padded = Buffer.concat([bytes, Buffer.alloc((4 - bytes.length % 4) % 4, 0x20)]);
+  const header = Buffer.alloc(20);
+  header.writeUInt32LE(0x46546c67, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(20 + padded.length, 8);
+  header.writeUInt32LE(padded.length, 12);
+  header.writeUInt32LE(0x4e4f534a, 16);
+  return Buffer.concat([header, padded]);
+}
+
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), "renderer-gltf-validator-"));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -47,6 +59,17 @@ test("validates external geometry and preserves the official report", async (t) 
   assert.equal(result.report.info.totalTriangleCount, 1);
   assert.ok(result.report.info.resources.some((resource) => resource.uri === "geometry.bin"));
   assert.equal(JSON.parse(result.stdout).validatorVersion, "2.0.0-dev.3.10");
+});
+
+test("validates GLB external geometry and preserves the official report", async (t) => {
+  const data = await fixture(t);
+  const model = path.join(data.assets, "model.glb");
+  await writeFile(model, glbBytes(data.model));
+  const result = spawnSync(process.execPath, [cli, model, data.report], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(await readFile(data.report, "utf8"));
+  assert.equal(report.issues.numErrors, 0);
+  assert.equal(report.info.totalTriangleCount, 1);
 });
 
 test("rejects missing external buffers and validates image bytes", async (t) => {
@@ -124,6 +147,25 @@ test("refuses to replace a hard link to input data", async (t) => {
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /must not overwrite/);
   assert.deepEqual(await readFile(input), original);
+});
+
+test("protects declared glTF and GLB inputs even when validation stops before fetching", async (t) => {
+  const data = await fixture(t);
+  data.model.asset.version = "1.0";
+  const glb = path.join(data.assets, "model.glb");
+  await writeFile(data.input, JSON.stringify(data.model));
+  await writeFile(glb, glbBytes(data.model));
+  const input = path.join(data.assets, "geometry.bin");
+  const original = await readFile(input);
+  for (const model of [data.input, glb]) {
+    const result = spawnSync(process.execPath, [cli, model, input], { encoding: "utf8" });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /must not overwrite/);
+    assert.deepEqual(await readFile(input), original);
+    const failure = spawnSync(process.execPath, [cli, model, data.report], { encoding: "utf8" });
+    assert.equal(failure.status, 1, failure.stderr);
+    assert.ok(JSON.parse(await readFile(data.report, "utf8")).issues.numErrors > 0);
+  }
 });
 
 test("fails malformed input without claiming success", async (t) => {
