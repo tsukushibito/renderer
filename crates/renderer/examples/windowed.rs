@@ -14,10 +14,11 @@ mod demo {
         time::{Duration, Instant},
     };
 
+    #[cfg(feature = "vulkan-diagnostics")]
+    use renderer::ValidationMonitor;
     use renderer::{
         EngineRenderError, MeshCacheConfig, MeshUploadState, PresentOutcome, PresentationConfig,
-        Presenter, RenderedFrame, RuntimeConfig, RuntimeErrorKind, ValidationMonitor, VulkanEngine,
-        VulkanRuntime,
+        Presenter, RenderedFrame, RuntimeConfig, RuntimeErrorKind, VulkanEngine, VulkanRuntime,
         engine::{Engine, Material, MaterialHandle, MeshHandle},
     };
     use winit::{
@@ -81,6 +82,7 @@ mod demo {
         engine: Option<VulkanEngine>,
         presenter: Option<Presenter>,
         assets: Option<SceneAssets>,
+        #[cfg(feature = "vulkan-diagnostics")]
         validation: Option<ValidationMonitor>,
         output: Option<RenderedFrame>,
         presented: u32,
@@ -101,6 +103,7 @@ mod demo {
                 engine: None,
                 presenter: None,
                 assets: None,
+                #[cfg(feature = "vulkan-diagnostics")]
                 validation: None,
                 output: None,
                 presented: 0,
@@ -131,14 +134,19 @@ mod demo {
                     ..Default::default()
                 },
             )?;
+            #[cfg(feature = "vulkan-diagnostics")]
             let validation = runtime.validation_monitor();
-            let report = validation.report();
-            if report.core_validation != Some(true)
-                || report.synchronization_validation != Some(true)
+            #[cfg(feature = "development-validation")]
             {
-                return Err(
-                    format!("Core/SyncVal effective settings are unverified: {report:?}").into(),
-                );
+                let report = validation.report();
+                if report.core_validation != Some(true)
+                    || report.synchronization_validation != Some(true)
+                {
+                    return Err(format!(
+                        "Core/SyncVal effective settings are unverified: {report:?}"
+                    )
+                    .into());
+                }
             }
             let geometry = scene::triangle([1.0, 0.0, 0.0, 1.0])?;
             let engine = VulkanEngine::new(
@@ -161,7 +169,10 @@ mod demo {
             self.engine = Some(engine);
             self.presenter = Some(presenter);
             self.assets = Some(assets);
-            self.validation = Some(validation);
+            #[cfg(feature = "vulkan-diagnostics")]
+            {
+                self.validation = Some(validation);
+            }
             self.update_title();
             Ok(())
         }
@@ -283,6 +294,7 @@ mod demo {
             self.presenter = None;
             self.engine = None;
             self.window = None;
+            #[cfg(feature = "vulkan-diagnostics")]
             if let Some(validation) = &self.validation {
                 let report = validation.report();
                 if !report.is_clean() {
