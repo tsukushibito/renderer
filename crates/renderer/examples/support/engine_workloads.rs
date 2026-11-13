@@ -286,6 +286,13 @@ fn assert_validation(mode: Mode, report: &ValidationReport) -> Result<()> {
     {
         return Err(format!("required Core/SyncVal were not confirmed: {report:#?}").into());
     }
+    if mode == Mode::Benchmark
+        && (report.core_validation == Some(true) || report.synchronization_validation == Some(true))
+    {
+        return Err(
+            "performance run had externally enabled Validation; use a clean environment".into(),
+        );
+    }
     Ok(())
 }
 
@@ -642,6 +649,39 @@ fn option_bool(value: Option<bool>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn benchmark_rejects_observed_native_validation_without_inventing_unknown_settings() {
+        let mut report = ValidationReport {
+            requested: ValidationMode::Disabled,
+            warnings: 0,
+            errors: 0,
+            callback_failures: 0,
+            dropped_problems: 0,
+            problems: Vec::new(),
+            layer_status_messages: Vec::new(),
+            dropped_layer_statuses: 0,
+            startup_status_recognized: false,
+            core_validation: None,
+            synchronization_validation: None,
+        };
+        assert!(assert_validation(Mode::Benchmark, &report).is_ok());
+        assert_eq!(report.core_validation, None);
+        assert_eq!(report.synchronization_validation, None);
+        for (core, sync) in [(true, false), (false, true), (true, true)] {
+            report.core_validation = Some(core);
+            report.synchronization_validation = Some(sync);
+            assert!(assert_validation(Mode::Benchmark, &report).is_err());
+        }
+        report.core_validation = Some(false);
+        report.synchronization_validation = Some(false);
+        assert!(assert_validation(Mode::Benchmark, &report).is_ok());
+        assert!(assert_validation(Mode::Verify, &report).is_err());
+        report.requested = ValidationMode::Required;
+        report.core_validation = Some(true);
+        report.synchronization_validation = Some(true);
+        assert!(assert_validation(Mode::Verify, &report).is_ok());
+    }
 
     #[test]
     fn report_statistics_and_escaping_are_stable() {
