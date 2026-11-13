@@ -15,3 +15,6 @@
 )]
 #[rustfmt::skip]
 mod bindings;
+
+#[cfg(test)]
+mod preparation;
