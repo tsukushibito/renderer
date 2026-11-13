@@ -37,12 +37,14 @@ function Assert-PreparationReport {
     param($Report)
     if ($Report.schema_version -ne 1) { throw 'Unsupported preparation report schema.' }
     foreach ($field in @('debug_layer_requested', 'gpu_based_validation_requested',
-            'debug_device_available', 'info_queue_available', 'teardown_checked')) {
+            'configuration_before_device', 'debug_device_available', 'info_queue_available',
+            'teardown_checked')) {
         if ($Report.validation.$field -isnot [bool] -or -not $Report.validation.$field) {
             throw "Preparation report did not confirm validation.$field."
         }
     }
-    foreach ($field in @('warnings', 'errors', 'corruption')) {
+    foreach ($field in @('warnings', 'errors', 'corruption', 'callback_failures',
+            'dropped_messages', 'storage_denied_messages', 'storage_discarded_messages')) {
         $count = $Report.validation.$field
         if (($count -isnot [int] -and $count -isnot [long]) -or $count -ne 0) {
             throw "Preparation report did not confirm zero validation.$field."
@@ -51,6 +53,11 @@ function Assert-PreparationReport {
     if ($Report.vulkan.same_adapter -isnot [bool] -or -not $Report.vulkan.same_adapter -or
         $Report.vulkan.luid_valid -isnot [bool] -or -not $Report.vulkan.luid_valid) {
         throw 'D3D12 and Vulkan were not confirmed to use the same hardware adapter.'
+    }
+    foreach ($field in @('core_validation', 'synchronization_validation', 'teardown_checked')) {
+        if ($Report.vulkan.$field -isnot [bool] -or -not $Report.vulkan.$field) {
+            throw "Preparation report did not confirm vulkan.$field."
+        }
     }
     if ($Report.allocator.baseline -cne 'committed_resource' -or
         $Report.allocator.probe_created -isnot [bool] -or -not $Report.allocator.probe_created -or
