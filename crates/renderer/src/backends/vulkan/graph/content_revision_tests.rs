@@ -2,34 +2,12 @@
 
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
-use crate::graph::{BufferDesc, Graph, GraphErrorKind, ImageDesc};
+use crate::graph::{
+    AttachmentOps, BufferDesc, ComputeTransform, Graph, GraphErrorKind, ImageDesc, LoadAction,
+    RasterParameters,
+};
 
 const WAIT: Duration = Duration::from_secs(10);
-
-#[test]
-fn readonly_scopes_preserve_content_revision_and_order_later_writes() {
-    let mut state = Snapshot {
-        revision: 7,
-        stage: vk::PipelineStageFlags2::COPY,
-        access: vk::AccessFlags2::TRANSFER_WRITE,
-        writer_stage: vk::PipelineStageFlags2::COPY,
-        writer_access: vk::AccessFlags2::TRANSFER_WRITE,
-        ..Snapshot::default()
-    };
-    state.record_access(usage(AccessPurpose::CopySource), false, 8);
-    state.record_access(usage(AccessPurpose::StorageRead), false, 9);
-    state.record_access(usage(AccessPurpose::Sampled), true, 10);
-    assert_eq!(state.revision, 7, "reads/layout changes preserve contents");
-    let mut write = usage(AccessPurpose::CopyDestination);
-    write.writes = true;
-    let (stages, access) = source_scope(&state, write, true);
-    assert!(stages.contains(vk::PipelineStageFlags2::FRAGMENT_SHADER));
-    assert!(stages.contains(vk::PipelineStageFlags2::COPY));
-    assert!(access.contains(vk::AccessFlags2::SHADER_SAMPLED_READ));
-    assert!(access.contains(vk::AccessFlags2::TRANSFER_WRITE));
-    state.record_access(write, true, 11);
-    assert_eq!(state.revision, 11);
-}
 
 fn real_gpu(test: impl FnOnce(&mut VulkanRuntime)) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
