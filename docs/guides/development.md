@@ -104,7 +104,7 @@ Windowsには`presentation` featureの全target check・Clippy・CPU試験も追
 |---|---|
 | `development-validation` | Graphの独立再検査・dead部分の循環診断。`vulkan-diagnostics`も有効にする |
 | `vulkan-diagnostics` | debug_utils、native callback・monitor、命名・label。単独でも選択可能 |
-| `graph-diagnostics` | 論理Graph dumpと、そのための解析情報保持。検証とは独立 |
+| `graph-diagnostics` | 論理Graph／native loweringのdumpと専用解析情報。検証とは独立 |
 
 `development-validation`ありではnative検証の既定が`ValidationMode::Required`、なしでは`Disabled`です。
 `ValidationMode`はnative Layer要求を選び、Renderer側の追加検証はCargo featureで選びます。

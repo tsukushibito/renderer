@@ -463,7 +463,7 @@ CPU retireはpayload整理、query取得、native実行枠のreset・返却を�
 画像の論理byte数はpacked texel量であり、optimal imageのAllocation sizeでもprocess VRAM使用量でもない。
 このVMA統計はdriverやSwapchainの確保を含まない。
 `EXT_memory_budget`は有効にしておらず、process budgetは未取得とする。
-製品・性能用のLayer設定は明示的な`new_with_validation`で選ぶ。現行の既定Requiredは維持している。
+製品・性能用のLayer設定は`new_with_validation`で明示でき、既定値は`development-validation`の有無で選ぶ。
 要求したmodeとLayerから実際に観測した設定、未確認の情報を区別して記録する。
 
 ## 参照する仕様

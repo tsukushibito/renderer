@@ -225,7 +225,7 @@ native検証の要求設定と、Layer等から観測した実効状態は別に
 | `development-validation`は既定off、profileと独立 | Graphの保証済み入力の独立再検査とdead部分だけの循環診断をコンパイル除外できる。live計画の拒否・同期は維持 |
 | native検証の既定は上記featureありで`Required`、なしで`Disabled` | `vulkan-diagnostics`なしの明示`Required`は失敗。検証を省いて成功扱いにはしない |
 | `vulkan-diagnostics`を独立選択 | offならdebug_utils・callback・名前／labelの構築・診断履歴を除外。運用エラーの処理・ログは維持 |
-| `graph-diagnostics`を独立選択 | offならdumpとその解析情報の保持を除外。実行順・内容・必要なアクセスは維持 |
+| `graph-diagnostics`を独立選択 | offなら論理／lowering dumpと専用解析情報の保持を除外。実行順・内容・必要なアクセスは維持 |
 | `MeshData::new`で入力を検査しimmutableな内容要約を生成 | privateな管理下uploadへ保証を引き継ぎ、mesh描画時のindex本文再走査・検査用CPU保持を省く。実Device上限は別に適合確認 |
 | 任意Graph upload／copyのCPU provenance | 部分byte更新や未知の穴からindex安全性を確立するために必要な経路は残す。開発用診断として一括削除しない |
 | Graph構築のowner・範囲・用途、producer／hazard、live循環、投入時のimport照合 | safe入力と変動状態を保証するために維持。公開されたimportの更新・削除は不変mesh保証では代替しない |
