@@ -715,7 +715,8 @@ impl Inner {
         if !self.dirty && self.current.is_some() {
             return Ok(None);
         }
-        self.poll(Duration::ZERO)?;
+        // The public prepare/present entry points already poll before calling
+        // this method. Initial construction has no pending work to retire.
         // SAFETY: Live Surface and physical Device were selected together.
         let caps = unsafe {
             self.surface

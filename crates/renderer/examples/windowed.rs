@@ -33,6 +33,28 @@ mod demo {
     use super::scene;
 
     const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
+    const SMOKE_BUDGET: Duration = Duration::from_secs(20);
+    const REDRAW_INTERVAL: Duration = Duration::from_millis(4);
+
+    struct RedrawSchedule {
+        next: Instant,
+    }
+
+    impl RedrawSchedule {
+        fn new(now: Instant) -> Self {
+            Self { next: now }
+        }
+
+        fn request_due(&mut self, now: Instant) -> bool {
+            if now < self.next {
+                return false;
+            }
+            // Schedule from this request instead of issuing catch-up redraws.
+            // Unrelated early event-loop wakeups leave the deadline unchanged.
+            self.next = now + REDRAW_INTERVAL;
+            true
+        }
+    }
 
     #[derive(Debug, PartialEq, Eq)]
     struct Options {
@@ -89,12 +111,14 @@ mod demo {
         resized: bool,
         minimized: bool,
         restore_at: Option<Instant>,
+        redraw: RedrawSchedule,
         started: Instant,
         error: Option<String>,
     }
 
     impl App {
         fn new(options: Options) -> Self {
+            let now = Instant::now();
             Self {
                 smoke: options.smoke,
                 vsync: options.vsync,
@@ -110,7 +134,8 @@ mod demo {
                 resized: false,
                 minimized: false,
                 restore_at: None,
-                started: Instant::now(),
+                redraw: RedrawSchedule::new(now),
+                started: now,
                 error: None,
             }
         }
@@ -203,8 +228,8 @@ mod demo {
             };
             while engine.runtime_mut().poll_frame()?.is_some() {}
             engine.poll_uploads()?;
-            presenter.poll()?;
             if self.restore_at.is_some() {
+                presenter.poll()?;
                 return Ok(());
             }
             match presenter.prepare() {
@@ -356,7 +381,8 @@ mod demo {
         }
 
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-            if self.smoke && self.started.elapsed() > Duration::from_secs(20) {
+            let now = Instant::now();
+            if self.smoke && now.duration_since(self.started) >= SMOKE_BUDGET {
                 self.fail(event_loop, "windowed smoke run timed out");
                 return;
             }
@@ -384,12 +410,9 @@ mod demo {
                 if let Some(presenter) = &mut self.presenter {
                     presenter.resize(0, 0);
                 }
-                self.restore_at = Some(Instant::now() + Duration::from_millis(50));
+                self.restore_at = Some(now + Duration::from_millis(50));
             }
-            if self
-                .restore_at
-                .is_some_and(|deadline| Instant::now() >= deadline)
-            {
+            if self.restore_at.is_some_and(|deadline| now >= deadline) {
                 self.restore_at = None;
                 if let Some(window) = &self.window {
                     window.set_minimized(false);
@@ -406,12 +429,36 @@ mod demo {
                 event_loop.exit();
                 return;
             }
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_millis(4),
-            ));
+            let next_redraw = if self.restore_at.is_none()
+                && self
+                    .presenter
+                    .as_ref()
+                    .and_then(Presenter::extent)
+                    .is_some()
+            {
+                if self.redraw.request_due(now)
+                    && let Some(window) = &self.window
+                {
+                    window.request_redraw();
+                }
+                Some(self.redraw.next)
+            } else {
+                // A zero-extent Window has nothing to draw. Resume on a resize
+                // event, or the explicit smoke-test restoration deadline.
+                None
+            };
+            let next_wake = [
+                next_redraw,
+                self.restore_at,
+                self.smoke.then_some(self.started + SMOKE_BUDGET),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            event_loop.set_control_flow(match next_wake {
+                Some(deadline) => ControlFlow::WaitUntil(deadline),
+                None => ControlFlow::Wait,
+            });
         }
     }
 
@@ -436,7 +483,27 @@ mod demo {
 
     #[cfg(test)]
     mod tests {
-        use super::Options;
+        use super::{Options, REDRAW_INTERVAL, RedrawSchedule};
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn redraw_deadline_survives_early_wakeups_and_does_not_catch_up() {
+            let start = Instant::now();
+            let mut schedule = RedrawSchedule::new(start);
+            assert!(schedule.request_due(start));
+            let deadline = start + REDRAW_INTERVAL;
+            assert_eq!(schedule.next, deadline);
+            for millis in [1, 2, 3] {
+                assert!(!schedule.request_due(start + Duration::from_millis(millis)));
+                assert_eq!(schedule.next, deadline);
+            }
+            assert!(schedule.request_due(deadline));
+            assert!(!schedule.request_due(deadline));
+            let late = deadline + Duration::from_secs(1);
+            assert!(schedule.request_due(late));
+            assert_eq!(schedule.next, late + REDRAW_INTERVAL);
+            assert!(!schedule.request_due(late));
+        }
 
         #[test]
         fn options_select_vsync_and_reject_invalid_requests() {
