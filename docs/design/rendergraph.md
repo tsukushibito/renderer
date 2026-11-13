@@ -236,6 +236,8 @@ GPU非依存の`engine::Engine`は容量付きのmesh/material登録を持つ。
 型付きハンドルはowner・index・generationを検査し、更新は同じハンドルの内容を進め、
 削除と再登録では世代を分ける。meshは不変の入力byte列、materialはlinear RGBA tintに限定する。
 scene、ECS、asset loader、カメラの意味は呼び出し側が所有する。
+RendererはModel構造を持たず、mesh/materialと描画入力を扱う。
+Modelを含めない責務境界と理由は[実装方針](implementation-policy.md#21-ゲームエンジンへ提供するもの)を参照する。
 
 `View`、`Draw`から作る`FrameSnapshot`はmeshの版とtint・行列を所有し、
 後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
