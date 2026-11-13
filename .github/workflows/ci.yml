@@ -22,7 +22,8 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
         with:
           rust-version: "1.99.0"
-          arguments: --locked --manifest-path tools/d3d12-bindings/Cargo.toml --config deny.toml
+          manifest-path: tools/d3d12-bindings/Cargo.toml
+          arguments: --locked --config deny.toml
 
   format:
     runs-on: ubuntu-24.04
