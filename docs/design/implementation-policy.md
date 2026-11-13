@@ -476,10 +476,11 @@ path-traced参照画像との一致、レイトレーシング/GI、native HDR�
 
 <a id="bistro-requirements"></a>
 
-### Bistroの確定要件と素材取得前の仕様案
+### Bistroの確定要件と素材検証
 
 `renderer-7ft.1.1`で合意した要件を次に固定する。下の描画方式と準備手順は出発案であり、
-素材実体・変換結果・API基盤の小試作に基づく採用決定や、実装・実GPU受入の完了を意味しない。
+素材の実体検証は[検証結果と入力hash](../verification/bistro-assets.json)へ記録した。
+描画方式・API基盤の採用決定や、Renderer実装・実GPU受入の完了は意味しない。
 
 | 項目 | 確定した要件 |
 |---|---|
@@ -509,13 +510,34 @@ CC-BY 4.0、屋外2,832,120三角形と記載する。これは配布案内の�
 | alpha | opaque/mask/blendの分類と根拠、shadowへの適用。必要な透過表現を不透明へ黙って置き換えず、alpha blendと物理的な透過・屈折を同一視しない。 |
 | 変換の再現 | toolの正確なpatch/build・exporter版、script/設定/hash、入力・出力hash、sourceから出力へのnode/instance/material/texture対応。 |
 
-候補は固定版Blenderのheadless変換と[同梱Khronos exporter](https://github.com/KhronosGroup/glTF-Blender-IO)による
-glTF 2.0 Separateへの出力である。中間形式を検査しやすくする案であり、runtime依存はまだ選ばない。
-[BlenderのglTF資料](https://docs.blender.org/manual/en/5.0/addons/import_export/scene_gltf2.html)にある認識可能なmaterial nodeや
+検証用の中間形式にはBlender **4.5.16 LTS / build 3f6797307da5**のheadless実行と
+[同梱Khronos exporter](https://github.com/KhronosGroup/glTF-Blender-IO)によるglTF 2.0 Separateを使った。
+runtime依存の採用ではない。[BlenderのglTF資料](https://docs.blender.org/manual/en/4.5/addons/import_export/scene_gltf2.html)にある認識可能なmaterial nodeや
 UV/normal境界での頂点分割を考慮し、FBXからの変換を無損失と仮定しない。
 選択物だけのexportや材質の単純化で欠落を隠さず、対応表・形状・画像を照合する。
 [glTF Validator](https://github.com/KhronosGroup/glTF-Validator)の形式・参照検査と、元シーンの完全性確認も区別する。
 取込・作成・更新境界で内容を保証し、不変なasset本文を毎drawで再走査しない。
+
+実配布`Bistro_v5_2.zip`は894,377,473 byteで、FBX独立解析は1,296 mesh Model・2,832,120三角形、
+132材質・405画像を確認した。全meshにauthored normalとTextureUV/LightMapUVがあり、tangent/colorはない。
+標準のBlender処理が削除する2,894重複面には、逆向き980面、異なる法線やUVも含まれる。
+検証profileでは頂点indexだけを分離し、全三角形・向き・材質・属性を保持して通常のMesh検査を通す。
+FBXのraw CORNER normalを別属性に保存し、Blender内部の圧縮normalを経由せずglTFへ正規化出力する。
+固定exporterの4桁丸めは7桁へ変更し、変更箇所・元/変更後functionのhashを記録する。
+これらは既知FBX hashと固定Blender版に限定したoffline変換であり、一般入力やRendererの検証を無効化する方針ではない。
+
+同梱READMEのPBR規約を使い、BaseColor RGB/alpha、ORMのR=AO/G=roughness/B=metal、発光RGBを明示接続する。
+BC5 normalは正Zを復元してDX規約から緑成分を反転し、色とdataの扱いを分ける。
+10発光材質のFBX色係数0.5を保持し、全ModelのCullingOffを両面材質へ対応させる。
+alphaはopaque 120、mask 7、blend 5とした。maskのcutoff 0.5と分類は変換方針であり、元のartist intentの証明ではない。
+ORM画像がない瓶ラベル1材質はnonmetal/roughness 0.5を明示した暫定値とし、元Phong値をPBR値と断定しない。
+
+使用中の`MASTER_Glass_Dirty_MASKED`と`Paris_LiquorBottle_01_Labels`は画像alphaが全0で、計222面に影響する。
+元の値を保持して`renderer-7ft.1.1.2`で解釈を追跡し、推測で不透明化した結果を忠実変換とは呼ばない。
+PNGはbase mipだけの中間形式であり、元DDS・mip情報は保存する。実行用のmipとMikkTSpace生成はB2で確定する。
+TANGENTは元にも検証glTFにもなく、[glTF仕様](https://github.com/KhronosGroup/glTF/blob/main/specification/2.0/Specification.adoc)に従いconsumerで生成する。
+この構成の公式Validator警告1,591件と、保持した未使用LightMapUVに関するinfo 1,591件は原文を残す。
+native API受入の警告/エラーゼロを緩和する例外ではない。
 
 #### 描画方式の出発案
 
@@ -553,8 +575,8 @@ native検証を無効にした最適化通常経路で内容を別に照合し�
 warm-up・複数runのp50/p95・揺れ・VSyncと表示待ちを記録する。
 
 準備の記録手順は[開発ガイド](../guides/development.md#bistro-preparation)に置く。
-素材実体の版/hash・全材質の棚卸し・変換再現性・camera/lightの具体値は未確認である。
-それらを固定するまで`renderer-7ft.1.1`は進行中とし、実装済みとは扱わない。
+素材の版/hash・全材質/画像の棚卸しと、glTF/全参照fileのbyte一致による変換再現性は確認した。
+全ゼロalphaの解釈、最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中とする。
 画像閾値の校正と性能予算は各段階の実GPU結果で具体化し、最新の実行/未実行は
 [検証状況](../verification/current.md)へ記録する。
 

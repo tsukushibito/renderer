@@ -8,6 +8,21 @@ permissions:
   contents: read
 
 jobs:
+  asset-tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: python -m pip install -r tools/bistro/requirements.txt
+      - run: python -B -m unittest discover -s tools/bistro -p 'test_*.py'
+      - run: npm ci --ignore-scripts --prefix tools/bistro-validator
+      - run: npm test --prefix tools/bistro-validator
+
   dependencies:
     runs-on: ubuntu-24.04
     steps:

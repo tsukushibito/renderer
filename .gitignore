@@ -8,6 +8,7 @@
 
 # Local downloaded tools
 .tools/
+/tools/bistro/__pycache__/
 
 # Rust build output (Cargo.lock is tracked for reproducible dependency resolution)
 /target/

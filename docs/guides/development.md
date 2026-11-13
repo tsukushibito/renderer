@@ -57,28 +57,65 @@ Windowsジョブはrunner付属のMSVCを使います。
 
 <a id="bistro-preparation"></a>
 
-## Bistroの素材・再現条件の準備（B0仕様案）
+## Bistro素材の取得・変換・検証
 
 対象と描画条件は[実装方針の確定要件](../design/implementation-policy.md#bistro-requirements)に従う。
-以下は取得前の準備仕様で、動作確認済みの取得・変換コマンドやBistro描画sampleはまだない。
-tool導入や大容量素材の取得を、通常のRustビルド・CIの前提へ追加しない。
+このoffline検証はPython 3.11、NumPy 1.26.4、Pillow 11.1.0、Node 24、Blender 4.5.16 LTSを使う。
+素材・portable tool・全量reportはGit管理外の`.tools/bistro/`へ置く。通常のRustビルドはこれらへ依存しない。
+CIの`asset-tools`は小fixtureの検査だけを行い、BistroやBlenderをダウンロードしない。
 
-1. [NVIDIA公式ページ](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)から配布元を確認する。
-   利用側のasset保管先へアーカイブを保存し、URL・取得日時・ファイル名・size・SHA-256・同梱licenseと
-   クレジットを記録する。大容量素材を既定でGitへ追加せず、配布案内の三角形数を実測件数の代わりにしない。
-2. 展開後の屋外sceneについて、node/instance・mesh/material slot・texture参照の対応表とhashを作る。
-   FBXと同梱sceneを照合し、座標/単位、normal/tangent/UV、色空間/channel、sampler/mip、alpha/両面を記録する。
-   欠落・未対応は診断し、選択物exportや不透明への置換で対象を黙って減らさない。
-3. Blender＋glTF Separateを候補として、小さな代表部分で変換を試す。
-   toolのpatch/build・exporter・script・全設定を固定し、sourceと出力の対応、transform・面・接線・材質を比較する。
-   形式は固定版Khronos Validatorでも検査しreportを保存する。形式の合格だけで元シーンの完全性を認めない。
-   必要材質が保存できなければ変換規則を直すか、別の取込経路を評価してから全屋外へ広げる。
-4. 全屋外の取得・変換結果から、同じ出力を再生成できる手順とhashを記録する。
-   環境画像も出典/license/hash・前処理tool/設定・出力hashを固定し、色・normal等のmip規則を混同しない。
-   検証保証は取込・作成・更新境界へ置き、描画ごとのasset全量検査や診断専用payload保持を前提にしない。
-5. 比較設定にcamera/FOV/near/far・巡回keyframe/固定時刻、sun/IBL、露出、影/Bloom/AA、1920×1080、
-   asset/shader/tool/設定hashを保存する。APIを変えても同じ値を使い、基準画像変更には理由を残す。
-   実行するcommit・OS/GPU/driver・buildと実効検証設定も記録する。
+[NVIDIA公式ページ](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)のDownload入口は
+`https://developer.nvidia.com/bistro`である。redirect先の期限付きtokenは再現情報へ保存しない。
+`Bistro_v5_2.zip`のSHA-256は`0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1`。
+[Blender公式4.5配布](https://download.blender.org/release/Blender4.5/)の
+`blender-4.5.16-windows-x64.zip`は`e258e90a1ebc14798ad65b3426bc5f11f5e0e013541c61cc7c3ee9bbf4ca0ce6`。
+取得後にSHA-256を照合してから、それぞれ`source/`と`tools/`へ初回展開する。
+入力の変更は別配布物として再監査し、既存入力を上書きしない。同梱licenseとクレジットを保持する。
+
+次はルートからの実行例である。Python依存は専用venvへ導入してよい。
+
+```powershell
+python -m venv .tools/bistro/venv
+$bistroPython = '.tools/bistro/venv/Scripts/python.exe'
+& $bistroPython -m pip install -r tools/bistro/requirements.txt
+npm.cmd ci --ignore-scripts --prefix tools/bistro-validator
+$bistroSource = '.tools/bistro/source/Bistro_v5_2'
+$bistroBlender = '.tools/bistro/tools/blender-4.5.16-windows-x64/blender.exe'
+$bistroFbxModule = '.tools/bistro/tools/blender-4.5.16-windows-x64/4.5/scripts/addons_core/io_scene_fbx'
+$bistroAudit = '.tools/bistro/logs/source-inventory.json'
+$bistroTextures = '.tools/bistro/logs/textures.json'
+$bistroPng = '.tools/bistro/prepared-textures'
+$bistroOutput = '.tools/bistro/output/verified'
+$env:BLENDER_USER_RESOURCES = Join-Path $PWD '.tools/bistro/blender-user'
+& $bistroPython -B tools/bistro/source_inventory.py --source "$bistroSource/BistroExterior.fbx" --blender-fbx-module $bistroFbxModule --asset-root $bistroSource --output $bistroAudit
+& $bistroPython -B tools/bistro/prepare_textures.py $bistroSource $bistroAudit $bistroPng $bistroTextures
+& $bistroBlender --background --factory-startup --threads 4 --python-exit-code 1 --python tools/bistro/convert_blender.py -- $bistroSource $bistroAudit $bistroTextures $bistroPng $bistroOutput
+& $bistroPython -B tools/bistro/compare_source_bindings.py --source "$bistroSource/BistroExterior.fbx" --audit $bistroAudit --baseline "$bistroOutput/baseline.json" --blender-fbx-module $bistroFbxModule --output .tools/bistro/logs/source-bindings.json
+& $bistroPython -B tools/bistro/compare_geometry.py "$bistroOutput/baseline.json" "$bistroOutput/BistroExterior.gltf" --output .tools/bistro/logs/geometry.json
+& $bistroPython -B tools/bistro/compare_materials.py "$bistroOutput/baseline.json" $bistroTextures $bistroPng "$bistroOutput/BistroExterior.gltf" --output .tools/bistro/logs/materials.json
+node tools/bistro-validator/validate.mjs "$bistroOutput/BistroExterior.gltf" .tools/bistro/logs/validator.json
+```
+
+各コマンドの非ゼロ終了を確認して停止し、失敗reportを成功へ置き換えない。
+source inventoryは固定Blenderの純粋なFBX parserを使い、Blenderアプリへの取込と独立して元配列・slot・参照を調べる。
+変換は既知FBXのhashとauditのsource hash、固定Blender版を要求する。重複面の頂点分離後にMesh検査を行い、
+元のraw CORNER normalを直接出力するための限定したfunction変更もhashへ残す。インストール済みtoolのファイルは書き換えない。
+DDSのbase mipをPNGへ変換し、normalの正Z復元/緑反転を含む画素規則を照合する。元DDSの全mipをglTFへ収録したとは扱わない。
+形状比較は全instance・world transform・三角形の数/向き/重複・材質・normal・UV0/UV1を照合し、
+同位置の重複三角形も全属性の一対一対応を要求する。頂点数や配列順の一致を条件にしない。
+source binding比較は元FBX配列からlocal位置・corner normal・UV2組・面ごとの材質を独立に照合する。
+Blenderの63 byte超の名前短縮も固定版の規則で追跡し、Model/Geometryの取り違えを検出する。
+
+別の出力先で変換コマンドをもう一度実行し、
+`tools/bistro/compare_outputs.py <first.gltf> <second.gltf> --output <report.json>`で全参照fileのbyte一致を確認する。
+`render_validation.py <source.blendまたは出力.gltf> <同じviews.json> <画像directory>`を同じBlender引数で実行すると、
+固定camera/lightのCycles CPU 8 sample・960×540画像を作る。`compare_previews.py`で比較画像と数値を保存する。
+これは変換QAであり、最終1920×1080の描画品質・Vulkan/D3D12の受入画像や性能値ではない。
+`summarize.py --help`の各report引数を指定し、[素材検証データ](../verification/bistro-assets.json)へ現在の証拠をまとめる。
+
+検証profileのTANGENT省略による警告、未使用UVのinfo、全ゼロalphaの解釈は
+[検証結果](../verification/current.md#bistro-assets)を参照する。警告を黙って抑制せず、全量reportと失敗した変換条件も保持する。
+検査の保証は取込・作成・更新境界へ置き、描画ごとのasset全量検査や診断専用payload保持を前提にしない。
 
 今後の実GPU受入では、両APIを同時に負荷実行せず、同じ機材で逐次確認する。
 offscreenの最終SDR・Bloom前HDR・必要な中間出力と差分を保存し、画面表示・自由操作・resize・最小化復帰・

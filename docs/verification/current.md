@@ -9,7 +9,7 @@
 
 開発計画を[実装方針のB0〜B5](../design/implementation-policy.md#bistro-roadmap)へ改訂した。
 追跡は`renderer-7ft`。`renderer-7ft.1.1`では利用者要件を合意し、
-[確定要件と取得前の仕様案](../design/implementation-policy.md#bistro-requirements)を記録した。
+[確定要件と素材検証](../design/implementation-policy.md#bistro-requirements)を記録した。
 対象は屋外全体、太陽光＋IBL＋影、PBR/HDR/tone mappingと利用側Bloom、基準1920×1080、
 自由カメラと固定視点・自動巡回、両APIのWindows表示・操作、初回受入は既存RTX 3060である。
 要件の合意を実装・実GPU受入の成功とは扱わない。
@@ -17,15 +17,53 @@
 旧M4の6/22完了は準備・Device・buffer実行の実績であり、新計画の進捗率へ流用しない。
 旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
 
-今回の変更は文書とBeadsの要件・仕様案だけで、下記のGPU・CPU実行結果は従来の固定ソースでの実績である。
-NVIDIA公式の配布形式・license案内と、変換・PBR/IBL・影・tone mappingの一次資料を確認した。
-素材実体の配布hash・mesh/material/texture棚卸し・変換再現性・IBL素材・camera/light具体値は未確認で、
-`renderer-7ft.1.1`は進行中である。次の実作業は素材実体に基づく調査・変換の実証と条件の固定である。
-Bistroの素材取得・変換、テクスチャ付きPBR・影・HDR、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
-画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、出発案を性能保証へ読み替えない。
-文書4件のUTF-8・fenceと相対リンク/anchor 71件・既存の実装方針へのbacklink、`git diff --check`、
-Beadsの依存循環なしを確認した。独立レビューで検証構成の表現と開発手順に残っていた旧M4の将来指示を修正した。
-実装・shader・依存・ビルド設定の変更がないため、今回のためのローカルGPU/CPU試験は再実行しない。
+素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
+全ゼロalphaの解釈と最終camera/path/light/IBL/露出等が残るため`renderer-7ft.1.1`は進行中である。
+Renderer本体・shader・native経路は変更せず、以降のGPU・Rust試験表は従来の固定ソースの実績として保持する。
+BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
+画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
+
+<a id="bistro-assets"></a>
+
+### Bistro屋外素材の実体検証
+
+入力・tool/function hash、全画像の対応、材質recipe、全meshの誤差とValidator原文は
+[機械可読の現在データ](bistro-assets.json)、見た目は[比較画像](bistro-assets-preview.png)、
+再現は[開発ガイド](../guides/development.md#bistro-preparation)を参照する。
+
+| 確認 | 結果 |
+|---|---|
+| 公式入力 | `Bistro_v5_2.zip` 894,377,473 byte、SHA-256 `0d50e3c724c6c5da19f8eb99ad3f53e36fec37ffa2df9621f9ccf0603f3934e1`。FBXは`471991629c7e35a88338c48f3565390ad19cc5d1d7c7e067fc2a60b4f3b5f195`。同梱README/licenseもhash保存 |
+| 独立FBX解析 | 1,296 Geometry/mesh Model、2,832,120三角形、132材質・405画像、欠落参照/名前衝突なし。有限値、index/normal/UV/material slot範囲と接続を確認 |
+| 元FBXから取込結果への対応 | 全1,296 Model/Geometryの元float32位置・向き・raw corner normal・両UV・面ごとの材質slotが完全一致。428件の長い名前の短縮も追跡し、衝突なし。world行列の元FBXからの再導出はこの検査に含めず、取込後からglTFへの行列保持を別に確認 |
+| 元の面と属性 | normal＋TextureUV/LightMapUV、tangent/colorなし。重複面2,894（逆向き980）、厳密な面積ゼロ19を保持。重複面のうち2,609は法線、765はUVが異なる |
+| 変換・材質 | Blender 4.5.16 LTS build 3f6797307da5。通常の面削除とnormal精度低下を避ける限定profileを使用。132材質のfactor/alpha/両面/UV/チャンネル、405画像の変換画素を照合 |
+| 独立glTF形状比較 | 全instance・三角形・向き・重複・材質・raw source normal・UV0/UV1を照合して成功。最大world位置差2.60e-5 m、normal成分差3.90e-7、UV差0。float32の絶対/相対許容値はデータに記録 |
+| 形式検査 | Khronos Validator 2.0.0-dev.3.10、外部buffer/画像も検査、エラー0。TANGENT consumer生成の警告1,591、保持した未使用LightMapUVのinfo 1,591を抑制せず保存 |
+| 再生成 | 元FBXを別Blender processで再取込し、glTF・buffer・全405画像、計407 file / 851,291,697 byteがすべてbyte一致 |
+| CPU画像QA | 元FBXから明示PBR recipeを構成したsceneとglTF再importを同じ3視点・固定光・Cycles CPU 8 sample・960×540で比較。形状/材質の大きな欠落は見られず、RGB PSNR 34.8〜39.2 dB。完全一致やruntimeの合否閾値とは扱わない |
+
+raw normalの圧縮表現を使うとBlender内ではゼロ/方向差が生じたため、glTFデータは保存したraw値を直接正規化して出力した。
+CPU previewにはBlenderの再符号化・sample noise等の差が残り、屋根等の局所差も画像に残す。
+glTF再import後のBlender終了ログには24 byteの未解放block報告が1件あり、tool診断として保持する。
+Rendererのnative所有・GPU完了の受入を行った結果ではない。
+
+**未解決の素材解釈:** `MASTER_Glass_Dirty_MASKED`は68面/13mesh、`Paris_LiquorBottle_01_Labels`は154面/11meshで
+使われるが、BaseColor alphaが全0である。いずれも非退化面であり、未使用として削除しない。
+現在は元alphaを保持する。原作者の意図や不透明overrideを確定しておらず、`renderer-7ft.1.1.2`で追跡する。
+mask/blendの分類と、ORMのないラベル材質のnonmetal/roughness 0.5も明示した変換方針である。
+
+元にないTANGENTはこのglTFへ生成収録していない。標準生成を試した別条件ではzero tangent 345個が形式エラーとなったため、
+MikkTSpace生成と退化入力fallback・実行用mipをB2の取込/cook要件へ記録した。
+PNGはbase mipだけで、元DDSとmip情報は保持する。これらの警告はnative API検証ゼロ方針の例外ではない。
+素材はAmazon Lumberyard Bistro / NVIDIA ORCA / [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/)。
+配布元は[公式ページ](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)であり、画像は本検証で変換・描画した。
+
+検証ツールのローカルCPU試験はPython 30件・Node 5件成功。独立レビューで材質検査のAO用UV/transformと
+予期しない発光の検出、重複三角形の対応、元FBXから正規化normalへの照合を補強し、回帰試験を追加した。
+文書4件のUTF-8/fence・相対link/anchor 79件・既存policyへのbacklinkと`git diff --check`を確認した。
+通常CIへ小fixtureの`asset-tools`を追加した。ローカルのRust/native GPU再実行はRenderer実装変更がないため対象外とし、
+pushした組合せのbuild/testはCIで別に確認する。
 
 ## 環境と対応範囲
 
