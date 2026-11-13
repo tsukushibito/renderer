@@ -20,7 +20,7 @@ CPU範囲管理の性能比較にはCriterionを使います。
 
 ```powershell
 New-Item -ItemType Directory -Force .tools | Out-Null
-cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
+cargo run --locked -p renderer --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/m2.ppm
 ```
 
 引数は出力先PPMファイルです。CPUだけのGraph構築・解析は既定featureで利用できます。

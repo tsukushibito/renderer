@@ -63,12 +63,36 @@ jobs:
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
+          CARGO_INCREMENTAL: "0"
         run: |
-          $featureArgs = @('--no-default-features')
-          if ($env:BACKEND -ne 'cpu') { $featureArgs += @('--features', $env:BACKEND) }
-          cargo check --locked --workspace --all-targets @featureArgs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked --workspace @featureArgs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($development in @($false, $true)) {
+            $features = @()
+            if ($env:BACKEND -ne 'cpu') { $features += $env:BACKEND }
+            if ($development) { $features += 'development-validation,graph-diagnostics' }
+            $featureArgs = @('--no-default-features')
+            if ($features.Count) { $featureArgs += @('--features', ($features -join ',')) }
+            cargo check --locked --workspace --all-targets @featureArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo test --locked --workspace @featureArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Check optimized Vulkan execution with and without development validation
+        if: matrix.backend == 'vulkan'
+        shell: pwsh
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          foreach ($features in @('vulkan', 'vulkan,development-validation,graph-diagnostics')) {
+            cargo test --locked --workspace --release --no-default-features --features $features
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Check independent diagnostic features
+        if: matrix.backend == 'vulkan'
+        shell: pwsh
+        run: |
+          foreach ($features in @('vulkan,vulkan-diagnostics', 'vulkan,graph-diagnostics', 'vulkan,development-validation')) {
+            cargo check --locked --workspace --all-targets --no-default-features --features $features
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

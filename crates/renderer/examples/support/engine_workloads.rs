@@ -515,12 +515,15 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     )?;
     writeln!(
         output,
-        "\"host\":{{\"source_commit\":{},\"rustc\":{},\"os\":{},\"arch\":{},\"debug_assertions\":{}}},",
+        "\"host\":{{\"source_commit\":{},\"rustc\":{},\"os\":{},\"arch\":{},\"debug_assertions\":{},\"development_validation\":{},\"vulkan_diagnostics\":{},\"graph_diagnostics\":{}}},",
         json_string(&command("git", &["rev-parse", "HEAD"])),
         json_string(&command("rustc", &["--version"])),
         json_string(std::env::consts::OS),
         json_string(std::env::consts::ARCH),
-        cfg!(debug_assertions)
+        cfg!(debug_assertions),
+        cfg!(feature = "development-validation"),
+        cfg!(feature = "vulkan-diagnostics"),
+        cfg!(feature = "graph-diagnostics")
     )?;
     writeln!(
         output,

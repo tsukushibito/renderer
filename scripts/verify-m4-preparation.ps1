@@ -161,7 +161,7 @@ try {
             }
     )
     $probeArgs = @('test', '--locked', '-p', 'renderer', '--lib', '--no-default-features',
-        '--features', 'vulkan,d3d12', '::d3d12_preparation_', '--')
+        '--features', 'vulkan,d3d12,development-validation', '::d3d12_preparation_', '--')
     $inventoryArgs = $probeArgs + @('--list', '--ignored')
     $summary.commands += @{ executable = $cargo; arguments = $inventoryArgs }
     $inventory = @(Invoke-LoggedNative $cargo $inventoryArgs (Join-Path $OutputDirectory 'probe-inventory.log'))

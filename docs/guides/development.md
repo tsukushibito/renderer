@@ -98,13 +98,27 @@ Windowsには`presentation` featureの全target check・Clippy・CPU試験も追
 同期生成、GPU寿命・正常完了、容量とnative失敗の処理は製品でも維持します。
 検証の切替を変更するときは、適用範囲の有効／無効両構成と最適化された通常経路を確認します。
 
-現行の`ValidationMode::Disabled`はVulkan Layerの明示的な無効化で、製品・性能用途で選択できます。
-既定は`Required`のままで、releaseビルドだけでは無効になりません。
-Disabledでもdebug_utils、Graph内部の検査、index全走査とCPU provenanceは残ります。
-内部の開発用検証をコンパイル除外するfeatureや、診断拡張を要求しない製品経路は未実装です。
-未提供のfeature指定を製品ビルド手順として使わないでください。
+既定featureは空です。最適化と独立した追加featureを使います。
 
-今後切替を実装した際は、feature統合後の実構成を`cargo tree -e features`等で確認し、
+| feature | 追加する処理 |
+|---|---|
+| `development-validation` | Graphの独立再検査・dead部分の循環診断。`vulkan-diagnostics`も有効にする |
+| `vulkan-diagnostics` | debug_utils、native callback・monitor、命名・label。単独でも選択可能 |
+| `graph-diagnostics` | 論理Graph dumpと、そのための解析情報保持。検証とは独立 |
+
+`development-validation`ありではnative検証の既定が`ValidationMode::Required`、なしでは`Disabled`です。
+`ValidationMode`はnative Layer要求を選び、Renderer側の追加検証はCargo featureで選びます。
+`vulkan-diagnostics`なしで`Required`を明示すると、検証できない要求として失敗します。
+製品構成は`--release --no-default-features --features vulkan`で、診断拡張やLayerを要求しません。
+任意Graph入力の保証、実行計画・同期・寿命・容量・native失敗の処理は両構成に残ります。
+
+```sh
+cargo test --locked --workspace --release --no-default-features --features vulkan
+cargo test --locked --workspace --release --no-default-features --features vulkan,development-validation,graph-diagnostics
+cargo tree --locked -p renderer -e features --no-default-features --features vulkan
+```
+
+feature統合後の実構成を確認し、
 最適化・Renderer内の追加検証・native検証・profilingをそれぞれ記録します。
 `--all-features`だけでは検証無効構成の確認になりません。
 コード・依存関係・生成物や走査／allocation／保持byte等から、除去を主張する費用を確認します。
@@ -159,7 +173,7 @@ probeの単独実行コマンドは次のとおりです。レポートを保存
 反復スクリプトはこの環境変数を各回へ渡し、終了時に元の値へ戻します。
 
 ```powershell
-cargo test --locked -p renderer --lib --no-default-features --features vulkan,d3d12 ::d3d12_preparation_ -- --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer --lib --no-default-features --features vulkan,d3d12,development-validation ::d3d12_preparation_ -- --ignored --nocapture --test-threads=1
 ```
 
 準備段階では実hardware adapterの照合、Device作成前のDebug Layer／GBV要求と診断interface、
@@ -190,7 +204,7 @@ M4-19のCPU／GPU時間とメモリ比較は別のrelease実行とし、GBV等�
 後述の性能試験はこのfilterに含まれません。
 
 ```sh
-cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_ -- --ignored --nocapture
+cargo test --locked -p renderer --no-default-features --features vulkan,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
 ```
 
 一部だけを確認するときは、上の`::vulkan_`を次のfilterへ置き換えます。
@@ -214,7 +228,7 @@ producer・不要パス除去・Attachment・import/exportの契約は
 Vulkan環境では、ウィンドウなしで次の例を実行できます。
 
 ```powershell
-cargo run --locked -p renderer --features vulkan --example headless -- .tools/m2.ppm
+cargo run --locked -p renderer --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/m2.ppm
 ```
 
 出力先の親ディレクトリは事前に用意します。
@@ -249,7 +263,7 @@ custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する�
 完了済みreadbackを一件遅らせて消費し、3件まで未回収frameを保持します。
 
 ```powershell
-cargo run --locked -p renderer --no-default-features --features vulkan --example frame_loop -- --verify .tools/frame-verify.json --churn --ppm .tools/frame.ppm
+cargo run --locked -p renderer --no-default-features --features vulkan,development-validation --example frame_loop -- --verify .tools/frame-verify.json --churn --ppm .tools/frame.ppm
 ```
 
 JSONには終了後のValidation件数とCore／SyncValの実効設定を含めます。
@@ -266,7 +280,7 @@ OPAQUE合成への対応が必要です。不足は診断して停止し、別qu
 ```powershell
 cargo run --locked -p renderer --no-default-features --features presentation --example windowed
 cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --vsync off
-cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --smoke
+cargo run --locked -p renderer --no-default-features --features presentation,development-validation --example windowed -- --smoke
 ```
 
 既定はVSync ON（FIFO）、`--vsync on|off`で起動時に選択し、Vキーで実行中に切り替えます。
@@ -278,7 +292,7 @@ headless例と共通のScene、mesh/material/Viewとcustom処理を使います�
 自動受入には、次のignored実ウィンドウ試験も明示実行します。
 
 ```powershell
-cargo test --locked -p renderer --no-default-features --features presentation ::vulkan_ -- --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer --no-default-features --features presentation,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
 ```
 
 表示前に`Presenter::prepare`を呼び、現在の`extent`で出力Graphを構築します。
@@ -343,9 +357,9 @@ startup uploadは測定loopの前に完了させ、そのbyte数とCPU・待機�
 各画像は決定的な全RGBA期待値と照合し、検証modeはnative所有者の破棄後までCore／SyncValを要求します。
 
 ```powershell
-cargo run --release --locked -p renderer --no-default-features --features vulkan --example engine_workloads -- --verify .tools/engine-workloads-verify.json
+cargo run --release --locked -p renderer --no-default-features --features vulkan,development-validation --example engine_workloads -- --verify .tools/engine-workloads-verify.json
 cargo run --release --locked -p renderer --no-default-features --features vulkan --example engine_workloads -- --benchmark .tools/engine-workloads-benchmark.json
-cargo test --locked -p renderer --no-default-features --features vulkan --test engine_workloads vulkan_ -- --ignored --nocapture --test-threads=1
+cargo test --locked -p renderer --no-default-features --features vulkan,development-validation --test engine_workloads vulkan_ -- --ignored --nocapture --test-threads=1
 ```
 
 性能modeはValidation無効を明示し、32 warm-up＋128測定frameを3 run実行します。
@@ -390,7 +404,7 @@ run間の揺れ、p95、GPU時間、作成数、cacheとVMAの保持量を併記
 
 ### Graphのlowering診断
 
-論理的な依存・用途は`CompiledGraph::dump()`で確認します。
+論理的な依存・用途は`graph-diagnostics`構成の`CompiledGraph::dump()`で確認します。
 Vulkanで実際に記録する同期や物理資源との対応が必要な場合は、通常の`submit`の代わりに
 次のAPIを使います。診断は要求した投入だけで生成され、通常経路には文字列構築を追加しません。
 
@@ -427,7 +441,7 @@ CPU型のソフトウェア実装は通常の候補になれますが、実GPU�
 
 ### Validationの判定条件
 
-現行APIと正しさ受入の既定は`ValidationMode::Required`で、`VK_LAYER_KHRONOS_validation`と
+`development-validation`構成の正しさ受入は`ValidationMode::Required`で、`VK_LAYER_KHRONOS_validation`と
 `VK_EXT_debug_utils`、`VK_EXT_layer_settings`を要求します。
 `validate_sync=true`により通常のcore validationへSynchronization Validationを追加します。
 外部設定はAPI指定を上書きできるため、起動INFOからSyncValとcore validationの実効状態も確認します。
