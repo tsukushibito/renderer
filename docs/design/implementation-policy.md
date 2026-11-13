@@ -514,25 +514,28 @@ Apple展開が優先要件になった場合やWindows実機を維持できな�
 
 | 項目 | 確認した範囲と制限 |
 |---|---|
-| 実機 | `nvidia-smi`でRTX 3060、driver 610.88、12 GiBを確認。D3D12が選ぶadapterとの照合は未実施。 |
-| native初期化 | `D3D12CreateDevice(default adapter, FL11_0)`と`D3D12GetDebugInterface(ID3D12Debug)`が`S_OK`。取得した参照は直後に解放し、命令は投入していない。 |
+| 実機 | RTX 3060、driver 610.88、12 GiB。準備probeでDXGI hardware adapterと実Vulkan選択のvendor/device ID・LUID一致を確認した。 |
+| native初期化 | private bindingsでhardware Device、SM6.0、RGBA8 typed UAV load/store、committed bufferの作成・map・破棄を確認。queue投入は未実施。 |
 | ランタイム・SDK | `d3d12.dll`と`d3d12sdklayers.dll`は10.0.26100.9818。Windows SDK 10.0.26100を含む複数版と、Vulkan SDK 1.4.341.1のDXC・SPIRV-Cross・glslangValidator・spirv-valが存在する。 |
-| 検証 | Debug interfaceの取得だけを確認。Debug Layer／GPU-based validation（GBV）の有効化、実描画・readback、終了までの検証ログ確認は未実施。GBVの設定はDevice作成前に行い、性能測定とは分ける。[^d3dvalidation] |
-| CI | 現在のWindows／Linux CIはbuild・check・CPU試験であり、実GPU runnerはない。ローカルの再現手順または実在を確認したrunnerでM4の実GPU受入を行う。 |
+| 検証 | Device作成前のDebug Layer／GBV設定、InfoQueueとGBV有効の起動報告、最終COM Release後までの診断を3回反復確認。shaderのGBV実行と画像等価性は未実施。GBVは性能測定と分ける。[^d3dvalidation] |
+| CI | Windows／Linuxのbuild・check・CPU試験を維持し、WindowsのD3D12単独／Vulkan併用を追加。実GPU runnerはなく、管理者のWindows実機で逐次受入する。[実行手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を使う。 |
 
 M4の最初の実装範囲は、offscreenのcopy、深度付きindexed mesh、Compute、composite、readbackとする。
 同じ論理Graph・入力・解像度を使い、画像と検証結果、CPU負担をVulkanと比較する。
 D3D12での表示経路を、共通契約の検証に先立つ必須条件にはしない。
 
-shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を最初に検証する。[^spirvcross][^dxc]
+shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を採用した。[^spirvcross][^dxc]
+固定5種類の再生成一致とreflectionを確認し、tool版・hash・引数・ABIを[ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記す。
 binding、combined sampler、行列・座標・データ配置の等価性は生成成功だけで判断せず、実出力と照合する。
 HLSLを単一ソースへ移す案は代案とし、既存Vulkan基準の再生成一致と変更量を比較してから判断する。
 Rust bindingsはMicrosoftの`windows-bindgen`によるbackend-private生成を採用する。
-D3D12・DXGIと必要なWin32／DXC APIだけを生成し、生成型はD3D12バックエンド内部に閉じる。
+D3D12・DXGIと必要なWin32 APIだけを生成し、生成型はD3D12バックエンド内部に閉じる。
+準備範囲ではDXCのnative APIを使わず、固定CLIでshaderを事前生成する。
 再利用ライブラリの依存量と版の衝突を抑える公式推奨に従う選択である。[^windowsrust]
-M4準備で公開済みgenerator・入力metadata・生成コードのruntime依存を照合し、API・MSRV・license・依存量を確認して版を固定する。
-生成filter・手順・入力の版を管理し、同じ入力からの再生成が一致することを検証する。
-生成物をGit管理するかbuild時に生成するかは、この再現性と非Windows／CPUのみのビルドを維持できる方法で決める。
+M4準備でgenerator／metadata／runtimeを0.100.0へ固定し、MSRV 1.95が本リポジトリのRust 1.99内であることを確認した。
+生成toolは独立workspaceとlockfileに分離し、限定filterとLF固定の生成済み単一RustファイルをGit管理する。
+通常のRustビルドへgenerator・SDKを要求せず、再生成一致と生成toolを含む依存監査を確認した。
+固定入力と手順は[ツールガイド](../guides/tooling.md#d3d12-bindingsの生成)を参照する。
 
 代案の`windows 0.62.2`は既存allocatorとの接続が容易だが、0.62系への長期保守・修正backportの保証は確認できていない。
 この短期互換性だけを理由に旧系列へ固定せず、allocatorは採用bindingsとの型・ABI・所有権・保守状況を別途検証して選ぶ。[^windowsallocator]
@@ -549,8 +552,10 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 上限付きの資源再利用はM4-06、物理aliasingの限定実験はM4-16で別に検証する。
 準備probeは作成と破棄だけを確認し、投入後の寿命とreadback内容はM4-04以降で実証する。
 
-準備の残件は`renderer-6qc`（adapter・検証・shader経路）と`renderer-k51`（実GPU反復実行基盤）で管理する。
-M3で行うのはこの選定と準備条件の明確化までで、第二バックエンド実装や一般RHIの先行固定は含めない。
+準備は`renderer-we8.1`・`.2`、`renderer-6qc`（adapter・検証・shader経路）、
+`renderer-k51`（ローカル実GPU反復実行基盤）で実施した。
+現在の`d3d12` featureはprivate bindingsとtest専用probeまでであり、
+M4-03の製品runtime、M4-04以降のGraph実行、一般RHIは実装済みとしない。
 
 ## 17. Codexの作業手順
 

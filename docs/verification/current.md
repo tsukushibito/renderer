@@ -30,20 +30,23 @@ CPUのGraph・engine入力はGPU・windowなしで構築できる。
 | 確認 | 結果 |
 |---|---|
 | fmt | 成功 |
-| CPU / Vulkan / Windows presentationの全target check・Clippy `-D warnings` | 3構成すべて成功 |
+| CPU / Vulkan / Windows presentation / D3D12 / Vulkan＋D3D12の全target check・Clippy `-D warnings` | 5構成すべて成功 |
 | CPUのみの通常試験 | 単体43件＋公開API 9件＋負荷fixture 3件成功 |
 | Vulkan featureの通常試験 | CPU単体143件＋公開API 9件＋負荷fixture 4件成功、42 ignored |
 | presentation featureの通常試験 | CPU単体148件＋公開API 9件＋負荷fixture 4件成功、43 ignored |
-| 明示headless実GPU試験 | 40件成功、3.78秒 |
-| headless＋実Win32 Surfaceを含む明示GPU試験 | 単独実行41件成功、4.53秒。さらに公開APIのoffscreen負荷1件成功、0.57秒。native異常は再現せず。前回の観測は後述 |
+| D3D12 featureの通常試験 | CPU単体43件＋公開API 9件＋負荷fixture 3件成功、1 ignored |
+| Vulkan＋D3D12 featureの通常試験 | CPU単体143件＋公開API 9件＋負荷fixture 4件成功、43 ignored |
+| 明示headless実GPU試験 | Vulkan＋D3D12構成で40件成功、5.26秒、逐次実行 |
+| D3D12準備の反復実機試験 | 統合mainのclean状態で3回成功。同一GPU、Debug Layer／GBV起動報告、最終解放後の診断を確認 |
+| headless＋実Win32 Surfaceを含む明示GPU試験 | 前回の単独41件成功、公開API offscreen負荷1件成功を継承。今回の準備変更では実Surfaceを再実行していない |
 | Validation / SyncVal | 実効設定を確認し、native所有者の破棄後までwarning・error・callback失敗ゼロ |
-| Shader再生成検証 | 以前の固定SDKによる5種類のspirv-val・再生成SHA-256一致を継承。今回shader変更なし |
+| Shader再生成検証 | 固定SDKの5種類のSPIR-V検証・再生成一致に加え、HLSL・検証済みDXIL・reflection・manifestの再生成一致 |
 | headless例 | 従来の128×96描画・深度・Compute・合成とPPM出力成功 |
 | engine headless統合例 | 24 frame、3 in-flight、custom処理・history・更新/削除・遅延readbackの照合成功 |
 | engine Windows表示例 | ON/OFF各起動の`windowed --smoke`で12 Present要求、VSync往復切り替え・resize・最小化復帰・pending終了、終了コード0 |
 | 表示例の引数検査 | VSync既定ON、ON/OFF指定、smoke併用、不正引数拒否のCPU試験1件成功 |
 | exampleのCPU試験 | frame計測9件、大メッシュfixture・統計4件、windowed引数1件成功 |
-| 依存監査 | cargo-deny 0.20.2でadvisories / bans / licenses / sources成功 |
+| 依存監査 | cargo-deny 0.20.2で通常workspace・独立bindings generatorのadvisories / bans / licenses / sources成功 |
 | 文書 | UTF-8、相対リンク・anchor、fenced block、差分空白を確認 |
 
 実GPUはignored試験を明示実行し、前提不足を成功・skipへ置き換えていない。
@@ -351,18 +354,47 @@ clock・affinity・電力・OS負荷は固定していない。固定shader／UN
 全sample・条件・CPU probe本体とhash・出力hashは[エンジン負荷データ](engine-workloads-metrics.json)へ保存した。
 CPU probeは埋め込みsourceから再構築でき、ローカル`.tools/`だけを再現用sourceにしていない。
 
-## 第二APIの選定と未確認範囲
+## 第二APIの準備と未確認範囲
 
 M4の第二APIはD3D12を選定した。既存Windows実機とshaderツールを使って、
 同じ入力・Graph・GPUでVulkanと比較しやすいことが理由である。
-D3D12CreateDevice(default adapter, FL11_0)とID3D12Debug取得はS_OK、直後にreleaseし命令投入なし。
-adapterの識別、Debug Layer/GBV有効化、実描画と画像等価性、実GPU CIは未確認。
-準備は`renderer-6qc`、`renderer-k51`に登録し、M3で第二backend実装や一般RHIを先行固定していない。
+準備4課題（`renderer-we8.1`・`.2`、`renderer-6qc`・`renderer-k51`）の実装を追加した。
+`d3d12` featureはWindows限定のprivate bindingsとtest専用probeであり、公開D3D12 runtimeはまだない。
 
-Rust bindingsは[設計方針](../design/implementation-policy.md#161-第二バックエンドの選定と準備条件)のとおり、
-Microsoftの`windows-bindgen`によるbackend-private生成を採用する方針を確定した。
-固定するgenerator・metadata・runtime依存の照合、生成・再生成一致・compile、allocator接続と新bindings経由のnative実行は未実施で、`renderer-6qc`の準備範囲に残る。
-既存probeの`S_OK`は、この採用bindingsでの検証結果として扱わない。
+bindingsは`windows-bindgen`／`windows-default`／`windows-core` 0.100.0、MSRV 1.95で固定した。
+入力`Windows.Win32.winmd`のSHA-256は`818706A4908FE51447EBFD88F1E54195CEDA5EC437F95FE17F1250471680811D`、
+LF固定の生成Rustは`F8D56EA7AC3CD5C41E456FDF04E31856CF4C18549F376F1F42C5B3AC545CDB25`で再生成一致した。
+通常ビルドは生成済みRustを使い、generatorとmetadataの依存は独立workspaceで監査する。
+既存依存の`windows-link` 0.2と新規0.100.0の併存、tool監査の未使用license許可に関するwarningは
+GPU Validationとは別の依存監査診断として確認した。ライセンスやadvisoryの除外追加はない。
+
+固定SDK 1.4.341.1のSPIRV-Cross 1.4.341.0とDXC 1.9.0.5180で5種類のshaderを生成・検証し、
+既存SPIR-V、HLSL、DXIL、binding／定数reflection、manifestの再生成一致を確認した。
+固定toolのhash・引数と4／80-byte定数、行列・座標・samplerの対応は
+[ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記録した。
+生成物の改変とSDK不足が失敗することも確認した。
+
+統合ソース`cad88dfcde254b95bf5ff0b5ebfa32a7dd28cef8`、clean mainで
+[反復スクリプト](../../scripts/verify-m4-preparation.ps1)でprobeを3回実行して全回成功した。
+機材・実行担当・再実行方法は[開発手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を参照する。
+
+| 確認 | 3回共通の結果 |
+|---|---|
+| GPU同一性 | NVIDIA RTX 3060、vendor/device IDとDXGI／Vulkan LUIDが一致 |
+| 能力 | SM6.0、RGBA8 typed UAV load/store、resource binding tier 3、heap tier 2 |
+| allocation基準 | DEFAULT／UPLOAD／READBACKの64-byte committed bufferを作成・検査・破棄。各allocation 65,536 byte、alignment 65,536 |
+| Debug Layer／GBV | Device作成前に設定、InfoQueue取得と起動message ID1016のGBV有効報告を確認。設定getterだけから推測していない |
+| 終了後診断 | 最終Device Releaseを含むcallbackとDXGI global queueを確認。warning／error／corruption、callback失敗、破棄メッセージはゼロ |
+| Vulkan検証 | 実選択Deviceを使い、Core／SyncValの実効と破棄後の診断ゼロを確認 |
+
+初期storage filterはINFOだけを65件抑制していた。filterのallow／deny全条件を検査し、
+警告・error・corruptionを抑制しないことを確認してから解除した。元のfilterと件数はJSONへ残し、
+解除後の追加抑制はゼロ。既存メッセージを消去して成功扱いにはしていない。
+最初のprobeで検出したDEFAULT bufferの初期状態に関する警告1328は`COMMON`への修正で解消し、例外は追加していない。
+
+queue投入、buffer copy/readbackの内容、shaderのGBV実行、二APIの画像等価性と性能比較は未実行。
+M4-03の製品runtime、M4-04以降のGraph実行・Fence寿命、M4-08〜10の画像比較へ残す。
+実GPU CIは追加せず、既存CIはCPU／buildと依存監査を担当する。
 
 別GPU/driver、Linux表示・実GPU、Mac/Metal、実native OOM/Device loss/Surface loss、
 拡張なしWSI、透明Window、HDR、物理aliasing、複数queueは今回の追加実機確認に含まない。
@@ -370,6 +402,11 @@ Microsoftの`windows-bindgen`によるbackend-private生成を採用する方針
 過去のtransfer-only Criterionや局所compiler比較の数値を、現在のframe基準値やFPSに読み替えない。
 
 ## 再現物
+
+M4準備の生成一致・5構成の品質確認・依存監査・Vulkan実GPU40件のログは`.tools/m4/gates/`、
+3回反復の環境・source commit・shader hash・全probe JSON／logは
+`.tools/m4/preparation/20261113T043516239Z-4a752b57/`へ保存した。
+再実行sourceと生成済みbindings／shaderはGit管理し、`.tools/`だけに依存しない。
 
 M4前の入力・資源管理のゲートは`.tools/engine-readiness/gates/`へ保存した。
 `{cpu,vulkan,presentation}-{check,clippy,test}.log`、`fmt.log`、`examples-test.log`、
@@ -385,7 +422,8 @@ M4前の入力・資源管理のゲートは`.tools/engine-readiness/gates/`へ�
 cache比較のprobeとログは`.tools/pre-m4/`にあり、前回のnative異常は同ディレクトリの
 `gates/gpu-all-initial-native-crash.log`、単独Device確認は`gates/gpu-device-isolated.log`へ残した。
 ローカルの`.tools/`自体を共有sourceの代わりにはしない。
-GLSL/SPIR-V binaryと依存は今回変更せず、Shader再生成とローカル依存監査は既存結果を引き継ぐ。
+既存GLSL／SPIR-V binaryは今回も変更せず、固定SDKで再生成一致を再確認した。
+今回追加したD3D12依存・生成tool依存・DXILの検証結果は上記M4準備のログを参照する。
 
 従来のM3ゲートは`.tools/m3/gates/{cpu,vulkan,presentation}-{check,clippy,test}.log`、
 `gpu-all.log`、`windowed-smoke.log`、`example-cpu.log`、`shader-verify.log`、`headless-example.log`。

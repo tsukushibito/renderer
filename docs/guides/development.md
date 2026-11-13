@@ -146,6 +146,11 @@ cargo test --locked -p renderer --lib --no-default-features --features vulkan,d3
 最小のallocation作成、およびnative資源の終了までの診断を確認します。
 検証設定の要求・成功したinterface照会・実際に取得できる設定情報は区別してレポートへ残し、
 取得できない実効設定を推測で確認済みにしません。
+GBVの実効は起動message ID1016の有効報告で確認し、原文をJSONへ保存します。
+InfoQueueの既定storage filterも実際に取得し、INFO／MESSAGEだけを抑制することを検査してから解除します。
+元のfilterと抑制数は保存し、追加抑制・メッセージ破棄・callback失敗をゼロとします。
+filterを無視するcallbackはprocess寿命の同期済みログを使い、最終Device Releaseまで登録を維持します。
+DXGIのglobal queueも全native所有者の解放後まで保持して確認します。
 warning／error／corruptionはゼロを要求し、Vulkan側も終了後まで既存の厳格な診断条件を適用します。
 tool・Debug Layer・実GPUの不足、LUID照合不能、probeの不在、JSON欠落を成功やskipへ置き換えません。
 
