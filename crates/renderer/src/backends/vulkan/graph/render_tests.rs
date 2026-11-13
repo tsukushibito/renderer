@@ -2,9 +2,25 @@
 
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
-use crate::graph::{BufferDesc, ComputeTransform, Graph, ImageDesc, RasterParameters};
+use crate::graph::{
+    BufferDesc, BufferHandle, ComputeTransform, Graph, GraphError, ImageDesc, RasterParameters,
+    ValidatedRasterParameters,
+};
 
 const WAIT: Duration = Duration::from_secs(10);
+
+fn batch_draws(
+    draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
+) -> impl ExactSizeIterator<
+    Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
+> {
+    draws
+        .into_iter()
+        .map(|(vertices, indices, count, parameters)| {
+            ValidatedRasterParameters::new(parameters)
+                .map(|parameters| (vertices, indices, count, parameters))
+        })
+}
 
 fn real_gpu(test: impl FnOnce(&mut VulkanRuntime)) {
     real_gpu_config(RuntimeConfig::default(), test);
@@ -107,7 +123,7 @@ fn opaque_batch_comparison(
         graph
             .raster_batch(
                 "opaque batch",
-                draws,
+                batch_draws(draws),
                 color,
                 depth,
                 [0.0, 0.0, 0.0, 1.0],
@@ -239,10 +255,10 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
         graph
             .raster_batch(
                 "bounds batch",
-                vec![
+                batch_draws(vec![
                     (full, indices, 3, RasterParameters::default()),
                     (short, indices, 3, RasterParameters::default()),
-                ],
+                ]),
                 color,
                 depth,
                 [0.0; 4],
@@ -282,7 +298,7 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
         graph
             .raster_batch(
                 "shared input batch",
-                vec![(buffer, buffer, 3, RasterParameters::default()); 3],
+                batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
                 color,
                 depth,
                 [0.0, 0.0, 1.0, 1.0],

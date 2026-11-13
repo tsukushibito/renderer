@@ -209,6 +209,34 @@ pub struct RasterParameters {
     pub transform: [[f32; 4]; 4],
     pub tint: [f32; 4],
 }
+
+/// Finite, immutable per-draw values. The private field carries the creation
+/// guarantee from a captured engine frame into the internal batch builder.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValidatedRasterParameters(RasterParameters);
+
+impl ValidatedRasterParameters {
+    pub(crate) fn get(self) -> RasterParameters {
+        self.0
+    }
+
+    pub(crate) fn new(parameters: RasterParameters) -> Result<Self, GraphError> {
+        if parameters
+            .transform
+            .iter()
+            .flatten()
+            .chain(&parameters.tint)
+            .any(|value| !value.is_finite())
+        {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "non-finite raster transform or tint",
+            ));
+        }
+        Ok(Self(parameters))
+    }
+}
+
 impl Default for RasterParameters {
     fn default() -> Self {
         Self {
@@ -1116,13 +1144,15 @@ impl Graph {
     pub(crate) fn raster_batch(
         &mut self,
         name: impl Into<String>,
-        draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
+        draws: impl ExactSizeIterator<
+            Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
+        >,
         color: ImageHandle,
         depth: ImageHandle,
         clear_color: [f32; 4],
         clear_depth: f32,
     ) -> Result<PassHandle, GraphError> {
-        if draws.is_empty() {
+        if draws.len() == 0 {
             return self.clear_attachments(name, color, depth, clear_color, clear_depth);
         }
         self.build_pass(name, |graph| {
@@ -1150,8 +1180,15 @@ impl Graph {
             let mut encoded = Vec::with_capacity(draws.len());
             // Preserve both purposes if a buffer supplies vertices and indices.
             let mut buffers = BTreeMap::<usize, [u64; 2]>::new();
-            for (vertices, indices, index_count, parameters) in draws {
-                let draw = graph.raster_draw(vertices, indices, index_count, parameters)?;
+            for draw in draws {
+                let (vertices, indices, index_count, parameters) = draw?;
+                let (vertices, indices) = graph.raster_buffers(vertices, indices, index_count)?;
+                let draw = RasterDrawOperands {
+                    vertices,
+                    indices,
+                    index_count,
+                    parameters: parameters.get(),
+                };
                 let vs = graph.resources[draw.vertices].desc.units();
                 let ix = u64::from(draw.index_count) * 4;
                 buffers.entry(draw.vertices).or_default()[0] = vs;
@@ -1460,6 +1497,22 @@ impl Graph {
         index_count: u32,
         parameters: RasterParameters,
     ) -> Result<RasterDrawOperands, GraphError> {
+        let (vertices, indices) = self.raster_buffers(vertices, indices, index_count)?;
+        let parameters = ValidatedRasterParameters::new(parameters)?;
+        Ok(RasterDrawOperands {
+            vertices,
+            indices,
+            index_count,
+            parameters: parameters.get(),
+        })
+    }
+
+    fn raster_buffers(
+        &self,
+        vertices: BufferHandle,
+        indices: BufferHandle,
+        index_count: u32,
+    ) -> Result<(usize, usize), GraphError> {
         let vertices = self.buffer_id(vertices)?;
         let indices = self.buffer_id(indices)?;
         let vs = self.resources[vertices].desc.units();
@@ -1476,24 +1529,7 @@ impl Graph {
                 if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
             ));
         }
-        if parameters
-            .transform
-            .iter()
-            .flatten()
-            .chain(&parameters.tint)
-            .any(|x| !x.is_finite())
-        {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidInput,
-                "non-finite raster transform or tint",
-            ));
-        }
-        Ok(RasterDrawOperands {
-            vertices,
-            indices,
-            index_count,
-            parameters,
-        })
+        Ok((vertices, indices))
     }
 
     fn image_desc_at(&self, id: usize) -> Result<ImageDesc, GraphError> {
@@ -1663,6 +1699,19 @@ fn validate_purpose(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn batch_draws(
+        draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
+    ) -> impl ExactSizeIterator<
+        Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
+    > {
+        draws
+            .into_iter()
+            .map(|(vertices, indices, count, parameters)| {
+                ValidatedRasterParameters::new(parameters)
+                    .map(|parameters| (vertices, indices, count, parameters))
+            })
+    }
 
     #[test]
     fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
@@ -2321,10 +2370,10 @@ mod tests {
         graph
             .raster_batch(
                 "opaque batch",
-                vec![
+                batch_draws(vec![
                     (vertices, indices, 3, RasterParameters::default()),
                     (missing, indices, 3, RasterParameters::default()),
-                ],
+                ]),
                 color,
                 depth,
                 [0.0; 4],
@@ -2346,7 +2395,10 @@ mod tests {
         graph
             .raster_batch(
                 "opaque batch",
-                vec![(vertices, vertices, 3, RasterParameters::default()); 3],
+                batch_draws(vec![
+                    (vertices, vertices, 3, RasterParameters::default());
+                    3
+                ]),
                 color,
                 depth,
                 [0.0; 4],
@@ -2371,10 +2423,10 @@ mod tests {
         let error = graph
             .raster_batch(
                 "invalid opaque input",
-                vec![
+                batch_draws(vec![
                     (vertices, indices, 3, RasterParameters::default()),
                     (vertices, indices, 6, RasterParameters::default()),
-                ],
+                ]),
                 color,
                 depth,
                 [0.0; 4],
@@ -2395,7 +2447,7 @@ mod tests {
         let error = graph
             .raster_batch(
                 "foreign opaque input",
-                vec![(foreign, indices, 3, RasterParameters::default())],
+                batch_draws(vec![(foreign, indices, 3, RasterParameters::default())]),
                 color,
                 depth,
                 [0.0; 4],
@@ -2407,6 +2459,73 @@ mod tests {
         assert_eq!(error.resource(), Some(foreign.into()));
         assert_eq!(error.resource_name(), None);
         assert_eq!(graph.passes.len(), before);
+
+        let error = graph
+            .raster_batch(
+                "unresolved opaque input",
+                [
+                    Ok((
+                        vertices,
+                        indices,
+                        3,
+                        ValidatedRasterParameters::new(RasterParameters::default()).unwrap(),
+                    )),
+                    Err(GraphError::new(
+                        GraphErrorKind::InvalidInput,
+                        "missing resolved mesh buffers",
+                    )),
+                ]
+                .into_iter(),
+                color,
+                depth,
+                [0.0; 4],
+                1.0,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some("unresolved opaque input"));
+        assert_eq!(error.pass(), None);
+        assert_eq!(graph.passes.len(), before);
+    }
+
+    #[test]
+    fn public_raster_parameters_are_checked_before_creating_a_pass() {
+        let mut graph = Graph::new();
+        let (vertices, indices, color, depth) = mesh(&mut graph);
+        let before = graph.passes.len();
+        let mut transform = RasterParameters::default();
+        transform.transform[0][0] = f32::INFINITY;
+        let mut tint = RasterParameters::default();
+        tint.tint[3] = f32::NAN;
+        for parameters in [transform, tint] {
+            let error = graph
+                .raster(
+                    "invalid public parameters",
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 3,
+                        parameters,
+                    },
+                    RasterAttachments {
+                        color: Attachment {
+                            image: color,
+                            load: LoadOp::Clear([0.0; 4]),
+                            store: StoreOp::Store,
+                        },
+                        depth: Attachment {
+                            image: depth,
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        },
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+            assert_eq!(error.pass_name(), Some("invalid public parameters"));
+            assert_eq!(error.pass(), None);
+            assert_eq!(graph.passes.len(), before);
+        }
     }
 
     #[test]

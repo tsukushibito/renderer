@@ -12,7 +12,7 @@ use std::{
     },
 };
 
-use crate::graph::RasterParameters;
+use crate::graph::{RasterParameters, ValidatedRasterParameters};
 
 mod graph;
 pub use graph::{FrameGraph, FrameOutputOwnership};
@@ -335,17 +335,16 @@ impl Engine {
                 return Err(EngineError::new("model matrix must be finite"));
             }
             let transform = multiply(view.clip_from_world, draw.world_from_model);
-            if !finite_matrix(transform) {
-                return Err(EngineError::new("combined clip transform is not finite"));
-            }
+            let parameters = ValidatedRasterParameters::new(RasterParameters {
+                transform,
+                tint: material.tint,
+            })
+            .map_err(|_| EngineError::new("combined clip transform is not finite"))?;
             captured.push(SnapshotDraw {
                 mesh: draw.mesh,
                 revision: mesh.revision,
                 data: Arc::clone(&mesh.data),
-                parameters: RasterParameters {
-                    transform,
-                    tint: material.tint,
-                },
+                parameters,
             });
         }
         Ok(FrameSnapshot {
@@ -397,7 +396,7 @@ pub(crate) struct SnapshotDraw {
     pub mesh: MeshHandle,
     pub revision: u64,
     pub data: Arc<MeshData>,
-    pub parameters: RasterParameters,
+    pub parameters: ValidatedRasterParameters,
 }
 
 fn validate_material(material: Material) -> Result<(), EngineError> {
@@ -620,7 +619,7 @@ mod tests {
                 }],
             )
             .unwrap();
-        assert_eq!(old.draws[0].parameters.transform[3][0], 0.5);
+        assert_eq!(old.draws[0].parameters.get().transform[3][0], 0.5);
         engine.update_mesh(mesh_handle, mesh(0.0)).unwrap();
         engine
             .update_material(material, Material { tint: [0.5; 4] })
@@ -637,8 +636,8 @@ mod tests {
             .unwrap();
         assert_eq!(old.draws[0].revision, 1);
         assert_eq!(new.draws[0].revision, 2);
-        assert_eq!(old.draws[0].parameters.tint, [1.0; 4]);
-        assert_eq!(new.draws[0].parameters.tint, [0.5; 4]);
+        assert_eq!(old.draws[0].parameters.get().tint, [1.0; 4]);
+        assert_eq!(new.draws[0].parameters.get().tint, [0.5; 4]);
         assert_ne!(old.draws[0].data.vertices, new.draws[0].data.vertices);
         engine.delete_mesh(mesh_handle).unwrap();
         engine.delete_material(material).unwrap();
@@ -686,6 +685,7 @@ mod tests {
         assert_eq!(
             engine.snapshot(&view(), &[draw]).unwrap().draws[0]
                 .parameters
+                .get()
                 .tint,
             [1.0; 4]
         );
