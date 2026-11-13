@@ -427,19 +427,19 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         assert_eq!(result.readback(image_read).unwrap(), image_bytes);
         assert!(result.readback(image_read).is_err());
         let accepted = runtime.entries[image_export.key.index as usize]
-            .physical
+            .physical()
             .lock()
             .scheduled
             .serial;
         assert_eq!(accepted, 2);
         let completed = runtime.entries[image_export.key.index as usize]
-            .physical
+            .physical()
             .lock()
             .completed_serial;
         assert_eq!(completed, 2);
         first.wait(Duration::from_secs(10)).unwrap().unwrap();
         let state = runtime.entries[image_export.key.index as usize]
-            .physical
+            .physical()
             .lock();
         assert_eq!(
             state.completed_serial, 2,
@@ -490,7 +490,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         for _ in 0..8 {
             let (mut submission, lowering) = runtime.submit_with_diagnostics(&plan).unwrap();
             let key = submission.export_buffer(source).unwrap().key();
-            let physical = &runtime.entry(key).unwrap().physical;
+            let physical = runtime.entry(key).unwrap().physical();
             let label = format!("resource {} \"repeat.src\"", source.index);
             let mut lines = lowering
                 .lines()

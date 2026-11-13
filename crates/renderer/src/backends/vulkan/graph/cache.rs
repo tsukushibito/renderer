@@ -131,6 +131,7 @@ impl<K: Copy + Ord> CacheIndex<K> {
         descriptor: K,
         entry_count: usize,
         capacity: usize,
+        vacant: Option<usize>,
         mut eligible: impl FnMut(usize) -> bool,
     ) -> Result<CacheTarget, ()> {
         while let Some(&index) = self
@@ -142,6 +143,11 @@ impl<K: Copy + Ord> CacheIndex<K> {
                 return Ok(CacheTarget::Reuse(index));
             }
             self.remove(index);
+        }
+        // A trimmed slot has no allocation to evict. Prefer it to growing the
+        // registry or replacing an allocation of another descriptor.
+        if let Some(index) = vacant {
+            return Ok(CacheTarget::Replace(index));
         }
         if entry_count < capacity {
             return Ok(CacheTarget::Create);
@@ -209,26 +215,59 @@ mod tests {
         index.insert(4, 'a', 3);
         index.insert(2, 'a', 8);
         index.insert(1, 'b', 3);
-        assert_eq!(index.select('a', 5, 6, |_| true), Ok(CacheTarget::Reuse(2)));
-        assert_eq!(index.select('c', 5, 6, |_| true), Ok(CacheTarget::Create));
         assert_eq!(
-            index.select('c', 6, 6, |_| true),
+            index.select('a', 5, 6, None, |_| true),
+            Ok(CacheTarget::Reuse(2))
+        );
+        assert_eq!(
+            index.select('c', 5, 6, None, |_| true),
+            Ok(CacheTarget::Create)
+        );
+        assert_eq!(
+            index.select('c', 6, 6, None, |_| true),
             Ok(CacheTarget::Replace(1))
         );
         // Selecting does not evict: a failed native replacement can retry.
         assert_eq!(
-            index.select('c', 6, 6, |_| true),
+            index.select('c', 6, 6, None, |_| true),
             Ok(CacheTarget::Replace(1))
         );
         index.remove(1);
         assert_eq!(
-            index.select('c', 6, 6, |_| true),
+            index.select('c', 6, 6, None, |_| true),
             Ok(CacheTarget::Replace(4))
         );
         index.insert(4, 'a', 10);
         assert_eq!(
-            index.select('c', 6, 6, |_| true),
+            index.select('c', 6, 6, None, |_| true),
             Ok(CacheTarget::Replace(2))
+        );
+    }
+
+    #[test]
+    fn vacant_slots_follow_matching_reuse_but_precede_growth_and_eviction() {
+        let mut index = CacheIndex::default();
+        index.insert(2, 'a', 7);
+        index.insert(1, 'b', 3);
+        assert_eq!(
+            index.select('a', 4, 8, Some(0), |_| true),
+            Ok(CacheTarget::Reuse(2))
+        );
+        assert_eq!(
+            index.select('c', 4, 8, Some(0), |_| true),
+            Ok(CacheTarget::Replace(0)),
+            "fill a trimmed slot before growing the registry"
+        );
+        assert_eq!(
+            index.select('c', 4, 4, Some(0), |_| true),
+            Ok(CacheTarget::Replace(0)),
+            "fill a trimmed slot before evicting another descriptor"
+        );
+        // Candidate selection is transactional. A failed native creation has
+        // consumed neither the supplied vacancy nor the indexed idle resources.
+        assert_eq!(
+            index.select('c', 4, 4, None, |_| true),
+            Ok(CacheTarget::Replace(1))
         );
     }
 
@@ -269,7 +308,9 @@ mod tests {
                         .min_by_key(|&(position, entry)| (entry.serial, position))
                         .map(|(position, _)| CacheTarget::Replace(position))
                 });
-            let actual = index.select(descriptor, entries.len(), 32, |n| entries[n].available);
+            let actual = index.select(descriptor, entries.len(), 32, None, |n| {
+                entries[n].available
+            });
             assert_eq!(actual.ok(), expected);
             if let Ok(target) = actual {
                 let position = match target {
@@ -305,10 +346,11 @@ mod tests {
         }
         let mut checks = 0;
         for position in registered..registered + targets {
-            let selected = index.select(7, registered + targets, registered + targets, |_| {
-                checks += 1;
-                true
-            });
+            let selected =
+                index.select(7, registered + targets, registered + targets, None, |_| {
+                    checks += 1;
+                    true
+                });
             assert_eq!(selected, Ok(CacheTarget::Reuse(position)));
             index.remove(position);
         }
@@ -317,7 +359,7 @@ mod tests {
         // not revisit them; a future release event makes them candidates again.
         for _ in 0..targets {
             assert_eq!(
-                index.select(7, registered + targets, registered + targets, |_| {
+                index.select(7, registered + targets, registered + targets, None, |_| {
                     checks += 1;
                     false
                 }),
@@ -327,7 +369,9 @@ mod tests {
         assert_eq!(checks, targets);
         index.insert(registered, 7, 2);
         assert_eq!(
-            index.select(7, registered + targets, registered + targets, |_| true),
+            index.select(7, registered + targets, registered + targets, None, |_| {
+                true
+            }),
             Ok(CacheTarget::Reuse(registered))
         );
     }
@@ -340,7 +384,7 @@ mod tests {
         let mut checks = 0;
         for _ in 0..10 {
             assert_eq!(
-                index.select(1, 2, 2, |_| {
+                index.select(1, 2, 2, None, |_| {
                     checks += 1;
                     false
                 }),
@@ -349,6 +393,9 @@ mod tests {
         }
         assert_eq!(checks, 2);
         index.insert(1, 1, 1);
-        assert_eq!(index.select(1, 2, 2, |_| true), Ok(CacheTarget::Reuse(1)));
+        assert_eq!(
+            index.select(1, 2, 2, None, |_| true),
+            Ok(CacheTarget::Reuse(1))
+        );
     }
 }

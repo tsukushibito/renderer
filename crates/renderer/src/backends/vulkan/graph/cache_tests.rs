@@ -1,7 +1,7 @@
 //! Cache policy and real-GPU descriptor churn, pressure and failure regressions.
 
 use super::*;
-use crate::graph::{Graph, ImageDesc};
+use crate::graph::{BufferDesc, Graph, ImageDesc};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -149,8 +149,8 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
     real_gpu(1, 1, |runtime| {
         let original = complete_image(runtime, 2, 7);
         let entry = &runtime.entries[original.index as usize];
-        let native_image = entry.physical.image().image;
-        let accepted_serial = entry.physical.lock().scheduled.serial;
+        let native_image = entry.physical().image().image;
+        let accepted_serial = entry.physical().lock().scheduled.serial;
         // Exercise the native resource boundary directly: Graph names are user
         // input, and a failed constructor must not destroy the selected victim.
         let error = runtime
@@ -160,8 +160,8 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
         let entry = &runtime.entries[original.index as usize];
         assert_eq!(entry.generation, original.generation);
-        assert_eq!(entry.physical.image().image, native_image);
-        assert_eq!(entry.physical.lock().scheduled.serial, accepted_serial);
+        assert_eq!(entry.physical().image().image, native_image);
+        assert_eq!(entry.physical().lock().scheduled.serial, accepted_serial);
         assert_eq!(runtime.stats().resources_created, 1);
         assert_eq!(runtime.entries.len(), 1);
         let reused = complete_image(runtime, 2, 19);
@@ -169,5 +169,133 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
         assert_eq!(reused.generation, original.generation + 1);
         assert_eq!(runtime.stats().resources_created, 1);
         assert_eq!(runtime.stats().resources_reused, 1);
+    });
+}
+
+#[test]
+#[ignore = "explicit real-GPU idle trim ownership and native memory test; requires Core/SyncVal"]
+fn vulkan_graph_trim_releases_idle_working_set_and_preserves_live_owners() {
+    real_gpu(8, 3, |runtime| {
+        let baseline = runtime.memory_stats().unwrap();
+        let first = complete_image(runtime, 4, 11);
+        let second = complete_image(runtime, 8, 22);
+        let registered = runtime
+            .create_buffer("registered", BufferDesc { size: 64 })
+            .unwrap();
+        let leased = runtime
+            .create_buffer("escaped lease", BufferDesc { size: 96 })
+            .unwrap();
+        let lease = runtime.lease(leased.key()).unwrap();
+        runtime.delete(leased.key()).unwrap();
+
+        let (plan, image, read) = image_plan(3, 33);
+        let mut pending = runtime.submit(&plan).unwrap();
+        let pending_key = pending.export_image(image).unwrap().key();
+        runtime.delete(pending_key).unwrap();
+        let before = runtime.memory_stats().unwrap();
+        assert_eq!(before.cached_logical_bytes, 4 * 4 * 4 + 8 * 8 * 4);
+        assert_eq!(before.registered_logical_bytes, 64);
+        assert_eq!(before.retained_logical_bytes, 96 + 3 * 3 * 4);
+        assert_eq!(
+            before.vma_allocation_count,
+            baseline.vma_allocation_count + 5
+        );
+
+        assert_eq!(runtime.trim_idle_resources(), 2);
+        let trimmed = runtime.memory_stats().unwrap();
+        assert_eq!(trimmed.cached_logical_bytes, 0);
+        assert_eq!(trimmed.registered_logical_bytes, 64);
+        assert_eq!(
+            trimmed.retained_logical_bytes,
+            before.retained_logical_bytes
+        );
+        assert_eq!(
+            trimmed.vma_allocation_count,
+            before.vma_allocation_count - 2
+        );
+        assert!(trimmed.vma_allocation_bytes < before.vma_allocation_bytes);
+        assert!(pending.is_pending(), "trim must not poll or wait for work");
+        assert!(runtime.refresh_buffer(registered.key()).is_ok());
+        assert_eq!(runtime.trim_idle_resources(), 0);
+        for key in [first, second, pending_key, leased.key()] {
+            assert_eq!(
+                runtime.refresh_image(key).err().unwrap().kind(),
+                RuntimeErrorKind::StaleResource
+            );
+        }
+
+        // A rejected constructor must leave the trimmed slot and its old
+        // generation untouched. Its next successful creation gets a new key.
+        assert_eq!(
+            runtime
+                .acquire(ResourceDesc::Buffer(BufferDesc { size: 0 }), "invalid size")
+                .err()
+                .unwrap()
+                .kind(),
+            RuntimeErrorKind::InvalidInput
+        );
+        let replacement = runtime
+            .create_buffer("after trim", BufferDesc { size: 80 })
+            .unwrap();
+        assert_eq!(replacement.key().index, first.index);
+        assert_eq!(replacement.key().generation, first.generation + 1);
+        assert_eq!(
+            runtime.entries.len(),
+            5,
+            "fill holes before registry growth"
+        );
+        assert_eq!(
+            runtime.refresh_image(first).unwrap_err().kind(),
+            RuntimeErrorKind::StaleResource
+        );
+
+        check_result(&mut pending, read, 3, 33);
+        assert_eq!(runtime.trim_idle_resources(), 1);
+        assert_eq!(runtime.memory_stats().unwrap().retained_logical_bytes, 96);
+        drop(lease);
+        assert_eq!(runtime.trim_idle_resources(), 1);
+        runtime.delete(registered.key()).unwrap();
+        runtime.delete(replacement.key()).unwrap();
+        assert_eq!(runtime.trim_idle_resources(), 2);
+        let final_memory = runtime.memory_stats().unwrap();
+        assert_eq!(
+            final_memory.vma_allocation_count,
+            baseline.vma_allocation_count
+        );
+        assert_eq!(
+            final_memory.vma_allocation_bytes,
+            baseline.vma_allocation_bytes
+        );
+        assert_eq!(final_memory.cached_logical_bytes, 0);
+        assert_eq!(final_memory.retained_logical_bytes, 0);
+        eprintln!(
+            "idle trim memory: baseline={baseline:?}; before={before:?}; trimmed={trimmed:?}; final={final_memory:?}"
+        );
+    });
+}
+
+#[test]
+#[ignore = "explicit real-GPU saturated generation trim test; requires Core/SyncVal"]
+fn vulkan_graph_trim_releases_saturated_generations_without_reviving_keys() {
+    real_gpu(1, 1, |runtime| {
+        let baseline = runtime.memory_stats().unwrap();
+        let key = complete_image(runtime, 2, 17);
+        runtime.entries[key.index as usize].generation = u32::MAX;
+        assert_eq!(runtime.trim_idle_resources(), 1);
+        assert_eq!(runtime.trim_idle_resources(), 0);
+        assert_eq!(
+            runtime.memory_stats().unwrap().vma_allocation_count,
+            baseline.vma_allocation_count
+        );
+        let (plan, _, _) = image_plan(2, 29);
+        assert_eq!(
+            runtime.submit(&plan).err().unwrap().kind(),
+            RuntimeErrorKind::CapacityExhausted,
+            "an exhausted slot remains a tombstone after releasing its allocation"
+        );
+        assert_eq!(
+            runtime.refresh_image(key).unwrap_err().kind(),
+            RuntimeErrorKind::StaleResource
+        );
     });
 }

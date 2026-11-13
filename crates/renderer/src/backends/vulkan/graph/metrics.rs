@@ -115,13 +115,16 @@ impl VulkanRuntime {
             ..MemoryStats::default()
         };
         for entry in &self.entries {
-            let bytes = match entry.physical.desc {
+            let Some(physical) = &entry.physical else {
+                continue;
+            };
+            let bytes = match physical.desc {
                 crate::graph::ResourceDesc::Buffer(desc) => desc.size,
                 crate::graph::ResourceDesc::Image(desc) => desc.byte_len().unwrap_or(u64::MAX),
             };
             let target = if entry.registered {
                 &mut output.registered_logical_bytes
-            } else if Arc::strong_count(&entry.physical) > 1 {
+            } else if Arc::strong_count(physical) > 1 {
                 &mut output.retained_logical_bytes
             } else {
                 &mut output.cached_logical_bytes
