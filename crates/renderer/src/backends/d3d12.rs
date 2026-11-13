@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 mod device;
 mod diagnostics;
+mod graph;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
 pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12ValidationReport};
+pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 
 /// Native validation is independent of optimization and Renderer diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,6 +280,25 @@ mod tests {
         assert!(finished.teardown_checked, "{finished:?}");
         assert!(finished.is_clean(), "{finished:?}");
         assert!(monitor.snapshot().teardown_checked);
+        // The debug configuration remains process-wide after final Release.
+        // Recreate in this same process to exercise the non-first initialization
+        // path, removed callback registration and retained global DXGI history.
+        let recreated = D3D12Runtime::new(config).expect("same-mode native owner recreation");
+        let recreated_monitor = recreated.validation_monitor();
+        assert_eq!(recreated.device_info().luid, info.luid);
+        assert!(!recreated_monitor.snapshot().teardown_checked);
+        let recreated_finished = recreated.shutdown().expect("recreated owner shutdown");
+        assert!(
+            recreated_finished.debug_layer_enabled
+                && recreated_finished.gpu_based_validation_enabled
+        );
+        assert!(
+            recreated_finished.teardown_checked && recreated_finished.is_clean(),
+            "{recreated_finished:?}"
+        );
+        // The first monitor neither retains the Device nor starts collecting a
+        // later owner's messages after its own callback identity was removed.
+        assert_eq!(monitor.snapshot().messages.len(), finished.messages.len());
         println!("D3D12_RUNTIME_INFO {info:?}");
         println!("D3D12_RUNTIME_VALIDATION {finished:?}");
     }
