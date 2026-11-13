@@ -705,7 +705,8 @@ impl Graph {
         }
     }
     /// `pass` must execute after `dependency`. Forward edges are allowed and
-    /// compile rejects cycles, including cycles in otherwise dead declarations.
+    /// Compile rejects live cycles in every configuration. With
+    /// `development-validation`, it also rejects cycles confined to dead work.
     pub fn depends_on(
         &mut self,
         pass: PassHandle,
@@ -2127,8 +2128,12 @@ mod tests {
             .unwrap();
         graph.export_image(color).unwrap();
         let compiled = graph.compile().unwrap();
-        let dump = compiled.dump();
-        assert!(dump.contains("purpose=Vertex") && dump.contains("purpose=Index"));
+        assert_eq!(compiled.pass_count(), 2);
+        #[cfg(feature = "graph-diagnostics")]
+        {
+            let dump = compiled.dump();
+            assert!(dump.contains("purpose=Vertex") && dump.contains("purpose=Index"));
+        }
     }
 
     #[test]

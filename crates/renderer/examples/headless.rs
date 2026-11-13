@@ -76,6 +76,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let unused = graph.image("unused image", ImageDesc::rgba8(1, 1))?;
     graph.upload_image("unused upload", unused, vec![1, 2, 3, 255])?;
     let plan = graph.compile()?;
+    #[cfg(feature = "graph-diagnostics")]
     println!("{}", plan.dump());
     let mut runtime = VulkanRuntime::new(RuntimeConfig::default())?;
     let mut submission = runtime.submit(&plan)?;
