@@ -111,6 +111,9 @@ def compare_geometry_arrays(label, geometry, saved, slot_count):
             f"{label}: unsupported normal mapping")
     normals = np.asarray(child(normal_layer, b"Normals").props[0], dtype=np.float32).reshape(-1, 3)
     exact_array(label + " raw source corner normals", saved["source_loop_normals"], normals)
+    lengths = np.linalg.norm(normals, axis=1, keepdims=True)
+    require(np.isfinite(lengths).all() and np.all(lengths > 0), f"{label}: invalid source normal length")
+    exact_array(label + " normalized source corner normals", saved["loop_normals"], normals / lengths)
     uv_names = []
     for index, uv_layer in enumerate(children(geometry, b"LayerElementUV")):
         require(child(uv_layer, b"MappingInformationType").props == [b"ByPolygonVertex"]
@@ -263,6 +266,7 @@ def compare(source, audit_path, baseline_path, parser_dir):
                     "renamed_models": sum(item["source_model_name"] != item["baseline_name"] for item in results),
                     "exact_float32_original_positions": True, "exact_ordered_corner_positions": True,
                     "exact_raw_corner_normals": True, "exact_both_corner_uv_sets": True,
+                    "exact_normalized_corner_normals": True,
                     "exact_ordered_polygon_material_indices": True},
         "material_face_usage": dict(sorted(material_usage.items())),
         "geometric_transforms": {"all_identity": True, "audited_template_defaults": geometric_defaults},

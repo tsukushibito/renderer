@@ -45,6 +45,7 @@ def fixture(mapping=b"AllSame", material_slots=(0,)):
         "triangle_loops": np.arange(6).reshape(-1, 3),
         "material_indices": np.array([0, 0] if mapping == b"AllSame" else material_slots),
         "source_loop_normals": normals.copy(),
+        "loop_normals": normals.copy(),
         "loop_uv": np.concatenate((uv, uv)),
     }
     return geometry, saved
@@ -74,7 +75,7 @@ class SourceBindingTests(unittest.TestCase):
             compare_geometry_arrays("source", geometry, saved, 2)
 
     def test_changed_position_normal_or_uv_is_detected(self):
-        for field_name in ("positions", "source_loop_normals", "loop_uv"):
+        for field_name in ("positions", "source_loop_normals", "loop_normals", "loop_uv"):
             with self.subTest(field=field_name):
                 geometry, saved = fixture()
                 saved[field_name][0, 0] = 0.25
