@@ -59,6 +59,23 @@ Windows / LinuxのCPU・Vulkan、およびWindows presentationのcheck・Clippy�
 [GitHub Actions](https://github.com/tsukushibito/renderer/actions/workflows/ci.yml)に設定している。
 このローカル確認はLinux実行や実GPU CIの合格を意味しない。
 
+### 製品版と開発用の検証方針
+
+2026-11-13に[検証方針](../guides/validation-policy.md)を制定し、AGENTS.mdと既存の設計・開発ガイドへ反映した。
+Vulkan／Rust／Cargo／VMA、Unreal、D3D12、Metalの一次資料24件を確認し、API条件の保証と
+反復検査、開発用診断、同期・寿命・容量・native失敗の実行機能を区別した。
+製品の保証済み入力は再走査せず、開発用の検証専用処理・保持情報をコンパイル除外する方針とする。
+
+今回の変更は文書とAPIコメントのみで、runtime動作やCargo featureは変更していない。
+`ValidationMode::Disabled`は引き続きLayerの切替だけで、内部検査・CPU provenance・debug_utilsは残る。
+新しい製品構成、検証除去のCPU／メモリ効果、実GPUの追加確認は未実装・未測定／未実行である。
+既存のGPU結果を今回の新しい確認として扱わない。文書の確認結果とCIはBeads `renderer-pwx`にも記録する。
+
+ローカルではMarkdown 13文書のUTF-8・fence、相対リンク／anchor 166件、一次資料参照24件と
+検証JSONのparse、`git diff --check`、`cargo fmt --all -- --check`が成功した。
+`RUSTDOCFLAGS="-D warnings"`でCPUのみとVulkan featureの`cargo doc --locked --workspace --no-deps`も成功した。
+文書とコメントだけの変更のため、新しいCPU挙動試験・実GPU試験・性能測定は追加していない。
+
 ### VSyncの選択・切り替え
 
 `renderer-5kp`で`PresentationConfig::vsync`、`Presenter::set_vsync`と要求値getterを追加した。

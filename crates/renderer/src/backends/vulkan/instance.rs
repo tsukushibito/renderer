@@ -16,8 +16,9 @@ const REQUIRED_EXTENSIONS: [&CStr; 2] =
     [ash::ext::debug_utils::NAME, ash::ext::layer_settings::NAME];
 pub(super) const LOG_TARGET: &str = "renderer::vulkan";
 
-/// Validation stays mandatory unless the caller explicitly selects a performance
-/// run. Loader environment/settings may still inject layers in either mode.
+/// Native validation is required by default. Shipping and performance callers
+/// can explicitly disable layers; Renderer-side checks remain enabled.
+/// Loader environment/settings may still inject layers in either mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ValidationMode {
     #[default]

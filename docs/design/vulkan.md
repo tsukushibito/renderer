@@ -61,13 +61,22 @@ debug_utilsのDevice用関数テーブルは一度保持し、Queueも作成時�
 
 ## 検証と診断
 
+製品・開発・性能・障害調査の分類は[検証方針](../guides/validation-policy.md)に従う。
+製品はValidation Layersを既定無効とし、開発用検証へ依存しない実行を目指す。
+次の既定値・切替は現行実装の説明であり、この文書変更で内部検証を除去したものではない。
+
 既定の`ValidationMode::Required`はValidation Layer、debug_utils、layer_settingsを要求し、
 core validationを維持したままSynchronization Validationを追加するよう指定する。
 受入試験ではレイヤー起動情報を確認し、外部設定で検証を無効にした成功を受け入れない。
 
-性能測定には`ValidationMode::Disabled`を明示できる。
+製品でのLayer無効化と性能測定には`ValidationMode::Disabled`を明示できる。
 この場合はValidation Layerとlayer_settingsを要求せず、debug_utilsと診断を維持する。
 releaseだけで暗黙に検証を外さない。外部loader設定によるLayer注入は別途確認する。
+
+この切替はGraph検査、index全走査、CPU provenance、debug名等を除去する機能ではない。
+内部の開発用検証を製品から除外するビルド切替と、診断拡張を不要にする経路は未実装である。
+今後は最適化と追加検証を独立に選び、同期・寿命・容量・native失敗の処理を維持したまま保証を上流へ移す。
+[現行との差分](../guides/validation-policy.md#current)を参照する。
 
 `tracing`のsubscriber・出力先・表示レベルは利用側が設定する。
 ライブラリはglobal subscriberを設置せず、初期化時の`Dispatch`を保持して別スレッドのcallbackにも使う。
@@ -443,7 +452,7 @@ CPU retireはpayload整理、query取得、native実行枠のreset・返却を�
 画像の論理byte数はpacked texel量であり、optimal imageのAllocation sizeでもprocess VRAM使用量でもない。
 このVMA統計はdriverやSwapchainの確保を含まない。
 `EXT_memory_budget`は有効にしておらず、process budgetは未取得とする。
-性能用の検証設定は明示的な`new_with_validation`で選び、既定Requiredは維持する。
+製品・性能用のLayer設定は明示的な`new_with_validation`で選ぶ。現行の既定Requiredは維持している。
 要求したmodeとLayerから実際に観測した設定、未確認の情報を区別して記録する。
 
 ## 参照する仕様

@@ -7,6 +7,7 @@
 |---|---|---|
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、ビルド、試験、性能測定 |
 | 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、RenderDoc |
+| 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
 | 実装指針 | [RenderGraphベストプラクティス](guides/rendergraph-best-practices.md) | 公開設計の比較、依存・内容・寿命、コンパイル、同期、資源配置、並列化、検証 |
 | 設計 | [実装方針](design/implementation-policy.md) | 全体構成、ロードマップ、実装・検証の方針 |

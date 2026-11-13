@@ -50,7 +50,8 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
   [current Vulkan design](docs/design/vulkan.md). Follow the applicable guidance.
 - Satisfy applicable Vulkan and VMA API contracts and the current Renderer
   policies. Performance advice or a documented recommendation exception cannot
-  waive synchronization, lifetime, safety, or validation requirements.
+  waive API, synchronization, lifetime, or safety contracts. The placement of
+  checks follows the production and development validation policy below.
 - Follow general recommendations by default. When choosing another approach,
   record the reason, alternatives, risks and supporting evidence in the relevant
   existing design document and Beads issue, proportionate to the change.
@@ -68,6 +69,35 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
 - At completion, record applicable guidance, justified departures from general
   recommendations, and executed/unexecuted verification in the existing issue
   and relevant documentation. Use the established quality and validation gates.
+
+# Production and development validation
+
+- Before adding, moving, disabling, or reviewing validation, read the
+  [validation policy](docs/guides/validation-policy.md). It governs asset input,
+  Rust API contracts, RenderGraph, and all backends.
+- Shipping draw/submit paths must not repeatedly validate already guaranteed
+  contents. Establish guarantees at cook/import, creation/update, or Graph
+  construction boundaries; preserve them through private immutable data,
+  ownership, and explicit invalidation where applicable.
+- Compile development-only diagnostics out of shipping configurations, including
+  their dedicated scans, metadata, retained payloads, strings, and dependencies.
+  Keep optimization and validation independently selectable. Do not assume that
+  a release profile, hidden logs, or disabled native layers removes these costs.
+- Preserve safe Rust and native API contracts in every configuration. Do not
+  replace required checks with debug assertions without another guarantee, and
+  never put required side effects inside validation-only code. Use a documented
+  unsafe boundary only when the caller must assume safety obligations.
+- Keep execution planning, synchronization, GPU lifetime/completion, capacity
+  management, and native failure handling in shipping. Eliminate redundant state
+  checks only when ownership, immutability, or another explicit invariant makes
+  them unnecessary. Keep optional profiling and diagnostics independent.
+- For changes to validation paths, verify applicable enabled and disabled
+  configurations, including optimized execution; preserve existing real-GPU
+  acceptance gates. Record the guarantee, invalidation, removed work, evidence,
+  and unexecuted checks in the relevant design document and Beads issue.
+- Distinguish this policy from implementation status. Current native-layer
+  controls do not remove Renderer-side checks; document gaps rather than
+  claiming that a shipping configuration already implements the policy.
 
 # API compatibility
 

@@ -557,6 +557,11 @@ GPU-drivenではindirect／count buffer等の実際の用途・保持条件を�
 
 ## 16. 診断・検証・性能測定
 
+製品・開発用の分類には[検証方針](validation-policy.md)を適用する。
+入力の保証を上流へ移し、製品では保証済み内容の反復scanと開発用の専用metadata保持を避ける。
+producer・hazard・culling・native同期等の計画作成と、結果を独立に再点検する診断を分離する。
+safeな計画を成立させる拒否や実行時に変わる資源状態の処理を、診断と一括して無効にしない。
+
 ### 診断を実行計画の一部として設計する
 
 passとresourceへ安定したIDと読める名前を付け、宣言元からnative object／command labelまで追跡する。

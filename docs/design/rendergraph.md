@@ -5,6 +5,9 @@ Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出�
 全体方針は[実装方針](implementation-policy.md)、native資源と完了管理は
 [Vulkanの設計](vulkan.md)、実行済みの確認は[検証状況](../verification/current.md)を参照する。
 
+検証処理の配置・製品構成からの除去には[製品版と開発用の検証方針](../guides/validation-policy.md)を適用する。
+以下は現在のAPI・動作の契約であり、方針の制定だけで検査を無効化できるようになったとは扱わない。
+
 ## 対応範囲と処理の境界
 
 最初の経路は、単一Graphics＋Computeキュー、物理aliasingなし、
@@ -88,6 +91,12 @@ write／copyによる置換は成功・失敗のどちらのcacheも失効させ
 現在のindex用途とそのcopy元、import／exportしたbufferに必要な内容だけを追跡する。
 import／exportしたbufferは後のGraphでindexに使えるため、元の入力を共有したまま保持する。
 この保持は新しいCPUミラーの作成とは異なるが、小さなsliceが元の入力全体を保持する場合はある。
+
+これは現在のruntimeの保証方法である。製品向けには、取込済みの不変meshの保証を引き継ぎ、
+全index走査と検証専用CPU保持を描画経路から外すことを優先する。
+任意のGraph upload／copyに同じ保証があるとは仮定せず、範囲・内容更新・Device条件での失効を設計する。
+追加診断と、safeな計画・必要な同期を成立させる処理を分離してから変更する。
+[保証の移動](../guides/validation-policy.md#guarantees)と[Graphの分類](../guides/validation-policy.md#graph)を参照する。
 
 ## 論理的な依存と実行順
 

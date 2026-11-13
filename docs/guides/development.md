@@ -91,6 +91,26 @@ Windowsには`presentation` featureの全target check・Clippy・CPU試験も追
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
 
+## 製品・開発用の検証設定
+
+実装・レビューでは[製品版と開発用の検証方針](validation-policy.md)に従います。
+保証済みの入力をdraw／submitごとに再走査せず、保証を取込・更新・Graph構築等の境界へ移します。
+同期生成、GPU寿命・正常完了、容量とnative失敗の処理は製品でも維持します。
+検証の切替を変更するときは、適用範囲の有効／無効両構成と最適化された通常経路を確認します。
+
+現行の`ValidationMode::Disabled`はVulkan Layerの明示的な無効化で、製品・性能用途で選択できます。
+既定は`Required`のままで、releaseビルドだけでは無効になりません。
+Disabledでもdebug_utils、Graph内部の検査、index全走査とCPU provenanceは残ります。
+内部の開発用検証をコンパイル除外するfeatureや、診断拡張を要求しない製品経路は未実装です。
+未提供のfeature指定を製品ビルド手順として使わないでください。
+
+今後切替を実装した際は、feature統合後の実構成を`cargo tree -e features`等で確認し、
+最適化・Renderer内の追加検証・native検証・profilingをそれぞれ記録します。
+`--all-features`だけでは検証無効構成の確認になりません。
+コード・依存関係・生成物や走査／allocation／保持byte等から、除去を主張する費用を確認します。
+実GPUの正しさ受入はCore＋SyncVal等を維持し、GPU-AV／GBVによる追加診断と製品相当の性能測定を分けます。
+変更に応じた確認範囲は[検証方針の受入基準](validation-policy.md#verification)を参照してください。
+
 ## M4のD3D12準備と実GPU受入経路
 
 M4の実GPU受入は、現在利用できるWindows x64機（Core i5-14600KF、RTX 3060）で
@@ -407,7 +427,7 @@ CPU型のソフトウェア実装は通常の候補になれますが、実GPU�
 
 ### Validationの判定条件
 
-既定は`ValidationMode::Required`で、`VK_LAYER_KHRONOS_validation`と
+現行APIと正しさ受入の既定は`ValidationMode::Required`で、`VK_LAYER_KHRONOS_validation`と
 `VK_EXT_debug_utils`、`VK_EXT_layer_settings`を要求します。
 `validate_sync=true`により通常のcore validationへSynchronization Validationを追加します。
 外部設定はAPI指定を上書きできるため、起動INFOからSyncValとcore validationの実効状態も確認します。
@@ -460,8 +480,9 @@ cargo bench --locked -p renderer --no-default-features --bench transfer_planning
 
 ## GPU転送の性能測定
 
-性能試験だけが`ValidationMode::Disabled`を明示指定します。
-debug_utilsと診断経路は維持し、releaseビルドだけで自動的に検証を外しません。
+製品でLayerを無効にする場合と性能試験では、`ValidationMode::Disabled`を明示指定します。
+この転送性能試験はその設定を選びます。現行はdebug_utilsと診断経路を維持し、
+releaseビルドだけで自動的に検証を外しません。内部検証除去とは別の設定です。
 外部loader設定によるLayerの強制注入も確認してください。
 VVLの起動状態を受信した場合は測定を失敗させ、ログ非表示だけを検証なしとは扱いません。
 
