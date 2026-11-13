@@ -1,0 +1,6 @@
+dxil/*.hlsl text eol=lf
+dxil/*.reflection.txt text eol=lf
+dxil/*.json text eol=lf
+dxil/*.dxil binary
+dxil-toolchain.json text eol=lf
+dxil-contracts.json text eol=lf

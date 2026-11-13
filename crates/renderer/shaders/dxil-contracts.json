@@ -1,0 +1,61 @@
+{
+  "scope": "Trusted fixed fixtures only. Compilation/reflection is verified; D3D12 execution and two-API image equivalence remain M4-08 through M4-10 acceptance work.",
+  "entry_point": "main",
+  "shader_model": "6.0",
+  "dxil_version": "1.0",
+  "validator_version": "1.10 (pinned DXC internal validator; validation enabled)",
+  "coordinates": {
+    "input": "Same model positions and column-major clip_from_model bytes as Vulkan",
+    "vertex_y": "Negate clip-space Y in both generated vertex shaders to match positive-height Vulkan viewport orientation with a positive D3D12 viewport",
+    "clip_z": "Preserve 0 <= z <= w; no --fixup-clipspace",
+    "raster": "Normal Z, clear depth 1, LESS, cull NONE, blending disabled; front-face/culling equivalence is not established",
+    "pixel": "Top-left image coordinates and pixel-center SV_Position.xy; integer truncation selects the same texel",
+    "color": "Linear RGBA8_UNORM, alpha preserved; no filtering, sRGB conversion, HDR, or tone mapping"
+  },
+  "shaders": {
+    "image.comp": {
+      "profile": "cs_6_0",
+      "local_size": [8, 8, 1],
+      "vulkan_bindings": ["set0/binding0 readonly rgba8 storage image", "set0/binding1 writeonly rgba8 storage image"],
+      "d3d12_active_bindings": ["u0/space0 source RWTexture2D<unorm float4>", "u1/space0 destination RWTexture2D<unorm float4>", "b0/space0 mode cbuffer"],
+      "capability": "D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD and UAV_TYPED_STORE for DXGI_FORMAT_R8G8B8A8_UNORM; DXIL declares Typed UAV Load Additional Formats",
+      "constant_bytes": 4,
+      "constant_members": [{"name": "mode", "type": "u32", "offset": 0}],
+      "constant_binding": "DXC assigned and reflected b0; SPIRV-Cross emits an unregistered cbuffer",
+      "bounds": "Host must require equal nonzero source/destination extents; shader guards destination bounds for ceil-divided dispatch",
+      "choice": "Keep default storage-image UAV mapping; do not use SPIRV-Cross's type-system-sensitive --hlsl-nonwritable-uav-texture-as-srv option"
+    },
+    "mesh.vert": {
+      "profile": "vs_6_0",
+      "vertex_stride": 28,
+      "vertex_inputs": [{"semantic": "TEXCOORD0", "format": "R32G32B32_FLOAT", "offset": 0}, {"semantic": "TEXCOORD1", "format": "R32G32B32A32_FLOAT", "offset": 12}],
+      "constant_bytes": 80,
+      "constant_members": [{"name": "clip_from_model", "offset": 0, "size": 64, "matrix_stride": 16}, {"name": "tint", "offset": 64, "size": 16}],
+      "constant_binding": "DXC assigned and reflected b0/space0; SPIRV-Cross emits an unregistered cbuffer",
+      "matrix": "Generated row_major float4x4 and mul(position, matrix) together preserve the original column-major host payload. Do not transpose or repack CPU bytes.",
+      "output": "TEXCOORD0 linear float4 color and SV_Position"
+    },
+    "mesh.frag": {
+      "profile": "ps_6_0",
+      "input": "TEXCOORD0 linear float4 color",
+      "output": "SV_Target0 float4",
+      "d3d12_active_bindings": []
+    },
+    "composite.vert": {
+      "profile": "vs_6_0",
+      "input": "SV_VertexID, fullscreen non-indexed triangle, vertex count 3, start vertex 0",
+      "output": "SV_Position",
+      "d3d12_active_bindings": []
+    },
+    "composite.frag": {
+      "profile": "ps_6_0",
+      "vulkan_bindings": ["set0/binding0 combined image sampler"],
+      "hlsl_declarations": ["Texture2D<float4> t0/space0", "SamplerState s0/space0"],
+      "d3d12_active_bindings": ["Texture2D<float4> t0/space0"],
+      "sampler": "SPIRV-Cross splits the combined sampler declaration, but texelFetch becomes Texture2D.Load. DXC removes unused s0; the checked-in reflection verifies no active sampler.",
+      "output": "SV_Target0 float4, source and destination extents must match"
+    }
+  },
+  "constant_allocation": "Logical member offsets and sizes do not replace D3D12 root-constant/CBV placement and range requirements. Product runtime chooses and validates the binding in later tasks.",
+  "verification": "Regeneration compares pinned tools, source/SPIR-V hashes, generated HLSL, validated DXIL, and DXC signature/binding/offset reflection. Nonidentity MVP, off-center geometry, depth, colors, and every output pixel still require real GPU comparison."
+}
