@@ -9,9 +9,10 @@ description = "RenderGraph-centered renderer for game engine integration"
 [features]
 default = []
 # Optional Renderer diagnostics, independent of optimization and native layers.
-development-validation = ["vulkan-diagnostics"]
+development-validation = ["vulkan-diagnostics", "d3d12-diagnostics"]
 # Native callback monitoring and debug names/labels can be enabled independently.
 vulkan-diagnostics = []
+d3d12-diagnostics = []
 # Detailed Graph dumps are independent of validation and profiling.
 graph-diagnostics = []
 vulkan = ["dep:ash", "dep:vk-mem", "dep:tracing"]

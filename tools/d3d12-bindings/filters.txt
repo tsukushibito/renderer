@@ -1,4 +1,4 @@
-# Precise public metadata paths, including only the APIs used in preparation.
+# Precise public metadata paths, including only the APIs used by runtime and preparation.
 D3D12CreateDevice
 D3D12GetDebugInterface
 ID3D12Debug::EnableDebugLayer
@@ -6,7 +6,7 @@ ID3D12Debug1::SetEnableGPUBasedValidation
 ID3D12DebugDevice::ReportLiveDeviceObjects
 ID3D12InfoQueue1::{RegisterMessageCallback,UnregisterMessageCallback}
 ID3D12InfoQueue::{GetNumStoredMessages,GetNumMessagesDeniedByStorageFilter,GetNumMessagesDiscardedByMessageCountLimit,GetMessage,SetMessageCountLimit,GetStorageFilter,ClearStorageFilter,ClearRetrievalFilter}
-ID3D12Device::{CheckFeatureSupport,CreateCommittedResource,GetResourceAllocationInfo}
+ID3D12Device::{CheckFeatureSupport,CreateCommittedResource,GetResourceAllocationInfo,CreateCommandQueue,CreateCommandAllocator,CreateCommandList,CreateFence,GetDeviceRemovedReason}
 ID3D12Resource::{GetDesc,GetHeapProperties,Map,Unmap}
 D3D12_FEATURE_DATA_D3D12_OPTIONS
 D3D12_FEATURE_DATA_SHADER_MODEL
@@ -48,3 +48,20 @@ D3D12_MESSAGE_SEVERITY
 DXGI_INFO_QUEUE_MESSAGE_SEVERITY
 DXGI_FORMAT_UNKNOWN
 D3D12_MESSAGE_ID_CREATEDEVICE_DEBUG_LAYER_STARTUP_OPTIONS
+
+ID3D12CommandQueue::{ExecuteCommandLists,Signal}
+ID3D12GraphicsCommandList::{CopyBufferRegion,ResourceBarrier,Close}
+ID3D12Fence::GetCompletedValue
+D3D12_COMMAND_QUEUE_DESC
+D3D12_COMMAND_LIST_TYPE
+D3D12_COMMAND_QUEUE_FLAGS
+D3D12_RESOURCE_BARRIER
+D3D12_RESOURCE_BARRIER_TYPE
+D3D12_RESOURCE_BARRIER_FLAGS
+D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES
+D3D12_FENCE_FLAGS
+DXGI_ERROR_UNSUPPORTED
+DXGI_ERROR_DEVICE_REMOVED
+DXGI_ERROR_DEVICE_HUNG
+DXGI_ERROR_DEVICE_RESET
+DXGI_ERROR_DRIVER_INTERNAL_ERROR

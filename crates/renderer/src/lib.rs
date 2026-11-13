@@ -30,5 +30,11 @@ pub use backends::vulkan::graph::{
 #[cfg(feature = "vulkan")]
 pub use backends::vulkan::ValidationMode;
 
+#[cfg(all(feature = "d3d12", windows))]
+pub use backends::d3d12::{
+    D3D12DeviceInfo, D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeError, D3D12RuntimeErrorKind,
+    D3D12ValidationMessage, D3D12ValidationMode, D3D12ValidationMonitor, D3D12ValidationReport,
+};
+
 #[cfg(all(feature = "presentation", windows))]
 pub use backends::vulkan::graph::{PresentOutcome, PresentationConfig, Presenter};
