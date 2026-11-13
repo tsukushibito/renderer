@@ -17,6 +17,16 @@ pub(super) fn host_metadata() -> BTreeMap<String, String> {
         "debug_assertions".into(),
         cfg!(debug_assertions).to_string(),
     );
+    for (feature, enabled) in [
+        (
+            "development_validation",
+            cfg!(feature = "development-validation"),
+        ),
+        ("vulkan_diagnostics", cfg!(feature = "vulkan-diagnostics")),
+        ("graph_diagnostics", cfg!(feature = "graph-diagnostics")),
+    ] {
+        values.insert(feature.into(), enabled.to_string());
+    }
     values.insert(
         "rustc".into(),
         command("rustc", &["--version", "--verbose"]),

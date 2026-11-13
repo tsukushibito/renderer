@@ -34,11 +34,13 @@ if ($LASTEXITCODE -ne 0 -or
 # enables synchronization2/dynamicRendering, but does not enable maintenance4.
 # No macros, includes or debug info. Entry point main, GLSL 450 core, optimized.
 $sources = @('image.comp', 'mesh.vert', 'mesh.frag', 'composite.vert', 'composite.frag')
-foreach ($source in $sources) {
-    $sourcePath = Join-Path $PSScriptRoot $source
-    $outputPath = Join-Path $PSScriptRoot ($source + '.spv')
-    $temporaryPath = [System.IO.Path]::GetTempFileName()
-    try {
+$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('renderer-spirv-' + [Guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $temporaryRoot
+try {
+    foreach ($source in $sources) {
+        $sourcePath = Join-Path $PSScriptRoot $source
+        $outputPath = Join-Path $PSScriptRoot ($source + '.spv')
+        $temporaryPath = Join-Path $temporaryRoot ($source + '.spv')
         & $compiler --target-env=vulkan1.3 --target-spv=spv1.3 -std=450core `
             -fentry-point=main -O -Werror $sourcePath -o $temporaryPath
         if ($LASTEXITCODE -ne 0) { throw "glslc failed for $source" }
@@ -53,11 +55,23 @@ foreach ($source in $sources) {
             if ($existingHash -cne $generatedHash) {
                 throw "Fixture differs from regenerated shader: $source"
             }
-        } else {
-            Copy-Item -LiteralPath $temporaryPath -Destination $outputPath -Force
         }
         Write-Output "$source $generatedHash"
-    } finally {
-        Remove-Item -LiteralPath $temporaryPath -Force
     }
+    # A later compiler/validator failure must leave the entire fixture set intact.
+    # Publish only after every source has compiled and validated successfully.
+    if (-not $Verify) {
+        foreach ($source in $sources) {
+            Copy-Item -LiteralPath (Join-Path $temporaryRoot ($source + '.spv')) `
+                -Destination (Join-Path $PSScriptRoot ($source + '.spv')) -Force
+        }
+    }
+} finally {
+    $resolvedTemporary = [IO.Path]::GetFullPath($temporaryRoot)
+    $resolvedTempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    if ([IO.Path]::GetDirectoryName($resolvedTemporary).TrimEnd('\') -cne $resolvedTempParent.TrimEnd('\') -or
+        [IO.Path]::GetFileName($resolvedTemporary) -notmatch '^renderer-spirv-[0-9a-f]{32}$') {
+        throw "Refusing to remove unexpected temporary path: $resolvedTemporary"
+    }
+    Remove-Item -LiteralPath $resolvedTemporary -Recurse -Force
 }
