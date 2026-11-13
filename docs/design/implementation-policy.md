@@ -540,7 +540,10 @@ COM参照の保持とGPUの利用期間を区別し、resource・heap allocation
 
 M4の最初のD3D12 buffer基準には`CreateCommittedResource`を使う。
 resourceと暗黙のheapを一つの所有者で保持でき、private生成型と既存allocatorの公開型を
-未検証のcastで接続する必要がない。UPLOADは`GENERIC_READ`、READBACKは`COPY_DEST`で作成する。[^committed]
+未検証のcastで接続する必要がない。DEFAULT bufferは`COMMON`、UPLOADは`GENERIC_READ`、
+READBACKは`COPY_DEST`で作成する。[^committed]
+現行runtimeはDEFAULT bufferの初期`COPY_DEST`を無視して`COMMON`とし、警告1328を報告するため、
+準備probeでも実状態と一致する`COMMON`を使う。後続Graph実装はこの状態から依存を計画する。
 代案の外部suballocatorは型・COM所有権・配置条件の接続確認を要するため、この基準には導入しない。
 resourceごとのheapによるメモリ・作成費用を許容する単純な基準であり、性能改善とは扱わない。
 上限付きの資源再利用はM4-06、物理aliasingの限定実験はM4-16で別に検証する。

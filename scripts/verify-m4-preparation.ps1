@@ -37,6 +37,7 @@ function Assert-PreparationReport {
     param($Report)
     if ($Report.schema_version -ne 1) { throw 'Unsupported preparation report schema.' }
     foreach ($field in @('debug_layer_requested', 'gpu_based_validation_requested',
+            'gpu_based_validation_effective', 'storage_filter_problem_safe',
             'configuration_before_device', 'debug_device_available', 'info_queue_available',
             'teardown_checked')) {
         if ($Report.validation.$field -isnot [bool] -or -not $Report.validation.$field) {
@@ -44,7 +45,8 @@ function Assert-PreparationReport {
         }
     }
     foreach ($field in @('warnings', 'errors', 'corruption', 'callback_failures',
-            'dropped_messages', 'storage_denied_messages', 'storage_discarded_messages')) {
+            'dropped_messages', 'additional_storage_denied_after_clear',
+            'storage_discarded_messages')) {
         $count = $Report.validation.$field
         if (($count -isnot [int] -and $count -isnot [long]) -or $count -ne 0) {
             throw "Preparation report did not confirm zero validation.$field."
