@@ -900,7 +900,7 @@ mod tests {
             },
             revision: 0,
             desc: BufferDesc { size: 4 },
-            initialized: vec![0..4],
+            initialized: std::iter::once(0..4).collect(),
         };
         let mut graph = Graph::new();
         let imported = graph.import_buffer("external buffer", &source).unwrap();
