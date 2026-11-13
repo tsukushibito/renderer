@@ -118,6 +118,15 @@ cargo test --locked --workspace --release --no-default-features --features vulka
 cargo tree --locked -p renderer -e features --no-default-features --features vulkan
 ```
 
+製品経路の実GPU内容・CPU保持の確認は、native受入と別runで実行します。
+
+```sh
+cargo test --locked -p renderer --release --lib --no-default-features --features vulkan ::vulkan_shipping_ -- --ignored --nocapture --test-threads=1
+```
+
+これはnative検証なしの内容照合です。offのmonitorは診断を収集しないため、
+件数0や起動報告の不在を外部Layer注入がなかった証明には使いません。
+
 feature統合後の実構成を確認し、
 最適化・Renderer内の追加検証・native検証・profilingをそれぞれ記録します。
 `--all-features`だけでは検証無効構成の確認になりません。
@@ -538,7 +547,7 @@ native資源の毎回作成と再利用の比較に加え、複数submitと単�
 $rendererPreviousRustLog = $env:RUST_LOG
 try {
     $env:RUST_LOG = 'renderer=trace'
-    cargo test --locked -p renderer --no-default-features --features vulkan ::vulkan_ -- --ignored --nocapture
+    cargo test --locked -p renderer --no-default-features --features vulkan,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
 } finally {
     $env:RUST_LOG = $rendererPreviousRustLog
 }
