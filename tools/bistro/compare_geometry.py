@@ -46,6 +46,8 @@ class Gltf:
         self.path = Path(path)
         self.data = json.loads(self.path.read_text(encoding="utf-8"))
         _require(self.data.get("asset", {}).get("version") == "2.0", "expected glTF 2.0")
+        material_names = [item["name"] for item in self.data.get("materials", []) if item.get("name")]
+        _require(len(material_names) == len(set(material_names)), "ambiguous duplicate glTF material names")
         self.buffers = []
         for item in self.data.get("buffers", []):
             uri = item.get("uri", "")
@@ -116,6 +118,9 @@ class Gltf:
             _require(index not in visited, "node is repeated or graph is cyclic")
             visited.add(index)
             node = nodes[index]
+            _require("skin" not in node, "skinning is outside the static source inventory contract")
+            _require("EXT_mesh_gpu_instancing" not in node.get("extensions", {}),
+                     "GPU instancing is outside the source instance inventory contract")
             world = parent @ node_matrix(node)
             if "mesh" in node:
                 name = node.get("name")

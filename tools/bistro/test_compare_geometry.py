@@ -154,7 +154,9 @@ class GeometryComparisonTests(unittest.TestCase):
         self.source.write_text(json.dumps(source), encoding="utf-8")
         self.export(corrupt="normal_rounding")
         target = json.loads(self.target.read_text(encoding="utf-8"))
-        target["materials"][1]["name"] = "Brick"
+        target["materials"].pop()
+        for primitive in target["meshes"][0]["primitives"]:
+            primitive["material"] = 0
         self.target.write_text(json.dumps(target), encoding="utf-8")
         report = geometry.compare(self.source, self.target)
         self.assertTrue(report["ok"], report["errors"])
@@ -164,6 +166,25 @@ class GeometryComparisonTests(unittest.TestCase):
         expected = np.array([[0, -3, 0, 1], [2, 0, 0, 2], [0, 0, 4, 3], [0, 0, 0, 1]])
         np.testing.assert_allclose(geometry.node_matrix(node), expected, atol=1e-14)
         np.testing.assert_allclose(geometry.node_matrix({"matrix": expected.T.ravel().tolist()}), expected)
+
+    def test_unrepresented_deformation_and_gpu_instances_are_rejected(self):
+        for property_name, value in (("skin", 0), ("extensions", {"EXT_mesh_gpu_instancing": {}})):
+            with self.subTest(property_name=property_name):
+                self.export()
+                data = json.loads(self.target.read_text(encoding="utf-8"))
+                data["nodes"][0][property_name] = value
+                self.target.write_text(json.dumps(data), encoding="utf-8")
+                with self.assertRaises(geometry.ComparisonError):
+                    geometry.compare(self.source, self.target)
+
+    def test_distinct_material_indices_cannot_hide_behind_one_name(self):
+        self.export()
+        data = json.loads(self.target.read_text(encoding="utf-8"))
+        data["materials"].append({"name": "Brick", "pbrMetallicRoughness": {"baseColorFactor": [0, 1, 0, 1]}})
+        data["meshes"][0]["primitives"][0]["material"] = 2
+        self.target.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaisesRegex(geometry.ComparisonError, "ambiguous duplicate glTF material names"):
+            geometry.compare(self.source, self.target)
 
 
 if __name__ == "__main__":
