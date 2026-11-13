@@ -1,0 +1,13 @@
+[package]
+name = "renderer-d3d12-bindings"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+# Separate from the library workspace: consumers never build the generator.
+[workspace]
+
+[dependencies]
+windows-bindgen = "=0.100.0"
+windows-default = "=0.100.0"

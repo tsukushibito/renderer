@@ -38,6 +38,10 @@ jobs:
         include:
           - os: windows-2022
             backend: presentation
+          - os: windows-2022
+            backend: d3d12
+          - os: windows-2022
+            backend: vulkan,d3d12
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
