@@ -230,7 +230,7 @@ M4-19のCPU／GPU時間とメモリ比較は別のrelease実行とし、GBV等�
 厳格検証と製品構成の内容照合は、設定を切り替える同一processに混ぜず、別processで実行します。
 D3D12のDebug Layer／GBV設定は最初のDevice作成前に固定する必要があります。
 厳格検証ではD3D12のDebug Layer／GBVとVulkan Core＋SyncValの実効を確認し、
-全native所有者の解放後までwarning／error、corruption、callback失敗等がゼロであることを要求します。
+試験が所有する全native参照の解放後までwarning／error、corruption、callback失敗等がゼロであることを要求します。
 前提不足、LUID照合不能、診断の実効未確認、試験・レポート不在は失敗です。
 
 ```powershell

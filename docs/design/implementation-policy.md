@@ -597,6 +597,8 @@ nativeエラーと元の原因、実完了、Device removal、資源保持は製
 monitorは診断状態だけを保持し、Deviceやqueueの寿命を延ばさない。
 runtimeを終了しても、別runtimeや未完了処理がnative所有者を保持する間は終了後診断の確認済みとは扱わない。
 最終native解放まで観測し、診断の有効要求と取得できた実効状態を区別する。
+終了確認の対象はRendererが所有するnative参照の解放までであり、外部ライブラリが保持する
+同じsingleton Deviceの最終破棄まで証明するものではない。
 
 `D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackを
 native資源と命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
