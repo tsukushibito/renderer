@@ -80,6 +80,7 @@ fn successful_device_uses_selected_queue_and_destroys_before_instance() {
     assert_eq!(owner.queue, vk::Queue::from_raw(5));
     assert_eq!(owner.max_buffer_size(), 1024);
     assert_eq!(owner.max_draw_indexed_index_value(), u32::MAX);
+    assert_eq!(owner.limits().max_framebuffer_width, 4096);
     STATE.with(|state| assert_eq!(state.borrow().property_queries, 1));
     #[cfg(feature = "vulkan-diagnostics")]
     {
@@ -265,6 +266,7 @@ unsafe extern "system" fn get_physical_device_properties2(
     // supplies only the cached buffer and indexed-draw limits needed here.
     unsafe {
         (*properties).properties.limits.max_draw_indexed_index_value = index_limit;
+        (*properties).properties.limits.max_framebuffer_width = 4096;
     }
     // SAFETY: The constructor's sole pNext entry is the live, uniquely borrowed
     // Maintenance4Properties output described above.

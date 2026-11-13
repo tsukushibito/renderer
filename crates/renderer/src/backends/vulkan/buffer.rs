@@ -89,6 +89,7 @@ pub(super) enum BufferError {
         role: BufferRole,
         operation: &'static str,
     },
+    #[cfg(test)]
     Uninitialized {
         offset: vk::DeviceSize,
         len: usize,
@@ -131,6 +132,7 @@ impl fmt::Display for BufferError {
             Self::AccessDenied { role, operation } => {
                 write!(f, "{role:?} buffer does not permit CPU {operation}")
             }
+            #[cfg(test)]
             Self::Uninitialized { offset, len } => write!(
                 f,
                 "readback range offset {offset}, length {len} has no established contents"
@@ -200,10 +202,12 @@ fn checked_range(
 }
 
 /// Initialization and hazard tracking share the same ordered byte-range union.
+#[cfg(test)]
 pub(super) type InitializedRanges = super::ranges::ByteRanges;
 
 /// Construct the actual request through one narrow boundary. This also allows a
 /// creation error to be tested without inventing a VMA allocation or fake driver.
+#[cfg(test)]
 fn create_resource(
     role: BufferRole,
     size: vk::DeviceSize,
@@ -258,10 +262,12 @@ pub(super) struct VulkanBuffer {
     size: vk::DeviceSize,
     memory_type: u32,
     memory_properties: vk::MemoryPropertyFlags,
+    #[cfg(test)]
     initialized: InitializedRanges,
 }
 
 impl VulkanAllocator {
+    #[cfg(test)]
     pub(super) fn create_buffer(
         &self,
         role: BufferRole,
@@ -316,6 +322,7 @@ impl VulkanAllocator {
                 size,
                 memory_type: 0,
                 memory_properties: vk::MemoryPropertyFlags::empty(),
+                #[cfg(test)]
                 initialized: InitializedRanges::default(),
             };
             let info = owner.owner.raw.get_allocation_info(&owner.allocation);
@@ -375,30 +382,39 @@ impl VulkanAllocator {
 }
 
 impl VulkanBuffer {
+    #[cfg(test)]
     pub(super) fn owner(&self) -> &Arc<MemoryOwner> {
         &self.owner
     }
 
+    #[cfg(test)]
     pub(super) fn role(&self) -> BufferRole {
         self.role
     }
 
+    #[cfg(test)]
     pub(super) fn size(&self) -> vk::DeviceSize {
         self.size
     }
 
+    #[cfg(test)]
     pub(super) fn fully_initialized(&self) -> bool {
         self.initialized.contains(&(0..self.size))
     }
 
-    pub(super) fn initialized_ranges(&self) -> InitializedRanges {
-        self.initialized.clone()
+    #[cfg(test)]
+    /// Move initialization bookkeeping to a batch that now owns this buffer.
+    /// Until successful completion restores the final set, this owner exposes
+    /// no initialized contents through its CPU access checks.
+    pub(super) fn take_initialized_ranges(&mut self) -> InitializedRanges {
+        std::mem::take(&mut self.initialized)
     }
 
     /// # Safety
     /// The caller must retain exclusive ownership from command recording through
     /// successful completion or lost-device retirement; no concurrent CPU access
     /// or native escape beyond that owner is allowed.
+    #[cfg(test)]
     pub(super) unsafe fn transfer_handle(&self) -> vk::Buffer {
         self.buffer
     }
@@ -414,17 +430,18 @@ impl VulkanBuffer {
 
     /// # Safety
     /// The caller has proved successful completion of a full-buffer GPU write.
+    #[cfg(test)]
     pub(super) unsafe fn establish_gpu_contents(&mut self) {
         self.initialized.insert(0..self.size);
     }
 
     /// # Safety
-    /// The caller proved successful completion of a GPU write to this exact,
-    /// in-bounds range on an active Device. No failed/unfinished write is valid.
-    pub(super) unsafe fn establish_gpu_range(&mut self, offset: u64, size: u64) {
-        let end = offset.checked_add(size).expect("validated GPU write range");
-        assert!(end <= self.size, "validated GPU write range is in bounds");
-        self.initialized.insert(offset..end);
+    /// These exact in-bounds ranges combine the retained prior contents with
+    /// GPU writes whose successful completion was proved on an active Device.
+    /// No unfinished or failed write may contribute to this set.
+    #[cfg(test)]
+    pub(super) unsafe fn establish_gpu_initialization(&mut self, ranges: InitializedRanges) {
+        self.initialized = ranges;
     }
 
     /// # Safety
@@ -497,6 +514,7 @@ impl VulkanBuffer {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn write(
         &mut self,
         offset: vk::DeviceSize,
@@ -539,6 +557,7 @@ impl VulkanBuffer {
         result
     }
 
+    #[cfg(test)]
     pub(super) fn read(
         &mut self,
         offset: vk::DeviceSize,
@@ -601,6 +620,7 @@ impl VulkanBuffer {
         }
     }
 
+    #[cfg(test)]
     fn log_access_error(&self, operation: &str, result: &Result<(), BufferError>) {
         if let Err(error) = result {
             tracing::error!(target: LOG_TARGET, buffer = ?self.buffer, role = ?self.role,

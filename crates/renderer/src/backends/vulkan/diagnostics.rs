@@ -31,9 +31,10 @@ pub(super) struct DiagnosticSnapshot {
     pub warnings: usize,
     pub errors: usize,
     pub callback_failures: usize,
-    #[cfg(feature = "vulkan-diagnostics")]
+    #[cfg(all(test, feature = "vulkan-diagnostics"))]
     pub messages_seen: usize,
-    /// The most recent messages at every severity, rather than a full transcript.
+    /// Acceptance tests observe recent INFO delivery independently of logging.
+    #[cfg(test)]
     pub messages: Vec<DiagnosticMessage>,
     /// The first warning/error messages; verbose traffic cannot displace them.
     pub problems: Vec<DiagnosticMessage>,
@@ -43,7 +44,7 @@ pub(super) struct DiagnosticSnapshot {
     pub dropped_layer_statuses: usize,
 }
 
-#[cfg(any(test, feature = "vulkan-diagnostics"))]
+#[cfg(test)]
 impl DiagnosticSnapshot {
     pub fn is_clean(&self) -> bool {
         self.warnings == 0

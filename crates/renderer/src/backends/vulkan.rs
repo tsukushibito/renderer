@@ -1,22 +1,19 @@
 //! Private Vulkan bootstrap, memory ownership, and single-queue transfers.
 
-// Compile the implementation in normal Vulkan builds while its runtime caller
-// is still pending; do not expose native APIs merely to suppress dead code.
-#![cfg_attr(
-    not(test),
-    allow(dead_code, reason = "private bootstrap awaits runtime integration")
-)]
-
 mod buffer;
 mod device;
 mod diagnostics;
 pub(crate) mod engine;
 pub(crate) mod graph;
+// Standalone transfer resources remain acceptance/performance references; the
+// shipping Graph owns its physical resources in graph/resources.rs.
+#[cfg(test)]
 mod image;
 mod instance;
 mod memory;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
+#[cfg(test)]
 mod ranges;
 mod transfer;
 

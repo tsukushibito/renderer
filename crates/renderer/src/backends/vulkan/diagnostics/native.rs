@@ -1,5 +1,6 @@
 //! Vulkan callback state. Its owner must retain the `Arc` through Instance destruction.
 
+#[cfg(test)]
 use std::collections::VecDeque;
 use std::ffi::{CStr, c_char, c_void};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -10,6 +11,7 @@ use super::{DiagnosticMessage, DiagnosticSnapshot};
 use ash::vk;
 use tracing::{Dispatch, Level};
 
+#[cfg(test)]
 const RECENT_MESSAGE_LIMIT: usize = 64;
 const PROBLEM_MESSAGE_LIMIT: usize = 128;
 const STARTUP_STATUS_LIMIT: usize = 8;
@@ -17,6 +19,7 @@ const STARTUP_STATUS_ID: &str = "WARNING-CreateInstance-status-message";
 
 #[derive(Default)]
 struct RetainedMessages {
+    #[cfg(test)]
     recent: VecDeque<DiagnosticMessage>,
     problems: Vec<DiagnosticMessage>,
     dropped_problems: usize,
@@ -29,6 +32,7 @@ pub(in crate::backends::vulkan) struct Diagnostics {
     warnings: AtomicUsize,
     errors: AtomicUsize,
     callback_failures: AtomicUsize,
+    #[cfg(test)]
     messages_seen: AtomicUsize,
     dispatch_failed: AtomicBool,
     retained: Mutex<RetainedMessages>,
@@ -43,6 +47,7 @@ impl Diagnostics {
             warnings: AtomicUsize::new(0),
             errors: AtomicUsize::new(0),
             callback_failures: AtomicUsize::new(0),
+            #[cfg(test)]
             messages_seen: AtomicUsize::new(0),
             dispatch_failed: AtomicBool::new(false),
             retained: Mutex::new(RetainedMessages::default()),
@@ -72,7 +77,9 @@ impl Diagnostics {
             warnings: self.warnings.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             callback_failures: self.callback_failures.load(Ordering::Relaxed),
+            #[cfg(test)]
             messages_seen: self.messages_seen.load(Ordering::Relaxed),
+            #[cfg(test)]
             messages: retained.recent.iter().cloned().collect(),
             problems: retained.problems.clone(),
             dropped_problems: retained.dropped_problems,
@@ -101,6 +108,14 @@ impl Diagnostics {
     }
 
     fn retain(&self, message: &DiagnosticMessage) {
+        #[cfg(not(test))]
+        if !message.severity.intersects(
+            vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+        ) && message.message_id_name.as_deref() != Some(STARTUP_STATUS_ID)
+        {
+            return;
+        }
         let mut retained = self.lock_retained();
         if message.message_id_name.as_deref() == Some(STARTUP_STATUS_ID)
             && !retained.layer_status_messages.contains(&message.message)
@@ -121,10 +136,13 @@ impl Diagnostics {
                 retained.dropped_problems = retained.dropped_problems.saturating_add(1);
             }
         }
-        if retained.recent.len() == RECENT_MESSAGE_LIMIT {
-            retained.recent.pop_front();
+        #[cfg(test)]
+        {
+            if retained.recent.len() == RECENT_MESSAGE_LIMIT {
+                retained.recent.pop_front();
+            }
+            retained.recent.push_back(message.clone());
         }
-        retained.recent.push_back(message.clone());
     }
 }
 
@@ -190,6 +208,7 @@ unsafe extern "system" fn debug_callback(
         return vk::FALSE;
     };
     let result = catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
         diagnostics.messages_seen.fetch_add(1, Ordering::Relaxed);
         // Count before allocation, formatting or external subscriber calls.
         if severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::WARNING) {

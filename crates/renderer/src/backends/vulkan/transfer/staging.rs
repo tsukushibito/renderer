@@ -342,6 +342,7 @@ impl StagingRange {
     pub(in crate::backends::vulkan) fn role(&self) -> BufferRole {
         self.owner.role
     }
+    #[cfg(all(test, feature = "development-validation"))]
     pub(in crate::backends::vulkan) fn owner(&self) -> &Arc<MemoryOwner> {
         &self.owner.owner
     }
@@ -351,6 +352,7 @@ impl StagingRange {
     pub(in crate::backends::vulkan) fn size(&self) -> u64 {
         self.reservation.as_ref().unwrap().size
     }
+    #[cfg(test)]
     pub(in crate::backends::vulkan) fn initialized(&self) -> bool {
         self.initialized
     }

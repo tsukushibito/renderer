@@ -321,6 +321,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
 
 /// Own the short-lived pNext and queue arrays through the creation call. Query
 /// results are deliberately not reused as enabled-feature structures.
+#[cfg(test)]
 fn with_create_info<T>(
     queue_family_index: u32,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
@@ -368,7 +369,7 @@ pub(super) struct VulkanDevice {
     debug_utils: Option<ash::ext::debug_utils::Device>,
     selected: SelectedDevice,
     max_buffer_size: vk::DeviceSize,
-    max_draw_indexed_index_value: u32,
+    limits: vk::PhysicalDeviceLimits,
     queue: vk::Queue,
     queue_lock: Mutex<()>,
     state: AtomicU8,
@@ -509,7 +510,12 @@ impl VulkanDevice {
     }
 
     pub(super) fn max_draw_indexed_index_value(&self) -> u32 {
-        self.max_draw_indexed_index_value
+        self.limits.max_draw_indexed_index_value
+    }
+
+    /// Immutable adapter limits cached before Device creation.
+    pub(super) fn limits(&self) -> &vk::PhysicalDeviceLimits {
+        &self.limits
     }
 
     pub(super) fn name(&self) -> &str {
@@ -631,8 +637,7 @@ impl VulkanDevice {
         }
         // Optional feature enablement does not change the reported limit. Use
         // this adapter's actual value rather than assuming either 24 or 32 bits.
-        let max_draw_indexed_index_value =
-            properties.properties.limits.max_draw_indexed_index_value;
+        let limits = properties.properties.limits;
         let max_buffer_size = maintenance4.max_buffer_size;
         tracing::info!(target: LOG_TARGET, device = %selected.info.name,
             device_type = ?selected.info.device_type, family = selected.queue_family_index,
@@ -668,7 +673,7 @@ impl VulkanDevice {
             debug_utils: None,
             selected,
             max_buffer_size,
-            max_draw_indexed_index_value,
+            limits,
             queue: vk::Queue::null(),
             queue_lock: Mutex::new(()),
             state: AtomicU8::new(DeviceState::Active as u8),

@@ -145,7 +145,6 @@ impl TransferPool {
 struct BufferState {
     value: Option<VulkanBuffer>,
     initialized: InitializedRanges,
-    written: Vec<Range<u64>>,
     prior_contents: bool,
 }
 
@@ -201,7 +200,7 @@ pub(in crate::backends::vulkan) struct BatchBuilder {
 impl BatchBuilder {
     pub(in crate::backends::vulkan) fn add_buffer(
         &mut self,
-        buffer: VulkanBuffer,
+        mut buffer: VulkanBuffer,
     ) -> Result<BufferId, BatchError> {
         if !Arc::ptr_eq(buffer.owner(), &self.work.owner)
             || buffer.role() != BufferRole::DeviceTransfer
@@ -214,12 +213,11 @@ impl BatchBuilder {
             batch: self.work.id,
             index: self.work.buffers.len(),
         };
-        let initialized = buffer.initialized_ranges();
+        let initialized = buffer.take_initialized_ranges();
         self.work.buffers.push(BufferState {
             prior_contents: !initialized.is_empty(),
             initialized,
             value: Some(buffer),
-            written: Vec::new(),
         });
         Ok(id)
     }
@@ -285,8 +283,7 @@ impl BatchBuilder {
             offset,
             barrier_before,
         });
-        self.work.buffers[target].initialized.insert(range.clone());
-        self.work.buffers[target].written.push(range);
+        self.work.buffers[target].initialized.insert(range);
         self.work.bytes = self.work.bytes.saturating_add(size);
         Ok(())
     }
@@ -345,10 +342,7 @@ impl BatchBuilder {
             size,
             barrier_before,
         });
-        self.work.buffers[target]
-            .initialized
-            .insert(target_range.clone());
-        self.work.buffers[target].written.push(target_range);
+        self.work.buffers[target].initialized.insert(target_range);
         self.work.bytes = self.work.bytes.saturating_add(size);
         Ok(())
     }
@@ -464,7 +458,12 @@ impl BatchBuilder {
         // Per-command decisions are now fixed. The temporary hazard index is
         // unnecessary while GPU work or CPU-held readback results stay alive.
         self.work.hazards = BufferHazards::default();
-        Ok(self.reservation.record(self.work)?)
+        let mut recorded = self.reservation.record(self.work)?;
+        // Native recording succeeded and RecordedTransfer can only submit or
+        // cancel; no rerecord operation uses these operands. Resource owners,
+        // completion initialization and image layout metadata remain retained.
+        recorded.resources.payload.commands = Vec::new();
+        Ok(recorded)
     }
 }
 
@@ -562,6 +561,11 @@ impl TransferPayload for TransferBatch {
                 "batch must contain unfinished copy commands",
             ));
         }
+        // The private builder receives both staging allocators from the same
+        // TransferPool owner and appends uploads only after a successful write.
+        // Owned leases cannot be mutated or recycled externally before record.
+        // Recheck those invariants only as an independent development diagnostic.
+        #[cfg(feature = "development-validation")]
         if self
             .uploads
             .iter()
@@ -748,16 +752,15 @@ impl TransferPayload for TransferBatch {
 
     unsafe fn establish_contents(&mut self) {
         for state in &mut self.buffers {
-            for range in &state.written {
-                // SAFETY: Actual Fence success on an active Device proves each
-                // planned GPU write completed; targets remained uniquely owned.
-                unsafe {
-                    state
-                        .value
-                        .as_mut()
-                        .unwrap()
-                        .establish_gpu_range(range.start, range.end - range.start);
-                }
+            // SAFETY: The builder's exact union contains retained prior contents
+            // plus validated writes. Actual Fence success on an active Device
+            // proves every write completed while the target was uniquely owned.
+            unsafe {
+                state
+                    .value
+                    .as_mut()
+                    .unwrap()
+                    .establish_gpu_initialization(std::mem::take(&mut state.initialized));
             }
         }
         for state in &mut self.images {

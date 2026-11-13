@@ -80,6 +80,7 @@ impl<T> Retained<T> {
         self.state == State::DeviceLost
     }
 
+    #[cfg(test)]
     pub(super) fn is_complete(&self) -> bool {
         self.state == State::Complete
     }
