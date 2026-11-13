@@ -11,6 +11,17 @@ def sha(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def require_successful_checks(source_bindings, geometry, materials, validator, reproduction):
+    for name, value in (("source bindings", source_bindings["passed"]),
+                        ("geometry", geometry["ok"]), ("materials", materials["passed"]),
+                        ("reproduction", reproduction["passed"])):
+        if value is not True:
+            raise ValueError(f"Cannot publish failed {name} evidence")
+    issues = validator["issues"]
+    if type(issues["numErrors"]) is not int or issues["numErrors"] != 0 or issues["truncated"] is not False:
+        raise ValueError("Cannot publish failed or truncated validator evidence")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("work", type=Path)
@@ -20,6 +31,12 @@ def main():
         parser.add_argument(f"--{name}-report", type=Path, required=True)
     args = parser.parse_args()
     load = lambda path: json.loads(path.read_text(encoding="utf-8"))
+    source_bindings = load(args.source_bindings_report)
+    geometry = load(args.geometry_report)
+    materials = load(args.materials_report)
+    validator = load(args.validator_report)
+    reproduction = load(args.reproduction_report)
+    require_successful_checks(source_bindings, geometry, materials, validator, reproduction)
     audit = load(args.work / "logs/source-inventory.json")
     baseline = load(args.export / "baseline.json")
     alpha = load(args.alpha_report)
@@ -40,10 +57,6 @@ def main():
     if alpha["decision"]["source_fbx_sha256"] != baseline["source_sha256"]:
         raise ValueError("Alpha decision does not cover this source FBX")
     textures = load(args.work / "logs/textures.json")
-    geometry = load(args.geometry_report)
-    materials = load(args.materials_report)
-    validator = load(args.validator_report)
-    reproduction = load(args.reproduction_report)
     archive = args.work / "downloads/Bistro_v5_2.zip"
     source = args.work / "source/Bistro_v5_2"
     for texture in textures["textures"]:
@@ -82,7 +95,7 @@ def main():
                        "sampling": "TextureUV, repeat S/T, linear magnification, trilinear minification",
                        "mip_scope": textures["mip_policy"],
                        "materials": baseline["materials"], "textures": textures["textures"]},
-        "checks": {"source_bindings": load(args.source_bindings_report), "geometry": geometry, "materials": {"passed": materials["passed"],
+        "checks": {"source_bindings": source_bindings, "geometry": geometry, "materials": {"passed": materials["passed"],
                    "materials": len(materials["materials"]), "unique_pixel_comparisons": materials["unique_pixel_comparisons"]},
                    "validator": validator["issues"], "reproduction": reproduction,
                    "preview": load(args.preview_report),

@@ -157,15 +157,22 @@ def gltf_usage(model, material_index):
 
 def inspect(source, audit_path, gltf_path, *, root, archive=None, prepared=None):
     source, root = source.resolve(), root.resolve()
-    archive = archive or root / "assets/bistro/source/Bistro_v5_2.zip"
-    archive_record = file_record(archive)
-    require(archive_record["sha256"] == ARCHIVE_SHA256, "archive differs from pinned official Bistro v5.2")
+    default_archive = root / "assets/bistro/source/Bistro_v5_2.zip"
+    archive = (archive or default_archive).resolve()
     manifest_result = verify(root)
+    if archive == default_archive.resolve():
+        # The full manifest verification just hashed this archive. Reuse that
+        # verified record; a custom archive still needs its own content check.
+        manifest = json.loads((root / "assets/bistro/manifest.json").read_text(encoding="utf-8"))
+        entry = next(item for item in manifest["files"]
+                     if item["path"] == "assets/bistro/source/Bistro_v5_2.zip")
+        archive_record = {"bytes": entry["size"], "sha256": entry["sha256"]}
+    else:
+        archive_record = file_record(archive)
+    require(archive_record["sha256"] == ARCHIVE_SHA256, "archive differs from pinned official Bistro v5.2")
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     require(audit.get("schema_version") == 1 and audit["source"]["path"] == "BistroExterior.fbx",
             "unsupported source audit")
-    require(file_record(source / "BistroExterior.fbx") ==
-            {key: audit["source"][key] for key in ("bytes", "sha256")}, "FBX audit hash/size differs")
     model = Gltf(gltf_path)
     documents = []
     materials = []
@@ -181,6 +188,8 @@ def inspect(source, audit_path, gltf_path, *, root, archive=None, prepared=None)
             return record
 
         fbx_record = archive_match("BistroExterior.fbx")
+        require(fbx_record == {key: audit["source"][key] for key in ("bytes", "sha256")},
+                "FBX audit hash/size differs")
         for name in ("README.txt", "CHANGELOG.txt", "BistroExterior.pyscene"):
             record = archive_match(name)
             documents.append({"path": name, **record,

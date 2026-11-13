@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +83,47 @@ test("rejects a symlink that resolves outside the model directory", async (t) =>
   const result = await data.run();
   assert.equal(result.status, 1);
   assert.ok(result.report.issues.messages.some((issue) => issue.message.includes("escapes the model directory")));
+});
+
+test("refuses to overwrite the model or its external buffer and image", async (t) => {
+  const data = await fixture(t);
+  const image = path.join(data.assets, "image.png");
+  await writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64"));
+  data.model.images = [{ uri: "image.png" }];
+  await writeFile(data.input, JSON.stringify(data.model));
+  for (const output of [data.input, path.join(data.assets, "geometry.bin"), image]) {
+    const original = await readFile(output);
+    const result = spawnSync(process.execPath, [cli, data.input, output], { encoding: "utf8" });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /must not overwrite/);
+    assert.deepEqual(await readFile(output), original);
+  }
+});
+
+test("refuses a report alias that resolves to an external input", async (t) => {
+  const data = await fixture(t);
+  await writeFile(data.input, JSON.stringify(data.model));
+  const alias = path.join(data.root, "input-alias");
+  await symlink(data.assets, alias, "junction");
+  const input = path.join(data.assets, "geometry.bin");
+  const original = await readFile(input);
+  const result = spawnSync(process.execPath,
+    [cli, data.input, path.join(alias, "geometry.bin")], { encoding: "utf8" });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /must not overwrite/);
+  assert.deepEqual(await readFile(input), original);
+});
+
+test("refuses to replace a hard link to input data", async (t) => {
+  const data = await fixture(t);
+  await writeFile(data.input, JSON.stringify(data.model));
+  const input = path.join(data.assets, "geometry.bin");
+  const original = await readFile(input);
+  await link(input, data.report);
+  const result = spawnSync(process.execPath, [cli, data.input, data.report], { encoding: "utf8" });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /must not overwrite/);
+  assert.deepEqual(await readFile(input), original);
 });
 
 test("fails malformed input without claiming success", async (t) => {

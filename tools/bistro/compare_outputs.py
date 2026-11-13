@@ -23,8 +23,11 @@ def compare(first, second):
         if not a.is_relative_to(first.parent.resolve()) or not b.is_relative_to(second.parent.resolve()):
             raise ValueError(f"Resource escapes export directory: {name}")
         pairs.append((name, a, b))
-    files = [{"path": name, "size": b.stat().st_size, "sha256": digest(b), "reproduced": digest(a) == digest(b)}
-             for name, a, b in pairs]
+    files = []
+    for name, a, b in pairs:
+        first_hash, second_hash = digest(a), digest(b)
+        files.append({"path": name, "size": b.stat().st_size, "sha256": second_hash,
+                      "reproduced": first_hash == second_hash})
     return {"passed": all(item["reproduced"] for item in files), "files": files,
             "bytes": sum(item["size"] for item in files),
             "scope": "All glTF/linked buffer/image bytes; excludes host-only blend/NPZ/debug metadata and paths"}

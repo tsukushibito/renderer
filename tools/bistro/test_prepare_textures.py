@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import struct
@@ -34,6 +35,12 @@ class TextureConversionTests(unittest.TestCase):
             self.assertTrue(np.all(image[4:, :, 1] == 31))
             self.assertTrue(np.all(image[:, :, 2] > 200))
             self.assertTrue(report["textures"][0]["pixel_roundtrip"])
+            texture = report["textures"][0]
+            self.assertEqual(texture["source_size"], (root / "normal.dds").stat().st_size)
+            self.assertEqual(texture["source_sha256"],
+                             hashlib.sha256((root / "normal.dds").read_bytes()).hexdigest())
+            self.assertEqual(texture["dds_fourcc"], "ATI2")
+            self.assertEqual(texture["source_mip_levels"], 1)
 
     def test_base_color_alpha_and_orm_channels_are_not_reinterpreted(self):
         with tempfile.TemporaryDirectory() as directory:

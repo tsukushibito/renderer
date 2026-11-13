@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import validator from "gltf-validator";
@@ -12,10 +12,12 @@ function requireInside(root, candidate) {
   }
 }
 
-async function validate(modelPath) {
-  const model = await realpath(modelPath);
+async function validate(model) {
   const root = path.dirname(model);
-  const report = await validator.validateBytes(new Uint8Array(await readFile(model)), {
+  const inputs = new Set([model]);
+  // Node Buffers already implement Uint8Array. Keep the file-backed allocation
+  // instead of copying every model, external buffer, and image before validation.
+  const report = await validator.validateBytes(await readFile(model), {
     uri: path.basename(model),
     maxIssues: 0,
     writeTimestamp: false,
@@ -29,12 +31,14 @@ async function validate(modelPath) {
       }
       const resource = fileURLToPath(url);
       requireInside(root, resource);
+      inputs.add(resource);
       const target = await realpath(resource);
       requireInside(root, target);
-      return new Uint8Array(await readFile(target));
+      inputs.add(target);
+      return readFile(target);
     },
   });
-  return report;
+  return { report, inputs };
 }
 
 async function main() {
@@ -44,13 +48,32 @@ async function main() {
   const model = await realpath(process.argv[2]);
   const output = path.resolve(process.argv[3]);
   let outputTarget = output;
+  let outputInfo;
   try {
     outputTarget = await realpath(output);
+    outputInfo = await stat(outputTarget, { bigint: true });
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   if (!path.relative(model, outputTarget)) throw new Error("The report must not overwrite the model");
-  const report = await validate(model);
+  const { report, inputs } = await validate(model);
+  if (inputs.has(outputTarget)) throw new Error("The report must not overwrite an input resource");
+  // realpath resolves symbolic links; hard links need the file identity check.
+  // Ordinary report files have a single link and need no per-input stat scan.
+  if (outputInfo?.nlink > 1n) {
+    for (const input of inputs) {
+      let info;
+      try {
+        info = await stat(input, { bigint: true });
+      } catch (error) {
+        if (error.code === "ENOENT") continue;
+        throw error;
+      }
+      if (info.dev === outputInfo.dev && info.ino === outputInfo.ino) {
+        throw new Error("The report must not overwrite an input resource");
+      }
+    }
+  }
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output, `${JSON.stringify(report, null, 2)}\n`);
   const { numErrors, numWarnings, numInfos, numHints, truncated } = report.issues;
