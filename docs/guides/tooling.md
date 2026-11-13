@@ -142,7 +142,8 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
 
 変換optionの意味は[採用版SPIRV-Cross CLI](https://github.com/KhronosGroup/SPIRV-Cross/blob/vulkan-sdk-1.4.341.0/main.cpp)を参照する。
 この確認は生成・静的ABI・再現性の証拠であり、D3D12での実行や二APIの画像等価性は未確認である。
-非identity MVP、非対称なgeometry、深度、Compute／合成の全画素比較はM4-08〜10で確認する。
+非identity MVP、非対称なgeometry、深度、Compute／合成の全画素比較はB1の
+`renderer-7ft.2.3`／`.2.4`で確認する。
 4／80 byteの論理定数ABIと、後続runtimeのroot constants／CBVの配置・range要件も区別する。
 
 ## RenderDoc
