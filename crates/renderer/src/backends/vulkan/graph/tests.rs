@@ -2,6 +2,84 @@ use super::*;
 use crate::graph::{BufferDesc, Graph, ImageDesc};
 
 #[test]
+#[ignore = "explicit real GPU pass-identity readback test; run shipping and strict validation separately"]
+fn vulkan_graph_readback_identity_survives_reordered_execution() {
+    let mut runtime = VulkanRuntime::new(RuntimeConfig {
+        execution_slots: 1,
+        resource_capacity: 1,
+        staging_bytes: 4096,
+        max_shader_bindings: 1,
+    })
+    .unwrap();
+    assert_ne!(
+        runtime.owner.device.device_type(),
+        vk::PhysicalDeviceType::CPU,
+        "real GPU required"
+    );
+    let monitor = runtime.validation_monitor();
+    #[cfg(not(feature = "vulkan-diagnostics"))]
+    {
+        let logical_name = runtime
+            .create_buffer("logical\0name", BufferDesc { size: 4 })
+            .unwrap();
+        runtime.delete(logical_name.key()).unwrap();
+    }
+    #[cfg(feature = "vulkan-diagnostics")]
+    assert_eq!(
+        runtime
+            .create_buffer("logical\0name", BufferDesc { size: 4 })
+            .unwrap_err()
+            .kind(),
+        RuntimeErrorKind::InvalidInput
+    );
+    let mut graph = Graph::new();
+    let buffer = graph
+        .buffer("readback source", BufferDesc { size: 8 })
+        .unwrap();
+    graph
+        .upload_buffer("upload", buffer, 0, vec![1, 2, 3, 4, 5, 6, 7, 8])
+        .unwrap();
+    let first = graph.readback_buffer("first", buffer, 0, 4).unwrap();
+    let second = graph.readback_buffer("second", buffer, 4, 4).unwrap();
+    graph.depends_on(first, second).unwrap();
+    let plan = graph.compile().unwrap();
+    assert_eq!(plan.ordered_pass_names(), ["upload", "second", "first"]);
+    let mut submission = runtime.submit(&plan).unwrap();
+    let mut result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
+    assert_eq!(result.readback(first).unwrap(), [1, 2, 3, 4]);
+    assert_eq!(result.readback(second).unwrap(), [5, 6, 7, 8]);
+    assert_eq!(
+        result.readback(first).unwrap_err().kind(),
+        RuntimeErrorKind::InvalidInput
+    );
+    let mut foreign = Graph::new();
+    let foreign_buffer = foreign.buffer("foreign", BufferDesc { size: 4 }).unwrap();
+    foreign
+        .upload_buffer("upload", foreign_buffer, 0, vec![0; 4])
+        .unwrap();
+    let foreign_read = foreign
+        .readback_buffer("read", foreign_buffer, 0, 4)
+        .unwrap();
+    assert_eq!(
+        result.readback(foreign_read).unwrap_err().kind(),
+        RuntimeErrorKind::WrongOwner
+    );
+    drop(result);
+    drop(submission);
+    drop(runtime);
+    let report = monitor.report();
+    #[cfg(feature = "development-validation")]
+    {
+        assert_eq!(report.core_validation, Some(true), "{report:#?}");
+        assert_eq!(report.synchronization_validation, Some(true), "{report:#?}");
+    }
+    assert!(
+        report.is_clean(),
+        "validation through native destruction: {report:#?}"
+    );
+}
+
+#[test]
 #[ignore = "explicit real GPU graph Copy/import/reuse test; requires strict Vulkan validation"]
 fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
@@ -385,21 +463,24 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             foreign_runtime.submit(&imported_plan).err().unwrap().kind(),
             RuntimeErrorKind::WrongOwner
         );
-        // Forging contents inside the crate cannot authorize a different runtime
-        // initialization snapshot. Public callers cannot construct these fields.
-        let mut forged = first_export.clone();
-        forged.initialized = std::iter::once(0..8).collect();
-        let mut malformed = Graph::new();
-        let input = malformed.import_buffer("forged", &forged).unwrap();
-        malformed.readback_buffer("read", input, 0, 8).unwrap();
-        assert_eq!(
-            runtime
-                .submit(&malformed.compile().unwrap())
-                .err()
-                .unwrap()
-                .kind(),
-            RuntimeErrorKind::StaleResource
-        );
+        #[cfg(feature = "development-validation")]
+        {
+            // This diagnostic deliberately violates a private invariant. Public
+            // callers cannot forge initialized ranges for an unchanged revision.
+            let mut forged = first_export.clone();
+            forged.initialized = std::iter::once(0..8).collect();
+            let mut malformed = Graph::new();
+            let input = malformed.import_buffer("forged", &forged).unwrap();
+            malformed.readback_buffer("read", input, 0, 8).unwrap();
+            assert_eq!(
+                runtime
+                    .submit(&malformed.compile().unwrap())
+                    .err()
+                    .unwrap()
+                    .kind(),
+                RuntimeErrorKind::StaleResource
+            );
+        }
         runtime.delete(first_export.key()).unwrap();
         assert_eq!(
             runtime.submit(&imported_plan).err().unwrap().kind(),

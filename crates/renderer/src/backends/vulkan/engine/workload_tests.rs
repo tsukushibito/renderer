@@ -16,6 +16,94 @@ mod engine_geometry;
 const TIMEOUT: Duration = Duration::from_secs(30);
 const STAGING: u64 = 256 * 1024;
 
+#[test]
+#[ignore = "explicit real GPU upload cancellation/readmission test; run shipping and strict validation separately"]
+fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
+    let runtime = VulkanRuntime::new(RuntimeConfig {
+        execution_slots: 2,
+        resource_capacity: 4,
+        staging_bytes: STAGING,
+        max_shader_bindings: 1,
+    })
+    .unwrap();
+    assert_ne!(
+        runtime.device_info().device_type,
+        "CPU",
+        "real GPU required"
+    );
+    let monitor = runtime.validation_monitor();
+    let mut renderer = VulkanEngine::new(
+        runtime,
+        MeshCacheConfig {
+            max_meshes: 1,
+            max_bytes: 2 * 1024 * 1024,
+            max_upload_submissions: 2,
+        },
+    )
+    .unwrap();
+    let mut assets = Engine::new(1, 1).unwrap();
+    let generated = engine_geometry::grid(112);
+    assert!(generated.vertices.len() as u64 > STAGING);
+    let mesh = assets.create_mesh(generated.mesh).unwrap();
+    let material = assets.create_material(Material::default()).unwrap();
+    let snapshot = assets
+        .snapshot(
+            &View {
+                width: 8,
+                height: 8,
+                clip_from_world: IDENTITY,
+                clear_color: [0.0, 0.0, 0.0, 1.0],
+            },
+            &[Draw {
+                mesh,
+                material,
+                world_from_model: IDENTITY,
+            }],
+        )
+        .unwrap();
+    let partial = renderer.prepare_snapshot(&snapshot).unwrap();
+    assert!(partial.submitted_bytes > 0 && partial.remaining_bytes > 0);
+    renderer.cancel_uploads().unwrap();
+    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 0);
+    let cancelled = renderer.wait_uploads(TIMEOUT).unwrap();
+    assert_eq!(cancelled.remaining_bytes, 0);
+    assert_eq!(cancelled.pending_submissions, 0);
+    assert!(renderer.retiring.is_empty());
+
+    let mut progress = renderer.prepare_snapshot(&snapshot).unwrap();
+    let started = Instant::now();
+    while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
+        assert!(
+            started.elapsed() < TIMEOUT,
+            "readmitted upload must complete"
+        );
+        progress = renderer
+            .wait_uploads(TIMEOUT.saturating_sub(started.elapsed()))
+            .unwrap();
+    }
+    let buffers = renderer.residents[&MeshVersionKey::new(mesh, 1)]
+        .buffers
+        .as_ref()
+        .unwrap();
+    let vertices = buffers.vertices;
+    let indices = buffers.indices;
+    read_all(&mut renderer, vertices, &generated.vertices);
+    read_all(&mut renderer, indices, &generated.indices);
+    renderer.unload_all_meshes().unwrap();
+    assert!(renderer.residents.is_empty() && renderer.retiring.is_empty());
+    drop(renderer);
+    let report = monitor.report();
+    #[cfg(feature = "development-validation")]
+    {
+        assert_eq!(report.core_validation, Some(true), "{report:#?}");
+        assert_eq!(report.synchronization_validation, Some(true), "{report:#?}");
+    }
+    assert!(
+        report.is_clean(),
+        "validation through native destruction: {report:#?}"
+    );
+}
+
 fn read_all(renderer: &mut VulkanEngine, key: ResourceKey, expected: &[u8]) {
     for (part, bytes) in expected.chunks(STAGING as usize).enumerate() {
         let offset = part as u64 * STAGING;

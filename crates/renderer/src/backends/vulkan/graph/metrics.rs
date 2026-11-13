@@ -138,6 +138,14 @@ impl VulkanRuntime {
 impl super::SubmissionResult {
     pub(super) fn completed(graph: u64, mut work: super::GraphWork) -> Result<Self, RuntimeError> {
         if let Some(profile) = &mut work.profile {
+            profile.begin_retire();
+        }
+        // Recording uses readback vector offsets, so reorder only after actual
+        // completion retired those operands. Pass identities are unique; every
+        // result lookup can now use binary search without another retained index.
+        work.readbacks.sort_unstable_by_key(|(index, _)| *index);
+        if let Some(profile) = &mut work.profile {
+            profile.end_retire();
             // SAFETY: Only the successful PendingTransfer wait/poll path calls
             // this constructor, after the actual Fence and active Device check.
             unsafe { profile.finish() }?;

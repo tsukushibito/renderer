@@ -40,6 +40,60 @@ impl ResidentMesh {
     }
 }
 
+/// The admitted working set is immutable until replacement/cancellation. A
+/// cursor visits completed meshes once, and accepted chunks update the byte
+/// counter instead of rescanning every mesh on each progress query.
+pub(super) struct ActiveUpload {
+    keys: Vec<MeshVersionKey>,
+    cursor: usize,
+    remaining_bytes: u64,
+}
+
+impl ActiveUpload {
+    fn new(keys: Vec<MeshVersionKey>, remaining_bytes: u64) -> Self {
+        Self {
+            keys,
+            cursor: 0,
+            remaining_bytes,
+        }
+    }
+
+    fn next(&mut self, mut pending: impl FnMut(MeshVersionKey) -> bool) -> Option<MeshVersionKey> {
+        while let Some(&key) = self.keys.get(self.cursor) {
+            if pending(key) {
+                return Some(key);
+            }
+            self.cursor += 1;
+        }
+        None
+    }
+
+    fn submitted(&mut self, bytes: u64, complete: bool) {
+        // Each accepted chunk is bounded by the current mesh's remaining bytes,
+        // which contributed to this counter at admission. Failed submits never
+        // call this method; they preserve both the cursor and remaining count.
+        self.remaining_bytes -= bytes;
+        if complete {
+            self.cursor += 1;
+        }
+    }
+
+    fn remove_mesh(&mut self, mesh: MeshHandle, mut remaining: impl FnMut(MeshVersionKey) -> u64) {
+        let mut index = 0;
+        let mut removed_prefix = 0;
+        self.keys.retain(|&key| {
+            let remove = key.mesh == mesh;
+            if remove {
+                self.remaining_bytes -= remaining(key);
+                removed_prefix += usize::from(index < self.cursor);
+            }
+            index += 1;
+            !remove
+        });
+        self.cursor -= removed_prefix;
+    }
+}
+
 enum UploadObservation<E> {
     Pending,
     Complete,
@@ -83,16 +137,12 @@ impl VulkanEngine {
         &mut self,
         snapshot: &FrameSnapshot,
     ) -> Result<MeshUploadProgress, EngineRenderError> {
-        let required = snapshot
-            .draws
-            .iter()
-            .map(|draw| {
-                (
-                    MeshVersionKey::new(draw.mesh, draw.revision),
-                    Arc::clone(&draw.data),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
+        let mut required = BTreeMap::new();
+        for draw in &snapshot.draws {
+            required
+                .entry(MeshVersionKey::new(draw.mesh, draw.revision))
+                .or_insert_with(|| Arc::clone(&draw.data));
+        }
         let required_bytes = required.values().try_fold(0u64, |total, data| {
             total
                 .checked_add(data.vertices.len() as u64)
@@ -121,7 +171,7 @@ impl VulkanEngine {
             && self
                 .active_upload
                 .as_ref()
-                .is_some_and(|active| *active != keys)
+                .is_some_and(|active| active.keys != keys)
         {
             return Err(MeshPreparationError::UploadBusy.into());
         }
@@ -158,27 +208,35 @@ impl VulkanEngine {
             .map(|entry| u128::from(entry.bytes))
             .sum::<u128>()
             + u128::from(missing_bytes);
-        let mut candidates = self
-            .residents
-            .iter()
-            .filter(|(key, entry)| !required.contains_key(key) && !entry.pinned())
-            .map(|(key, entry)| (entry.last_use.load(Ordering::Relaxed), *key))
-            .collect::<Vec<_>>();
-        candidates.sort_unstable();
-        for (_, key) in candidates {
-            let retiring = self.residents[&key].retiring;
-            if !retiring
-                && total_count <= self.config.max_meshes.min(physical_mesh_limit)
-                && total_bytes <= u128::from(self.config.max_bytes)
-            {
-                continue;
-            }
-            let bytes = self.residents[&key].bytes;
-            self.remove_resident(key)?;
-            total_count -= 1;
-            total_bytes -= u128::from(bytes);
-            if !retiring {
-                self.evictions += 1;
+        let count_limit = self.config.max_meshes.min(physical_mesh_limit);
+        // The common already-resident path needs no LRU candidate allocation or
+        // sorting. Retiring entries are still reaped, even without budget pressure.
+        if total_count > count_limit
+            || total_bytes > u128::from(self.config.max_bytes)
+            || !self.retiring.is_empty()
+        {
+            let mut candidates = self
+                .residents
+                .iter()
+                .filter(|(key, entry)| !required.contains_key(key) && !entry.pinned())
+                .map(|(key, entry)| (entry.last_use.load(Ordering::Relaxed), *key))
+                .collect::<Vec<_>>();
+            candidates.sort_unstable();
+            for (_, key) in candidates {
+                let retiring = self.residents[&key].retiring;
+                if !retiring
+                    && total_count <= count_limit
+                    && total_bytes <= u128::from(self.config.max_bytes)
+                {
+                    continue;
+                }
+                let bytes = self.residents[&key].bytes;
+                self.remove_resident(key)?;
+                total_count -= 1;
+                total_bytes -= u128::from(bytes);
+                if !retiring {
+                    self.evictions += 1;
+                }
             }
         }
         let serial = self.next_use()?;
@@ -193,9 +251,17 @@ impl VulkanEngine {
                 retiring: false,
             });
             entry.retiring = false;
+            self.retiring.remove(&key);
             entry.last_use.store(serial, Ordering::Relaxed);
         }
-        self.active_upload = Some(keys);
+        let remaining_bytes = keys
+            .iter()
+            .map(|key| {
+                let entry = &self.residents[key];
+                entry.bytes - entry.uploaded
+            })
+            .sum();
+        self.active_upload = Some(ActiveUpload::new(keys, remaining_bytes));
         self.poll_uploads()
     }
     /// Poll only this loader's bounded submissions and advance at most one chunk.
@@ -230,12 +296,7 @@ impl VulkanEngine {
     fn remaining_bytes(&self) -> u64 {
         self.active_upload
             .as_ref()
-            .into_iter()
-            .flatten()
-            .filter_map(|key| self.residents.get(key))
-            .filter(|entry| !entry.retiring)
-            .map(|entry| entry.bytes - entry.uploaded)
-            .sum()
+            .map_or(0, |active| active.remaining_bytes)
     }
     fn progress(&self, submitted_bytes: u64) -> MeshUploadProgress {
         let remaining_bytes = self.remaining_bytes();
@@ -253,18 +314,13 @@ impl VulkanEngine {
         }
     }
     fn pump_chunk(&mut self) -> Result<MeshUploadProgress, EngineRenderError> {
-        let Some(key) = self
-            .active_upload
-            .as_ref()
-            .into_iter()
-            .flatten()
-            .copied()
-            .find(|key| {
+        let Some(key) = self.active_upload.as_mut().and_then(|active| {
+            active.next(|key| {
                 self.residents
-                    .get(key)
+                    .get(&key)
                     .is_some_and(|entry| !entry.ready() && !entry.retiring)
             })
-        else {
+        }) else {
             self.active_upload = None;
             return Ok(self.progress(0));
         };
@@ -364,12 +420,17 @@ impl VulkanEngine {
         if entry.ready() {
             entry.data = None;
         }
+        self.active_upload
+            .as_mut()
+            .expect("accepted chunk belongs to the active upload")
+            .submitted(size, entry.ready());
         if self.remaining_bytes() == 0 {
             self.active_upload = None;
         }
         Ok(self.progress(size))
     }
     fn remove_resident(&mut self, key: MeshVersionKey) -> Result<(), EngineRenderError> {
+        self.retiring.remove(&key);
         if let Some(entry) = self.residents.remove(&key)
             && let Some(buffers) = entry.buffers
         {
@@ -380,10 +441,10 @@ impl VulkanEngine {
     }
     pub(super) fn reap_retiring(&mut self) -> Result<(), EngineRenderError> {
         let keys = self
-            .residents
+            .retiring
             .iter()
-            .filter(|(_, entry)| entry.retiring && !entry.pinned())
-            .map(|(key, _)| *key)
+            .filter(|key| !self.residents[key].pinned())
+            .copied()
             .collect::<Vec<_>>();
         for key in keys {
             self.remove_resident(key)?;
@@ -392,12 +453,13 @@ impl VulkanEngine {
     }
     /// Stop incomplete work; accepted GPU chunks retain native leases until retired.
     pub fn cancel_uploads(&mut self) -> Result<(), EngineRenderError> {
-        if let Some(keys) = self.active_upload.take() {
-            for key in keys {
+        if let Some(active) = self.active_upload.take() {
+            for key in active.keys {
                 if let Some(entry) = self.residents.get_mut(&key)
                     && !entry.ready()
                 {
                     entry.retiring = true;
+                    self.retiring.insert(key);
                 }
             }
         }
@@ -409,11 +471,19 @@ impl VulkanEngine {
         for (key, entry) in &mut self.residents {
             if key.mesh == mesh {
                 entry.retiring = true;
+                self.retiring.insert(*key);
                 count += 1;
             }
         }
-        if let Some(keys) = &mut self.active_upload {
-            keys.retain(|key| key.mesh != mesh);
+        if let Some(active) = &mut self.active_upload {
+            active.remove_mesh(mesh, |key| {
+                self.residents
+                    .get(&key)
+                    .map_or(0, |entry| entry.bytes - entry.uploaded)
+            });
+            if active.remaining_bytes == 0 {
+                self.active_upload = None;
+            }
         }
         self.reap_retiring()?;
         Ok(count)
@@ -423,6 +493,7 @@ impl VulkanEngine {
         for entry in self.residents.values_mut() {
             entry.retiring = true;
         }
+        self.retiring.extend(self.residents.keys().copied());
         self.reap_retiring()
     }
     pub fn mesh_cache_stats(&self) -> MeshCacheStats {
@@ -453,6 +524,80 @@ impl VulkanEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(index: u32) -> MeshVersionKey {
+        MeshVersionKey::new(
+            MeshHandle {
+                owner: 1,
+                index,
+                generation: 1,
+            },
+            1,
+        )
+    }
+
+    #[test]
+    fn upload_progress_preserves_partial_chunks_and_retries_without_rescanning_ready_meshes() {
+        let keys = (0..4_096).map(key).collect::<Vec<_>>();
+        let mut active = ActiveUpload::new(keys, 4_096 * 12);
+        let mut visited = 0;
+        for index in 0..4_096 {
+            let expected = key(index);
+            assert_eq!(
+                active.next(|_| {
+                    visited += 1;
+                    true
+                }),
+                Some(expected)
+            );
+            active.submitted(4, false);
+            assert_eq!(active.remaining_bytes, (4_096 - u64::from(index)) * 12 - 4);
+            // Backpressure/failure does not submit a chunk or advance progress.
+            assert_eq!(active.next(|_| true), Some(expected));
+            assert_eq!(active.remaining_bytes, (4_096 - u64::from(index)) * 12 - 4);
+            active.submitted(8, true);
+        }
+        assert_eq!(active.remaining_bytes, 0);
+        assert_eq!(active.next(|_| panic!("completed prefix revisited")), None);
+        assert_eq!(visited, 4_096);
+    }
+
+    #[test]
+    fn upload_cursor_skips_an_initially_resident_prefix_once() {
+        let mut active = ActiveUpload::new((0..32).map(key).collect(), 4);
+        let mut visits = 0;
+        for _ in 0..8 {
+            assert_eq!(
+                active.next(|key| {
+                    visits += 1;
+                    key.mesh.index == 31
+                }),
+                Some(key(31))
+            );
+        }
+        assert_eq!(visits, 31 + 8);
+        active.submitted(4, true);
+        assert_eq!(active.next(|_| panic!("completed prefix revisited")), None);
+    }
+
+    #[test]
+    fn unloading_completed_and_pending_meshes_keeps_cursor_and_byte_progress_consistent() {
+        let mut active = ActiveUpload::new((0..4).map(key).collect(), 48);
+        assert_eq!(active.next(|_| true), Some(key(0)));
+        active.submitted(12, true);
+        assert_eq!(active.next(|_| true), Some(key(1)));
+        active.submitted(4, false);
+        active.remove_mesh(key(0).mesh, |_| 0);
+        assert_eq!(active.next(|_| true), Some(key(1)));
+        active.remove_mesh(key(2).mesh, |_| 12);
+        assert_eq!(active.remaining_bytes, 20);
+        active.remove_mesh(key(1).mesh, |_| 8);
+        assert_eq!(active.next(|_| true), Some(key(3)));
+        assert_eq!(active.remaining_bytes, 12);
+        active.submitted(12, true);
+        assert_eq!(active.remaining_bytes, 0);
+        assert_eq!(active.next(|_| panic!("removed mesh revisited")), None);
+    }
 
     #[test]
     fn fragment_retry_distinguishes_staging_from_execution_backpressure() {
