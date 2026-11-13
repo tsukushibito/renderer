@@ -145,7 +145,8 @@ Vulkan・D3D12・Metalの全操作を列挙した巨大な`Backend`トレイト�
 
 ### 5.3 第二バックエンドで確認すること
 
-第二バックエンドはD3D12またはMetalなど、Vulkanと異なるAPIから選ぶ。優先順位は実機・CI・対象OS・保守担当の条件で決め、現段階では固定しない。
+第二バックエンドはVulkanと異なるAPIから選ぶ。M3でWindows上のD3D12を選定した。
+実機・CI・対象OS・保守担当を判断材料とした理由と見直し条件は[16.1節](#161-第二バックエンドの選定と準備条件)に記す。
 
 同じ論理グラフ、同等のシェーダー処理、同じ出力条件を動かしながら、次を分類する。
 
@@ -537,6 +538,14 @@ M4準備で公開済みgenerator・入力metadata・生成コードのruntime依
 この短期互換性だけを理由に旧系列へ固定せず、allocatorは採用bindingsとの型・ABI・所有権・保守状況を別途検証して選ぶ。[^windowsallocator]
 COM参照の保持とGPUの利用期間を区別し、resource・heap allocation・descriptor領域・command allocator等の解放や再利用をFence完了で保護する。[^d3dlifetime]
 
+M4の最初のD3D12 buffer基準には`CreateCommittedResource`を使う。
+resourceと暗黙のheapを一つの所有者で保持でき、private生成型と既存allocatorの公開型を
+未検証のcastで接続する必要がない。UPLOADは`GENERIC_READ`、READBACKは`COPY_DEST`で作成する。[^committed]
+代案の外部suballocatorは型・COM所有権・配置条件の接続確認を要するため、この基準には導入しない。
+resourceごとのheapによるメモリ・作成費用を許容する単純な基準であり、性能改善とは扱わない。
+上限付きの資源再利用はM4-06、物理aliasingの限定実験はM4-16で別に検証する。
+準備probeは作成と破棄だけを確認し、投入後の寿命とreadback内容はM4-04以降で実証する。
+
 準備の残件は`renderer-6qc`（adapter・検証・shader経路）と`renderer-k51`（実GPU反復実行基盤）で管理する。
 M3で行うのはこの選定と準備条件の明確化までで、第二バックエンド実装や一般RHIの先行固定は含めない。
 
@@ -656,5 +665,7 @@ GPU検証ができない場合は、実行済みの確認と未検証項目を�
 [^windowsallocator]: gpu-allocator 0.28.0の公開manifestは`windows >=0.53, <=0.62`を要求する。新しい生成型との接続を未検証のまま互換と扱わない。`https://docs.rs/crate/gpu-allocator/0.28.0/source/Cargo.toml`。Microsoft担当者の旧系列の不具合への回答はmasterでの修正と0.62での回避策を示し、0.62へのbackportを約束していない。`https://github.com/microsoft/windows-rs/issues/5189#issuecomment-6448298133`
 
 [^d3dlifetime]: Microsoft「Important Changes from Direct3D 11 to Direct3D 12」。明示同期と、アプリが管理する資源・descriptorメモリの寿命。`https://learn.microsoft.com/en-us/windows/win32/direct3d12/important-changes-from-directx-11-to-directx-12`
+
+[^committed]: Microsoft「ID3D12Device::CreateCommittedResource」。resourceと暗黙のheapの所有、UPLOAD/READBACKの初期状態、最後の参照を解放する前のGPU利用終了条件。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createcommittedresource`
 
 [^metal]: Apple「Metal」。AppleプラットフォームとAPI／shader検証・診断ツールの概要。`https://developer.apple.com/metal/`
