@@ -344,12 +344,16 @@ impl NativeTransfer {
                 .create_fence(&vk::FenceCreateInfo::default(), None)
         }
         .map_err(|result| native_error(device, "vkCreateFence", result))?;
-        native.name(native.pool, c"renderer.transfer.pool")?;
-        native.name(native.command, c"renderer.transfer.commands")?;
-        native.name(native.fence, c"renderer.transfer.completion")?;
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            native.name(native.pool, c"renderer.transfer.pool")?;
+            native.name(native.command, c"renderer.transfer.commands")?;
+            native.name(native.fence, c"renderer.transfer.completion")?;
+        }
         Ok(native)
     }
 
+    #[cfg(feature = "vulkan-diagnostics")]
     fn name<T: vk::Handle>(&self, handle: T, name: &CStr) -> Result<(), TransferError> {
         let device = &self.owner.device;
         // SAFETY: Every named object belongs to this live Device; command/pool/
@@ -375,12 +379,14 @@ impl NativeTransfer {
             )
         }
         .map_err(|result| native_error(device, "vkBeginCommandBuffer", result))?;
+        #[cfg(feature = "vulkan-diagnostics")]
         let debug = device.debug_utils();
         // SAFETY: The validated payload owns every referenced resource on this
         // Device and is retained by the enclosing recording owner. Source
         // write/flush precedes submit. The payload records dependencies for its
         // actual consumers, including a HOST dependency only for readback.
         unsafe {
+            #[cfg(feature = "vulkan-diagnostics")]
             debug.cmd_begin_debug_utils_label(
                 self.command,
                 &vk::DebugUtilsLabelEXT::default()
@@ -388,6 +394,7 @@ impl NativeTransfer {
                     .color([0.2, 0.7, 1.0, 1.0]),
             );
             payload.record(self.command);
+            #[cfg(feature = "vulkan-diagnostics")]
             debug.cmd_end_debug_utils_label(self.command);
         }
         // SAFETY: The unique command buffer has balanced command labels and no

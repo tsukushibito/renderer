@@ -484,7 +484,7 @@ fn vulkan_batch_smoke() {
     tracing::dispatcher::with_default(&dispatch, || {
         for iteration in 0..2 {
             let diagnostics = Diagnostics::new();
-            let instance = VulkanInstance::new(Arc::clone(&diagnostics)).unwrap();
+            let instance = VulkanInstance::new(diagnostics.clone()).unwrap();
             crate::backends::vulkan::assert_real_validation(&diagnostics);
             let device = VulkanDevice::new(instance).unwrap();
             assert_ne!(

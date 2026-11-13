@@ -1,5 +1,7 @@
 use super::super::real_vulkan_dispatch;
 use super::*;
+#[cfg(feature = "vulkan-diagnostics")]
+use std::sync::Arc;
 
 #[test]
 fn extension_names_deduplicate_equal_contents_from_distinct_storage() {
@@ -163,53 +165,58 @@ fn missing_loader_keeps_underlying_loading_error() {
 #[test]
 #[ignore = "explicit Vulkan 1.3 runtime test; requires validation layer and debug_utils"]
 fn vulkan_instance_smoke() {
-    let dispatch = real_vulkan_dispatch();
-    tracing::dispatcher::with_default(&dispatch, || {
-        for iteration in 0..4 {
-            let diagnostics = Diagnostics::new();
-            let instance = VulkanInstance::new(Arc::clone(&diagnostics)).unwrap_or_else(|error| {
-                panic!(
-                    "iteration {iteration}: {error}; {:?}",
-                    diagnostics.snapshot()
-                )
-            });
-            super::super::assert_real_validation(&diagnostics);
-            let message = vk::DebugUtilsMessengerCallbackDataEXT::default()
-                .message_id_number(0x716867)
-                .message_id_name(c"renderer.qhg.callback-smoke")
-                .message(c"qhg INFO callback delivery check");
-            // SAFETY: The enabled extension and messenger belong to this live
-            // instance. All callback strings remain live; INFO is a diagnostic
-            // submission, not a deliberate invalid Vulkan operation.
-            unsafe {
-                instance
-                    .debug_utils
-                    .as_ref()
-                    .unwrap()
-                    .submit_debug_utils_message(
-                        vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
-                        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL,
-                        &message,
-                    );
-            }
-            assert!(
-                diagnostics.snapshot().messages.iter().any(|message| {
-                    message.message_id_name.as_deref() == Some("renderer.qhg.callback-smoke")
-                        && message.message_id_number == 0x716867
-                }),
-                "real debug messenger did not deliver the submitted INFO message"
-            );
-            drop(instance);
-            let report = diagnostics.snapshot();
-            assert!(
-                report.is_clean(),
-                "iteration {iteration}, including shutdown: {report:#?}"
-            );
-            tracing::info!(target: LOG_TARGET, iteration, warnings = report.warnings,
+    #[cfg(not(feature = "vulkan-diagnostics"))]
+    panic!("native validation acceptance requires development-validation");
+    #[cfg(feature = "vulkan-diagnostics")]
+    {
+        let dispatch = real_vulkan_dispatch();
+        tracing::dispatcher::with_default(&dispatch, || {
+            for iteration in 0..4 {
+                let diagnostics = Diagnostics::new();
+                let instance = VulkanInstance::new(diagnostics.clone()).unwrap_or_else(|error| {
+                    panic!(
+                        "iteration {iteration}: {error}; {:?}",
+                        diagnostics.snapshot()
+                    )
+                });
+                super::super::assert_real_validation(&diagnostics);
+                let message = vk::DebugUtilsMessengerCallbackDataEXT::default()
+                    .message_id_number(0x716867)
+                    .message_id_name(c"renderer.qhg.callback-smoke")
+                    .message(c"qhg INFO callback delivery check");
+                // SAFETY: The enabled extension and messenger belong to this live
+                // instance. All callback strings remain live; INFO is a diagnostic
+                // submission, not a deliberate invalid Vulkan operation.
+                unsafe {
+                    instance
+                        .debug_utils
+                        .as_ref()
+                        .unwrap()
+                        .submit_debug_utils_message(
+                            vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+                            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL,
+                            &message,
+                        );
+                }
+                assert!(
+                    diagnostics.snapshot().messages.iter().any(|message| {
+                        message.message_id_name.as_deref() == Some("renderer.qhg.callback-smoke")
+                            && message.message_id_number == 0x716867
+                    }),
+                    "real debug messenger did not deliver the submitted INFO message"
+                );
+                drop(instance);
+                let report = diagnostics.snapshot();
+                assert!(
+                    report.is_clean(),
+                    "iteration {iteration}, including shutdown: {report:#?}"
+                );
+                tracing::info!(target: LOG_TARGET, iteration, warnings = report.warnings,
                 errors = report.errors, callback_failures = report.callback_failures,
                 "Vulkan instance smoke including shutdown passed");
-        }
-    });
+            }
+        });
+    }
 }
 
 #[test]
@@ -222,7 +229,7 @@ fn vulkan_instance_partial_failure() {
             // SAFETY: Use the platform loader and retain it in initialize's guard
             // until all Instance calls and failure cleanup have finished.
             let entry = unsafe { Entry::load() }.expect("load Vulkan for explicit runtime test");
-            let result = VulkanInstance::initialize(entry, Arc::clone(&diagnostics), || {
+            let result = VulkanInstance::initialize(entry, diagnostics.clone(), || {
                 // Deliberate host-side failure at the creation boundary: no
                 // invalid Vulkan call and no claim of reproducing driver OOM.
                 Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY)
@@ -237,6 +244,7 @@ fn vulkan_instance_partial_failure() {
                 ),
                 "unexpected partial initialization result at iteration {iteration}"
             );
+            #[cfg(feature = "vulkan-diagnostics")]
             assert_eq!(
                 Arc::strong_count(&diagnostics),
                 1,

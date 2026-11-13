@@ -4,11 +4,12 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::ffi::CStr;
 use std::fmt;
-use std::sync::Arc;
 
 use ash::{Entry, vk};
 
+#[cfg(test)]
 use super::diagnostics::Diagnostics;
+use super::diagnostics::DiagnosticsHandle;
 
 pub(super) const REQUIRED_API: u32 = vk::API_VERSION_1_3;
 const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
@@ -16,21 +17,39 @@ const REQUIRED_EXTENSIONS: [&CStr; 2] =
     [ash::ext::debug_utils::NAME, ash::ext::layer_settings::NAME];
 pub(super) const LOG_TARGET: &str = "renderer::vulkan";
 
-/// Native validation is required by default. Shipping and performance callers
-/// can explicitly disable layers; Renderer-side checks remain enabled.
+/// Native validation defaults to Required with `development-validation`, and to
+/// Disabled otherwise. Renderer safety and execution contracts are always enabled.
 /// Loader environment/settings may still inject layers in either mode.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ValidationMode {
-    #[default]
     Required,
     Disabled,
+}
+
+impl Default for ValidationMode {
+    fn default() -> Self {
+        if cfg!(feature = "development-validation") {
+            Self::Required
+        } else {
+            Self::Disabled
+        }
+    }
 }
 
 impl ValidationMode {
     fn extensions(self) -> &'static [&'static CStr] {
         match self {
             Self::Required => &REQUIRED_EXTENSIONS,
-            Self::Disabled => &[ash::ext::debug_utils::NAME],
+            Self::Disabled => {
+                #[cfg(feature = "vulkan-diagnostics")]
+                {
+                    &[ash::ext::debug_utils::NAME]
+                }
+                #[cfg(not(feature = "vulkan-diagnostics"))]
+                {
+                    &[]
+                }
+            }
         }
     }
 }
@@ -108,7 +127,10 @@ pub(super) enum InitError {
         operation: &'static str,
         result: vk::Result,
     },
+    #[cfg(feature = "vulkan-diagnostics")]
     MissingEntryPoint(&'static CStr),
+    #[cfg(not(feature = "vulkan-diagnostics"))]
+    DiagnosticsNotCompiled,
 }
 
 impl fmt::Display for InitError {
@@ -123,6 +145,12 @@ impl fmt::Display for InitError {
                 Ok(())
             }
             Self::Vulkan { operation, result } => write!(f, "{operation} failed: {result:?}"),
+            #[cfg(not(feature = "vulkan-diagnostics"))]
+            Self::DiagnosticsNotCompiled => write!(
+                f,
+                "native validation requires the vulkan-diagnostics or development-validation feature"
+            ),
+            #[cfg(feature = "vulkan-diagnostics")]
             Self::MissingEntryPoint(name) => write!(
                 f,
                 "enabled VK_EXT_debug_utils has no entry point {}",
@@ -141,7 +169,10 @@ impl Error for InitError {
                 PrerequisiteFailure::Query { result, .. } => Some(result as &dyn Error),
                 _ => None,
             }),
+            #[cfg(feature = "vulkan-diagnostics")]
             Self::MissingEntryPoint(_) => None,
+            #[cfg(not(feature = "vulkan-diagnostics"))]
+            Self::DiagnosticsNotCompiled => None,
         }
     }
 }
@@ -334,25 +365,32 @@ fn discover(entry: &Entry, validation: ValidationMode) -> Result<Discovery, Init
 /// Owns all dependencies through destruction, including create/destroy callbacks.
 /// A Device owner retains this value until all Device calls have finished.
 pub(super) struct VulkanInstance {
-    entry: Entry,
+    _entry: Entry,
     instance: ash::Instance,
+    #[cfg(feature = "vulkan-diagnostics")]
     debug_utils: Option<ash::ext::debug_utils::Instance>,
+    #[cfg(feature = "vulkan-diagnostics")]
     messenger: Option<vk::DebugUtilsMessengerEXT>,
-    _diagnostics: Arc<Diagnostics>,
+    #[cfg(feature = "vulkan-diagnostics")]
+    _diagnostics: DiagnosticsHandle,
+    #[cfg(feature = "vulkan-diagnostics")]
     validation: ValidationMode,
 }
 
 impl VulkanInstance {
+    #[cfg(feature = "vulkan-diagnostics")]
     pub(super) fn validation_mode(&self) -> ValidationMode {
         self.validation
     }
 
-    pub(super) fn new(diagnostics: Arc<Diagnostics>) -> Result<Self, InitError> {
-        Self::with_validation(diagnostics, ValidationMode::default())
+    #[cfg(test)]
+    pub(super) fn new(diagnostics: DiagnosticsHandle) -> Result<Self, InitError> {
+        // Native acceptance always requests validation, even in a shipping build.
+        Self::with_validation(diagnostics, ValidationMode::Required)
     }
 
     pub(super) fn with_validation(
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
     ) -> Result<Self, InitError> {
         let result = Self::load_and_initialize(diagnostics, validation);
@@ -368,12 +406,12 @@ impl VulkanInstance {
 
     #[cfg(all(feature = "presentation", windows))]
     pub(super) fn entry(&self) -> &Entry {
-        &self.entry
+        &self._entry
     }
 
     #[cfg(all(feature = "presentation", windows))]
     pub(super) fn with_extensions(
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
         extensions: &[&'static CStr],
     ) -> Result<Self, InitError> {
@@ -384,7 +422,7 @@ impl VulkanInstance {
     }
 
     fn load_and_initialize(
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
     ) -> Result<Self, InitError> {
         // SAFETY: Use the platform Vulkan loader, which supplies Vulkan entry
@@ -397,7 +435,7 @@ impl VulkanInstance {
     /// it is not a Backend abstraction or a configurable production failure mode.
     fn initialize(
         entry: Entry,
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
     ) -> Result<Self, InitError> {
         Self::initialize_with_validation(
@@ -410,7 +448,7 @@ impl VulkanInstance {
 
     fn initialize_with_validation(
         entry: Entry,
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
         before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
     ) -> Result<Self, InitError> {
@@ -425,11 +463,15 @@ impl VulkanInstance {
 
     fn initialize_with_extensions(
         entry: Entry,
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         validation: ValidationMode,
         additional_extensions: &[&'static CStr],
         before_messenger_create: impl FnOnce() -> Result<(), vk::Result>,
     ) -> Result<Self, InitError> {
+        #[cfg(not(feature = "vulkan-diagnostics"))]
+        if validation == ValidationMode::Required {
+            return Err(InitError::DiagnosticsNotCompiled);
+        }
         let discovery = discover(&entry, validation)?;
         if let Some(available) = discovery.extensions {
             let missing = additional_extensions
@@ -454,9 +496,11 @@ impl VulkanInstance {
             .into_iter()
             .map(CStr::as_ptr)
             .collect();
+        #[cfg(feature = "vulkan-diagnostics")]
         let enable_sync: vk::Bool32 = vk::TRUE;
         // ash's byte-slice setter counts bytes rather than BOOL32 values. Keep
         // the correctly typed value and its count explicit for this setting.
+        #[cfg(feature = "vulkan-diagnostics")]
         let settings = [vk::LayerSettingEXT {
             value_count: 1,
             p_values: std::ptr::from_ref(&enable_sync).cast(),
@@ -465,13 +509,20 @@ impl VulkanInstance {
                 .setting_name(c"validate_sync")
                 .ty(vk::LayerSettingTypeEXT::BOOL32)
         }];
+        #[cfg(feature = "vulkan-diagnostics")]
         let mut layer_settings = vk::LayerSettingsCreateInfoEXT::default().settings(&settings);
+        #[cfg(feature = "vulkan-diagnostics")]
         let mut callback = diagnostics.messenger_create_info();
+        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_mut))]
         let mut create_info = vk::InstanceCreateInfo::default()
             .application_info(&application_info)
             .enabled_layer_names(&layers)
-            .enabled_extension_names(&extensions)
-            .push_next(&mut callback);
+            .enabled_extension_names(&extensions);
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            create_info = create_info.push_next(&mut callback);
+        }
+        #[cfg(feature = "vulkan-diagnostics")]
         if validation == ValidationMode::Required {
             create_info = create_info.push_next(&mut layer_settings);
         }
@@ -486,59 +537,70 @@ impl VulkanInstance {
         })?;
         // Immediately establish ownership: every later return/unwind drops this
         // guard and destroys the already-created Instance exactly once.
+        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_mut))]
         let mut owner = Self {
-            entry,
+            _entry: entry,
             instance,
+            #[cfg(feature = "vulkan-diagnostics")]
             debug_utils: None,
+            #[cfg(feature = "vulkan-diagnostics")]
             messenger: None,
-            _diagnostics: Arc::clone(&diagnostics),
+            #[cfg(feature = "vulkan-diagnostics")]
+            _diagnostics: diagnostics.clone(),
+            #[cfg(feature = "vulkan-diagnostics")]
             validation,
         };
-        for name in [
-            c"vkCreateDebugUtilsMessengerEXT",
-            c"vkDestroyDebugUtilsMessengerEXT",
-            c"vkSubmitDebugUtilsMessageEXT",
-        ] {
-            // SAFETY: The Instance belongs to this live Entry, extension enabled,
-            // and each entry-point name is a static NUL-terminated string.
-            if unsafe {
-                owner
-                    .entry
-                    .get_instance_proc_addr(owner.instance.handle(), name.as_ptr())
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            for name in [
+                c"vkCreateDebugUtilsMessengerEXT",
+                c"vkDestroyDebugUtilsMessengerEXT",
+                c"vkSubmitDebugUtilsMessageEXT",
+            ] {
+                // SAFETY: The Instance belongs to this live Entry, extension enabled,
+                // and each entry-point name is a static NUL-terminated string.
+                if unsafe {
+                    owner
+                        ._entry
+                        .get_instance_proc_addr(owner.instance.handle(), name.as_ptr())
+                }
+                .is_none()
+                {
+                    return Err(InitError::MissingEntryPoint(name));
+                }
             }
-            .is_none()
-            {
-                return Err(InitError::MissingEntryPoint(name));
+            let debug_utils = ash::ext::debug_utils::Instance::new(&owner._entry, &owner.instance);
+            // Rebuild a standalone create_info: push_next above may have modified its
+            // chain, and messenger creation needs no InstanceCreateInfo linkage.
+            before_messenger_create().map_err(|result| InitError::Vulkan {
+                operation: "vkCreateDebugUtilsMessengerEXT",
+                result,
+            })?;
+            // SAFETY: The extension and its functions were checked, callback state
+            // belongs to the live guard, and the resulting messenger is owned once.
+            let messenger = unsafe {
+                debug_utils.create_debug_utils_messenger(&diagnostics.messenger_create_info(), None)
             }
+            .map_err(|result| InitError::Vulkan {
+                operation: "vkCreateDebugUtilsMessengerEXT",
+                result,
+            })?;
+            owner.debug_utils = Some(debug_utils);
+            owner.messenger = Some(messenger);
         }
-        let debug_utils = ash::ext::debug_utils::Instance::new(&owner.entry, &owner.instance);
-        // Rebuild a standalone create_info: push_next above may have modified its
-        // chain, and messenger creation needs no InstanceCreateInfo linkage.
-        before_messenger_create().map_err(|result| InitError::Vulkan {
-            operation: "vkCreateDebugUtilsMessengerEXT",
-            result,
-        })?;
-        // SAFETY: The extension and its functions were checked, callback state
-        // belongs to the live guard, and the resulting messenger is owned once.
-        let messenger = unsafe {
-            debug_utils.create_debug_utils_messenger(&diagnostics.messenger_create_info(), None)
-        }
-        .map_err(|result| InitError::Vulkan {
-            operation: "vkCreateDebugUtilsMessengerEXT",
-            result,
-        })?;
-        owner.debug_utils = Some(debug_utils);
-        owner.messenger = Some(messenger);
+        #[cfg(not(feature = "vulkan-diagnostics"))]
+        let _ = (diagnostics, before_messenger_create);
         tracing::info!(target: LOG_TARGET, api = %api_version(REQUIRED_API),
             validation = ?validation, extensions = ?validation.extensions(),
             synchronization_validation_requested = validation == ValidationMode::Required,
-            "Vulkan instance and debug messenger initialized");
+            "Vulkan instance initialized");
         Ok(owner)
     }
 }
 
 impl Drop for VulkanInstance {
     fn drop(&mut self) {
+        #[cfg(feature = "vulkan-diagnostics")]
         if let (Some(debug_utils), Some(messenger)) = (&self.debug_utils, self.messenger.take()) {
             // SAFETY: We exclusively own this live messenger and Instance; no
             // concurrent API calls exist. A containing Device owner has already

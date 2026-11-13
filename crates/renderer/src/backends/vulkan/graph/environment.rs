@@ -1,10 +1,11 @@
 //! Owned environment facts and callback monitoring without native ownership.
 
-use std::sync::Arc;
-
 use ash::vk;
 
+#[cfg(all(test, feature = "vulkan-diagnostics"))]
 use super::super::diagnostics::Diagnostics;
+#[cfg(feature = "vulkan-diagnostics")]
+use super::super::diagnostics::DiagnosticsHandle;
 use super::super::instance::{REQUIRED_API, ValidationMode, api_version};
 use super::VulkanRuntime;
 
@@ -30,7 +31,9 @@ pub struct DeviceInfo {
 /// not keep an Instance, Device, allocation or submitted command alive.
 #[derive(Clone)]
 pub struct ValidationMonitor {
-    diagnostics: Arc<Diagnostics>,
+    #[cfg(feature = "vulkan-diagnostics")]
+    diagnostics: DiagnosticsHandle,
+    #[cfg(feature = "vulkan-diagnostics")]
     requested: ValidationMode,
 }
 
@@ -72,35 +75,52 @@ impl ValidationMonitor {
     /// Unknown effective settings are reported as None. In Disabled mode, an
     /// absent status message does not prove that the loader injected no layers.
     pub fn report(&self) -> ValidationReport {
-        let snapshot = self.diagnostics.snapshot();
-        let effective = effective_validation(
-            &snapshot.layer_status_messages,
-            snapshot.dropped_layer_statuses,
-        );
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            let snapshot = self.diagnostics.snapshot();
+            let effective = effective_validation(
+                &snapshot.layer_status_messages,
+                snapshot.dropped_layer_statuses,
+            );
+            ValidationReport {
+                requested: self.requested,
+                warnings: snapshot.warnings,
+                errors: snapshot.errors,
+                callback_failures: snapshot.callback_failures,
+                dropped_problems: snapshot.dropped_problems,
+                problems: snapshot
+                    .problems
+                    .into_iter()
+                    .map(|message| {
+                        format!(
+                            "{:?} [{}:{}] {}",
+                            message.severity,
+                            message.message_id_name.as_deref().unwrap_or("unnamed"),
+                            message.message_id_number,
+                            message.message
+                        )
+                    })
+                    .collect(),
+                layer_status_messages: snapshot.layer_status_messages,
+                dropped_layer_statuses: snapshot.dropped_layer_statuses,
+                startup_status_recognized: effective.is_some(),
+                core_validation: effective.map(|settings| settings.core),
+                synchronization_validation: effective.map(|settings| settings.synchronization),
+            }
+        }
+        #[cfg(not(feature = "vulkan-diagnostics"))]
         ValidationReport {
-            requested: self.requested,
-            warnings: snapshot.warnings,
-            errors: snapshot.errors,
-            callback_failures: snapshot.callback_failures,
-            dropped_problems: snapshot.dropped_problems,
-            problems: snapshot
-                .problems
-                .into_iter()
-                .map(|message| {
-                    format!(
-                        "{:?} [{}:{}] {}",
-                        message.severity,
-                        message.message_id_name.as_deref().unwrap_or("unnamed"),
-                        message.message_id_number,
-                        message.message
-                    )
-                })
-                .collect(),
-            layer_status_messages: snapshot.layer_status_messages,
-            dropped_layer_statuses: snapshot.dropped_layer_statuses,
-            startup_status_recognized: effective.is_some(),
-            core_validation: effective.map(|settings| settings.core),
-            synchronization_validation: effective.map(|settings| settings.synchronization),
+            requested: ValidationMode::Disabled,
+            warnings: 0,
+            errors: 0,
+            callback_failures: 0,
+            dropped_problems: 0,
+            problems: Vec::new(),
+            layer_status_messages: Vec::new(),
+            dropped_layer_statuses: 0,
+            startup_status_recognized: false,
+            core_validation: None,
+            synchronization_validation: None,
         }
     }
 }
@@ -143,18 +163,22 @@ impl VulkanRuntime {
 
     pub fn validation_monitor(&self) -> ValidationMonitor {
         ValidationMonitor {
-            diagnostics: Arc::clone(&self.diagnostics),
+            #[cfg(feature = "vulkan-diagnostics")]
+            diagnostics: self.diagnostics.clone(),
+            #[cfg(feature = "vulkan-diagnostics")]
             requested: self.owner.device.validation_mode(),
         }
     }
 }
 
+#[cfg(any(test, feature = "vulkan-diagnostics"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct EffectiveValidation {
     core: bool,
     synchronization: bool,
 }
 
+#[cfg(any(test, feature = "vulkan-diagnostics"))]
 fn effective_validation(messages: &[String], dropped: usize) -> Option<EffectiveValidation> {
     if dropped != 0 {
         return None;
@@ -171,6 +195,7 @@ fn effective_validation(messages: &[String], dropped: usize) -> Option<Effective
 
 /// This intentionally recognizes the pinned SDK's startup grammar rather than
 /// guessing effective settings from arbitrary occurrences of feature names.
+#[cfg(any(test, feature = "vulkan-diagnostics"))]
 fn parse_status(message: &str) -> Option<EffectiveValidation> {
     const SYNCHRONIZATION: &str = "VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT";
     const ENABLES: &[&str] = &[
@@ -287,10 +312,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "vulkan-diagnostics")]
     fn startup_report_survives_recent_message_eviction_and_monitor_owner_drop() {
         let diagnostics = Diagnostics::new();
         let monitor = ValidationMonitor {
-            diagnostics: Arc::clone(&diagnostics),
+            diagnostics: diagnostics.clone(),
             requested: ValidationMode::Required,
         };
         let emit = |name: &std::ffi::CStr, message: &std::ffi::CStr, severity| {
@@ -342,7 +368,9 @@ mod tests {
     #[test]
     fn disabled_request_without_observed_status_does_not_invent_effective_state() {
         let monitor = ValidationMonitor {
+            #[cfg(feature = "vulkan-diagnostics")]
             diagnostics: Diagnostics::new(),
+            #[cfg(feature = "vulkan-diagnostics")]
             requested: ValidationMode::Disabled,
         };
         let report = monitor.report();
@@ -351,5 +379,7 @@ mod tests {
         assert_eq!(report.core_validation, None);
         assert_eq!(report.synchronization_validation, None);
         assert!(report.is_clean());
+        #[cfg(not(feature = "vulkan-diagnostics"))]
+        assert_eq!(std::mem::size_of::<ValidationMonitor>(), 0);
     }
 }

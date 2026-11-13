@@ -1,5 +1,6 @@
 //! Device-only graph buffers. Pending graph owners retain this allocation.
 
+#[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CString;
 use std::sync::Arc;
 
@@ -51,12 +52,13 @@ impl GraphBuffer {
     pub(super) fn new(
         owner: Arc<MemoryOwner>,
         size: u64,
-        name: &str,
+        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] name: &str,
     ) -> Result<Self, RuntimeError> {
         owner
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
+        #[cfg(feature = "vulkan-diagnostics")]
         let name = CString::new(name)
             .map_err(|_| RuntimeError::invalid("graph buffer debug name contains a NUL byte"))?;
         let (handle, allocation) =
@@ -82,27 +84,30 @@ impl GraphBuffer {
             size,
             allocation,
         };
-        // SAFETY: The uniquely owned buffer belongs to this live Device. The
-        // CString remains valid through this synchronous naming operation.
-        unsafe {
-            buffer
-                .owner
-                .device
-                .debug_utils()
-                .set_debug_utils_object_name(
-                    &vk::DebugUtilsObjectNameInfoEXT::default()
-                        .object_handle(handle)
-                        .object_name(&name),
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            // SAFETY: The uniquely owned buffer belongs to this live Device. The
+            // CString remains valid through this synchronous naming operation.
+            unsafe {
+                buffer
+                    .owner
+                    .device
+                    .debug_utils()
+                    .set_debug_utils_object_name(
+                        &vk::DebugUtilsObjectNameInfoEXT::default()
+                            .object_handle(handle)
+                            .object_name(&name),
+                    )
+            }
+            .map_err(|result| {
+                buffer.owner.device.observe_result(result);
+                RuntimeError::native(
+                    "vkSetDebugUtilsObjectNameEXT for graph buffer",
+                    buffer.owner.device.name(),
+                    result,
                 )
+            })?;
         }
-        .map_err(|result| {
-            buffer.owner.device.observe_result(result);
-            RuntimeError::native(
-                "vkSetDebugUtilsObjectNameEXT for graph buffer",
-                buffer.owner.device.name(),
-                result,
-            )
-        })?;
         Ok(buffer)
     }
 }

@@ -3,7 +3,10 @@
 //! The graph executor owns synchronization. Every object referenced by recorded
 //! commands, including a descriptor lease, stays alive through proven retirement.
 
-use std::ffi::{CStr, CString};
+#[cfg(feature = "vulkan-diagnostics")]
+use std::ffi::CStr;
+#[cfg(feature = "vulkan-diagnostics")]
+use std::ffi::CString;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ash::vk;
@@ -18,6 +21,7 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
     RuntimeError::native(operation, owner.device.name(), result)
 }
 
+#[cfg(feature = "vulkan-diagnostics")]
 fn name_object<H: vk::Handle>(
     owner: &MemoryOwner,
     handle: H,
@@ -55,7 +59,7 @@ impl GraphImage {
         width: u32,
         height: u32,
         format: vk::Format,
-        name: &str,
+        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] name: &str,
     ) -> Result<Self, RuntimeError> {
         owner
             .device
@@ -193,29 +197,32 @@ impl GraphImage {
                 .create_image_view(&view_info, None)
         }
         .map_err(|error| native(&result.owner, "vkCreateImageView(Graph)", error))?;
-        let name = CString::new(name)
-            .map_err(|_| RuntimeError::invalid("Graph image name contains NUL"))?;
-        let naming = vk::DebugUtilsObjectNameInfoEXT::default()
-            .object_handle(image)
-            .object_name(&name);
-        // SAFETY: The Device owns this live image and consumes the name inline.
-        unsafe {
-            result
-                .owner
-                .device
-                .debug_utils()
-                .set_debug_utils_object_name(&naming)
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            let name = CString::new(name)
+                .map_err(|_| RuntimeError::invalid("Graph image name contains NUL"))?;
+            let naming = vk::DebugUtilsObjectNameInfoEXT::default()
+                .object_handle(image)
+                .object_name(&name);
+            // SAFETY: The Device owns this live image and consumes the name inline.
+            unsafe {
+                result
+                    .owner
+                    .device
+                    .debug_utils()
+                    .set_debug_utils_object_name(&naming)
+            }
+            .map_err(|error| {
+                native(
+                    &result.owner,
+                    "vkSetDebugUtilsObjectNameEXT(Graph image)",
+                    error,
+                )
+            })?;
+            let view_name = CString::new(format!("{}-view", name.to_string_lossy()))
+                .expect("image name already checked for NUL");
+            name_object(&result.owner, result.view, &view_name)?;
         }
-        .map_err(|error| {
-            native(
-                &result.owner,
-                "vkSetDebugUtilsObjectNameEXT(Graph image)",
-                error,
-            )
-        })?;
-        let view_name = CString::new(format!("{}-view", name.to_string_lossy()))
-            .expect("image name already checked for NUL");
-        name_object(&result.owner, result.view, &view_name)?;
         Ok(result)
     }
 }
@@ -292,7 +299,7 @@ impl DescriptorArena {
     fn new(
         owner: Arc<MemoryOwner>,
         max_bindings: u32,
-        ordinal: usize,
+        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] ordinal: usize,
     ) -> Result<Self, RuntimeError> {
         let sizes = [
             vk::DescriptorPoolSize {
@@ -312,9 +319,12 @@ impl DescriptorArena {
         let pool = unsafe { owner.device.raw().create_descriptor_pool(&info, None) }
             .map_err(|result| native(&owner, "vkCreateDescriptorPool(Graph)", result))?;
         let result = Self { owner, pool };
-        let name = CString::new(format!("m2-descriptor-arena-{ordinal}"))
-            .expect("numeric name has no NUL");
-        name_object(&result.owner, pool, &name)?;
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            let name = CString::new(format!("m2-descriptor-arena-{ordinal}"))
+                .expect("numeric name has no NUL");
+            name_object(&result.owner, pool, &name)?;
+        }
         Ok(result)
     }
 }
@@ -368,6 +378,7 @@ enum ProgramKind {
 }
 
 impl ProgramKind {
+    #[cfg(feature = "vulkan-diagnostics")]
     fn name(self) -> &'static CStr {
         match self {
             Self::Compute => c"m2-image-compute",
@@ -577,18 +588,21 @@ impl Program {
             ProgramKind::Raster => self.graphics_pipeline(true)?,
             ProgramKind::Composite => self.graphics_pipeline(false)?,
         };
-        let name = kind.name();
-        name_object(&self.owner, self.pipeline, name)?;
-        let layout_name = CString::new(format!("{}-layout", name.to_string_lossy()))
-            .expect("fixed program names contain no NUL");
-        name_object(&self.owner, self.layout, &layout_name)?;
-        if !bindings.is_empty() {
-            let set_name = CString::new(format!("{}-set-layout", name.to_string_lossy()))
+        #[cfg(feature = "vulkan-diagnostics")]
+        {
+            let name = kind.name();
+            name_object(&self.owner, self.pipeline, name)?;
+            let layout_name = CString::new(format!("{}-layout", name.to_string_lossy()))
                 .expect("fixed program names contain no NUL");
-            name_object(&self.owner, self.set_layout, &set_name)?;
-        }
-        if matches!(kind, ProgramKind::Composite) {
-            name_object(&self.owner, self.sampler, c"m2-composite-nearest-sampler")?;
+            name_object(&self.owner, self.layout, &layout_name)?;
+            if !bindings.is_empty() {
+                let set_name = CString::new(format!("{}-set-layout", name.to_string_lossy()))
+                    .expect("fixed program names contain no NUL");
+                name_object(&self.owner, self.set_layout, &set_name)?;
+            }
+            if matches!(kind, ProgramKind::Composite) {
+                name_object(&self.owner, self.sampler, c"m2-composite-nearest-sampler")?;
+            }
         }
         Ok(())
     }

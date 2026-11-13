@@ -190,7 +190,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             runtime.owner.device.device_type(),
             vk::PhysicalDeviceType::CPU
         );
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         assert_eq!(presenter.vsync(), Some(true));
         presenter.set_vsync(true).unwrap();

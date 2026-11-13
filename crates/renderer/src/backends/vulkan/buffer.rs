@@ -325,35 +325,38 @@ impl VulkanAllocator {
             owner.memory_type = info.memory_type;
             owner.memory_properties =
                 properties.memory_types[info.memory_type as usize].property_flags;
-            let name = match role {
-                BufferRole::Upload => c"renderer.upload",
-                BufferRole::DeviceTransfer => c"renderer.device-transfer",
-                BufferRole::Readback => c"renderer.readback",
-            };
-            // SAFETY: The unique live buffer belongs to this Device, debug_utils
-            // is enabled, and the borrowed name remains live through the call.
-            unsafe {
-                owner
-                    .owner
-                    .device
-                    .debug_utils()
-                    .set_debug_utils_object_name(
-                        &vk::DebugUtilsObjectNameInfoEXT::default()
-                            .object_handle(buffer)
-                            .object_name(name),
-                    )
-            }
-            .map_err(|result| {
-                owner.owner.device.observe_result(result);
-                BufferError::Vulkan {
-                    operation: "vkSetDebugUtilsObjectNameEXT",
-                    role,
-                    size,
-                    offset: 0,
-                    len: size,
-                    result,
+            #[cfg(feature = "vulkan-diagnostics")]
+            {
+                let name = match role {
+                    BufferRole::Upload => c"renderer.upload",
+                    BufferRole::DeviceTransfer => c"renderer.device-transfer",
+                    BufferRole::Readback => c"renderer.readback",
+                };
+                // SAFETY: The unique live buffer belongs to this Device, debug_utils
+                // is enabled, and the borrowed name remains live through the call.
+                unsafe {
+                    owner
+                        .owner
+                        .device
+                        .debug_utils()
+                        .set_debug_utils_object_name(
+                            &vk::DebugUtilsObjectNameInfoEXT::default()
+                                .object_handle(buffer)
+                                .object_name(name),
+                        )
                 }
-            })?;
+                .map_err(|result| {
+                    owner.owner.device.observe_result(result);
+                    BufferError::Vulkan {
+                        operation: "vkSetDebugUtilsObjectNameEXT",
+                        role,
+                        size,
+                        offset: 0,
+                        len: size,
+                        result,
+                    }
+                })?;
+            }
             tracing::info!(target: LOG_TARGET, buffer = ?owner.buffer, role = ?role,
                 size, allocation_size = info.size, memory_type = owner.memory_type,
                 memory_properties = ?owner.memory_properties,
@@ -763,7 +766,7 @@ mod tests {
         tracing::dispatcher::with_default(&dispatch, || {
             for iteration in 0..4 {
                 let diagnostics = Diagnostics::new();
-                let instance = VulkanInstance::new(Arc::clone(&diagnostics))
+                let instance = VulkanInstance::new(diagnostics.clone())
                     .unwrap_or_else(|error| panic!("iteration {iteration}: {error}"));
                 super::super::assert_real_validation(&diagnostics);
                 let device = VulkanDevice::new(instance)

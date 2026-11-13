@@ -4,7 +4,9 @@
 //! recorded reference, and accepted state is distinct from actual completion.
 
 use std::collections::BTreeMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
+#[cfg(feature = "vulkan-diagnostics")]
+use std::ffi::CString;
 use std::fmt;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,7 +18,7 @@ use ash::vk;
 
 use super::buffer::{BufferError, BufferRole};
 use super::device::{DeviceInitError, DeviceState, VulkanDevice};
-use super::diagnostics::Diagnostics;
+use super::diagnostics::{Diagnostics, DiagnosticsHandle};
 use super::instance::{InitError, PrerequisiteFailure, VulkanInstance};
 use super::memory::{AllocatorInitError, MemoryOwner, VulkanAllocator};
 use super::transfer::staging::{SharedStaging, StagingError, StagingRange};
@@ -258,6 +260,9 @@ impl From<InitError> for RuntimeError {
                     _ => None,
                 })
                 .unwrap_or(RuntimeErrorKind::Unsupported),
+            #[cfg(not(feature = "vulkan-diagnostics"))]
+            InitError::DiagnosticsNotCompiled => RuntimeErrorKind::Unsupported,
+            #[cfg(feature = "vulkan-diagnostics")]
             InitError::MissingEntryPoint(_) => RuntimeErrorKind::Unsupported,
             InitError::Vulkan { result, .. } => native_kind(*result),
         };
@@ -441,7 +446,7 @@ impl Drop for Registration<'_> {
 /// no Vulkan handles. One mutable submit transaction serializes state planning.
 pub struct VulkanRuntime {
     owner: Arc<MemoryOwner>,
-    diagnostics: Arc<Diagnostics>,
+    diagnostics: DiagnosticsHandle,
     execution: ExecutionPool,
     upload: SharedStaging,
     readback: SharedStaging,
@@ -461,18 +466,18 @@ pub struct VulkanRuntime {
 
 impl VulkanRuntime {
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {
-        Self::new_with_validation(config, super::instance::ValidationMode::Required)
+        Self::new_with_validation(config, super::instance::ValidationMode::default())
     }
 
-    /// Performance runs may explicitly disable Validation. The default
-    /// constructor and correctness tests continue to require Core + SyncVal.
+    /// Select native validation independently of optimization and Renderer checks.
+    /// Required needs `vulkan-diagnostics`; `development-validation` selects it by default.
     pub fn new_with_validation(
         config: RuntimeConfig,
         validation: super::instance::ValidationMode,
     ) -> Result<Self, RuntimeError> {
         Self::validate_config(config)?;
         let diagnostics = Diagnostics::new();
-        let instance = VulkanInstance::with_validation(Arc::clone(&diagnostics), validation)?;
+        let instance = VulkanInstance::with_validation(diagnostics.clone(), validation)?;
         let device = VulkanDevice::new(instance)?;
         Self::from_device(config, diagnostics, device)
     }
@@ -492,7 +497,7 @@ impl VulkanRuntime {
 
     fn from_device(
         config: RuntimeConfig,
-        diagnostics: Arc<Diagnostics>,
+        diagnostics: DiagnosticsHandle,
         device: VulkanDevice,
     ) -> Result<Self, RuntimeError> {
         let allocator = VulkanAllocator::new(device)?;
@@ -1256,6 +1261,7 @@ fn provenance_requirements(graph: &CompiledGraph) -> (Vec<bool>, Vec<bool>) {
 }
 
 struct PreparedPass {
+    #[cfg(feature = "vulkan-diagnostics")]
     name: CString,
     operation: PreparedOperation,
     buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
@@ -1304,6 +1310,7 @@ impl GraphWork {
                 diagnostics::pass(output, index, pass);
             }
             let mut prepared = PreparedPass {
+                #[cfg(feature = "vulkan-diagnostics")]
                 name: CString::new(pass.name.as_str())
                     .map_err(|_| RuntimeError::invalid("pass debug name contains a NUL byte"))?,
                 operation: PreparedOperation::try_from(&pass.operation)?,
@@ -1699,6 +1706,7 @@ impl TransferPayload for GraphWork {
             // SAFETY: Every command operand is validated and retained in this
             // payload. Pass boundaries lie outside all dynamic rendering scopes.
             unsafe {
+                #[cfg(feature = "vulkan-diagnostics")]
                 device.debug_utils().cmd_begin_debug_utils_label(
                     command,
                     &vk::DebugUtilsLabelEXT::default().label_name(&pass.name),
@@ -1874,6 +1882,7 @@ impl TransferPayload for GraphWork {
                         )
                     }
                 }
+                #[cfg(feature = "vulkan-diagnostics")]
                 device.debug_utils().cmd_end_debug_utils_label(command);
             }
         }

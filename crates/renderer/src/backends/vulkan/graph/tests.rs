@@ -183,7 +183,7 @@ fn vulkan_graph_upload_input_retirement_and_future_index_import() {
             max_shader_bindings: 4,
         })
         .unwrap();
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         assert_ne!(
             runtime.owner.device.device_type(),
@@ -348,7 +348,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             max_shader_bindings: 8,
         })
         .unwrap();
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         assert_ne!(
             runtime.owner.device.device_type(),
@@ -547,7 +547,7 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
             max_shader_bindings: 4,
         })
         .unwrap();
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         assert_ne!(
             runtime.owner.device.device_type(),
@@ -635,7 +635,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             max_shader_bindings: 2,
         };
         let mut runtime = VulkanRuntime::new(config).unwrap();
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         assert_ne!(
             runtime.owner.device.device_type(),
@@ -702,7 +702,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             "failed acquisitions do not grow the registry"
         );
         let mut foreign_runtime = VulkanRuntime::new(config).unwrap();
-        let foreign_diagnostics = Arc::clone(&foreign_runtime.diagnostics);
+        let foreign_diagnostics = foreign_runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&foreign_diagnostics);
         let mut imported = Graph::new();
         let input = imported.import_buffer("input", &first_export).unwrap();

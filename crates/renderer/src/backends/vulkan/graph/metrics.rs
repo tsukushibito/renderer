@@ -464,7 +464,7 @@ mod tests {
                 vk::PhysicalDeviceType::CPU,
                 "CPU fallback is not real-GPU acceptance"
             );
-            let diagnostics = Arc::clone(&runtime.diagnostics);
+            let diagnostics = runtime.diagnostics.clone();
             crate::backends::vulkan::assert_real_validation(&diagnostics);
 
             let mut graph = Graph::new();

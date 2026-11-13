@@ -18,7 +18,7 @@ fn real_gpu_config(config: RuntimeConfig, test: impl FnOnce(&mut VulkanRuntime))
             vk::PhysicalDeviceType::CPU,
             "CPU fallback does not count as real-GPU acceptance"
         );
-        let diagnostics = Arc::clone(&runtime.diagnostics);
+        let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
         test(&mut runtime);
         drop(runtime);
