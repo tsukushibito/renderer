@@ -464,15 +464,99 @@ DAGや固定操作が動くことと、拡張性の実証を区別する。
 |---|---|
 | 描画 | 対象Bistroをテクスチャ付きPBR・影・線形HDR・トーンマッピングで描く。normal/tangent/UV、色空間、sampling/mip、alphaの解釈と対応範囲を記す。 |
 | 拡張性 | 利用側の別module/crateが独自shader/pipelineの多段Bloomを追加・無効化・交換できる。Renderer本体やeffect列挙型の編集を必要としない。 |
-| 二API | 同じ論理Graph・利用側パス定義・asset入力・描画条件をVulkan/D3D12実GPUへ渡す。 |
+| 二API | 同じ論理Graph・利用側パス定義・asset入力・描画条件をVulkan/D3D12実GPUへ渡し、Windowsでは両APIで表示・自由カメラ操作を行える。 |
 | 正しさ | 画像・差分を保存し、浮動小数点やsamplingの差に対する比較条件を根拠付きで定める。bufferのbit一致を画像へ機械的に適用しない。 |
 | 所有と検証 | 作成・更新・import/export・pending・終了・失敗を各段階で確認する。厳格native検証と診断なし最適化経路を分け、検証方針を満たす。 |
 | 性能 | 初回読込と定常描画を分け、CPU build/compile/record/submit・GPU時間・メモリ・uploadを記録する。対象機材・画質と実測から予算を決め、未測定のFPSを約束しない。 |
 
 path-traced参照画像との一致、レイトレーシング/GI、native HDR表示、skinning等を自動的な必須条件にはしない。
 静的Bistroだけでは確認できない履歴や動的更新は、小さな補助sceneで検証する。
-表示の初期対象は現行のWindowsとし、二APIの描画受入は共通offscreen出力でも行える。
-D3D12固有presentationを無条件に追加せず、表示経路はB0の基盤選定と合わせて定める。
+表示の初期対象は現行のWindowsとする。ユーザーとの要件合意により、最終受入は両APIの画面表示・操作と、
+同条件のoffscreen画像比較の両方を要求する。表示経路の実装方式はB0の基盤選定で比較する。
+
+<a id="bistro-requirements"></a>
+
+### Bistroの確定要件と素材取得前の仕様案
+
+`renderer-7ft.1.1`で合意した要件を次に固定する。下の描画方式と準備手順は出発案であり、
+素材実体・変換結果・API基盤の小試作に基づく採用決定や、実装・実GPU受入の完了を意味しない。
+
+| 項目 | 確定した要件 |
+|---|---|
+| 最終対象 | Bistroの屋外全体。屋内全体は含めない。部分シーンでの着手後も屋外の対象mesh/materialを黙って省略しない。 |
+| 描画品質 | テクスチャ付きPBR、太陽光＋空からの光（IBL）＋影、線形HDR・トーンマッピング、利用側独自Bloom。建物・地面間の光の跳ね返りを解く追加GIは必須にしない。IBL自体は間接照明を含む。 |
+| 基準解像度 | 1920×1080。画像比較・性能測定の共通条件であり、実行時の解像度変更を妨げない。 |
+| カメラ | マウス・キーボードによる自由移動に加え、比較用の固定視点と再現可能な自動巡回。カメラ・入力・シーン管理は利用側に置く。 |
+| 表示 | 同じサンプルをVulkan/D3D12のどちらで起動しても、Windowsの画面で表示・操作できる。offscreen画像比較も行う。 |
+| 初回受入機材 | 既存Windows x64／RTX 3060環境。既存記録は12 GiBであり、実行時にadapter・driver・能力を再記録する。他GPUでの実機受入を初回の必須条件にはせず、NVIDIA専用設計も要求しない。 |
+| 性能予算 | 同じ素材・画質・機材の実測から定める。未測定のFPS、VRAM内への収容、他APIへの優位を約束しない。 |
+
+実行中のAPI切替、二APIの同時二画面表示、カメラの衝突判定・歩行物理は今回の要件に含めない。
+native HDR表示、レイトレーシング、追加GI、skinningも上の完成条件には追加しない。
+
+#### 素材と変換の確認仕様
+
+[NVIDIAの公式配布](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)はFBX/Falcor形式、
+CC-BY 4.0、屋外2,832,120三角形と記載する。これは配布案内の値であり、取得ファイルの検証値ではない。
+引用情報の2017年7月を配布versionとみなさず、取得日時・実ファイル・size・SHA-256で配布物を識別する。
+同梱licenseと出典を確認し、作者・配布元・licenseへのリンク、変換した旨を利用側のクレジットへ残す。
+
+| 記録対象 | 取得・変換時に確定する内容 |
+|---|---|
+| 幾何 | source node path、mesh/instance、transform、三角形、material slot、position/normal/tangent/UV/colorの有無と対応。座標系・単位・面の向き・接線の符号も記録する。 |
+| 材質 | base color、metal/roughまたはspec/gloss、normal、emissive、AO、opacity/cutoff、両面、UV set/transform。存在と意味を同梱scene・textureと照合する。 |
+| 画像・sampling | 相対path、hash、寸法、channelと色空間、wrap/filter、mipと生成条件、欠落参照。色textureとnormal等のdata textureの変換を分ける。 |
+| alpha | opaque/mask/blendの分類と根拠、shadowへの適用。必要な透過表現を不透明へ黙って置き換えず、alpha blendと物理的な透過・屈折を同一視しない。 |
+| 変換の再現 | toolの正確なpatch/build・exporter版、script/設定/hash、入力・出力hash、sourceから出力へのnode/instance/material/texture対応。 |
+
+候補は固定版Blenderのheadless変換と[同梱Khronos exporter](https://github.com/KhronosGroup/glTF-Blender-IO)による
+glTF 2.0 Separateへの出力である。中間形式を検査しやすくする案であり、runtime依存はまだ選ばない。
+[BlenderのglTF資料](https://docs.blender.org/manual/en/5.0/addons/import_export/scene_gltf2.html)にある認識可能なmaterial nodeや
+UV/normal境界での頂点分割を考慮し、FBXからの変換を無損失と仮定しない。
+選択物だけのexportや材質の単純化で欠落を隠さず、対応表・形状・画像を照合する。
+[glTF Validator](https://github.com/KhronosGroup/glTF-Validator)の形式・参照検査と、元シーンの完全性確認も区別する。
+取込・作成・更新境界で内容を保証し、不変なasset本文を毎drawで再走査しない。
+
+#### 描画方式の出発案
+
+| 項目 | 第一案と採用時の確認 |
+|---|---|
+| Raster/PBR | 通常のForward、metallic-roughnessのGGX specular＋diffuse、normal map。太陽光＋IBLから始める構成の小ささを理由とし、Deferred等への性能優位は主張しない。材質棚卸しに必要な変換・emissive・alpha・両面を反映する。 |
+| IBL | 静的環境を前処理し、diffuse irradianceとroughness別specularを使う。環境の出典/license/hash・回転・強度・前処理toolを固定し、環境内の太陽とdirectional sunの重複を調整する。 |
+| 影 | 太陽のCSM＋PCF。分割数・解像度・距離・bias・filter・境界処理と安定化は、素材と巡回経路で画質・費用を確認して固定する。 |
+| HDRとBloom | 線形Rec.709のRGBA16F候補へ描画し、利用側の多段Bloomを合成して固定露出・tone mappingへ渡す。Bloomの追加・無効化・交換でRenderer本体を編集しない。 |
+| 出力 | SDR sRGBを初期表示とし、tone mapperはKhronos PBR Neutralを候補にする。linear入力・出力とsRGB転送を分け、encodeを一度だけ行う。formatのattachment/storage/sampled/filter等の実用途は両APIで照会・確認する。 |
+| AA | 履歴・jitterを必須にしないFXAAを候補にし、AAなしの診断画像も保存する。細線・鏡面の時間方向のちらつきを解決済みとは扱わず、巡回で評価する。 |
+
+PBR/IBLの算法は[Filamentの解説](https://google.github.io/filament/main/filament.html)、
+影の算法は[MicrosoftのCSM解説](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/cascaded-shadow-maps)、
+tone mappingは[Khronosの参照shader](https://github.com/KhronosGroup/ToneMapping/blob/main/PBR_Neutral/pbrNeutral.glsl)を根拠にする。
+CSM資料のD3D10/11向け実装説明をD3D12のAPI契約へ流用しない。
+これは画質・構成の出発案であり、vendor固有の最適化や未計測の高速化ではない。
+採用基盤・公開APIの選定は後続のB0課題で行い、Vulkan/VMA等の同期・寿命・能力契約と
+[製品・開発の検証方針](../guides/validation-policy.md)を維持する。一般推奨からの新しい例外は設けない。
+
+#### 再現・比較と完了の境界
+
+asset/IBL/shader/設定のhash、座標・単位・projection、camera pose/FOV/near/far、巡回keyframeと固定時刻、
+sun/IBL、露出、影・Bloom・AA、解像度を一組で保存する。全景・路地・材質近景・alpha・影境界を確認できる
+視点を取得後に選び、自動露出や時刻変化・乱数jitterで比較条件を変えない。
+最終SDRだけでなくBloom前HDRと必要な中間出力・差分を保存し、単純fixtureの厳密比較とBistroの許容誤差比較を分ける。
+同API反復と二API差、既知の材質欠落・色変換ミス・影ずれを検出できることから、受入runより前に
+絶対/相対誤差・誤差画素数/領域の閾値と根拠を固定する。輪郭等の一括除外で不具合を隠さない。
+
+両APIの表示・自由操作・resize・最小化復帰・pending中の終了を実GPUで受け入れる。
+最適化＋Renderer追加検証あり＋厳格native検証の経路と、Renderer追加検証・専用診断をコンパイル除外し
+native検証を無効にした最適化通常経路で内容を別に照合し、
+正常終了・native所有者破棄後までの警告/エラーゼロを既存方針どおり要求する。
+初回読込/変換・upload・shader/pipeline準備と定常描画、CPU各phase・GPU・frame全体・メモリを分け、
+warm-up・複数runのp50/p95・揺れ・VSyncと表示待ちを記録する。
+
+準備の記録手順は[開発ガイド](../guides/development.md#bistro-preparation)に置く。
+素材実体の版/hash・全材質の棚卸し・変換再現性・camera/lightの具体値は未確認である。
+それらを固定するまで`renderer-7ft.1.1`は進行中とし、実装済みとは扱わない。
+画像閾値の校正と性能予算は各段階の実GPU結果で具体化し、最新の実行/未実行は
+[検証状況](../verification/current.md)へ記録する。
 
 ### B0: Bistro基準・公開APIのUX・採用基盤の設計
 
@@ -482,7 +566,7 @@ D3D12固有presentationを無条件に追加せず、表示経路はB0の基盤�
 |---|---|
 | `renderer-7ft.1.1` | 素材・描画要求を棚卸しし、最終対象・品質・再現条件・比較方法を固定する。 |
 | `renderer-7ft.1.2` | 第7章の代表利用コードを複数案で書き、UX、所有、資源アクセス、pipeline/binding/ABI、errorと拡張時の変更箇所を比較する。 |
-| `renderer-7ft.1.3` | 既存継続/改修・自前置換・外部基盤利用を一次資料と小試作で比較し、進めやすさ・総工数・品質・保守負担から採用案と移行範囲を決める。 |
+| `renderer-7ft.1.3` | 既存継続/改修・自前置換・外部基盤利用を一次資料と小試作で比較し、両APIのWindows表示も含む総工数・品質・保守負担から採用案と移行範囲を決める。 |
 
 **完了条件:** 利用コードと要求を根拠にAPI・採用基盤の第一案を説明できる。
 外部基盤へ委譲する範囲とRendererが保証する範囲も明示する。
@@ -529,8 +613,9 @@ Bistroへの最終接続はB3のHDR出力を使い、拡張性の問題発見を
 
 ### B5: Bistro二APIの統合受入と組込性
 
-`renderer-7ft.6`。各段階の検証を継続したうえで、固定view/camera path、offscreen/表示、
-複数frame、更新・pending終了と補助sceneを統合確認する。初回読込と定常描画を分けて測定する。
+`renderer-7ft.6`。各段階の検証を継続したうえで、1920×1080の固定view/camera pathとoffscreen比較、
+両APIのWindows表示・自由移動、複数frame、更新・pending終了と補助sceneを統合確認する。
+初回受入は既存RTX 3060環境とし、初回読込と定常描画を分けて測定する。
 
 **完了条件:** 上表の描画・拡張性・二API・正しさ・所有・性能の証拠が揃う。
 外部の利用コードから再現できるガイドを整え、実行/未実行と既知の制限を説明できる。
@@ -582,6 +667,7 @@ Apple展開が優先要件になった場合やWindows実機を維持できな�
 
 旧M4は固定操作をD3D12へ移植してから公開契約を抽出する計画だった。未着手分はB0〜B5へ置換し、次の作業をB0の要求・利用例・方式選定とする。二APIで同じパスと入力を比較する目標は維持する。
 D3D12での表示経路を、共通契約の検証に先立つ必須条件にはしない。
+ただし[Bistroの確定要件](#bistro-requirements)により、両APIでのWindows表示は最終受入の必須条件である。
 
 shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を採用した。[^spirvcross][^dxc]
 固定5種類の再生成一致とreflectionを確認し、tool版・hash・引数・ABIを[ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記す。

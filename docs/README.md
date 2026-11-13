@@ -5,12 +5,12 @@
 
 | 分類 | 文書 | 内容 |
 |---|---|---|
-| 利用手順 | [開発手順](guides/development.md) | 環境構築、ビルド、試験、性能測定 |
+| 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
 | 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、RenderDoc |
 | 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
 | 実装指針 | [RenderGraphベストプラクティス](guides/rendergraph-best-practices.md) | 公開設計の比較、依存・内容・寿命、コンパイル、同期、資源配置、並列化、検証 |
-| 設計 | [実装方針](design/implementation-policy.md) | Bistro到達目標、APIのUXと基盤選定、B0〜B5計画、現行D3D12の契約と実装・検証の方針 |
+| 設計 | [実装方針](design/implementation-policy.md) | Bistro確定要件と取得前の仕様案、APIのUXと基盤選定、B0〜B5計画、現行D3D12の契約と実装・検証の方針 |
 | 設計 | [RenderGraph](design/rendergraph.md) | 共通宣言・依存解析、二APIのbuffer実行、Vulkanのimport/export・履歴、エンジン入力と拡張 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |

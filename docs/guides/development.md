@@ -55,6 +55,41 @@ CIのLinux確認ジョブではgccを明示的に用意し、Vulkanジョブで�
 Windowsジョブはrunner付属のMSVCを使います。
 ビルド確認とLinux実GPUでの確認は別の結果として扱います。
 
+<a id="bistro-preparation"></a>
+
+## Bistroの素材・再現条件の準備（B0仕様案）
+
+対象と描画条件は[実装方針の確定要件](../design/implementation-policy.md#bistro-requirements)に従う。
+以下は取得前の準備仕様で、動作確認済みの取得・変換コマンドやBistro描画sampleはまだない。
+tool導入や大容量素材の取得を、通常のRustビルド・CIの前提へ追加しない。
+
+1. [NVIDIA公式ページ](https://developer.nvidia.com/orca/amazon-lumberyard-bistro)から配布元を確認する。
+   利用側のasset保管先へアーカイブを保存し、URL・取得日時・ファイル名・size・SHA-256・同梱licenseと
+   クレジットを記録する。大容量素材を既定でGitへ追加せず、配布案内の三角形数を実測件数の代わりにしない。
+2. 展開後の屋外sceneについて、node/instance・mesh/material slot・texture参照の対応表とhashを作る。
+   FBXと同梱sceneを照合し、座標/単位、normal/tangent/UV、色空間/channel、sampler/mip、alpha/両面を記録する。
+   欠落・未対応は診断し、選択物exportや不透明への置換で対象を黙って減らさない。
+3. Blender＋glTF Separateを候補として、小さな代表部分で変換を試す。
+   toolのpatch/build・exporter・script・全設定を固定し、sourceと出力の対応、transform・面・接線・材質を比較する。
+   形式は固定版Khronos Validatorでも検査しreportを保存する。形式の合格だけで元シーンの完全性を認めない。
+   必要材質が保存できなければ変換規則を直すか、別の取込経路を評価してから全屋外へ広げる。
+4. 全屋外の取得・変換結果から、同じ出力を再生成できる手順とhashを記録する。
+   環境画像も出典/license/hash・前処理tool/設定・出力hashを固定し、色・normal等のmip規則を混同しない。
+   検証保証は取込・作成・更新境界へ置き、描画ごとのasset全量検査や診断専用payload保持を前提にしない。
+5. 比較設定にcamera/FOV/near/far・巡回keyframe/固定時刻、sun/IBL、露出、影/Bloom/AA、1920×1080、
+   asset/shader/tool/設定hashを保存する。APIを変えても同じ値を使い、基準画像変更には理由を残す。
+   実行するcommit・OS/GPU/driver・buildと実効検証設定も記録する。
+
+今後の実GPU受入では、両APIを同時に負荷実行せず、同じ機材で逐次確認する。
+offscreenの最終SDR・Bloom前HDR・必要な中間出力と差分を保存し、画面表示・自由操作・resize・最小化復帰・
+pending終了も別に確認する。最適化＋Renderer追加検証あり＋Vulkan Core/SyncValまたはD3D12 Debug Layer/適用するGBVの厳格受入と、
+Renderer追加検証・専用診断をコンパイル除外しnative検証を無効にした最適化経路の内容照合を別runで行う。
+性能測定も後者の構成で行い、厳格受入の計装付き時間と分ける。
+[GBVはshader・commandを計装する](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-d3d12-debug-layer-gpu-based-validation)ため、
+その実行時間を通常性能として扱わない。既存の警告/エラーゼロと破棄後までの確認を維持する。
+画像閾値は既知の誤りを検出できる条件から受入前に固定し、性能予算は同条件の実測から決める。
+記録先は[現在の検証状況](../verification/current.md)、未完了の追跡は`renderer-7ft.1.1`と各実装課題を使う。
+
 ## ビルド・品質確認
 
 Vulkanの同期・寿命・資源更新・機能導入のレビューには
@@ -211,10 +246,10 @@ warning／error／corruptionはゼロを要求し、Vulkan側も終了後まで�
 tool・Debug Layer・実GPUの不足、LUID照合不能、probeの不在、JSON欠落を成功やskipへ置き換えません。
 
 この準備probeはGraphの実行や二APIの画像等価性の受入には数えません。
-buffer byteの受入は次節、M4-08〜10ではCompute・深度付きmesh・合成の画像を照合し、
-M4-18では同じ入力・解像度・期待値と寿命／失敗条件を二APIで反復確認します。
-各段階でraw byte／RGBAまたはPPM、Graph条件、終了後の検証ログを同じ実行IDへ保存する形に接続します。
-M4-19のCPU／GPU時間とメモリ比較は別のrelease実行とし、GBV等を有効にした正しさ試験の時間を
+buffer byteの受入は次節、新しい画像・寿命契約はB1〜B5の各実装段階で、
+同じ入力・解像度・期待値と寿命／失敗条件を二APIで反復確認します。
+各段階でraw byte／画像・差分、Graph条件、終了後の検証ログを同じ実行IDへ保存します。
+CPU／GPU時間とメモリ比較は診断なしの別のrelease実行とし、GBV等を有効にした正しさ試験の時間を
 性能値へ流用しません。両APIの対応する負荷と計測経路が揃うまで、性能比較は未実行として記録します。
 実GPU試験・計測を並行実行せず、機材を使えない場合は受入未完了として理由を残します。
 

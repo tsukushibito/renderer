@@ -8,14 +8,23 @@
 ## Bistro計画と現行実装の区別
 
 開発計画を[実装方針のB0〜B5](../design/implementation-policy.md#bistro-roadmap)へ改訂した。
-追跡は`renderer-7ft`、次の実作業は`renderer-7ft.1.1`のBistro対象・描画品質・受入条件の具体化である。
+追跡は`renderer-7ft`。`renderer-7ft.1.1`では利用者要件を合意し、
+[確定要件と取得前の仕様案](../design/implementation-policy.md#bistro-requirements)を記録した。
+対象は屋外全体、太陽光＋IBL＋影、PBR/HDR/tone mappingと利用側Bloom、基準1920×1080、
+自由カメラと固定視点・自動巡回、両APIのWindows表示・操作、初回受入は既存RTX 3060である。
+要件の合意を実装・実GPU受入の成功とは扱わない。
 既存基盤の再利用は必須にせず、B0で維持・改修・置換・外部基盤を比較する。
 旧M4の6/22完了は準備・Device・buffer実行の実績であり、新計画の進捗率へ流用しない。
 旧M4の未着手分は後継課題を示して置換し、実装完了とは扱わない。
 
-今回の変更は文書とBeadsの計画再編だけで、下記のGPU・CPU実行結果は従来の固定ソースでの実績である。
-Bistroの素材取得・変換、テクスチャ付きPBR・影・HDR、独自Bloom、公開パスAPIの二API実証は未実行である。
-文書差分・相対リンク/anchor・課題対応と依存循環を確認した。独立レビューで残っていた旧M4の将来指示とVMA固有選択の適用範囲を修正した。
+今回の変更は文書とBeadsの要件・仕様案だけで、下記のGPU・CPU実行結果は従来の固定ソースでの実績である。
+NVIDIA公式の配布形式・license案内と、変換・PBR/IBL・影・tone mappingの一次資料を確認した。
+素材実体の配布hash・mesh/material/texture棚卸し・変換再現性・IBL素材・camera/light具体値は未確認で、
+`renderer-7ft.1.1`は進行中である。次の実作業は素材実体に基づく調査・変換の実証と条件の固定である。
+Bistroの素材取得・変換、テクスチャ付きPBR・影・HDR、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
+画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、出発案を性能保証へ読み替えない。
+文書4件のUTF-8・fenceと相対リンク/anchor 71件・既存の実装方針へのbacklink、`git diff --check`、
+Beadsの依存循環なしを確認した。独立レビューで検証構成の表現と開発手順に残っていた旧M4の将来指示を修正した。
 実装・shader・依存・ビルド設定の変更がないため、今回のためのローカルGPU/CPU試験は再実行しない。
 
 ## 環境と対応範囲
