@@ -1,0 +1,56 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+; shader hash: 2d8ef3ffd4355c40d2a01dfb866efc83
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Compute Shader
+; NumThreads=(1,1,1)
+; NumBytesGroupSharedMemory: 0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 0
+; SigOutputElements: 0
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 0
+; SigOutputVectors[0]: 0
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Buffer Definitions:
+;
+; cbuffer _13_15
+; {
+;
+;   struct _13_15
+;   {
+;
+;       uint4 _15_m0;                                 ; Offset:    0
+;
+;   } _13_15;                                         ; Offset:    0 Size:    16
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _13_15                            cbuffer      NA          NA     CB0            cb0     1
+; _10                                   UAV    byte         r/w      U0      u0,space1     1
+;
