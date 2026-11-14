@@ -280,10 +280,11 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 `renderer-7ft.2.1.2`は、共通の`program::ManagedProgram`からnative Programを作成し、
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
-`.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加える。一般owned passとの接続、
-他format/mip/layer/filter、任意shader取込は後続へ残す。
+`.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
+一般owned passとの接続、depth/他format/mip/layer/filter、任意shader取込は後続へ残す。
 
-safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`と`sampled_readback()`である。
+safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`sampled_readback()`、
+`sampled_float_readback()`である。
 前者は以下のbuffer ABIを持つ。
 GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
 `std140 uvec4`（offset 0、16 byte）を読み、Storageのset 1/binding 0へ
@@ -320,7 +321,7 @@ leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早�
 計画・状態・所有を接続する必要があり、今回の作成APIだけで一般dispatchの同期を保証したとは扱わない。
 実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
 
-`create_managed_image(ImageDescriptor)`はRGBA8_UNORMの2D、mip/layer/sample各1、
+`create_managed_image(ImageDescriptor)`はRGBA8_UNORMまたはRGBA16Fの2D、mip/layer/sample各1、
 optimal tiling、`SAMPLED|TRANSFER_DST`だけで作る。Graph画像のstorage/color attachment等の
 固定usageやframebuffer/viewport上限を持ち込まず、実際のformat/type/tiling/usage/flagsと
 extent/mip/layer/sample対応を作成境界で照会する。packed pixel量をVMA allocation sizeへ代用しない。
@@ -345,6 +346,17 @@ fixtureはImageとStorageの排他leaseを記録から退役まで保持する�
 再初期化せずSHADER_READ_ONLY_OPTIMALで再sampleし、新しい色は別画像版へuploadする。受理済みsubmitの予定状態と
 未投入cancelを区別し、GPU完了を確認できない失敗では資源/descriptor/lease連鎖を早期解放しない。
 画像の公開作成/所有/descriptorは製品へ残し、upload色・private executorのstate/leaseは`cfg(test)`に限る。
+
+RGBA16Fは`ImageFormat::Rgba16Float`を`R16G16B16A16_SFLOAT`へ対応づけ、
+同じ実format/usage照会とfull color Viewの所有を使う。Viewのnative formatは保持したImageから決める。
+RGBA8の対応や既存Graph画像の用途を、RGBA16Fの対応根拠へ流用しない。
+`sampled_float_readback`は同じ4座標の各RGBAをFP32でsampleし、`floatBitsToUint`で
+4個の`uvec4`、計64 byteをStorageへ書く。画像の16-bit格納からFP32への解釈を確認するもので、
+shaderの16-bit演算型や追加の`shaderFloat16` featureは使わない。
+これは[画像readのbinary32への変換](https://docs.vulkan.org/spec/latest/chapters/images.html#images-reads-numericformat)と
+[shader内16-bit型のfeature](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceShaderFloat16Int8Features.html)を区別した選択である。
+private受入は32 byteの2x2 half入力と64 byteの出力を区別し、負値・小数・1超の値と行/成分順を照合する。
+shader ABI・画像format・参照範囲は作成時に保証し、upload byte列とreadback範囲の変更は試験専用経路に限定する。
 
 
 ## 投入・完了・異常時の保持

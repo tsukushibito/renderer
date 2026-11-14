@@ -41,7 +41,7 @@ struct Work {
     readback: TransferBuffer,
 }
 impl Work {
-    fn new(bindings: VulkanBindings, pixels: Option<&[u8; 16]>) -> Result<Self, RuntimeError> {
+    fn new(bindings: VulkanBindings, pixels: Option<&[u8]>) -> Result<Self, RuntimeError> {
         let image = bindings
             .0
             .resources
@@ -58,11 +58,19 @@ impl Work {
                 "supply initial pixels exactly once, then reuse immutable sampled contents",
             ));
         }
-        // This fixture's byte input is exactly the selected 2x2 image, not an
-        // unrestricted upload API. General Graph upload remains subsequent work.
-        if image.image.desc() != image_desc() {
+        // This fixture's byte input is exactly the selected 2x2 image in its
+        // actual texel format. General Graph upload remains subsequent work.
+        let desc = image.image.desc();
+        let upload_size = match desc.format {
+            ImageFormat::Rgba8Unorm => 16,
+            ImageFormat::Rgba16Float => 32,
+        };
+        if desc.width != 2
+            || desc.height != 2
+            || pixels.is_some_and(|bytes| bytes.len() != upload_size)
+        {
             return Err(RuntimeError::invalid(
-                "sampling fixture requires a 2x2 image",
+                "sampling fixture requires exact format-sized 2x2 pixels",
             ));
         }
         let output_index = bindings
@@ -71,15 +79,20 @@ impl Work {
             .position(|slot| slot.kind == BindingType::StorageWrite)
             .unwrap();
         let output = StorageLease::acquire(bindings.0.buffer(output_index).0.clone())?;
+        let output_size = bindings.layout()[output_index].min_size;
         let allocator = VulkanAllocator {
             owner: Arc::clone(&bindings.0.program.0.owner),
         };
         let upload = pixels.map(|pixels| {
-            let mut upload = allocator.create_buffer(BufferRole::Upload, 16).unwrap();
+            let mut upload = allocator
+                .create_buffer(BufferRole::Upload, pixels.len() as u64)
+                .unwrap();
             upload.write(0, pixels).unwrap();
             upload
         });
-        let readback = allocator.create_buffer(BufferRole::Readback, 16).unwrap();
+        let readback = allocator
+            .create_buffer(BufferRole::Readback, output_size)
+            .unwrap();
         Ok(Self {
             bindings,
             image: Some(image),
@@ -89,8 +102,8 @@ impl Work {
             readback,
         })
     }
-    fn read(&mut self) -> [u8; 16] {
-        let mut bytes = [0; 16];
+    fn read(&mut self) -> Vec<u8> {
+        let mut bytes = vec![0; self.readback.size() as usize];
         self.readback.read(0, &mut bytes).unwrap();
         bytes
     }
@@ -106,7 +119,7 @@ impl TransferPayload for Work {
         &self.bindings.0.program.0.owner
     }
     fn bytes(&self) -> u64 {
-        if self.upload.is_some() { 32 } else { 16 }
+        self.upload.as_ref().map_or(0, TransferBuffer::size) + self.readback.size()
     }
     fn label(&self) -> &'static CStr {
         c"managed.sampled-readback"
@@ -124,7 +137,8 @@ impl TransferPayload for Work {
         // SAFETY: This payload retains the complete binding chain and exclusive
         // leases for image initialization/sampling and Storage writes. Reviewed
         // shader coordinates are finite and sample with normalized nearest/clamp.
-        // Every copy is in its exact checked 16-byte/2x2 range. No raw owner escapes.
+        // Copies use the actual 2x2 upload format and the reviewed shader's
+        // 16/64-byte output range. No raw owner escapes.
         unsafe {
             if let Some(upload) = &self.upload {
                 let initialize = [vk::ImageMemoryBarrier2::default()
@@ -220,7 +234,7 @@ impl TransferPayload for Work {
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .buffer(output.buffer.0.handle)
                 .offset(range.offset)
-                .size(16)];
+                .size(self.readback.size())];
             device.raw().cmd_pipeline_barrier2(
                 command,
                 &vk::DependencyInfo::default().buffer_memory_barriers(&copied),
@@ -229,7 +243,9 @@ impl TransferPayload for Work {
                 command,
                 output.buffer.0.handle,
                 self.readback.transfer_handle(),
-                &[vk::BufferCopy::default().src_offset(range.offset).size(16)],
+                &[vk::BufferCopy::default()
+                    .src_offset(range.offset)
+                    .size(self.readback.size())],
             );
             record_host_read(device, command);
         }
@@ -262,11 +278,11 @@ impl TransferPayload for Work {
         self.output.take();
     }
 }
-fn image_desc() -> ImageDescriptor {
+fn image_desc(format: ImageFormat) -> ImageDescriptor {
     ImageDescriptor {
         width: 2,
         height: 2,
-        format: ImageFormat::Rgba8Unorm,
+        format,
     }
 }
 fn bind(
@@ -276,6 +292,12 @@ fn bind(
     sampler: &VulkanSampler,
     output: &VulkanBuffer,
 ) -> Result<VulkanBindings, RuntimeError> {
+    let output_size = program
+        .layout()
+        .iter()
+        .find(|slot| slot.kind == BindingType::StorageWrite)
+        .unwrap()
+        .min_size;
     runtime.create_bindings(
         program,
         &[
@@ -285,7 +307,7 @@ fn bind(
                 resource: BindingResource::Buffer {
                     buffer: output,
                     offset: 256,
-                    size: 16,
+                    size: output_size,
                 },
             },
             Binding {
@@ -305,6 +327,41 @@ fn bind(
 #[test]
 #[ignore = "explicit real-GPU managed nearest/clamp sampling, image/View/sampler owners and reuse; run strict/shipping separately"]
 fn vulkan_managed_sampled_creation_and_versions() {
+    let pixels = crate::program::SAMPLE_TEST_DATA;
+    run_sampled_versions(
+        ManagedProgram::sampled_readback(),
+        ImageFormat::Rgba8Unorm,
+        [&pixels[0], &pixels[1]],
+        [&pixels[0], &pixels[1]],
+    );
+}
+
+#[test]
+#[ignore = "explicit real-GPU RGBA16F sampling, binary32 output, versions and reuse; run strict/shipping separately"]
+fn vulkan_managed_sampled_float_creation_and_versions() {
+    let pixels = crate::program::SAMPLE_FLOAT_TEST_DATA;
+    let expected = crate::program::SAMPLE_FLOAT_EXPECTED.map(|words| {
+        words
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>()
+    });
+    run_sampled_versions(
+        ManagedProgram::sampled_float_readback(),
+        ImageFormat::Rgba16Float,
+        [&pixels[0], &pixels[1]],
+        [&expected[0], &expected[1]],
+    );
+}
+
+fn run_sampled_versions(
+    managed: ManagedProgram,
+    format: ImageFormat,
+    pixels: [&[u8]; 2],
+    expected: [&[u8]; 2],
+) {
+    let [old, new] = pixels;
+    let [old_expected, new_expected] = expected;
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
         let runtime = VulkanRuntime::new(RuntimeConfig::default()).unwrap();
@@ -325,9 +382,14 @@ fn vulkan_managed_sampled_creation_and_versions() {
             monitor.report().requested,
             crate::backends::vulkan::ValidationMode::Disabled
         );
-        let managed = ManagedProgram::sampled_readback();
         let program = runtime.create_program(&managed).unwrap();
-        let image = runtime.create_managed_image(image_desc()).unwrap();
+        let output_size = program
+            .layout()
+            .iter()
+            .find(|slot| slot.kind == BindingType::StorageWrite)
+            .unwrap()
+            .min_size;
+        let image = runtime.create_managed_image(image_desc(format)).unwrap();
         let view = runtime
             .create_image_view(&image, ImageViewDescriptor::default())
             .unwrap();
@@ -335,89 +397,94 @@ fn vulkan_managed_sampled_creation_and_versions() {
             .create_sampler(SamplerDescriptor::NearestClamp)
             .unwrap();
         let output = runtime
-            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+            .create_managed_buffer(BufferDescriptor::Storage {
+                size: 256 + output_size,
+            })
             .unwrap();
-        assert_eq!(image.desc(), image_desc());
+        assert_eq!(image.desc(), image_desc(format));
         assert_eq!(view.desc(), ImageViewDescriptor::default());
         assert_eq!(sampler.desc(), SamplerDescriptor::NearestClamp);
         let bindings = bind(&runtime, &program, &view, &sampler, &output).unwrap();
         assert_eq!(bindings.layout(), managed.bindings());
-        assert!(
-            matches!(runtime.create_image_view(&image, ImageViewDescriptor { base_mip_level: 1, ..Default::default() }),
+        if format == ImageFormat::Rgba8Unorm {
+            assert!(
+                matches!(runtime.create_image_view(&image, ImageViewDescriptor { base_mip_level: 1, ..Default::default() }),
             Err(e) if e.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
-        );
-        assert!(
-            matches!(runtime.create_managed_image(ImageDescriptor { width: 0, ..image_desc() }),
+            );
+            assert!(
+                matches!(runtime.create_managed_image(ImageDescriptor { width: 0, ..image_desc(format) }),
             Err(e) if e.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
-        );
-        let invalid_kind = runtime.create_bindings(
-            &program,
-            &[
-                Binding {
-                    group: 0,
-                    binding: 0,
-                    resource: BindingResource::Sampler(&sampler),
-                },
-                Binding {
-                    group: 0,
-                    binding: 1,
-                    resource: BindingResource::ImageView(&view),
-                },
-                Binding {
-                    group: 1,
-                    binding: 0,
-                    resource: BindingResource::Buffer {
-                        buffer: &output,
-                        offset: 256,
-                        size: 16,
+            );
+            let invalid_kind = runtime.create_bindings(
+                &program,
+                &[
+                    Binding {
+                        group: 0,
+                        binding: 0,
+                        resource: BindingResource::Sampler(&sampler),
                     },
-                },
-            ],
-        );
-        assert!(
-            matches!(invalid_kind, Err(e) if e.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
-        );
-        let foreign = VulkanRuntime::new(RuntimeConfig::default()).unwrap();
-        let foreign_monitor = foreign.validation_monitor();
-        assert!(
-            matches!(foreign.create_image_view(&image, ImageViewDescriptor::default()), Err(e) if e.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
-        );
-        let foreign_sampler = foreign
-            .create_sampler(SamplerDescriptor::NearestClamp)
-            .unwrap();
-        assert!(
-            matches!(bind(&runtime, &program, &view, &foreign_sampler, &output), Err(e) if e.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
-        );
-        let foreign_image = foreign.create_managed_image(image_desc()).unwrap();
-        let foreign_view = foreign
-            .create_image_view(&foreign_image, ImageViewDescriptor::default())
-            .unwrap();
-        assert!(
-            matches!(bind(&runtime, &program, &foreign_view, &sampler, &output), Err(e) if e.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
-        );
-        drop((foreign_sampler, foreign_view, foreign_image, foreign));
-        assert!(
-            foreign_monitor.report().is_clean(),
-            "{:#?}",
-            foreign_monitor.report()
-        );
-        let [old, new] = crate::program::SAMPLE_TEST_DATA;
+                    Binding {
+                        group: 0,
+                        binding: 1,
+                        resource: BindingResource::ImageView(&view),
+                    },
+                    Binding {
+                        group: 1,
+                        binding: 0,
+                        resource: BindingResource::Buffer {
+                            buffer: &output,
+                            offset: 256,
+                            size: 16,
+                        },
+                    },
+                ],
+            );
+            assert!(
+                matches!(invalid_kind, Err(e) if e.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
+            );
+            let foreign = VulkanRuntime::new(RuntimeConfig::default()).unwrap();
+            let foreign_monitor = foreign.validation_monitor();
+            assert!(
+                matches!(foreign.create_image_view(&image, ImageViewDescriptor::default()), Err(e) if e.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
+            );
+            let foreign_sampler = foreign
+                .create_sampler(SamplerDescriptor::NearestClamp)
+                .unwrap();
+            assert!(
+                matches!(bind(&runtime, &program, &view, &foreign_sampler, &output), Err(e) if e.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
+            );
+            let foreign_image = foreign.create_managed_image(image_desc(format)).unwrap();
+            let foreign_view = foreign
+                .create_image_view(&foreign_image, ImageViewDescriptor::default())
+                .unwrap();
+            assert!(
+                matches!(bind(&runtime, &program, &foreign_view, &sampler, &output), Err(e) if e.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
+            );
+            drop((foreign_sampler, foreign_view, foreign_image, foreign));
+            assert!(
+                foreign_monitor.report().is_clean(),
+                "{:#?}",
+                foreign_monitor.report()
+            );
+        }
         let canceled =
-            RecordedTransfer::new(Work::new(bindings.clone(), Some(&old)).unwrap()).unwrap();
-        assert!(Work::new(bindings.clone(), Some(&old)).is_err());
+            RecordedTransfer::new(Work::new(bindings.clone(), Some(old)).unwrap()).unwrap();
+        assert!(Work::new(bindings.clone(), Some(old)).is_err());
         drop(canceled);
         let weak_image = Arc::downgrade(&image.0);
         let weak_view = Arc::downgrade(&view.0);
         let weak_sampler = Arc::downgrade(&sampler.0);
         let recorded =
-            RecordedTransfer::new(Work::new(bindings.clone(), Some(&old)).unwrap()).unwrap();
+            RecordedTransfer::new(Work::new(bindings.clone(), Some(old)).unwrap()).unwrap();
         let newer_program = runtime.create_program(&managed).unwrap();
-        let newer_image = runtime.create_managed_image(image_desc()).unwrap();
+        let newer_image = runtime.create_managed_image(image_desc(format)).unwrap();
         let newer_view = runtime
             .create_image_view(&newer_image, ImageViewDescriptor::default())
             .unwrap();
         let newer_output = runtime
-            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+            .create_managed_buffer(BufferDescriptor::Storage {
+                size: 256 + output_size,
+            })
             .unwrap();
         let newer_bindings = bind(
             &runtime,
@@ -428,7 +495,7 @@ fn vulkan_managed_sampled_creation_and_versions() {
         )
         .unwrap();
         let newer_recorded =
-            RecordedTransfer::new(Work::new(newer_bindings, Some(&new)).unwrap()).unwrap();
+            RecordedTransfer::new(Work::new(newer_bindings, Some(new)).unwrap()).unwrap();
         drop((
             program,
             image,
@@ -444,14 +511,14 @@ fn vulkan_managed_sampled_creation_and_versions() {
         let mut second = newer_recorded.submit().unwrap();
         assert!(Work::new(bindings.clone(), None).is_err());
         let mut first_result = first.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(first_result.read(), old);
+        assert_eq!(first_result.read(), old_expected);
         let reused = RecordedTransfer::new(Work::new(bindings, None).unwrap()).unwrap();
         let mut third = reused.submit().unwrap();
         drop(runtime);
         let mut third_result = third.wait(Duration::from_secs(10)).unwrap().unwrap();
         let mut second_result = second.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(second_result.read(), new);
-        assert_eq!(third_result.read(), old);
+        assert_eq!(second_result.read(), new_expected);
+        assert_eq!(third_result.read(), old_expected);
         assert!(weak_image.upgrade().is_some());
         assert!(weak_view.upgrade().is_some());
         assert!(weak_sampler.upgrade().is_some());

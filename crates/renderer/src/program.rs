@@ -136,10 +136,12 @@ pub enum BindingResource<'a, B, V, S> {
     Sampler(&'a S),
 }
 
-/// Managed images currently support a single color format.
+/// Managed sampled color formats. Sampling returns ordinary FP32 components;
+/// RGBA16F image storage does not require shader FP16 arithmetic support.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageFormat {
     Rgba8Unorm,
+    Rgba16Float,
 }
 
 /// An uninitialized sampled 2D image. Mip, layer and sample counts are one.
@@ -259,6 +261,35 @@ static SAMPLED_READBACK: Manifest = Manifest {
     dxil: include_bytes!("../shaders/dxil/sampled.comp.dxil"),
 };
 
+static SAMPLED_FLOAT_READBACK: Manifest = Manifest {
+    entry: "main",
+    workgroup_size: [1, 1, 1],
+    bindings: &[
+        BindingLayout {
+            group: 0,
+            binding: 0,
+            kind: BindingType::SampledImage,
+            min_size: 0,
+        },
+        BindingLayout {
+            group: 0,
+            binding: 1,
+            kind: BindingType::Sampler,
+            min_size: 0,
+        },
+        BindingLayout {
+            group: 1,
+            binding: 0,
+            kind: BindingType::StorageWrite,
+            min_size: 64,
+        },
+    ],
+    #[cfg(feature = "vulkan")]
+    spirv: include_bytes!("../shaders/sampled_float.comp.spv"),
+    #[cfg(all(feature = "d3d12", windows))]
+    dxil: include_bytes!("../shaders/dxil/sampled_float.comp.dxil"),
+};
+
 impl ManagedProgram {
     /// Reviewed compute asset: one invocation copies exactly 16 bytes from the
     /// uniform slot into the storage slot. Extra descriptor bytes are untouched.
@@ -274,6 +305,15 @@ impl ManagedProgram {
     pub const fn sampled_readback() -> Self {
         Self {
             manifest: &SAMPLED_READBACK,
+        }
+    }
+
+    /// Reviewed compute asset: four nearest/clamp samples preserve all RGBA
+    /// FP32 component bits in exactly 64 storage bytes. RGBA16F sampling needs
+    /// no shader FP16 feature. Private acceptance dispatches one invocation.
+    pub const fn sampled_float_readback() -> Self {
+        Self {
+            manifest: &SAMPLED_FLOAT_READBACK,
         }
     }
 
@@ -441,6 +481,66 @@ pub(crate) const SAMPLE_TEST_DATA: [[u8; 16]; 2] = [
     ],
 ];
 
+// Exact finite half encodings for the row-major RGBA components
+// [-2, -1, -0.5, -0.25, 0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 8, 16, 32, 64].
+// The second image reverses component order. Avoid denormals, NaNs and negative
+// zero so this fixture checks storage conversion and sampling without relying
+// on optional shader floating-point controls or a runtime half converter.
+#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+pub(crate) const SAMPLE_FLOAT_TEST_DATA: [[u8; 32]; 2] = [
+    [
+        0x00, 0xc0, 0x00, 0xbc, 0x00, 0xb8, 0x00, 0xb4, 0x00, 0x00, 0x00, 0x34, 0x00, 0x38, 0x00,
+        0x3c, 0x00, 0x3e, 0x00, 0x40, 0x00, 0x42, 0x00, 0x44, 0x00, 0x48, 0x00, 0x4c, 0x00, 0x50,
+        0x00, 0x54,
+    ],
+    [
+        0x00, 0x54, 0x00, 0x50, 0x00, 0x4c, 0x00, 0x48, 0x00, 0x44, 0x00, 0x42, 0x00, 0x40, 0x00,
+        0x3e, 0x00, 0x3c, 0x00, 0x38, 0x00, 0x34, 0x00, 0x00, 0x00, 0xb4, 0x00, 0xb8, 0x00, 0xbc,
+        0x00, 0xc0,
+    ],
+];
+
+/// Expected FP32 bit patterns, independently specified from the half payload.
+#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+pub(crate) const SAMPLE_FLOAT_EXPECTED: [[u32; 16]; 2] = [
+    [
+        0xc000_0000,
+        0xbf80_0000,
+        0xbf00_0000,
+        0xbe80_0000,
+        0x0000_0000,
+        0x3e80_0000,
+        0x3f00_0000,
+        0x3f80_0000,
+        0x3fc0_0000,
+        0x4000_0000,
+        0x4040_0000,
+        0x4080_0000,
+        0x4100_0000,
+        0x4180_0000,
+        0x4200_0000,
+        0x4280_0000,
+    ],
+    [
+        0x4280_0000,
+        0x4200_0000,
+        0x4180_0000,
+        0x4100_0000,
+        0x4080_0000,
+        0x4040_0000,
+        0x4000_0000,
+        0x3fc0_0000,
+        0x3f80_0000,
+        0x3f00_0000,
+        0x3e80_0000,
+        0x0000_0000,
+        0xbe80_0000,
+        0xbf00_0000,
+        0xbf80_0000,
+        0xc000_0000,
+    ],
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,6 +555,10 @@ mod tests {
             (
                 ManagedProgram::sampled_readback(),
                 include_str!("../shaders/dxil/sampled.comp.spirv-reflection.json"),
+            ),
+            (
+                ManagedProgram::sampled_float_readback(),
+                include_str!("../shaders/dxil/sampled_float.comp.spirv-reflection.json"),
             ),
         ] {
             let reflected: serde_json::Value = serde_json::from_str(json).unwrap();
@@ -490,6 +594,10 @@ mod tests {
                             &reflected["types"][resource["type"].as_str().unwrap()]["members"][0];
                         assert_eq!(member["type"], "uvec4");
                         assert_eq!(member["offset"], 0);
+                        if slot.min_size == 64 {
+                            assert_eq!(member["array"], serde_json::json!([4]));
+                            assert_eq!(member["array_stride"], 16);
+                        }
                         if kind == BindingType::StorageWrite {
                             assert_eq!(resource["writeonly"], true);
                         }

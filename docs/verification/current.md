@@ -9,26 +9,29 @@
 
 ## 管理下Programと資源bindingの二API実装
 
-`renderer-7ft.2.1.4`。Uniform/Storage共通契約と`.2.1.3`の重複検査整理を維持し、
-RGBA8_UNORM 2D画像、full View、nearest/clamp samplerとsampled bindingを両APIへ追加した。
+`renderer-7ft.2.1.5`。Uniform/Storage共通契約と`.2.1.3`の重複検査整理、`.2.1.4`の
+RGBA8画像/View/samplerを維持し、RGBA16F 2D画像とHDR値を保持するsampled readbackを両APIへ追加した。
 `Binding`/`BindingResource`がbuffer/View/samplerを一つのcomplete collectionで扱い、
 旧buffer専用binding APIを置換した。既存の固定ProgramKindは増やしていない。
-親`renderer-7ft.2.1`のRGBA16F/depth、他mip/layer/filterや管理下assetの拡張と、
+親`renderer-7ft.2.1`のdepth、他mip/layer/filterや管理下assetの拡張と、
 `.2.2`以降のowned Graph実行は未完了である。
 [作成保証とVulkan所有](../design/vulkan.md#managed-uniform)、
 [D3D12のroot/tableと保証](../design/implementation-policy.md#d3d12の管理下programとuniform)、
 [再実行](../guides/development.md#管理下uniform-programの作成と受入)を参照する。
 
-safeなshader入口はレビュー済みのuniform/sample readback 2本である。
-新sampled assetはseparate texture2Dとsamplerを`textureLod`で実際に使い、
-DXILでも`t0/space0`と`s1/space0`をactiveに保持する。4 sampleをRGBA8へpackしStorageへ16 byte書く。
+safeなshader入口はレビュー済みのuniform/sample/sample-float readback 3本である。
+両sampled assetはseparate texture2Dとsamplerを`textureLod`で実際に使い、
+DXILでも`t0/space0`と`s1/space0`をactiveに保持する。既存assetはRGBA8へpackして16 byte書き、
+新`sampled_float.comp`は4 sampleの全RGBAをFP32 bit列の64 byteとしてStorageへ書く。
+SPIR-VはShader capabilityと32-bit floatのみで、shaderFloat16や16-bit演算型を要求しない。
 生成時のSPIR-V/DXIL reflection照合はslot/type/count/member offset/size/local sizeに加え、
 float2D image、sampler、writeonly出力と余分な資源を確認する。
-固定SDKの全7本SPIR-V/DXIL再生成Verify、SDK不要の改変拒否、D3D12 bindings Verifyが成功した。
-旧6shaderのsource/binary/text/reflectionの31hashは比較元`9980c8b`と不変である。
-新sampled SPIR-Vは`0692881ace6f430320e40144b2d5f429cad7e8db8ce5d7a4019959070632c53a`、
-DXILは`f8bd5f6ed7e9a7651a4bbf3260cca58f134df2619b5ae628f12fbb9c9c7d8a6e`。
-生成bindingsは`ec789d7dd1ea186525e953cfc3d31f747a6810a1774b266ebb9a5497a293e0f3`で一致した。
+新出力のarray 4、literal count、stride 16、offset 0、block size 64も照合する。
+固定SDKの全8本SPIR-V/DXIL再生成Verify、SDK不要の改変拒否（pwshとWindows PowerShell 5.1）、
+D3D12 bindings Verifyが成功した。旧7shaderのsource/binary/text/reflectionの37hashは比較元`e6e8fd0`と不変である。
+新sampled-float SPIR-Vは`ec3213ae49b0a47ee2d96cceb28e73f54edb0cb917df77b9f76b98bd3f779438`、
+DXILは`a4a959173d88b4cce681bc2286ee426f698e9170fbadca0fc04fde654808891b`。
+生成bindingsは`0057a6da906d1c8b0f4c23b29fb75074638cc76fe09d3fe29b84d75d34d60a28`で一致した。
 
 作成境界で全slotの欠落/重複/余剰、resource kind/用途、owner、論理buffer範囲とDevice alignment、
 実format/usage/extent対応、View範囲を保証する。画像はmip/layer/sample各1、未初期化作成であり、
@@ -39,7 +42,8 @@ View/Image、samplerとdescriptor heap/setを強保持する。不変なslotと�
 Vulkanのsampler生存数上限は全旧/新作成箇所でDevice単位予約/失敗返却/native破棄後返却へ揃えた。
 D3D12のtexture/samplerはshader-visible SRV/SAMPLER heapのtable、bufferはroot CBV/UAVを使う。
 native容量/失敗・同期・実Fence完了・GPU寿命は製品に残す。
-公開Image/Storageの作成成功は内容初期化を意味せず、shaderが書いた16 byteだけをreadbackする。
+公開Image/Storageの作成成功は内容初期化を意味せず、各shaderが書いた16または64 byteだけをreadbackする。
+ImageとViewは同じ実formatを使い、実DeviceのRGBA16F対応はRGBA8と区別して作成境界で保証する。
 
 private upload/dispatch/readbackと入力色、Image/Storageの排他lease/stateは`cfg(test)`に限定する。
 通常buildにCPU検査用画素payloadやprivate executor metadataを保持しない。
@@ -50,30 +54,31 @@ row配置とCOMMON→COPY_DEST→NON_PIXEL_SHADER_RESOURCE→COMMONを確認し�
 Vulkan初回画像遷移の既存COPY execution対策も維持する。
 
 Windows x64/Rust 1.99.0でfmt、CPUのみ/製品/開発の全target Clippy（`-D warnings`）が成功した。
-CPUのみ通常71件、製品release通常191件、開発debug/release通常202件と、各構成のRustdoc 1件が成功した。
+CPUのみ通常71件、製品release通常191件、開発release通常202件と、各構成のRustdoc 1件が成功した。
 Rustdocは両backendの公開Image/View/Sampler/binding作成例をコンパイルする。
 共通契約、shader/ABIと両backendの作成/同期/所有の独立レビューで修正必須の未解決指摘はない。
-境界値の組合せは共通CPUへまとめ、native試験での同じ拒否classの重複ケースを増やさない。
+境界値の組合せは共通CPUへまとめ、native試験での同じ拒否classのmatrixを形式ごとに複製しない。
+SDK不要の新negative caseは64-byte配列ABIの差分へ絞り、既存の共通image/sampler検査を再列挙しない。
 
 RTX 3060/driver 610.88でreleaseの実GPU試験を逐次実行した。
-sampledの旧入力はrow-major RGBA `[5,17,29,43,61,79,97,113,127,149,173,199,211,223,239,251]`、
-新入力はその逆順byte列である。両APIとも2x2をnearest/clampで読み、公開272-byte Storageの
-offset256からの16 byteが期待値と全byte一致した。境界外clamp、nearest対linearの違い、
+RGBA8は既存の2x2非対称入力をnearest/clampで読み、公開272-byte Storageのoffset256からの16 byteが一致した。
+RGBA16Fの旧入力はrow-major成分 `[-2,-1,-0.5,-0.25,0,0.25,0.5,1,1.5,2,3,4,8,16,32,64]`、
+新入力は成分の逆順で、各32 byteの正確なhalf格納である。両APIとも公開320-byte Storageの
+offset256からの64 byteが独立に指定したFP32期待bit列と全byte一致した。
+NaN/subnormal/負のゼロの追加契約は今回要求しない。境界外clamp、nearest対linearの違い、
 画像の行/成分、逆順binding、型/owner拒否、未投入cancel、pending/busy、実完了後reuse、
 runtime facade先drop、最終View/Image/sampler/heap/Device解放を確認した。
-D3D12のnon-comparison samplerはComparisonFunc NEVERとし、警告1361を例外扱いせず解消した。
 strictはVulkan Core/SyncValまたはD3D12 Debug Layer/GBVの実効を確認し、
 最終native解放後までwarning/error/corruption/callback問題ゼロだった。
 製品の追加検証/専用診断除外・native Requested Disabledでも同じbyte一致を別processで確認した。
 この成功だけから外部Layer不存在やnative診断有効を主張しない。
 
-統合結果の既存回帰を含め、strict Vulkan48件（表示/resize/cancel/pending終了を含む）、
-strict D3D12準備/runtime/managed4件、D3D12 buffer寿命1件、共有buffer strict1件、
-製品managed Vulkan 2件/D3D12 2件、Vulkan mesh1件、共有buffer製品1件の合計60件が成功した。
-正式な統合ゲートログは`.tools/b1-sampled/gates/`に保存した。
-Vulkan CPUアクセス拒否の負の試験によるRenderer ERRORログはnative Validation診断と区別する。
+今回の統合結果では既存StorageとRGBA8を含め、strict/製品の各Vulkan 3件、D3D12 2件、計10件が成功した。
+D3D12のsampled 1件はRGBA8/RGBA16Fの両caseを実行する。workerで実GPUを重複実行せず、統合後に逐次実行した。
+正式な統合ゲートログは`.tools/b1-rgba16f/gates/`に保存した。
+変更範囲外のGraph/WSI全体の実GPU回帰は今回再実行していない。直近の全60件成功はGit履歴の`.2.1.4`の記録を参照する。
 
-Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、RGBA16F/depthの二API管理下契約、
+Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、depthの二API管理下契約、
 性能・長時間耐久、実native OOM/Device lossは未実行である。性能優位や計算量の改善は主張しない。
 既知の未再現起動crash `renderer-0pb`の原因確定や解決も主張しない。
 

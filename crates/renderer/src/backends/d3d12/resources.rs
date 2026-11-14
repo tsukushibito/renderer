@@ -182,7 +182,7 @@ impl DeviceImage {
         };
         let desc = image_desc(desc);
         let mut raw = None;
-        // SAFETY: The managed creation boundary establishes this RGBA8 single
+        // SAFETY: The managed creation boundary establishes this sampled single
         // mip/layer/sample description and format support. COMMON has no valid
         // contents yet. The owned COM output is released on every failure path.
         unsafe {
@@ -207,6 +207,13 @@ impl DeviceImage {
     }
 }
 
+pub(super) fn image_format(format: crate::program::ImageFormat) -> DXGI_FORMAT {
+    match format {
+        crate::program::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        crate::program::ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
+    }
+}
+
 pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURCE_DESC {
     D3D12_RESOURCE_DESC {
         Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
@@ -214,9 +221,7 @@ pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURC
         Height: desc.height,
         DepthOrArraySize: 1,
         MipLevels: 1,
-        Format: match desc.format {
-            crate::program::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-        },
+        Format: image_format(desc.format),
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
             Quality: 0,

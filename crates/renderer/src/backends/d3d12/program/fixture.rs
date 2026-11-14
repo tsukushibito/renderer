@@ -53,6 +53,7 @@ impl Drop for ExecutionLease {
 
 pub(in super::super) struct FixtureRecording {
     pub(in super::super) readback: DeviceBuffer,
+    pub(in super::super) size: usize,
     pub(in super::super) staging: Vec<DeviceBuffer>,
     pub(in super::super) leases: Vec<ExecutionLease>,
 }
@@ -64,10 +65,14 @@ fn upload_image(
 ) -> Result<DeviceBuffer, D3D12RuntimeError> {
     let owner = &image.0.owner;
     let desc = image.desc();
-    let row_bytes = desc.width as usize * 4;
+    let texel_bytes = match desc.format {
+        crate::program::ImageFormat::Rgba8Unorm => 4,
+        crate::program::ImageFormat::Rgba16Float => 8,
+    };
+    let row_bytes = desc.width as usize * texel_bytes;
     if pixels.len() != row_bytes * desc.height as usize {
         return Err(D3D12RuntimeError::invalid(
-            "sampled fixture pixels must cover the complete RGBA8 image",
+            "sampled fixture pixels must cover the complete image",
         ));
     }
     let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
@@ -183,7 +188,14 @@ impl D3D12Bindings {
                 leases.push(ExecutionLease::acquire(resource)?);
             }
         }
-        let readback = DeviceBuffer::new(&program.owner, 16, D3D12_HEAP_TYPE_READBACK)?;
+        // These acceptance shaders write exactly their minimum storage ABI;
+        // min_size alone is not a write guarantee for arbitrary Programs.
+        let output_bytes = self.layout()[storage_index].min_size as usize;
+        let readback = DeviceBuffer::new(
+            &program.owner,
+            output_bytes as u64,
+            D3D12_HEAP_TYPE_READBACK,
+        )?;
         let mut staging = Vec::new();
         for resource in &binding.resources {
             if let BoundResource::ImageView(view) = resource {
@@ -222,7 +234,7 @@ impl D3D12Bindings {
         binding._heaps.bind(list);
         // SAFETY: Complete immutable bindings establish all slot/kind/owner/range
         // guarantees. Uploaded image content and exclusive leases cover sampled
-        // reads; both reviewed shaders write exactly 16 bytes in one invocation.
+        // reads; the reviewed shaders initialize exactly their manifested output bytes.
         unsafe {
             list.SetPipelineState(&program._pipeline);
             list.SetComputeRootSignature(&program._signature);
@@ -263,7 +275,13 @@ impl D3D12Bindings {
         );
         // SAFETY: UAV writes precede this transition and exact initialized range.
         unsafe {
-            list.CopyBufferRegion(readback.raw(), 0, output.0._native.raw(), range.offset, 16)
+            list.CopyBufferRegion(
+                readback.raw(),
+                0,
+                output.0._native.raw(),
+                range.offset,
+                output_bytes as u64,
+            )
         };
         super::super::graph::transition(
             list,
@@ -284,6 +302,7 @@ impl D3D12Bindings {
         }
         Ok(FixtureRecording {
             readback,
+            size: output_bytes,
             staging,
             leases,
         })

@@ -41,6 +41,7 @@ pub(super) struct DeviceOwner {
     pub(super) queue_gate: Mutex<()>,
     pub(super) info: D3D12DeviceInfo,
     pub(super) rgba8_sampled: bool,
+    pub(super) rgba16f_sampled: bool,
     pub(super) descriptor_steps: [u32; 2],
     pub(super) monitor: D3D12ValidationMonitor,
     #[cfg(feature = "d3d12-diagnostics")]
@@ -189,6 +190,11 @@ impl DeviceOwner {
             ..Default::default()
         };
         feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut format)?;
+        let mut rgba16f = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
+            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
+            ..Default::default()
+        };
+        feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut rgba16f)?;
         // Query future shader capabilities, but buffer-only execution does not
         // require SM6.0 or RGBA8 UAV support.
         let queue_desc = D3D12_COMMAND_QUEUE_DESC {
@@ -225,6 +231,9 @@ impl DeviceOwner {
                 rgba8_typed_uav_store: format.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE != 0,
             },
             descriptor_steps,
+            rgba16f_sampled: rgba16f.Support1
+                & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
+                == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),
             rgba8_sampled: format.Support1
                 & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
                 == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),

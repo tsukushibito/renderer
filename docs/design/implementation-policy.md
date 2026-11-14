@@ -1011,7 +1011,8 @@ depth-only/color-only、Compute/copy、import/exportとGPU寿命を段階実装�
 進める。同じ管理下compute shaderを再利用し、storage出力も公開作成APIで用意する。
 native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換する。
 `.2.1.4`はRGBA8画像/View/nearest-clamp samplerとsampled bindingへ進める。
-RGBA16F/depth、一般owned Graphや他mip/layer/filterは親`renderer-7ft.2.1`と後続課題へ残す。
+`.2.1.5`はRGBA16F画像とHDR値を保持するsampled readbackを同じ二APIへ加える。
+depth、一般owned Graphや他mip/layer/filterは親`renderer-7ft.2.1`と後続課題へ残す。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
 
@@ -1174,7 +1175,7 @@ fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのb
 一般Graph導入時の製品状態管理・同期・GPU lifetimeは後続であり、このtest-only leaseが代替するものではない。
 二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
 
-`.2.1.4`の管理下画像はRGBA8_UNORM Texture2D、mip/layer/sample各1、DEFAULT heap、
+管理下画像はRGBA8_UNORMまたはRGBA16F Texture2D、mip/layer/sample各1、DEFAULT heap、
 初期COMMON、未初期化である。実DeviceのTEXTURE2D/SHADER_SAMPLE対応とextent上限を作成時に保証する。
 Viewはfull mip0/layer0の不変SRV定義とImage owner、Samplerはnearest/clamp/LOD0定義とDeviceを保持する。
 non-comparison POINT filterのComparisonFuncはNEVERとし、無視される設定にもnative警告を残さない。
@@ -1188,11 +1189,22 @@ bindingが保持し、GPU利用が終わるまで所有連鎖を保つ。これ�
 sampled fixtureだけが`GetCopyableFootprints`の実結果を使ってupload bufferのrow配置を作り、
 COMMON→COPY_DEST→NON_PIXEL_SHADER_RESOURCEでsampling、最後にCOMMONへ戻す。
 packed RGBA8 byte数をnative image allocationやcopy row pitchへ代用しない。
-Storage側はUAV→COPY_SOURCE→COMMONを維持し、readbackするのはshaderが書いた16 byteだけである。
+Storage側はUAV→COPY_SOURCE→COMMONを維持し、readbackするのは各shaderが書いた16または64 byteだけである。
 ImageとStorageをともに排他leaseで保護し、upload buffer、descriptor heapsと全参照をWork/Retainedへ保持する。
 画像の初期化済み状態は正常Fence完了後だけ確定し、旧画像の再利用は再uploadせずCOMMONからsamplingへ遷移する。
 未投入cancel、pending、Signal失敗と正常Fence完了の既存契約を引き継ぐ。
 製品の作成/descriptorと、`cfg(test)`だけのupload/実行/色payload/stateを区別する。
+
+`.2.1.5`の`ImageFormat::Rgba16Float`は`DXGI_FORMAT_R16G16B16A16_FLOAT`へ対応する。
+実Deviceの形式別TEXTURE2D/SHADER_SAMPLE照会結果を保持し、要求された画像の作成時に適合を確認する。
+RGBA16Fの対応をbuffer-only runtime全体の必須条件にはしない。SRVには保持したImageの実formatを使う。
+nearest samplerとdescriptor heap/tableの構成は既存と共通である。
+`sampled_float_readback`は4 sampleの全RGBAをFP32の`asuint` bit列として64 byteへ書く。
+root UAVの安全性はこのレビュー済み64-byte writeと作成済み範囲により確立し、記録時にABIを再走査しない。
+half入力は8 byte/texel、2x2で32 byteであり、uploadのrow配置はこの形式について返された
+[GetCopyableFootprints](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints)を使う。
+16-byte出力の既存shaderと64-byte出力の新shaderを区別し、
+各shaderが初期化する範囲だけをreadbackする。取消・pending・正常完了・最終解放の契約は共通である。
 
 
 ### D3D12のDeviceとbuffer実行

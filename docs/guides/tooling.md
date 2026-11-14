@@ -102,7 +102,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 
 ## D3D12の固定shader生成
 
-管理下7種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
+管理下8種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
 入力のSPIR-Vは既存のVulkan基準を維持し、この手順では書き換えない。
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 
@@ -112,7 +112,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 ```
 
 `-Verify`は生成済みファイルを変更せず、不足・差分・tool不一致・変換失敗をエラーにする。
-先に既存の`regenerate.ps1 -Verify`で7種類のSPIR-V再生成一致と`spirv-val`を確認する。
+先に既存の`regenerate.ps1 -Verify`で8種類のSPIR-V再生成一致と`spirv-val`を確認する。
 [toolchain定義](../../crates/renderer/shaders/dxil-toolchain.json)でWindows x64 SDKの
 glslc・spirv-val・SPIRV-Cross・DXC・dxcompiler.dllのSHA-256と、変換引数を固定する。
 SPIRV-Crossは`vulkan-sdk-1.4.341.0`、DXCは`1.9.0.5180 (e35541826)`である。
@@ -150,8 +150,13 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
 - `sampled.comp`はlocal size 1×1×1、separate texture2Dのset0/binding0、samplerのset0/binding1、
   writeonly Storageのset1/binding0を使う。DXILでも`t0/space0`と`s1/space0`をactiveに保ち、
   `SampleLevel`でnearest/clampを実行する。出力は`u0/space1`の16 byteで、
-  4 sampleをRGBA8へpackする。`managed-abi.ps1`とSDK不要の改変回帰は両managed assetを確認する。
+  4 sampleをRGBA8へpackする。
   生成manifest schema3は共通verifierのhashと新assetのsource/SPIR-V/HLSL/DXIL/両reflectionを保持する。
+- `sampled_float.comp`は同じimage/sampler slotとlocal sizeを使い、各sampleの全RGBAを
+  `floatBitsToUint`/`asuint`で4個のuvec4へ返す。writeonly出力はoffset 0、array stride 16、
+  block size 64で、DXILは`u0/space1`へoffset 0/16/32/48の`Store4`を行う。
+  half格納のRGBA16FをFP32で読み、16-bit shader演算型を要求しない。
+  `managed-abi.ps1`とSDK不要の改変回帰は3本のmanaged assetを確認する。
 
 変換optionの意味は[採用版SPIRV-Cross CLI](https://github.com/KhronosGroup/SPIRV-Cross/blob/vulkan-sdk-1.4.341.0/main.cpp)を参照する。
 この生成確認は静的ABI・再現性の証拠であり、それ自体では実GPUの内容一致を証明しない。

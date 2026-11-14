@@ -1031,6 +1031,7 @@ pub const DXGI_ERROR_NOT_FOUND: windows_core::HRESULT = windows_core::HRESULT(0x
 pub const DXGI_ERROR_UNSUPPORTED: windows_core::HRESULT =
     windows_core::HRESULT(0x887A0004_u32 as _);
 pub type DXGI_FORMAT = i32;
+pub const DXGI_FORMAT_R16G16B16A16_FLOAT: DXGI_FORMAT = 10;
 pub const DXGI_FORMAT_R8G8B8A8_UNORM: DXGI_FORMAT = 28;
 pub const DXGI_FORMAT_UNKNOWN: DXGI_FORMAT = 0;
 #[repr(C)]
