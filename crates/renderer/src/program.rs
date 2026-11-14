@@ -19,7 +19,7 @@
 //! {
 //!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
 //!     let image = runtime.create_managed_image(ImageDescriptor {
-//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm })?;
+//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
 //!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
 //!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
 //!     let storage = runtime.create_managed_buffer(BufferDescriptor::Storage { size: 272 })?;
@@ -37,7 +37,7 @@
 //! {
 //!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
 //!     let image = runtime.create_managed_image(ImageDescriptor {
-//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm })?;
+//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
 //!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
 //!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
 //!     let storage = runtime.create_managed_buffer(BufferDescriptor::Storage { size: 272 })?;
@@ -149,11 +149,15 @@ pub enum ImageFormat {
 /// Color images support sampling and transfer destination use; D32 images
 /// support sampling and depth attachment use.
 /// Creation does not upload pixels or submit GPU work.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageDescriptor {
     pub width: u32,
     pub height: u32,
     pub format: ImageFormat,
+    /// Preferred value for later depth attachment clears. D32 permits `None`
+    /// or a finite, non-subnormal value in `[0, 1]`; color images require `None`.
+    /// This does not initialize the image or restrict later clear values.
+    pub preferred_depth_clear: Option<f32>,
 }
 
 /// The operation supported by an image View.
@@ -366,6 +370,7 @@ pub(crate) enum ProgramError {
     OutOfBounds,
     InvalidExtent,
     InvalidViewRange,
+    InvalidClearValue,
 }
 
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
@@ -381,6 +386,9 @@ impl std::fmt::Display for ProgramError {
             Self::OutOfBounds => "binding range exceeds the logical buffer",
             Self::InvalidExtent => "image extent must be nonzero and within Device limits",
             Self::InvalidViewRange => "image View must cover mip zero and layer zero exactly once",
+            Self::InvalidClearValue => {
+                "preferred depth clear must be finite, within [0, 1], and not subnormal"
+            }
         })
     }
 }
@@ -458,6 +466,14 @@ pub(crate) fn validate_image_descriptor(
         || desc.height > max_dimension
     {
         return Err(ProgramError::InvalidExtent);
+    }
+    if let Some(value) = desc.preferred_depth_clear {
+        if desc.format != ImageFormat::D32Float {
+            return Err(ProgramError::UsageMismatch);
+        }
+        if !(0.0..=1.0).contains(&value) || value.is_subnormal() {
+            return Err(ProgramError::InvalidClearValue);
+        }
     }
     Ok(())
 }
@@ -780,6 +796,7 @@ mod tests {
             width: 2,
             height: 2,
             format: ImageFormat::Rgba8Unorm,
+            preferred_depth_clear: None,
         };
         assert_eq!(validate_image_descriptor(desc, 2), Ok(()));
         for (width, height) in [(0, 2), (2, 0), (3, 2), (2, 3)] {
@@ -805,6 +822,25 @@ mod tests {
             ImageFormat::Rgba16Float,
             ImageFormat::D32Float,
         ] {
+            assert_eq!(
+                validate_image_descriptor(ImageDescriptor { format, ..desc }, 2),
+                Ok(())
+            );
+            assert_eq!(
+                validate_image_descriptor(
+                    ImageDescriptor {
+                        format,
+                        preferred_depth_clear: Some(0.25),
+                        ..desc
+                    },
+                    2
+                ),
+                if format == ImageFormat::D32Float {
+                    Ok(())
+                } else {
+                    Err(ProgramError::UsageMismatch)
+                }
+            );
             assert_eq!(validate_image_view_descriptor(format, sampled), Ok(()));
             assert_eq!(
                 validate_image_view_descriptor(format, depth),
@@ -813,6 +849,32 @@ mod tests {
                 } else {
                     Err(ProgramError::UsageMismatch)
                 }
+            );
+        }
+        for value in [0.0, 1.0] {
+            assert_eq!(
+                validate_image_descriptor(
+                    ImageDescriptor {
+                        format: ImageFormat::D32Float,
+                        preferred_depth_clear: Some(value),
+                        ..desc
+                    },
+                    2
+                ),
+                Ok(())
+            );
+        }
+        for value in [f32::NAN, f32::INFINITY, -0.25, 1.25, f32::from_bits(1)] {
+            assert_eq!(
+                validate_image_descriptor(
+                    ImageDescriptor {
+                        format: ImageFormat::D32Float,
+                        preferred_depth_clear: Some(value),
+                        ..desc
+                    },
+                    2
+                ),
+                Err(ProgramError::InvalidClearValue)
             );
         }
         let view = depth;
