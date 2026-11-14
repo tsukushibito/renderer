@@ -27,6 +27,8 @@ struct Plan<'a> {
 }
 
 enum PlannedOperation<'a> {
+    #[cfg(test)]
+    UniformFixture(&'a super::program::D3D12UniformBinding),
     Upload {
         dst: usize,
         offset: u64,
@@ -155,6 +157,8 @@ struct Readback {
 
 struct Work {
     graph: u64,
+    #[cfg(test)]
+    uniform_bindings: Vec<super::program::D3D12UniformBinding>,
     buffers: Vec<Option<DeviceBuffer>>,
     staging: Vec<DeviceBuffer>,
     scratch: Vec<DeviceBuffer>,
@@ -212,6 +216,8 @@ impl Work {
             .map_err(|error| owner.native("ID3D12Device::CreateFence", error))?;
         let mut work = Self {
             graph: plan.graph,
+            #[cfg(test)]
+            uniform_bindings: Vec::new(),
             buffers,
             staging: Vec::new(),
             scratch: Vec::new(),
@@ -224,6 +230,17 @@ impl Work {
         let mut states = vec![D3D12_RESOURCE_STATE_COMMON; work.buffers.len()];
         for operation in plan.operations {
             match operation {
+                #[cfg(test)]
+                PlannedOperation::UniformFixture(binding) => {
+                    let (output, readback) = binding.record_fixture(&work.list)?;
+                    work.scratch.push(output);
+                    work.readbacks.push(Readback {
+                        pass: 0,
+                        size: 16,
+                        buffer: Some(readback),
+                    });
+                    work.uniform_bindings.push(binding.clone());
+                }
                 PlannedOperation::Upload { dst, offset, bytes } => {
                     let upload =
                         DeviceBuffer::new(&work.owner, bytes.len() as u64, D3D12_HEAP_TYPE_UPLOAD)?;
@@ -400,7 +417,7 @@ impl Work {
     }
 }
 
-fn transition(
+pub(super) fn transition(
     list: &ID3D12GraphicsCommandList,
     resource: &ID3D12Resource,
     before: &mut D3D12_RESOURCE_STATES,
@@ -439,6 +456,24 @@ pub struct D3D12PreparedGraph {
 }
 
 impl D3D12Runtime {
+    #[cfg(test)]
+    pub(super) fn prepare_uniform_fixture(
+        &self,
+        binding: &super::program::D3D12UniformBinding,
+    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
+        binding.check_owner(&self.device)?;
+        let work = Work::prepare(
+            Arc::clone(&self.device),
+            Plan {
+                graph: 0,
+                buffers: vec![],
+                operations: vec![PlannedOperation::UniformFixture(binding)],
+            },
+            false,
+        )?;
+        Ok(D3D12PreparedGraph { work })
+    }
+
     /// Records retained buffer operations without submitting or waiting. Input
     /// validity and ordering come from the shared immutable compiled graph.
     pub fn prepare(&self, graph: &CompiledGraph) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
@@ -546,6 +581,8 @@ impl D3D12Submission {
         let Work {
             graph,
             mut readbacks,
+            #[cfg(test)]
+            uniform_bindings,
             owner,
             buffers,
             staging,
@@ -558,6 +595,8 @@ impl D3D12Submission {
         // releasing the last owner. The owner keeps final-release diagnostics
         // active; a partial pattern with `..` would defer these fields too far.
         drop((buffers, staging, scratch, list, _allocator, fence));
+        #[cfg(test)]
+        drop(uniform_bindings);
         // Recording order is the Graph's execution order, which need not match
         // pass indices. No command operands refer to these entries after the
         // completed work has retired; index them once for result consumption.
