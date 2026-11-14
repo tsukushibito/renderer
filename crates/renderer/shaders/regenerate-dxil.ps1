@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-. (Join-Path $PSScriptRoot 'uniform-abi.ps1')
+. (Join-Path $PSScriptRoot 'managed-abi.ps1')
 
 function Get-Sha256([string]$Path) {
     $hasher = [Security.Cryptography.SHA256]::Create()
@@ -117,9 +117,13 @@ try {
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
         Write-Utf8 (Join-Path $temporaryRoot ($source + '.reflection.txt')) $reflection
-        if ($source -ceq 'uniform.comp') {
+        if ($source -cin @('uniform.comp', 'sampled.comp')) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
-            Assert-UniformAbi ($spirvReflection | ConvertFrom-Json) $reflection
+            if ($source -ceq 'uniform.comp') {
+                Assert-UniformAbi ($spirvReflection | ConvertFrom-Json) $reflection
+            } else {
+                Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection
+            }
             Write-Utf8 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json')) $spirvReflection
         }
         $hashes = [ordered]@{
@@ -129,16 +133,16 @@ try {
             dxil = Get-Sha256 $dxil
             reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.reflection.txt'))
         }
-        if ($source -ceq 'uniform.comp') {
+        if ($source -cin @('uniform.comp', 'sampled.comp')) {
             $hashes.spirv_reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json'))
         }
         $artifacts[$source] = $hashes
     }
     $manifest = [ordered]@{
-        schema = 2
+        schema = 3
         toolchain_sha256 = Get-Sha256 $lockPath
         contracts_sha256 = Get-Sha256 (Join-Path $PSScriptRoot 'dxil-contracts.json')
-        uniform_abi_verifier_utf8_lf_sha256 = Get-SourceSha256 (Join-Path $PSScriptRoot 'uniform-abi.ps1')
+        managed_abi_verifier_utf8_lf_sha256 = Get-SourceSha256 (Join-Path $PSScriptRoot 'managed-abi.ps1')
         artifacts = $artifacts
     }
     Write-Utf8 (Join-Path $temporaryRoot 'manifest.json') (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
