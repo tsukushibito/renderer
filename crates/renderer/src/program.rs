@@ -85,6 +85,7 @@ impl BufferDescriptor<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BindingType {
     Uniform,
+    StorageRead,
     StorageWrite,
     SampledImage,
     Sampler,
@@ -94,7 +95,7 @@ impl BindingType {
     pub const fn buffer_usage(self) -> Option<BufferUsage> {
         match self {
             Self::Uniform => Some(BufferUsage::Uniform),
-            Self::StorageWrite => Some(BufferUsage::Storage),
+            Self::StorageRead | Self::StorageWrite => Some(BufferUsage::Storage),
             Self::SampledImage | Self::Sampler => None,
         }
     }
@@ -250,6 +251,29 @@ static UNIFORM_READBACK: Manifest = Manifest {
     dxil: include_bytes!("../shaders/dxil/uniform.comp.dxil"),
 };
 
+static STORAGE_READBACK: Manifest = Manifest {
+    entry: "main",
+    workgroup_size: [1, 1, 1],
+    bindings: &[
+        BindingLayout {
+            group: 0,
+            binding: 0,
+            kind: BindingType::StorageRead,
+            min_size: 16,
+        },
+        BindingLayout {
+            group: 1,
+            binding: 0,
+            kind: BindingType::StorageWrite,
+            min_size: 16,
+        },
+    ],
+    #[cfg(feature = "vulkan")]
+    spirv: include_bytes!("../shaders/storage_read.comp.spv"),
+    #[cfg(all(feature = "d3d12", windows))]
+    dxil: include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
+};
+
 static SAMPLED_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
@@ -318,6 +342,16 @@ impl ManagedProgram {
         }
     }
 
+    /// Reviewed compute asset: one invocation copies exactly 16 bytes from a
+    /// read-only storage slot into a write-only storage slot. Extra descriptor
+    /// bytes are untouched. The input must be initialized before execution.
+    /// Dispatch is currently exercised only by private native acceptance tests.
+    pub const fn storage_readback() -> Self {
+        Self {
+            manifest: &STORAGE_READBACK,
+        }
+    }
+
     /// Reviewed compute asset: four nearest/clamp samples, packed as RGBA8
     /// into exactly 16 storage bytes. Private acceptance dispatches one invocation.
     pub const fn sampled_readback() -> Self {
@@ -345,6 +379,11 @@ impl ManagedProgram {
 
     pub const fn bindings(&self) -> &'static [BindingLayout] {
         self.manifest.bindings
+    }
+
+    #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+    pub(crate) fn same_asset(&self, other: &Self) -> bool {
+        std::ptr::eq(self.manifest, other.manifest)
     }
 
     #[cfg(feature = "vulkan")]
@@ -603,6 +642,10 @@ mod tests {
                 include_str!("../shaders/dxil/sampled.comp.spirv-reflection.json"),
             ),
             (
+                ManagedProgram::storage_readback(),
+                include_str!("../shaders/dxil/storage_read.comp.spirv-reflection.json"),
+            ),
+            (
                 ManagedProgram::sampled_float_readback(),
                 include_str!("../shaders/dxil/sampled_float.comp.spirv-reflection.json"),
             ),
@@ -623,6 +666,11 @@ mod tests {
                 ("separate_samplers", BindingType::Sampler),
             ] {
                 for resource in reflected[category].as_array().into_iter().flatten() {
+                    let kind = if category == "ssbos" && resource["readonly"] == true {
+                        BindingType::StorageRead
+                    } else {
+                        kind
+                    };
                     let slot = program
                         .bindings()
                         .iter()
@@ -646,6 +694,8 @@ mod tests {
                         }
                         if kind == BindingType::StorageWrite {
                             assert_eq!(resource["writeonly"], true);
+                        } else if kind == BindingType::StorageRead {
+                            assert_eq!(resource["readonly"], true);
                         }
                     } else {
                         assert_eq!(slot.min_size, 0);
@@ -740,7 +790,11 @@ mod tests {
             offset: 256,
             size: 16,
         };
-        for layout in ManagedProgram::uniform_readback().bindings() {
+        for layout in ManagedProgram::uniform_readback()
+            .bindings()
+            .iter()
+            .chain(&ManagedProgram::storage_readback().bindings()[..1])
+        {
             let check = |usage, size, descriptor| {
                 validate_buffer_binding(*layout, usage, size, descriptor, 256, 65_536)
             };

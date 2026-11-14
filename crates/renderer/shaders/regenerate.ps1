@@ -33,7 +33,7 @@ if ($LASTEXITCODE -ne 0 -or
 # Explicit SPIR-V 1.3 avoids LocalSizeId/maintenance4 requirements. The runtime
 # enables synchronization2/dynamicRendering, but does not enable maintenance4.
 # No macros, includes or debug info. Entry point main, GLSL 450 core, optimized.
-$sources = @('image.comp', 'mesh.vert', 'mesh.frag', 'composite.vert', 'composite.frag', 'uniform.comp', 'sampled.comp', 'sampled_float.comp')
+$sources = @('image.comp', 'mesh.vert', 'mesh.frag', 'composite.vert', 'composite.frag', 'uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp')
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('renderer-spirv-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {

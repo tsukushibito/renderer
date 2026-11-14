@@ -1,0 +1,18 @@
+#version 450 core
+
+// Trusted ABI fixture: one invocation copies one complete 16-byte uint vector.
+// The host initializes the input, orders its producer before this read, and
+// retains both buffer ranges and immutable bindings through actual completion.
+// Private acceptance uses separate input and output resources; this shader
+// does not establish synchronization or initial contents by reflection alone.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer Parameters {
+    uvec4 value;
+} parameters;
+layout(set = 1, binding = 0, std430) writeonly buffer Result {
+    uvec4 value;
+} result;
+
+void main() {
+    result.value = parameters.value;
+}
