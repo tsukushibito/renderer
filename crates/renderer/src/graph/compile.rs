@@ -362,8 +362,8 @@ pub(super) fn analyze(
         // itself and accidental access ordering cannot hide an undefined read.
         for access in &pass.accesses {
             if access.read {
-                let producers = contents[access.resource]
-                    .read(access.range.clone())
+                contents[access.resource]
+                    .read(access.range.clone(), &mut data[index])
                     .map_err(|hole| {
                         CompileError::new(
                             GraphErrorKind::UninitializedRead,
@@ -376,7 +376,6 @@ pub(super) fn analyze(
                         .at_resource(access.resource)
                         .at_range(hole)
                     })?;
-                data[index].extend(producers);
             }
         }
         for access in &pass.accesses {
@@ -395,18 +394,19 @@ pub(super) fn analyze(
         }
     }
     for (resource, range) in exports {
-        let producers = contents[*resource].read(range.clone()).map_err(|hole| {
-            CompileError::new(
-                GraphErrorKind::UninitializedRead,
-                format!(
-                    "export reads uninitialized resource {:?} at {}..{}",
-                    resources[*resource].name, hole.start, hole.end
-                ),
-            )
-            .at_resource(*resource)
-            .at_range(hole)
-        })?;
-        roots.extend(producers);
+        contents[*resource]
+            .read(range.clone(), &mut roots)
+            .map_err(|hole| {
+                CompileError::new(
+                    GraphErrorKind::UninitializedRead,
+                    format!(
+                        "export reads uninitialized resource {:?} at {}..{}",
+                        resources[*resource].name, hole.start, hole.end
+                    ),
+                )
+                .at_resource(*resource)
+                .at_range(hole)
+            })?;
     }
 
     // Scheduling edges do not define liveness. In particular WAW cannot keep
@@ -960,8 +960,9 @@ impl ContentMap {
         );
     }
 
-    fn read(&self, range: Range<u64>) -> Result<BTreeSet<usize>, Range<u64>> {
-        let mut producers = BTreeSet::new();
+    // Add directly to the caller's dependency set. A hole can leave prefix
+    // producers in that set, but both callers abort the analysis on any hole.
+    fn read(&self, range: Range<u64>, producers: &mut BTreeSet<usize>) -> Result<(), Range<u64>> {
         let (&first, _) = self
             .segments
             .range(..=range.start)
@@ -975,7 +976,7 @@ impl ContentMap {
                 producers.insert(producer);
             }
         }
-        Ok(producers)
+        Ok(())
     }
 }
 
