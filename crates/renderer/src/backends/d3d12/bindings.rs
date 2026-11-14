@@ -105,6 +105,9 @@ pub struct D3D12_CACHED_PIPELINE_STATE {
     pub pCachedBlob: *const core::ffi::c_void,
     pub CachedBlobSizeInBytes: usize,
 }
+pub type D3D12_CLEAR_FLAGS = u32;
+pub const D3D12_CLEAR_FLAG_DEPTH: D3D12_CLEAR_FLAGS = 1;
+pub const D3D12_CLEAR_FLAG_STENCIL: D3D12_CLEAR_FLAGS = 2;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct D3D12_CLEAR_VALUE {
@@ -202,6 +205,34 @@ pub struct D3D12_DEPTH_STENCIL_VALUE {
     pub Stencil: u8,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct D3D12_DEPTH_STENCIL_VIEW_DESC {
+    pub Format: DXGI_FORMAT,
+    pub ViewDimension: D3D12_DSV_DIMENSION,
+    pub Flags: D3D12_DSV_FLAGS,
+    pub Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0,
+}
+impl Default for D3D12_DEPTH_STENCIL_VIEW_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+    pub Texture1D: D3D12_TEX1D_DSV,
+    pub Texture1DArray: D3D12_TEX1D_ARRAY_DSV,
+    pub Texture2D: D3D12_TEX2D_DSV,
+    pub Texture2DArray: D3D12_TEX2D_ARRAY_DSV,
+    pub Texture2DMS: D3D12_TEX2DMS_DSV,
+    pub Texture2DMSArray: D3D12_TEX2DMS_ARRAY_DSV,
+}
+impl Default for D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_DESCRIPTOR_HEAP_DESC {
     pub Type: D3D12_DESCRIPTOR_HEAP_TYPE,
@@ -232,6 +263,18 @@ pub const D3D12_DESCRIPTOR_RANGE_TYPE_CBV: D3D12_DESCRIPTOR_RANGE_TYPE = 2;
 pub const D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER: D3D12_DESCRIPTOR_RANGE_TYPE = 3;
 pub const D3D12_DESCRIPTOR_RANGE_TYPE_SRV: D3D12_DESCRIPTOR_RANGE_TYPE = 0;
 pub const D3D12_DESCRIPTOR_RANGE_TYPE_UAV: D3D12_DESCRIPTOR_RANGE_TYPE = 1;
+pub type D3D12_DSV_DIMENSION = i32;
+pub const D3D12_DSV_DIMENSION_TEXTURE1D: D3D12_DSV_DIMENSION = 1;
+pub const D3D12_DSV_DIMENSION_TEXTURE1DARRAY: D3D12_DSV_DIMENSION = 2;
+pub const D3D12_DSV_DIMENSION_TEXTURE2D: D3D12_DSV_DIMENSION = 3;
+pub const D3D12_DSV_DIMENSION_TEXTURE2DARRAY: D3D12_DSV_DIMENSION = 4;
+pub const D3D12_DSV_DIMENSION_TEXTURE2DMS: D3D12_DSV_DIMENSION = 5;
+pub const D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY: D3D12_DSV_DIMENSION = 6;
+pub const D3D12_DSV_DIMENSION_UNKNOWN: D3D12_DSV_DIMENSION = 0;
+pub type D3D12_DSV_FLAGS = u32;
+pub const D3D12_DSV_FLAG_NONE: D3D12_DSV_FLAGS = 0;
+pub const D3D12_DSV_FLAG_READ_ONLY_DEPTH: D3D12_DSV_FLAGS = 1;
+pub const D3D12_DSV_FLAG_READ_ONLY_STENCIL: D3D12_DSV_FLAGS = 2;
 pub type D3D12_FEATURE = i32;
 pub const D3D12_FEATURE_APPLICATION_SPECIFIC_DRIVER_STATE: D3D12_FEATURE = 56;
 pub const D3D12_FEATURE_ARCHITECTURE: D3D12_FEATURE = 1;
@@ -525,6 +568,7 @@ pub const D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT: i32 = 16;
 pub struct D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV {
     pub Location: D3D12_GPU_VIRTUAL_ADDRESS,
 }
+pub type D3D12_RECT = RECT;
 pub const D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT: i32 = 4096;
 pub const D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION: i32 = 16384;
 #[repr(C)]
@@ -851,6 +895,13 @@ pub struct D3D12_SUBRESOURCE_FOOTPRINT {
     pub RowPitch: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX1D_ARRAY_DSV {
+    pub MipSlice: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct D3D12_TEX1D_ARRAY_SRV {
     pub MostDetailedMip: u32,
@@ -858,6 +909,11 @@ pub struct D3D12_TEX1D_ARRAY_SRV {
     pub FirstArraySlice: u32,
     pub ArraySize: u32,
     pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX1D_DSV {
+    pub MipSlice: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -868,14 +924,32 @@ pub struct D3D12_TEX1D_SRV {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_ARRAY_DSV {
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2DMS_ARRAY_SRV {
     pub FirstArraySlice: u32,
     pub ArraySize: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_DSV {
+    pub UnusedField_NothingToDefine: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2DMS_SRV {
     pub UnusedField_NothingToDefine: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2D_ARRAY_DSV {
+    pub MipSlice: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -886,6 +960,11 @@ pub struct D3D12_TEX2D_ARRAY_SRV {
     pub ArraySize: u32,
     pub PlaneSlice: u32,
     pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2D_DSV {
+    pub MipSlice: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1031,7 +1110,10 @@ pub const DXGI_ERROR_NOT_FOUND: windows_core::HRESULT = windows_core::HRESULT(0x
 pub const DXGI_ERROR_UNSUPPORTED: windows_core::HRESULT =
     windows_core::HRESULT(0x887A0004_u32 as _);
 pub type DXGI_FORMAT = i32;
+pub const DXGI_FORMAT_D32_FLOAT: DXGI_FORMAT = 40;
 pub const DXGI_FORMAT_R16G16B16A16_FLOAT: DXGI_FORMAT = 10;
+pub const DXGI_FORMAT_R32_FLOAT: DXGI_FORMAT = 41;
+pub const DXGI_FORMAT_R32_TYPELESS: DXGI_FORMAT = 39;
 pub const DXGI_FORMAT_R8G8B8A8_UNORM: DXGI_FORMAT = 28;
 pub const DXGI_FORMAT_UNKNOWN: DXGI_FORMAT = 0;
 #[repr(C)]
@@ -1596,6 +1678,23 @@ impl ID3D12Device {
             );
         }
     }
+    pub unsafe fn CreateDepthStencilView<P0>(
+        &self,
+        presource: P0,
+        pdesc: Option<*const D3D12_DEPTH_STENCIL_VIEW_DESC>,
+        destdescriptor: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) where
+        P0: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateDepthStencilView)(
+                windows_core::Interface::as_raw(self),
+                presource.param().abi(),
+                pdesc.unwrap_or(core::mem::zeroed()) as _,
+                destdescriptor,
+            );
+        }
+    }
     pub unsafe fn CreateSampler(
         &self,
         pdesc: *const D3D12_SAMPLER_DESC,
@@ -1768,7 +1867,12 @@ pub struct ID3D12Device_Vtbl {
     ),
     CreateUnorderedAccessView: usize,
     CreateRenderTargetView: usize,
-    CreateDepthStencilView: usize,
+    pub CreateDepthStencilView: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *const D3D12_DEPTH_STENCIL_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
     pub CreateSampler: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *const D3D12_SAMPLER_DESC,
@@ -2043,6 +2147,26 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn ClearDepthStencilView(
+        &self,
+        depthstencilview: D3D12_CPU_DESCRIPTOR_HANDLE,
+        clearflags: D3D12_CLEAR_FLAGS,
+        depth: f32,
+        stencil: u8,
+        prects: &[D3D12_RECT],
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).ClearDepthStencilView)(
+                windows_core::Interface::as_raw(self),
+                depthstencilview,
+                clearflags,
+                depth,
+                stencil,
+                prects.len().try_into().unwrap(),
+                prects.as_ptr(),
+            );
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12GraphicsCommandList_Vtbl {
@@ -2106,7 +2230,15 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     IASetVertexBuffers: usize,
     SOSetTargets: usize,
     OMSetRenderTargets: usize,
-    ClearDepthStencilView: usize,
+    pub ClearDepthStencilView: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+        D3D12_CLEAR_FLAGS,
+        f32,
+        u8,
+        u32,
+        *const D3D12_RECT,
+    ),
     ClearRenderTargetView: usize,
     ClearUnorderedAccessViewUint: usize,
     ClearUnorderedAccessViewFloat: usize,
@@ -2785,4 +2917,12 @@ impl windows_core::RuntimeName for IDXGIObject {}
 pub struct LUID {
     pub LowPart: u32,
     pub HighPart: i32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RECT {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
 }

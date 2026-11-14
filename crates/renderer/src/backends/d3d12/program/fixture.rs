@@ -51,10 +51,94 @@ impl Drop for ExecutionLease {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(in super::super) enum ImageInitialization<'a> {
+    Upload(&'a [u8]),
+    DepthClear { view: &'a D3D12ImageView },
+}
+
+pub(in super::super) struct DepthTarget {
+    _heap: ID3D12DescriptorHeap,
+    _view: D3D12ImageView,
+}
+
+fn clear_depth(
+    list: &ID3D12GraphicsCommandList,
+    sampled: &D3D12ImageView,
+    attachment: &D3D12ImageView,
+) -> Result<DepthTarget, D3D12RuntimeError> {
+    if attachment.desc().usage != crate::program::ImageViewUsage::DepthAttachment
+        || !Arc::ptr_eq(&sampled.image.0, &attachment.image.0)
+    {
+        return Err(D3D12RuntimeError::invalid(
+            "depth clear requires the same Image's depth attachment View",
+        ));
+    }
+    // Creation validated this immutable preference. Do not add another clear
+    // input or repeat its finite/range checks at recording.
+    let value = attachment
+        .image
+        .desc()
+        .preferred_depth_clear
+        .ok_or_else(|| {
+            D3D12RuntimeError::invalid("private depth fixture requires a preferred clear value")
+        })?;
+    let owner = &attachment.image.0.owner;
+    let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+        Type: D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+        NumDescriptors: 1,
+        Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+        NodeMask: 0,
+    };
+    // SAFETY: The exact one-slot DSV heap is CPU-only. No shader-visible flag is
+    // valid for DSV descriptors; its owned COM reference covers native creation.
+    let heap: ID3D12DescriptorHeap = unsafe { owner.raw.CreateDescriptorHeap(&heap_desc) }
+        .map_err(|error| owner.native("ID3D12Device::CreateDescriptorHeap(DSV)", error))?;
+    let desc = D3D12_DEPTH_STENCIL_VIEW_DESC {
+        Format: DXGI_FORMAT_D32_FLOAT,
+        ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
+        Flags: D3D12_DSV_FLAG_NONE,
+        Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+            Texture2D: D3D12_TEX2D_DSV {
+                MipSlice: attachment.desc().base_mip_level,
+            },
+        },
+    };
+    let mut state = D3D12_RESOURCE_STATE_COMMON;
+    super::super::graph::transition(
+        list,
+        attachment.image.0.native.raw(),
+        &mut state,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+    );
+    // SAFETY: Public View creation established the D32 single-subresource
+    // contract. The matching typeless Image allows depth attachments, the full
+    // View is in DEPTH_WRITE and clear depth is finite and normalized. Work keeps
+    // the View/Image/heap until retirement (conservative for the CPU-only DSV).
+    unsafe {
+        let handle = heap.GetCPUDescriptorHandleForHeapStart();
+        owner
+            .raw
+            .CreateDepthStencilView(attachment.image.0.native.raw(), Some(&desc), handle);
+        list.ClearDepthStencilView(handle, D3D12_CLEAR_FLAG_DEPTH, value, 0, &[]);
+    }
+    super::super::graph::transition(
+        list,
+        attachment.image.0.native.raw(),
+        &mut state,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+    );
+    Ok(DepthTarget {
+        _heap: heap,
+        _view: attachment.clone(),
+    })
+}
+
 pub(in super::super) struct FixtureRecording {
     pub(in super::super) readback: DeviceBuffer,
     pub(in super::super) size: usize,
     pub(in super::super) staging: Vec<DeviceBuffer>,
+    pub(in super::super) depth_targets: Vec<DepthTarget>,
     pub(in super::super) leases: Vec<ExecutionLease>,
 }
 
@@ -68,6 +152,11 @@ fn upload_image(
     let texel_bytes = match desc.format {
         crate::program::ImageFormat::Rgba8Unorm => 4,
         crate::program::ImageFormat::Rgba16Float => 8,
+        crate::program::ImageFormat::D32Float => {
+            return Err(D3D12RuntimeError::invalid(
+                "depth fixture initialization uses an attachment clear",
+            ));
+        }
     };
     let row_bytes = desc.width as usize * texel_bytes;
     if pixels.len() != row_bytes * desc.height as usize {
@@ -163,7 +252,7 @@ impl D3D12Bindings {
     pub(in super::super) fn record_fixture(
         &self,
         list: &ID3D12GraphicsCommandList,
-        pixels: Option<&[u8]>,
+        initialize: Option<ImageInitialization<'_>>,
     ) -> Result<FixtureRecording, D3D12RuntimeError> {
         let binding = &self.0;
         let program = &binding._program.0;
@@ -197,10 +286,18 @@ impl D3D12Bindings {
             D3D12_HEAP_TYPE_READBACK,
         )?;
         let mut staging = Vec::new();
+        let mut depth_targets = Vec::new();
         for resource in &binding.resources {
             if let BoundResource::ImageView(view) = resource {
-                if let Some(pixels) = pixels {
-                    staging.push(upload_image(list, &view.image, pixels)?);
+                if let Some(initialize) = initialize {
+                    match initialize {
+                        ImageInitialization::Upload(pixels) => {
+                            staging.push(upload_image(list, &view.image, pixels)?)
+                        }
+                        ImageInitialization::DepthClear { view: attachment } => {
+                            depth_targets.push(clear_depth(list, view, attachment)?)
+                        }
+                    }
                     for lease in &mut leases {
                         if let BoundResource::ImageView(leased) = &lease.resource
                             && Arc::ptr_eq(&leased.image.0, &view.image.0)
@@ -211,7 +308,7 @@ impl D3D12Bindings {
                 } else {
                     if !view.image.0.initialized.load(Ordering::Acquire) {
                         return Err(D3D12RuntimeError::invalid(
-                            "sampled fixture image has no completed upload",
+                            "sampled fixture image has no completed initialization",
                         ));
                     }
                     let mut state = D3D12_RESOURCE_STATE_COMMON;
@@ -304,6 +401,7 @@ impl D3D12Bindings {
             readback,
             size: output_bytes,
             staging,
+            depth_targets,
             leases,
         })
     }

@@ -35,6 +35,7 @@ fn image_desc() -> ImageDescriptor {
         width: 2,
         height: 2,
         format: ImageFormat::Rgba8Unorm,
+        preferred_depth_clear: None,
     }
 }
 fn sampled_entries<'a>(
@@ -394,12 +395,55 @@ fn storage_fixture(strict: bool) {
     );
 }
 
-fn sampled_fixture<const N: usize>(
+enum SampledInitialization<'a> {
+    Upload([&'a [u8]; 2]),
+    DepthClear([f32; 2]),
+}
+
+enum ExpectedSamples {
+    All([Vec<u8>; 2]),
+    DepthRed([u32; 2]),
+}
+impl ExpectedSamples {
+    fn check(&self, version: usize, actual: &[u8]) {
+        match self {
+            Self::All(expected) => assert_eq!(actual, expected[version]),
+            Self::DepthRed(expected) => {
+                assert_eq!(actual.len(), 64);
+                for sample in actual.as_chunks::<16>().0 {
+                    assert_eq!(
+                        u32::from_le_bytes(sample[..4].try_into().unwrap()),
+                        expected[version]
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn prepare_sampled_case(
+    runtime: &D3D12Runtime,
+    bindings: &D3D12Bindings,
+    initialize: &SampledInitialization<'_>,
+    depth_views: &Option<[D3D12ImageView; 2]>,
+    version: usize,
+) -> Result<super::super::D3D12PreparedGraph, D3D12RuntimeError> {
+    match initialize {
+        SampledInitialization::Upload(bytes) => {
+            runtime.prepare_sampled_fixture(bindings, Some(bytes[version]))
+        }
+        SampledInitialization::DepthClear(_) => {
+            runtime.prepare_depth_fixture(bindings, Some(&depth_views.as_ref().unwrap()[version]))
+        }
+    }
+}
+
+fn sampled_fixture(
     strict: bool,
     format: ImageFormat,
     managed: ManagedProgram,
-    pixels: [[u8; N]; 2],
-    expected: [Vec<u8>; 2],
+    initialize: SampledInitialization<'_>,
+    expected: ExpectedSamples,
 ) {
     let mut runtime = runtime(strict);
     let monitor = runtime.validation_monitor();
@@ -408,14 +452,25 @@ fn sampled_fixture<const N: usize>(
         format,
         ..image_desc()
     };
+    let (desc, newer_desc) = match &initialize {
+        SampledInitialization::DepthClear(values) => (
+            ImageDescriptor {
+                preferred_depth_clear: Some(values[0]),
+                ..desc
+            },
+            ImageDescriptor {
+                preferred_depth_clear: Some(values[1]),
+                ..desc
+            },
+        ),
+        SampledInitialization::Upload(_) => (desc, desc),
+    };
     let output_size = managed
         .bindings()
         .iter()
         .find(|slot| slot.kind == BindingType::StorageWrite)
         .unwrap()
         .min_size;
-    let [first, second] = pixels;
-    let [expected_first, expected_second] = expected;
     if format == ImageFormat::Rgba8Unorm {
         check_creation_failure(&runtime, &managed);
     }
@@ -437,7 +492,7 @@ fn sampled_fixture<const N: usize>(
         }
     }
     let image = runtime.create_managed_image(desc).unwrap();
-    let newer = runtime.create_managed_image(desc).unwrap();
+    let newer = runtime.create_managed_image(newer_desc).unwrap();
     let image_owner = Arc::downgrade(&image.0);
     let view = runtime
         .create_image_view(&image, ImageViewDescriptor::default())
@@ -445,6 +500,18 @@ fn sampled_fixture<const N: usize>(
     let new_view = runtime
         .create_image_view(&newer, ImageViewDescriptor::default())
         .unwrap();
+    let depth_views = if format == ImageFormat::D32Float {
+        let descriptor = ImageViewDescriptor {
+            usage: crate::program::ImageViewUsage::DepthAttachment,
+            ..Default::default()
+        };
+        Some([
+            runtime.create_image_view(&image, descriptor).unwrap(),
+            runtime.create_image_view(&newer, descriptor).unwrap(),
+        ])
+    } else {
+        None
+    };
     assert_eq!(image.desc(), desc);
     assert_eq!(view.desc(), ImageViewDescriptor::default());
     if format == ImageFormat::Rgba8Unorm {
@@ -487,6 +554,27 @@ fn sampled_fixture<const N: usize>(
     let new = runtime.create_bindings(&program, &reversed).unwrap();
     assert_eq!(new.layout(), managed.bindings());
     assert_eq!(new.len(), 3);
+    if let Some(attachments) = &depth_views {
+        assert_eq!(
+            runtime
+                .prepare_depth_fixture(&old, Some(&attachments[1]))
+                .err()
+                .unwrap()
+                .kind(),
+            D3D12RuntimeErrorKind::InvalidInput,
+        );
+        assert_eq!(
+            runtime
+                .create_bindings(
+                    &program,
+                    &sampled_entries(&attachments[0], &sampler, &output, output_size)
+                )
+                .unwrap_err()
+                .kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
+    }
+
     if format == ImageFormat::Rgba8Unorm {
         // The selected slot is valid, but the resource kind is not.
         let wrong = [
@@ -548,12 +636,12 @@ fn sampled_fixture<const N: usize>(
         D3D12RuntimeErrorKind::InvalidInput
     );
     assert!(runtime.prepare_sampled_fixture(&old, None).is_err());
-    let canceled = runtime.prepare_sampled_fixture(&old, Some(&first)).unwrap();
-    assert!(runtime.prepare_sampled_fixture(&old, Some(&first)).is_err());
+    let canceled = prepare_sampled_case(&runtime, &old, &initialize, &depth_views, 0).unwrap();
+    assert!(prepare_sampled_case(&runtime, &old, &initialize, &depth_views, 0).is_err());
     drop(canceled);
     assert!(runtime.prepare_sampled_fixture(&old, None).is_err());
-    let prepared = runtime.prepare_sampled_fixture(&old, Some(&first)).unwrap();
-    assert_eq!(wait_bytes(&mut runtime, prepared), expected_first);
+    let prepared = prepare_sampled_case(&runtime, &old, &initialize, &depth_views, 0).unwrap();
+    expected.check(0, &wait_bytes(&mut runtime, prepared));
     // Image exclusivity belongs to the shared Image, not the binding version.
     let alias = runtime
         .create_bindings(
@@ -563,9 +651,8 @@ fn sampled_fixture<const N: usize>(
         .unwrap();
     let prepared_old = runtime.prepare_sampled_fixture(&old, None).unwrap();
     assert!(runtime.prepare_sampled_fixture(&alias, None).is_err());
-    let prepared_new = runtime
-        .prepare_sampled_fixture(&new, Some(&second))
-        .unwrap();
+    let prepared_new = prepare_sampled_case(&runtime, &new, &initialize, &depth_views, 1).unwrap();
+    drop(depth_views);
     drop((
         alias, old, new, view, new_view, image, newer, sampler, output, new_output, program,
     ));
@@ -579,8 +666,8 @@ fn sampled_fixture<const N: usize>(
     let mut new_result = new_pending.wait(Duration::from_secs(30)).unwrap().unwrap();
     let old_bytes = old_result.readback(pass).unwrap();
     let new_bytes = new_result.readback(pass).unwrap();
-    assert_eq!(old_bytes, expected_first);
-    assert_eq!(new_bytes, expected_second);
+    expected.check(0, &old_bytes);
+    expected.check(1, &new_bytes);
     drop((old_result, new_result, old_pending, new_pending));
     assert!(image_owner.upgrade().is_none());
     assert!(program_owner.upgrade().is_none());
@@ -598,17 +685,25 @@ fn sampled_cases(strict: bool) {
         strict,
         ImageFormat::Rgba8Unorm,
         ManagedProgram::sampled_readback(),
-        rgba8,
-        rgba8.map(Vec::from),
+        SampledInitialization::Upload([&rgba8[0], &rgba8[1]]),
+        ExpectedSamples::All(rgba8.map(Vec::from)),
     );
+    let rgba16 = crate::program::SAMPLE_FLOAT_TEST_DATA;
     let expected = crate::program::SAMPLE_FLOAT_EXPECTED
         .map(|words| words.into_iter().flat_map(u32::to_le_bytes).collect());
     sampled_fixture(
         strict,
         ImageFormat::Rgba16Float,
         ManagedProgram::sampled_float_readback(),
-        crate::program::SAMPLE_FLOAT_TEST_DATA,
-        expected,
+        SampledInitialization::Upload([&rgba16[0], &rgba16[1]]),
+        ExpectedSamples::All(expected),
+    );
+    sampled_fixture(
+        strict,
+        ImageFormat::D32Float,
+        ManagedProgram::sampled_float_readback(),
+        SampledInitialization::DepthClear(crate::program::DEPTH_TEST_VALUES),
+        ExpectedSamples::DepthRed(crate::program::DEPTH_TEST_EXPECTED),
     );
 }
 

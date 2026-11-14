@@ -180,6 +180,17 @@ impl DeviceImage {
             VisibleNodeMask: 1,
             ..Default::default()
         };
+        // A preferred clear value is an immutable creation hint, not an
+        // initialization operation. The public boundary validated D32/range.
+        let clear = desc.preferred_depth_clear.map(|value| D3D12_CLEAR_VALUE {
+            Format: DXGI_FORMAT_D32_FLOAT,
+            Anonymous: D3D12_CLEAR_VALUE_0 {
+                DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
+                    Depth: value,
+                    Stencil: 0,
+                },
+            },
+        });
         let desc = image_desc(desc);
         let mut raw = None;
         // SAFETY: The managed creation boundary establishes this sampled single
@@ -191,7 +202,7 @@ impl DeviceImage {
                 D3D12_HEAP_FLAG_NONE,
                 &desc,
                 D3D12_RESOURCE_STATE_COMMON,
-                None,
+                clear.as_ref().map(std::ptr::from_ref),
                 &mut raw,
             )
         }
@@ -211,6 +222,14 @@ pub(super) fn image_format(format: crate::program::ImageFormat) -> DXGI_FORMAT {
     match format {
         crate::program::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
         crate::program::ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        crate::program::ImageFormat::D32Float => DXGI_FORMAT_R32_TYPELESS,
+    }
+}
+
+pub(super) fn sampled_format(format: crate::program::ImageFormat) -> DXGI_FORMAT {
+    match format {
+        crate::program::ImageFormat::D32Float => DXGI_FORMAT_R32_FLOAT,
+        _ => image_format(format),
     }
 }
 
@@ -227,6 +246,11 @@ pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURC
             Quality: 0,
         },
         Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        Flags: if desc.format == crate::program::ImageFormat::D32Float {
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
+        } else {
+            D3D12_RESOURCE_FLAG_NONE
+        },
         ..Default::default()
     }
 }

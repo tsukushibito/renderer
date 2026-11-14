@@ -59,7 +59,7 @@ impl D3D12ImageView {
     }
     pub(super) fn native_desc(&self) -> D3D12_SHADER_RESOURCE_VIEW_DESC {
         D3D12_SHADER_RESOURCE_VIEW_DESC {
-            Format: super::resources::image_format(self.image.desc().format),
+            Format: super::resources::sampled_format(self.image.desc().format),
             ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
             Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING as u32,
             Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
@@ -128,6 +128,7 @@ impl D3D12Runtime {
         let supported = match desc.format {
             crate::program::ImageFormat::Rgba8Unorm => self.device.rgba8_sampled,
             crate::program::ImageFormat::Rgba16Float => self.device.rgba16f_sampled,
+            crate::program::ImageFormat::D32Float => self.device.d32_sampled,
         };
         if !supported {
             return Err(D3D12RuntimeError::unsupported(format!(
@@ -153,7 +154,7 @@ impl D3D12Runtime {
     ) -> Result<D3D12ImageView, D3D12RuntimeError> {
         self.device.ensure_active()?;
         super::program::require_same_owner(&self.device, &image.0.owner)?;
-        validate_image_view_descriptor(desc)
+        validate_image_view_descriptor(image.desc().format, desc)
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
         Ok(D3D12ImageView {
             image: image.clone(),
