@@ -16,7 +16,7 @@ use super::device::DeviceState;
 use super::instance::LOG_TARGET;
 use super::memory::{MemoryOwner, VulkanAllocator};
 
-mod host_access;
+pub(super) mod host_access;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BufferRole {

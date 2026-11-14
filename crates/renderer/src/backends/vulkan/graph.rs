@@ -250,6 +250,32 @@ pub struct VulkanRuntime {
 }
 
 impl VulkanRuntime {
+    /// Create an immutable managed pipeline independently of any Graph.
+    pub fn create_program(
+        &self,
+        program: &crate::program::ManagedProgram,
+    ) -> Result<super::managed::VulkanProgram, RuntimeError> {
+        super::managed::VulkanProgram::create(Arc::clone(&self.owner), program)
+    }
+
+    /// Copy uniform bytes once. Updating creates a new buffer version.
+    pub fn create_uniform_buffer(
+        &self,
+        bytes: &[u8],
+    ) -> Result<super::managed::VulkanUniformBuffer, RuntimeError> {
+        super::managed::VulkanUniformBuffer::create(Arc::clone(&self.owner), bytes)
+    }
+
+    /// Create an immutable set retaining this exact program and buffer version.
+    pub fn create_uniform_binding(
+        &self,
+        program: &super::managed::VulkanProgram,
+        buffer: &super::managed::VulkanUniformBuffer,
+        desc: crate::program::UniformBindingDesc,
+    ) -> Result<super::managed::VulkanUniformBinding, RuntimeError> {
+        super::managed::VulkanUniformBinding::create(&self.owner, program, buffer, desc)
+    }
+
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {
         Self::new_with_validation(config, super::instance::ValidationMode::default())
     }
