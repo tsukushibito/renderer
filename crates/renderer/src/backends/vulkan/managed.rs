@@ -23,7 +23,7 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
 fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
     match kind {
         BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
-        BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::StorageRead | BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
         BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
         BindingType::Sampler => vk::DescriptorType::SAMPLER,
     }
@@ -51,7 +51,7 @@ impl VulkanProgram {
             .count() as u32;
         let storage_count = bindings
             .iter()
-            .filter(|b| b.kind == BindingType::StorageWrite)
+            .filter(|b| matches!(b.kind, BindingType::StorageRead | BindingType::StorageWrite))
             .count() as u32;
         let group_count = bindings.iter().map(|b| b.group + 1).max().unwrap_or(0);
         let image_count = bindings
@@ -79,7 +79,9 @@ impl VulkanProgram {
                 b.min_size
                     > match b.kind {
                         BindingType::Uniform => u64::from(limits.max_uniform_buffer_range),
-                        BindingType::StorageWrite => u64::from(limits.max_storage_buffer_range),
+                        BindingType::StorageRead | BindingType::StorageWrite => {
+                            u64::from(limits.max_storage_buffer_range)
+                        }
                         BindingType::SampledImage | BindingType::Sampler => 0,
                     }
             })
@@ -100,6 +102,8 @@ impl VulkanProgram {
         let mut program = Program {
             owner,
             bindings,
+            #[cfg(test)]
+            managed: *managed,
             set_layouts: Vec::new(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
@@ -111,6 +115,8 @@ impl VulkanProgram {
 struct Program {
     owner: Arc<MemoryOwner>,
     bindings: &'static [BindingLayout],
+    #[cfg(test)]
+    managed: ManagedProgram,
     set_layouts: Vec<vk::DescriptorSetLayout>,
     layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
@@ -386,7 +392,7 @@ impl VulkanBindings {
                             limits.min_uniform_buffer_offset_alignment,
                             limits.max_uniform_buffer_range,
                         ),
-                        BindingType::StorageWrite => (
+                        BindingType::StorageRead | BindingType::StorageWrite => (
                             limits.min_storage_buffer_offset_alignment,
                             limits.max_storage_buffer_range,
                         ),
@@ -434,16 +440,21 @@ impl VulkanBindings {
             sets: Vec::new(),
         };
         let sizes = [
-            BindingType::Uniform,
-            BindingType::StorageWrite,
-            BindingType::SampledImage,
-            BindingType::Sampler,
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+            vk::DescriptorType::SAMPLER,
         ]
         .into_iter()
-        .filter_map(|kind| {
-            let count = program.0.bindings.iter().filter(|b| b.kind == kind).count() as u32;
+        .filter_map(|ty| {
+            let count = program
+                .0
+                .bindings
+                .iter()
+                .filter(|b| descriptor_type(b.kind) == ty)
+                .count() as u32;
             (count != 0).then_some(vk::DescriptorPoolSize {
-                ty: descriptor_type(kind),
+                ty,
                 descriptor_count: count,
             })
         })
