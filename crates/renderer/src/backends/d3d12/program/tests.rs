@@ -104,22 +104,16 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
             min_size: 16,
         },
         BindingLayout {
-            group: 2,
-            binding: 3,
-            kind: BindingType::Uniform,
-            min_size: 16,
-        },
-        BindingLayout {
-            group: 10,
-            binding: 11,
-            kind: BindingType::StorageRead,
-            min_size: 16,
-        },
-        BindingLayout {
             group: 4,
             binding: 6,
             kind: BindingType::SampledImage,
             min_size: 0,
+        },
+        BindingLayout {
+            group: 2,
+            binding: 3,
+            kind: BindingType::Uniform,
+            min_size: 16,
         },
         BindingLayout {
             group: 8,
@@ -127,13 +121,23 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
             kind: BindingType::Sampler,
             min_size: 0,
         },
+        BindingLayout {
+            group: 10,
+            binding: 11,
+            kind: BindingType::StorageRead,
+            min_size: 16,
+        },
     ];
     let params = root_parameters(&layout).unwrap();
-    for (index, (slot, parameter)) in layout.iter().zip(&params.parameters).enumerate() {
+    assert_eq!(params.parameters.len(), layout.len());
+    for (slot, parameter) in layout.iter().zip(&params.parameters) {
         // SAFETY: Lowering selected Descriptor for buffers and DescriptorTable
         // for sampled entries; owned ranges keep table pointers valid here.
         unsafe {
-            if index < 3 {
+            if matches!(
+                slot.kind,
+                BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+            ) {
                 assert_eq!(
                     parameter.ParameterType,
                     match slot.kind {
@@ -162,7 +166,7 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
                 );
                 assert_eq!(
                     desc.RangeType,
-                    if index == 3 {
+                    if slot.kind == BindingType::SampledImage {
                         D3D12_DESCRIPTOR_RANGE_TYPE_SRV
                     } else {
                         D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
@@ -172,12 +176,12 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
         }
     }
     assert_eq!(
-        root_parameters(&[layout[2]; 33]).err().unwrap().kind(),
+        root_parameters(&[layout[4]; 33]).err().unwrap().kind(),
         D3D12RuntimeErrorKind::Unsupported
     );
-    assert!(root_parameters(&[layout[3]; 64]).is_ok());
+    assert!(root_parameters(&[layout[1]; 64]).is_ok());
     assert_eq!(
-        root_parameters(&[layout[3]; 65]).err().unwrap().kind(),
+        root_parameters(&[layout[1]; 65]).err().unwrap().kind(),
         D3D12RuntimeErrorKind::Unsupported
     );
 }
@@ -418,6 +422,7 @@ fn storage_fixture(strict: bool, storage_read: bool) {
     let old = runtime
         .create_bindings(&program, &entries(&uniform, &output))
         .unwrap();
+    assert!(old.0._heaps._tables.is_empty());
     let mut reversed = entries(&newer, &new_output);
     reversed.reverse();
     let new = runtime.create_bindings(&program, &reversed).unwrap();
