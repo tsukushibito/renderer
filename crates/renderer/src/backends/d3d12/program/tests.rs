@@ -41,6 +41,7 @@ fn sampled_entries<'a>(
     view: &'a D3D12ImageView,
     sampler: &'a D3D12Sampler,
     output: &'a D3D12Buffer,
+    output_size: u64,
 ) -> [Entry<'a>; 3] {
     [
         Binding {
@@ -53,7 +54,14 @@ fn sampled_entries<'a>(
             binding: 1,
             resource: BindingResource::Sampler(sampler),
         },
-        buffer_entry(1, output, range()),
+        buffer_entry(
+            1,
+            output,
+            BufferRange {
+                size: output_size,
+                ..range()
+            },
+        ),
     ]
 }
 
@@ -386,35 +394,50 @@ fn storage_fixture(strict: bool) {
     );
 }
 
-fn sampled_fixture(strict: bool) {
+fn sampled_fixture<const N: usize>(
+    strict: bool,
+    format: ImageFormat,
+    managed: ManagedProgram,
+    pixels: [[u8; N]; 2],
+    expected: [Vec<u8>; 2],
+) {
     let mut runtime = runtime(strict);
     let monitor = runtime.validation_monitor();
     let device = Arc::downgrade(&runtime.device);
-    let managed = ManagedProgram::sampled_readback();
-    check_creation_failure(&runtime, &managed);
+    let desc = ImageDescriptor {
+        format,
+        ..image_desc()
+    };
+    let output_size = managed
+        .bindings()
+        .iter()
+        .find(|slot| slot.kind == BindingType::StorageWrite)
+        .unwrap()
+        .min_size;
+    let [first, second] = pixels;
+    let [expected_first, expected_second] = expected;
+    if format == ImageFormat::Rgba8Unorm {
+        check_creation_failure(&runtime, &managed);
+    }
     let program = runtime.create_program(&managed).unwrap();
     let program_owner = Arc::downgrade(&program.0);
-    for desc in [
-        ImageDescriptor {
-            width: 0,
-            ..image_desc()
-        },
-        ImageDescriptor {
-            height: 0,
-            ..image_desc()
-        },
-        ImageDescriptor {
-            width: D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION as u32 + 1,
-            ..image_desc()
-        },
-    ] {
-        assert_eq!(
-            runtime.create_managed_image(desc).unwrap_err().kind(),
-            D3D12RuntimeErrorKind::InvalidInput
-        );
+    if format == ImageFormat::Rgba8Unorm {
+        for desc in [
+            ImageDescriptor { width: 0, ..desc },
+            ImageDescriptor { height: 0, ..desc },
+            ImageDescriptor {
+                width: D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION as u32 + 1,
+                ..desc
+            },
+        ] {
+            assert_eq!(
+                runtime.create_managed_image(desc).unwrap_err().kind(),
+                D3D12RuntimeErrorKind::InvalidInput
+            );
+        }
     }
-    let image = runtime.create_managed_image(image_desc()).unwrap();
-    let newer = runtime.create_managed_image(image_desc()).unwrap();
+    let image = runtime.create_managed_image(desc).unwrap();
+    let newer = runtime.create_managed_image(desc).unwrap();
     let image_owner = Arc::downgrade(&image.0);
     let view = runtime
         .create_image_view(&image, ImageViewDescriptor::default())
@@ -422,80 +445,121 @@ fn sampled_fixture(strict: bool) {
     let new_view = runtime
         .create_image_view(&newer, ImageViewDescriptor::default())
         .unwrap();
-    assert_eq!(image.desc(), image_desc());
+    assert_eq!(image.desc(), desc);
     assert_eq!(view.desc(), ImageViewDescriptor::default());
-    assert_eq!(
-        runtime
-            .create_image_view(
-                &image,
-                ImageViewDescriptor {
-                    base_mip_level: 1,
-                    ..Default::default()
-                }
-            )
-            .unwrap_err()
-            .kind(),
-        D3D12RuntimeErrorKind::InvalidInput
-    );
+    if format == ImageFormat::Rgba8Unorm {
+        assert_eq!(
+            runtime
+                .create_image_view(
+                    &image,
+                    ImageViewDescriptor {
+                        base_mip_level: 1,
+                        ..Default::default()
+                    }
+                )
+                .unwrap_err()
+                .kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
+    }
     let sampler = runtime
         .create_sampler(SamplerDescriptor::NearestClamp)
         .unwrap();
     assert_eq!(sampler.desc(), SamplerDescriptor::NearestClamp);
     let output = runtime
-        .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+        .create_managed_buffer(BufferDescriptor::Storage {
+            size: 256 + output_size,
+        })
         .unwrap();
     let new_output = runtime
-        .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+        .create_managed_buffer(BufferDescriptor::Storage {
+            size: 256 + output_size,
+        })
         .unwrap();
     let old = runtime
-        .create_bindings(&program, &sampled_entries(&view, &sampler, &output))
+        .create_bindings(
+            &program,
+            &sampled_entries(&view, &sampler, &output, output_size),
+        )
         .unwrap();
-    let mut reversed = sampled_entries(&new_view, &sampler, &new_output);
+    let mut reversed = sampled_entries(&new_view, &sampler, &new_output, output_size);
     reversed.reverse();
     let new = runtime.create_bindings(&program, &reversed).unwrap();
     assert_eq!(new.layout(), managed.bindings());
     assert_eq!(new.len(), 3);
-    // The selected slot is valid, but the resource kind is not.
-    let wrong = [
+    if format == ImageFormat::Rgba8Unorm {
+        // The selected slot is valid, but the resource kind is not.
+        let wrong = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Sampler(&sampler),
+            },
+            Binding {
+                group: 0,
+                binding: 1,
+                resource: BindingResource::Sampler(&sampler),
+            },
+            buffer_entry(1, &output, range()),
+        ];
+        assert_eq!(
+            runtime
+                .create_bindings(&program, &wrong)
+                .unwrap_err()
+                .kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
+        let owners_before_failure = Arc::strong_count(&runtime.device);
+        assert_eq!(
+            descriptors::DescriptorHeaps::new_inner(&runtime.device, &old.0.resources, true)
+                .err()
+                .unwrap()
+                .kind(),
+            D3D12RuntimeErrorKind::Native
+        );
+        assert_eq!(Arc::strong_count(&runtime.device), owners_before_failure);
+    }
+    // Enforce the selected Program's 16- or 64-byte ABI at the native API.
+    let too_short = [
         Binding {
             group: 0,
             binding: 0,
-            resource: BindingResource::Sampler(&sampler),
+            resource: BindingResource::ImageView(&view),
         },
         Binding {
             group: 0,
             binding: 1,
             resource: BindingResource::Sampler(&sampler),
         },
-        buffer_entry(1, &output, range()),
+        buffer_entry(
+            1,
+            &output,
+            BufferRange {
+                size: output_size - 1,
+                ..range()
+            },
+        ),
     ];
     assert_eq!(
         runtime
-            .create_bindings(&program, &wrong)
+            .create_bindings(&program, &too_short)
             .unwrap_err()
             .kind(),
         D3D12RuntimeErrorKind::InvalidInput
     );
-    let owners_before_failure = Arc::strong_count(&runtime.device);
-    assert_eq!(
-        descriptors::DescriptorHeaps::new_inner(&runtime.device, &old.0.resources, true)
-            .err()
-            .unwrap()
-            .kind(),
-        D3D12RuntimeErrorKind::Native
-    );
-    assert_eq!(Arc::strong_count(&runtime.device), owners_before_failure);
-    let [first, second] = crate::program::SAMPLE_TEST_DATA;
     assert!(runtime.prepare_sampled_fixture(&old, None).is_err());
     let canceled = runtime.prepare_sampled_fixture(&old, Some(&first)).unwrap();
     assert!(runtime.prepare_sampled_fixture(&old, Some(&first)).is_err());
     drop(canceled);
     assert!(runtime.prepare_sampled_fixture(&old, None).is_err());
     let prepared = runtime.prepare_sampled_fixture(&old, Some(&first)).unwrap();
-    assert_eq!(wait_bytes(&mut runtime, prepared), first);
+    assert_eq!(wait_bytes(&mut runtime, prepared), expected_first);
     // Image exclusivity belongs to the shared Image, not the binding version.
     let alias = runtime
-        .create_bindings(&program, &sampled_entries(&view, &sampler, &new_output))
+        .create_bindings(
+            &program,
+            &sampled_entries(&view, &sampler, &new_output, output_size),
+        )
         .unwrap();
     let prepared_old = runtime.prepare_sampled_fixture(&old, None).unwrap();
     assert!(runtime.prepare_sampled_fixture(&alias, None).is_err());
@@ -515,16 +579,36 @@ fn sampled_fixture(strict: bool) {
     let mut new_result = new_pending.wait(Duration::from_secs(30)).unwrap().unwrap();
     let old_bytes = old_result.readback(pass).unwrap();
     let new_bytes = new_result.readback(pass).unwrap();
-    assert_eq!(old_bytes, first);
-    assert_eq!(new_bytes, second);
+    assert_eq!(old_bytes, expected_first);
+    assert_eq!(new_bytes, expected_second);
     drop((old_result, new_result, old_pending, new_pending));
     assert!(image_owner.upgrade().is_none());
     assert!(program_owner.upgrade().is_none());
     assert!(device.upgrade().is_none());
     validate_report(&monitor, strict);
     println!(
-        "D3D12_SAMPLED_REPORT strict={strict} old={old_bytes:?} new={new_bytes:?} validation={:?}",
+        "D3D12_SAMPLED_REPORT format={format:?} strict={strict} old={old_bytes:?} new={new_bytes:?} validation={:?}",
         monitor.snapshot()
+    );
+}
+
+fn sampled_cases(strict: bool) {
+    let rgba8 = crate::program::SAMPLE_TEST_DATA;
+    sampled_fixture(
+        strict,
+        ImageFormat::Rgba8Unorm,
+        ManagedProgram::sampled_readback(),
+        rgba8,
+        rgba8.map(Vec::from),
+    );
+    let expected = crate::program::SAMPLE_FLOAT_EXPECTED
+        .map(|words| words.into_iter().flat_map(u32::to_le_bytes).collect());
+    sampled_fixture(
+        strict,
+        ImageFormat::Rgba16Float,
+        ManagedProgram::sampled_float_readback(),
+        crate::program::SAMPLE_FLOAT_TEST_DATA,
+        expected,
     );
 }
 
@@ -538,7 +622,7 @@ fn d3d12_managed_storage_strict() {
 #[test]
 #[ignore = "requires D3D12 hardware, Debug Layer and GPU-Based Validation"]
 fn d3d12_managed_sampled_strict() {
-    sampled_fixture(true);
+    sampled_cases(true);
 }
 #[cfg(not(any(
     feature = "development-validation",
@@ -566,5 +650,5 @@ fn d3d12_managed_sampled_shipping() {
     if cfg!(debug_assertions) {
         panic!("shipping acceptance requires --release");
     }
-    sampled_fixture(false);
+    sampled_cases(false);
 }

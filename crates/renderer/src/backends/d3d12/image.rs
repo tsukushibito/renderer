@@ -59,7 +59,7 @@ impl D3D12ImageView {
     }
     pub(super) fn native_desc(&self) -> D3D12_SHADER_RESOURCE_VIEW_DESC {
         D3D12_SHADER_RESOURCE_VIEW_DESC {
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            Format: super::resources::image_format(self.image.desc().format),
             ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
             Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING as u32,
             Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
@@ -116,7 +116,7 @@ impl fmt::Debug for D3D12Sampler {
     }
 }
 impl D3D12Runtime {
-    /// Creates a single mip/layer/sample RGBA8 sampled image, without uploading
+    /// Creates a single mip/layer/sample sampled image, without uploading
     /// pixels or submitting commands. Creation does not establish valid contents.
     pub fn create_managed_image(
         &self,
@@ -125,10 +125,15 @@ impl D3D12Runtime {
         self.device.ensure_active()?;
         validate_image_descriptor(desc, D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION as u32)
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
-        if !self.device.rgba8_sampled {
-            return Err(D3D12RuntimeError::unsupported(
-                "RGBA8_UNORM sampled Texture2D is unsupported",
-            ));
+        let supported = match desc.format {
+            crate::program::ImageFormat::Rgba8Unorm => self.device.rgba8_sampled,
+            crate::program::ImageFormat::Rgba16Float => self.device.rgba16f_sampled,
+        };
+        if !supported {
+            return Err(D3D12RuntimeError::unsupported(format!(
+                "{:?} sampled Texture2D is unsupported",
+                desc.format,
+            )));
         }
         let native = DeviceImage::new(&self.device, desc)?;
         Ok(D3D12Image(Arc::new(ImageOwner {

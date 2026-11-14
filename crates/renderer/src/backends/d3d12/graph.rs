@@ -244,7 +244,7 @@ impl Work {
                     work.staging.extend(recording.staging);
                     work.readbacks.push(Readback {
                         pass: 0,
-                        size: 16,
+                        size: recording.size,
                         buffer: Some(recording.readback),
                     });
                     work.managed_bindings.push(binding.clone());
