@@ -25,7 +25,7 @@ mod presenter;
 pub use presenter::Presenter;
 mod runtime;
 mod work;
-use work::PresentWork;
+use work::{PresentWork, prepare_source};
 
 #[cfg(test)]
 mod tests;
