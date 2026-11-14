@@ -33,11 +33,15 @@ pub use backends::vulkan::graph::{
 #[cfg(feature = "vulkan")]
 pub use backends::vulkan::ValidationMode;
 
+#[cfg(feature = "vulkan")]
+pub use backends::vulkan::{VulkanProgram, VulkanUniformBinding, VulkanUniformBuffer};
+
 #[cfg(all(feature = "d3d12", windows))]
 pub use backends::d3d12::{
-    D3D12DeviceInfo, D3D12PreparedGraph, D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeError,
-    D3D12RuntimeErrorKind, D3D12Submission, D3D12SubmissionResult, D3D12ValidationMessage,
-    D3D12ValidationMode, D3D12ValidationMonitor, D3D12ValidationReport,
+    D3D12DeviceInfo, D3D12PreparedGraph, D3D12Program, D3D12Runtime, D3D12RuntimeConfig,
+    D3D12RuntimeError, D3D12RuntimeErrorKind, D3D12Submission, D3D12SubmissionResult,
+    D3D12UniformBinding, D3D12UniformBuffer, D3D12ValidationMessage, D3D12ValidationMode,
+    D3D12ValidationMonitor, D3D12ValidationReport,
 };
 
 #[cfg(all(feature = "presentation", windows))]

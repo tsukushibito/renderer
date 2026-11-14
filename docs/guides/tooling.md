@@ -102,7 +102,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 
 ## D3D12の固定shader生成
 
-管理下5種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
+管理下6種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
 入力のSPIR-Vは既存のVulkan基準を維持し、この手順では書き換えない。
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 
@@ -112,7 +112,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 ```
 
 `-Verify`は生成済みファイルを変更せず、不足・差分・tool不一致・変換失敗をエラーにする。
-先に既存の`regenerate.ps1 -Verify`で5種類のSPIR-V再生成一致と`spirv-val`を確認する。
+先に既存の`regenerate.ps1 -Verify`で6種類のSPIR-V再生成一致と`spirv-val`を確認する。
 [toolchain定義](../../crates/renderer/shaders/dxil-toolchain.json)でWindows x64 SDKの
 glslc・spirv-val・SPIRV-Cross・DXC・dxcompiler.dllのSHA-256と、変換引数を固定する。
 SPIRV-Crossは`vulkan-sdk-1.4.341.0`、DXCは`1.9.0.5180 (e35541826)`である。
@@ -139,9 +139,17 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
   深度は両APIで0〜1のためclip-space Z補正は行わず、culling無効・通常Z・linear RGBA8を前提にする。
 - Compositeのcombined samplerはHLSLで`t0`と`s0`へ分かれるが、`texelFetch`は`Texture2D.Load`になる。
   DXCは未使用の`s0`を除去し、実reflectionのactive bindingは`t0`だけである。
+- `uniform.comp`はlocal size 1×1×1、`std140`の`uvec4`をset 0/binding 0から読み、
+  private受入用のset 1/binding 0へ書く。両blockはmember offset 0、16 byteである。
+  HLSL/DXILでは`b0/space0`と`RWByteAddressBuffer u0/space1`へ対応する。
+  `uniform-abi.ps1`がSPIRV-CrossのJSON reflectionとDXC reflectionを契約へ照合し、
+  slot/type/count/offset/size/local sizeや余分な資源の不一致を生成前の検証で拒否する。
+  SDK不要の`test-uniform-abi.ps1`は改変したreflection/契約が拒否されることも確認し、CIで実行する。
 
 変換optionの意味は[採用版SPIRV-Cross CLI](https://github.com/KhronosGroup/SPIRV-Cross/blob/vulkan-sdk-1.4.341.0/main.cpp)を参照する。
-この確認は生成・静的ABI・再現性の証拠であり、D3D12での実行や二APIの画像等価性は未確認である。
+この生成確認は静的ABI・再現性の証拠であり、それ自体では実GPUの内容一致を証明しない。
+uniformの二API buffer内容照合は[現在の検証状況](../verification/current.md#managed-uniform)へ分けて記録する。
+既存の画像shaderのD3D12実行や二APIの画像等価性は未確認である。
 非identity MVP、非対称なgeometry、深度、Compute／合成の全画素比較はB1の
 `renderer-7ft.2.3`／`.2.4`で確認する。
 4／80 byteの論理定数ABIと、後続runtimeのroot constants／CBVの配置・range要件も区別する。

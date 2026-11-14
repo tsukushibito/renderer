@@ -52,6 +52,12 @@ bufferは半開byte範囲を指定し、未対応の画像subresource指定は�
 D3D12のprepareはexportとliveなimport・画像・未対応操作を明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
+B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
+Program/uniform buffer/binding作成APIを用意する。版は不変で、bindingが実Programと
+資源の所有を保持する。[管理下uniformの契約](vulkan.md#managed-uniform)を参照する。
+この作成APIとprivate GPU受入を、公開Graphの一般draw/dispatch対応とは扱わない。
+owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`へ残す。
+
 ## producer・範囲・Attachment
 
 資源は可変で、readは宣言順で直前までに書かれた内容を使う。

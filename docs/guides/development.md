@@ -322,6 +322,36 @@ Windows表示・自由camera・resize/最小化・pending終了とnative失敗�
 source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/foundation-comparison.json)を参照する。
 試作の計時・性能比較・全Bistro常駐の合否は取得しない。
 
+## 管理下uniform Programの作成と受入
+
+`renderer-7ft.2.1.1`の公開入口は`program::ManagedProgram::uniform_readback()`と
+両runtimeの`create_program`、`create_uniform_buffer`、`create_uniform_binding`である。
+[`program` moduleの例](../../crates/renderer/src/program.rs)は両APIの公開型でRustdocコンパイルする。
+byte更新は新しいbuffer/bindingを作り、旧参照の内容を変更しない。
+この範囲は作成APIであり、一般Graph dispatchや公開storage bindingは後続へ残す。
+
+SDKなしのABI契約回帰は次を使う。生成条件を更新した場合は[shader再生成](tooling.md)も実行する。
+
+```powershell
+./crates/renderer/shaders/test-uniform-abi.ps1
+./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+./scripts/regenerate-d3d12-bindings.ps1 -Verify
+```
+
+実GPU受入は以下を逐次実行する。strictにはCore/SyncValまたはDebug Layer/GBVが必要で、
+前提不足をskip扱いにしない。同じ共通byte列をoffset 256に置き、旧版/新版の各16 byte、
+参照保持、未投入cancelと最終native解放を確認する。storage出力と命令記録はprivateな受入fixtureである。
+
+```powershell
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_uniform_creation_and_versions -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation d3d12_uniform_program_strict -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_uniform_creation_and_versions -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features d3d12 d3d12_uniform_program_shipping -- --ignored --nocapture --test-threads=1
+```
+
+製品構成の成功をnative診断の実効確認へ流用しない。結果・限界は
+[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
+
 ## 製品・開発用の検証設定
 
 実装・レビューでは[製品版と開発用の検証方針](validation-policy.md)に従います。

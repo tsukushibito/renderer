@@ -273,6 +273,38 @@ GraphWorkはdraw列・全物理資源・不変Programを完了まで保持し、
 clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・pending所有と、
 共有/異なる多数meshの比較結果を[現在の検証状況](../verification/current.md#draw-listの本実装と比較計測)へ記録する。
 
+<a id="managed-uniform"></a>
+
+### 管理下Programと不変uniform binding
+
+`renderer-7ft.2.1.1`は、共通の`program::ManagedProgram`からnative Programを作成する
+最初の範囲である。既存の固定`ProgramKind`へ効果を追加せず、Graph非依存の
+`managed` moduleがpipeline、layout、uniform allocation、bindingの所有を担当する。
+一般owned passとの接続、storage/画像の公開binding API、任意shader取込は後続へ残す。
+
+safeな入口はレビュー済みの`ManagedProgram::uniform_readback()`だけである。
+GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
+`std140 uvec4`（offset 0、16 byte）を読み、private受入用のset 1/binding 0へ
+16 byteを書く。一つのinvocationだけを実行し、値依存の範囲外アクセスや競合を作らない。
+reflection・hashだけで任意source/binaryを信頼済みへ昇格させる機能は提供しない。
+生成時にSPIR-VとDXILのreflectionをABI契約へ照合する。
+
+作成時に実Deviceのcompute/descriptor上限とABIを検査する。uniform bufferは
+`UNIFORM_BUFFER`用途のVMA allocationへ初期byteを一度write/flushし、公開後の
+map/上書きを許可しない。`std140`を使い、UBO標準layoutやscalar layout featureを要求しない。
+binding作成時にProgramとbufferのowner、slot、論理byte範囲、
+`minUniformBufferOffsetAlignment`と`maxUniformBufferRange`を照合する。
+descriptor pool/setを新規作成して一度だけ更新し、不変bindingがProgramとbufferを強保持する。
+新しいbyteやbindingは新しいownerへ作り、旧参照のbyteやdescriptorを変更しない。
+失効操作を公開しないため、確立したABI・範囲を記録時に再走査する必要はない。
+native失敗、容量、同期、実GPU完了と所有の保持は製品構成にも残す。
+
+受入のstorage出力とそのdescriptor setは`cfg(test)`に限定し、公開uniform setを更新せず
+別setとして保持する。記録・未投入cancel・pendingの退役には既存のtransfer所有経路を使う。
+pendingで参照を失う場合もGPU完了または既存の不確定失敗時の保持契約を守る。
+これを一般Graph dispatchやstorage資源の公開対応済みとは扱わない。
+実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
+
 ## 投入・完了・異常時の保持
 
 同じqueueで前のread-only layout遷移が既にwriterを可視化した後、write/layout変更がなく、

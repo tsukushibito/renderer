@@ -5,6 +5,32 @@
 //! bindings and Graph execution are subsequent work. Arbitrary source/binary
 //! import is deliberately unavailable: reflection alone does not establish
 //! shader memory safety, declared accesses, or synchronization.
+//!
+//! ```no_run
+//! use renderer::program::{ManagedProgram, UniformBindingDesc};
+//!
+//! #[cfg(feature = "vulkan")]
+//! fn create(runtime: &renderer::VulkanRuntime)
+//!     -> Result<renderer::VulkanUniformBinding, renderer::RuntimeError>
+//! {
+//!     let program = runtime.create_program(&ManagedProgram::uniform_readback())?;
+//!     let buffer = runtime.create_uniform_buffer(&[0; 16])?;
+//!     runtime.create_uniform_binding(&program, &buffer, UniformBindingDesc {
+//!         group: 0, binding: 0, offset: 0, size: 16,
+//!     })
+//! }
+//!
+//! #[cfg(all(feature = "d3d12", windows))]
+//! fn create_d3d12(runtime: &renderer::D3D12Runtime)
+//!     -> Result<renderer::D3D12UniformBinding, renderer::D3D12RuntimeError>
+//! {
+//!     let program = runtime.create_program(&ManagedProgram::uniform_readback())?;
+//!     let buffer = runtime.create_uniform_buffer(&[0; 16])?;
+//!     runtime.create_uniform_binding(&program, &buffer, UniformBindingDesc {
+//!         group: 0, binding: 0, offset: 0, size: 16,
+//!     })
+//! }
+//! ```
 
 /// A uniform slot reflected from an immutable, reviewed shader asset.
 /// This describes an interface; native bindings retain their actual Program.

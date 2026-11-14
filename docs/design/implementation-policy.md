@@ -1007,6 +1007,12 @@ B2 `.3.1`〜`.3.3`、B3 `.4.1`〜`.4.3`、B4 `.5.1`〜`.5.2`、B5 `.6.1`〜`.6.3
 depth-only/color-only、Compute/copy、import/exportとGPU寿命を段階実装する。
 資源format・範囲、shader信頼境界・ABI、宣言と実命令の整合、能力・errorを実証する。
 
+最初の`renderer-7ft.2.1.1`では管理下compute shader 1本とuniform buffer/bindingの
+作成・不変版の保持を二APIで実装する。結果照合用storage出力はprivate受入に限定する。
+一般storage/画像/View/sampler、RGBA16F/depth、一般owned Graphはこの範囲に含めず、
+親`renderer-7ft.2.1`と後続課題へ残す。保証境界は[管理下uniformの契約](vulkan.md#managed-uniform)、
+実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
+
 **完了条件:** 効果専用操作をRenderer本体へ追加せず、同じ利用側パス定義と入力を二APIで実行できる。
 標準描画も独自処理も同じGraph経路を使い、未投入・未完了・更新・破棄・失敗・回収を区別する。
 以降の実シーンで分かった不備は設計へ戻して改訂する。固定操作の完全移植を先行条件にしない。
@@ -1130,6 +1136,27 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 現在の`d3d12` featureは、次のDeviceとbuffer実行までを提供する。
 
 <a id="d3d12-runtime"></a>
+
+### D3D12の管理下Programとuniform
+
+`renderer-7ft.2.1.1`は共通の`ManagedProgram`をSM6.0のcompute PSOとroot signatureへ
+具体化する。既存buffer-only runtimeのDevice要件を増やさず、Program作成時にSM6.0を確認する。
+初期byteをUPLOAD allocationへ一度だけ書き、Program/UBO/bindingを不変の版として保持する。
+bindingはDevice owner、slot、offset、論理rangeとshaderの16-byte最小ABIを作成時に照合する。
+offsetは256-byte境界、論理rangeは64 KiB以下とし、native allocationの256-byte切上げを
+論理rangeの拡大には使わない。CPU mappingやnative handleを公開しない。
+
+この小さいassetはroot CBV `b0/space0`とprivate受入用root UAV `u0/space1`を使う。
+descriptor heap/tableを使う代案に対し、2資源だけの作成契約と版保持を確認するための単純な基準を選んだ。
+[root descriptorの仕様](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-descriptors-directly-in-the-root-signature)
+が許可するcounterなしのraw bufferだけを出力に使う。root descriptorにはrange境界がないため、
+レビュー済みshaderが一つのinvocationで16 byteだけアクセスすることと、不変の参照範囲を安全性の前提にする。
+shader/ABIを変更する際はこの保証を再確立する。一般shader/layoutやbindlessへの制約・性能優位は主張しない。
+
+PSO/root signatureの部分作成はCOM所有で片付け、成功したbindingは実ProgramとUBOを強保持する。
+受入用output/readbackは`cfg(test)`に限定し、既存の未投入cancel、投入前の所有確立、
+Signal失敗時の保持、Fence完了・pending退役を使う。一般storage APIやGraph dispatchは後続である。
+二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
 
 ### D3D12のDeviceとbuffer実行
 

@@ -28,6 +28,9 @@ jobs:
         run: python -B tools/bistro/verify_lfs_assets.py --pointers
       - run: npm ci --ignore-scripts --prefix tools/bistro-validator
       - run: npm test --prefix tools/bistro-validator
+      - name: Check managed uniform shader ABI contracts without an SDK
+        shell: pwsh
+        run: ./crates/renderer/shaders/test-uniform-abi.ps1
 
   dependencies:
     runs-on: ubuntu-24.04
