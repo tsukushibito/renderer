@@ -176,7 +176,7 @@ fn observe(runtime: &mut VulkanRuntime, reads: &mut Reads, verified: &mut usize)
 }
 
 #[test]
-#[ignore = "explicit real Win32 Surface/Swapchain/Graph acceptance; requires Core+SyncVal and desktop"]
+#[ignore = "explicit real Win32 Surface/Swapchain/Graph acceptance; run strict and release shipping separately"]
 fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
@@ -200,7 +200,23 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             vk::PhysicalDeviceType::CPU
         );
         let diagnostics = runtime.diagnostics.clone();
+        #[cfg(feature = "development-validation")]
         crate::backends::vulkan::assert_real_validation(&diagnostics);
+        #[cfg(not(feature = "development-validation"))]
+        #[allow(
+            clippy::assertions_on_constants,
+            reason = "the ignored shipping acceptance remains compilable in debug CPU suites"
+        )]
+        {
+            assert!(
+                !cfg!(debug_assertions),
+                "shipping acceptance requires --release"
+            );
+            assert_eq!(
+                runtime.validation_monitor().report().requested,
+                crate::backends::vulkan::ValidationMode::Disabled
+            );
+        }
         assert_eq!(presenter.vsync(), Some(true));
         presenter.set_vsync(true).unwrap();
         assert_eq!(
@@ -213,7 +229,9 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         let mut verified = 0;
         let start = Instant::now();
         let mut displayed = 0;
+        let mut repeated_presentations = 0;
         let mut output: Option<ImportImage> = None;
+        let mut output_presented = false;
         let mut resized = false;
         let mut rapid_resized = false;
         let mut suspended = false;
@@ -263,6 +281,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                     Ok((frame, image, pass)) => {
                         reads.insert(frame.id(), (pass, width, height));
                         output = Some(image);
+                        output_presented = false;
                     }
                     Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {
                         continue;
@@ -306,6 +325,14 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                         image,
                         "presentation changes synchronization state, not source contents"
                     );
+                    if !output_presented {
+                        // Keep the same source for another accepted present.
+                        // Only ordinary zero-time polls run between these calls;
+                        // no explicit GPU wait supplies the source dependency.
+                        output_presented = true;
+                        continue;
+                    }
+                    repeated_presentations += 1;
                     runtime.delete(image.key()).unwrap();
                     output = None;
                     displayed += 1;
@@ -355,6 +382,10 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             "native acquire cancellation hook must run"
         );
         assert!(resized && rapid_resized && suspended);
+        assert_eq!(
+            repeated_presentations, 18,
+            "every completed source was presented twice"
+        );
         assert!(
             !presenter.inner.as_ref().unwrap().pending.is_empty(),
             "close includes unobserved presentation ownership"

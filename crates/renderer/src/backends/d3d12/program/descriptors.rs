@@ -24,6 +24,7 @@ pub(super) fn root_parameters(
     }
     let ranges: Vec<_> = layout
         .iter()
+        .filter(|slot| matches!(slot.kind, BindingType::SampledImage | BindingType::Sampler))
         .map(|slot| D3D12_DESCRIPTOR_RANGE {
             RangeType: if slot.kind == BindingType::Sampler {
                 D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
@@ -36,10 +37,12 @@ pub(super) fn root_parameters(
             OffsetInDescriptorsFromTableStart: 0,
         })
         .collect();
+    // Finish the table-only allocation before taking any native pointers.
+    // Root buffer descriptors retain their manifest index without a range entry.
+    let mut table_ranges = ranges.iter();
     let parameters = layout
         .iter()
-        .zip(&ranges)
-        .map(|(slot, range)| {
+        .map(|slot| {
             let (kind, value) = match slot.kind {
                 BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => (
                     match slot.kind {
@@ -60,7 +63,7 @@ pub(super) fn root_parameters(
                     D3D12_ROOT_PARAMETER_0 {
                         DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                             NumDescriptorRanges: 1,
-                            pDescriptorRanges: range,
+                            pDescriptorRanges: table_ranges.next().unwrap(),
                         },
                     },
                 ),
@@ -117,6 +120,15 @@ impl DescriptorHeaps {
                 .filter(|r| matches!(r, BoundResource::Sampler(_)))
                 .count(),
         ];
+        if counts == [0, 0] {
+            // Root CBV/SRV/UAV arguments need neither heaps nor table handles.
+            // Mixed layouts below keep table entries indexed by manifest root.
+            return Ok(Self {
+                _views: None,
+                _samplers: None,
+                _tables: Box::new([]),
+            });
+        }
         let create =
             |count: usize, kind| -> Result<Option<ID3D12DescriptorHeap>, D3D12RuntimeError> {
                 if count == 0 {

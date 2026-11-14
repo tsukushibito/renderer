@@ -153,11 +153,7 @@ impl VulkanRuntime {
             .serial
             .checked_add(1)
             .ok_or_else(|| RuntimeError::capacity("submission serial exhausted"))?;
-        let mut next = previous.clone();
-        next.serial = serial;
-        next.stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
-        next.access = vk::AccessFlags2::SHADER_SAMPLED_READ;
-        next.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        let (previous, next) = prepare_source(previous, serial);
         let work = PresentWork {
             source,
             previous,

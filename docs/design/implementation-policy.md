@@ -1205,6 +1205,12 @@ root index/register/space/descriptor種別は共通manifestから導出し、全
 root texture descriptorを使うことはできない。2種類のheapとProgram/View→Image/Samplerを
 bindingが保持し、GPU利用が終わるまで所有連鎖を保つ。これは必要なAPI構成であり性能優位は未測定である。
 
+root signatureのrange配列はtexture/samplerのtable slotだけに作り、root buffer descriptorには作らない。
+配列を完成させてからnative pointerを取り、同期的なsignature serializeの完了まで保持する。
+root parameterは全slotのmanifest順を維持する。buffer-only bindingはheapもtable handle配列も持たず、
+mixed bindingだけが従来どおりroot indexに対応したtable配列を保持する。
+この作成時の補助配列整理によって、Program/資源の強保持、入力保証、部分失敗cleanupやGPU寿命は変えない。
+
 sampled fixtureだけが`GetCopyableFootprints`の実結果を使ってupload bufferのrow配置を作り、
 COMMON→COPY_DEST→NON_PIXEL_SHADER_RESOURCEでsampling、最後にCOMMONへ戻す。
 packed RGBA8 byte数をnative image allocationやcopy row pitchへ代用しない。

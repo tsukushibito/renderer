@@ -24,6 +24,17 @@ pub(super) mod diagnostics;
 mod record;
 
 impl Snapshot {
+    // Only read-only consumers without a layout transition may reuse this
+    // visibility. Exact equality deliberately avoids inferring stage/access
+    // pairings from independently accumulated masks.
+    pub(super) fn has_read_visibility(
+        &self,
+        stage: vk::PipelineStageFlags2,
+        access: vk::AccessFlags2,
+    ) -> bool {
+        self.stage == stage && self.access == access
+    }
+
     fn record_access(&mut self, current: Use, layout_change: bool, serial: u64) {
         if !current.writes && !layout_change {
             self.stage |= current.stage;
@@ -663,7 +674,7 @@ fn source_scope(
         } else {
             scope
         }
-    } else if previous.stage == current.stage && previous.access == current.access {
+    } else if previous.has_read_visibility(current.stage, current.access) {
         // A prior read-only layout transition already exposed this writer to
         // this exact destination scope. A pipeline barrier's second scope also
         // includes later commands on the same queue; no intervening write or

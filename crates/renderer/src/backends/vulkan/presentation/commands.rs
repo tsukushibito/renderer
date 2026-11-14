@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
 pub(in crate::backends::vulkan) struct SourceScope {
     pub(in crate::backends::vulkan) stage: vk::PipelineStageFlags2,
     pub(in crate::backends::vulkan) access: vk::AccessFlags2,
@@ -41,8 +42,12 @@ impl PresentCommands {
     /// `command` must be recording on this owner's queue family. `source` must
     /// be a live, initialized, same-Device sampled image matching the retained
     /// slot binding and target extent. `previous` must describe its current
-    /// canonical same-queue scope/layout. This image index must remain acquired
-    /// from the retained chain, and the caller must wait its acquire semaphore
+    /// canonical same-queue scope/layout. `None` is permitted only when prior
+    /// same-queue synchronization already exposed the writer to the exact
+    /// FRAGMENT_SHADER/SHADER_SAMPLED_READ scope in SHADER_READ_ONLY_OPTIMAL,
+    /// without intervening writes or layout changes. This Swapchain image index
+    /// must remain acquired from the retained chain, and the caller must wait
+    /// its acquire semaphore
     /// at COLOR_ATTACHMENT_OUTPUT. The caller retains the source allocation,
     /// serializes native queue access, and retains this command owner through
     /// cancellation or actual GPU completion.
@@ -50,9 +55,9 @@ impl PresentCommands {
         &self,
         command: vk::CommandBuffer,
         source: vk::Image,
-        previous: SourceScope,
+        previous: Option<SourceScope>,
     ) {
-        let barriers = [
+        let source_barrier = previous.map(|previous| {
             vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(previous.stage)
                 .src_access_mask(previous.access)
@@ -63,7 +68,10 @@ impl PresentCommands {
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(source)
-                .subresource_range(color_range()),
+                .subresource_range(color_range())
+        });
+        let barriers = [
+            source_barrier.unwrap_or_default(),
             vk::ImageMemoryBarrier2::default()
                 .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
@@ -107,7 +115,8 @@ impl PresentCommands {
             let device = self.owner.device.raw();
             device.cmd_pipeline_barrier2(
                 command,
-                &vk::DependencyInfo::default().image_memory_barriers(&barriers),
+                &vk::DependencyInfo::default()
+                    .image_memory_barriers(&barriers[usize::from(source_barrier.is_none())..]),
             );
             device.cmd_begin_rendering(command, &rendering);
             device.cmd_set_viewport(

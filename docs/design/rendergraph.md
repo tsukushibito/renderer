@@ -163,6 +163,11 @@ compile解析用の名前、初期化範囲と明示依存は構築Graphから�
 完成した`CompiledGraph`は必要な命令・資源・名前を独立所有し、呼出元の借用を残さない。
 通常構成では解析済み実行順をmoveし、optional診断が同じ情報を保持するときだけ複製する。
 
+read/exportのproducerは最終的な依存集合へ直接追加し、readごとの一時集合を作って取り込み直さない。
+途中に未初期化の穴があれば解析全体を失敗にし、追加済みprefixの依存を含む不完全な計画を公開しない。
+producerの重複排除、内容の有効性、culling後の最終内容再計算は維持する。
+全passのaccessを解析用の一時Vecへ射影する現行表現の整理は、`renderer-7ft.2.2`のowned計画変更で扱う。
+
 内容のproducerを特定するdataflowと、同じ物理資源のRAW・WAR・WAWによる順序制約は区別する。
 不要パス除去はexport・readback・外部に観測される書き込み・明示的な副作用から
 必要なproducerを辿る。上書き済みwriterや不要なreaderを、順序制約だけで残さない。

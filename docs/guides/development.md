@@ -655,6 +655,16 @@ headless例と共通のScene、mesh/material/Viewとcustom処理を使います�
 cargo test --locked -p renderer --no-default-features --features presentation,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
 ```
 
+同じsource画像の再presentを含む表示の受入は、次の同一scenarioをstrictと製品構成で別々に実行できます。
+strictではCore/SyncValの実効を確認し、製品構成ではreleaseとnative Requested Disabledを要求します。
+少なくとも18出力をそれぞれ2回presentし、明示的なGPU待機を間に追加せず、
+内容照合、resize/VSync/取得後取消、pending終了と最終native所有者の解放を確認します。
+
+```powershell
+cargo test --locked --release -p renderer --lib --no-default-features --features presentation,development-validation,graph-diagnostics vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features presentation vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+```
+
 表示前に`Presenter::prepare`を呼び、現在の`extent`で出力Graphを構築します。
 `NotReady`はpoll後に再試行、`Suspended`はゼロextentの復帰を待ちます。
 `RecreateRequired`は再作成の予約であり、`prepare`を進めるまでextentは更新されません。

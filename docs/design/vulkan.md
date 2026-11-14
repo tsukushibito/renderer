@@ -553,6 +553,14 @@ Graph本体と表示は同じqueueへの別submitである。Graph解析にSwapc
 出力のcanonicalな予定状態からfragment samplingへ依存を記録する。
 表示用submitがsourceの予定layout・stage/access・利用serialを進め、leaseを完了まで保持する。
 読み取り専用の表示では内容revisionを変えず、Graph完了のCPU waitも挟まない。
+表示元のcanonical stage/accessが正確に`FRAGMENT_SHADER`/`SHADER_SAMPLED_READ`で、
+layoutが`SHADER_READ_ONLY_OPTIMAL`なら、先行する同queueの依存が後続の同じreadも覆うため、
+source画像barrierだけを省く。Graph本体と同じexact read scope判定を使い、
+初回表示、異なるscope、write、layout変更の依存とSwapchain側のbarrierは維持する。
+writer自体は保持し、writeで変わるrevisionとcanonical状態から後続の必要依存を再計画する。
+記録payloadのpreviousは必要なscalar scopeだけとし、取得したSnapshotは複製せずnextへ移す。
+内容revision、初期化範囲、provenanceとwriterを保持し、submit受理時だけ予定状態を公開する。
+source lease、未投入取消、GPU完了とpresent完了による退役、不確定失敗時の所有保持は変えない。
 同じ内容snapshotから次のconsumerを構築でき、同期は投入時のcanonicalな状態から計画する。
 表示用submitが受理された後は、queuePresentが失敗しても予定同期状態は進み得る。
 返値だけで旧同期状態へrollbackしたと考えず、実際に受理された状態を引き継ぐ。

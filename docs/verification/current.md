@@ -5,6 +5,43 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## Graph・表示・descriptorの効率整理
+
+`renderer-agv`、比較元`413ff7d`。read/exportのproducerを最終依存集合へ直接追加し、
+readごとの一時BTreeSetと取り込み直しを除去した。途中に未初期化の穴があれば解析全体を失敗にし、
+producer/culling/hazard/live cycleと最終内容再計算は維持する。
+全accessの解析用一時Vecはユーザー指定に従い未変更で、`renderer-7ft.2.2`に残す。
+
+表示は同queueでcanonical scopeが正確にFRAGMENT/SAMPLED_READ、layoutがSHADER_READ_ONLYのときだけ
+source画像barrierを省き、Swapchain画像barrierと呼出しは残す。新write/scope/layoutでは必要依存を記録する。
+previousの保持をscalar scopeへ狭め、唯一のowned Snapshotをnextへmoveして2回目のcloneを除去した。
+内容revision/初期化/provenance/writer、submit受理時公開、source leaseとGPU/present退役を維持する。
+D3D12はtable用rangeだけを作り、buffer-only bindingの全None table配列を除去した。
+mixed root index、native pointerの安定、全資源の強保持と部分失敗cleanupは維持する。
+適用した同期・所有・境界保証の一般推奨からの新たな例外はない。
+
+[同一の既存CPU harnessと結果](source-review.json)でrelease/default featureなしを比較した。
+2,048資源/4,096passのcompileは確保要求40,001→37,953回、総要求byte 7,125,062→6,912,070。
+8,192drawのframe構築は18回/1,706,449 byteで不変だった。allocatorのalloc/realloc要求であり、
+常駐量・peak・CPU時間・GPU性能の改善率を示すものではない。
+
+Windows x64/Rust 1.99.0でfmt、CPUのみ/製品/開発の全target Clippy（`-D warnings`）、
+CPUのみ通常71件、製品release通常192件、開発release通常203件と各Rustdoc 1件が成功した。
+CPU回帰は表示の省略・失効条件を1件追加し、D3D12は既存試験をinterleaved root順へ変更した。
+producerは既存のhole/producer/export/culling回帰を活用し、同じ契約の試験を複製していない。
+
+RTX 3060/driver 610.88でreleaseの適用実GPU8件を逐次実行した。
+strict/製品それぞれでWSI 1件、D3D12 managed 2件、二API共有buffer Graph 1件が成功した。
+WSIは同一出力2回のaccepted presentを18出力分確認し、間に明示GPU waitを追加せず、
+内容照合、resize/VSync/取得後取消、pending終了と最終Window/native所有者の解放を確認した。
+strictはCore/SyncValまたはDebug Layer/GBVの実効と最終native解放後まで警告/エラー等ゼロを維持する。
+製品構成は追加検証/専用診断を除外し、releaseとnative Requested Disabledで同じscenarioを実行した。
+外部Layer注入の不存在を証明したとは扱わない。独立レビューに未解決指摘はない。
+正式ログは`.tools/agv/gates/`。実行filterは[開発ガイド](../guides/development.md)と機械可読の結果を参照する。
+shader/生成bindingsは無変更で今回再生成Verifyは実行していない。
+全Graph/transfer実GPUの再受入、Linux/別GPU/driver、Bistro全体、時間性能/長時間耐久、実native OOM/lossは未実行。
+既知の未再現native起動crash `renderer-0pb`の解決も主張しない。
+
 <a id="managed-uniform"></a>
 
 ## 管理下Programと資源bindingの二API実装

@@ -3,6 +3,62 @@
   "verification_date": "2026-11-14",
   "issue": "renderer-420",
   "baseline_commit": "f649bcf58709fd97315e3693b75beb8b790ef8be",
+  "current_efficiency_cleanup": {
+    "issue": "renderer-agv",
+    "baseline_commit": "413ff7dfba4c44d7695d3b6f440bdc91a6a58afb",
+    "worker_commits": [
+      "887564d264e304e53289bbb39d3e6d46248e16d6",
+      "ba5e7a9300e018378dcb1e41fb217d5e16254094",
+      "e37d2d0a6017cdd1fa2b05a8718a7ad8d978e956"
+    ],
+    "allocation_probe": {
+      "source_reference": "reproduction.harness_source_utf8",
+      "source_sha256": "2a33a6302697b76b11a87d68f84929632ab865d0351767a152d5d24c5f7b4f19",
+      "same_harness_before_and_after": true,
+      "configuration": "Windows x64, Rust 1.99.0, release, no default features, CARGO_INCREMENTAL=0; System alloc/realloc call and requested-byte counter; graph construction and plan destruction outside compile measurement",
+      "compile": {
+        "resources": 2048,
+        "passes": 4096,
+        "before_allocation_calls": 40001,
+        "after_allocation_calls": 37953,
+        "before_requested_bytes": 7125062,
+        "after_requested_bytes": 6912070
+      },
+      "frame_build": {
+        "draws": 8192,
+        "before_and_after_allocation_calls": 18,
+        "before_and_after_requested_bytes": 1706449
+      },
+      "not_measured": ["resident/peak memory", "CPU wall-clock time", "GPU performance"]
+    },
+    "removed_work": [
+      "Temporary producer BTreeSet and reinsertion for each read/export; mandatory initialization, dataflow, culling and scheduling remain.",
+      "One source image barrier element on exact repeated same-queue fragment sampled reads; Swapchain barriers and calls remain.",
+      "Second Snapshot clone and retained previous initialized/provenance payload in presentation; accepted next state and source lease remain.",
+      "D3D12 root-buffer descriptor range elements and buffer-only all-None table-handle allocation; mixed root-index tables and native/resource ownership remain."
+    ],
+    "deferred": "All-pass CompileAccess temporary Vec projection is unchanged and assigned to renderer-7ft.2.2 by the user.",
+    "cpu_tests": {"no_features": 71, "shipping_release": 192, "development_release": 203, "rustdoc_per_configuration": 1},
+    "gpu": {
+      "hardware": "NVIDIA GeForce RTX 3060, driver 610.88",
+      "strict_features": "--all-features",
+      "shipping_features": "--no-default-features --features presentation,d3d12",
+      "configuration": "--release, --ignored --nocapture --test-threads=1; each gate in a separate sequential process",
+      "filters_per_configuration": [
+        {"target": "lib", "filter": "vulkan_presentation_graph_resize_cancel_and_pending_shutdown", "passed": 1},
+        {"target": "lib", "filter": "d3d12_managed_", "passed": 2},
+        {"target": "test d3d12_graph", "filter": "m4_buffer_shared_graph_strict OR m4_buffer_shared_graph_shipping", "exact": true, "passed": 1}
+      ],
+      "total_tests_passed": 8,
+      "wsi_sources_accepted_twice_per_configuration": 18,
+      "explicit_gpu_wait_between_repeated_presents": false,
+      "strict_final_native_warning_error_counts": 0,
+      "shipping_native_request": "Disabled; external injection absence is not claimed"
+    },
+    "checks": ["fmt", "all-target Clippy -D warnings in CPU/development/shipping", "independent code and documentation review", "git diff --check"],
+    "logs": ".tools/agv/gates/",
+    "unexecuted": ["full Graph/transfer real-GPU suite", "shader/binding regeneration (unchanged)", "Linux/other GPU/driver", "full Bistro", "wall-clock/performance/endurance", "real native OOM/loss", "renderer-0pb reproduction or resolution"]
+  },
   "review_scope": {
     "renderer_src_rust_files": 64,
     "example_rust_files": 11,
