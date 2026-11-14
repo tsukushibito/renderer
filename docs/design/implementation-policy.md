@@ -121,7 +121,7 @@ aliasing、複数queue、vendor固有最適化の直接制御は今回の選定�
 全候補でModel、素材cook、PBR/IBL/CSM、Bloom、自由camera、画像差分の校正と性能測定は利用側／Rendererで作る。
 外部基盤がBistroの描画機能やGraphのproducer/cullingを完成させるわけではない。
 現行範囲は[Graphの形式・固定操作](../../crates/renderer/src/graph.rs)、
-[Vulkanの固定Program](../../crates/renderer/src/backends/vulkan/graph/shaders.rs)、
+[Vulkanの固定Program](../../crates/renderer/src/backends/vulkan/program/creation.rs)、
 [D3D12のprepare対応範囲](../../crates/renderer/src/backends/d3d12/graph.rs)から確認した。
 高位のrenderer/engineをさらに採用する案は、そのscene/material/Graph境界を第7章へ再適合する費用が増えるため、
 直接二APIを提供するwgpuを外部案の代表とした。候補網羅を採用の前提にしない。
@@ -221,21 +221,23 @@ Forward/GGX、静的IBL、CSM/PCF、RGBA16F、Neutral、FXAAを第15章の出発
 ### 3.4 全体レビューから定めたソース整理の境界
 
 `renderer-420`で第一者のRust、shader、素材tool、生成・検証script、CIと文書構成を確認した。
-確定した不要な処理は現行経路で修正し、一般化に伴う責務移動は次の実装課題へ結び付ける。
+確定した不要な処理を修正し、残った4つの責務境界は`renderer-hyf`でB1の機能追加に先行して整理した。
 実行結果と確認限界は[現在の検証状況](../verification/current.md#repository-review)を参照する。
 
-| 現在の結合 | 整理する責務と時期 |
+| 整理前の結合 | 現在の責務境界 |
 |---|---|
-| `graph.rs`の資源型・固定操作・builderと`engine::MeshData`専用upload入口 | `.2.1`でGPU非依存の資源・Program/layout/binding契約をGraphの固定操作から分離する。`.2.2`で論理命令・builder・エラーと共通解析の境界を整理し、engine固有のmesh変換をbridge側へ寄せる。入力の保証を失う単純移動はしない |
-| Vulkan `graph/shaders.rs`のProgram作成、descriptor arena/cache、固定操作のnative記録 | `.2.1`の最初に作成・不変所有・binding leaseを記録から分ける。所有者と部分失敗時の後始末を同じ境界に保ち、汎用化に必要な単位で分割する |
-| Vulkan `graph/resources.rs`とD3D12 `graph.rs`内の物理資源所有 | `.2.1`でGraph外からも使用できるbackend内の作成・所有境界へ移す。CPU host accessとGraphの予定状態・初期化の責務は区別する |
-| Vulkan `graph/presentation.rs`のSwapchain選択・所有、slot/cancel、native記録と公開入口 | `.2.6`で二API表示を接続するとき、これらの所有境界で分離する。present/GPU両方の完了条件と世代の保持を一つの証明可能な連鎖に保つ |
+| `graph.rs`の資源型・固定操作・builderと`engine::MeshData`依存 | `graph.rs`は公開facadeとGraph所有状態。`graph/{resource,pass,error,builder}.rs`と既存解析を分離。meshの不変stream/provenance選択は`engine/graph.rs`、検査と追加はGraph内の狭いbuilderが所有し、Graphからengineへの依存を除去 |
+| Vulkan固定Programの作成、descriptor arena/cache、native記録 | `program.rs`が不変publicationを所有し、`program/{creation,bindings,record}.rs`へ分離。BindingPoolはinlineで容量・cache・leaseを管理し、追加allocation/Arc/lockなし。Graph型への依存はrecordの固定描画引数だけ |
+| Graph配下の物理資源所有とVulkan実行エラー | 両backendの`resources.rs`へ物理buffer/image/CPU Mapを分離し、Vulkanエラーは`error.rs`へ移した。工場はGraph型に依存しない。D3D12のCPUアクセスは作成・完了・排他的所有のprivate unsafe契約を明記し、runtime work/resultがDevice所有を保持 |
+| Vulkan表示のSwapchain所有、slot/cancel、記録と公開入口 | native `presentation/{surface,swapchain,slots,program,commands}.rs`が所有・退役・記録を担当。Graph側`presentation/{state,presenter,runtime,work}.rs`だけがcanonical状態とleaseを保持し、native側にGraph型を持ち込まない |
 
 backendのnative型は既にprivateで、D3D12本番実装からVulkanへの依存はない。
 生成D3D12 bindingsはfilterと固定generatorから再生成し、手書きで分割しない。
 `foo.rs`と`foo/`の配置、実装末尾のunit testと公開APIのintegration testを維持する。
 行数だけを理由にmoduleを増やさず、crate分割、巨大なRHI trait、互換wrapperを先行条件にしない。
-移動だけで成立する整理は機能追加と別commitにし、所有契約の変更は対応する回帰と一緒に行う。
+公開入口はfacadeからの直接reexportで一つに保ち、所有者の内部状態は必要な操作へ閉じる。
+構成整理と一般Program/manifest/reflection、一般資源・owned passの機能追加は別commit/課題とする。
+後者は`renderer-7ft.2.1`以降で実装し、今回の整理をその機能の完了と扱わない。
 
 ## 4. 設計の中心は「グラフを実行する基盤」
 

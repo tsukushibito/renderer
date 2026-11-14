@@ -17,6 +17,19 @@ B1では構築時owned命令とbinding/attachment由来アクセスを一般化�
 現行の固定操作、内部表現、構築順による意味論、runtimeの再利用は維持義務ではない。
 以下の現行契約は、変更を実装・検証するまで有効であり、計画だけで対応済みとは扱わない。
 
+## ソースの責務と依存方向
+
+`graph.rs`は公開型のfacade、Graph所有状態、identityとcompile入口を持つ。
+子moduleの`resource`は論理資源・import・範囲、`pass`は宣言とowned命令、
+`error`はprivate contextを持つ構造化エラー、`builder`は検査後のtransactionalな追加を担当する。
+`accesses`/`compile`は共通解析を担当し、既存builder回帰群は`graph/tests.rs`へまとめる。
+公開型はfacadeから直接reexportし、並行する互換APIを作らない。
+
+Graphから`engine`の型を参照しない。`MeshData::upload_graph_slice`は不変なstreamと
+既存のindex要約を選び、Graphの狭いprivate builderがowner/全stream長/alignment/範囲を検査して追加する。
+engine側からGraphのpassを直接変更せず、任意のpublic byte uploadからmesh provenanceを作らない。
+元のArc、slice位置とappend失敗時の状態を維持し、chunkごとのpayload複製や追加scanを入れない。
+
 ## 対応範囲と処理の境界
 
 Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなし、

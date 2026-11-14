@@ -14,7 +14,7 @@
 | 設計 | [RenderGraph](design/rendergraph.md) | 共通宣言・依存解析、二APIのbuffer実行、Vulkanのimport/export・履歴、エンジン入力と拡張 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
-| 検証データ | [全体レビューの証拠](verification/source-review.json) | CPU allocationの同一harness、shader故障/改行再現、Blender全量同等性。所見は[検証状況](verification/current.md#repository-review) |
+| 検証データ | [全体レビュー・責務整理の証拠](verification/source-review.json) | CPU allocationの同一harnessと整理前後、依存方向、native再受入、shader故障/改行再現、Blender全量同等性。所見は[検証状況](verification/current.md#repository-review) |
 | 検証データ | [Bistro素材検証](verification/bistro-assets.json)・[比較画像](verification/bistro-assets-preview.png) | 公式入力hash、全mesh/材質/画像の対応、変換・再生成・CPU画像QA |
 | 検証データ | [Bistro alpha解釈](verification/bistro-alpha.json)・[近景比較画像](verification/bistro-alpha-preview.png) | 2材質の元値・全mip、Falcor一次ソース、alpha保持と不透明化の比較・確定方針 |
 | 検証データ | [Bistro描画条件](../tools/bistro/conditions.json)・[設定検証と実行記録](verification/bistro-conditions.json)・[CPUプレビュー](verification/bistro-conditions-preview.png) | 固定7視点・巡回・sun/IBL/露出、照明候補、二API比較と性能校正の条件 |

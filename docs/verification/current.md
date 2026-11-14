@@ -38,9 +38,9 @@ alpha再検証の出力39,662 byteも変更前後で一致した。
 shaderは最後のcompileを故障させても全5個の既存SPIR-Vを保持し、
 `core.autocrlf=true`のcheckout相当で13個のtextがLFとなって再生成照合に成功した。
 
-構成上はGraphとengineの相互依存、Program/bindingと記録、物理資源とGraph、
-WSIの複数所有境界の同居を整理対象とした。[既存設計の整理範囲](../design/implementation-policy.md#source-boundaries)を
-`renderer-7ft.2.1`/`.2.2`/`.2.6`へ記録した。backendのprivate分離、生成bindingsの隔離、
+構成上のGraphとengineの相互依存、Program/bindingと記録、物理資源とGraph、
+WSIの複数所有境界の同居は、下記`renderer-hyf`で機能追加前に整理した。
+[現在の境界](../design/implementation-policy.md#source-boundaries)を既存B1課題へ反映する。backendのprivate分離、生成bindingsの隔離、
 `foo.rs`と`foo/`、integration test/実GPUignoredの区分は維持する。
 現在のraw Graph作成境界のextent/clear検査、動的なowner/revision、同期・寿命・容量・native失敗は保持する。
 将来の一般Programではread scope省略の成立条件を再確認する。
@@ -56,6 +56,39 @@ Renderer追加scanなしのbatch 1件、D3D12寿命1件、二API共有bufferの�
 Python 60件、Node 10件とshader再生成照合が成功した。
 公式offline glTF validatorの0 error/1,591 warning/1,591 infoは従来の`issues`全体と一致し、
 nativeの診断ゼロと区別する。Linuxは実GPU未実行で、CIのCPU/build確認を別に記録する。
+
+<a id="source-reorganization"></a>
+
+### B1実装前の4つの責務境界の整理
+
+`renderer-hyf`、整理前`9f6b3a4`。`renderer-7ft.2.1`の一般Program機能を始める前に、
+4点を実装・統合した。[設計](../design/implementation-policy.md#source-boundaries)と
+[機械可読の検証記録](source-review.json)の`source_reorganization`に対応する。
+
+| 対象 | 整理後の境界 |
+|---|---|
+| GPU非依存Graph | 公開facade、resource/pass/error/builder、共通解析を分離。Graphからengine型を参照せず、mesh変換はengine bridge、保証と追加はGraph builderが担当 |
+| Vulkan Program | publication、creation、inline BindingPool、native recordを分離。作成・bindingにGraph依存なし。追加allocation/Arc/lockなし、lease保持とpool→Programの解放順を維持 |
+| 両APIの物理資源 | backend直下のresources、Vulkan errorへ抽出。物理owner/factoryにGraph型の依存なし。D3D12のCPUアクセスは完了・範囲・排他的所有のprivate unsafe契約を明記 |
+| Windows表示 | native Surface/Swapchain/slot/acquire guard/Program/commandsとGraph adapterを分離。native側にGraph状態を持たず、private slot/guardの操作が取消と退役を所有 |
+
+公開入口はfacadeからの直接reexportで維持し、並行API、一般RHI、`mod.rs`を追加していない。
+独立レビューでmesh provenance/Arc共有/失敗時の未追加、部分作成cleanup、
+descriptorと参照資源、GPU＋present両完了、未確定失敗時の保持・旧世代退役を確認した。
+依存方向の機械検査もすべて成功した。shaderのsource/binaryと、実行可能な固定操作の範囲は変えていない。
+
+統合後のfmt、製品/開発の全target Clippy（`-D warnings`）、CPU通常67件、
+`presentation,d3d12`のrelease通常183件、追加検証/Graph診断ありのrelease通常194件が成功した。
+前節と同じrelease実GPU54件および製品/厳格の表示smokeが再び成功し、
+resize/cancel/pending終了と最終native解放の既存診断判定を維持した。新規native警告/エラーはない。
+Programのnative call site 38件とshader include 6件は不変。
+WSIは53→52件で、唯一の差は不変limitsの再照会を既存Device cacheへ置換したことだった。
+固定SDKのSPIR-V/DXIL再生成照合も成功した。
+
+同じrelease CPU harnessで、compileのallocation 40,001回/7,125,062要求byteと、
+frame構築18回/1,706,449要求byteが整理前後で一致した。
+これは合成入力のallocation要求の確認で、実時間・GPU速度・Bistro性能の測定ではない。
+Linux実GPU、別GPU/driver、Bistro全体、既知`renderer-0pb`の再現・解決は今回未実行である。
 
 ## Bistro計画と現行実装の区別
 

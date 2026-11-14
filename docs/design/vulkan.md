@@ -36,11 +36,14 @@ Graphのnative実行は次の責務に分ける。公開APIや汎用backend trai
 | 内部module | 所有する責務 |
 |---|---|
 | `graph.rs` | 登録・世代・cache、import/export、投入の受理と公開状態 |
-| `graph/resources.rs` | bufferとimage／viewのVMA allocation所有・破棄 |
+| `resources.rs` / `error.rs` | Graphに依存しない物理buffer/image/viewのVMA所有・破棄とnative実行エラー |
 | `graph/work.rs` | 不変の準備operand、staging、必要な依存の計画 |
 | `graph/work/record.rs` | native記録、投入受理・退役時のpayload処理 |
 | `graph/work/diagnostics.rs` | `graph-diagnostics`だけで生成するlowering dump |
-| `graph/shaders.rs` | 管理下Program、pipeline、descriptor lease |
+| `program.rs` / `program/creation.rs` | 管理下固定Programの不変publication、ABI/能力保証、作成と部分失敗RAII |
+| `program/bindings.rs` / `program/record.rs` | inlineの容量付きdescriptor pool/cache/leaseと、分離したnative記録 |
+| `presentation/` | native Surface/Swapchain/slot/acquire guard/Program/命令の所有・操作 |
+| `graph/presentation/` | canonicalなsource状態とlease、Presenterの公開操作とruntimeの接続 |
 
 記録の子moduleは準備operandへprivateにアクセスする。テストのためだけにfieldを公開せず、
 資源の所有者を分散させない。記録から退役までのlease・実Fenceによる完了・失敗時の保持は同じ契約を使う。
@@ -101,8 +104,9 @@ Graph入力の保証・同期・寿命・容量・native失敗は維持する。
 
 `tracing`のsubscriber・出力先・表示レベルは利用側が設定する。
 ライブラリはglobal subscriberを設置せず、初期化時の`Dispatch`を保持して別スレッドのcallbackにも使う。
-GENERAL／VALIDATION／PERFORMANCEの全重要度を受信し、ログフィルターとは独立して件数を数える。
-直近64件と最初のwarning／error 128件を保持し、保持できなかった問題メッセージの件数も示す。
+GENERAL／VALIDATION／PERFORMANCEの全重要度を受信し、ログフィルターとは独立してwarning/errorとcallback失敗を数える。
+最初のwarning／error 128件を保持し、保持できなかった問題メッセージの件数も示す。
+直近64件の全severity履歴と総受信数はprivateな受入観測用としてtest構成だけで保持する。
 
 callbackは文字列を所有データへコピーし、集計ロックを解放してからsubscriberを呼ぶ。
 callbackとsubscriberからVulkanへ再入しない。panicはFFI内に封じ、常に`VK_FALSE`を返す。
@@ -223,6 +227,9 @@ RasterのD32 depth対応を含む形式・ABI上限を、その種類のnative�
 作成に失敗したProgramをキャッシュせず、部分作成分を解放して再試行可能な状態を維持する。
 descriptor arenaは同時実行数とGraph内binding数に上限を持ち、
 GPU完了または未投入キャンセルを確認してから再利用する。
+容量・cache・lease操作は`program/bindings.rs`のinline BindingPoolへ閉じる。
+leaseは`Arc<ShaderPrograms>`を保持し、最後のownerのDropはcached descriptor poolを
+不変Program/layoutより先に解放する。module分離によるallocation・Arc・lockの追加はない。
 更新済みdescriptorを参照する記録済み／未完了命令を、別の更新で無効にしない。
 pipeline作成に失敗した際も、部分的に作成できたhandleを解放する。
 
@@ -388,6 +395,14 @@ engineのupload jobは固定staging容量・cache atom整列・未回収submissi
 取消・退避・CPU asset削除の後も、受理済みchunkが参照するstagingとnative資源を完了まで保持する。
 
 ## Windows Presentation
+
+native `presentation/`はGraph型・Snapshot・PhysicalLeaseを参照しない。
+`swapchain`は能力選択と世代RAII、`slots`は再利用条件・present退役・acquire guard/取消を所有する。
+`program`/`commands`はdescriptorとnative fullscreen記録を担当する。
+Graph側の`work` adapterがsource leaseとcanonical scopeを渡し、submit受理時の予定状態と
+完了時のserialだけを公開する。source所有はnative recordへ移さず、adapterが実完了まで保持する。
+slotとguardの状態はprivateに保ち、状態遷移を所有者の操作へまとめる。
+記録/CPUアクセスのprivate unsafe境界は同一Device、初期化、排他的使用と実完了の責務を明記する。
 
 公開`prepare`/`present`がそれぞれpollを行ってから再作成へ進み、内部で同じpollを繰り返さない。
 表示例は次回再描画期限を早期eventで後ろへ動かさず、ゼロ寸法ではevent/明示復帰期限を待つ。
