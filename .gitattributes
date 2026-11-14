@@ -6,7 +6,7 @@
 /crates/renderer/shaders/*.json text eol=lf
 /crates/renderer/shaders/dxil/*.hlsl text eol=lf
 /crates/renderer/shaders/dxil/*.reflection.txt text eol=lf
-/crates/renderer/shaders/dxil/manifest.json text eol=lf
+/crates/renderer/shaders/dxil/*.json text eol=lf
 
 # Bistro source, verified interchange assets, and comparison image.
 /assets/bistro/source/*.zip filter=lfs diff=lfs merge=lfs -text
