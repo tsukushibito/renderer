@@ -13,7 +13,7 @@ pub(super) fn root_parameters(
     let cost: usize = layout
         .iter()
         .map(|slot| match slot.kind {
-            BindingType::Uniform | BindingType::StorageWrite => 2,
+            BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => 2,
             BindingType::SampledImage | BindingType::Sampler => 1,
         })
         .sum();
@@ -41,11 +41,12 @@ pub(super) fn root_parameters(
         .zip(&ranges)
         .map(|(slot, range)| {
             let (kind, value) = match slot.kind {
-                BindingType::Uniform | BindingType::StorageWrite => (
-                    if slot.kind == BindingType::Uniform {
-                        D3D12_ROOT_PARAMETER_TYPE_CBV
-                    } else {
-                        D3D12_ROOT_PARAMETER_TYPE_UAV
+                BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => (
+                    match slot.kind {
+                        BindingType::Uniform => D3D12_ROOT_PARAMETER_TYPE_CBV,
+                        BindingType::StorageRead => D3D12_ROOT_PARAMETER_TYPE_SRV,
+                        BindingType::StorageWrite => D3D12_ROOT_PARAMETER_TYPE_UAV,
+                        _ => unreachable!(),
                     },
                     D3D12_ROOT_PARAMETER_0 {
                         Descriptor: D3D12_ROOT_DESCRIPTOR {

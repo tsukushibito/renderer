@@ -9,7 +9,7 @@ pub(in super::super) struct ExecutionLease {
     initializes: bool,
 }
 impl ExecutionLease {
-    fn acquire(resource: &BoundResource) -> Result<Self, D3D12RuntimeError> {
+    pub(super) fn acquire(resource: &BoundResource) -> Result<Self, D3D12RuntimeError> {
         let flag = match resource {
             BoundResource::Buffer {
                 _buffer: buffer, ..
@@ -140,6 +140,7 @@ pub(in super::super) struct FixtureRecording {
     pub(in super::super) staging: Vec<DeviceBuffer>,
     pub(in super::super) depth_targets: Vec<DepthTarget>,
     pub(in super::super) leases: Vec<ExecutionLease>,
+    pub(in super::super) bindings: Vec<D3D12Bindings>,
 }
 
 fn upload_image(
@@ -243,6 +244,53 @@ fn upload_image(
 }
 
 impl D3D12Bindings {
+    /// # Safety
+    /// The caller establishes initialized read ranges, native access states and
+    /// no simultaneous SRV/UAV alias, and retains all resources through completion.
+    /// Slot/owner/range/ABI guarantees come from immutable binding creation.
+    pub(super) unsafe fn record_dispatch(&self, list: &ID3D12GraphicsCommandList) {
+        let binding = &self.0;
+        let program = &binding._program.0;
+        binding._heaps.bind(list);
+        // SAFETY: Creation established the immutable slot/kind/owner/range
+        // guarantees; the caller supplies initialized contents and valid states
+        // for the reviewed shader and retains every referenced native object.
+        unsafe {
+            list.SetPipelineState(&program._pipeline);
+            list.SetComputeRootSignature(&program._signature);
+            for (root, (slot, resource)) in self.layout().iter().zip(&binding.resources).enumerate()
+            {
+                match resource {
+                    BoundResource::Buffer {
+                        _buffer: buffer,
+                        _range: range,
+                    } => {
+                        let address = D3D12_GPU_VIRTUAL_ADDRESS(
+                            buffer.0._native.raw().GetGPUVirtualAddress().0 + range.offset,
+                        );
+                        match slot.kind {
+                            BindingType::Uniform => {
+                                list.SetComputeRootConstantBufferView(root as u32, address)
+                            }
+                            BindingType::StorageRead => {
+                                list.SetComputeRootShaderResourceView(root as u32, address)
+                            }
+                            BindingType::StorageWrite => {
+                                list.SetComputeRootUnorderedAccessView(root as u32, address)
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    BoundResource::ImageView(_) | BoundResource::Sampler(_) => list
+                        .SetComputeRootDescriptorTable(
+                            root as u32,
+                            binding._heaps._tables[root].unwrap(),
+                        ),
+                }
+            }
+            list.Dispatch(1, 1, 1);
+        }
+    }
     pub(in super::super) fn check_owner(
         &self,
         owner: &Arc<DeviceOwner>,
@@ -256,6 +304,15 @@ impl D3D12Bindings {
     ) -> Result<FixtureRecording, D3D12RuntimeError> {
         let binding = &self.0;
         let program = &binding._program.0;
+        if self
+            .layout()
+            .iter()
+            .any(|slot| slot.kind == BindingType::StorageRead)
+        {
+            return Err(D3D12RuntimeError::invalid(
+                "StorageRead fixture requires its same-work GPU producer",
+            ));
+        }
         let storage_index = self
             .layout()
             .iter()
@@ -328,42 +385,9 @@ impl D3D12Bindings {
             &mut output_state,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         );
-        binding._heaps.bind(list);
-        // SAFETY: Complete immutable bindings establish all slot/kind/owner/range
-        // guarantees. Uploaded image content and exclusive leases cover sampled
-        // reads; the reviewed shaders initialize exactly their manifested output bytes.
-        unsafe {
-            list.SetPipelineState(&program._pipeline);
-            list.SetComputeRootSignature(&program._signature);
-            for (root, (slot, resource)) in self.layout().iter().zip(&binding.resources).enumerate()
-            {
-                match resource {
-                    BoundResource::Buffer {
-                        _buffer: buffer,
-                        _range: range,
-                    } => {
-                        let address = D3D12_GPU_VIRTUAL_ADDRESS(
-                            buffer.0._native.raw().GetGPUVirtualAddress().0 + range.offset,
-                        );
-                        match slot.kind {
-                            BindingType::Uniform => {
-                                list.SetComputeRootConstantBufferView(root as u32, address)
-                            }
-                            BindingType::StorageWrite => {
-                                list.SetComputeRootUnorderedAccessView(root as u32, address)
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
-                    BoundResource::ImageView(_) | BoundResource::Sampler(_) => list
-                        .SetComputeRootDescriptorTable(
-                            root as u32,
-                            binding._heaps._tables[root].unwrap(),
-                        ),
-                }
-            }
-            list.Dispatch(1, 1, 1);
-        }
+        // SAFETY: This fixture established the reviewed shader's initialized
+        // inputs, exclusive leases and native states above.
+        unsafe { self.record_dispatch(list) };
         super::super::graph::transition(
             list,
             output.0._native.raw(),
@@ -403,6 +427,7 @@ impl D3D12Bindings {
             staging,
             depth_targets,
             leases,
+            bindings: vec![self.clone()],
         })
     }
 }

@@ -110,6 +110,12 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
             min_size: 16,
         },
         BindingLayout {
+            group: 10,
+            binding: 11,
+            kind: BindingType::StorageRead,
+            min_size: 16,
+        },
+        BindingLayout {
             group: 4,
             binding: 6,
             kind: BindingType::SampledImage,
@@ -127,13 +133,14 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
         // SAFETY: Lowering selected Descriptor for buffers and DescriptorTable
         // for sampled entries; owned ranges keep table pointers valid here.
         unsafe {
-            if index < 2 {
+            if index < 3 {
                 assert_eq!(
                     parameter.ParameterType,
-                    if index == 0 {
-                        D3D12_ROOT_PARAMETER_TYPE_UAV
-                    } else {
-                        D3D12_ROOT_PARAMETER_TYPE_CBV
+                    match slot.kind {
+                        BindingType::StorageWrite => D3D12_ROOT_PARAMETER_TYPE_UAV,
+                        BindingType::Uniform => D3D12_ROOT_PARAMETER_TYPE_CBV,
+                        BindingType::StorageRead => D3D12_ROOT_PARAMETER_TYPE_SRV,
+                        _ => unreachable!(),
                     }
                 );
                 let desc = parameter.Anonymous.Descriptor;
@@ -155,7 +162,7 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
                 );
                 assert_eq!(
                     desc.RangeType,
-                    if index == 2 {
+                    if index == 3 {
                         D3D12_DESCRIPTOR_RANGE_TYPE_SRV
                     } else {
                         D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
@@ -165,12 +172,12 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
         }
     }
     assert_eq!(
-        root_parameters(&[layout[0]; 33]).err().unwrap().kind(),
+        root_parameters(&[layout[2]; 33]).err().unwrap().kind(),
         D3D12RuntimeErrorKind::Unsupported
     );
-    assert!(root_parameters(&[layout[2]; 64]).is_ok());
+    assert!(root_parameters(&[layout[3]; 64]).is_ok());
     assert_eq!(
-        root_parameters(&[layout[2]; 65]).err().unwrap().kind(),
+        root_parameters(&[layout[3]; 65]).err().unwrap().kind(),
         D3D12RuntimeErrorKind::Unsupported
     );
 }
@@ -232,12 +239,151 @@ fn wait_bytes(runtime: &mut D3D12Runtime, prepared: super::super::D3D12PreparedG
     result.readback(PassHandle { graph: 0, index: 0 }).unwrap()
 }
 
-fn storage_fixture(strict: bool) {
+struct StorageCase {
+    producer: [D3D12Bindings; 2],
+    reader: Option<[D3D12Bindings; 2]>,
+}
+impl StorageCase {
+    fn prepare(
+        &self,
+        runtime: &D3D12Runtime,
+        version: usize,
+    ) -> Result<super::super::D3D12PreparedGraph, D3D12RuntimeError> {
+        if let Some(reader) = &self.reader {
+            runtime.prepare_storage_read_fixture(&self.producer[version], &reader[version])
+        } else {
+            runtime.prepare_managed_fixture(&self.producer[version])
+        }
+    }
+}
+
+fn storage_read_bindings(
+    runtime: &D3D12Runtime,
+    producer: &[D3D12Bindings; 2],
+    input: [&D3D12Buffer; 2],
+    uniform: &D3D12Buffer,
+) -> [D3D12Bindings; 2] {
+    let program = runtime
+        .create_program(&ManagedProgram::storage_readback())
+        .unwrap();
+    let output = [0; 2].map(|_| {
+        runtime
+            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+            .unwrap()
+    });
+    let old = runtime
+        .create_bindings(&program, &entries(input[0], &output[0]))
+        .unwrap();
+    let mut reversed = entries(input[1], &output[1]);
+    reversed.reverse();
+    let new = runtime.create_bindings(&program, &reversed).unwrap();
+    // Root SRV creation must forward usage, raw GPUVA alignment, reviewed Load4
+    // minimum and logical bounds; padded/native allocation is not a substitute.
+    for (buffer, invalid_range) in [
+        (uniform, range()),
+        (
+            input[0],
+            BufferRange {
+                offset: 4,
+                ..range()
+            },
+        ),
+        (
+            input[0],
+            BufferRange {
+                size: 15,
+                ..range()
+            },
+        ),
+        (
+            input[0],
+            BufferRange {
+                size: 17,
+                ..range()
+            },
+        ),
+    ] {
+        assert_eq!(
+            runtime
+                .create_bindings(
+                    &program,
+                    &[
+                        buffer_entry(0, buffer, invalid_range),
+                        buffer_entry(1, &output[0], range())
+                    ],
+                )
+                .unwrap_err()
+                .kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
+    }
+    // A public reader binding is not evidence that its contents were initialized.
+    assert!(runtime.prepare_managed_fixture(&old).is_err());
+    assert!(
+        runtime
+            .prepare_storage_read_fixture(&old, &producer[0])
+            .is_err()
+    );
+    assert!(
+        runtime
+            .prepare_storage_read_fixture(&producer[0], &new)
+            .is_err()
+    );
+    let wrong_offset = runtime
+        .create_bindings(
+            &program,
+            &[
+                buffer_entry(
+                    0,
+                    input[0],
+                    BufferRange {
+                        offset: 0,
+                        ..range()
+                    },
+                ),
+                buffer_entry(1, &output[0], range()),
+            ],
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .prepare_storage_read_fixture(&producer[0], &wrong_offset)
+            .is_err()
+    );
+    // Even disjoint byte ranges share one physical resource state. Creation is
+    // legal, but this simultaneous SRV/UAV execution cannot use the same buffer.
+    let alias = runtime
+        .create_bindings(
+            &program,
+            &[
+                buffer_entry(0, input[0], range()),
+                buffer_entry(
+                    1,
+                    input[0],
+                    BufferRange {
+                        offset: 0,
+                        ..range()
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .prepare_storage_read_fixture(&producer[0], &alias)
+            .is_err()
+    );
+    [old, new]
+}
+
+fn storage_fixture(strict: bool, storage_read: bool) {
     let mut runtime = runtime(strict);
     let monitor = runtime.validation_monitor();
     let device = Arc::downgrade(&runtime.device);
     let managed = ManagedProgram::uniform_readback();
-    check_creation_failure(&runtime, &managed);
+    if !storage_read {
+        check_creation_failure(&runtime, &managed);
+    }
     let program = runtime.create_program(&managed).unwrap();
     let program_owner = Arc::downgrade(&program.0);
     let [first, second] = crate::program::UNIFORM_TEST_DATA;
@@ -278,103 +424,146 @@ fn storage_fixture(strict: bool) {
     assert_eq!(old.layout(), program.layout());
     assert_eq!(new.len(), 2);
     assert!(!new.is_empty());
-    assert_eq!(
-        runtime.create_bindings(&program, &[]).unwrap_err().kind(),
-        D3D12RuntimeErrorKind::InvalidInput
-    );
-    assert_eq!(
-        runtime
-            .create_bindings(
-                &program,
-                &[
-                    buffer_entry(0, &uniform, range()),
-                    buffer_entry(0, &uniform, range())
-                ]
-            )
-            .unwrap_err()
-            .kind(),
-        D3D12RuntimeErrorKind::InvalidInput
-    );
-    assert_eq!(
-        runtime
-            .create_bindings(&program, &entries(&output, &uniform))
-            .unwrap_err()
-            .kind(),
-        D3D12RuntimeErrorKind::InvalidInput
-    );
-    for invalid in [
-        BufferRange {
-            offset: 1,
-            ..range()
-        },
-        BufferRange {
-            size: 15,
-            ..range()
-        },
-        BufferRange {
-            size: 17,
-            ..range()
-        },
-    ] {
+    if !storage_read {
+        assert_eq!(
+            runtime.create_bindings(&program, &[]).unwrap_err().kind(),
+            D3D12RuntimeErrorKind::InvalidInput
+        );
         assert_eq!(
             runtime
                 .create_bindings(
                     &program,
                     &[
-                        buffer_entry(0, &uniform, invalid),
-                        buffer_entry(1, &output, range())
+                        buffer_entry(0, &uniform, range()),
+                        buffer_entry(0, &uniform, range())
                     ]
                 )
                 .unwrap_err()
                 .kind(),
             D3D12RuntimeErrorKind::InvalidInput
         );
-    }
-    let baseline = Arc::strong_count(&uniform.0);
-    for entry in [
-        buffer_entry(7, &output, range()),
-        buffer_entry(
-            1,
-            &output,
-            BufferRange {
-                offset: 4,
-                ..range()
-            },
-        ),
-        buffer_entry(
-            1,
-            &output,
-            BufferRange {
-                size: 17,
-                ..range()
-            },
-        ),
-    ] {
         assert_eq!(
             runtime
-                .create_bindings(&program, &[buffer_entry(0, &uniform, range()), entry])
+                .create_bindings(&program, &entries(&output, &uniform))
                 .unwrap_err()
                 .kind(),
             D3D12RuntimeErrorKind::InvalidInput
         );
+        for invalid in [
+            BufferRange {
+                offset: 1,
+                ..range()
+            },
+            BufferRange {
+                size: 15,
+                ..range()
+            },
+            BufferRange {
+                size: 17,
+                ..range()
+            },
+        ] {
+            assert_eq!(
+                runtime
+                    .create_bindings(
+                        &program,
+                        &[
+                            buffer_entry(0, &uniform, invalid),
+                            buffer_entry(1, &output, range())
+                        ]
+                    )
+                    .unwrap_err()
+                    .kind(),
+                D3D12RuntimeErrorKind::InvalidInput
+            );
+        }
+        let baseline = Arc::strong_count(&uniform.0);
+        for entry in [
+            buffer_entry(7, &output, range()),
+            buffer_entry(
+                1,
+                &output,
+                BufferRange {
+                    offset: 4,
+                    ..range()
+                },
+            ),
+            buffer_entry(
+                1,
+                &output,
+                BufferRange {
+                    size: 17,
+                    ..range()
+                },
+            ),
+        ] {
+            assert_eq!(
+                runtime
+                    .create_bindings(&program, &[buffer_entry(0, &uniform, range()), entry])
+                    .unwrap_err()
+                    .kind(),
+                D3D12RuntimeErrorKind::InvalidInput
+            );
+        }
+        assert_eq!(Arc::strong_count(&uniform.0), baseline);
     }
-    assert_eq!(Arc::strong_count(&uniform.0), baseline);
-    let canceled = runtime.prepare_managed_fixture(&old).unwrap();
-    assert!(runtime.prepare_managed_fixture(&old).is_err());
+    let producer = [old, new];
+    let reader = storage_read
+        .then(|| storage_read_bindings(&runtime, &producer, [&output, &new_output], &uniform));
+    let reader_owner = reader
+        .as_ref()
+        .map(|bindings| Arc::downgrade(&bindings[0].0._program.0));
+    let case = StorageCase { producer, reader };
+    let buffer_owners: Vec<_> = case
+        .producer
+        .iter()
+        .chain(case.reader.iter().flatten())
+        .flat_map(|binding| binding.0.resources.iter())
+        .filter_map(|resource| match resource {
+            BoundResource::Buffer { _buffer, .. } => Some(Arc::downgrade(&_buffer.0)),
+            _ => None,
+        })
+        .collect();
+    let canceled = case.prepare(&runtime, 0).unwrap();
+    assert!(case.prepare(&runtime, 0).is_err());
     drop(canceled);
-    let prepared = runtime.prepare_managed_fixture(&old).unwrap();
+    let prepared = case.prepare(&runtime, 0).unwrap();
     let mut pending = runtime.submit_prepared(prepared).unwrap();
-    assert!(runtime.prepare_managed_fixture(&old).is_err());
+    assert!(case.prepare(&runtime, 0).is_err());
     let mut result = pending.wait(Duration::from_secs(30)).unwrap().unwrap();
     assert_eq!(
         result.readback(PassHandle { graph: 0, index: 0 }).unwrap(),
         first
     );
     drop((result, pending));
-    let prepared_old = runtime.prepare_managed_fixture(&old).unwrap();
-    let prepared_new = runtime.prepare_managed_fixture(&new).unwrap();
-    drop((old, new, uniform, newer, output, new_output, program));
+    let prepared_old = case.prepare(&runtime, 0).unwrap();
+    if let Some(reader) = &case.reader {
+        let BoundResource::Buffer {
+            _buffer: old_output,
+            ..
+        } = &reader[0].0.resources[1]
+        else {
+            unreachable!()
+        };
+        let alias = runtime
+            .create_bindings(&reader[0].0._program, &entries(&new_output, old_output))
+            .unwrap();
+        // Failing the second lease must release the first intermediate lease.
+        assert!(
+            runtime
+                .prepare_storage_read_fixture(&case.producer[1], &alias)
+                .is_err()
+        );
+    }
+    let prepared_new = case.prepare(&runtime, 1).unwrap();
+    drop((case, uniform, newer, output, new_output, program));
     assert!(program_owner.upgrade().is_some());
+    assert!(buffer_owners.iter().all(|owner| owner.upgrade().is_some()));
+    assert!(
+        reader_owner
+            .as_ref()
+            .is_none_or(|owner| owner.upgrade().is_some())
+    );
     let mut old_pending = runtime.submit_prepared(prepared_old).unwrap();
     let mut new_pending = runtime.submit_prepared(prepared_new).unwrap();
     runtime.shutdown().unwrap();
@@ -387,10 +576,16 @@ fn storage_fixture(strict: bool) {
     assert_eq!(new_bytes, second);
     drop((old_result, new_result, old_pending, new_pending));
     assert!(program_owner.upgrade().is_none());
+    assert!(buffer_owners.iter().all(|owner| owner.upgrade().is_none()));
+    assert!(
+        reader_owner
+            .as_ref()
+            .is_none_or(|owner| owner.upgrade().is_none())
+    );
     assert!(device.upgrade().is_none());
     validate_report(&monitor, strict);
     println!(
-        "D3D12_STORAGE_REPORT strict={strict} old={old_bytes:?} new={new_bytes:?} validation={:?}",
+        "D3D12_STORAGE_REPORT storage_read={storage_read} strict={strict} old={old_bytes:?} new={new_bytes:?} validation={:?}",
         monitor.snapshot()
     );
 }
@@ -711,7 +906,8 @@ fn sampled_cases(strict: bool) {
 #[test]
 #[ignore = "requires D3D12 hardware, Debug Layer and GPU-Based Validation"]
 fn d3d12_managed_storage_strict() {
-    storage_fixture(true);
+    storage_fixture(true, false);
+    storage_fixture(true, true);
 }
 #[cfg(feature = "d3d12-diagnostics")]
 #[test]
@@ -731,7 +927,8 @@ fn d3d12_managed_storage_shipping() {
     if cfg!(debug_assertions) {
         panic!("shipping acceptance requires --release");
     }
-    storage_fixture(false);
+    storage_fixture(false, false);
+    storage_fixture(false, true);
 }
 #[cfg(not(any(
     feature = "development-validation",
