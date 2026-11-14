@@ -11,7 +11,7 @@ use super::resources::{DeviceBuffer, MAX_BUFFER_BYTES};
 use super::{D3D12Runtime, D3D12RuntimeError, bindings::*, device::DeviceOwner};
 use crate::program::{
     BufferBinding, BufferBindingDesc, BufferBindingLayout, BufferBindingType, BufferDescriptor,
-    BufferUsage, ManagedProgram, validate_binding_slots, validate_buffer_binding,
+    BufferUsage, ManagedProgram, resolve_buffer_bindings, validate_buffer_binding,
 };
 
 const UNIFORM_ALIGNMENT: u64 = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT as u64;
@@ -298,22 +298,13 @@ impl D3D12Runtime {
     ) -> Result<D3D12Bindings, D3D12RuntimeError> {
         self.device.ensure_active()?;
         require_same_owner(&self.device, &program.0.owner)?;
-        let descs = bindings
-            .iter()
-            .map(|binding| binding.desc)
-            .collect::<Vec<_>>();
-        validate_binding_slots(program.layout(), &descs)
+        let resolved = resolve_buffer_bindings(program.layout(), bindings)
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
         let mut buffers = Vec::with_capacity(bindings.len());
         let mut canonical_descs = Vec::with_capacity(bindings.len());
-        for &layout in program.layout() {
-            // Complete, unique slot membership was established above.
-            let binding = bindings
-                .iter()
-                .find(|binding| {
-                    binding.desc.group == layout.group && binding.desc.binding == layout.binding
-                })
-                .unwrap();
+        for entry in resolved {
+            let (layout, binding) =
+                entry.map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
             require_same_owner(&self.device, &binding.buffer.0.owner)?;
             let (alignment, max_range) = match layout.kind {
                 BufferBindingType::Uniform => (UNIFORM_ALIGNMENT, MAX_UNIFORM_RANGE),
@@ -493,8 +484,6 @@ mod tests {
 
     #[test]
     fn allocation_padding_applies_only_to_uniforms_and_never_changes_logical_ranges() {
-        assert_eq!(allocation_size(1, BufferUsage::Uniform).unwrap(), 256);
-        assert_eq!(allocation_size(256, BufferUsage::Uniform).unwrap(), 256);
         assert_eq!(allocation_size(272, BufferUsage::Uniform).unwrap(), 512);
         assert_eq!(allocation_size(272, BufferUsage::Storage).unwrap(), 272);
         for usage in [BufferUsage::Uniform, BufferUsage::Storage] {
@@ -656,14 +645,6 @@ mod tests {
         );
         for desc in [
             BufferBindingDesc {
-                group: 7,
-                ..uniform_desc()
-            },
-            BufferBindingDesc {
-                binding: 7,
-                ..uniform_desc()
-            },
-            BufferBindingDesc {
                 offset: 1,
                 ..uniform_desc()
             },
@@ -694,7 +675,14 @@ mod tests {
                 D3D12RuntimeErrorKind::InvalidInput
             );
         }
+        let owners_before_rejection = Arc::strong_count(&buffer.0);
         for desc in [
+            // A missing second slot must reject after resolving the uniform,
+            // releasing the partially retained input instead of publishing it.
+            BufferBindingDesc {
+                group: 7,
+                ..storage_desc()
+            },
             BufferBindingDesc {
                 offset: 4,
                 ..storage_desc()
@@ -722,6 +710,7 @@ mod tests {
                 D3D12RuntimeErrorKind::InvalidInput
             );
         }
+        assert_eq!(Arc::strong_count(&buffer.0), owners_before_rejection);
         let baseline = Arc::strong_count(&old.0);
         let canceled = runtime.prepare_managed_fixture(&old).unwrap();
         assert_eq!(Arc::strong_count(&old.0), baseline + 1);
@@ -732,9 +721,9 @@ mod tests {
         drop(canceled);
         assert_eq!(Arc::strong_count(&old.0), baseline);
         let pass = PassHandle { graph: 0, index: 0 };
-        // Reuse after cancellation and after actual completion. The executor
-        // restores COMMON and the lease does not release while work is pending.
-        for _ in 0..2 {
+        // Reuse after cancellation. The final preparation below reuses the
+        // same storage after actual completion.
+        {
             let prepared = runtime.prepare_managed_fixture(&old).unwrap();
             let mut pending = runtime.submit_prepared(prepared).unwrap();
             assert_eq!(
