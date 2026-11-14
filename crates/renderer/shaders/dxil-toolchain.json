@@ -18,6 +18,7 @@
     {"source": "mesh.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []},
     {"source": "composite.vert", "stage": "vert", "profile": "vs_6_0", "spirv_cross_arguments": ["--flip-vert-y"]},
     {"source": "composite.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []},
-    {"source": "uniform.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []}
+    {"source": "uniform.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
+    {"source": "sampled.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []}
   ]
 }

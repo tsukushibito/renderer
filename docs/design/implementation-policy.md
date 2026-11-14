@@ -1010,7 +1010,8 @@ depth-only/color-only、Compute/copy、import/exportとGPU寿命を段階実装�
 `renderer-7ft.2.1.1`のuniform作成から`.2.1.2`でUniform/Storageの共通buffer/layout/bindingへ
 進める。同じ管理下compute shaderを再利用し、storage出力も公開作成APIで用意する。
 native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換する。
-画像/View/sampler、RGBA16F/depth、一般owned Graphは親`renderer-7ft.2.1`と後続課題へ残す。
+`.2.1.4`はRGBA8画像/View/nearest-clamp samplerとsampled bindingへ進める。
+RGBA16F/depth、一般owned Graphや他mip/layer/filterは親`renderer-7ft.2.1`と後続課題へ残す。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
 
@@ -1140,7 +1141,7 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 
 <a id="d3d12の管理下programとuniform"></a>
 
-### D3D12の管理下Programとbuffer binding
+### D3D12の管理下Programと資源binding
 
 `renderer-7ft.2.1.2`は共通の`ManagedProgram`をSM6.0のcompute PSOとroot signatureへ
 具体化する。既存buffer-only runtimeのDevice要件を増やさず、Program作成時にSM6.0を確認する。
@@ -1172,6 +1173,27 @@ private受入だけがshaderの16-byte write保証を使う。Storage出力は�
 fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのbusy拒否と再利用を確認する。
 一般Graph導入時の製品状態管理・同期・GPU lifetimeは後続であり、このtest-only leaseが代替するものではない。
 二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
+
+`.2.1.4`の管理下画像はRGBA8_UNORM Texture2D、mip/layer/sample各1、DEFAULT heap、
+初期COMMON、未初期化である。実DeviceのTEXTURE2D/SHADER_SAMPLE対応とextent上限を作成時に保証する。
+Viewはfull mip0/layer0の不変SRV定義とImage owner、Samplerはnearest/clamp/LOD0定義とDeviceを保持する。
+non-comparison POINT filterのComparisonFuncはNEVERとし、無視される設定にもnative警告を残さない。
+D3D12には独立View/Sampler COM objectがないため、作成時にCPU専用descriptor heapを増設せず、
+`create_bindings`が所有するshader-visible heapへ一度だけnative descriptorを具体化する。
+textureはSRV table、samplerは別SAMPLER heap/tableとし、bufferは既存root CBV/UAVを使う。
+root index/register/space/descriptor種別は共通manifestから導出し、全slot保証後に公開する。
+root texture descriptorを使うことはできない。2種類のheapとProgram/View→Image/Samplerを
+bindingが保持し、GPU利用が終わるまで所有連鎖を保つ。これは必要なAPI構成であり性能優位は未測定である。
+
+sampled fixtureだけが`GetCopyableFootprints`の実結果を使ってupload bufferのrow配置を作り、
+COMMON→COPY_DEST→NON_PIXEL_SHADER_RESOURCEでsampling、最後にCOMMONへ戻す。
+packed RGBA8 byte数をnative image allocationやcopy row pitchへ代用しない。
+Storage側はUAV→COPY_SOURCE→COMMONを維持し、readbackするのはshaderが書いた16 byteだけである。
+ImageとStorageをともに排他leaseで保護し、upload buffer、descriptor heapsと全参照をWork/Retainedへ保持する。
+画像の初期化済み状態は正常Fence完了後だけ確定し、旧画像の再利用は再uploadせずCOMMONからsamplingへ遷移する。
+未投入cancel、pending、Signal失敗と正常Fence完了の既存契約を引き継ぐ。
+製品の作成/descriptorと、`cfg(test)`だけのupload/実行/色payload/stateを区別する。
+
 
 ### D3D12のDeviceとbuffer実行
 

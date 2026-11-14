@@ -2,7 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use ash::vk;
@@ -373,6 +373,40 @@ pub(super) struct VulkanDevice {
     queue: vk::Queue,
     queue_lock: Mutex<()>,
     state: AtomicU8,
+    samplers: SamplerCount,
+}
+
+/// Count successful create calls conservatively, without relying on optional
+/// driver deduplication of identical samplers. Reservations also cover creates
+/// in progress so concurrent calls cannot exceed the native allocation limit.
+#[derive(Default)]
+struct SamplerCount(AtomicU32);
+impl SamplerCount {
+    fn reserve(&self, maximum: u32) -> Result<SamplerReservation<'_>, ()> {
+        self.0
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < maximum).then(|| count + 1)
+            })
+            .map_err(|_| ())?;
+        Ok(SamplerReservation {
+            count: self,
+            committed: false,
+        })
+    }
+    fn release(&self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
+}
+struct SamplerReservation<'a> {
+    count: &'a SamplerCount,
+    committed: bool,
+}
+impl Drop for SamplerReservation<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.count.release();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -384,6 +418,47 @@ pub(super) enum DeviceState {
 }
 
 impl VulkanDevice {
+    /// # Safety
+    /// The caller supplies valid sampler creation inputs for this active Device
+    /// and immediately owns success until the matching helper destroys it.
+    pub(super) unsafe fn create_sampler(
+        &self,
+        info: &vk::SamplerCreateInfo<'_>,
+    ) -> Result<vk::Sampler, super::error::RuntimeError> {
+        let mut reservation = self
+            .samplers
+            .reserve(self.limits.max_sampler_allocation_count)
+            .map_err(|()| {
+                super::error::RuntimeError::capacity("Device sampler allocation limit exhausted")
+            })?;
+        // SAFETY: The caller guarantees configuration/feature validity. The
+        // reservation establishes the Device-wide maxSamplerAllocationCount.
+        match unsafe { self.device.create_sampler(info, None) } {
+            Ok(handle) => {
+                reservation.committed = true;
+                Ok(handle)
+            }
+            Err(result) => {
+                drop(reservation);
+                self.observe_result(result);
+                Err(super::error::RuntimeError::native(
+                    "vkCreateSampler",
+                    self.name(),
+                    result,
+                ))
+            }
+        }
+    }
+    /// # Safety
+    /// A non-null handle was created by this Device's helper and is exclusively
+    /// destroyed once, after all recorded/native uses retire or are canceled.
+    pub(super) unsafe fn destroy_sampler(&self, sampler: vk::Sampler) {
+        if sampler != vk::Sampler::null() {
+            // SAFETY: The caller establishes native lifetime and exclusive use.
+            unsafe { self.device.destroy_sampler(sampler, None) };
+            self.samplers.release();
+        }
+    }
     #[cfg(feature = "vulkan-diagnostics")]
     pub(super) fn validation_mode(&self) -> super::instance::ValidationMode {
         self._instance.validation_mode()
@@ -677,6 +752,7 @@ impl VulkanDevice {
             queue: vk::Queue::null(),
             queue_lock: Mutex::new(()),
             state: AtomicU8::new(DeviceState::Active as u8),
+            samplers: SamplerCount::default(),
         };
         // SAFETY: Exactly one queue was requested from this family with index 0.
         // It is owned by the Device and requires no separate destruction.
@@ -738,6 +814,24 @@ mod tests {
     use super::super::diagnostics::Diagnostics;
     use super::*;
     use ash::vk::Handle;
+
+    #[test]
+    fn sampler_capacity_reservations_cover_creation_failure_and_live_owners() {
+        let count = SamplerCount::default();
+        let failed_creation = count.reserve(1).unwrap();
+        assert!(count.reserve(1).is_err());
+        drop(failed_creation);
+        let mut accepted = count.reserve(1).unwrap();
+        accepted.committed = true;
+        drop(accepted);
+        assert!(
+            count.reserve(1).is_err(),
+            "successful native owner still consumes quota"
+        );
+        count.release(); // Native destruction returns its committed reservation.
+        assert!(count.reserve(1).is_ok());
+        assert!(count.reserve(0).is_err());
+    }
 
     fn candidate(index: u64, device_type: vk::PhysicalDeviceType) -> Candidate {
         Candidate {

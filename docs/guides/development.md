@@ -324,20 +324,25 @@ source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/fo
 
 <a id="管理下uniform-programの作成と受入"></a>
 
-## 管理下buffer Programの作成と受入
+## 管理下資源Programの作成と受入
 
 `renderer-7ft.2.1.2`の公開入口は`program::ManagedProgram::uniform_readback()`と
 両runtimeの`create_program`、`create_managed_buffer`、`create_bindings`である。
+`.2.1.4`は`ManagedProgram::sampled_readback()`と、`create_managed_image`、
+`create_image_view`、`create_sampler`を加える。RGBA8_UNORM 2Dのmip/layer/sampleは各1、
+Viewはfull color範囲、Samplerは`NearestClamp`に限定する。
 [`program` moduleの例](../../crates/renderer/src/program.rs)は両APIの公開型でRustdocコンパイルする。
 Uniformのbyte更新は新しいbuffer/bindingを作り、旧参照の内容を変更しない。
 Storageの版/範囲は保持するが本文はGPU更新可能で、作成直後は未初期化である。
 binding集合は全slotを満たす必要があり、入力順は自由で、成功後はProgram/資源/範囲を所有する。
-一般Graph dispatchと画像bindingは後続へ残す。
+`Binding`はslotと`BindingResource::{Buffer, ImageView, Sampler}`を持つ。
+画像の作成/参照保持は内容初期化を意味せず、作成時の暗黙upload/submit/waitはない。
+一般Graph dispatch/画像uploadと他format/mip/layer/filterは後続へ残す。
 
 SDKなしのABI契約回帰は次を使う。生成条件を更新した場合は[shader再生成](tooling.md)も実行する。
 
 ```powershell
-./crates/renderer/shaders/test-uniform-abi.ps1
+./crates/renderer/shaders/test-managed-abi.ps1
 ./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ./scripts/regenerate-d3d12-bindings.ps1 -Verify
 ```
@@ -346,12 +351,19 @@ SDKなしのABI契約回帰は次を使う。生成条件を更新した場合�
 前提不足をskip扱いにしない。同じ共通byte列をoffset 256に置き、旧版/新版の各16 byte、
 参照保持、未投入cancel/busy拒否/完了後reuseと最終native解放を確認する。
 Storage出力は公開APIで作成し、private fixtureは書いた16 byteだけをreadbackする。
+sampled fixtureは同じ2x2非対称RGBA8をnearest/clampの4座標で読み、入力16 byteへpackして照合する。
+ImageとStorageの両方を記録/pendingから排他保護し、View/Image/sampler/heapの最終解放も確認する。
 
 ```powershell
 cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_storage_creation_and_versions -- --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation d3d12_managed_storage_strict -- --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_storage_creation_and_versions -- --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --lib --no-default-features --features d3d12 d3d12_managed_storage_shipping -- --ignored --nocapture --test-threads=1
+
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_sampled_creation_and_versions -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation d3d12_managed_sampled_strict -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_sampled_creation_and_versions -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features d3d12 d3d12_managed_sampled_shipping -- --ignored --nocapture --test-threads=1
 ```
 
 製品構成の成功をnative診断の実効確認へ流用しない。結果・限界は

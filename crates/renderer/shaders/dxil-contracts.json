@@ -1,5 +1,5 @@
 {
-  "scope": "Trusted managed fixtures only. Compilation/reflection is verified. uniform.comp exercises the common B1 Uniform/Storage creation and binding contracts through private dispatch; existing image/raster D3D12 execution and two-API image equivalence remain later B1 work (renderer-7ft.2.3 and renderer-7ft.2.4).",
+  "scope": "Trusted managed fixtures only. Compilation/reflection is verified. uniform.comp exercises the common B1 Uniform/Storage creation and binding contracts, and sampled.comp exercises RGBA8 sampled-image/View/sampler bindings through private dispatch. Existing general image/raster D3D12 execution and two-API image equivalence remain later B1 work (renderer-7ft.2.3 and renderer-7ft.2.4).",
   "entry_point": "main",
   "shader_model": "6.0",
   "dxil_version": "1.0",
@@ -10,9 +10,23 @@
     "clip_z": "Preserve 0 <= z <= w; no --fixup-clipspace",
     "raster": "Normal Z, clear depth 1, LESS, cull NONE, blending disabled; front-face/culling equivalence is not established",
     "pixel": "Top-left image coordinates and pixel-center SV_Position.xy; integer truncation selects the same texel",
-    "color": "Linear RGBA8_UNORM, alpha preserved; no filtering, sRGB conversion, HDR, or tone mapping"
+    "color": "Linear RGBA8_UNORM, alpha preserved; no sRGB conversion, HDR, or tone mapping. sampled.comp uses explicit nearest/clamp normalized-coordinate sampling; the older fixed fixtures do not filter."
   },
   "shaders": {
+    "sampled.comp": {
+      "profile": "cs_6_0",
+      "local_size": [1, 1, 1],
+      "vulkan_bindings": ["set0/binding0 one separate texture2D sampled image", "set0/binding1 one separate sampler", "set1/binding0 std430 writeonly storage buffer, one uvec4 at byte 0, 16 bytes"],
+      "d3d12_active_bindings": ["t0/space0 Texture2D<float4>", "s1/space0 active SamplerState", "u0/space1 RWByteAddressBuffer, Store4 at byte 0"],
+      "image": "A complete initialized linear RGBA8_UNORM 2D image; the acceptance fixture is 2x2 with one mip and layer. No format reinterpretation or sRGB conversion.",
+      "sampler": "Separate sampler with normalized coordinates, min/mag nearest, mip nearest, clamp-to-edge on all axes, no comparison/anisotropy, LOD zero. Actual textureLod/SampleLevel keeps it active in both binaries.",
+      "sample_uvs": [[-0.25, -0.25], [0.6, 0.2], [0.2, 0.6], [1.25, 1.25]],
+      "packing": "Each textureLod at explicit LOD 0 is packUnorm4x8 encoded: R is the least-significant byte, followed by G, B, A. Four packed texels form the output uvec4. Outside UVs exercise clamp; off-center interior UVs distinguish nearest from linear.",
+      "input_rgba8_row_major": [5, 17, 29, 43, 61, 79, 97, 113, 127, 149, 173, 199, 211, 223, 239, 251],
+      "output_u32": [723325189, 1902202685, 3350041983, 4226801619],
+      "bounds": "Host dispatches exactly one workgroup. The storage range has at least 16 bytes; only its first 16 bytes are initialized by the shader. No arbitrary shader, public dispatch, mip/layer traversal, or general Graph integration is provided.",
+      "verification": "managed-abi.ps1 checks both reflected interfaces, including the active separate sampler, 2D float sampled image, and write-only 16-byte storage output. The known 2x2 fixture must return the same 16 RGBA bytes on both APIs in little-endian u32 output order; actual filtering, addressing, orientation, packing and lifetime remain GPU acceptance obligations. Reflection does not prove arbitrary shader safety."
+    },
     "uniform.comp": {
       "profile": "cs_6_0",
       "local_size": [1, 1, 1],
@@ -20,7 +34,7 @@
       "d3d12_active_bindings": ["b0/space0 cbuffer, one uint4 at byte 0, 16 logical bytes", "u0/space1 RWByteAddressBuffer storage output, Store4 at byte 0"],
       "bounds": "Private acceptance dispatches exactly one workgroup using publicly created buffers/bindings. Both ranges contain at least 16 bytes; only the first 16 descriptor bytes are initialized by the shader. General Graph execution is subsequent work.",
       "uniform_allocation": "The logical 16-byte ABI does not replace Vulkan uniform offset/range limits or D3D12 CBV placement/range alignment and native allocation requirements.",
-      "verification": "uniform-abi.ps1 mechanically checks SPIRV-Cross JSON and DXC reflected resource registers, counts, local size, uniform member type/offset and logical block size. The managed source and GPU byte round-trip establish behavior; reflection is not a proof of arbitrary shader safety."
+      "verification": "managed-abi.ps1 mechanically checks SPIRV-Cross JSON and DXC reflected resource registers, counts, local size, uniform member type/offset and logical block size. The managed source and GPU byte round-trip establish behavior; reflection is not a proof of arbitrary shader safety."
     },
     "image.comp": {
       "profile": "cs_6_0",

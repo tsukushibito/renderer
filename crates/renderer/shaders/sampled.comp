@@ -1,0 +1,28 @@
+#version 450 core
+
+// Trusted sampled-image fixture: one invocation reads a single-mip RGBA8 2D
+// image through a separate normalized-coordinate nearest/clamp sampler. Its
+// only writes are the first 16 bytes of the checked storage descriptor range.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform texture2D source_image;
+layout(set = 0, binding = 1) uniform sampler source_sampler;
+layout(set = 1, binding = 0, std430) writeonly buffer Result {
+    uvec4 value;
+} result;
+
+uint sample_packed(vec2 uv) {
+    // Actual sampling keeps the sampler active in both SPIR-V and DXIL.
+    // Explicit LOD zero needs no derivatives in this compute invocation.
+    return packUnorm4x8(textureLod(sampler2D(source_image, source_sampler), uv, 0.0));
+}
+
+void main() {
+    // The first/last samples exercise clamping. The off-center interior samples
+    // distinguish nearest filtering from linear filtering on the 2x2 fixture.
+    // packUnorm4x8 stores R in the least-significant byte, then G, B and A.
+    result.value = uvec4(
+        sample_packed(vec2(-0.25, -0.25)),
+        sample_packed(vec2(0.6, 0.2)),
+        sample_packed(vec2(0.2, 0.6)),
+        sample_packed(vec2(1.25, 1.25)));
+}

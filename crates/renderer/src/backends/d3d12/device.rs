@@ -40,6 +40,8 @@ pub(super) struct DeviceOwner {
     pub(super) raw: ManuallyDrop<ID3D12Device>,
     pub(super) queue_gate: Mutex<()>,
     pub(super) info: D3D12DeviceInfo,
+    pub(super) rgba8_sampled: bool,
+    pub(super) descriptor_steps: [u32; 2],
     pub(super) monitor: D3D12ValidationMonitor,
     #[cfg(feature = "d3d12-diagnostics")]
     session: Option<Session>,
@@ -199,6 +201,13 @@ impl DeviceOwner {
         let mut luid = [0; 8];
         luid[..4].copy_from_slice(&desc.AdapterLuid.LowPart.to_le_bytes());
         luid[4..].copy_from_slice(&desc.AdapterLuid.HighPart.to_le_bytes());
+        // SAFETY: Query immutable descriptor strides on the retained live Device.
+        let descriptor_steps = unsafe {
+            [
+                raw.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV),
+                raw.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER),
+            ]
+        };
         let owner = Arc::new(Self {
             queue: ManuallyDrop::new(queue),
             raw: ManuallyDrop::new(raw),
@@ -215,6 +224,10 @@ impl DeviceOwner {
                 rgba8_typed_uav_load: format.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD != 0,
                 rgba8_typed_uav_store: format.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE != 0,
             },
+            descriptor_steps,
+            rgba8_sampled: format.Support1
+                & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
+                == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),
             monitor,
             #[cfg(feature = "d3d12-diagnostics")]
             session: Some(session),

@@ -275,14 +275,16 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 
 <a id="managed-uniform"></a>
 
-### 管理下Programとbuffer binding
+### 管理下Programと資源binding
 
 `renderer-7ft.2.1.2`は、共通の`program::ManagedProgram`からnative Programを作成し、
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
-一般owned passとの接続、画像のbinding、任意shader取込は後続へ残す。
+`.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加える。一般owned passとの接続、
+他format/mip/layer/filter、任意shader取込は後続へ残す。
 
-safeな入口はレビュー済みの`ManagedProgram::uniform_readback()`だけである。
+safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`と`sampled_readback()`である。
+前者は以下のbuffer ABIを持つ。
 GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
 `std140 uvec4`（offset 0、16 byte）を読み、Storageのset 1/binding 0へ
 16 byteを書く。一つのinvocationだけを実行し、値依存の範囲外アクセスや競合を作らない。
@@ -299,7 +301,7 @@ set layoutを作る。`create_managed_buffer`はUniformとStorageを受け、既
 
 `create_bindings`は全slotの過不足・重複、用途、owner、論理範囲を検査し、uniform/storage
 それぞれの実Device offset alignmentと最大rangeを満たすことを保証する。入力順は自由で、
-成功後はmanifest順のProgram・全buffer・範囲を強保持する。pool/setを新規作成し一度だけupdateする。
+成功後はmanifest順のProgram・buffer/範囲・View/Image・samplerを強保持する。pool/setを新規作成し一度だけupdateする。
 slot解決は呼出し元の入力を直接参照し、検査専用descriptor Vecを作らない。各manifest slotへ
 対応する入力がちょうど1件であることと全体の件数から、過不足・重複を排除する。
 全結果の解決・資源検査が成功してからnative pool/setを作る。選択済みpairのslotを再照合せず、
@@ -317,6 +319,33 @@ leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早�
 この試験用state/lease/入力は通常buildに含めない。一般Graph導入時には製品の
 計画・状態・所有を接続する必要があり、今回の作成APIだけで一般dispatchの同期を保証したとは扱わない。
 実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
+
+`create_managed_image(ImageDescriptor)`はRGBA8_UNORMの2D、mip/layer/sample各1、
+optimal tiling、`SAMPLED|TRANSFER_DST`だけで作る。Graph画像のstorage/color attachment等の
+固定usageやframebuffer/viewport上限を持ち込まず、実際のformat/type/tiling/usage/flagsと
+extent/mip/layer/sample対応を作成境界で照会する。packed pixel量をVMA allocation sizeへ代用しない。
+作成直後は未初期化であり、upload/submit/waitを暗黙に行わない。
+`create_image_view`はfull color mip0/layer0範囲とownerを検査し、ViewがImageを保持する。
+`create_sampler(NearestClamp)`はnormalized coordinate、nearest min/mag/mip、clamp-to-edge、
+LOD0、compare/anisotropyなしで作る。Device全体の生存sampler数をnative作成前に予約し、
+失敗時またはnative破棄後に返す。既存固定Graph/表示samplerも同じ上限契約を使う。
+
+`Binding`のslotと`BindingResource`のbuffer/View/sampler参照へ入力をまとめ、旧buffer専用
+binding APIを置換する。sampled shaderはset0/binding0のseparate sampled image、
+set0/binding1のseparate sampler、set1/binding0の16-byte StorageWriteを持つ。
+全slot解決と種別/owner/範囲検査後に通常descriptor setを一度作成/updateし、公開後は変更しない。
+View/Image/samplerをdrawごとに再走査する処理や、検査専用Vecを追加しない。
+Deviceに対するsampled-image/samplerのstage別/set別descriptor上限もProgram作成時に保証する。
+
+private受入は2x2の非対称RGBA8をuploadし、4回の`textureLod(..., 0)`を実行して
+`packUnorm4x8`で16 byteへ戻す。UVは(-0.25,-0.25)、(0.6,0.2)、(0.2,0.6)、(1.25,1.25)で、
+nearestとclamp、行/成分の対応を実内容で確認する。`texelFetch`への置換でsamplerを除去しない。
+fixtureはImageとStorageの排他leaseを記録から退役まで保持する。画像は初回UNDEFINEDからTRANSFER_DSTへ遷移し、copy write→compute sampled readを
+可視化する。初回は既存の保守的COPY execution依存も維持する。一度uploadした画像は
+再初期化せずSHADER_READ_ONLY_OPTIMALで再sampleし、新しい色は別画像版へuploadする。受理済みsubmitの予定状態と
+未投入cancelを区別し、GPU完了を確認できない失敗では資源/descriptor/lease連鎖を早期解放しない。
+画像の公開作成/所有/descriptorは製品へ残し、upload色・private executorのstate/leaseは`cfg(test)`に限る。
+
 
 ## 投入・完了・異常時の保持
 
