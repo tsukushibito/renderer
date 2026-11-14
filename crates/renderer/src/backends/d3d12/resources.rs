@@ -48,6 +48,25 @@ impl DeviceBuffer {
         size: u64,
         heap: D3D12_HEAP_TYPE,
     ) -> Result<Self, D3D12RuntimeError> {
+        Self::with_flags(owner, size, heap, D3D12_RESOURCE_FLAG_NONE)
+    }
+
+    #[cfg(test)]
+    pub(super) fn storage(owner: &DeviceOwner, size: u64) -> Result<Self, D3D12RuntimeError> {
+        Self::with_flags(
+            owner,
+            size,
+            D3D12_HEAP_TYPE_DEFAULT,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        )
+    }
+
+    fn with_flags(
+        owner: &DeviceOwner,
+        size: u64,
+        heap: D3D12_HEAP_TYPE,
+        flags: D3D12_RESOURCE_FLAGS,
+    ) -> Result<Self, D3D12RuntimeError> {
         let initial = validate_buffer_request(size, heap)?;
         let heap_properties = D3D12_HEAP_PROPERTIES {
             Type: heap,
@@ -67,6 +86,7 @@ impl DeviceBuffer {
                 Quality: 0,
             },
             Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: flags,
             ..Default::default()
         };
         let mut raw = None;
@@ -105,7 +125,7 @@ impl DeviceBuffer {
             End: bytes.len(),
         };
         let mapping = Mapping::new(owner, &self.raw, empty, written)?;
-        // SAFETY: This upload allocation has exactly bytes.len() logical bytes;
+        // SAFETY: The caller guarantees at least bytes.len() writable bytes;
         // it has not been submitted and the mapped native pointer is nonnull.
         // The CPU source and native allocation do not overlap.
         unsafe {
