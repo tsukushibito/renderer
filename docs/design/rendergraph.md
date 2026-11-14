@@ -57,6 +57,8 @@ Program、Uniform/Storage buffer、RGBA8/RGBA16F/D32画像/View、nearest/clamp 
 Viewはsampled用とD32のdepth attachment用を区別し、aspectはformatから導出する。
 bindingはmanifest順に
 実Programと全資源の版/範囲を保持する。Storage本文はGPU可変で、作成を初期化とは扱わない。
+`StorageRead`と`StorageWrite`は同じStorage資源のbinding用途を表す。
+private受入のproducer→consumer同期を、公開Graphの一般dispatch対応とは扱わない。
 [管理下資源の契約](vulkan.md#managed-uniform)を参照する。
 この作成APIとprivate GPU受入を、公開Graphの一般draw/dispatch対応とは扱わない。
 owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`へ残す。

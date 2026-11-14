@@ -6,12 +6,12 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'managed-abi.ps1')
-$verify = ${function:Assert-UniformAbi}
+$verify = ${function:Assert-BufferCopyAbi}
 $json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/uniform.comp.spirv-reflection.json') -Raw
 $reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/uniform.comp.reflection.txt') -Raw
-Assert-UniformAbi ($json | ConvertFrom-Json) $reflection
+Assert-BufferCopyAbi ($json | ConvertFrom-Json) $reflection
 # Native tools use LF; a Windows text reader must not affect ABI interpretation.
-Assert-UniformAbi ($json | ConvertFrom-Json) ($reflection.Replace("`r`n", "`n").Replace("`n", "`r`n"))
+Assert-BufferCopyAbi ($json | ConvertFrom-Json) ($reflection.Replace("`r`n", "`n").Replace("`n", "`r`n"))
 
 function Expect-Rejected([string]$Name, [scriptblock]$Mutate) {
     $spirv = $json | ConvertFrom-Json
@@ -128,4 +128,18 @@ Expect-Rejected 'float output array stride' {
 Expect-Rejected 'float output specialized array count' {
     param($s) $s.types.PSObject.Properties[$s.ssbos[0].type].Value.members[0].array_size_is_literal = @($false)
 }
-Write-Output 'Managed uniform/sampled/float SPIR-V/DXIL ABI contracts and mismatch rejections passed.'
+# Storage input reuses the buffer-copy layout and output checks above. Exercise
+# the new read-only qualifier and raw SRV branch, without duplicating that matrix.
+$verify = { param($s, $d) Assert-BufferCopyAbi $s $d -StorageInput }
+$json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/storage_read.comp.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/storage_read.comp.reflection.txt') -Raw
+Assert-BufferCopyAbi ($json | ConvertFrom-Json) $reflection -StorageInput
+Expect-Rejected 'storage input mutability' {
+    param($s) ($s.ssbos | Where-Object { $_.set -eq 0 }).readonly = $false
+}
+Expect-Rejected 'DXIL storage input register' { param($s, $d) $d.Replace('t0', 't1') }
+Expect-Rejected 'DXIL storage input is writable' { param($s, $d) $d.Replace('r/o', 'r/w') }
+Expect-Rejected 'DXIL storage input is typed' {
+    param($s, $d) [regex]::Replace($d, '(?m)(^;[^\r\n]+\s+texture\s+)byte', '${1}u32')
+}
+Write-Output 'Managed uniform/storage-read/sampled/float SPIR-V/DXIL ABI contracts and mismatch rejections passed.'

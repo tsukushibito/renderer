@@ -283,8 +283,8 @@ moduleがpipeline、layout、allocation、bindingの所有を担当し、既存�
 `.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
 一般owned passとの接続、他format/mip/layer/filter、任意shader取込は後続へ残す。
 
-safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`sampled_readback()`、
-`sampled_float_readback()`である。
+safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`storage_readback()`、
+`sampled_readback()`、`sampled_float_readback()`である。
 前者は以下のbuffer ABIを持つ。
 GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
 `std140 uvec4`（offset 0、16 byte）を読み、Storageのset 1/binding 0へ
@@ -320,6 +320,24 @@ leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早�
 この試験用state/lease/入力は通常buildに含めない。一般Graph導入時には製品の
 計画・状態・所有を接続する必要があり、今回の作成APIだけで一般dispatchの同期を保証したとは扱わない。
 実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
+
+`.2.1.7`の`StorageRead`は既存Storage資源を読むbindingであり、別のbuffer用途を増やさない。
+Vulkanのdescriptorはread/writeとも`STORAGE_BUFFER`で、descriptor上限も両者を合算する。
+offset alignmentと最大rangeは既存storage契約を使う。`storage_read.comp`はset0/binding0の
+readonly `std430 uvec4`の先頭16 byteを読み、set1/binding0のwriteonly出力へ16 byteを書く。
+生成reflectionでreadonly/writeonlyとmember/slot/sizeを照合し、不変manifestへ結び付ける。
+binding作成成功をStorage本文の初期化保証にはしない。
+
+private受入は同じWorkの中で`uniform_readback`をproducer、`storage_readback`をconsumerとして実行する。
+準備時にレビュー済みassetのidentity、producer出力とconsumer入力の同じBuffer版・先頭offset、
+実際の16-byte write/read保証を結び付け、input/outputの全buffer aliasを拒否する。
+公開binding作成へalias検査用scanを増やさない。両Program/Bindingsとinput/outputを保持し、
+各物理Storageを一度だけ排他leaseする。producer write→consumer readの
+`COMPUTE_SHADER`/`SHADER_STORAGE_WRITE`→`COMPUTE_SHADER`/`SHADER_STORAGE_READ`依存を置き、
+consumer出力だけを最後にcopy/readbackする。間のCPU待機やreadbackで同期を補わない。
+再利用時は前consumer read→次producer writeの実行順も保つ。
+asset identity確認とproducer/canonical slotの試験用metadataは`cfg(test)`に限定し、
+製品のcreation契約と一般Graphの実行計画を混同しない。
 
 `create_managed_image(ImageDescriptor)`はRGBA8_UNORM、RGBA16FまたはD32_FLOATの2D、mip/layer/sample各1、
 optimal tilingで作る。色は`SAMPLED|TRANSFER_DST`、D32は`DEPTH_STENCIL_ATTACHMENT|SAMPLED`に固定する。Graph画像のstorage/color attachment等の

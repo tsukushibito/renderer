@@ -2134,6 +2134,19 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn SetComputeRootShaderResourceView(
+        &self,
+        rootparameterindex: u32,
+        bufferlocation: D3D12_GPU_VIRTUAL_ADDRESS,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetComputeRootShaderResourceView)(
+                windows_core::Interface::as_raw(self),
+                rootparameterindex,
+                bufferlocation,
+            );
+        }
+    }
     pub unsafe fn SetComputeRootUnorderedAccessView(
         &self,
         rootparameterindex: u32,
@@ -2221,7 +2234,8 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     pub SetComputeRootConstantBufferView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     SetGraphicsRootConstantBufferView: usize,
-    SetComputeRootShaderResourceView: usize,
+    pub SetComputeRootShaderResourceView:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     SetGraphicsRootShaderResourceView: usize,
     pub SetComputeRootUnorderedAccessView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),

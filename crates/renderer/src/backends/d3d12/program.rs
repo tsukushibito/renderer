@@ -14,6 +14,8 @@ mod descriptors;
 #[cfg(test)]
 mod fixture;
 #[cfg(test)]
+mod storage_read;
+#[cfg(test)]
 mod tests;
 use super::{D3D12Runtime, D3D12RuntimeError, bindings::*, device::DeviceOwner};
 use crate::program::{
@@ -22,7 +24,9 @@ use crate::program::{
 };
 use descriptors::{DescriptorHeaps, root_parameters};
 #[cfg(test)]
-pub(super) use fixture::{DepthTarget, ExecutionLease, ImageInitialization};
+pub(super) use fixture::{DepthTarget, ExecutionLease, FixtureRecording, ImageInitialization};
+#[cfg(test)]
+pub(super) use storage_read::StorageReadFixture;
 
 const UNIFORM_ALIGNMENT: u64 = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT as u64;
 const STORAGE_ALIGNMENT: u64 = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT as u64;
@@ -314,7 +318,9 @@ impl D3D12Runtime {
                     require_same_owner(&self.device, &buffer.0.owner)?;
                     let (alignment, max_range) = match layout.kind {
                         BindingType::Uniform => (UNIFORM_ALIGNMENT, MAX_UNIFORM_RANGE),
-                        BindingType::StorageWrite => (STORAGE_ALIGNMENT, MAX_BUFFER_BYTES),
+                        BindingType::StorageRead | BindingType::StorageWrite => {
+                            (STORAGE_ALIGNMENT, MAX_BUFFER_BYTES)
+                        }
                         _ => {
                             return Err(D3D12RuntimeError::invalid(
                                 "buffer resource does not match image or sampler slot",

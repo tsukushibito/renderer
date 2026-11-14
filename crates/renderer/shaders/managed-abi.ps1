@@ -23,56 +23,87 @@ function Get-DxilResourceRows([string]$Section) {
         '(?m)^;\s+(?<name>\S+)\s+(?<kind>\S+)\s+(?<format>\S+)\s+(?<dimension>\S+)\s+(?<id>\S+)\s+(?<slot>\S+)\s+(?<count>\d+)\s*$')
 }
 
-function Assert-UniformAbi([object]$Spirv, [string]$Dxil) {
-    Assert-ManagedComputeEntry $Spirv $Dxil 'uniform.comp'
+function Assert-BufferCopyAbi([object]$Spirv, [string]$Dxil, [switch]$StorageInput) {
+    $asset = if ($StorageInput) { 'storage_read.comp' } else { 'uniform.comp' }
+    Assert-ManagedComputeEntry $Spirv $Dxil $asset
     foreach ($category in @('textures', 'separate_images', 'separate_samplers', 'images',
             'sampled_images', 'subpass_inputs', 'acceleration_structures', 'push_constants')) {
         $property = $Spirv.PSObject.Properties[$category]
         if ($null -ne $property -and @($property.Value).Count -ne 0) {
-            throw "uniform.comp has unexpected SPIR-V resources: $category"
+            throw "$asset has unexpected SPIR-V resources: $category"
         }
     }
-    $ubos = @($Spirv.ubos)
+    $ubos = @()
+    $uniformProperty = $Spirv.PSObject.Properties['ubos']
+    if ($null -ne $uniformProperty) { $ubos = @($uniformProperty.Value) }
     $ssbos = @($Spirv.ssbos)
-    if ($ubos.Count -ne 1 -or $ssbos.Count -ne 1) {
-        throw 'uniform.comp must reflect exactly one uniform and one storage buffer.'
+    if ($StorageInput) {
+        $inputs = @($ssbos | Where-Object { $_.set -eq 0 })
+        $outputs = @($ssbos | Where-Object { $_.set -eq 1 })
+        if ($ubos.Count -ne 0 -or $ssbos.Count -ne 2 -or
+            $inputs.Count -ne 1 -or $outputs.Count -ne 1) {
+            throw 'storage_read.comp must reflect one storage input and one storage output.'
+        }
+        $inputResource = $inputs[0]
+        $outputResource = $outputs[0]
+        $readonly = $inputResource.PSObject.Properties['readonly']
+        if ($null -eq $readonly -or $readonly.Value -ne $true) {
+            throw 'storage_read.comp input must be read-only.'
+        }
+    } else {
+        if ($ubos.Count -ne 1 -or $ssbos.Count -ne 1) {
+            throw 'uniform.comp must reflect exactly one uniform and one storage buffer.'
+        }
+        $inputResource = $ubos[0]
+        $outputResource = $ssbos[0]
     }
-    foreach ($item in @(@($ubos[0], 0), @($ssbos[0], 1))) {
+    foreach ($item in @(@($inputResource, 0), @($outputResource, 1))) {
         $resource = $item[0]
         $set = $item[1]
         $array = $resource.PSObject.Properties['array']
         if ($resource.set -ne $set -or $resource.binding -ne 0 -or
             $resource.block_size -ne 16 -or $null -ne $array) {
-            throw "uniform.comp SPIR-V set $set buffer binding, count or byte size differs."
+            throw "$asset SPIR-V set $set buffer binding, count or byte size differs."
         }
         $type = $Spirv.types.PSObject.Properties[$resource.type]
-        if ($null -eq $type) { throw 'uniform.comp reflected buffer type is missing.' }
+        if ($null -eq $type) { throw "$asset reflected buffer type is missing." }
         $members = @($type.Value.members)
         if ($members.Count -ne 1 -or $members[0].type -cne 'uvec4' -or
             $members[0].offset -ne 0 -or $null -ne $members[0].PSObject.Properties['array']) {
-            throw "uniform.comp SPIR-V set $set must contain one uvec4 at byte zero."
+            throw "$asset SPIR-V set $set must contain one uvec4 at byte zero."
         }
     }
-    $writeonly = $ssbos[0].PSObject.Properties['writeonly']
+    $writeonly = $outputResource.PSObject.Properties['writeonly']
     if ($null -eq $writeonly -or $writeonly.Value -ne $true) {
-        throw 'uniform.comp private output must be write-only.'
+        throw "$asset output must be write-only."
     }
     $sections = @($Dxil -split '; Resource Bindings:')
-    if ($sections.Count -ne 2) { throw 'uniform.comp DXIL resource reflection is missing.' }
+    if ($sections.Count -ne 2) { throw "$asset DXIL resource reflection is missing." }
     $rows = @(Get-DxilResourceRows $sections[1])
-    if ($rows.Count -ne 2) { throw 'uniform.comp DXIL must bind exactly two resources.' }
-    $uniform = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'cbuffer' })
+    if ($rows.Count -ne 2) { throw "$asset DXIL must bind exactly two resources." }
+    $inputKind = if ($StorageInput) { 'texture' } else { 'cbuffer' }
+    $inputs = @($rows | Where-Object { $_.Groups['kind'].Value -ceq $inputKind })
     $output = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'UAV' })
-    if ($uniform.Count -ne 1 -or $output.Count -ne 1 -or
-        $uniform[0].Groups['slot'].Value -cnotmatch '^cb0(?:,space0)?$' -or
-        $uniform[0].Groups['count'].Value -cne '1' -or
+    if ($inputs.Count -ne 1 -or $output.Count -ne 1 -or
+        $inputs[0].Groups['count'].Value -cne '1' -or
         $output[0].Groups['slot'].Value -cne 'u0,space1' -or
         $output[0].Groups['count'].Value -cne '1' -or
         $output[0].Groups['format'].Value -cne 'byte' -or
         $output[0].Groups['dimension'].Value -cne 'r/w') {
-        throw 'uniform.comp DXIL requires one b0/space0 cbuffer and one u0/space1 raw UAV.'
+        throw "$asset DXIL requires exactly one input and one u0/space1 raw UAV."
     }
-    $name = [regex]::Escape($uniform[0].Groups['name'].Value)
+    if ($StorageInput) {
+        if ($inputs[0].Groups['slot'].Value -cnotmatch '^t0(?:,space0)?$' -or
+            $inputs[0].Groups['format'].Value -cne 'byte' -or
+            $inputs[0].Groups['dimension'].Value -cne 'r/o') {
+            throw 'storage_read.comp DXIL requires one t0/space0 raw read-only SRV.'
+        }
+        return
+    }
+    if ($inputs[0].Groups['slot'].Value -cnotmatch '^cb0(?:,space0)?$') {
+        throw 'uniform.comp DXIL requires one b0/space0 cbuffer.'
+    }
+    $name = [regex]::Escape($inputs[0].Groups['name'].Value)
     $body = [regex]::Match($sections[0],
         ('(?s); cbuffer ' + $name + '\s*\n; \{(?<body>.*?)\n; \}'))
     if (-not $body.Success) { throw 'uniform.comp DXIL cbuffer definition is missing.' }

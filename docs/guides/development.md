@@ -338,6 +338,8 @@ Viewの用途は既定の`ImageViewUsage::Sampled`と、D32専用の`DepthAttach
 D32はattachment/sample両用途を持ち、aspectはformatから導出する。
 `ImageDescriptor::preferred_depth_clear`はD32の予定clear値を指定できる。色は`None`とし、
 D32の`Some`は[0,1]の有限・非subnormal値を使う。この指定で画像内容は初期化されない。
+`.2.1.7`は`ManagedProgram::storage_readback()`と`BindingType::StorageRead`を加える。
+同じ`BufferDescriptor::Storage`をreadonly入力とwriteonly出力へ使い、別のbuffer作成APIは持たない。
 [`program` moduleの例](../../crates/renderer/src/program.rs)は両APIの公開型でRustdocコンパイルする。
 Uniformのbyte更新は新しいbuffer/bindingを作り、旧参照の内容を変更しない。
 Storageの版/範囲は保持するが本文はGPU更新可能で、作成直後は未初期化である。
@@ -358,6 +360,9 @@ SDKなしのABI契約回帰は次を使う。生成条件を更新した場合�
 前提不足をskip扱いにしない。共通入力からStorageのoffset 256へ書いた旧版/新版の内容、
 参照保持、未投入cancel/busy拒否/完了後reuseと最終native解放を確認する。
 Storage出力は公開APIで作成し、private fixtureは各shaderが初期化する16または64 byteだけをreadbackする。
+StorageReadの受入は、同じGPU処理内で既存uniform shaderがinputへ16 byteを書き、
+write→read依存の後にStorageRead shaderが別outputへcopyする。途中にCPU待機/readbackを挟まない。
+producerとconsumerのbuffer/offset一致、同buffer別範囲のinput/output拒否、cancel/pending/reuseを確認する。
 sampled fixtureは同じ2x2非対称RGBA8をnearest/clampの4座標で読み、入力16 byteへpackして照合する。
 同じ受入でRGBA16Fの32-byte入力も読み、4 texelの全RGBAを64-byteのFP32 bit列へ返す。
 halfで正確に表せる負値・小数・1超の値を使い、既存RGBA8と新RGBA16Fの旧版/新版をそれぞれ照合する。
@@ -366,9 +371,9 @@ FP32 bit列で照合する。旧版reuseは再clearしない。attachment View�
 ImageとStorageの両方を記録/pendingから排他保護し、View/Image/sampler/heapの最終解放も確認する。
 
 ```powershell
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_storage_creation_and_versions -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_storage_ -- --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation d3d12_managed_storage_strict -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_storage_creation_and_versions -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_storage_ -- --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --lib --no-default-features --features d3d12 d3d12_managed_storage_shipping -- --ignored --nocapture --test-threads=1
 
 cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_sampled_ -- --ignored --nocapture --test-threads=1

@@ -28,6 +28,8 @@ struct Plan<'a> {
 
 enum PlannedOperation<'a> {
     #[cfg(test)]
+    StorageReadFixture(super::program::StorageReadFixture<'a>),
+    #[cfg(test)]
     ManagedFixture {
         binding: &'a super::program::D3D12Bindings,
         initialize: Option<super::program::ImageInitialization<'a>>,
@@ -177,6 +179,19 @@ struct Work {
 }
 
 impl Work {
+    #[cfg(test)]
+    fn retain_fixture(&mut self, recording: super::program::FixtureRecording) {
+        self.resource_leases.extend(recording.leases);
+        self.staging.extend(recording.staging);
+        self.depth_targets.extend(recording.depth_targets);
+        self.readbacks.push(Readback {
+            pass: 0,
+            size: recording.size,
+            buffer: Some(recording.readback),
+        });
+        self.managed_bindings.extend(recording.bindings);
+    }
+
     fn prepare(
         owner: Arc<DeviceOwner>,
         plan: Plan<'_>,
@@ -247,15 +262,12 @@ impl Work {
                     initialize,
                 } => {
                     let recording = binding.record_fixture(&work.list, initialize)?;
-                    work.resource_leases.extend(recording.leases);
-                    work.staging.extend(recording.staging);
-                    work.depth_targets.extend(recording.depth_targets);
-                    work.readbacks.push(Readback {
-                        pass: 0,
-                        size: recording.size,
-                        buffer: Some(recording.readback),
-                    });
-                    work.managed_bindings.push(binding.clone());
+                    work.retain_fixture(recording);
+                }
+                #[cfg(test)]
+                PlannedOperation::StorageReadFixture(plan) => {
+                    let recording = plan.record(&work.list)?;
+                    work.retain_fixture(recording);
                 }
                 PlannedOperation::Upload { dst, offset, bytes } => {
                     let upload =
@@ -502,6 +514,25 @@ impl D3D12Runtime {
             binding,
             clear.map(|view| super::program::ImageInitialization::DepthClear { view }),
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn prepare_storage_read_fixture(
+        &self,
+        producer: &super::program::D3D12Bindings,
+        reader: &super::program::D3D12Bindings,
+    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
+        let plan = super::program::StorageReadFixture::new(&self.device, producer, reader)?;
+        let work = Work::prepare(
+            Arc::clone(&self.device),
+            Plan {
+                graph: 0,
+                buffers: vec![],
+                operations: vec![PlannedOperation::StorageReadFixture(plan)],
+            },
+            false,
+        )?;
+        Ok(D3D12PreparedGraph { work })
     }
 
     #[cfg(test)]

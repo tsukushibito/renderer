@@ -1013,7 +1013,9 @@ native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換
 `.2.1.4`はRGBA8画像/View/nearest-clamp samplerとsampled bindingへ進める。
 `.2.1.5`はRGBA16F画像とHDR値を保持するsampled readbackを同じ二APIへ加える。
 `.2.1.6`はD32画像とdepth attachment/sample Viewの作成契約、clear後のdepth sampleを加える。
-一般owned Graphや他mip/layer/filter、比較samplerは親`renderer-7ft.2.1`と後続課題へ残す。
+`.2.1.7`はreadonly StorageRead bindingと管理下shaderの16-byte copyを二APIへ加える。
+一般owned Graphは`.2.2`、graphicsのstage/vertex/attachment/PSOとRaster実行は`.2.3`へ残す。
+他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
 
@@ -1152,7 +1154,7 @@ StorageはDEFAULT/ALLOW_UNORDERED_ACCESSで未初期化作成する。公開CPU 
 Program・binding・資源の版/用途/範囲は不変だが、Storage本文はGPUが更新できる。
 `create_bindings`は全slotの欠落/重複/余剰、Device owner、用途、offset、論理rangeと
 shaderの16-byte最小ABIを作成時に照合し、Programと全bufferをmanifest順に保持する。
-Uniformはoffset 256-byte境界/range 64 KiB以下、Storageのraw UAVはoffset 16-byte境界を使う。
+Uniformはoffset 256-byte境界/range 64 KiB以下、Storageのraw SRV/UAVはoffset 16-byte境界を使う。
 native allocationの切上げを論理rangeの拡大には使わない。旧Uniform専用APIは置換した。
 binding入力は検査専用Vecを経ずmanifest順に解決し、全結果の成功後だけ所有を公開する。
 対応付け済みslotの再照合と、集合検査後の別の再探索を除去した。途中のslot解決・資源検査が
@@ -1175,6 +1177,20 @@ private受入だけがshaderの16-byte write保証を使う。Storage出力は�
 fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのbusy拒否と再利用を確認する。
 一般Graph導入時の製品状態管理・同期・GPU lifetimeは後続であり、このtest-only leaseが代替するものではない。
 二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
+
+`.2.1.7`の`StorageRead`は既存Storage資源をroot SRV `t0/space0`へlowerする。
+同じ管理下`storage_read.comp`をDXILの`ByteAddressBuffer.Load4(0)`→
+`RWByteAddressBuffer.Store4(0)`へ変換し、一つのinvocationが先頭16 byteだけをread/writeする。
+root SRVにもrange境界保護がないため、信頼済みassetの動作と作成時の論理範囲を保証へ結び付ける。
+root index/register/spaceはmanifestから導出し、通常の記録時にABIを再走査しない。
+[root descriptorの契約](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#using-descriptors-directly-in-the-root-arguments)に従う。
+private受入はuniform producerとStorageRead consumerを同じWorkへ保持し、途中のCPU待機を置かず、
+inputのUAV→NON_PIXEL_SHADER_RESOURCE transitionでwrite→readを同期する。追加のUAV barrierを重ねない。
+最後にinput/outputをCOMMONへ戻す。D3D12 bufferは一つのsubresourceなので、
+input/outputが同じbufferならbyte範囲が別でもprivate prepareで拒否する。
+公開binding作成は定義と所有を確立する境界とし、この実行制約のための全slot走査を加えない。
+producer/consumerのasset identityと同じBuffer版・先頭16 byteを準備時に照合し、
+input/outputを各一度leaseして両Program/Bindingsとともにcancel/実Fence退役まで保持する。
 
 管理下画像はRGBA8_UNORM、RGBA16FまたはD32 Texture2D、mip/layer/sample各1、DEFAULT heap、
 初期COMMON、未初期化である。実DeviceのTEXTURE2D/SHADER_SAMPLE対応とextent上限を作成時に保証する。

@@ -9,31 +9,34 @@
 
 ## 管理下Programと資源bindingの二API実装
 
-`renderer-7ft.2.1.6`。Uniform/Storage共通契約と`.2.1.3`の重複検査整理、RGBA8/RGBA16Fの
-画像/View/samplerを維持し、D32深度画像とattachment/sample Viewの作成契約を両APIへ追加した。
+`renderer-7ft.2.1.7`。Uniform/StorageとRGBA8/RGBA16F/D32画像/View/samplerの契約を維持し、
+StorageRead bindingとreadonly storageの16-byte copyを両APIへ追加した。
 `Binding`/`BindingResource`がbuffer/View/samplerを一つのcomplete collectionで扱い、
 旧buffer専用binding APIを置換した。既存の固定ProgramKindは増やしていない。
-親`renderer-7ft.2.1`の残る管理下asset/作成契約の確認と、他mip/layer/filterや
-`.2.2`以降のowned Graph実行は未完了である。
+親`renderer-7ft.2.1`の作成契約はこの範囲で実証した。owned命令・初期化/hazard/subresource計画は
+`.2.2`、graphicsのstage/vertex/attachment/PSOとRaster実行は`.2.3`へ残す。
 [作成保証とVulkan所有](../design/vulkan.md#managed-uniform)、
 [D3D12のroot/tableと保証](../design/implementation-policy.md#d3d12の管理下programとuniform)、
 [再実行](../guides/development.md#管理下uniform-programの作成と受入)を参照する。
 
-safeなshader入口はレビュー済みのuniform/sample/sample-float readback 3本である。
+safeなshader入口はレビュー済みのuniform/storage-read/sample/sample-float readback 4本である。
+新`storage_read.comp`はset0/binding0のreadonly SSBOの先頭16 byteを読み、
+set1/binding0のwriteonly出力へ16 byteを書く。DXILのraw SRV `t0/space0`とUAV `u0/space1`、
+SPIR-VのNonWritable/NonReadableを実dumpでも確認し、manifestとreflectionへ結び付けた。
 両sampled assetはseparate texture2Dとsamplerを`textureLod`で実際に使い、
 DXILでも`t0/space0`と`s1/space0`をactiveに保持する。`sampled_readback`はRGBA8へpackして16 byte書き、
 `sampled_float.comp`は4 sampleの全RGBAをFP32 bit列の64 byteとしてStorageへ書く。
-D32でもこの既存shaderを再利用し、今回shader assetを追加・変更していない。
+D32でもこの既存shaderを再利用する。
 SPIR-VはShader capabilityと32-bit floatのみで、shaderFloat16や16-bit演算型を要求しない。
 生成時のSPIR-V/DXIL reflection照合はslot/type/count/member offset/size/local sizeに加え、
 float2D image、sampler、writeonly出力と余分な資源を確認する。
 float出力のarray 4、literal count、stride 16、offset 0、block size 64も照合する。
-固定SDKの全8本SPIR-V/DXIL再生成Verify、SDK不要の改変拒否（pwshとWindows PowerShell 5.1）、
-D3D12 bindings Verifyが成功した。全8shaderのsource/binary/text/reflectionは比較元`124545c`と不変である。
-sampled-float SPIR-Vは`ec3213ae49b0a47ee2d96cceb28e73f54edb0cb917df77b9f76b98bd3f779438`、
-DXILは`a4a959173d88b4cce681bc2286ee426f698e9170fbadca0fc04fde654808891b`。
-生成bindingsはD32/DSVに必要な型・定数を再生成し、
-`6fa17a779cc6bb0a58317787bdbb9d96448a0bf9000ff10546367697d6774055`で一致した。
+固定SDKの全9本SPIR-V/DXIL再生成Verify、SDK不要の改変拒否（pwshとWindows PowerShell 5.1）、
+D3D12 bindings Verifyが成功した。既存8shaderの43 source/binary/HLSL/reflectionファイルは比較元`35ae8f0`と不変である。
+storage-read SPIR-Vは`10aa5b93fa3e89a5e9d7c4b32921e4edac215ddc64c1f33dd45cc08d446d4398`、
+DXILは`4b249dc0d1728365f867e2219cc556ef1f57141ed1b99ae37d60cb3457a37c6a`。
+生成bindingsにはroot SRV記録に必要なAPIを追加し、固定generatorとのSHA-256一致
+`fbb5d0a887223679910c3e2baa7d0abf7e3c82d52cacc298456d18a195d3564d`を確認した。
 
 作成境界で全slotの欠落/重複/余剰、resource kind/用途、owner、論理buffer範囲とDevice alignment、
 実format/usage/extent対応、View範囲を保証する。画像はmip/layer/sample各1、未初期化作成であり、
@@ -42,7 +45,7 @@ View/Image、samplerとdescriptor heap/setを強保持する。不変なslotと�
 入力を直接参照するlazy slot解決を維持し、検査専用Vec、選択済みslotの再照合、別のslot再探索を増やしていない。
 全入力検査に成功してからnative descriptorを一度具体化し、失敗時は途中の参照を解放する。
 Vulkanのsampler生存数上限は全旧/新作成箇所でDevice単位予約/失敗返却/native破棄後返却へ揃えた。
-D3D12のtexture/samplerはshader-visible SRV/SAMPLER heapのtable、bufferはroot CBV/UAVを使う。
+D3D12のtexture/samplerはshader-visible SRV/SAMPLER heapのtable、bufferはroot CBV/SRV/UAVを使う。
 native容量/失敗・同期・実Fence完了・GPU寿命は製品に残す。
 公開Image/Storageの作成成功は内容初期化を意味せず、各shaderが書いた16または64 byteだけをreadbackする。
 色のImageとViewは同じ実formatを使い、実DeviceのRGBA16F対応はRGBA8と区別して作成境界で保証する。
@@ -52,6 +55,17 @@ View用途を作成時に固定し、色のdepth attachmentとattachment Viewの
 `preferred_depth_clear`は後続clearの予定値であり、作成時の初期化ではない。D32の`None`は合法で、
 色への`Some`、NaN/Inf、[0,1]外とsubnormalを共通作成境界で拒否する。
 値の検査を記録へ重ねず、不変Image descriptorから実clear値を使う。
+
+StorageReadは同じStorage用途のdescriptorであり、Vulkanはread/write双方をSTORAGE_BUFFER数へ合算する。
+D3D12はraw root SRVの16-byte alignmentと論理範囲を作成時に保証する。
+private prepareでproducer/consumerのexact asset、同じinput版・先頭offsetと実際の16-byte write/readを
+一度結び付け、input/outputを各一度leaseする。descriptorのsize全域を初期化保証とは扱わない。
+同bufferは別byte範囲でもprivate実行を拒否する。公開binding作成へalias全slot走査を追加しない。
+Vulkanのproducer COMPUTE write→consumer COMPUTE read barrier、D3D12のUAV→NON_PIXEL transitionを使い、
+2 dispatch間にCPU待機やcopy/readbackを挟まず、最後のconsumer outputだけをreadbackする。
+再利用で前consumer read→次producer writeの実行順も保つ。
+asset identity照合とproducer/canonical slotの追加metadataは試験専用であり、通常libraryへ追加しない。
+D3D12の既存ManagedProgram保持は通常のlayout取得に必要であり、この除外の主張には含めない。
 
 private upload/dispatch/readbackと入力色、Image/Storageの排他lease/stateは`cfg(test)`に限定する。
 通常buildにCPU検査用画素payloadやprivate executor metadataを保持しない。
@@ -73,9 +87,13 @@ CPUのみ通常71件、製品release通常191件、開発release通常202件と�
 Rustdocは両backendの公開Image/View/Sampler/binding作成例をコンパイルする。
 共通契約、shader/ABIと両backendの作成/同期/所有の独立レビューで修正必須の未解決指摘はない。
 境界値の組合せは共通CPUへまとめ、native試験での同じ拒否classのmatrixを形式ごとに複製しない。
-今回のCPU差分は既存creation testのD32/View用途/preferred clear値へまとめ、新しいtest関数やshader ABI negativeを増やしていない。
+共通CPU契約は既存test内へまとめた。UniformとStorageReadのbuffer-copy ABI checkerを共有し、
+既存Uniformの改変拒否を維持したまま新negativeをreadonly/SRV register/raw read-only種別の4件へ絞った。
 
 RTX 3060/driver 610.88でreleaseの実GPU試験を逐次実行した。
+StorageReadは既存uniform producerから同Workで初期化した旧版/新版の16 byteを別Storageへcopyし、
+非零offsetの全byte一致を確認した。producerなし、不一致input/offsetと同buffer別範囲を拒否し、
+cancel/busy/pending/完了後reuse、両Program/Bindings/input/outputの最終解放を共有fixtureで確認した。
 RGBA8は既存の2x2非対称入力をnearest/clampで読み、公開272-byte Storageのoffset256からの16 byteが一致した。
 RGBA16Fの旧入力はrow-major成分 `[-2,-1,-0.5,-0.25,0,0.25,0.5,1,1.5,2,3,4,8,16,32,64]`、
 新入力は成分の逆順で、各32 byteの正確なhalf格納である。両APIとも公開320-byte Storageの
@@ -92,9 +110,9 @@ strictはVulkan Core/SyncValまたはD3D12 Debug Layer/GBVの実効を確認し�
 製品の追加検証/専用診断除外・native Requested Disabledでも同じbyte一致を別processで確認した。
 この成功だけから外部Layer不存在やnative診断有効を主張しない。
 
-今回の統合結果では既存StorageとRGBA8/RGBA16Fを含め、strict/製品の各Vulkan 4件、D3D12 2件、計12件が成功した。
-D3D12のsampled 1件はRGBA8/RGBA16F/D32の3caseを実行する。workerではGPUを実行せず、rootの先行診断後に統合結果を逐次実行した。
-正式な統合ゲートログは`.tools/b1-depth/gates/`に保存した。
+今回の統合結果では既存StorageとRGBA8/RGBA16F/D32を含め、strict/製品の各Vulkan 5件、D3D12 2件、計14件が成功した。
+D3D12のstorage 1件はuniform単独とStorageRead chainの両case、sampled 1件は3形式を実行する。
+workerではGPUを実行せず、rootが統合結果を逐次実行した。正式ログは`.tools/b1-storage-read/gates/`に保存した。
 変更範囲外のGraph/WSI全体の実GPU回帰は今回再実行していない。直近の全60件成功はGit履歴の`.2.1.4`の記録を参照する。
 
 Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、comparison sampler/PCF、
