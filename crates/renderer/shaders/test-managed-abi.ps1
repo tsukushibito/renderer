@@ -110,4 +110,22 @@ for ($index = 0; $index -lt 4; $index++) {
         ([uint32]$rgba[$offset + 2] -shl 16) -bor ([uint32]$rgba[$offset + 3] -shl 24)
     if ($packed -ne $sampled.output_u32[$index]) { throw "Sampled RGBA/uint packing differs at texel $index" }
 }
-Write-Output 'Managed uniform/sampled SPIR-V/DXIL ABI contracts and mismatch rejections passed.'
+
+# The float asset reuses the sampled interface but stores four complete bitcast
+# vectors. Check the new 64-byte array ABI rather than repeating the unchanged
+# image/sampler register matrix already exercised above.
+$verify = { param($s, $d) Assert-SampledAbi $s $d -FloatOutput }
+$json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/sampled_float.comp.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/sampled_float.comp.reflection.txt') -Raw
+Assert-SampledAbi ($json | ConvertFrom-Json) $reflection -FloatOutput
+Expect-Rejected 'float output uses old packed byte size' { param($s) $s.ssbos[0].block_size = 16 }
+Expect-Rejected 'float output array length' {
+    param($s) $s.types.PSObject.Properties[$s.ssbos[0].type].Value.members[0].array = @(3)
+}
+Expect-Rejected 'float output array stride' {
+    param($s) $s.types.PSObject.Properties[$s.ssbos[0].type].Value.members[0].array_stride = 32
+}
+Expect-Rejected 'float output specialized array count' {
+    param($s) $s.types.PSObject.Properties[$s.ssbos[0].type].Value.members[0].array_size_is_literal = @($false)
+}
+Write-Output 'Managed uniform/sampled/float SPIR-V/DXIL ABI contracts and mismatch rejections passed.'

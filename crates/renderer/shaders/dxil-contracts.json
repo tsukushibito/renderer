@@ -1,5 +1,5 @@
 {
-  "scope": "Trusted managed fixtures only. Compilation/reflection is verified. uniform.comp exercises the common B1 Uniform/Storage creation and binding contracts, and sampled.comp exercises RGBA8 sampled-image/View/sampler bindings through private dispatch. Existing general image/raster D3D12 execution and two-API image equivalence remain later B1 work (renderer-7ft.2.3 and renderer-7ft.2.4).",
+  "scope": "Trusted managed fixtures only. Compilation/reflection is verified. uniform.comp exercises common B1 Uniform/Storage creation and binding contracts. sampled.comp and sampled_float.comp exercise RGBA8/RGBA16F sampled-image/View/sampler bindings through private dispatch. General image/raster D3D12 Graph execution and image equivalence remain later B1 work (renderer-7ft.2.3 and renderer-7ft.2.4).",
   "entry_point": "main",
   "shader_model": "6.0",
   "dxil_version": "1.0",
@@ -10,9 +10,25 @@
     "clip_z": "Preserve 0 <= z <= w; no --fixup-clipspace",
     "raster": "Normal Z, clear depth 1, LESS, cull NONE, blending disabled; front-face/culling equivalence is not established",
     "pixel": "Top-left image coordinates and pixel-center SV_Position.xy; integer truncation selects the same texel",
-    "color": "Linear RGBA8_UNORM, alpha preserved; no sRGB conversion, HDR, or tone mapping. sampled.comp uses explicit nearest/clamp normalized-coordinate sampling; the older fixed fixtures do not filter."
+    "color": "The older fixed fixtures use linear RGBA8_UNORM without filtering. sampled.comp uses nearest/clamp RGBA8 sampling and UNORM packing. sampled_float.comp uses nearest/clamp RGBA16F sampling and preserves all FP32 result bits. No sRGB conversion, tone mapping, or general HDR renderer is implemented by these fixtures."
   },
   "shaders": {
+    "sampled_float.comp": {
+      "profile": "cs_6_0",
+      "local_size": [1, 1, 1],
+      "vulkan_bindings": ["set0/binding0 one separate float texture2D sampled image", "set0/binding1 one separate sampler", "set1/binding0 std430 writeonly storage buffer, uvec4 value[4] at byte 0, stride 16, 64 bytes"],
+      "d3d12_active_bindings": ["t0/space0 Texture2D<float4>", "s1/space0 active SamplerState", "u0/space1 RWByteAddressBuffer, Store4 at bytes 0, 16, 32 and 48"],
+      "image": "An initialized R16G16B16A16_SFLOAT / R16G16B16A16_FLOAT 2D image; the acceptance fixture is 2x2, one mip/layer/sample. Storage values convert to FP32 sample results without shaderFloat16 arithmetic or 16-bit shader storage features.",
+      "sampler": "Same separate normalized-coordinate nearest/clamp-to-edge sampler at explicit LOD 0 as sampled.comp; no comparison or anisotropy.",
+      "sample_uvs": [[-0.25, -0.25], [0.6, 0.2], [0.2, 0.6], [1.25, 1.25]],
+      "output": "Four full RGBA sample vectors in row-major texel order, floatBitsToUint/asuint bitcast into uvec4[4]. Negative and above-one values are retained; no clamp, UNORM packing, half arithmetic, or float-to-integer numeric conversion.",
+      "input_half_u16_hex": ["c000", "bc00", "b800", "b400", "0000", "3400", "3800", "3c00", "3e00", "4000", "4200", "4400", "4800", "4c00", "5000", "5400"],
+      "input_components": [-2, -1, -0.5, -0.25, 0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 8, 16, 32, 64],
+      "output_fp32_u32_hex": ["c0000000", "bf800000", "bf000000", "be800000", "00000000", "3e800000", "3f000000", "3f800000", "3fc00000", "40000000", "40400000", "40800000", "41000000", "41800000", "42000000", "42800000"],
+      "versions": "The newer image reverses all 16 component positions, preserving each little-endian half encoding. The expected 16 FP32 words reverse in the same order. No subnormal, NaN, infinity, or negative zero is used.",
+      "bounds": "Exactly one workgroup. The storage descriptor has at least 64 logical bytes; only its first 64 bytes are initialized by the shader. Public Graph dispatch and general HDR/depth rendering are subsequent work.",
+      "verification": "The managed checker verifies the shared sampled interface and literal uvec4 array[4], offset 0, stride 16, block size 64. All 16 sampled FP32 components must match the independently specified expected words on both APIs; shader reflection alone does not establish format support, behavior or arbitrary shader safety."
+    },
     "sampled.comp": {
       "profile": "cs_6_0",
       "local_size": [1, 1, 1],

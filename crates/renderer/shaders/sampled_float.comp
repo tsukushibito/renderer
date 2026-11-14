@@ -1,0 +1,25 @@
+#version 450 core
+
+// Trusted float-image fixture: one invocation samples a single-mip float 2D
+// image through a separate normalized-coordinate nearest/clamp sampler. Sampled
+// RGBA16F texels convert to ordinary 32-bit floats; no shaderFloat16 is required.
+// Preserve every component's FP32 bits in the first 64 checked storage bytes.
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform texture2D source_image;
+layout(set = 0, binding = 1) uniform sampler source_sampler;
+layout(set = 1, binding = 0, std430) writeonly buffer Result {
+    uvec4 value[4];
+} result;
+
+uvec4 sample_bits(vec2 uv) {
+    return floatBitsToUint(textureLod(sampler2D(source_image, source_sampler), uv, 0.0));
+}
+
+void main() {
+    // Match the RGBA8 fixture's clamp and off-center nearest samples. Unlike
+    // packUnorm4x8, floatBitsToUint preserves negative and above-one values.
+    result.value[0] = sample_bits(vec2(-0.25, -0.25));
+    result.value[1] = sample_bits(vec2(0.6, 0.2));
+    result.value[2] = sample_bits(vec2(0.2, 0.6));
+    result.value[3] = sample_bits(vec2(1.25, 1.25));
+}

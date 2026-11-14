@@ -85,13 +85,15 @@ function Assert-UniformAbi([object]$Spirv, [string]$Dxil) {
     }
 }
 
-function Assert-SampledAbi([object]$Spirv, [string]$Dxil) {
-    Assert-ManagedComputeEntry $Spirv $Dxil 'sampled.comp'
+function Assert-SampledAbi([object]$Spirv, [string]$Dxil, [switch]$FloatOutput) {
+    $asset = if ($FloatOutput) { 'sampled_float.comp' } else { 'sampled.comp' }
+    $outputBytes = if ($FloatOutput) { 64 } else { 16 }
+    Assert-ManagedComputeEntry $Spirv $Dxil $asset
     foreach ($category in @('textures', 'images', 'ubos', 'sampled_images',
             'subpass_inputs', 'acceleration_structures', 'push_constants')) {
         $property = $Spirv.PSObject.Properties[$category]
         if ($null -ne $property -and @($property.Value).Count -ne 0) {
-            throw "sampled.comp has unexpected SPIR-V resources: $category"
+            throw "$asset has unexpected SPIR-V resources: $category"
         }
     }
     foreach ($expected in @(@('separate_images', 'texture2D', 0), @('separate_samplers', 'sampler', 1))) {
@@ -99,25 +101,34 @@ function Assert-SampledAbi([object]$Spirv, [string]$Dxil) {
         if ($resources.Count -ne 1 -or $resources[0].type -cne $expected[1] -or
             $resources[0].set -ne 0 -or $resources[0].binding -ne $expected[2] -or
             $null -ne $resources[0].PSObject.Properties['array']) {
-            throw "sampled.comp requires one separate $($expected[1]) at set 0 binding $($expected[2])."
+            throw "$asset requires one separate $($expected[1]) at set 0 binding $($expected[2])."
         }
     }
     $outputs = @($Spirv.ssbos)
-    if ($outputs.Count -ne 1) { throw 'sampled.comp must have exactly one storage output.' }
+    if ($outputs.Count -ne 1) { throw "$asset must have exactly one storage output." }
     $output = $outputs[0]
-    if ($output.set -ne 1 -or $output.binding -ne 0 -or $output.block_size -ne 16 -or
+    if ($output.set -ne 1 -or $output.binding -ne 0 -or $output.block_size -ne $outputBytes -or
         $output.writeonly -ne $true -or $null -ne $output.PSObject.Properties['array']) {
-        throw 'sampled.comp requires one write-only 16-byte storage output at set 1 binding 0.'
+        throw "$asset requires one write-only $outputBytes-byte storage output at set 1 binding 0."
     }
     $members = @($Spirv.types.PSObject.Properties[$output.type].Value.members)
     if ($members.Count -ne 1 -or $members[0].type -cne 'uvec4' -or
-        $members[0].offset -ne 0 -or $null -ne $members[0].PSObject.Properties['array']) {
-        throw 'sampled.comp output must contain one uvec4 at byte zero.'
+        $members[0].offset -ne 0) {
+        throw "$asset output must contain a uvec4 member at byte zero."
+    }
+    if ($FloatOutput) {
+        if ((@($members[0].array) -join ',') -cne '4' -or
+            (@($members[0].array_size_is_literal) -join ',') -cne 'True' -or
+            $members[0].array_stride -ne 16) {
+            throw "$asset output must contain four literal uvec4 elements at 16-byte stride."
+        }
+    } elseif ($null -ne $members[0].PSObject.Properties['array']) {
+        throw 'sampled.comp output must contain one non-array uvec4.'
     }
     $sections = @($Dxil -split '; Resource Bindings:')
-    if ($sections.Count -ne 2) { throw 'sampled.comp DXIL resource reflection is missing.' }
+    if ($sections.Count -ne 2) { throw "$asset DXIL resource reflection is missing." }
     $rows = @(Get-DxilResourceRows $sections[1])
-    if ($rows.Count -ne 3) { throw 'sampled.comp DXIL must bind exactly three active resources.' }
+    if ($rows.Count -ne 3) { throw "$asset DXIL must bind exactly three active resources." }
     $images = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'texture' })
     $samplers = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'sampler' })
     $outputs = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'UAV' })
@@ -130,6 +141,6 @@ function Assert-SampledAbi([object]$Spirv, [string]$Dxil) {
         $outputs[0].Groups['format'].Value -cne 'byte' -or
         $outputs[0].Groups['dimension'].Value -cne 'r/w' -or
         @($rows | Where-Object { $_.Groups['count'].Value -cne '1' }).Count -ne 0) {
-        throw 'sampled.comp DXIL requires t0/space0 Texture2D<float4>, active s1/space0 sampler and u0/space1 raw UAV.'
+        throw "$asset DXIL requires t0/space0 Texture2D<float4>, active s1/space0 sampler and u0/space1 raw UAV."
     }
 }

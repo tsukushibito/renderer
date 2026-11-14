@@ -117,12 +117,14 @@ try {
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
         Write-Utf8 (Join-Path $temporaryRoot ($source + '.reflection.txt')) $reflection
-        if ($source -cin @('uniform.comp', 'sampled.comp')) {
+        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp')) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
             if ($source -ceq 'uniform.comp') {
                 Assert-UniformAbi ($spirvReflection | ConvertFrom-Json) $reflection
-            } else {
+            } elseif ($source -ceq 'sampled.comp') {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection
+            } else {
+                Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection -FloatOutput
             }
             Write-Utf8 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json')) $spirvReflection
         }
@@ -133,7 +135,7 @@ try {
             dxil = Get-Sha256 $dxil
             reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.reflection.txt'))
         }
-        if ($source -cin @('uniform.comp', 'sampled.comp')) {
+        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp')) {
             $hashes.spirv_reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json'))
         }
         $artifacts[$source] = $hashes
