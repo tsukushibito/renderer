@@ -134,6 +134,19 @@ pub(crate) fn validate_uniform_binding(
     Ok(())
 }
 
+// Both native acceptance fixtures consume these exact asymmetric bytes. Keep
+// test payloads out of ordinary builds, including development diagnostics.
+#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+pub(crate) const UNIFORM_TEST_DATA: [[u8; 16]; 2] = [
+    [
+        0x67, 0x45, 0x23, 0x01, 0xef, 0xcd, 0xab, 0x89, 0x98, 0xba, 0xdc, 0xfe, 0x10, 0x32, 0x54,
+        0x76,
+    ],
+    [
+        0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0x7f, 0, 0xff, 0x80, 0x62, 0x19, 0xc3, 0xa5,
+    ],
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
