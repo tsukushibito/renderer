@@ -9,10 +9,10 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::super::memory::MemoryOwner;
+use super::super::program::{ShaderBindings, ShaderPrograms};
 use super::super::transfer::staging::{SharedStaging, StagingRange};
 use super::metrics;
 use super::provenance::{BufferProvenance, IndexError};
-use super::shaders::{ShaderBindings, ShaderPrograms};
 use super::{NativeResource, Physical, PhysicalLease, RuntimeError, Snapshot};
 use crate::graph::{
     AccessPurpose, AttachmentOps, CompiledGraph, ComputeTransform, MeshUpload, Operation,

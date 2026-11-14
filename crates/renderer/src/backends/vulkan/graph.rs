@@ -17,6 +17,7 @@ use super::device::VulkanDevice;
 use super::diagnostics::{Diagnostics, DiagnosticsHandle};
 use super::instance::VulkanInstance;
 use super::memory::{MemoryOwner, VulkanAllocator};
+use super::program::{ShaderNeeds, ShaderPrograms};
 use super::transfer::staging::SharedStaging;
 use super::transfer::{ExecutionPool, PendingTransfer};
 use crate::graph::{
@@ -33,7 +34,6 @@ mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
 mod provenance;
-mod shaders;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
 mod work;
@@ -44,7 +44,6 @@ pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics}
 #[cfg(all(feature = "presentation", windows))]
 pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
 use provenance::BufferProvenance;
-use shaders::{ShaderNeeds, ShaderPrograms};
 use work::GraphWork;
 
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);

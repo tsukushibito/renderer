@@ -14,6 +14,7 @@ mod instance;
 mod memory;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
+mod program;
 #[cfg(test)]
 mod ranges;
 mod resources;
