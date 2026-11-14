@@ -5,22 +5,19 @@
 //! records once. Submission does not revalidate immutable graph contents.
 
 use std::{
-    ffi::c_void,
     mem::ManuallyDrop,
-    ptr,
     sync::Arc,
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
 use windows_core::{Error, HRESULT};
 
 use crate::graph::{CompiledGraph, Operation, PassHandle, ResourceDesc};
 
+use super::resources::{DeviceBuffer, MAX_BUFFER_BYTES};
 use super::{D3D12Runtime, D3D12RuntimeError, bindings::*, device::DeviceOwner};
 
-// Deliberately limited M4 library baseline. Native hardware limits and actual
-// allocation success are separate; this is not an available-VRAM guarantee.
-const MAX_BUFFER_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DROP_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Plan<'a> {
@@ -150,157 +147,17 @@ impl<'a> Plan<'a> {
     }
 }
 
-struct Buffer {
-    raw: ID3D12Resource,
-}
-
-impl Buffer {
-    fn new(
-        owner: &DeviceOwner,
-        size: u64,
-        heap: D3D12_HEAP_TYPE,
-    ) -> Result<Self, D3D12RuntimeError> {
-        let heap_properties = D3D12_HEAP_PROPERTIES {
-            Type: heap,
-            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
-            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
-            CreationNodeMask: 1,
-            VisibleNodeMask: 1,
-        };
-        let desc = D3D12_RESOURCE_DESC {
-            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
-            Width: size,
-            Height: 1,
-            DepthOrArraySize: 1,
-            MipLevels: 1,
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-            ..Default::default()
-        };
-        let initial = match heap {
-            D3D12_HEAP_TYPE_UPLOAD => D3D12_RESOURCE_STATE_GENERIC_READ,
-            D3D12_HEAP_TYPE_READBACK => D3D12_RESOURCE_STATE_COPY_DEST,
-            _ => D3D12_RESOURCE_STATE_COMMON,
-        };
-        let mut raw = None;
-        // SAFETY: The checked plan supplies a nonzero supported buffer size;
-        // node masks and fixed heap states satisfy committed buffer contracts.
-        // The owned output slot is empty and remains local on failure.
-        unsafe {
-            owner.raw.CreateCommittedResource(
-                &heap_properties,
-                D3D12_HEAP_FLAG_NONE,
-                &desc,
-                initial,
-                None,
-                &mut raw,
-            )
-        }
-        .map_err(|error| owner.native("ID3D12Device::CreateCommittedResource", error))?;
-        let raw =
-            raw.ok_or_else(|| missing_output(owner, "ID3D12Device::CreateCommittedResource"))?;
-        Ok(Self { raw })
-    }
-
-    fn write(&self, owner: &DeviceOwner, bytes: &[u8]) -> Result<(), D3D12RuntimeError> {
-        let empty = D3D12_RANGE { Begin: 0, End: 0 };
-        let written = D3D12_RANGE {
-            Begin: 0,
-            End: bytes.len(),
-        };
-        let mapping = Mapping::new(owner, &self.raw, empty, written)?;
-        // SAFETY: This upload allocation has exactly bytes.len() logical bytes;
-        // it has not been submitted and the mapped native pointer is nonnull.
-        // The CPU source and native allocation do not overlap.
-        unsafe {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), mapping.pointer.cast(), bytes.len());
-        }
-        Ok(())
-    }
-
-    fn read(&self, owner: &DeviceOwner, size: usize) -> Result<Vec<u8>, D3D12RuntimeError> {
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(size)
-            .map_err(|_| D3D12RuntimeError::capacity("CPU allocation for readback failed"))?;
-        let read = D3D12_RANGE {
-            Begin: 0,
-            End: size,
-        };
-        let empty = D3D12_RANGE { Begin: 0, End: 0 };
-        let mapping = Mapping::new(owner, &self.raw, read, empty)?;
-        // SAFETY: Only a completed result exposes this readback allocation;
-        // size is its checked logical length, and Map does not offset pointers.
-        // All bytes were initialized by the completed GPU copy. The slice is
-        // borrowed only while the mapping guard remains live, and size does not
-        // exceed Rust's slice limit. The reserved vector needs no zero-fill.
-        let mapped = unsafe { std::slice::from_raw_parts(mapping.pointer.cast::<u8>(), size) };
-        bytes.extend_from_slice(mapped);
-        Ok(bytes)
-    }
-}
-
-struct Mapping<'a> {
-    resource: &'a ID3D12Resource,
-    pointer: *mut c_void,
-    written: D3D12_RANGE,
-}
-impl<'a> Mapping<'a> {
-    fn new(
-        owner: &DeviceOwner,
-        resource: &'a ID3D12Resource,
-        read: D3D12_RANGE,
-        written: D3D12_RANGE,
-    ) -> Result<Self, D3D12RuntimeError> {
-        let mut pointer = ptr::null_mut();
-        // SAFETY: This private buffer has one subresource and is CPU-visible.
-        // The given ranges are within its logical length. The caller guarantees
-        // either not-yet-submitted upload ownership or completed readback.
-        unsafe { resource.Map(0, Some(&read), &mut pointer) }
-            .ok()
-            .map_err(|error| owner.native("ID3D12Resource::Map", error))?;
-        let mapping = Self {
-            resource,
-            pointer,
-            written,
-        };
-        if pointer.is_null() {
-            return Err(missing_output(owner, "ID3D12Resource::Map"));
-        }
-        Ok(mapping)
-    }
-}
-impl Drop for Mapping<'_> {
-    fn drop(&mut self) {
-        // SAFETY: A successful Map created this guard, which uniquely balances
-        // it even when copying or error handling unwinds. No pointer escapes.
-        unsafe {
-            self.resource.Unmap(0, Some(&self.written));
-        }
-    }
-}
-
-fn missing_output(owner: &DeviceOwner, operation: &'static str) -> D3D12RuntimeError {
-    owner.native(
-        operation,
-        Error::from_hresult(HRESULT(0x8000_4005u32 as i32)),
-    )
-}
-
 struct Readback {
     pass: usize,
     size: usize,
-    buffer: Option<Buffer>,
+    buffer: Option<DeviceBuffer>,
 }
 
 struct Work {
     graph: u64,
-    buffers: Vec<Option<Buffer>>,
-    staging: Vec<Buffer>,
-    scratch: Vec<Buffer>,
+    buffers: Vec<Option<DeviceBuffer>>,
+    staging: Vec<DeviceBuffer>,
+    scratch: Vec<DeviceBuffer>,
     readbacks: Vec<Readback>,
     _allocator: ID3D12CommandAllocator,
     list: ID3D12GraphicsCommandList,
@@ -318,7 +175,7 @@ impl Work {
         let mut buffers = Vec::with_capacity(plan.buffers.len());
         for size in plan.buffers {
             let buffer = size
-                .map(|size| Buffer::new(&owner, size, D3D12_HEAP_TYPE_DEFAULT))
+                .map(|size| DeviceBuffer::new(&owner, size, D3D12_HEAP_TYPE_DEFAULT))
                 .transpose()?;
             #[cfg(test)]
             let created = buffer.is_some();
@@ -369,11 +226,16 @@ impl Work {
             match operation {
                 PlannedOperation::Upload { dst, offset, bytes } => {
                     let upload =
-                        Buffer::new(&work.owner, bytes.len() as u64, D3D12_HEAP_TYPE_UPLOAD)?;
-                    upload.write(&work.owner, bytes)?;
+                        DeviceBuffer::new(&work.owner, bytes.len() as u64, D3D12_HEAP_TYPE_UPLOAD)?;
+                    // SAFETY: This exact-sized upload is newly owned here and
+                    // no native command can access it before queue submission.
+                    // Owned CPU input cannot overlap this new native allocation.
+                    unsafe {
+                        upload.write(&work.owner, bytes)?;
+                    }
                     transition(
                         &work.list,
-                        &work.buffers[dst].as_ref().unwrap().raw,
+                        work.buffers[dst].as_ref().unwrap().raw(),
                         &mut states[dst],
                         D3D12_RESOURCE_STATE_COPY_DEST,
                     );
@@ -382,9 +244,9 @@ impl Work {
                     // Both buffers remain owned by work through GPU completion.
                     unsafe {
                         work.list.CopyBufferRegion(
-                            &work.buffers[dst].as_ref().unwrap().raw,
+                            work.buffers[dst].as_ref().unwrap().raw(),
                             offset,
-                            &upload.raw,
+                            upload.raw(),
                             0,
                             bytes.len() as u64,
                         );
@@ -400,7 +262,7 @@ impl Work {
                 } => {
                     transition(
                         &work.list,
-                        &work.buffers[src].as_ref().unwrap().raw,
+                        work.buffers[src].as_ref().unwrap().raw(),
                         &mut states[src],
                         D3D12_RESOURCE_STATE_COPY_SOURCE,
                     );
@@ -408,11 +270,12 @@ impl Work {
                         // Legacy barriers cannot make one resource both source
                         // and destination. Preserve legal nonoverlapping Graph
                         // self-copy semantics with an independent scratch buffer.
-                        let scratch = Buffer::new(&work.owner, size, D3D12_HEAP_TYPE_DEFAULT)?;
+                        let scratch =
+                            DeviceBuffer::new(&work.owner, size, D3D12_HEAP_TYPE_DEFAULT)?;
                         let mut state = D3D12_RESOURCE_STATE_COMMON;
                         transition(
                             &work.list,
-                            &scratch.raw,
+                            scratch.raw(),
                             &mut state,
                             D3D12_RESOURCE_STATE_COPY_DEST,
                         );
@@ -420,22 +283,22 @@ impl Work {
                         // exactly size bytes, and both resources are retained.
                         unsafe {
                             work.list.CopyBufferRegion(
-                                &scratch.raw,
+                                scratch.raw(),
                                 0,
-                                &work.buffers[src].as_ref().unwrap().raw,
+                                work.buffers[src].as_ref().unwrap().raw(),
                                 src_offset,
                                 size,
                             );
                         }
                         transition(
                             &work.list,
-                            &scratch.raw,
+                            scratch.raw(),
                             &mut state,
                             D3D12_RESOURCE_STATE_COPY_SOURCE,
                         );
                         transition(
                             &work.list,
-                            &work.buffers[dst].as_ref().unwrap().raw,
+                            work.buffers[dst].as_ref().unwrap().raw(),
                             &mut states[dst],
                             D3D12_RESOURCE_STATE_COPY_DEST,
                         );
@@ -443,9 +306,9 @@ impl Work {
                         // matching native states and checked logical ranges.
                         unsafe {
                             work.list.CopyBufferRegion(
-                                &work.buffers[dst].as_ref().unwrap().raw,
+                                work.buffers[dst].as_ref().unwrap().raw(),
                                 dst_offset,
-                                &scratch.raw,
+                                scratch.raw(),
                                 0,
                                 size,
                             );
@@ -454,7 +317,7 @@ impl Work {
                     } else {
                         transition(
                             &work.list,
-                            &work.buffers[dst].as_ref().unwrap().raw,
+                            work.buffers[dst].as_ref().unwrap().raw(),
                             &mut states[dst],
                             D3D12_RESOURCE_STATE_COPY_DEST,
                         );
@@ -462,9 +325,9 @@ impl Work {
                         // states and immutable Graph-validated copy ranges.
                         unsafe {
                             work.list.CopyBufferRegion(
-                                &work.buffers[dst].as_ref().unwrap().raw,
+                                work.buffers[dst].as_ref().unwrap().raw(),
                                 dst_offset,
-                                &work.buffers[src].as_ref().unwrap().raw,
+                                work.buffers[src].as_ref().unwrap().raw(),
                                 src_offset,
                                 size,
                             );
@@ -477,10 +340,11 @@ impl Work {
                     offset,
                     size,
                 } => {
-                    let readback = Buffer::new(&work.owner, size as u64, D3D12_HEAP_TYPE_READBACK)?;
+                    let readback =
+                        DeviceBuffer::new(&work.owner, size as u64, D3D12_HEAP_TYPE_READBACK)?;
                     transition(
                         &work.list,
-                        &work.buffers[src].as_ref().unwrap().raw,
+                        work.buffers[src].as_ref().unwrap().raw(),
                         &mut states[src],
                         D3D12_RESOURCE_STATE_COPY_SOURCE,
                     );
@@ -488,9 +352,9 @@ impl Work {
                     // readback destination is exactly size bytes in COPY_DEST.
                     unsafe {
                         work.list.CopyBufferRegion(
-                            &readback.raw,
+                            readback.raw(),
                             0,
-                            &work.buffers[src].as_ref().unwrap().raw,
+                            work.buffers[src].as_ref().unwrap().raw(),
                             offset,
                             size as u64,
                         );
@@ -809,7 +673,10 @@ impl D3D12SubmissionResult {
             .ok_or_else(|| D3D12RuntimeError::invalid("readback was already consumed"))?;
         let owner = self.owner.as_ref().unwrap();
         owner.check_native_active()?;
-        let bytes = buffer.read(owner, readback.size)?;
+        // SAFETY: Normal Fence completion retired the GPU copy before this
+        // result existed. The plan checked this exact readback length against
+        // the allocation and Rust slice limits; owner remains retained here.
+        let bytes = unsafe { buffer.read(owner, readback.size)? };
         // Removal may occur while a previously completed readback is held or
         // copied. Do not publish bytes as a valid result after native failure.
         owner.check_native_active()?;

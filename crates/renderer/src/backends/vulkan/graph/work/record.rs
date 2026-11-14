@@ -6,9 +6,9 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::super::super::memory::MemoryOwner;
+use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
 use super::super::super::transfer::{TransferError, TransferPayload};
-use super::super::resources::GraphImage;
 use super::{ComputeTransform, GraphWork, PreparedOperation};
 use crate::graph::{LoadAction, StoreOp};
 
@@ -295,8 +295,8 @@ impl TransferPayload for GraphWork {
 unsafe fn record_clear_attachments(
     device: &ash::Device,
     command: vk::CommandBuffer,
-    color: &GraphImage,
-    depth: &GraphImage,
+    color: &DeviceImage,
+    depth: &DeviceImage,
     clear_color: [f32; 4],
     clear_depth: f32,
 ) {
@@ -337,12 +337,12 @@ unsafe fn record_clear_attachments(
     }
 }
 
-fn layers(image: &GraphImage) -> vk::ImageSubresourceLayers {
+fn layers(image: &DeviceImage) -> vk::ImageSubresourceLayers {
     vk::ImageSubresourceLayers::default()
         .aspect_mask(image.aspect)
         .layer_count(1)
 }
-fn image_copy(image: &GraphImage, offset: u64) -> vk::BufferImageCopy {
+fn image_copy(image: &DeviceImage, offset: u64) -> vk::BufferImageCopy {
     vk::BufferImageCopy::default()
         .buffer_offset(offset)
         .image_subresource(layers(image))

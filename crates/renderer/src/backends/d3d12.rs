@@ -6,6 +6,7 @@ use std::sync::Arc;
 mod device;
 mod diagnostics;
 mod graph;
+mod resources;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
 pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12ValidationReport};
