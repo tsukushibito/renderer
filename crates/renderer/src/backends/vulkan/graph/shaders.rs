@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use ash::vk;
 
+use super::super::error::RuntimeError;
 use super::super::memory::MemoryOwner;
-use super::RuntimeError;
-use super::resources::GraphImage;
+use super::super::resources::DeviceImage;
 use crate::graph::RasterParameters;
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
@@ -256,7 +256,7 @@ fn validate_program(
                 false,
             )?;
             // D32 is not mandatory on every Vulkan 1.3 adapter. Checking only
-            // GraphImage creation misses graphs that do not even use depth.
+            // DeviceImage creation misses graphs that do not even use depth.
             require(
                 vk::Format::D32_SFLOAT,
                 vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
@@ -725,7 +725,7 @@ impl ShaderPrograms {
         &self,
         command: vk::CommandBuffer,
         set: vk::DescriptorSet,
-        destination: &GraphImage,
+        destination: &DeviceImage,
         mode: u32,
     ) {
         let device = self.owner.device.raw();
@@ -773,8 +773,8 @@ impl ShaderPrograms {
         vertices: vk::Buffer,
         indices: vk::Buffer,
         index_count: u32,
-        color: &GraphImage,
-        depth: &GraphImage,
+        color: &DeviceImage,
+        depth: &DeviceImage,
         color_load: vk::AttachmentLoadOp,
         color_store: vk::AttachmentStoreOp,
         clear_color: [f32; 4],
@@ -809,8 +809,8 @@ impl ShaderPrograms {
         &self,
         command: vk::CommandBuffer,
         draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,
-        color: &GraphImage,
-        depth: &GraphImage,
+        color: &DeviceImage,
+        depth: &DeviceImage,
         clear_color: [f32; 4],
         clear_depth: f32,
     ) {
@@ -837,8 +837,8 @@ impl ShaderPrograms {
         &self,
         command: vk::CommandBuffer,
         draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,
-        color: &GraphImage,
-        depth: &GraphImage,
+        color: &DeviceImage,
+        depth: &DeviceImage,
         color_load: vk::AttachmentLoadOp,
         color_store: vk::AttachmentStoreOp,
         clear_color: [f32; 4],
@@ -921,7 +921,7 @@ impl ShaderPrograms {
         &self,
         command: vk::CommandBuffer,
         set: vk::DescriptorSet,
-        destination: &GraphImage,
+        destination: &DeviceImage,
     ) {
         let colors = [vk::RenderingAttachmentInfo::default()
             .image_view(destination.view)
@@ -1037,8 +1037,8 @@ impl ShaderBindings {
 
     pub(super) fn compute(
         &mut self,
-        source: &GraphImage,
-        destination: &GraphImage,
+        source: &DeviceImage,
+        destination: &DeviceImage,
     ) -> Result<vk::DescriptorSet, RuntimeError> {
         if !source.belongs_to(&self.programs.owner)
             || !destination.belongs_to(&self.programs.owner)
@@ -1094,7 +1094,7 @@ impl ShaderBindings {
 
     pub(super) fn composite(
         &mut self,
-        source: &GraphImage,
+        source: &DeviceImage,
     ) -> Result<vk::DescriptorSet, RuntimeError> {
         if !source.belongs_to(&self.programs.owner) || source.format != vk::Format::R8G8B8A8_UNORM {
             return Err(RuntimeError::invalid(

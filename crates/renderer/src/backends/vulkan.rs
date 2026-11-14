@@ -4,9 +4,10 @@ mod buffer;
 mod device;
 mod diagnostics;
 pub(crate) mod engine;
+mod error;
 pub(crate) mod graph;
 // Standalone transfer resources remain acceptance/performance references; the
-// shipping Graph owns its physical resources in graph/resources.rs.
+// shipping Graph owns its physical resources in resources.rs.
 #[cfg(test)]
 mod image;
 mod instance;
@@ -15,6 +16,7 @@ mod memory;
 mod presentation;
 #[cfg(test)]
 mod ranges;
+mod resources;
 mod transfer;
 
 pub use instance::ValidationMode;

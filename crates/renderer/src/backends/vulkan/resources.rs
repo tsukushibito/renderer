@@ -1,4 +1,4 @@
-//! Device-only Graph buffers and images/views, retained by pending owners.
+//! Device-only buffers and images/views, independent of logical Graph state.
 
 #[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CString;
@@ -7,12 +7,12 @@ use std::sync::Arc;
 use ash::vk;
 use vk_mem::Alloc;
 
-use super::super::memory::MemoryOwner;
-use super::RuntimeError;
+use super::error::RuntimeError;
+use super::memory::MemoryOwner;
 
 /// Owns the buffer and allocation together. Initialization and scheduled access
 /// belong to the graph runtime, independently of this physical allocation.
-pub(super) struct GraphBuffer {
+pub(super) struct DeviceBuffer {
     pub(super) owner: Arc<MemoryOwner>,
     pub(super) handle: vk::Buffer,
     pub(super) size: u64,
@@ -48,7 +48,7 @@ fn create_buffer<T>(
     create(&info, &allocation)
 }
 
-impl GraphBuffer {
+impl DeviceBuffer {
     pub(super) fn new(
         owner: Arc<MemoryOwner>,
         size: u64,
@@ -112,7 +112,7 @@ impl GraphBuffer {
     }
 }
 
-impl Drop for GraphBuffer {
+impl Drop for DeviceBuffer {
     fn drop(&mut self) {
         // SAFETY: Graph recording/pending owners retain the physical allocation.
         // Destruction is reached only before submit or after safe retirement;
@@ -133,7 +133,7 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
 
 /// Allocation and its view are one owner; layout/content state belongs to the
 /// canonical runtime entry, independently of this immutable storage identity.
-pub(super) struct GraphImage {
+pub(super) struct DeviceImage {
     owner: Arc<MemoryOwner>,
     allocation: vk_mem::Allocation,
     pub(super) image: vk::Image,
@@ -143,7 +143,7 @@ pub(super) struct GraphImage {
     pub(super) aspect: vk::ImageAspectFlags,
 }
 
-impl GraphImage {
+impl DeviceImage {
     pub(super) fn belongs_to(&self, owner: &Arc<MemoryOwner>) -> bool {
         Arc::ptr_eq(&self.owner, owner)
     }
@@ -332,7 +332,7 @@ impl GraphImage {
     }
 }
 
-impl Drop for GraphImage {
+impl Drop for DeviceImage {
     fn drop(&mut self) {
         // SAFETY: Runtime leases retain storage through recording and GPU use.
         // The view is destroyed before its image, then the retained VMA/Device.
@@ -355,7 +355,10 @@ mod tests {
             let error =
                 create_buffer::<()>(size, 96, |_, _| panic!("invalid size must not reach VMA"))
                     .unwrap_err();
-            assert_eq!(error.kind(), super::super::RuntimeErrorKind::InvalidInput);
+            assert_eq!(
+                error.kind(),
+                super::super::error::RuntimeErrorKind::InvalidInput
+            );
             assert!(error.message.contains("maxBufferSize 96"));
         }
     }
@@ -381,7 +384,7 @@ mod tests {
             ))
         })
         .unwrap_err();
-        assert_eq!(error.kind(), super::super::RuntimeErrorKind::Native);
+        assert_eq!(error.kind(), super::super::error::RuntimeErrorKind::Native);
         assert!(error.message.contains("vmaCreateBuffer"));
         assert!(error.message.contains("96 bytes"));
         assert!(error.message.contains("ERROR_OUT_OF_DEVICE_MEMORY"));
