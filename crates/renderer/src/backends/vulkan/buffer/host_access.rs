@@ -3,7 +3,7 @@
 use ash::{prelude::VkResult, vk};
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct AccessError {
+pub(in crate::backends::vulkan) struct AccessError {
     pub operation: &'static str,
     pub result: vk::Result,
 }
@@ -14,7 +14,7 @@ pub(super) struct AccessError {
 /// A successful map must return a non-null pointer to the allocation's first
 /// byte, remaining valid until the matching unmap. Implementations must not
 /// move or free that storage during cache operations. Unmap must not unwind.
-pub(super) unsafe trait MemoryAccess {
+pub(in crate::backends::vulkan) unsafe trait MemoryAccess {
     /// # Safety
     /// The allocation must be live and its mapping/cache host calls exclusively
     /// controlled by this access. The copied range and its cache atoms exclude
@@ -29,13 +29,13 @@ pub(super) unsafe trait MemoryAccess {
     fn invalidate(&mut self, offset: vk::DeviceSize, size: vk::DeviceSize) -> VkResult<()>;
 }
 
-pub(super) struct VmaAccess<'a> {
+pub(in crate::backends::vulkan) struct VmaAccess<'a> {
     allocator: &'a vk_mem::Allocator,
     allocation: &'a mut vk_mem::Allocation,
 }
 
 impl<'a> VmaAccess<'a> {
-    pub(super) fn new(
+    pub(in crate::backends::vulkan) fn new(
         allocator: &'a vk_mem::Allocator,
         allocation: &'a mut vk_mem::Allocation,
     ) -> Self {
@@ -110,7 +110,7 @@ impl<A: MemoryAccess> Drop for Mapping<'_, A> {
 /// flush must be free of GPU/concurrent CPU access. Mapping/cache host calls on
 /// the allocation must be serialized. The caller validates the range against
 /// the allocation/CPU address space and excludes overlap with `bytes`.
-pub(super) unsafe fn write(
+pub(in crate::backends::vulkan) unsafe fn write(
     access: &mut impl MemoryAccess,
     coherent: bool,
     offset: usize,
