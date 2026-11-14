@@ -8,7 +8,9 @@ use crate::backends::vulkan::memory::VulkanAllocator;
 use crate::backends::vulkan::transfer::{
     RecordedTransfer, TransferError, TransferPayload, record_host_read,
 };
-use crate::program::{ImageDescriptor, ImageFormat, ImageViewDescriptor, SamplerDescriptor};
+use crate::program::{
+    ImageDescriptor, ImageFormat, ImageViewDescriptor, ImageViewUsage, SamplerDescriptor,
+};
 use std::ffi::CStr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -32,16 +34,69 @@ impl Drop for ImageLease {
         self.image.0.state.busy.store(false, Ordering::Release);
     }
 }
+
+#[derive(Clone, Copy)]
+enum SampleInput<'a> {
+    Pixels(&'a [u8]),
+    Depth(f32),
+}
+enum InitialContents<'a> {
+    Pixels(&'a [u8]),
+    DepthClear(VulkanImageView),
+}
+impl<'a> SampleInput<'a> {
+    fn descriptor(self, format: ImageFormat) -> ImageDescriptor {
+        ImageDescriptor {
+            preferred_depth_clear: match self {
+                Self::Pixels(_) => None,
+                Self::Depth(value) => Some(value),
+            },
+            ..image_desc(format)
+        }
+    }
+    fn initialize(self, attachment: &Option<VulkanImageView>) -> InitialContents<'a> {
+        match self {
+            Self::Pixels(bytes) => InitialContents::Pixels(bytes),
+            Self::Depth(_) => InitialContents::DepthClear(attachment.as_ref().unwrap().clone()),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+enum ExpectedOutput<'a> {
+    Bytes(&'a [u8]),
+    DepthR(u32),
+}
+impl ExpectedOutput<'_> {
+    fn assert_matches(self, bytes: Vec<u8>) {
+        match self {
+            Self::Bytes(expected) => assert_eq!(bytes, expected),
+            Self::DepthR(expected) => {
+                assert_eq!(bytes.len(), 64);
+                for component in [0, 4, 8, 12] {
+                    let offset = component * 4;
+                    let actual = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    assert_eq!(actual, expected, "depth R component {component}");
+                }
+            }
+        }
+    }
+}
 struct Work {
     bindings: VulkanBindings,
     image: Option<ImageLease>,
     output: Option<StorageLease>,
     output_index: usize,
     upload: Option<TransferBuffer>,
+    // The attachment View is a command operand outside sampled bindings; it
+    // must be retained independently through recording and GPU retirement.
+    depth_clear: Option<VulkanImageView>,
     readback: TransferBuffer,
 }
 impl Work {
-    fn new(bindings: VulkanBindings, pixels: Option<&[u8]>) -> Result<Self, RuntimeError> {
+    fn new(
+        bindings: VulkanBindings,
+        initial: Option<InitialContents<'_>>,
+    ) -> Result<Self, RuntimeError> {
         let image = bindings
             .0
             .resources
@@ -53,24 +108,33 @@ impl Work {
             .unwrap();
         let image = ImageLease::acquire(image)?;
         let initialized = image.image.0.state.initialized.load(Ordering::Acquire);
-        if initialized == pixels.is_some() {
+        if initialized == initial.is_some() {
             return Err(RuntimeError::invalid(
-                "supply initial pixels exactly once, then reuse immutable sampled contents",
+                "initialize exactly once, then reuse immutable sampled contents",
             ));
         }
-        // This fixture's byte input is exactly the selected 2x2 image in its
-        // actual texel format. General Graph upload remains subsequent work.
+        // The fixture accepts exact color pixels or a D32 attachment load clear.
+        // Both Views must converge on the same exclusive physical image lease.
         let desc = image.image.desc();
-        let upload_size = match desc.format {
-            ImageFormat::Rgba8Unorm => 16,
-            ImageFormat::Rgba16Float => 32,
+        let (pixels, depth_clear) = match initial {
+            Some(InitialContents::Pixels(bytes)) => (Some(bytes), None),
+            Some(InitialContents::DepthClear(attachment)) => (None, Some(attachment)),
+            None => (None, None),
         };
-        if desc.width != 2
-            || desc.height != 2
-            || pixels.is_some_and(|bytes| bytes.len() != upload_size)
-        {
+        let valid_initial = match (desc.format, pixels, &depth_clear) {
+            (_, None, None) => initialized,
+            (ImageFormat::Rgba8Unorm, Some(bytes), None) => bytes.len() == 16,
+            (ImageFormat::Rgba16Float, Some(bytes), None) => bytes.len() == 32,
+            (ImageFormat::D32Float, None, Some(attachment)) => {
+                Arc::ptr_eq(&attachment.0.image.0, &image.image.0)
+                    && attachment.desc().usage == ImageViewUsage::DepthAttachment
+                    && desc.preferred_depth_clear.is_some()
+            }
+            _ => false,
+        };
+        if desc.width != 2 || desc.height != 2 || !valid_initial {
             return Err(RuntimeError::invalid(
-                "sampling fixture requires exact format-sized 2x2 pixels",
+                "sampling fixture requires exact 2x2 pixels or a valid same-image depth clear",
             ));
         }
         let output_index = bindings
@@ -99,6 +163,7 @@ impl Work {
             output: Some(output),
             output_index,
             upload,
+            depth_clear,
             readback,
         })
     }
@@ -191,6 +256,67 @@ impl TransferPayload for Work {
                     &vk::DependencyInfo::default().image_memory_barriers(&sampled),
                 );
             }
+            if let Some(attachment) = &self.depth_clear {
+                let stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
+                let depth_range = vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                    .level_count(1)
+                    .layer_count(1);
+                let initialize = [vk::ImageMemoryBarrier2::default()
+                    .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                    .src_access_mask(vk::AccessFlags2::NONE)
+                    .dst_stage_mask(stages)
+                    .dst_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image.0.handle)
+                    .subresource_range(depth_range)];
+                device.raw().cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default().image_memory_barriers(&initialize),
+                );
+                let depth = vk::RenderingAttachmentInfo::default()
+                    .image_view(attachment.0.handle)
+                    .image_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(vk::ClearValue {
+                        depth_stencil: vk::ClearDepthStencilValue {
+                            depth: image.desc().preferred_depth_clear.unwrap(),
+                            stencil: 0,
+                        },
+                    });
+                let rendering = vk::RenderingInfo::default()
+                    .layer_count(1)
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent: vk::Extent2D {
+                            width: 2,
+                            height: 2,
+                        },
+                    })
+                    .depth_attachment(&depth);
+                device.raw().cmd_begin_rendering(command, &rendering);
+                device.raw().cmd_end_rendering(command);
+                let sampled = [vk::ImageMemoryBarrier2::default()
+                    .src_stage_mask(stages)
+                    .src_access_mask(vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                    .old_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(image.0.handle)
+                    .subresource_range(depth_range)];
+                device.raw().cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default().image_memory_barriers(&sampled),
+                );
+            }
             if output.reused {
                 let reused = [vk::BufferMemoryBarrier2::default()
                     .src_stage_mask(
@@ -259,7 +385,7 @@ impl TransferPayload for Work {
             .storage
             .used
             .store(true, Ordering::Release);
-        if self.upload.is_some() {
+        if self.upload.is_some() || self.depth_clear.is_some() {
             self.image
                 .as_ref()
                 .unwrap()
@@ -283,6 +409,7 @@ fn image_desc(format: ImageFormat) -> ImageDescriptor {
         width: 2,
         height: 2,
         format,
+        preferred_depth_clear: None,
     }
 }
 fn bind(
@@ -331,8 +458,14 @@ fn vulkan_managed_sampled_creation_and_versions() {
     run_sampled_versions(
         ManagedProgram::sampled_readback(),
         ImageFormat::Rgba8Unorm,
-        [&pixels[0], &pixels[1]],
-        [&pixels[0], &pixels[1]],
+        [
+            SampleInput::Pixels(&pixels[0]),
+            SampleInput::Pixels(&pixels[1]),
+        ],
+        [
+            ExpectedOutput::Bytes(&pixels[0]),
+            ExpectedOutput::Bytes(&pixels[1]),
+        ],
     );
 }
 
@@ -349,18 +482,54 @@ fn vulkan_managed_sampled_float_creation_and_versions() {
     run_sampled_versions(
         ManagedProgram::sampled_float_readback(),
         ImageFormat::Rgba16Float,
-        [&pixels[0], &pixels[1]],
-        [&expected[0], &expected[1]],
+        [
+            SampleInput::Pixels(&pixels[0]),
+            SampleInput::Pixels(&pixels[1]),
+        ],
+        [
+            ExpectedOutput::Bytes(&expected[0]),
+            ExpectedOutput::Bytes(&expected[1]),
+        ],
     );
+}
+
+#[test]
+#[ignore = "explicit real-GPU D32 attachment clear, sampling, View owners and reuse; run strict/shipping separately"]
+fn vulkan_managed_sampled_depth_creation_and_versions() {
+    let values = crate::program::DEPTH_TEST_VALUES;
+    let expected = crate::program::DEPTH_TEST_EXPECTED;
+    run_sampled_versions(
+        ManagedProgram::sampled_float_readback(),
+        ImageFormat::D32Float,
+        [SampleInput::Depth(values[0]), SampleInput::Depth(values[1])],
+        [
+            ExpectedOutput::DepthR(expected[0]),
+            ExpectedOutput::DepthR(expected[1]),
+        ],
+    );
+}
+
+fn depth_attachment(runtime: &VulkanRuntime, image: &VulkanImage) -> Option<VulkanImageView> {
+    (image.desc().format == ImageFormat::D32Float).then(|| {
+        runtime
+            .create_image_view(
+                image,
+                ImageViewDescriptor {
+                    usage: ImageViewUsage::DepthAttachment,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+    })
 }
 
 fn run_sampled_versions(
     managed: ManagedProgram,
     format: ImageFormat,
-    pixels: [&[u8]; 2],
-    expected: [&[u8]; 2],
+    inputs: [SampleInput<'_>; 2],
+    expected: [ExpectedOutput<'_>; 2],
 ) {
-    let [old, new] = pixels;
+    let [old, new] = inputs;
     let [old_expected, new_expected] = expected;
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
@@ -389,10 +558,13 @@ fn run_sampled_versions(
             .find(|slot| slot.kind == BindingType::StorageWrite)
             .unwrap()
             .min_size;
-        let image = runtime.create_managed_image(image_desc(format)).unwrap();
+        let image = runtime
+            .create_managed_image(old.descriptor(format))
+            .unwrap();
         let view = runtime
             .create_image_view(&image, ImageViewDescriptor::default())
             .unwrap();
+        let attachment = depth_attachment(&runtime, &image);
         let sampler = runtime
             .create_sampler(SamplerDescriptor::NearestClamp)
             .unwrap();
@@ -401,11 +573,17 @@ fn run_sampled_versions(
                 size: 256 + output_size,
             })
             .unwrap();
-        assert_eq!(image.desc(), image_desc(format));
+        assert_eq!(image.desc(), old.descriptor(format));
         assert_eq!(view.desc(), ImageViewDescriptor::default());
         assert_eq!(sampler.desc(), SamplerDescriptor::NearestClamp);
         let bindings = bind(&runtime, &program, &view, &sampler, &output).unwrap();
         assert_eq!(bindings.layout(), managed.bindings());
+        if let Some(attachment) = &attachment {
+            assert!(
+                matches!(bind(&runtime, &program, attachment, &sampler, &output),
+                Err(e) if e.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
+            );
+        }
         if format == ImageFormat::Rgba8Unorm {
             assert!(
                 matches!(runtime.create_image_view(&image, ImageViewDescriptor { base_mip_level: 1, ..Default::default() }),
@@ -467,20 +645,34 @@ fn run_sampled_versions(
                 foreign_monitor.report()
             );
         }
-        let canceled =
-            RecordedTransfer::new(Work::new(bindings.clone(), Some(old)).unwrap()).unwrap();
-        assert!(Work::new(bindings.clone(), Some(old)).is_err());
+        let canceled = RecordedTransfer::new(
+            Work::new(bindings.clone(), Some(old.initialize(&attachment))).unwrap(),
+        )
+        .unwrap();
+        assert!(Work::new(bindings.clone(), Some(old.initialize(&attachment))).is_err());
         drop(canceled);
+        if format == ImageFormat::D32Float {
+            assert!(Work::new(bindings.clone(), None).is_err());
+        }
         let weak_image = Arc::downgrade(&image.0);
         let weak_view = Arc::downgrade(&view.0);
         let weak_sampler = Arc::downgrade(&sampler.0);
-        let recorded =
-            RecordedTransfer::new(Work::new(bindings.clone(), Some(old)).unwrap()).unwrap();
+        let weak_attachment = attachment.as_ref().map(|view| Arc::downgrade(&view.0));
+        let recorded = RecordedTransfer::new(
+            Work::new(bindings.clone(), Some(old.initialize(&attachment))).unwrap(),
+        )
+        .unwrap();
         let newer_program = runtime.create_program(&managed).unwrap();
-        let newer_image = runtime.create_managed_image(image_desc(format)).unwrap();
+        let newer_image = runtime
+            .create_managed_image(new.descriptor(format))
+            .unwrap();
         let newer_view = runtime
             .create_image_view(&newer_image, ImageViewDescriptor::default())
             .unwrap();
+        let newer_attachment = depth_attachment(&runtime, &newer_image);
+        let weak_newer_attachment = newer_attachment
+            .as_ref()
+            .map(|view| Arc::downgrade(&view.0));
         let newer_output = runtime
             .create_managed_buffer(BufferDescriptor::Storage {
                 size: 256 + output_size,
@@ -494,31 +686,44 @@ fn run_sampled_versions(
             &newer_output,
         )
         .unwrap();
-        let newer_recorded =
-            RecordedTransfer::new(Work::new(newer_bindings, Some(new)).unwrap()).unwrap();
+        if format == ImageFormat::D32Float {
+            assert!(Work::new(newer_bindings.clone(), Some(new.initialize(&attachment))).is_err());
+        }
+        let newer_recorded = RecordedTransfer::new(
+            Work::new(newer_bindings, Some(new.initialize(&newer_attachment))).unwrap(),
+        )
+        .unwrap();
         drop((
             program,
             image,
             view,
+            attachment,
             sampler,
             output,
             newer_program,
             newer_image,
             newer_view,
+            newer_attachment,
             newer_output,
         ));
         let mut first = recorded.submit().unwrap();
         let mut second = newer_recorded.submit().unwrap();
+        for view in [&weak_attachment, &weak_newer_attachment]
+            .into_iter()
+            .flatten()
+        {
+            assert!(view.upgrade().is_some());
+        }
         assert!(Work::new(bindings.clone(), None).is_err());
         let mut first_result = first.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(first_result.read(), old_expected);
+        old_expected.assert_matches(first_result.read());
         let reused = RecordedTransfer::new(Work::new(bindings, None).unwrap()).unwrap();
         let mut third = reused.submit().unwrap();
         drop(runtime);
         let mut third_result = third.wait(Duration::from_secs(10)).unwrap().unwrap();
         let mut second_result = second.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(second_result.read(), new_expected);
-        assert_eq!(third_result.read(), old_expected);
+        new_expected.assert_matches(second_result.read());
+        old_expected.assert_matches(third_result.read());
         assert!(weak_image.upgrade().is_some());
         assert!(weak_view.upgrade().is_some());
         assert!(weak_sampler.upgrade().is_some());
@@ -533,6 +738,12 @@ fn run_sampled_versions(
         assert!(weak_image.upgrade().is_none());
         assert!(weak_view.upgrade().is_none());
         assert!(weak_sampler.upgrade().is_none());
+        for view in [&weak_attachment, &weak_newer_attachment]
+            .into_iter()
+            .flatten()
+        {
+            assert!(view.upgrade().is_none());
+        }
         let report = monitor.report();
         assert!(report.is_clean(), "final native teardown: {report:#?}");
     });

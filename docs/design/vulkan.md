@@ -281,7 +281,7 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
 `.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
-一般owned passとの接続、depth/他format/mip/layer/filter、任意shader取込は後続へ残す。
+一般owned passとの接続、他format/mip/layer/filter、任意shader取込は後続へ残す。
 
 safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`sampled_readback()`、
 `sampled_float_readback()`である。
@@ -321,12 +321,17 @@ leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早�
 計画・状態・所有を接続する必要があり、今回の作成APIだけで一般dispatchの同期を保証したとは扱わない。
 実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
 
-`create_managed_image(ImageDescriptor)`はRGBA8_UNORMまたはRGBA16Fの2D、mip/layer/sample各1、
-optimal tiling、`SAMPLED|TRANSFER_DST`だけで作る。Graph画像のstorage/color attachment等の
+`create_managed_image(ImageDescriptor)`はRGBA8_UNORM、RGBA16FまたはD32_FLOATの2D、mip/layer/sample各1、
+optimal tilingで作る。色は`SAMPLED|TRANSFER_DST`、D32は`DEPTH_STENCIL_ATTACHMENT|SAMPLED`に固定する。Graph画像のstorage/color attachment等の
 固定usageやframebuffer/viewport上限を持ち込まず、実際のformat/type/tiling/usage/flagsと
 extent/mip/layer/sample対応を作成境界で照会する。packed pixel量をVMA allocation sizeへ代用しない。
 作成直後は未初期化であり、upload/submit/waitを暗黙に行わない。
-`create_image_view`はfull color mip0/layer0範囲とownerを検査し、ViewがImageを保持する。
+`preferred_depth_clear: Option<f32>`はD32の後続attachment clearに予定する値であり、
+内容初期化や後続clear値の制限を意味しない。`None`も許可し、色への`Some`、非有限値、
+[0,1]外、subnormalは作成境界で拒否する。この不変metadataをView/Imageの所有とともに保持する。
+`create_image_view`はfull mip0/layer0範囲、ownerと`ImageViewUsage`を検査し、ViewがImageを保持する。
+`Sampled`が既定で、`DepthAttachment`はD32だけに許可する。aspectはImageのformatからcolor/depthへ導出し、
+呼出し側に別のaspect指定を要求しない。sampled bindingには`Sampled` Viewだけを受け付ける。
 `create_sampler(NearestClamp)`はnormalized coordinate、nearest min/mag/mip、clamp-to-edge、
 LOD0、compare/anisotropyなしで作る。Device全体の生存sampler数をnative作成前に予約し、
 失敗時またはnative破棄後に返す。既存固定Graph/表示samplerも同じ上限契約を使う。
@@ -357,6 +362,24 @@ shaderの16-bit演算型や追加の`shaderFloat16` featureは使わない。
 [shader内16-bit型のfeature](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceShaderFloat16Int8Features.html)を区別した選択である。
 private受入は32 byteの2x2 half入力と64 byteの出力を区別し、負値・小数・1超の値と行/成分順を照合する。
 shader ABI・画像format・参照範囲は作成時に保証し、upload byte列とreadback範囲の変更は試験専用経路に限定する。
+
+`.2.1.6`の`ImageFormat::D32Float`は`D32_SFLOAT`へ対応する。attachmentとsampledの組合せを
+実Deviceへ照会し、depth-only aspectのattachment用・sampled用Viewが同じImageを保持する。
+private受入は全2x2領域のdepth attachmentをDynamic Renderingのload `CLEAR`/store `STORE`で
+0.25または0.75へ初期化する。clearの前後でlayoutを明示し、rendering scopeの外に
+`EARLY_FRAGMENT_TESTS|LATE_FRAGMENT_TESTS`/`DEPTH_STENCIL_ATTACHMENT_WRITE`から
+`COMPUTE_SHADER`/`SHADER_SAMPLED_READ`への依存を置く。
+`DEPTH_STENCIL_ATTACHMENT_OPTIMAL`から`SHADER_READ_ONLY_OPTIMAL`を使い、
+separate depth/stencil layout featureを追加しない。
+初回UNDEFINED遷移には、既存Graphのdepthを含む画像と同じCOPY execution対策を継承する。
+これは既存の保守的な正しさ対策であり、D32の性能改善やdriver原因の確定を主張しない。
+[attachmentのload/storeとlayout](https://docs.vulkan.org/refpages/latest/refpages/source/VkRenderingAttachmentInfo.html)と
+[画像barrier](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageMemoryBarrier2.html)に従う。
+既存`sampled_float_readback`と非comparison nearest samplerを再利用し、64-byte出力の4 texelのR成分を
+独立なFP32期待bit列へ照合する。色用uploadをdepth clearへ流用せず、D32にtransfer用途を追加しない。
+初期化後の旧版reuseは再clearしない。attachment Viewも記録/pendingの所有へ含め、同じImageの排他lease、
+cancel、受理済み予定状態、実Fence退役、最終解放は既存fixtureの契約を引き継ぐ。
+公開の用途/format/ownerとpreferred clear値の保証は製品に残し、clear命令記録・試験入力/stateは`cfg(test)`に限定する。
 
 
 ## 投入・完了・異常時の保持

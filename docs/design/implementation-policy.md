@@ -1012,7 +1012,8 @@ depth-only/color-only、Compute/copy、import/exportとGPU寿命を段階実装�
 native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換する。
 `.2.1.4`はRGBA8画像/View/nearest-clamp samplerとsampled bindingへ進める。
 `.2.1.5`はRGBA16F画像とHDR値を保持するsampled readbackを同じ二APIへ加える。
-depth、一般owned Graphや他mip/layer/filterは親`renderer-7ft.2.1`と後続課題へ残す。
+`.2.1.6`はD32画像とdepth attachment/sample Viewの作成契約、clear後のdepth sampleを加える。
+一般owned Graphや他mip/layer/filter、比較samplerは親`renderer-7ft.2.1`と後続課題へ残す。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
 
@@ -1175,9 +1176,11 @@ fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのb
 一般Graph導入時の製品状態管理・同期・GPU lifetimeは後続であり、このtest-only leaseが代替するものではない。
 二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
 
-管理下画像はRGBA8_UNORMまたはRGBA16F Texture2D、mip/layer/sample各1、DEFAULT heap、
+管理下画像はRGBA8_UNORM、RGBA16FまたはD32 Texture2D、mip/layer/sample各1、DEFAULT heap、
 初期COMMON、未初期化である。実DeviceのTEXTURE2D/SHADER_SAMPLE対応とextent上限を作成時に保証する。
-Viewはfull mip0/layer0の不変SRV定義とImage owner、Samplerはnearest/clamp/LOD0定義とDeviceを保持する。
+Viewはfull mip0/layer0の用途とImage owner、Samplerはnearest/clamp/LOD0定義とDeviceを保持する。
+`ImageViewUsage::Sampled`が既定であり、`DepthAttachment`はD32だけに許可する。
+attachment Viewはsampled bindingへ受け付けない。aspectはImageのformatから導出する。
 non-comparison POINT filterのComparisonFuncはNEVERとし、無視される設定にもnative警告を残さない。
 D3D12には独立View/Sampler COM objectがないため、作成時にCPU専用descriptor heapを増設せず、
 `create_bindings`が所有するshader-visible heapへ一度だけnative descriptorを具体化する。
@@ -1205,6 +1208,26 @@ half入力は8 byte/texel、2x2で32 byteであり、uploadのrow配置はこの
 [GetCopyableFootprints](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints)を使う。
 16-byte出力の既存shaderと64-byte出力の新shaderを区別し、
 各shaderが初期化する範囲だけをreadbackする。取消・pending・正常完了・最終解放の契約は共通である。
+
+`.2.1.6`のD32は`R32_TYPELESS`のDEFAULT資源を`ALLOW_DEPTH_STENCIL`で作り、
+DSVは`D32_FLOAT`、SRVは`R32_FLOAT`で解釈する。samplingも行うため`DENY_SHADER_RESOURCE`は付けない。
+resource形式のTEXTURE2D、DSV形式のDEPTH_STENCIL、SRV形式のSHADER_SAMPLE対応を
+実Deviceで分けて照会・保持し、D32作成要求へ適合確認する。buffer-only runtimeの必須能力へ昇格しない。
+`ImageDescriptor::preferred_depth_clear`の`Some`は、作成時に`D32_FLOAT`のoptimized clear値へlowerする。
+`None`も合法であり、値を渡しても内容の初期化やGPU投入は行わない。色への`Some`、
+非有限値、[0,1]外、subnormalは共通の作成境界で拒否する。
+これは最初のstrict受入で未指定clear値にnative警告821を3件観測したための宣言である。
+試験の旧版/新版はそれぞれ0.25/0.75を作成時に宣言し、その保持値で実clearする。
+警告を免除せず、実装済みのclear経路をnative診断ゼロで確認する選択であり、性能効果は測定していない。
+[CreateCommittedResource](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createcommittedresource)と
+[ClearDepthStencilView](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-cleardepthstencilview)に従う。
+[資源flagsの契約](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_flags)と
+[SRV形式の契約](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_shader_resource_view_desc)に従う。
+private受入は公開attachment Viewからnon-shader-visible DSV heapを具体化し、
+COMMON→DEPTH_WRITEで全2x2を0.25/0.75へclear、NON_PIXEL_SHADER_RESOURCEで通常sample後にCOMMONへ戻す。
+DSV heapとattachment ViewをWork/Retainedへ保持し、sampled Viewと同じImageの排他leaseで守る。
+既存64-byte float出力の4 texelのR成分だけを独立なFP32期待bit列へ照合し、旧版reuseは再clearしない。
+DSV作成/clear命令と試験入力/stateは`cfg(test)`に限定し、一般Graphのattachment実行は後続とする。
 
 
 ### D3D12のDeviceとbuffer実行

@@ -22,7 +22,7 @@ use crate::program::{
 };
 use descriptors::{DescriptorHeaps, root_parameters};
 #[cfg(test)]
-pub(super) use fixture::ExecutionLease;
+pub(super) use fixture::{DepthTarget, ExecutionLease, ImageInitialization};
 
 const UNIFORM_ALIGNMENT: u64 = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT as u64;
 const STORAGE_ALIGNMENT: u64 = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT as u64;
@@ -340,7 +340,9 @@ impl D3D12Runtime {
                     }
                 }
                 BindingResource::ImageView(view) => {
-                    if layout.kind != BindingType::SampledImage {
+                    if layout.kind != BindingType::SampledImage
+                        || view.desc().usage != crate::program::ImageViewUsage::Sampled
+                    {
                         return Err(D3D12RuntimeError::invalid(
                             "image View resource does not match Program slot",
                         ));

@@ -9,11 +9,11 @@
 
 ## 管理下Programと資源bindingの二API実装
 
-`renderer-7ft.2.1.5`。Uniform/Storage共通契約と`.2.1.3`の重複検査整理、`.2.1.4`の
-RGBA8画像/View/samplerを維持し、RGBA16F 2D画像とHDR値を保持するsampled readbackを両APIへ追加した。
+`renderer-7ft.2.1.6`。Uniform/Storage共通契約と`.2.1.3`の重複検査整理、RGBA8/RGBA16Fの
+画像/View/samplerを維持し、D32深度画像とattachment/sample Viewの作成契約を両APIへ追加した。
 `Binding`/`BindingResource`がbuffer/View/samplerを一つのcomplete collectionで扱い、
 旧buffer専用binding APIを置換した。既存の固定ProgramKindは増やしていない。
-親`renderer-7ft.2.1`のdepth、他mip/layer/filterや管理下assetの拡張と、
+親`renderer-7ft.2.1`の残る管理下asset/作成契約の確認と、他mip/layer/filterや
 `.2.2`以降のowned Graph実行は未完了である。
 [作成保証とVulkan所有](../design/vulkan.md#managed-uniform)、
 [D3D12のroot/tableと保証](../design/implementation-policy.md#d3d12の管理下programとuniform)、
@@ -21,17 +21,19 @@ RGBA8画像/View/samplerを維持し、RGBA16F 2D画像とHDR値を保持するs
 
 safeなshader入口はレビュー済みのuniform/sample/sample-float readback 3本である。
 両sampled assetはseparate texture2Dとsamplerを`textureLod`で実際に使い、
-DXILでも`t0/space0`と`s1/space0`をactiveに保持する。既存assetはRGBA8へpackして16 byte書き、
-新`sampled_float.comp`は4 sampleの全RGBAをFP32 bit列の64 byteとしてStorageへ書く。
+DXILでも`t0/space0`と`s1/space0`をactiveに保持する。`sampled_readback`はRGBA8へpackして16 byte書き、
+`sampled_float.comp`は4 sampleの全RGBAをFP32 bit列の64 byteとしてStorageへ書く。
+D32でもこの既存shaderを再利用し、今回shader assetを追加・変更していない。
 SPIR-VはShader capabilityと32-bit floatのみで、shaderFloat16や16-bit演算型を要求しない。
 生成時のSPIR-V/DXIL reflection照合はslot/type/count/member offset/size/local sizeに加え、
 float2D image、sampler、writeonly出力と余分な資源を確認する。
-新出力のarray 4、literal count、stride 16、offset 0、block size 64も照合する。
+float出力のarray 4、literal count、stride 16、offset 0、block size 64も照合する。
 固定SDKの全8本SPIR-V/DXIL再生成Verify、SDK不要の改変拒否（pwshとWindows PowerShell 5.1）、
-D3D12 bindings Verifyが成功した。旧7shaderのsource/binary/text/reflectionの37hashは比較元`e6e8fd0`と不変である。
-新sampled-float SPIR-Vは`ec3213ae49b0a47ee2d96cceb28e73f54edb0cb917df77b9f76b98bd3f779438`、
+D3D12 bindings Verifyが成功した。全8shaderのsource/binary/text/reflectionは比較元`124545c`と不変である。
+sampled-float SPIR-Vは`ec3213ae49b0a47ee2d96cceb28e73f54edb0cb917df77b9f76b98bd3f779438`、
 DXILは`a4a959173d88b4cce681bc2286ee426f698e9170fbadca0fc04fde654808891b`。
-生成bindingsは`0057a6da906d1c8b0f4c23b29fb75074638cc76fe09d3fe29b84d75d34d60a28`で一致した。
+生成bindingsはD32/DSVに必要な型・定数を再生成し、
+`6fa17a779cc6bb0a58317787bdbb9d96448a0bf9000ff10546367697d6774055`で一致した。
 
 作成境界で全slotの欠落/重複/余剰、resource kind/用途、owner、論理buffer範囲とDevice alignment、
 実format/usage/extent対応、View範囲を保証する。画像はmip/layer/sample各1、未初期化作成であり、
@@ -43,7 +45,13 @@ Vulkanのsampler生存数上限は全旧/新作成箇所でDevice単位予約/�
 D3D12のtexture/samplerはshader-visible SRV/SAMPLER heapのtable、bufferはroot CBV/UAVを使う。
 native容量/失敗・同期・実Fence完了・GPU寿命は製品に残す。
 公開Image/Storageの作成成功は内容初期化を意味せず、各shaderが書いた16または64 byteだけをreadbackする。
-ImageとViewは同じ実formatを使い、実DeviceのRGBA16F対応はRGBA8と区別して作成境界で保証する。
+色のImageとViewは同じ実formatを使い、実DeviceのRGBA16F対応はRGBA8と区別して作成境界で保証する。
+D32のVulkan Image/Viewは`D32_SFLOAT`とdepth aspect、D3D12は`R32_TYPELESS` Imageと
+`D32_FLOAT` DSV/`R32_FLOAT` SRVを使い、attachmentとsampledの実能力を保証する。
+View用途を作成時に固定し、色のdepth attachmentとattachment Viewのsampled bindingを拒否する。
+`preferred_depth_clear`は後続clearの予定値であり、作成時の初期化ではない。D32の`None`は合法で、
+色への`Some`、NaN/Inf、[0,1]外とsubnormalを共通作成境界で拒否する。
+値の検査を記録へ重ねず、不変Image descriptorから実clear値を使う。
 
 private upload/dispatch/readbackと入力色、Image/Storageの排他lease/stateは`cfg(test)`に限定する。
 通常buildにCPU検査用画素payloadやprivate executor metadataを保持しない。
@@ -52,13 +60,20 @@ VulkanはCOPY→sampled readとStorage write→copy→host依存、D3D12は実Ge
 row配置とCOMMON→COPY_DEST→NON_PIXEL_SHADER_RESOURCE→COMMONを確認した。
 取消で未初期化を公開せず、pending中の競合を拒否し、不確定失敗では既存Retainedと所有連鎖を保持する。
 Vulkan初回画像遷移の既存COPY execution対策も維持する。
+D32は転送uploadせず、Vulkanのdepth-only Dynamic Rendering load CLEAR/store STORE、
+D3D12のDSV clearで初期化する。Vulkanは両depth stageのwrite→compute sampled read依存と
+layout遷移をrendering scope外で記録する。D3D12はCOMMON→DEPTH_WRITE→
+NON_PIXEL_SHADER_RESOURCE→COMMONへ遷移する。attachment ViewとDSV heapもWork/Retainedに保持する。
+先行D3D12 strict試験ではreadback一致後にclear値未指定の警告821を3件観測し受入失敗とした。
+作成時のpreferred clear値をoptimized clear値へlowerして修正し、警告の例外扱いは追加していない。
+この値指定の性能効果は測定していない。
 
 Windows x64/Rust 1.99.0でfmt、CPUのみ/製品/開発の全target Clippy（`-D warnings`）が成功した。
 CPUのみ通常71件、製品release通常191件、開発release通常202件と、各構成のRustdoc 1件が成功した。
 Rustdocは両backendの公開Image/View/Sampler/binding作成例をコンパイルする。
 共通契約、shader/ABIと両backendの作成/同期/所有の独立レビューで修正必須の未解決指摘はない。
 境界値の組合せは共通CPUへまとめ、native試験での同じ拒否classのmatrixを形式ごとに複製しない。
-SDK不要の新negative caseは64-byte配列ABIの差分へ絞り、既存の共通image/sampler検査を再列挙しない。
+今回のCPU差分は既存creation testのD32/View用途/preferred clear値へまとめ、新しいtest関数やshader ABI negativeを増やしていない。
 
 RTX 3060/driver 610.88でreleaseの実GPU試験を逐次実行した。
 RGBA8は既存の2x2非対称入力をnearest/clampで読み、公開272-byte Storageのoffset256からの16 byteが一致した。
@@ -68,17 +83,21 @@ offset256からの64 byteが独立に指定したFP32期待bit列と全byte一�
 NaN/subnormal/負のゼロの追加契約は今回要求しない。境界外clamp、nearest対linearの違い、
 画像の行/成分、逆順binding、型/owner拒否、未投入cancel、pending/busy、実完了後reuse、
 runtime facade先drop、最終View/Image/sampler/heap/Device解放を確認した。
+D32は旧版0.25/新版0.75を宣言・clearし、既存64-byte出力の4 texelのRを
+`0x3e800000`/`0x3f400000`へ照合した。GBAの値は今回の受入保証に含めない。
+旧版の再sampleは再clearせず旧値を維持する。attachment Viewの用途違い/別Image拒否、
+clear取消後の未初期化read拒否と再clear、pending中の所有、最終解放を共通fixtureで確認した。
 strictはVulkan Core/SyncValまたはD3D12 Debug Layer/GBVの実効を確認し、
 最終native解放後までwarning/error/corruption/callback問題ゼロだった。
 製品の追加検証/専用診断除外・native Requested Disabledでも同じbyte一致を別processで確認した。
 この成功だけから外部Layer不存在やnative診断有効を主張しない。
 
-今回の統合結果では既存StorageとRGBA8を含め、strict/製品の各Vulkan 3件、D3D12 2件、計10件が成功した。
-D3D12のsampled 1件はRGBA8/RGBA16Fの両caseを実行する。workerで実GPUを重複実行せず、統合後に逐次実行した。
-正式な統合ゲートログは`.tools/b1-rgba16f/gates/`に保存した。
+今回の統合結果では既存StorageとRGBA8/RGBA16Fを含め、strict/製品の各Vulkan 4件、D3D12 2件、計12件が成功した。
+D3D12のsampled 1件はRGBA8/RGBA16F/D32の3caseを実行する。workerではGPUを実行せず、rootの先行診断後に統合結果を逐次実行した。
+正式な統合ゲートログは`.tools/b1-depth/gates/`に保存した。
 変更範囲外のGraph/WSI全体の実GPU回帰は今回再実行していない。直近の全60件成功はGit履歴の`.2.1.4`の記録を参照する。
 
-Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、depthの二API管理下契約、
+Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、comparison sampler/PCF、
 性能・長時間耐久、実native OOM/Device lossは未実行である。性能優位や計算量の改善は主張しない。
 既知の未再現起動crash `renderer-0pb`の原因確定や解決も主張しない。
 

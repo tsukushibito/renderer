@@ -53,7 +53,8 @@ D3D12のprepareはexportとliveなimport・画像・未対応操作を明示エ�
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
-Program、Uniform/Storage buffer、RGBA8/RGBA16F画像/View、nearest/clamp samplerの共通binding作成APIを用意する。
+Program、Uniform/Storage buffer、RGBA8/RGBA16F/D32画像/View、nearest/clamp samplerの共通binding作成APIを用意する。
+Viewはsampled用とD32のdepth attachment用を区別し、aspectはformatから導出する。
 bindingはmanifest順に
 実Programと全資源の版/範囲を保持する。Storage本文はGPU可変で、作成を初期化とは扱わない。
 [管理下資源の契約](vulkan.md#managed-uniform)を参照する。

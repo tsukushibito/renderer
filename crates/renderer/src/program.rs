@@ -19,7 +19,7 @@
 //! {
 //!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
 //!     let image = runtime.create_managed_image(ImageDescriptor {
-//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm })?;
+//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
 //!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
 //!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
 //!     let storage = runtime.create_managed_buffer(BufferDescriptor::Storage { size: 272 })?;
@@ -37,7 +37,7 @@
 //! {
 //!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
 //!     let image = runtime.create_managed_image(ImageDescriptor {
-//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm })?;
+//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
 //!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
 //!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
 //!     let storage = runtime.create_managed_buffer(BufferDescriptor::Storage { size: 272 })?;
@@ -136,27 +136,44 @@ pub enum BindingResource<'a, B, V, S> {
     Sampler(&'a S),
 }
 
-/// Managed sampled color formats. Sampling returns ordinary FP32 components;
+/// Managed image formats. Sampling returns ordinary FP32 components;
 /// RGBA16F image storage does not require shader FP16 arithmetic support.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageFormat {
     Rgba8Unorm,
     Rgba16Float,
+    D32Float,
 }
 
 /// An uninitialized sampled 2D image. Mip, layer and sample counts are one.
+/// Color images support sampling and transfer destination use; D32 images
+/// support sampling and depth attachment use.
 /// Creation does not upload pixels or submit GPU work.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImageDescriptor {
     pub width: u32,
     pub height: u32,
     pub format: ImageFormat,
+    /// Preferred value for later depth attachment clears. D32 permits `None`
+    /// or a finite, non-subnormal value in `[0, 1]`; color images require `None`.
+    /// This does not initialize the image or restrict later clear values.
+    pub preferred_depth_clear: Option<f32>,
 }
 
-/// The subresources interpreted by a 2D color View. Only the complete single
-/// mip/layer is supported; unsupported ranges fail at View creation.
+/// The operation supported by an image View.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImageViewUsage {
+    Sampled,
+    /// A depth attachment View, supported only by [`ImageFormat::D32Float`].
+    DepthAttachment,
+}
+
+/// The usage and subresources interpreted by a 2D View. Only the complete
+/// single mip/layer is supported; unsupported ranges fail at View creation.
+/// The color or depth aspect is determined by the image format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageViewDescriptor {
+    pub usage: ImageViewUsage,
     pub base_mip_level: u32,
     pub mip_level_count: u32,
     pub base_array_layer: u32,
@@ -166,6 +183,7 @@ pub struct ImageViewDescriptor {
 impl Default for ImageViewDescriptor {
     fn default() -> Self {
         Self {
+            usage: ImageViewUsage::Sampled,
             base_mip_level: 0,
             mip_level_count: 1,
             base_array_layer: 0,
@@ -352,6 +370,7 @@ pub(crate) enum ProgramError {
     OutOfBounds,
     InvalidExtent,
     InvalidViewRange,
+    InvalidClearValue,
 }
 
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
@@ -361,12 +380,15 @@ impl std::fmt::Display for ProgramError {
             Self::BindingCount => "binding collection must cover the complete Program layout",
             Self::MissingSlot => "binding collection does not provide a required Program slot",
             Self::DuplicateSlot => "binding collection contains a duplicate Program slot",
-            Self::UsageMismatch => "resource kind or usage does not match the managed Program slot",
+            Self::UsageMismatch => "resource kind or usage does not match the requested operation",
             Self::InvalidAlignment => "buffer offset does not meet Device binding alignment",
             Self::InvalidRange => "buffer range is outside the shader or Device limits",
             Self::OutOfBounds => "binding range exceeds the logical buffer",
             Self::InvalidExtent => "image extent must be nonzero and within Device limits",
             Self::InvalidViewRange => "image View must cover mip zero and layer zero exactly once",
+            Self::InvalidClearValue => {
+                "preferred depth clear must be finite, within [0, 1], and not subnormal"
+            }
         })
     }
 }
@@ -445,15 +467,31 @@ pub(crate) fn validate_image_descriptor(
     {
         return Err(ProgramError::InvalidExtent);
     }
+    if let Some(value) = desc.preferred_depth_clear {
+        if desc.format != ImageFormat::D32Float {
+            return Err(ProgramError::UsageMismatch);
+        }
+        if !(0.0..=1.0).contains(&value) || value.is_subnormal() {
+            return Err(ProgramError::InvalidClearValue);
+        }
+    }
     Ok(())
 }
 
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
 pub(crate) fn validate_image_view_descriptor(
+    format: ImageFormat,
     desc: ImageViewDescriptor,
 ) -> Result<(), ProgramError> {
-    if desc != ImageViewDescriptor::default() {
+    if desc.base_mip_level != 0
+        || desc.mip_level_count != 1
+        || desc.base_array_layer != 0
+        || desc.array_layer_count != 1
+    {
         return Err(ProgramError::InvalidViewRange);
+    }
+    if desc.usage == ImageViewUsage::DepthAttachment && format != ImageFormat::D32Float {
+        return Err(ProgramError::UsageMismatch);
     }
     Ok(())
 }
@@ -540,6 +578,14 @@ pub(crate) const SAMPLE_FLOAT_EXPECTED: [[u32; 16]; 2] = [
         0xc000_0000,
     ],
 ];
+
+// Depth acceptance clears each complete image to one exact finite value, then
+// compares the R component of all four samples from sampled_float_readback.
+#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+pub(crate) const DEPTH_TEST_VALUES: [f32; 2] = [0.25, 0.75];
+
+#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+pub(crate) const DEPTH_TEST_EXPECTED: [u32; 2] = [0x3e80_0000, 0x3f40_0000];
 
 #[cfg(test)]
 mod tests {
@@ -750,6 +796,7 @@ mod tests {
             width: 2,
             height: 2,
             format: ImageFormat::Rgba8Unorm,
+            preferred_depth_clear: None,
         };
         assert_eq!(validate_image_descriptor(desc, 2), Ok(()));
         for (width, height) in [(0, 2), (2, 0), (3, 2), (2, 3)] {
@@ -765,8 +812,72 @@ mod tests {
                 Err(ProgramError::InvalidExtent)
             );
         }
-        let view = ImageViewDescriptor::default();
-        assert_eq!(validate_image_view_descriptor(view), Ok(()));
+        let sampled = ImageViewDescriptor::default();
+        let depth = ImageViewDescriptor {
+            usage: ImageViewUsage::DepthAttachment,
+            ..sampled
+        };
+        for format in [
+            ImageFormat::Rgba8Unorm,
+            ImageFormat::Rgba16Float,
+            ImageFormat::D32Float,
+        ] {
+            assert_eq!(
+                validate_image_descriptor(ImageDescriptor { format, ..desc }, 2),
+                Ok(())
+            );
+            assert_eq!(
+                validate_image_descriptor(
+                    ImageDescriptor {
+                        format,
+                        preferred_depth_clear: Some(0.25),
+                        ..desc
+                    },
+                    2
+                ),
+                if format == ImageFormat::D32Float {
+                    Ok(())
+                } else {
+                    Err(ProgramError::UsageMismatch)
+                }
+            );
+            assert_eq!(validate_image_view_descriptor(format, sampled), Ok(()));
+            assert_eq!(
+                validate_image_view_descriptor(format, depth),
+                if format == ImageFormat::D32Float {
+                    Ok(())
+                } else {
+                    Err(ProgramError::UsageMismatch)
+                }
+            );
+        }
+        for value in [0.0, 1.0] {
+            assert_eq!(
+                validate_image_descriptor(
+                    ImageDescriptor {
+                        format: ImageFormat::D32Float,
+                        preferred_depth_clear: Some(value),
+                        ..desc
+                    },
+                    2
+                ),
+                Ok(())
+            );
+        }
+        for value in [f32::NAN, f32::INFINITY, -0.25, 1.25, f32::from_bits(1)] {
+            assert_eq!(
+                validate_image_descriptor(
+                    ImageDescriptor {
+                        format: ImageFormat::D32Float,
+                        preferred_depth_clear: Some(value),
+                        ..desc
+                    },
+                    2
+                ),
+                Err(ProgramError::InvalidClearValue)
+            );
+        }
+        let view = depth;
         for invalid in [
             ImageViewDescriptor {
                 base_mip_level: 1,
@@ -794,7 +905,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                validate_image_view_descriptor(invalid),
+                validate_image_view_descriptor(ImageFormat::D32Float, invalid),
                 Err(ProgramError::InvalidViewRange)
             );
         }

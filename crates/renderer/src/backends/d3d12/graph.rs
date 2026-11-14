@@ -30,7 +30,7 @@ enum PlannedOperation<'a> {
     #[cfg(test)]
     ManagedFixture {
         binding: &'a super::program::D3D12Bindings,
-        pixels: Option<&'a [u8]>,
+        initialize: Option<super::program::ImageInitialization<'a>>,
     },
     Upload {
         dst: usize,
@@ -164,6 +164,8 @@ struct Work {
     managed_bindings: Vec<super::program::D3D12Bindings>,
     #[cfg(test)]
     resource_leases: Vec<super::program::ExecutionLease>,
+    #[cfg(test)]
+    depth_targets: Vec<super::program::DepthTarget>,
     buffers: Vec<Option<DeviceBuffer>>,
     staging: Vec<DeviceBuffer>,
     scratch: Vec<DeviceBuffer>,
@@ -225,6 +227,8 @@ impl Work {
             managed_bindings: Vec::new(),
             #[cfg(test)]
             resource_leases: Vec::new(),
+            #[cfg(test)]
+            depth_targets: Vec::new(),
             buffers,
             staging: Vec::new(),
             scratch: Vec::new(),
@@ -238,10 +242,14 @@ impl Work {
         for operation in plan.operations {
             match operation {
                 #[cfg(test)]
-                PlannedOperation::ManagedFixture { binding, pixels } => {
-                    let recording = binding.record_fixture(&work.list, pixels)?;
+                PlannedOperation::ManagedFixture {
+                    binding,
+                    initialize,
+                } => {
+                    let recording = binding.record_fixture(&work.list, initialize)?;
                     work.resource_leases.extend(recording.leases);
                     work.staging.extend(recording.staging);
+                    work.depth_targets.extend(recording.depth_targets);
                     work.readbacks.push(Readback {
                         pass: 0,
                         size: recording.size,
@@ -478,14 +486,29 @@ impl D3D12Runtime {
         binding: &super::program::D3D12Bindings,
         pixels: Option<&[u8]>,
     ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        self.prepare_fixture(binding, pixels)
+        self.prepare_fixture(
+            binding,
+            pixels.map(super::program::ImageInitialization::Upload),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn prepare_depth_fixture(
+        &self,
+        binding: &super::program::D3D12Bindings,
+        clear: Option<&super::image::D3D12ImageView>,
+    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
+        self.prepare_fixture(
+            binding,
+            clear.map(|view| super::program::ImageInitialization::DepthClear { view }),
+        )
     }
 
     #[cfg(test)]
     fn prepare_fixture(
         &self,
         binding: &super::program::D3D12Bindings,
-        pixels: Option<&[u8]>,
+        initialize: Option<super::program::ImageInitialization<'_>>,
     ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
         binding.check_owner(&self.device)?;
         let work = Work::prepare(
@@ -493,7 +516,10 @@ impl D3D12Runtime {
             Plan {
                 graph: 0,
                 buffers: vec![],
-                operations: vec![PlannedOperation::ManagedFixture { binding, pixels }],
+                operations: vec![PlannedOperation::ManagedFixture {
+                    binding,
+                    initialize,
+                }],
             },
             false,
         )?;
@@ -611,6 +637,8 @@ impl D3D12Submission {
             managed_bindings,
             #[cfg(test)]
             resource_leases,
+            #[cfg(test)]
+            depth_targets,
             owner,
             buffers,
             staging,
@@ -622,6 +650,8 @@ impl D3D12Submission {
         // Release every completed command/resource reference before possibly
         // releasing the last owner. The owner keeps final-release diagnostics
         // active; a partial pattern with `..` would defer these fields too far.
+        #[cfg(test)]
+        drop(depth_targets);
         drop((buffers, staging, scratch, list, _allocator, fence));
         #[cfg(test)]
         {

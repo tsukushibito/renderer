@@ -333,13 +333,18 @@ source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/fo
 Viewはfull color範囲、Samplerは`NearestClamp`に限定する。
 `.2.1.5`は`ImageFormat::Rgba16Float`と`ManagedProgram::sampled_float_readback()`を加える。
 同じ2D/full View/nearest samplerでRGBA16FをFP32としてsampleし、全RGBAをbit列で返す。
+`.2.1.6`は`ImageFormat::D32Float`と`ImageViewDescriptor.usage`を加える。
+Viewの用途は既定の`ImageViewUsage::Sampled`と、D32専用の`DepthAttachment`を区別する。
+D32はattachment/sample両用途を持ち、aspectはformatから導出する。
+`ImageDescriptor::preferred_depth_clear`はD32の予定clear値を指定できる。色は`None`とし、
+D32の`Some`は[0,1]の有限・非subnormal値を使う。この指定で画像内容は初期化されない。
 [`program` moduleの例](../../crates/renderer/src/program.rs)は両APIの公開型でRustdocコンパイルする。
 Uniformのbyte更新は新しいbuffer/bindingを作り、旧参照の内容を変更しない。
 Storageの版/範囲は保持するが本文はGPU更新可能で、作成直後は未初期化である。
 binding集合は全slotを満たす必要があり、入力順は自由で、成功後はProgram/資源/範囲を所有する。
 `Binding`はslotと`BindingResource::{Buffer, ImageView, Sampler}`を持つ。
 画像の作成/参照保持は内容初期化を意味せず、作成時の暗黙upload/submit/waitはない。
-一般Graph dispatch/画像uploadとdepth/他format/mip/layer/filterは後続へ残す。
+一般Graph dispatch/画像uploadと他format/mip/layer/filter、comparison sampler/PCFは後続へ残す。
 
 SDKなしのABI契約回帰は次を使う。生成条件を更新した場合は[shader再生成](tooling.md)も実行する。
 
@@ -356,6 +361,8 @@ Storage出力は公開APIで作成し、private fixtureは各shaderが初期化�
 sampled fixtureは同じ2x2非対称RGBA8をnearest/clampの4座標で読み、入力16 byteへpackして照合する。
 同じ受入でRGBA16Fの32-byte入力も読み、4 texelの全RGBAを64-byteのFP32 bit列へ返す。
 halfで正確に表せる負値・小数・1超の値を使い、既存RGBA8と新RGBA16Fの旧版/新版をそれぞれ照合する。
+D32はdepth attachment全域を0.25/0.75へclearし、同じfloat shaderでsampleした4 texelのR成分を
+FP32 bit列で照合する。旧版reuseは再clearしない。attachment Viewをsampled bindingへ渡す入力は拒否する。
 ImageとStorageの両方を記録/pendingから排他保護し、View/Image/sampler/heapの最終解放も確認する。
 
 ```powershell
