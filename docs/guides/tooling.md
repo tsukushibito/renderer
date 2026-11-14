@@ -140,11 +140,12 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
 - Compositeのcombined samplerはHLSLで`t0`と`s0`へ分かれるが、`texelFetch`は`Texture2D.Load`になる。
   DXCは未使用の`s0`を除去し、実reflectionのactive bindingは`t0`だけである。
 - `uniform.comp`はlocal size 1×1×1、`std140`の`uvec4`をset 0/binding 0から読み、
-  private受入用のset 1/binding 0へ書く。両blockはmember offset 0、16 byteである。
+  Storageのset 1/binding 0へ書く。両blockはmember offset 0、16 byteである。
   HLSL/DXILでは`b0/space0`と`RWByteAddressBuffer u0/space1`へ対応する。
   `uniform-abi.ps1`がSPIRV-CrossのJSON reflectionとDXC reflectionを契約へ照合し、
   slot/type/count/offset/size/local sizeや余分な資源の不一致を生成前の検証で拒否する。
   SDK不要の`test-uniform-abi.ps1`は改変したreflection/契約が拒否されることも確認し、CIで実行する。
+  Rustのmanifest binding表も通常CPU試験で生成reflectionへ照合し、runtimeでの再reflectionを避ける。
 
 変換optionの意味は[採用版SPIRV-Cross CLI](https://github.com/KhronosGroup/SPIRV-Cross/blob/vulkan-sdk-1.4.341.0/main.cpp)を参照する。
 この生成確認は静的ABI・再現性の証拠であり、それ自体では実GPUの内容一致を証明しない。

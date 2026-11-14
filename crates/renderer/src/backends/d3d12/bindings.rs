@@ -413,6 +413,7 @@ pub struct D3D12_RANGE {
     pub Begin: usize,
     pub End: usize,
 }
+pub const D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT: i32 = 16;
 pub const D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT: i32 = 4096;
 #[repr(C)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

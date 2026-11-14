@@ -275,34 +275,43 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 
 <a id="managed-uniform"></a>
 
-### 管理下Programと不変uniform binding
+### 管理下Programとbuffer binding
 
-`renderer-7ft.2.1.1`は、共通の`program::ManagedProgram`からnative Programを作成する
-最初の範囲である。既存の固定`ProgramKind`へ効果を追加せず、Graph非依存の
-`managed` moduleがpipeline、layout、uniform allocation、bindingの所有を担当する。
-一般owned passとの接続、storage/画像の公開binding API、任意shader取込は後続へ残す。
+`renderer-7ft.2.1.2`は、共通の`program::ManagedProgram`からnative Programを作成し、
+UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
+moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
+一般owned passとの接続、画像のbinding、任意shader取込は後続へ残す。
 
 safeな入口はレビュー済みの`ManagedProgram::uniform_readback()`だけである。
 GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
-`std140 uvec4`（offset 0、16 byte）を読み、private受入用のset 1/binding 0へ
+`std140 uvec4`（offset 0、16 byte）を読み、Storageのset 1/binding 0へ
 16 byteを書く。一つのinvocationだけを実行し、値依存の範囲外アクセスや競合を作らない。
 reflection・hashだけで任意source/binaryを信頼済みへ昇格させる機能は提供しない。
-生成時にSPIR-VとDXILのreflectionをABI契約へ照合する。
+生成時にSPIR-VとDXILのreflectionをABI契約へ照合する。CPU試験でRustのmanifest表も
+生成reflectionへ結び付け、kind/group/binding/minimum byte数を一致させる。
 
-作成時に実Deviceのcompute/descriptor上限とABIを検査する。uniform bufferは
-`UNIFORM_BUFFER`用途のVMA allocationへ初期byteを一度write/flushし、公開後の
-map/上書きを許可しない。`std140`を使い、UBO標準layoutやscalar layout featureを要求しない。
-binding作成時にProgramとbufferのowner、slot、論理byte範囲、
-`minUniformBufferOffsetAlignment`と`maxUniformBufferRange`を照合する。
-descriptor pool/setを新規作成して一度だけ更新し、不変bindingがProgramとbufferを強保持する。
-新しいbyteやbindingは新しいownerへ作り、旧参照のbyteやdescriptorを変更しない。
-失効操作を公開しないため、確立したABI・範囲を記録時に再走査する必要はない。
-native失敗、容量、同期、実GPU完了と所有の保持は製品構成にも残す。
+作成時に実Deviceのcompute/descriptor上限とABIを検査し、manifest表からgroupごとの
+set layoutを作る。`create_managed_buffer`はUniformとStorageを受け、既存Graph registryの
+`create_buffer`とは所有の役割が異なる。Uniformは`UNIFORM_BUFFER`のVMA allocationへ
+初期byteを一度write/flushし、公開後のCPU上書きを許可しない。Storageは
+`STORAGE_BUFFER|TRANSFER_SRC`、`AutoPreferDevice`で未初期化作成し、CPU mapを公開しない。
+`std140`を使い、UBO標準layoutやscalar layout featureを要求しない。
 
-受入のstorage出力とそのdescriptor setは`cfg(test)`に限定し、公開uniform setを更新せず
-別setとして保持する。記録・未投入cancel・pendingの退役には既存のtransfer所有経路を使う。
-pendingで参照を失う場合もGPU完了または既存の不確定失敗時の保持契約を守る。
-これを一般Graph dispatchやstorage資源の公開対応済みとは扱わない。
+`create_bindings`は全slotの過不足・重複、用途、owner、論理範囲を検査し、uniform/storage
+それぞれの実Device offset alignmentと最大rangeを満たすことを保証する。入力順は自由で、
+成功後はmanifest順のProgram・全buffer・範囲を強保持する。pool/setを新規作成し一度だけupdateする。
+Uniform専用の作成API・型とconsumerは共通APIへ置換し、互換wrapperを残さない。
+一資源の用途をUniformかStorageに固定し、両用途への同一資源aliasを許可しない。
+不変なのはProgram/descriptor/資源の版と範囲であり、Storage本文はGPUが書き換えられる。
+作成成功や`StorageWrite`だけで初期化済みにはしない。このshaderが確立するのは指定offsetの16 byteだけである。
+失効操作を公開しないABI・範囲を記録時に再走査せず、native失敗、容量、同期、実GPU完了と所有は製品に残す。
+
+受入は公開APIで作成したStorageを使い、命令記録とreadbackだけを`cfg(test)`へ限定する。
+fixture専用の排他leaseで同一Storageへの重複記録を拒否し、cancelまたは実Fence完了で返す。
+reuse時のshader write/copy readから次のshader writeへの依存も記録する。
+leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早期に返さない。
+この試験用state/lease/入力は通常buildに含めない。一般Graph導入時には製品の
+計画・状態・所有を接続する必要があり、今回の作成APIだけで一般dispatchの同期を保証したとは扱わない。
 実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
 
 ## 投入・完了・異常時の保持

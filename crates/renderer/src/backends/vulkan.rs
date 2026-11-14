@@ -22,7 +22,7 @@ mod resources;
 mod transfer;
 
 pub use instance::ValidationMode;
-pub use managed::{VulkanProgram, VulkanUniformBinding, VulkanUniformBuffer};
+pub use managed::{VulkanBindings, VulkanBuffer, VulkanProgram};
 
 // Test-only cross-API identity check. Use the actual Required-validation Device
 // selection path rather than a second adapter selector just for D3D12 evidence.

@@ -258,22 +258,21 @@ impl VulkanRuntime {
         super::managed::VulkanProgram::create(Arc::clone(&self.owner), program)
     }
 
-    /// Copy uniform bytes once. Updating creates a new buffer version.
-    pub fn create_uniform_buffer(
+    /// Create an owned uniform or storage buffer independently of any Graph.
+    pub fn create_managed_buffer(
         &self,
-        bytes: &[u8],
-    ) -> Result<super::managed::VulkanUniformBuffer, RuntimeError> {
-        super::managed::VulkanUniformBuffer::create(Arc::clone(&self.owner), bytes)
+        desc: crate::program::BufferDescriptor<'_>,
+    ) -> Result<super::managed::VulkanBuffer, RuntimeError> {
+        super::managed::VulkanBuffer::create(Arc::clone(&self.owner), desc)
     }
 
-    /// Create an immutable set retaining this exact program and buffer version.
-    pub fn create_uniform_binding(
+    /// Create immutable sets retaining this exact Program and buffer versions.
+    pub fn create_bindings(
         &self,
         program: &super::managed::VulkanProgram,
-        buffer: &super::managed::VulkanUniformBuffer,
-        desc: crate::program::UniformBindingDesc,
-    ) -> Result<super::managed::VulkanUniformBinding, RuntimeError> {
-        super::managed::VulkanUniformBinding::create(&self.owner, program, buffer, desc)
+        bindings: &[crate::program::BufferBinding<'_, super::managed::VulkanBuffer>],
+    ) -> Result<super::managed::VulkanBindings, RuntimeError> {
+        super::managed::VulkanBindings::create(&self.owner, program, bindings)
     }
 
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {

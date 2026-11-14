@@ -7,11 +7,12 @@
 
 <a id="managed-uniform"></a>
 
-## 管理下uniform Programの最初の二API実装
+## 管理下buffer Programの二API実装
 
-`renderer-7ft.2.1.1`。`program::ManagedProgram`とVulkan/D3D12のProgram・uniform
-buffer・binding作成APIを追加した。親`renderer-7ft.2.1`の一般storage/画像/View/sampler、
-RGBA16F/depth等と、`.2.2`以降のowned Graph実行は未完了である。
+`renderer-7ft.2.1.2`。`program::ManagedProgram`のmanifest表からVulkan/D3D12のnative
+layout/root slotを導出し、Uniform/Storageの共通buffer・binding作成APIへ移行した。
+Uniform専用型/APIとin-repo consumerを置換し、Storageの公開作成物を受入出力に使う。
+親`renderer-7ft.2.1`の画像/View/sampler、RGBA16F/depth等と、`.2.2`以降のowned Graph実行は未完了である。
 [作成保証とVulkan所有](../design/vulkan.md#managed-uniform)、
 [D3D12のroot descriptorと保証](../design/implementation-policy.md#d3d12の管理下programとuniform)、
 [再実行](../guides/development.md#管理下uniform-programの作成と受入)を参照する。
@@ -19,37 +20,42 @@ RGBA16F/depth等と、`.2.2`以降のowned Graph実行は未完了である。
 安全なshader入口はレビュー済みの1本に限定し、生成時にSPIR-V/DXIL reflectionの
 slot/type/count/member offset/size/local sizeを照合する。固定SDKによる6本の再生成Verify、
 ABI改変を拒否するSDK不要CPU試験、D3D12 bindings再生成Verifyが成功した。
-既存5本のshader binaryは不変である。新SPIR-Vは
+全6本のshader binaryは不変で、説明と生成manifestのhashだけを更新した。管理下fixtureのSPIR-Vは
 `edac2e89ee1a9ef1ed23ee961fa74e7a4420b2920ed97371d9cec65c2484c075`、DXILは
 `04d57252459a6480e068fd0bcfdc3fc2c56dc64983d95a57f2b4511dc7620f8c`。
-bindingsは`8c7a7929a2c0197d9e79261e30d87124741e8cea18c9c084f5ffdb8ef29fa7e6`で一致した。
+bindingsは`21215e9b169fb7d883bf0a869ad1b91fe247ea7b6ae6e1fd5371dede1a7dc891`で一致した。
 
-作成境界でABI、owner、slot、範囲とDevice alignmentを保証し、privateな不変ownerが
-Program・descriptor・byteを保持する。更新は新しい版の作成であり、既存版を失効・上書きしない。
+Rustのmanifest表と生成reflectionのkind/group/slot/minimum byte数をCPU試験で照合する。
+作成境界でbinding集合の欠落/重複/余剰、用途、ABI、owner、論理範囲とDevice alignmentを保証し、
+成功後はmanifest順にProgram・descriptor・全bufferの版と範囲を保持する。
+Uniform更新は新しい資源/binding版を作り、旧byteを上書きしない。Storage本文はGPU可変であり、
+作成成功やStorageWrite指定で全rangeの初期化を認めない。固定shaderが書く16 byteだけを内容照合する。
 製品構成でもnative失敗・容量・同期・実完了・GPU所有の保持は維持する。
-テスト専用出力、入力byte、失敗注入と専用記録は`cfg(test)`で通常buildから除外する。
+Storage資源の作成・descriptorは通常buildに残し、入力byte・失敗注入・専用記録/readback・
+private executor専用Storage lease/busy/usedは`cfg(test)`で通常buildから除外する。
 Vulkanは通常のsetとstd140、D3D12はこの小さいfixtureに限るroot CBV/UAVを基準とした。
 push constant/device-local化やdescriptor方式の性能優位、一般shaderの安全性は主張しない。
 
 Windows x64/Rust 1.99.0でfmt、CPUのみ・製品・開発の全target Clippy（`-D warnings`）、
-CPUのみの通常69件、製品release通常187件、開発debug/release通常198件が成功した。
+CPUのみの通常70件、製品release通常189件、開発debug/release通常200件が成功した。
 両backendの公開作成例はRustdocでコンパイルし、追加の1件が各構成で成功した。
 新規codeの独立レビューで修正必須の指摘はない。
 
 RTX 3060でreleaseの実GPU試験を逐次実行した。
-新fixtureは共通の非対称な旧/新byte列を272-byte論理bufferのoffset 256へ置き、
-両APIとも各16 byteが期待値と全byte一致した。caller入力の変更、旧Program/UBO/bindingの保持、
-不正slot/範囲/alignment・owner拒否、記録済み未投入cancel、runtime facade先dropを確認した。
+fixtureは共通の非対称な旧/新byte列と、公開APIで作成した272-byte Storageのoffset 256を使い、
+両APIとも書込先の16 byteだけが期待値と全byte一致した。caller入力の変更、旧Program/資源/bindingの保持、
+逆順binding入力、欠落/重複/余剰/用途/slot/範囲/alignment・owner拒否、記録済み未投入cancelと
+busy拒否、実完了後の同一Storage再利用、runtime facade先dropを確認した。
 D3D12ではroot signature作成後の注入失敗からの再試行も成功した。
 strictはCore/SyncValまたはDebug Layer/GBVの実効を確認し、shaderを実際に実行して
 最終native解放後まで警告・error・corruption・callback問題ゼロだった。
 製品構成の両APIでも同じbyte一致を別processで確認したが、診断除外構成の成功を
 外部Layer不存在やnative診断有効の証明とは扱わない。
 
-既存回帰を含め、strict Vulkan 47件（表示・resize/cancel/pending終了と新uniformを含む）、
-strict D3D12準備/runtime/新uniformの3件、D3D12 buffer寿命1件、共有bufferのstrict/製品各1件、
-Vulkan製品mesh 1件、新uniform製品2件の合計56件が成功した。
-ローカルの詳細ログは`.tools/b1-uniform/gates/`に保存した。
+既存回帰を含め、strict Vulkan 47件（表示・resize/cancel/pending終了とmanaged Storageを含む）、
+strict D3D12準備/runtime/managed Storageの3件、D3D12 buffer寿命1件、共有bufferのstrict/製品各1件、
+Vulkan製品mesh 1件、managed Storage製品2件の合計56件が成功した。
+ローカルの詳細ログは`.tools/b1-storage/gates/`に保存した。
 Vulkan CPUアクセス拒否の負の試験が出すRendererログはnative Validation診断と区別する。
 
 Linux実GPU、別GPU/driver、一般shader/画像/Graph実行、性能・長時間耐久、実native OOM/

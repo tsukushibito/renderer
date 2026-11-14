@@ -1,140 +1,71 @@
-//! Native acceptance for the managed interface without a general Graph encoder.
-
-use std::ffi::CStr;
-use std::time::Duration;
+//! Acceptance uses public buffer/binding creation and a private exclusive executor.
 
 use super::*;
-use crate::backends::vulkan::buffer::{BufferRole, VulkanBuffer};
+use crate::backends::vulkan::buffer::{BufferRole, VulkanBuffer as TransferBuffer};
 use crate::backends::vulkan::graph::{RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::memory::VulkanAllocator;
 use crate::backends::vulkan::transfer::{
     RecordedTransfer, TransferError, TransferPayload, record_host_read,
 };
+use std::ffi::CStr;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
-struct Output {
-    owner: Arc<MemoryOwner>,
-    handle: vk::Buffer,
-    allocation: vk_mem::Allocation,
+struct StorageLease {
+    buffer: VulkanBuffer,
+    reused: bool,
 }
-impl Drop for Output {
-    fn drop(&mut self) {
-        // SAFETY: The fixture payload owns this unaliased output through GPU
-        // retirement and retains its allocator. No raw handle escapes it.
-        unsafe {
-            self.owner
-                .raw
-                .destroy_buffer(self.handle, &mut self.allocation)
-        };
+impl StorageLease {
+    fn acquire(buffer: VulkanBuffer) -> Result<Self, RuntimeError> {
+        buffer
+            .0
+            .storage
+            .busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| RuntimeError::capacity("storage output is already recorded or pending"))?;
+        let reused = buffer.0.storage.used.load(Ordering::Acquire);
+        Ok(Self { buffer, reused })
     }
 }
-
-struct OutputBinding {
-    program: VulkanProgram,
-    output: Output,
-    pool: vk::DescriptorPool,
-    set: vk::DescriptorSet,
-}
-impl Drop for OutputBinding {
+impl Drop for StorageLease {
     fn drop(&mut self) {
-        // SAFETY: The recording/pending payload is the sole set owner; Drop is
-        // reached only for cancellation or proven retirement. Destroy the pool
-        // before its separately retained Program/layout and output allocation.
-        unsafe {
-            self.program
-                .0
-                .owner
-                .device
-                .raw()
-                .destroy_descriptor_pool(self.pool, None)
-        };
+        self.buffer.0.storage.busy.store(false, Ordering::Release);
     }
 }
 
 struct Work {
-    binding: VulkanUniformBinding,
-    output: OutputBinding,
-    readback: VulkanBuffer,
+    bindings: VulkanBindings,
+    output: Option<StorageLease>,
+    output_index: usize,
+    readback: TransferBuffer,
 }
 impl Work {
-    fn new(binding: VulkanUniformBinding) -> Self {
-        let program = binding.0.program.clone();
-        let owner = Arc::clone(&program.0.owner);
-        let info = vk::BufferCreateInfo::default()
-            .size(16)
-            .usage(vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let allocation_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::AutoPreferDevice,
-            ..Default::default()
-        };
-        // SAFETY: Fixed nonzero unaliased output, retained allocator and Device.
-        let (handle, allocation) =
-            unsafe { owner.raw.create_buffer(&info, &allocation_info) }.unwrap();
-        let mut output = OutputBinding {
-            program,
-            output: Output {
-                owner: Arc::clone(&owner),
-                handle,
-                allocation,
-            },
-            pool: vk::DescriptorPool::null(),
-            set: vk::DescriptorSet::null(),
-        };
-        let sizes = [vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 1,
-        }];
-        // SAFETY: Fresh private set written once before recording; the payload
-        // retains the output range and program/layout through every native use.
-        unsafe {
-            output.pool = owner
-                .device
-                .raw()
-                .create_descriptor_pool(
-                    &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(1)
-                        .pool_sizes(&sizes),
-                    None,
-                )
-                .unwrap();
-            let layouts = [output.program.0.output_set];
-            output.set = owner
-                .device
-                .raw()
-                .allocate_descriptor_sets(
-                    &vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(output.pool)
-                        .set_layouts(&layouts),
-                )
-                .unwrap()[0];
-            let buffers = [vk::DescriptorBufferInfo::default()
-                .buffer(handle)
-                .offset(0)
-                .range(16)];
-            let writes = [vk::WriteDescriptorSet::default()
-                .dst_set(output.set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&buffers)];
-            owner.device.raw().update_descriptor_sets(&writes, &[]);
-        }
-        let readback = VulkanAllocator { owner }
-            .create_buffer(BufferRole::Readback, 16)
+    fn new(bindings: VulkanBindings) -> Result<Self, RuntimeError> {
+        let output_index = bindings
+            .0
+            .program
+            .layout()
+            .iter()
+            .position(|b| b.kind == BufferBindingType::StorageWrite)
             .unwrap();
-        Self {
-            binding,
-            output,
+        let output = StorageLease::acquire(bindings.0.buffers[output_index].clone())?;
+        let allocator = VulkanAllocator {
+            owner: Arc::clone(&bindings.0.program.0.owner),
+        };
+        let readback = allocator.create_buffer(BufferRole::Readback, 16).unwrap();
+        Ok(Self {
+            bindings,
+            output: Some(output),
+            output_index,
             readback,
-        }
+        })
     }
-
     fn read(&mut self) -> [u8; 16] {
         let mut result = [0; 16];
         self.readback.read(0, &mut result).unwrap();
         result
     }
 }
-
 impl TransferPayload for Work {
     fn validate(&self) -> Result<(), TransferError> {
         self.owner()
@@ -143,34 +74,53 @@ impl TransferPayload for Work {
             .map_err(TransferError::DeviceUnavailable)
     }
     fn owner(&self) -> &Arc<MemoryOwner> {
-        &self.binding.0.program.0.owner
+        &self.bindings.0.program.0.owner
     }
     fn bytes(&self) -> u64 {
         16
     }
     fn label(&self) -> &'static CStr {
-        c"managed.uniform-readback"
+        c"managed.storage-readback"
     }
-
     unsafe fn record(&self, command: vk::CommandBuffer) {
-        let program = &self.binding.0.program.0;
+        let program = &self.bindings.0.program.0;
         let device = &program.owner.device;
-        let sets = [self.binding.0.set, self.output.set];
-        let barrier = [vk::BufferMemoryBarrier2::default()
+        let output = self.output.as_ref().unwrap();
+        let desc = self.bindings.0.descs[self.output_index];
+        let reused = [vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::COPY)
+            .src_access_mask(
+                vk::AccessFlags2::SHADER_STORAGE_WRITE | vk::AccessFlags2::TRANSFER_READ,
+            )
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .buffer(output.buffer.0.handle)
+            .offset(0)
+            .size(output.buffer.len())];
+        let to_copy = [vk::BufferMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
             .dst_stage_mask(vk::PipelineStageFlags2::COPY)
             .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .buffer(self.output.output.handle)
-            .offset(0)
+            .buffer(output.buffer.0.handle)
+            .offset(desc.offset)
             .size(16)];
-        // SAFETY: One reviewed invocation reads/writes exactly the checked
-        // 16-byte ranges. The immutable sets, pipeline, buffers and owner remain
-        // retained by this payload. Submit makes flushed host writes available;
-        // explicit shader-to-copy and copy-to-host dependencies follow.
+        // SAFETY: This executor exclusively leases the Storage output from
+        // recording through cancel or actual retirement. The reviewed shader
+        // writes exactly 16 bytes within the validated descriptor. Immutable
+        // sets/pipeline/buffers remain retained. Prior accepted use is ordered
+        // before reuse, then shader writes before copy and copy before host.
         unsafe {
+            if output.reused {
+                device.raw().cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default().buffer_memory_barriers(&reused),
+                );
+            }
             device.raw().cmd_bind_pipeline(
                 command,
                 vk::PipelineBindPoint::COMPUTE,
@@ -181,43 +131,81 @@ impl TransferPayload for Work {
                 vk::PipelineBindPoint::COMPUTE,
                 program.layout,
                 0,
-                &sets,
+                &self.bindings.0.sets,
                 &[],
             );
             device.raw().cmd_dispatch(command, 1, 1, 1);
             device.raw().cmd_pipeline_barrier2(
                 command,
-                &vk::DependencyInfo::default().buffer_memory_barriers(&barrier),
+                &vk::DependencyInfo::default().buffer_memory_barriers(&to_copy),
             );
             device.raw().cmd_copy_buffer(
                 command,
-                self.output.output.handle,
+                output.buffer.0.handle,
                 self.readback.transfer_handle(),
-                &[vk::BufferCopy::default().size(16)],
+                &[vk::BufferCopy::default().src_offset(desc.offset).size(16)],
             );
             record_host_read(device, command);
         }
     }
-
+    fn submitted(&mut self) {
+        self.output
+            .as_ref()
+            .unwrap()
+            .buffer
+            .0
+            .storage
+            .used
+            .store(true, Ordering::Release);
+    }
     unsafe fn establish_contents(&mut self) {
-        // SAFETY: Transfer retirement proved successful completion on an active
-        // Device. The dispatch and copy wrote all 16 readback bytes.
+        // SAFETY: Actual successful Fence wait on active Device proved the
+        // dispatch/copy completed and initialized every readback byte.
         unsafe { self.readback.establish_gpu_contents() };
+        self.output.take();
     }
 }
 
-fn descriptor() -> UniformBindingDesc {
-    UniformBindingDesc {
-        group: 0,
+fn desc(group: u32) -> BufferBindingDesc {
+    BufferBindingDesc {
+        group,
         binding: 0,
         offset: 256,
         size: 16,
     }
 }
+fn bind(
+    runtime: &VulkanRuntime,
+    program: &VulkanProgram,
+    uniform: &VulkanBuffer,
+    storage: &VulkanBuffer,
+    uniform_desc: BufferBindingDesc,
+    storage_desc: BufferBindingDesc,
+) -> Result<VulkanBindings, RuntimeError> {
+    // Deliberately reverse caller order to exercise canonical manifest ordering.
+    runtime.create_bindings(
+        program,
+        &[
+            BufferBinding {
+                buffer: storage,
+                desc: storage_desc,
+            },
+            BufferBinding {
+                buffer: uniform,
+                desc: uniform_desc,
+            },
+        ],
+    )
+}
+fn invalid(result: Result<VulkanBindings, RuntimeError>) {
+    assert!(
+        matches!(result, Err(error) if error.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
+    );
+}
 
 #[test]
-#[ignore = "explicit real-GPU managed uniform ABI, immutable versions and ownership; run strict and shipping separately"]
-fn vulkan_managed_uniform_creation_and_versions() {
+#[ignore = "explicit real-GPU public uniform/storage bindings, versions, exclusion and reuse; run strict and shipping separately"]
+fn vulkan_managed_storage_creation_and_versions() {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
         let runtime = VulkanRuntime::new(RuntimeConfig::default()).unwrap();
@@ -238,99 +226,193 @@ fn vulkan_managed_uniform_creation_and_versions() {
             monitor.report().requested,
             crate::backends::vulkan::ValidationMode::Disabled
         );
-
         let managed = ManagedProgram::uniform_readback();
         let program = runtime.create_program(&managed).unwrap();
+        assert_eq!(program.layout(), managed.bindings());
         let [expected, newer_expected] = crate::program::UNIFORM_TEST_DATA;
         let mut bytes = vec![0; 272];
         bytes[256..].copy_from_slice(&expected);
-        let buffer = runtime.create_uniform_buffer(&bytes).unwrap();
-        assert_eq!(buffer.len(), 272);
-        bytes[256..].fill(0); // Caller mutation cannot alter published contents.
-        let binding = runtime
-            .create_uniform_binding(&program, &buffer, descriptor())
+        let uniform = runtime
+            .create_managed_buffer(BufferDescriptor::Uniform { bytes: &bytes })
             .unwrap();
-        assert_eq!(binding.desc(), descriptor());
-        assert_eq!(program.uniform_layout(), managed.uniform_layout());
-        for desc in [
-            UniformBindingDesc {
-                group: 1,
-                ..descriptor()
-            },
-            UniformBindingDesc {
+        let storage = runtime
+            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+            .unwrap();
+        assert_eq!(uniform.len(), 272);
+        assert_eq!(storage.len(), 272);
+        assert_eq!(uniform.usage(), BufferUsage::Uniform);
+        assert_eq!(storage.usage(), BufferUsage::Storage);
+        bytes[256..].fill(0);
+        let bindings = bind(&runtime, &program, &uniform, &storage, desc(0), desc(1)).unwrap();
+        assert_eq!(bindings.descs(), &[desc(0), desc(1)]);
+        for bad in [
+            BufferBindingDesc {
                 binding: 1,
-                ..descriptor()
+                ..desc(1)
             },
-            UniformBindingDesc {
-                offset: 1,
-                ..descriptor()
-            },
-            UniformBindingDesc {
+            BufferBindingDesc { size: 0, ..desc(1) },
+            BufferBindingDesc {
                 size: 15,
-                ..descriptor()
+                ..desc(1)
             },
-            UniformBindingDesc {
+            BufferBindingDesc {
                 size: 17,
-                ..descriptor()
+                ..desc(1)
+            },
+            BufferBindingDesc {
+                size: u64::MAX,
+                ..desc(1)
             },
         ] {
-            assert!(
-                matches!(runtime.create_uniform_binding(&program, &buffer, desc),
-                Err(error) if error.kind() == super::super::error::RuntimeErrorKind::InvalidInput)
-            );
+            invalid(bind(&runtime, &program, &uniform, &storage, desc(0), bad));
         }
-        assert!(matches!(runtime.create_uniform_buffer(&[]),
-            Err(error) if error.kind() == super::super::error::RuntimeErrorKind::InvalidInput));
-        // Reject another allocator/Device even when its layout and bytes match.
+        let alignment = program
+            .0
+            .owner
+            .device
+            .limits()
+            .min_storage_buffer_offset_alignment;
+        if alignment > 1 {
+            invalid(bind(
+                &runtime,
+                &program,
+                &uniform,
+                &storage,
+                desc(0),
+                BufferBindingDesc {
+                    offset: 1,
+                    ..desc(1)
+                },
+            ));
+        }
+        invalid(bind(
+            &runtime,
+            &program,
+            &storage,
+            &uniform,
+            desc(0),
+            desc(1),
+        ));
+        invalid(runtime.create_bindings(
+            &program,
+            &[BufferBinding {
+                buffer: &uniform,
+                desc: desc(0),
+            }],
+        ));
+        invalid(bind(
+            &runtime,
+            &program,
+            &uniform,
+            &storage,
+            desc(0),
+            desc(0),
+        ));
+        for request in [
+            BufferDescriptor::Uniform { bytes: &[] },
+            BufferDescriptor::Storage { size: 0 },
+            BufferDescriptor::Storage { size: u64::MAX },
+        ] {
+            assert!(matches!(runtime.create_managed_buffer(request), Err(error)
+                if error.kind() == super::super::error::RuntimeErrorKind::InvalidInput));
+        }
         let foreign = VulkanRuntime::new(RuntimeConfig::default()).unwrap();
         let foreign_monitor = foreign.validation_monitor();
-        let foreign_buffer = foreign.create_uniform_buffer(&[0; 272]).unwrap();
+        let foreign_storage = foreign
+            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+            .unwrap();
         assert!(
-            matches!(runtime.create_uniform_binding(&program, &foreign_buffer, descriptor()),
+            matches!(bind(&runtime, &program, &uniform, &foreign_storage, desc(0), desc(1)),
             Err(error) if error.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
         );
         let foreign_program = foreign.create_program(&managed).unwrap();
         assert!(
-            matches!(runtime.create_uniform_binding(&foreign_program, &buffer, descriptor()),
+            matches!(bind(&runtime, &foreign_program, &uniform, &storage, desc(0), desc(1)),
             Err(error) if error.kind() == super::super::error::RuntimeErrorKind::WrongOwner)
         );
-        drop((foreign_program, foreign_buffer, foreign));
+        drop((foreign_program, foreign_storage, foreign));
         assert!(
             foreign_monitor.report().is_clean(),
             "{:#?}",
             foreign_monitor.report()
         );
 
-        // Cancel a real recorded command before submit; its owned descriptors
-        // and buffers must be releasable without changing other bindings.
-        let canceled = RecordedTransfer::new(Work::new(binding.clone())).unwrap();
+        // Ownership alone does not serialize mutable GPU storage. A second
+        // preparation is rejected until the first recording cancels/retires.
+        let canceled = RecordedTransfer::new(Work::new(bindings.clone()).unwrap()).unwrap();
+        assert!(matches!(Work::new(bindings.clone()), Err(error)
+            if error.kind() == super::super::error::RuntimeErrorKind::CapacityExhausted));
         drop(canceled);
         let weak_program = Arc::downgrade(&program.0);
-        let weak_buffer = Arc::downgrade(&buffer.0);
-        let weak_binding = Arc::downgrade(&binding.0);
-        let recorded = RecordedTransfer::new(Work::new(binding)).unwrap();
+        let weak_uniform = Arc::downgrade(&uniform.0);
+        let weak_storage = Arc::downgrade(&storage.0);
+        let weak_bindings = Arc::downgrade(&bindings.0);
+        let recorded = RecordedTransfer::new(Work::new(bindings.clone()).unwrap()).unwrap();
         let newer_program = runtime.create_program(&managed).unwrap();
         bytes[256..].copy_from_slice(&newer_expected);
-        let newer_buffer = runtime.create_uniform_buffer(&bytes).unwrap();
-        let newer_binding = runtime
-            .create_uniform_binding(&newer_program, &newer_buffer, descriptor())
+        let newer_uniform = runtime
+            .create_managed_buffer(BufferDescriptor::Uniform { bytes: &bytes })
             .unwrap();
-        let newer_recorded = RecordedTransfer::new(Work::new(newer_binding)).unwrap();
-        drop((program, buffer, newer_program, newer_buffer));
+        let newer_storage = runtime
+            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
+            .unwrap();
+        let newer_bindings = bind(
+            &runtime,
+            &newer_program,
+            &newer_uniform,
+            &newer_storage,
+            desc(0),
+            desc(1),
+        )
+        .unwrap();
+        let reuse = bind(
+            &runtime,
+            &newer_program,
+            &newer_uniform,
+            &storage,
+            desc(0),
+            desc(1),
+        )
+        .unwrap();
+        assert!(Work::new(reuse.clone()).is_err());
+        let newer_recorded = RecordedTransfer::new(Work::new(newer_bindings).unwrap()).unwrap();
+        drop((
+            program,
+            uniform,
+            storage,
+            newer_program,
+            newer_uniform,
+            newer_storage,
+        ));
         assert!(weak_program.upgrade().is_some());
-        assert!(weak_buffer.upgrade().is_some());
-        assert!(weak_binding.upgrade().is_some());
+        assert!(weak_uniform.upgrade().is_some());
+        assert!(weak_storage.upgrade().is_some());
+        assert!(weak_bindings.upgrade().is_some());
         let mut first = recorded.submit().unwrap();
         let mut second = newer_recorded.submit().unwrap();
-        drop(runtime); // Pending work, not the facade, owns all native resources.
-        let mut second_result = second.wait(Duration::from_secs(10)).unwrap().unwrap();
+        assert!(Work::new(bindings.clone()).is_err());
+        drop(bindings);
         let mut first_result = first.wait(Duration::from_secs(10)).unwrap().unwrap();
         assert_eq!(first_result.read(), expected);
+        let reuse_recorded = RecordedTransfer::new(Work::new(reuse).unwrap()).unwrap();
+        let mut third = reuse_recorded.submit().unwrap();
+        drop(runtime);
+        let mut third_result = third.wait(Duration::from_secs(10)).unwrap().unwrap();
+        let mut second_result = second.wait(Duration::from_secs(10)).unwrap().unwrap();
         assert_eq!(second_result.read(), newer_expected);
-        drop((first_result, second_result, first, second));
+        assert_eq!(third_result.read(), newer_expected);
+        drop((
+            first_result,
+            second_result,
+            third_result,
+            first,
+            second,
+            third,
+        ));
         assert!(weak_program.upgrade().is_none());
-        assert!(weak_buffer.upgrade().is_none());
-        assert!(weak_binding.upgrade().is_none());
+        assert!(weak_uniform.upgrade().is_none());
+        assert!(weak_storage.upgrade().is_none());
+        assert!(weak_bindings.upgrade().is_none());
         let report = monitor.report();
         assert!(report.is_clean(), "final native teardown: {report:#?}");
     });

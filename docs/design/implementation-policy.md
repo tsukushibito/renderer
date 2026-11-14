@@ -1007,10 +1007,11 @@ B2 `.3.1`〜`.3.3`、B3 `.4.1`〜`.4.3`、B4 `.5.1`〜`.5.2`、B5 `.6.1`〜`.6.3
 depth-only/color-only、Compute/copy、import/exportとGPU寿命を段階実装する。
 資源format・範囲、shader信頼境界・ABI、宣言と実命令の整合、能力・errorを実証する。
 
-最初の`renderer-7ft.2.1.1`では管理下compute shader 1本とuniform buffer/bindingの
-作成・不変版の保持を二APIで実装する。結果照合用storage出力はprivate受入に限定する。
-一般storage/画像/View/sampler、RGBA16F/depth、一般owned Graphはこの範囲に含めず、
-親`renderer-7ft.2.1`と後続課題へ残す。保証境界は[管理下uniformの契約](vulkan.md#managed-uniform)、
+`renderer-7ft.2.1.1`のuniform作成から`.2.1.2`でUniform/Storageの共通buffer/layout/bindingへ
+進める。同じ管理下compute shaderを再利用し、storage出力も公開作成APIで用意する。
+native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換する。
+画像/View/sampler、RGBA16F/depth、一般owned Graphは親`renderer-7ft.2.1`と後続課題へ残す。
+保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
 
 **完了条件:** 効果専用操作をRenderer本体へ追加せず、同じ利用側パス定義と入力を二APIで実行できる。
@@ -1137,25 +1138,34 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 
 <a id="d3d12-runtime"></a>
 
-### D3D12の管理下Programとuniform
+<a id="d3d12の管理下programとuniform"></a>
 
-`renderer-7ft.2.1.1`は共通の`ManagedProgram`をSM6.0のcompute PSOとroot signatureへ
+### D3D12の管理下Programとbuffer binding
+
+`renderer-7ft.2.1.2`は共通の`ManagedProgram`をSM6.0のcompute PSOとroot signatureへ
 具体化する。既存buffer-only runtimeのDevice要件を増やさず、Program作成時にSM6.0を確認する。
-初期byteをUPLOAD allocationへ一度だけ書き、Program/UBO/bindingを不変の版として保持する。
-bindingはDevice owner、slot、offset、論理rangeとshaderの16-byte最小ABIを作成時に照合する。
-offsetは256-byte境界、論理rangeは64 KiB以下とし、native allocationの256-byte切上げを
-論理rangeの拡大には使わない。CPU mappingやnative handleを公開しない。
+`create_managed_buffer`のUniformは初期byteをUPLOAD allocationへ一度だけ書き、
+StorageはDEFAULT/ALLOW_UNORDERED_ACCESSで未初期化作成する。公開CPU mapを持たず、
+Program・binding・資源の版/用途/範囲は不変だが、Storage本文はGPUが更新できる。
+`create_bindings`は全slotの欠落/重複/余剰、Device owner、用途、offset、論理rangeと
+shaderの16-byte最小ABIを作成時に照合し、Programと全bufferをmanifest順に保持する。
+Uniformはoffset 256-byte境界/range 64 KiB以下、Storageのraw UAVはoffset 16-byte境界を使う。
+native allocationの切上げを論理rangeの拡大には使わない。旧Uniform専用APIは置換した。
 
-この小さいassetはroot CBV `b0/space0`とprivate受入用root UAV `u0/space1`を使う。
+この小さいassetはroot CBV `b0/space0`とroot UAV `u0/space1`を使う。
+kind/register/spaceとrecord root indexをmanifest表から導出し、nativeへ固定slotを持ち込まない。
 descriptor heap/tableを使う代案に対し、2資源だけの作成契約と版保持を確認するための単純な基準を選んだ。
 [root descriptorの仕様](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-descriptors-directly-in-the-root-signature)
 が許可するcounterなしのraw bufferだけを出力に使う。root descriptorにはrange境界がないため、
 レビュー済みshaderが一つのinvocationで16 byteだけアクセスすることと、不変の参照範囲を安全性の前提にする。
 shader/ABIを変更する際はこの保証を再確立する。一般shader/layoutやbindlessへの制約・性能優位は主張しない。
 
-PSO/root signatureの部分作成はCOM所有で片付け、成功したbindingは実ProgramとUBOを強保持する。
-受入用output/readbackは`cfg(test)`に限定し、既存の未投入cancel、投入前の所有確立、
-Signal失敗時の保持、Fence完了・pending退役を使う。一般storage APIやGraph dispatchは後続である。
+PSO/root signatureの部分作成はCOM所有で片付ける。作成成功やStorageWrite指定を内容初期化とは扱わず、
+private受入だけがshaderの16-byte write保証を使う。Storage出力は公開作成APIを使い、
+命令記録/readbackとStorageの排他leaseは`cfg(test)`に限定する。leaseは既存Work/Retainedへ保持し、
+未投入cancelまたは実Fence完了で返し、未完了/Signal失敗時は早期に返さない。
+fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのbusy拒否と再利用を確認する。
+一般Graph導入時の製品状態管理・同期・GPU lifetimeは後続であり、このtest-only leaseが代替するものではない。
 二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
 
 ### D3D12のDeviceとbuffer実行

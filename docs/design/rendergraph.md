@@ -53,8 +53,9 @@ D3D12のprepareはexportとliveなimport・画像・未対応操作を明示エ�
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
-Program/uniform buffer/binding作成APIを用意する。版は不変で、bindingが実Programと
-資源の所有を保持する。[管理下uniformの契約](vulkan.md#managed-uniform)を参照する。
+ProgramとUniform/Storageの共通buffer/binding作成APIを用意する。bindingはmanifest順に
+実Programと全資源の版/範囲を保持する。Storage本文はGPU可変で、作成を初期化とは扱わない。
+[管理下bufferの契約](vulkan.md#managed-uniform)を参照する。
 この作成APIとprivate GPU受入を、公開Graphの一般draw/dispatch対応とは扱わない。
 owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`へ残す。
 

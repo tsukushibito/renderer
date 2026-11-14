@@ -1,5 +1,5 @@
 {
-  "scope": "Trusted managed fixtures only. Compilation/reflection is verified. uniform.comp is the initial B1 uniform-binding round-trip; existing image/raster D3D12 execution and two-API image equivalence remain later B1 work (renderer-7ft.2.3 and renderer-7ft.2.4).",
+  "scope": "Trusted managed fixtures only. Compilation/reflection is verified. uniform.comp exercises the common B1 Uniform/Storage creation and binding contracts through private dispatch; existing image/raster D3D12 execution and two-API image equivalence remain later B1 work (renderer-7ft.2.3 and renderer-7ft.2.4).",
   "entry_point": "main",
   "shader_model": "6.0",
   "dxil_version": "1.0",
@@ -17,8 +17,8 @@
       "profile": "cs_6_0",
       "local_size": [1, 1, 1],
       "vulkan_bindings": ["set0/binding0 std140 uniform buffer, one uvec4 at byte 0, 16 bytes", "set1/binding0 std430 writeonly storage buffer, one uvec4 at byte 0, 16 bytes"],
-      "d3d12_active_bindings": ["b0/space0 cbuffer, one uint4 at byte 0, 16 logical bytes", "u0/space1 RWByteAddressBuffer private acceptance output, Store4 at byte 0"],
-      "bounds": "Host dispatches exactly one workgroup. Both ranges contain at least 16 bytes. Output is acceptance infrastructure, not a public general-storage API.",
+      "d3d12_active_bindings": ["b0/space0 cbuffer, one uint4 at byte 0, 16 logical bytes", "u0/space1 RWByteAddressBuffer storage output, Store4 at byte 0"],
+      "bounds": "Private acceptance dispatches exactly one workgroup using publicly created buffers/bindings. Both ranges contain at least 16 bytes; only the first 16 descriptor bytes are initialized by the shader. General Graph execution is subsequent work.",
       "uniform_allocation": "The logical 16-byte ABI does not replace Vulkan uniform offset/range limits or D3D12 CBV placement/range alignment and native allocation requirements.",
       "verification": "uniform-abi.ps1 mechanically checks SPIRV-Cross JSON and DXC reflected resource registers, counts, local size, uniform member type/offset and logical block size. The managed source and GPU byte round-trip establish behavior; reflection is not a proof of arbitrary shader safety."
     },
