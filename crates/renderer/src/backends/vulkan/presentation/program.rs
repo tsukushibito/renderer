@@ -64,19 +64,16 @@ impl Program {
                     None,
                 )
                 .map_err(|r| native(&program.owner, "vkCreatePipelineLayout(present)", r))?;
-            program.sampler = device
-                .create_sampler(
-                    &vk::SamplerCreateInfo::default()
-                        .mag_filter(vk::Filter::NEAREST)
-                        .min_filter(vk::Filter::NEAREST)
-                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                        .max_lod(0.0),
-                    None,
-                )
-                .map_err(|r| native(&program.owner, "vkCreateSampler(present)", r))?;
+            program.sampler = program.owner.device.create_sampler(
+                &vk::SamplerCreateInfo::default()
+                    .mag_filter(vk::Filter::NEAREST)
+                    .min_filter(vk::Filter::NEAREST)
+                    .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                    .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                    .max_lod(0.0),
+            )?;
         }
         let vertex = Module::new(
             Arc::clone(&program.owner),
@@ -155,7 +152,7 @@ impl Drop for Program {
         unsafe {
             let device = self.owner.device.raw();
             device.destroy_pipeline(self.pipeline, None);
-            device.destroy_sampler(self.sampler, None);
+            self.owner.device.destroy_sampler(self.sampler);
             device.destroy_pipeline_layout(self.layout, None);
             device.destroy_descriptor_set_layout(self.set_layout, None);
         }

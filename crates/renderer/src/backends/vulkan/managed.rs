@@ -4,21 +4,28 @@ use super::buffer::host_access::{self, VmaAccess};
 use super::error::RuntimeError;
 use super::memory::MemoryOwner;
 use crate::program::{
-    BufferBinding, BufferBindingDesc, BufferBindingLayout, BufferBindingType, BufferDescriptor,
-    BufferUsage, ManagedProgram, resolve_buffer_bindings, validate_buffer_binding,
+    Binding, BindingLayout, BindingResource, BindingType, BufferDescriptor, BufferRange,
+    BufferUsage, ManagedProgram, resolve_bindings, validate_buffer_binding,
 };
 use ash::vk;
 use std::sync::Arc;
 use vk_mem::Alloc;
 
+mod image;
+mod sampler;
+pub use image::{VulkanImage, VulkanImageView};
+pub use sampler::VulkanSampler;
+
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
     RuntimeError::native(operation, owner.device.name(), result)
 }
-fn descriptor_type(kind: BufferBindingType) -> vk::DescriptorType {
+fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
     match kind {
-        BufferBindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
-        BufferBindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
+        BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+        BindingType::Sampler => vk::DescriptorType::SAMPLER,
     }
 }
 
@@ -26,7 +33,7 @@ fn descriptor_type(kind: BufferBindingType) -> vk::DescriptorType {
 #[derive(Clone)]
 pub struct VulkanProgram(Arc<Program>);
 impl VulkanProgram {
-    pub fn layout(&self) -> &'static [BufferBindingLayout] {
+    pub fn layout(&self) -> &'static [BindingLayout] {
         self.0.bindings
     }
     pub(super) fn create(
@@ -40,13 +47,21 @@ impl VulkanProgram {
         let bindings = managed.bindings();
         let uniform_count = bindings
             .iter()
-            .filter(|b| b.kind == BufferBindingType::Uniform)
+            .filter(|b| b.kind == BindingType::Uniform)
             .count() as u32;
         let storage_count = bindings
             .iter()
-            .filter(|b| b.kind == BufferBindingType::StorageWrite)
+            .filter(|b| b.kind == BindingType::StorageWrite)
             .count() as u32;
         let group_count = bindings.iter().map(|b| b.group + 1).max().unwrap_or(0);
+        let image_count = bindings
+            .iter()
+            .filter(|b| b.kind == BindingType::SampledImage)
+            .count() as u32;
+        let sampler_count = bindings
+            .iter()
+            .filter(|b| b.kind == BindingType::Sampler)
+            .count() as u32;
         let local = managed.workgroup_size();
         let limits = owner.device.limits();
         let invocations = local.into_iter().try_fold(1_u32, u32::checked_mul);
@@ -55,14 +70,17 @@ impl VulkanProgram {
             || limits.max_descriptor_set_uniform_buffers < uniform_count
             || limits.max_per_stage_descriptor_storage_buffers < storage_count
             || limits.max_descriptor_set_storage_buffers < storage_count
-            || limits.max_per_stage_resources < uniform_count + storage_count
+            || limits.max_per_stage_descriptor_sampled_images < image_count
+            || limits.max_descriptor_set_sampled_images < image_count
+            || limits.max_per_stage_descriptor_samplers < sampler_count
+            || limits.max_descriptor_set_samplers < sampler_count
+            || limits.max_per_stage_resources < uniform_count + storage_count + image_count
             || bindings.iter().any(|b| {
                 b.min_size
                     > match b.kind {
-                        BufferBindingType::Uniform => u64::from(limits.max_uniform_buffer_range),
-                        BufferBindingType::StorageWrite => {
-                            u64::from(limits.max_storage_buffer_range)
-                        }
+                        BindingType::Uniform => u64::from(limits.max_uniform_buffer_range),
+                        BindingType::StorageWrite => u64::from(limits.max_storage_buffer_range),
+                        BindingType::SampledImage | BindingType::Sampler => 0,
                     }
             })
             || limits
@@ -92,7 +110,7 @@ impl VulkanProgram {
 }
 struct Program {
     owner: Arc<MemoryOwner>,
-    bindings: &'static [BufferBindingLayout],
+    bindings: &'static [BindingLayout],
     set_layouts: Vec<vk::DescriptorSetLayout>,
     layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
@@ -319,79 +337,117 @@ impl Drop for Buffer {
     }
 }
 
-/// Descriptor sets written once, retaining all bound buffers and the Program.
+/// Descriptor sets written once, retaining all resources and the Program.
 #[derive(Clone)]
 pub struct VulkanBindings(Arc<Bindings>);
 impl VulkanBindings {
-    /// Binding descriptors are in the Program manifest's canonical order.
-    pub fn descs(&self) -> &[BufferBindingDesc] {
-        &self.0.descs
+    pub fn layout(&self) -> &'static [BindingLayout] {
+        self.0.program.layout()
     }
     pub(super) fn create(
         owner: &Arc<MemoryOwner>,
         program: &VulkanProgram,
-        input: &[BufferBinding<'_, VulkanBuffer>],
+        input: &[Binding<'_, VulkanBuffer, VulkanImageView, VulkanSampler>],
     ) -> Result<Self, RuntimeError> {
         owner
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         if !Arc::ptr_eq(owner, &program.0.owner)
-            || input.iter().any(|b| !Arc::ptr_eq(owner, &b.buffer.0.owner))
+            || input.iter().any(|b| {
+                !Arc::ptr_eq(
+                    owner,
+                    match &b.resource {
+                        BindingResource::Buffer { buffer, .. } => &buffer.0.owner,
+                        BindingResource::ImageView(view) => &view.0.image.0.owner,
+                        BindingResource::Sampler(sampler) => &sampler.0.owner,
+                    },
+                )
+            })
         {
             return Err(RuntimeError::wrong_owner(
-                "managed Program/buffer belongs to another Device",
+                "managed Program/resource belongs to another Device",
             ));
         }
-        let resolved = resolve_buffer_bindings(program.0.bindings, input)
+        let resolved = resolve_bindings(program.0.bindings, input)
             .map_err(|e| RuntimeError::invalid(e.to_string()))?;
         let limits = owner.device.limits();
-        let mut buffers = Vec::with_capacity(input.len());
-        let mut descs = Vec::with_capacity(input.len());
+        let mut resources = Vec::with_capacity(input.len());
         for entry in resolved {
             let (layout, binding) = entry.map_err(|e| RuntimeError::invalid(e.to_string()))?;
-            let (alignment, maximum) = match layout.kind {
-                BufferBindingType::Uniform => (
-                    limits.min_uniform_buffer_offset_alignment,
-                    limits.max_uniform_buffer_range,
-                ),
-                BufferBindingType::StorageWrite => (
-                    limits.min_storage_buffer_offset_alignment,
-                    limits.max_storage_buffer_range,
-                ),
+            let resource = match &binding.resource {
+                BindingResource::Buffer {
+                    buffer,
+                    offset,
+                    size,
+                } => {
+                    let (alignment, maximum) = match layout.kind {
+                        BindingType::Uniform => (
+                            limits.min_uniform_buffer_offset_alignment,
+                            limits.max_uniform_buffer_range,
+                        ),
+                        BindingType::StorageWrite => (
+                            limits.min_storage_buffer_offset_alignment,
+                            limits.max_storage_buffer_range,
+                        ),
+                        BindingType::SampledImage | BindingType::Sampler => (1, 0),
+                    };
+                    let range = BufferRange {
+                        offset: *offset,
+                        size: *size,
+                    };
+                    validate_buffer_binding(
+                        layout,
+                        buffer.usage(),
+                        buffer.len(),
+                        range,
+                        alignment,
+                        u64::from(maximum),
+                    )
+                    .map_err(|e| RuntimeError::invalid(e.to_string()))?;
+                    BoundResource::Buffer {
+                        buffer: (*buffer).clone(),
+                        range,
+                    }
+                }
+                BindingResource::ImageView(view) if layout.kind == BindingType::SampledImage => {
+                    BoundResource::ImageView((*view).clone())
+                }
+                BindingResource::Sampler(sampler) if layout.kind == BindingType::Sampler => {
+                    BoundResource::Sampler((*sampler).clone())
+                }
+                _ => {
+                    return Err(RuntimeError::invalid(
+                        "resource kind does not match the Program slot",
+                    ));
+                }
             };
-            validate_buffer_binding(
-                layout,
-                binding.buffer.usage(),
-                binding.buffer.len(),
-                binding.desc,
-                alignment,
-                u64::from(maximum),
-            )
-            .map_err(|e| RuntimeError::invalid(e.to_string()))?;
-            buffers.push(binding.buffer.clone());
-            descs.push(binding.desc);
+            resources.push(resource);
         }
         let mut bindings = Bindings {
             program: program.clone(),
-            buffers,
-            descs,
+            resources,
             pool: vk::DescriptorPool::null(),
             sets: Vec::new(),
         };
-        let sizes = [BufferBindingType::Uniform, BufferBindingType::StorageWrite]
-            .into_iter()
-            .filter_map(|kind| {
-                let count = program.0.bindings.iter().filter(|b| b.kind == kind).count() as u32;
-                (count != 0).then_some(vk::DescriptorPoolSize {
-                    ty: descriptor_type(kind),
-                    descriptor_count: count,
-                })
+        let sizes = [
+            BindingType::Uniform,
+            BindingType::StorageWrite,
+            BindingType::SampledImage,
+            BindingType::Sampler,
+        ]
+        .into_iter()
+        .filter_map(|kind| {
+            let count = program.0.bindings.iter().filter(|b| b.kind == kind).count() as u32;
+            (count != 0).then_some(vk::DescriptorPoolSize {
+                ty: descriptor_type(kind),
+                descriptor_count: count,
             })
-            .collect::<Vec<_>>();
-        // SAFETY: Fresh pool/sets, checked logical ranges and correct native
-        // resource usages. Every referenced owner is retained before update;
-        // descriptor contents stay unchanged through all later GPU use.
+        })
+        .collect::<Vec<_>>();
+        // SAFETY: The whole input resolved and passed ownership/kind/range checks
+        // before allocation. New sets are updated once, retain all resources and
+        // are never changed while referenced by recorded/pending commands.
         unsafe {
             bindings.pool = owner
                 .device
@@ -413,14 +469,23 @@ impl VulkanBindings {
                 )
                 .map_err(|r| native(owner, "vkAllocateDescriptorSets(managed)", r))?;
             let infos = bindings
-                .buffers
+                .resources
                 .iter()
-                .zip(&bindings.descs)
-                .map(|(buffer, desc)| {
-                    vk::DescriptorBufferInfo::default()
-                        .buffer(buffer.0.handle)
-                        .offset(desc.offset)
-                        .range(desc.size)
+                .map(|resource| match resource {
+                    BoundResource::Buffer { buffer, range } => NativeBindingInfo::Buffer(
+                        vk::DescriptorBufferInfo::default()
+                            .buffer(buffer.0.handle)
+                            .offset(range.offset)
+                            .range(range.size),
+                    ),
+                    BoundResource::ImageView(view) => NativeBindingInfo::Image(
+                        vk::DescriptorImageInfo::default()
+                            .image_view(view.0.handle)
+                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
+                    ),
+                    BoundResource::Sampler(sampler) => NativeBindingInfo::Image(
+                        vk::DescriptorImageInfo::default().sampler(sampler.0.handle),
+                    ),
                 })
                 .collect::<Vec<_>>();
             let writes = program
@@ -429,11 +494,18 @@ impl VulkanBindings {
                 .iter()
                 .zip(&infos)
                 .map(|(layout, info)| {
-                    vk::WriteDescriptorSet::default()
+                    let write = vk::WriteDescriptorSet::default()
                         .dst_set(bindings.sets[layout.group as usize])
                         .dst_binding(layout.binding)
-                        .descriptor_type(descriptor_type(layout.kind))
-                        .buffer_info(std::slice::from_ref(info))
+                        .descriptor_type(descriptor_type(layout.kind));
+                    match info {
+                        NativeBindingInfo::Buffer(info) => {
+                            write.buffer_info(std::slice::from_ref(info))
+                        }
+                        NativeBindingInfo::Image(info) => {
+                            write.image_info(std::slice::from_ref(info))
+                        }
+                    }
                 })
                 .collect::<Vec<_>>();
             owner.device.raw().update_descriptor_sets(&writes, &[]);
@@ -441,17 +513,37 @@ impl VulkanBindings {
         Ok(Self(Arc::new(bindings)))
     }
 }
+enum BoundResource {
+    Buffer {
+        buffer: VulkanBuffer,
+        range: BufferRange,
+    },
+    ImageView(VulkanImageView),
+    Sampler(VulkanSampler),
+}
+enum NativeBindingInfo {
+    Buffer(vk::DescriptorBufferInfo),
+    Image(vk::DescriptorImageInfo),
+}
 struct Bindings {
     program: VulkanProgram,
-    buffers: Vec<VulkanBuffer>,
-    descs: Vec<BufferBindingDesc>,
+    resources: Vec<BoundResource>,
     pool: vk::DescriptorPool,
     sets: Vec<vk::DescriptorSet>,
 }
+impl Bindings {
+    #[cfg(test)]
+    fn buffer(&self, index: usize) -> (&VulkanBuffer, BufferRange) {
+        match &self.resources[index] {
+            BoundResource::Buffer { buffer, range } => (buffer, *range),
+            _ => unreachable!("reviewed shader buffer slot"),
+        }
+    }
+}
 impl Drop for Bindings {
     fn drop(&mut self) {
-        // SAFETY: Execution owners retain these immutable sets until actual
-        // retirement/cancel. Destroy the pool before Program and buffers drop.
+        // SAFETY: Execution owners retain the sets through retirement/cancel.
+        // Destroy their pool before the retained Program and resources drop.
         unsafe {
             self.program
                 .0
@@ -463,5 +555,7 @@ impl Drop for Bindings {
     }
 }
 
+#[cfg(test)]
+mod sampled_tests;
 #[cfg(test)]
 mod tests;

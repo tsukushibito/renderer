@@ -11,12 +11,12 @@ use std::ffi::CStr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-struct StorageLease {
-    buffer: VulkanBuffer,
-    reused: bool,
+pub(super) struct StorageLease {
+    pub(super) buffer: VulkanBuffer,
+    pub(super) reused: bool,
 }
 impl StorageLease {
-    fn acquire(buffer: VulkanBuffer) -> Result<Self, RuntimeError> {
+    pub(super) fn acquire(buffer: VulkanBuffer) -> Result<Self, RuntimeError> {
         buffer
             .0
             .storage
@@ -46,9 +46,9 @@ impl Work {
             .program
             .layout()
             .iter()
-            .position(|b| b.kind == BufferBindingType::StorageWrite)
+            .position(|b| b.kind == BindingType::StorageWrite)
             .unwrap();
-        let output = StorageLease::acquire(bindings.0.buffers[output_index].clone())?;
+        let output = StorageLease::acquire(bindings.0.buffer(output_index).0.clone())?;
         let allocator = VulkanAllocator {
             owner: Arc::clone(&bindings.0.program.0.owner),
         };
@@ -86,7 +86,7 @@ impl TransferPayload for Work {
         let program = &self.bindings.0.program.0;
         let device = &program.owner.device;
         let output = self.output.as_ref().unwrap();
-        let desc = self.bindings.0.descs[self.output_index];
+        let desc = self.bindings.0.buffer(self.output_index).1;
         let reused = [vk::BufferMemoryBarrier2::default()
             .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::COPY)
             .src_access_mask(
@@ -166,12 +166,25 @@ impl TransferPayload for Work {
     }
 }
 
-fn desc(group: u32) -> BufferBindingDesc {
-    BufferBindingDesc {
-        group,
-        binding: 0,
+fn desc(_group: u32) -> BufferRange {
+    BufferRange {
         offset: 256,
         size: 16,
+    }
+}
+fn buffer_binding(
+    group: u32,
+    buffer: &VulkanBuffer,
+    range: BufferRange,
+) -> Binding<'_, VulkanBuffer, VulkanImageView, VulkanSampler> {
+    Binding {
+        group,
+        binding: 0,
+        resource: BindingResource::Buffer {
+            buffer,
+            offset: range.offset,
+            size: range.size,
+        },
     }
 }
 fn bind(
@@ -179,21 +192,14 @@ fn bind(
     program: &VulkanProgram,
     uniform: &VulkanBuffer,
     storage: &VulkanBuffer,
-    uniform_desc: BufferBindingDesc,
-    storage_desc: BufferBindingDesc,
+    uniform_desc: BufferRange,
+    storage_desc: BufferRange,
 ) -> Result<VulkanBindings, RuntimeError> {
-    // Deliberately reverse caller order to exercise canonical manifest ordering.
     runtime.create_bindings(
         program,
         &[
-            BufferBinding {
-                buffer: storage,
-                desc: storage_desc,
-            },
-            BufferBinding {
-                buffer: uniform,
-                desc: uniform_desc,
-            },
+            buffer_binding(1, storage, storage_desc),
+            buffer_binding(0, uniform, uniform_desc),
         ],
     )
 }
@@ -244,22 +250,18 @@ fn vulkan_managed_storage_creation_and_versions() {
         assert_eq!(storage.usage(), BufferUsage::Storage);
         bytes[256..].fill(0);
         let bindings = bind(&runtime, &program, &uniform, &storage, desc(0), desc(1)).unwrap();
-        assert_eq!(bindings.descs(), &[desc(0), desc(1)]);
+        assert_eq!(bindings.layout(), managed.bindings());
         for bad in [
-            BufferBindingDesc {
-                binding: 1,
-                ..desc(1)
-            },
-            BufferBindingDesc { size: 0, ..desc(1) },
-            BufferBindingDesc {
+            BufferRange { size: 0, ..desc(1) },
+            BufferRange {
                 size: 15,
                 ..desc(1)
             },
-            BufferBindingDesc {
+            BufferRange {
                 size: 17,
                 ..desc(1)
             },
-            BufferBindingDesc {
+            BufferRange {
                 size: u64::MAX,
                 ..desc(1)
             },
@@ -279,7 +281,7 @@ fn vulkan_managed_storage_creation_and_versions() {
                 &uniform,
                 &storage,
                 desc(0),
-                BufferBindingDesc {
+                BufferRange {
                     offset: 1,
                     ..desc(1)
                 },
@@ -293,20 +295,20 @@ fn vulkan_managed_storage_creation_and_versions() {
             desc(0),
             desc(1),
         ));
+        invalid(runtime.create_bindings(&program, &[buffer_binding(0, &uniform, desc(0))]));
         invalid(runtime.create_bindings(
             &program,
-            &[BufferBinding {
-                buffer: &uniform,
-                desc: desc(0),
-            }],
+            &[
+                buffer_binding(0, &uniform, desc(0)),
+                buffer_binding(0, &storage, desc(1)),
+            ],
         ));
-        invalid(bind(
-            &runtime,
+        invalid(runtime.create_bindings(
             &program,
-            &uniform,
-            &storage,
-            desc(0),
-            desc(0),
+            &[
+                buffer_binding(0, &uniform, desc(0)),
+                buffer_binding(2, &storage, desc(1)),
+            ],
         ));
         for request in [
             BufferDescriptor::Uniform { bytes: &[] },

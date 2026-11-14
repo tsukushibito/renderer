@@ -266,11 +266,40 @@ impl VulkanRuntime {
         super::managed::VulkanBuffer::create(Arc::clone(&self.owner), desc)
     }
 
+    /// Create an uninitialized sampled 2D image independently of any Graph.
+    pub fn create_managed_image(
+        &self,
+        desc: crate::program::ImageDescriptor,
+    ) -> Result<super::managed::VulkanImage, RuntimeError> {
+        super::managed::VulkanImage::create(Arc::clone(&self.owner), desc)
+    }
+
+    /// Create an immutable complete View retaining this exact image version.
+    pub fn create_image_view(
+        &self,
+        image: &super::managed::VulkanImage,
+        desc: crate::program::ImageViewDescriptor,
+    ) -> Result<super::managed::VulkanImageView, RuntimeError> {
+        super::managed::VulkanImageView::create(&self.owner, image, desc)
+    }
+
+    pub fn create_sampler(
+        &self,
+        desc: crate::program::SamplerDescriptor,
+    ) -> Result<super::managed::VulkanSampler, RuntimeError> {
+        super::managed::VulkanSampler::create(Arc::clone(&self.owner), desc)
+    }
+
     /// Create immutable sets retaining this exact Program and buffer versions.
     pub fn create_bindings(
         &self,
         program: &super::managed::VulkanProgram,
-        bindings: &[crate::program::BufferBinding<'_, super::managed::VulkanBuffer>],
+        bindings: &[crate::program::Binding<
+            '_,
+            super::managed::VulkanBuffer,
+            super::managed::VulkanImageView,
+            super::managed::VulkanSampler,
+        >],
     ) -> Result<super::managed::VulkanBindings, RuntimeError> {
         super::managed::VulkanBindings::create(&self.owner, program, bindings)
     }
