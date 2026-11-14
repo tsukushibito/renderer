@@ -51,7 +51,6 @@ impl DeviceBuffer {
         Self::with_flags(owner, size, heap, D3D12_RESOURCE_FLAG_NONE)
     }
 
-    #[cfg(test)]
     pub(super) fn storage(owner: &DeviceOwner, size: u64) -> Result<Self, D3D12RuntimeError> {
         Self::with_flags(
             owner,

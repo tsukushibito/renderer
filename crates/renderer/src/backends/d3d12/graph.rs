@@ -28,7 +28,7 @@ struct Plan<'a> {
 
 enum PlannedOperation<'a> {
     #[cfg(test)]
-    UniformFixture(&'a super::program::D3D12UniformBinding),
+    ManagedFixture(&'a super::program::D3D12Bindings),
     Upload {
         dst: usize,
         offset: u64,
@@ -158,7 +158,9 @@ struct Readback {
 struct Work {
     graph: u64,
     #[cfg(test)]
-    uniform_bindings: Vec<super::program::D3D12UniformBinding>,
+    managed_bindings: Vec<super::program::D3D12Bindings>,
+    #[cfg(test)]
+    storage_leases: Vec<super::program::StorageLease>,
     buffers: Vec<Option<DeviceBuffer>>,
     staging: Vec<DeviceBuffer>,
     scratch: Vec<DeviceBuffer>,
@@ -217,7 +219,9 @@ impl Work {
         let mut work = Self {
             graph: plan.graph,
             #[cfg(test)]
-            uniform_bindings: Vec::new(),
+            managed_bindings: Vec::new(),
+            #[cfg(test)]
+            storage_leases: Vec::new(),
             buffers,
             staging: Vec::new(),
             scratch: Vec::new(),
@@ -231,15 +235,15 @@ impl Work {
         for operation in plan.operations {
             match operation {
                 #[cfg(test)]
-                PlannedOperation::UniformFixture(binding) => {
-                    let (output, readback) = binding.record_fixture(&work.list)?;
-                    work.scratch.push(output);
+                PlannedOperation::ManagedFixture(binding) => {
+                    let (readback, lease) = binding.record_fixture(&work.list)?;
+                    work.storage_leases.push(lease);
                     work.readbacks.push(Readback {
                         pass: 0,
                         size: 16,
                         buffer: Some(readback),
                     });
-                    work.uniform_bindings.push(binding.clone());
+                    work.managed_bindings.push(binding.clone());
                 }
                 PlannedOperation::Upload { dst, offset, bytes } => {
                     let upload =
@@ -457,9 +461,9 @@ pub struct D3D12PreparedGraph {
 
 impl D3D12Runtime {
     #[cfg(test)]
-    pub(super) fn prepare_uniform_fixture(
+    pub(super) fn prepare_managed_fixture(
         &self,
-        binding: &super::program::D3D12UniformBinding,
+        binding: &super::program::D3D12Bindings,
     ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
         binding.check_owner(&self.device)?;
         let work = Work::prepare(
@@ -467,7 +471,7 @@ impl D3D12Runtime {
             Plan {
                 graph: 0,
                 buffers: vec![],
-                operations: vec![PlannedOperation::UniformFixture(binding)],
+                operations: vec![PlannedOperation::ManagedFixture(binding)],
             },
             false,
         )?;
@@ -582,7 +586,9 @@ impl D3D12Submission {
             graph,
             mut readbacks,
             #[cfg(test)]
-            uniform_bindings,
+            managed_bindings,
+            #[cfg(test)]
+            storage_leases,
             owner,
             buffers,
             staging,
@@ -596,7 +602,7 @@ impl D3D12Submission {
         // active; a partial pattern with `..` would defer these fields too far.
         drop((buffers, staging, scratch, list, _allocator, fence));
         #[cfg(test)]
-        drop(uniform_bindings);
+        drop((managed_bindings, storage_leases));
         // Recording order is the Graph's execution order, which need not match
         // pass indices. No command operands refer to these entries after the
         // completed work has retired; index them once for result consumption.
