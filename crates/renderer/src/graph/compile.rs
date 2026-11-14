@@ -319,14 +319,15 @@ impl CompileError {
             }
         }
         if !self.cycle.is_empty() {
-            error.context_mut().cycle_passes = self
-                .cycle
-                .into_iter()
-                .map(|index| PassHandle {
-                    graph: graph.id,
-                    index,
-                })
-                .collect();
+            error = error.with_cycle_passes(
+                self.cycle
+                    .into_iter()
+                    .map(|index| PassHandle {
+                        graph: graph.id,
+                        index,
+                    })
+                    .collect(),
+            );
         }
         error
     }

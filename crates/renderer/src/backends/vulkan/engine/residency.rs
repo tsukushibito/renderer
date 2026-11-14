@@ -389,10 +389,10 @@ impl VulkanEngine {
                 "mesh upload target",
                 &self.runtime.refresh_buffer(buffer_key)?,
             )?;
-            graph.upload_mesh_slice(
+            data.upload_graph_slice(
+                &mut graph,
                 "mesh upload chunk",
                 target,
-                data,
                 entry.uploaded >= vertex_bytes,
                 offset as usize..(offset + size) as usize,
             )?;

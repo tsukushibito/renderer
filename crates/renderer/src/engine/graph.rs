@@ -1,10 +1,11 @@
 //! Lower owned engine input into ordinary, GPU-independent Graph operations.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
-use super::{FrameSnapshot, MeshHandle};
+use super::{FrameSnapshot, MeshData, MeshHandle};
 use crate::graph::{
-    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc, ImageHandle, PassHandle,
+    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc, ImageHandle,
+    MeshUpload, PassHandle,
 };
 
 /// Responsibility for the final output's runtime registration. This does not
@@ -31,6 +32,32 @@ impl FrameGraph {
     /// have been scheduled. Imported outputs remain owned by their caller.
     pub fn output_ownership(&self) -> FrameOutputOwnership {
         self.output_ownership
+    }
+}
+
+impl MeshData {
+    /// Upload one aligned slice of an immutable mesh stream. Only this bridge
+    /// establishes mesh provenance; arbitrary public byte uploads cannot do so.
+    pub(crate) fn upload_graph_slice(
+        &self,
+        graph: &mut Graph,
+        name: impl Into<String>,
+        dst: BufferHandle,
+        indices: bool,
+        source: Range<usize>,
+    ) -> Result<PassHandle, GraphError> {
+        let (bytes, provenance) = if indices {
+            (
+                &self.indices,
+                MeshUpload::Indices {
+                    byte_len: self.indices.len() as u64,
+                    maximum: self.index_maximum,
+                },
+            )
+        } else {
+            (&self.vertices, MeshUpload::Vertices)
+        };
+        graph.upload_mesh_slice(name, dst, bytes, source, provenance)
     }
 }
 
@@ -66,17 +93,17 @@ impl FrameSnapshot {
                     size: draw.data.indices.len() as u64,
                 },
             )?;
-            graph.upload_mesh_slice(
+            draw.data.upload_graph_slice(
+                &mut graph,
                 "mesh vertex upload",
                 vertices,
-                &draw.data,
                 false,
                 0..draw.data.vertices.len(),
             )?;
-            graph.upload_mesh_slice(
+            draw.data.upload_graph_slice(
+                &mut graph,
                 "mesh index upload",
                 indices,
-                &draw.data,
                 true,
                 0..draw.data.indices.len(),
             )?;
@@ -175,6 +202,63 @@ mod tests {
             clip_from_world: IDENTITY,
             clear_color: [0.0, 0.0, 0.0, 1.0],
         }
+    }
+
+    #[test]
+    fn immutable_mesh_upload_preserves_stream_provenance_and_failed_append_atomicity() {
+        use crate::graph::{MeshUpload, Operation};
+        use std::sync::Arc;
+
+        let data = triangle();
+        let mut graph = Graph::new();
+        let indices = graph
+            .buffer(
+                "indices",
+                crate::graph::BufferDesc {
+                    size: data.indices.len() as u64,
+                },
+            )
+            .unwrap();
+        let uploaded = data
+            .upload_graph_slice(&mut graph, "index chunk", indices, true, 4..8)
+            .unwrap();
+        let Operation::UploadBuffer {
+            bytes,
+            source,
+            offset,
+            mesh,
+            ..
+        } = &graph.passes[uploaded.index].operation
+        else {
+            panic!("mesh chunk upload")
+        };
+        assert!(Arc::ptr_eq(bytes, &data.indices));
+        assert_eq!(source, &(4..8));
+        assert_eq!(*offset, 4);
+        assert!(matches!(
+            mesh,
+            Some(MeshUpload::Indices {
+                byte_len: 12,
+                maximum: 2
+            })
+        ));
+        assert_eq!(graph.passes.len(), 1);
+
+        for invalid in [1..5, 12..16] {
+            let error = data
+                .upload_graph_slice(&mut graph, "invalid chunk", indices, true, invalid)
+                .unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+            assert_eq!(error.resource(), Some(indices.into()));
+            assert_eq!(graph.passes.len(), 1, "failed mesh upload appends nothing");
+        }
+        graph
+            .upload_buffer("raw bytes", indices, 0, vec![0; 4])
+            .unwrap();
+        assert!(matches!(
+            graph.passes.last().unwrap().operation,
+            Operation::UploadBuffer { mesh: None, .. }
+        ));
     }
 
     #[test]
