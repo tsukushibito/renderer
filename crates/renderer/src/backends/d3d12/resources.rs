@@ -1,5 +1,5 @@
-//! Committed buffer ownership and scoped CPU mapping, independent of Graph plans.
-//! Queue work/results retain the native Device owner and release buffers first.
+//! Committed buffer/image ownership and scoped CPU mapping, independent of Graph plans.
+//! Managed owners and queue work retain the Device and release native resources first.
 
 use std::{ffi::c_void, ptr};
 
@@ -161,6 +161,68 @@ impl DeviceBuffer {
         let mapped = unsafe { std::slice::from_raw_parts(mapping.pointer.cast::<u8>(), size) };
         bytes.extend_from_slice(mapped);
         Ok(bytes)
+    }
+}
+
+/// Physical sampled image ownership. Its sole creation caller establishes
+/// nonzero Device-supported extent/format before reaching this native factory.
+pub(super) struct DeviceImage {
+    raw: ID3D12Resource,
+}
+impl DeviceImage {
+    pub(super) fn new(
+        owner: &DeviceOwner,
+        desc: crate::program::ImageDescriptor,
+    ) -> Result<Self, D3D12RuntimeError> {
+        let properties = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+            ..Default::default()
+        };
+        let desc = image_desc(desc);
+        let mut raw = None;
+        // SAFETY: The managed creation boundary establishes this RGBA8 single
+        // mip/layer/sample description and format support. COMMON has no valid
+        // contents yet. The owned COM output is released on every failure path.
+        unsafe {
+            owner.raw.CreateCommittedResource(
+                &properties,
+                D3D12_HEAP_FLAG_NONE,
+                &desc,
+                D3D12_RESOURCE_STATE_COMMON,
+                None,
+                &mut raw,
+            )
+        }
+        .map_err(|error| owner.native("ID3D12Device::CreateCommittedResource(image)", error))?;
+        Ok(Self {
+            raw: raw.ok_or_else(|| {
+                missing_output(owner, "ID3D12Device::CreateCommittedResource(image)")
+            })?,
+        })
+    }
+    pub(super) fn raw(&self) -> &ID3D12Resource {
+        &self.raw
+    }
+}
+
+pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURCE_DESC {
+    D3D12_RESOURCE_DESC {
+        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+        Width: u64::from(desc.width),
+        Height: desc.height,
+        DepthOrArraySize: 1,
+        MipLevels: 1,
+        Format: match desc.format {
+            crate::program::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        },
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        ..Default::default()
     }
 }
 

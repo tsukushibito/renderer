@@ -4,15 +4,25 @@
 //! ABI, usage, owner and logical range guarantees before native recording.
 
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::{fmt, mem::ManuallyDrop, sync::Arc};
 
+use super::image::{D3D12ImageView, D3D12Sampler};
 use super::resources::{DeviceBuffer, MAX_BUFFER_BYTES};
+
+mod descriptors;
+#[cfg(test)]
+mod fixture;
+#[cfg(test)]
+mod tests;
 use super::{D3D12Runtime, D3D12RuntimeError, bindings::*, device::DeviceOwner};
 use crate::program::{
-    BufferBinding, BufferBindingDesc, BufferBindingLayout, BufferBindingType, BufferDescriptor,
-    BufferUsage, ManagedProgram, resolve_buffer_bindings, validate_buffer_binding,
+    Binding, BindingLayout, BindingResource, BindingType, BufferDescriptor, BufferRange,
+    BufferUsage, ManagedProgram, resolve_bindings, validate_buffer_binding,
 };
+use descriptors::{DescriptorHeaps, root_parameters};
+#[cfg(test)]
+pub(super) use fixture::ExecutionLease;
 
 const UNIFORM_ALIGNMENT: u64 = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT as u64;
 const STORAGE_ALIGNMENT: u64 = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT as u64;
@@ -55,19 +65,29 @@ unsafe impl Sync for BufferOwner {}
 #[derive(Clone)]
 pub struct D3D12Buffer(Arc<BufferOwner>);
 
-struct BindingOwner {
-    _program: D3D12Program,
-    _buffers: Box<[D3D12Buffer]>,
-    descs: Box<[BufferBindingDesc]>,
+#[derive(Clone)]
+enum BoundResource {
+    Buffer {
+        _buffer: D3D12Buffer,
+        _range: BufferRange,
+    },
+    ImageView(D3D12ImageView),
+    Sampler(D3D12Sampler),
 }
-/// An immutable, manifest-ordered binding version retaining its actual Program
-/// and every buffer. Creating another version never updates existing bindings.
+struct BindingOwner {
+    // Drop native heaps, then resources, before releasing the last Program/Device.
+    _heaps: DescriptorHeaps,
+    resources: Box<[BoundResource]>,
+    _program: D3D12Program,
+}
+/// Immutable manifest-ordered bindings retaining their native heaps, Program,
+/// Views, images, samplers and buffer versions through GPU ownership transfer.
 #[derive(Clone)]
 pub struct D3D12Bindings(Arc<BindingOwner>);
 
 impl D3D12Program {
     /// Reflected buffer slots in their canonical native root-parameter order.
-    pub fn layout(&self) -> &'static [BufferBindingLayout] {
+    pub fn layout(&self) -> &'static [BindingLayout] {
         self.0.managed.bindings()
     }
 }
@@ -85,9 +105,14 @@ impl D3D12Buffer {
     }
 }
 impl D3D12Bindings {
-    /// Logical ranges in the same canonical order as `Program::layout`.
-    pub fn descs(&self) -> &[BufferBindingDesc] {
-        &self.0.descs
+    pub fn layout(&self) -> &'static [BindingLayout] {
+        self.0._program.layout()
+    }
+    pub fn len(&self) -> usize {
+        self.0.resources.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.resources.is_empty()
     }
 }
 impl fmt::Debug for D3D12Program {
@@ -108,7 +133,7 @@ impl fmt::Debug for D3D12Buffer {
 impl fmt::Debug for D3D12Bindings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("D3D12Bindings")
-            .field("ranges", &self.0.descs)
+            .field("layout", &self.layout())
             .finish_non_exhaustive()
     }
 }
@@ -124,40 +149,16 @@ fn allocation_size(size: u64, usage: BufferUsage) -> Result<u64, D3D12RuntimeErr
         BufferUsage::Storage => size,
     })
 }
-fn require_same_owner<T>(owner: &Arc<T>, resource: &Arc<T>) -> Result<(), D3D12RuntimeError> {
+pub(super) fn require_same_owner<T>(
+    owner: &Arc<T>,
+    resource: &Arc<T>,
+) -> Result<(), D3D12RuntimeError> {
     if !Arc::ptr_eq(owner, resource) {
         return Err(D3D12RuntimeError::wrong_owner(
             "managed binding belongs to another D3D12 Device",
         ));
     }
     Ok(())
-}
-
-fn root_parameters(
-    layout: &[BufferBindingLayout],
-) -> Result<Vec<D3D12_ROOT_PARAMETER>, D3D12RuntimeError> {
-    // Each root descriptor costs two DWORDs, within the v1.0 64-DWORD limit.
-    if layout.len() > 32 {
-        return Err(D3D12RuntimeError::unsupported(
-            "managed buffer layout exceeds D3D12 root signature capacity",
-        ));
-    }
-    Ok(layout
-        .iter()
-        .map(|slot| D3D12_ROOT_PARAMETER {
-            ParameterType: match slot.kind {
-                BufferBindingType::Uniform => D3D12_ROOT_PARAMETER_TYPE_CBV,
-                BufferBindingType::StorageWrite => D3D12_ROOT_PARAMETER_TYPE_UAV,
-            },
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: slot.binding,
-                    RegisterSpace: slot.group,
-                },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_ALL,
-        })
-        .collect())
 }
 
 impl D3D12Runtime {
@@ -186,8 +187,8 @@ impl D3D12Runtime {
         }
         let parameters = root_parameters(managed.bindings())?;
         let desc = D3D12_ROOT_SIGNATURE_DESC {
-            NumParameters: parameters.len() as u32,
-            pParameters: parameters.as_ptr(),
+            NumParameters: parameters.parameters.len() as u32,
+            pParameters: parameters.parameters.as_ptr(),
             ..Default::default()
         };
         let mut blob = None;
@@ -289,515 +290,81 @@ impl D3D12Runtime {
         })))
     }
 
-    /// Validates every reflected slot and canonicalizes caller declaration order.
-    /// The immutable result retains both its Program and each resource version.
+    /// Resolves every reflected slot once, validates native owners/usages and
+    /// creates immutable shader-visible descriptors only after complete success.
     pub fn create_bindings(
         &self,
         program: &D3D12Program,
-        bindings: &[BufferBinding<'_, D3D12Buffer>],
+        bindings: &[Binding<'_, D3D12Buffer, D3D12ImageView, D3D12Sampler>],
     ) -> Result<D3D12Bindings, D3D12RuntimeError> {
         self.device.ensure_active()?;
         require_same_owner(&self.device, &program.0.owner)?;
-        let resolved = resolve_buffer_bindings(program.layout(), bindings)
+        let resolved = resolve_bindings(program.layout(), bindings)
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
-        let mut buffers = Vec::with_capacity(bindings.len());
-        let mut canonical_descs = Vec::with_capacity(bindings.len());
+        let mut resources = Vec::with_capacity(bindings.len());
         for entry in resolved {
             let (layout, binding) =
                 entry.map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
-            require_same_owner(&self.device, &binding.buffer.0.owner)?;
-            let (alignment, max_range) = match layout.kind {
-                BufferBindingType::Uniform => (UNIFORM_ALIGNMENT, MAX_UNIFORM_RANGE),
-                BufferBindingType::StorageWrite => (STORAGE_ALIGNMENT, MAX_BUFFER_BYTES),
+            let resource = match &binding.resource {
+                BindingResource::Buffer {
+                    buffer,
+                    offset,
+                    size,
+                } => {
+                    require_same_owner(&self.device, &buffer.0.owner)?;
+                    let (alignment, max_range) = match layout.kind {
+                        BindingType::Uniform => (UNIFORM_ALIGNMENT, MAX_UNIFORM_RANGE),
+                        BindingType::StorageWrite => (STORAGE_ALIGNMENT, MAX_BUFFER_BYTES),
+                        _ => {
+                            return Err(D3D12RuntimeError::invalid(
+                                "buffer resource does not match image or sampler slot",
+                            ));
+                        }
+                    };
+                    let range = BufferRange {
+                        offset: *offset,
+                        size: *size,
+                    };
+                    validate_buffer_binding(
+                        layout,
+                        buffer.usage(),
+                        buffer.len(),
+                        range,
+                        alignment,
+                        max_range,
+                    )
+                    .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
+                    BoundResource::Buffer {
+                        _buffer: (*buffer).clone(),
+                        _range: range,
+                    }
+                }
+                BindingResource::ImageView(view) => {
+                    if layout.kind != BindingType::SampledImage {
+                        return Err(D3D12RuntimeError::invalid(
+                            "image View resource does not match Program slot",
+                        ));
+                    }
+                    require_same_owner(&self.device, &view.image.0.owner)?;
+                    BoundResource::ImageView((*view).clone())
+                }
+                BindingResource::Sampler(sampler) => {
+                    if layout.kind != BindingType::Sampler {
+                        return Err(D3D12RuntimeError::invalid(
+                            "sampler resource does not match Program slot",
+                        ));
+                    }
+                    require_same_owner(&self.device, &sampler.owner)?;
+                    BoundResource::Sampler((*sampler).clone())
+                }
             };
-            validate_buffer_binding(
-                layout,
-                binding.buffer.usage(),
-                binding.buffer.len(),
-                binding.desc,
-                alignment,
-                max_range,
-            )
-            .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
-            buffers.push(binding.buffer.clone());
-            canonical_descs.push(binding.desc);
+            resources.push(resource);
         }
+        let heaps = DescriptorHeaps::new(&self.device, &resources)?;
         Ok(D3D12Bindings(Arc::new(BindingOwner {
+            _heaps: heaps,
+            resources: resources.into_boxed_slice(),
             _program: program.clone(),
-            _buffers: buffers.into_boxed_slice(),
-            descs: canonical_descs.into_boxed_slice(),
         })))
-    }
-}
-
-/// Test-only exclusive storage use. The execution owner retains this through
-/// cancel or proven completion; unproven native failure retains it indefinitely.
-#[cfg(test)]
-pub(super) struct StorageLease(D3D12Buffer);
-#[cfg(test)]
-impl StorageLease {
-    fn acquire(buffer: &D3D12Buffer) -> Result<Self, D3D12RuntimeError> {
-        buffer
-            .0
-            .in_use
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                D3D12RuntimeError::invalid(
-                    "managed storage buffer is already reserved by recorded or pending work",
-                )
-            })?;
-        Ok(Self(buffer.clone()))
-    }
-}
-#[cfg(test)]
-impl Drop for StorageLease {
-    fn drop(&mut self) {
-        self.0.0.in_use.store(false, Ordering::Release);
-    }
-}
-
-#[cfg(test)]
-impl D3D12Bindings {
-    pub(super) fn check_owner(&self, owner: &Arc<DeviceOwner>) -> Result<(), D3D12RuntimeError> {
-        require_same_owner(owner, &self.0._program.0.owner)
-    }
-
-    pub(super) fn record_fixture(
-        &self,
-        list: &ID3D12GraphicsCommandList,
-    ) -> Result<(DeviceBuffer, StorageLease), D3D12RuntimeError> {
-        let binding = &self.0;
-        let program = &binding._program.0;
-        let storage_index = program
-            .managed
-            .bindings()
-            .iter()
-            .position(|slot| slot.kind == BufferBindingType::StorageWrite)
-            .unwrap();
-        let output = &binding._buffers[storage_index];
-        let output_desc = binding.descs[storage_index];
-        let lease = StorageLease::acquire(output)?;
-        let readback = DeviceBuffer::new(&program.owner, 16, D3D12_HEAP_TYPE_READBACK)?;
-        let mut state = D3D12_RESOURCE_STATE_COMMON;
-        super::graph::transition(
-            list,
-            output.0._native.raw(),
-            &mut state,
-            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        );
-        // SAFETY: Every immutable binding's usage/slot/range/owner was checked
-        // once. Root slots and kinds follow the reflected manifest. The reviewed
-        // single invocation reads/writes exactly 16 bytes, within these ranges.
-        // The exclusive lease and Work retain all references until real retirement.
-        unsafe {
-            list.SetPipelineState(&program._pipeline);
-            list.SetComputeRootSignature(&program._signature);
-            for (root, ((slot, buffer), desc)) in program
-                .managed
-                .bindings()
-                .iter()
-                .zip(&binding._buffers)
-                .zip(&binding.descs)
-                .enumerate()
-            {
-                let address = D3D12_GPU_VIRTUAL_ADDRESS(
-                    buffer.0._native.raw().GetGPUVirtualAddress().0 + desc.offset,
-                );
-                match slot.kind {
-                    BufferBindingType::Uniform => {
-                        list.SetComputeRootConstantBufferView(root as u32, address)
-                    }
-                    BufferBindingType::StorageWrite => {
-                        list.SetComputeRootUnorderedAccessView(root as u32, address)
-                    }
-                }
-            }
-            list.Dispatch(1, 1, 1);
-        }
-        super::graph::transition(
-            list,
-            output.0._native.raw(),
-            &mut state,
-            D3D12_RESOURCE_STATE_COPY_SOURCE,
-        );
-        // SAFETY: UAV writes precede the copy-source transition. Only the exact
-        // 16-byte initialized subrange is copied, never the uninitialized prefix.
-        unsafe {
-            list.CopyBufferRegion(
-                readback.raw(),
-                0,
-                output.0._native.raw(),
-                output_desc.offset,
-                16,
-            )
-        };
-        // Idle and canceled work both retain COMMON. Exclusive use prevents a
-        // second recording from assuming that state while this work is pending.
-        super::graph::transition(
-            list,
-            output.0._native.raw(),
-            &mut state,
-            D3D12_RESOURCE_STATE_COMMON,
-        );
-        Ok((readback, lease))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::{D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode};
-    use super::*;
-    use crate::graph::PassHandle;
-    use std::time::Duration;
-
-    fn uniform_desc() -> BufferBindingDesc {
-        BufferBindingDesc {
-            group: 0,
-            binding: 0,
-            offset: 256,
-            size: 16,
-        }
-    }
-    fn storage_desc() -> BufferBindingDesc {
-        BufferBindingDesc {
-            group: 1,
-            binding: 0,
-            offset: 256,
-            size: 16,
-        }
-    }
-    fn entries<'a>(
-        uniform: &'a D3D12Buffer,
-        storage: &'a D3D12Buffer,
-    ) -> [BufferBinding<'a, D3D12Buffer>; 2] {
-        [
-            BufferBinding {
-                buffer: uniform,
-                desc: uniform_desc(),
-            },
-            BufferBinding {
-                buffer: storage,
-                desc: storage_desc(),
-            },
-        ]
-    }
-
-    #[test]
-    fn allocation_padding_applies_only_to_uniforms_and_never_changes_logical_ranges() {
-        assert_eq!(allocation_size(272, BufferUsage::Uniform).unwrap(), 512);
-        assert_eq!(allocation_size(272, BufferUsage::Storage).unwrap(), 272);
-        for usage in [BufferUsage::Uniform, BufferUsage::Storage] {
-            assert_eq!(
-                allocation_size(MAX_BUFFER_BYTES, usage).unwrap(),
-                MAX_BUFFER_BYTES
-            );
-            for size in [0, MAX_BUFFER_BYTES + 1, u64::MAX] {
-                assert_eq!(
-                    allocation_size(size, usage).unwrap_err().kind(),
-                    D3D12RuntimeErrorKind::InvalidInput
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn binding_owner_identity_is_not_replaced_by_equal_metadata() {
-        let owner = Arc::new(());
-        assert!(require_same_owner(&owner, &owner).is_ok());
-        assert_eq!(
-            require_same_owner(&owner, &Arc::new(()))
-                .unwrap_err()
-                .kind(),
-            D3D12RuntimeErrorKind::WrongOwner
-        );
-    }
-
-    #[test]
-    fn root_descriptor_order_kinds_and_registers_follow_the_manifest() {
-        let layout = [
-            BufferBindingLayout {
-                group: 5,
-                binding: 7,
-                kind: BufferBindingType::StorageWrite,
-                min_size: 16,
-            },
-            BufferBindingLayout {
-                group: 2,
-                binding: 3,
-                kind: BufferBindingType::Uniform,
-                min_size: 16,
-            },
-        ];
-        let parameters = root_parameters(&layout).unwrap();
-        for (index, (slot, parameter)) in layout.iter().zip(&parameters).enumerate() {
-            assert_eq!(
-                parameter.ParameterType,
-                if index == 0 {
-                    D3D12_ROOT_PARAMETER_TYPE_UAV
-                } else {
-                    D3D12_ROOT_PARAMETER_TYPE_CBV
-                }
-            );
-            // SAFETY: root_parameters selected the Descriptor union member for
-            // both reflected buffer kinds; this inspects that lowering contract.
-            let descriptor = unsafe { parameter.Anonymous.Descriptor };
-            assert_eq!(
-                (descriptor.RegisterSpace, descriptor.ShaderRegister),
-                (slot.group, slot.binding)
-            );
-        }
-        assert_eq!(
-            root_parameters(&[layout[0]; 33]).err().unwrap().kind(),
-            D3D12RuntimeErrorKind::Unsupported
-        );
-    }
-
-    fn managed_fixture(strict: bool) {
-        let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
-            validation: if strict {
-                D3D12ValidationMode::Required
-            } else {
-                D3D12ValidationMode::Disabled
-            },
-        })
-        .expect("real D3D12 hardware and requested diagnostics");
-        let monitor = runtime.validation_monitor();
-        let device = Arc::downgrade(&runtime.device);
-        let managed = ManagedProgram::uniform_readback();
-        let owners_before_failure = Arc::strong_count(&runtime.device);
-        assert_eq!(
-            runtime
-                .create_program_inner(&managed, true)
-                .unwrap_err()
-                .kind(),
-            D3D12RuntimeErrorKind::Native
-        );
-        assert_eq!(Arc::strong_count(&runtime.device), owners_before_failure);
-        let program = runtime.create_program(&managed).unwrap();
-        let program_owner = Arc::downgrade(&program.0);
-        let [first, second] = crate::program::UNIFORM_TEST_DATA;
-        let make_bytes = |values: [u8; 16]| {
-            let mut bytes = vec![0; 256];
-            bytes.extend_from_slice(&values);
-            bytes
-        };
-        let buffer = runtime
-            .create_managed_buffer(BufferDescriptor::Uniform {
-                bytes: &make_bytes(first),
-            })
-            .unwrap();
-        let updated = runtime
-            .create_managed_buffer(BufferDescriptor::Uniform {
-                bytes: &make_bytes(second),
-            })
-            .unwrap();
-        let output = runtime
-            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
-            .unwrap();
-        let new_output = runtime
-            .create_managed_buffer(BufferDescriptor::Storage { size: 272 })
-            .unwrap();
-        assert_eq!(program.layout(), managed.bindings());
-        assert_eq!(buffer.usage(), BufferUsage::Uniform);
-        assert_eq!(output.usage(), BufferUsage::Storage);
-        assert_eq!((buffer.len(), output.len()), (272, 272));
-        assert!(!buffer.is_empty() && !output.is_empty());
-        let old = runtime
-            .create_bindings(&program, &entries(&buffer, &output))
-            .unwrap();
-        // Deliberately reverse caller order; the resulting immutable root slots
-        // must still follow the manifest rather than declaration order.
-        let mut reversed = entries(&updated, &new_output);
-        reversed.reverse();
-        let new = runtime.create_bindings(&program, &reversed).unwrap();
-        assert_eq!(old.descs(), &[uniform_desc(), storage_desc()]);
-        assert_eq!(new.descs(), old.descs());
-        assert_eq!(
-            runtime.create_bindings(&program, &[]).unwrap_err().kind(),
-            D3D12RuntimeErrorKind::InvalidInput
-        );
-        assert_eq!(
-            runtime
-                .create_bindings(
-                    &program,
-                    &[
-                        BufferBinding {
-                            buffer: &buffer,
-                            desc: uniform_desc()
-                        },
-                        BufferBinding {
-                            buffer: &buffer,
-                            desc: uniform_desc()
-                        },
-                    ]
-                )
-                .unwrap_err()
-                .kind(),
-            D3D12RuntimeErrorKind::InvalidInput
-        );
-        // Valid slots with wrong resource kinds cannot become native descriptors.
-        assert_eq!(
-            runtime
-                .create_bindings(&program, &entries(&output, &buffer))
-                .unwrap_err()
-                .kind(),
-            D3D12RuntimeErrorKind::InvalidInput
-        );
-        for desc in [
-            BufferBindingDesc {
-                offset: 1,
-                ..uniform_desc()
-            },
-            BufferBindingDesc {
-                size: 15,
-                ..uniform_desc()
-            },
-            BufferBindingDesc {
-                size: 17,
-                ..uniform_desc()
-            },
-        ] {
-            let bindings = [
-                BufferBinding {
-                    buffer: &buffer,
-                    desc,
-                },
-                BufferBinding {
-                    buffer: &output,
-                    desc: storage_desc(),
-                },
-            ];
-            assert_eq!(
-                runtime
-                    .create_bindings(&program, &bindings)
-                    .unwrap_err()
-                    .kind(),
-                D3D12RuntimeErrorKind::InvalidInput
-            );
-        }
-        let owners_before_rejection = Arc::strong_count(&buffer.0);
-        for desc in [
-            // A missing second slot must reject after resolving the uniform,
-            // releasing the partially retained input instead of publishing it.
-            BufferBindingDesc {
-                group: 7,
-                ..storage_desc()
-            },
-            BufferBindingDesc {
-                offset: 4,
-                ..storage_desc()
-            },
-            BufferBindingDesc {
-                size: 17,
-                ..storage_desc()
-            },
-        ] {
-            let bindings = [
-                BufferBinding {
-                    buffer: &buffer,
-                    desc: uniform_desc(),
-                },
-                BufferBinding {
-                    buffer: &output,
-                    desc,
-                },
-            ];
-            assert_eq!(
-                runtime
-                    .create_bindings(&program, &bindings)
-                    .unwrap_err()
-                    .kind(),
-                D3D12RuntimeErrorKind::InvalidInput
-            );
-        }
-        assert_eq!(Arc::strong_count(&buffer.0), owners_before_rejection);
-        let baseline = Arc::strong_count(&old.0);
-        let canceled = runtime.prepare_managed_fixture(&old).unwrap();
-        assert_eq!(Arc::strong_count(&old.0), baseline + 1);
-        assert_eq!(
-            runtime.prepare_managed_fixture(&old).err().unwrap().kind(),
-            D3D12RuntimeErrorKind::InvalidInput
-        );
-        drop(canceled);
-        assert_eq!(Arc::strong_count(&old.0), baseline);
-        let pass = PassHandle { graph: 0, index: 0 };
-        // Reuse after cancellation. The final preparation below reuses the
-        // same storage after actual completion.
-        {
-            let prepared = runtime.prepare_managed_fixture(&old).unwrap();
-            let mut pending = runtime.submit_prepared(prepared).unwrap();
-            assert_eq!(
-                runtime.prepare_managed_fixture(&old).err().unwrap().kind(),
-                D3D12RuntimeErrorKind::InvalidInput
-            );
-            let mut result = pending
-                .wait(Duration::from_secs(30))
-                .unwrap()
-                .expect("storage reuse completion");
-            assert_eq!(result.readback(pass).unwrap(), first);
-        }
-        let prepared_old = runtime.prepare_managed_fixture(&old).unwrap();
-        let prepared_new = runtime.prepare_managed_fixture(&new).unwrap();
-        drop((old, new, buffer, updated, output, new_output, program));
-        assert!(
-            program_owner.upgrade().is_some(),
-            "recordings retain the actual Program and all buffers"
-        );
-        let mut old_pending = runtime.submit_prepared(prepared_old).unwrap();
-        let mut new_pending = runtime.submit_prepared(prepared_new).unwrap();
-        runtime.shutdown().unwrap();
-        assert!(device.upgrade().is_some(), "pending work retains Device");
-        let mut old_result = old_pending
-            .wait(Duration::from_secs(30))
-            .unwrap()
-            .expect("old bindings completion");
-        let mut new_result = new_pending
-            .wait(Duration::from_secs(30))
-            .unwrap()
-            .expect("new bindings completion");
-        let old_bytes = old_result.readback(pass).unwrap();
-        let new_bytes = new_result.readback(pass).unwrap();
-        assert_eq!(old_bytes, first);
-        assert_eq!(new_bytes, second);
-        drop((old_result, new_result, old_pending, new_pending));
-        assert!(program_owner.upgrade().is_none());
-        assert!(device.upgrade().is_none());
-        let report = monitor.snapshot();
-        assert!(report.is_clean(), "{report:?}");
-        if strict {
-            assert!(
-                report.debug_layer_enabled
-                    && report.gpu_based_validation_enabled
-                    && report.teardown_checked,
-                "{report:?}"
-            );
-        } else {
-            assert!(!report.debug_layer_enabled && !report.gpu_based_validation_enabled);
-        }
-        println!(
-            "D3D12_STORAGE_REPORT strict={strict} old={old_bytes:?} new={new_bytes:?} validation={report:?}"
-        );
-    }
-
-    #[cfg(feature = "d3d12-diagnostics")]
-    #[test]
-    #[ignore = "requires D3D12 hardware, Debug Layer and GPU-Based Validation"]
-    fn d3d12_managed_storage_strict() {
-        managed_fixture(true);
-    }
-
-    #[cfg(not(any(
-        feature = "development-validation",
-        feature = "d3d12-diagnostics",
-        feature = "vulkan-diagnostics",
-        feature = "graph-diagnostics"
-    )))]
-    #[test]
-    #[ignore = "requires optimized D3D12 hardware execution without diagnostics"]
-    fn d3d12_managed_storage_shipping() {
-        if cfg!(debug_assertions) {
-            panic!("shipping content acceptance requires --release");
-        }
-        managed_fixture(false);
     }
 }

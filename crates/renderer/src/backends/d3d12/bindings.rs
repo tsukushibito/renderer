@@ -82,6 +82,25 @@ pub type D3D12MessageFunc = Option<
 >;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_BOX {
+    pub left: u32,
+    pub top: u32,
+    pub front: u32,
+    pub right: u32,
+    pub bottom: u32,
+    pub back: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_BUFFER_SRV {
+    pub FirstElement: u64,
+    pub NumElements: u32,
+    pub StructureByteStride: u32,
+    pub Flags: D3D12_BUFFER_SRV_FLAGS,
+}
+pub type D3D12_BUFFER_SRV_FLAGS = u32;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_CACHED_PIPELINE_STATE {
     pub pCachedBlob: *const core::ffi::c_void,
     pub CachedBlobSizeInBytes: usize,
@@ -129,6 +148,15 @@ pub type D3D12_COMMAND_QUEUE_FLAGS = u32;
 pub const D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT: D3D12_COMMAND_QUEUE_FLAGS = 1;
 pub const D3D12_COMMAND_QUEUE_FLAG_NONE: D3D12_COMMAND_QUEUE_FLAGS = 0;
 pub type D3D12_COMPARISON_FUNC = i32;
+pub const D3D12_COMPARISON_FUNC_ALWAYS: D3D12_COMPARISON_FUNC = 8;
+pub const D3D12_COMPARISON_FUNC_EQUAL: D3D12_COMPARISON_FUNC = 3;
+pub const D3D12_COMPARISON_FUNC_GREATER: D3D12_COMPARISON_FUNC = 5;
+pub const D3D12_COMPARISON_FUNC_GREATER_EQUAL: D3D12_COMPARISON_FUNC = 7;
+pub const D3D12_COMPARISON_FUNC_LESS: D3D12_COMPARISON_FUNC = 2;
+pub const D3D12_COMPARISON_FUNC_LESS_EQUAL: D3D12_COMPARISON_FUNC = 4;
+pub const D3D12_COMPARISON_FUNC_NEVER: D3D12_COMPARISON_FUNC = 1;
+pub const D3D12_COMPARISON_FUNC_NONE: D3D12_COMPARISON_FUNC = 0;
+pub const D3D12_COMPARISON_FUNC_NOT_EQUAL: D3D12_COMPARISON_FUNC = 6;
 #[repr(C)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_COMPUTE_PIPELINE_STATE_DESC {
@@ -140,6 +168,11 @@ pub struct D3D12_COMPUTE_PIPELINE_STATE_DESC {
 }
 pub type D3D12_CONSERVATIVE_RASTERIZATION_TIER = i32;
 pub const D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT: i32 = 256;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_CPU_DESCRIPTOR_HANDLE {
+    pub ptr: usize,
+}
 pub type D3D12_CPU_PAGE_PROPERTY = i32;
 pub const D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE: D3D12_CPU_PAGE_PROPERTY = 1;
 pub const D3D12_CPU_PAGE_PROPERTY_UNKNOWN: D3D12_CPU_PAGE_PROPERTY = 0;
@@ -161,12 +194,30 @@ pub const D3D12_DEBUG_DEVICE_PARAMETER_GPU_BASED_VALIDATION_SETTINGS:
 pub const D3D12_DEBUG_DEVICE_PARAMETER_GPU_SLOWDOWN_PERFORMANCE_FACTOR:
     D3D12_DEBUG_DEVICE_PARAMETER_TYPE = 2;
 pub type D3D12_DEBUG_DEVICE_PARAMETER_TYPE = i32;
+pub const D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING: i32 = 5768;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct D3D12_DEPTH_STENCIL_VALUE {
     pub Depth: f32,
     pub Stencil: u8,
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_DESCRIPTOR_HEAP_DESC {
+    pub Type: D3D12_DESCRIPTOR_HEAP_TYPE,
+    pub NumDescriptors: u32,
+    pub Flags: D3D12_DESCRIPTOR_HEAP_FLAGS,
+    pub NodeMask: u32,
+}
+pub type D3D12_DESCRIPTOR_HEAP_FLAGS = u32;
+pub const D3D12_DESCRIPTOR_HEAP_FLAG_NONE: D3D12_DESCRIPTOR_HEAP_FLAGS = 0;
+pub const D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE: D3D12_DESCRIPTOR_HEAP_FLAGS = 1;
+pub type D3D12_DESCRIPTOR_HEAP_TYPE = i32;
+pub const D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV: D3D12_DESCRIPTOR_HEAP_TYPE = 0;
+pub const D3D12_DESCRIPTOR_HEAP_TYPE_DSV: D3D12_DESCRIPTOR_HEAP_TYPE = 3;
+pub const D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES: D3D12_DESCRIPTOR_HEAP_TYPE = 4;
+pub const D3D12_DESCRIPTOR_HEAP_TYPE_RTV: D3D12_DESCRIPTOR_HEAP_TYPE = 2;
+pub const D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER: D3D12_DESCRIPTOR_HEAP_TYPE = 1;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_DESCRIPTOR_RANGE {
@@ -177,6 +228,10 @@ pub struct D3D12_DESCRIPTOR_RANGE {
     pub OffsetInDescriptorsFromTableStart: u32,
 }
 pub type D3D12_DESCRIPTOR_RANGE_TYPE = i32;
+pub const D3D12_DESCRIPTOR_RANGE_TYPE_CBV: D3D12_DESCRIPTOR_RANGE_TYPE = 2;
+pub const D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER: D3D12_DESCRIPTOR_RANGE_TYPE = 3;
+pub const D3D12_DESCRIPTOR_RANGE_TYPE_SRV: D3D12_DESCRIPTOR_RANGE_TYPE = 0;
+pub const D3D12_DESCRIPTOR_RANGE_TYPE_UAV: D3D12_DESCRIPTOR_RANGE_TYPE = 1;
 pub type D3D12_FEATURE = i32;
 pub const D3D12_FEATURE_APPLICATION_SPECIFIC_DRIVER_STATE: D3D12_FEATURE = 56;
 pub const D3D12_FEATURE_ARCHITECTURE: D3D12_FEATURE = 1;
@@ -276,6 +331,46 @@ pub const D3D12_FENCE_FLAG_NON_MONITORED: D3D12_FENCE_FLAGS = 4;
 pub const D3D12_FENCE_FLAG_SHARED: D3D12_FENCE_FLAGS = 1;
 pub const D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER: D3D12_FENCE_FLAGS = 2;
 pub type D3D12_FILTER = i32;
+pub const D3D12_FILTER_ANISOTROPIC: D3D12_FILTER = 85;
+pub const D3D12_FILTER_COMPARISON_ANISOTROPIC: D3D12_FILTER = 213;
+pub const D3D12_FILTER_COMPARISON_MIN_LINEAR_MAG_MIP_POINT: D3D12_FILTER = 144;
+pub const D3D12_FILTER_COMPARISON_MIN_LINEAR_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 145;
+pub const D3D12_FILTER_COMPARISON_MIN_MAG_ANISOTROPIC_MIP_POINT: D3D12_FILTER = 212;
+pub const D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 148;
+pub const D3D12_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR: D3D12_FILTER = 149;
+pub const D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT: D3D12_FILTER = 128;
+pub const D3D12_FILTER_COMPARISON_MIN_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 129;
+pub const D3D12_FILTER_COMPARISON_MIN_POINT_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 132;
+pub const D3D12_FILTER_COMPARISON_MIN_POINT_MAG_MIP_LINEAR: D3D12_FILTER = 133;
+pub const D3D12_FILTER_MAXIMUM_ANISOTROPIC: D3D12_FILTER = 469;
+pub const D3D12_FILTER_MAXIMUM_MIN_LINEAR_MAG_MIP_POINT: D3D12_FILTER = 400;
+pub const D3D12_FILTER_MAXIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 401;
+pub const D3D12_FILTER_MAXIMUM_MIN_MAG_ANISOTROPIC_MIP_POINT: D3D12_FILTER = 468;
+pub const D3D12_FILTER_MAXIMUM_MIN_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 404;
+pub const D3D12_FILTER_MAXIMUM_MIN_MAG_MIP_LINEAR: D3D12_FILTER = 405;
+pub const D3D12_FILTER_MAXIMUM_MIN_MAG_MIP_POINT: D3D12_FILTER = 384;
+pub const D3D12_FILTER_MAXIMUM_MIN_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 385;
+pub const D3D12_FILTER_MAXIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 388;
+pub const D3D12_FILTER_MAXIMUM_MIN_POINT_MAG_MIP_LINEAR: D3D12_FILTER = 389;
+pub const D3D12_FILTER_MINIMUM_ANISOTROPIC: D3D12_FILTER = 341;
+pub const D3D12_FILTER_MINIMUM_MIN_LINEAR_MAG_MIP_POINT: D3D12_FILTER = 272;
+pub const D3D12_FILTER_MINIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 273;
+pub const D3D12_FILTER_MINIMUM_MIN_MAG_ANISOTROPIC_MIP_POINT: D3D12_FILTER = 340;
+pub const D3D12_FILTER_MINIMUM_MIN_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 276;
+pub const D3D12_FILTER_MINIMUM_MIN_MAG_MIP_LINEAR: D3D12_FILTER = 277;
+pub const D3D12_FILTER_MINIMUM_MIN_MAG_MIP_POINT: D3D12_FILTER = 256;
+pub const D3D12_FILTER_MINIMUM_MIN_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 257;
+pub const D3D12_FILTER_MINIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 260;
+pub const D3D12_FILTER_MINIMUM_MIN_POINT_MAG_MIP_LINEAR: D3D12_FILTER = 261;
+pub const D3D12_FILTER_MIN_LINEAR_MAG_MIP_POINT: D3D12_FILTER = 16;
+pub const D3D12_FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 17;
+pub const D3D12_FILTER_MIN_MAG_ANISOTROPIC_MIP_POINT: D3D12_FILTER = 84;
+pub const D3D12_FILTER_MIN_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 20;
+pub const D3D12_FILTER_MIN_MAG_MIP_LINEAR: D3D12_FILTER = 21;
+pub const D3D12_FILTER_MIN_MAG_MIP_POINT: D3D12_FILTER = 0;
+pub const D3D12_FILTER_MIN_MAG_POINT_MIP_LINEAR: D3D12_FILTER = 1;
+pub const D3D12_FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT: D3D12_FILTER = 4;
+pub const D3D12_FILTER_MIN_POINT_MAG_MIP_LINEAR: D3D12_FILTER = 5;
 pub type D3D12_FORMAT_SUPPORT1 = u32;
 pub const D3D12_FORMAT_SUPPORT1_BACK_BUFFER_CAST: D3D12_FORMAT_SUPPORT1 = 16777216;
 pub const D3D12_FORMAT_SUPPORT1_BLENDABLE: D3D12_FORMAT_SUPPORT1 = 32768;
@@ -325,6 +420,11 @@ pub const D3D12_FORMAT_SUPPORT2_UAV_TYPED_LOAD: D3D12_FORMAT_SUPPORT2 = 64;
 pub const D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE: D3D12_FORMAT_SUPPORT2 = 128;
 pub type D3D12_GPU_BASED_VALIDATION_PIPELINE_STATE_CREATE_FLAGS = u32;
 pub type D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE = i32;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_GPU_DESCRIPTOR_HANDLE {
+    pub ptr: u64,
+}
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct D3D12_GPU_VIRTUAL_ADDRESS(pub u64);
@@ -409,12 +509,24 @@ pub const D3D12_PIPELINE_STATE_FLAG_NONE: D3D12_PIPELINE_STATE_FLAGS = 0;
 pub const D3D12_PIPELINE_STATE_FLAG_TOOL_DEBUG: D3D12_PIPELINE_STATE_FLAGS = 1;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
+    pub Offset: u64,
+    pub Footprint: D3D12_SUBRESOURCE_FOOTPRINT,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_RANGE {
     pub Begin: usize,
     pub End: usize,
 }
 pub const D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT: i32 = 16;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV {
+    pub Location: D3D12_GPU_VIRTUAL_ADDRESS,
+}
 pub const D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT: i32 = 4096;
+pub const D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION: i32 = 16384;
 #[repr(C)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_RESOURCE_ALIASING_BARRIER {
@@ -631,12 +743,64 @@ pub const D3D12_ROOT_SIGNATURE_FLAG_NONE: D3D12_ROOT_SIGNATURE_FLAGS = 0;
 pub const D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED: D3D12_ROOT_SIGNATURE_FLAGS =
     2048;
 #[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct D3D12_SAMPLER_DESC {
+    pub Filter: D3D12_FILTER,
+    pub AddressU: D3D12_TEXTURE_ADDRESS_MODE,
+    pub AddressV: D3D12_TEXTURE_ADDRESS_MODE,
+    pub AddressW: D3D12_TEXTURE_ADDRESS_MODE,
+    pub MipLODBias: f32,
+    pub MaxAnisotropy: u32,
+    pub ComparisonFunc: D3D12_COMPARISON_FUNC,
+    pub BorderColor: [f32; 4],
+    pub MinLOD: f32,
+    pub MaxLOD: f32,
+}
+impl Default for D3D12_SAMPLER_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_SHADER_BYTECODE {
     pub pShaderBytecode: *const core::ffi::c_void,
     pub BytecodeLength: usize,
 }
 pub type D3D12_SHADER_MIN_PRECISION_SUPPORT = u32;
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct D3D12_SHADER_RESOURCE_VIEW_DESC {
+    pub Format: DXGI_FORMAT,
+    pub ViewDimension: D3D12_SRV_DIMENSION,
+    pub Shader4ComponentMapping: u32,
+    pub Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0,
+}
+impl Default for D3D12_SHADER_RESOURCE_VIEW_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+    pub Buffer: D3D12_BUFFER_SRV,
+    pub Texture1D: D3D12_TEX1D_SRV,
+    pub Texture1DArray: D3D12_TEX1D_ARRAY_SRV,
+    pub Texture2D: D3D12_TEX2D_SRV,
+    pub Texture2DArray: D3D12_TEX2D_ARRAY_SRV,
+    pub Texture2DMS: D3D12_TEX2DMS_SRV,
+    pub Texture2DMSArray: D3D12_TEX2DMS_ARRAY_SRV,
+    pub Texture3D: D3D12_TEX3D_SRV,
+    pub TextureCube: D3D12_TEXCUBE_SRV,
+    pub TextureCubeArray: D3D12_TEXCUBE_ARRAY_SRV,
+    pub RaytracingAccelerationStructure: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV,
+}
+impl Default for D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
 pub type D3D12_SHADER_VISIBILITY = i32;
 pub const D3D12_SHADER_VISIBILITY_ALL: D3D12_SHADER_VISIBILITY = 0;
 pub const D3D12_SHADER_VISIBILITY_AMPLIFICATION: D3D12_SHADER_VISIBILITY = 6;
@@ -646,6 +810,19 @@ pub const D3D12_SHADER_VISIBILITY_HULL: D3D12_SHADER_VISIBILITY = 2;
 pub const D3D12_SHADER_VISIBILITY_MESH: D3D12_SHADER_VISIBILITY = 7;
 pub const D3D12_SHADER_VISIBILITY_PIXEL: D3D12_SHADER_VISIBILITY = 5;
 pub const D3D12_SHADER_VISIBILITY_VERTEX: D3D12_SHADER_VISIBILITY = 1;
+pub type D3D12_SRV_DIMENSION = i32;
+pub const D3D12_SRV_DIMENSION_BUFFER: D3D12_SRV_DIMENSION = 1;
+pub const D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE: D3D12_SRV_DIMENSION = 11;
+pub const D3D12_SRV_DIMENSION_TEXTURE1D: D3D12_SRV_DIMENSION = 2;
+pub const D3D12_SRV_DIMENSION_TEXTURE1DARRAY: D3D12_SRV_DIMENSION = 3;
+pub const D3D12_SRV_DIMENSION_TEXTURE2D: D3D12_SRV_DIMENSION = 4;
+pub const D3D12_SRV_DIMENSION_TEXTURE2DARRAY: D3D12_SRV_DIMENSION = 5;
+pub const D3D12_SRV_DIMENSION_TEXTURE2DMS: D3D12_SRV_DIMENSION = 6;
+pub const D3D12_SRV_DIMENSION_TEXTURE2DMSARRAY: D3D12_SRV_DIMENSION = 7;
+pub const D3D12_SRV_DIMENSION_TEXTURE3D: D3D12_SRV_DIMENSION = 8;
+pub const D3D12_SRV_DIMENSION_TEXTURECUBE: D3D12_SRV_DIMENSION = 9;
+pub const D3D12_SRV_DIMENSION_TEXTURECUBEARRAY: D3D12_SRV_DIMENSION = 10;
+pub const D3D12_SRV_DIMENSION_UNKNOWN: D3D12_SRV_DIMENSION = 0;
 pub type D3D12_STATIC_BORDER_COLOR = i32;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -664,7 +841,121 @@ pub struct D3D12_STATIC_SAMPLER_DESC {
     pub RegisterSpace: u32,
     pub ShaderVisibility: D3D12_SHADER_VISIBILITY,
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_SUBRESOURCE_FOOTPRINT {
+    pub Format: DXGI_FORMAT,
+    pub Width: u32,
+    pub Height: u32,
+    pub Depth: u32,
+    pub RowPitch: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEX1D_ARRAY_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+    pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEX1D_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_ARRAY_SRV {
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_SRV {
+    pub UnusedField_NothingToDefine: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEX2D_ARRAY_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+    pub PlaneSlice: u32,
+    pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEX2D_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub PlaneSlice: u32,
+    pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEX3D_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEXCUBE_ARRAY_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub First2DArrayFace: u32,
+    pub NumCubes: u32,
+    pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_TEXCUBE_SRV {
+    pub MostDetailedMip: u32,
+    pub MipLevels: u32,
+    pub ResourceMinLODClamp: f32,
+}
 pub type D3D12_TEXTURE_ADDRESS_MODE = i32;
+pub const D3D12_TEXTURE_ADDRESS_MODE_BORDER: D3D12_TEXTURE_ADDRESS_MODE = 4;
+pub const D3D12_TEXTURE_ADDRESS_MODE_CLAMP: D3D12_TEXTURE_ADDRESS_MODE = 3;
+pub const D3D12_TEXTURE_ADDRESS_MODE_MIRROR: D3D12_TEXTURE_ADDRESS_MODE = 2;
+pub const D3D12_TEXTURE_ADDRESS_MODE_MIRROR_ONCE: D3D12_TEXTURE_ADDRESS_MODE = 5;
+pub const D3D12_TEXTURE_ADDRESS_MODE_WRAP: D3D12_TEXTURE_ADDRESS_MODE = 1;
+#[repr(C)]
+pub struct D3D12_TEXTURE_COPY_LOCATION {
+    pub pResource: core::mem::ManuallyDrop<Option<ID3D12Resource>>,
+    pub Type: D3D12_TEXTURE_COPY_TYPE,
+    pub Anonymous: D3D12_TEXTURE_COPY_LOCATION_0,
+}
+impl Clone for D3D12_TEXTURE_COPY_LOCATION {
+    fn clone(&self) -> Self {
+        unsafe { core::mem::transmute_copy(self) }
+    }
+}
+impl Default for D3D12_TEXTURE_COPY_LOCATION {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union D3D12_TEXTURE_COPY_LOCATION_0 {
+    pub PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    pub SubresourceIndex: u32,
+}
+impl Default for D3D12_TEXTURE_COPY_LOCATION_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+pub type D3D12_TEXTURE_COPY_TYPE = i32;
+pub const D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT: D3D12_TEXTURE_COPY_TYPE = 1;
+pub const D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX: D3D12_TEXTURE_COPY_TYPE = 0;
+pub const D3D12_TEXTURE_DATA_PITCH_ALIGNMENT: i32 = 256;
+pub const D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT: i32 = 512;
 pub type D3D12_TEXTURE_LAYOUT = i32;
 pub const D3D12_TEXTURE_LAYOUT_64KB_STANDARD_SWIZZLE: D3D12_TEXTURE_LAYOUT = 3;
 pub const D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE: D3D12_TEXTURE_LAYOUT = 2;
@@ -1080,6 +1371,56 @@ pub struct ID3D12DebugDevice1_Vtbl {
 }
 impl windows_core::RuntimeName for ID3D12DebugDevice1 {}
 windows_core::imp::define_interface!(
+    ID3D12DescriptorHeap,
+    ID3D12DescriptorHeap_Vtbl,
+    0x8efb471d_616c_4f49_90f7_127bb763fa51
+);
+impl core::ops::Deref for ID3D12DescriptorHeap {
+    type Target = ID3D12Pageable;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    ID3D12DescriptorHeap,
+    windows_core::IUnknown,
+    ID3D12Object,
+    ID3D12DeviceChild,
+    ID3D12Pageable
+);
+impl ID3D12DescriptorHeap {
+    pub unsafe fn GetCPUDescriptorHandleForHeapStart(&self) -> D3D12_CPU_DESCRIPTOR_HANDLE {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).GetCPUDescriptorHandleForHeapStart)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            );
+            result__
+        }
+    }
+    pub unsafe fn GetGPUDescriptorHandleForHeapStart(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).GetGPUDescriptorHandleForHeapStart)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            );
+            result__
+        }
+    }
+}
+#[repr(C)]
+pub struct ID3D12DescriptorHeap_Vtbl {
+    pub base__: ID3D12Pageable_Vtbl,
+    GetDesc: usize,
+    pub GetCPUDescriptorHandleForHeapStart:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut D3D12_CPU_DESCRIPTOR_HANDLE),
+    pub GetGPUDescriptorHandleForHeapStart:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut D3D12_GPU_DESCRIPTOR_HANDLE),
+}
+impl windows_core::RuntimeName for ID3D12DescriptorHeap {}
+windows_core::imp::define_interface!(
     ID3D12Device,
     ID3D12Device_Vtbl,
     0x189819f1_1db6_4b57_be54_1821339b85f7
@@ -1187,6 +1528,35 @@ impl ID3D12Device {
             )
         }
     }
+    pub unsafe fn CreateDescriptorHeap<T>(
+        &self,
+        pdescriptorheapdesc: *const D3D12_DESCRIPTOR_HEAP_DESC,
+    ) -> windows_core::Result<T>
+    where
+        T: windows_core::Interface,
+    {
+        let mut result__ = core::ptr::null_mut();
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateDescriptorHeap)(
+                windows_core::Interface::as_raw(self),
+                pdescriptorheapdesc,
+                &T::IID,
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
+    pub unsafe fn GetDescriptorHandleIncrementSize(
+        &self,
+        descriptorheaptype: D3D12_DESCRIPTOR_HEAP_TYPE,
+    ) -> u32 {
+        unsafe {
+            (windows_core::Interface::vtable(self).GetDescriptorHandleIncrementSize)(
+                windows_core::Interface::as_raw(self),
+                descriptorheaptype,
+            )
+        }
+    }
     pub unsafe fn CreateRootSignature<T>(
         &self,
         nodemask: u32,
@@ -1206,6 +1576,36 @@ impl ID3D12Device {
                 &mut result__,
             )
             .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
+    pub unsafe fn CreateShaderResourceView<P0>(
+        &self,
+        presource: P0,
+        pdesc: Option<*const D3D12_SHADER_RESOURCE_VIEW_DESC>,
+        destdescriptor: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) where
+        P0: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateShaderResourceView)(
+                windows_core::Interface::as_raw(self),
+                presource.param().abi(),
+                pdesc.unwrap_or(core::mem::zeroed()) as _,
+                destdescriptor,
+            );
+        }
+    }
+    pub unsafe fn CreateSampler(
+        &self,
+        pdesc: *const D3D12_SAMPLER_DESC,
+        destdescriptor: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateSampler)(
+                windows_core::Interface::as_raw(self),
+                pdesc,
+                destdescriptor,
+            );
         }
     }
     pub unsafe fn GetResourceAllocationInfo(
@@ -1278,6 +1678,31 @@ impl ID3D12Device {
             )
         }
     }
+    pub unsafe fn GetCopyableFootprints(
+        &self,
+        presourcedesc: *const D3D12_RESOURCE_DESC,
+        firstsubresource: u32,
+        numsubresources: u32,
+        baseoffset: u64,
+        playouts: Option<*mut D3D12_PLACED_SUBRESOURCE_FOOTPRINT>,
+        pnumrows: Option<*mut u32>,
+        prowsizeinbytes: Option<*mut u64>,
+        ptotalbytes: Option<*mut u64>,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).GetCopyableFootprints)(
+                windows_core::Interface::as_raw(self),
+                presourcedesc,
+                firstsubresource,
+                numsubresources,
+                baseoffset,
+                playouts.unwrap_or(core::mem::zeroed()) as _,
+                pnumrows.unwrap_or(core::mem::zeroed()) as _,
+                prowsizeinbytes.unwrap_or(core::mem::zeroed()) as _,
+                ptotalbytes.unwrap_or(core::mem::zeroed()) as _,
+            );
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12Device_Vtbl {
@@ -1317,8 +1742,14 @@ pub struct ID3D12Device_Vtbl {
         *mut core::ffi::c_void,
         u32,
     ) -> windows_core::HRESULT,
-    CreateDescriptorHeap: usize,
-    GetDescriptorHandleIncrementSize: usize,
+    pub CreateDescriptorHeap: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_DESCRIPTOR_HEAP_DESC,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    pub GetDescriptorHandleIncrementSize:
+        unsafe extern "system" fn(*mut core::ffi::c_void, D3D12_DESCRIPTOR_HEAP_TYPE) -> u32,
     pub CreateRootSignature: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         u32,
@@ -1328,11 +1759,20 @@ pub struct ID3D12Device_Vtbl {
         *mut *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
     CreateConstantBufferView: usize,
-    CreateShaderResourceView: usize,
+    pub CreateShaderResourceView: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *const D3D12_SHADER_RESOURCE_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
     CreateUnorderedAccessView: usize,
     CreateRenderTargetView: usize,
     CreateDepthStencilView: usize,
-    CreateSampler: usize,
+    pub CreateSampler: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_SAMPLER_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
     CopyDescriptors: usize,
     CopyDescriptorsSimple: usize,
     pub GetResourceAllocationInfo: unsafe extern "system" fn(
@@ -1370,7 +1810,17 @@ pub struct ID3D12Device_Vtbl {
     ) -> windows_core::HRESULT,
     pub GetDeviceRemovedReason:
         unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_core::HRESULT,
-    GetCopyableFootprints: usize,
+    pub GetCopyableFootprints: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_RESOURCE_DESC,
+        u32,
+        u32,
+        u64,
+        *mut D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+        *mut u32,
+        *mut u64,
+        *mut u64,
+    ),
     CreateQueryHeap: usize,
     SetStablePowerState: usize,
     CreateCommandSignature: usize,
@@ -1492,6 +1942,27 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn CopyTextureRegion(
+        &self,
+        pdst: *const D3D12_TEXTURE_COPY_LOCATION,
+        dstx: u32,
+        dsty: u32,
+        dstz: u32,
+        psrc: *const D3D12_TEXTURE_COPY_LOCATION,
+        psrcbox: Option<*const D3D12_BOX>,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).CopyTextureRegion)(
+                windows_core::Interface::as_raw(self),
+                pdst,
+                dstx,
+                dsty,
+                dstz,
+                psrc,
+                psrcbox.unwrap_or(core::mem::zeroed()) as _,
+            );
+        }
+    }
     pub unsafe fn SetPipelineState<P0>(&self, ppipelinestate: P0)
     where
         P0: windows_core::Param<ID3D12PipelineState>,
@@ -1512,6 +1983,15 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn SetDescriptorHeaps(&self, ppdescriptorheaps: &[Option<ID3D12DescriptorHeap>]) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetDescriptorHeaps)(
+                windows_core::Interface::as_raw(self),
+                ppdescriptorheaps.len().try_into().unwrap(),
+                core::mem::transmute(ppdescriptorheaps.as_ptr()),
+            );
+        }
+    }
     pub unsafe fn SetComputeRootSignature<P0>(&self, prootsignature: P0)
     where
         P0: windows_core::Param<ID3D12RootSignature>,
@@ -1520,6 +2000,19 @@ impl ID3D12GraphicsCommandList {
             (windows_core::Interface::vtable(self).SetComputeRootSignature)(
                 windows_core::Interface::as_raw(self),
                 prootsignature.param().abi(),
+            );
+        }
+    }
+    pub unsafe fn SetComputeRootDescriptorTable(
+        &self,
+        rootparameterindex: u32,
+        basedescriptor: D3D12_GPU_DESCRIPTOR_HANDLE,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetComputeRootDescriptorTable)(
+                windows_core::Interface::as_raw(self),
+                rootparameterindex,
+                basedescriptor,
             );
         }
     }
@@ -1567,7 +2060,15 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
         u64,
         u64,
     ),
-    CopyTextureRegion: usize,
+    pub CopyTextureRegion: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_TEXTURE_COPY_LOCATION,
+        u32,
+        u32,
+        u32,
+        *const D3D12_TEXTURE_COPY_LOCATION,
+        *const D3D12_BOX,
+    ),
     CopyResource: usize,
     CopyTiles: usize,
     ResolveSubresource: usize,
@@ -1580,11 +2081,13 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     pub ResourceBarrier:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const D3D12_RESOURCE_BARRIER),
     ExecuteBundle: usize,
-    SetDescriptorHeaps: usize,
+    pub SetDescriptorHeaps:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const *mut core::ffi::c_void),
     pub SetComputeRootSignature:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
     SetGraphicsRootSignature: usize,
-    SetComputeRootDescriptorTable: usize,
+    pub SetComputeRootDescriptorTable:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_DESCRIPTOR_HANDLE),
     SetGraphicsRootDescriptorTable: usize,
     SetComputeRoot32BitConstant: usize,
     SetGraphicsRoot32BitConstant: usize,
