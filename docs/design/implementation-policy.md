@@ -1151,6 +1151,11 @@ Program・binding・資源の版/用途/範囲は不変だが、Storage本文は
 shaderの16-byte最小ABIを作成時に照合し、Programと全bufferをmanifest順に保持する。
 Uniformはoffset 256-byte境界/range 64 KiB以下、Storageのraw UAVはoffset 16-byte境界を使う。
 native allocationの切上げを論理rangeの拡大には使わない。旧Uniform専用APIは置換した。
+binding入力は検査専用Vecを経ずmanifest順に解決し、全結果の成功後だけ所有を公開する。
+対応付け済みslotの再照合と、集合検査後の別の再探索を除去した。途中のslot解決・資源検査が
+失敗すれば、それまでに複製した参照も解放し、不完全なbindingを公開しない。
+logical size/pad後native sizeの検査は、他のfactory呼出し元の安全性も守るため今回は変更しない。
+Device状態・native容量/失敗・Fence・GPU寿命の保証も変更しない。
 
 この小さいassetはroot CBV `b0/space0`とroot UAV `u0/space1`を使う。
 kind/register/spaceとrecord root indexをmanifest表から導出し、nativeへ固定slotを持ち込まない。

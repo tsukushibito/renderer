@@ -300,6 +300,10 @@ set layoutを作る。`create_managed_buffer`はUniformとStorageを受け、既
 `create_bindings`は全slotの過不足・重複、用途、owner、論理範囲を検査し、uniform/storage
 それぞれの実Device offset alignmentと最大rangeを満たすことを保証する。入力順は自由で、
 成功後はmanifest順のProgram・全buffer・範囲を強保持する。pool/setを新規作成し一度だけupdateする。
+slot解決は呼出し元の入力を直接参照し、検査専用descriptor Vecを作らない。各manifest slotへ
+対応する入力がちょうど1件であることと全体の件数から、過不足・重複を排除する。
+全結果の解決・資源検査が成功してからnative pool/setを作る。選択済みpairのslotを再照合せず、
+同じslotの対応付けを別処理で再探索しない。保持用buffer/範囲配列とnative descriptor更新用配列は維持する。
 Uniform専用の作成API・型とconsumerは共通APIへ置換し、互換wrapperを残さない。
 一資源の用途をUniformかStorageに固定し、両用途への同一資源aliasを許可しない。
 不変なのはProgram/descriptor/資源の版と範囲であり、Storage本文はGPUが書き換えられる。

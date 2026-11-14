@@ -184,9 +184,8 @@ impl ManagedProgram {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProgramError {
     BindingCount,
-    UnknownSlot,
+    MissingSlot,
     DuplicateSlot,
-    LayoutMismatch,
     UsageMismatch,
     InvalidAlignment,
     InvalidRange,
@@ -198,9 +197,8 @@ impl std::fmt::Display for ProgramError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::BindingCount => "binding collection must cover the complete Program layout",
-            Self::UnknownSlot => "binding collection contains an unknown Program slot",
+            Self::MissingSlot => "binding collection does not provide a required Program slot",
             Self::DuplicateSlot => "binding collection contains a duplicate Program slot",
-            Self::LayoutMismatch => "buffer slot does not match the managed Program layout",
             Self::UsageMismatch => "buffer usage does not match the managed Program slot",
             Self::InvalidAlignment => "buffer offset does not meet Device binding alignment",
             Self::InvalidRange => "buffer range is outside the shader or Device limits",
@@ -209,35 +207,37 @@ impl std::fmt::Display for ProgramError {
     }
 }
 
-/// The trusted layout has unique slots. Equal count plus known, unique inputs
-/// proves complete coverage, independently of caller order. Native owners store
-/// the successful collection in manifest order; recording need not repeat this.
+/// Resolve directly from caller input in manifest order without a validation
+/// scratch allocation. The trusted layout has unique slots: equal count and one
+/// input per slot prove complete coverage and reject unknown/duplicate inputs.
+/// Callers must consume every result successfully before publishing native
+/// bindings. Each selected pair already has matching group/binding values.
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
-pub(crate) fn validate_binding_slots(
-    layout: &[BufferBindingLayout],
-    descs: &[BufferBindingDesc],
-) -> Result<(), ProgramError> {
-    if layout.len() != descs.len() {
+pub(crate) fn resolve_buffer_bindings<'a, 'b, B>(
+    layout: &'a [BufferBindingLayout],
+    input: &'a [BufferBinding<'b, B>],
+) -> Result<
+    impl Iterator<Item = Result<(BufferBindingLayout, &'a BufferBinding<'b, B>), ProgramError>>,
+    ProgramError,
+> {
+    if layout.len() != input.len() {
         return Err(ProgramError::BindingCount);
     }
-    for (index, desc) in descs.iter().enumerate() {
-        let same_slot = |group, binding| desc.group == group && desc.binding == binding;
-        if !layout
-            .iter()
-            .any(|slot| same_slot(slot.group, slot.binding))
-        {
-            return Err(ProgramError::UnknownSlot);
-        }
-        if descs[..index]
-            .iter()
-            .any(|other| same_slot(other.group, other.binding))
-        {
+    Ok(layout.iter().copied().map(move |slot| {
+        let mut matching = input.iter().filter(|binding| {
+            binding.desc.group == slot.group && binding.desc.binding == slot.binding
+        });
+        let binding = matching.next().ok_or(ProgramError::MissingSlot)?;
+        if matching.next().is_some() {
             return Err(ProgramError::DuplicateSlot);
         }
-    }
-    Ok(())
+        Ok((slot, binding))
+    }))
 }
 
+/// The resolver selected this immutable descriptor for `layout`. Check its
+/// external resource usage/range against the real Device limits once; slot
+/// equality is already established and is not revalidated here.
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
 pub(crate) fn validate_buffer_binding(
     layout: BufferBindingLayout,
@@ -247,9 +247,6 @@ pub(crate) fn validate_buffer_binding(
     alignment: u64,
     max_range: u64,
 ) -> Result<(), ProgramError> {
-    if desc.group != layout.group || desc.binding != layout.binding {
-        return Err(ProgramError::LayoutMismatch);
-    }
     if usage != layout.kind.usage() {
         return Err(ProgramError::UsageMismatch);
     }
@@ -341,20 +338,46 @@ mod tests {
     #[test]
     fn complete_binding_collection_accepts_caller_order_and_rejects_malformed_slots() {
         let layout = ManagedProgram::uniform_readback().bindings();
-        assert_eq!(validate_binding_slots(layout, &[desc(1), desc(0)]), Ok(()));
+        let resolve = |descs: &[BufferBindingDesc]| {
+            let input = descs
+                .iter()
+                .map(|desc| BufferBinding {
+                    buffer: &desc.group,
+                    desc: *desc,
+                })
+                .collect::<Vec<_>>();
+            resolve_buffer_bindings(layout, &input).and_then(|resolved| {
+                resolved
+                    .map(|entry| {
+                        entry.map(|(slot, binding)| (slot.group, *binding.buffer, binding.desc))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+        };
+        assert_eq!(
+            resolve(&[desc(1), desc(0)]),
+            Ok(vec![(0, 0, desc(0)), (1, 1, desc(1))])
+        );
         for incomplete in [&[][..], &[desc(0)][..], &[desc(0), desc(1), desc(2)][..]] {
-            assert_eq!(
-                validate_binding_slots(layout, incomplete),
-                Err(ProgramError::BindingCount)
-            );
+            assert_eq!(resolve(incomplete), Err(ProgramError::BindingCount));
         }
         assert_eq!(
-            validate_binding_slots(layout, &[desc(0), desc(0)]),
+            resolve(&[desc(0), desc(0)]),
             Err(ProgramError::DuplicateSlot)
         );
-        assert_eq!(
-            validate_binding_slots(layout, &[desc(0), desc(2)]),
-            Err(ProgramError::UnknownSlot)
+        // Missing/unknown inputs can occur after an earlier slot resolved.
+        // Both group and binding identity participate in resolution.
+        assert!(resolve(&[desc(0), desc(2)]).is_err());
+        assert!(resolve(&[desc(1), desc(1)]).is_err());
+        assert!(
+            resolve(&[
+                desc(0),
+                BufferBindingDesc {
+                    binding: 1,
+                    ..desc(1)
+                }
+            ])
+            .is_err()
         );
     }
 
@@ -377,17 +400,6 @@ mod tests {
             assert_eq!(
                 check(wrong, 272, desc(layout.group)),
                 Err(ProgramError::UsageMismatch)
-            );
-            assert_eq!(
-                check(
-                    usage,
-                    512,
-                    BufferBindingDesc {
-                        group: 9,
-                        ..desc(layout.group)
-                    }
-                ),
-                Err(ProgramError::LayoutMismatch)
             );
             assert_eq!(
                 check(

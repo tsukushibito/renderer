@@ -9,7 +9,7 @@
 
 ## 管理下buffer Programの二API実装
 
-`renderer-7ft.2.1.2`。`program::ManagedProgram`のmanifest表からVulkan/D3D12のnative
+`renderer-7ft.2.1.2`と`.2.1.3`。`program::ManagedProgram`のmanifest表からVulkan/D3D12のnative
 layout/root slotを導出し、Uniform/Storageの共通buffer・binding作成APIへ移行した。
 Uniform専用型/APIとin-repo consumerを置換し、Storageの公開作成物を受入出力に使う。
 親`renderer-7ft.2.1`の画像/View/sampler、RGBA16F/depth等と、`.2.2`以降のowned Graph実行は未完了である。
@@ -28,6 +28,11 @@ bindingsは`21215e9b169fb7d883bf0a869ad1b91fe247ea7b6ae6e1fd5371dede1a7dc891`で
 Rustのmanifest表と生成reflectionのkind/group/slot/minimum byte数をCPU試験で照合する。
 作成境界でbinding集合の欠落/重複/余剰、用途、ABI、owner、論理範囲とDevice alignmentを保証し、
 成功後はmanifest順にProgram・descriptor・全bufferの版と範囲を保持する。
+`.2.1.3`では入力を直接参照するslot解決へまとめ、検査専用descriptor Vec、別処理でのslot再探索、
+選択済みpairのslot再照合を除去した。全結果を成功消費してからnative作成・公開へ進み、
+後半の未知slotなどで失敗しても途中の資源参照を残さない。用途・owner・範囲・alignment・overflowの拒否は維持する。
+これは作成処理のソース整理であり、時間・GPU速度の改善率や計算量の線形化は主張しない。
+native入力を作る配列、SPIR-Vのword変換、Deviceの変動状態、native失敗・同期・寿命は維持した。
 Uniform更新は新しい資源/binding版を作り、旧byteを上書きしない。Storage本文はGPU可変であり、
 作成成功やStorageWrite指定で全rangeの初期化を認めない。固定shaderが書く16 byteだけを内容照合する。
 製品構成でもnative失敗・容量・同期・実完了・GPU所有の保持は維持する。
@@ -40,6 +45,10 @@ Windows x64/Rust 1.99.0でfmt、CPUのみ・製品・開発の全target Clippy�
 CPUのみの通常70件、製品release通常189件、開発debug/release通常200件が成功した。
 両backendの公開作成例はRustdocでコンパイルし、追加の1件が各構成で成功した。
 新規codeの独立レビューで修正必須の指摘はない。
+テストも見直し、旧private helperへ不正slotを直接渡すassertは、slot解決の入力拒否と資源対応の試験へ集約した。
+D3D12は同じrounding classのassert、未知slotの同じ拒否classのassert、同一dispatchの余分な反復を除いた。
+shader ABI、実Device別のalignment/論理範囲、owner、部分作成失敗、cancel/busy、完了後reuse、
+pending中の参照保持は残した。後半のslot解決失敗で途中の資源参照が解放されることも公開APIで確認する。
 
 RTX 3060でreleaseの実GPU試験を逐次実行した。
 fixtureは共通の非対称な旧/新byte列と、公開APIで作成した272-byte Storageのoffset 256を使い、
@@ -55,7 +64,7 @@ strictはCore/SyncValまたはDebug Layer/GBVの実効を確認し、shaderを�
 既存回帰を含め、strict Vulkan 47件（表示・resize/cancel/pending終了とmanaged Storageを含む）、
 strict D3D12準備/runtime/managed Storageの3件、D3D12 buffer寿命1件、共有bufferのstrict/製品各1件、
 Vulkan製品mesh 1件、managed Storage製品2件の合計56件が成功した。
-ローカルの詳細ログは`.tools/b1-storage/gates/`に保存した。
+ローカルの詳細ログは`.tools/b1-binding-cleanup/gates/`に保存した。
 Vulkan CPUアクセス拒否の負の試験が出すRendererログはnative Validation診断と区別する。
 
 Linux実GPU、別GPU/driver、一般shader/画像/Graph実行、性能・長時間耐久、実native OOM/
