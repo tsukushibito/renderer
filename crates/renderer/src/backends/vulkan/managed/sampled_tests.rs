@@ -42,19 +42,22 @@ enum SampleInput<'a> {
 }
 enum InitialContents<'a> {
     Pixels(&'a [u8]),
-    DepthClear {
-        attachment: VulkanImageView,
-        value: f32,
-    },
+    DepthClear(VulkanImageView),
 }
 impl<'a> SampleInput<'a> {
+    fn descriptor(self, format: ImageFormat) -> ImageDescriptor {
+        ImageDescriptor {
+            preferred_depth_clear: match self {
+                Self::Pixels(_) => None,
+                Self::Depth(value) => Some(value),
+            },
+            ..image_desc(format)
+        }
+    }
     fn initialize(self, attachment: &Option<VulkanImageView>) -> InitialContents<'a> {
         match self {
             Self::Pixels(bytes) => InitialContents::Pixels(bytes),
-            Self::Depth(value) => InitialContents::DepthClear {
-                attachment: attachment.as_ref().unwrap().clone(),
-                value,
-            },
+            Self::Depth(_) => InitialContents::DepthClear(attachment.as_ref().unwrap().clone()),
         }
     }
 }
@@ -86,7 +89,7 @@ struct Work {
     upload: Option<TransferBuffer>,
     // The attachment View is a command operand outside sampled bindings; it
     // must be retained independently through recording and GPU retirement.
-    depth_clear: Option<(VulkanImageView, f32)>,
+    depth_clear: Option<VulkanImageView>,
     readback: TransferBuffer,
 }
 impl Work {
@@ -115,20 +118,17 @@ impl Work {
         let desc = image.image.desc();
         let (pixels, depth_clear) = match initial {
             Some(InitialContents::Pixels(bytes)) => (Some(bytes), None),
-            Some(InitialContents::DepthClear { attachment, value }) => {
-                (None, Some((attachment, value)))
-            }
+            Some(InitialContents::DepthClear(attachment)) => (None, Some(attachment)),
             None => (None, None),
         };
         let valid_initial = match (desc.format, pixels, &depth_clear) {
             (_, None, None) => initialized,
             (ImageFormat::Rgba8Unorm, Some(bytes), None) => bytes.len() == 16,
             (ImageFormat::Rgba16Float, Some(bytes), None) => bytes.len() == 32,
-            (ImageFormat::D32Float, None, Some((attachment, value))) => {
+            (ImageFormat::D32Float, None, Some(attachment)) => {
                 Arc::ptr_eq(&attachment.0.image.0, &image.image.0)
                     && attachment.desc().usage == ImageViewUsage::DepthAttachment
-                    && value.is_finite()
-                    && (0.0..=1.0).contains(value)
+                    && desc.preferred_depth_clear.is_some()
             }
             _ => false,
         };
@@ -256,7 +256,7 @@ impl TransferPayload for Work {
                     &vk::DependencyInfo::default().image_memory_barriers(&sampled),
                 );
             }
-            if let Some((attachment, value)) = &self.depth_clear {
+            if let Some(attachment) = &self.depth_clear {
                 let stages = vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
                     | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS;
                 let depth_range = vk::ImageSubresourceRange::default()
@@ -285,7 +285,7 @@ impl TransferPayload for Work {
                     .store_op(vk::AttachmentStoreOp::STORE)
                     .clear_value(vk::ClearValue {
                         depth_stencil: vk::ClearDepthStencilValue {
-                            depth: *value,
+                            depth: image.desc().preferred_depth_clear.unwrap(),
                             stencil: 0,
                         },
                     });
@@ -409,6 +409,7 @@ fn image_desc(format: ImageFormat) -> ImageDescriptor {
         width: 2,
         height: 2,
         format,
+        preferred_depth_clear: None,
     }
 }
 fn bind(
@@ -557,7 +558,9 @@ fn run_sampled_versions(
             .find(|slot| slot.kind == BindingType::StorageWrite)
             .unwrap()
             .min_size;
-        let image = runtime.create_managed_image(image_desc(format)).unwrap();
+        let image = runtime
+            .create_managed_image(old.descriptor(format))
+            .unwrap();
         let view = runtime
             .create_image_view(&image, ImageViewDescriptor::default())
             .unwrap();
@@ -570,7 +573,7 @@ fn run_sampled_versions(
                 size: 256 + output_size,
             })
             .unwrap();
-        assert_eq!(image.desc(), image_desc(format));
+        assert_eq!(image.desc(), old.descriptor(format));
         assert_eq!(view.desc(), ImageViewDescriptor::default());
         assert_eq!(sampler.desc(), SamplerDescriptor::NearestClamp);
         let bindings = bind(&runtime, &program, &view, &sampler, &output).unwrap();
@@ -660,7 +663,9 @@ fn run_sampled_versions(
         )
         .unwrap();
         let newer_program = runtime.create_program(&managed).unwrap();
-        let newer_image = runtime.create_managed_image(image_desc(format)).unwrap();
+        let newer_image = runtime
+            .create_managed_image(new.descriptor(format))
+            .unwrap();
         let newer_view = runtime
             .create_image_view(&newer_image, ImageViewDescriptor::default())
             .unwrap();
