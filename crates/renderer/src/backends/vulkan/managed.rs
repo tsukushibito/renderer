@@ -5,7 +5,7 @@ use super::error::RuntimeError;
 use super::memory::MemoryOwner;
 use crate::program::{
     BufferBinding, BufferBindingDesc, BufferBindingLayout, BufferBindingType, BufferDescriptor,
-    BufferUsage, ManagedProgram, validate_binding_slots, validate_buffer_binding,
+    BufferUsage, ManagedProgram, resolve_buffer_bindings, validate_buffer_binding,
 };
 use ash::vk;
 use std::sync::Arc;
@@ -343,17 +343,13 @@ impl VulkanBindings {
                 "managed Program/buffer belongs to another Device",
             ));
         }
-        let requested = input.iter().map(|b| b.desc).collect::<Vec<_>>();
-        validate_binding_slots(program.0.bindings, &requested)
+        let resolved = resolve_buffer_bindings(program.0.bindings, input)
             .map_err(|e| RuntimeError::invalid(e.to_string()))?;
         let limits = owner.device.limits();
         let mut buffers = Vec::with_capacity(input.len());
         let mut descs = Vec::with_capacity(input.len());
-        for layout in program.0.bindings {
-            let binding = input
-                .iter()
-                .find(|b| b.desc.group == layout.group && b.desc.binding == layout.binding)
-                .unwrap();
+        for entry in resolved {
+            let (layout, binding) = entry.map_err(|e| RuntimeError::invalid(e.to_string()))?;
             let (alignment, maximum) = match layout.kind {
                 BufferBindingType::Uniform => (
                     limits.min_uniform_buffer_offset_alignment,
@@ -365,7 +361,7 @@ impl VulkanBindings {
                 ),
             };
             validate_buffer_binding(
-                *layout,
+                layout,
                 binding.buffer.usage(),
                 binding.buffer.len(),
                 binding.desc,
