@@ -6,9 +6,9 @@ use ash::vk;
 
 use super::{MemoryOwner, RuntimeError, native};
 
-pub(super) struct Program {
+pub(in crate::backends::vulkan) struct Program {
     owner: Arc<MemoryOwner>,
-    pub(super) format: vk::Format,
+    pub(in crate::backends::vulkan) format: vk::Format,
     pub(super) set_layout: vk::DescriptorSetLayout,
     pub(super) layout: vk::PipelineLayout,
     pub(super) pipeline: vk::Pipeline,
@@ -16,7 +16,10 @@ pub(super) struct Program {
 }
 
 impl Program {
-    pub(super) fn new(
+    pub(super) fn owner(&self) -> &Arc<MemoryOwner> {
+        &self.owner
+    }
+    pub(in crate::backends::vulkan) fn new(
         owner: Arc<MemoryOwner>,
         format: vk::Format,
     ) -> Result<Arc<Self>, RuntimeError> {
@@ -29,16 +32,8 @@ impl Program {
             sampler: vk::Sampler::null(),
         };
         let device = program.owner.device.raw();
-        // SAFETY: Live adapter/Instance owned here; queried limits describe the
-        // one sampler, image and color attachment used by the fixed program.
-        let limits = unsafe {
-            program
-                .owner
-                .device
-                .instance_raw()
-                .get_physical_device_properties(program.owner.device.physical_device())
-        }
-        .limits;
+        // Device creation retained these immutable physical limits.
+        let limits = program.owner.device.limits();
         if limits.max_per_stage_descriptor_samplers < 1
             || limits.max_per_stage_descriptor_sampled_images < 1
             || limits.max_descriptor_set_samplers < 1
@@ -85,11 +80,11 @@ impl Program {
         }
         let vertex = Module::new(
             Arc::clone(&program.owner),
-            include_bytes!("../../../../../shaders/composite.vert.spv"),
+            include_bytes!("../../../../shaders/composite.vert.spv"),
         )?;
         let fragment = Module::new(
             Arc::clone(&program.owner),
-            include_bytes!("../../../../../shaders/composite.frag.spv"),
+            include_bytes!("../../../../shaders/composite.frag.spv"),
         )?;
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
