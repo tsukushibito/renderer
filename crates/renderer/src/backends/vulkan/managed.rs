@@ -410,7 +410,10 @@ impl VulkanBindings {
                         range,
                     }
                 }
-                BindingResource::ImageView(view) if layout.kind == BindingType::SampledImage => {
+                BindingResource::ImageView(view)
+                    if layout.kind == BindingType::SampledImage
+                        && view.desc().usage == crate::program::ImageViewUsage::Sampled =>
+                {
                     BoundResource::ImageView((*view).clone())
                 }
                 BindingResource::Sampler(sampler) if layout.kind == BindingType::Sampler => {

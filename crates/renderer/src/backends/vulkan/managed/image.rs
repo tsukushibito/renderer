@@ -2,7 +2,7 @@
 
 use super::{MemoryOwner, RuntimeError, native};
 use crate::program::{
-    ImageDescriptor, ImageFormat, ImageViewDescriptor, validate_image_descriptor,
+    ImageDescriptor, ImageFormat, ImageViewDescriptor, ImageViewUsage, validate_image_descriptor,
     validate_image_view_descriptor,
 };
 use ash::vk;
@@ -13,10 +13,18 @@ fn native_format(format: ImageFormat) -> vk::Format {
     match format {
         ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
         ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+        ImageFormat::D32Float => vk::Format::D32_SFLOAT,
     }
 }
 
-/// An uninitialized sampled color image with one mip, layer and sample.
+fn native_aspect(format: ImageFormat) -> vk::ImageAspectFlags {
+    match format {
+        ImageFormat::D32Float => vk::ImageAspectFlags::DEPTH,
+        ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => vk::ImageAspectFlags::COLOR,
+    }
+}
+
+/// An uninitialized sampled image with one mip, layer and sample.
 #[derive(Clone)]
 pub struct VulkanImage(pub(super) Arc<Image>);
 impl VulkanImage {
@@ -34,7 +42,13 @@ impl VulkanImage {
         validate_image_descriptor(desc, owner.device.limits().max_image_dimension2_d)
             .map_err(|error| RuntimeError::invalid(error.to_string()))?;
         let format = native_format(desc.format);
-        let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
+        let usage = vk::ImageUsageFlags::SAMPLED
+            | match desc.format {
+                ImageFormat::D32Float => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => {
+                    vk::ImageUsageFlags::TRANSFER_DST
+                }
+            };
         let query = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(format)
             .ty(vk::ImageType::TYPE_2D)
@@ -131,7 +145,7 @@ impl Drop for Image {
     }
 }
 
-/// An immutable complete 2D color View, retaining the image allocation.
+/// An immutable complete 2D View, retaining its image and fixed interpretation.
 #[derive(Clone)]
 pub struct VulkanImageView(pub(super) Arc<ImageView>);
 impl VulkanImageView {
@@ -152,18 +166,24 @@ impl VulkanImageView {
                 "image View belongs to another Device",
             ));
         }
-        validate_image_view_descriptor(desc).map_err(|e| RuntimeError::invalid(e.to_string()))?;
+        validate_image_view_descriptor(image.desc().format, desc)
+            .map_err(|e| RuntimeError::invalid(e.to_string()))?;
         let range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .aspect_mask(native_aspect(image.desc().format))
             .base_mip_level(desc.base_mip_level)
             .level_count(desc.mip_level_count)
             .base_array_layer(desc.base_array_layer)
             .layer_count(desc.array_layer_count);
+        let mut usage = vk::ImageViewUsageCreateInfo::default().usage(match desc.usage {
+            ImageViewUsage::Sampled => vk::ImageUsageFlags::SAMPLED,
+            ImageViewUsage::DepthAttachment => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        });
         let info = vk::ImageViewCreateInfo::default()
             .image(image.0.handle)
             .view_type(vk::ImageViewType::TYPE_2D)
             .format(native_format(image.desc().format))
-            .subresource_range(range);
+            .subresource_range(range)
+            .push_next(&mut usage);
         // SAFETY: Same-Device immutable image retains its creation format and
         // usage. This View uses that exact format and a checked full subresource.
         let handle = unsafe { owner.device.raw().create_image_view(&info, None) }
