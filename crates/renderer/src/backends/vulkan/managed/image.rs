@@ -9,7 +9,14 @@ use ash::vk;
 use std::sync::Arc;
 use vk_mem::Alloc;
 
-/// An uninitialized sampled RGBA8 image with one mip, layer and sample.
+fn native_format(format: ImageFormat) -> vk::Format {
+    match format {
+        ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+    }
+}
+
+/// An uninitialized sampled color image with one mip, layer and sample.
 #[derive(Clone)]
 pub struct VulkanImage(pub(super) Arc<Image>);
 impl VulkanImage {
@@ -26,9 +33,7 @@ impl VulkanImage {
             .map_err(RuntimeError::device_unavailable)?;
         validate_image_descriptor(desc, owner.device.limits().max_image_dimension2_d)
             .map_err(|error| RuntimeError::invalid(error.to_string()))?;
-        let format = match desc.format {
-            ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
-        };
+        let format = native_format(desc.format);
         let usage = vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST;
         let query = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(format)
@@ -157,10 +162,10 @@ impl VulkanImageView {
         let info = vk::ImageViewCreateInfo::default()
             .image(image.0.handle)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(vk::Format::R8G8B8A8_UNORM)
+            .format(native_format(image.desc().format))
             .subresource_range(range);
-        // SAFETY: Same-Device immutable image has the fixed RGBA8 format and
-        // usage. The checked full subresource exists and remains strongly held.
+        // SAFETY: Same-Device immutable image retains its creation format and
+        // usage. This View uses that exact format and a checked full subresource.
         let handle = unsafe { owner.device.raw().create_image_view(&info, None) }
             .map_err(|r| native(owner, "vkCreateImageView(managed)", r))?;
         Ok(Self(Arc::new(ImageView {
