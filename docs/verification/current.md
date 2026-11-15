@@ -30,6 +30,44 @@ CIには固定CLI取得・ハッシュ照合、bundle一致、HTMLリンクと�
 Rendererの実装・validation配置・同期・GPU寿命・メモリ方針は変更しない。新たな推奨例外はない。
 実GPU受入・性能計測・shader/bindings再生成は文書変更のため再実行していない。
 
+## Program由来bindingとshader stageのowned計画
+
+`renderer-7ft.2.2.5`、実装・統合確認点`52a5d74`。
+buffer/ImageView/samplerの型付きbindingをComputeと各drawで共用し、Programから用途・
+Vertex/Fragment/Compute stageと実footprintを導く。descriptor全範囲と実アクセスを分け、
+命令・binding・定数・View/samplerを準備済みarenaへ所有する。
+実際の別VS/FSに結び付いた`textured_mesh()`はVS Uniform16 byteとFS sampled画像/samplerを持つ。
+既存の四Compute assetも同じGraph入口を使う。契約は[Graph設計](../design/rendergraph.md#owned-shader-bindings)に従う。
+
+Windows x64 / Rust 1.99.0で、CPU default132件、`vulkan,d3d12` release製品269件・
+追加検証/graph診断あり282件と各Rustdoc1件が成功した。新しい公開API回帰8件、
+構成例の無効化試験1件と実行、内部の所有/stage対応・shader reflection契約を確認した。
+短命入力とdraw別material、選択mip/layer/depthの初期化、producer/culling、WAR/循環、
+後半drawのfeedback拒否、foreign資源、slot/種別/容量失敗後の再利用、descriptor末尾の未初期化を確認した。
+全target Clippyは`presentation,d3d12,memory-profiling`の診断有無で成功し、fmtも通過した。
+固定SDKによるSPIR-V/DXIL再生成一致、SDK不要ABI試験、matrix layoutとVS/PS signatureの不一致拒否も成功した。
+
+CPUの新しい`shader_bindings`窓は24変動frame、1/2/3 Raster段×2draw、
+Uniform offset 0/16/32と3mip×2layerのView変更、sampled Compute出力64 byte、取消・不要write・
+3plan保持・全返却/resetを含み、製品releaseのRust確保/ゼロ初期化確保/再確保/解放と要求byteは全0だった。
+既存4窓も全0で、追加検証ありは別baselineとして確認した。native実行の測定とは区別する。
+
+RTX 3060 / driver 610.88でVulkan strictの正しさゲート53件（WSI込み）と、製品構成の境界1件が成功した。
+二API共有Graphはstrict/製品の両方で10pass・308 byteが全一致した。strictは最終native解放後まで診断ゼロ、
+製品は追加診断除外/native Requested Disabledを確認し、外部layer注入の不存在証明とはしない。
+liveなbuffer dispatch・textured Raster・sampled dispatch計画は拒否し、拒否時のnative作成/解放8eventは全0だった。
+Vulkanの取得/再利用数は不変で、culled枝専用の資源も取得しない。
+D3D12の画像計画は先行する画像uploadの未対応判定で拒否するため、新shader命令のnative loweringを通した証拠にはしない。
+製品Engine48frame、WSI18source/36present・18readbackも再受入し、RendererのRust4event・VMA host3event・
+Resetを除くnative8eventは全0だった。WSIのcaller要求は別rowで記録する。
+
+これで`.2.2`のCPU計画・構成/所有の受入を満たす。一般graphicsのnative PSO/二API実行は`.2.3`、
+一般native Compute/copyは`.2.4`、BloomアルゴリズムはB4に残る。HDR Graph形式、storage-image Compute、
+任意shader取込、複数subresourceを覆うViewは今回の実装範囲に含めない。
+Vulkan guidanceの用途別stage/access・descriptor/資源寿命と検証配置を維持し、新しい規約例外はない。
+Linux/別GPU・driver実GPU、長時間耐久、実native OOM/loss、時間性能と物理VRAM改善は未確認。
+コマンド・生counter・容量・native比較は[機械可読記録](frame-memory.json)の`owned_shader_bindings`にある。
+
 ## 明示Programとowned Raster列
 
 `renderer-7ft.2.2.4`、実装・統合確認点`5d7fb6b`。
@@ -61,7 +99,7 @@ VMA host3event・Resetを除くnative作成/解放8eventは全0だった。WSI c
 二API共有buffer Graphはstrict/製品とも308 byte全一致。strictはCore/SyncValまたはDebug Layer/GBVの実効と
 最終native所有者解放後まで警告/error等ゼロを確認し、製品は追加診断除外/native Requested Disabledで確認した。
 
-このmeshはdescriptor bindingを持たない。一般graphics bindingのstage導出、他のshader/PSO、
+このmeshはdescriptor bindingを持たない。`.2.2.5`で別Programのbinding/stage CPU計画を接続したが、他のshader/PSO、
 D3D12 Raster、depth-only/MRT描画、first_index/base_vertex/多instanceと一般native subresource実行は後続に残る。
 index本文の範囲・未知内容・Device上限とGPU寿命は既存native経路で維持し、CPU Programだけから安全を推定しない。
 新しい規約例外はない。Linux/別GPU・driver実GPU、長時間耐久、実native OOM/loss、時間性能と物理VRAM改善は未確認。
