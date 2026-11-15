@@ -564,16 +564,16 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
                 parameters: RasterParameters::default(),
             },
             RasterAttachments {
-                color: Attachment {
-                    image: color,
+                colors: &[Attachment {
+                    view: graph.image_view(color, 0, 0).unwrap(),
                     load: color_load,
                     store: StoreOp::Store,
-                },
-                depth: Attachment {
-                    image: depth,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(depth, 0, 0).unwrap(),
                     load: depth_load,
                     store: StoreOp::Store,
-                },
+                }),
             },
         );
         assert_eq!(result.is_ok(), valid);
@@ -598,16 +598,16 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 parameters: RasterParameters::default(),
             },
             RasterAttachments {
-                color: Attachment {
-                    image: c,
+                colors: &[Attachment {
+                    view: graph.image_view(c, 0, 0).unwrap(),
                     load: LoadOp::Load,
                     store: StoreOp::Store,
-                },
-                depth: Attachment {
-                    image: d,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(d, 0, 0).unwrap(),
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
-                },
+                }),
             },
         )
         .unwrap();
@@ -631,16 +631,16 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 parameters: RasterParameters::default(),
             },
             RasterAttachments {
-                color: Attachment {
-                    image: c,
+                colors: &[Attachment {
+                    view: graph.image_view(c, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
                     store: StoreOp::Discard,
-                },
-                depth: Attachment {
-                    image: d,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(d, 0, 0).unwrap(),
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
-                },
+                }),
             },
         )
         .unwrap();
@@ -668,16 +668,16 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
                 parameters: RasterParameters::default(),
             },
             RasterAttachments {
-                color: Attachment {
-                    image: c,
+                colors: &[Attachment {
+                    view: graph.image_view(c, 0, 0).unwrap(),
                     load: LoadOp::Discard,
                     store: StoreOp::Store,
-                },
-                depth: Attachment {
-                    image: d,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(d, 0, 0).unwrap(),
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
-                },
+                }),
             },
         )
         .unwrap();
@@ -839,16 +839,16 @@ fn public_raster_parameters_are_checked_before_creating_a_pass() {
                     parameters,
                 },
                 RasterAttachments {
-                    color: Attachment {
-                        image: color,
+                    colors: &[Attachment {
+                        view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
                         store: StoreOp::Store,
-                    },
-                    depth: Attachment {
-                        image: depth,
+                    }],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
-                    },
+                    }),
                 },
             )
             .unwrap_err();

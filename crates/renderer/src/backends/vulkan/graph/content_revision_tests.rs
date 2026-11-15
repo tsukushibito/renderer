@@ -214,7 +214,21 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         let color = initial.image("color", ImageDesc::rgba8(2, 2)).unwrap();
         let depth = initial.image("depth", ImageDesc::depth32(2, 2)).unwrap();
         initial
-            .clear_attachments("initial clear", color, depth, [0.0; 4], 1.0)
+            .attachment_pass(
+                "initial clear",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: initial.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: initial.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
             .unwrap();
         initial.export_image(color).unwrap();
         initial.export_image(depth).unwrap();
@@ -231,7 +245,21 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         let clear_color = clear.import_image("clear color", &color).unwrap();
         let clear_depth = clear.import_image("clear depth", &depth).unwrap();
         clear
-            .clear_attachments("same value clear", clear_color, clear_depth, [0.0; 4], 1.0)
+            .attachment_pass(
+                "same value clear",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: clear.image_view(clear_color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: clear.image_view(clear_depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
             .unwrap();
         let mut cleared = runtime.submit(&clear.compile().unwrap()).unwrap();
         assert_eq!(
@@ -271,24 +299,24 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                     parameters: RasterParameters::default(),
                 },
                 RasterAttachments {
-                    color: Attachment {
-                        image: color_target,
+                    colors: &[Attachment {
+                        view: discard.image_view(color_target, 0, 0).unwrap(),
                         load: match discard_ops.load {
                             LoadAction::Clear => LoadOp::Clear([0.0; 4]),
                             LoadAction::Load => LoadOp::Load,
                             LoadAction::Discard => LoadOp::Discard,
                         },
                         store: discard_ops.store,
-                    },
-                    depth: Attachment {
-                        image: depth_target,
+                    }],
+                    depth: Some(Attachment {
+                        view: discard.image_view(depth_target, 0, 0).unwrap(),
                         load: match discard_ops.load {
                             LoadAction::Clear => LoadOp::Clear(1.0),
                             LoadAction::Load => LoadOp::Load,
                             LoadAction::Discard => LoadOp::Discard,
                         },
                         store: discard_ops.store,
-                    },
+                    }),
                 },
             )
             .unwrap();

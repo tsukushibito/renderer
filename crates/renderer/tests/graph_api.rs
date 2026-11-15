@@ -36,16 +36,16 @@ fn offscreen_pipeline(graph: &mut Graph) {
                 parameters: RasterParameters::default(),
             },
             RasterAttachments {
-                color: Attachment {
-                    image: color,
+                colors: &[Attachment {
+                    view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
                     store: StoreOp::Store,
-                },
-                depth: Attachment {
-                    image: depth,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(depth, 0, 0).unwrap(),
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
-                },
+                }),
             },
         )
         .unwrap();
