@@ -1,7 +1,7 @@
-//! Fixed-capacity shared staging with VMA placement and unique range lifetimes.
+//! Fixed-capacity shared staging with bounded placement and unique range lifetimes.
 //!
 //! GPU owners retain range leases, not only native buffer handles. A lease is
-//! returned to VMA only after GPU retirement and, for Readback, CPU consumption.
+//! returned only after GPU retirement and, for Readback, CPU consumption.
 
 use std::error::Error;
 use std::fmt;
@@ -22,6 +22,9 @@ pub(in crate::backends::vulkan) enum StagingError {
         requested: u64,
         reserved: u64,
     },
+    RangeCapacityExhausted {
+        capacity: usize,
+    },
     LengthMismatch {
         expected: u64,
         actual: usize,
@@ -32,10 +35,6 @@ pub(in crate::backends::vulkan) enum StagingError {
     },
     Uninitialized,
     Buffer(BufferError),
-    Vulkan {
-        operation: &'static str,
-        result: vk::Result,
-    },
 }
 
 impl fmt::Display for StagingError {
@@ -51,6 +50,12 @@ impl fmt::Display for StagingError {
                 f,
                 "staging has no contiguous range for {requested} bytes (capacity {capacity}, reserved {reserved})"
             ),
+            Self::RangeCapacityExhausted { capacity } => {
+                write!(
+                    f,
+                    "staging has no free range metadata (capacity {capacity})"
+                )
+            }
             Self::LengthMismatch { expected, actual } => write!(
                 f,
                 "staging range requires {expected} bytes, received {actual}"
@@ -60,7 +65,6 @@ impl fmt::Display for StagingError {
             }
             Self::Uninitialized => write!(f, "readback range has no completed contents"),
             Self::Buffer(source) => fmt::Display::fmt(source, f),
-            Self::Vulkan { operation, result } => write!(f, "{operation} failed: {result:?}"),
         }
     }
 }
@@ -69,7 +73,6 @@ impl Error for StagingError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Buffer(source) => Some(source),
-            Self::Vulkan { result, .. } => Some(result),
             _ => None,
         }
     }
@@ -96,24 +99,26 @@ pub(in crate::backends::vulkan) struct StagingStats {
 }
 
 struct Reservation {
-    allocation: vk_mem::VirtualAllocation,
     offset: u64,
     size: u64,
     reserved: u64,
 }
 
-/// Placement is entirely delegated to VMA. Returning an allocation requires its
-/// unique Reservation; this type implements no second free-space algorithm.
-struct Arena {
-    block: vk_mem::VirtualBlock,
-    stats: StagingStats,
+#[derive(Clone, Copy)]
+struct FreeRange {
+    offset: u64,
+    size: u64,
 }
 
-// SAFETY: This block uses no application allocation callbacks or user pointers.
-// Moving its sole owner between threads does not access it concurrently. Every
-// shared call is serialized by StagingOwner.arena, and virtual allocation tokens
-// are used only with that same block under the lock.
-unsafe impl Send for Arena {}
+/// Sorted, coalesced free regions over one persistent VMA-owned buffer.
+/// At most N live reservations require N+1 free-region records. All metadata
+/// capacity is reserved before publication; neither allocation nor return grows
+/// or releases a general-purpose heap allocation.
+struct Arena {
+    free: Vec<FreeRange>,
+    max_ranges: usize,
+    stats: StagingStats,
+}
 
 fn padded_size(size: u64, alignment: u64) -> Result<u64, StagingError> {
     if size == 0 || size > isize::MAX as u64 {
@@ -129,7 +134,7 @@ fn padded_size(size: u64, alignment: u64) -> Result<u64, StagingError> {
 }
 
 impl Arena {
-    fn new(capacity: u64, alignment: u64) -> Result<Self, StagingError> {
+    fn new(capacity: u64, alignment: u64, max_ranges: usize) -> Result<Self, StagingError> {
         if alignment < 4 || !alignment.is_power_of_two() {
             return Err(StagingError::Invalid(
                 "alignment must be a power of two of at least four",
@@ -140,16 +145,22 @@ impl Arena {
                 "capacity must be CPU-addressable and a nonzero multiple of cache/copy alignment",
             ));
         }
-        let block = vk_mem::VirtualBlock::new(vk_mem::VirtualBlockCreateInfo {
+        let records = max_ranges
+            .checked_add(1)
+            .filter(|_| max_ranges != 0)
+            .ok_or(StagingError::Invalid(
+                "range metadata capacity must be nonzero and representable",
+            ))?;
+        let mut free = Vec::new();
+        free.try_reserve_exact(records)
+            .map_err(|_| StagingError::Invalid("cannot reserve staging range metadata"))?;
+        free.push(FreeRange {
+            offset: 0,
             size: capacity,
-            ..Default::default()
-        })
-        .map_err(|result| StagingError::Vulkan {
-            operation: "vmaCreateVirtualBlock",
-            result,
-        })?;
+        });
         Ok(Self {
-            block,
+            free,
+            max_ranges,
             stats: StagingStats {
                 capacity,
                 alignment,
@@ -167,34 +178,27 @@ impl Arena {
 
     fn allocate(&mut self, size: u64) -> Result<Reservation, StagingError> {
         let reserved = padded_size(size, self.stats.alignment)?;
-        // SAFETY: This uniquely accessed live block receives a nonzero size and
-        // power-of-two alignment. The returned token stays with its unique lease.
-        let allocation = unsafe {
-            self.block.allocate(vk_mem::VirtualAllocationCreateInfo {
-                size: reserved,
-                alignment: self.stats.alignment,
-                user_data: 0,
-                flags: vk_mem::VirtualAllocationCreateFlags::empty(),
-            })
+        if self.stats.live_ranges == self.max_ranges {
+            self.stats.capacity_exhaustions = self.stats.capacity_exhaustions.saturating_add(1);
+            return Err(StagingError::RangeCapacityExhausted {
+                capacity: self.max_ranges,
+            });
+        }
+        let Some(index) = self.free.iter().position(|range| range.size >= reserved) else {
+            self.stats.capacity_exhaustions = self.stats.capacity_exhaustions.saturating_add(1);
+            return Err(StagingError::CapacityExhausted {
+                capacity: self.stats.capacity,
+                requested: size,
+                reserved: self.stats.reserved_bytes,
+            });
         };
-        let (allocation, offset) = match allocation {
-            Ok(value) => value,
-            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                // This result means virtual space exhaustion, not driver OOM.
-                self.stats.capacity_exhaustions = self.stats.capacity_exhaustions.saturating_add(1);
-                return Err(StagingError::CapacityExhausted {
-                    capacity: self.stats.capacity,
-                    requested: size,
-                    reserved: self.stats.reserved_bytes,
-                });
-            }
-            Err(result) => {
-                return Err(StagingError::Vulkan {
-                    operation: "vmaVirtualAllocate",
-                    result,
-                });
-            }
-        };
+        let offset = self.free[index].offset;
+        if self.free[index].size == reserved {
+            self.free.remove(index);
+        } else {
+            self.free[index].offset += reserved;
+            self.free[index].size -= reserved;
+        }
         self.stats.used_bytes += size;
         self.stats.reserved_bytes += reserved;
         self.stats.live_ranges += 1;
@@ -204,30 +208,53 @@ impl Arena {
             .high_water_reserved_bytes
             .max(self.stats.reserved_bytes);
         Ok(Reservation {
-            allocation,
             offset,
             size,
             reserved,
         })
     }
 
-    fn release(&mut self, mut reservation: Reservation) {
-        // SAFETY: This unique token was allocated from this same block and is
-        // returned once, after its last GPU/CPU owner allows its lease to drop.
-        unsafe { self.block.free(&mut reservation.allocation) };
+    fn release(&mut self, reservation: Reservation) {
+        // A unique private token is returned exactly once. Coalesce before any
+        // insertion so the temporary free-region count also stays within N+1.
+        let index = self
+            .free
+            .partition_point(|range| range.offset < reservation.offset);
+        let end = reservation.offset + reservation.reserved;
+        let left = index
+            .checked_sub(1)
+            .filter(|&left| self.free[left].offset + self.free[left].size == reservation.offset);
+        let right = self
+            .free
+            .get(index)
+            .is_some_and(|range| range.offset == end);
+        match (left, right) {
+            (Some(left), true) => {
+                self.free[left].size += reservation.reserved + self.free[index].size;
+                self.free.remove(index);
+            }
+            (Some(left), false) => self.free[left].size += reservation.reserved,
+            (None, true) => {
+                self.free[index].offset = reservation.offset;
+                self.free[index].size += reservation.reserved;
+            }
+            (None, false) => {
+                // N live reservations have at most N+1 gaps. A return with no
+                // adjacent gap cannot exceed the metadata reserved at creation.
+                assert!(self.free.len() < self.free.capacity());
+                self.free.insert(
+                    index,
+                    FreeRange {
+                        offset: reservation.offset,
+                        size: reservation.reserved,
+                    },
+                );
+            }
+        }
         self.stats.used_bytes -= reservation.size;
         self.stats.reserved_bytes -= reservation.reserved;
         self.stats.live_ranges -= 1;
         self.stats.releases = self.stats.releases.saturating_add(1);
-    }
-}
-
-impl Drop for Arena {
-    fn drop(&mut self) {
-        // SAFETY: No range can outlive StagingOwner because it retains an Arc.
-        // Clearing also makes construction/test unwinding safe before VMA's
-        // destructor asserts that every virtual allocation was released.
-        unsafe { self.block.clear() };
     }
 }
 
@@ -271,6 +298,7 @@ impl SharedStaging {
         owner: Arc<MemoryOwner>,
         role: BufferRole,
         capacity: u64,
+        max_ranges: usize,
     ) -> Result<Self, StagingError> {
         if role == BufferRole::DeviceTransfer {
             return Err(StagingError::Invalid(
@@ -290,7 +318,7 @@ impl SharedStaging {
                 .get_physical_device_properties(owner.device.physical_device())
         };
         let alignment = properties.limits.non_coherent_atom_size.max(4);
-        let arena = Arena::new(capacity, alignment)?;
+        let arena = Arena::new(capacity, alignment, max_ranges)?;
         let factory = VulkanAllocator {
             owner: Arc::clone(&owner),
         };
@@ -445,7 +473,7 @@ mod tests {
 
     #[test]
     fn padded_ranges_enforce_capacity_and_reclaim_out_of_order() {
-        let mut arena = Arena::new(1024, 256).unwrap();
+        let mut arena = Arena::new(1024, 256, 4).unwrap();
         let first = arena.allocate(257).unwrap();
         let second = arena.allocate(1).unwrap();
         let third = arena.allocate(17).unwrap();
@@ -501,9 +529,11 @@ mod tests {
     #[test]
     fn invalid_requests_never_change_live_reservations() {
         for (capacity, alignment) in [(0, 256), (257, 256), (1024, 0), (1024, 3)] {
-            assert!(Arena::new(capacity, alignment).is_err());
+            assert!(Arena::new(capacity, alignment, 4).is_err());
         }
-        let mut arena = Arena::new(256, 256).unwrap();
+        assert!(Arena::new(256, 256, 0).is_err());
+        assert!(Arena::new(256, 256, usize::MAX).is_err());
+        let mut arena = Arena::new(256, 256, 4).unwrap();
         for size in [0, u64::MAX, isize::MAX as u64 + 1] {
             assert!(arena.allocate(size).is_err());
         }
@@ -513,5 +543,32 @@ mod tests {
             arena.allocate(257),
             Err(StagingError::CapacityExhausted { .. })
         ));
+    }
+
+    #[test]
+    fn range_capacity_returns_without_growth_and_reuses_fragmented_regions() {
+        const COUNT: usize = 8;
+        let mut arena = Arena::new(4096, 16, COUNT).unwrap();
+        let metadata_capacity = arena.free.capacity();
+        let mut live: [Option<Reservation>; COUNT] = std::array::from_fn(|_| None);
+        for iteration in 0..128 {
+            for (index, slot) in live.iter_mut().enumerate() {
+                *slot = Some(
+                    arena
+                        .allocate(17 + ((index + iteration) % 5) as u64 * 16)
+                        .unwrap(),
+                );
+            }
+            assert!(matches!(
+                arena.allocate(1),
+                Err(StagingError::RangeCapacityExhausted { capacity: COUNT })
+            ));
+            for index in (0..COUNT).step_by(2).chain((1..COUNT).rev().step_by(2)) {
+                arena.release(live[index].take().unwrap());
+            }
+            assert_eq!(arena.free.capacity(), metadata_capacity);
+            assert_eq!(arena.free.len(), 1);
+            assert_eq!((arena.free[0].offset, arena.free[0].size), (0, 4096));
+        }
     }
 }
