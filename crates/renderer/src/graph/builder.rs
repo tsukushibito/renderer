@@ -261,9 +261,23 @@ impl Graph {
         &mut self,
         name: &str,
         draw: RasterDraw,
-        attachments: RasterAttachments,
+        attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
+            let [color_attachment] = attachments.colors else {
+                return Err(GraphError::new(
+                    GraphErrorKind::Unsupported,
+                    "built-in mesh Raster requires one color attachment",
+                ));
+            };
+            let depth_attachment = attachments.depth.ok_or_else(|| {
+                GraphError::new(
+                    GraphErrorKind::Unsupported,
+                    "built-in mesh Raster requires a depth attachment",
+                )
+            })?;
+            graph.base_attachment_view(color_attachment.view)?;
+            graph.base_attachment_view(depth_attachment.view)?;
             let draw = graph.raster_draw(
                 draw.vertices,
                 draw.indices,
@@ -273,13 +287,13 @@ impl Graph {
             let vertices = draw.vertices;
             let indices = draw.indices;
             let (color, depth) =
-                graph.raster_targets(attachments.color.image, attachments.depth.image)?;
+                graph.raster_targets(color_attachment.view.image, depth_attachment.view.image)?;
             let vs = graph.resources[vertices].desc.units();
             let ix = u64::from(draw.index_count) * 4;
             let (clear_color, clear_depth) =
-                attachment_clear_values(attachments.color.load, attachments.depth.load)?;
-            let color_ops = attachments.color.ops();
-            let depth_ops = attachments.depth.ops();
+                attachment_clear_values(color_attachment.load, depth_attachment.load)?;
+            let color_ops = color_attachment.ops();
+            let depth_ops = depth_attachment.ops();
             Ok((
                 Operation::Raster {
                     vertices,
@@ -320,7 +334,21 @@ impl Graph {
         clear_depth: f32,
     ) -> Result<PassHandle, GraphError> {
         if draws.len() == 0 {
-            return self.clear_attachments(name, color, depth, clear_color, clear_depth);
+            return self.attachment_pass(
+                name,
+                RasterAttachments {
+                    colors: &[super::Attachment {
+                        view: self.image_view(color, 0, 0)?,
+                        load: LoadOp::Clear(clear_color),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(super::Attachment {
+                        view: self.image_view(depth, 0, 0)?,
+                        load: LoadOp::Clear(clear_depth),
+                        store: StoreOp::Store,
+                    }),
+                },
+            );
         }
         self.build_pass(name, |graph| {
             let (color, depth) = graph.raster_targets(color, depth)?;
@@ -385,42 +413,6 @@ impl Graph {
         })
     }
 
-    /// Initializes a complete color/depth target even when a view has no draws.
-    pub fn clear_attachments(
-        &mut self,
-        name: &str,
-        color: ImageHandle,
-        depth: ImageHandle,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-    ) -> Result<PassHandle, GraphError> {
-        self.build_pass(name, |graph| {
-            let (color, depth) = graph.raster_targets(color, depth)?;
-            let (clear_color, clear_depth) =
-                attachment_clear_values(LoadOp::Clear(clear_color), LoadOp::Clear(clear_depth))?;
-            Ok((
-                Operation::ClearAttachments {
-                    color,
-                    depth,
-                    clear_color,
-                    clear_depth,
-                },
-                graph.append_accesses([
-                    attachment(
-                        color,
-                        AttachmentOps::CLEAR_STORE,
-                        AccessPurpose::ColorAttachment,
-                    ),
-                    attachment(
-                        depth,
-                        AttachmentOps::CLEAR_STORE,
-                        AccessPurpose::DepthAttachment,
-                    ),
-                ])?,
-                false,
-            ))
-        })
-    }
     pub fn composite(
         &mut self,
         name: &str,
@@ -469,23 +461,24 @@ impl Graph {
                     )?,
                     (
                         AccessRange::Image {
-                            mip: 0,
-                            layer: 0,
+                            mip,
+                            layer,
                             aspect,
                         },
                         ResourceDesc::Image(d),
-                    ) if *aspect
+                    ) if *mip < d.mip_levels && *layer < d.array_layers && *aspect
                         == if d.format == ImageFormat::Rgba8Unorm {
                             ImageAspect::Color
                         } else {
                             ImageAspect::Depth
                         } =>
                     {
-                        0..1
+                        let unit = u64::from(*layer) * u64::from(d.mip_levels) + u64::from(*mip);
+                        unit..unit + 1
                     }
                     _ => {
                         return Err(graph.resource_error(GraphErrorKind::Unsupported,
-                            "unsupported range: only complete mip 0/layer 0 and its matching aspect are supported",
+                            "image subresource must fit its mip/layer counts and match its format aspect",
                             id,
                         ).with_range(access.range.clone()));
                     }
@@ -529,6 +522,7 @@ impl Graph {
             self.uploads.len(),
             self.names.len(),
             self.bindings.len(),
+            self.attachments.len(),
         );
         let result = build(self).and_then(|(operation, accesses, side_effect)| {
             self.push(name, operation, accesses, side_effect)
@@ -540,6 +534,7 @@ impl Graph {
             data.uploads.truncate(checkpoint.2);
             data.names.truncate(checkpoint.3);
             data.bindings.truncate(checkpoint.4);
+            data.attachments.truncate(checkpoint.5);
         }
         result.map_err(|error| error.with_pass_name(name))
     }
@@ -550,6 +545,7 @@ impl Graph {
     ) -> Result<(usize, usize), GraphError> {
         let color = self.image_id(color)?;
         let depth = self.image_id(depth)?;
+        self.single_image(depth)?;
         self.color(color)?;
         let c = self.image_desc_at(color)?;
         let d = self.image_desc_at(depth)?;

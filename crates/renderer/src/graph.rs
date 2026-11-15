@@ -10,6 +10,7 @@ use std::{
 
 mod accesses;
 mod analysis;
+mod attachments;
 mod builder;
 mod compile;
 mod dispatch;
@@ -28,13 +29,14 @@ pub use pass::{
     LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
-    AttachmentOps, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,
-    RasterDrawOperands, ResourceAccess, UploadSource, ValidatedRasterParameters,
+    AttachmentClearOperands, AttachmentOperand, AttachmentOps, Dependency, DependencyList,
+    LoadAction, MeshUpload, Operation, Pass, RasterDrawOperands, ResourceAccess, UploadSource,
+    ValidatedRasterParameters,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};
 pub use resource::{
-    BufferDesc, BufferHandle, ImageDesc, ImageFormat, ImageHandle, ImportBuffer, ImportImage,
-    PassHandle, ResourceKey,
+    BufferDesc, BufferHandle, ImageDesc, ImageFormat, ImageHandle, ImageView, ImportBuffer,
+    ImportImage, PassHandle, ResourceKey,
 };
 pub(crate) use resource::{Resource, ResourceDesc};
 pub use storage::{GraphCapacity, GraphPool, GraphStorage};

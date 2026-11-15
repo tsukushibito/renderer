@@ -827,6 +827,11 @@ impl VulkanRuntime {
         name: &str,
         allow_create: bool,
     ) -> Result<(ResourceKey, PhysicalLease), RuntimeError> {
+        if matches!(desc, ResourceDesc::Image(desc) if !desc.is_single_subresource()) {
+            return Err(RuntimeError::unsupported(
+                "native images require one mip and one layer",
+            ));
+        }
         self.collect_recycled();
         let target = self
             .available
@@ -998,6 +1003,17 @@ impl VulkanRuntime {
             serial,
         )?;
         for &pass in &graph.order {
+            if matches!(
+                &graph.passes[pass].operation,
+                Operation::AttachmentPass {
+                    simple_clear: None,
+                    ..
+                }
+            ) {
+                return Err(RuntimeError::unsupported(
+                    "attachment shape has no native execution support",
+                ));
+            }
             if let Operation::Dispatch { .. } = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
                     "pass {} uses managed dispatch; native execution unsupported",
@@ -1011,6 +1027,12 @@ impl VulkanRuntime {
                 )));
             }
             for access in graph.accesses(pass) {
+                if matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if !desc.is_single_subresource())
+                {
+                    return Err(RuntimeError::unsupported(
+                        "native images require one mip and one layer",
+                    ));
+                }
                 work.needed[access.resource] = true;
             }
         }

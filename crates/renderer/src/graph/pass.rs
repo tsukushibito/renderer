@@ -2,7 +2,7 @@
 
 use std::{ops::Range, sync::Arc};
 
-use super::{BufferHandle, GraphError, GraphErrorKind, ImageHandle};
+use super::{BufferHandle, GraphError, GraphErrorKind, ImageHandle, ImageView};
 
 /// How an attachment begins. Only a clear operation carries a clear value.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -12,10 +12,10 @@ pub enum LoadOp<T> {
     Discard,
 }
 
-/// A complete image and the operations applied to its contents.
+/// A single image subresource and the operations applied to its contents.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Attachment<T> {
-    pub image: ImageHandle,
+    pub view: ImageView,
     pub load: LoadOp<T>,
     pub store: StoreOp,
 }
@@ -33,11 +33,29 @@ impl<T> Attachment<T> {
     }
 }
 
-/// Named color and depth targets for the built-in mesh pipeline.
+/// Borrowed attachment inputs. An attachment pass owns copies after construction;
+/// the built-in mesh pipeline currently requires one color and one depth target.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RasterAttachments {
-    pub color: Attachment<[f32; 4]>,
-    pub depth: Attachment<f32>,
+pub struct RasterAttachments<'a> {
+    pub colors: &'a [Attachment<[f32; 4]>],
+    pub depth: Option<Attachment<f32>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AttachmentOperand {
+    pub view: ImageView,
+    pub ops: AttachmentOps,
+    /// Color RGBA or depth in the first component; meaningful only for Clear.
+    pub clear: [f32; 4],
+}
+
+/// The already-established Clear/Store shape used by existing native lowering.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AttachmentClearOperands {
+    pub color: usize,
+    pub depth: usize,
+    pub clear_color: [f32; 4],
+    pub clear_depth: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -307,11 +325,10 @@ pub(crate) enum Operation {
         clear_color: [f32; 4],
         clear_depth: f32,
     },
-    ClearAttachments {
-        color: usize,
-        depth: usize,
-        clear_color: [f32; 4],
-        clear_depth: f32,
+    AttachmentPass {
+        colors: Range<usize>,
+        depth: Option<usize>,
+        simple_clear: Option<AttachmentClearOperands>,
     },
     Composite {
         src: usize,

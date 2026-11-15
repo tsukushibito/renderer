@@ -198,17 +198,22 @@ impl PreparedOperation {
                 clear_color,
                 clear_depth,
             },
-            Operation::ClearAttachments {
-                color,
-                depth,
-                clear_color,
-                clear_depth,
+            Operation::AttachmentPass {
+                simple_clear: Some(clear),
+                ..
             } => Self::ClearAttachments {
-                color,
-                depth,
-                clear_color,
-                clear_depth,
+                color: clear.color,
+                depth: clear.depth,
+                clear_color: clear.clear_color,
+                clear_depth: clear.clear_depth,
             },
+            Operation::AttachmentPass {
+                simple_clear: None, ..
+            } => {
+                return Err(RuntimeError::unsupported(
+                    "attachment shape has no native execution support",
+                ));
+            }
             Operation::Composite { dst, .. } => Self::Composite { dst },
             Operation::Dispatch { .. } | Operation::Declared(_) => {
                 return Err(RuntimeError::unsupported(
@@ -636,7 +641,7 @@ impl GraphWork {
                                 })?;
                         }
                     }
-                    Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}
+                    Operation::CopyImage { .. } | Operation::AttachmentPass { .. } => {}
                     Operation::Dispatch { .. } | Operation::Declared(_) => {
                         return Err(RuntimeError::unsupported(
                             "pass has no supported native operation",

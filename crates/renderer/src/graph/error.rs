@@ -15,6 +15,7 @@ pub enum GraphCapacityKind {
     Accesses,
     Draws,
     Bindings,
+    Attachments,
     Dependencies,
     InitialRanges,
     NameBytes,

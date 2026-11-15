@@ -1,8 +1,8 @@
 //! Prepared backing shared by the unique builder and its immutable plans.
 
 use super::{
-    BufferBindingOperands, Dependency, Graph, GraphCapacityKind, GraphError, Pass,
-    RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
+    AttachmentOperand, BufferBindingOperands, Dependency, Graph, GraphCapacityKind, GraphError,
+    Pass, RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
 };
 use std::{
     cell::UnsafeCell,
@@ -20,6 +20,7 @@ pub struct GraphCapacity {
     pub accesses: usize,
     pub draws: usize,
     pub bindings: usize,
+    pub attachments: usize,
     pub dependencies: usize,
     pub initial_ranges: usize,
     pub name_bytes: usize,
@@ -36,6 +37,7 @@ impl Default for GraphCapacity {
             accesses: 2048,
             draws: 2048,
             bindings: 2048,
+            attachments: 512,
             dependencies: 2048,
             initial_ranges: 2048,
             name_bytes: 16_384,
@@ -107,6 +109,7 @@ pub struct GraphStorage {
     pub(super) uploads: Vec<u8>,
     pub(super) draws: Vec<RasterDrawOperands>,
     pub(super) bindings: Vec<BufferBindingOperands>,
+    pub(super) attachments: Vec<AttachmentOperand>,
     pub(super) raster_ranges: Vec<[u64; 2]>,
     pub(super) overlap: Vec<super::accesses::IndexedAccess>,
     pub(super) workspace: analysis::Workspace,
@@ -143,6 +146,7 @@ impl GraphStorage {
             uploads: buffer(capacity.upload_bytes, GraphCapacityKind::UploadBytes)?,
             draws: buffer(capacity.draws, GraphCapacityKind::Draws)?,
             bindings: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
+            attachments: buffer(capacity.attachments, GraphCapacityKind::Attachments)?,
             raster_ranges,
             overlap: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
             workspace: analysis::Workspace::new(capacity.analysis())
@@ -168,6 +172,7 @@ impl GraphStorage {
         self.uploads.clear();
         self.draws.clear();
         self.bindings.clear();
+        self.attachments.clear();
         #[cfg(feature = "graph-diagnostics")]
         self.dump.take();
     }
@@ -205,6 +210,9 @@ impl GraphStorage {
     )]
     pub(crate) fn raster_draws(&self, range: &Range<usize>) -> &[RasterDrawOperands] {
         &self.draws[range.clone()]
+    }
+    pub(crate) fn attachment_operands(&self, range: Range<usize>) -> &[AttachmentOperand] {
+        &self.attachments[range]
     }
     pub(crate) fn upload_data<'a>(&'a self, operation: &'a super::Operation) -> &'a [u8] {
         let source = match operation {

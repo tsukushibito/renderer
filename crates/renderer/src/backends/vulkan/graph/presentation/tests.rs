@@ -83,6 +83,7 @@ struct HeldResult {
 fn graph_capacity() -> GraphCapacity {
     GraphCapacity {
         bindings: 0,
+        attachments: 16,
         resources: 8,
         passes: 8,
         accesses: 32,
