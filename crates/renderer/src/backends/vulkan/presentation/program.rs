@@ -5,6 +5,8 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::{MemoryOwner, RuntimeError, native};
+#[cfg(feature = "memory-profiling")]
+use crate::measurement::{NativeEvent, record_native};
 
 pub(in crate::backends::vulkan) struct Program {
     owner: Arc<MemoryOwner>,
@@ -52,12 +54,16 @@ impl Program {
         // SAFETY: All creation arrays remain live. Each successful handle is
         // immediately owned by program, including every partial failure.
         unsafe {
+            #[cfg(feature = "memory-profiling")]
+            record_native(NativeEvent::ObjectCreate, 1);
             program.set_layout = device
                 .create_descriptor_set_layout(
                     &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
                     None,
                 )
                 .map_err(|r| native(&program.owner, "vkCreateDescriptorSetLayout(present)", r))?;
+            #[cfg(feature = "memory-profiling")]
+            record_native(NativeEvent::ObjectCreate, 1);
             program.layout = device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&[program.set_layout]),
@@ -127,12 +133,20 @@ impl Program {
             .push_next(&mut rendering)];
         // SAFETY: The fixed composite shaders and descriptor layout agree.
         // The SRGB attachment format was checked against Surface capabilities.
+        #[cfg(feature = "memory-profiling")]
+        record_native(NativeEvent::ObjectCreate, 1);
+        // SAFETY: Fixed shaders/layout agree and the Surface format was queried.
         match unsafe { device.create_graphics_pipelines(vk::PipelineCache::null(), &info, None) } {
             Ok(values) => program.pipeline = values[0],
             Err((partial, result)) => {
                 for pipeline in partial {
                     // SAFETY: Partially created pipelines have no recorded uses.
-                    unsafe { device.destroy_pipeline(pipeline, None) };
+                    if pipeline != vk::Pipeline::null() {
+                        #[cfg(feature = "memory-profiling")]
+                        record_native(NativeEvent::ObjectDestroy, 1);
+                        // SAFETY: This partial handle has never been recorded.
+                        unsafe { device.destroy_pipeline(pipeline, None) };
+                    }
                 }
                 return Err(native(
                     &program.owner,
@@ -151,10 +165,22 @@ impl Drop for Program {
         // Null handles make partial initialization use the same cleanup path.
         unsafe {
             let device = self.owner.device.raw();
-            device.destroy_pipeline(self.pipeline, None);
+            if self.pipeline != vk::Pipeline::null() {
+                #[cfg(feature = "memory-profiling")]
+                record_native(NativeEvent::ObjectDestroy, 1);
+                device.destroy_pipeline(self.pipeline, None);
+            }
             self.owner.device.destroy_sampler(self.sampler);
-            device.destroy_pipeline_layout(self.layout, None);
-            device.destroy_descriptor_set_layout(self.set_layout, None);
+            if self.layout != vk::PipelineLayout::null() {
+                #[cfg(feature = "memory-profiling")]
+                record_native(NativeEvent::ObjectDestroy, 1);
+                device.destroy_pipeline_layout(self.layout, None);
+            }
+            if self.set_layout != vk::DescriptorSetLayout::null() {
+                #[cfg(feature = "memory-profiling")]
+                record_native(NativeEvent::ObjectDestroy, 1);
+                device.destroy_descriptor_set_layout(self.set_layout, None);
+            }
         }
     }
 }
@@ -168,6 +194,9 @@ impl Module {
         let words = ash::util::read_spv(&mut std::io::Cursor::new(bytes))
             .map_err(|e| RuntimeError::invalid(format!("invalid presentation SPIR-V: {e}")))?;
         // SAFETY: Checked-in trusted SPIR-V validated by the shader build gate.
+        #[cfg(feature = "memory-profiling")]
+        record_native(NativeEvent::ObjectCreate, 1);
+        // SAFETY: Trusted SPIR-V words remain live through native creation.
         let handle = unsafe {
             owner
                 .device
@@ -181,6 +210,9 @@ impl Module {
 impl Drop for Module {
     fn drop(&mut self) {
         // SAFETY: Pipeline creation consumed the module; no command references it.
+        #[cfg(feature = "memory-profiling")]
+        record_native(NativeEvent::ObjectDestroy, 1);
+        // SAFETY: Pipelines consumed this module; no command references it.
         unsafe {
             self.owner
                 .device
@@ -201,6 +233,9 @@ impl Binding {
             .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .descriptor_count(1)];
         // SAFETY: Program and Device are live; this one-set pool is owned below.
+        #[cfg(feature = "memory-profiling")]
+        record_native(NativeEvent::ObjectCreate, 1);
+        // SAFETY: This owned pool has one set of the retained Program's layout.
         let pool = unsafe {
             program.owner.device.raw().create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
@@ -217,6 +252,9 @@ impl Binding {
         };
         let layouts = [binding.program.set_layout];
         // SAFETY: This exclusively owned pool has capacity for the exact layout.
+        #[cfg(feature = "memory-profiling")]
+        record_native(NativeEvent::DescriptorAllocate, 1);
+        // SAFETY: This exclusively owned pool fits this exact live layout.
         binding.set = unsafe {
             binding.program.owner.device.raw().allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
@@ -257,6 +295,14 @@ impl Binding {
 impl Drop for Binding {
     fn drop(&mut self) {
         // SAFETY: Binding is retained with its Slot until recorded work retires.
+        #[cfg(feature = "memory-profiling")]
+        {
+            record_native(NativeEvent::ObjectDestroy, 1);
+            if self.set != vk::DescriptorSet::null() {
+                record_native(NativeEvent::DescriptorFree, 1);
+            }
+        }
+        // SAFETY: All recorded/GPU uses retired before the final Slot release.
         unsafe {
             self.program
                 .owner

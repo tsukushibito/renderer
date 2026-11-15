@@ -40,7 +40,7 @@ impl Prefix {
     }
 }
 
-struct IndexedAccess {
+pub(super) struct IndexedAccess {
     resource: usize,
     range: Range<u64>,
     write: bool,
@@ -60,27 +60,37 @@ struct IndexedAccess {
 /// Original-order queries and one final suffix scan preserve the same pair and
 /// error attribution as a pairwise scan. A accesses use O(A log A) time and O(A)
 /// temporary storage. All-reader passes need O(A) time and no allocation.
+#[cfg(test)]
 pub(super) fn conflicting_accesses<T>(
     accesses: &[T],
     view: impl Fn(&T) -> (usize, Range<u64>, bool),
 ) -> Option<(usize, usize)> {
+    let mut scratch = Vec::with_capacity(accesses.len());
+    conflicting_accesses_in(accesses, view, &mut scratch).expect("prepared test scratch")
+}
+
+pub(super) fn conflicting_accesses_in<T>(
+    accesses: &[T],
+    view: impl Fn(&T) -> (usize, Range<u64>, bool),
+    sorted: &mut Vec<IndexedAccess>,
+) -> Result<Option<(usize, usize)>, ()> {
+    sorted.clear();
     if !accesses.iter().any(|access| view(access).2) {
-        return None;
+        return Ok(None);
     }
-    let mut sorted = accesses
-        .iter()
-        .enumerate()
-        .map(|(index, access)| {
-            let (resource, range, write) = view(access);
-            IndexedAccess {
-                resource,
-                range,
-                write,
-                index,
-                prefix: Prefix::default(),
-            }
-        })
-        .collect::<Vec<_>>();
+    if accesses.len() > sorted.capacity() {
+        return Err(());
+    }
+    sorted.extend(accesses.iter().enumerate().map(|(index, access)| {
+        let (resource, range, write) = view(access);
+        IndexedAccess {
+            resource,
+            range,
+            write,
+            index,
+            prefix: Prefix::default(),
+        }
+    }));
     sorted.sort_unstable_by_key(|access| {
         (
             access.resource,
@@ -91,7 +101,7 @@ pub(super) fn conflicting_accesses<T>(
     });
     let mut resource = None;
     let mut prefix = Prefix::default();
-    for access in &mut sorted {
+    for access in sorted.iter_mut() {
         if resource != Some(access.resource) {
             resource = Some(access.resource);
             prefix = Prefix::default();
@@ -118,7 +128,7 @@ pub(super) fn conflicting_accesses<T>(
             // The first original access with a conflict has no conflicting
             // predecessor: that predecessor would already have found this one.
             // Scan only its suffix to select the earliest second declaration.
-            return accesses[left + 1..]
+            return Ok(accesses[left + 1..]
                 .iter()
                 .position(|other| {
                     let (other_resource, other_range, other_write) = view(other);
@@ -127,10 +137,10 @@ pub(super) fn conflicting_accesses<T>(
                         && other_range.start < range.end
                         && (write || other_write)
                 })
-                .map(|offset| (left, left + 1 + offset));
+                .map(|offset| (left, left + 1 + offset)));
         }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(test)]

@@ -44,6 +44,10 @@ impl WindowSurface {
         // SAFETY: These paired handles come from one live winit Window. The
         // returned owner keeps that Window, Instance and loader alive until the
         // Surface is destroyed. All platform extensions were checked/enabled.
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+        // SAFETY: The live paired Window handles and enabled platform extension
+        // satisfy Surface creation; the returned owner retains Window/Instance.
         let surface = unsafe {
             ash_window::create_surface(
                 instance.entry(),
@@ -108,6 +112,9 @@ impl Drop for WindowSurface {
     fn drop(&mut self) {
         // SAFETY: Every Swapchain owner retains this Surface. Its final Drop
         // therefore follows all Swapchain destruction, with Window/Instance live.
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
+        // SAFETY: Swapchain/work owners have released this final Surface owner.
         unsafe { self.loader.destroy_surface(self.handle, None) };
     }
 }
