@@ -4,15 +4,16 @@
 //! handles and captures immutable data needed to build a frame's graph.
 
 use std::{
+    borrow::Cow,
     collections::BTreeSet,
     fmt,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
 
-use crate::graph::{RasterParameters, ValidatedRasterParameters};
+use crate::graph::{BufferHandle, RasterParameters, ValidatedRasterParameters};
 
 mod graph;
 pub use graph::{FrameGraph, FrameOutputOwnership};
@@ -147,16 +148,35 @@ pub struct Draw {
     pub world_from_model: Matrix4,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EngineErrorKind {
+    InvalidInput,
+    CapacityExhausted,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EngineError {
-    pub message: String,
+    kind: EngineErrorKind,
+    pub message: Cow<'static, str>,
 }
 
 impl EngineError {
-    pub(crate) fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<Cow<'static, str>>) -> Self {
         Self {
+            kind: EngineErrorKind::InvalidInput,
             message: message.into(),
         }
+    }
+
+    fn capacity(message: &'static str) -> Self {
+        Self {
+            kind: EngineErrorKind::CapacityExhausted,
+            message: Cow::Borrowed(message),
+        }
+    }
+
+    pub fn kind(&self) -> EngineErrorKind {
+        self.kind
     }
 }
 impl fmt::Display for EngineError {
@@ -177,6 +197,15 @@ struct MeshVersion {
     data: Arc<MeshData>,
 }
 
+/// Preparation limits for CPU assets and changed versions awaiting maintenance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EngineCapacity {
+    pub meshes: usize,
+    pub materials: usize,
+    /// Maximum updated/deleted mesh versions retained until explicit collection.
+    pub retired_mesh_versions: usize,
+}
+
 /// Bounded CPU-side assets. Updates preserve a live handle; deletion invalidates
 /// it immediately. Reusing a slot creates a different generation.
 #[derive(Debug)]
@@ -188,14 +217,16 @@ pub struct Engine {
     free_materials: BTreeSet<usize>,
     mesh_capacity: usize,
     material_capacity: usize,
+    retired_meshes: Vec<MeshVersion>,
+    retired_mesh_capacity: usize,
 }
 
 impl Engine {
-    pub fn new(mesh_capacity: usize, material_capacity: usize) -> Result<Self, EngineError> {
-        if mesh_capacity == 0
-            || material_capacity == 0
-            || mesh_capacity > u32::MAX as usize
-            || material_capacity > u32::MAX as usize
+    pub fn new(capacity: EngineCapacity) -> Result<Self, EngineError> {
+        if capacity.meshes == 0
+            || capacity.materials == 0
+            || capacity.meshes > u32::MAX as usize
+            || capacity.materials > u32::MAX as usize
         {
             return Err(EngineError::new(
                 "asset capacities must be nonzero and fit u32",
@@ -204,14 +235,28 @@ impl Engine {
         let id = NEXT_ENGINE
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| EngineError::new("engine identity exhausted"))?;
+        let mut meshes = Vec::new();
+        let mut materials = Vec::new();
+        let mut retired_meshes = Vec::new();
+        meshes
+            .try_reserve_exact(capacity.meshes)
+            .map_err(|_| EngineError::capacity("unable to reserve mesh slots"))?;
+        materials
+            .try_reserve_exact(capacity.materials)
+            .map_err(|_| EngineError::capacity("unable to reserve material slots"))?;
+        retired_meshes
+            .try_reserve_exact(capacity.retired_mesh_versions)
+            .map_err(|_| EngineError::capacity("unable to reserve retired mesh slots"))?;
         Ok(Self {
             id,
-            meshes: Vec::new(),
-            materials: Vec::new(),
+            meshes,
+            materials,
             free_meshes: BTreeSet::new(),
             free_materials: BTreeSet::new(),
-            mesh_capacity,
-            material_capacity,
+            mesh_capacity: capacity.meshes,
+            material_capacity: capacity.materials,
+            retired_meshes,
+            retired_mesh_capacity: capacity.retired_mesh_versions,
         })
     }
 
@@ -238,37 +283,91 @@ impl Engine {
             .revision
             .checked_add(1)
             .ok_or_else(|| EngineError::new("mesh revision exhausted"))?;
-        *mesh = MeshVersion {
-            revision,
-            data: Arc::new(data),
-        };
+        if self.retired_meshes.len() == self.retired_mesh_capacity {
+            return Err(EngineError::capacity("retired mesh capacity exhausted"));
+        }
+        let previous = std::mem::replace(
+            mesh,
+            MeshVersion {
+                revision,
+                data: Arc::new(data),
+            },
+        );
+        self.retired_meshes.push(previous);
         Ok(())
     }
     pub fn delete_mesh(&mut self, handle: MeshHandle) -> Result<(), EngineError> {
         self.check_owner(handle.owner)?;
         lookup(&self.meshes, handle.index, handle.generation)?;
-        self.meshes[handle.index as usize].value = None;
+        if self.retired_meshes.len() == self.retired_mesh_capacity {
+            return Err(EngineError::capacity("retired mesh capacity exhausted"));
+        }
+        let previous = self.meshes[handle.index as usize]
+            .value
+            .take()
+            .expect("lookup established a live mesh");
+        self.retired_meshes.push(previous);
         if handle.generation < u32::MAX {
             self.free_meshes.insert(handle.index as usize);
         }
         Ok(())
     }
+
+    /// Reclaim changed mesh versions at an explicit maintenance boundary.
+    ///
+    /// Snapshots and graph uploads retain different `Arc`s. An unreferenced
+    /// version can be released only while each stream is exclusive or another
+    /// version retained by this Engine anchors it. Sequential removal keeps the
+    /// final anchor while graph uploads or cloned `MeshData` still retain bytes.
+    /// No weak references to these owners are exposed.
+    /// Keep this Engine alive throughout ordinary frame processing; destroying
+    /// it starts shutdown, including the eventual release of surviving frames.
+    pub fn collect_retired_meshes(&mut self) -> usize {
+        let before = self.retired_meshes.len();
+        let mut index = 0;
+        while index < self.retired_meshes.len() {
+            let version = &self.retired_meshes[index];
+            if Arc::strong_count(&version.data) == 1
+                && self.stream_is_anchored(&version.data.vertices, index)
+                && self.stream_is_anchored(&version.data.indices, index)
+            {
+                self.retired_meshes.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        before - self.retired_meshes.len()
+    }
+
+    fn stream_is_anchored(&self, bytes: &Arc<[u8]>, candidate: usize) -> bool {
+        Arc::strong_count(bytes) == 1
+            || self
+                .meshes
+                .iter()
+                .filter_map(|slot| slot.value.as_ref())
+                .chain(
+                    self.retired_meshes
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, version)| (index != candidate).then_some(version)),
+                )
+                .any(|version| {
+                    Arc::ptr_eq(bytes, &version.data.vertices)
+                        || Arc::ptr_eq(bytes, &version.data.indices)
+                })
+    }
     pub fn mesh_revision(&self, handle: MeshHandle) -> Result<u64, EngineError> {
         self.check_owner(handle.owner)?;
         Ok(lookup(&self.meshes, handle.index, handle.generation)?.revision)
     }
-    pub fn live_mesh_handles(&self) -> Vec<MeshHandle> {
-        self.meshes
-            .iter()
-            .enumerate()
-            .filter_map(|(index, slot)| {
-                slot.value.as_ref().map(|_| MeshHandle {
-                    owner: self.id,
-                    index: index as u32,
-                    generation: slot.generation,
-                })
+    pub fn live_mesh_handles(&self) -> impl Iterator<Item = MeshHandle> + '_ {
+        self.meshes.iter().enumerate().filter_map(|(index, slot)| {
+            slot.value.as_ref().map(|_| MeshHandle {
+                owner: self.id,
+                index: index as u32,
+                generation: slot.generation,
             })
-            .collect()
+        })
     }
 
     pub fn create_material(&mut self, material: Material) -> Result<MaterialHandle, EngineError> {
@@ -307,7 +406,12 @@ impl Engine {
 
     /// Capture owns each immutable mesh version and copies material/matrices.
     /// Later CPU asset updates cannot change an already captured frame.
-    pub fn snapshot(&self, view: &View, draws: &[Draw]) -> Result<FrameSnapshot, EngineError> {
+    pub fn snapshot(
+        &self,
+        pool: &SnapshotPool,
+        view: &View,
+        draws: &[Draw],
+    ) -> Result<FrameSnapshot, EngineError> {
         if view.width == 0
             || view.height == 0
             || u64::from(view.width)
@@ -321,7 +425,12 @@ impl Engine {
                 "view needs a valid extent and finite parameters",
             ));
         }
-        let mut captured = Vec::with_capacity(draws.len());
+        if draws.len() > pool.owner.draw_capacity {
+            return Err(EngineError::capacity("snapshot draw capacity exhausted"));
+        }
+        // Construct the lease before fallible capture so every early return
+        // returns its storage without freeing the prepared arrays.
+        let mut captured = pool.acquire(*view)?;
         for draw in draws {
             self.check_owner(draw.mesh.owner)?;
             self.check_owner(draw.material.owner)?;
@@ -340,17 +449,14 @@ impl Engine {
                 tint: material.tint,
             })
             .map_err(|_| EngineError::new("combined clip transform is not finite"))?;
-            captured.push(SnapshotDraw {
+            captured.draws.push(SnapshotDraw {
                 mesh: draw.mesh,
                 revision: mesh.revision,
                 data: Arc::clone(&mesh.data),
                 parameters,
             });
         }
-        Ok(FrameSnapshot {
-            view: *view,
-            draws: captured,
-        })
+        Ok(captured)
     }
 
     fn check_owner(&self, owner: u64) -> Result<(), EngineError> {
@@ -363,7 +469,7 @@ impl Engine {
 }
 
 /// Owned frame input; it does not borrow a mutable scene or promise GPU completion.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
     allow(
@@ -374,6 +480,8 @@ impl Engine {
 pub struct FrameSnapshot {
     pub(crate) view: View,
     pub(crate) draws: Vec<SnapshotDraw>,
+    meshes: Mutex<Vec<SnapshotMesh>>,
+    pool: Arc<SnapshotPoolOwner>,
 }
 impl FrameSnapshot {
     pub fn view(&self) -> &View {
@@ -381,6 +489,98 @@ impl FrameSnapshot {
     }
     pub fn draw_count(&self) -> usize {
         self.draws.len()
+    }
+}
+
+impl Drop for FrameSnapshot {
+    fn drop(&mut self) {
+        let mut draws = std::mem::take(&mut self.draws);
+        draws.clear();
+        let mut meshes = std::mem::take(
+            self.meshes
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        meshes.clear();
+        self.pool
+            .free
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(SnapshotStorage { draws, meshes });
+    }
+}
+
+/// Prepared, bounded storage for independently owned frame captures.
+///
+/// Capture and return reuse these arrays even when draw counts and values vary.
+/// Keep an owning pool handle and the source Engine alive until all ordinary
+/// frame consumers finish. Dropping those owners is an explicit shutdown
+/// boundary; outstanding snapshots remain memory-safe and release storage later.
+#[derive(Clone, Debug)]
+pub struct SnapshotPool {
+    owner: Arc<SnapshotPoolOwner>,
+}
+
+#[derive(Debug)]
+struct SnapshotPoolOwner {
+    draw_capacity: usize,
+    free: Mutex<Vec<SnapshotStorage>>,
+}
+
+#[derive(Debug)]
+struct SnapshotStorage {
+    draws: Vec<SnapshotDraw>,
+    meshes: Vec<SnapshotMesh>,
+}
+
+#[derive(Debug)]
+struct SnapshotMesh {
+    mesh: MeshHandle,
+    draw: usize,
+    buffers: Option<(BufferHandle, BufferHandle)>,
+}
+
+impl SnapshotPool {
+    pub fn new(draw_capacity: usize, slots: usize) -> Result<Self, EngineError> {
+        if slots == 0 {
+            return Err(EngineError::new("snapshot pool needs a nonzero slot count"));
+        }
+        let mut free = Vec::new();
+        free.try_reserve_exact(slots)
+            .map_err(|_| EngineError::capacity("unable to reserve snapshot slots"))?;
+        for _ in 0..slots {
+            let mut draws = Vec::new();
+            let mut meshes = Vec::new();
+            draws
+                .try_reserve_exact(draw_capacity)
+                .map_err(|_| EngineError::capacity("unable to reserve snapshot draws"))?;
+            meshes
+                .try_reserve_exact(draw_capacity)
+                .map_err(|_| EngineError::capacity("unable to reserve snapshot meshes"))?;
+            free.push(SnapshotStorage { draws, meshes });
+        }
+        Ok(Self {
+            owner: Arc::new(SnapshotPoolOwner {
+                draw_capacity,
+                free: Mutex::new(free),
+            }),
+        })
+    }
+
+    fn acquire(&self, view: View) -> Result<FrameSnapshot, EngineError> {
+        let storage = self
+            .owner
+            .free
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+            .ok_or_else(|| EngineError::capacity("snapshot slots exhausted"))?;
+        Ok(FrameSnapshot {
+            view,
+            draws: storage.draws,
+            meshes: Mutex::new(storage.meshes),
+            pool: Arc::clone(&self.owner),
+        })
     }
 }
 
@@ -434,7 +634,7 @@ fn insert<T>(
         return Ok((index as u32, slot.generation));
     }
     if slots.len() >= capacity {
-        return Err(EngineError::new("asset capacity exhausted"));
+        return Err(EngineError::capacity("asset capacity exhausted"));
     }
     let index = slots.len() as u32;
     slots.push(Slot {
@@ -466,6 +666,14 @@ fn lookup_mut<T>(
 mod tests {
     use super::*;
 
+    fn capacity(meshes: usize, materials: usize) -> EngineCapacity {
+        EngineCapacity {
+            meshes,
+            materials,
+            retired_mesh_versions: meshes.max(2),
+        }
+    }
+
     fn mesh(red: f32) -> MeshData {
         MeshData::new(
             &[Vertex {
@@ -488,8 +696,8 @@ mod tests {
     #[test]
     fn handles_validate_owner_generation_and_capacity() {
         assert_eq!(mesh(1.0).byte_len(), 28 + 3 * 4);
-        let mut first = Engine::new(1, 1).unwrap();
-        let second = Engine::new(1, 1).unwrap();
+        let mut first = Engine::new(capacity(1, 1)).unwrap();
+        let second = Engine::new(capacity(1, 1)).unwrap();
         let old = first.create_mesh(mesh(1.0)).unwrap();
         assert!(first.create_mesh(mesh(0.0)).is_err());
         assert!(second.mesh_revision(old).is_err());
@@ -504,7 +712,7 @@ mod tests {
     #[test]
     fn large_registration_reuses_lowest_deleted_indices_independently() {
         const COUNT: usize = 4_096;
-        let mut engine = Engine::new(COUNT, COUNT).unwrap();
+        let mut engine = Engine::new(capacity(COUNT, COUNT)).unwrap();
         let data = mesh(1.0);
         let meshes = (0..COUNT)
             .map(|_| engine.create_mesh(data.clone()).unwrap())
@@ -531,14 +739,14 @@ mod tests {
             assert!(engine.delete_material(materials[index]).is_err());
             assert_eq!(engine.mesh_revision(new_mesh).unwrap(), 1);
         }
-        assert_eq!(engine.live_mesh_handles().len(), COUNT);
+        assert_eq!(engine.live_mesh_handles().count(), COUNT);
         assert!(engine.create_mesh(data).is_err());
         assert!(engine.create_material(Material::default()).is_err());
     }
 
     #[test]
     fn generation_exhausted_slots_are_retired_instead_of_reused() {
-        let mut engine = Engine::new(2, 2).unwrap();
+        let mut engine = Engine::new(capacity(2, 2)).unwrap();
         for expected_index in 0..2 {
             let mut mesh_handle = engine.create_mesh(mesh(1.0)).unwrap();
             let mut material = engine.create_material(Material::default()).unwrap();
@@ -553,12 +761,12 @@ mod tests {
         }
         assert!(engine.create_mesh(mesh(1.0)).is_err());
         assert!(engine.create_material(Material::default()).is_err());
-        assert!(engine.live_mesh_handles().is_empty());
+        assert!(engine.live_mesh_handles().next().is_none());
     }
 
     #[test]
     fn failed_mutations_do_not_consume_reusable_slots_or_replace_live_data() {
-        let mut engine = Engine::new(1, 1).unwrap();
+        let mut engine = Engine::new(capacity(1, 1)).unwrap();
         let material = engine.create_material(Material::default()).unwrap();
         engine.delete_material(material).unwrap();
         assert!(
@@ -588,7 +796,7 @@ mod tests {
                 .unwrap()
                 .data,
         ));
-        let other = Engine::new(1, 1).unwrap();
+        let other = Engine::new(capacity(1, 1)).unwrap();
         assert!(
             engine
                 .delete_mesh(MeshHandle {
@@ -602,7 +810,8 @@ mod tests {
 
     #[test]
     fn snapshots_keep_old_mesh_and_material_and_compose_transforms() {
-        let mut engine = Engine::new(1, 1).unwrap();
+        let pool = SnapshotPool::new(1, 2).unwrap();
+        let mut engine = Engine::new(capacity(1, 1)).unwrap();
         let mesh_handle = engine.create_mesh(mesh(1.0)).unwrap();
         let material = engine.create_material(Material::default()).unwrap();
         let mut camera = view();
@@ -611,6 +820,7 @@ mod tests {
         model[3][0] = 0.25;
         let old = engine
             .snapshot(
+                &pool,
                 &camera,
                 &[Draw {
                     mesh: mesh_handle,
@@ -626,6 +836,7 @@ mod tests {
             .unwrap();
         let new = engine
             .snapshot(
+                &pool,
                 &view(),
                 &[Draw {
                     mesh: mesh_handle,
@@ -647,6 +858,7 @@ mod tests {
 
     #[test]
     fn invalid_input_does_not_replace_live_data() {
+        let pool = SnapshotPool::new(1, 1).unwrap();
         assert!(MeshData::new(&[], &[]).is_err());
         let vertex = Vertex {
             position: [0.0; 3],
@@ -664,7 +876,7 @@ mod tests {
             )
             .is_err()
         );
-        let mut engine = Engine::new(1, 1).unwrap();
+        let mut engine = Engine::new(capacity(1, 1)).unwrap();
         let material = engine.create_material(Material::default()).unwrap();
         assert!(
             engine
@@ -683,7 +895,7 @@ mod tests {
             world_from_model: IDENTITY,
         };
         assert_eq!(
-            engine.snapshot(&view(), &[draw]).unwrap().draws[0]
+            engine.snapshot(&pool, &view(), &[draw]).unwrap().draws[0]
                 .parameters
                 .get()
                 .tint,
@@ -691,12 +903,124 @@ mod tests {
         );
         let mut bad = view();
         bad.clip_from_world[0][0] = f32::INFINITY;
-        assert!(engine.snapshot(&bad, &[draw]).is_err());
+        assert!(engine.snapshot(&pool, &bad, &[draw]).is_err());
         bad.clip_from_world = IDENTITY;
         bad.clip_from_world[0][0] = f32::MAX;
         let mut overflowing = draw;
         overflowing.world_from_model[0][0] = f32::MAX;
-        assert!(engine.snapshot(&bad, &[overflowing]).is_err());
-        assert_eq!(engine.snapshot(&view(), &[]).unwrap().draw_count(), 0);
+        assert!(engine.snapshot(&pool, &bad, &[overflowing]).is_err());
+        assert_eq!(
+            engine.snapshot(&pool, &view(), &[]).unwrap().draw_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn snapshot_slots_reuse_capacity_and_return_after_partial_failure() {
+        let pool = SnapshotPool::new(2, 1).unwrap();
+        let mut engine = Engine::new(capacity(1, 1)).unwrap();
+        let mesh = engine.create_mesh(mesh(1.0)).unwrap();
+        let material = engine.create_material(Material::default()).unwrap();
+        let draw = Draw {
+            mesh,
+            material,
+            world_from_model: IDENTITY,
+        };
+        let frame = engine.snapshot(&pool, &view(), &[draw, draw]).unwrap();
+        let storage = frame.draws.as_ptr();
+        assert_eq!(
+            engine.snapshot(&pool, &view(), &[]).unwrap_err().kind(),
+            EngineErrorKind::CapacityExhausted,
+        );
+        drop(frame);
+        let foreign = Draw {
+            material: MaterialHandle {
+                owner: 0,
+                ..material
+            },
+            ..draw
+        };
+        assert!(engine.snapshot(&pool, &view(), &[draw, foreign]).is_err());
+        let frame = engine.snapshot(&pool, &view(), &[draw]).unwrap();
+        assert_eq!(frame.draws.as_ptr(), storage);
+        assert_eq!(frame.draw_count(), 1);
+        drop(frame);
+        assert_eq!(
+            engine
+                .snapshot(&pool, &view(), &[draw; 3])
+                .unwrap_err()
+                .kind(),
+            EngineErrorKind::CapacityExhausted,
+        );
+        assert_eq!(
+            engine.snapshot(&pool, &view(), &[]).unwrap().draw_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn retired_meshes_wait_for_snapshot_and_both_upload_streams() {
+        let pool = SnapshotPool::new(1, 1).unwrap();
+        let mut engine = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let handle = engine.create_mesh(mesh(1.0)).unwrap();
+        let material = engine.create_material(Material::default()).unwrap();
+        let frame = engine
+            .snapshot(
+                &pool,
+                &view(),
+                &[Draw {
+                    mesh: handle,
+                    material,
+                    world_from_model: IDENTITY,
+                }],
+            )
+            .unwrap();
+        let vertices = Arc::clone(&frame.draws[0].data.vertices);
+        let indices = Arc::clone(&frame.draws[0].data.indices);
+        engine.update_mesh(handle, mesh(0.5)).unwrap();
+        assert_eq!(engine.collect_retired_meshes(), 0);
+        assert_eq!(
+            engine.update_mesh(handle, mesh(0.0)).unwrap_err().kind(),
+            EngineErrorKind::CapacityExhausted,
+        );
+        assert_eq!(engine.mesh_revision(handle).unwrap(), 2);
+        assert_eq!(
+            engine.delete_mesh(handle).unwrap_err().kind(),
+            EngineErrorKind::CapacityExhausted,
+        );
+        drop(frame);
+        assert_eq!(engine.collect_retired_meshes(), 0);
+        drop(vertices);
+        assert_eq!(engine.collect_retired_meshes(), 0);
+        drop(indices);
+        assert_eq!(engine.collect_retired_meshes(), 1);
+        engine.delete_mesh(handle).unwrap();
+        assert_eq!(engine.collect_retired_meshes(), 1);
+        assert!(engine.mesh_revision(handle).is_err());
+    }
+
+    #[test]
+    fn maintenance_releases_shared_versions_but_keeps_the_last_stream_anchor() {
+        let mut engine = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 2,
+        })
+        .unwrap();
+        let data = mesh(1.0);
+        let handle = engine.create_mesh(data.clone()).unwrap();
+        engine.update_mesh(handle, data.clone()).unwrap();
+        assert_eq!(engine.collect_retired_meshes(), 1);
+        engine.update_mesh(handle, data.clone()).unwrap();
+        engine.delete_mesh(handle).unwrap();
+        assert_eq!(engine.collect_retired_meshes(), 1);
+        assert_eq!(engine.retired_meshes.len(), 1);
+        drop(data);
+        assert_eq!(engine.collect_retired_meshes(), 1);
     }
 }
