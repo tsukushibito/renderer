@@ -407,14 +407,12 @@ impl Graph {
                     )
                     .with_range(graph.access_range(access.resource, access.range.clone())));
             }
-            let targets = plan.targets.filter(|_| program.is_mesh());
             Ok((
                 Operation::Raster {
                     program: *program,
                     draws: first_draw..graph.draws.len(),
                     colors: plan.colors,
                     depth: plan.depth,
-                    targets,
                 },
                 first_access..graph.accesses.len(),
                 false,
@@ -752,7 +750,6 @@ mod tests {
             draws,
             colors,
             depth: depth_index,
-            targets,
         } = &plan.passes[pass.index].operation
         else {
             panic!("owned Raster operation")
@@ -788,10 +785,6 @@ mod tests {
                 .any(|access| access.resource == first.vertices.index
                     && access.purpose == AccessPurpose::Index
                     && access.range == (0..12))
-        );
-        assert!(
-            targets.is_none(),
-            "multi-subresource Raster must not inherit native baseline support"
         );
     }
 
@@ -954,13 +947,9 @@ mod tests {
             .unwrap();
         graph.readback_buffer("bytes", result, 16, 64).unwrap();
         let plan = graph.compile().unwrap();
-        let Operation::Raster { draws, targets, .. } = &plan.passes[pass.index].operation else {
+        let Operation::Raster { draws, .. } = &plan.passes[pass.index].operation else {
             panic!()
         };
-        assert!(
-            targets.is_none(),
-            "descriptor-bound graphics has no native lowering yet"
-        );
         let owned = &plan.draws[draws.clone()];
         assert_eq!(owned.len(), 2);
         assert_eq!(owned[0].bindings.len(), 3);

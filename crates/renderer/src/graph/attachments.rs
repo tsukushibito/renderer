@@ -2,14 +2,13 @@
 
 use super::{
     AccessPurpose, AttachmentOperand, Graph, GraphCapacityKind, GraphError, GraphErrorKind,
-    ImageFormat, LoadAction, LoadOp, Operation, PassHandle, RasterAttachmentOperands,
-    RasterAttachments, ResourceAccess, StoreOp, storage::capacity_error,
+    LoadAction, LoadOp, Operation, PassHandle, RasterAttachments, ResourceAccess, StoreOp,
+    storage::capacity_error,
 };
 
 pub(super) struct AttachmentPlan {
     pub colors: std::ops::Range<usize>,
     pub depth: Option<usize>,
-    pub targets: Option<RasterAttachmentOperands>,
     pub accesses: std::ops::Range<usize>,
 }
 
@@ -28,17 +27,10 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let plan = graph.append_attachments(attachments)?;
-            let simple_clear = plan.targets.filter(|targets| {
-                targets.color_ops.load == LoadAction::Clear
-                    && targets.color_ops.store == StoreOp::Store
-                    && targets.depth_ops.load == LoadAction::Clear
-                    && targets.depth_ops.store == StoreOp::Store
-            });
             Ok((
                 Operation::AttachmentPass {
                     colors: plan.colors,
                     depth: plan.depth,
-                    simple_clear,
                 },
                 plan.accesses,
                 false,
@@ -147,35 +139,9 @@ impl Graph {
                 .with_range(self.access_range(access.resource, access.range.clone())));
         }
 
-        let targets = if let (1, Some(depth)) = (colors.len(), depth) {
-            let color = self.attachments[colors.start];
-            let depth = self.attachments[depth];
-            if self.image_desc_at(color.view.image.index)?.format == ImageFormat::Rgba8Unorm
-                && self
-                    .image_desc_at(color.view.image.index)?
-                    .is_single_subresource()
-                && self
-                    .image_desc_at(depth.view.image.index)?
-                    .is_single_subresource()
-            {
-                Some(RasterAttachmentOperands {
-                    color: color.view.image.index,
-                    depth: depth.view.image.index,
-                    color_ops: color.ops,
-                    depth_ops: depth.ops,
-                    clear_color: color.clear,
-                    clear_depth: depth.clear[0],
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
         Ok(AttachmentPlan {
             colors,
             depth,
-            targets,
             accesses,
         })
     }
@@ -273,15 +239,9 @@ mod tests {
         };
         graph.export_image(b.image()).unwrap();
         let plan = graph.compile().unwrap();
-        let Operation::AttachmentPass {
-            colors,
-            depth,
-            simple_clear,
-        } = &plan.passes[pass.index].operation
-        else {
+        let Operation::AttachmentPass { colors, depth } = &plan.passes[pass.index].operation else {
             panic!("expected owned attachment pass");
         };
-        assert!(simple_clear.is_none());
         let colors = &plan.attachments[colors.clone()];
         assert_eq!(colors.len(), 2);
         assert_eq!(colors[0].view, b);
@@ -299,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn original_clear_shape_preserves_the_native_lowering_operands() {
+    fn clear_color_and_depth_contents_remain_owned_until_the_plan_is_returned() {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let color = graph.image("color", ImageDesc::rgba8(3, 2)).unwrap();
@@ -324,16 +284,23 @@ mod tests {
         graph.export_image(color).unwrap();
         let plan = graph.compile().unwrap();
         let Operation::AttachmentPass {
-            simple_clear: Some(clear),
-            ..
+            colors,
+            depth: depth_index,
         } = &plan.passes[pass.index].operation
         else {
-            panic!("original clear shape must retain its native lowering contract");
+            panic!("expected owned attachment pass");
         };
-        assert_eq!(clear.color, color.index);
-        assert_eq!(clear.depth, depth.index);
-        assert_eq!(clear.clear_color, [0.25, 0.5, 0.75, 1.0]);
-        assert_eq!(clear.clear_depth, 0.625);
+        assert_eq!(colors.len(), 1);
+        let color_operand = &plan.attachments[colors.start];
+        assert_eq!(color_operand.view.image(), color);
+        assert_eq!(color_operand.clear, [0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(color_operand.ops.load, LoadAction::Clear);
+        assert_eq!(color_operand.ops.store, StoreOp::Store);
+        let depth_operand = &plan.attachments[depth_index.unwrap()];
+        assert_eq!(depth_operand.view.image(), depth);
+        assert_eq!(depth_operand.clear[0], 0.625);
+        assert_eq!(depth_operand.ops.load, LoadAction::Clear);
+        assert_eq!(depth_operand.ops.store, StoreOp::Store);
         assert_eq!(
             pool.begin().unwrap_err().kind(),
             GraphErrorKind::CapacityExhausted
