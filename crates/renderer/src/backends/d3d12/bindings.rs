@@ -1227,10 +1227,17 @@ windows_core::imp::interface_hierarchy!(
     ID3D12DeviceChild,
     ID3D12Pageable
 );
+impl ID3D12CommandAllocator {
+    pub unsafe fn Reset(&self) -> windows_core::HRESULT {
+        unsafe {
+            (windows_core::Interface::vtable(self).Reset)(windows_core::Interface::as_raw(self))
+        }
+    }
+}
 #[repr(C)]
 pub struct ID3D12CommandAllocator_Vtbl {
     pub base__: ID3D12Pageable_Vtbl,
-    Reset: usize,
+    pub Reset: unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_core::HRESULT,
 }
 impl windows_core::RuntimeName for ID3D12CommandAllocator {}
 windows_core::imp::define_interface!(
@@ -2010,6 +2017,19 @@ impl ID3D12GraphicsCommandList {
             (windows_core::Interface::vtable(self).Close)(windows_core::Interface::as_raw(self))
         }
     }
+    pub unsafe fn Reset<P0, P1>(&self, pallocator: P0, pinitialstate: P1) -> windows_core::HRESULT
+    where
+        P0: windows_core::Param<ID3D12CommandAllocator>,
+        P1: windows_core::Param<ID3D12PipelineState>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).Reset)(
+                windows_core::Interface::as_raw(self),
+                pallocator.param().abi(),
+                pinitialstate.param().abi(),
+            )
+        }
+    }
     pub unsafe fn Dispatch(
         &self,
         threadgroupcountx: u32,
@@ -2185,7 +2205,11 @@ impl ID3D12GraphicsCommandList {
 pub struct ID3D12GraphicsCommandList_Vtbl {
     pub base__: ID3D12CommandList_Vtbl,
     pub Close: unsafe extern "system" fn(*mut core::ffi::c_void) -> windows_core::HRESULT,
-    Reset: usize,
+    pub Reset: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     ClearState: usize,
     DrawInstanced: usize,
     DrawIndexedInstanced: usize,
