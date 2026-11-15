@@ -1,5 +1,6 @@
 //! Real-GPU repeated frame ownership, reuse and history scenarios.
 
+use super::tests::prepare_scenario;
 use super::*;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -68,6 +69,21 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
             ..RuntimeConfig::default()
         },
         |runtime| {
+            prepare_scenario(
+                runtime,
+                3,
+                5,
+                &[
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 64 },
+                        count: 3,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(8, 8),
+                        count: 6,
+                    },
+                ],
+            );
             let mut retained = Vec::new();
             let mut warm = None;
             for round in 0..4 {
@@ -160,11 +176,27 @@ fn vulkan_frames_delete_pending_resources_and_recover_readback_capacity() {
     real_gpu(
         RuntimeConfig {
             execution_slots: 2,
-            resource_capacity: 2,
+            resource_capacity: 3,
             staging_bytes: 4096,
             ..RuntimeConfig::default()
         },
         |runtime| {
+            prepare_scenario(
+                runtime,
+                1,
+                2,
+                &[
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 2048 },
+                        count: 2,
+                    },
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 1024 },
+                        count: 1,
+                    },
+                ],
+            );
+            let prepared_resources = runtime.stats().resources_created;
             let make = |size: u64, value: u8| {
                 let mut graph = Graph::test_new();
                 let buffer = graph
@@ -229,21 +261,14 @@ fn vulkan_frames_delete_pending_resources_and_recover_readback_capacity() {
             assert_eq!(runtime.stats().readback_live_ranges, 1);
             let submitted = runtime.submit_frame(&replacement).unwrap();
             let replacement_key = submitted.export_buffer(replacement_buffer).unwrap().key();
-            assert!(
-                replacement_key.index == first_key.index
-                    || replacement_key.index == second_key.index
-            );
-            let previous = if replacement_key.index == first_key.index {
-                first_key
-            } else {
-                second_key
-            };
-            assert!(replacement_key.generation > previous.generation);
+            assert_ne!(replacement_key.index, first_key.index);
+            assert_ne!(replacement_key.index, second_key.index);
             assert_eq!(
                 runtime.entries.len(),
-                2,
-                "size change replaces an idle bounded entry"
+                3,
+                "size changes select an explicitly prepared descriptor class"
             );
+            assert_eq!(runtime.stats().resources_created, prepared_resources);
             runtime.delete(replacement_key).unwrap();
             drop(submitted);
             let mut result = completion(runtime).result;
@@ -271,6 +296,21 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
             ..RuntimeConfig::default()
         },
         |runtime| {
+            prepare_scenario(
+                runtime,
+                2,
+                3,
+                &[
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(8, 8),
+                        count: 4,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(5, 3),
+                        count: 4,
+                    },
+                ],
+            );
             let mut previous: Option<ImportImage> = None;
             for (phase, desc) in [
                 ImageDesc::rgba8(8, 8),

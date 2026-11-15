@@ -1,5 +1,6 @@
 //! Real-GPU shader, depth and complete M2 integration contracts.
 
+use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
 use crate::graph::{
@@ -177,10 +178,34 @@ fn opaque_batch_comparison(
     (graph.compile().unwrap(), readback)
 }
 
+fn prepare_opaque_scenario(runtime: &mut VulkanRuntime, additional: &[ResourceClass]) {
+    let mut classes = vec![
+        ResourceClass::Buffer {
+            desc: BufferDesc { size: 84 },
+            count: 2,
+        },
+        ResourceClass::Buffer {
+            desc: BufferDesc { size: 12 },
+            count: 4,
+        },
+        ResourceClass::Image {
+            desc: ImageDesc::rgba8(64, 64),
+            count: 3,
+        },
+        ResourceClass::Image {
+            desc: ImageDesc::depth32(64, 64),
+            count: 1,
+        },
+    ];
+    classes.extend_from_slice(additional);
+    prepare_scenario(runtime, 10, 14, &classes);
+}
+
 #[test]
 #[ignore = "real-GPU opaque batch/scalar reference; requires Core/SyncVal"]
 fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
     real_gpu(|runtime| {
+        prepare_opaque_scenario(runtime, &[]);
         for empty in [false, true] {
             for reverse in [false, true] {
                 let mut reference = None;
@@ -214,6 +239,23 @@ fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
 #[ignore = "real-GPU batch late index validation; requires Core/SyncVal"]
 fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
     real_gpu(|runtime| {
+        prepare_opaque_scenario(
+            runtime,
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 28 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(1, 1),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(1, 1),
+                    count: 1,
+                },
+            ],
+        );
         let (plan, _) = opaque_batch_comparison(true, false, false, true);
         let error = match runtime.submit(&plan) {
             Ok(_) => panic!("later draw indices must be checked"),
@@ -284,6 +326,25 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
 #[ignore = "real-GPU shared vertex/index buffer in an opaque batch; requires Core/SyncVal"]
 fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            3,
+            3,
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 84 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(4, 4),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(4, 4),
+                    count: 1,
+                },
+            ],
+        );
         let mut graph = Graph::test_new();
         let buffer = graph
             .buffer("shared input", BufferDesc { size: 84 })
@@ -338,6 +399,33 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             ..RuntimeConfig::default()
         },
         |runtime| {
+            prepare_scenario(
+                runtime,
+                4,
+                5,
+                &[
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(8, 8),
+                        count: 3,
+                    },
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 224 },
+                        count: 1,
+                    },
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 48 },
+                        count: 1,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(16, 16),
+                        count: 1,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::depth32(16, 16),
+                        count: 1,
+                    },
+                ],
+            );
             let mut graph = Graph::test_new();
             let source = graph
                 .image("capacity-source", ImageDesc::rgba8(8, 8))
@@ -401,7 +489,10 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 transform(&bytes, ComputeTransform::Invert)
             );
             let recovered = runtime.stats();
-            assert_eq!(recovered.descriptor_arenas_created, 1);
+            assert_eq!(
+                recovered.descriptor_arenas_created,
+                runtime.config.execution_slots
+            );
             assert!(recovered.descriptor_arenas_reused >= 1);
             assert_eq!(
                 (recovered.upload_live_ranges, recovered.readback_live_ranges),
@@ -466,6 +557,15 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
 #[ignore = "explicit real-GPU image Compute dependencies; requires Core/SyncVal"]
 fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            3,
+            5,
+            &[ResourceClass::Image {
+                desc: ImageDesc::rgba8(17, 13),
+                count: 3,
+            }],
+        );
         let mut graph = Graph::test_new();
         let desc = ImageDesc::rgba8(17, 13); // dispatch tail requires shader bounds guard
         let source = graph.image("compute-source", desc).unwrap();
@@ -498,14 +598,15 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
         let compiled = graph.compile().unwrap();
         let expected_first = transform(&bytes, ComputeTransform::Invert);
         let expected_second = transform(&expected_first, ComputeTransform::SwapRedBlue);
-        let mut compute_pipeline = None;
+        let prepared_programs = runtime.programs.as_ref().unwrap().handles();
+        assert_ne!(prepared_programs[0], vk::Pipeline::null());
+        assert_eq!(prepared_programs[1], vk::Pipeline::null());
+        assert_ne!(prepared_programs[2], vk::Pipeline::null());
         for _ in 0..4 {
             let mut submission = runtime.submit(&compiled).unwrap();
             assert_eq!(runtime.execution.stats().leased, 1);
             let handles = runtime.programs.as_ref().unwrap().handles();
-            assert_ne!(handles[0], vk::Pipeline::null());
-            assert_eq!(handles[1..], [vk::Pipeline::null(); 2]);
-            assert_eq!(*compute_pipeline.get_or_insert(handles[0]), handles[0]);
+            assert_eq!(handles, prepared_programs);
             let mut result = submission
                 .wait(WAIT)
                 .unwrap()
@@ -522,7 +623,10 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
             "all native execution slots are prepared before graph submission"
         );
         assert!(stats.execution_slots_reused >= 3);
-        assert_eq!(stats.descriptor_arenas_created, 1);
+        assert_eq!(
+            stats.descriptor_arenas_created,
+            runtime.config.execution_slots
+        );
         assert!(stats.descriptor_arenas_reused >= 3);
         assert_eq!(
             (stats.upload_live_ranges, stats.readback_live_ranges),
@@ -532,9 +636,43 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
 }
 
 #[test]
-#[ignore = "explicit real-GPU lazy program creation with pending work; requires Core/SyncVal"]
-fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
+#[ignore = "explicit real-GPU prepared program selection with pending work; requires Core/SyncVal"]
+fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            4,
+            4,
+            &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(4, 4),
+                    count: 3,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 224 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 48 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(16, 16),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(16, 16),
+                    count: 1,
+                },
+            ],
+        );
+        let prepared_programs = runtime.programs.as_ref().unwrap().handles();
+        assert!(
+            prepared_programs
+                .iter()
+                .all(|&handle| handle != vk::Pipeline::null())
+        );
+        let prepared_resources = runtime.stats().resources_created;
         let mut producer = Graph::test_new();
         let source = producer
             .image("lazy-source", ImageDesc::rgba8(4, 4))
@@ -553,10 +691,17 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
         let mut pending_compute = runtime.submit(&producer.compile().unwrap()).unwrap();
         let exported = pending_compute.export_image(output).unwrap();
         let first = runtime.programs.as_ref().unwrap().handles();
-        assert_ne!(first[0], vk::Pipeline::null());
-        assert_eq!(first[1..], [vk::Pipeline::null(); 2]);
+        assert_eq!(first, prepared_programs);
+        assert_eq!(
+            runtime
+                .prepare_working_set(FrameCapacity::default(), &[])
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::CapacityExhausted,
+            "pending work prevents replacing the prepared backing"
+        );
 
-        // Add composite while the Compute submission still owns its program.
+        // Select composite while the Compute submission still owns its program.
         let mut consumer = Graph::test_new();
         let source = consumer.import_image("lazy-import", &exported).unwrap();
         let output = consumer
@@ -568,11 +713,9 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
             .unwrap();
         let mut pending_composite = runtime.submit(&consumer.compile().unwrap()).unwrap();
         let second = runtime.programs.as_ref().unwrap().handles();
-        assert_eq!(second[0], first[0]);
-        assert_eq!(second[1], vk::Pipeline::null());
-        assert_ne!(second[2], vk::Pipeline::null());
+        assert_eq!(second, prepared_programs);
 
-        // Add mesh without replacing either earlier program. All three kinds
+        // Select mesh without replacing either earlier program. All three kinds
         // coexist while the prior submissions still retain their leases.
         let mut mesh = Graph::test_new();
         let (vertices, indices) = add_mesh(&mut mesh, false);
@@ -605,9 +748,8 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
         let mesh_read = mesh.readback_image("lazy-read-mesh", color).unwrap();
         let mut pending_mesh = runtime.submit(&mesh.compile().unwrap()).unwrap();
         let third = runtime.programs.as_ref().unwrap().handles();
-        assert_eq!(third[0], first[0]);
-        assert_eq!(third[2], second[2]);
-        assert_ne!(third[1], vk::Pipeline::null());
+        assert_eq!(third, prepared_programs);
+        assert_eq!(runtime.stats().resources_created, prepared_resources);
         let mut mesh_result = pending_mesh.wait(WAIT).unwrap().expect("mesh must finish");
         assert_eq!(
             mesh_result.test_readback(mesh_read).unwrap(),
@@ -710,6 +852,37 @@ fn add_mesh(graph: &mut Graph, reverse: bool) -> (BufferHandle, BufferHandle) {
 #[ignore = "explicit real-GPU indexed mesh/depth and attachment LOAD; requires Core/SyncVal"]
 fn vulkan_graph_depth_occlusion_and_attachment_load() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            6,
+            10,
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 224 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 48 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 112 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 24 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(16, 16),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(16, 16),
+                    count: 1,
+                },
+            ],
+        );
         for reverse in [false, true] {
             let mut graph = Graph::test_new();
             let (vertices, indices) = add_mesh(&mut graph, reverse);
@@ -829,6 +1002,29 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
 #[ignore = "explicit real-GPU full M2 flow and pending export handoff; requires Core/SyncVal"]
 fn vulkan_graph_full_m2_composite_and_pending_handoff() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            8,
+            8,
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 224 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 48 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(16, 16),
+                    count: 5,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(16, 16),
+                    count: 1,
+                },
+            ],
+        );
         let expected_scene = expected_mesh([0, 0, 0, 255]);
         let expected = transform(
             &transform(&expected_scene, ComputeTransform::Invert),
@@ -994,7 +1190,10 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             "graph reuse does not create additional native execution slots"
         );
         assert!(stats.execution_slots_reused >= 2);
-        assert_eq!(stats.descriptor_arenas_created, 2);
+        assert_eq!(
+            stats.descriptor_arenas_created,
+            runtime.config.execution_slots
+        );
         assert!(stats.descriptor_arenas_reused >= 2);
         assert_eq!(
             (stats.upload_live_ranges, stats.readback_live_ranges),
