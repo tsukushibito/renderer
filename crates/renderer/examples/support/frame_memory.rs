@@ -5,9 +5,9 @@ use renderer::engine::{
     SnapshotPool, Vertex, View,
 };
 use renderer::graph::{
-    Access, AccessKind, AccessPurpose, AccessRange, Attachment, BufferBinding, BufferDesc,
-    CompiledGraph, ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc,
-    LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
+    Access, AccessKind, AccessPurpose, AccessRange, Attachment, Binding, BufferDesc, CompiledGraph,
+    ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, LoadOp, PassKind,
+    RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::measurement::Snapshot;
 use renderer::program::{ManagedProgram, ManagedRasterProgram};
@@ -215,19 +215,23 @@ fn owned_compute_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                 name,
                 &program,
                 &[
-                    BufferBinding {
+                    Binding {
                         group: 0,
                         binding: 0,
-                        buffer: input,
-                        offset: source_offset,
-                        size: 32,
+                        resource: renderer::graph::BindingResource::Buffer {
+                            buffer: input,
+                            offset: source_offset,
+                            size: 32,
+                        },
                     },
-                    BufferBinding {
+                    Binding {
                         group: 1,
                         binding: 0,
-                        buffer: output,
-                        offset,
-                        size: 32,
+                        resource: renderer::graph::BindingResource::Buffer {
+                            buffer: output,
+                            offset,
+                            size: 32,
+                        },
                     },
                 ],
                 [1, 1, 1],
@@ -406,6 +410,7 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .unwrap();
     let count = [0, 1, 4, 2][frame % 4];
     let mut draws = std::array::from_fn::<_, 4, _>(|draw| RasterDraw {
+        bindings: &[],
         vertices: vertices[draw % 2],
         indices: indices[draw % 2],
         index_count: 3,

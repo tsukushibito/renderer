@@ -19,8 +19,7 @@
 use std::time::Duration;
 
 use renderer::graph::{
-    BufferBinding, BufferDesc, BufferHandle, CompiledGraph, Graph, GraphCapacity, GraphPool,
-    PassHandle,
+    Binding, BufferDesc, BufferHandle, CompiledGraph, Graph, GraphCapacity, GraphPool, PassHandle,
 };
 use renderer::program::ManagedProgram;
 use renderer::{
@@ -50,19 +49,23 @@ fn append_owned_dispatch(graph: &mut Graph) -> BufferHandle {
             "managed dispatch",
             &ManagedProgram::uniform_readback(),
             &[
-                BufferBinding {
+                Binding {
                     group: 0,
                     binding: 0,
-                    buffer: uniform,
-                    offset: 0,
-                    size: 32,
+                    resource: renderer::graph::BindingResource::Buffer {
+                        buffer: uniform,
+                        offset: 0,
+                        size: 32,
+                    },
                 },
-                BufferBinding {
+                Binding {
                     group: 1,
                     binding: 0,
-                    buffer: output,
-                    offset: 0,
-                    size: 32,
+                    resource: renderer::graph::BindingResource::Buffer {
+                        buffer: output,
+                        offset: 0,
+                        size: 32,
+                    },
                 },
             ],
             [1, 1, 1],

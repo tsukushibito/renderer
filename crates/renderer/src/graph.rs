@@ -21,8 +21,8 @@ mod resource;
 mod storage;
 
 pub use compile::CompiledGraph;
-pub use dispatch::BufferBinding;
-pub(crate) use dispatch::BufferBindingOperands;
+pub(crate) use dispatch::BindingOperands;
+pub use dispatch::{Binding, BindingResource};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 #[cfg(feature = "vulkan")]
 pub(crate) use pass::AttachmentOps;

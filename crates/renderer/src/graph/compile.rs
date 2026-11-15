@@ -89,13 +89,14 @@ impl CompiledGraph {
             for access in self.accesses(index) {
                 writeln!(
                     text,
-                    "  resource={} range={:?} purpose={:?} read={} write={} valid_after={}",
+                    "  resource={} range={:?} purpose={:?} read={} write={} valid_after={} stages={:?}",
                     access.resource,
                     access.range,
                     access.purpose,
                     access.read,
                     access.write,
-                    access.initializes && !access.discard_after
+                    access.initializes && !access.discard_after,
+                    access.stages
                 )
                 .expect("String writing");
             }
