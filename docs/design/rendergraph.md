@@ -286,7 +286,8 @@ resource容量は保持する物理entry数の上限であり、DeviceのVRAM bu
 exportを保持し続けた場合も、容量不足を返し、内部で待機・無制限増設はしない。
 
 `Submission::wait`のtimeoutは`None`で、同じsubmissionを再度待てる。
-正常完了後は`SubmissionResult::readback`へreadbackパスのハンドルを渡す。
+正常完了後は`SubmissionResult::readback_len`でサイズを取得し、
+`readback_into(pass, &mut [u8])`で呼び出し側が準備した領域へコピーする。
 CPUコピー成功時にそのstaging領域を解放し、二重消費と別Graphのハンドルを拒否する。
 読み取り前の結果を保持していても、完了した実行枠は先に再利用できる。
 
@@ -342,14 +343,16 @@ Graphはbyte範囲を解析し、native状態遷移は全bufferを対象にす�
 
 `D3D12PreparedGraph`は未投入のcommand・資源を保持し、Dropでキャンセルできる。
 `submit`／`submit_prepared`は非同期で、`D3D12Submission`がGPU参照を所有する。
-`poll`または`wait(timeout)`が正常完了を返した後だけ、結果の`readback(PassHandle)`でCPUへコピーする。
+`poll`または`wait(timeout)`が正常完了を返した後だけ、結果の`readback_len`と
+`readback_into(pass, &mut [u8])`で利用側の準備済み領域へコピーする。
 timeout後も保持して再待機でき、別Graphのhandleとreadbackの二重消費は拒否する。
 runtimeを先に終了しても、prepared／submission／未読結果が必要なnative所有者を保持する。
 
 Device removalや投入後のsignal失敗を有効な内容として返さない。
 完了不明の処理は停止と所有保持へ進め、未投入の作成・記録失敗と区別する。
 Drop時の対象Fence待機と保持の規則は[D3D12 runtimeの設計](implementation-policy.md#d3d12-runtime)を参照する。
-この段階にはcanonical import／export、永続key、資源poolや上限付きpending frame管理を追加していない。
+この段階にはcanonical import／exportと永続keyを追加していない。
+実行・資源・CPU結果は準備済みpoolへ分け、未完了submissionの通常Dropは上限付きpendingへ引き継ぐ。
 
 ## 同期と一般推奨の適用
 
@@ -441,6 +444,20 @@ GPU常駐はmeshのowner・index・generation・revisionで識別し、`MeshCach
 準備済みframeは必要な登録をpinし、submit後のnative所有は通常のGPU leaseへ引き継ぐ。
 CPU更新・削除後の旧snapshotも、そのimmutableな版として独立して準備できる。
 
+`unload_mesh`は対象数を返して論理退役をmarkし、`unload_all_meshes`と`cancel_uploads`もmarkのみを行う。
+旧assetのMap node・native登録・CPU sourceの実回収は、資源変更に紐づく明示的な
+`VulkanEngine::collect_retired_meshes(Option<&Engine>)`へ分離する。通常のsubmit/pollは
+frame・execution・readbackのleaseを従来どおり返すが、旧assetを最後に解放しない。
+準備済みframeがpinする登録は保守でも維持し、回収待ちentryもmesh予算へ含める。
+新assetの入場に不足する場合は、明示的な保守と再試行を呼び出し側で選ぶ。
+
+`MeshCacheConfig::max_retired_sources`はGPU mesh件数と独立したCPU source退役容量で、
+各sourceのbyte上限と合わせて保持量を制限する。満杯なら型付き不足を返し、増設・内部waitを行わない。
+`Some(&assets)`は同じCPU Engineの現在版/退役版が同じ不変入力を保持することをidentityで確認し、
+そのEngineの退役保証へanchorを引き継ぐ。CPU Engineは通常処理中保持し、残存consumerを伴う先行終了は終了境界で扱う。
+`None`または別ownerでは、外側とvertex/index両streamのconsumerが終わるまでsourceを保持する。
+これにより二つの退役poolの相互待ちを避けつつ、CPU入力の最後の解放を通常frameへ移さない。
+
 `prepare_snapshot`と`poll_uploads`は明示的に分割uploadを進める。
 一つのmeshや全入力がstaging容量を超えても、同じ上限付きpoolを再利用する。
 `Ready`は必要なbyte列がすべてqueueへ受理されていることを意味し、GPU完了ではない。
@@ -459,7 +476,7 @@ compileは同じslotのdraw範囲を凍結し、必要なconsumerが終わるま
 外部bufferアクセスは資源ごとに範囲を集約し、同じbufferがVertexとIndexの両方なら両用途を残す。
 indexは各drawの頂点範囲とDevice上限について記録前に検査し、後のdrawが不正でも部分的にsubmitしない。
 canonical importは`ResourceKey`をkeyとするprivateな索引で検索し、同一性とsnapshot整合性の検査を保つ。
-Vulkanの用途集約も資源keyの順序付きmapを使い、多数の異なるmeshを一つのパスへ集めても全入力対を走査しない。
+Vulkanの用途集約も論理資源indexの準備済み配列と利用index列を使い、多数の異なるmeshを一つのパスへ集めても全入力対を走査しない。
 
 `Graph::raster`等の単一draw操作は参照経路と明示的なGraph構築に残す。
 今回のbatchは固定shaderの標準opaque描画をまとめる契約で、公開PassEncoderや任意パスの自動統合ではない。
@@ -474,7 +491,9 @@ closureはGraph構築時に実行され、GPU記録中にsceneへ再入しない
 返された完成画像を直接exportし、無変換の最終compositeと別画像を毎Viewに強制しない。
 `FrameOutputOwnership::Frame`はこのGraphで作った出力、`Caller`は利用側がimportした出力を表す。
 `release_output`はframe所有の元のkeyだけを登録解除し、caller所有の登録には触れない。
-CPU経路の`FrameGraph`、持続的な実行経路の`PreparedEngineFrame`から通常のGraphを取り出し、
+CPU経路では`FrameGraph.graph.compile()`、持続的な実行経路では`PreparedEngineFrame::compile()`で
+構築物を消費して凍結する。後者はmeshのpinと出力の所有権を`CompiledEngineFrame`へ引き継ぎ、
+`VulkanEngine::submit_frame(compiled)`が同じ所有付き入力を受け取る。
 build、compile、submitを分けられる。利用側の履歴処理や測定を標準描画と同じGraphへ接続できる。
 準備済みframeとplanのGraph identity、元の出力と必要exportを投入前に照合する。
 buildはGPU実行枠の予約ではない。内容が変わる別submitや外部keyの削除ではimportが失効するが、

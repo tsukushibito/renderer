@@ -1,7 +1,10 @@
 //! Bounded logical mesh residency, prepared pins and explicit chunk submission.
 use super::super::graph::RuntimeErrorKind;
 use super::*;
-use crate::graph::{BufferDesc, GraphErrorKind};
+use crate::{
+    engine::Engine,
+    graph::{BufferDesc, GraphErrorKind},
+};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
@@ -37,6 +40,78 @@ impl ResidentMesh {
         self.buffers
             .as_ref()
             .is_some_and(|buffers| Arc::strong_count(buffers) > 1)
+    }
+}
+
+/// CPU source retirement is independent of GPU cache occupancy. Every source
+/// was admitted within max_bytes; this fixed version count bounds retention.
+pub(super) struct DeferredSources {
+    sources: Vec<Arc<MeshData>>,
+    capacity: usize,
+}
+
+fn source_releasable<'a>(
+    data: &Arc<MeshData>,
+    assets: Option<&Engine>,
+    anchors: impl Iterator<Item = &'a Arc<MeshData>> + Clone,
+) -> bool {
+    if assets.is_some_and(|assets| assets.anchors_mesh_data(data))
+        || anchors.clone().any(|other| Arc::ptr_eq(data, other))
+    {
+        return true;
+    }
+    // A snapshot retains the outer Arc, whereas Graph uploads retain the two
+    // streams separately. Neither is a persistent asset-ownership proof.
+    Arc::strong_count(data) == 1
+        && [&data.vertices, &data.indices].into_iter().all(|bytes| {
+            Arc::strong_count(bytes) == 1
+                || anchors.clone().any(|other| {
+                    Arc::ptr_eq(bytes, &other.vertices) || Arc::ptr_eq(bytes, &other.indices)
+                })
+        })
+}
+
+impl DeferredSources {
+    pub(super) fn new(capacity: usize) -> Result<Self, EngineError> {
+        let mut sources = Vec::new();
+        sources
+            .try_reserve_exact(capacity)
+            .map_err(|_| EngineError::new("unable to reserve retired mesh sources"))?;
+        Ok(Self { sources, capacity })
+    }
+
+    fn can_retain(&self, data: &Arc<MeshData>) -> bool {
+        self.sources.len() < self.capacity
+            || self.sources.iter().any(|other| Arc::ptr_eq(data, other))
+    }
+
+    fn retain(&mut self, data: Arc<MeshData>) {
+        if !self.sources.iter().any(|other| Arc::ptr_eq(&data, other)) {
+            // The caller checked this bound before unregistering GPU resources.
+            assert!(self.sources.len() < self.capacity);
+            self.sources.push(data);
+        }
+    }
+
+    fn collect(
+        &mut self,
+        assets: Option<&Engine>,
+        residents: &BTreeMap<MeshVersionKey, ResidentMesh>,
+    ) {
+        let mut index = 0;
+        while index < self.sources.len() {
+            let anchors = self
+                .sources
+                .iter()
+                .enumerate()
+                .filter_map(|(other, source)| (other != index).then_some(source))
+                .chain(residents.values().filter_map(|entry| entry.data.as_ref()));
+            if source_releasable(&self.sources[index], assets, anchors) {
+                self.sources.swap_remove(index);
+            } else {
+                index += 1;
+            }
+        }
     }
 }
 
@@ -234,12 +309,10 @@ impl VulkanEngine {
             .sum::<u128>()
             + u128::from(missing_bytes);
         let count_limit = self.config.max_meshes.min(physical_mesh_limit);
-        // The common already-resident path needs no LRU candidate allocation or
-        // sorting. Retiring entries are still reaped, even without budget pressure.
-        if total_count > count_limit
-            || total_bytes > u128::from(self.config.max_bytes)
-            || !self.retiring.is_empty()
-        {
+        // Only admitting missing assets can require eviction. In particular,
+        // changing draws among already resident assets never collects retired
+        // entries or allocates/sorts LRU candidates.
+        if total_count > count_limit || total_bytes > u128::from(self.config.max_bytes) {
             let mut candidates = self
                 .residents
                 .iter()
@@ -261,7 +334,7 @@ impl VulkanEngine {
                     continue;
                 }
                 let bytes = self.residents[&key].bytes;
-                self.remove_resident(key)?;
+                self.remove_resident(key, None)?;
                 total_count -= 1;
                 total_bytes -= u128::from(bytes);
                 if !retiring {
@@ -281,7 +354,6 @@ impl VulkanEngine {
                 retiring: false,
             });
             entry.retiring = false;
-            self.retiring.remove(key);
             entry.last_use.store(serial, Ordering::Relaxed);
         }
         let remaining_bytes = required
@@ -334,7 +406,7 @@ impl VulkanEngine {
                 },
             },
         )?;
-        self.reap_retiring()
+        Ok(())
     }
     fn remaining_bytes(&self) -> u64 {
         self.active_upload
@@ -466,9 +538,8 @@ impl VulkanEngine {
         self.pending_uploads.push(submission);
         let entry = self.residents.get_mut(&key).unwrap();
         entry.uploaded += size;
-        if entry.ready() {
-            entry.data = None;
-        }
+        // Keep the source anchor until explicit maintenance. Completion can
+        // otherwise make a later Graph/snapshot return free the last payload.
         self.active_upload
             .as_mut()
             .expect("accepted chunk belongs to the active upload")
@@ -478,49 +549,103 @@ impl VulkanEngine {
         }
         Ok(self.progress(size))
     }
-    fn remove_resident(&mut self, key: MeshVersionKey) -> Result<(), EngineRenderError> {
-        self.retiring.remove(&key);
-        if let Some(entry) = self.residents.remove(&key)
-            && let Some(buffers) = entry.buffers
+    fn remove_resident(
+        &mut self,
+        key: MeshVersionKey,
+        assets: Option<&Engine>,
+    ) -> Result<(), EngineRenderError> {
+        let entry = &self.residents[&key];
+        let retain_source = entry.data.as_ref().is_some_and(|data| {
+            !source_releasable(
+                data,
+                assets,
+                self.retired_sources
+                    .sources
+                    .iter()
+                    .chain(self.residents.iter().filter_map(|(other, entry)| {
+                        (*other != key).then_some(entry.data.as_ref()).flatten()
+                    })),
+            )
+        });
+        if retain_source
+            && !self
+                .retired_sources
+                .can_retain(entry.data.as_ref().expect("retained source"))
         {
+            return Err(MeshPreparationError::SourceRetirementCapacityExhausted.into());
+        }
+        if let Some(buffers) = &entry.buffers {
             self.runtime.delete(buffers.vertices)?;
             self.runtime.delete(buffers.indices)?;
         }
-        Ok(())
-    }
-    pub(super) fn reap_retiring(&mut self) -> Result<(), EngineRenderError> {
-        while let Some(key) = self
-            .retiring
-            .iter()
-            .find(|key| !self.residents[key].pinned())
-            .copied()
-        {
-            self.remove_resident(key)?;
+        let entry = self.residents.remove(&key).expect("resident removal");
+        if retain_source {
+            self.retired_sources
+                .retain(entry.data.expect("retained source"));
         }
         Ok(())
     }
-    /// Stop incomplete work; accepted GPU chunks retain native leases until retired.
-    pub fn cancel_uploads(&mut self) -> Result<(), EngineRenderError> {
+
+    /// Reclaim obsolete GPU registrations and CPU sources at an explicit asset
+    /// change or maintenance boundary. This never polls or waits for the GPU;
+    /// prepared frames keep their registered mesh versions pinned, and recorded
+    /// or accepted native work retains its own physical resource leases.
+    ///
+    /// Pass the CPU asset owner when available. Pointer identity establishes
+    /// that it anchors the same current or retired immutable version, allowing
+    /// this Engine to release its source without waiting for CPU asset deletion.
+    /// Keep that CPU Engine alive throughout ordinary processing of its derived
+    /// frames; destroying it begins shutdown, including surviving consumers.
+    /// An absent or unrelated owner retains sources until external snapshots and
+    /// upload streams finish. `max_retired_sources` bounds that deferred storage.
+    ///
+    /// Idle Graph inputs are released here. Active Graphs and canonical content
+    /// remain pinned. Returns the number of GPU mesh registrations removed;
+    /// deferred source occupancy is available through [`Self::mesh_cache_stats`].
+    pub fn collect_retired_meshes(
+        &mut self,
+        assets: Option<&Engine>,
+    ) -> Result<usize, EngineRenderError> {
+        self.release_idle_inputs();
+        self.retired_sources.collect(assets, &self.residents);
+        let before = self.residents.len();
+        while let Some(key) = self
+            .residents
+            .iter()
+            .find_map(|(key, entry)| (entry.retiring && !entry.pinned()).then_some(*key))
+        {
+            self.remove_resident(key, assets)?;
+        }
+        // Unregistering an idle native buffer can release its canonical Graph
+        // provenance, making an upload slot newly idle at this same boundary.
+        self.release_idle_inputs();
+        self.retired_sources.collect(assets, &self.residents);
+        Ok(before - self.residents.len())
+    }
+    /// Stop incomplete work. Accepted GPU chunks return their execution leases
+    /// through ordinary completion observation. Obsolete mesh registrations and
+    /// sources remain bounded until explicit [`Self::collect_retired_meshes`].
+    pub fn cancel_uploads(&mut self) {
         if let Some(active) = &self.active_upload {
             for key in &active.keys {
                 if let Some(entry) = self.residents.get_mut(key)
                     && !entry.ready()
                 {
                     entry.retiring = true;
-                    self.retiring.insert(*key);
                 }
             }
         }
         self.finish_active_upload();
-        self.reap_retiring()
     }
-    /// Unregister GPU versions without deleting the CPU asset or invalidating prepared pins.
-    pub fn unload_mesh(&mut self, mesh: MeshHandle) -> Result<usize, EngineRenderError> {
+    /// Make GPU versions unavailable to new frames without deleting the CPU
+    /// asset or invalidating prepared frames. Explicit collection unregisters
+    /// them once prepared pins finish; normal frame processing never destroys
+    /// these obsolete assets. Returns the number of matching versions.
+    pub fn unload_mesh(&mut self, mesh: MeshHandle) -> usize {
         let mut count = 0;
         for (key, entry) in &mut self.residents {
             if key.mesh == mesh {
                 entry.retiring = true;
-                self.retiring.insert(*key);
                 count += 1;
             }
         }
@@ -534,16 +659,14 @@ impl VulkanEngine {
                 self.finish_active_upload();
             }
         }
-        self.reap_retiring()?;
-        Ok(count)
+        count
     }
-    pub fn unload_all_meshes(&mut self) -> Result<(), EngineRenderError> {
+    /// Mark every GPU mesh version for explicit collection.
+    pub fn unload_all_meshes(&mut self) {
         self.finish_active_upload();
         for entry in self.residents.values_mut() {
             entry.retiring = true;
         }
-        self.retiring.extend(self.residents.keys().copied());
-        self.reap_retiring()
     }
     pub fn mesh_cache_stats(&self) -> MeshCacheStats {
         MeshCacheStats {
@@ -566,6 +689,7 @@ impl VulkanEngine {
                 .count(),
             pending_upload_submissions: self.pending_uploads.len(),
             evictions: self.evictions,
+            retired_sources: self.retired_sources.sources.len(),
         }
     }
 }
@@ -573,6 +697,18 @@ impl VulkanEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{Draw, EngineCapacity, IDENTITY, Material, SnapshotPool, Vertex, View};
+
+    fn triangle() -> MeshData {
+        MeshData::new(
+            &[[-0.4, -0.4, 0.25], [0.4, -0.4, 0.25], [0.0, 0.4, 0.25]].map(|position| Vertex {
+                position,
+                color: [1.0; 4],
+            }),
+            &[0, 1, 2],
+        )
+        .unwrap()
+    }
 
     fn key(index: u32) -> MeshVersionKey {
         MeshVersionKey::new(
@@ -583,6 +719,106 @@ mod tests {
             },
             1,
         )
+    }
+
+    #[test]
+    fn source_retirement_preserves_external_consumers_and_transfers_only_to_the_asset_owner() {
+        let residents = BTreeMap::new();
+        let mut deferred = DeferredSources::new(1).unwrap();
+        let snapshot = Arc::new(triangle());
+        let weak = Arc::downgrade(&snapshot);
+        let upload = Arc::clone(&snapshot.vertices);
+        deferred.retain(Arc::clone(&snapshot));
+        assert!(!deferred.can_retain(&Arc::new(triangle())));
+        deferred.collect(None, &residents);
+        assert_eq!(deferred.sources.len(), 1);
+        drop(snapshot);
+        deferred.collect(None, &residents);
+        assert_eq!(
+            deferred.sources.len(),
+            1,
+            "Graph stream still needs its anchor"
+        );
+        drop(upload);
+        deferred.collect(None, &residents);
+        assert!(deferred.sources.is_empty());
+        assert!(weak.upgrade().is_none());
+
+        let mut assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let unrelated = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let mesh = assets.create_mesh(triangle()).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
+        let snapshots = SnapshotPool::new(1, 1).unwrap();
+        let snapshot = assets
+            .snapshot(
+                &snapshots,
+                &View {
+                    width: 8,
+                    height: 8,
+                    clip_from_world: IDENTITY,
+                    clear_color: [0.0, 0.0, 0.0, 1.0],
+                },
+                &[Draw {
+                    mesh,
+                    material,
+                    world_from_model: IDENTITY,
+                }],
+            )
+            .unwrap();
+        deferred.retain(Arc::clone(&snapshot.draws[0].data));
+        assets.delete_mesh(mesh).unwrap();
+        deferred.collect(Some(&unrelated), &residents);
+        assert_eq!(deferred.sources.len(), 1, "unrelated owner proves nothing");
+        assert_eq!(assets.collect_retired_meshes(), 0);
+        deferred.collect(Some(&assets), &residents);
+        assert!(deferred.sources.is_empty());
+        drop(snapshot);
+        assert_eq!(
+            assets.collect_retired_meshes(),
+            1,
+            "owners must not wait on one another"
+        );
+
+        // Distinct MeshData versions can share immutable leaf streams. The
+        // sequential pass preserves the final anchor without retaining a cycle.
+        let first = Arc::new(triangle());
+        let second = Arc::new((*first).clone());
+        let mut deferred = DeferredSources::new(2).unwrap();
+        deferred.retain(first);
+        deferred.retain(second);
+        deferred.collect(None, &residents);
+        assert!(deferred.sources.is_empty());
+
+        let first = Arc::new(triangle());
+        let second = Arc::new((*first).clone());
+        let mut residents = BTreeMap::new();
+        residents.insert(
+            key(0),
+            ResidentMesh {
+                bytes: second.byte_len(),
+                uploaded: second.byte_len(),
+                data: Some(second),
+                buffers: None,
+                last_use: AtomicU64::new(0),
+                retiring: false,
+            },
+        );
+        deferred.retain(first);
+        deferred.collect(None, &residents);
+        assert!(
+            deferred.sources.is_empty(),
+            "resident stream remains anchored"
+        );
     }
 
     #[test]

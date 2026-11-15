@@ -220,13 +220,15 @@ hostでもworkgroup size・invocation数・dispatch数・descriptor・push const
 合成はset 0 binding 0のcombined image samplerから同じ座標を`texelFetch`し、
 別の同寸画像へfullscreen triangleで書く。filterやsRGB変換はしない。
 
-pipeline・layout・samplerはCompute／Raster／Compositeの必要な種類ごとに遅延作成し、
-成功した不変のProgramをruntimeで保持する。不使用の種類の能力を要求せず、native資源も作らない。
+pipeline・layout・samplerは明示したworking setの準備でCompute／Raster／Compositeの必要な種類を作成し、
+成功した不変のProgramをruntimeで保持する。buffer-onlyなら画像用Programを要求せず、
+RGBA8 classでCompute/Composite、RGBA8とD32の組でRasterを準備する。
 RasterのD32 depth対応を含む形式・ABI上限を、その種類のnative作成前に検査する。
-公開したProgramを置き換えないため、未完了Computeがある間にもRaster等を追加できる。
+通常frame中に新しい種類を遅延作成しない。種類や容量の追加は、既存consumerを返却した準備境界で行う。
 作成に失敗したProgramをキャッシュせず、部分作成分を解放して再試行可能な状態を維持する。
 descriptor arenaは同時実行数とGraph内binding数に上限を持ち、
-GPU完了または未投入キャンセルを確認してから再利用する。
+必要なlayoutとsetを準備境界でまとめて作成する。GPU完了または未投入キャンセルを確認してから
+既存setの内容を更新して再利用し、通常frameでsetのallocate/freeやpool resetによる暗黙freeを行わない。
 容量・cache・lease操作は`program/bindings.rs`のinline BindingPoolへ閉じる。
 leaseは`Arc<ShaderPrograms>`を保持し、最後のownerのDropはcached descriptor poolを
 不変Program/layoutより先に解放する。module分離によるallocation・Arc・lockの追加はない。
@@ -264,7 +266,8 @@ scalarと同じ内容有効性のままbatch化の効果を比較した。代案
 Vulkan 1.3基準のまま、追加featureなしで区間内へ任意のbarrierを挿入しない。
 任意shaderや異なるパスへこの統合条件を自動適用するものではない。
 
-用途は資源keyの`BTreeMap`へ集約してstage/access/writeを合成し、同じbufferのVertex/Index両用途も保つ。
+用途は論理資源indexの準備済み配列へ集約してstage/access/writeを合成し、
+触れたindexを予約済み配列で列挙する。同じbufferのVertex/Index両用途も保つ。
 全drawのindex保証を各頂点範囲・Device上限で記録前に確認し、失敗はpassとdraw番号の文脈を伴って返す。
 管理下meshは取込時に確立した不変count／最大値を使い、index本文や検査用CPU byte列を再保持しない。
 任意Graph入力では部分byte更新にも必要な内容追跡を維持し、同countの最大値要約を再利用する。
@@ -442,15 +445,23 @@ native資源・payload・VMA・Deviceを含む所有連鎖を保持して早期�
 Runtime自身のDropには既存の保守的な後始末を残すが、通常frameの進行には使わない。
 停止やDevice lossを別操作で検出した場合も、各処理の実Fence結果を観測してから退役する。
 
-この経路は既存Fence・所有leaseを活かし、timelineへの置換や別のframe poolを導入しない。
+この経路は既存Fence・所有leaseを活かし、timelineへ置換しない。
+作業・CPU結果・exportメタデータには、それぞれの寿命と上限に対応した準備済みpoolを持つ。
 予定状態の引継ぎ、完了によるnative回収、CPU結果の保持を分けることで、
 単一queueの正しい基準を保ったままPresentationや履歴の利用を追加する。
 
 ## 実行資源と共有stagingの再利用
 
-Graphの物理資源cacheは、同じ`ResourceDesc`で登録解除済み・leaseなし・世代を更新可能なentryを
-まず再利用する。一致がなければ`resource_capacity`まではentryを追加し、異なる寸法やbuffer sizeの
-working setを保持する。上限時だけ、同じ再利用条件を満たすentryのうち最後の受理済み利用の
+`prepare_working_set(FrameCapacity, &[ResourceClass])`を初期化・資源変更境界で呼び、
+Graphの配列上限とwork/result/export枠、import範囲snapshot、CPU provenanceの容量を準備する。
+`ResourceClass`はbackend非依存のbuffer/image descriptorと同時保持数であり、登録済み入力とは別に
+記録・GPU・exportが保持し得る未登録instance数を含める。変更には既存のframe/result/metadata/range tokenの返却が必要である。
+入力やdraw/pass構成は準備済み上限内で毎frame変更でき、固定planの再生を条件にしない。
+
+通常Graphは同じ`ResourceDesc`で登録解除済み・leaseなし・世代を更新可能なentryだけを再利用し、
+一致がなければ容量不足を返す。native作成・置換・待機を暗黙に行わない。
+明示した準備と`create_buffer`等の資源作成境界では、`resource_capacity`まではentryを追加して
+異なる寸法やbuffer sizeを保持できる。その上限時だけ、同じ再利用条件を満たすentryのうち最後の受理済み利用の
 `scheduled.serial`が最小のものを置換する。同じserialならindexの小さいentryを選ぶ。
 登録中、記録・pendingのleaseが残る資源、世代上限のentryは置換しない。候補がなければ
 内部で待機せず容量不足を返す。失敗した準備を受理済み利用として新しく扱わない。
@@ -464,6 +475,8 @@ nativeの外部参照はleaseを通し、解放通知を準備済みbitmapとind
 通知queueを含むmetadata容量を初期化で予約し、時間性能の改善は未測定として扱う。
 
 再利用は旧内容の初期化状態とCPU provenanceを消す一方、実際のlayout・access・writer scopeは保持する。
+`delete`もkeyを直ちに失効させ、その内容の初期化/provenanceを解放する。既に記録した命令が必要な
+native参照・staging・planは別leaseでGPU完了まで保持し、削除済みproofだけがGraph slotを留め続ける進行性の循環を避ける。
 新しいnative資源とViewの作成・命名がすべて成功してから置換し、失敗時には既存entryのallocation・
 世代・予定状態を維持する。OOM時に暗黙のevictionや再試行を加えない。
 
@@ -510,6 +523,11 @@ virtual領域の空き不足とnativeメモリ確保のOOMも区別する。
 Upload leaseは正常完了時に返す。Readback leaseはCPUコピー成功または結果破棄まで保持し、
 読み取り失敗では再試行できる。共有Readbackの領域APIはCPU read用とする。
 native実行枠は未読Readbackより先に再利用できる。
+work配列は実GPU完了後に返し、CPU結果は独立したresult slotでreadback範囲を保持する。
+`readback_len`でサイズを調べ、`readback_into(pass, &mut [u8])`で呼び出し側の領域へコピーする。
+長さ不一致は検査を維持した固定サイズのエラーで返し、readback leaseを失わず再試行できる。
+exportのCloneは準備済みslotの参照を増やすだけで、最後の外部owner返却時に範囲tokenを解放する。
+pool所有者は通常処理中保持し、pool先終了後の最後のbacking解放は終了境界として扱う。
 再取得した領域の過去のbyte列を、新しい要求の初期化済み内容として扱わない。
 完了不明の処理はleaseを含めて保持し、領域だけを先に再利用しない。
 
@@ -622,9 +640,11 @@ Dropの保守的回収でも完了を証明できない場合は、Window・Surf
 
 ## 範囲計画と性能評価
 
-`ByteRanges`は半開区間を`BTreeMap`で保持し、隣接・重複を統合する。
+転送の参照計画・比較用`ByteRanges`は半開区間を`BTreeMap`で保持し、隣接・重複を統合する。
 初期化追跡とcopyの競合判定で共用し、保持区間数Kに対する包含・重複検索をO(log K)、
 N件の挿入列を償却O(N log N)で扱う。独自の木構造や空きメモリ配置は実装しない。
+通常Graphの解析・予定状態・CPU provenanceは別に準備済みの区間配列を使い、木nodeを確保/解放しない。
+配列の挿入/削除は保持区間数に比例するため、確保ゼロからCPU時間の改善を推定しない。
 
 競合判定はbufferごとにreadとwriteの集合を分ける。
 同一copyの全アクセスを先行copyと照合してから挿入し、RAW／WAR／WAWに依存を入れる。

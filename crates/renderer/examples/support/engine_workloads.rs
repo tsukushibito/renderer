@@ -148,6 +148,7 @@ impl Driver {
                 max_meshes: CACHE_MESHES,
                 max_bytes: CACHE_BYTES,
                 max_upload_submissions: 3,
+                max_retired_sources: 16,
             },
             Default::default(),
         )?;
@@ -526,6 +527,7 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         stream.push(assets.create_mesh(grid(8).mesh)?);
     }
     for handle in stream.iter().take(3) {
+        driver.renderer.collect_retired_meshes(Some(&assets))?;
         let frame = snapshot(&assets, &snapshots, *handle, red, &view(32, 32))?;
         driver.ready(&frame)?;
         driver.enqueue(&frame, &stream_red, false, false)?;
@@ -537,6 +539,7 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     assets.delete_mesh(stream[1])?;
     stream[1] = assets.create_mesh(grid(10).mesh)?;
     for &handle in &stream {
+        driver.renderer.collect_retired_meshes(Some(&assets))?;
         let frame = snapshot(&assets, &snapshots, handle, red, &view(32, 32))?;
         driver.ready(&frame)?;
         driver.enqueue(&frame, &stream_red, false, false)?;
@@ -546,7 +549,8 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     }
     driver.drain()?;
     // Explicit unload must preserve CPU assets and permit later re-upload.
-    driver.renderer.unload_mesh(stream[0])?;
+    driver.renderer.unload_mesh(stream[0]);
+    driver.renderer.collect_retired_meshes(Some(&assets))?;
     let replay = snapshot(&assets, &snapshots, stream[0], blue, &view(32, 32))?;
     driver.ready(&replay)?;
     driver.enqueue(&replay, &stream_blue, false, false)?;

@@ -194,6 +194,7 @@ impl Options {
                 .checked_mul(max_meshes as u64)
                 .ok_or("mesh residency byte budget overflow")?,
             max_upload_submissions: 1,
+            max_retired_sources: max_meshes.max(16),
         })
     }
 
@@ -610,6 +611,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         if options.churn && frame > 0 && frame.is_multiple_of(8) {
             let asset_update_start = Instant::now();
             engine.release_idle_inputs();
+            engine.collect_retired_meshes(Some(&assets))?;
             assets.collect_retired_meshes();
             change_assets(&mut assets, &mut meshes[0], &mut material, phase)?;
             asset_update_ns = asset_update_start.elapsed().as_nanos();
@@ -737,9 +739,11 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         engine.runtime_mut().delete(previous.key())?;
     }
     for mesh in meshes {
-        engine.unload_mesh(mesh)?;
+        engine.unload_mesh(mesh);
         assets.delete_mesh(mesh)?;
     }
+    engine.collect_retired_meshes(Some(&assets))?;
+    assets.collect_retired_meshes();
     assets.delete_material(material)?;
     if let (Some(path), Some(rgba)) = (&options.ppm, &collector.last_pixels) {
         frame_report::write_ppm(path, options.width, options.height, rgba)?;

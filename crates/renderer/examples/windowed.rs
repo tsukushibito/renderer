@@ -200,6 +200,7 @@ mod demo {
                     max_meshes: 1,
                     max_bytes: geometry.byte_len(),
                     max_upload_submissions: 1,
+                    max_retired_sources: 16,
                 },
                 Default::default(),
             )?;
@@ -364,8 +365,9 @@ mod demo {
                 if let Some(mut output) = self.output.take() {
                     engine.release_output(&mut output)?;
                 }
-                engine.unload_all_meshes()?;
+                engine.unload_all_meshes();
                 if let Some(mut assets) = self.assets.take() {
+                    engine.collect_retired_meshes(Some(&assets.inputs))?;
                     assets.inputs.delete_mesh(assets.mesh)?;
                     assets.inputs.delete_material(assets.material)?;
                 }

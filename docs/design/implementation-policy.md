@@ -1222,8 +1222,8 @@ READBACKは`COPY_DEST`で作成する。[^committed]
 準備probeと製品runtimeは実状態と一致する`COMMON`を使う。Graph実行はこの状態から依存を計画する。
 代案の外部suballocatorは型・COM所有権・配置条件の接続確認を要するため、この基準には導入しない。
 resourceごとのheapによるメモリ・作成費用を許容する単純な基準であり、性能改善とは扱わない。
-上限付きの資源再利用と物理aliasingは現行D3D12では未実装である。
-旧M4-06/16の順序を新計画へ持ち越さず、前者はB1の採用基盤で実証し、後者はBistro実測から採否を判断する。
+上限付きの資源再利用は下記FramePoolで実装し、物理aliasingは現行D3D12では未実装である。
+旧M4-16の順序を新計画へ持ち越さず、物理aliasingはBistro実測から採否を判断する。
 準備probeは作成と破棄だけの確認であり、buffer投入後の寿命とreadback内容は製品runtimeの受入で扱う。
 
 準備は`renderer-we8.1`・`.2`、`renderer-6qc`（adapter・検証・shader経路）、
@@ -1366,36 +1366,44 @@ runtimeを終了しても、別runtimeや未完了処理がnative所有者を保
 同じsingleton Deviceの最終破棄まで証明するものではない。
 
 `D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackを
-native資源と命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
+準備済みnative資源への命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
 Graph構築で保証した内容を再走査せず、未対応操作、D3D12固有の上限と資源作成条件を準備境界で扱う。
 現在はtransient bufferだけを受け入れ、export、liveなimport・画像・その他の操作は明示エラーとする。
 不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
 bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
 
 DEFAULT、UPLOAD、READBACKのcommitted resourceを使い、legacy barrierで全bufferの状態を追跡する。
+`D3D12RuntimeConfig::capacity`の`D3D12FrameCapacity`でexecution/result/resource/operation枠、
+buffer数と各buffer・upload・readback・scratchのbyte上限を明示し、runtime初期化で全枠を作成する。
+通常prepareはその上限内で変わる入力を記録し直し、native資源やCPU配列を増設しない。
+枠不足・上限超過は待たずに型付きエラーを返す。容量変更は旧consumerの寿命を終えた明示準備境界で行う。
 DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit promotion／decayによるbarrier削減は
 現段階では採用しない。状態と命令の対応を確認しやすい基準を優先する選択であり、余分なbarrier費用は残る。[^d3dbarriers]
 同じbufferの非重複copyは、別のscratch bufferを介した二段copyで共通Graphの意味を保つ。
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
-Enhanced Barriers、外部suballocator、資源pool、画像、import／exportをこの範囲へ先行導入しない。
+Enhanced Barriers、外部suballocator、画像、import／exportをこの範囲へ先行導入しない。
 
 `submit`または`submit_prepared`は待機せずに投入し、`D3D12Submission`がcommand allocator／list、
 全buffer・allocationとDevice所有者を実GPU完了まで保持する。
-未投入のprepared処理の破棄はキャンセルであり、通常に解放できる。
-`poll`／`wait(timeout)`で対象Fenceの正常完了を確認してから、`D3D12SubmissionResult::readback`で
-CPUへコピーする。timeoutは結果を返さず、同じsubmissionを再度待てる。readbackは一度だけ消費する。
+未投入のprepared処理の破棄はキャンセルであり、記録の終了後に既存枠へ返却する。
+`poll`／`wait(timeout)`で対象Fenceの正常完了を確認するとnative execution枠を返却する。
+独立result枠の常時map済みREADBACK bufferを保持し、`D3D12SubmissionResult::readback_len`でサイズを調べ、
+`readback_into(pass, &mut [u8])`で利用側の領域へコピーする。完了時の追加CPUコピーはなく、
+未読結果もnative実行枠を占有しない。result枠とREADBACK容量は別に準備する。ゼロ確保を時間性能の改善とは説明しない。
+timeoutは結果を返さず、同じsubmissionを再度待てる。readbackは一度だけ消費し、長さ不一致では結果を保持する。
 Fenceの`UINT64_MAX`やDevice removalを正常完了とみなさない。[^d3dfence]
 
 `ExecuteCommandLists`後の`Signal`失敗は未投入rollbackを保証できない。[^d3dexecute][^d3dsignal]
 その場合はDeviceを停止し、GPU利用終了を証明できない所有連鎖を保持する。
-未完了submissionのDropは対象Fenceだけを最大5秒の予算で待ち、完了を証明できなければ同じ保持を行う。
+未完了submissionの通常Dropはpoolへ処理を引き渡し、`D3D12Runtime::poll`で実Fenceを観測して回収する。
+最後のpool所有者を終了する境界では全対象Fenceに共通の最大5秒予算で待ち、完了を証明できなければ同じ保持を行う。
 この異常経路では保持資源を回収できない。通常経路は明示的な完了確認で回収し、Drop待機へ依存しない。
 通常のsubmitへQueue／Device全体の暗黙waitを追加しない。
 
 共通Graphの全byte一致、終了後までの厳格診断、最適化された診断なし経路の内容を別runで確認する。
 実行方法は[開発手順](../guides/development.md#d3d12-buffer-acceptance)、
 実行済み・未実行の範囲は[現在の検証状況](../verification/current.md)に記す。
-画像・上限付き再利用・canonical import/exportは現行D3D12で未実装である。旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
+Graph画像実行とcanonical import/exportは現行D3D12で未実装である。旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
 一般RHIや将来の描画・binding契約をこのbuffer実行だけで確定したとは扱わない。
 
 ## 17. Codexの作業手順

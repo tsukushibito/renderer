@@ -2,7 +2,9 @@
 //!
 //! Install [`CountingAllocator`] around the application's global allocator to
 //! observe Rust heap requests. Backend hooks separately observe Renderer-issued
-//! native calls and VMA host metadata. Driver-internal allocations are not
+//! native calls and requests through VMA's host callbacks. Those callbacks may
+//! also be forwarded to Vulkan, so their requests are not attributed separately
+//! to VMA and the driver. Driver allocations outside the callbacks are not
 //! observed. Snapshots and subtraction allocate nothing; format reports only
 //! after the measured owners have been returned or dropped.
 //! VMA callbacks should forward directly to a native allocator or `System`,
@@ -24,8 +26,9 @@ pub enum RustEvent {
     Deallocate,
 }
 
-/// Host allocation callbacks made by VMA, which Rust's global allocator cannot
-/// observe when the native library uses its default C/C++ allocator.
+/// Requests through the host callbacks supplied to VMA, including callbacks
+/// forwarded to Vulkan. Their VMA/driver origin is not distinguished; Rust's
+/// global allocator cannot otherwise observe default native host allocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
 pub enum HostEvent {

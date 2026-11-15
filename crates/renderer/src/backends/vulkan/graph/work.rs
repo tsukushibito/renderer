@@ -265,12 +265,14 @@ struct PreparedPass {
 pub(super) struct GraphWork {
     owner: Arc<MemoryOwner>,
     data: Option<StorageLease<WorkData>>,
-    pub(super) result: StorageLease<ResultData>,
     serial: u64,
     programs: Option<Arc<ShaderPrograms>>,
     bindings: Option<ShaderBindings>,
     plan: Option<CompiledGraph>,
     pub(super) profile: Option<metrics::WorkProfile>,
+    // Return the result slot last: an idle result pool must also imply that
+    // optional timing aliases owned by this result have already been released.
+    pub(super) result: StorageLease<ResultData>,
 }
 impl Deref for GraphWork {
     type Target = WorkData;

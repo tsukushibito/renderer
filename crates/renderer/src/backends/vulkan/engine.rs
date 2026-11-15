@@ -9,13 +9,13 @@ use crate::{
     },
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt,
     sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 mod residency;
-use residency::{ActiveUpload, MeshVersionKey, ResidentBuffers, ResidentMesh};
+use residency::{ActiveUpload, DeferredSources, MeshVersionKey, ResidentBuffers, ResidentMesh};
 mod frames;
 use frames::{FrameScratchLease, FrameScratchPool};
 
@@ -45,6 +45,9 @@ pub struct MeshCacheConfig {
     pub max_meshes: usize,
     pub max_bytes: u64,
     pub max_upload_submissions: usize,
+    /// CPU source versions retained after GPU residency ends. This is separate
+    /// from `max_meshes`; each version was admitted within `max_bytes`.
+    pub max_retired_sources: usize,
 }
 impl Default for MeshCacheConfig {
     fn default() -> Self {
@@ -52,6 +55,7 @@ impl Default for MeshCacheConfig {
             max_meshes: 16,
             max_bytes: 64 * 1024 * 1024,
             max_upload_submissions: 1,
+            max_retired_sources: 16,
         }
     }
 }
@@ -72,6 +76,7 @@ pub enum MeshPreparationError {
     ResidencyPinned,
     NotResident,
     FrameCapacityExhausted,
+    SourceRetirementCapacityExhausted,
 }
 impl fmt::Display for MeshPreparationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -103,6 +108,9 @@ impl fmt::Display for MeshPreparationError {
             ),
             Self::FrameCapacityExhausted => f.write_str(
                 "prepared frame capacity exhausted; submit or drop a prepared frame before retrying",
+            ),
+            Self::SourceRetirementCapacityExhausted => f.write_str(
+                "retired mesh source capacity exhausted; collect with the CPU asset owner or after source consumers finish",
             ),
         }
     }
@@ -178,6 +186,7 @@ pub struct MeshCacheStats {
     pub prepared_retained_meshes: usize,
     pub pending_upload_submissions: usize,
     pub evictions: usize,
+    pub retired_sources: usize,
 }
 /// Output ownership authority is independent of replaceable public metadata.
 pub struct RenderedFrame {
@@ -249,7 +258,7 @@ pub struct VulkanEngine {
     upload_graphs: GraphPool,
     frame_scratch: FrameScratchPool,
     residents: BTreeMap<MeshVersionKey, ResidentMesh>,
-    retiring: BTreeSet<MeshVersionKey>,
+    retired_sources: DeferredSources,
     active_upload: Option<ActiveUpload>,
     idle_upload_keys: Vec<MeshVersionKey>,
     required_meshes: Vec<(MeshVersionKey, Arc<MeshData>)>,
@@ -297,7 +306,7 @@ impl VulkanEngine {
             upload_graphs,
             frame_scratch,
             residents: BTreeMap::new(),
-            retiring: BTreeSet::new(),
+            retired_sources: DeferredSources::new(config.max_retired_sources)?,
             active_upload: None,
             idle_upload_keys,
             required_meshes,
@@ -414,7 +423,6 @@ impl VulkanEngine {
         let output = submission.export_image(prepared.output)?;
         let ownership = prepared.output_ownership;
         drop(prepared.scratch);
-        self.reap_retiring()?;
         Ok(RenderedFrame {
             submission,
             owned_output_key: (ownership == FrameOutputOwnership::Frame).then_some(output.key()),
@@ -438,3 +446,6 @@ mod workload_tests;
 
 #[cfg(test)]
 pub(crate) mod test_input;
+
+#[cfg(all(test, feature = "memory-profiling"))]
+mod retired_memory_tests;

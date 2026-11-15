@@ -205,12 +205,12 @@ pub(crate) fn counts(snapshot: Snapshot) -> serde_json::Value {
 pub(crate) fn semantics() -> serde_json::Value {
     serde_json::json!({
         "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
-        "vma_host": "VMA native host callback calls/known requested bytes, forwarded separately from the Rust global allocator",
+        "vma_host": "requests through host callbacks supplied to VMA, including callbacks forwarded to Vulkan; VMA/driver origin is not separated; forwarded independently of the Rust global allocator",
         "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
         "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
         "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
         "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
-        "scope": "overlapping categories must not be summed as physical allocations; driver-internal allocations are unobserved",
+        "scope": "overlapping categories must not be summed as physical allocations; driver/OS/native allocations outside the configured callbacks are unobserved",
     })
 }
 
@@ -564,7 +564,7 @@ mod buffer {
             "frame_count_excludes_lifetime_boundary_submissions": true,
             "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI",
             "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit fence waits/polls",
-            "unobserved": "driver-internal host/device allocations",
+            "unobserved": "driver/OS/native allocations outside the configured callbacks; D3D12 bootstrap and test-only legacy factories are outside native hook coverage",
             "startup_positive_control": counts(startup),
             "shutdown_outside_normal_frames": counts(shutdown),
             "total": counts(result.total),

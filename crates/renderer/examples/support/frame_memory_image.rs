@@ -357,6 +357,7 @@ pub fn lifecycle(baseline: bool) {
             max_meshes: 1,
             max_bytes: 1024,
             max_upload_submissions: 1,
+            max_retired_sources: 1,
         },
         EngineFrameCapacity {
             prepared_frames: IN_FLIGHT,
@@ -464,7 +465,7 @@ pub fn lifecycle(baseline: bool) {
         "boundary_cases": ["compiled/uncompiled prepared cancel", "prepared frame capacity/busy rejection"],
         "coverage": "ordinary public Engine snapshot/build/compile, resident mesh Raster, image Compute/Composite, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
         "caller": "fixed pending/result arrays and 1024-byte output; explicit per-frame fence waits only when pending array fills; report outside measurement",
-        "unobserved": "driver-internal host/device allocations",
+        "unobserved": "driver/OS/native allocations outside the configured callbacks",
         "startup_positive_control": counts(startup),
         "shutdown_outside_normal_frames": counts(shutdown),
         "total": counts(measured.total),
