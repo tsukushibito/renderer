@@ -210,6 +210,7 @@ impl Graph {
         let unit = u64::from(operand.view.layer) * u64::from(desc.mip_levels)
             + u64::from(operand.view.mip);
         self.append_access(ResourceAccess {
+            stages: crate::program::ShaderStages::EMPTY,
             resource,
             range: unit..unit + 1,
             read: operand.ops.load == LoadAction::Load,

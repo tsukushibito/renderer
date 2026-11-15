@@ -1,5 +1,5 @@
 use renderer::graph::{
-    AccessRange, BufferBinding, BufferDesc, BufferHandle, Graph, GraphCapacity, GraphCapacityKind,
+    AccessRange, Binding, BufferDesc, BufferHandle, Graph, GraphCapacity, GraphCapacityKind,
     GraphErrorKind, GraphPool,
 };
 use renderer::program::ManagedProgram;
@@ -8,23 +8,52 @@ fn buffer(graph: &mut Graph, name: &str, size: u64) -> BufferHandle {
     graph.buffer(name, BufferDesc { size }).unwrap()
 }
 
-fn bindings(input: BufferHandle, output: BufferHandle) -> [BufferBinding; 2] {
+fn bindings(input: BufferHandle, output: BufferHandle) -> [Binding; 2] {
     [
-        BufferBinding {
+        Binding {
             group: 0,
             binding: 0,
-            buffer: input,
-            offset: 0,
-            size: 16,
+            resource: renderer::graph::BindingResource::Buffer {
+                buffer: input,
+                offset: 0,
+                size: 16,
+            },
         },
-        BufferBinding {
+        Binding {
             group: 1,
             binding: 0,
-            buffer: output,
-            offset: 0,
-            size: 16,
+            resource: renderer::graph::BindingResource::Buffer {
+                buffer: output,
+                offset: 0,
+                size: 16,
+            },
         },
     ]
+}
+
+fn set_buffer(
+    binding: &mut Binding,
+    buffer: Option<BufferHandle>,
+    offset: Option<u64>,
+    size: Option<u64>,
+) {
+    let renderer::graph::BindingResource::Buffer {
+        buffer: current_buffer,
+        offset: current_offset,
+        size: current_size,
+    } = &mut binding.resource
+    else {
+        panic!("expected a buffer test input")
+    };
+    if let Some(value) = buffer {
+        *current_buffer = value;
+    }
+    if let Some(value) = offset {
+        *current_offset = value;
+    }
+    if let Some(value) = size {
+        *current_size = value;
+    }
 }
 
 #[test]
@@ -39,9 +68,9 @@ fn short_lived_bindings_build_a_two_dispatch_producer_chain() {
         .unwrap();
     {
         let mut input = bindings(source, intermediate);
-        input[0].offset = 16;
-        input[0].size = 32;
-        input[1].size = 32;
+        set_buffer(&mut input[0], None, Some(16), None);
+        set_buffer(&mut input[0], None, None, Some(32));
+        set_buffer(&mut input[1], None, None, Some(32));
         input.swap(0, 1);
         graph
             .dispatch(
@@ -56,9 +85,9 @@ fn short_lived_bindings_build_a_two_dispatch_producer_chain() {
         let overwritten = input[0];
         input.fill(overwritten);
         let mut reader = bindings(intermediate, output);
-        reader[0].size = 32;
-        reader[1].offset = 16;
-        reader[1].size = 32;
+        set_buffer(&mut reader[0], None, None, Some(32));
+        set_buffer(&mut reader[1], None, Some(16), None);
+        set_buffer(&mut reader[1], None, None, Some(32));
         graph
             .dispatch(
                 "reader",
@@ -87,8 +116,8 @@ fn descriptor_tail_is_neither_read_nor_initialized_by_the_shader() {
             .upload_buffer("prefix only", source, 0, &[9; 16])
             .unwrap();
         let mut input = bindings(source, output);
-        input[0].size = 32;
-        input[1].size = 32;
+        set_buffer(&mut input[0], None, None, Some(32));
+        set_buffer(&mut input[1], None, None, Some(32));
         graph
             .dispatch(
                 "write prefix",
@@ -116,7 +145,7 @@ fn descriptor_tail_is_neither_read_nor_initialized_by_the_shader() {
     let output = buffer(&mut graph, "output", 16);
     graph.upload_buffer("seed", source, 0, &[0; 16]).unwrap();
     let mut producer = bindings(source, intermediate);
-    producer[1].size = 32;
+    set_buffer(&mut producer[1], None, None, Some(32));
     graph
         .dispatch(
             "producer",
@@ -126,7 +155,7 @@ fn descriptor_tail_is_neither_read_nor_initialized_by_the_shader() {
         )
         .unwrap();
     let mut reader = bindings(intermediate, output);
-    reader[0].offset = 16;
+    set_buffer(&mut reader[0], None, Some(16), None);
     let read = graph
         .dispatch(
             "read unwritten tail",
@@ -150,9 +179,9 @@ fn overlapping_descriptors_with_disjoint_shader_footprints_are_supported() {
     let storage = buffer(&mut graph, "storage", 48);
     graph.upload_buffer("seed", storage, 0, &[3; 16]).unwrap();
     let mut input = bindings(storage, storage);
-    input[0].size = 32;
-    input[1].offset = 16;
-    input[1].size = 32;
+    set_buffer(&mut input[0], None, None, Some(32));
+    set_buffer(&mut input[1], None, Some(16), None);
+    set_buffer(&mut input[1], None, None, Some(32));
     graph
         .dispatch(
             "copy prefix",
@@ -328,7 +357,7 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
             "unknown slot",
             [
                 valid[0],
-                BufferBinding {
+                Binding {
                     group: 9,
                     binding: 7,
                     ..valid[1]
@@ -339,73 +368,61 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
         ),
         (
             "zero range",
-            [
-                valid[0],
-                BufferBinding {
-                    size: 0,
-                    ..valid[1]
-                },
-            ],
+            [valid[0], {
+                let mut binding = valid[1];
+                set_buffer(&mut binding, None, None, Some(0));
+                binding
+            }],
             GraphErrorKind::InvalidInput,
             (1, 0),
         ),
         (
             "undersized ABI",
-            [
-                valid[0],
-                BufferBinding {
-                    size: 8,
-                    ..valid[1]
-                },
-            ],
+            [valid[0], {
+                let mut binding = valid[1];
+                set_buffer(&mut binding, None, None, Some(8));
+                binding
+            }],
             GraphErrorKind::InvalidInput,
             (1, 0),
         ),
         (
             "out of bounds",
-            [
-                valid[0],
-                BufferBinding {
-                    offset: 60,
-                    ..valid[1]
-                },
-            ],
+            [valid[0], {
+                let mut binding = valid[1];
+                set_buffer(&mut binding, None, Some(60), None);
+                binding
+            }],
             GraphErrorKind::InvalidInput,
             (1, 0),
         ),
         (
             "overflow",
-            [
-                valid[0],
-                BufferBinding {
-                    offset: u64::MAX - 7,
-                    ..valid[1]
-                },
-            ],
+            [valid[0], {
+                let mut binding = valid[1];
+                set_buffer(&mut binding, None, Some(u64::MAX - 7), None);
+                binding
+            }],
             GraphErrorKind::InvalidInput,
             (1, 0),
         ),
         (
             "foreign owner",
-            [
-                valid[0],
-                BufferBinding {
-                    buffer: foreign_buffer,
-                    ..valid[1]
-                },
-            ],
+            [valid[0], {
+                let mut binding = valid[1];
+                set_buffer(&mut binding, Some(foreign_buffer), None, None);
+                binding
+            }],
             GraphErrorKind::WrongOwner,
             (1, 0),
         ),
         (
             "aliased footprints",
-            [
-                valid[0],
-                BufferBinding {
-                    buffer: source,
-                    ..valid[1]
-                },
-            ],
+            [valid[0], {
+                let mut binding = valid[1];
+                set_buffer(&mut binding, Some(source), None, None);
+                binding
+            }],
             GraphErrorKind::InvalidInput,
             (0, 0),
         ),
@@ -437,10 +454,10 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
     ] {
         assert_eq!(
             graph
-                .dispatch("sampled asset", &program, &[], [1; 3])
+                .dispatch("sampled asset missing bindings", &program, &[], [1; 3])
                 .unwrap_err()
                 .kind(),
-            GraphErrorKind::Unsupported
+            GraphErrorKind::InvalidInput
         );
     }
     // Every rejected call must have returned its partially appended binding

@@ -5,7 +5,12 @@ use renderer::graph::{
 };
 use renderer::program::ManagedRasterProgram;
 
-fn mesh(graph: &mut Graph, name: &str, seed_vertices: bool, seed_indices: bool) -> RasterDraw {
+fn mesh(
+    graph: &mut Graph,
+    name: &str,
+    seed_vertices: bool,
+    seed_indices: bool,
+) -> RasterDraw<'static> {
     let vertices = graph
         .buffer(&format!("{name} vertices"), BufferDesc { size: 84 })
         .unwrap();
@@ -23,6 +28,7 @@ fn mesh(graph: &mut Graph, name: &str, seed_vertices: bool, seed_indices: bool) 
             .unwrap();
     }
     RasterDraw {
+        bindings: &[],
         vertices,
         indices,
         index_count: 3,
@@ -81,6 +87,7 @@ fn short_lived_draws_keep_both_meshes_alive_and_pin_the_completed_plan() {
             )
             .unwrap();
         draws.fill(RasterDraw {
+            bindings: &[],
             index_count: 0,
             ..a
         });
@@ -160,6 +167,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
         .unwrap();
     graph.upload_buffer("current", shared, 0, &[0; 84]).unwrap();
     let draw = RasterDraw {
+        bindings: &[],
         vertices: shared,
         indices: shared,
         index_count: 3,
@@ -173,6 +181,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
             &[
                 draw,
                 RasterDraw {
+                    bindings: &[],
                     index_count: 6,
                     ..draw
                 },
@@ -447,14 +456,17 @@ fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges
     for invalid in [
         nan,
         RasterDraw {
+            bindings: &[],
             index_count: 0,
             ..valid
         },
         RasterDraw {
+            bindings: &[],
             index_count: 6,
             ..valid
         },
         RasterDraw {
+            bindings: &[],
             vertices: bad_stride,
             ..valid
         },

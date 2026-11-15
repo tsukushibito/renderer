@@ -294,6 +294,7 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                 "discard",
                 &crate::program::ManagedRasterProgram::mesh(),
                 &[RasterDraw {
+                    bindings: &[],
                     vertices,
                     indices,
                     index_count: 3,

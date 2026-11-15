@@ -392,7 +392,7 @@ impl GraphWork {
             // disjoint self-copies must not appear to depend on themselves.
             touched.clear();
             for access in graph.accesses(index) {
-                let current = usage(access.purpose);
+                let current = usage(access.purpose, access.stages);
                 if !used[access.resource] {
                     used[access.resource] = true;
                     touched.push(access.resource);
@@ -657,7 +657,26 @@ impl Default for Use {
     }
 }
 
-fn usage(purpose: AccessPurpose) -> Use {
+fn usage(purpose: AccessPurpose, stages: crate::program::ShaderStages) -> Use {
+    let mut shader_stage = vk::PipelineStageFlags2::NONE;
+    for (logical, native) in [
+        (
+            crate::program::ShaderStages::VERTEX,
+            vk::PipelineStageFlags2::VERTEX_SHADER,
+        ),
+        (
+            crate::program::ShaderStages::FRAGMENT,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        ),
+        (
+            crate::program::ShaderStages::COMPUTE,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+        ),
+    ] {
+        if stages.contains(logical) {
+            shader_stage |= native;
+        }
+    }
     use AccessPurpose::*;
     let (stage, access, layout) = match purpose {
         CopySource => (
@@ -671,27 +690,27 @@ fn usage(purpose: AccessPurpose) -> Use {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         ),
         Uniform => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            shader_stage,
             vk::AccessFlags2::UNIFORM_READ,
             vk::ImageLayout::UNDEFINED,
         ),
         StorageRead => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            shader_stage,
             vk::AccessFlags2::SHADER_STORAGE_READ,
             vk::ImageLayout::GENERAL,
         ),
         StorageWrite => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            shader_stage,
             vk::AccessFlags2::SHADER_STORAGE_WRITE,
             vk::ImageLayout::GENERAL,
         ),
         StorageReadWrite => (
-            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            shader_stage,
             vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE,
             vk::ImageLayout::GENERAL,
         ),
         Sampled => (
-            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            shader_stage,
             vk::AccessFlags2::SHADER_SAMPLED_READ,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         ),
@@ -775,6 +794,46 @@ mod tests {
     };
     use std::time::Duration;
     #[test]
+    fn shader_resource_scopes_follow_the_program_and_fixed_function_fetch_is_separate() {
+        use crate::program::ShaderStages;
+        for stages in [
+            ShaderStages::VERTEX,
+            ShaderStages::FRAGMENT,
+            ShaderStages::COMPUTE,
+            ShaderStages::VERTEX.union(ShaderStages::FRAGMENT),
+        ] {
+            let expected = if stages == ShaderStages::VERTEX {
+                vk::PipelineStageFlags2::VERTEX_SHADER
+            } else if stages == ShaderStages::FRAGMENT {
+                vk::PipelineStageFlags2::FRAGMENT_SHADER
+            } else if stages == ShaderStages::COMPUTE {
+                vk::PipelineStageFlags2::COMPUTE_SHADER
+            } else {
+                vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER
+            };
+            assert_eq!(usage(AccessPurpose::Uniform, stages).stage, expected);
+            assert_eq!(usage(AccessPurpose::Sampled, stages).stage, expected);
+            assert_eq!(usage(AccessPurpose::StorageRead, stages).stage, expected);
+        }
+        assert_eq!(
+            usage(AccessPurpose::Uniform, ShaderStages::VERTEX).access,
+            vk::AccessFlags2::UNIFORM_READ
+        );
+        assert_eq!(
+            usage(AccessPurpose::Sampled, ShaderStages::COMPUTE).access,
+            vk::AccessFlags2::SHADER_SAMPLED_READ
+        );
+        assert_eq!(
+            usage(AccessPurpose::Vertex, ShaderStages::EMPTY).stage,
+            vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+        );
+        assert_eq!(
+            usage(AccessPurpose::Index, ShaderStages::EMPTY).stage,
+            vk::PipelineStageFlags2::INDEX_INPUT
+        );
+    }
+
+    #[test]
     fn prepared_upload_uses_slice_length_without_retaining_source_bytes() {
         let input: Arc<[u8]> = vec![7; 64].into();
         let weak = Arc::downgrade(&input);
@@ -828,6 +887,7 @@ mod tests {
                 "mesh",
                 &crate::program::ManagedRasterProgram::mesh(),
                 &[RasterDraw {
+                    bindings: &[],
                     vertices,
                     indices,
                     index_count: 3,
@@ -907,11 +967,15 @@ mod tests {
             AccessPurpose::Index,
             AccessPurpose::Sampled,
         ] {
-            let (stage, access) = source_scope(&snapshot, usage(purpose), false);
+            let (stage, access) =
+                source_scope(&snapshot, usage(purpose, purpose.default_stages()), false);
             assert!(stage.contains(vk::PipelineStageFlags2::COPY));
             assert!(access.contains(vk::AccessFlags2::TRANSFER_WRITE));
         }
-        let mut writer = usage(AccessPurpose::CopyDestination);
+        let mut writer = usage(
+            AccessPurpose::CopyDestination,
+            AccessPurpose::CopyDestination.default_stages(),
+        );
         writer.writes = true;
         let (stage, access) = source_scope(&previous, writer, false);
         assert!(
@@ -933,12 +997,19 @@ mod tests {
             AccessPurpose::DepthAttachment,
         ] {
             assert_eq!(
-                source_scope(&initial, usage(purpose), true),
+                source_scope(&initial, usage(purpose, purpose.default_stages()), true),
                 (vk::PipelineStageFlags2::COPY, vk::AccessFlags2::NONE)
             );
         }
         assert_eq!(
-            source_scope(&initial, usage(AccessPurpose::CopyDestination), false),
+            source_scope(
+                &initial,
+                usage(
+                    AccessPurpose::CopyDestination,
+                    AccessPurpose::CopyDestination.default_stages()
+                ),
+                false
+            ),
             (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE),
             "new buffer uploads do not need the image scheduling workaround"
         );
@@ -951,7 +1022,14 @@ mod tests {
             ..Snapshot::default()
         };
         assert_eq!(
-            source_scope(&previous, usage(AccessPurpose::Sampled), true),
+            source_scope(
+                &previous,
+                usage(
+                    AccessPurpose::Sampled,
+                    AccessPurpose::Sampled.default_stages()
+                ),
+                true
+            ),
             (
                 vk::PipelineStageFlags2::COMPUTE_SHADER,
                 vk::AccessFlags2::SHADER_STORAGE_WRITE
@@ -970,11 +1048,35 @@ mod tests {
             writer_access: vk::AccessFlags2::TRANSFER_WRITE,
             ..Snapshot::default()
         };
-        state.record_access(usage(AccessPurpose::CopySource), false, 8);
-        state.record_access(usage(AccessPurpose::StorageRead), false, 9);
-        state.record_access(usage(AccessPurpose::Sampled), true, 10);
+        state.record_access(
+            usage(
+                AccessPurpose::CopySource,
+                AccessPurpose::CopySource.default_stages(),
+            ),
+            false,
+            8,
+        );
+        state.record_access(
+            usage(
+                AccessPurpose::StorageRead,
+                AccessPurpose::StorageRead.default_stages(),
+            ),
+            false,
+            9,
+        );
+        state.record_access(
+            usage(
+                AccessPurpose::Sampled,
+                AccessPurpose::Sampled.default_stages(),
+            ),
+            true,
+            10,
+        );
         assert_eq!(state.revision, 7, "reads/layout changes preserve contents");
-        let mut write = usage(AccessPurpose::CopyDestination);
+        let mut write = usage(
+            AccessPurpose::CopyDestination,
+            AccessPurpose::CopyDestination.default_stages(),
+        );
         write.writes = true;
         let (stages, access) = source_scope(&state, write, true);
         assert!(stages.contains(vk::PipelineStageFlags2::FRAGMENT_SHADER));
@@ -996,7 +1098,10 @@ mod tests {
             layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             ..Snapshot::default()
         };
-        let sampled = usage(AccessPurpose::Sampled);
+        let sampled = usage(
+            AccessPurpose::Sampled,
+            AccessPurpose::Sampled.default_stages(),
+        );
         let mut dependencies = 0;
         for reader in 0..8 {
             let transition = state.layout != sampled.layout;
@@ -1016,7 +1121,10 @@ mod tests {
             "an accepted read-only import snapshot keeps the same visibility"
         );
         for different_scope in [
-            usage(AccessPurpose::StorageRead),
+            usage(
+                AccessPurpose::StorageRead,
+                AccessPurpose::StorageRead.default_stages(),
+            ),
             Use {
                 access: vk::AccessFlags2::SHADER_STORAGE_READ,
                 ..sampled
@@ -1035,7 +1143,10 @@ mod tests {
             !source_scope(&state, sampled, true).0.is_empty(),
             "layout transitions remain ordered"
         );
-        let mut write = usage(AccessPurpose::CopyDestination);
+        let mut write = usage(
+            AccessPurpose::CopyDestination,
+            AccessPurpose::CopyDestination.default_stages(),
+        );
         write.writes = true;
         let (stage, access) = source_scope(&state, write, false);
         assert!(
@@ -1057,7 +1168,10 @@ mod tests {
     #[test]
     fn read_write_access_does_not_establish_visibility_for_a_later_read() {
         let mut state = Snapshot::default();
-        let mut read_write = usage(AccessPurpose::StorageReadWrite);
+        let mut read_write = usage(
+            AccessPurpose::StorageReadWrite,
+            AccessPurpose::StorageReadWrite.default_stages(),
+        );
         read_write.writes = true;
         state.record_access(read_write, false, 1);
         assert_eq!(
@@ -1066,7 +1180,14 @@ mod tests {
             "identical read/write scopes still need a write dependency"
         );
         assert_eq!(
-            source_scope(&state, usage(AccessPurpose::StorageRead), false),
+            source_scope(
+                &state,
+                usage(
+                    AccessPurpose::StorageRead,
+                    AccessPurpose::StorageRead.default_stages()
+                ),
+                false
+            ),
             (
                 vk::PipelineStageFlags2::COMPUTE_SHADER,
                 vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_STORAGE_WRITE
@@ -1077,10 +1198,16 @@ mod tests {
     #[test]
     fn buffer_read_visibility_reuses_exact_pairs_and_keeps_all_reader_scopes() {
         let mut state = Snapshot::default();
-        let mut write = usage(AccessPurpose::CopyDestination);
+        let mut write = usage(
+            AccessPurpose::CopyDestination,
+            AccessPurpose::CopyDestination.default_stages(),
+        );
         write.writes = true;
         state.record_access(write, false, 7);
-        let copied = usage(AccessPurpose::CopySource);
+        let copied = usage(
+            AccessPurpose::CopySource,
+            AccessPurpose::CopySource.default_stages(),
+        );
         let mut dependencies = 0;
         for reader in 0..8 {
             dependencies += usize::from(!source_scope(&state, copied, false).0.is_empty());
@@ -1091,7 +1218,10 @@ mod tests {
         assert!(state.access.contains(vk::AccessFlags2::TRANSFER_WRITE));
         assert!(source_scope(&state.clone(), copied, false).0.is_empty());
 
-        let storage = usage(AccessPurpose::StorageRead);
+        let storage = usage(
+            AccessPurpose::StorageRead,
+            AccessPurpose::StorageRead.default_stages(),
+        );
         assert_eq!(
             source_scope(&state, storage, false),
             (write.stage, write.access)
@@ -1422,6 +1552,7 @@ mod tests {
                 "degenerate-mesh",
                 &crate::program::ManagedRasterProgram::mesh(),
                 &[RasterDraw {
+                    bindings: &[],
                     vertices,
                     indices,
                     index_count: 3,

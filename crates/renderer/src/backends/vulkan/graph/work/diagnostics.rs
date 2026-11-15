@@ -66,8 +66,8 @@ pub(super) fn pass(output: &mut String, graph: &CompiledGraph, index: usize) {
     for access in graph.accesses(index) {
         writeln!(
             output,
-            "  use resource={} range={:?} purpose={:?} read={} write={}",
-            access.resource, access.range, access.purpose, access.read, access.write,
+            "  use resource={} range={:?} purpose={:?} read={} write={} stages={:?}",
+            access.resource, access.range, access.purpose, access.read, access.write, access.stages,
         )
         .expect("writing String");
     }
