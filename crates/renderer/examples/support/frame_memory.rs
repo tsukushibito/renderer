@@ -1341,6 +1341,7 @@ mod buffer {
         config.capacity.results = IN_FLIGHT * 2;
         config.capacity.resources = 2;
         config.capacity.operations = 4;
+        config.capacity.provenance_segments_per_resource = 0;
         config.capacity.buffers = 2;
         config.capacity.buffer_bytes = 32;
         config.capacity.upload_bytes = 32;
@@ -1385,6 +1386,7 @@ mod buffer {
                 "results": config.capacity.results,
                 "resources": config.capacity.resources,
                 "operations": config.capacity.operations,
+                "provenance_segments_per_resource": config.capacity.provenance_segments_per_resource,
                 "buffers": config.capacity.buffers,
                 "buffer_bytes": config.capacity.buffer_bytes,
                 "upload_bytes": config.capacity.upload_bytes,

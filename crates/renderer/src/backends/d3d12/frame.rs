@@ -25,6 +25,10 @@ pub struct D3D12FrameCapacity {
     pub results: usize,
     pub resources: usize,
     pub operations: usize,
+    /// Known index-content segments reserved per physical buffer and copy scratch.
+    /// Independent of operation/draw capacity; exhaustion returns a capacity error.
+    /// Zero is valid for buffer-only work and complete immutable mesh index proofs.
+    pub provenance_segments_per_resource: usize,
     pub buffers: usize,
     pub buffer_bytes: u64,
     pub upload_bytes: u64,
@@ -39,6 +43,7 @@ impl Default for D3D12FrameCapacity {
             results: 6,
             resources: 1024,
             operations: 4096,
+            provenance_segments_per_resource: 64,
             buffers: 16,
             buffer_bytes: 1024 * 1024,
             upload_bytes: 1024 * 1024,
@@ -151,7 +156,9 @@ impl ExecutionSlot {
         upload.map_persistent(owner, capacity.upload_bytes, false)?;
         let mut provenance = reserved(capacity.buffers)?;
         for _ in 0..capacity.buffers {
-            provenance.push(BufferProvenance::with_capacity(capacity.operations));
+            provenance.push(BufferProvenance::with_capacity(
+                capacity.provenance_segments_per_resource,
+            ));
         }
         Ok(Self {
             raster: None,
@@ -167,7 +174,9 @@ impl ExecutionSlot {
                 v.resize(capacity.resources, false);
                 v
             },
-            provenance_scratch: BufferProvenance::with_capacity(capacity.operations),
+            provenance_scratch: BufferProvenance::with_capacity(
+                capacity.provenance_segments_per_resource,
+            ),
             allocator,
             list,
             fence,
@@ -918,6 +927,172 @@ mod tests {
             assert!(unwound.is_err());
             assert!(matches!(phase, Phase::Pending));
             assert_eq!(signal_called.get(), !unwind_in_execute);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware and requested native diagnostics"]
+    fn d3d12_index_provenance_capacity_rejects_and_recovers() {
+        use crate::{
+            backends::d3d12::{
+                D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+                D3D12RuntimeErrorKind, D3D12ValidationMode,
+            },
+            engine::{MeshData, Vertex},
+            graph::{
+                Attachment, BufferDesc, CompiledGraph, GraphCapacity, GraphPool, ImageDesc, LoadOp,
+                PassHandle, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
+            },
+            program::ManagedRasterProgram,
+        };
+        use std::time::Duration;
+
+        fn raster(
+            pool: &mut GraphPool,
+            mesh: &MeshData,
+            arbitrary_split: Option<bool>,
+        ) -> (CompiledGraph, PassHandle) {
+            let mut graph = pool.begin().unwrap();
+            let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
+            let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
+            mesh.upload_graph_slice(&mut graph, "vertices", vertices, false, 0..84)
+                .unwrap();
+            if let Some(split) = arbitrary_split {
+                let bytes = [0u32, 1, 2].map(u32::to_le_bytes).concat();
+                if split {
+                    graph
+                        .upload_buffer("first index", indices, 0, &bytes[..4])
+                        .unwrap();
+                    graph
+                        .upload_buffer("remaining indices", indices, 4, &bytes[4..])
+                        .unwrap();
+                } else {
+                    graph.upload_buffer("indices", indices, 0, &bytes).unwrap();
+                }
+            } else {
+                mesh.upload_graph_slice(&mut graph, "indices", indices, true, 0..12)
+                    .unwrap();
+            }
+            let color = graph.image("color", ImageDesc::rgba8(1, 1)).unwrap();
+            graph
+                .raster(
+                    "triangle",
+                    &ManagedRasterProgram::mesh(),
+                    &[RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 3,
+                        bindings: &[],
+                        parameters: RasterParameters {
+                            tint: [1.0, 0.0, 0.0, 1.0],
+                            ..Default::default()
+                        },
+                    }],
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: graph.image_view(color, 0, 0).unwrap(),
+                            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                            store: StoreOp::Store,
+                        }],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+            let readback = graph.readback_image("color bytes", color).unwrap();
+            (graph.compile().unwrap(), readback)
+        }
+
+        let mesh = MeshData::new(
+            &[[-1.0, -1.0, 0.5], [3.0, -1.0, 0.5], [-1.0, 3.0, 0.5]].map(|position| Vertex {
+                position,
+                color: [1.0; 4],
+            }),
+            &[0, 1, 2],
+        )
+        .unwrap();
+        let strict = cfg!(feature = "development-validation");
+        for segments in [0, 1] {
+            let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
+                validation: if strict {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                capacity: D3D12FrameCapacity {
+                    executions: 1,
+                    results: 1,
+                    resources: 8,
+                    operations: 32,
+                    provenance_segments_per_resource: segments,
+                    buffers: 2,
+                    buffer_bytes: 128,
+                    upload_bytes: 512,
+                    readback_bytes: 512,
+                    scratch_bytes: 128,
+                },
+            })
+            .unwrap();
+            let monitor = runtime.validation_monitor();
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            if segments == 0 {
+                let mut graph = pool.begin().unwrap();
+                let buffer = graph.buffer("buffer only", BufferDesc { size: 4 }).unwrap();
+                graph
+                    .upload_buffer("bytes", buffer, 0, &[1, 2, 3, 4])
+                    .unwrap();
+                let readback = graph.readback_buffer("bytes", buffer, 0, 4).unwrap();
+                let graph = graph.compile().unwrap();
+                let mut submission = runtime.submit(&graph).unwrap();
+                let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
+                let mut bytes = [0; 4];
+                result.readback_into(readback, &mut bytes).unwrap();
+                assert_eq!(bytes, [1, 2, 3, 4]);
+                drop((result, submission, graph));
+            }
+            runtime
+                .prepare_raster_working_set(
+                    &[D3D12ImageClass {
+                        desc: ImageDesc::rgba8(1, 1),
+                        count: 1,
+                    }],
+                    &[ManagedRasterProgram::mesh()],
+                )
+                .unwrap();
+            let (invalid, _) = raster(&mut pool, &mesh, Some(true));
+            assert_eq!(
+                runtime.prepare(&invalid).err().unwrap().kind(),
+                D3D12RuntimeErrorKind::CapacityExhausted
+            );
+            drop(invalid);
+            assert_eq!(
+                pool.leased_slots(),
+                0,
+                "rejected recording must release every Graph pin"
+            );
+
+            // Zero segments uses the immutable mesh proof. One segment accepts
+            // arbitrary CPU bytes after the split upload exhausted that limit.
+            let (valid, readback) = raster(&mut pool, &mesh, (segments != 0).then_some(false));
+            drop(runtime.prepare(&valid).unwrap());
+            let mut submission = runtime.submit(&valid).unwrap();
+            let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
+            let mut bytes = [0; 4];
+            result.readback_into(readback, &mut bytes).unwrap();
+            assert_eq!(bytes, [255, 0, 0, 255]);
+            drop((result, submission, valid));
+            assert_eq!(pool.leased_slots(), 0);
+            drop(pool);
+            runtime.shutdown().unwrap();
+            let report = monitor.snapshot();
+            assert!(report.is_clean(), "{report:?}");
+            if strict {
+                assert!(
+                    report.debug_layer_enabled
+                        && report.gpu_based_validation_enabled
+                        && report.teardown_checked,
+                    "{report:?}"
+                );
+            }
         }
     }
 }

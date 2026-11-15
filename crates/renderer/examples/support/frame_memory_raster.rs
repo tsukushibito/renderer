@@ -654,7 +654,8 @@ impl Backend for renderer::D3D12Runtime {
     fn native_capacity() -> serde_json::Value {
         serde_json::json!({
             "executions": IN_FLIGHT, "results": IN_FLIGHT * 2,
-            "resources": 16, "operations_and_draws": 32, "buffers": 4, "buffer_bytes": 512,
+            "resources": 16, "operations_and_draws": 32, "provenance_segments_per_resource": 16,
+            "buffers": 4, "buffer_bytes": 512,
             "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512,
             "image_classes_per_execution": [
                 { "kind": "rgba8", "extent": [WIDTH, HEIGHT], "count": 1 },
@@ -678,6 +679,7 @@ pub fn d3d12(baseline: bool) {
     config.capacity.results = IN_FLIGHT * 2;
     config.capacity.resources = 16;
     config.capacity.operations = 32;
+    config.capacity.provenance_segments_per_resource = 16;
     config.capacity.buffers = 4;
     config.capacity.buffer_bytes = 512;
     config.capacity.upload_bytes = 16 * 1024;
