@@ -9,6 +9,8 @@ mod frame;
 mod graph;
 mod image;
 mod program;
+mod raster;
+mod raster_storage;
 mod resources;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
@@ -17,6 +19,7 @@ pub use frame::D3D12FrameCapacity;
 pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 pub use image::{D3D12Image, D3D12ImageView, D3D12Sampler};
 pub use program::{D3D12Bindings, D3D12Buffer, D3D12Program};
+pub use raster_storage::D3D12ImageClass;
 
 /// Native validation is independent of optimization and Renderer diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,6 +167,30 @@ impl D3D12Runtime {
         let device = DeviceOwner::new(config.validation)?;
         let pool = frame::FramePool::new(Arc::clone(&device), config.capacity)?;
         Ok(Self { device, pool })
+    }
+    /// Reserves exact image classes, descriptor arenas and immutable graphics
+    /// pipelines at an explicit change boundary. All execution and result leases
+    /// must have returned; ordinary Graph preparation never grows this storage.
+    pub fn prepare_raster_working_set(
+        &mut self,
+        images: &[D3D12ImageClass],
+        programs: &[crate::program::ManagedRasterProgram],
+    ) -> Result<(), D3D12RuntimeError> {
+        self.device.ensure_active()?;
+        self.pool.reap()?;
+        if !self.pool.is_idle() {
+            return Err(D3D12RuntimeError::capacity(
+                "Raster working set cannot change while execution or result leases remain",
+            ));
+        }
+        let pool = frame::FramePool::with_raster(
+            Arc::clone(&self.device),
+            self.pool.capacity(),
+            images,
+            programs,
+        )?;
+        self.pool = pool;
+        Ok(())
     }
     pub fn device_info(&self) -> D3D12DeviceInfo {
         self.device.info.clone()

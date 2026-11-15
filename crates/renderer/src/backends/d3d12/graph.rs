@@ -15,6 +15,7 @@ use windows_core::{Error, HRESULT};
 use crate::graph::{CompiledGraph, PassHandle};
 
 mod bounded;
+mod raster;
 
 #[cfg(test)]
 use super::device::DeviceOwner;

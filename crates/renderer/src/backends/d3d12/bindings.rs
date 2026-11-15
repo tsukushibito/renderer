@@ -71,6 +71,58 @@ where
             .and_then(|| windows_core::imp::Type::from_abi(result__))
     }
 }
+pub const D3D10_PRIMITIVE_TOPOLOGY_LINELIST: D3D_PRIMITIVE_TOPOLOGY = 2;
+pub const D3D10_PRIMITIVE_TOPOLOGY_LINELIST_ADJ: D3D_PRIMITIVE_TOPOLOGY = 10;
+pub const D3D10_PRIMITIVE_TOPOLOGY_LINESTRIP: D3D_PRIMITIVE_TOPOLOGY = 3;
+pub const D3D10_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ: D3D_PRIMITIVE_TOPOLOGY = 11;
+pub const D3D10_PRIMITIVE_TOPOLOGY_POINTLIST: D3D_PRIMITIVE_TOPOLOGY = 1;
+pub const D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST: D3D_PRIMITIVE_TOPOLOGY = 4;
+pub const D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ: D3D_PRIMITIVE_TOPOLOGY = 12;
+pub const D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP: D3D_PRIMITIVE_TOPOLOGY = 5;
+pub const D3D10_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ: D3D_PRIMITIVE_TOPOLOGY = 13;
+pub const D3D10_PRIMITIVE_TOPOLOGY_UNDEFINED: D3D_PRIMITIVE_TOPOLOGY = 0;
+pub const D3D11_PRIMITIVE_TOPOLOGY_10_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 42;
+pub const D3D11_PRIMITIVE_TOPOLOGY_11_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 43;
+pub const D3D11_PRIMITIVE_TOPOLOGY_12_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 44;
+pub const D3D11_PRIMITIVE_TOPOLOGY_13_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 45;
+pub const D3D11_PRIMITIVE_TOPOLOGY_14_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 46;
+pub const D3D11_PRIMITIVE_TOPOLOGY_15_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 47;
+pub const D3D11_PRIMITIVE_TOPOLOGY_16_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 48;
+pub const D3D11_PRIMITIVE_TOPOLOGY_17_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 49;
+pub const D3D11_PRIMITIVE_TOPOLOGY_18_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 50;
+pub const D3D11_PRIMITIVE_TOPOLOGY_19_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 51;
+pub const D3D11_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 33;
+pub const D3D11_PRIMITIVE_TOPOLOGY_20_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 52;
+pub const D3D11_PRIMITIVE_TOPOLOGY_21_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 53;
+pub const D3D11_PRIMITIVE_TOPOLOGY_22_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 54;
+pub const D3D11_PRIMITIVE_TOPOLOGY_23_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 55;
+pub const D3D11_PRIMITIVE_TOPOLOGY_24_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 56;
+pub const D3D11_PRIMITIVE_TOPOLOGY_25_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 57;
+pub const D3D11_PRIMITIVE_TOPOLOGY_26_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 58;
+pub const D3D11_PRIMITIVE_TOPOLOGY_27_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 59;
+pub const D3D11_PRIMITIVE_TOPOLOGY_28_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 60;
+pub const D3D11_PRIMITIVE_TOPOLOGY_29_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 61;
+pub const D3D11_PRIMITIVE_TOPOLOGY_2_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 34;
+pub const D3D11_PRIMITIVE_TOPOLOGY_30_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 62;
+pub const D3D11_PRIMITIVE_TOPOLOGY_31_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 63;
+pub const D3D11_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 64;
+pub const D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 35;
+pub const D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 36;
+pub const D3D11_PRIMITIVE_TOPOLOGY_5_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 37;
+pub const D3D11_PRIMITIVE_TOPOLOGY_6_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 38;
+pub const D3D11_PRIMITIVE_TOPOLOGY_7_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 39;
+pub const D3D11_PRIMITIVE_TOPOLOGY_8_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 40;
+pub const D3D11_PRIMITIVE_TOPOLOGY_9_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 41;
+pub const D3D11_PRIMITIVE_TOPOLOGY_LINELIST: D3D_PRIMITIVE_TOPOLOGY = 2;
+pub const D3D11_PRIMITIVE_TOPOLOGY_LINELIST_ADJ: D3D_PRIMITIVE_TOPOLOGY = 10;
+pub const D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP: D3D_PRIMITIVE_TOPOLOGY = 3;
+pub const D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ: D3D_PRIMITIVE_TOPOLOGY = 11;
+pub const D3D11_PRIMITIVE_TOPOLOGY_POINTLIST: D3D_PRIMITIVE_TOPOLOGY = 1;
+pub const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST: D3D_PRIMITIVE_TOPOLOGY = 4;
+pub const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ: D3D_PRIMITIVE_TOPOLOGY = 12;
+pub const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP: D3D_PRIMITIVE_TOPOLOGY = 5;
+pub const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ: D3D_PRIMITIVE_TOPOLOGY = 13;
+pub const D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED: D3D_PRIMITIVE_TOPOLOGY = 0;
 pub type D3D12MessageFunc = Option<
     unsafe extern "system" fn(
         category: D3D12_MESSAGE_CATEGORY,
@@ -80,6 +132,44 @@ pub type D3D12MessageFunc = Option<
         pcontext: *mut core::ffi::c_void,
     ),
 >;
+pub type D3D12_BLEND = i32;
+pub const D3D12_BLEND_ALPHA_FACTOR: D3D12_BLEND = 20;
+pub const D3D12_BLEND_BLEND_FACTOR: D3D12_BLEND = 14;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct D3D12_BLEND_DESC {
+    pub AlphaToCoverageEnable: windows_core::BOOL,
+    pub IndependentBlendEnable: windows_core::BOOL,
+    pub RenderTarget: [D3D12_RENDER_TARGET_BLEND_DESC; 8],
+}
+impl Default for D3D12_BLEND_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+pub const D3D12_BLEND_DEST_ALPHA: D3D12_BLEND = 7;
+pub const D3D12_BLEND_DEST_COLOR: D3D12_BLEND = 9;
+pub const D3D12_BLEND_INV_ALPHA_FACTOR: D3D12_BLEND = 21;
+pub const D3D12_BLEND_INV_BLEND_FACTOR: D3D12_BLEND = 15;
+pub const D3D12_BLEND_INV_DEST_ALPHA: D3D12_BLEND = 8;
+pub const D3D12_BLEND_INV_DEST_COLOR: D3D12_BLEND = 10;
+pub const D3D12_BLEND_INV_SRC1_ALPHA: D3D12_BLEND = 19;
+pub const D3D12_BLEND_INV_SRC1_COLOR: D3D12_BLEND = 17;
+pub const D3D12_BLEND_INV_SRC_ALPHA: D3D12_BLEND = 6;
+pub const D3D12_BLEND_INV_SRC_COLOR: D3D12_BLEND = 4;
+pub const D3D12_BLEND_ONE: D3D12_BLEND = 2;
+pub type D3D12_BLEND_OP = i32;
+pub const D3D12_BLEND_OP_ADD: D3D12_BLEND_OP = 1;
+pub const D3D12_BLEND_OP_MAX: D3D12_BLEND_OP = 5;
+pub const D3D12_BLEND_OP_MIN: D3D12_BLEND_OP = 4;
+pub const D3D12_BLEND_OP_REV_SUBTRACT: D3D12_BLEND_OP = 3;
+pub const D3D12_BLEND_OP_SUBTRACT: D3D12_BLEND_OP = 2;
+pub const D3D12_BLEND_SRC1_ALPHA: D3D12_BLEND = 18;
+pub const D3D12_BLEND_SRC1_COLOR: D3D12_BLEND = 16;
+pub const D3D12_BLEND_SRC_ALPHA: D3D12_BLEND = 5;
+pub const D3D12_BLEND_SRC_ALPHA_SAT: D3D12_BLEND = 11;
+pub const D3D12_BLEND_SRC_COLOR: D3D12_BLEND = 3;
+pub const D3D12_BLEND_ZERO: D3D12_BLEND = 1;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_BOX {
@@ -89,6 +179,12 @@ pub struct D3D12_BOX {
     pub right: u32,
     pub bottom: u32,
     pub back: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_BUFFER_RTV {
+    pub FirstElement: u64,
+    pub NumElements: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -130,6 +226,12 @@ impl Default for D3D12_CLEAR_VALUE_0 {
         unsafe { core::mem::zeroed() }
     }
 }
+pub type D3D12_COLOR_WRITE_ENABLE = i32;
+pub const D3D12_COLOR_WRITE_ENABLE_ALL: D3D12_COLOR_WRITE_ENABLE = 15;
+pub const D3D12_COLOR_WRITE_ENABLE_ALPHA: D3D12_COLOR_WRITE_ENABLE = 8;
+pub const D3D12_COLOR_WRITE_ENABLE_BLUE: D3D12_COLOR_WRITE_ENABLE = 4;
+pub const D3D12_COLOR_WRITE_ENABLE_GREEN: D3D12_COLOR_WRITE_ENABLE = 2;
+pub const D3D12_COLOR_WRITE_ENABLE_RED: D3D12_COLOR_WRITE_ENABLE = 1;
 pub type D3D12_COMMAND_LIST_TYPE = i32;
 pub const D3D12_COMMAND_LIST_TYPE_BUNDLE: D3D12_COMMAND_LIST_TYPE = 1;
 pub const D3D12_COMMAND_LIST_TYPE_COMPUTE: D3D12_COMMAND_LIST_TYPE = 2;
@@ -169,6 +271,9 @@ pub struct D3D12_COMPUTE_PIPELINE_STATE_DESC {
     pub CachedPSO: D3D12_CACHED_PIPELINE_STATE,
     pub Flags: D3D12_PIPELINE_STATE_FLAGS,
 }
+pub type D3D12_CONSERVATIVE_RASTERIZATION_MODE = i32;
+pub const D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF: D3D12_CONSERVATIVE_RASTERIZATION_MODE = 0;
+pub const D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON: D3D12_CONSERVATIVE_RASTERIZATION_MODE = 1;
 pub type D3D12_CONSERVATIVE_RASTERIZATION_TIER = i32;
 pub const D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT: i32 = 256;
 #[repr(C)]
@@ -182,6 +287,10 @@ pub const D3D12_CPU_PAGE_PROPERTY_UNKNOWN: D3D12_CPU_PAGE_PROPERTY = 0;
 pub const D3D12_CPU_PAGE_PROPERTY_WRITE_BACK: D3D12_CPU_PAGE_PROPERTY = 3;
 pub const D3D12_CPU_PAGE_PROPERTY_WRITE_COMBINE: D3D12_CPU_PAGE_PROPERTY = 2;
 pub type D3D12_CROSS_NODE_SHARING_TIER = i32;
+pub type D3D12_CULL_MODE = i32;
+pub const D3D12_CULL_MODE_BACK: D3D12_CULL_MODE = 3;
+pub const D3D12_CULL_MODE_FRONT: D3D12_CULL_MODE = 2;
+pub const D3D12_CULL_MODE_NONE: D3D12_CULL_MODE = 1;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS {
@@ -198,6 +307,26 @@ pub const D3D12_DEBUG_DEVICE_PARAMETER_GPU_SLOWDOWN_PERFORMANCE_FACTOR:
     D3D12_DEBUG_DEVICE_PARAMETER_TYPE = 2;
 pub type D3D12_DEBUG_DEVICE_PARAMETER_TYPE = i32;
 pub const D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING: i32 = 5768;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_DEPTH_STENCILOP_DESC {
+    pub StencilFailOp: D3D12_STENCIL_OP,
+    pub StencilDepthFailOp: D3D12_STENCIL_OP,
+    pub StencilPassOp: D3D12_STENCIL_OP,
+    pub StencilFunc: D3D12_COMPARISON_FUNC,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_DEPTH_STENCIL_DESC {
+    pub DepthEnable: windows_core::BOOL,
+    pub DepthWriteMask: D3D12_DEPTH_WRITE_MASK,
+    pub DepthFunc: D3D12_COMPARISON_FUNC,
+    pub StencilEnable: windows_core::BOOL,
+    pub StencilReadMask: u8,
+    pub StencilWriteMask: u8,
+    pub FrontFace: D3D12_DEPTH_STENCILOP_DESC,
+    pub BackFace: D3D12_DEPTH_STENCILOP_DESC,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct D3D12_DEPTH_STENCIL_VALUE {
@@ -232,6 +361,9 @@ impl Default for D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
         unsafe { core::mem::zeroed() }
     }
 }
+pub type D3D12_DEPTH_WRITE_MASK = i32;
+pub const D3D12_DEPTH_WRITE_MASK_ALL: D3D12_DEPTH_WRITE_MASK = 1;
+pub const D3D12_DEPTH_WRITE_MASK_ZERO: D3D12_DEPTH_WRITE_MASK = 0;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_DESCRIPTOR_HEAP_DESC {
@@ -263,6 +395,14 @@ pub const D3D12_DESCRIPTOR_RANGE_TYPE_CBV: D3D12_DESCRIPTOR_RANGE_TYPE = 2;
 pub const D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER: D3D12_DESCRIPTOR_RANGE_TYPE = 3;
 pub const D3D12_DESCRIPTOR_RANGE_TYPE_SRV: D3D12_DESCRIPTOR_RANGE_TYPE = 0;
 pub const D3D12_DESCRIPTOR_RANGE_TYPE_UAV: D3D12_DESCRIPTOR_RANGE_TYPE = 1;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_DISCARD_REGION {
+    pub NumRects: u32,
+    pub pRects: *const D3D12_RECT,
+    pub FirstSubresource: u32,
+    pub NumSubresources: u32,
+}
 pub type D3D12_DSV_DIMENSION = i32;
 pub const D3D12_DSV_DIMENSION_TEXTURE1D: D3D12_DSV_DIMENSION = 1;
 pub const D3D12_DSV_DIMENSION_TEXTURE1DARRAY: D3D12_DSV_DIMENSION = 2;
@@ -373,6 +513,9 @@ pub const D3D12_FENCE_FLAG_NONE: D3D12_FENCE_FLAGS = 0;
 pub const D3D12_FENCE_FLAG_NON_MONITORED: D3D12_FENCE_FLAGS = 4;
 pub const D3D12_FENCE_FLAG_SHARED: D3D12_FENCE_FLAGS = 1;
 pub const D3D12_FENCE_FLAG_SHARED_CROSS_ADAPTER: D3D12_FENCE_FLAGS = 2;
+pub type D3D12_FILL_MODE = i32;
+pub const D3D12_FILL_MODE_SOLID: D3D12_FILL_MODE = 3;
+pub const D3D12_FILL_MODE_WIREFRAME: D3D12_FILL_MODE = 2;
 pub type D3D12_FILTER = i32;
 pub const D3D12_FILTER_ANISOTROPIC: D3D12_FILTER = 85;
 pub const D3D12_FILTER_COMPARISON_ANISOTROPIC: D3D12_FILTER = 213;
@@ -471,6 +614,36 @@ pub struct D3D12_GPU_DESCRIPTOR_HANDLE {
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct D3D12_GPU_VIRTUAL_ADDRESS(pub u64);
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+    pub pRootSignature: core::mem::ManuallyDrop<Option<ID3D12RootSignature>>,
+    pub VS: D3D12_SHADER_BYTECODE,
+    pub PS: D3D12_SHADER_BYTECODE,
+    pub DS: D3D12_SHADER_BYTECODE,
+    pub HS: D3D12_SHADER_BYTECODE,
+    pub GS: D3D12_SHADER_BYTECODE,
+    pub StreamOutput: D3D12_STREAM_OUTPUT_DESC,
+    pub BlendState: D3D12_BLEND_DESC,
+    pub SampleMask: u32,
+    pub RasterizerState: D3D12_RASTERIZER_DESC,
+    pub DepthStencilState: D3D12_DEPTH_STENCIL_DESC,
+    pub InputLayout: D3D12_INPUT_LAYOUT_DESC,
+    pub IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE,
+    pub PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE,
+    pub NumRenderTargets: u32,
+    pub RTVFormats: [DXGI_FORMAT; 8],
+    pub DSVFormat: DXGI_FORMAT,
+    pub SampleDesc: DXGI_SAMPLE_DESC,
+    pub NodeMask: u32,
+    pub CachedPSO: D3D12_CACHED_PIPELINE_STATE,
+    pub Flags: D3D12_PIPELINE_STATE_FLAGS,
+}
+impl Default for D3D12_GRAPHICS_PIPELINE_STATE_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
 pub type D3D12_HEAP_FLAGS = u32;
 pub const D3D12_HEAP_FLAG_ALLOW_ALL_BUFFERS_AND_TEXTURES: D3D12_HEAP_FLAGS = 0;
 pub const D3D12_HEAP_FLAG_ALLOW_DISPLAY: D3D12_HEAP_FLAGS = 8;
@@ -504,6 +677,17 @@ pub const D3D12_HEAP_TYPE_DEFAULT: D3D12_HEAP_TYPE = 1;
 pub const D3D12_HEAP_TYPE_GPU_UPLOAD: D3D12_HEAP_TYPE = 5;
 pub const D3D12_HEAP_TYPE_READBACK: D3D12_HEAP_TYPE = 3;
 pub const D3D12_HEAP_TYPE_UPLOAD: D3D12_HEAP_TYPE = 2;
+pub type D3D12_INDEX_BUFFER_STRIP_CUT_VALUE = i32;
+pub const D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE = 1;
+pub const D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFFFFFF: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE = 2;
+pub const D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE = 0;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDEX_BUFFER_VIEW {
+    pub BufferLocation: D3D12_GPU_VIRTUAL_ADDRESS,
+    pub SizeInBytes: u32,
+    pub Format: DXGI_FORMAT,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_INFO_QUEUE_FILTER {
@@ -520,6 +704,43 @@ pub struct D3D12_INFO_QUEUE_FILTER_DESC {
     pub NumIDs: u32,
     pub pIDList: *mut D3D12_MESSAGE_ID,
 }
+pub type D3D12_INPUT_CLASSIFICATION = i32;
+pub const D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA: D3D12_INPUT_CLASSIFICATION = 1;
+pub const D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA: D3D12_INPUT_CLASSIFICATION = 0;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INPUT_ELEMENT_DESC {
+    pub SemanticName: windows_core::PCSTR,
+    pub SemanticIndex: u32,
+    pub Format: DXGI_FORMAT,
+    pub InputSlot: u32,
+    pub AlignedByteOffset: u32,
+    pub InputSlotClass: D3D12_INPUT_CLASSIFICATION,
+    pub InstanceDataStepRate: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INPUT_LAYOUT_DESC {
+    pub pInputElementDescs: *const D3D12_INPUT_ELEMENT_DESC,
+    pub NumElements: u32,
+}
+pub type D3D12_LOGIC_OP = i32;
+pub const D3D12_LOGIC_OP_AND: D3D12_LOGIC_OP = 6;
+pub const D3D12_LOGIC_OP_AND_INVERTED: D3D12_LOGIC_OP = 13;
+pub const D3D12_LOGIC_OP_AND_REVERSE: D3D12_LOGIC_OP = 12;
+pub const D3D12_LOGIC_OP_CLEAR: D3D12_LOGIC_OP = 0;
+pub const D3D12_LOGIC_OP_COPY: D3D12_LOGIC_OP = 2;
+pub const D3D12_LOGIC_OP_COPY_INVERTED: D3D12_LOGIC_OP = 3;
+pub const D3D12_LOGIC_OP_EQUIV: D3D12_LOGIC_OP = 11;
+pub const D3D12_LOGIC_OP_INVERT: D3D12_LOGIC_OP = 5;
+pub const D3D12_LOGIC_OP_NAND: D3D12_LOGIC_OP = 7;
+pub const D3D12_LOGIC_OP_NOOP: D3D12_LOGIC_OP = 4;
+pub const D3D12_LOGIC_OP_NOR: D3D12_LOGIC_OP = 9;
+pub const D3D12_LOGIC_OP_OR: D3D12_LOGIC_OP = 8;
+pub const D3D12_LOGIC_OP_OR_INVERTED: D3D12_LOGIC_OP = 15;
+pub const D3D12_LOGIC_OP_OR_REVERSE: D3D12_LOGIC_OP = 14;
+pub const D3D12_LOGIC_OP_SET: D3D12_LOGIC_OP = 1;
+pub const D3D12_LOGIC_OP_XOR: D3D12_LOGIC_OP = 10;
 pub type D3D12_MEMORY_POOL = i32;
 pub const D3D12_MEMORY_POOL_L0: D3D12_MEMORY_POOL = 1;
 pub const D3D12_MEMORY_POOL_L1: D3D12_MEMORY_POOL = 2;
@@ -556,11 +777,35 @@ pub struct D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
     pub Offset: u64,
     pub Footprint: D3D12_SUBRESOURCE_FOOTPRINT,
 }
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct D3D12_PRIMITIVE_TOPOLOGY(pub D3D_PRIMITIVE_TOPOLOGY);
+pub type D3D12_PRIMITIVE_TOPOLOGY_TYPE = i32;
+pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE: D3D12_PRIMITIVE_TOPOLOGY_TYPE = 2;
+pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH: D3D12_PRIMITIVE_TOPOLOGY_TYPE = 4;
+pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT: D3D12_PRIMITIVE_TOPOLOGY_TYPE = 1;
+pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE: D3D12_PRIMITIVE_TOPOLOGY_TYPE = 3;
+pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED: D3D12_PRIMITIVE_TOPOLOGY_TYPE = 0;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_RANGE {
     pub Begin: usize,
     pub End: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_RASTERIZER_DESC {
+    pub FillMode: D3D12_FILL_MODE,
+    pub CullMode: D3D12_CULL_MODE,
+    pub FrontCounterClockwise: windows_core::BOOL,
+    pub DepthBias: i32,
+    pub DepthBiasClamp: f32,
+    pub SlopeScaledDepthBias: f32,
+    pub DepthClipEnable: windows_core::BOOL,
+    pub MultisampleEnable: windows_core::BOOL,
+    pub AntialiasedLineEnable: windows_core::BOOL,
+    pub ForcedSampleCount: u32,
+    pub ConservativeRaster: D3D12_CONSERVATIVE_RASTERIZATION_MODE,
 }
 pub const D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT: i32 = 16;
 #[repr(C)]
@@ -569,6 +814,49 @@ pub struct D3D12_RAYTRACING_ACCELERATION_STRUCTURE_SRV {
     pub Location: D3D12_GPU_VIRTUAL_ADDRESS,
 }
 pub type D3D12_RECT = RECT;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_RENDER_TARGET_BLEND_DESC {
+    pub BlendEnable: windows_core::BOOL,
+    pub LogicOpEnable: windows_core::BOOL,
+    pub SrcBlend: D3D12_BLEND,
+    pub DestBlend: D3D12_BLEND,
+    pub BlendOp: D3D12_BLEND_OP,
+    pub SrcBlendAlpha: D3D12_BLEND,
+    pub DestBlendAlpha: D3D12_BLEND,
+    pub BlendOpAlpha: D3D12_BLEND_OP,
+    pub LogicOp: D3D12_LOGIC_OP,
+    pub RenderTargetWriteMask: u8,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct D3D12_RENDER_TARGET_VIEW_DESC {
+    pub Format: DXGI_FORMAT,
+    pub ViewDimension: D3D12_RTV_DIMENSION,
+    pub Anonymous: D3D12_RENDER_TARGET_VIEW_DESC_0,
+}
+impl Default for D3D12_RENDER_TARGET_VIEW_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union D3D12_RENDER_TARGET_VIEW_DESC_0 {
+    pub Buffer: D3D12_BUFFER_RTV,
+    pub Texture1D: D3D12_TEX1D_RTV,
+    pub Texture1DArray: D3D12_TEX1D_ARRAY_RTV,
+    pub Texture2D: D3D12_TEX2D_RTV,
+    pub Texture2DArray: D3D12_TEX2D_ARRAY_RTV,
+    pub Texture2DMS: D3D12_TEX2DMS_RTV,
+    pub Texture2DMSArray: D3D12_TEX2DMS_ARRAY_RTV,
+    pub Texture3D: D3D12_TEX3D_RTV,
+}
+impl Default for D3D12_RENDER_TARGET_VIEW_DESC_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
 pub const D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT: i32 = 4096;
 pub const D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION: i32 = 16384;
 #[repr(C)]
@@ -786,6 +1074,16 @@ pub const D3D12_ROOT_SIGNATURE_FLAG_LOCAL_ROOT_SIGNATURE: D3D12_ROOT_SIGNATURE_F
 pub const D3D12_ROOT_SIGNATURE_FLAG_NONE: D3D12_ROOT_SIGNATURE_FLAGS = 0;
 pub const D3D12_ROOT_SIGNATURE_FLAG_SAMPLER_HEAP_DIRECTLY_INDEXED: D3D12_ROOT_SIGNATURE_FLAGS =
     2048;
+pub type D3D12_RTV_DIMENSION = i32;
+pub const D3D12_RTV_DIMENSION_BUFFER: D3D12_RTV_DIMENSION = 1;
+pub const D3D12_RTV_DIMENSION_TEXTURE1D: D3D12_RTV_DIMENSION = 2;
+pub const D3D12_RTV_DIMENSION_TEXTURE1DARRAY: D3D12_RTV_DIMENSION = 3;
+pub const D3D12_RTV_DIMENSION_TEXTURE2D: D3D12_RTV_DIMENSION = 4;
+pub const D3D12_RTV_DIMENSION_TEXTURE2DARRAY: D3D12_RTV_DIMENSION = 5;
+pub const D3D12_RTV_DIMENSION_TEXTURE2DMS: D3D12_RTV_DIMENSION = 6;
+pub const D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY: D3D12_RTV_DIMENSION = 7;
+pub const D3D12_RTV_DIMENSION_TEXTURE3D: D3D12_RTV_DIMENSION = 8;
+pub const D3D12_RTV_DIMENSION_UNKNOWN: D3D12_RTV_DIMENSION = 0;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct D3D12_SAMPLER_DESC {
@@ -854,6 +1152,16 @@ pub const D3D12_SHADER_VISIBILITY_HULL: D3D12_SHADER_VISIBILITY = 2;
 pub const D3D12_SHADER_VISIBILITY_MESH: D3D12_SHADER_VISIBILITY = 7;
 pub const D3D12_SHADER_VISIBILITY_PIXEL: D3D12_SHADER_VISIBILITY = 5;
 pub const D3D12_SHADER_VISIBILITY_VERTEX: D3D12_SHADER_VISIBILITY = 1;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_SO_DECLARATION_ENTRY {
+    pub Stream: u32,
+    pub SemanticName: windows_core::PCSTR,
+    pub SemanticIndex: u32,
+    pub StartComponent: u8,
+    pub ComponentCount: u8,
+    pub OutputSlot: u8,
+}
 pub type D3D12_SRV_DIMENSION = i32;
 pub const D3D12_SRV_DIMENSION_BUFFER: D3D12_SRV_DIMENSION = 1;
 pub const D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE: D3D12_SRV_DIMENSION = 11;
@@ -885,6 +1193,24 @@ pub struct D3D12_STATIC_SAMPLER_DESC {
     pub RegisterSpace: u32,
     pub ShaderVisibility: D3D12_SHADER_VISIBILITY,
 }
+pub type D3D12_STENCIL_OP = i32;
+pub const D3D12_STENCIL_OP_DECR: D3D12_STENCIL_OP = 8;
+pub const D3D12_STENCIL_OP_DECR_SAT: D3D12_STENCIL_OP = 5;
+pub const D3D12_STENCIL_OP_INCR: D3D12_STENCIL_OP = 7;
+pub const D3D12_STENCIL_OP_INCR_SAT: D3D12_STENCIL_OP = 4;
+pub const D3D12_STENCIL_OP_INVERT: D3D12_STENCIL_OP = 6;
+pub const D3D12_STENCIL_OP_KEEP: D3D12_STENCIL_OP = 1;
+pub const D3D12_STENCIL_OP_REPLACE: D3D12_STENCIL_OP = 3;
+pub const D3D12_STENCIL_OP_ZERO: D3D12_STENCIL_OP = 2;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_STREAM_OUTPUT_DESC {
+    pub pSODeclaration: *const D3D12_SO_DECLARATION_ENTRY,
+    pub NumEntries: u32,
+    pub pBufferStrides: *const u32,
+    pub NumStrides: u32,
+    pub RasterizedStream: u32,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_SUBRESOURCE_FOOTPRINT {
@@ -897,6 +1223,13 @@ pub struct D3D12_SUBRESOURCE_FOOTPRINT {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX1D_ARRAY_DSV {
+    pub MipSlice: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX1D_ARRAY_RTV {
     pub MipSlice: u32,
     pub FirstArraySlice: u32,
     pub ArraySize: u32,
@@ -916,6 +1249,11 @@ pub struct D3D12_TEX1D_DSV {
     pub MipSlice: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX1D_RTV {
+    pub MipSlice: u32,
+}
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct D3D12_TEX1D_SRV {
     pub MostDetailedMip: u32,
@@ -925,6 +1263,12 @@ pub struct D3D12_TEX1D_SRV {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2DMS_ARRAY_DSV {
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_ARRAY_RTV {
     pub FirstArraySlice: u32,
     pub ArraySize: u32,
 }
@@ -941,6 +1285,11 @@ pub struct D3D12_TEX2DMS_DSV {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_RTV {
+    pub UnusedField_NothingToDefine: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2DMS_SRV {
     pub UnusedField_NothingToDefine: u32,
 }
@@ -950,6 +1299,14 @@ pub struct D3D12_TEX2D_ARRAY_DSV {
     pub MipSlice: u32,
     pub FirstArraySlice: u32,
     pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2D_ARRAY_RTV {
+    pub MipSlice: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+    pub PlaneSlice: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -967,12 +1324,25 @@ pub struct D3D12_TEX2D_DSV {
     pub MipSlice: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2D_RTV {
+    pub MipSlice: u32,
+    pub PlaneSlice: u32,
+}
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct D3D12_TEX2D_SRV {
     pub MostDetailedMip: u32,
     pub MipLevels: u32,
     pub PlaneSlice: u32,
     pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX3D_RTV {
+    pub MipSlice: u32,
+    pub FirstWSlice: u32,
+    pub WSize: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1041,6 +1411,23 @@ pub const D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE: D3D12_TEXTURE_LAYOUT = 2;
 pub const D3D12_TEXTURE_LAYOUT_ROW_MAJOR: D3D12_TEXTURE_LAYOUT = 1;
 pub const D3D12_TEXTURE_LAYOUT_UNKNOWN: D3D12_TEXTURE_LAYOUT = 0;
 pub type D3D12_TILED_RESOURCES_TIER = i32;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_VERTEX_BUFFER_VIEW {
+    pub BufferLocation: D3D12_GPU_VIRTUAL_ADDRESS,
+    pub SizeInBytes: u32,
+    pub StrideInBytes: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct D3D12_VIEWPORT {
+    pub TopLeftX: f32,
+    pub TopLeftY: f32,
+    pub Width: f32,
+    pub Height: f32,
+    pub MinDepth: f32,
+    pub MaxDepth: f32,
+}
 pub type D3D_FEATURE_LEVEL = i32;
 pub const D3D_FEATURE_LEVEL_10_0: D3D_FEATURE_LEVEL = 40960;
 pub const D3D_FEATURE_LEVEL_10_1: D3D_FEATURE_LEVEL = 41216;
@@ -1055,6 +1442,50 @@ pub const D3D_FEATURE_LEVEL_9_1: D3D_FEATURE_LEVEL = 37120;
 pub const D3D_FEATURE_LEVEL_9_2: D3D_FEATURE_LEVEL = 37376;
 pub const D3D_FEATURE_LEVEL_9_3: D3D_FEATURE_LEVEL = 37632;
 pub const D3D_HIGHEST_SHADER_MODEL: D3D_SHADER_MODEL = 105;
+pub type D3D_PRIMITIVE_TOPOLOGY = i32;
+pub const D3D_PRIMITIVE_TOPOLOGY_10_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 42;
+pub const D3D_PRIMITIVE_TOPOLOGY_11_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 43;
+pub const D3D_PRIMITIVE_TOPOLOGY_12_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 44;
+pub const D3D_PRIMITIVE_TOPOLOGY_13_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 45;
+pub const D3D_PRIMITIVE_TOPOLOGY_14_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 46;
+pub const D3D_PRIMITIVE_TOPOLOGY_15_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 47;
+pub const D3D_PRIMITIVE_TOPOLOGY_16_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 48;
+pub const D3D_PRIMITIVE_TOPOLOGY_17_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 49;
+pub const D3D_PRIMITIVE_TOPOLOGY_18_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 50;
+pub const D3D_PRIMITIVE_TOPOLOGY_19_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 51;
+pub const D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 33;
+pub const D3D_PRIMITIVE_TOPOLOGY_20_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 52;
+pub const D3D_PRIMITIVE_TOPOLOGY_21_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 53;
+pub const D3D_PRIMITIVE_TOPOLOGY_22_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 54;
+pub const D3D_PRIMITIVE_TOPOLOGY_23_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 55;
+pub const D3D_PRIMITIVE_TOPOLOGY_24_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 56;
+pub const D3D_PRIMITIVE_TOPOLOGY_25_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 57;
+pub const D3D_PRIMITIVE_TOPOLOGY_26_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 58;
+pub const D3D_PRIMITIVE_TOPOLOGY_27_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 59;
+pub const D3D_PRIMITIVE_TOPOLOGY_28_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 60;
+pub const D3D_PRIMITIVE_TOPOLOGY_29_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 61;
+pub const D3D_PRIMITIVE_TOPOLOGY_2_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 34;
+pub const D3D_PRIMITIVE_TOPOLOGY_30_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 62;
+pub const D3D_PRIMITIVE_TOPOLOGY_31_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 63;
+pub const D3D_PRIMITIVE_TOPOLOGY_32_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 64;
+pub const D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 35;
+pub const D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 36;
+pub const D3D_PRIMITIVE_TOPOLOGY_5_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 37;
+pub const D3D_PRIMITIVE_TOPOLOGY_6_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 38;
+pub const D3D_PRIMITIVE_TOPOLOGY_7_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 39;
+pub const D3D_PRIMITIVE_TOPOLOGY_8_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 40;
+pub const D3D_PRIMITIVE_TOPOLOGY_9_CONTROL_POINT_PATCHLIST: D3D_PRIMITIVE_TOPOLOGY = 41;
+pub const D3D_PRIMITIVE_TOPOLOGY_LINELIST: D3D_PRIMITIVE_TOPOLOGY = 2;
+pub const D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ: D3D_PRIMITIVE_TOPOLOGY = 10;
+pub const D3D_PRIMITIVE_TOPOLOGY_LINESTRIP: D3D_PRIMITIVE_TOPOLOGY = 3;
+pub const D3D_PRIMITIVE_TOPOLOGY_LINESTRIP_ADJ: D3D_PRIMITIVE_TOPOLOGY = 11;
+pub const D3D_PRIMITIVE_TOPOLOGY_POINTLIST: D3D_PRIMITIVE_TOPOLOGY = 1;
+pub const D3D_PRIMITIVE_TOPOLOGY_TRIANGLEFAN: D3D_PRIMITIVE_TOPOLOGY = 6;
+pub const D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST: D3D_PRIMITIVE_TOPOLOGY = 4;
+pub const D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST_ADJ: D3D_PRIMITIVE_TOPOLOGY = 12;
+pub const D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP: D3D_PRIMITIVE_TOPOLOGY = 5;
+pub const D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP_ADJ: D3D_PRIMITIVE_TOPOLOGY = 13;
+pub const D3D_PRIMITIVE_TOPOLOGY_UNDEFINED: D3D_PRIMITIVE_TOPOLOGY = 0;
 pub type D3D_ROOT_SIGNATURE_VERSION = i32;
 pub const D3D_ROOT_SIGNATURE_VERSION_1: D3D_ROOT_SIGNATURE_VERSION = 1;
 pub const D3D_ROOT_SIGNATURE_VERSION_1_0: D3D_ROOT_SIGNATURE_VERSION = 1;
@@ -1112,8 +1543,11 @@ pub const DXGI_ERROR_UNSUPPORTED: windows_core::HRESULT =
 pub type DXGI_FORMAT = i32;
 pub const DXGI_FORMAT_D32_FLOAT: DXGI_FORMAT = 40;
 pub const DXGI_FORMAT_R16G16B16A16_FLOAT: DXGI_FORMAT = 10;
+pub const DXGI_FORMAT_R32G32B32A32_FLOAT: DXGI_FORMAT = 2;
+pub const DXGI_FORMAT_R32G32B32_FLOAT: DXGI_FORMAT = 6;
 pub const DXGI_FORMAT_R32_FLOAT: DXGI_FORMAT = 41;
 pub const DXGI_FORMAT_R32_TYPELESS: DXGI_FORMAT = 39;
+pub const DXGI_FORMAT_R32_UINT: DXGI_FORMAT = 42;
 pub const DXGI_FORMAT_R8G8B8A8_UNORM: DXGI_FORMAT = 28;
 pub const DXGI_FORMAT_UNKNOWN: DXGI_FORMAT = 0;
 #[repr(C)]
@@ -1559,6 +1993,24 @@ impl ID3D12Device {
             .and_then(|| windows_core::imp::Type::from_abi(result__))
         }
     }
+    pub unsafe fn CreateGraphicsPipelineState<T>(
+        &self,
+        pdesc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+    ) -> windows_core::Result<T>
+    where
+        T: windows_core::Interface,
+    {
+        let mut result__ = core::ptr::null_mut();
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateGraphicsPipelineState)(
+                windows_core::Interface::as_raw(self),
+                pdesc,
+                &T::IID,
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
     pub unsafe fn CreateComputePipelineState<T>(
         &self,
         pdesc: *const D3D12_COMPUTE_PIPELINE_STATE_DESC,
@@ -1678,6 +2130,23 @@ impl ID3D12Device {
     {
         unsafe {
             (windows_core::Interface::vtable(self).CreateShaderResourceView)(
+                windows_core::Interface::as_raw(self),
+                presource.param().abi(),
+                pdesc.unwrap_or(core::mem::zeroed()) as _,
+                destdescriptor,
+            );
+        }
+    }
+    pub unsafe fn CreateRenderTargetView<P0>(
+        &self,
+        presource: P0,
+        pdesc: Option<*const D3D12_RENDER_TARGET_VIEW_DESC>,
+        destdescriptor: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) where
+        P0: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateRenderTargetView)(
                 windows_core::Interface::as_raw(self),
                 presource.param().abi(),
                 pdesc.unwrap_or(core::mem::zeroed()) as _,
@@ -1827,7 +2296,12 @@ pub struct ID3D12Device_Vtbl {
         *const windows_core::GUID,
         *mut *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
-    CreateGraphicsPipelineState: usize,
+    pub CreateGraphicsPipelineState: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     pub CreateComputePipelineState: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *const D3D12_COMPUTE_PIPELINE_STATE_DESC,
@@ -1873,7 +2347,12 @@ pub struct ID3D12Device_Vtbl {
         D3D12_CPU_DESCRIPTOR_HANDLE,
     ),
     CreateUnorderedAccessView: usize,
-    CreateRenderTargetView: usize,
+    pub CreateRenderTargetView: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *const D3D12_RENDER_TARGET_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
     pub CreateDepthStencilView: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,
@@ -2030,6 +2509,25 @@ impl ID3D12GraphicsCommandList {
             )
         }
     }
+    pub unsafe fn DrawIndexedInstanced(
+        &self,
+        indexcountperinstance: u32,
+        instancecount: u32,
+        startindexlocation: u32,
+        basevertexlocation: i32,
+        startinstancelocation: u32,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).DrawIndexedInstanced)(
+                windows_core::Interface::as_raw(self),
+                indexcountperinstance,
+                instancecount,
+                startindexlocation,
+                basevertexlocation,
+                startinstancelocation,
+            );
+        }
+    }
     pub unsafe fn Dispatch(
         &self,
         threadgroupcountx: u32,
@@ -2088,6 +2586,32 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn IASetPrimitiveTopology(&self, primitivetopology: D3D12_PRIMITIVE_TOPOLOGY) {
+        unsafe {
+            (windows_core::Interface::vtable(self).IASetPrimitiveTopology)(
+                windows_core::Interface::as_raw(self),
+                primitivetopology,
+            );
+        }
+    }
+    pub unsafe fn RSSetViewports(&self, pviewports: &[D3D12_VIEWPORT]) {
+        unsafe {
+            (windows_core::Interface::vtable(self).RSSetViewports)(
+                windows_core::Interface::as_raw(self),
+                pviewports.len().try_into().unwrap(),
+                pviewports.as_ptr(),
+            );
+        }
+    }
+    pub unsafe fn RSSetScissorRects(&self, prects: &[D3D12_RECT]) {
+        unsafe {
+            (windows_core::Interface::vtable(self).RSSetScissorRects)(
+                windows_core::Interface::as_raw(self),
+                prects.len().try_into().unwrap(),
+                prects.as_ptr(),
+            );
+        }
+    }
     pub unsafe fn SetPipelineState<P0>(&self, ppipelinestate: P0)
     where
         P0: windows_core::Param<ID3D12PipelineState>,
@@ -2128,6 +2652,17 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn SetGraphicsRootSignature<P0>(&self, prootsignature: P0)
+    where
+        P0: windows_core::Param<ID3D12RootSignature>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetGraphicsRootSignature)(
+                windows_core::Interface::as_raw(self),
+                prootsignature.param().abi(),
+            );
+        }
+    }
     pub unsafe fn SetComputeRootDescriptorTable(
         &self,
         rootparameterindex: u32,
@@ -2141,6 +2676,36 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn SetGraphicsRootDescriptorTable(
+        &self,
+        rootparameterindex: u32,
+        basedescriptor: D3D12_GPU_DESCRIPTOR_HANDLE,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetGraphicsRootDescriptorTable)(
+                windows_core::Interface::as_raw(self),
+                rootparameterindex,
+                basedescriptor,
+            );
+        }
+    }
+    pub unsafe fn SetGraphicsRoot32BitConstants(
+        &self,
+        rootparameterindex: u32,
+        num32bitvaluestoset: u32,
+        psrcdata: *const core::ffi::c_void,
+        destoffsetin32bitvalues: u32,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetGraphicsRoot32BitConstants)(
+                windows_core::Interface::as_raw(self),
+                rootparameterindex,
+                num32bitvaluestoset,
+                psrcdata,
+                destoffsetin32bitvalues,
+            );
+        }
+    }
     pub unsafe fn SetComputeRootConstantBufferView(
         &self,
         rootparameterindex: u32,
@@ -2148,6 +2713,19 @@ impl ID3D12GraphicsCommandList {
     ) {
         unsafe {
             (windows_core::Interface::vtable(self).SetComputeRootConstantBufferView)(
+                windows_core::Interface::as_raw(self),
+                rootparameterindex,
+                bufferlocation,
+            );
+        }
+    }
+    pub unsafe fn SetGraphicsRootConstantBufferView(
+        &self,
+        rootparameterindex: u32,
+        bufferlocation: D3D12_GPU_VIRTUAL_ADDRESS,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetGraphicsRootConstantBufferView)(
                 windows_core::Interface::as_raw(self),
                 rootparameterindex,
                 bufferlocation,
@@ -2180,6 +2758,45 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn IASetIndexBuffer(&self, pview: Option<*const D3D12_INDEX_BUFFER_VIEW>) {
+        unsafe {
+            (windows_core::Interface::vtable(self).IASetIndexBuffer)(
+                windows_core::Interface::as_raw(self),
+                pview.unwrap_or(core::mem::zeroed()) as _,
+            );
+        }
+    }
+    pub unsafe fn IASetVertexBuffers(
+        &self,
+        startslot: u32,
+        pviews: Option<&[D3D12_VERTEX_BUFFER_VIEW]>,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).IASetVertexBuffers)(
+                windows_core::Interface::as_raw(self),
+                startslot,
+                pviews.map_or(0, |slice| slice.len().try_into().unwrap()),
+                pviews.map_or(core::ptr::null(), |slice| slice.as_ptr()),
+            );
+        }
+    }
+    pub unsafe fn OMSetRenderTargets(
+        &self,
+        numrendertargetdescriptors: u32,
+        prendertargetdescriptors: Option<*const D3D12_CPU_DESCRIPTOR_HANDLE>,
+        rtssinglehandletodescriptorrange: bool,
+        pdepthstencildescriptor: Option<*const D3D12_CPU_DESCRIPTOR_HANDLE>,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).OMSetRenderTargets)(
+                windows_core::Interface::as_raw(self),
+                numrendertargetdescriptors,
+                prendertargetdescriptors.unwrap_or(core::mem::zeroed()) as _,
+                rtssinglehandletodescriptorrange.into(),
+                pdepthstencildescriptor.unwrap_or(core::mem::zeroed()) as _,
+            );
+        }
+    }
     pub unsafe fn ClearDepthStencilView(
         &self,
         depthstencilview: D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -2200,6 +2817,37 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn ClearRenderTargetView(
+        &self,
+        rendertargetview: D3D12_CPU_DESCRIPTOR_HANDLE,
+        colorrgba: &[f32; 4],
+        prects: &[D3D12_RECT],
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).ClearRenderTargetView)(
+                windows_core::Interface::as_raw(self),
+                rendertargetview,
+                colorrgba.as_ptr(),
+                prects.len().try_into().unwrap(),
+                prects.as_ptr(),
+            );
+        }
+    }
+    pub unsafe fn DiscardResource<P0>(
+        &self,
+        presource: P0,
+        pregion: Option<*const D3D12_DISCARD_REGION>,
+    ) where
+        P0: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).DiscardResource)(
+                windows_core::Interface::as_raw(self),
+                presource.param().abi(),
+                pregion.unwrap_or(core::mem::zeroed()) as _,
+            );
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12GraphicsCommandList_Vtbl {
@@ -2212,7 +2860,8 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     ) -> windows_core::HRESULT,
     ClearState: usize,
     DrawInstanced: usize,
-    DrawIndexedInstanced: usize,
+    pub DrawIndexedInstanced:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32, u32, i32, u32),
     pub Dispatch: unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32, u32),
     pub CopyBufferRegion: unsafe extern "system" fn(
         *mut core::ffi::c_void,
@@ -2234,9 +2883,12 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     CopyResource: usize,
     CopyTiles: usize,
     ResolveSubresource: usize,
-    IASetPrimitiveTopology: usize,
-    RSSetViewports: usize,
-    RSSetScissorRects: usize,
+    pub IASetPrimitiveTopology:
+        unsafe extern "system" fn(*mut core::ffi::c_void, D3D12_PRIMITIVE_TOPOLOGY),
+    pub RSSetViewports:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const D3D12_VIEWPORT),
+    pub RSSetScissorRects:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const D3D12_RECT),
     OMSetBlendFactor: usize,
     OMSetStencilRef: usize,
     pub SetPipelineState: unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
@@ -2247,27 +2899,43 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, *const *mut core::ffi::c_void),
     pub SetComputeRootSignature:
         unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
-    SetGraphicsRootSignature: usize,
+    pub SetGraphicsRootSignature:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
     pub SetComputeRootDescriptorTable:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_DESCRIPTOR_HANDLE),
-    SetGraphicsRootDescriptorTable: usize,
+    pub SetGraphicsRootDescriptorTable:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_DESCRIPTOR_HANDLE),
     SetComputeRoot32BitConstant: usize,
     SetGraphicsRoot32BitConstant: usize,
     SetComputeRoot32BitConstants: usize,
-    SetGraphicsRoot32BitConstants: usize,
+    pub SetGraphicsRoot32BitConstants:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32, *const core::ffi::c_void, u32),
     pub SetComputeRootConstantBufferView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
-    SetGraphicsRootConstantBufferView: usize,
+    pub SetGraphicsRootConstantBufferView:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     pub SetComputeRootShaderResourceView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     SetGraphicsRootShaderResourceView: usize,
     pub SetComputeRootUnorderedAccessView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     SetGraphicsRootUnorderedAccessView: usize,
-    IASetIndexBuffer: usize,
-    IASetVertexBuffers: usize,
+    pub IASetIndexBuffer:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *const D3D12_INDEX_BUFFER_VIEW),
+    pub IASetVertexBuffers: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        u32,
+        *const D3D12_VERTEX_BUFFER_VIEW,
+    ),
     SOSetTargets: usize,
-    OMSetRenderTargets: usize,
+    pub OMSetRenderTargets: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        *const D3D12_CPU_DESCRIPTOR_HANDLE,
+        windows_core::BOOL,
+        *const D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
     pub ClearDepthStencilView: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         D3D12_CPU_DESCRIPTOR_HANDLE,
@@ -2277,10 +2945,20 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
         u32,
         *const D3D12_RECT,
     ),
-    ClearRenderTargetView: usize,
+    pub ClearRenderTargetView: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+        *const f32,
+        u32,
+        *const D3D12_RECT,
+    ),
     ClearUnorderedAccessViewUint: usize,
     ClearUnorderedAccessViewFloat: usize,
-    DiscardResource: usize,
+    pub DiscardResource: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *const D3D12_DISCARD_REGION,
+    ),
     BeginQuery: usize,
     EndQuery: usize,
     ResolveQueryData: usize,
