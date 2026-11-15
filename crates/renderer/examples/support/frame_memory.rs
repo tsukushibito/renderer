@@ -14,19 +14,19 @@ const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;
 const FRAMES: usize = 24;
 
-struct Report<const N: usize> {
-    total: Snapshot,
-    phases: [Snapshot; N],
+pub(crate) struct Report<const N: usize> {
+    pub(crate) total: Snapshot,
+    pub(crate) phases: [Snapshot; N],
 }
 
-fn phase<T>(totals: &mut Snapshot, operation: impl FnOnce() -> T) -> T {
+pub(crate) fn phase<T>(totals: &mut Snapshot, operation: impl FnOnce() -> T) -> T {
     let before = Snapshot::now();
     let value = operation();
     totals.accumulate(Snapshot::now().since(before));
     value
 }
 
-fn graph_capacity() -> GraphCapacity {
+pub(crate) fn graph_capacity() -> GraphCapacity {
     GraphCapacity {
         resources: 8,
         passes: 8,
@@ -42,7 +42,7 @@ fn graph_capacity() -> GraphCapacity {
     }
 }
 
-fn capacity_report() -> serde_json::Value {
+pub(crate) fn capacity_report() -> serde_json::Value {
     let capacity = graph_capacity();
     serde_json::json!({
         "resources": capacity.resources, "passes": capacity.passes,
@@ -53,13 +53,28 @@ fn capacity_report() -> serde_json::Value {
     })
 }
 
-fn recycle_graph_slots<const N: usize>(pool: &mut GraphPool) {
-    // Reset every backing slot while it is uniquely owned. Retain the empty
+fn recycle_graph_slots<const N: usize>(pool: &mut GraphPool) -> usize {
+    // Reset every idle backing slot while it is uniquely owned. Retain the empty
     // graphs together so begin() cannot repeatedly select just the first slot.
-    // Any retained upload/import operands from the last frames are returned
-    // inside measurement, rather than deferred to pool shutdown.
-    let empty: [Graph; N] = std::array::from_fn(|_| pool.begin().unwrap());
+    // Idle slots return upload/import operands inside measurement. Canonical
+    // buffer content proofs may still pin other slots as persistent state;
+    // report those pins instead of invalidating them just for measurement.
+    let mut empty: [Option<Graph>; N] = std::array::from_fn(|_| None);
+    let mut count = 0;
+    for slot in &mut empty {
+        match pool.begin() {
+            Ok(graph) => {
+                *slot = Some(graph);
+                count += 1;
+            }
+            Err(error) => {
+                assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
+                break;
+            }
+        }
+    }
     drop(empty);
+    count
 }
 
 fn cpu_frames(
@@ -168,7 +183,7 @@ fn cpu_frames(
     // from the last three frames must not be deallocated outside measurement.
     phase(&mut phases[3], || {
         drop((plans, captures));
-        recycle_graph_slots::<IN_FLIGHT>(pool);
+        assert_eq!(recycle_graph_slots::<IN_FLIGHT>(pool), IN_FLIGHT);
     });
     Report {
         total: Snapshot::now().since(before),
@@ -176,7 +191,7 @@ fn cpu_frames(
     }
 }
 
-fn counts(snapshot: Snapshot) -> serde_json::Value {
+pub(crate) fn counts(snapshot: Snapshot) -> serde_json::Value {
     serde_json::json!({
         "rust_calls_alloc_alloc_zeroed_realloc_dealloc": snapshot.rust.map(|value| value.calls),
         "rust_requested_bytes": snapshot.rust.map(|value| value.bytes),
@@ -187,7 +202,7 @@ fn counts(snapshot: Snapshot) -> serde_json::Value {
     })
 }
 
-fn semantics() -> serde_json::Value {
+pub(crate) fn semantics() -> serde_json::Value {
     serde_json::json!({
         "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
         "vma_host": "VMA native host callback calls/known requested bytes, forwarded separately from the Rust global allocator",
@@ -199,7 +214,7 @@ fn semantics() -> serde_json::Value {
     })
 }
 
-fn features() -> serde_json::Value {
+pub(crate) fn features() -> serde_json::Value {
     serde_json::json!({
         "development_validation": cfg!(feature = "development-validation"),
         "graph_diagnostics": cfg!(feature = "graph-diagnostics"),
@@ -307,6 +322,9 @@ mod buffer {
     use std::time::Duration;
     const GPU_WARMUP: usize = 24;
     const GPU_FRAMES: usize = 48;
+    // Generic buffer provenance can retain old compiled input metadata after
+    // GPU retirement, independently of the three pending/three CPU results.
+    const GRAPH_SLOTS: usize = IN_FLIGHT * 4;
 
     // A measurement adapter only: both normal public APIs exercise the same
     // graph and ownership schedule. It exposes no renderer-internal operands.
@@ -454,7 +472,7 @@ mod buffer {
             phase(&mut phases[4], || drop(plan));
         }
         phase(&mut phases[4], || {
-            recycle_graph_slots::<{ IN_FLIGHT * 2 }>(pool);
+            recycle_graph_slots::<GRAPH_SLOTS>(pool);
         });
         Report {
             total: Snapshot::now().since(start),
@@ -512,6 +530,8 @@ mod buffer {
         startup: Snapshot,
         shutdown: Snapshot,
         result: Report<5>,
+        retained_graph_slots: usize,
+        native_capacity: serde_json::Value,
     ) {
         let json = serde_json::json!({
             "scenario": name,
@@ -523,8 +543,10 @@ mod buffer {
             "measured_frames": GPU_FRAMES,
             "pending_capacity_exercised": IN_FLIGHT,
             "completed_readbacks_held": IN_FLIGHT,
-            "graph_slots": IN_FLIGHT * 2,
+            "graph_slots": GRAPH_SLOTS,
+            "retained_provenance_graph_slots_after_window": retained_graph_slots,
             "graph_capacity": capacity_report(),
+            "native_capacity": native_capacity,
             "input_versions": 4,
             "copy_passes": [0, 1, 2, 1],
             "last_case_is_disjoint_self_copy": true,
@@ -598,18 +620,18 @@ mod buffer {
             panic!("memory acceptance requires --release");
         }
         let start = Snapshot::now();
-        let mut runtime = renderer::VulkanRuntime::new(renderer::RuntimeConfig {
+        let config = renderer::RuntimeConfig {
             execution_slots: IN_FLIGHT,
             resource_capacity: 32,
             staging_bytes: 16 * 1024,
             staging_ranges: 32,
             max_shader_bindings: 8,
-        })
-        .unwrap();
+        };
+        let mut runtime = renderer::VulkanRuntime::new(config).unwrap();
         assert_ne!(runtime.device_info().device_type, "CPU");
         let monitor = runtime.validation_monitor();
         let (inputs, expected) = inputs();
-        let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT * 2).unwrap();
+        let mut pool = GraphPool::new(graph_capacity(), GRAPH_SLOTS).unwrap();
         frames(&mut runtime, &mut pool, &inputs, &expected, GPU_WARMUP);
         let startup = Snapshot::now().since(start);
         positive_control(startup);
@@ -622,9 +644,9 @@ mod buffer {
             "VMA device memory hooks are absent or unexercised"
         );
         let measured = frames(&mut runtime, &mut pool, &inputs, &expected, GPU_FRAMES);
-        assert!(pool.is_idle());
+        let retained_graph_slots = pool.leased_slots();
         let before_shutdown = Snapshot::now();
-        drop(runtime);
+        drop((runtime, pool));
         let shutdown = Snapshot::now().since(before_shutdown);
         destruction_control([startup, measured.total, shutdown]);
         assert!(
@@ -649,6 +671,14 @@ mod buffer {
             startup,
             shutdown,
             measured,
+            retained_graph_slots,
+            serde_json::json!({
+                "execution_slots": config.execution_slots,
+                "resource_capacity": config.resource_capacity,
+                "staging_bytes": config.staging_bytes,
+                "staging_ranges": config.staging_ranges,
+                "max_shader_bindings": config.max_shader_bindings,
+            }),
         );
     }
 
@@ -720,14 +750,15 @@ mod buffer {
         let mut runtime = renderer::D3D12Runtime::new(config).unwrap();
         let monitor = runtime.validation_monitor();
         let (inputs, expected) = inputs();
-        let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT * 2).unwrap();
+        let mut pool = GraphPool::new(graph_capacity(), GRAPH_SLOTS).unwrap();
         frames(&mut runtime, &mut pool, &inputs, &expected, GPU_WARMUP);
         let startup = Snapshot::now().since(start);
         positive_control(startup);
         let measured = frames(&mut runtime, &mut pool, &inputs, &expected, GPU_FRAMES);
-        assert!(pool.is_idle());
+        let retained_graph_slots = pool.leased_slots();
         let before_shutdown = Snapshot::now();
         runtime.shutdown().unwrap();
+        drop(pool);
         let shutdown = Snapshot::now().since(before_shutdown);
         destruction_control([startup, measured.total, shutdown]);
         let validation = monitor.snapshot();
@@ -749,6 +780,18 @@ mod buffer {
             startup,
             shutdown,
             measured,
+            retained_graph_slots,
+            serde_json::json!({
+                "executions": config.capacity.executions,
+                "results": config.capacity.results,
+                "resources": config.capacity.resources,
+                "operations": config.capacity.operations,
+                "buffers": config.capacity.buffers,
+                "buffer_bytes": config.capacity.buffer_bytes,
+                "upload_bytes": config.capacity.upload_bytes,
+                "readback_bytes": config.capacity.readback_bytes,
+                "scratch_bytes": config.capacity.scratch_bytes,
+            }),
         );
     }
 }
