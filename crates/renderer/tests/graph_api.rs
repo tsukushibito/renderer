@@ -31,6 +31,7 @@ fn offscreen_pipeline(graph: &mut Graph) {
             "mesh",
             &renderer::program::ManagedRasterProgram::mesh(),
             &[RasterDraw {
+                bindings: &[],
                 vertices,
                 indices,
                 index_count: 3,

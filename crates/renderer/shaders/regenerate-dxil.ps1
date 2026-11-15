@@ -117,7 +117,7 @@ try {
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
         Write-Utf8 (Join-Path $temporaryRoot ($source + '.reflection.txt')) $reflection
-        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp')) {
+        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'textured.vert', 'textured.frag')) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
             if ($source -ceq 'uniform.comp') {
                 Assert-BufferCopyAbi ($spirvReflection | ConvertFrom-Json) $reflection
@@ -125,8 +125,10 @@ try {
                 Assert-BufferCopyAbi ($spirvReflection | ConvertFrom-Json) $reflection -StorageInput
             } elseif ($source -ceq 'sampled.comp') {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection
-            } else {
+            } elseif ($source -ceq 'sampled_float.comp') {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection -FloatOutput
+            } else {
+                Assert-TexturedRasterAbi ($spirvReflection | ConvertFrom-Json) $reflection -Vertex:($source -ceq 'textured.vert')
             }
             Write-Utf8 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json')) $spirvReflection
         }
@@ -137,7 +139,7 @@ try {
             dxil = Get-Sha256 $dxil
             reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.reflection.txt'))
         }
-        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp')) {
+        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'textured.vert', 'textured.frag')) {
             $hashes.spirv_reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json'))
         }
         $artifacts[$source] = $hashes

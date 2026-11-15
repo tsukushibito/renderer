@@ -4,8 +4,8 @@
 //! are copied once and stay immutable; storage is created without initialized
 //! contents and may be written by the GPU. Immutable bindings retain the actual
 //! Program and resource versions, not a promise of immutable storage contents.
-//! Buffer-only managed dispatches can be planned by Graph; native Graph dispatch
-//! execution and arbitrary shader import are subsequent work. Reflection alone
+//! Managed buffer and sampled-image dispatches can be planned by Graph; native
+//! Graph dispatch execution and arbitrary shader import are subsequent work. Reflection alone
 //! cannot establish shader memory safety or synchronization.
 //!
 //! Creation retains uninitialized images; this example does not execute a dispatch.
@@ -106,12 +106,54 @@ impl BindingType {
     }
 }
 
+/// Shader execution scopes derived from a reviewed Program, independent of
+/// native pipeline flags. Vertex/index fetch and attachments have separate uses.
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub struct ShaderStages(u8);
+
+impl ShaderStages {
+    pub const EMPTY: Self = Self(0);
+    pub const VERTEX: Self = Self(1);
+    pub const FRAGMENT: Self = Self(2);
+    pub const COMPUTE: Self = Self(4);
+
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+impl std::fmt::Debug for ShaderStages {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_empty() {
+            return f.write_str("EMPTY");
+        }
+        let mut separator = "";
+        for (stage, name) in [
+            (Self::VERTEX, "VERTEX"),
+            (Self::FRAGMENT, "FRAGMENT"),
+            (Self::COMPUTE, "COMPUTE"),
+        ] {
+            if self.contains(stage) {
+                write!(f, "{separator}{name}")?;
+                separator = "|";
+            }
+        }
+        Ok(())
+    }
+}
+
 /// One reflected slot in an immutable Program interface.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BindingLayout {
     pub group: u32,
     pub binding: u32,
     pub kind: BindingType,
+    pub stages: ShaderStages,
     /// Required buffer bytes; zero for image and sampler slots.
     pub min_size: u64,
 }
@@ -217,7 +259,7 @@ struct Manifest {
     entry: &'static str,
     workgroup_size: [u32; 3],
     bindings: &'static [BindingLayout],
-    buffer_dispatch: Option<BufferDispatch>,
+    dispatch: DispatchContract,
     #[cfg(feature = "vulkan")]
     spirv: &'static [u8],
     #[cfg(all(feature = "d3d12", windows))]
@@ -225,9 +267,10 @@ struct Manifest {
 }
 
 /// Reviewed execution footprint, separate from the ABI's minimum descriptor
-/// size. Entries follow manifest binding order and access a prefix of each
-/// bound range. Changing shader behavior requires reviewing this contract too.
-pub(crate) struct BufferDispatch {
+/// size. Entries follow manifest binding order: buffers access the byte prefix,
+/// images read their complete selected View, and samplers have no content access.
+/// Changing shader behavior requires reviewing this contract too.
+pub(crate) struct DispatchContract {
     pub workgroups: [u32; 3],
     pub bytes: &'static [u64],
 }
@@ -245,21 +288,23 @@ impl std::fmt::Debug for ManagedProgram {
 static UNIFORM_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
-    buffer_dispatch: Some(BufferDispatch {
+    dispatch: DispatchContract {
         workgroups: [1, 1, 1],
         bytes: &[16, 16],
-    }),
+    },
     bindings: &[
         BindingLayout {
             group: 0,
             binding: 0,
             kind: BindingType::Uniform,
+            stages: ShaderStages::COMPUTE,
             min_size: 16,
         },
         BindingLayout {
             group: 1,
             binding: 0,
             kind: BindingType::StorageWrite,
+            stages: ShaderStages::COMPUTE,
             min_size: 16,
         },
     ],
@@ -272,21 +317,23 @@ static UNIFORM_READBACK: Manifest = Manifest {
 static STORAGE_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
-    buffer_dispatch: Some(BufferDispatch {
+    dispatch: DispatchContract {
         workgroups: [1, 1, 1],
         bytes: &[16, 16],
-    }),
+    },
     bindings: &[
         BindingLayout {
             group: 0,
             binding: 0,
             kind: BindingType::StorageRead,
+            stages: ShaderStages::COMPUTE,
             min_size: 16,
         },
         BindingLayout {
             group: 1,
             binding: 0,
             kind: BindingType::StorageWrite,
+            stages: ShaderStages::COMPUTE,
             min_size: 16,
         },
     ],
@@ -299,24 +346,30 @@ static STORAGE_READBACK: Manifest = Manifest {
 static SAMPLED_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
-    buffer_dispatch: None,
+    dispatch: DispatchContract {
+        workgroups: [1, 1, 1],
+        bytes: &[0, 0, 16],
+    },
     bindings: &[
         BindingLayout {
             group: 0,
             binding: 0,
             kind: BindingType::SampledImage,
+            stages: ShaderStages::COMPUTE,
             min_size: 0,
         },
         BindingLayout {
             group: 0,
             binding: 1,
             kind: BindingType::Sampler,
+            stages: ShaderStages::COMPUTE,
             min_size: 0,
         },
         BindingLayout {
             group: 1,
             binding: 0,
             kind: BindingType::StorageWrite,
+            stages: ShaderStages::COMPUTE,
             min_size: 16,
         },
     ],
@@ -329,24 +382,30 @@ static SAMPLED_READBACK: Manifest = Manifest {
 static SAMPLED_FLOAT_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
-    buffer_dispatch: None,
+    dispatch: DispatchContract {
+        workgroups: [1, 1, 1],
+        bytes: &[0, 0, 64],
+    },
     bindings: &[
         BindingLayout {
             group: 0,
             binding: 0,
             kind: BindingType::SampledImage,
+            stages: ShaderStages::COMPUTE,
             min_size: 0,
         },
         BindingLayout {
             group: 0,
             binding: 1,
             kind: BindingType::Sampler,
+            stages: ShaderStages::COMPUTE,
             min_size: 0,
         },
         BindingLayout {
             group: 1,
             binding: 0,
             kind: BindingType::StorageWrite,
+            stages: ShaderStages::COMPUTE,
             min_size: 64,
         },
     ],
@@ -405,8 +464,8 @@ impl ManagedProgram {
         self.manifest.bindings
     }
 
-    pub(crate) const fn buffer_dispatch(&self) -> Option<&'static BufferDispatch> {
-        self.manifest.buffer_dispatch.as_ref()
+    pub(crate) const fn dispatch_contract(&self) -> &'static DispatchContract {
+        &self.manifest.dispatch
     }
 
     #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]

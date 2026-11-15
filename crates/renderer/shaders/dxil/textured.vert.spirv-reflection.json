@@ -1,0 +1,109 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_11" : {
+            "name" : "_11",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4"
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "float"
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                }
+            ]
+        },
+        "_17" : {
+            "name" : "_17",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 64
+                }
+            ]
+        },
+        "_33" : {
+            "name" : "_33",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "_25",
+            "location" : 0
+        },
+        {
+            "type" : "vec4",
+            "name" : "_44",
+            "location" : 1
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_42",
+            "location" : 0
+        },
+        {
+            "type" : "vec2",
+            "name" : "_53",
+            "location" : 1
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_33",
+            "name" : "_33_35",
+            "block_size" : 16,
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_17",
+            "name" : "_19",
+            "push_constant" : true
+        }
+    ]
+}

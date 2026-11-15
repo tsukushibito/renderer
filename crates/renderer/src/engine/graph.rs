@@ -156,7 +156,13 @@ impl FrameSnapshot {
                     "missing resolved mesh buffers",
                 )
             })?;
-            Ok((vertices, indices, draw.data.index_count, draw.parameters))
+            Ok((
+                vertices,
+                indices,
+                draw.data.index_count,
+                draw.parameters,
+                &[] as &[crate::graph::Binding],
+            ))
         });
         graph.raster_validated(
             if self.draws.is_empty() {

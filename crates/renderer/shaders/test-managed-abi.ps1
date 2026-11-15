@@ -142,4 +142,52 @@ Expect-Rejected 'DXIL storage input is writable' { param($s, $d) $d.Replace('r/o
 Expect-Rejected 'DXIL storage input is typed' {
     param($s, $d) [regex]::Replace($d, '(?m)(^;[^\r\n]+\s+texture\s+)byte', '${1}u32')
 }
-Write-Output 'Managed uniform/storage-read/sampled/float SPIR-V/DXIL ABI contracts and mismatch rejections passed.'
+# The graphics resources belong to different shader stages. Verify each real
+# module independently, including the native Uniform/inline register distinction.
+$verify = { param($s, $d) Assert-TexturedRasterAbi $s $d -Vertex }
+$json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/textured.vert.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/textured.vert.reflection.txt') -Raw
+Assert-TexturedRasterAbi ($json | ConvertFrom-Json) $reflection -Vertex
+Assert-TexturedRasterAbi ($json | ConvertFrom-Json) ($reflection.Replace("`r`n", "`n").Replace("`n", "`r`n")) -Vertex
+Expect-Rejected 'vertex resource reflected as fragment' { param($s) $s.entryPoints[0].mode = 'frag' }
+Expect-Rejected 'vertex Uniform slot' { param($s) $s.ubos[0].binding = 1 }
+Expect-Rejected 'vertex Uniform prefix size' { param($s) $s.ubos[0].block_size = 32 }
+Expect-Rejected 'vertex Uniform scalar type' {
+    param($s) $s.types.PSObject.Properties[$s.ubos[0].type].Value.members[0].type = 'uvec4'
+}
+Expect-Rejected 'vertex inline matrix stride' {
+    param($s) $s.types.PSObject.Properties[$s.push_constants[0].type].Value.members[0].matrix_stride = 32
+}
+Expect-Rejected 'vertex inline row-major matrix' {
+    param($s) $s.types.PSObject.Properties[$s.push_constants[0].type].Value.members[0] |
+        Add-Member -NotePropertyName row_major -NotePropertyValue $true
+}
+Expect-Rejected 'vertex additional storage side effect' {
+    param($s) $s | Add-Member -NotePropertyName ssbos -NotePropertyValue @([pscustomobject]@{ set = 2; binding = 0 })
+}
+Expect-Rejected 'DXIL inline and Uniform register alias' { param($s, $d) $d.Replace('cb1', 'cb0') }
+Expect-Rejected 'DXIL vertex Uniform prefix size' {
+    param($s, $d) [regex]::Replace($d, 'Size:\s*16', 'Size: 32')
+}
+Expect-Rejected 'DXIL vertex attribute semantic' { param($s, $d) $d.Replace('TEXCOORD                 1', 'TEXCOORD                 7') }
+Expect-Rejected 'DXIL vertex attribute type' { param($s, $d) $d.Replace('NONE   float', 'NONE   uint') }
+$verify = { param($s, $d) Assert-TexturedRasterAbi $s $d }
+$json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/textured.frag.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/textured.frag.reflection.txt') -Raw
+Assert-TexturedRasterAbi ($json | ConvertFrom-Json) $reflection
+Expect-Rejected 'fragment image stage' { param($s) $s.entryPoints[0].mode = 'vert' }
+Expect-Rejected 'fragment image group' { param($s) $s.separate_images[0].set = 0 }
+Expect-Rejected 'fragment image dimension' { param($s) $s.separate_images[0].type = 'texture3D' }
+Expect-Rejected 'fragment image descriptor array' {
+    param($s) $s.separate_images[0] | Add-Member -NotePropertyName array -NotePropertyValue @(2)
+}
+Expect-Rejected 'fragment extra Uniform' {
+    param($s) $s | Add-Member -NotePropertyName ubos -NotePropertyValue @([pscustomobject]@{ set = 0; binding = 0 })
+}
+Expect-Rejected 'DXIL fragment sampler register space' { param($s, $d) $d.Replace('s1,space1', 's1,space0') }
+Expect-Rejected 'DXIL fragment sampler removed' {
+    param($s, $d) [regex]::Replace($d, '(?m)^;[ \t]+[^\r\n]+[ \t]+sampler[^\r\n]*\r?\n', '')
+}
+Expect-Rejected 'DXIL fragment varying components' { param($s, $d) $d.Replace('1   xy ', '1   xyz') }
+Expect-Rejected 'DXIL fragment color target semantic' { param($s, $d) $d.Replace('SV_Target                0', 'SV_Target                1') }
+Write-Output 'Managed compute and descriptor-bound Raster SPIR-V/DXIL ABI contracts and mismatch rejections passed.'

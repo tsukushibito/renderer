@@ -1,8 +1,8 @@
 //! Prepared backing shared by the unique builder and its immutable plans.
 
 use super::{
-    AttachmentOperand, BufferBindingOperands, Dependency, Graph, GraphCapacityKind, GraphError,
-    Pass, RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
+    AttachmentOperand, BindingOperands, Dependency, Graph, GraphCapacityKind, GraphError, Pass,
+    RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
 };
 use std::{
     cell::UnsafeCell,
@@ -108,7 +108,7 @@ pub struct GraphStorage {
     pub(super) names: Vec<u8>,
     pub(super) uploads: Vec<u8>,
     pub(super) draws: Vec<RasterDrawOperands>,
-    pub(super) bindings: Vec<BufferBindingOperands>,
+    pub(super) bindings: Vec<BindingOperands>,
     pub(super) attachments: Vec<AttachmentOperand>,
     pub(super) raster_ranges: Vec<[u64; 2]>,
     pub(super) overlap: Vec<super::accesses::IndexedAccess>,

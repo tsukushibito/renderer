@@ -141,9 +141,11 @@ impl Default for RasterParameters {
     }
 }
 
-/// One indexed triangle draw using the built-in mesh shader ABI.
+/// One indexed triangle draw. Its borrowed descriptors follow the selected
+/// Raster Program layout and are owned by the plan after construction.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RasterDraw {
+pub struct RasterDraw<'a> {
+    pub bindings: &'a [super::Binding],
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
     pub index_count: u32,
@@ -175,6 +177,18 @@ pub enum AccessPurpose {
     Index,
     ColorAttachment,
     DepthAttachment,
+}
+impl AccessPurpose {
+    pub(crate) const fn default_stages(self) -> crate::program::ShaderStages {
+        use crate::program::ShaderStages;
+        match self {
+            Self::Uniform | Self::StorageRead | Self::StorageWrite | Self::StorageReadWrite => {
+                ShaderStages::COMPUTE
+            }
+            Self::Sampled => ShaderStages::FRAGMENT,
+            _ => ShaderStages::EMPTY,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageAspect {
@@ -225,6 +239,7 @@ pub struct Access {
     )
 )]
 pub(crate) struct ResourceAccess {
+    pub stages: crate::program::ShaderStages,
     pub resource: usize,
     pub range: Range<u64>,
     pub read: bool,
@@ -236,13 +251,21 @@ pub(crate) struct ResourceAccess {
     pub purpose: AccessPurpose,
 }
 
-/// Owned operands for one fixed-pipeline draw in an engine opaque pass.
-#[derive(Clone, Copy, Debug)]
+/// Owned indexed draw operands, including its canonical material descriptors.
+#[derive(Clone, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
     allow(dead_code, reason = "native batch recording operands")
 )]
 pub(crate) struct RasterDrawOperands {
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "descriptor-bound native Raster is subsequent work"
+        )
+    )]
+    pub bindings: Range<usize>,
     pub vertices: usize,
     pub indices: usize,
     pub index_count: u32,

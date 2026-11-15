@@ -16,10 +16,13 @@ fn prepared_graph(capacity: GraphCapacity) -> (GraphPool, Graph) {
     (pool, graph)
 }
 
-fn batch_draws(draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>) -> Vec<RasterDraw> {
+fn batch_draws(
+    draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
+) -> Vec<RasterDraw<'static>> {
     draws
         .into_iter()
         .map(|(vertices, indices, index_count, parameters)| RasterDraw {
+            bindings: &[],
             vertices,
             indices,
             index_count,
@@ -558,6 +561,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
             "attachment input",
             &crate::program::ManagedRasterProgram::mesh(),
             &[RasterDraw {
+                bindings: &[],
                 vertices,
                 indices,
                 index_count: 3,
@@ -593,6 +597,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
             "undefined load",
             &crate::program::ManagedRasterProgram::mesh(),
             &[RasterDraw {
+                bindings: &[],
                 vertices: v,
                 indices: i,
                 index_count: 3,
@@ -627,6 +632,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
             "discarded",
             &crate::program::ManagedRasterProgram::mesh(),
             &[RasterDraw {
+                bindings: &[],
                 vertices: v,
                 indices: i,
                 index_count: 3,
@@ -665,6 +671,7 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
             "partial",
             &crate::program::ManagedRasterProgram::mesh(),
             &[RasterDraw {
+                bindings: &[],
                 vertices: v,
                 indices: i,
                 index_count: 3,
@@ -881,6 +888,7 @@ fn public_raster_parameters_are_checked_before_creating_a_pass() {
                 "invalid public parameters",
                 &crate::program::ManagedRasterProgram::mesh(),
                 &[RasterDraw {
+                    bindings: &[],
                     vertices,
                     indices,
                     index_count: 3,

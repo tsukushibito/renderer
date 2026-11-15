@@ -20,7 +20,26 @@ function Get-DxilResourceRows([string]$Section) {
     # Capture every resource row, including unsupported types, so an extra
     # resource cannot pass just because it is not one of the expected kinds.
     return [regex]::Matches($Section,
-        '(?m)^;\s+(?<name>\S+)\s+(?<kind>\S+)\s+(?<format>\S+)\s+(?<dimension>\S+)\s+(?<id>\S+)\s+(?<slot>\S+)\s+(?<count>\d+)\s*$')
+        '(?m)^;[ \t]+(?<name>\S+)[ \t]+(?<kind>\S+)[ \t]+(?<format>\S+)[ \t]+(?<dimension>\S+)[ \t]+(?<id>\S+)[ \t]+(?<slot>\S+)[ \t]+(?<count>\d+)[ \t]*\r?$')
+}
+
+function Assert-TexturedDxilSignature([string]$Dxil, [string]$Heading, [object[]]$Expected) {
+    $section = [regex]::Match($Dxil.Replace("`r`n", "`n"),
+        ('(?m)^; ' + $Heading + ' signature:\n;\n; Name[^\n]*\n; -+[^\n]*\n(?<body>(?:;[^\n]+\n)+)'))
+    if (-not $section.Success) { throw "Textured Raster DXIL $Heading signature is missing." }
+    $lines = @($section.Groups['body'].Value.TrimEnd("`n") -split "`n")
+    if ($lines.Count -ne $Expected.Count) { throw "Textured Raster DXIL $Heading signature count differs." }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        $row = [regex]::Match($lines[$index],
+            '^;[ \t]+(?<name>\S+)[ \t]+(?<index>\d+)[ \t]+(?<mask>\S+)[ \t]+\d+[ \t]+(?<system>\S+)[ \t]+(?<format>\S+)(?:[ \t]+\S+)?[ \t]*$')
+        if (-not $row.Success -or $row.Groups['name'].Value -cne $Expected[$index][0] -or
+            $row.Groups['index'].Value -cne $Expected[$index][1] -or
+            $row.Groups['mask'].Value -cne $Expected[$index][2] -or
+            $row.Groups['system'].Value -cne $Expected[$index][3] -or
+            $row.Groups['format'].Value -cne 'float') {
+            throw "Textured Raster DXIL $Heading signature semantic, type or component count differs."
+        }
+    }
 }
 
 function Assert-BufferCopyAbi([object]$Spirv, [string]$Dxil, [switch]$StorageInput) {
@@ -173,5 +192,117 @@ function Assert-SampledAbi([object]$Spirv, [string]$Dxil, [switch]$FloatOutput) 
         $outputs[0].Groups['dimension'].Value -cne 'r/w' -or
         @($rows | Where-Object { $_.Groups['count'].Value -cne '1' }).Count -ne 0) {
         throw "$asset DXIL requires t0/space0 Texture2D<float4>, active s1/space0 sampler and u0/space1 raw UAV."
+    }
+}
+
+# Descriptor visibility is established separately for the actual vertex and
+# fragment modules. No reflection record can promote arbitrary shader code to
+# the reviewed read-only behavior of these checked-in sources.
+function Assert-TexturedRasterAbi([object]$Spirv, [string]$Dxil, [switch]$Vertex) {
+    $asset = if ($Vertex) { 'textured.vert' } else { 'textured.frag' }
+    $mode = if ($Vertex) { 'vert' } else { 'frag' }
+    $stage = if ($Vertex) { 'Vertex' } else { 'Pixel' }
+    $entries = @($Spirv.entryPoints)
+    if ($entries.Count -ne 1 -or $entries[0].name -cne 'main' -or
+        $entries[0].mode -cne $mode -or
+        $Dxil -cnotmatch ('(?m)^; ' + $stage + ' Shader\s*$') -or
+        $Dxil -cnotmatch '(?m)^; EntryFunctionName: main\s*$') {
+        throw "$asset shader stage or entry point differs from its reviewed interface."
+    }
+    $forbidden = @('textures', 'images', 'ssbos', 'sampled_images', 'subpass_inputs', 'acceleration_structures')
+    $forbidden += if ($Vertex) { @('separate_images', 'separate_samplers') } else { @('ubos', 'push_constants') }
+    foreach ($category in $forbidden) {
+        $property = $Spirv.PSObject.Properties[$category]
+        if ($null -ne $property -and @($property.Value).Count -ne 0) {
+            throw "$asset has unexpected resources: $category"
+        }
+    }
+    $sections = @($Dxil.Replace("`r`n", "`n") -split '; Resource Bindings:')
+    if ($sections.Count -ne 2) { throw "$asset DXIL resource reflection is missing." }
+    $rows = @(Get-DxilResourceRows $sections[1])
+    if ($rows.Count -ne 2 -or @($rows | Where-Object { $_.Groups['count'].Value -cne '1' }).Count -ne 0) {
+        throw "$asset must bind exactly two non-array native resources."
+    }
+    if ($Vertex) {
+        Assert-TexturedDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyz', 'NONE'), @('TEXCOORD', '1', 'xyzw', 'NONE'))
+        Assert-TexturedDxilSignature $Dxil 'Output' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'), @('SV_Position', '0', 'xyzw', 'POS'))
+    } else {
+        Assert-TexturedDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'))
+        Assert-TexturedDxilSignature $Dxil 'Output' @(,@('SV_Target', '0', 'xyzw', 'TARGET'))
+    }
+    $input = @($Spirv.inputs | Sort-Object location)
+    $output = @($Spirv.outputs | Sort-Object location)
+    $expectedInput = if ($Vertex) { @('vec3', 'vec4') } else { @('vec4', 'vec2') }
+    $expectedOutput = if ($Vertex) { @('vec4', 'vec2') } else { @('vec4') }
+    foreach ($item in @(@($input, $expectedInput), @($output, $expectedOutput))) {
+        $actual = @($item[0])
+        $expected = @($item[1])
+        if ($actual.Count -ne $expected.Count) { throw "$asset varying or attribute count differs." }
+        for ($index = 0; $index -lt $actual.Count; $index++) {
+            if ($actual[$index].type -cne $expected[$index] -or $actual[$index].location -ne $index -or
+                $null -ne $actual[$index].PSObject.Properties['array']) {
+                throw "$asset varying or attribute layout differs."
+            }
+        }
+    }
+    if ($Vertex) {
+        $ubos = @($Spirv.ubos)
+        $push = @($Spirv.push_constants)
+        if ($ubos.Count -ne 1 -or $ubos[0].set -ne 0 -or $ubos[0].binding -ne 0 -or
+            $ubos[0].block_size -ne 16 -or $null -ne $ubos[0].PSObject.Properties['array'] -or
+            $push.Count -ne 1) {
+            throw 'textured.vert must read one 16-byte Uniform at group 0/binding 0 and one inline block.'
+        }
+        $uniformMembers = @($Spirv.types.PSObject.Properties[$ubos[0].type].Value.members)
+        $pushMembers = @($Spirv.types.PSObject.Properties[$push[0].type].Value.members)
+        if ($uniformMembers.Count -ne 1 -or $uniformMembers[0].type -cne 'vec4' -or
+            $uniformMembers[0].offset -ne 0 -or $null -ne $uniformMembers[0].PSObject.Properties['array'] -or
+            $pushMembers.Count -ne 2 -or $pushMembers[0].type -cne 'mat4' -or
+            $pushMembers[0].offset -ne 0 -or $pushMembers[0].matrix_stride -ne 16 -or
+            $pushMembers[1].type -cne 'vec4' -or $pushMembers[1].offset -ne 64 -or
+            ($null -ne $pushMembers[0].PSObject.Properties['row_major'] -and $pushMembers[0].row_major -eq $true) -or
+            $null -ne $pushMembers[0].PSObject.Properties['array'] -or $null -ne $pushMembers[1].PSObject.Properties['array']) {
+            throw 'textured.vert Uniform prefix or inline matrix/tint offsets differ.'
+        }
+        foreach ($slot in @(@('cb0', 16), @('cb1', 80))) {
+            $buffers = @($rows | Where-Object {
+                $_.Groups['kind'].Value -ceq 'cbuffer' -and
+                $_.Groups['slot'].Value -cmatch ('^' + $slot[0] + '(?:,space0)?$')
+            })
+            if ($buffers.Count -ne 1) { throw "textured.vert requires $($slot[0])/space0." }
+            $name = [regex]::Escape($buffers[0].Groups['name'].Value)
+            $body = [regex]::Match($sections[0], ('(?s); cbuffer ' + $name + '\s*\n; \{(?<body>.*?)\n; \}'))
+            if (-not $body.Success -or
+                $body.Groups['body'].Value -cnotmatch ('(?m)^;\s+\}\s+' + $name + ';\s*;\s*Offset:\s*0\s+Size:\s*' + $slot[1] + '\s*$')) {
+                throw 'textured.vert DXIL cbuffer byte size differs.'
+            }
+            $members = @($body.Groups['body'].Value -split '\n' | Where-Object { $_ -match 'Offset:' -and $_ -notmatch 'Size:' })
+            if ($slot[1] -eq 16) {
+                if ($members.Count -ne 1 -or $members[0] -cnotmatch '^;\s+float4\s+\w+;\s*;\s*Offset:\s*0\s*$') {
+                    throw 'textured.vert DXIL Uniform must contain one float4 at byte zero.'
+                }
+            } elseif ($members.Count -ne 2 -or
+                $members[0] -cnotmatch '^;\s+row_major float4x4\s+\w+;\s*;\s*Offset:\s*0\s*$' -or
+                $members[1] -cnotmatch '^;\s+float4\s+\w+;\s*;\s*Offset:\s*64\s*$') {
+                throw 'textured.vert DXIL inline matrix/tint layout differs.'
+            }
+        }
+    } else {
+        foreach ($expected in @(@('separate_images', 'texture2D', 0), @('separate_samplers', 'sampler', 1))) {
+            $resources = @($Spirv.PSObject.Properties[$expected[0]].Value)
+            if ($resources.Count -ne 1 -or $resources[0].type -cne $expected[1] -or
+                $resources[0].set -ne 1 -or $resources[0].binding -ne $expected[2] -or
+                $null -ne $resources[0].PSObject.Properties['array']) {
+                throw 'textured.frag must bind one separate float 2D image and sampler in group 1.'
+            }
+        }
+        $images = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'texture' })
+        $samplers = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'sampler' })
+        if ($images.Count -ne 1 -or $samplers.Count -ne 1 -or
+            $images[0].Groups['slot'].Value -cne 't0,space1' -or
+            $images[0].Groups['format'].Value -cne 'f32' -or $images[0].Groups['dimension'].Value -cne '2d' -or
+            $samplers[0].Groups['slot'].Value -cne 's1,space1') {
+            throw 'textured.frag DXIL must retain the active float texture and separate sampler in space 1.'
+        }
     }
 }

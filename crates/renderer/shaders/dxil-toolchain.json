@@ -16,6 +16,8 @@
     {"source": "image.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
     {"source": "mesh.vert", "stage": "vert", "profile": "vs_6_0", "spirv_cross_arguments": ["--flip-vert-y"]},
     {"source": "mesh.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []},
+    {"source": "textured.vert", "stage": "vert", "profile": "vs_6_0", "spirv_cross_arguments": ["--flip-vert-y"]},
+    {"source": "textured.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []},
     {"source": "composite.vert", "stage": "vert", "profile": "vs_6_0", "spirv_cross_arguments": ["--flip-vert-y"]},
     {"source": "composite.frag", "stage": "frag", "profile": "ps_6_0", "spirv_cross_arguments": []},
     {"source": "uniform.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},

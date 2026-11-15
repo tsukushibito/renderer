@@ -259,15 +259,22 @@ impl Graph {
         &mut self,
         name: &str,
         program: &crate::program::ManagedRasterProgram,
-        draws: &[RasterDraw],
+        draws: &[RasterDraw<'_>],
         attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
         self.raster_validated(
             name,
             program,
             draws.iter().map(|draw| {
-                ValidatedRasterParameters::new(draw.parameters)
-                    .map(|parameters| (draw.vertices, draw.indices, draw.index_count, parameters))
+                ValidatedRasterParameters::new(draw.parameters).map(|parameters| {
+                    (
+                        draw.vertices,
+                        draw.indices,
+                        draw.index_count,
+                        parameters,
+                        draw.bindings,
+                    )
+                })
             }),
             attachments,
         )
@@ -275,12 +282,21 @@ impl Graph {
 
     /// The Engine already guarantees finite immutable parameters at snapshot
     /// creation. This adapter consumes that proof without scanning values again.
-    pub(crate) fn raster_validated(
+    pub(crate) fn raster_validated<'a>(
         &mut self,
         name: &str,
         program: &crate::program::ManagedRasterProgram,
         draws: impl ExactSizeIterator<
-            Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
+            Item = Result<
+                (
+                    BufferHandle,
+                    BufferHandle,
+                    u32,
+                    ValidatedRasterParameters,
+                    &'a [super::Binding],
+                ),
+                GraphError,
+            >,
         >,
         attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
@@ -306,7 +322,9 @@ impl Graph {
             let resources = graph.resources.len();
             graph.data_mut().raster_ranges[..resources].fill([0; 2]);
             for draw in draws {
-                let (vertices, indices, index_count, parameters) = draw?;
+                let (vertices, indices, index_count, parameters, bindings) = draw?;
+                let bindings =
+                    graph.append_bindings(program.bindings(), program.binding_bytes(), bindings)?;
                 let (vertices, indices) = graph.raster_buffers(
                     vertices,
                     indices,
@@ -319,6 +337,7 @@ impl Graph {
                 data.raster_ranges[vertices][0] = vs;
                 data.raster_ranges[indices][1] = data.raster_ranges[indices][1].max(ix);
                 data.draws.push(RasterDrawOperands {
+                    bindings,
                     vertices,
                     indices,
                     index_count,
@@ -335,6 +354,19 @@ impl Graph {
                 }
             }
             let plan = graph.append_attachments(attachments)?;
+            if !program.bindings().is_empty()
+                && let Some(left) =
+                    graph.conflicting_pass_access(first_access..graph.accesses.len())?
+            {
+                let access = &graph.accesses[first_access + left];
+                return Err(graph
+                    .resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "overlapping Raster shader and attachment footprints are unsupported",
+                        access.resource,
+                    )
+                    .with_range(graph.access_range(access.resource, access.range.clone())));
+            }
             let targets = plan.targets.filter(|_| program.is_mesh());
             Ok((
                 Operation::Raster {
@@ -423,6 +455,11 @@ impl Graph {
                 validate_purpose(kind, graph.resources[id].desc, access.kind, access.purpose)
                     .map_err(|error| graph.resource_context(error, id).with_range(access.range.clone()))?;
                 graph.append_access(ResourceAccess {
+            stages: match kind {
+                        PassKind::Compute => crate::program::ShaderStages::COMPUTE,
+                        PassKind::Raster => crate::program::ShaderStages::VERTEX.union(crate::program::ShaderStages::FRAGMENT),
+                        PassKind::Copy => crate::program::ShaderStages::EMPTY,
+                    },
                     resource: id,
                     range,
                     read: access.kind != AccessKind::Write,
@@ -504,6 +541,7 @@ impl Graph {
 
 fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
     ResourceAccess {
+        stages: purpose.default_stages(),
         resource,
         range,
         read: true,
@@ -515,6 +553,7 @@ fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceA
 }
 fn write(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
     ResourceAccess {
+        stages: purpose.default_stages(),
         resource,
         range,
         read: false,
@@ -591,12 +630,13 @@ mod tests {
     };
     use crate::program::ManagedRasterProgram;
 
-    fn uploaded_draw(graph: &mut Graph, name: &str) -> RasterDraw {
+    fn uploaded_draw(graph: &mut Graph, name: &str) -> RasterDraw<'static> {
         let vertices = graph.buffer(name, BufferDesc { size: 84 }).unwrap();
         let indices = graph.buffer(name, BufferDesc { size: 12 }).unwrap();
         graph.upload_buffer(name, vertices, 0, &[0; 84]).unwrap();
         graph.upload_buffer(name, indices, 0, &[0; 12]).unwrap();
         RasterDraw {
+            bindings: &[],
             vertices,
             indices,
             index_count: 3,
@@ -740,7 +780,13 @@ mod tests {
             store: StoreOp::Store,
         };
         let validated = ValidatedRasterParameters::new(draw.parameters).unwrap();
-        let tuple = (draw.vertices, draw.indices, draw.index_count, validated);
+        let tuple = (
+            draw.vertices,
+            draw.indices,
+            draw.index_count,
+            validated,
+            &[] as &[super::super::Binding],
+        );
         let error = graph
             .raster_validated(
                 "resolution failed",
@@ -767,5 +813,157 @@ mod tests {
             .unwrap();
         graph.readback_image("pixels", image).unwrap();
         assert_eq!(graph.compile().unwrap().pass_count(), 4);
+    }
+    #[test]
+    fn owned_draw_descriptors_preserve_materials_views_samplers_and_shader_scopes() {
+        use crate::graph::{Binding, BindingOperands, BindingResource};
+        use crate::program::{ManagedProgram, SamplerDescriptor, ShaderStages};
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mesh = uploaded_draw(&mut graph, "mesh");
+        let uniform = graph.buffer("uniform", BufferDesc { size: 64 }).unwrap();
+        graph
+            .upload_buffer("uniform bytes", uniform, 16, &[0; 16])
+            .unwrap();
+        let a = graph.image("a", ImageDesc::rgba8(2, 2)).unwrap();
+        let b = graph.image("b", ImageDesc::rgba8(2, 2)).unwrap();
+        graph.upload_image("a pixels", a, &[0; 16]).unwrap();
+        graph.upload_image("b pixels", b, &[0; 16]).unwrap();
+        let a_view = graph.image_view(a, 0, 0).unwrap();
+        let b_view = graph.image_view(b, 0, 0).unwrap();
+        let output = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
+        let output_view = graph.image_view(output, 0, 0).unwrap();
+        let pass = {
+            let material = |view| {
+                [
+                    Binding {
+                        group: 1,
+                        binding: 1,
+                        resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                    },
+                    Binding {
+                        group: 0,
+                        binding: 0,
+                        resource: BindingResource::Buffer {
+                            buffer: uniform,
+                            offset: 16,
+                            size: 48,
+                        },
+                    },
+                    Binding {
+                        group: 1,
+                        binding: 0,
+                        resource: BindingResource::ImageView(view),
+                    },
+                ]
+            };
+            let mut first = material(a_view);
+            let second = material(b_view);
+            let draws = [
+                RasterDraw {
+                    bindings: &first,
+                    ..mesh
+                },
+                RasterDraw {
+                    bindings: &second,
+                    ..mesh
+                },
+            ];
+            let pass = graph
+                .raster(
+                    "materials",
+                    &ManagedRasterProgram::textured_mesh(),
+                    &draws,
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: output_view,
+                            load: LoadOp::Clear([0.0; 4]),
+                            store: StoreOp::Store,
+                        }],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+            first.fill(second[0]);
+            std::hint::black_box(first);
+            pass
+        };
+        let result = graph.buffer("result", BufferDesc { size: 80 }).unwrap();
+        let dispatch = graph
+            .dispatch(
+                "sample output",
+                &ManagedProgram::sampled_float_readback(),
+                &[
+                    Binding {
+                        group: 0,
+                        binding: 0,
+                        resource: BindingResource::ImageView(output_view),
+                    },
+                    Binding {
+                        group: 0,
+                        binding: 1,
+                        resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                    },
+                    Binding {
+                        group: 1,
+                        binding: 0,
+                        resource: BindingResource::Buffer {
+                            buffer: result,
+                            offset: 16,
+                            size: 64,
+                        },
+                    },
+                ],
+                [1; 3],
+            )
+            .unwrap();
+        graph.readback_buffer("bytes", result, 16, 64).unwrap();
+        let plan = graph.compile().unwrap();
+        let Operation::Raster { draws, targets, .. } = &plan.passes[pass.index].operation else {
+            panic!()
+        };
+        assert!(
+            targets.is_none(),
+            "descriptor-bound graphics has no native lowering yet"
+        );
+        let owned = &plan.draws[draws.clone()];
+        assert_eq!(owned.len(), 2);
+        assert_eq!(owned[0].bindings.len(), 3);
+        assert_eq!(owned[0].bindings.end, owned[1].bindings.start);
+        for (draw, view) in owned.iter().zip([a_view, b_view]) {
+            let bindings = &plan.bindings[draw.bindings.clone()];
+            assert!(
+                matches!(bindings[0], BindingOperands::Buffer { resource, range: crate::program::BufferRange { offset: 16, size: 48 } } if resource == uniform.index)
+            );
+            assert!(matches!(bindings[1], BindingOperands::ImageView(actual) if actual == view));
+            assert!(matches!(
+                bindings[2],
+                BindingOperands::Sampler(SamplerDescriptor::NearestClamp)
+            ));
+        }
+        let accesses = plan.accesses(pass.index);
+        for access in accesses
+            .iter()
+            .filter(|access| access.purpose == AccessPurpose::Uniform)
+        {
+            assert_eq!(access.stages, ShaderStages::VERTEX);
+            assert_eq!(
+                access.range,
+                16..32,
+                "descriptor tail is not a shader footprint"
+            );
+        }
+        for access in accesses
+            .iter()
+            .filter(|access| access.purpose == AccessPurpose::Sampled)
+        {
+            assert_eq!(access.stages, ShaderStages::FRAGMENT);
+        }
+        assert!(
+            plan.accesses(dispatch.index)
+                .iter()
+                .all(|access| access.stages == ShaderStages::COMPUTE)
+        );
+        assert_eq!(plan.accesses(dispatch.index)[1].range, 16..80);
     }
 }
