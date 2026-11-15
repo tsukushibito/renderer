@@ -3,7 +3,6 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
-use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,19 +20,23 @@ use super::program::{ShaderNeeds, ShaderPrograms};
 use super::transfer::staging::SharedStaging;
 use super::transfer::{ExecutionPool, PendingTransfer};
 use crate::graph::{
-    BufferHandle, CompiledGraph, ImageFormat, ImageHandle, ImportBuffer, ImportImage, Operation,
-    PassHandle, ResourceDesc, ResourceKey,
+    BufferHandle, CompiledGraph, GraphCapacity, ImageFormat, ImageHandle, ImportBuffer,
+    ImportImage, ImportRanges, ImportRangesPool, Operation, PassHandle, ResourceDesc, ResourceKey,
 };
 
 mod cache;
 #[cfg(feature = "graph-diagnostics")]
 use work::diagnostics;
 mod environment;
+mod exports;
+use exports::{ExportLease, ExportPool};
 mod frames;
 mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
 mod provenance;
+mod snapshots;
+mod storage;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
 mod work;
@@ -44,7 +47,9 @@ pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics}
 #[cfg(all(feature = "presentation", windows))]
 pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
 use provenance::BufferProvenance;
+use storage::StoragePool;
 use work::GraphWork;
+use work::{ResultData, WorkData};
 
 static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 
@@ -75,6 +80,46 @@ impl Default for RuntimeConfig {
     }
 }
 
+/// Backing reserved for changing Graph inputs, independent of native execution
+/// slots. Result and metadata capacity also cover callers retaining old frames.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameCapacity {
+    pub graph: GraphCapacity,
+    pub work_slots: usize,
+    pub result_slots: usize,
+    pub metadata_slots: usize,
+    pub range_snapshots: usize,
+    pub initialized_ranges_per_resource: usize,
+    pub provenance_segments_per_resource: usize,
+}
+impl Default for FrameCapacity {
+    fn default() -> Self {
+        Self {
+            graph: GraphCapacity::default(),
+            work_slots: 4,
+            result_slots: 8,
+            metadata_slots: 16,
+            range_snapshots: 1024,
+            initialized_ranges_per_resource: 32,
+            provenance_segments_per_resource: 64,
+        }
+    }
+}
+
+/// Native-independent resource classes and simultaneously retained instance
+/// counts. New classes/counts require an explicit working-set preparation.
+#[derive(Clone, Copy, Debug)]
+pub enum ResourceClass {
+    Buffer {
+        desc: crate::graph::BufferDesc,
+        count: usize,
+    },
+    Image {
+        desc: crate::graph::ImageDesc,
+        count: usize,
+    },
+}
+
 pub use super::error::{RuntimeError, RuntimeErrorKind};
 
 /// Counters describe bounded reuse, not performance claims.
@@ -91,7 +136,6 @@ pub struct RuntimeStats {
     pub descriptor_arenas_reused: usize,
 }
 
-#[derive(Clone)]
 struct Snapshot {
     // Changes only when accepted work writes or invalidates logical contents.
     revision: u64,
@@ -104,6 +148,19 @@ struct Snapshot {
     writer_stage: vk::PipelineStageFlags2,
     writer_access: vk::AccessFlags2,
     provenance: BufferProvenance,
+}
+
+#[cfg(test)]
+impl Clone for Snapshot {
+    fn clone(&self) -> Self {
+        let mut result = Self::with_capacity(
+            self.initialized.capacity(),
+            self.provenance.segment_capacity(),
+        )
+        .unwrap();
+        result.copy_from(self).unwrap();
+        result
+    }
 }
 
 impl Default for Snapshot {
@@ -168,6 +225,7 @@ impl Physical {
 struct Entry {
     generation: u32,
     registered: bool,
+    pending_registration: u64,
     // Trimming leaves the generation in place: a later allocation must never
     // resurrect an old public ResourceKey, even when the native object is gone.
     physical: Option<Arc<Physical>>,
@@ -214,14 +272,25 @@ type PhysicalLease = ResourceLease<Physical>;
 
 struct Registration<'a> {
     entries: &'a mut [Entry],
-    indices: Vec<usize>,
+    exports: &'a ExportLease,
+    logical: &'a [usize],
+    serial: u64,
     keep: bool,
 }
 impl Drop for Registration<'_> {
     fn drop(&mut self) {
-        if !self.keep {
-            for &index in &self.indices {
-                self.entries[index].registered = false;
+        for &logical in self.logical {
+            let key = self
+                .exports
+                .get(logical)
+                .expect("prepared exported key")
+                .key();
+            let entry = &mut self.entries[key.index as usize];
+            if entry.pending_registration == self.serial {
+                entry.pending_registration = 0;
+                if !self.keep {
+                    entry.registered = false;
+                }
             }
         }
     }
@@ -237,6 +306,11 @@ pub struct VulkanRuntime {
     upload: SharedStaging,
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
+    workspaces: Option<StoragePool<WorkData>>,
+    results: Option<StoragePool<ResultData>>,
+    frame_capacity: Option<FrameCapacity>,
+    exports: Option<ExportPool>,
+    import_ranges: Mutex<ImportRangesPool>,
     entries: Vec<Entry>,
     vacant: Vec<usize>,
     available: CacheIndex<CacheDescriptor>,
@@ -253,6 +327,151 @@ pub struct VulkanRuntime {
 }
 
 impl VulkanRuntime {
+    fn capture_ranges(&self, ranges: &[Range<u64>]) -> Result<ImportRanges, RuntimeError> {
+        self.import_ranges
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .capture(ranges)
+            .map_err(|_| RuntimeError::capacity("prepared import range snapshots exhausted"))
+    }
+
+    /// Prepare native resources and all variable-length frame backing. Normal
+    /// submit never creates resources or grows this working set. Graph input,
+    /// draw count and pass composition may change within the prepared limits.
+    ///
+    /// `resources` describes unregistered reusable instances in addition to
+    /// explicitly registered inputs. Include recording, GPU and exported uses
+    /// in the counts. Every recording/result/metadata token must be returned
+    /// before changing capacities; ordinary exhaustion never waits implicitly.
+    pub fn prepare_working_set(
+        &mut self,
+        capacity: FrameCapacity,
+        resources: &[ResourceClass],
+    ) -> Result<(), RuntimeError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        self.collect_recycled();
+        if self.execution.stats().leased != 0
+            || self.workspaces.as_ref().is_some_and(|pool| !pool.is_idle())
+            || self.results.as_ref().is_some_and(|pool| !pool.is_idle())
+            || self.exports.as_mut().is_some_and(|pool| !pool.is_idle())
+            || !self
+                .import_ranges
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_idle()
+        {
+            return Err(RuntimeError::capacity(
+                "working-set preparation requires returned frame/result/import tokens",
+            ));
+        }
+        if capacity.graph.resources == 0
+            || capacity.graph.passes == 0
+            || capacity.work_slots == 0
+            || capacity.result_slots == 0
+            || capacity.metadata_slots == 0
+            || capacity.range_snapshots == 0
+        {
+            return Err(RuntimeError::invalid(
+                "frame working-set capacities must be nonzero",
+            ));
+        }
+        let workspaces = StoragePool::new(
+            capacity.work_slots,
+            || WorkData::new(capacity),
+            WorkData::reset,
+        )?;
+        let results = StoragePool::new(
+            capacity.result_slots,
+            || ResultData::new(capacity.graph.passes),
+            ResultData::reset,
+        )?;
+        let exports = ExportPool::new(capacity.graph.resources, capacity.metadata_slots)?;
+        let ranges = ImportRangesPool::new(
+            capacity.initialized_ranges_per_resource,
+            capacity.range_snapshots,
+        )
+        .map_err(|_| RuntimeError::capacity("import range preparation failed"))?;
+        let instances = resources.iter().try_fold(0usize, |total, class| {
+            let count = match class {
+                ResourceClass::Buffer { count, .. } | ResourceClass::Image { count, .. } => *count,
+            };
+            if count == 0 {
+                return Err(RuntimeError::invalid(
+                    "resource class count must be nonzero",
+                ));
+            }
+            total
+                .checked_add(count)
+                .ok_or_else(|| RuntimeError::capacity("resource working-set count overflow"))
+        })?;
+        if instances
+            > self
+                .config
+                .resource_capacity
+                .saturating_sub(self.entries.iter().filter(|entry| entry.registered).count())
+        {
+            return Err(RuntimeError::capacity(
+                "resource working set exceeds registry capacity",
+            ));
+        }
+        let mut retained = storage::reserved(instances)?;
+        for class in resources {
+            let (desc, count) = match *class {
+                ResourceClass::Buffer { desc, count } => (ResourceDesc::Buffer(desc), count),
+                ResourceClass::Image { desc, count } => (ResourceDesc::Image(desc), count),
+            };
+            for _ in 0..count {
+                retained.push(self.acquire_inner(desc, "prepared graph resource", true)?.1);
+            }
+        }
+        drop(retained);
+        self.collect_recycled();
+        let mut snapshots = storage::reserved(self.entries.len())?;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if let Some(physical) = &entry.physical {
+                let mut snapshot = Snapshot::with_capacity(
+                    capacity.initialized_ranges_per_resource,
+                    capacity.provenance_segments_per_resource,
+                )?;
+                snapshot.copy_from(&physical.lock().scheduled)?;
+                snapshots.push((index, snapshot));
+            }
+        }
+        if self.programs.is_none() {
+            self.programs = Some(ShaderPrograms::new(
+                Arc::clone(&self.owner),
+                self.config.execution_slots,
+                self.config.max_shader_bindings,
+            )?);
+        }
+        // The current supported Graph envelope includes all three native shader
+        // classes. Public preparation describes capacity/resources, not private
+        // program kinds; a later frame may select any supported pass mix.
+        self.programs
+            .as_ref()
+            .unwrap()
+            .prepare_bindings(ShaderNeeds {
+                compute: true,
+                raster: true,
+                composite: true,
+            })?;
+        for (index, snapshot) in snapshots {
+            self.entries[index].physical().lock().scheduled = snapshot;
+        }
+        self.workspaces = Some(workspaces);
+        self.results = Some(results);
+        self.exports = Some(exports);
+        self.frame_capacity = Some(capacity);
+        *self
+            .import_ranges
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = ranges;
+        Ok(())
+    }
+
     /// Create an immutable managed pipeline independently of any Graph.
     pub fn create_program(
         &self,
@@ -387,6 +606,14 @@ impl VulkanRuntime {
             upload,
             readback,
             programs: None,
+            workspaces: None,
+            results: None,
+            frame_capacity: None,
+            exports: None,
+            import_ranges: Mutex::new(
+                ImportRangesPool::new(0, config.resource_capacity)
+                    .map_err(|_| RuntimeError::capacity("import range preparation failed"))?,
+            ),
             entries,
             vacant,
             available,
@@ -438,7 +665,7 @@ impl VulkanRuntime {
             key,
             revision: state.scheduled.revision,
             desc,
-            initialized: state.scheduled.initialized.clone(),
+            initialized: self.capture_ranges(&state.scheduled.initialized)?,
         })
     }
     pub fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, RuntimeError> {
@@ -511,11 +738,16 @@ impl VulkanRuntime {
             return;
         };
         if entry.reusable() {
-            self.available.insert(
-                index,
-                entry.physical().desc.into(),
-                entry.physical().lock().scheduled.serial,
-            );
+            let serial = {
+                let mut state = entry.physical().lock();
+                // No public key or recording/GPU lease can read these logical
+                // contents again. Release provenance pins before the next Graph
+                // builder checkout; retain actual native layout and last writer.
+                state.scheduled.clear_contents();
+                state.scheduled.serial
+            };
+            self.available
+                .insert(index, entry.physical().desc.into(), serial);
         } else {
             self.available.remove(index);
         }
@@ -558,6 +790,15 @@ impl VulkanRuntime {
         desc: ResourceDesc,
         name: &str,
     ) -> Result<(ResourceKey, PhysicalLease), RuntimeError> {
+        self.acquire_inner(desc, name, false)
+    }
+
+    fn acquire_inner(
+        &mut self,
+        desc: ResourceDesc,
+        name: &str,
+        allow_create: bool,
+    ) -> Result<(ResourceKey, PhysicalLease), RuntimeError> {
         self.collect_recycled();
         let target = self
             .available
@@ -569,6 +810,11 @@ impl VulkanRuntime {
                 |index| self.entries.get(index).is_some_and(Entry::reusable),
             )
             .map_err(|()| RuntimeError::capacity("graph physical resource capacity exhausted"))?;
+        if !allow_create && !matches!(target, CacheTarget::Reuse(_)) {
+            return Err(RuntimeError::capacity(
+                "resource class has no prepared free instance",
+            ));
+        }
         if let CacheTarget::Reuse(index) = target {
             self.available.remove(index);
             let entry = &mut self.entries[index];
@@ -576,7 +822,7 @@ impl VulkanRuntime {
             let mut state = entry.physical().lock();
             // Preserve actual native synchronization, never old logical contents.
             state.scheduled.initialized.clear();
-            state.scheduled.provenance = BufferProvenance::default();
+            state.scheduled.provenance.clear();
             drop(state);
             self.resources_reused += 1;
             return Ok((
@@ -623,7 +869,14 @@ impl VulkanRuntime {
             desc,
             native,
             state: Mutex::new(State {
-                scheduled: Snapshot::default(),
+                scheduled: if let Some(capacity) = self.frame_capacity {
+                    Snapshot::with_capacity(
+                        capacity.initialized_ranges_per_resource,
+                        capacity.provenance_segments_per_resource,
+                    )?
+                } else {
+                    Snapshot::default()
+                },
                 completed_serial: 0,
             }),
         });
@@ -632,6 +885,7 @@ impl VulkanRuntime {
         let entry = Entry {
             generation,
             registered: false,
+            pending_registration: 0,
             physical: Some(Arc::clone(&physical)),
         };
         if replace.is_some() {
@@ -704,25 +958,35 @@ impl VulkanRuntime {
         } else {
             None
         };
-        let mut needed = vec![false; graph.resources.len()];
+        let mut work = GraphWork::acquire(
+            Arc::clone(&self.owner),
+            self.workspaces
+                .as_ref()
+                .ok_or_else(|| RuntimeError::capacity("frame working set is not prepared"))?,
+            self.results.as_ref().ok_or_else(|| {
+                RuntimeError::capacity("frame result working set is not prepared")
+            })?,
+            graph,
+            serial,
+        )?;
         for &pass in &graph.order {
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
                     "pass {} is declaration-only {kind:?}; native execution unsupported",
-                    graph.passes[pass].name
+                    graph.pass_name(pass)
                 )));
             }
-            for access in &graph.passes[pass].accesses {
-                needed[access.resource] = true;
+            for access in graph.accesses(pass) {
+                work.needed[access.resource] = true;
             }
         }
         for &resource in &graph.exports {
-            needed[resource] = true;
+            work.needed[resource] = true;
         }
         // Validate logical contents, including culled imports, before allocation.
         // Read-only uses may have advanced native scopes/layouts since compile;
         // prepare rebases those from the latest canonical scheduled state.
-        for resource in &graph.resources {
+        for (resource_index, resource) in graph.resources.iter().enumerate() {
             if let Some(key) = resource.import {
                 let physical = self.entry(key)?.physical();
                 let state = physical.lock();
@@ -734,28 +998,26 @@ impl VulkanRuntime {
                 #[cfg(feature = "development-validation")]
                 let inconsistent = inconsistent
                     || physical.desc != resource.desc
-                    || state.scheduled.initialized != resource.initial;
+                    || state.scheduled.initialized != graph.initial_contents(resource_index);
                 if inconsistent {
                     return Err(RuntimeError::stale(format!(
                         "stale or inconsistent import snapshot for {}; refresh and recompile",
-                        resource.name
+                        graph.resource_name(resource_index)
                     )));
                 }
             }
         }
-        let mut physical = vec![None; graph.resources.len()];
-        let mut keys = vec![None; graph.resources.len()];
         for (index, resource) in graph.resources.iter().enumerate() {
-            if !needed[index] {
+            if !work.needed[index] {
                 continue;
             }
             let (key, value) = if let Some(key) = resource.import {
                 (key, self.lease(key)?)
             } else {
-                self.acquire(resource.desc, &resource.name)?
+                self.acquire(resource.desc, graph.resource_name(index))?
             };
-            keys[index] = Some(key);
-            physical[index] = Some(value);
+            work.keys[index] = Some(key);
+            work.physical[index] = Some(value);
         }
         let mut shader_needs = ShaderNeeds::default();
         for &pass in &graph.order {
@@ -768,16 +1030,13 @@ impl VulkanRuntime {
                 _ => {}
             }
         }
-        if shader_needs.any() && self.programs.is_none() {
-            self.programs = Some(ShaderPrograms::new(
-                Arc::clone(&self.owner),
-                self.config.execution_slots,
-                self.config.max_shader_bindings,
-            )?);
-        }
-        let programs = shader_needs
-            .any()
-            .then(|| Arc::clone(self.programs.as_ref().unwrap()));
+        let programs = if shader_needs.any() {
+            Some(Arc::clone(self.programs.as_ref().ok_or_else(|| {
+                RuntimeError::capacity("shader working set is not prepared")
+            })?))
+        } else {
+            None
+        };
         if let Some(programs) = &programs {
             programs.ensure(shader_needs)?;
         }
@@ -792,17 +1051,14 @@ impl VulkanRuntime {
                 graph,
                 serial,
                 self.owner.device.queue_family(),
-                &keys,
-                &physical,
+                &work.keys[..graph.resources.len()],
+                &work.physical[..graph.resources.len()],
             )
         });
         #[cfg(not(feature = "graph-diagnostics"))]
         let diagnostic = ();
-        let mut work = GraphWork::prepare(
-            Arc::clone(&self.owner),
+        let mut work = work.prepare(
             graph,
-            serial,
-            physical,
             programs,
             bindings,
             &self.upload,
@@ -817,32 +1073,33 @@ impl VulkanRuntime {
             .profile
             .as_ref()
             .map(|profile| Arc::clone(&profile.cpu_pending));
-        let mut exports = BTreeMap::new();
+        let mut exports = self
+            .exports
+            .as_mut()
+            .ok_or_else(|| RuntimeError::capacity("frame metadata working set is not prepared"))?
+            .acquire()?;
         for &index in &graph.exports {
-            let key = keys[index].unwrap();
+            let key = work.keys[index].unwrap();
             let snapshot = work.final_states[index].as_ref().unwrap();
             exports.insert(
                 index,
-                export_snapshot(key, graph.resources[index].desc, snapshot),
-            );
+                export_snapshot(self, key, graph.resources[index].desc, snapshot)?,
+            )?;
         }
         // Slots become externally named only for an actual export. The local
         // payload leases already prevent reuse throughout this transaction.
-        let new_exports = graph
-            .exports
-            .iter()
-            .filter_map(|&index| {
-                let key = keys[index].unwrap();
-                (!self.entries[key.index as usize].registered).then_some(key.index as usize)
-            })
-            .collect::<Vec<_>>();
         let record_started = cpu_pending.as_ref().map(|_| Instant::now());
         let recorded = reservation.record(work)?;
         if let (Some(cpu), Some(started)) = (&cpu_pending, record_started) {
             cpu.lock().unwrap_or_else(|error| error.into_inner())[0] = started.elapsed();
         }
-        for &index in &new_exports {
-            self.register(index);
+        for &logical in &graph.exports {
+            let key = exports.get(logical).expect("prepared exported key").key();
+            let index = key.index as usize;
+            if !self.entries[index].registered {
+                self.entries[index].pending_registration = serial;
+                self.register(index);
+            }
         }
         // Consume the serial before submit/logging: even if an application
         // subscriber panics after acceptance, a later write cannot reuse its
@@ -853,7 +1110,9 @@ impl VulkanRuntime {
         // This guard changes registration only, never accepted physical state.
         let mut registration = Registration {
             entries: &mut self.entries,
-            indices: new_exports,
+            exports: &exports,
+            logical: &graph.exports,
+            serial,
             keep: false,
         };
         let submit_started = cpu_pending.as_ref().map(|_| Instant::now());
@@ -880,13 +1139,26 @@ enum Export {
     Buffer(ImportBuffer),
     Image(ImportImage),
 }
-fn export_snapshot(key: ResourceKey, desc: ResourceDesc, snapshot: &Snapshot) -> Export {
-    match desc {
+impl Export {
+    fn key(&self) -> ResourceKey {
+        match self {
+            Self::Buffer(value) => value.key,
+            Self::Image(value) => value.key,
+        }
+    }
+}
+fn export_snapshot(
+    runtime: &VulkanRuntime,
+    key: ResourceKey,
+    desc: ResourceDesc,
+    snapshot: &Snapshot,
+) -> Result<Export, RuntimeError> {
+    Ok(match desc {
         ResourceDesc::Buffer(desc) => Export::Buffer(ImportBuffer {
             key,
             revision: snapshot.revision,
             desc,
-            initialized: snapshot.initialized.clone(),
+            initialized: runtime.capture_ranges(&snapshot.initialized)?,
         }),
         ResourceDesc::Image(desc) => Export::Image(ImportImage {
             key,
@@ -894,7 +1166,7 @@ fn export_snapshot(key: ResourceKey, desc: ResourceDesc, snapshot: &Snapshot) ->
             desc,
             initialized: snapshot.initialized.len() == 1 && snapshot.initialized[0] == (0..1),
         }),
-    }
+    })
 }
 
 /// Owns a pending submission, never a CPU-readiness promise. Its bounded Drop
@@ -903,7 +1175,7 @@ pub struct Submission {
     id: FrameId,
     graph: u64,
     pending: PendingTransfer<GraphWork>,
-    exports: BTreeMap<usize, Export>,
+    exports: ExportLease,
 }
 
 impl Submission {
@@ -915,9 +1187,9 @@ impl Submission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .get(&handle.index)
+            .get(handle.index)
             .and_then(|value| match value {
-                Export::Buffer(value) => Some(value.clone()),
+                Export::Buffer(value) => Some(value),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("buffer was not exported"))
@@ -927,9 +1199,9 @@ impl Submission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .get(&handle.index)
+            .get(handle.index)
             .and_then(|value| match value {
-                Export::Image(value) => Some(value.clone()),
+                Export::Image(value) => Some(value),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("image was not exported"))
@@ -954,6 +1226,7 @@ impl SubmissionResult {
             return Err(RuntimeError::wrong_owner("foreign graph readback handle"));
         }
         self.work
+            .result
             .readbacks
             .binary_search_by_key(&pass.index, |(index, _)| *index)
             .map_err(|_| RuntimeError::invalid("pass has no readback result"))
@@ -962,7 +1235,7 @@ impl SubmissionResult {
     /// Exact size of an unconsumed readback. No native mapping or allocation.
     pub fn readback_len(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
         let index = self.readback_index(pass)?;
-        let value = self.work.readbacks[index]
+        let value = self.work.result.readbacks[index]
             .1
             .as_ref()
             .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
@@ -979,7 +1252,7 @@ impl SubmissionResult {
         output: &mut [u8],
     ) -> Result<(), RuntimeError> {
         let index = self.readback_index(pass)?;
-        let (_, range) = &mut self.work.readbacks[index];
+        let (_, range) = &mut self.work.result.readbacks[index];
         let value = range
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;

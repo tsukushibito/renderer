@@ -359,7 +359,7 @@ impl SharedStaging {
     }
 }
 
-/// No Clone: a range has one CPU/GPU owner until it can be returned to VMA.
+/// No Clone: a range has one CPU/GPU owner until its placement can be returned.
 pub(in crate::backends::vulkan) struct StagingRange {
     owner: Arc<StagingOwner>,
     reservation: Option<Reservation>,

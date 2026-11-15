@@ -3,10 +3,14 @@
 use std::time::{Duration, Instant};
 
 use super::{RuntimeConfig, VulkanRuntime};
+use crate::backends::vulkan::engine::{
+    EngineFrameCapacity,
+    test_input::{Assets as Engine, graph},
+};
 use crate::{
     EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
     RenderedFrame, VulkanEngine,
-    engine::{Draw, Engine, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
+    engine::{Draw, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
     graph::{ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
 };
 
@@ -40,6 +44,7 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
                 max_bytes: mesh([1.0; 4]).byte_len() * 8,
                 max_upload_submissions: 1,
             },
+            EngineFrameCapacity::default(),
         )
         .unwrap();
         let mut assets = Engine::new(4, 4).unwrap();
@@ -99,8 +104,7 @@ fn render_frame(
     ) -> Result<crate::graph::ImageHandle, GraphError>,
 ) -> Result<RenderedFrame, EngineRenderError> {
     let prepared = build_frame(engine, assets, view, draws, readback, extension)?;
-    let plan = prepared.graph.compile()?;
-    engine.submit_frame(prepared, &plan)
+    engine.submit_frame(prepared.compile()?)
 }
 
 fn collect(engine: &mut VulkanEngine, expected: &[(FrameId, PassHandle, usize, [u8; 4])]) {
@@ -360,10 +364,10 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         assert!(matches!(rejected, Err(EngineRenderError::Graph(_))));
         let mut prepared =
             build_frame(engine, assets, &view, &[], false, |_, color| Ok(color)).unwrap();
-        prepared.graph = Graph::new();
-        let foreign = prepared.graph.compile().unwrap();
+        prepared.graph = graph();
+        let foreign = prepared.compile().unwrap();
         assert!(matches!(
-            engine.submit_frame(prepared, &foreign),
+            engine.submit_frame(foreign),
             Err(EngineRenderError::Input(_))
         ));
         assert_eq!(engine.runtime().pending_frames(), 0);
@@ -388,24 +392,22 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         let old_b = engine
             .build_snapshot(&captured, true, |_, c| Ok(c))
             .unwrap();
-        let old_a_plan = old_a.graph.compile().unwrap();
-        let old_b_plan = old_b.graph.compile().unwrap();
+        let old_a = old_a.compile().unwrap();
+        let old_b = old_b.compile().unwrap();
         // Both prepared graphs pin the same resident old version. Later CPU
         // updates do not alter their immutable content or registration pins.
         assets
             .update_mesh(handle, mesh([0.0, 0.0, 1.0, 1.0]))
             .unwrap();
-        let mut a = engine.submit_frame(old_a, &old_a_plan).unwrap();
-        let mut b = engine.submit_frame(old_b, &old_b_plan).unwrap();
+        let mut a = engine.submit_frame(old_a).unwrap();
+        let mut b = engine.submit_frame(old_b).unwrap();
         engine.release_output(&mut a).unwrap();
         engine.release_output(&mut b).unwrap();
         assert_eq!(engine.runtime().stats().registered_resources, 2);
         let new_a = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
         let new_b = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
-        let plan_a = new_a.graph.compile().unwrap();
-        let plan_b = new_b.graph.compile().unwrap();
-        let mut c = engine.submit_frame(new_a, &plan_a).unwrap();
-        let mut d = engine.submit_frame(new_b, &plan_b).unwrap();
+        let mut c = engine.submit_frame(new_a.compile().unwrap()).unwrap();
+        let mut d = engine.submit_frame(new_b.compile().unwrap()).unwrap();
         engine.release_output(&mut c).unwrap();
         engine.release_output(&mut d).unwrap();
         // Two views share each immutable resident version: the old and new
@@ -431,9 +433,14 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             ],
         );
         let cached = build_frame(engine, assets, &black_view, &[draw], true, |_, c| Ok(c)).unwrap();
-        let plan = cached.graph.compile().unwrap();
-        assert!(!plan.ordered_pass_names().contains(&"mesh vertex upload"));
-        let mut pending = engine.submit_frame(cached, &plan).unwrap();
+        let cached = cached.compile().unwrap();
+        assert!(
+            !cached
+                .graph
+                .ordered_pass_names()
+                .any(|name| name == "mesh vertex upload")
+        );
+        let mut pending = engine.submit_frame(cached).unwrap();
         engine.release_output(&mut pending).unwrap();
         assets.delete_mesh(handle).unwrap();
         engine.unload_mesh(handle).unwrap();
@@ -484,7 +491,12 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
         ash::vk::PhysicalDeviceType::CPU
     );
     let monitor = runtime.validation_monitor();
-    let mut engine = VulkanEngine::new(runtime, MeshCacheConfig::default()).unwrap();
+    let mut engine = VulkanEngine::new(
+        runtime,
+        MeshCacheConfig::default(),
+        EngineFrameCapacity::default(),
+    )
+    .unwrap();
     let mut assets = Engine::new(4, 4).unwrap();
     let data = mesh([1.0, 0.0, 0.0, 1.0]);
     let vertices = Arc::downgrade(&data.vertices);
@@ -507,10 +519,11 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     let prepared = engine
         .build_snapshot(&snapshot, true, |_, color| Ok(color))
         .unwrap();
-    let plan = prepared.graph.compile().unwrap();
+    let prepared = prepared.compile().unwrap();
     drop(snapshot);
     assets.delete_mesh(mesh_handle).unwrap();
     assets.delete_material(material).unwrap();
+    assets.collect_retired_meshes();
     assert!(
         vertices.upgrade().is_none(),
         "resident vertex buffers retain no CPU mesh payload"
@@ -519,9 +532,8 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
         indices.upgrade().is_none(),
         "resident index buffers retain only their immutable bound"
     );
-    let mut frame = engine.submit_frame(prepared, &plan).unwrap();
+    let mut frame = engine.submit_frame(prepared).unwrap();
     engine.release_output(&mut frame).unwrap();
-    drop(plan);
     for entry in &engine.runtime().entries {
         if entry.registered {
             assert_eq!(

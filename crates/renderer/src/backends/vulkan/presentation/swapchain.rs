@@ -136,6 +136,10 @@ impl Swapchain {
         // SAFETY: Actual Surface capabilities were queried, one queue supports
         // graphics/compute/present, and old belongs to the same Surface. A caller
         // retains old even if creation fails, because this call retires it.
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+        // SAFETY: Queried Surface plan and retained old generation satisfy the
+        // creation contract described above.
         let handle = unsafe { loader.create_swapchain(&info, None) }
             .map_err(|r| native(&owner, "vkCreateSwapchainKHR", r))?;
         let mut chain = Self {
@@ -159,6 +163,10 @@ impl Swapchain {
                 .subresource_range(color_range());
             // SAFETY: Views reference this owned Swapchain's images; no VMA
             // Allocation or separate image ownership is fabricated for them.
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+            // SAFETY: This image belongs to the retained Swapchain, with the
+            // same queried format and one color subresource.
             let view = unsafe { chain.owner.device.raw().create_image_view(&info, None) }
                 .map_err(|r| native(&chain.owner, "vkCreateImageView(swapchain)", r))?;
             chain.views.push(view);
@@ -172,8 +180,15 @@ impl Drop for Swapchain {
         // GPU references and all corresponding present fences have completed.
         unsafe {
             for view in self.views.drain(..) {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
                 self.owner.device.raw().destroy_image_view(view, None);
             }
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
             self.loader.destroy_swapchain(self.handle, None);
         }
     }

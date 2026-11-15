@@ -127,6 +127,8 @@ struct ShaderModule<'a> {
 }
 impl Drop for ShaderModule<'_> {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: Synchronous pipeline creation no longer uses this module.
         unsafe {
             self.owner
@@ -164,6 +166,8 @@ impl Program {
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })
                 .collect::<Vec<_>>();
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             // SAFETY: The reviewed manifest describes this validated binary.
             // The local table remains live through synchronous creation.
             let layout = unsafe {
@@ -178,12 +182,16 @@ impl Program {
         // SAFETY: All inputs describe the reviewed managed ABI. Every native
         // result is owned immediately for partial-failure cleanup.
         unsafe {
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             self.layout = device
                 .create_pipeline_layout(
                     &vk::PipelineLayoutCreateInfo::default().set_layouts(&self.set_layouts),
                     None,
                 )
                 .map_err(|r| native(&self.owner, "vkCreatePipelineLayout(managed)", r))?;
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             let module = ShaderModule {
                 owner: &self.owner,
                 handle: device
@@ -198,11 +206,21 @@ impl Program {
                         .module(module.handle)
                         .name(c"main"),
                 )];
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             self.pipeline =
                 match device.create_compute_pipelines(vk::PipelineCache::null(), &infos, None) {
                     Ok(pipelines) => pipelines[0],
                     Err((partial, result)) => {
                         for pipeline in partial {
+                            if pipeline == vk::Pipeline::null() {
+                                continue;
+                            }
+                            #[cfg(feature = "memory-profiling")]
+                            crate::measurement::record_native(
+                                crate::measurement::NativeEvent::ObjectDestroy,
+                                1,
+                            );
                             device.destroy_pipeline(pipeline, None);
                         }
                         return Err(native(
@@ -222,9 +240,28 @@ impl Drop for Program {
         // Drop occurs before recording, after cancel or actual GPU retirement.
         unsafe {
             let device = self.owner.device.raw();
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline_layout(self.layout, None);
+            if self.pipeline != vk::Pipeline::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                device.destroy_pipeline(self.pipeline, None);
+            }
+            if self.layout != vk::PipelineLayout::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                device.destroy_pipeline_layout(self.layout, None);
+            }
             for layout in &self.set_layouts {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
                 device.destroy_descriptor_set_layout(*layout, None);
             }
         }
@@ -286,6 +323,8 @@ impl VulkanBuffer {
                 ..Default::default()
             },
         };
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
         // SAFETY: Exact nonzero request, retained VMA/Device, no escaped mapping.
         let (handle, allocation) = unsafe { owner.raw.create_buffer(&info, &allocation_info) }
             .map_err(|r| native(&owner, "vmaCreateBuffer(managed)", r))?;
@@ -333,6 +372,8 @@ struct StorageState {
 }
 impl Drop for Buffer {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
         // SAFETY: Bindings/GPU owners retain the allocation through every
         // recorded use, completion or cancellation; no mapping escapes.
         unsafe {
@@ -463,6 +504,8 @@ impl VulkanBindings {
         // before allocation. New sets are updated once, retain all resources and
         // are never changed while referenced by recorded/pending commands.
         unsafe {
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             bindings.pool = owner
                 .device
                 .raw()
@@ -473,6 +516,11 @@ impl VulkanBindings {
                     None,
                 )
                 .map_err(|r| native(owner, "vkCreateDescriptorPool(managed)", r))?;
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(
+                crate::measurement::NativeEvent::DescriptorAllocate,
+                program.0.set_layouts.len() as u64,
+            );
             bindings.sets = owner
                 .device
                 .raw()
@@ -556,6 +604,17 @@ impl Bindings {
 }
 impl Drop for Bindings {
     fn drop(&mut self) {
+        if self.pool == vk::DescriptorPool::null() {
+            return;
+        }
+        #[cfg(feature = "memory-profiling")]
+        {
+            crate::measurement::record_native(
+                crate::measurement::NativeEvent::DescriptorFree,
+                self.sets.len() as u64,
+            );
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
+        }
         // SAFETY: Execution owners retain the sets through retirement/cancel.
         // Destroy their pool before the retained Program and resources drop.
         unsafe {

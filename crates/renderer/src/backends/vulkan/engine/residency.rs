@@ -1,7 +1,7 @@
 //! Bounded logical mesh residency, prepared pins and explicit chunk submission.
 use super::super::graph::RuntimeErrorKind;
 use super::*;
-use crate::graph::BufferDesc;
+use crate::graph::{BufferDesc, GraphErrorKind};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::Instant,
@@ -137,19 +137,40 @@ impl VulkanEngine {
         &mut self,
         snapshot: &FrameSnapshot,
     ) -> Result<MeshUploadProgress, EngineRenderError> {
-        let mut required = BTreeMap::new();
+        let mut required = std::mem::take(&mut self.required_meshes);
+        let result = self.prepare_snapshot_with_scratch(snapshot, &mut required);
+        required.clear();
+        self.required_meshes = required;
+        result
+    }
+
+    fn prepare_snapshot_with_scratch(
+        &mut self,
+        snapshot: &FrameSnapshot,
+        required: &mut Vec<(MeshVersionKey, Arc<MeshData>)>,
+    ) -> Result<MeshUploadProgress, EngineRenderError> {
+        let mut required_bytes = 0u64;
         for draw in &snapshot.draws {
-            required
-                .entry(MeshVersionKey::new(draw.mesh, draw.revision))
-                .or_insert_with(|| Arc::clone(&draw.data));
+            let key = MeshVersionKey::new(draw.mesh, draw.revision);
+            let Err(index) = required.binary_search_by_key(&key, |(key, _)| *key) else {
+                continue;
+            };
+            required_bytes = required_bytes
+                .checked_add(draw.data.vertices.len() as u64)
+                .and_then(|v| v.checked_add(draw.data.indices.len() as u64))
+                .ok_or_else(|| EngineError::new("mesh working set byte size overflows"))?;
+            if required.len() == self.config.max_meshes {
+                return Err(MeshPreparationError::WorkingSetTooLarge {
+                    required_meshes: required.len() + 1,
+                    required_bytes,
+                    max_meshes: self.config.max_meshes,
+                    max_bytes: self.config.max_bytes,
+                }
+                .into());
+            }
+            required.insert(index, (key, Arc::clone(&draw.data)));
         }
-        let required_bytes = required.values().try_fold(0u64, |total, data| {
-            total
-                .checked_add(data.vertices.len() as u64)
-                .and_then(|v| v.checked_add(data.indices.len() as u64))
-                .ok_or_else(|| EngineError::new("mesh working set byte size overflows"))
-        })?;
-        if required.len() > self.config.max_meshes || required_bytes > self.config.max_bytes {
+        if required_bytes > self.config.max_bytes {
             return Err(MeshPreparationError::WorkingSetTooLarge {
                 required_meshes: required.len(),
                 required_bytes,
@@ -166,19 +187,23 @@ impl VulkanEngine {
             }
             .into());
         }
-        let keys = required.keys().copied().collect::<Vec<_>>();
         if self.remaining_bytes() != 0
-            && self
-                .active_upload
-                .as_ref()
-                .is_some_and(|active| active.keys != keys)
+            && self.active_upload.as_ref().is_some_and(|active| {
+                !active
+                    .keys
+                    .iter()
+                    .copied()
+                    .eq(required.iter().map(|(key, _)| *key))
+            })
         {
             return Err(MeshPreparationError::UploadBusy.into());
         }
-        let pinned = self
-            .residents
-            .iter()
-            .filter(|(key, entry)| !required.contains_key(key) && entry.pinned());
+        let pinned = self.residents.iter().filter(|(key, entry)| {
+            required
+                .binary_search_by_key(*key, |(key, _)| *key)
+                .is_err()
+                && entry.pinned()
+        });
         let (pinned_count, pinned_bytes) = pinned
             .fold((0usize, 0u64), |(count, bytes), (_, entry)| {
                 (count + 1, bytes.saturating_add(entry.bytes))
@@ -193,8 +218,8 @@ impl VulkanEngine {
             return Err(MeshPreparationError::ResidencyPinned.into());
         }
         let missing_count = required
-            .keys()
-            .filter(|key| !self.residents.contains_key(key))
+            .iter()
+            .filter(|(key, _)| !self.residents.contains_key(key))
             .count();
         let missing_bytes = required
             .iter()
@@ -218,7 +243,12 @@ impl VulkanEngine {
             let mut candidates = self
                 .residents
                 .iter()
-                .filter(|(key, entry)| !required.contains_key(key) && !entry.pinned())
+                .filter(|(key, entry)| {
+                    required
+                        .binary_search_by_key(*key, |(key, _)| *key)
+                        .is_err()
+                        && !entry.pinned()
+                })
                 .map(|(key, entry)| (entry.last_use.load(Ordering::Relaxed), *key))
                 .collect::<Vec<_>>();
             candidates.sort_unstable();
@@ -240,29 +270,42 @@ impl VulkanEngine {
             }
         }
         let serial = self.next_use()?;
-        for (key, data) in required {
+        for (key, data) in required.iter() {
             let bytes = data.vertices.len() as u64 + data.indices.len() as u64;
-            let entry = self.residents.entry(key).or_insert_with(|| ResidentMesh {
+            let entry = self.residents.entry(*key).or_insert_with(|| ResidentMesh {
                 buffers: None,
-                data: Some(data),
+                data: Some(Arc::clone(data)),
                 bytes,
                 uploaded: 0,
                 last_use: AtomicU64::new(serial),
                 retiring: false,
             });
             entry.retiring = false;
-            self.retiring.remove(&key);
+            self.retiring.remove(key);
             entry.last_use.store(serial, Ordering::Relaxed);
         }
-        let remaining_bytes = keys
+        let remaining_bytes = required
             .iter()
-            .map(|key| {
+            .map(|(key, _)| {
                 let entry = &self.residents[key];
                 entry.bytes - entry.uploaded
             })
             .sum();
-        self.active_upload = Some(ActiveUpload::new(keys, remaining_bytes));
+        let active = self.active_upload.get_or_insert_with(|| {
+            ActiveUpload::new(std::mem::take(&mut self.idle_upload_keys), 0)
+        });
+        active.keys.clear();
+        active.keys.extend(required.iter().map(|(key, _)| *key));
+        active.cursor = 0;
+        active.remaining_bytes = remaining_bytes;
         self.poll_uploads()
+    }
+
+    fn finish_active_upload(&mut self) {
+        if let Some(mut active) = self.active_upload.take() {
+            active.keys.clear();
+            self.idle_upload_keys = active.keys;
+        }
     }
     /// Poll only this loader's bounded submissions and advance at most one chunk.
     /// Application frame completions/readback results remain in the runtime queue.
@@ -321,7 +364,7 @@ impl VulkanEngine {
                     .is_some_and(|entry| !entry.ready() && !entry.retiring)
             })
         }) else {
-            self.active_upload = None;
+            self.finish_active_upload();
             return Ok(self.progress(0));
         };
         if self.pending_uploads.len() >= self.config.max_upload_submissions {
@@ -384,7 +427,13 @@ impl VulkanEngine {
             return Ok(self.progress(0));
         }
         let submission = loop {
-            let mut graph = Graph::new();
+            let mut graph = match self.upload_graphs.begin() {
+                Ok(graph) => graph,
+                Err(error) if error.kind() == GraphErrorKind::CapacityExhausted => {
+                    return Ok(self.progress(0));
+                }
+                Err(error) => return Err(error.into()),
+            };
             let target = graph.import_buffer(
                 "mesh upload target",
                 &self.runtime.refresh_buffer(buffer_key)?,
@@ -425,7 +474,7 @@ impl VulkanEngine {
             .expect("accepted chunk belongs to the active upload")
             .submitted(size, entry.ready());
         if self.remaining_bytes() == 0 {
-            self.active_upload = None;
+            self.finish_active_upload();
         }
         Ok(self.progress(size))
     }
@@ -440,29 +489,29 @@ impl VulkanEngine {
         Ok(())
     }
     pub(super) fn reap_retiring(&mut self) -> Result<(), EngineRenderError> {
-        let keys = self
+        while let Some(key) = self
             .retiring
             .iter()
-            .filter(|key| !self.residents[key].pinned())
+            .find(|key| !self.residents[key].pinned())
             .copied()
-            .collect::<Vec<_>>();
-        for key in keys {
+        {
             self.remove_resident(key)?;
         }
         Ok(())
     }
     /// Stop incomplete work; accepted GPU chunks retain native leases until retired.
     pub fn cancel_uploads(&mut self) -> Result<(), EngineRenderError> {
-        if let Some(active) = self.active_upload.take() {
-            for key in active.keys {
-                if let Some(entry) = self.residents.get_mut(&key)
+        if let Some(active) = &self.active_upload {
+            for key in &active.keys {
+                if let Some(entry) = self.residents.get_mut(key)
                     && !entry.ready()
                 {
                     entry.retiring = true;
-                    self.retiring.insert(key);
+                    self.retiring.insert(*key);
                 }
             }
         }
+        self.finish_active_upload();
         self.reap_retiring()
     }
     /// Unregister GPU versions without deleting the CPU asset or invalidating prepared pins.
@@ -482,14 +531,14 @@ impl VulkanEngine {
                     .map_or(0, |entry| entry.bytes - entry.uploaded)
             });
             if active.remaining_bytes == 0 {
-                self.active_upload = None;
+                self.finish_active_upload();
             }
         }
         self.reap_retiring()?;
         Ok(count)
     }
     pub fn unload_all_meshes(&mut self) -> Result<(), EngineRenderError> {
-        self.active_upload = None;
+        self.finish_active_upload();
         for entry in self.residents.values_mut() {
             entry.retiring = true;
         }

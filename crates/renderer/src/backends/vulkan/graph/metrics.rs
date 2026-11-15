@@ -143,7 +143,9 @@ impl super::SubmissionResult {
         // Recording uses readback vector offsets, so reorder only after actual
         // completion retired those operands. Pass identities are unique; every
         // result lookup can now use binary search without another retained index.
-        work.readbacks.sort_unstable_by_key(|(index, _)| *index);
+        work.result
+            .readbacks
+            .sort_unstable_by_key(|(index, _)| *index);
         if let Some(profile) = &mut work.profile {
             profile.end_retire();
             // SAFETY: Only the successful PendingTransfer wait/poll path calls
@@ -209,6 +211,8 @@ impl TimestampPool {
                 "selected queue has no usable timestamp counter",
             ));
         }
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Timestamp queries require no extra feature. Query count fits
         // u32, and the owner is established before another fallible operation.
         let pool = unsafe {
@@ -253,6 +257,8 @@ impl TimestampPool {
 
 impl Drop for TimestampOwner {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: Every recorded/pending use retains a lease and this owner.
         // The last owner is released before submit, after actual completion,
         // or under Device-loss retirement. Uncertain work retains the Arc.
@@ -271,6 +277,8 @@ impl TimestampLease {
     /// by the same recording/pending owner through completion or cancellation.
     pub(super) unsafe fn begin(&self, command: vk::CommandBuffer) {
         let device = self.pool.owner.device.raw();
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::Reset, 1);
         // SAFETY: The unique pair is not in use by another recording/submission.
         // Queue reset orders both writes without requiring hostQueryReset.
         unsafe {
