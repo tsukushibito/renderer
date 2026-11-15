@@ -1,6 +1,6 @@
 //! Classified, owned error context without retaining a Graph or native resource.
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use super::{AccessRange, PassHandle, ResourceHandle};
 
@@ -8,6 +8,8 @@ use super::{AccessRange, PassHandle, ResourceHandle};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GraphErrorKind {
+    /// A prepared pool or metadata buffer has no available capacity.
+    CapacityExhausted,
     /// Descriptors, values, access purposes or ranges are incompatible or invalid.
     InvalidInput,
     /// A handle has the current owner but no matching declaration of its kind.
@@ -40,13 +42,13 @@ struct GraphErrorContext {
 /// declaration involved; retaining an error does not retain its graph or GPU data.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GraphError {
-    pub message: String,
+    pub message: Cow<'static, str>,
     kind: GraphErrorKind,
-    context: Option<Box<GraphErrorContext>>,
+    context: Option<GraphErrorContext>,
 }
 impl GraphError {
     /// Creates an application-defined error, for example from a graph extension.
-    pub fn custom(message: impl Into<String>) -> Self {
+    pub fn custom(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(GraphErrorKind::Custom, message)
     }
 
@@ -81,7 +83,7 @@ impl GraphError {
             .map_or(&[], |context| context.cycle_passes.as_slice())
     }
 
-    pub(crate) fn new(kind: GraphErrorKind, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: GraphErrorKind, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             message: message.into(),
             kind,
@@ -94,23 +96,39 @@ impl GraphError {
     }
 
     fn context_mut(&mut self) -> &mut GraphErrorContext {
-        self.context.get_or_insert_with(Box::default)
+        self.context.get_or_insert_with(GraphErrorContext::default)
     }
     pub(crate) fn with_pass_name(mut self, name: &str) -> Self {
+        if self.kind == GraphErrorKind::CapacityExhausted {
+            return self;
+        }
         self.context_mut().pass_name = Some(name.into());
         self
     }
     pub(super) fn with_resource_name(mut self, name: &str) -> Self {
+        if self.kind == GraphErrorKind::CapacityExhausted {
+            return self;
+        }
         self.context_mut().resource_name = Some(name.into());
         self
     }
     pub(super) fn with_pass(mut self, handle: PassHandle, name: Option<&str>) -> Self {
+        let name = if self.kind == GraphErrorKind::CapacityExhausted {
+            None
+        } else {
+            name
+        };
         let context = self.context_mut();
         context.pass = Some(handle);
         context.pass_name = name.map(str::to_owned);
         self
     }
     pub(crate) fn with_resource(mut self, handle: ResourceHandle, name: Option<&str>) -> Self {
+        let name = if self.kind == GraphErrorKind::CapacityExhausted {
+            None
+        } else {
+            name
+        };
         let context = self.context_mut();
         context.resource = Some(handle);
         context.resource_name = name.map(str::to_owned);
