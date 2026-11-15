@@ -546,17 +546,32 @@ impl Workspace {
                 self.record_hazard(pass, &access)?;
             }
         }
-        self.edges.sort_unstable();
         Ok(())
     }
 
     fn topological(&mut self, live: &[bool], out: &mut Output) -> Result<(), Error> {
+        out.order.clear();
+        if self.edges.iter().all(|edge| edge.from < edge.to) {
+            // Every edge follows declaration order, proving that order is a DAG
+            // schedule and the same smallest-ready order as the general path.
+            // Hazard construction/capacity checks still run before this point.
+            #[cfg(any(test, feature = "graph-diagnostics"))]
+            self.edges.sort_unstable();
+            out.order.extend(
+                live.iter()
+                    .enumerate()
+                    .filter_map(|(pass, &is_live)| is_live.then_some(pass)),
+            );
+            return Ok(());
+        }
+        // CSR construction needs neighboring edges grouped by source. Keep the
+        // stable cycle witness and general scheduling path for backward edges.
+        self.edges.sort_unstable();
         self.incoming.fill(0);
         self.done.fill(false);
         self.offsets.fill(0);
         self.neighbors.clear();
         self.ready.clear();
-        out.order.clear();
         for edge in &self.edges {
             if self.neighbors.last() == Some(&(edge.from, edge.to)) {
                 continue;
@@ -692,23 +707,33 @@ pub(crate) fn analyze(
     }
     work.ordering(input, &out.live)?;
     work.topological_live_output(out)?;
-    // A culled writer must not publish valid contents. Replay only live order.
-    work.initialize_contents(input)?;
-    for (position, &pass) in out.order.iter().enumerate() {
-        #[cfg(not(any(test, feature = "graph-diagnostics")))]
-        let _ = position;
-        for access in input.pass_accesses(pass) {
-            if access.write {
-                work.write_contents(
-                    access.resource,
-                    access.range,
-                    access.valid_after,
-                    Some(pass),
-                )?;
+    // The first dataflow pass already established these contents when no pass
+    // was removed or reordered. Otherwise replay is essential: a culled writer
+    // must not publish initialized contents, and scheduling may change order.
+    let construction_order = out.order.len() == passes
+        && out
+            .order
+            .iter()
+            .enumerate()
+            .all(|(pass, &index)| pass == index);
+    if !construction_order {
+        work.initialize_contents(input)?;
+        for &pass in &out.order {
+            for access in input.pass_accesses(pass) {
+                if access.write {
+                    work.write_contents(
+                        access.resource,
+                        access.range,
+                        access.valid_after,
+                        Some(pass),
+                    )?;
+                }
             }
         }
-        #[cfg(any(test, feature = "graph-diagnostics"))]
-        {
+    }
+    #[cfg(any(test, feature = "graph-diagnostics"))]
+    {
+        for (position, &pass) in out.order.iter().enumerate() {
             for access in input.pass_accesses(pass) {
                 match &mut out.lifetimes[access.resource] {
                     Some((_, last)) => *last = position,
@@ -979,6 +1004,96 @@ mod tests {
         analyze(&graph, &mut work, &mut out).unwrap();
         assert_eq!(out.order, [0]);
         assert_eq!(out.final_contents(0), [4..8]);
+    }
+
+    #[test]
+    fn declaration_order_keeps_initial_ranges_and_discard_without_publishing_culled_writes() {
+        let mut graph = fixture(vec![0..4, 12..16]);
+        graph.passes = vec![
+            pass(vec![write(4..8)], true),
+            pass(
+                vec![Access {
+                    valid_after: false,
+                    ..write(6..8)
+                }],
+                true,
+            ),
+            pass(vec![read(0..6)], true),
+        ];
+        let mut work = Workspace::new(limits()).unwrap();
+        let mut out = Output::new(limits()).unwrap();
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [0, 1, 2]);
+        assert_eq!(out.final_contents(0), [0..6, 12..16]);
+        assert_eq!(out.lifetimes[0], Some((0, 2)));
+
+        graph.passes.push(pass(vec![write(8..12)], false));
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [0, 1, 2]);
+        assert_eq!(out.final_contents(0), [0..6, 12..16]);
+        assert_eq!(out.lifetimes[0], Some((0, 2)));
+    }
+
+    #[test]
+    fn backward_schedule_keeps_resource_contents_and_actual_lifetimes() {
+        let mut graph = fixture(vec![]);
+        graph.resources.push(Resource {
+            size: 16,
+            initial: vec![12..16],
+            external: false,
+        });
+        graph.passes = vec![
+            pass(vec![write(0..4)], true),
+            pass(
+                vec![Access {
+                    resource: 1,
+                    ..write(4..8)
+                }],
+                true,
+            ),
+        ];
+        graph.passes[0].dependencies.push(1);
+        let mut work = Workspace::new(limits()).unwrap();
+        let mut out = Output::new(limits()).unwrap();
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [1, 0]);
+        assert_eq!(out.final_contents(0), [0..4]);
+        assert_eq!(out.final_contents(1), [4..8, 12..16]);
+        assert_eq!(out.lifetimes, [Some((1, 1)), Some((0, 0))]);
+    }
+
+    #[test]
+    fn forward_schedule_reuses_workspace_after_backward_order_and_self_cycle() {
+        let mut graph = fixture(vec![]);
+        graph.passes = (0..5).map(|_| pass(vec![], true)).collect();
+        graph.passes[0].dependencies.push(3);
+        graph.passes[2].dependencies.push(1);
+        graph.passes[4].dependencies.extend([0, 3]);
+        let mut work = Workspace::new(limits()).unwrap();
+        let mut out = Output::new(limits()).unwrap();
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [1, 2, 3, 0, 4]);
+
+        graph.passes[0].dependencies.clear();
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [0, 1, 2, 3, 4]);
+        assert!(out.ordering_edges.is_sorted());
+        graph.passes[3].side_effect = false;
+        graph.passes[4].dependencies.pop();
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [0, 1, 2, 4]);
+        assert!(out.ordering_edges.is_sorted());
+
+        graph.passes[0].dependencies.push(0);
+        assert_eq!(
+            analyze(&graph, &mut work, &mut out).unwrap_err().kind,
+            ErrorKind::DependencyCycle
+        );
+        assert_eq!(out.cycle, [0, 0]);
+        graph.passes[0].dependencies.clear();
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [0, 1, 2, 4]);
+        assert!(out.cycle.is_empty());
     }
 
     #[test]
