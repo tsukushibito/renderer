@@ -99,6 +99,28 @@ This repository uses **Beads (`bd`)** for issue tracking. Read
   controls do not remove Renderer-side checks; document gaps rather than
   claiming that a shipping configuration already implements the policy.
 
+# Steady-state frame memory
+
+- Design normal frame processing for zero general-purpose CPU heap allocations,
+  reallocations, and deallocations, and zero Renderer-issued native resource or
+  memory creation/destruction. Follow the scope and evidence requirements in
+  [the frame memory policy](docs/design/implementation-policy.md#steady-state-memory).
+- Cover Graph build/compile, prepare, record, submit, poll/retire, present, and
+  result consumption/return within prepared resource and capacity limits, even
+  when per-frame inputs change. Moving the same work to another thread or API
+  does not remove it from this scope.
+- Reserve capacity at explicit preparation/change boundaries and reuse arrays,
+  workspaces, and pools. Reserving/returning slots or suballocating within that
+  capacity is allowed; its bookkeeping must also avoid heap growth and release.
+  Do not silently grow pools or add implicit GPU waits on ordinary exhaustion.
+- Reuse only after all recording, GPU, presentation, and CPU consumers relevant
+  to that resource have finished. The zero-allocation goal cannot waive safe
+  Rust/native contracts, synchronization, capacity checks, or failure handling.
+- Measure allocation, reallocation, and deallocation separately from native
+  create/destroy calls. Keep optional diagnostics and unobservable driver-internal
+  allocations distinct from the Renderer guarantee. Record remaining gaps in
+  Beads and current verification; this design goal is not a claim of completion.
+
 # API compatibility
 
 - Backward compatibility is not a default constraint. Prefer the appropriate API

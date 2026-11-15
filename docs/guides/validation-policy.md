@@ -135,6 +135,11 @@ Unreal RDGも追加validationとresource transitionの生成を別に説明す�
 
 ## 6. 製品版に残す実行状態と失敗処理
 
+[通常フレームのメモリ規約](../design/implementation-policy.md#steady-state-memory)は、
+準備済み容量内での汎用ヒープ確保/再確保/解放とnative資源/メモリ作成/破棄ゼロを設計目標とする。
+この目標のために必要な入力拒否、同期、GPU/present/CPU寿命、容量不足やnative失敗の扱いを省いてはならない。
+追加診断の費用と通常処理の達成状況は独立に確認し、現在未達の処理を保証済みとは扱わない。
+
 submit受理、GPU正常完了、CPU利用終了、登録解除、物理資源の回収を区別する。
 Vulkanのsubmit OOMには状態不変の保証があるが、それを全native失敗へ一般化しない。
 Fence timeoutを正常完了にせず、Device loss後の内容を有効な結果として返さない。

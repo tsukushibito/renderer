@@ -1,9 +1,23 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-14。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日: 2026-11-15（規約/文書の確認。以下の既存実行結果の日付は各記録に従う）。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+## 通常フレームのメモリ規約と現行実装
+
+`renderer-gsw`。[確保・解放ゼロの設計目標](../design/implementation-policy.md#steady-state-memory)を
+AGENTSと既存実装方針へ明文化した。準備済み上限内のGraph構築から完了処理/結果返却までを対象にし、
+事前領域内の再利用、明示した準備・変更境界、容量不足、GPU/present/CPU寿命と診断の計測範囲を定めた。
+今回の変更は規約/文書のみで、実装の確保・解放をゼロにする変更や新しい測定は行っていない。
+
+現行のGraph compile等は未達である。下記`renderer-agv`の37,953回は合成入力のalloc/realloc要求であり、
+deallocや通常フレーム全体、native作成/破棄ゼロの確認ではない。
+全accessの一時Vec整理は引き続き`renderer-7ft.2.2`へ残し、同課題以降の設計/実装に新規約を適用する。
+通常フレーム全体の計測とゼロ目標への移行は、同課題に依存する`renderer-dzz`で追跡する。
+変更文書5件の相対link/anchor 140件とdiff確認が成功し、規約間整合の独立レビューに未解決指摘はない。
+CPU/GPU試験のローカル再実行は対象外とした。
 
 ## Graph・表示・descriptorの効率整理
 
