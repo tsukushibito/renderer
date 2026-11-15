@@ -1,6 +1,8 @@
 //! Acquire/present synchronization slots and exceptional cancellation owners.
 
 use super::*;
+#[cfg(feature = "memory-profiling")]
+use crate::measurement::{NativeEvent, record_native};
 
 pub(in crate::backends::vulkan) struct Slot {
     owner: Arc<MemoryOwner>,
@@ -31,24 +33,32 @@ impl Slot {
         // SAFETY: Handles are immediately stored in the partial-construction
         // owner; no GPU or acquire references exist until construction returns.
         unsafe {
+            #[cfg(feature = "memory-profiling")]
+            record_native(NativeEvent::ObjectCreate, 1);
             slot.acquire = slot
                 .owner
                 .device
                 .raw()
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                 .map_err(|r| native(&slot.owner, "vkCreateSemaphore(acquire)", r))?;
+            #[cfg(feature = "memory-profiling")]
+            record_native(NativeEvent::ObjectCreate, 1);
             slot.finished = slot
                 .owner
                 .device
                 .raw()
                 .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
                 .map_err(|r| native(&slot.owner, "vkCreateSemaphore(present)", r))?;
+            #[cfg(feature = "memory-profiling")]
+            record_native(NativeEvent::ObjectCreate, 1);
             slot.present_fence = slot
                 .owner
                 .device
                 .raw()
                 .create_fence(&vk::FenceCreateInfo::default(), None)
                 .map_err(|r| native(&slot.owner, "vkCreateFence(present)", r))?;
+            #[cfg(feature = "memory-profiling")]
+            record_native(NativeEvent::ObjectCreate, 1);
             slot.cleanup_fence = slot
                 .owner
                 .device
@@ -65,16 +75,27 @@ impl Drop for Slot {
         // alive. Normal release requires GPU completion AND present completion.
         unsafe {
             let device = self.owner.device.raw();
-            device.destroy_fence(self.cleanup_fence, None);
-            device.destroy_fence(self.present_fence, None);
-            device.destroy_semaphore(self.finished, None);
-            device.destroy_semaphore(self.acquire, None);
+            for fence in [self.cleanup_fence, self.present_fence] {
+                if fence != vk::Fence::null() {
+                    #[cfg(feature = "memory-profiling")]
+                    record_native(NativeEvent::ObjectDestroy, 1);
+                    device.destroy_fence(fence, None);
+                }
+            }
+            for semaphore in [self.finished, self.acquire] {
+                if semaphore != vk::Semaphore::null() {
+                    #[cfg(feature = "memory-profiling")]
+                    record_native(NativeEvent::ObjectDestroy, 1);
+                    device.destroy_semaphore(semaphore, None);
+                }
+            }
         }
     }
 }
 pub(in crate::backends::vulkan) struct SlotRecord {
     slot: Arc<Slot>,
     present: Option<Arc<Swapchain>>,
+    spare_binding: Option<Binding>,
 }
 
 /// Holds a successful acquire immediately, including across a logging unwind.
@@ -216,16 +237,12 @@ impl Slot {
     /// retain this Slot, and its acquire signal must be unowned. `program` and
     /// `source` must belong to this Device; source must remain live through the
     /// new recorded/pending work. Its View must match the fixed sampled ABI.
-    unsafe fn prepare(
-        &mut self,
-        program: Arc<Program>,
-        source: vk::ImageView,
-    ) -> Result<(), RuntimeError> {
-        if self.binding.program.format != program.format {
-            self.binding = Binding::new(program)?;
-        }
+    unsafe fn prepare(&mut self, source: vk::ImageView) -> Result<(), RuntimeError> {
         // SAFETY: Both prior cleanup and present usages completed before this
         // Slot became idle; no recorded work retains it (unique Arc above).
+        #[cfg(feature = "memory-profiling")]
+        record_native(NativeEvent::Reset, 1);
+        // SAFETY: Both fences and every recorded reference have retired.
         unsafe {
             self.owner
                 .device
@@ -244,7 +261,24 @@ impl SlotRecord {
         Ok(Self {
             slot: Slot::new(program)?,
             present: None,
+            spare_binding: None,
         })
+    }
+    /// Prepare the fixed Surface format working set without modifying any
+    /// descriptor retained by recorded, GPU or presentation work.
+    pub(in crate::backends::vulkan) fn prepare_format(
+        &mut self,
+        program: Arc<Program>,
+    ) -> Result<(), RuntimeError> {
+        if self.slot.binding.program.format != program.format
+            && self
+                .spare_binding
+                .as_ref()
+                .is_none_or(|binding| binding.program.format != program.format)
+        {
+            self.spare_binding = Some(Binding::new(program)?);
+        }
+        Ok(())
     }
     pub(in crate::backends::vulkan) fn slot(&self) -> &Arc<Slot> {
         &self.slot
@@ -264,9 +298,20 @@ impl SlotRecord {
         source: vk::ImageView,
     ) -> Result<(), RuntimeError> {
         let slot = Arc::get_mut(&mut self.slot).expect("idle Slot has one owner");
+        if slot.binding.program.format != program.format {
+            let binding = self.spare_binding.as_mut().ok_or_else(|| {
+                RuntimeError::capacity("presentation format bindings were not prepared")
+            })?;
+            if binding.program.format != program.format {
+                return Err(RuntimeError::capacity(
+                    "presentation format bindings were not prepared",
+                ));
+            }
+            std::mem::swap(&mut slot.binding, binding);
+        }
         // SAFETY: Caller proved both completion conditions; sole Arc is also
         // enforced above. Source/program obligations are forwarded unchanged.
-        unsafe { slot.prepare(program, source) }
+        unsafe { slot.prepare(source) }
     }
     pub(in crate::backends::vulkan) fn present_enqueued(&mut self, chain: Arc<Swapchain>) {
         self.present = Some(chain);
