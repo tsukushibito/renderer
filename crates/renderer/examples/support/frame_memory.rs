@@ -219,6 +219,7 @@ pub fn cpu_lifecycle(baseline: bool) {
     if cfg!(debug_assertions) {
         panic!("memory acceptance requires --release");
     }
+    let start = Snapshot::now();
     let mut engine = Engine::new(EngineCapacity {
         meshes: 1,
         materials: 1,
@@ -256,10 +257,22 @@ pub fn cpu_lifecycle(baseline: bool) {
         world_from_model: IDENTITY,
     }; 4];
     cpu_frames(&engine, &snapshots, &mut pool, &draws, WARMUP);
+    let startup = Snapshot::now().since(start);
+    assert!(
+        startup.rust[renderer::measurement::RustEvent::Allocate as usize].calls != 0,
+        "Rust global allocator hooks are absent or unexercised"
+    );
     let report = cpu_frames(&engine, &snapshots, &mut pool, &draws, FRAMES);
     assert!(pool.is_idle());
+    let before_shutdown = Snapshot::now();
+    drop((pool, snapshots, engine));
+    let shutdown = Snapshot::now().since(before_shutdown);
+    assert!(
+        shutdown.rust[renderer::measurement::RustEvent::Deallocate as usize].calls != 0,
+        "Rust global deallocation hooks are absent or unexercised"
+    );
     // Serialization, formatting, and all reporter-owned allocations are outside
-    // both total and phase intervals. The Engine resident assets remain alive.
+    // both total and phase intervals. Prepared owner shutdown is separate.
     let json = serde_json::json!({
         "scenario": "cpu_snapshot_build_compile_return",
         "mode": if baseline { "baseline" } else { "require_zero" },
@@ -272,6 +285,8 @@ pub fn cpu_lifecycle(baseline: bool) {
         "extra_compute_passes": [0, 1, 2],
         "boundary_cases": ["snapshot/graph busy", "draw/resource capacity", "unbuilt snapshot/uncompiled graph cancel"],
         "coverage": "Rust snapshot/build/compile and all normal-frame owners dropped; no native execution or presentation",
+        "startup_positive_control": counts(startup),
+        "shutdown_outside_normal_frames": counts(shutdown),
         "total": counts(report.total),
         "phases_snapshot_build_compile_return": report.phases.map(counts),
     });
@@ -412,6 +427,10 @@ mod buffer {
 
     fn positive_control(startup: Snapshot) {
         assert!(
+            startup.rust[renderer::measurement::RustEvent::Allocate as usize].calls != 0,
+            "Rust global allocator hooks are absent or unexercised"
+        );
+        assert!(
             startup.native[NativeEvent::ObjectCreate as usize] != 0,
             "native object hooks are absent or unexercised"
         );
@@ -422,6 +441,13 @@ mod buffer {
     }
 
     fn destruction_control(intervals: [Snapshot; 3]) {
+        assert!(
+            intervals.iter().any(|interval| interval.rust
+                [renderer::measurement::RustEvent::Deallocate as usize]
+                .calls
+                != 0),
+            "Rust global deallocation hooks are absent or unexercised"
+        );
         assert!(
             intervals
                 .iter()
