@@ -47,25 +47,11 @@ pub(crate) struct AttachmentOperand {
     pub view: ImageView,
     pub ops: AttachmentOps,
     /// Color RGBA or depth in the first component; meaningful only for Clear.
+    #[cfg_attr(
+        not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),
+        allow(dead_code, reason = "clear payload is consumed by native lowering")
+    )]
     pub clear: [f32; 4],
-}
-
-/// The already-established Clear/Store shape used by existing native lowering.
-#[derive(Clone, Copy, Debug)]
-#[cfg_attr(
-    not(feature = "vulkan"),
-    allow(
-        dead_code,
-        reason = "fixed clear operands are consumed by Vulkan lowering"
-    )
-)]
-pub(crate) struct RasterAttachmentOperands {
-    pub color: usize,
-    pub depth: usize,
-    pub clear_color: [f32; 4],
-    pub clear_depth: f32,
-    pub color_ops: AttachmentOps,
-    pub depth_ops: AttachmentOps,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -336,36 +322,12 @@ pub(crate) enum Operation {
     Raster {
         program: crate::program::ManagedRasterProgram,
         draws: Range<usize>,
-        #[cfg_attr(
-            not(test),
-            allow(dead_code, reason = "owned general graphics attachments")
-        )]
         colors: Range<usize>,
-        #[cfg_attr(
-            not(test),
-            allow(dead_code, reason = "owned general graphics attachments")
-        )]
         depth: Option<usize>,
-        targets: Option<RasterAttachmentOperands>,
     },
     AttachmentPass {
-        #[cfg_attr(
-            not(test),
-            allow(
-                dead_code,
-                reason = "owned attachment Views for general native graphics are subsequent work"
-            )
-        )]
         colors: Range<usize>,
-        #[cfg_attr(
-            not(test),
-            allow(
-                dead_code,
-                reason = "owned attachment Views for general native graphics are subsequent work"
-            )
-        )]
         depth: Option<usize>,
-        simple_clear: Option<RasterAttachmentOperands>,
     },
     Composite {
         src: usize,
