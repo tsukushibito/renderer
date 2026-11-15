@@ -217,6 +217,7 @@ pub(super) fn record(
     graph: &CompiledGraph,
     pass: usize,
     programs: &[RasterPipeline],
+    clear_programs: &super::super::raster_clear::ClearPrograms,
 ) -> Result<(), D3D12RuntimeError> {
     let (program, draws, colors, depth) = match &graph.passes[pass].operation {
         Operation::Raster {
@@ -292,20 +293,26 @@ pub(super) fn record(
         let handle = image.rtv.unwrap();
         color_handle = Some(handle);
         extent = [image.desc.width, image.desc.height];
-        if attachment.ops.load == LoadAction::Clear {
+        if attachment.ops.load == LoadAction::Clear
+            && attachment.clear.map(f32::to_bits) == [0.0f32, 0.0, 0.0, 1.0].map(f32::to_bits)
+        {
             // SAFETY: Prepared RTV matches this retained image in RENDER_TARGET.
             // Graph guarantees finite clear color and complete attachment extent.
             unsafe {
                 slot.list
                     .ClearRenderTargetView(handle, &attachment.clear, &[])
             };
+        } else if attachment.ops.load == LoadAction::Clear {
+            clear_programs.record(&slot.list, image, attachment.clear, None);
         }
     }
     if let Some((attachment, image)) = depth {
         let handle = image.dsv.unwrap();
         depth_handle = Some(handle);
         extent = [image.desc.width, image.desc.height];
-        if attachment.ops.load == LoadAction::Clear {
+        if attachment.ops.load == LoadAction::Clear
+            && attachment.clear[0].to_bits() == 1.0f32.to_bits()
+        {
             // SAFETY: Prepared full D32 DSV is DEPTH_WRITE; preflight established
             // normalized clear depth, and this lease retains descriptor/image.
             unsafe {
@@ -317,6 +324,8 @@ pub(super) fn record(
                     &[],
                 )
             };
+        } else if attachment.ops.load == LoadAction::Clear {
+            clear_programs.record(&slot.list, image, [1.0; 4], Some(attachment.clear[0]));
         }
     }
     let Some(program) = program else {

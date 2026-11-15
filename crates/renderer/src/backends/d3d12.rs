@@ -10,6 +10,7 @@ mod graph;
 mod image;
 mod program;
 mod raster;
+mod raster_clear;
 mod raster_storage;
 mod resources;
 pub use device::D3D12DeviceInfo;
