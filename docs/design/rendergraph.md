@@ -5,7 +5,8 @@
 
 Graphの宣言・解析はGPUとウィンドウに依存せず、通常のCPU構成で利用する。
 Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出さない。
-Windowsの`d3d12` featureは同じ`CompiledGraph`のbuffer upload・copy・readbackを実行する。
+Windowsの`d3d12` featureは同じ`CompiledGraph`のbuffer upload・copy・readbackと、
+画像upload/readback・owned Rasterを実行する。
 Graphの宣言・解析と、各backendが実行できる操作の範囲は区別する。
 全体方針は[実装方針](implementation-policy.md)、native資源と完了管理は
 [Vulkanの設計](vulkan.md)と[D3D12の設計](implementation-policy.md#d3d12-runtime)、
@@ -27,6 +28,8 @@ B1では構築時owned命令とbinding/attachment由来アクセスを一般化�
 `error`はprivate contextを持つ構造化エラー、`builder`は検査後のtransactionalな追加を担当する。
 `storage`は準備済みslotと借用範囲、`ranges`はimport初期化範囲の不変snapshotを所有する。
 `accesses`/`analysis`は予約済み作業領域で解析し、`compile`が構築領域を不変planへ凍結する。
+`provenance`は両native backendが使うprivateなindex内容追跡と不変meshの要約を保持する。
+upload/copyによる保証の確立・失効、未知の穴の拒否、容量とprefix最大値の再利用を一つの実装へまとめる。
 既存builder回帰群は`graph/tests.rs`へまとめる。
 公開型はfacadeから直接reexportし、並行する互換APIを作らない。
 
@@ -52,10 +55,10 @@ bufferは半開byte範囲を指定する。
 
 | 実行基盤 | 現在の範囲 |
 |---|---|
-| Vulkan | buffer／画像copy、固定Compute、Attachment clear、indexed mesh、合成、import／export、上限付き再利用 |
-| D3D12 | transient bufferのupload・copy・readback。単一DIRECT queue、committed resource、物理aliasingなし |
+| Vulkan | buffer／RGBA8画像copy、固定Compute、attachment操作、owned Raster、合成、import／export、上限付き再利用 |
+| D3D12 | transient bufferのupload・copy・readback、画像upload/readback、attachment操作とowned Raster。単一DIRECT queue、committed resource、物理aliasingなし |
 
-D3D12のprepareはexportとliveなimport・画像・未対応操作を明示エラーにする。
+D3D12のprepareはexportとliveなimport・一般dispatch・画像copy等の未対応操作を明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
@@ -104,7 +107,7 @@ culling・循環は既存の共通解析へ接続する。
 planとnative consumerのpinが全て返るまでslotを再利用しない。
 
 native dispatch実行は後続`.2.4`であり、両backendはliveなmanaged dispatchを取得前に拒否する。
-新しいdescriptor-bound Rasterのnative PSO/実行は`.2.3`で扱い、現行meshとして誤実行しない。
+descriptor-bound Rasterは、明示準備したProgram・attachment構成のnative PSOとdraw別descriptorへ具体化する。
 culledな未対応枝は実行を妨げず、その枝専用のnative資源も取得しない。
 Device固有のalignment・usage・descriptor/dispatch上限、native Program/binding所有、
 D3D12のresource単位の状態互換性はCPU計画だけでは保証しない。
@@ -158,12 +161,12 @@ native作成・破棄や表示・結果消費を含む全体のゼロ達成を�
 ### 画像subresourceとowned attachment配列
 
 `renderer-7ft.2.2.3`。`ImageDesc`は`mip_levels`と`array_layers`を持ち、
-`rgba8`/`depth32` constructorは各1を設定する。mip数は最大extentから許される段数まで、
+`rgba8`/`rgba16_float`/`depth32` constructorは各1を設定する。mip数は最大extentから許される段数まで、
 layer数は非ゼロとし、全mipの縮小extentとlayer数のpacked byte合計をchecked演算で検査する。
 これはnative allocation sizeやVRAM使用量の見積もりではない。
 
 `Graph::image_view(image, mip, layer)`は同じ画像の単一subresourceを指す不変な値を返す。
-owner・範囲を作成境界で確認し、aspectをRGBA8のColor／D32のDepthから導く。
+owner・範囲を作成境界で確認し、aspectをRGBA8/RGBA16FのColor／D32のDepthから導く。
 `ImageView`は画像を別resourceとして登録せず、複数Viewの重なりを元の画像で解析する。
 現行は単一mip/layer Viewであり、複数mip/layerを覆う一つのViewは未対応である。
 論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
@@ -174,17 +177,24 @@ owner・範囲を作成境界で確認し、aspectをRGBA8のColor／D32のDepth
 color配列は0個以上、depthは任意だが、全体が空の指定は拒否する。
 各`Attachment { view, load, store }`を準備済みarenaへcopyし、呼出元のsliceを変更/破棄してもplanは変わらない。
 選択mipのextentは全targetで一致させ、色/深度の形式、clear値、owner、同一subresourceへの重複writeを構築時に拒否する。
+depth clearは有限な0〜1とし、subnormal値を拒否する。二APIのnative clearとshaderによる全域clearの間で
+FP32のflush差を持ち込まないための保証であり、既存managed D32作成のclear値と同じ境界を使う。
+ゼロと`f32::MIN_POSITIVE`以上の通常値は受け付け、この保証をprivateなowned operandで保持する。
 同じ画像の非重複layerは別のtargetにできる。Load/Store/Discardは選択subresourceだけに適用し、
 loadがDiscardの操作だけで有効な内容を確立したとは扱わない。
 `GraphCapacity::attachments`はcolorとdepthを合わせた保持数の上限で、失敗時には途中のarena/access/name追加を戻す。
 旧`clear_attachments`はこのAPIへ置換し、互換入口を残さない。
 
-Vulkanへlowerできるのは従来の1 RGBA8＋D32・単一subresource・両方Clear/Storeの形だけである。
-この形は構築時に確定して保持し、native記録で入力配列の保証を再走査しない。
-color-only/depth-only/MRTやmulti-subresource画像のlive使用はnative資源の取得前に`Unsupported`を返す。
-資源準備と画像cacheのlookup前にもmulti-subresourceを拒否し、古い1mip画像を誤って再利用しない。
-culledな未対応枝は実行や物理資源取得を妨げない。D3D12の画像実行、一般Rasterとmulti-subresource native実行は後続に残る。
-既存のwhole-image upload/copy/readback/Compute/compositeは単一subresource画像だけを受け入れ、
+両backendのnative attachment操作とRasterはcolor一個（RGBA8またはRGBA16F）、optional D32、
+またはcolorなし＋D32を扱う。Load/Clear/DiscardとStore/Discardを保持し、ダミーattachmentは要求しない。
+MRTやmulti-subresource画像のlive計画はpreflightで拒否し、native記録・投入へ進めない。
+Vulkanは物理取得・資源準備と画像cacheのlookup前にもmulti-subresourceを拒否し、古い1mip画像を誤って再利用しない。
+D3D12のprepareは既存execution枠の取得後に適合を検査する。未準備容量の不足が先に返る場合があり、
+全backendのエラー種別の優先順位を固定する契約ではない。
+culledな未対応枝は実行や物理資源取得を妨げない。
+whole-image uploadはRGBA8/RGBA16F、readbackはこれらとD32のpacked bytesを扱う。
+texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation sizeの代用にはしない。
+既存の画像copy/固定Compute/compositeはRGBA8のままとし、単一subresource画像だけを受け入れ、
 一部の操作を画像全体の初期化として扱わない。
 
 資源は可変で、readは宣言順で直前までに書かれた内容を使う。
@@ -253,8 +263,8 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 `Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`と借用draw sliceを受け取る。
 各`RasterDraw`はvertex／index buffer・index count・`RasterParameters`と借用binding sliceをまとめ、
 attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
-現在の管理下mesh Programは1 RGBA8出力を持ち、CPU計画ではdepthを省略できる。
-Vulkanのnative実行は従来の1color＋depth・単一subresource画像だけを扱い、他の形は物理取得前に`Unsupported`にする。
+管理下の色Programは出力形式に一致する一個のcolorを要求し、depthを省略できる。
+`depth_only()`はcolorを持たず、depthを要求する。native実行は単一subresource画像を扱う。
 各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
 `Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
 既定の描画引数には`RasterParameters::default()`を明示する。
@@ -267,9 +277,17 @@ Vulkanのnative実行は従来の1color＋depth・単一subresource画像だけ�
 このmeshだけから一般graphicsのUniform bindingを推定しない。
 `textured_mesh()`は実際の別VS/FSに結び付き、`group 0/binding 0`のVS Uniform先頭16 byteを
 clip-space offsetへ使い、`group 1/binding 0`の画像と`binding 1`のsamplerをFSで読む。
-stride 28・inline引数80 byte・1 RGBA8出力は同じで、native PSOは未接続である。
+stride 28・inline引数80 byte・1 RGBA8出力は同じである。
 生成DXILではUniformが`b0/space0`、inline引数が`b1/space0`であり、
 meshのinline `b0`と同じnative layoutを流用できる契約ではない。
+
+`mesh_hdr()`/`textured_mesh_hdr()`は同じfloat出力shaderをRGBA16F attachmentへ書くレビュー済み契約である。
+`depth_only()`はmeshのvertex shaderと固定深度処理を使い、fragment shaderとcolor出力を持たない。
+これらのProgram identityとcolor/depthの有無・形式をnative pipelineの識別に含める。
+任意shader取込、MRT、可変vertex layout、比較sampler、影の照明処理、tone mappingはこの契約に含めない。
+両backendの明示的なProgram/画像準備は通常frameの外で行い、capacity不足や未準備のProgramを
+通常prepare中のnative作成・内部waitで補わない。各drawのdescriptor内容は記録からcancelまたは実GPU完了まで保持し、
+同じpass内でも別drawのUniform/画像/samplerに上書きされない。
 
 planはProgram identity、draw順、各定数、全buffer/View参照を準備済みarenaへ所有する。
 vertex/index用途はdrawから導き、共有bufferの各用途を失わずに集約する。Indexはu32三角形、
@@ -300,8 +318,8 @@ index本文を走査せず、頂点数と実Device上限を要約から照合す
 CPU assetや投入前のstaging入力自体の所有は別の必要な寿命である。
 
 任意Graph入力ではruntimeがupload・copyから既知のindex内容を追跡し、index値が頂点数未満であることを確認する。
-Deviceの実際の`maxDrawIndexedIndexValue`も確認し、確認できない内容や範囲外indexを
-native命令の記録前に拒否する。featureを有効化していないことから上限を固定値へ置き換えない。
+未知内容や範囲外indexは該当drawの記録前・Graph全体の投入前に拒否し、前半だけをsubmitしない。
+VulkanではDeviceの実際の`maxDrawIndexedIndexValue`も確認し、featureを有効化していないことから上限を固定値へ置き換えない。
 
 内容追跡はupload入力の共有sliceを参照し、GPU copyではbyte列をCPUで複製しない。
 部分書き換え・copyの未知の穴を保持し、sliceを跨ぐindexも一時bufferを作らず検査する。

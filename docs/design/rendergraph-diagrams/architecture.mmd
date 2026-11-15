@@ -5,7 +5,7 @@ flowchart TB
     build --> analysis["CPU解析・culling・実行順"]
     analysis --> plan["不変CompiledGraph"]
     plan --> vulkan["Vulkan runtime"]
-    plan --> d3d["D3D12 runtime：bufferのみ"]
+    plan --> d3d["D3D12 runtime：buffer・画像・Raster"]
     vulkan --> gpu["native記録・同期・GPU投入"]
     d3d --> gpu
     gpu -->|"正常完了を観測"| result["CPU結果の消費・返却"]

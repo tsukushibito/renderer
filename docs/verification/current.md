@@ -5,11 +5,56 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## owned Raster・画像転送の二API実行
+
+`renderer-7ft.2.3`、統合ソース確認点`ccd838e`。共通owned Graphから、複数draw順、color-only、
+depth付きcolor、depth-only、RGBA16Fとdraw別Uniform/画像/samplerをVulkan/D3D12へ実行する。
+レビュー済みProgramとattachment構成のPSO、画像/View、descriptorを明示準備し、通常frameでは保持・再利用する。
+一般dispatch/画像copy、MRT、native複数mip/layer、D3D12 import/exportと表示はこの受入に含めない。
+
+Windows x64、Rust1.99.0、`CARGO_INCREMENTAL=0`、NVIDIA RTX3060／Vulkan driver610.88。
+同じadapterのvendor/device IDとLUIDを照合し、GPU実行を直列に行った。
+[実行手順](../guides/development.md#owned-raster-acceptance)、入力・条件・counter・source hash・25コマンドは
+[メモリ検証データの`owned_raster_native`](frame-memory.json)に記録する。
+
+| 確認 | 結果 |
+|---|---|
+| 共通CPU、二API release製品、release追加検証＋診断 | 138／276／289件＋Rustdoc各1件成功 |
+| all-target Clippy | presentation＋D3D12＋memory-profilingの製品／診断、およびD3D12単独で警告ゼロ |
+| 同じ公開Graphのstrict／shipping | 各1件成功。各API3回、9 readback・704 byteを全て独立期待値とAPI間で照合 |
+| 3×5の可変clear | strict／shipping各1件成功。depth0.25→0.75、0/1、color/depthのLoad保持を全画素照合 |
+| 既存Vulkan Raster/Compute/composite回帰 | strict10件成功。draw順・index拒否・共有fetch・descriptor不足/再利用・pendingを含む |
+| D3D12の部分作成失敗・cancel・pending所有 | strict1件成功 |
+| 共通buffer Graph | strict／shipping各1件成功。画像準備不足と未対応dispatchの拒否後にも再利用可能 |
+| ABI・生成物・文書 | 管理下SPIR-V/DXIL ABI、D3D12 bindings再生成一致、fmt/diff、HTML17ページとMermaid32表示の検査成功 |
+
+strictは最終native解放後までCore＋SyncVal／Debug Layer＋GBVの実効と診断ゼロを確認した。
+shippingは追加検証・専用診断をコンパイル除外しnative `Disabled`を要求して同じ内容を照合する。
+外部Layer注入の不在を診断なし実行から証明したとは扱わない。
+共有Graphは二回ずつ同じplanを使い、最後の所有試験だけ同一入力から別planを作る。
+公開plan/runtimeを完了観測前に破棄し、結果取得まで所有が残ることを確認した。
+GraphPoolのbackingは保持し、破棄時点でGPUが実行中だったとは強制・断定しない。
+
+メモリ窓は各APIの製品／診断baselineを別processで実行した。16×16、24warmup＋24変動frame、
+3in-flightと3個の保持結果、5Program、draw0/1/2/3、色形式・attachment形状・binding・入力値を変える。
+depth clearも1と0.875を切り替え、native fast clearとshader clearを含む。
+Graph構築/compile、prepare/record/submit、完了/poll/retire、全画素readback・結果/plan返却を連続窓へ含めた。
+全4構成でRust alloc/alloc_zeroed/realloc/deallocの回数・要求byte、native作成/破棄・memory/descriptor確保解放がゼロ。
+VulkanのVMA host callbackもゼロ。native resetの48／96は既存枠の再利用であり、native全呼出しゼロの主張ではない。
+startup/shutdownの正の対照と全Graph slot返却を確認した。driver/OS内部の確保、時間性能、物理VRAMやWSIまでの保証へ一般化しない。
+
+初回の内容照合は成功したが、D3D12のoptimized clear未指定による警告820/821で厳格受入が失敗した。
+固定既定値はnative clear、他の値は準備済み全域triangle/PSOを使う形へ修正し、警告を除外せず再受入した。
+追加draw/帯域の交換条件、代案とD32 subnormal clear拒否は[現行方針](../design/implementation-policy.md#d3d12-runtime)に記す。
+不明なGPU完了時にもPSOとclear geometryを保持する修正は独立レビューで確認した。
+実native OOM/Device loss、他GPU/driver、直接のD3D12 clear A/B、Bistroの影照明・tone mappingは未実行である。
+以下の`.2.2`時点のnative拒否記録は当時の範囲であり、今回のRaster/画像対応を反映した現行境界は上記に従う。
+
 ## RenderGraph設計ガイドのHTMLとMermaid図
 
 `renderer-chk`。mdBook 0.5.4 / mdbook-mermaid 0.17.1 / Mermaid 12.3.0で、
 既存文書と[導入](../design/rendergraph-overview.md)、[設計図集](../design/rendergraph-diagrams.md)をHTMLへ生成した。
-現在の実装確認点は`2b1e70c`。主要Rust型の共有所有、flat arenaとowned命令、compile、
+現在の実装確認点は`ccd838e`。主要Rust型の共有所有、flat arenaとowned命令、compile、
 producer/culling、live hazard、範囲/subresource、native投入、別々の寿命、work/result状態、
 importのrevision、binding/stage導出、容量の13図をMermaid原本へまとめた。導入の3図も同じ原本をincludeする。
 生成・配布・固定版・ライセンスと更新方法は[文書ガイド](../guides/html-docs.md)を参照する。

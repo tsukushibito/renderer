@@ -22,7 +22,7 @@
       "constant_bytes": 80,
       "constant_members": [{"name": "clip_from_model", "offset": 0, "size": 64, "matrix_stride": 16}, {"name": "tint", "offset": 64, "size": 16}],
       "behavior": "Apply inline column-major MVP and then add every component of the Uniform clip_offset. Multiply vertex rgba by inline tint. Generate UV as model position xy * 0.5 + 0.5.",
-      "scope": "Reviewed CPU Graph contract and generated native binaries only. Its native PSO/descriptor execution and GPU image acceptance remain renderer-7ft.2.3. The old descriptor-free mesh pipeline cannot execute this Program."
+      "scope": "Reviewed owned Graph Raster contract and generated native binaries. Vulkan and D3D12 prepare distinct graphics PSOs and per-draw descriptors for this Program; the descriptor-free mesh layout cannot execute it. HDR output selects an RGBA16F attachment with the same float shader output."
     },
     "textured.frag": {
       "profile": "ps_6_0",

@@ -4,7 +4,7 @@ RenderGraphは、**何を読み、何を書き、何を結果として残すか*
 必要な処理とその順序を求め、GPUへ安全に実行するための計画へつなぐ仕組みです。
 利用側の描画意図、CPU上の依存解析、backend固有の同期・資源管理を分けて扱います。
 
-この案内は実装確認点[`2b1e70c`](https://github.com/tsukushibito/renderer/tree/2b1e70c02e299c1aa6fe7e210920f6e7c752120c)の現在の動作を説明します。
+この案内は実装確認点[`ccd838e`](https://github.com/tsukushibito/renderer/tree/ccd838edd24117f570d39bf38f3a9d595c398a60)の現在の動作を説明します。
 詳細な契約は[RenderGraph設計](rendergraph.md)、実行した確認の範囲は[現在の検証状況](../verification/current.md)を参照してください。
 後続のB1計画を、実装済みの機能としては扱いません。
 型の所有・compile・native実行等を詳しく追うには[設計図集](rendergraph-diagrams.md)を参照してください。
@@ -104,7 +104,7 @@ compileは概ね次の処理を行います。
 
 未初期化readはculling前に検出します。結果に使わないpassでも不正なreadはエラーです。
 一方、除去される部分だけの循環を追加で診断するかは開発用検証の設定によります。
-処理の根拠は[共通解析](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/analysis.rs#L640)にあります。
+処理の根拠は[共通解析](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/analysis.rs)にあります。
 
 ## 4. 内容・GPU状態・完了は別の情報
 
@@ -154,11 +154,12 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 | 機能 | 共通CPU計画 | Vulkan実行 | D3D12実行 |
 |---|---|---|---|
 | buffer upload/copy/readback | 対応 | 対応 | transient bufferで対応 |
+| 画像upload/readback | RGBA8/RGBA16F upload、これらとD32 readback | 各1 subresource | transient画像・各1 subresource |
 | 画像copy・固定Compute・composite | 対応 | 限定した管理下操作に対応 | 未対応 |
-| 管理下owned Raster | mesh/textured mesh、1 RGBA8＋任意depth、複数draw | meshのみ、1 RGBA8＋D32、各1subresource、指定Load/Storeを保持 | 未対応 |
+| 管理下owned Raster | mesh/textured meshのRGBA8/RGBA16F、depth-only、複数draw | 最大一色＋任意depth、各1 subresource、指定Load/Store・bindingを保持 | 同じ契約のtransient資源で対応 |
 | `Graph::dispatch` | 管理下4 asset、workgroups `[1,1,1]` | liveなdispatchは未対応 | liveなdispatchは未対応 |
-| `attachment_pass` | color-only・depth-only・MRT、単一mip/layer View | 1 RGBA8＋D32、各1subresource、両方Clear/Storeのみ | 未対応 |
-| 複数mip/layerの画像 | subresource単位に解析 | native画像は各1のみ | 画像実行未対応 |
+| `attachment_pass` | color-only・depth-only・MRT、単一mip/layer View | 最大一色＋任意depth、各1 subresource | 同じnative形状で対応 |
+| 複数mip/layerの画像 | subresource単位に解析 | native画像は各1のみ | native画像は各1のみ |
 | import/export・履歴 | 宣言・解析に対応 | canonical状態と連携 | 未対応 |
 | 複数queue・物理aliasing | 一般実装なし | 単一Graphics＋Compute queue、aliasingなし | 単一DIRECT queue、aliasingなし |
 
@@ -295,15 +296,15 @@ CPUだけの試験はnative dispatch対応やnative allocationゼロの証拠に
 
 | 確かめたいこと | 固定した実装への入口 |
 |---|---|
-| facade・Graph identity・明示依存 | [`graph.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph.rs) |
-| 準備済みslotと再利用 | [`graph/storage.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/storage.rs) |
-| builderの検査・途中失敗の巻き戻し | [`graph/builder.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/builder.rs) |
-| compileと不変plan | [`graph/compile.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/compile.rs) |
-| owned RasterとProgram契約 | [`program/raster.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/program/raster.rs) |
-| shader stageとbindingの契約 | [`program.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/program.rs) |
-| owned bindingとshader footprint | [`graph/dispatch.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/dispatch.rs) |
-| attachmentの所有と限定lowering形 | [`graph/attachments.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/attachments.rs) |
-| 公開APIを使うCPU回帰 | [`tests/graph_api.rs`](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/tests/graph_api.rs) |
+| facade・Graph identity・明示依存 | [`graph.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph.rs) |
+| 準備済みslotと再利用 | [`graph/storage.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/storage.rs) |
+| builderの検査・途中失敗の巻き戻し | [`graph/builder.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/builder.rs) |
+| compileと不変plan | [`graph/compile.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/compile.rs) |
+| owned RasterとProgram契約 | [`program/raster.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/program/raster.rs) |
+| shader stageとbindingの契約 | [`program.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/program.rs) |
+| owned bindingとshader footprint | [`graph/dispatch.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/dispatch.rs) |
+| attachmentの所有と限定lowering形 | [`graph/attachments.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/attachments.rs) |
+| 公開APIを使うCPU回帰 | [`tests/graph_api.rs`](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/tests/graph_api.rs) |
 
 B1では、実装済みの管理下owned命令とbinding/attachment由来のアクセスを出発点として、
 利用側の独自Program/PSO、一般binding、Raster・Computeの二API実行を段階的に実証します。

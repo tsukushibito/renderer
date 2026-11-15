@@ -1104,7 +1104,7 @@ native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換
 `.2.1.5`はRGBA16F画像とHDR値を保持するsampled readbackを同じ二APIへ加える。
 `.2.1.6`はD32画像とdepth attachment/sample Viewの作成契約、clear後のdepth sampleを加える。
 `.2.1.7`はreadonly StorageRead bindingと管理下shaderの16-byte copyを二APIへ加える。
-一般owned Graphは`.2.2`、graphicsのstage/vertex/attachment/PSOとRaster実行は`.2.3`へ残す。
+一般owned Graphの計画は`.2.2`、graphicsのstage/vertex/attachment/PSOと二API Raster実行は`.2.3`で接続する。
 `.2.2.2`では管理下buffer Computeのowned命令・論理bindingとshader実footprintを共通CPU計画へ接続した。
 現在はuniform/storage readbackの一workgroupだけを扱い、binding全descriptorと16-byte実アクセスを分ける。
 これは`.2.1`で作成したnative Program/Bindingsの実行ではなく、Device固有の保証と二APIの一般実行は`.2.4`へ残す。
@@ -1115,7 +1115,14 @@ Load/Store、各subresourceの初期化・producer/hazard/culling、全域export
 owned一般Raster命令・graphics stage/vertex/PSOと実描画、複数subresource View/native実行をこの完了に含めない。
 `.2.2.4`は実在mesh assetの`ManagedRasterProgram`を明示するowned複数drawへ公開Raster/Engine batchを統合する。
 Program・定数・draw順・attachmentを同じ準備済み計画へ所有し、既存VulkanでLoad/Storeとindex provenanceを維持して実行する。
-このmeshはdescriptorを使わない。`.2.2.5`は別の実shader `textured_mesh()`でVS UniformとFS画像/samplerを導き、各drawのbindingをowned計画へ接続する。Computeのsampled assetも同じ型付きbindingを使い、ShaderStagesと実footprintを共通解析へ保持する。利用側の二段sampled RasterとCompute readbackで短命入力・画像依存・cullingを実証する。これは設計比較の構成パターンの接続であり、BloomアルゴリズムはB4、HDR Graph/新PSOとD3D12 Rasterは`.2.3`、一般native Compute/copyは`.2.4`に残る。
+このmeshはdescriptorを使わない。`.2.2.5`は別の実shader `textured_mesh()`でVS UniformとFS画像/samplerを導き、各drawのbindingをowned計画へ接続する。Computeのsampled assetも同じ型付きbindingを使い、ShaderStagesと実footprintを共通解析へ保持する。利用側の二段sampled RasterとCompute readbackで短命入力・画像依存・cullingを実証する。これは設計比較の構成パターンの接続であり、BloomアルゴリズムはB4、一般native Compute/copyは`.2.4`に残る。
+
+`.2.3`は同じowned Rasterから複数draw順、color-only、depth-only、RGBA16Fとdraw別Uniform/画像/samplerを
+二APIへlowerする。Programのレビュー済みshader/ABIとattachment形式をpipeline keyへ含め、
+選択したProgram、物理画像、descriptorの容量を明示準備境界で確保する。通常frameでは作成・増設・内部waitを行わない。
+HDRは既存float shader出力の格納形式であり、露出・tone mappingやBistroの影照明を実装した意味ではない。
+GPU前のindex内容保証はprivateな`graph::provenance`へ共有し、変わらないmesh本文の再走査を避ける。
+通常Z/LESS、u32 triangle index、stride28、inline80 byte、単一mip/layer/sample、最大一色とoptional D32が実行範囲である。
 任意/MRT Program、first_index/base_vertex/多instance、複数subresourceを覆うViewをこの完了の保証にしない。
 他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
@@ -1351,10 +1358,11 @@ private受入は公開attachment Viewからnon-shader-visible DSV heapを具体�
 COMMON→DEPTH_WRITEで全2x2を0.25/0.75へclear、NON_PIXEL_SHADER_RESOURCEで通常sample後にCOMMONへ戻す。
 DSV heapとattachment ViewをWork/Retainedへ保持し、sampled Viewと同じImageの排他leaseで守る。
 既存64-byte float出力の4 texelのR成分だけを独立なFP32期待bit列へ照合し、旧版reuseは再clearしない。
-DSV作成/clear命令と試験入力/stateは`cfg(test)`に限定し、一般Graphのattachment実行は後続とする。
+このprivate受入のDSV作成/clear命令と試験入力/stateは`cfg(test)`に限定する。
+owned Graphのattachment実行は以下の製品経路で扱う。
 
 
-### D3D12のDeviceとbuffer実行
+### D3D12のDeviceとGraph実行
 
 Windows限定の`D3D12Runtime`が、hardware adapter、Device、単一DIRECT queueと明示終了を所有する。
 adapterのvendor／device IDとLUID、照会した能力をnative型なしで公開する。
@@ -1378,14 +1386,14 @@ runtimeを終了しても、別runtimeや未完了処理がnative所有者を保
 終了確認の対象はRendererが所有するnative参照の解放までであり、外部ライブラリが保持する
 同じsingleton Deviceの最終破棄まで証明するものではない。
 
-`D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackを
+`D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackと画像upload/readback・Rasterを
 準備済みnative資源への命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
 Graph構築で保証した内容を再走査せず、未対応操作、D3D12固有の上限と資源作成条件を準備境界で扱う。
-現在はtransient bufferだけを受け入れ、export、liveなimport・画像・その他の操作は明示エラーとする。
+transient資源だけを受け入れ、export、liveなimport・一般dispatch・画像copy等は明示エラーとする。
 不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
 bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
 
-製品bufferの具体化は`graph/bounded.rs`だけが行う。test専用の`graph.rs`には管理下shaderの
+製品Graphの具体化は`graph/bounded.rs`が行い、画像・graphicsの所有と記録は専用moduleへ分ける。`graph.rs`に残すtest専用処理は管理下shaderの
 実GPU fixtureと、実bufferを一つ作成した直後の失敗注入を残す。失敗注入は命令記録前に終了するため、
 旧buffer Graphの別の計画・upload/copy/readback記録処理は保持しない。
 実bufferの部分作成後の解放・エラー原因保持を確認する限定fixtureであり、実ドライバーのOOMや
@@ -1400,10 +1408,47 @@ DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit pro
 現段階では採用しない。状態と命令の対応を確認しやすい基準を優先する選択であり、余分なbarrier費用は残る。[^d3dbarriers]
 同じbufferの非重複copyは、別のscratch bufferを介した二段copyで共通Graphの意味を保つ。
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
-Enhanced Barriers、外部suballocator、画像、import／exportをこの範囲へ先行導入しない。
+Enhanced Barriers、外部suballocator、import／exportは未対応である。
+
+`prepare_raster_working_set(&[D3D12ImageClass], &[ManagedRasterProgram])`は全execution/result tokenが返った
+明示準備境界で画像classごとの個数、Programごとのgraphics PSO/root signatureとdescriptor heapを準備する。
+各execution leaseが物理画像/View、RTV/DSVとdraw別SRVの枠、および一個の不変nearest/clamp sampler descriptorを所有する。
+RGBA8/RGBA16Fのcolor targetとoptional D32、またはdepth-onlyを扱い、MRTと複数mip/layerは拒否する。
+実formatのrender target/depth/sample能力、SM6.0、root signature、native作成失敗はこの境界で扱う。
+一度準備した各drawのdescriptorは未投入cancelまたは実Fence完了まで再利用しない。
+D3D12は選択color Programごとのdepth有／無を準備する。Vulkanはprepared画像にD32がある場合だけ
+depth有のcolor Programも準備する。buffer-onlyの初期化ではどちらもgraphicsの能力を要求しない。
+
+mesh/depthのinlineはvertex b0、texturedのinlineはvertex b1であり、texturedのvertex b0を
+16-byte Uniform用root CBVへ割り当てる。CBV addressの256-byte alignmentと論理descriptor範囲を
+native適合境界で保証し、root descriptor自体のboundsに依存しない。20DWORDのinline定数をdrawごとに設定する。
+depth-only PSOはpixel shaderとRTVを持たず、color-only PSOは深度test/writeを無効にする。
+生成DXILのclip Y反転とpositive viewportを一組として維持する。
+
+画像upload/readbackは`GetCopyableFootprints`のoffset512-byte・row pitch256-byte条件を扱い、
+packedな利用側byte列とnativeのpadded rowを行ごとに写す。最後の行のpaddingまで利用可能とは仮定しない。
+D32 copyは全subresource、source boxなし、destination XYZ0とし、RGBA16Fは4成分binary16の格納を保つ。
+全資源のlegacy state遷移と必要な依存はshippingにも残す。共有provenanceはindexとそのcopy元だけを追跡し、
+未知内容・頂点範囲外を記録前に拒否する。index本文のprefix要約は内容の更新で失効する。
+
+Graphのclear値はframeやpassで変えられるが、D3D12のoptimized clear値は資源作成時に固定される。
+作成時に値を渡さないclearは厳格受入でwarning820/821を発生させる。固定optimized値と異なる値も
+API上は許可されるが効率上の警告対象であり、診断を抑制して通常の受入を通さない。
+[CreateCommittedResourceの契約](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createcommittedresource)
+に従い、色`[0,0,0,1]`／深度`1`の作成時既定値と一致するclearはnative命令、
+それ以外は明示準備した全域triangleと専用PSOで行う。
+色clearはDSVをbindせず、深度clearはRTVをbindせずALWAYS/writeを使い、他のattachmentを保持する。
+通常描画の前にpipeline/root/buffer/viewport等の状態を設定し直す。
+全域geometryとclear用pipelineも記録・GPU完了の所有連鎖へ含め、通常frameの資源作成は増やさない。
+
+これはattachmentのnative clearを優先する一般推奨からの限定的な変更である。代案のclear値ごとの資源増設は
+変更可能な入力を固定された資源容量へ無制限に写し、毎frame作成はメモリ規約に反するため採用しない。
+追加draw/帯域・状態設定の費用が残り、時間性能の優位は未計測である。独立期待値とVulkanのnative clearとの内容照合、
+厳格診断・製品構成の別実行で適用範囲を確認する。shaderのFP32 subnormal flush差を避けるため、D32 clearの
+subnormal値はGraph構築で拒否し、ゼロまたは0〜1の通常値を不変operandへ引き継ぐ。
 
 `submit`または`submit_prepared`は待機せずに投入し、`D3D12Submission`がcommand allocator／list、
-全buffer・allocationとDevice所有者を実GPU完了まで保持する。
+全buffer/image・allocation、Program/descriptorとDevice所有者を実GPU完了まで保持する。
 未投入のprepared処理の破棄はキャンセルであり、記録の終了後に既存枠へ返却する。
 `poll`／`wait(timeout)`で対象Fenceの正常完了を確認するとnative execution枠を返却する。
 独立result枠の常時map済みREADBACK bufferを保持し、`D3D12SubmissionResult::readback_len`でサイズを調べ、
@@ -1422,7 +1467,7 @@ Fenceの`UINT64_MAX`やDevice removalを正常完了とみなさない。[^d3dfe
 共通Graphの全byte一致、終了後までの厳格診断、最適化された診断なし経路の内容を別runで確認する。
 実行方法は[開発手順](../guides/development.md#d3d12-buffer-acceptance)、
 実行済み・未実行の範囲は[現在の検証状況](../verification/current.md)に記す。
-Graph画像実行とcanonical import/exportは現行D3D12で未実装である。旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
+canonical import/exportは現行D3D12で未実装であり、`.2.5`で扱う。旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
 一般RHIや将来の描画・binding契約をこのbuffer実行だけで確定したとは扱わない。
 
 ## 17. Codexの作業手順

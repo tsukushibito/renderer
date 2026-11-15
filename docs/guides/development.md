@@ -566,6 +566,37 @@ backend内の試験では未投入キャンセル・作成失敗の後始末、F
 長時間耐久・VRAM飽和や性能閾値を、このbuffer機能の受入条件へ追加しません。
 性能改善を主張するときの比較測定は、正しさの受入と別に実施します。
 
+<a id="owned-raster-acceptance"></a>
+
+### owned Rasterの二API受入
+
+[公開API試験](../../crates/renderer/tests/raster_graph.rs)は同じowned Graphの複数draw、color-only、
+depth付きcolor、depth-only、draw別Uniform/画像/samplerとRGBA16Fを二APIで逐次実行します。
+vendor/device IDとLUIDを照合し、全readback byteを独立期待値とAPI間で比較します。
+Runtime/公開planの破棄後もcompletion/readbackの所有連鎖を維持し、D3D12のprepare/cancel、
+後半drawの不正index拒否後の再利用、保持中tokenによるbackpressureも確認します。
+tiny fixtureでhostから完了を観測する前に破棄する試験であり、破棄時点でGPUが実行中だったという主張はしません。
+
+```powershell
+cargo test --locked --release -p renderer --test raster_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics owned_raster_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --test raster_graph --no-default-features --features vulkan,d3d12 owned_raster_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+```
+
+`RASTER_GRAPH_REPORT`に条件・内容・実効native検証と最終解放後の診断を出力します。
+strictはCore＋SyncVal／Debug Layer＋GBV、shippingはRenderer追加検証と専用診断を除外しnative `Disabled`を要求します。
+設定は別processで切り替え、前提不足をskipしません。診断なしの件数0は外部Layer注入不在の証明には使いません。
+
+通常フレームのヒープ/native作成・破棄はlibtest外の独立processで別に測定します。
+`frame_memory`の`vulkan-raster`/`d3d12-raster`は明示準備後に入力・draw数・Program・attachmentを変え、
+Graph構築からreadback消費・全token返却までを連続窓に含めます。診断ありは
+`development-validation,graph-diagnostics`を追加した別buildへ`--baseline`を指定して別計測します。
+`--baseline`だけで診断featureを有効化するものではありません。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-raster
+cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-raster
+```
+
 ## 実Vulkan試験
 
 実Vulkan試験は`#[ignore]`で分離し、明示実行します。

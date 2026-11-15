@@ -29,7 +29,7 @@ Deviceで機能を有効にしていることと、その機能を使う処理�
 [B0の基盤比較](implementation-policy.md#foundation-selection)ではnativeの低レベル所有・同期・退役・WSIを再利用し、
 上位の固定Program/Operationを一般ownedパスへ置換する方針を採用した。
 B1で資源用途・format・bindingを拡張するときも、同期・GPU寿命・native失敗等の必要な保証と移行時の検証を明示する。
-本書以下は移行前の実装済み契約であり、一般Program/encoder/HDR等を追加済みとは扱わない。
+以下は現在の実装済み契約である。レビュー済みRaster/HDR格納形式の対応と、未対応の任意shader/encoderを区別する。
 
 Graphのnative実行は次の責務に分ける。公開APIや汎用backend traitを増やす分割ではない。
 
@@ -40,7 +40,7 @@ Graphのnative実行は次の責務に分ける。公開APIや汎用backend trai
 | `graph/work.rs` | 不変の準備operand、staging、必要な依存の計画 |
 | `graph/work/record.rs` | native記録、投入受理・退役時のpayload処理 |
 | `graph/work/diagnostics.rs` | `graph-diagnostics`だけで生成するlowering dump |
-| `program.rs` / `program/creation.rs` | 管理下固定Programの不変publication、ABI/能力保証、作成と部分失敗RAII |
+| `program.rs` / `program/creation.rs` | 管理下Programとattachment構成の不変pipeline、ABI/能力保証、作成と部分失敗RAII |
 | `program/bindings.rs` / `program/record.rs` | inlineの容量付きdescriptor pool/cache/leaseと、分離したnative記録 |
 | `presentation/` | native Surface/Swapchain/slot/acquire guard/Program/命令の所有・操作 |
 | `graph/presentation/` | canonicalなsource状態とlease、Presenterの公開操作とruntimeの接続 |
@@ -172,11 +172,12 @@ VMAのmap／unmap呼び出しを、毎回必ずnative mappingを作り直す処�
 ## 画像とcopyの範囲
 
 論理Graphは`ImageDesc::mip_levels`/`array_layers`と単一subresource ViewをCPUで計画できるが、
-このbackendのnative画像は引き続き各1だけを扱う。`.2.2.3`のowned attachment passは、
-1 RGBA8＋D32・両方Clear/Store・単一subresourceの場合だけ既存のBegin/EndRenderingへlowerする。
-その他のlive attachment構成は物理取得前、multi-subresource資源はworking-set準備入口とcache lookup前にも拒否する。
+このbackendのnative画像は各1だけを扱う。owned attachment passとRasterは、
+color一個（RGBA8/RGBA16F）とoptional D32、またはdepth-onlyをDynamic Renderingへlowerする。
+Load/Clear/DiscardとStore/Discardを保持する。MRT等の未対応なlive構成は物理取得前、
+multi-subresource資源はworking-set準備入口とcache lookup前にも拒否する。
 cache keyがbase extent/formatである現実装で、multi画像を既存1mip画像へ誤再利用しないための能力境界である。
-culledな未対応枝は取得しない。一般graphicsやnative mip/layer実行を追加済みとは扱わない。
+culledな未対応枝は取得しない。任意shaderやnative mip/layer実行は未対応である。
 
 既存の転送試験用`VulkanImage`はRGBA8_UNORM、2D、optimal tiling、mip・layer・sample各1、
 transfer source／destination、EXCLUSIVE共有、初期layout UNDEFINEDに限定する。
@@ -194,8 +195,10 @@ upload-only、readback-only、複数copyの一括投入、同一バッチ内の�
 そのCOPY専用計画と、下記のGraphの予定／完了状態は別の実行契約である。
 
 GraphのRGBA8_UNORM画像はtransfer source／destination、storage、sampled、color attachmentの
-固定usage組を持つ。D32_SFLOATはdepth attachmentとして使う。
-両者とも2D・optimal tiling・mip／layer／sample各1とし、実際のusage組の能力とextent、
+固定usage組を持つ。RGBA16Fはtransfer source／destination、sampled、color attachment、
+D32_SFLOATはdepth attachment、sampled、transfer source／destinationを持つ。
+public GraphのD32 uploadは受け付けず、ここでのusageは実装した同期・転送と再利用の能力条件を表す。
+いずれも2D・optimal tiling・mip／layer／sample各1とし、実際のusage組の能力とextent、
 framebuffer／viewport上限を照会する。Graph画像はallocationとImageViewを一緒に保持する。
 固定usageはexport後に対応操作へ再importできるようにするためであり、
 usage削減による最適化や、未確認GPUでの対応を主張しない。
@@ -260,9 +263,23 @@ pipelineとviewportを設定してから、owned draw列の順にbuffer binding�
 draw命令自体はdraw数分あり、instancingやmulti-drawへの変換、描画順の並べ替えは行わない。
 空listにはclear-onlyの既存経路を使い、Raster Programの作成を要求しない。
 単一drawも同じ列で記録する。Engineの標準opaqueは従来どおりClear/Storeを明示する。
-ProgramのSPIR-Vは管理下manifestから既存factoryへ渡し、native pipelineは準備済み`ShaderPrograms`が保持する。
+ProgramのSPIR-Vは管理下manifestからfactoryへ渡し、native pipelineは準備済み`ShaderPrograms`が保持する。
 CPUのstatic Program identityだけでnative所有者を代替せず、WorkのProgram/資源保持とplan pinをGPU完了まで維持する。
-color-onlyやmulti-subresourceのCPU Raster計画は現在のPSOでは実行せず、物理取得前に拒否する。
+color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を使う。
+MRTやmulti-subresourceのlive計画は物理取得前に拒否する。
+
+`prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
+選択したレビュー済みProgramとcolor形式・depth有無をkeyとしてpipelineを保持し、
+通常prepareで新しい種類を作成しない。既存meshのcolor＋depthは従来のworking-set準備で利用できる。
+HDRは同じfloat出力shaderをRGBA16Fへ書き、depth-onlyはfragment stageとcolor attachmentを省く。
+pipeline layoutはmeshのinline80 byteと、texturedのVS Uniform／FS sampled image・separate samplerを区別する。
+Uniformの実Device alignment/range上限は記録前のnative適合境界で保証する。
+drawごとの二groupのdescriptorを容量内で別slotへ設定し、記録済み／pendingのsetを別drawで再更新しない。
+Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ含め、cancelまたは実GPU完了後だけ再利用する。
+
+RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignmentをatom sizeと8 byte以上にする。
+D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyや固定ComputeのRGBA8契約を
+RGBA16Fへ自動拡張せず、各実format/usage能力の作成時照会とnative失敗処理を維持する。
 
 最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
 scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と
@@ -294,9 +311,9 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
 `.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
-一般owned passのnative実行、他format/mip/layer/filter、任意shader取込は後続へ残す。
-`.2.2.5`の`Graph::dispatch`は管理下buffer・sampled assetの論理CPU計画を接続する。各drawの型付きbindingと共に、manifest由来のVertex/Fragment/Compute stageと実footprintを保持する。新しい`textured_mesh()`はVS UniformとFS sampled画像/samplerのCPU計画を扱い、native PSOへは未接続のため取得前に拒否する。
-native Program/Bindingsを実行する経路は未実装で、live dispatchは物理資源の取得前に拒否する。
+owned dispatchのnative実行、他format/mip/layer/filter、任意shader取込は後続へ残す。
+`Graph::dispatch`は管理下buffer・sampled assetの論理CPU計画を接続する。各drawの型付きbindingと共に、manifest由来のVertex/Fragment/Compute stageと実footprintを保持する。`textured_mesh()`のVS UniformとFS sampled画像/samplerはowned Rasterのnative PSOへ接続する。
+`ManagedProgram`/Bindingsをowned dispatchから実行する経路は未実装で、live dispatchは物理資源の取得前に拒否する。
 culledな未対応枝は除去できる。Uniform/storage/sampled用途は保持した実shader stageと対応するaccessへ具体化し、Vertex/Index fetchはそれぞれ入力stageを使うが、
 この対応表を一般dispatchのnative実行対応とみなさない。
 

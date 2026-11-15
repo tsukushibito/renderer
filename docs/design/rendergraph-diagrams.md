@@ -2,8 +2,8 @@
 
 構造・依存・状態・寿命を、別々の問いとして読むための図集です。
 最初に[RenderGraphの案内](rendergraph-overview.md)、正確なAPI制約は[詳細設計](rendergraph.md)を参照してください。
-図は実装確認点[`2b1e70c`](https://github.com/tsukushibito/renderer/tree/2b1e70c02e299c1aa6fe7e210920f6e7c752120c)に対応します。
-将来の一般shader・D3D12画像実行・複数queue・物理aliasingを、実装済みとして描いていません。
+図は実装確認点[`ccd838e`](https://github.com/tsukushibito/renderer/tree/ccd838edd24117f570d39bf38f3a9d595c398a60)に対応します。
+将来の任意shader・一般dispatch・複数queue・物理aliasingを、実装済みとして描いていません。
 
 | 知りたいこと | 読む図 |
 |---|---|
@@ -39,10 +39,10 @@ Graph構築とcompileはGPU・windowなしで使えます。`CompiledGraph`か�
 liveな未対応操作は明示エラーにし、除去された枝だけの物理資源は取得しません。
 
 Vulkanは単一Graphics＋Compute queueで限定した描画・Compute・copy等を実行します。
-D3D12の公開Graph実行はtransient bufferのupload/copy/readbackです。
-ソース：[Graph facade](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph.rs)、
-[Vulkan runtime](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/graph.rs)、
-[D3D12 runtime](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/d3d12/graph.rs)。
+D3D12の公開Graph実行はtransient bufferのupload/copy/readback、画像upload/readbackとowned Rasterです。
+ソース：[Graph facade](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph.rs)、
+[Vulkan runtime](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/graph.rs)、
+[D3D12 runtime](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/d3d12/graph.rs)。
 
 <a id="ownership"></a>
 
@@ -61,9 +61,9 @@ poolがslotを排他的に再取得できるまで書き換えません。`compi
 可変builderと不変planが同時に同じ領域を書き換える経路を作りません。
 handleはidentityとindexの値で、GPU資源やslotへの強い参照ではありません。
 
-ソース：[slotとpool](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/storage.rs#L226)、
-[CompiledGraph](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/compile.rs#L13)、
-[handleとView](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/resource.rs#L7)。
+ソース：[slotとpool](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/storage.rs)、
+[CompiledGraph](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/compile.rs)、
+[handleとView](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/resource.rs)。
 
 <a id="owned-pass"></a>
 
@@ -85,14 +85,15 @@ Rasterは`ManagedRasterProgram`、Dispatchは別の`ManagedProgram`の値を持�
 Viewは論理画像のsubresource値、Samplerは不変設定を持ち、native資源の所有型ではありません。
 `mesh()`はbindingを持たず、`textured_mesh()`はdrawごとのUniform・sampled View・SamplerをCPUで計画します。
 
-現在のRasterは複数drawを同じLoad/Storeの下で保持します。CPUは1 RGBA8＋任意depth、
-Vulkan nativeはbindingなしの`mesh()`で1 RGBA8＋D32・各1subresourceです。
+現在のRasterは複数drawを同じLoad/Storeの下で保持します。色ProgramはRGBA8またはRGBA16F一個と任意depth、
+深度専用Programはcolorなし＋D32を使います。両native backendとも各1 subresourceです。
 指定Load/Storeは保持し、空drawはattachment-onlyへ正規化します。
-`textured_mesh()`と`Graph::dispatch`のlive native実行、D3D12 Raster、一般native graphics bindingは未対応です。
-ソース：[GraphStorage](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/storage.rs#L98)、
-[OperationとPass](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/pass.rs#L291)、
-[Raster builder](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/builder.rs#L258)、
-[Raster Program](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/program/raster.rs)。
+`textured_mesh()`のdraw別bindingも明示準備したnative PSO/descriptorへ接続します。
+`Graph::dispatch`のlive native実行、任意shaderや一般encoderは未対応です。
+ソース：[GraphStorage](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/storage.rs)、
+[OperationとPass](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/pass.rs)、
+[Raster builder](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/builder.rs)、
+[Raster Program](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/program/raster.rs)。
 
 <a id="binding-stages"></a>
 
@@ -117,18 +118,19 @@ Samplerは設定をcaptureしますが、内容accessやproducer辺を作りま�
 
 `textured_mesh()`はVERTEX Uniform16 byteと、FRAGMENT sampled View＋nearest/clampを要求します。
 頂点stride28・inline行列＋tint80 byte・1 RGBA8＋任意depthは`mesh()`と同じCPU契約です。
-liveなtextured Rasterは物理資源取得前に拒否し、既存native mesh Rasterの指定Load/Storeは維持します。
-これは任意shaderやcaller自己申告のstage、一般native PSO/bindingを受け入れる契約ではありません。
+liveなtextured Rasterは両APIで実行し、未準備のProgramやdescriptor容量不足は明示エラーにします。
+`mesh_hdr()`/`textured_mesh_hdr()`はRGBA16F出力、`depth_only()`はfragment stageなしの深度出力です。
+これは任意shaderやcaller自己申告のstageを受け入れる契約ではありません。
 
 Dispatchの管理下assetは`uniform_readback()`、`storage_readback()`、`sampled_readback()`、
 `sampled_float_readback()`の4つで、全てworkgroups `[1,1,1]`です。
 Storage出力の先頭16/16/16/64 byteだけを確立し、sampled入力は選択subresource全域を保守的にreadします。
 全bindingのshader stageはCOMPUTEです。descriptorの残りを初期化済みとせず、live native実行は両backendで拒否します。
 
-ソース：[Bindingと正規化・access導出](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/dispatch.rs)、
-[ShaderStagesとBindingLayout](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/program.rs#L109)、
-[管理下Raster manifest](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/program/raster.rs)、
-[native能力境界](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/graph/work.rs)。
+ソース：[Bindingと正規化・access導出](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/dispatch.rs)、
+[ShaderStagesとBindingLayout](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/program.rs)、
+[管理下Raster manifest](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/program/raster.rs)、
+[native能力境界](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/graph/work.rs)。
 
 <a id="compile"></a>
 
@@ -146,8 +148,8 @@ builder失敗は追加途中のarenaを戻し、compile失敗は不完全な計�
 `development-validation`は保証済み宣言の独立再点検等を加えます。
 liveな循環は常に拒否し、dead部分だけの循環は開発構成で追加診断します。
 全passが宣言順のまま残る場合の再計算省略等、同じ意味を保つ短絡経路は図ではまとめています。
-ソース：[共通解析の入口](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/analysis.rs#L640)、
-[compileの凍結とエラー変換](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/compile.rs)。
+ソース：[共通解析の入口](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/analysis.rs)、
+[compileの凍結とエラー変換](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/compile.rs)。
 
 <a id="producer-culling"></a>
 
@@ -164,8 +166,8 @@ P1は古い内容をscratchへcopyしますが、その結果を使うpassはあ
 
 readの内容は宣言順で決まります。明示依存を後から追加しても、readが別のwriterを読むようには変わりません。
 明示依存の先は意味的な前提として残します。未初期化readは除去前に検査します。
-ソース：[dataflow・生存解析](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/analysis.rs#L640)、
-[明示依存の契約](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph.rs#L90)。
+ソース：[dataflow・生存解析](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/analysis.rs)、
+[明示依存の契約](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph.rs)。
 
 <a id="hazards"></a>
 
@@ -182,7 +184,7 @@ writeがあればRAW・WAR・WAWを求め、read/readだけからhazard辺は作
 backendではRAWとWAWに適切なmemory dependency、WARに必要なexecution dependencyを記録します。
 画像layout変更等の条件は別途必要であり、read/readだからnative状態も無条件に同じとは限りません。
 Graphのtopological順だけでは、GPUの書き込みの可視性は成立しません。
-ソース：[hazard解析](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/analysis.rs#L421)、
+ソース：[hazard解析](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/analysis.rs)、
 契約：[同期のガイド](../guides/vulkan-best-practices.md#synchronization)。
 
 <a id="ranges"></a>
@@ -201,8 +203,8 @@ CPUのsubresource解析と、nativeが複数mip/layer画像を実行できるか
 内容の有効性は「読む値が定義されているか」、layoutは「native用途に適した状態か」、
 正常完了は「GPUが成功して終わったか」です。画像が適切なlayoutでも内容が有効とは限らず、
 有効な予定内容があってもCPUから即座に読めるとは限りません。
-ソース：[資源・View](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/resource.rs)、
-[区間解析](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/analysis/intervals.rs)。
+ソース：[資源・View](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/resource.rs)、
+[区間解析](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/analysis/intervals.rs)。
 
 <a id="native-sequence"></a>
 
@@ -220,8 +222,8 @@ Vulkanの`submit`/`Submission::wait`経路の例です。native submit成功後�
 図は成功とtimeoutに絞っています。native OOM、Device loss、完了不明の失敗の保持・停止は
 [GPU状態と所有](rendergraph.md#gpu状態と所有)に従います。
 `submit_frame`ではruntimeが上限付きpendingを所有し、利用側は`poll_frame`/`wait_frame`で完了を受け取ります。
-ソース：[submitとSubmission](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/graph.rs)、
-[正常完了後の保持の整理](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/graph/work/record.rs#L263)。
+ソース：[submitとSubmission](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/graph.rs)、
+[正常完了後の保持の整理](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/graph/work/record.rs)。
 
 <a id="lifetimes"></a>
 
@@ -238,8 +240,8 @@ Graph slotの再取得条件は、利用側のcloneやnative/provenance等を含
 
 export物理資源の登録解除は別の明示`delete`です。snapshotのDropだけでは登録を解除せず、
 deleteしてもpending側が物理参照を持つ間はGPU使用中の資源を破棄しません。
-ソース：[pool再取得](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/storage.rs#L307)、
-[GraphWorkの保持](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/graph/work.rs#L259)、
+ソース：[pool再取得](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/storage.rs)、
+[GraphWorkの保持](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/graph/work.rs)、
 契約：[slot所有](rendergraph.md#prepared-graph-storage)。
 
 <a id="work-result-state"></a>
@@ -257,8 +259,8 @@ Device loss等で完了が不明なら、通常の再利用へ戻さず停止・
 
 完了済みCPU結果を破棄する場合の領域返却と、pending処理のDropも同じではありません。
 D3D12の公開`prepare`は未投入command・資源を所有し、投入後の所有はSubmissionへ移ります。
-ソース：[Vulkan完了管理](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/transfer.rs)、
-[D3D12 Graphのprepared/submission/result](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/d3d12/graph.rs)。
+ソース：[Vulkan完了管理](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/transfer.rs)、
+[D3D12 Graphのprepared/submission/result](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/d3d12/graph.rs)。
 
 <a id="import-revision"></a>
 
@@ -276,8 +278,8 @@ write・clear・discardでrevisionを進め、readやlayout変更だけでは進
 A受理後のfresh snapshotからBを構築すれば、同じqueueへAのCPU待機なしで投入できます。
 GPU間の必要な依存と、CPU readback・再利用のための正常完了観測は残ります。
 完了側は単調なserialで観測し、内容byte列を含む別の完了snapshotを複製・保存しません。
-ソース：[import値](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/resource.rs#L143)、
-[canonical状態とsnapshot](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/backends/vulkan/graph/snapshots.rs)、
+ソース：[import値](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/resource.rs)、
+[canonical状態とsnapshot](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/backends/vulkan/graph/snapshots.rs)、
 契約：[履歴](rendergraph.md#履歴と段階的な拡張)。
 
 <a id="capacity"></a>
@@ -296,5 +298,5 @@ slot不足ならconsumerの返却、metadataやworking set不足なら明示準�
 この規約は必要な同期・安全性・容量検査・native失敗処理を削除する理由にはなりません。
 既存のゼロcounterは[検証済みworkloadと観測窓](../verification/current.md#通常フレームのメモリ規約と実装)に限る証拠であり、
 別負荷の速度やdriver内部の確保についての保証ではありません。
-ソース：[GraphCapacity](https://github.com/tsukushibito/renderer/blob/2b1e70c02e299c1aa6fe7e210920f6e7c752120c/crates/renderer/src/graph/storage.rs#L17)、
+ソース：[GraphCapacity](https://github.com/tsukushibito/renderer/blob/ccd838edd24117f570d39bf38f3a9d595c398a60/crates/renderer/src/graph/storage.rs)、
 契約：[通常フレームのメモリ規約](implementation-policy.md#steady-state-memory)。
