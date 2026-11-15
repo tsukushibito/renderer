@@ -97,6 +97,7 @@ impl ShaderPrograms {
         }))
     }
 
+    /// Check the immutable prepared working set without creating native state.
     pub(super) fn ensure(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
         self.owner
             .device
@@ -105,9 +106,23 @@ impl ShaderPrograms {
         if (!needs.compute || self.compute.get().is_some())
             && (!needs.raster || self.raster.get().is_some())
             && (!needs.composite || self.composite.get().is_some())
+            && self.bindings.is_prepared(needs)?
         {
-            return Ok(());
+            Ok(())
+        } else {
+            Err(RuntimeError::capacity(
+                "Graph program/binding working set is not prepared",
+            ))
         }
+    }
+
+    /// Explicit preparation/change boundary. Existing leases must retire before
+    /// extending the descriptor working set; ordinary ensure/acquire never grow.
+    pub(super) fn prepare_bindings(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
         let _initialization = self
             .initialization
             .lock()
@@ -127,7 +142,11 @@ impl ShaderPrograms {
                 })?;
             }
         }
-        Ok(())
+        self.bindings.prepare(
+            &self.owner,
+            self.compute.get().map(|program| program.set_layout),
+            self.composite.get().map(|program| program.set_layout),
+        )
     }
 
     fn compute(&self) -> &Program {
