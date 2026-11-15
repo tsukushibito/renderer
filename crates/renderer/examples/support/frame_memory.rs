@@ -1,9 +1,13 @@
 //! Fixed-storage measurement driver. Report construction is outside the window.
 
 use renderer::engine::{
-    Draw, Engine, FrameGraph, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View,
+    Draw, Engine, EngineCapacity, EngineErrorKind, FrameSnapshot, IDENTITY, Material, MeshData,
+    SnapshotPool, Vertex, View,
 };
-use renderer::graph::{CompiledGraph, ComputeTransform, ImageDesc};
+use renderer::graph::{
+    BufferDesc, CompiledGraph, ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool,
+    ImageDesc,
+};
 use renderer::measurement::Snapshot;
 
 const IN_FLIGHT: usize = 3;
@@ -37,9 +41,50 @@ fn phase<T>(totals: &mut Snapshot, operation: impl FnOnce() -> T) -> T {
     value
 }
 
-fn cpu_frames(engine: &Engine, draws: &[Draw; 4], count: usize) -> Report<4> {
+fn graph_capacity() -> GraphCapacity {
+    GraphCapacity {
+        resources: 8,
+        passes: 8,
+        accesses: 32,
+        draws: 4,
+        dependencies: 8,
+        initial_ranges: 16,
+        name_bytes: 512,
+        upload_bytes: 128,
+        edges: 128,
+        segments: 128,
+        readers: 128,
+    }
+}
+
+fn capacity_report() -> serde_json::Value {
+    let capacity = graph_capacity();
+    serde_json::json!({
+        "resources": capacity.resources, "passes": capacity.passes,
+        "accesses": capacity.accesses, "draws": capacity.draws,
+        "dependencies": capacity.dependencies, "initial_ranges": capacity.initial_ranges,
+        "name_bytes": capacity.name_bytes, "upload_bytes": capacity.upload_bytes,
+        "edges": capacity.edges, "segments": capacity.segments, "readers": capacity.readers,
+    })
+}
+
+fn recycle_graph_slots<const N: usize>(pool: &mut GraphPool) {
+    // Reset every backing slot while it is uniquely owned. Retain the empty
+    // graphs together so begin() cannot repeatedly select just the first slot.
+    // Any retained upload/import operands from the last frames are returned
+    // inside measurement, rather than deferred to pool shutdown.
+    let empty: [Graph; N] = std::array::from_fn(|_| pool.begin().unwrap());
+    drop(empty);
+}
+
+fn cpu_frames(
+    engine: &Engine,
+    snapshots: &SnapshotPool,
+    pool: &mut GraphPool,
+    draws: &[Draw; 4],
+    count: usize,
+) -> Report<4> {
     let mut captures: [Option<FrameSnapshot>; IN_FLIGHT] = std::array::from_fn(|_| None);
-    let mut graphs: [Option<FrameGraph>; IN_FLIGHT] = std::array::from_fn(|_| None);
     let mut plans: [Option<CompiledGraph>; IN_FLIGHT] = std::array::from_fn(|_| None);
     let mut phases = [Snapshot::default(); 4];
     let before = Snapshot::now();
@@ -47,7 +92,6 @@ fn cpu_frames(engine: &Engine, draws: &[Draw; 4], count: usize) -> Report<4> {
         let slot = frame % IN_FLIGHT;
         phase(&mut phases[3], || {
             drop(plans[slot].take());
-            drop(graphs[slot].take());
             drop(captures[slot].take());
         });
         let draw_count = [0, 1, 4, 2][frame % 4];
@@ -57,13 +101,48 @@ fn cpu_frames(engine: &Engine, draws: &[Draw; 4], count: usize) -> Report<4> {
             clip_from_world: IDENTITY,
             clear_color: [frame as f32 / count as f32, 0.25, 0.5, 1.0],
         };
+        phase(&mut phases[0], || {
+            let over_capacity = [draws[0]; 5];
+            assert_eq!(
+                engine
+                    .snapshot(snapshots, &view, &over_capacity)
+                    .err()
+                    .unwrap()
+                    .kind(),
+                EngineErrorKind::CapacityExhausted
+            );
+            // Abandon an acquired snapshot without building a frame. Its slot
+            // must return without waiting or allocating replacement storage.
+            drop(engine.snapshot(snapshots, &view, &[]).unwrap());
+        });
+        phase(&mut phases[1], || {
+            // Fill the prepared resource capacity exactly, reject the next
+            // declaration, then cancel this uncompiled graph inside the window.
+            let mut canceled = pool.begin().unwrap();
+            for _ in 0..graph_capacity().resources {
+                canceled
+                    .buffer("canceled", BufferDesc { size: 16 })
+                    .unwrap();
+            }
+            assert_eq!(
+                canceled
+                    .buffer("over capacity", BufferDesc { size: 16 })
+                    .err()
+                    .unwrap()
+                    .kind(),
+                GraphErrorKind::CapacityExhausted
+            );
+            drop(canceled);
+        });
         let captured = phase(&mut phases[0], || {
-            engine.snapshot(&view, &draws[..draw_count]).unwrap()
+            engine
+                .snapshot(snapshots, &view, &draws[..draw_count])
+                .unwrap()
         });
         let extra_passes = frame % 3;
         let graph = phase(&mut phases[1], || {
             captured
-                .build_graph(true, |graph, mut color| {
+                .build_graph(pool, true, |graph, mut color| {
                     for _ in 0..extra_passes {
                         let output = graph.image("memory transform", ImageDesc::rgba8(16, 16))?;
                         graph.compute(
@@ -84,12 +163,28 @@ fn cpu_frames(engine: &Engine, draws: &[Draw; 4], count: usize) -> Report<4> {
             if draw_count == 0 { 2 } else { 4 } + extra_passes
         );
         captures[slot] = Some(captured);
-        graphs[slot] = Some(graph);
         plans[slot] = Some(plan);
+        if frame >= IN_FLIGHT - 1 {
+            phase(&mut phases[0], || {
+                assert_eq!(
+                    engine.snapshot(snapshots, &view, &[]).err().unwrap().kind(),
+                    EngineErrorKind::CapacityExhausted
+                );
+            });
+            phase(&mut phases[1], || {
+                assert_eq!(
+                    pool.begin().err().unwrap().kind(),
+                    GraphErrorKind::CapacityExhausted
+                );
+            });
+        }
     }
-    // Drain every normal-frame owner before stopping: plans/graphs/captures
+    // Drain every normal-frame owner before stopping: plans/captures
     // from the last three frames must not be deallocated outside measurement.
-    phase(&mut phases[3], || drop((plans, graphs, captures)));
+    phase(&mut phases[3], || {
+        drop((plans, captures));
+        recycle_graph_slots::<IN_FLIGHT>(pool);
+    });
     Report {
         total: Snapshot::now().since(before),
         phases,
@@ -124,7 +219,14 @@ pub fn cpu_lifecycle(baseline: bool) {
     if cfg!(debug_assertions) {
         panic!("memory acceptance requires --release");
     }
-    let mut engine = Engine::new(1, 1).unwrap();
+    let mut engine = Engine::new(EngineCapacity {
+        meshes: 1,
+        materials: 1,
+        retired_mesh_versions: 1,
+    })
+    .unwrap();
+    let snapshots = SnapshotPool::new(4, IN_FLIGHT).unwrap();
+    let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
             MeshData::new(
@@ -153,8 +255,9 @@ pub fn cpu_lifecycle(baseline: bool) {
         material,
         world_from_model: IDENTITY,
     }; 4];
-    cpu_frames(&engine, &draws, WARMUP);
-    let report = cpu_frames(&engine, &draws, FRAMES);
+    cpu_frames(&engine, &snapshots, &mut pool, &draws, WARMUP);
+    let report = cpu_frames(&engine, &snapshots, &mut pool, &draws, FRAMES);
+    assert!(pool.is_idle());
     // Serialization, formatting, and all reporter-owned allocations are outside
     // both total and phase intervals. The Engine resident assets remain alive.
     let json = serde_json::json!({
@@ -164,8 +267,10 @@ pub fn cpu_lifecycle(baseline: bool) {
         "warmup_frames": WARMUP,
         "measured_frames": FRAMES,
         "retained_frame_slots": IN_FLIGHT,
+        "graph_capacity": capacity_report(),
         "draw_counts": [0, 1, 4, 2],
         "extra_compute_passes": [0, 1, 2],
+        "boundary_cases": ["snapshot/graph busy", "draw/resource capacity", "unbuilt snapshot/uncompiled graph cancel"],
         "coverage": "Rust snapshot/build/compile and all normal-frame owners dropped; no native execution or presentation",
         "total": counts(report.total),
         "phases_snapshot_build_compile_return": report.phases.map(counts),
@@ -186,8 +291,9 @@ mod buffer {
     use super::*;
     use renderer::graph::{BufferDesc, Graph, PassHandle};
     use renderer::measurement::NativeEvent;
-    use std::sync::Arc;
     use std::time::Duration;
+    const GPU_WARMUP: usize = 24;
+    const GPU_FRAMES: usize = 48;
 
     // A measurement adapter only: both normal public APIs exercise the same
     // graph and ownership schedule. It exposes no renderer-internal operands.
@@ -201,16 +307,20 @@ mod buffer {
 
     type Slot<T> = Option<(T, PassHandle, [u8; 16])>;
 
-    fn graph(input: &Arc<[u8]>, copies: usize) -> (Graph, PassHandle) {
-        let mut graph = Graph::new();
+    fn graph(pool: &mut GraphPool, input: &[u8; 32], copies: usize) -> (Graph, PassHandle) {
+        let mut graph = pool.begin().unwrap();
         let a = graph
-            .buffer("memory source", BufferDesc { size: 16 })
+            .buffer("memory source", BufferDesc { size: 32 })
             .unwrap();
-        graph
-            .upload_buffer_shared("memory upload", a, 0, Arc::clone(input))
-            .unwrap();
+        graph.upload_buffer("memory upload", a, 0, input).unwrap();
         let mut output = a;
-        if copies != 0 {
+        let mut read_offset = 0;
+        if copies == 3 {
+            graph
+                .copy_buffer("memory self copy", a, 0, a, 16, 16)
+                .unwrap();
+            read_offset = 16;
+        } else if copies != 0 {
             let b = graph
                 .buffer("memory copy", BufferDesc { size: 16 })
                 .unwrap();
@@ -224,14 +334,15 @@ mod buffer {
             }
         }
         let read = graph
-            .readback_buffer("memory readback", output, 0, 16)
+            .readback_buffer("memory readback", output, read_offset, 16)
             .unwrap();
         (graph, read)
     }
 
     fn frames<B: Backend>(
         runtime: &mut B,
-        inputs: &[Arc<[u8]>; 4],
+        pool: &mut GraphPool,
+        inputs: &[[u8; 32]; 4],
         expected: &[[u8; 16]; 4],
         count: usize,
     ) -> Report<5> {
@@ -255,13 +366,14 @@ mod buffer {
                     drop(work);
                 }
             });
-            let version = frame % inputs.len();
-            let (graph, pass) = phase(&mut phases[0], || graph(&inputs[version], frame % 3));
+            let version = (frame + frame / 4) % inputs.len();
+            let copies = frame % 4;
+            let (graph, pass) = phase(&mut phases[0], || graph(pool, &inputs[version], copies));
             let plan = phase(&mut phases[1], || graph.compile().unwrap());
-            assert_eq!(plan.pass_count(), 2 + frame % 3);
+            assert_eq!(plan.pass_count(), if copies == 3 { 3 } else { 2 + copies });
             let work = phase(&mut phases[2], || runtime.submit(&plan));
             pending[slot] = Some((work, pass, expected[version]));
-            phase(&mut phases[4], || drop((plan, graph)));
+            phase(&mut phases[4], || drop(plan));
         }
         for slot in 0..IN_FLIGHT {
             phase(&mut phases[4], || {
@@ -283,6 +395,7 @@ mod buffer {
                 drop(result);
             }
             drop(pending);
+            recycle_graph_slots::<{ IN_FLIGHT * 2 }>(pool);
         });
         Report {
             total: Snapshot::now().since(start),
@@ -290,11 +403,11 @@ mod buffer {
         }
     }
 
-    fn inputs() -> ([Arc<[u8]>; 4], [[u8; 16]; 4]) {
-        let expected = std::array::from_fn(|version| {
+    fn inputs() -> ([[u8; 32]; 4], [[u8; 16]; 4]) {
+        let data: [[u8; 32]; 4] = std::array::from_fn(|version| {
             std::array::from_fn(|byte| ((byte * 37 + version * 19) ^ (byte >> 1)) as u8)
         });
-        (expected.map(|bytes| Arc::from(bytes.as_slice())), expected)
+        (data, data.map(|bytes| bytes[..16].try_into().unwrap()))
     }
 
     fn positive_control(startup: Snapshot) {
@@ -335,14 +448,17 @@ mod buffer {
             "mode": if baseline { "baseline" } else { "require_zero" },
             "features": features(),
             "native_request": if cfg!(feature = "development-validation") { "Required" } else { "Disabled" },
-            "warmup_frames": WARMUP,
-            "measured_frames": FRAMES,
+            "warmup_frames": GPU_WARMUP,
+            "measured_frames": GPU_FRAMES,
             "pending_capacity_exercised": IN_FLIGHT,
             "completed_readbacks_held": IN_FLIGHT,
+            "graph_slots": IN_FLIGHT * 2,
+            "graph_capacity": capacity_report(),
             "input_versions": 4,
-            "copy_passes": [0, 1, 2],
+            "copy_passes": [0, 1, 2, 1],
+            "last_case_is_disjoint_self_copy": true,
             "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI or cancel/busy proof",
-            "caller": "fixed arrays and prepared input Arcs; report outside measurement; explicit per-submission fence waits",
+            "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit per-submission fence waits",
             "unobserved": "driver-internal host/device allocations",
             "startup_positive_control": counts(startup),
             "shutdown_outside_normal_frames": counts(shutdown),
@@ -395,7 +511,8 @@ mod buffer {
         assert_ne!(runtime.device_info().device_type, "CPU");
         let monitor = runtime.validation_monitor();
         let (inputs, expected) = inputs();
-        frames(&mut runtime, &inputs, &expected, WARMUP);
+        let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT * 2).unwrap();
+        frames(&mut runtime, &mut pool, &inputs, &expected, GPU_WARMUP);
         let startup = Snapshot::now().since(start);
         positive_control(startup);
         assert!(
@@ -406,7 +523,8 @@ mod buffer {
             startup.native[NativeEvent::MemoryAllocate as usize] != 0,
             "VMA device memory hooks are absent or unexercised"
         );
-        let measured = frames(&mut runtime, &inputs, &expected, FRAMES);
+        let measured = frames(&mut runtime, &mut pool, &inputs, &expected, GPU_FRAMES);
+        assert!(pool.is_idle());
         let before_shutdown = Snapshot::now();
         drop(runtime);
         let shutdown = Snapshot::now().since(before_shutdown);
@@ -463,10 +581,12 @@ mod buffer {
             renderer::D3D12Runtime::new(renderer::D3D12RuntimeConfig::default()).unwrap();
         let monitor = runtime.validation_monitor();
         let (inputs, expected) = inputs();
-        frames(&mut runtime, &inputs, &expected, WARMUP);
+        let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT * 2).unwrap();
+        frames(&mut runtime, &mut pool, &inputs, &expected, GPU_WARMUP);
         let startup = Snapshot::now().since(start);
         positive_control(startup);
-        let measured = frames(&mut runtime, &inputs, &expected, FRAMES);
+        let measured = frames(&mut runtime, &mut pool, &inputs, &expected, GPU_FRAMES);
+        assert!(pool.is_idle());
         let before_shutdown = Snapshot::now();
         runtime.shutdown().unwrap();
         let shutdown = Snapshot::now().since(before_shutdown);
