@@ -77,7 +77,7 @@ CI の Linux x64 musl tarball は `42aca57eea8521971cc595fe4bb853c5b8b7d9f7138a2
 
 ## Mermaid 図の管理と描画検査
 
-[設計図集](../design/rendergraph-diagrams.md)の12図は `docs/design/rendergraph-diagrams/*.mmd` を正本とする。
+[設計図集](../design/rendergraph-diagrams.md)の13図は `docs/design/rendergraph-diagrams/*.mmd` を正本とする。
 Markdown の `mermaid` コードブロック内で mdBook の `include` を使い、同じ図を導入と図集で共有する。
 `accTitle` と `accDescr` を付け、図の前提・制限は本文にも記す。
 型の実内包、Arc 共有保持、作成・識別・変換は矢印とラベルを区別する。

@@ -70,6 +70,8 @@ private受入のproducer→consumer同期を、公開Graphの一般dispatch対�
 一般owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`で進める。
 その作成領域・解析workspace・不変planの所有は、以下の準備済みslotへ移行した。
 
+<a id="owned-shader-bindings"></a>
+
 ### Program由来bindingとshader stageのowned計画
 
 `Graph::dispatch(name, &program, &bindings, workgroups)`は管理下の四Compute assetを

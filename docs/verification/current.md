@@ -9,14 +9,14 @@
 
 `renderer-chk`。mdBook 0.5.4 / mdbook-mermaid 0.17.1 / Mermaid 12.3.0で、
 既存文書と[導入](../design/rendergraph-overview.md)、[設計図集](../design/rendergraph-diagrams.md)をHTMLへ生成した。
-現在の実装確認点は`367c021`。主要Rust型の共有所有、flat arenaとowned命令、compile、
+現在の実装確認点は`2b1e70c`。主要Rust型の共有所有、flat arenaとowned命令、compile、
 producer/culling、live hazard、範囲/subresource、native投入、別々の寿命、work/result状態、
-importのrevision、容量の12図をMermaid原本へまとめた。導入の3図も同じ原本をincludeする。
+importのrevision、binding/stage導出、容量の13図をMermaid原本へまとめた。導入の3図も同じ原本をincludeする。
 生成・配布・固定版・ライセンスと更新方法は[文書ガイド](../guides/html-docs.md)を参照する。
 
 Windows x64で固定CLI配布物のSHA-256照合、npm lockfileの導入、表示用bundleの再生成一致、
 生成済み全17ページのローカルリンク・fragment・asset検査が成功した。
-隔離Chromiumで12図の30表示箇所（導入3＋図集12＋全章印刷15）を描画し、構文・SVG title/description、
+隔離Chromiumで13図の32表示箇所（導入3＋図集13＋全章印刷16）を描画し、構文・SVG title/description、
 拡大/縮小/原寸/全体表示、Escでの返却、拡大中のPDF印刷、明暗テーマ、390pxの本文横overflowなし、
 印刷時の操作ボタン非表示、localhost以外の文書asset要求なしを確認した。
 Chromeでも型関係図・シーケンス図の文字と矢印、原寸拡大、Esc/閉じるでの復帰、暗色テーマと章内移動を確認した。
@@ -108,7 +108,7 @@ native画像は今も1mip/1layerのみで、新attachmentのloweringは従来の
 `Graph::dispatch`は管理下uniform/storage readbackのProgram identity・workgroup数と、
 manifest順の論理buffer descriptorを準備済み領域へ所有する。
 shader実footprintを別契約として保持し、32-byte descriptorでも読書き・初期化は先頭16 byteだけに限定した。
-所有・保証境界・制限は[Graph契約](../design/rendergraph.md#管理下buffer-computeのowned計画)に従う。
+所有・保証境界・制限は[Graph契約](../design/rendergraph.md#owned-shader-bindings)に従う。
 一般Computeのnative実行、native Program/Bindingsのimport/保持、MRT/subresourceのnative実行、一般Rasterは未実装のままである。
 
 Windows x64 / Rust 1.99.0で、公開API8件と内部契約2件の新規回帰を含め、
