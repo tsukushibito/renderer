@@ -6,7 +6,7 @@
   "validator_version": "1.10 (pinned DXC internal validator; validation enabled)",
   "coordinates": {
     "input": "Same model positions and column-major clip_from_model bytes as Vulkan",
-    "vertex_y": "Negate clip-space Y in both generated vertex shaders to match positive-height Vulkan viewport orientation with a positive D3D12 viewport",
+    "vertex_y": "Negate clip-space Y in all generated vertex shaders to match positive-height Vulkan viewport orientation with a positive D3D12 viewport",
     "clip_z": "Preserve 0 <= z <= w; no --fixup-clipspace",
     "raster": "Normal Z, clear depth 1, LESS, cull NONE, blending disabled; front-face/culling equivalence is not established",
     "pixel": "Top-left image coordinates and pixel-center SV_Position.xy; integer truncation selects the same texel",

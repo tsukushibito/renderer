@@ -158,6 +158,10 @@ Expect-Rejected 'vertex Uniform scalar type' {
 Expect-Rejected 'vertex inline matrix stride' {
     param($s) $s.types.PSObject.Properties[$s.push_constants[0].type].Value.members[0].matrix_stride = 32
 }
+Expect-Rejected 'vertex inline row-major matrix' {
+    param($s) $s.types.PSObject.Properties[$s.push_constants[0].type].Value.members[0] |
+        Add-Member -NotePropertyName row_major -NotePropertyValue $true
+}
 Expect-Rejected 'vertex additional storage side effect' {
     param($s) $s | Add-Member -NotePropertyName ssbos -NotePropertyValue @([pscustomobject]@{ set = 2; binding = 0 })
 }
@@ -165,6 +169,8 @@ Expect-Rejected 'DXIL inline and Uniform register alias' { param($s, $d) $d.Repl
 Expect-Rejected 'DXIL vertex Uniform prefix size' {
     param($s, $d) [regex]::Replace($d, 'Size:\s*16', 'Size: 32')
 }
+Expect-Rejected 'DXIL vertex attribute semantic' { param($s, $d) $d.Replace('TEXCOORD                 1', 'TEXCOORD                 7') }
+Expect-Rejected 'DXIL vertex attribute type' { param($s, $d) $d.Replace('NONE   float', 'NONE   uint') }
 $verify = { param($s, $d) Assert-TexturedRasterAbi $s $d }
 $json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/textured.frag.spirv-reflection.json') -Raw
 $reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/textured.frag.reflection.txt') -Raw
@@ -182,4 +188,6 @@ Expect-Rejected 'DXIL fragment sampler register space' { param($s, $d) $d.Replac
 Expect-Rejected 'DXIL fragment sampler removed' {
     param($s, $d) [regex]::Replace($d, '(?m)^;[ \t]+[^\r\n]+[ \t]+sampler[^\r\n]*\r?\n', '')
 }
+Expect-Rejected 'DXIL fragment varying components' { param($s, $d) $d.Replace('1   xy ', '1   xyz') }
+Expect-Rejected 'DXIL fragment color target semantic' { param($s, $d) $d.Replace('SV_Target                0', 'SV_Target                1') }
 Write-Output 'Managed compute and descriptor-bound Raster SPIR-V/DXIL ABI contracts and mismatch rejections passed.'

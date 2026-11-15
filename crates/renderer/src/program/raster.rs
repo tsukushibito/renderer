@@ -322,6 +322,7 @@ mod tests {
         assert_eq!(push[0]["type"], "mat4");
         assert_eq!(push[0]["offset"], 0);
         assert_eq!(push[0]["matrix_stride"], 16);
+        assert_ne!(push[0]["row_major"].as_bool(), Some(true));
         assert_eq!(push[1]["type"], "vec4");
         assert_eq!(push[1]["offset"], 64);
         assert_eq!(fragment["separate_images"][0]["type"], "texture2D");

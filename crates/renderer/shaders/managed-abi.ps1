@@ -23,6 +23,25 @@ function Get-DxilResourceRows([string]$Section) {
         '(?m)^;[ \t]+(?<name>\S+)[ \t]+(?<kind>\S+)[ \t]+(?<format>\S+)[ \t]+(?<dimension>\S+)[ \t]+(?<id>\S+)[ \t]+(?<slot>\S+)[ \t]+(?<count>\d+)[ \t]*\r?$')
 }
 
+function Assert-TexturedDxilSignature([string]$Dxil, [string]$Heading, [object[]]$Expected) {
+    $section = [regex]::Match($Dxil.Replace("`r`n", "`n"),
+        ('(?m)^; ' + $Heading + ' signature:\n;\n; Name[^\n]*\n; -+[^\n]*\n(?<body>(?:;[^\n]+\n)+)'))
+    if (-not $section.Success) { throw "Textured Raster DXIL $Heading signature is missing." }
+    $lines = @($section.Groups['body'].Value.TrimEnd("`n") -split "`n")
+    if ($lines.Count -ne $Expected.Count) { throw "Textured Raster DXIL $Heading signature count differs." }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        $row = [regex]::Match($lines[$index],
+            '^;[ \t]+(?<name>\S+)[ \t]+(?<index>\d+)[ \t]+(?<mask>\S+)[ \t]+\d+[ \t]+(?<system>\S+)[ \t]+(?<format>\S+)(?:[ \t]+\S+)?[ \t]*$')
+        if (-not $row.Success -or $row.Groups['name'].Value -cne $Expected[$index][0] -or
+            $row.Groups['index'].Value -cne $Expected[$index][1] -or
+            $row.Groups['mask'].Value -cne $Expected[$index][2] -or
+            $row.Groups['system'].Value -cne $Expected[$index][3] -or
+            $row.Groups['format'].Value -cne 'float') {
+            throw "Textured Raster DXIL $Heading signature semantic, type or component count differs."
+        }
+    }
+}
+
 function Assert-BufferCopyAbi([object]$Spirv, [string]$Dxil, [switch]$StorageInput) {
     $asset = if ($StorageInput) { 'storage_read.comp' } else { 'uniform.comp' }
     Assert-ManagedComputeEntry $Spirv $Dxil $asset
@@ -204,6 +223,13 @@ function Assert-TexturedRasterAbi([object]$Spirv, [string]$Dxil, [switch]$Vertex
     if ($rows.Count -ne 2 -or @($rows | Where-Object { $_.Groups['count'].Value -cne '1' }).Count -ne 0) {
         throw "$asset must bind exactly two non-array native resources."
     }
+    if ($Vertex) {
+        Assert-TexturedDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyz', 'NONE'), @('TEXCOORD', '1', 'xyzw', 'NONE'))
+        Assert-TexturedDxilSignature $Dxil 'Output' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'), @('SV_Position', '0', 'xyzw', 'POS'))
+    } else {
+        Assert-TexturedDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'))
+        Assert-TexturedDxilSignature $Dxil 'Output' @(,@('SV_Target', '0', 'xyzw', 'TARGET'))
+    }
     $input = @($Spirv.inputs | Sort-Object location)
     $output = @($Spirv.outputs | Sort-Object location)
     $expectedInput = if ($Vertex) { @('vec3', 'vec4') } else { @('vec4', 'vec2') }
@@ -233,7 +259,9 @@ function Assert-TexturedRasterAbi([object]$Spirv, [string]$Dxil, [switch]$Vertex
             $uniformMembers[0].offset -ne 0 -or $null -ne $uniformMembers[0].PSObject.Properties['array'] -or
             $pushMembers.Count -ne 2 -or $pushMembers[0].type -cne 'mat4' -or
             $pushMembers[0].offset -ne 0 -or $pushMembers[0].matrix_stride -ne 16 -or
-            $pushMembers[1].type -cne 'vec4' -or $pushMembers[1].offset -ne 64) {
+            $pushMembers[1].type -cne 'vec4' -or $pushMembers[1].offset -ne 64 -or
+            ($null -ne $pushMembers[0].PSObject.Properties['row_major'] -and $pushMembers[0].row_major -eq $true) -or
+            $null -ne $pushMembers[0].PSObject.Properties['array'] -or $null -ne $pushMembers[1].PSObject.Properties['array']) {
             throw 'textured.vert Uniform prefix or inline matrix/tint offsets differ.'
         }
         foreach ($slot in @(@('cb0', 16), @('cb1', 80))) {
