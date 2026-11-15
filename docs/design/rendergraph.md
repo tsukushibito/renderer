@@ -191,8 +191,10 @@ native命令の記録前に拒否する。featureを有効化していないこ�
 
 内容追跡はupload入力の共有sliceを参照し、GPU copyではbyte列をCPUで複製しない。
 部分書き換え・copyの未知の穴を保持し、sliceを跨ぐindexも一時bufferを作らず検査する。
-既知sliceは開始位置をkeyとする`BTreeMap`で管理し、write／copyでは対象区間と重なる部分だけを
-検索・更新する。全segmentの移動や再sortを更新ごとに行わない。
+既知sliceは開始位置で整列した予約済みsegment配列で管理し、write／copyでは対象区間と
+重なる部分を二分探索する。挿入・削除では後続segmentの移動があり、更新は最悪O(S)となる。
+このprovenance配列は論理Graphの初期化・hazard解析と別に、native実行用の内容要約を管理する。
+heap nodeの確保・解放を避けるための交換条件であり、確保ゼロから更新時間の改善を推定しない。
 一般入力のindex検査は同じ内容・index数について最大値を一度求める。
 頂点数／Device上限が変わってもこの要約を比較し、同じindex本文を再走査しない。
 write／copyによる置換で要約を失効し、import snapshotのClone後の更新も独立して扱う。
