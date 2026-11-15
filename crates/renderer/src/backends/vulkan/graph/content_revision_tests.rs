@@ -49,7 +49,7 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
     real_gpu(|runtime| {
         let pixels = [10, 20, 30, 255].repeat(4);
         let bytes = (0..16).collect::<Vec<u8>>();
-        let mut initial = Graph::new();
+        let mut initial = Graph::test_new();
         let image = initial
             .image("shared image", ImageDesc::rgba8(2, 2))
             .unwrap();
@@ -57,10 +57,10 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
             .buffer("shared bytes", BufferDesc { size: 16 })
             .unwrap();
         initial
-            .upload_image("initial image", image, pixels.clone())
+            .upload_image("initial image", image, &pixels)
             .unwrap();
         initial
-            .upload_buffer("initial bytes", buffer, 0, bytes.clone())
+            .upload_buffer("initial bytes", buffer, 0, &bytes)
             .unwrap();
         initial.export_image(image).unwrap();
         initial.export_buffer(buffer).unwrap();
@@ -71,7 +71,7 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
 
         // Compile both readers and a writer before any of them changes queue
         // scopes/layout. Their logical input contents are the same version.
-        let mut compute = Graph::new();
+        let mut compute = Graph::test_new();
         let compute_image = compute
             .import_image("compute input", &source_image)
             .unwrap();
@@ -88,7 +88,7 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
             .unwrap();
         let compute = compute.compile().unwrap();
 
-        let mut sampled = Graph::new();
+        let mut sampled = Graph::test_new();
         let sampled_image = sampled.import_image("sample input", &source_image).unwrap();
         let sampled_buffer = sampled
             .import_buffer("sample bytes", &source_buffer)
@@ -103,14 +103,14 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
             .unwrap();
         let sampled = sampled.compile().unwrap();
 
-        let mut writer = Graph::new();
+        let mut writer = Graph::test_new();
         let write_image = writer.import_image("write image", &source_image).unwrap();
         let write_buffer = writer.import_buffer("write bytes", &source_buffer).unwrap();
         writer
-            .upload_image("replace image", write_image, vec![91; 16])
+            .upload_image("replace image", write_image, &[91; 16])
             .unwrap();
         writer
-            .upload_buffer("partial replacement", write_buffer, 4, vec![73; 8])
+            .upload_buffer("partial replacement", write_buffer, 4, &[73; 8])
             .unwrap();
         let written_image = writer.readback_image("written image", write_image).unwrap();
         let written_buffer = writer
@@ -171,7 +171,7 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
 #[ignore = "explicit real-GPU clear/discard content revisions; requires Core/SyncVal"]
 fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() {
     real_gpu(|runtime| {
-        let mut initial = Graph::new();
+        let mut initial = Graph::test_new();
         let color = initial.image("color", ImageDesc::rgba8(2, 2)).unwrap();
         let depth = initial.image("depth", ImageDesc::depth32(2, 2)).unwrap();
         initial
@@ -184,11 +184,11 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         let depth = first.export_image(depth).unwrap();
         completed(&mut first);
 
-        let mut old_reader = Graph::new();
+        let mut old_reader = Graph::test_new();
         let old_color = old_reader.import_image("old color", &color).unwrap();
         old_reader.readback_image("old read", old_color).unwrap();
         let old_reader = old_reader.compile().unwrap();
-        let mut clear = Graph::new();
+        let mut clear = Graph::test_new();
         let clear_color = clear.import_image("clear color", &color).unwrap();
         let clear_depth = clear.import_image("clear depth", &depth).unwrap();
         clear
@@ -207,16 +207,16 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
             "clear is a write even for identical values"
         );
 
-        let mut discard = Graph::new();
+        let mut discard = Graph::test_new();
         let color_target = discard.import_image("discard color", &new_color).unwrap();
         let depth_target = discard.import_image("discard depth", &new_depth).unwrap();
         let vertices = discard.buffer("vertices", BufferDesc { size: 84 }).unwrap();
         let indices = discard.buffer("indices", BufferDesc { size: 12 }).unwrap();
         discard
-            .upload_buffer("vertices", vertices, 0, vec![0; 84])
+            .upload_buffer("vertices", vertices, 0, &[0; 84])
             .unwrap();
         discard
-            .upload_buffer("indices", indices, 0, vec![0; 12])
+            .upload_buffer("indices", indices, 0, &[0; 12])
             .unwrap();
         let discard_ops = AttachmentOps {
             load: LoadAction::Load,
@@ -257,7 +257,7 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         let undefined = runtime.refresh_image(color.key()).unwrap();
         assert!(!undefined.initialized);
         assert_ne!(undefined.revision, new_color.revision);
-        let mut undefined_reader = Graph::new();
+        let mut undefined_reader = Graph::test_new();
         let image = undefined_reader
             .import_image("undefined color", &undefined)
             .unwrap();
