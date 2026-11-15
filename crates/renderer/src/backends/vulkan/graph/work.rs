@@ -1004,6 +1004,7 @@ mod tests {
                 resource_capacity: 8,
                 staging_bytes: 4096,
                 max_shader_bindings: 4,
+                staging_ranges: 256,
             })
             .unwrap();
             let diagnostics = runtime.diagnostics.clone();
@@ -1064,6 +1065,7 @@ mod tests {
                 resource_capacity: 8,
                 staging_bytes: 4096,
                 max_shader_bindings: 4,
+                staging_ranges: 256,
             })
             .unwrap();
             let diagnostics = runtime.diagnostics.clone();

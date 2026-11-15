@@ -13,6 +13,7 @@ fn real_gpu(capacity: usize, slots: usize, test: impl FnOnce(&mut VulkanRuntime)
             resource_capacity: capacity,
             staging_bytes: 4096,
             max_shader_bindings: 1,
+            staging_ranges: 256,
         })
         .expect("real Vulkan runtime is required");
         assert_ne!(

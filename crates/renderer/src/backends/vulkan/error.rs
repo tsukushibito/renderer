@@ -45,6 +45,9 @@ enum RuntimeCause {
         requested: u64,
         reserved: u64,
     },
+    StagingRangeCapacity {
+        capacity: usize,
+    },
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
 impl RuntimeCause {
@@ -69,6 +72,10 @@ impl fmt::Display for RuntimeCause {
                 f,
                 "staging has no contiguous range for {requested} bytes (capacity {capacity}, reserved {reserved})"
             ),
+            Self::StagingRangeCapacity { capacity } => write!(
+                f,
+                "staging has no free range metadata (capacity {capacity})"
+            ),
             Self::Other(source) => source.fmt(f),
         }
     }
@@ -77,7 +84,10 @@ impl std::error::Error for RuntimeCause {}
 
 impl RuntimeError {
     pub(super) fn is_staging_exhausted(&self) -> bool {
-        matches!(self.source, Some(RuntimeCause::StagingCapacity { .. }))
+        matches!(
+            self.source,
+            Some(RuntimeCause::StagingCapacity { .. } | RuntimeCause::StagingRangeCapacity { .. })
+        )
     }
     pub fn kind(&self) -> RuntimeErrorKind {
         self.kind
@@ -225,6 +235,13 @@ impl From<TransferError> for RuntimeError {
 }
 impl From<StagingError> for RuntimeError {
     fn from(error: StagingError) -> Self {
+        if let StagingError::RangeCapacityExhausted { capacity } = error {
+            return Self {
+                message: "staging has no free range metadata".into(),
+                kind: RuntimeErrorKind::CapacityExhausted,
+                source: Some(RuntimeCause::StagingRangeCapacity { capacity }),
+            };
+        }
         if let StagingError::CapacityExhausted {
             capacity,
             requested,
@@ -245,7 +262,6 @@ impl From<StagingError> for RuntimeError {
             StagingError::CapacityExhausted { .. } => RuntimeErrorKind::CapacityExhausted,
             StagingError::DeviceUnavailable(state) => device_kind(*state),
             StagingError::Buffer(error) => buffer_error_kind(error),
-            StagingError::Vulkan { result, .. } => native_kind(*result),
             _ => RuntimeErrorKind::InvalidInput,
         };
         Self::with_source(kind, error)

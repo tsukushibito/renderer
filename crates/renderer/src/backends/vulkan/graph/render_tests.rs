@@ -334,6 +334,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
     real_gpu_config(
         RuntimeConfig {
             max_shader_bindings: 1,
+            staging_ranges: 256,
             ..RuntimeConfig::default()
         },
         |runtime| {

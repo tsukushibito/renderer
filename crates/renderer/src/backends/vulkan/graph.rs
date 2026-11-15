@@ -59,6 +59,7 @@ pub struct RuntimeConfig {
     pub execution_slots: usize,
     pub resource_capacity: usize,
     pub staging_bytes: u64,
+    pub staging_ranges: usize,
     pub max_shader_bindings: u32,
 }
 
@@ -69,6 +70,7 @@ impl Default for RuntimeConfig {
             resource_capacity: 64,
             staging_bytes: 4 * 1024 * 1024,
             max_shader_bindings: 64,
+            staging_ranges: 256,
         }
     }
 }
@@ -327,6 +329,7 @@ impl VulkanRuntime {
             || config.resource_capacity == 0
             || config.resource_capacity > u32::MAX as usize
             || config.max_shader_bindings == 0
+            || config.staging_ranges == 0
         {
             return Err(RuntimeError::invalid(
                 "runtime capacities must be nonzero and resource capacity fit u32",
@@ -343,12 +346,17 @@ impl VulkanRuntime {
         let allocator = VulkanAllocator::new(device)?;
         let owner = allocator.owner;
         let execution = ExecutionPool::new(Arc::clone(&owner), config.execution_slots)?;
-        let upload =
-            SharedStaging::new(Arc::clone(&owner), BufferRole::Upload, config.staging_bytes)?;
+        let upload = SharedStaging::new(
+            Arc::clone(&owner),
+            BufferRole::Upload,
+            config.staging_bytes,
+            config.staging_ranges,
+        )?;
         let readback = SharedStaging::new(
             Arc::clone(&owner),
             BufferRole::Readback,
             config.staging_bytes,
+            config.staging_ranges,
         )?;
         let id = NEXT_RUNTIME
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
