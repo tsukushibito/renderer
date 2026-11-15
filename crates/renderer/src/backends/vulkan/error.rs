@@ -48,6 +48,10 @@ enum RuntimeCause {
     StagingRangeCapacity {
         capacity: usize,
     },
+    StagingLength {
+        expected: u64,
+        actual: usize,
+    },
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
 impl RuntimeCause {
@@ -75,6 +79,10 @@ impl fmt::Display for RuntimeCause {
             Self::StagingRangeCapacity { capacity } => write!(
                 f,
                 "staging has no free range metadata (capacity {capacity})"
+            ),
+            Self::StagingLength { expected, actual } => write!(
+                f,
+                "staging range requires {expected} bytes, received {actual}"
             ),
             Self::Other(source) => source.fmt(f),
         }
@@ -235,6 +243,13 @@ impl From<TransferError> for RuntimeError {
 }
 impl From<StagingError> for RuntimeError {
     fn from(error: StagingError) -> Self {
+        if let StagingError::LengthMismatch { expected, actual } = error {
+            return Self {
+                message: "staging range length mismatch".into(),
+                kind: RuntimeErrorKind::InvalidInput,
+                source: Some(RuntimeCause::StagingLength { expected, actual }),
+            };
+        }
         if let StagingError::RangeCapacityExhausted { capacity } = error {
             return Self {
                 message: "staging has no free range metadata".into(),

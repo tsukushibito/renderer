@@ -336,6 +336,7 @@ mod buffer {
         fn cancel_recording(&mut self, graph: &CompiledGraph);
         fn reject_capacity(&mut self, graph: &CompiledGraph);
         fn reap_detached(&mut self);
+        fn collect_retired(&mut self);
         fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending;
         fn complete(pending: &mut Self::Pending) -> Self::Completed;
         fn consume(result: &mut Self::Completed, pass: PassHandle, expected: &[u8; 16]);
@@ -472,6 +473,7 @@ mod buffer {
             phase(&mut phases[4], || drop(plan));
         }
         phase(&mut phases[4], || {
+            runtime.collect_retired();
             recycle_graph_slots::<GRAPH_SLOTS>(pool);
         });
         Report {
@@ -587,6 +589,10 @@ mod buffer {
         type Completed = renderer::SubmissionResult;
         fn cancel_recording(&mut self, _: &CompiledGraph) {}
         fn reap_detached(&mut self) {}
+        fn collect_retired(&mut self) {
+            assert!(self.poll_frame().unwrap().is_none());
+            assert_eq!(self.pending_frames(), 0);
+        }
         fn reject_capacity(&mut self, graph: &CompiledGraph) {
             assert_eq!(
                 self.submit(graph).err().unwrap().kind(),
@@ -622,7 +628,7 @@ mod buffer {
         let start = Snapshot::now();
         let config = renderer::RuntimeConfig {
             execution_slots: IN_FLIGHT,
-            resource_capacity: 32,
+            resource_capacity: 8,
             staging_bytes: 16 * 1024,
             staging_ranges: 32,
             max_shader_bindings: 8,
@@ -630,6 +636,30 @@ mod buffer {
         let mut runtime = renderer::VulkanRuntime::new(config).unwrap();
         assert_ne!(runtime.device_info().device_type, "CPU");
         let monitor = runtime.validation_monitor();
+        let frame_capacity = renderer::FrameCapacity {
+            graph: graph_capacity(),
+            work_slots: IN_FLIGHT,
+            result_slots: IN_FLIGHT * 2,
+            metadata_slots: 16,
+            range_snapshots: 32,
+            initialized_ranges_per_resource: 8,
+            provenance_segments_per_resource: 8,
+        };
+        runtime
+            .prepare_working_set(
+                frame_capacity,
+                &[
+                    renderer::ResourceClass::Buffer {
+                        desc: BufferDesc { size: 32 },
+                        count: IN_FLIGHT,
+                    },
+                    renderer::ResourceClass::Buffer {
+                        desc: BufferDesc { size: 16 },
+                        count: IN_FLIGHT,
+                    },
+                ],
+            )
+            .unwrap();
         let (inputs, expected) = inputs();
         let mut pool = GraphPool::new(graph_capacity(), GRAPH_SLOTS).unwrap();
         frames(&mut runtime, &mut pool, &inputs, &expected, GPU_WARMUP);
@@ -645,6 +675,10 @@ mod buffer {
         );
         let measured = frames(&mut runtime, &mut pool, &inputs, &expected, GPU_FRAMES);
         let retained_graph_slots = pool.leased_slots();
+        assert_eq!(
+            retained_graph_slots, 0,
+            "unregistered inputs returned every Graph pin"
+        );
         let before_shutdown = Snapshot::now();
         drop((runtime, pool));
         let shutdown = Snapshot::now().since(before_shutdown);
@@ -678,6 +712,13 @@ mod buffer {
                 "staging_bytes": config.staging_bytes,
                 "staging_ranges": config.staging_ranges,
                 "max_shader_bindings": config.max_shader_bindings,
+                "work_slots": frame_capacity.work_slots,
+                "result_slots": frame_capacity.result_slots,
+                "metadata_slots": frame_capacity.metadata_slots,
+                "range_snapshots": frame_capacity.range_snapshots,
+                "initialized_ranges_per_resource": frame_capacity.initialized_ranges_per_resource,
+                "provenance_segments_per_resource": frame_capacity.provenance_segments_per_resource,
+                "additional_buffer_classes": [{ "bytes": 32, "instances": IN_FLIGHT }, { "bytes": 16, "instances": IN_FLIGHT }],
             }),
         );
     }
@@ -709,6 +750,9 @@ mod buffer {
                 );
                 std::thread::yield_now();
             }
+        }
+        fn collect_retired(&mut self) {
+            assert_eq!(self.poll().unwrap(), 0);
         }
         fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending {
             self.submit(graph).unwrap()
