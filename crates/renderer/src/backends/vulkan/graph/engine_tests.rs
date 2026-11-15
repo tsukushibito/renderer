@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{RuntimeConfig, VulkanRuntime};
+use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
     test_input::{Assets as Engine, graph},
@@ -11,7 +11,7 @@ use crate::{
     EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
     RenderedFrame, VulkanEngine,
     engine::{Draw, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
-    graph::{ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
+    graph::{BufferDesc, ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
 };
 
 fn mesh(color: [f32; 4]) -> MeshData {
@@ -26,7 +26,7 @@ fn mesh(color: [f32; 4]) -> MeshData {
 fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
-        let runtime = VulkanRuntime::new(RuntimeConfig {
+        let mut runtime = VulkanRuntime::new(RuntimeConfig {
             execution_slots: 4,
             ..RuntimeConfig::default()
         })
@@ -37,6 +37,37 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
         );
         let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
+        runtime
+            .prepare_working_set(
+                FrameCapacity::default(),
+                &[
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 84 },
+                        count: 8,
+                    },
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 12 },
+                        count: 8,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(32, 32),
+                        count: 12,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::depth32(32, 32),
+                        count: 4,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(8, 8),
+                        count: 8,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::depth32(8, 8),
+                        count: 4,
+                    },
+                ],
+            )
+            .unwrap();
         let mut engine = VulkanEngine::new(
             runtime,
             MeshCacheConfig {
@@ -481,7 +512,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
 fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     use std::sync::Arc;
 
-    let runtime = VulkanRuntime::new_with_validation(
+    let mut runtime = VulkanRuntime::new_with_validation(
         RuntimeConfig::default(),
         crate::ValidationMode::Disabled,
     )
@@ -491,6 +522,29 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
         ash::vk::PhysicalDeviceType::CPU
     );
     let monitor = runtime.validation_monitor();
+    runtime
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 84 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 12 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mut engine = VulkanEngine::new(
         runtime,
         MeshCacheConfig::default(),

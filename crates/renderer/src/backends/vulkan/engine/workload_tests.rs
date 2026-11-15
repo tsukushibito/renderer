@@ -7,8 +7,9 @@ use super::test_input::{Assets as Engine, graph};
 use super::{EngineFrameCapacity, MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
 use crate::{
     RuntimeConfig, ValidationMode, VulkanRuntime,
+    backends::vulkan::graph::{FrameCapacity, ResourceClass},
     engine::{Draw, IDENTITY, Material, View},
-    graph::ResourceKey,
+    graph::{BufferDesc, ImageDesc, ResourceKey},
 };
 
 #[path = "../../../../examples/support/engine_geometry.rs"]
@@ -47,6 +48,26 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
     let mut assets = Engine::new(1, 1).unwrap();
     let generated = engine_geometry::grid(112);
     assert!(generated.vertices.len() as u64 > STAGING);
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.vertices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.indices.len() as u64,
+                    },
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
     let material = assets.create_material(Material::default()).unwrap();
     let snapshot = assets
@@ -174,6 +195,26 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
     let mut assets = Engine::new(2, 1).unwrap();
     let generated = engine_geometry::grid(400);
     assert!(generated.vertices.len() > 4 * 1024 * 1024);
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.vertices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.indices.len() as u64,
+                    },
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
     let material = assets.create_material(Material::default()).unwrap();
     let snapshot = assets
@@ -263,7 +304,36 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
     )
     .unwrap();
     let mut assets = Engine::new(1, 1).unwrap();
-    let mesh = assets.create_mesh(engine_geometry::grid(4).mesh).unwrap();
+    let generated = engine_geometry::grid(4);
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.vertices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.indices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
+    let mesh = assets.create_mesh(generated.mesh).unwrap();
     let material = assets
         .create_material(Material {
             tint: [0.0, 1.0, 1.0, 1.0],
@@ -351,6 +421,22 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(8, 8),
+                    count: 2,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(8, 8),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mut graph = graph();
     let caller_image = graph
         .image(
@@ -360,11 +446,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         .unwrap();
     let caller_bytes = [17u8, 34, 51, 255].repeat(8 * 8);
     graph
-        .upload_image(
-            "initialize caller output",
-            caller_image,
-            &caller_bytes,
-        )
+        .upload_image("initialize caller output", caller_image, &caller_bytes)
         .unwrap();
     graph.export_image(caller_image).unwrap();
     let mut upload = renderer
@@ -480,6 +562,30 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 112 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 24 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mut assets = Engine::new(3, 1).unwrap();
     let material = assets.create_material(Material::default()).unwrap();
     let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
