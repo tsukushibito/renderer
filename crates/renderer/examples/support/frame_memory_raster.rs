@@ -98,6 +98,11 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
     let depth_only = mode == 5;
     let with_depth = matches!(mode, 1 | 2 | 5);
     let draw_count = [1, 3, 2, 0][frame % 4];
+    let clear_depth = if (frame / 6).is_multiple_of(2) {
+        1.0f32
+    } else {
+        0.875f32
+    };
     let mut graph = pool.begin().unwrap();
     let vertex_buffer = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
     let index_buffer = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
@@ -249,7 +254,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
     });
     let depth_attachment = depth.map(|image| Attachment {
         view: graph.image_view(image, 0, 0).unwrap(),
-        load: LoadOp::Clear(1.0),
+        load: LoadOp::Clear(clear_depth),
         store: StoreOp::Store,
     });
     graph
@@ -295,7 +300,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         let mut pixel = [0; 8];
         pixel[..4].copy_from_slice(
             &if draw_count == 0 {
-                1.0f32
+                clear_depth
             } else {
                 draws[draw_count - 1].parameters.transform[3][2]
             }
@@ -457,6 +462,7 @@ fn report<B: Backend>(
         },
         "extent": [WIDTH, HEIGHT],
         "draw_counts": [1, 3, 2, 0],
+        "depth_clear_values": [1.0, 0.875],
         "programs": ["mesh", "mesh_hdr", "textured_mesh", "textured_mesh_hdr", "depth_only"],
         "pass_shapes": ["color-only RGBA8", "color+depth RGBA8", "textured color+depth RGBA8", "color-only RGBA16F", "textured color-only RGBA16F", "depth-only D32"],
         "bindings": "per-draw Uniform at byte0/256, alternating sampled images and nearest/clamp sampler; two binary-exact input versions",
@@ -737,6 +743,6 @@ pub fn d3d12(baseline: bool) {
         shutdown,
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "luid": info.luid, "driver_version": info.driver_version, "shader_model": info.shader_model }),
-        serde_json::json!({ "debug_layer_enabled": validation.debug_layer_enabled, "gpu_based_validation_enabled": validation.gpu_based_validation_enabled, "teardown_checked": validation.teardown_checked }),
+        serde_json::json!({ "debug_layer_enabled": validation.debug_layer_enabled, "gpu_based_validation_enabled": validation.gpu_based_validation_enabled, "teardown_checked": validation.teardown_checked, "warnings": validation.warnings, "errors": validation.errors, "corruption": validation.corruption, "callback_failures": validation.callback_failures, "dropped_messages": validation.dropped_messages }),
     );
 }
