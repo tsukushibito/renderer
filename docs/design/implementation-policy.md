@@ -1105,6 +1105,10 @@ native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換
 `.2.1.6`はD32画像とdepth attachment/sample Viewの作成契約、clear後のdepth sampleを加える。
 `.2.1.7`はreadonly StorageRead bindingと管理下shaderの16-byte copyを二APIへ加える。
 一般owned Graphは`.2.2`、graphicsのstage/vertex/attachment/PSOとRaster実行は`.2.3`へ残す。
+`.2.2.2`では管理下buffer Computeのowned命令・論理bindingとshader実footprintを共通CPU計画へ接続した。
+現在はuniform/storage readbackの一workgroupだけを扱い、binding全descriptorと16-byte実アクセスを分ける。
+これは`.2.1`で作成したnative Program/Bindingsの実行ではなく、Device固有の保証と二APIの一般実行は`.2.4`へ残す。
+prepared arena・所有・初期化・依存・cullingとnative未対応拒否の範囲は[Graph契約](rendergraph.md#管理下buffer-computeのowned計画)に従う。
 他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。

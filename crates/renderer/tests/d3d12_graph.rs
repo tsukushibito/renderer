@@ -18,10 +18,14 @@
 
 use std::time::Duration;
 
-use renderer::graph::{BufferDesc, CompiledGraph, GraphCapacity, GraphPool, PassHandle};
+use renderer::graph::{
+    BufferBinding, BufferDesc, BufferHandle, CompiledGraph, Graph, GraphCapacity, GraphPool,
+    PassHandle,
+};
+use renderer::program::ManagedProgram;
 use renderer::{
-    D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode, ResourceClass, RuntimeConfig,
-    ValidationMode, VulkanRuntime,
+    D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode, ResourceClass,
+    RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime,
 };
 use serde_json::{Value, json};
 
@@ -29,6 +33,42 @@ struct ExpectedReadback {
     pass: PassHandle,
     name: &'static str,
     bytes: Vec<u8>,
+}
+
+fn append_owned_dispatch(graph: &mut Graph) -> BufferHandle {
+    let uniform = graph
+        .buffer("dispatch uniform", BufferDesc { size: 128 })
+        .unwrap();
+    let output = graph
+        .buffer("dispatch output", BufferDesc { size: 128 })
+        .unwrap();
+    graph
+        .upload_buffer("dispatch input", uniform, 0, &[7; 16])
+        .unwrap();
+    graph
+        .dispatch(
+            "managed dispatch",
+            &ManagedProgram::uniform_readback(),
+            &[
+                BufferBinding {
+                    group: 0,
+                    binding: 0,
+                    buffer: uniform,
+                    offset: 0,
+                    size: 32,
+                },
+                BufferBinding {
+                    group: 1,
+                    binding: 0,
+                    buffer: output,
+                    offset: 0,
+                    size: 32,
+                },
+            ],
+            [1, 1, 1],
+        )
+        .unwrap();
+    output
 }
 
 fn shared_buffer_graph() -> (GraphPool, CompiledGraph, Vec<ExpectedReadback>) {
@@ -89,6 +129,9 @@ fn shared_buffer_graph() -> (GraphPool, CompiledGraph, Vec<ExpectedReadback>) {
     let source_read = graph
         .readback_buffer("source range", source, 20, 36)
         .unwrap();
+    // Unsupported execution must be checked only for live operations. This
+    // branch is fully culled and must not acquire either physical buffer.
+    append_owned_dispatch(&mut graph);
     (
         graph_pool,
         graph.compile().unwrap(),
@@ -178,6 +221,32 @@ fn run_shared_graph(strict_validation: bool) {
             ],
         )
         .expect("prepare all native resource classes before submitting the common Graph");
+    let mut rejected_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut rejected_graph = rejected_pool.begin().unwrap();
+    let output = append_owned_dispatch(&mut rejected_graph);
+    rejected_graph
+        .readback_buffer("live dispatch result", output, 0, 16)
+        .unwrap();
+    let rejected = rejected_graph.compile().unwrap();
+    assert_eq!(
+        vulkan
+            .submit(&rejected)
+            .err()
+            .expect("live managed dispatch is unsupported")
+            .kind(),
+        RuntimeErrorKind::Unsupported
+    );
+    assert_eq!(
+        d3d12
+            .submit(&rejected)
+            .err()
+            .expect("live managed dispatch is unsupported")
+            .kind(),
+        D3D12RuntimeErrorKind::Unsupported
+    );
+    drop((rejected, rejected_pool));
+    // A rejected dispatch must return reusable recording/result reservations;
+    // the following ordinary Graph still executes successfully on both APIs.
     let pass_count = plan.pass_count();
     let mut vulkan_submission = vulkan.submit(&plan).expect("submit common Graph to Vulkan");
     let mut vulkan_result = vulkan_submission
@@ -270,6 +339,11 @@ fn run_shared_graph(strict_validation: bool) {
             "all_bytes_match": all_bytes_match,
             "compared_bytes_per_backend": compared_bytes,
             "readbacks": readbacks,
+            "owned_dispatch": {
+                "live_rejected_by_both_backends": true,
+                "culled_branch_does_not_prevent_execution": true,
+                "native_dispatch_execution_supported": false,
+            },
         },
         "validation": {
             "d3d12": {

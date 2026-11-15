@@ -5,10 +5,11 @@ use renderer::engine::{
     SnapshotPool, Vertex, View,
 };
 use renderer::graph::{
-    BufferDesc, CompiledGraph, ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool,
-    ImageDesc,
+    BufferBinding, BufferDesc, CompiledGraph, ComputeTransform, Graph, GraphCapacity,
+    GraphErrorKind, GraphPool, ImageDesc,
 };
 use renderer::measurement::Snapshot;
+use renderer::program::ManagedProgram;
 
 const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;
@@ -193,6 +194,117 @@ fn cpu_frames(
     }
 }
 
+fn owned_compute_graph(pool: &mut GraphPool, frame: usize) -> Graph {
+    let mut graph = pool.begin().unwrap();
+    let uniform = graph.buffer("uniform", BufferDesc { size: 64 }).unwrap();
+    let buffers = [
+        graph.buffer("storage a", BufferDesc { size: 64 }).unwrap(),
+        graph.buffer("storage b", BufferDesc { size: 64 }).unwrap(),
+    ];
+    let unused = graph
+        .buffer("unused output", BufferDesc { size: 64 })
+        .unwrap();
+    let dispatch = |graph: &mut Graph, name, program, input, source_offset, output, offset| {
+        // Stack inputs end after the call. The full 32-byte descriptor survives
+        // in the plan; only the reviewed 16-byte prefix enters content analysis.
+        graph
+            .dispatch(
+                name,
+                &program,
+                &[
+                    BufferBinding {
+                        group: 0,
+                        binding: 0,
+                        buffer: input,
+                        offset: source_offset,
+                        size: 32,
+                    },
+                    BufferBinding {
+                        group: 1,
+                        binding: 0,
+                        buffer: output,
+                        offset,
+                        size: 32,
+                    },
+                ],
+                [1, 1, 1],
+            )
+            .unwrap();
+    };
+    let mut offset = (frame % 3) as u64 * 16;
+    graph
+        .upload_buffer("uniform bytes", uniform, offset, &[frame as u8; 16])
+        .unwrap();
+    dispatch(
+        &mut graph,
+        "producer",
+        ManagedProgram::uniform_readback(),
+        uniform,
+        offset,
+        buffers[0],
+        offset,
+    );
+    let mut input = 0;
+    for hop in 0..=frame % 3 {
+        let next_offset = ((frame + hop + 1) % 3) as u64 * 16;
+        dispatch(
+            &mut graph,
+            "consumer",
+            ManagedProgram::storage_readback(),
+            buffers[input],
+            offset,
+            buffers[1 - input],
+            next_offset,
+        );
+        input = 1 - input;
+        offset = next_offset;
+    }
+    graph
+        .readback_buffer("owned output", buffers[input], offset, 16)
+        .unwrap();
+    dispatch(
+        &mut graph,
+        "dead branch",
+        ManagedProgram::uniform_readback(),
+        uniform,
+        (frame % 3) as u64 * 16,
+        unused,
+        0,
+    );
+    graph
+}
+
+fn owned_compute_frames(pool: &mut GraphPool, count: usize) -> Report<3> {
+    let mut plans: [Option<CompiledGraph>; IN_FLIGHT] = std::array::from_fn(|_| None);
+    let mut phases = [Snapshot::default(); 3];
+    let before = Snapshot::now();
+    for frame in 0..count {
+        let slot = frame % IN_FLIGHT;
+        phase(&mut phases[2], || drop(plans[slot].take()));
+        let graph = phase(&mut phases[0], || {
+            drop(owned_compute_graph(pool, frame));
+            owned_compute_graph(pool, frame)
+        });
+        let plan = phase(&mut phases[1], || graph.compile().unwrap());
+        assert_eq!(plan.pass_count(), 4 + frame % 3);
+        plans[slot] = Some(plan);
+        if frame >= IN_FLIGHT - 1 {
+            assert_eq!(
+                pool.begin().unwrap_err().kind(),
+                GraphErrorKind::CapacityExhausted
+            );
+        }
+    }
+    phase(&mut phases[2], || {
+        drop(plans);
+        assert_eq!(recycle_graph_slots::<IN_FLIGHT>(pool), IN_FLIGHT);
+    });
+    Report {
+        total: Snapshot::now().since(before),
+        phases,
+    }
+}
+
 pub(crate) fn counts(snapshot: Snapshot) -> serde_json::Value {
     serde_json::json!({
         "rust_calls_alloc_alloc_zeroed_realloc_dealloc": snapshot.rust.map(|value| value.calls),
@@ -242,6 +354,7 @@ pub fn cpu_lifecycle(baseline: bool) {
     .unwrap();
     let snapshots = SnapshotPool::new(4, IN_FLIGHT).unwrap();
     let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
+    let mut owned_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
             MeshData::new(
@@ -271,15 +384,18 @@ pub fn cpu_lifecycle(baseline: bool) {
         world_from_model: IDENTITY,
     }; 4];
     cpu_frames(&engine, &snapshots, &mut pool, &draws, WARMUP);
+    owned_compute_frames(&mut owned_pool, WARMUP);
     let startup = Snapshot::now().since(start);
     assert!(
         startup.rust[renderer::measurement::RustEvent::Allocate as usize].calls != 0,
         "Rust global allocator hooks are absent or unexercised"
     );
     let report = cpu_frames(&engine, &snapshots, &mut pool, &draws, FRAMES);
+    let owned_report = owned_compute_frames(&mut owned_pool, FRAMES);
     assert!(pool.is_idle());
+    assert!(owned_pool.is_idle());
     let before_shutdown = Snapshot::now();
-    drop((pool, snapshots, engine));
+    drop((owned_pool, pool, snapshots, engine));
     let shutdown = Snapshot::now().since(before_shutdown);
     assert!(
         shutdown.rust[renderer::measurement::RustEvent::Deallocate as usize].calls != 0,
@@ -304,14 +420,32 @@ pub fn cpu_lifecycle(baseline: bool) {
         "shutdown_outside_normal_frames": counts(shutdown),
         "total": counts(report.total),
         "phases_snapshot_build_compile_return": report.phases.map(counts),
+        "owned_compute": {
+            "coverage": "logical buffer dispatch build/compile/return; no native dispatch execution",
+            "measured_frames": FRAMES, "retained_frame_slots": IN_FLIGHT,
+            "consumer_counts": [1, 2, 3], "binding_offsets": [0, 16, 32],
+            "descriptor_bytes": 32, "shader_footprint_bytes": 16,
+            "boundary_cases": ["uncompiled dispatch cancel", "culled branch", "busy slots", "all owners returned and backing reset"],
+            "total": counts(owned_report.total),
+            "phases_build_compile_return": owned_report.phases.map(counts),
+        },
     });
     println!("FRAME_MEMORY_REPORT={json}");
     assert!(!report.total.overflowed, "measurement counter overflowed");
+    assert!(
+        !owned_report.total.overflowed,
+        "owned Compute measurement counter overflowed"
+    );
     if !baseline {
         assert!(
             report.total.is_allocation_free(),
             "CPU lifecycle still allocates or frees: {:?}",
             report.total
+        );
+        assert!(
+            owned_report.total.is_allocation_free(),
+            "owned Compute lifecycle still allocates or frees: {:?}",
+            owned_report.total
         );
     }
 }

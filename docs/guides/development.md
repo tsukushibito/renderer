@@ -698,6 +698,9 @@ cargo test --locked --release -p renderer --lib --no-default-features --features
 CPU caseはsnapshot/build/compileと全owner返却までを含み、
 draw数0/1/4/2、追加compute pass0/1/2、入力値を変え、3frame分のCPU ownerを保持してから全て返却する。
 capacity/busy拒否と未構築snapshot/未compile Graphの取消も窓内に含む。
+同じCPU実行の`owned_compute`欄は管理下buffer dispatchの論理build/compile/返却を別窓で測る。
+consumer数1/2/3、binding offset 0/16/32、入力値、culled枝を変え、32-byte descriptorと16-byte実footprintを区別する。
+3plan保持、未compile dispatch取消、全owner返却と次のslot resetも窓内に含める。native dispatch実行の測定ではない。
 buffer caseは3pending/3held結果、可変copyと自己copy、長さ不一致後のreadback再試行、未消費結果破棄まで含み、
 D3D12では未投入取消とsubmission破棄後のruntime pollも通す。
 image caseは通常の公開Engine APIでRaster→0/1/2段のInvert→Compositeを毎frame構築し、

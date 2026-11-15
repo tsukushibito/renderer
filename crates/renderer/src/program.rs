@@ -4,8 +4,9 @@
 //! are copied once and stay immutable; storage is created without initialized
 //! contents and may be written by the GPU. Immutable bindings retain the actual
 //! Program and resource versions, not a promise of immutable storage contents.
-//! General dispatch/Graph integration and arbitrary shader import are subsequent
-//! work. Reflection alone cannot establish shader memory safety or synchronization.
+//! Buffer-only managed dispatches can be planned by Graph; native Graph dispatch
+//! execution and arbitrary shader import are subsequent work. Reflection alone
+//! cannot establish shader memory safety or synchronization.
 //!
 //! Creation retains uninitialized images; this example does not execute a dispatch.
 //!

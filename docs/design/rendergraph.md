@@ -66,6 +66,37 @@ private受入のproducer→consumer同期を、公開Graphの一般dispatch対�
 一般owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`で進める。
 その作成領域・解析workspace・不変planの所有は、以下の準備済みslotへ移行した。
 
+### 管理下buffer Computeのowned計画
+
+`renderer-7ft.2.2.2`では`Graph::dispatch(name, &program, &bindings, workgroups)`を追加した。
+`ManagedProgram::uniform_readback()`と`storage_readback()`、`[1, 1, 1]` workgroupsを扱い、
+sampled assetや他のdispatch数は構築時に`Unsupported`として拒否する。
+`graph::BufferBinding`にはgroup/binding、論理buffer、offset/sizeだけを指定する。
+用途はProgramから導き、別のread/write一覧を要求しない。
+
+命令は不変な管理下Programのidentity、dispatch数、manifest順に正規化したbindingを所有する。
+Programはprivateなstatic manifestを参照し、bindingは準備済みarenaへ値として格納するため、
+呼出元のProgram変数・binding sliceを変更/破棄しても完成planは変わらない。
+これは論理bufferの命令であり、`.2.1`のnative Program/Bindingsをimportした所有契約ではない。
+
+descriptor全範囲の非ゼロ・ABI最小size・論理buffer内の境界を構築時に確認し、全offset/sizeを保持する。
+解析にはshaderの実際のread/write footprintだけを使う。現在の二assetはbinding先頭16 byteを読み、
+出力先頭16 byteだけを初期化する。32 byteのdescriptorを渡しても残り16 byteを初期化済みとしない。
+この保証はABIの`min_size`から推定せず、レビュー済みshaderと同時管理するprivate実行契約に置く。
+shaderやdispatch条件を変える際はfootprint・初期化保証も改訂する。
+Uniform readは`AccessPurpose::Uniform`であり、StorageReadへ代用しない。
+同passでwriteを含む実footprintが重なるbindingは拒否し、descriptorだけが重なる非重複範囲は区別する。
+
+初期化・宣言順producer・RAW/WAR/WAW・culling・循環は既存の共通解析へ接続する。
+`GraphCapacity::bindings`が全passのbinding上限で、超過は`GraphCapacityKind::Bindings`として返す。
+途中のslot/range/access/name/capacity失敗はbindingとaccessの追加を戻し、通常frameでheapを増設しない。
+
+native実行は後続`.2.4`であり、両backendはliveなmanaged dispatchを明示拒否する。
+culled dispatchは実行を妨げず、その論理buffer用のnative資源も取得しない。
+Device固有のalignment・usage・descriptor/dispatch上限、native Program/bindingの所有、
+D3D12のresource単位の状態互換性はCPU計画だけでは保証しない。
+MRT、画像subresource、一般Raster、一般Computeの二API実行を`.2.2.2`の完了に含めない。
+
 <a id="prepared-graph-storage"></a>
 
 ## 準備済みslotとframe入力の所有
@@ -76,7 +107,7 @@ private受入のproducer→consumer同期を、公開Graphの一般dispatch対�
 GraphはCloneできず、完成planのCloneは既存slotへのArc参照だけを増やす。
 構築途中のDrop、compile失敗、planのDropはslotへの参照を返す。
 
-容量はresource、pass、access、draw、明示依存、初期化range、名前byte、upload byte、
+容量はresource、pass、access、draw、binding、明示依存、初期化range、名前byte、upload byte、
 解析edge、区間、reader nodeを含む。draw数だけでなく、変動するpass構成・入力が
 必要とする全metadataも準備した上限内へ収める。上限超過や使用中slot不足は
 `GraphErrorKind::CapacityExhausted`で返し、通常経路で拡張・別確保・GPU待機へfallbackしない。
