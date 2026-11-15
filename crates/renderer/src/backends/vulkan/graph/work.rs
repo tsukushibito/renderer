@@ -1043,7 +1043,7 @@ mod tests {
             let mut consumer = runtime.submit(&graph.compile().unwrap()).unwrap();
             let mut result = consumer.wait(Duration::from_secs(10)).unwrap().unwrap();
             for read in reads {
-                assert_eq!(result.readback(read).unwrap(), pixels);
+                assert_eq!(result.test_readback(read).unwrap(), pixels);
             }
             producer.wait(Duration::from_secs(10)).unwrap().unwrap();
             runtime.delete(exported.key()).unwrap();
@@ -1112,8 +1112,8 @@ mod tests {
                 result.work.passes.is_empty(),
                 "completed output retains no recording plan"
             );
-            assert_eq!(result.readback(buffer_read).unwrap(), [17u8; 16]);
-            assert_eq!(result.readback(image_read).unwrap(), [29u8; 16]);
+            assert_eq!(result.test_readback(buffer_read).unwrap(), [17u8; 16]);
+            assert_eq!(result.test_readback(image_read).unwrap(), [29u8; 16]);
             drop((pending, result));
 
             // The initial-transition ordering also covers earlier copies in other
@@ -1148,8 +1148,8 @@ mod tests {
                 .unwrap();
             let mut third = runtime.submit(&consumer.compile().unwrap()).unwrap();
             let mut result = third.wait(Duration::from_secs(10)).unwrap().unwrap();
-            assert_eq!(result.readback(buffer_read).unwrap(), [17; 16]);
-            assert_eq!(result.readback(image_read).unwrap(), [29; 12]);
+            assert_eq!(result.test_readback(buffer_read).unwrap(), [17; 16]);
+            assert_eq!(result.test_readback(image_read).unwrap(), [29; 12]);
             second.wait(Duration::from_secs(10)).unwrap().unwrap();
             first.wait(Duration::from_secs(10)).unwrap().unwrap();
             runtime.delete(buffer.key()).unwrap();
@@ -1219,7 +1219,7 @@ mod tests {
             let read = draw.readback_image("color.read", color).unwrap();
             let mut third = runtime.submit(&draw.compile().unwrap()).unwrap();
             let mut result = third.wait(Duration::from_secs(10)).unwrap().unwrap();
-            assert_eq!(result.readback(read).unwrap(), [255, 0, 0, 255]);
+            assert_eq!(result.test_readback(read).unwrap(), [255, 0, 0, 255]);
             runtime.delete(exported.key()).unwrap();
             drop((first, second, third, result, runtime));
             assert!(

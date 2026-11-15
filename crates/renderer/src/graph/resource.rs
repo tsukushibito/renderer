@@ -79,7 +79,7 @@ pub struct ImportBuffer {
     pub(crate) key: ResourceKey,
     pub(crate) revision: u64,
     pub(crate) desc: BufferDesc,
-    pub(crate) initialized: Vec<Range<u64>>,
+    pub(crate) initialized: super::ImportRanges,
 }
 impl ImportBuffer {
     pub fn key(&self) -> ResourceKey {
@@ -124,83 +124,88 @@ impl ResourceDesc {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Resource {
-    pub name: String,
+    pub name: Range<usize>,
     pub desc: ResourceDesc,
     pub import: Option<ResourceKey>,
     pub import_revision: u64,
-    pub initial: Vec<Range<u64>>,
+    pub initial: Range<usize>,
 }
 
 impl Graph {
-    pub fn buffer(
+    fn add_resource(
         &mut self,
-        name: impl Into<String>,
-        desc: BufferDesc,
-    ) -> Result<BufferHandle, GraphError> {
-        let name = name.into();
+        name: &str,
+        desc: ResourceDesc,
+        import: Option<ResourceKey>,
+        revision: u64,
+        initial: &[Range<u64>],
+    ) -> Result<usize, GraphError> {
+        if self.resources.len() == self.capacity.resources
+            || initial.len()
+                > self
+                    .capacity
+                    .initial_ranges
+                    .saturating_sub(self.initial_ranges.len())
+        {
+            return Err(super::storage::capacity_error());
+        }
+        let name = self.store_name(name)?;
+        let index = self.resources.len();
+        let start = self.initial_ranges.len();
+        let data = self.data_mut();
+        data.initial_ranges.extend_from_slice(initial);
+        data.resources.push(Resource {
+            name,
+            desc,
+            import,
+            import_revision: revision,
+            initial: start..data.initial_ranges.len(),
+        });
+        data.exported.push(false);
+        Ok(index)
+    }
+    pub fn buffer(&mut self, name: &str, desc: BufferDesc) -> Result<BufferHandle, GraphError> {
         if desc.size == 0 {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
                 "buffer size must be nonzero",
             )
-            .with_resource_name(&name));
+            .with_resource_name(name));
         }
-        let index = self.resources.len();
-        self.resources.push(Resource {
-            name,
-            desc: ResourceDesc::Buffer(desc),
-            import: None,
-            import_revision: 0,
-            initial: Vec::new(),
-        });
+        let index = self.add_resource(name, ResourceDesc::Buffer(desc), None, 0, &[])?;
         Ok(BufferHandle {
             graph: self.id,
             index,
         })
     }
-    pub fn image(
-        &mut self,
-        name: impl Into<String>,
-        desc: ImageDesc,
-    ) -> Result<ImageHandle, GraphError> {
-        let name = name.into();
+    pub fn image(&mut self, name: &str, desc: ImageDesc) -> Result<ImageHandle, GraphError> {
         if desc.width == 0 || desc.height == 0 || desc.byte_len().is_none() {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
                 "image extent must be nonzero and its byte size representable",
             )
-            .with_resource_name(&name));
+            .with_resource_name(name));
         }
-        let index = self.resources.len();
-        self.resources.push(Resource {
-            name,
-            desc: ResourceDesc::Image(desc),
-            import: None,
-            import_revision: 0,
-            initial: Vec::new(),
-        });
+        let index = self.add_resource(name, ResourceDesc::Image(desc), None, 0, &[])?;
         Ok(ImageHandle {
             graph: self.id,
             index,
         })
     }
-    /// Returns the immutable description of a graph-local image. This checks
-    /// graph ownership without initializing a native backend or promising contents.
     pub fn image_desc(&self, image: ImageHandle) -> Result<ImageDesc, GraphError> {
         self.image_desc_at(self.image_id(image)?)
     }
-
     pub fn import_buffer(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         source: &ImportBuffer,
     ) -> Result<BufferHandle, GraphError> {
         let index = self.import(
-            name.into(),
+            name,
             ResourceDesc::Buffer(source.desc),
             source.key,
             source.revision,
-            source.initialized.clone(),
+            &source.initialized,
         )?;
         Ok(BufferHandle {
             graph: self.id,
@@ -209,16 +214,17 @@ impl Graph {
     }
     pub fn import_image(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         source: &ImportImage,
     ) -> Result<ImageHandle, GraphError> {
+        let initialized = 0..1;
         let initial = if source.initialized {
-            std::iter::once(0..1).collect()
+            std::slice::from_ref(&initialized)
         } else {
-            Vec::new()
+            &[]
         };
         let index = self.import(
-            name.into(),
+            name,
             ResourceDesc::Image(source.desc),
             source.key,
             source.revision,
@@ -231,17 +237,19 @@ impl Graph {
     }
     fn import(
         &mut self,
-        name: String,
+        name: &str,
         desc: ResourceDesc,
         key: ResourceKey,
         revision: u64,
-        initial: Vec<Range<u64>>,
+        initial: &[Range<u64>],
     ) -> Result<usize, GraphError> {
-        if let Some(&index) = self.imports.get(&key) {
+        let position = self.imports.binary_search_by_key(&key, |&(key, _)| key);
+        if let Ok(position) = position {
+            let index = self.imports[position].1;
             let existing = &self.resources[index];
             if existing.desc != desc
                 || existing.import_revision != revision
-                || existing.initial != initial
+                || &self.initial_ranges[existing.initial.clone()] != initial
             {
                 return Err(self.resource_error(
                     GraphErrorKind::InconsistentImport,
@@ -260,17 +268,12 @@ impl Graph {
                 GraphErrorKind::InvalidInput,
                 "invalid runtime import description or initialized range",
             )
-            .with_resource_name(&name));
+            .with_resource_name(name));
         }
-        let index = self.resources.len();
-        self.resources.push(Resource {
-            name,
-            desc,
-            import: Some(key),
-            import_revision: revision,
-            initial,
-        });
-        self.imports.insert(key, index);
+        let index = self.add_resource(name, desc, Some(key), revision, initial)?;
+        self.data_mut()
+            .imports
+            .insert(position.unwrap_err(), (key, index));
         Ok(index)
     }
     pub fn export_buffer(&mut self, buffer: BufferHandle) -> Result<(), GraphError> {
@@ -285,11 +288,11 @@ impl Graph {
     }
     fn export(&mut self, id: usize) {
         if self.exported.len() <= id {
-            self.exported.resize(id + 1, false);
+            self.data_mut().exported.resize(id + 1, false);
         }
         if !self.exported[id] {
-            self.exported[id] = true;
-            self.exports.push(id);
+            self.data_mut().exported[id] = true;
+            self.data_mut().exports.push(id);
         }
     }
     pub(super) fn buffer_id(&self, handle: BufferHandle) -> Result<usize, GraphError> {
@@ -309,7 +312,7 @@ impl Graph {
             )
             .with_resource(
                 handle.into(),
-                self.resources.get(handle.index).map(|r| r.name.as_str()),
+                self.resources.get(handle.index).map(|r| self.name(&r.name)),
             ));
         }
         Ok(handle.index)
@@ -331,7 +334,7 @@ impl Graph {
             )
             .with_resource(
                 handle.into(),
-                self.resources.get(handle.index).map(|r| r.name.as_str()),
+                self.resources.get(handle.index).map(|r| self.name(&r.name)),
             ));
         }
         Ok(handle.index)
@@ -389,7 +392,7 @@ impl Graph {
     pub(super) fn resource_error(
         &self,
         kind: GraphErrorKind,
-        message: impl Into<String>,
+        message: impl Into<std::borrow::Cow<'static, str>>,
         id: usize,
     ) -> GraphError {
         self.resource_context(GraphError::new(kind, message), id)
@@ -410,7 +413,7 @@ impl Graph {
             }
             .into(),
         };
-        error.with_resource(handle, Some(&resource.name))
+        error.with_resource(handle, Some(self.name(&resource.name)))
     }
     pub(super) fn access_range(&self, id: usize, range: Range<u64>) -> AccessRange {
         match self.resources[id].desc {

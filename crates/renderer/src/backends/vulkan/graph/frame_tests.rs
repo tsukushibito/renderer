@@ -104,7 +104,7 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
         assert!(runtime.stats().execution_slots_reused >= 1);
         for id in [first_id, second_id] {
             assert_eq!(
-                complete.get_mut(&id).unwrap().readback(read).unwrap(),
+                complete.get_mut(&id).unwrap().test_readback(read).unwrap(),
                 bytes
             );
         }
@@ -176,7 +176,10 @@ fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
         assert_eq!(runtime.stats().readback_live_ranges, 2);
         assert_eq!(runtime.stats().upload_live_ranges, 0);
         for id in [first, second] {
-            assert_eq!(results.get_mut(&id).unwrap().readback(read).unwrap(), bytes);
+            assert_eq!(
+                results.get_mut(&id).unwrap().test_readback(read).unwrap(),
+                bytes
+            );
         }
         assert_eq!(runtime.stats().readback_live_ranges, 0);
         assert!(

@@ -949,26 +949,51 @@ pub struct SubmissionResult {
     work: GraphWork,
 }
 impl SubmissionResult {
-    /// Copies and releases this pass's readback lease. A failed read preserves
-    /// the lease for retry. No native pointer or mapped memory escapes.
-    pub fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, RuntimeError> {
+    fn readback_index(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
         if pass.graph != self.graph {
             return Err(RuntimeError::wrong_owner("foreign graph readback handle"));
         }
-        let index = self
-            .work
+        self.work
             .readbacks
             .binary_search_by_key(&pass.index, |(index, _)| *index)
-            .map_err(|_| RuntimeError::invalid("pass has no readback result"))?;
+            .map_err(|_| RuntimeError::invalid("pass has no readback result"))
+    }
+
+    /// Exact size of an unconsumed readback. No native mapping or allocation.
+    pub fn readback_len(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
+        let index = self.readback_index(pass)?;
+        let value = self.work.readbacks[index]
+            .1
+            .as_ref()
+            .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
+        usize::try_from(value.size())
+            .map_err(|_| RuntimeError::unsupported("readback exceeds CPU address space"))
+    }
+
+    /// Copy into caller-owned prepared storage and return this readback range.
+    /// A length mismatch or failed read preserves the lease for retry. No native
+    /// pointer or mapped memory escapes, and no output backing is allocated.
+    pub fn readback_into(
+        &mut self,
+        pass: PassHandle,
+        output: &mut [u8],
+    ) -> Result<(), RuntimeError> {
+        let index = self.readback_index(pass)?;
         let (_, range) = &mut self.work.readbacks[index];
         let value = range
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
-        let length = usize::try_from(value.size())
-            .map_err(|_| RuntimeError::unsupported("readback exceeds CPU address space"))?;
-        let mut bytes = vec![0; length];
-        value.read(&mut bytes)?;
+        value.read(output)?;
         range.take();
+        Ok(())
+    }
+
+    // Content-focused unit/GPU acceptance uses an owned output for assertions.
+    // Allocation acceptance and every production consumer use readback_into.
+    #[cfg(test)]
+    pub(super) fn test_readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, RuntimeError> {
+        let mut bytes = vec![0; self.readback_len(pass)?];
+        self.readback_into(pass, &mut bytes)?;
         Ok(bytes)
     }
 }

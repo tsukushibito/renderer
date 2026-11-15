@@ -2,46 +2,48 @@
 //!
 //! Each builder validates raw inputs and appends only after all operands succeed.
 
-use std::{collections::BTreeMap, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
-use super::accesses::conflicting_accesses;
+use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, AttachmentOps, BufferHandle, ComputeTransform,
     Graph, GraphError, GraphErrorKind, ImageAspect, ImageDesc, ImageFormat, ImageHandle,
     LoadAction, LoadOp, MeshUpload, Operation, PassHandle, PassKind, RasterAttachments, RasterDraw,
     RasterDrawOperands, RasterParameters, ResourceAccess, ResourceDesc, ResourceHandle, StoreOp,
-    ValidatedRasterParameters, overlaps,
+    UploadSource, ValidatedRasterParameters, overlaps,
 };
 
 impl Graph {
     pub fn upload_buffer(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         dst: BufferHandle,
         offset: u64,
-        bytes: impl Into<Vec<u8>>,
+        bytes: &[u8],
     ) -> Result<PassHandle, GraphError> {
-        self.upload_buffer_shared(name, dst, offset, bytes.into().into())
-    }
-
-    /// Retains shared immutable bytes without copying them during compilation.
-    /// Reuse the same allocation when building graphs with the same upload data.
-    pub fn upload_buffer_shared(
-        &mut self,
-        name: impl Into<String>,
-        dst: BufferHandle,
-        offset: u64,
-        bytes: Arc<[u8]>,
-    ) -> Result<PassHandle, GraphError> {
-        let source = 0..bytes.len();
-        self.upload_buffer_slice(name, dst, offset, bytes, source)
+        self.build_pass(name, |graph| {
+            let dst = graph.buffer_id(dst)?;
+            let range = graph.buffer_range(dst, offset, bytes.len() as u64, true)?;
+            let data = graph.append_upload(bytes)?;
+            Ok((
+                Operation::UploadBuffer {
+                    dst,
+                    offset,
+                    data,
+                    mesh: None,
+                },
+                graph.append_accesses([write(dst, range, AccessPurpose::CopyDestination)])?,
+                false,
+            ))
+        })
     }
 
     /// Retain a slice of shared immutable input without allocating a chunk copy.
     /// The CPU source offset is independent of the aligned GPU destination offset.
+    #[cfg(test)]
     pub(crate) fn upload_buffer_slice(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         dst: BufferHandle,
         offset: u64,
         bytes: Arc<[u8]>,
@@ -54,7 +56,7 @@ impl Graph {
     /// this Graph boundary owns handle/range checks and transactional insertion.
     pub(crate) fn upload_mesh_slice(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         dst: BufferHandle,
         bytes: &Arc<[u8]>,
         source: Range<usize>,
@@ -83,7 +85,7 @@ impl Graph {
 
     fn upload_buffer_slice_with_mesh(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         dst: BufferHandle,
         offset: u64,
         bytes: Arc<[u8]>,
@@ -101,15 +103,15 @@ impl Graph {
             })?;
             let range = graph.buffer_range(dst, offset, slice.len() as u64, true)?;
             Ok((
-                Operation::UploadBuffer { dst, offset, bytes, source, mesh },
-                vec![write(dst, range, AccessPurpose::CopyDestination)],
+                Operation::UploadBuffer { dst, offset, data: UploadSource::Shared { bytes, source }, mesh },
+                graph.append_accesses([write(dst, range, AccessPurpose::CopyDestination)])?,
                 false,
             ))
         })
     }
     pub fn copy_buffer(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         src: BufferHandle,
         src_offset: u64,
         dst: BufferHandle,
@@ -138,17 +140,17 @@ impl Graph {
                     dst_offset,
                     size,
                 },
-                vec![
+                graph.append_accesses([
                     read(src, source, AccessPurpose::CopySource),
                     write(dst, target, AccessPurpose::CopyDestination),
-                ],
+                ])?,
                 false,
             ))
         })
     }
     pub fn readback_buffer(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         src: BufferHandle,
         offset: u64,
         size: u64,
@@ -158,49 +160,40 @@ impl Graph {
             let range = graph.buffer_range(src, offset, size, true)?;
             Ok((
                 Operation::ReadbackBuffer { src, offset, size },
-                vec![read(src, range, AccessPurpose::CopySource)],
+                graph.append_accesses([read(src, range, AccessPurpose::CopySource)])?,
                 true,
             ))
         })
     }
     pub fn upload_image(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         dst: ImageHandle,
-        bytes: impl Into<Vec<u8>>,
-    ) -> Result<PassHandle, GraphError> {
-        self.upload_image_shared(name, dst, bytes.into().into())
-    }
-
-    /// Retains one complete packed RGBA8 image as shared immutable upload data.
-    pub fn upload_image_shared(
-        &mut self,
-        name: impl Into<String>,
-        dst: ImageHandle,
-        bytes: Arc<[u8]>,
+        bytes: &[u8],
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let dst = graph.image_id(dst)?;
             graph.color(dst)?;
             if graph.image_desc_at(dst)?.byte_len() != Some(bytes.len() as u64) {
-                return Err(graph
-                    .resource_error(
-                        GraphErrorKind::InvalidInput,
-                        "image upload must provide every packed RGBA8 texel",
-                        dst,
-                    )
-                    .with_range(graph.access_range(dst, 0..1)));
+                return Err(graph.resource_error(
+                    GraphErrorKind::InvalidInput,
+                    "image upload must cover its exact extent",
+                    dst,
+                ));
             }
+            let data = graph.append_upload(bytes)?;
             Ok((
-                Operation::UploadImage { dst, bytes },
-                vec![write(dst, 0..1, AccessPurpose::CopyDestination)],
+                Operation::UploadImage { dst, data },
+                graph.append_accesses([write(dst, 0..1, AccessPurpose::CopyDestination)])?,
                 false,
             ))
         })
     }
+
+    /// Retains one complete packed RGBA8 image as shared immutable upload data.
     pub fn copy_image(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         src: ImageHandle,
         dst: ImageHandle,
     ) -> Result<PassHandle, GraphError> {
@@ -210,17 +203,17 @@ impl Graph {
             graph.compatible_color_pair(src, dst)?;
             Ok((
                 Operation::CopyImage { src, dst },
-                vec![
+                graph.append_accesses([
                     read(src, 0..1, AccessPurpose::CopySource),
                     write(dst, 0..1, AccessPurpose::CopyDestination),
-                ],
+                ])?,
                 false,
             ))
         })
     }
     pub fn readback_image(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         src: ImageHandle,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
@@ -228,14 +221,14 @@ impl Graph {
             graph.color(src)?;
             Ok((
                 Operation::ReadbackImage { src },
-                vec![read(src, 0..1, AccessPurpose::CopySource)],
+                graph.append_accesses([read(src, 0..1, AccessPurpose::CopySource)])?,
                 true,
             ))
         })
     }
     pub fn compute(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         src: ImageHandle,
         dst: ImageHandle,
         transform: ComputeTransform,
@@ -250,10 +243,10 @@ impl Graph {
                     dst,
                     transform,
                 },
-                vec![
+                graph.append_accesses([
                     read(src, 0..1, AccessPurpose::StorageRead),
                     write(dst, 0..1, AccessPurpose::StorageWrite),
-                ],
+                ])?,
                 false,
             ))
         })
@@ -265,7 +258,7 @@ impl Graph {
     /// or native commands are retained. Load/Discard require no clear value.
     pub fn raster(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         draw: RasterDraw,
         attachments: RasterAttachments,
     ) -> Result<PassHandle, GraphError> {
@@ -331,12 +324,12 @@ impl Graph {
                     clear_depth,
                     parameters: draw.parameters,
                 },
-                vec![
+                graph.append_accesses([
                     read(vertices, 0..vs, AccessPurpose::Vertex),
                     read(indices, 0..ix, AccessPurpose::Index),
                     attachment(color, color_ops, AccessPurpose::ColorAttachment),
                     attachment(depth, depth_ops, AccessPurpose::DepthAttachment),
-                ],
+                ])?,
                 false,
             ))
         })
@@ -348,7 +341,7 @@ impl Graph {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn raster_batch(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         draws: impl ExactSizeIterator<
             Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
         >,
@@ -382,53 +375,56 @@ impl Graph {
                     "invalid attachment clear value",
                 ));
             }
-            let mut encoded = Vec::with_capacity(draws.len());
-            // Preserve both purposes if a buffer supplies vertices and indices.
-            let mut buffers = BTreeMap::<usize, [u64; 2]>::new();
+            let first_draw = graph.draws.len();
+            if draws.len() > graph.capacity.draws.saturating_sub(first_draw) {
+                return Err(super::storage::capacity_error());
+            }
+            let resources = graph.resources.len();
+            graph.data_mut().raster_ranges[..resources].fill([0; 2]);
             for draw in draws {
                 let (vertices, indices, index_count, parameters) = draw?;
                 let (vertices, indices) = graph.raster_buffers(vertices, indices, index_count)?;
-                let draw = RasterDrawOperands {
+                let vs = graph.resources[vertices].desc.units();
+                let ix = u64::from(index_count) * 4;
+                let data = graph.data_mut();
+                data.raster_ranges[vertices][0] = vs;
+                data.raster_ranges[indices][1] = data.raster_ranges[indices][1].max(ix);
+                data.draws.push(RasterDrawOperands {
                     vertices,
                     indices,
                     index_count,
                     parameters: parameters.get(),
-                };
-                let vs = graph.resources[draw.vertices].desc.units();
-                let ix = u64::from(draw.index_count) * 4;
-                buffers.entry(draw.vertices).or_default()[0] = vs;
-                let index_range = &mut buffers.entry(draw.indices).or_default()[1];
-                *index_range = (*index_range).max(ix);
-                encoded.push(draw);
+                });
             }
-            let mut accesses = Vec::with_capacity(buffers.len() * 2 + 2);
-            for (resource, [vertices, indices]) in buffers {
+            let first_access = graph.accesses.len();
+            for resource in 0..resources {
+                let [vertices, indices] = graph.raster_ranges[resource];
                 if vertices != 0 {
-                    accesses.push(read(resource, 0..vertices, AccessPurpose::Vertex));
+                    graph.append_access(read(resource, 0..vertices, AccessPurpose::Vertex))?;
                 }
                 if indices != 0 {
-                    accesses.push(read(resource, 0..indices, AccessPurpose::Index));
+                    graph.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
                 }
             }
-            accesses.push(attachment(
+            graph.append_access(attachment(
                 color,
                 AttachmentOps::CLEAR_STORE,
                 AccessPurpose::ColorAttachment,
-            ));
-            accesses.push(attachment(
+            ))?;
+            graph.append_access(attachment(
                 depth,
                 AttachmentOps::CLEAR_STORE,
                 AccessPurpose::DepthAttachment,
-            ));
+            ))?;
             Ok((
                 Operation::RasterBatch {
-                    draws: encoded.into(),
+                    draws: first_draw..graph.draws.len(),
                     color,
                     depth,
                     clear_color,
                     clear_depth,
                 },
-                accesses,
+                first_access..graph.accesses.len(),
                 false,
             ))
         })
@@ -437,7 +433,7 @@ impl Graph {
     /// Initializes a complete color/depth target even when a view has no draws.
     pub fn clear_attachments(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         color: ImageHandle,
         depth: ImageHandle,
         clear_color: [f32; 4],
@@ -472,7 +468,7 @@ impl Graph {
                     clear_color,
                     clear_depth,
                 },
-                vec![
+                graph.append_accesses([
                     attachment(
                         color,
                         AttachmentOps::CLEAR_STORE,
@@ -483,14 +479,14 @@ impl Graph {
                         AttachmentOps::CLEAR_STORE,
                         AccessPurpose::DepthAttachment,
                     ),
-                ],
+                ])?,
                 false,
             ))
         })
     }
     pub fn composite(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         src: ImageHandle,
         dst: ImageHandle,
     ) -> Result<PassHandle, GraphError> {
@@ -500,10 +496,10 @@ impl Graph {
             graph.compatible_color_pair(src, dst)?;
             Ok((
                 Operation::Composite { src, dst },
-                vec![
+                graph.append_accesses([
                     read(src, 0..1, AccessPurpose::Sampled),
                     write(dst, 0..1, AccessPurpose::ColorAttachment),
-                ],
+                ])?,
                 false,
             ))
         })
@@ -512,13 +508,13 @@ impl Graph {
     /// live declaration-only operations rather than report successful execution.
     pub fn declare_pass(
         &mut self,
-        name: impl Into<String>,
+        name: &str,
         kind: PassKind,
-        accesses: Vec<Access>,
+        accesses: &[Access],
         side_effect: bool,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let mut encoded = Vec::with_capacity(accesses.len());
+            let first_access = graph.accesses.len();
             for access in accesses {
                 let id = match access.resource {
                     ResourceHandle::Buffer(h) => graph.buffer_id(h)?,
@@ -559,7 +555,7 @@ impl Graph {
                 };
                 validate_purpose(kind, graph.resources[id].desc, access.kind, access.purpose)
                     .map_err(|error| graph.resource_context(error, id).with_range(access.range.clone()))?;
-                encoded.push(ResourceAccess {
+                graph.append_access(ResourceAccess {
                     resource: id,
                     range,
                     read: access.kind != AccessKind::Write,
@@ -567,14 +563,16 @@ impl Graph {
                     initializes: access.kind != AccessKind::Read,
                     discard_after: false,
                     purpose: access.purpose,
-                });
+                })?;
             }
             // This public input boundary establishes pass-local disjointness.
             // Rechecking the immutable encoded accesses at submit is unnecessary.
-            if let Some((left, _)) = conflicting_accesses(&encoded, |access| {
+            let encoded = first_access..graph.accesses.len();
+            let conflict = { let data=graph.data_mut(); conflicting_accesses_in(&data.accesses[encoded.clone()], |access| {
                 (access.resource, access.range.clone(), access.write)
-            }) {
-                let access = &encoded[left];
+            }, &mut data.overlap).map_err(|_| super::storage::capacity_error())? };
+            if let Some((left, _)) = conflict {
+                let access = &graph.accesses[encoded.start + left];
                 return Err(graph.resource_error(GraphErrorKind::InvalidInput,
                     "overlapping pass accesses must use one read_write declaration",
                     access.resource,
@@ -585,15 +583,27 @@ impl Graph {
     }
     fn build_pass(
         &mut self,
-        name: impl Into<String>,
-        build: impl FnOnce(&Self) -> Result<(Operation, Vec<ResourceAccess>, bool), GraphError>,
+        name: &str,
+        build: impl FnOnce(&mut Self) -> Result<(Operation, Range<usize>, bool), GraphError>,
     ) -> Result<PassHandle, GraphError> {
-        let name = name.into();
-        let (operation, accesses, side_effect) =
-            build(self).map_err(|error| error.with_pass_name(&name))?;
-        Ok(self.push(name, operation, accesses, side_effect))
+        let checkpoint = (
+            self.accesses.len(),
+            self.draws.len(),
+            self.uploads.len(),
+            self.names.len(),
+        );
+        let result = build(self).and_then(|(operation, accesses, side_effect)| {
+            self.push(name, operation, accesses, side_effect)
+        });
+        if result.is_err() {
+            let data = self.data_mut();
+            data.accesses.truncate(checkpoint.0);
+            data.draws.truncate(checkpoint.1);
+            data.uploads.truncate(checkpoint.2);
+            data.names.truncate(checkpoint.3);
+        }
+        result.map_err(|error| error.with_pass_name(name))
     }
-
     fn raster_draw(
         &self,
         vertices: BufferHandle,

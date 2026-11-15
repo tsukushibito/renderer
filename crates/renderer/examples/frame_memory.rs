@@ -20,6 +20,10 @@ fn main() {
     assert!(args.next().is_none(), "unexpected argument");
     match mode.as_str() {
         "cpu" => frame_memory::cpu_lifecycle(baseline),
-        _ => panic!("supported mode: cpu [--baseline]"),
+        #[cfg(feature = "vulkan")]
+        "vulkan" => frame_memory::vulkan_buffer_lifecycle(baseline),
+        #[cfg(all(feature = "d3d12", windows))]
+        "d3d12" => frame_memory::d3d12_buffer_lifecycle(baseline),
+        _ => panic!("supported modes: cpu/vulkan/d3d12 [--baseline] (backend feature required)"),
     }
 }
