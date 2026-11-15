@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use renderer::graph::{BufferDesc, CompiledGraph, GraphCapacity, GraphPool, PassHandle};
 use renderer::{
-    D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode, RuntimeConfig, ValidationMode,
-    VulkanRuntime,
+    D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode, ResourceClass, RuntimeConfig,
+    ValidationMode, VulkanRuntime,
 };
 use serde_json::{Value, json};
 
@@ -163,6 +163,21 @@ fn run_shared_graph(strict_validation: bool) {
     let d3d12_monitor = d3d12.validation_monitor();
 
     let (_graph_pool, plan, expected) = shared_buffer_graph();
+    vulkan
+        .prepare_working_set(
+            Default::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 128 },
+                    count: 2,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 160 },
+                    count: 1,
+                },
+            ],
+        )
+        .expect("prepare all native resource classes before submitting the common Graph");
     let pass_count = plan.pass_count();
     let mut vulkan_submission = vulkan.submit(&plan).expect("submit common Graph to Vulkan");
     let mut vulkan_result = vulkan_submission

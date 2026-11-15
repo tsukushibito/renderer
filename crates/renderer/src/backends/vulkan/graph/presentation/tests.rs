@@ -802,6 +802,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                 report.is_clean(),
                 "Core/SyncVal including complete WSI shutdown: {report:#?}"
             );
+            #[cfg(feature = "vulkan-diagnostics")]
             drop(diagnostics);
         });
         measurements.caller(|| drop((event_loop, host)));
