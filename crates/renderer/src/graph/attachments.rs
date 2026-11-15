@@ -88,11 +88,17 @@ impl Graph {
         let colors = first..self.attachments.len();
         let depth = if let Some(attachment) = attachments.depth {
             let value = match attachment.load {
-                LoadOp::Clear(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
+                LoadOp::Clear(value)
+                    if value.is_finite()
+                        && (0.0..=1.0).contains(&value)
+                        && !value.is_subnormal() =>
+                {
+                    value
+                }
                 LoadOp::Clear(_) => {
                     return Err(self.resource_error(
                         GraphErrorKind::InvalidInput,
-                        "depth clear must be finite and within zero and one",
+                        "depth clear must be zero or a normal finite value within zero and one",
                         self.image_id(attachment.view.image)?,
                     ));
                 }
