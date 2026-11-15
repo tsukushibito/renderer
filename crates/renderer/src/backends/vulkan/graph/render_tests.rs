@@ -334,6 +334,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
     real_gpu_config(
         RuntimeConfig {
             max_shader_bindings: 1,
+            staging_ranges: 256,
             ..RuntimeConfig::default()
         },
         |runtime| {
@@ -505,6 +506,7 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
         let mut compute_pipeline = None;
         for _ in 0..4 {
             let mut submission = runtime.submit(&compiled).unwrap();
+            assert_eq!(runtime.execution.stats().leased, 1);
             let handles = runtime.programs.as_ref().unwrap().handles();
             assert_ne!(handles[0], vk::Pipeline::null());
             assert_eq!(handles[1..], [vk::Pipeline::null(); 2]);
@@ -519,7 +521,11 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
         let stats = runtime.stats();
         assert_eq!(stats.resources_created, 3, "images/views must be reused");
         assert!(stats.resources_reused >= 9);
-        assert_eq!(stats.execution_slots_created, 1);
+        assert_eq!(
+            stats.execution_slots_created,
+            runtime.execution.stats().capacity,
+            "all native execution slots are prepared before graph submission"
+        );
         assert!(stats.execution_slots_reused >= 3);
         assert_eq!(stats.descriptor_arenas_created, 1);
         assert!(stats.descriptor_arenas_reused >= 3);
@@ -947,6 +953,11 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                 runtime.submit_with_diagnostics(&consumer).unwrap();
             #[cfg(not(feature = "graph-diagnostics"))]
             let mut pending_consumer = runtime.submit(&consumer).unwrap();
+            assert_eq!(
+                runtime.execution.stats().leased,
+                2,
+                "one execution per graph, with two pending graphs"
+            );
             #[cfg(feature = "graph-diagnostics")]
             assert!(lowering.contains(&format!(
                 "imported=true import_revision={}",
@@ -976,8 +987,9 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
         );
         assert!(stats.resources_reused >= 8);
         assert_eq!(
-            stats.execution_slots_created, 2,
-            "one execution per graph, with two pending graphs"
+            stats.execution_slots_created,
+            runtime.execution.stats().capacity,
+            "graph reuse does not create additional native execution slots"
         );
         assert!(stats.execution_slots_reused >= 2);
         assert_eq!(stats.descriptor_arenas_created, 2);

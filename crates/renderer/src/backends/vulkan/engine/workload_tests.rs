@@ -24,6 +24,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
         resource_capacity: 4,
         staging_bytes: STAGING,
         max_shader_bindings: 1,
+        staging_ranges: 256,
     })
     .unwrap();
     assert_ne!(
@@ -147,6 +148,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             resource_capacity: 32,
             staging_bytes: STAGING,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         },
         ValidationMode::Required,
     )
@@ -236,6 +238,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
             resource_capacity: 16,
             staging_bytes: STAGING,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         },
         ValidationMode::Required,
     )
@@ -327,6 +330,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
             resource_capacity: 16,
             staging_bytes: STAGING,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         },
         ValidationMode::Required,
     )
@@ -446,6 +450,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             resource_capacity: 4,
             staging_bytes: STAGING,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         },
         ValidationMode::Required,
     )

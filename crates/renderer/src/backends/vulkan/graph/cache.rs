@@ -1,25 +1,67 @@
 //! Event-maintained candidates for physical resource reuse. Pending and registered
 //! entries are absent; acquisition never walks the rest of the registry.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::collections::TryReserveError;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 /// At most one pending notification per registry entry, even if callers hold
 /// or drop many cloned leases without performing another acquisition.
-#[derive(Default)]
-pub(super) struct RecycleQueue(Mutex<BTreeSet<usize>>);
+pub(super) struct RecycleQueue(Mutex<RecycleState>);
+
+struct RecycleState {
+    queued: Vec<bool>,
+    indices: Vec<usize>,
+}
 
 impl RecycleQueue {
-    fn released(&self, index: usize) {
-        self.0
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(index);
+    pub(super) fn new(capacity: usize) -> Result<Self, TryReserveError> {
+        let mut queued = Vec::new();
+        queued.try_reserve_exact(capacity)?;
+        queued.resize(capacity, false);
+        let mut indices = Vec::new();
+        indices.try_reserve_exact(capacity)?;
+        Ok(Self(Mutex::new(RecycleState { queued, indices })))
     }
 
+    fn released(&self, index: usize) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.queued[index] {
+            state.queued[index] = true;
+            // One queued entry per registry index fits the prepared capacity.
+            state.indices.push(index);
+        }
+    }
+
+    pub(super) fn drain_into(&self, output: &mut Vec<usize>) {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(
+            output.capacity() >= state.queued.len(),
+            "prepared recycle scratch capacity"
+        );
+        output.clear();
+        let RecycleState { queued, indices } = &mut *state;
+        // Visit only notifications, including with a large registered prefix.
+        // Drain retains the prepared backing and duplicate releases use no slot.
+        for index in indices.drain(..) {
+            queued[index] = false;
+            output.push(index);
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn take(&self) -> BTreeSet<usize> {
-        std::mem::take(&mut *self.0.lock().unwrap_or_else(|error| error.into_inner()))
+        let capacity = self
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .queued
+            .len();
+        let mut result = Vec::with_capacity(capacity);
+        self.drain_into(&mut result);
+        result.into_iter().collect()
     }
 }
 
@@ -82,43 +124,41 @@ pub(super) enum CacheTarget {
 }
 
 pub(super) struct CacheIndex<K> {
-    descriptors: BTreeMap<K, BTreeSet<usize>>,
-    oldest: BTreeSet<(u64, usize)>,
-    records: BTreeMap<usize, (K, u64)>,
-}
-
-impl<K> Default for CacheIndex<K> {
-    fn default() -> Self {
-        Self {
-            descriptors: BTreeMap::new(),
-            oldest: BTreeSet::new(),
-            records: BTreeMap::new(),
-        }
-    }
+    records: Vec<Option<(K, u64)>>,
+    // Stable registry indices in ascending order. Only indexed candidates are
+    // visited; large registered/leased prefixes are absent from this list.
+    candidates: Vec<usize>,
 }
 
 impl<K: Copy + Ord> CacheIndex<K> {
+    pub(super) fn new(capacity: usize) -> Result<Self, TryReserveError> {
+        let mut records = Vec::new();
+        records.try_reserve_exact(capacity)?;
+        records.resize(capacity, None);
+        let mut candidates = Vec::new();
+        candidates.try_reserve_exact(capacity)?;
+        Ok(Self {
+            records,
+            candidates,
+        })
+    }
+
     pub(super) fn insert(&mut self, index: usize, descriptor: K, serial: u64) {
-        self.remove(index);
-        self.descriptors
-            .entry(descriptor)
-            .or_default()
-            .insert(index);
-        self.oldest.insert((serial, index));
-        self.records.insert(index, (descriptor, serial));
+        self.records[index] = Some((descriptor, serial));
+        if let Err(position) = self.candidates.binary_search(&index) {
+            // At most one candidate per fixed registry index. Preparation
+            // reserved every possible entry, so insert only moves elements.
+            self.candidates.insert(position, index);
+        }
     }
 
     pub(super) fn remove(&mut self, index: usize) {
-        if let Some((descriptor, serial)) = self.records.remove(&index) {
-            let entries = self
-                .descriptors
-                .get_mut(&descriptor)
-                .expect("indexed descriptor");
-            entries.remove(&index);
-            if entries.is_empty() {
-                self.descriptors.remove(&descriptor);
-            }
-            self.oldest.remove(&(serial, index));
+        if self.records[index].take().is_some() {
+            let position = self
+                .candidates
+                .binary_search(&index)
+                .expect("indexed candidate");
+            self.candidates.remove(position);
         }
     }
 
@@ -134,10 +174,11 @@ impl<K: Copy + Ord> CacheIndex<K> {
         vacant: Option<usize>,
         mut eligible: impl FnMut(usize) -> bool,
     ) -> Result<CacheTarget, ()> {
-        while let Some(&index) = self
-            .descriptors
-            .get(&descriptor)
-            .and_then(|indices| indices.first())
+        while let Some(index) = self
+            .candidates
+            .iter()
+            .copied()
+            .find(|&index| self.records[index].unwrap().0 == descriptor)
         {
             if eligible(index) {
                 return Ok(CacheTarget::Reuse(index));
@@ -152,7 +193,12 @@ impl<K: Copy + Ord> CacheIndex<K> {
         if entry_count < capacity {
             return Ok(CacheTarget::Create);
         }
-        while let Some(&(_, index)) = self.oldest.first() {
+        while let Some(index) = self
+            .candidates
+            .iter()
+            .copied()
+            .min_by_key(|&index| (self.records[index].unwrap().1, index))
+        {
             if eligible(index) {
                 return Ok(CacheTarget::Replace(index));
             }
@@ -169,7 +215,7 @@ mod tests {
     #[test]
     fn lease_events_follow_arc_release_and_repeat_after_the_last_clone() {
         let value = Arc::new(17);
-        let recycle = Arc::new(RecycleQueue::default());
+        let recycle = Arc::new(RecycleQueue::new(16).unwrap());
         let first = ResourceLease::new(Arc::clone(&value), 3, Arc::clone(&recycle));
         let last = first.clone();
         drop(first);
@@ -191,7 +237,7 @@ mod tests {
     #[test]
     fn concurrent_last_lease_release_always_publishes_availability() {
         let value = Arc::new(17);
-        let recycle = Arc::new(RecycleQueue::default());
+        let recycle = Arc::new(RecycleQueue::new(16).unwrap());
         let barrier = Arc::new(std::sync::Barrier::new(4));
         let leases = (0..4)
             .map(|_| ResourceLease::new(Arc::clone(&value), 9, Arc::clone(&recycle)))
@@ -211,7 +257,7 @@ mod tests {
 
     #[test]
     fn candidates_preserve_descriptor_priority_growth_and_eviction_order() {
-        let mut index = CacheIndex::default();
+        let mut index = CacheIndex::new(32).unwrap();
         index.insert(4, 'a', 3);
         index.insert(2, 'a', 8);
         index.insert(1, 'b', 3);
@@ -246,7 +292,7 @@ mod tests {
 
     #[test]
     fn vacant_slots_follow_matching_reuse_but_precede_growth_and_eviction() {
-        let mut index = CacheIndex::default();
+        let mut index = CacheIndex::new(32).unwrap();
         index.insert(2, 'a', 7);
         index.insert(1, 'b', 3);
         assert_eq!(
@@ -280,7 +326,7 @@ mod tests {
             available: bool,
         }
         let mut entries: Vec<Entry> = Vec::new();
-        let mut index = CacheIndex::default();
+        let mut index = CacheIndex::new(32).unwrap();
         let mut random = 7u64;
         for serial in 0..4_096 {
             random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -338,7 +384,7 @@ mod tests {
 
     #[test]
     fn large_registered_prefix_and_many_leased_targets_do_not_get_rechecked() {
-        let mut index = CacheIndex::default();
+        let mut index = CacheIndex::new(17_408).unwrap();
         let registered = 16_384;
         let targets = 1_024;
         for position in registered..registered + targets {
@@ -378,7 +424,7 @@ mod tests {
 
     #[test]
     fn ineligible_candidates_are_checked_once_until_an_event_republishes_them() {
-        let mut index = CacheIndex::default();
+        let mut index = CacheIndex::new(32).unwrap();
         index.insert(0, 1, 0);
         index.insert(1, 1, 1);
         let mut checks = 0;

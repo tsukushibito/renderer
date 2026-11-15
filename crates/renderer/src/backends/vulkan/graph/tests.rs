@@ -9,6 +9,7 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
         resource_capacity: 1,
         staging_bytes: 4096,
         max_shader_bindings: 1,
+        staging_ranges: 256,
     })
     .unwrap();
     assert_ne!(
@@ -89,6 +90,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             resource_capacity: 6,
             staging_bytes: 4096,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         })
         .unwrap();
         let diagnostics = runtime.diagnostics.clone();
@@ -294,6 +296,7 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
             resource_capacity: 2,
             staging_bytes: 4 * 1024 * 1024,
             max_shader_bindings: 4,
+            staging_ranges: 256,
         })
         .unwrap();
         let diagnostics = runtime.diagnostics.clone();
@@ -382,6 +385,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             resource_capacity: 1,
             staging_bytes: 256,
             max_shader_bindings: 2,
+            staging_ranges: 256,
         };
         let mut runtime = VulkanRuntime::new(config).unwrap();
         let diagnostics = runtime.diagnostics.clone();
