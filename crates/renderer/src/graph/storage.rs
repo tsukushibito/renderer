@@ -164,10 +164,7 @@ impl GraphStorage {
     pub(crate) fn accesses(&self, pass: usize) -> &[ResourceAccess] {
         &self.accesses[self.passes[pass].accesses.clone()]
     }
-    #[cfg_attr(
-        not(feature = "vulkan"),
-        allow(dead_code, reason = "used by Vulkan lowering")
-    )]
+    #[cfg(all(feature = "vulkan", feature = "development-validation"))]
     pub(crate) fn initial_contents(&self, resource: usize) -> &[Range<u64>] {
         &self.initial_ranges[self.resources[resource].initial.clone()]
     }
