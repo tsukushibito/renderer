@@ -1,6 +1,6 @@
 //! Reviewed graphics shader contracts retained by owned Raster commands.
 
-use super::ImageFormat;
+use super::{BindingLayout, BindingType, ImageFormat, ShaderStages};
 
 /// An immutable, reviewed vertex/fragment shader pair, independent of a native
 /// pipeline. This CPU contract does not establish Device limits or PSO creation.
@@ -14,6 +14,8 @@ struct Manifest {
     vertex_stride: u32,
     parameter_size: u32,
     color_outputs: &'static [ImageFormat],
+    bindings: &'static [BindingLayout],
+    binding_bytes: &'static [u64],
     #[cfg(feature = "vulkan")]
     vertex_spirv: &'static [u8],
     #[cfg(feature = "vulkan")]
@@ -24,10 +26,48 @@ static MESH: Manifest = Manifest {
     vertex_stride: 28,
     parameter_size: 80,
     color_outputs: &[ImageFormat::Rgba8Unorm],
+    bindings: &[],
+    binding_bytes: &[],
     #[cfg(feature = "vulkan")]
     vertex_spirv: include_bytes!("../../shaders/mesh.vert.spv"),
     #[cfg(feature = "vulkan")]
     fragment_spirv: include_bytes!("../../shaders/mesh.frag.spv"),
+};
+
+static TEXTURED_MESH: Manifest = Manifest {
+    vertex_stride: 28,
+    parameter_size: 80,
+    color_outputs: &[ImageFormat::Rgba8Unorm],
+    bindings: &[
+        BindingLayout {
+            group: 0,
+            binding: 0,
+            kind: BindingType::Uniform,
+            min_size: 16,
+            stages: ShaderStages::VERTEX,
+        },
+        BindingLayout {
+            group: 1,
+            binding: 0,
+            kind: BindingType::SampledImage,
+            min_size: 0,
+            stages: ShaderStages::FRAGMENT,
+        },
+        BindingLayout {
+            group: 1,
+            binding: 1,
+            kind: BindingType::Sampler,
+            min_size: 0,
+            stages: ShaderStages::FRAGMENT,
+        },
+    ],
+    // Only the Uniform has a byte footprint. The image reads the complete
+    // selected mip/layer, while a sampler has no resource-content access.
+    binding_bytes: &[16, 0, 0],
+    #[cfg(feature = "vulkan")]
+    vertex_spirv: include_bytes!("../../shaders/textured.vert.spv"),
+    #[cfg(feature = "vulkan")]
+    fragment_spirv: include_bytes!("../../shaders/textured.frag.spv"),
 };
 
 impl std::fmt::Debug for ManagedRasterProgram {
@@ -36,6 +76,7 @@ impl std::fmt::Debug for ManagedRasterProgram {
             .field("vertex_stride", &self.vertex_stride())
             .field("parameter_size", &self.parameter_size())
             .field("color_outputs", &self.color_outputs())
+            .field("bindings", &self.bindings())
             .finish()
     }
 }
@@ -54,6 +95,24 @@ impl ManagedRasterProgram {
         Self { manifest: &MESH }
     }
 
+    /// A reviewed descriptor-bound mesh pair for logical Graph planning.
+    /// The vertex shader reads one 16-byte clip-space offset from Uniform
+    /// group 0/binding 0 in addition to the usual inline matrix/tint. The
+    /// fragment shader reads one float 2D sampled image at group 1/binding 0
+    /// using the separate nearest/clamp sampler at group 1/binding 1 and LOD 0.
+    /// UV coordinates derive from model position `xy * 0.5 + 0.5`; vertex color
+    /// and inline tint multiply the sampled result. No storage is written.
+    ///
+    /// The mesh vertex/index and inline parameter ABIs match [`Self::mesh`].
+    /// The complete selected mip/layer must be initialized; Raster does not
+    /// guarantee complete attachment coverage. Native execution is subsequent
+    /// work and must reject this Program until its PSO/bindings are supported.
+    pub const fn textured_mesh() -> Self {
+        Self {
+            manifest: &TEXTURED_MESH,
+        }
+    }
+
     pub const fn vertex_stride(&self) -> u32 {
         self.manifest.vertex_stride
     }
@@ -65,6 +124,16 @@ impl ManagedRasterProgram {
 
     pub const fn color_outputs(&self) -> &'static [ImageFormat] {
         self.manifest.color_outputs
+    }
+
+    pub const fn bindings(&self) -> &'static [BindingLayout] {
+        self.manifest.bindings
+    }
+
+    /// Reviewed buffer-prefix footprints, in manifest slot order. Image and
+    /// sampler slots use zero here and are handled by their resource kind.
+    pub(crate) const fn binding_bytes(&self) -> &'static [u64] {
+        self.manifest.binding_bytes
     }
 
     pub(crate) fn is_mesh(&self) -> bool {
@@ -100,6 +169,8 @@ mod tests {
     fn mesh_contract_matches_existing_shader_sources_and_compiler_reflection() {
         let program = ManagedRasterProgram::mesh();
         assert!(program.is_mesh());
+        assert!(program.bindings().is_empty());
+        assert!(program.binding_bytes().is_empty());
         let contracts: serde_json::Value =
             serde_json::from_str(include_str!("../../shaders/dxil-contracts.json")).unwrap();
         let mesh = &contracts["shaders"]["mesh.vert"];
@@ -190,6 +261,87 @@ mod tests {
         assert!(fragment_source.contains("layout(location = 0) out vec4 output_color;"));
     }
 
+    #[test]
+    fn textured_contract_derives_each_slot_and_stage_from_the_real_modules() {
+        let program = ManagedRasterProgram::textured_mesh();
+        assert!(!program.is_mesh());
+        assert_eq!(
+            program.vertex_stride(),
+            ManagedRasterProgram::mesh().vertex_stride()
+        );
+        assert_eq!(
+            program.parameter_size(),
+            ManagedRasterProgram::mesh().parameter_size()
+        );
+        assert_eq!(program.color_outputs(), &[ImageFormat::Rgba8Unorm]);
+        let vertex: serde_json::Value = serde_json::from_str(include_str!(
+            "../../shaders/dxil/textured.vert.spirv-reflection.json"
+        ))
+        .unwrap();
+        let fragment: serde_json::Value = serde_json::from_str(include_str!(
+            "../../shaders/dxil/textured.frag.spirv-reflection.json"
+        ))
+        .unwrap();
+        let mut reflected = Vec::new();
+        let mut bytes = Vec::new();
+        for (module, mode, stages) in [
+            (&vertex, "vert", ShaderStages::VERTEX),
+            (&fragment, "frag", ShaderStages::FRAGMENT),
+        ] {
+            assert_eq!(module["entryPoints"][0]["name"], "main");
+            assert_eq!(module["entryPoints"][0]["mode"], mode);
+            for (category, kind) in [
+                ("ubos", BindingType::Uniform),
+                ("separate_images", BindingType::SampledImage),
+                ("separate_samplers", BindingType::Sampler),
+            ] {
+                for resource in module[category].as_array().into_iter().flatten() {
+                    let min_size = resource["block_size"].as_u64().unwrap_or(0);
+                    reflected.push(BindingLayout {
+                        group: resource["set"].as_u64().unwrap() as u32,
+                        binding: resource["binding"].as_u64().unwrap() as u32,
+                        kind,
+                        min_size,
+                        stages,
+                    });
+                    bytes.push(min_size);
+                }
+            }
+            assert!(module["ssbos"].as_array().is_none_or(Vec::is_empty));
+            assert!(module["images"].as_array().is_none_or(Vec::is_empty));
+        }
+        assert_eq!(program.bindings(), reflected);
+        assert_eq!(program.binding_bytes(), bytes);
+        assert_eq!(program.binding_bytes(), &[16, 0, 0]);
+        let offset = &vertex["types"][vertex["ubos"][0]["type"].as_str().unwrap()]["members"];
+        assert_eq!(offset.as_array().unwrap().len(), 1);
+        assert_eq!(offset[0]["type"], "vec4");
+        assert_eq!(offset[0]["offset"], 0);
+        let push =
+            &vertex["types"][vertex["push_constants"][0]["type"].as_str().unwrap()]["members"];
+        assert_eq!(push[0]["type"], "mat4");
+        assert_eq!(push[0]["offset"], 0);
+        assert_eq!(push[0]["matrix_stride"], 16);
+        assert_eq!(push[1]["type"], "vec4");
+        assert_eq!(push[1]["offset"], 64);
+        assert_eq!(fragment["separate_images"][0]["type"], "texture2D");
+        assert_eq!(fragment["separate_samplers"][0]["type"], "sampler");
+        assert_eq!(fragment["outputs"].as_array().unwrap().len(), 1);
+        assert_eq!(fragment["outputs"][0]["type"], "vec4");
+        assert_eq!(fragment["outputs"][0]["location"], 0);
+
+        // Review the behavior separately from reflection: no storage writes,
+        // no input-dependent indexing into the Uniform, and explicit mip zero.
+        let source = include_str!("../../shaders/textured.vert");
+        assert!(source.contains("+ vertex_offset.clip_offset;"));
+        let source = include_str!("../../shaders/textured.frag");
+        assert!(
+            source.contains("textureLod(sampler2D(source_image, source_sampler), sample_uv, 0.0)")
+        );
+        let dxil = include_str!("../../shaders/dxil/textured.frag.hlsl");
+        assert!(dxil.contains("SampleLevel("));
+    }
+
     #[cfg(feature = "vulkan")]
     #[test]
     fn mesh_native_assets_are_the_reviewed_vertex_and_fragment_pair() {
@@ -201,6 +353,28 @@ mod tests {
         assert_eq!(
             program.fragment_spirv(),
             include_bytes!("../../shaders/mesh.frag.spv")
+        );
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn textured_native_assets_are_distinct_from_the_unsupported_mesh_pipeline() {
+        let program = ManagedRasterProgram::textured_mesh();
+        assert_eq!(
+            program.vertex_spirv(),
+            include_bytes!("../../shaders/textured.vert.spv")
+        );
+        assert_eq!(
+            program.fragment_spirv(),
+            include_bytes!("../../shaders/textured.frag.spv")
+        );
+        assert_ne!(
+            program.vertex_spirv(),
+            ManagedRasterProgram::mesh().vertex_spirv()
+        );
+        assert_ne!(
+            program.fragment_spirv(),
+            ManagedRasterProgram::mesh().fragment_spirv()
         );
     }
 }

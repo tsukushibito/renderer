@@ -13,6 +13,25 @@
     "color": "The older fixed fixtures use linear RGBA8_UNORM without filtering. sampled.comp uses nearest/clamp RGBA8 sampling and UNORM packing. sampled_float.comp uses nearest/clamp RGBA16F sampling and preserves all FP32 result bits. No sRGB conversion, tone mapping, or general HDR renderer is implemented by these fixtures."
   },
   "shaders": {
+    "textured.vert": {
+      "profile": "vs_6_0",
+      "vertex_stride": 28,
+      "vertex_inputs": [{"semantic": "TEXCOORD0", "format": "R32G32B32_FLOAT", "offset": 0}, {"semantic": "TEXCOORD1", "format": "R32G32B32A32_FLOAT", "offset": 12}],
+      "vulkan_bindings": ["set0/binding0 std140 uniform buffer, vec4 clip_offset at byte 0, 16 bytes"],
+      "d3d12_active_bindings": ["b0/space0 16-byte Uniform", "b1/space0 80-byte inline parameter block assigned by DXC"],
+      "constant_bytes": 80,
+      "constant_members": [{"name": "clip_from_model", "offset": 0, "size": 64, "matrix_stride": 16}, {"name": "tint", "offset": 64, "size": 16}],
+      "behavior": "Apply inline column-major MVP and then add every component of the Uniform clip_offset. Multiply vertex rgba by inline tint. Generate UV as model position xy * 0.5 + 0.5.",
+      "scope": "Reviewed CPU Graph contract and generated native binaries only. Its native PSO/descriptor execution and GPU image acceptance remain renderer-7ft.2.3. The old descriptor-free mesh pipeline cannot execute this Program."
+    },
+    "textured.frag": {
+      "profile": "ps_6_0",
+      "vulkan_bindings": ["set1/binding0 separate float texture2D sampled image", "set1/binding1 separate sampler"],
+      "d3d12_active_bindings": ["t0/space1 Texture2D<float4>", "s1/space1 active SamplerState"],
+      "input": "TEXCOORD0 linear float4 tinted color and TEXCOORD1 float2 interpolated UV",
+      "output": "SV_Target0 float4, one RGBA8_UNORM attachment; no storage side effects and no promise of complete attachment coverage",
+      "sampling": "textureLod/SampleLevel at explicit LOD 0 with a nearest/clamp sampler and single-mip 2D View. The whole selected mip/layer must be initialized because UVs are input dependent. This is a read-only sampled image contract, not a Bloom effect or HDR output pipeline."
+    },
     "sampled_float.comp": {
       "profile": "cs_6_0",
       "local_size": [1, 1, 1],
