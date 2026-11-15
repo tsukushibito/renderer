@@ -1,10 +1,19 @@
 use renderer::engine::{
-    Draw, Engine, FrameOutputOwnership, IDENTITY, Material, MeshData, Vertex, View,
+    Draw, Engine, EngineCapacity, FrameOutputOwnership, IDENTITY, Material, MeshData, SnapshotPool,
+    Vertex, View,
 };
+use renderer::graph::{GraphCapacity, GraphPool};
 
 #[test]
 fn owned_frame_inputs_need_no_gpu_or_window() {
-    let mut engine = Engine::new(2, 2).unwrap();
+    let mut engine = Engine::new(EngineCapacity {
+        meshes: 2,
+        materials: 2,
+        retired_mesh_versions: 2,
+    })
+    .unwrap();
+    let snapshots = SnapshotPool::new(1, 2).unwrap();
+    let mut graphs = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mesh = engine
         .create_mesh(
             MeshData::new(
@@ -29,13 +38,13 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
         material,
         world_from_model: IDENTITY,
     };
-    let captured = engine.snapshot(&view, &[draw]).unwrap();
+    let captured = engine.snapshot(&snapshots, &view, &[draw]).unwrap();
     engine.delete_mesh(mesh).unwrap();
     engine.delete_material(material).unwrap();
     assert_eq!(captured.draw_count(), 1);
     assert_eq!(*captured.view(), view);
     let frame = captured
-        .build_graph(true, |graph, color| {
+        .build_graph(&mut graphs, true, |graph, color| {
             let desc = graph.image_desc(color)?;
             let transformed = graph.image("external custom output", desc)?;
             graph.compute(
@@ -54,33 +63,53 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
             Ok(transformed)
         })
         .unwrap();
+    assert!(frame.readback.is_some());
+    assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
     let plan = frame.graph.compile().unwrap();
     assert!(
         plan.ordered_pass_names()
-            .contains(&"external custom transform")
+            .any(|name| name == "external custom transform")
     );
-    assert!(!plan.ordered_pass_names().contains(&"unused custom branch"));
+    assert!(
+        !plan
+            .ordered_pass_names()
+            .any(|name| name == "unused custom branch")
+    );
     #[cfg(feature = "graph-diagnostics")]
-    assert!(plan.culled_pass_names().contains(&"unused custom branch"));
-    assert!(frame.readback.is_some());
-    assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
-    assert!(engine.snapshot(&view, &[draw]).is_err());
-    assert_eq!(engine.snapshot(&view, &[]).unwrap().draw_count(), 0);
+    assert!(
+        plan.culled_pass_names()
+            .any(|name| name == "unused custom branch")
+    );
+    assert!(engine.snapshot(&snapshots, &view, &[draw]).is_err());
+    assert_eq!(
+        engine
+            .snapshot(&snapshots, &view, &[])
+            .unwrap()
+            .draw_count(),
+        0
+    );
 }
 
 #[test]
 fn identity_extension_exports_its_input_without_a_copy() {
-    let engine = Engine::new(1, 1).unwrap();
+    let engine = Engine::new(EngineCapacity {
+        meshes: 1,
+        materials: 1,
+        retired_mesh_versions: 0,
+    })
+    .unwrap();
+    let snapshots = SnapshotPool::new(0, 1).unwrap();
+    let mut graphs = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let view = View {
         width: 17,
         height: 11,
         clip_from_world: IDENTITY,
         clear_color: [0.0, 0.0, 0.0, 1.0],
     };
-    let snapshot = engine.snapshot(&view, &[]).unwrap();
+    let snapshot = engine.snapshot(&snapshots, &view, &[]).unwrap();
     let mut returned = None;
     let frame = snapshot
-        .build_graph(false, |_, color| {
+        .build_graph(&mut graphs, false, |_, color| {
             returned = Some(color);
             Ok(color)
         })
@@ -88,5 +117,8 @@ fn identity_extension_exports_its_input_without_a_copy() {
     assert_eq!(frame.output, returned.unwrap());
     assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
     let plan = frame.graph.compile().unwrap();
-    assert_eq!(plan.ordered_pass_names(), ["view clear"]);
+    assert_eq!(
+        plan.ordered_pass_names().collect::<Vec<_>>(),
+        ["view clear"]
+    );
 }

@@ -76,7 +76,7 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
                     let value = (round * 3 + lane + 1) as u8;
                     let buffer_bytes = vec![value; 64];
                     let image_bytes = [value, value + 3, value + 7, 255].repeat(64);
-                    let mut graph = Graph::new();
+                    let mut graph = Graph::test_new();
                     let buffer = graph
                         .buffer("frame bytes", BufferDesc { size: 64 })
                         .unwrap();
@@ -85,10 +85,10 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
                         .image("frame compute", ImageDesc::rgba8(8, 8))
                         .unwrap();
                     graph
-                        .upload_buffer("frame byte upload", buffer, 0, buffer_bytes.clone())
+                        .upload_buffer("frame byte upload", buffer, 0, &buffer_bytes)
                         .unwrap();
                     graph
-                        .upload_image("frame image upload", source, image_bytes.clone())
+                        .upload_image("frame image upload", source, &image_bytes)
                         .unwrap();
                     graph
                         .compute("frame invert", source, target, ComputeTransform::Invert)
@@ -166,12 +166,12 @@ fn vulkan_frames_delete_pending_resources_and_recover_readback_capacity() {
         },
         |runtime| {
             let make = |size: u64, value: u8| {
-                let mut graph = Graph::new();
+                let mut graph = Graph::test_new();
                 let buffer = graph
                     .buffer("changing buffer", BufferDesc { size })
                     .unwrap();
                 graph
-                    .upload_buffer("changing upload", buffer, 0, vec![value; size as usize])
+                    .upload_buffer("changing upload", buffer, 0, &vec![value; size as usize])
                     .unwrap();
                 graph.export_buffer(buffer).unwrap();
                 let read = graph
@@ -289,14 +289,14 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                 for batch in 0..2 {
                     let mut expected = HashMap::new();
                     for lane in 0..3 {
-                        let mut graph = Graph::new();
+                        let mut graph = Graph::test_new();
                         let source = if let Some(old) = &previous {
                             let fresh = runtime.refresh_image(old.key()).unwrap();
                             graph.import_image("previous history", &fresh).unwrap()
                         } else {
                             let source = graph.image("first history input", desc).unwrap();
                             graph
-                                .upload_image("initialize history", source, pixels.clone())
+                                .upload_image("initialize history", source, &pixels)
                                 .unwrap();
                             source
                         };
@@ -338,7 +338,7 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                 let current = runtime
                     .refresh_image(previous.as_ref().unwrap().key())
                     .unwrap();
-                let mut graph = Graph::new();
+                let mut graph = Graph::test_new();
                 let history = graph.import_image("readonly history", &current).unwrap();
                 let read = graph
                     .readback_image("readonly history result", history)

@@ -94,6 +94,7 @@ impl Driver {
                 execution_slots: 4,
                 resource_capacity: 64,
                 staging_bytes: STAGING_BYTES,
+                staging_ranges: 256,
                 max_shader_bindings: 64,
                 ..Default::default()
             },

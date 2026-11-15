@@ -135,6 +135,10 @@ fn capacity(message: &'static str) -> GraphError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::single_range_in_vec_init,
+    reason = "Typed fixtures intentionally capture a single initialized byte interval."
+)]
 mod tests {
     use super::*;
 
