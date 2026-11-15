@@ -620,37 +620,42 @@ fn run(strict: bool) {
         );
     }
 
-    // CPU plan and runtime owners can disappear while the submitted native
-    // commands and unread CPU results still own their required dependency chain.
-    let d3d12_plan = plan.clone();
-    let mut vk_submission = vulkan.submit(&plan).expect("Vulkan escaped-owner submit");
     drop(plan);
+    // Separate plans built from identical inputs let each backend lose every
+    // public plan handle before observing completion, with native runs still
+    // sequential. Only each GraphPool's prepared backing owner remains public.
+    let (vk_pool, vk_plan, vk_expected) = shared_graph(false);
+    let mut vk_submission = vulkan
+        .submit(&vk_plan)
+        .expect("Vulkan escaped-owner submit");
+    drop(vk_plan);
     drop(vulkan);
     let mut vk_result = vk_submission
         .wait(WAIT)
         .unwrap()
         .expect("Vulkan escaped-owner completion");
     let vk_pixels = compare(
-        &expected,
+        &vk_expected,
         |pass, out| vk_result.readback_into(pass, out).unwrap(),
         "Vulkan escaped owners",
     );
     drop((vk_result, vk_submission));
-    let mut dx_submission = d3d12
-        .submit(&d3d12_plan)
-        .expect("D3D12 escaped-owner submit");
-    drop(d3d12_plan);
+    drop(vk_pool);
+    let (dx_pool, dx_plan, dx_expected) = shared_graph(false);
+    let mut dx_submission = d3d12.submit(&dx_plan).expect("D3D12 escaped-owner submit");
+    drop(dx_plan);
     d3d12.shutdown().unwrap();
     let mut dx_result = dx_submission
         .wait(WAIT)
         .unwrap()
         .expect("D3D12 escaped-owner completion");
     let dx_pixels = compare(
-        &expected,
+        &dx_expected,
         |pass, out| dx_result.readback_into(pass, out).unwrap(),
         "D3D12 escaped owners",
     );
     drop((dx_result, dx_submission));
+    drop(dx_pool);
 
     let vk_report = vk_monitor.report();
     let dx_report = dx_monitor.snapshot();
@@ -659,7 +664,7 @@ fn run(strict: bool) {
         "configuration": {"development_validation":cfg!(feature="development-validation"),"graph_diagnostics":cfg!(feature="graph-diagnostics"),"vulkan_diagnostics":cfg!(feature="vulkan-diagnostics"),"d3d12_diagnostics":cfg!(feature="d3d12-diagnostics"),"debug_assertions":cfg!(debug_assertions),"external_layer_injection_checked":false},
         "adapter":{"name":vk_info.name,"luid":dx_info.luid,"vendor_id":dx_info.vendor_id,"device_id":dx_info.device_id,"vulkan_driver":vk_info.driver_info,"d3d12_driver":dx_info.driver_version},
         "compared_bytes_per_backend_per_run":expected.iter().map(|entry|entry.bytes.len()).sum::<usize>(),
-        "successful_runs_per_backend":3,"invalid_index_rejected":true,"d3d12_record_cancel_reuse":true,"runtime_drop_before_completion_observation":true,
+        "successful_runs_per_backend":3,"same_compiled_graph_runs_per_backend":2,"lifetime_plan_rebuilt_from_same_inputs":true,"native_runs_sequential":true,"invalid_index_rejected":true,"d3d12_record_cancel_reuse":true,"runtime_and_all_public_plan_handles_dropped_before_completion_observation":true,
         "vulkan_readbacks":vk_pixels,"d3d12_readbacks":dx_pixels,
         "validation":{
             "vulkan":{"requested":format!("{:?}",vk_report.requested),"core":vk_report.core_validation,"sync":vk_report.synchronization_validation,"warnings":vk_report.warnings,"errors":vk_report.errors,"callback_failures":vk_report.callback_failures,"dropped_problems":vk_report.dropped_problems,"dropped_layer_statuses":vk_report.dropped_layer_statuses,"problems":vk_report.problems,"layer_status_messages":vk_report.layer_status_messages},
