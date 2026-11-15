@@ -82,18 +82,31 @@ impl Snapshot {
         COUNTERS.snapshot()
     }
 
-    /// Difference over one interval. Do not reset shared counters while other
-    /// threads can allocate: cumulative subtraction preserves delayed frees.
+    /// Checked difference over one interval (or a contained event subtotal).
+    /// Decreasing fields invalidate the observation rather than wrapping to a
+    /// plausible zero. Do not reset shared counters while other threads can
+    /// allocate: cumulative subtraction preserves delayed frees.
     pub fn since(self, earlier: Self) -> Self {
-        let difference = |current: EventCount, previous: EventCount| EventCount {
-            calls: current.calls.wrapping_sub(previous.calls),
-            bytes: current.bytes.wrapping_sub(previous.bytes),
+        fn subtract(current: u64, previous: u64, overflowed: &mut bool) -> u64 {
+            current.checked_sub(previous).unwrap_or_else(|| {
+                *overflowed = true;
+                0
+            })
+        }
+        let mut overflowed = self.overflowed || earlier.overflowed;
+        let mut difference = |current: EventCount, previous: EventCount| EventCount {
+            calls: subtract(current.calls, previous.calls, &mut overflowed),
+            bytes: subtract(current.bytes, previous.bytes, &mut overflowed),
         };
+        let rust = std::array::from_fn(|i| difference(self.rust[i], earlier.rust[i]));
+        let vma_host = std::array::from_fn(|i| difference(self.vma_host[i], earlier.vma_host[i]));
+        let native =
+            std::array::from_fn(|i| subtract(self.native[i], earlier.native[i], &mut overflowed));
         Self {
-            rust: std::array::from_fn(|i| difference(self.rust[i], earlier.rust[i])),
-            vma_host: std::array::from_fn(|i| difference(self.vma_host[i], earlier.vma_host[i])),
-            native: std::array::from_fn(|i| self.native[i].wrapping_sub(earlier.native[i])),
-            overflowed: self.overflowed || earlier.overflowed,
+            rust,
+            vma_host,
+            native,
+            overflowed,
         }
     }
 
@@ -273,6 +286,10 @@ mod tests {
         sum.accumulate(extra);
         assert!(sum.overflowed);
         assert_eq!(sum.native[NativeEvent::ObjectCreate as usize], u64::MAX);
+        let invalid = initial.since(delta);
+        assert!(invalid.overflowed);
+        assert!(!invalid.is_allocation_free());
+        assert_eq!(invalid.rust[RustEvent::AllocateZeroed as usize].calls, 0);
         let reset_only = Snapshot {
             native: [0, 0, 0, 0, 0, 0, 0, 0, 1],
             ..Snapshot::default()
