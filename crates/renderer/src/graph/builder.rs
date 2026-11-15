@@ -7,10 +7,9 @@ use std::{ops::Range, sync::Arc};
 use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
-    GraphError, GraphErrorKind, ImageAspect, ImageDesc, ImageFormat, ImageHandle, MeshUpload,
-    Operation, PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands,
-    ResourceAccess, ResourceDesc, ResourceHandle, UploadSource, ValidatedRasterParameters,
-    overlaps,
+    GraphError, GraphErrorKind, ImageDesc, ImageFormat, ImageHandle, MeshUpload, Operation,
+    PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess,
+    ResourceDesc, ResourceHandle, UploadSource, ValidatedRasterParameters, overlaps,
 };
 
 impl Graph {
@@ -173,7 +172,14 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let dst = graph.image_id(dst)?;
-            graph.color(dst)?;
+            graph.single_image(dst)?;
+            if graph.image_desc_at(dst)?.format.aspect() != super::ImageAspect::Color {
+                return Err(graph.resource_error(
+                    GraphErrorKind::InvalidInput,
+                    "image upload requires a color format",
+                    dst,
+                ));
+            }
             if graph.image_desc_at(dst)?.byte_len() != Some(bytes.len() as u64) {
                 return Err(graph.resource_error(
                     GraphErrorKind::InvalidInput,
@@ -219,7 +225,7 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let src = graph.image_id(src)?;
-            graph.color(src)?;
+            graph.single_image(src)?;
             Ok((
                 Operation::ReadbackImage { src },
                 graph.append_accesses([read(src, 0..1, AccessPurpose::CopySource)])?,
@@ -304,11 +310,32 @@ impl Graph {
             return self.attachment_pass(name, attachments);
         }
         self.build_pass(name, |graph| {
+            if program.is_depth_only() && attachments.depth.is_none() {
+                return Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "depth-only Raster requires a depth attachment",
+                ));
+            }
             if attachments.colors.len() != program.color_outputs().len() {
                 return Err(GraphError::new(
                     GraphErrorKind::Unsupported,
                     "Raster attachment count differs from the Program output contract",
                 ));
+            }
+            for (attachment, format) in attachments.colors.iter().zip(program.color_outputs()) {
+                let resource = graph.image_id(attachment.view.image)?;
+                let expected = match format {
+                    crate::program::ImageFormat::Rgba8Unorm => ImageFormat::Rgba8Unorm,
+                    crate::program::ImageFormat::Rgba16Float => ImageFormat::Rgba16Float,
+                    crate::program::ImageFormat::D32Float => unreachable!("color output manifest"),
+                };
+                if graph.image_desc_at(resource)?.format != expected {
+                    return Err(graph.resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "Raster attachment format differs from the Program output contract",
+                        resource,
+                    ));
+                }
             }
             let first_draw = graph.draws.len();
             if draws.len() > graph.capacity.draws.saturating_sub(first_draw) {
@@ -444,12 +471,7 @@ impl Graph {
                             aspect,
                         },
                         ResourceDesc::Image(d),
-                    ) if *mip < d.mip_levels && *layer < d.array_layers && *aspect
-                        == if d.format == ImageFormat::Rgba8Unorm {
-                            ImageAspect::Color
-                        } else {
-                            ImageAspect::Depth
-                        } =>
+                    ) if *mip < d.mip_levels && *layer < d.array_layers && *aspect == d.format.aspect() =>
                     {
                         let unit = u64::from(*layer) * u64::from(d.mip_levels) + u64::from(*mip);
                         unit..unit + 1
@@ -594,7 +616,7 @@ fn validate_purpose(
                 && matches!(
                     desc,
                     ResourceDesc::Image(ImageDesc {
-                        format: ImageFormat::Rgba8Unorm,
+                        format: ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float,
                         ..
                     })
                 )
@@ -605,7 +627,7 @@ fn validate_purpose(
                 && matches!(
                     desc,
                     ResourceDesc::Image(ImageDesc {
-                        format: ImageFormat::Rgba8Unorm,
+                        format: ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float,
                         ..
                     })
                 )
@@ -634,8 +656,8 @@ fn validate_purpose(
 mod tests {
     use super::*;
     use crate::graph::{
-        Attachment, BufferDesc, GraphCapacity, GraphPool, LoadAction, LoadOp, RasterParameters,
-        StoreOp,
+        Attachment, BufferDesc, GraphCapacity, GraphPool, ImageAspect, LoadAction, LoadOp,
+        RasterParameters, StoreOp,
     };
     use crate::program::ManagedRasterProgram;
 
