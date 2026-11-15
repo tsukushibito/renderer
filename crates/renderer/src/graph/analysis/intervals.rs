@@ -254,9 +254,31 @@ impl<T: Copy> Intervals<T> {
             }
             return Ok(());
         }
-        let tail = self
-            .at(resource, range.end - 1)
+        let tail_index = self
+            .index_at(resource, range.end - 1)
             .expect("frontier covers resource");
+        let tail = self.nodes[tail_index.get()].entry;
+        if range.start == 0
+            && head.start == 0
+            && tail.end == range.end
+            && self.next(Cursor(tail_index)).is_none()
+        {
+            // Complete replacement needs one node and owns at least one to
+            // recycle. Detach just this resource and return its nodes without
+            // searching/rebalancing for every old interval. Postorder recursion
+            // is bounded by the AVL height; Copy entries own no drop payload.
+            let root = self.roots[resource].take().expect("nonempty frontier");
+            self.recycle_tree(root);
+            let root = self
+                .allocate(Entry {
+                    start: range.start,
+                    end: range.end,
+                    value,
+                })
+                .expect("complete replacement recycles its required node");
+            self.roots[resource] = Some(root);
+            return Ok(());
+        }
         let mut removed = 0;
         let mut cursor = Some(Cursor(index));
         while let Some(current) = cursor {
@@ -309,6 +331,20 @@ impl<T: Copy> Intervals<T> {
             .expect("preflighted capacity");
         }
         Ok(())
+    }
+
+    fn recycle_tree(&mut self, index: Index) {
+        let left = self.nodes[index.get()].left;
+        let right = self.nodes[index.get()].right;
+        if let Some(left) = left {
+            self.recycle_tree(left);
+        }
+        if let Some(right) = right {
+            self.recycle_tree(right);
+        }
+        self.nodes[index.get()].left = self.free;
+        self.free = Some(index);
+        self.len -= 1;
     }
 
     fn height(&self, link: Link) -> u8 {
@@ -531,6 +567,59 @@ mod tests {
         assert_eq!(map.at(0, 7).unwrap().value, 3);
         assert_eq!(map.at(0, 8).unwrap().value, 4);
         assert_eq!(check(&map, map.roots[0], None, None).0, map.len);
+    }
+
+    #[test]
+    fn whole_resource_replacement_retains_other_frontiers_and_reuses_fragmented_nodes() {
+        let mut map = Intervals::new(2, 8).unwrap();
+        map.clear(2);
+        for resource in 0..2 {
+            map.insert(
+                resource,
+                Entry {
+                    start: 0,
+                    end: 64,
+                    value: resource,
+                },
+            )
+            .unwrap();
+        }
+        let backing = map.nodes.as_ptr();
+        for point in [16, 32, 48] {
+            map.split(0, point).unwrap();
+        }
+        // Prefix/suffix operations terminate at existing boundaries but must
+        // retain the remaining intervals, as must an interior replacement.
+        map.replace(0, 0..32, 2).unwrap();
+        assert_eq!(map.at(0, 48).unwrap().value, 0);
+        map.replace(0, 32..64, 3).unwrap();
+        assert_eq!(map.at(0, 0).unwrap().value, 2);
+        map.replace(0, 16..48, 4).unwrap();
+        assert_eq!(map.at(0, 0).unwrap().value, 2);
+        assert_eq!(map.at(0, 63).unwrap().value, 3);
+        map.replace(0, 0..64, 5).unwrap();
+        assert_eq!(map.len, 2);
+        assert_eq!(map.at(0, 0).unwrap().value, 5);
+        assert_eq!(map.at(0, 63).unwrap().value, 5);
+        assert_eq!(map.at(1, 0).unwrap().value, 1);
+        assert_eq!(map.at(1, 63).unwrap().value, 1);
+        for point in 1..=6 {
+            map.split(0, point).unwrap();
+        }
+        assert_eq!(map.len, 8);
+        assert!(map.split(1, 32).is_err());
+        map.replace(0, 0..64, 6).unwrap();
+        map.split(1, 32).unwrap();
+        assert_eq!(map.at(1, 63).unwrap().value, 1);
+        assert_eq!(map.nodes.as_ptr(), backing);
+        for resource in 0..2 {
+            assert!(
+                map.nodes[map.roots[resource].unwrap().get()]
+                    .parent
+                    .is_none()
+            );
+            check(&map, map.roots[resource], None, None);
+        }
     }
 
     #[test]
