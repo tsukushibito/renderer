@@ -22,7 +22,9 @@ B1では構築時owned命令とbinding/attachment由来アクセスを一般化�
 `graph.rs`は公開型のfacade、Graph所有状態、identityとcompile入口を持つ。
 子moduleの`resource`は論理資源・import・範囲、`pass`は宣言とowned命令、
 `error`はprivate contextを持つ構造化エラー、`builder`は検査後のtransactionalな追加を担当する。
-`accesses`/`compile`は共通解析を担当し、既存builder回帰群は`graph/tests.rs`へまとめる。
+`storage`は準備済みslotと借用範囲、`ranges`はimport初期化範囲の不変snapshotを所有する。
+`accesses`/`analysis`は予約済み作業領域で解析し、`compile`が構築領域を不変planへ凍結する。
+既存builder回帰群は`graph/tests.rs`へまとめる。
 公開型はfacadeから直接reexportし、並行する互換APIを作らない。
 
 Graphから`engine`の型を参照しない。`MeshData::upload_graph_slice`は不変なstreamと
@@ -61,7 +63,47 @@ bindingはmanifest順に
 private受入のproducer→consumer同期を、公開Graphの一般dispatch対応とは扱わない。
 [管理下資源の契約](vulkan.md#managed-uniform)を参照する。
 この作成APIとprivate GPU受入を、公開Graphの一般draw/dispatch対応とは扱わない。
-owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`へ残す。
+一般owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`で進める。
+その作成領域・解析workspace・不変planの所有は、以下の準備済みslotへ移行した。
+
+<a id="prepared-graph-storage"></a>
+
+## 準備済みslotとframe入力の所有
+
+`GraphPool::new(GraphCapacity, slots)`は明示的な準備境界で領域を確保する。
+通常の構築は`pool.begin()`でslotを借り、`Graph::compile(self)`が同じ領域を
+`CompiledGraph`へ凍結する。旧`Graph::new()`と非消費型compileの互換経路は残さない。
+GraphはCloneできず、完成planのCloneは既存slotへのArc参照だけを増やす。
+構築途中のDrop、compile失敗、planのDropはslotへの参照を返す。
+
+容量はresource、pass、access、draw、明示依存、初期化range、名前byte、upload byte、
+解析edge、区間、reader nodeを含む。draw数だけでなく、変動するpass構成・入力が
+必要とする全metadataも準備した上限内へ収める。上限超過や使用中slot不足は
+`GraphErrorKind::CapacityExhausted`で返し、通常経路で拡張・別確保・GPU待機へfallbackしない。
+pass/access/draw/payload/名前はflatな予約済み配列と範囲で保持する。
+入力を解析用access Vecへ写し直さず、予約済みworkspaceを毎回resetして動的に解析する。
+同じplanだけを反復するcacheや、固定pass構成だけの経路ではない。
+
+poolは通常処理の間保持する。`begin(&mut self)`は`Arc::get_mut`で排他性と退役時の同期を
+確立できるslotだけを再利用し、新しいGraph identityを与える。旧frameのhandleは再利用先で拒否する。
+native命令、provenance、CPU結果等がplanを保持する期間もslot数へ含め、
+記録・GPU・CPUの必要なconsumerが終わる前に領域を書き換えない。
+`is_idle(&mut self)`はpool置換前の同期付き確認、`leased_slots()`は観測用の件数である。
+poolを先に破棄しても残存planは安全に読めるが、通常処理を継続する容量変更では
+旧pool ownerを保持し、consumer終了後の明示保守で破棄する。
+返却による最後のheap解放だけを通常frameの計測から除外する意味ではない。
+
+`ImportBuffer`の初期化範囲は`ImportRangesPool::new(range_capacity, slots)`が作る
+不変tokenへ移行した。`capture(&mut self, &[Range<u64>])`とtokenのClone・返却は
+準備済み領域を使う。Graphへのimportはその範囲を自身の予約領域へcaptureし、
+runtimeのowner・世代・内容revisionとの照合契約は維持する。
+`ImportRangesPool`を変更するときも、旧tokenのconsumerが残るpoolを通常frame中の最終解放へ移さない。
+
+CPU assetとsnapshotの準備は後述の`EngineCapacity`と`SnapshotPool`が担当する。
+native実行枠・物理資源・readback結果の準備は各backendの所有契約で別に管理する。
+全段階の達成可否は[通常フレームの規約](implementation-policy.md#steady-state-memory)と
+[検証状況](../verification/current.md)で確認し、この共通所有契約だけから
+native作成・破棄や表示・結果消費を含む全体のゼロ達成を主張しない。
 
 ## producer・範囲・Attachment
 
@@ -81,7 +123,7 @@ custom処理は入力handleから形式・寸法を取得して出力を作れ�
 
 構築・compileの失敗は`GraphError::kind()`で分類する。`GraphErrorKind`は非網羅の列挙型で、
 入力不正、無効handle、owner不一致、未対応、import snapshot不一致、未初期化read、循環、
-利用側のcustom失敗を区別する。`pass`／`resource`、名前、`AccessRange`を取得でき、
+利用側のcustom失敗と準備容量不足を区別する。`pass`／`resource`、名前、`AccessRange`を取得でき、
 bufferは問題のbyte範囲、画像はmip・layer・aspectを返す。内部の画像用論理範囲`0..1`は公開しない。
 循環は`cycle_passes()`で、先頭を末尾に再掲した有向経路として実際の参加passを返す。
 同名passもhandleで区別でき、循環から出るだけの後続passは含めない。
@@ -93,22 +135,29 @@ bufferは問題のbyte範囲、画像はmip・layer・aspectを返す。内部�
 `message`は残し、通常の失敗処理に文言解析を要求しない。
 構造化contextの追加により、旧`GraphError { message }`という直接構築はconstructorへ移行する。
 これは今回の公開API変更であり、既存literalとの互換層は追加しない。
+通常の容量不足はstaticなmessageを持ち、名前の複製やcontext用のheap確保を行わない。
+不正入力の詳細診断はこの通常backpressure経路と区別して計測する。
 
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
 deadなreadも未初期化ならエラーになり、不要な処理で入力ミスを隠さない。
 解析専用の`declare_pass`と実際の操作builderを分け、実行時にliveな解析専用パスを拒否する。
 native記録中の任意の実行callbackは提供しないので、Graph構築や除去をCPUのゲーム更新の代わりにしない。
 
-upload本文は不変の`Arc<[u8]>`で共有し、compileで全量を複製しない。
-既存の`upload_buffer`／`upload_image`はVec入力を受け取り、共有表現へ一度変換する。
-`upload_buffer_shared`／`upload_image_shared`へ同じArcを渡せば、Graphの再構築でも入力を共有できる。
-compiled planは除去したパスの実行本文を保持しない。確定した順序に不要な明示依存列も保持しない。
-`graph-diagnostics`だけがdump用の依存・寿命の解析情報とculled accessを保持し、
-`CompiledGraph::dump()`を提供する。文字列は要求時に一度生成する。
-`culled_pass_names()`も`graph-diagnostics`構成で提供し、保持済みのculled操作を参照する。
-offではculled pass名を複製せず、live pass名は運用エラーの文脈と実行順の問い合わせに残す。
-使われないtransient資源名もoffでは複製しない。live／exportと、投入時の再照合があるimport名は維持する。
-この区分はcompile中の既存live access走査で求め、一時索引をplanに保持しない。
+公開`upload_buffer`／`upload_image`は`&[u8]`を借り、構築時に準備済みblobへcaptureする。
+呼出し元のbyte列を書き換え・破棄しても完成planの入力は変わらず、compileで再複製しない。
+公開`upload_buffer_shared`／`upload_image_shared`と所有Vec入力は削除した。
+任意の最後のArcを通常slot返却で解放する経路を避けるため、共有Arc本文は
+常駐asset・旧版anchorがあるprivate mesh uploadだけへ限定する。
+
+planはslotの予約領域を保持するため、culledを含む入力本文・名前・access・明示依存が
+領域内に残り得る。これはculled passを実行したり、最終内容を初期化済みにする意味ではない。
+全plan consumerが終わった後の次の`begin`で領域をresetし、配列の容量は解放しない。
+private asset参照の明示保守は`GraphPool::release_idle()`で行い、使用中slotには触れない。
+旧版assetの退役は、後述の`Engine::collect_retired_meshes()`と合わせて扱う。
+
+`graph-diagnostics`だけが追加の依存・寿命の解析情報を保持し、`CompiledGraph::dump()`と
+`culled_pass_names()`を提供する。dump文字列は要求時に一度生成し、追加の費用として別計測する。
+名前の問い合わせは保持済み領域へのiteratorであり、frameごとの返却Vecを作らない。
 論理dumpにはアクセス用途も含む。`graph-diagnostics`構成のVulkanの`submit_with_diagnostics`は、成功した投入と
 実際のloweringの診断文字列を返す。通常の`submit`はこの文字列を生成しない。
 診断にはpass／論理resource、物理key・世代・native handle、import初期予定状態、
@@ -146,7 +195,7 @@ native命令の記録前に拒否する。featureを有効化していないこ�
 検索・更新する。全segmentの移動や再sortを更新ごとに行わない。
 一般入力のindex検査は同じ内容・index数について最大値を一度求める。
 頂点数／Device上限が変わってもこの要約を比較し、同じindex本文を再走査しない。
-write／copyによる置換で要約を失効し、snapshot cloneの後続更新も独立して扱う。
+write／copyによる置換で要約を失効し、import snapshotのClone後の更新も独立して扱う。
 現在のindex用途とそのcopy元、import／exportしたbufferに必要な内容だけを追跡する。
 import／exportしたbufferは後のGraphでindexに使えるため、元の入力を共有したまま保持する。
 この保持は新しいCPUミラーの作成とは異なるが、小さなsliceが元の入力全体を保持する場合はある。
@@ -159,14 +208,14 @@ import／exportしたbufferは後のGraphでindexに使えるため、元の入�
 
 ## 論理的な依存と実行順
 
-compile解析用の名前、初期化範囲と明示依存は構築Graphから借用する。
-完成した`CompiledGraph`は必要な命令・資源・名前を独立所有し、呼出元の借用を残さない。
-通常構成では解析済み実行順をmoveし、optional診断が同じ情報を保持するときだけ複製する。
+解析は同じslotのresource/pass/access/初期化範囲/明示依存をsliceとして借用する。
+入力sliceとworkspace/outputは互いに重ならないfieldへ分けて借用し、
+完成した`CompiledGraph`はslotをpinする。呼出し元のframe借用や自己参照を残さない。
 
 read/exportのproducerは最終的な依存集合へ直接追加し、readごとの一時集合を作って取り込み直さない。
 途中に未初期化の穴があれば解析全体を失敗にし、追加済みprefixの依存を含む不完全な計画を公開しない。
 producerの重複排除、内容の有効性、culling後の最終内容再計算は維持する。
-全passのaccessを解析用の一時Vecへ射影する現行表現の整理は、`renderer-7ft.2.2`のowned計画変更で扱う。
+`renderer-7ft.2.2.1`で全accessの一時Vec射影を除去し、予約済み配列のindexを直接使う。
 
 内容のproducerを特定するdataflowと、同じ物理資源のRAW・WAR・WAWによる順序制約は区別する。
 不要パス除去はexport・readback・外部に観測される書き込み・明示的な副作用から
@@ -176,15 +225,18 @@ nativeのstage・access・layoutは、残った実際の操作から具体化す
 
 順序依存は資源の区間ごとのwriterと未処理readerから作り、全先行パスとの総当たりを行わない。
 reader履歴はindexで参照する不変のarenaへ保持し、区間の分割では履歴を共有する。
-writeで複数区間のreaderを辿る際も共有tailを重複して走査しない。arenaはcompileの解析中だけ存在し、
-長い連鎖の破棄で再帰する所有構造にはしない。複雑な重複範囲で触る区間数や必要な依存自体が
+writeで複数区間のreaderを辿る際も共有tailを重複して走査しない。履歴はcompileごとにresetし、
+arenaの予約領域は再利用する。長い連鎖の破棄で再帰する所有構造にはしない。
+区間・依存・隣接表・ready heapも予約済み配列を使う。区間配列の挿入・削除はO(S)であり、
+旧BTreeの更新費用と異なるため、確保ゼロだけをCPU時間の改善根拠にしない。
+複雑な重複範囲で触る区間数や必要な依存自体が
 増える費用は残るため、すべての入力に線形時間を保証するものではない。
 開発構成では全宣言の循環を確認し、通常の実行順は残ったパスだけで順序依存を組み直す。
 除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
 
 解析専用の`declare_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
 共有の競合検査は宣言順で最初の衝突pairを選び、read/readや無関係な資源の総当たりをしない。
-Aアクセスに対してO(A log A)の処理とO(A)の一時情報で、全readならO(A)、一時allocationなしとなる。
+Aアクセスに対してO(A log A)の処理とO(A)の予約済みscratchを使い、全readならO(A)でsortを省略する。
 private builderが保証した入力のcompile再点検は`development-validation`へ分離する。
 producer・初期化・culling・live hazard／topological計画・最終内容の確定は製品でも実行する。
 
@@ -340,27 +392,45 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 
 ## エンジン入力と標準描画
 
-GPU非依存の`engine::Engine`は容量付きのmesh/material登録を持つ。
+GPU非依存の`engine::Engine`は`EngineCapacity { meshes, materials, retired_mesh_versions }`で
+mesh/materialと変更済み旧版の容量を準備する。`Engine::new`の資源登録容量と、
+frameごとのdraw数・同時snapshot数の容量は別である。
 型付きハンドルはowner・index・generationを検査し、更新は同じハンドルの内容を進め、
 削除と再登録では世代を分ける。meshは不変の入力byte列、materialはlinear RGBA tintに限定する。
 scene、ECS、asset loader、カメラの意味は呼び出し側が所有する。
 RendererはModel構造を持たず、mesh/materialと描画入力を扱う。
 Modelを含めない責務境界と理由は[実装方針](implementation-policy.md#21-ゲームエンジンへ提供するもの)を参照する。
 
-`View`、`Draw`から作る`FrameSnapshot`はmeshの版とtint・行列を所有し、
+`SnapshotPool::new(draw_capacity, slots)`を準備し、
+`Engine::snapshot(&pool, &view, &draws)`で可変の`View`・`Draw`をcaptureする。
+`FrameSnapshot`はmeshの版とtint・行列を所有し、
 後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
 `clip_from_world * world_from_model`を合成する。clip depthは0〜W、viewport高さは正、通常Zである。
 有限なdrawパラメーターはsnapshotでprivateな検証済み値として確立し、batch構築で再走査しない。
 public `Graph::raster`のraw入力検査は維持する。batchのowned operandはfallible iteratorから直接作り、
 途中失敗時はpassを追加しない。
+snapshotはCloneせず、必要な同時frame数のslotを準備する。capture途中の失敗と通常Dropは
+draw配列・mesh解決用scratchをpoolへ返す。元のEngineとSnapshotPoolは通常処理の間保持し、
+これらを先に終了して残存snapshotへ最後のheap解放を移す処理は終了境界として扱う。
 投影とhandednessは入力行列で選ぶ。Rustのstruct layoutをGPU ABIとせず、
 頂点は明示byte化し、描画引数も64-byte MVPと16-byte tintへ明示的に変換する。
 
-snapshotの`build_graph`はGPU・windowなしで標準Graphを構築できる。
+snapshotの`build_graph(&mut graph_pool, readback, extension)`はGPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
+mesh解決はsnapshot slotの予約済み配列とsort/index検索で行い、frameごとの一時BTreeMapを作らない。
+取得した`FrameGraph.graph`は消費型compileへ渡し、構築Graphを残すための複製を行わない。
 持続的な実行では、利用側の`Engine`がCPU assetとsnapshotを所有し、`VulkanEngine`は
 runtimeとGPU常駐を所有する。同じsnapshotを独立したrendererへ渡すことができ、
 バックエンド別のCPU asset登録は要求しない。
+
+meshの更新・削除は、既存snapshotが持つ版と両byte streamのanchorを
+予約済みretired領域へ移してから公開状態を進める。retired容量不足なら変更を拒否し、
+現在版・handleを部分的に更新しない。外側の`Arc<MeshData>`だけでなく、
+private uploadや複製した`MeshData`が持つvertex/index streamも旧版の保持条件に含める。
+変更に紐づく明示保守では、idleなGraph slotのpinを`GraphPool::release_idle()`で返し、
+`Engine::collect_retired_meshes()`が最後の必要なstream anchorまで確認して退役させる。
+streamを共有する複数の内部版があっても、外部consumerが残る最後のanchorを失わない。
+通常frameの入力配列返却を保守例外へ移す方式ではない。
 
 GPU常駐はmeshのowner・index・generation・revisionで識別し、`MeshCacheConfig`で件数と
 論理byte数を制限する。CPU assetの削除と別に`unload_mesh`で常駐を解除でき、
@@ -384,7 +454,7 @@ Fence完了後の結果・計測取得だけが失敗した場合も、退役済
 空draw listはclear-only、非空ならcolor/depthを一回clearし、宣言された順に全drawを描いてStoreする。
 Rasterノード数はdraw数によらず一件で、custom Compute・明示的なcomposite・readback等は別ノードのままである。
 同じmeshの再利用と、異なるmeshの組合せの両方を扱い、drawの行列・tint・index数を所有する。
-compileでもdraw配列を`Arc`で共有し、GPU完了まで必要な資源・操作の所有を維持する。
+compileは同じslotのdraw範囲を凍結し、必要なconsumerが終わるまでplanのpinで所有を維持する。
 
 外部bufferアクセスは資源ごとに範囲を集約し、同じbufferがVertexとIndexの両方なら両用途を残す。
 indexは各drawの頂点範囲とDevice上限について記録前に検査し、後のdrawが不正でも部分的にsubmitしない。

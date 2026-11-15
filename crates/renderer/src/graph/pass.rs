@@ -244,8 +244,6 @@ pub(crate) enum MeshUpload {
     )
 )]
 pub(crate) enum Operation {
-    /// Retains a culled pass's metadata without retaining its execution payload.
-    Culled,
     UploadBuffer {
         dst: usize,
         offset: u64,
