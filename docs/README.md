@@ -21,6 +21,7 @@
 | 検証データ | [基盤比較の実機小試作](verification/foundation-comparison.json) | 固定wgpu、二APIのowned Raster/Compute、期待byte、検証flagsの負の対照、source hashと未確認範囲 |
 | 素材 | [Bistro LFS素材](../assets/bistro/README.md)・[manifest](../assets/bistro/manifest.json) | 公式原本・検証済み屋外glTF・環境HDR、取得・ライセンスと全ファイルhash |
 | 検証データ | [現在のフレーム計測](verification/current-metrics.json) | 固定ソースの環境、各runの統計と生sample |
+| 検証データ | [通常フレームのメモリ計測](verification/frame-memory.json) | CPU確保/再確保/解放とnativeイベントの観測範囲、変動フレームの基準値、ゼロ目標の未達状況 |
 | 検証データ | [RenderGraph比較計測](verification/rendergraph-metrics.json) | 資源cache、標準draw batchの共有／異なるmesh比較、統計・生sample、RGBA照合 |
 | 検証データ | [エンジン負荷の計測](verification/engine-workloads-metrics.json) | 大メッシュ・複数Viewの受入、製品／検証構成の比較、CPU保持量probe・生sample |
 

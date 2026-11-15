@@ -25,7 +25,7 @@ pub enum GpuTiming {
 /// Optional CPU phases and the GPU Graph interval. Build/compile are caller work.
 #[derive(Clone, Copy, Debug)]
 pub struct SubmissionMetrics {
-    /// Validation, resource preparation and lazy pipeline creation before record.
+    /// Resource and command planning within the explicitly prepared working set.
     pub cpu_prepare: Duration,
     /// Command recording, including its begin/end calls.
     pub cpu_record: Duration,
@@ -388,10 +388,14 @@ pub(super) struct WorkProfile {
 }
 
 impl WorkProfile {
-    pub(super) fn new(lease: TimestampLease, started: Instant) -> Self {
+    pub(super) fn new(
+        lease: TimestampLease,
+        started: Instant,
+        cpu_pending: Arc<Mutex<[Duration; 2]>>,
+    ) -> Self {
         Self {
             lease: Some(lease),
-            cpu_pending: Arc::new(Mutex::new([Duration::ZERO; 2])),
+            cpu_pending,
             started,
             retire_started: None,
             result: SubmissionMetrics {
@@ -484,14 +488,21 @@ mod tests {
                 vk::PhysicalDeviceType::CPU,
                 "CPU fallback is not real-GPU acceptance"
             );
+            runtime
+                .prepare_working_set(
+                    super::super::FrameCapacity::default(),
+                    &[super::super::ResourceClass::Buffer {
+                        desc: BufferDesc { size: 16 },
+                        count: 2,
+                    }],
+                )
+                .unwrap();
             let diagnostics = runtime.diagnostics.clone();
             crate::backends::vulkan::assert_real_validation(&diagnostics);
 
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let buffer = graph.buffer("unprofiled", BufferDesc { size: 16 }).unwrap();
-            graph
-                .upload_buffer("upload", buffer, 0, vec![9; 16])
-                .unwrap();
+            graph.upload_buffer("upload", buffer, 0, &[9; 16]).unwrap();
             graph.readback_buffer("read", buffer, 0, 16).unwrap();
             let mut submission = runtime.submit(&graph.compile().unwrap()).unwrap();
             let result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
@@ -510,10 +521,10 @@ mod tests {
             for epoch in 0_u32..2 {
                 for index in 0..2 {
                     let value = (epoch * 2 + index + 1) as u8;
-                    let mut graph = Graph::new();
+                    let mut graph = Graph::test_new();
                     let buffer = graph.buffer("profiled", BufferDesc { size: 16 }).unwrap();
                     graph
-                        .upload_buffer("upload", buffer, 0, vec![value; 16])
+                        .upload_buffer("upload", buffer, 0, &[value; 16])
                         .unwrap();
                     let read = graph.readback_buffer("read", buffer, 0, 16).unwrap();
                     let frame = runtime.submit_frame(&graph.compile().unwrap()).unwrap();

@@ -245,15 +245,15 @@ mod tests {
 
     #[test]
     fn pass_and_epilogue_include_uses_and_accepted_state_without_payload() {
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let buffer = graph.buffer("payload", BufferDesc { size: 4 }).unwrap();
         graph
-            .upload_buffer("upload", buffer, 0, [0x81, 0x82, 0x83, 0x84])
+            .upload_buffer("upload", buffer, 0, &[0x81, 0x82, 0x83, 0x84])
             .unwrap();
         graph.readback_buffer("read", buffer, 0, 4).unwrap();
         let graph = graph.compile().unwrap();
         let mut output = String::new();
-        pass(&mut output, 0, &graph.passes[0]);
+        pass(&mut output, &graph, 0);
         assert!(output.contains("purpose=CopyDestination read=false write=true"));
         finish(&mut output, &graph, &[Some(Snapshot::default())], true);
         assert!(output.contains("epilogue reason=readback host visibility"));
