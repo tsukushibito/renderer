@@ -100,6 +100,10 @@ impl Deref for GraphStorage {
         &self.output
     }
 }
+#[cfg_attr(
+    not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+    allow(dead_code, reason = "native plan readers are optional")
+)]
 impl GraphStorage {
     fn new(capacity: GraphCapacity) -> Result<Self, GraphError> {
         let mut raster_ranges = buffer(capacity.resources)?;
@@ -153,15 +157,31 @@ impl GraphStorage {
     pub(crate) fn pass_name(&self, pass: usize) -> &str {
         self.name(&self.passes[pass].name)
     }
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        allow(dead_code, reason = "used by Vulkan lowering")
+    )]
     pub(crate) fn accesses(&self, pass: usize) -> &[ResourceAccess] {
         &self.accesses[self.passes[pass].accesses.clone()]
     }
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        allow(dead_code, reason = "used by Vulkan lowering")
+    )]
     pub(crate) fn initial_contents(&self, resource: usize) -> &[Range<u64>] {
         &self.initial_ranges[self.resources[resource].initial.clone()]
     }
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        allow(dead_code, reason = "used by Vulkan lowering")
+    )]
     pub(crate) fn final_contents(&self, resource: usize) -> &[Range<u64>] {
         self.output.final_contents(resource)
     }
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        allow(dead_code, reason = "used by Vulkan lowering")
+    )]
     pub(crate) fn raster_draws(&self, range: &Range<usize>) -> &[RasterDrawOperands] {
         &self.draws[range.clone()]
     }
@@ -240,6 +260,23 @@ impl GraphPool {
         self.slots
             .iter_mut()
             .all(|slot| Arc::get_mut(slot).is_some())
+    }
+    /// Explicit asset-change/maintenance operation. Release private asset pins
+    /// from idle slots while retaining every prepared buffer. Active plans are
+    /// untouched. Call before collecting retired asset versions; ordinary frame
+    /// recycling does not require this maintenance operation.
+    pub fn release_idle(&mut self) -> usize {
+        let mut released = 0;
+        for slot in &mut self.slots {
+            if let Some(slot) = Arc::get_mut(slot) {
+                let data = slot.data_mut();
+                if data.id != 0 {
+                    data.reset(0);
+                    released += 1;
+                }
+            }
+        }
+        released
     }
     pub fn begin(&mut self) -> Result<Graph, GraphError> {
         for slot in &mut self.slots {

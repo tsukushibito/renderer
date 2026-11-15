@@ -14,6 +14,7 @@ mod builder;
 mod compile;
 mod error;
 mod pass;
+mod ranges;
 mod resource;
 mod storage;
 
@@ -27,6 +28,7 @@ pub(crate) use pass::{
     AttachmentOps, LoadAction, MeshUpload, Operation, Pass, RasterDrawOperands, ResourceAccess,
     UploadSource, ValidatedRasterParameters,
 };
+pub use ranges::{ImportRanges, ImportRangesPool};
 pub use resource::{
     BufferDesc, BufferHandle, ImageDesc, ImageFormat, ImageHandle, ImportBuffer, ImportImage,
     PassHandle, ResourceKey,
@@ -63,6 +65,15 @@ impl std::fmt::Debug for Graph {
     }
 }
 impl Graph {
+    /// Correctness-test preparation only. Allocation acceptance must keep an
+    /// explicit prepared pool alive across every measured frame and return.
+    #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+    pub(crate) fn test_new() -> Self {
+        GraphPool::new(GraphCapacity::default(), 1)
+            .unwrap()
+            .begin()
+            .unwrap()
+    }
     fn data_mut(&mut self) -> &mut GraphStorage {
         // SAFETY: Graph is the unique non-Clone mutable checkout. A frozen plan
         // can only be created by consuming it, and the pool cannot reacquire a

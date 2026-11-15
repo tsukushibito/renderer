@@ -79,7 +79,7 @@ pub struct ImportBuffer {
     pub(crate) key: ResourceKey,
     pub(crate) revision: u64,
     pub(crate) desc: BufferDesc,
-    pub(crate) initialized: Vec<Range<u64>>,
+    pub(crate) initialized: super::ImportRanges,
 }
 impl ImportBuffer {
     pub fn key(&self) -> ResourceKey {
@@ -165,7 +165,6 @@ impl Graph {
         Ok(index)
     }
     pub fn buffer(&mut self, name: &str, desc: BufferDesc) -> Result<BufferHandle, GraphError> {
-        let name = name;
         if desc.size == 0 {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
@@ -180,7 +179,6 @@ impl Graph {
         })
     }
     pub fn image(&mut self, name: &str, desc: ImageDesc) -> Result<ImageHandle, GraphError> {
-        let name = name;
         if desc.width == 0 || desc.height == 0 || desc.byte_len().is_none() {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
@@ -219,9 +217,9 @@ impl Graph {
         name: &str,
         source: &ImportImage,
     ) -> Result<ImageHandle, GraphError> {
-        let initialized = [0..1];
+        let initialized = 0..1;
         let initial = if source.initialized {
-            initialized.as_slice()
+            std::slice::from_ref(&initialized)
         } else {
             &[]
         };
