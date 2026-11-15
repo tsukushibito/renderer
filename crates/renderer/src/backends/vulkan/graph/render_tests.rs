@@ -133,7 +133,21 @@ fn opaque_batch_comparison(
             .unwrap();
     } else {
         graph
-            .clear_attachments("opaque clear", color, depth, [0.0, 0.0, 0.0, 1.0], 1.0)
+            .attachment_pass(
+                "opaque clear",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
             .unwrap();
         for (vertices, indices, count, parameters) in draws {
             graph
@@ -146,16 +160,16 @@ fn opaque_batch_comparison(
                         parameters,
                     },
                     RasterAttachments {
-                        color: Attachment {
-                            image: color,
+                        colors: &[Attachment {
+                            view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Load,
                             store: StoreOp::Store,
-                        },
-                        depth: Attachment {
-                            image: depth,
+                        }],
+                        depth: Some(Attachment {
+                            view: graph.image_view(depth, 0, 0).unwrap(),
                             load: LoadOp::Load,
                             store: StoreOp::Store,
-                        },
+                        }),
                     },
                 )
                 .unwrap();
@@ -522,16 +536,16 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                         parameters: RasterParameters::default(),
                     },
                     RasterAttachments {
-                        color: Attachment {
-                            image: color,
+                        colors: &[Attachment {
+                            view: invalid.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
                             store: StoreOp::Store,
-                        },
-                        depth: Attachment {
-                            image: depth,
+                        }],
+                        depth: Some(Attachment {
+                            view: invalid.image_view(depth, 0, 0).unwrap(),
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
-                        },
+                        }),
                     },
                 )
                 .unwrap();
@@ -732,16 +746,16 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
                 parameters: RasterParameters::default(),
             },
             RasterAttachments {
-                color: Attachment {
-                    image: color,
+                colors: &[Attachment {
+                    view: mesh.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
                     store: StoreOp::Store,
-                },
-                depth: Attachment {
-                    image: depth,
+                }],
+                depth: Some(Attachment {
+                    view: mesh.image_view(depth, 0, 0).unwrap(),
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
-                },
+                }),
             },
         )
         .unwrap();
@@ -909,16 +923,16 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         parameters: RasterParameters::default(),
                     },
                     RasterAttachments {
-                        color: Attachment {
-                            image: color,
+                        colors: &[Attachment {
+                            view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
                             store: StoreOp::Store,
-                        },
-                        depth: Attachment {
-                            image: depth,
+                        }],
+                        depth: Some(Attachment {
+                            view: graph.image_view(depth, 0, 0).unwrap(),
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
-                        },
+                        }),
                     },
                 )
                 .unwrap();
@@ -961,16 +975,16 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         parameters: RasterParameters::default(),
                     },
                     RasterAttachments {
-                        color: Attachment {
-                            image: color,
+                        colors: &[Attachment {
+                            view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Load,
                             store: StoreOp::Store,
-                        },
-                        depth: Attachment {
-                            image: depth,
+                        }],
+                        depth: Some(Attachment {
+                            view: graph.image_view(depth, 0, 0).unwrap(),
                             load: LoadOp::Load,
                             store: StoreOp::Store,
-                        },
+                        }),
                     },
                 )
                 .unwrap();
@@ -1062,16 +1076,16 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                         parameters: RasterParameters::default(),
                     },
                     RasterAttachments {
-                        color: Attachment {
-                            image: color,
+                        colors: &[Attachment {
+                            view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
                             store: StoreOp::Store,
-                        },
-                        depth: Attachment {
-                            image: depth,
+                        }],
+                        depth: Some(Attachment {
+                            view: graph.image_view(depth, 0, 0).unwrap(),
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
-                        },
+                        }),
                     },
                 )
                 .unwrap();
