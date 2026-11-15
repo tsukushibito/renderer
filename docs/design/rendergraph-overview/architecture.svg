@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800" role="img" aria-labelledby="title desc">
+  <title id="title">宣言、共通Graph、backendの責務</title>
+  <desc id="desc">利用側とEngineがframe入力から処理を宣言する。GPUに依存しない共通Graphが構築時の保証、producer解析、不要パス除去、実行順を求め、不変なCompiledGraphを作る。backend runtimeが実資源と同期を決め、native命令を記録し投入する。正常完了を観測した後、利用側がCPU結果を消費する。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="#355e8a"/></marker>
+  </defs>
+  <rect width="600" height="800" rx="16" fill="#f4f7fb"/>
+  <g font-family="sans-serif" fill="#17324d">
+    <text x="30" y="42" font-size="25" font-weight="700">宣言から、実行へ</text>
+    <text x="30" y="75" font-size="19">共通の計画とnativeの責務を分ける</text>
+    <rect x="30" y="105" width="540" height="105" rx="12" fill="#ffffff" stroke="#889db2" stroke-width="2"/>
+    <text x="52" y="141" font-size="23" font-weight="700">利用側・Engine</text>
+    <text x="52" y="178" font-size="20">frame入力 → 資源・pass・結果を宣言</text>
+    <path d="M300 212V246" fill="none" stroke="#355e8a" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="30" y="257" width="540" height="145" rx="12" fill="#e7f1ff" stroke="#356cb0" stroke-width="2"/>
+    <text x="52" y="293" font-size="23" font-weight="700">共通Graph 〈CPU〉</text>
+    <text x="52" y="328" font-size="20">構築時の保証・producer解析</text>
+    <text x="52" y="362" font-size="20">culling・実行順 → 不変CompiledGraph</text>
+    <text x="390" y="390" font-size="16" fill="#345c85">GPU・window不要</text>
+    <path d="M300 405V440" fill="none" stroke="#355e8a" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="30" y="451" width="540" height="145" rx="12" fill="#e8f4ed" stroke="#37734e" stroke-width="2"/>
+    <text x="52" y="487" font-size="23" font-weight="700">backend runtime</text>
+    <text x="52" y="523" font-size="20">実資源・stage / access / layout</text>
+    <text x="52" y="558" font-size="20">native記録 → submit → 完了・退役</text>
+    <text x="390" y="584" font-size="16" fill="#386149">Vulkan / D3D12</text>
+    <path d="M300 598V635" fill="none" stroke="#355e8a" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="30" y="646" width="540" height="105" rx="12" fill="#ffffff" stroke="#889db2" stroke-width="2"/>
+    <text x="52" y="682" font-size="23" font-weight="700">結果の利用側</text>
+    <text x="52" y="719" font-size="20">正常完了後、CPU結果を消費・返却</text>
+    <text x="30" y="783" font-size="17">backendごとの実行能力は、共通CPU計画と別に確認する。</text>
+  </g>
+</svg>
