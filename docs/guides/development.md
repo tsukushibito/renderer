@@ -577,6 +577,15 @@ Runtime/公開planの破棄後もcompletion/readbackの所有連鎖を維持し�
 後半drawの不正index拒否後の再利用、保持中tokenによるbackpressureも確認します。
 tiny fixtureでhostから完了を観測する前に破棄する試験であり、破棄時点でGPUが実行中だったという主張はしません。
 
+D3D12のindex内容追跡は`D3D12FrameCapacity::provenance_segments_per_resource`（既定64）で、
+操作数・draw数と独立して予約します。buffer-onlyと完全な不変mesh要約だけなら0を指定でき、
+任意upload/copyのslice数が容量を超える場合は`CapacityExhausted`です。上限変更は明示準備境界で行います。
+backend内の`d3d12_shared_buffer_scopes_preserve_clear_results`と
+`d3d12_index_provenance_capacity_rejects_and_recovers`は、共有Vertex/Index/Uniformの用途合成と次passへの分離、
+容量0/1での拒否・cancel・再試行・Graph pin返却を確認するignored実GPU回帰です。
+以下の二API受入と同じstrict／shippingのfeature集合で`--lib <試験名> -- --ignored --nocapture --test-threads=1`を使い、
+設定ごとに別processで実行します。
+
 ```powershell
 cargo test --locked --release -p renderer --test raster_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics owned_raster_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --test raster_graph --no-default-features --features vulkan,d3d12 owned_raster_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1

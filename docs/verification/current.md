@@ -1,9 +1,46 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-15。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日: 2026-11-16。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+## D3D12 Rasterの用途集約と追跡容量
+
+`renderer-68c`、実装確認点`33587ca`。`.2.3`レビューの3件を改善した。
+各Raster/AttachmentPassのbuffer用途は該当passのaccess列だけで合成・消去し、全Graph bufferの初期化・走査を除去した。
+index provenanceは`provenance_segments_per_resource`（既定64）で操作数から独立して予約し、
+既定のsegment枠は208,896→3,264となった。buffer-onlyと完全な不変mesh要約は0を指定できる。
+depth clear値はGraph構築で有限値・0〜1・subnormal拒否を保証し、backendでの同じ値の再検査を除去した。
+native対応形式・Device適合・容量・同期・実完了・失敗処理は維持する。
+
+Windows x64、Rust1.99.0、`CARGO_INCREMENTAL=0`、NVIDIA RTX3060。
+入力・設定・source hash・実行コマンド・連続窓の結果は
+[メモリ検証データの`owned_raster_review_fixes`](frame-memory.json)に記録する。
+
+| 確認 | 結果 |
+|---|---|
+| 共通CPU／二API release製品／release追加検証＋診断 | 138／277／290件＋Rustdoc各1件成功 |
+| all-target Clippy | presentation＋D3D12＋memory-profilingの製品／診断、およびD3D12単独で警告ゼロ |
+| 新CPU回帰 | 同じbufferのVertex/Index/Uniform合成、一回の適用、次passのIndex-only、clear-onlyを確認 |
+| 新実GPU回帰 | 共有bufferのdegenerate drawとclear内容、容量0/1の拒否・cancel・再試行・mesh要約・pin返却がstrict／shipping各成功 |
+| 既存実GPU受入 | 共通Raster、3×5可変clear、共通bufferがstrict／shipping各成功。新回帰を含め10 test-config実行成功 |
+| 文書 | HTML17ページ・1920ローカル参照とMermaid32表示、viewer/theme/mobile/printを確認 |
+
+strictは最終native解放後までCore＋SyncVal／Debug Layer＋GBVの実効と診断ゼロを確認した。
+shippingはRendererの追加検証・専用診断を除外しnative `Disabled`を要求して、同じ期待内容を照合した。
+外部Layer注入の不在を診断なしの件数0から証明したとは扱わない。
+
+D3D12のbuffer／Raster窓を製品／診断baselineの4別processで再計測した。
+bufferはprovenance容量0、24warmup＋48変動frameと境界ケース、Rasterは容量16、24warmup＋24変動frameである。
+Graph構築/compile、prepare/record/submit、GPU完了・poll/retire、readback消費とplan/result返却までを含め、
+全4窓でRust alloc/alloc_zeroed/realloc/deallocの回数・要求byteとnative作成/破棄・memory/descriptor確保解放はゼロ。
+native resetの198（buffer）／96（Raster）は準備済み枠の再利用である。startup/shutdownの正の対照も確認した。
+
+segment予約枠の減少を常駐byte・時間性能の実測へ読み替えない。
+access列の二回走査は追加の使用列metadataを避ける選択であり、密なbinding入力の時間改善は未計測である。
+CPU/GPU時間、可変clearの大解像度比較、他GPU/driver、実native OOM/Device lossは未実行。
+Vulkan実装は変更せず、共通Raster/buffer受入を再実行した。以下の`.2.3`実装時のD3D12容量・計測記録は当時の確認点に従う。
 
 ## owned Raster・画像転送の二API実行
 

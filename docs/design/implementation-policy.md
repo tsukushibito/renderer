@@ -1431,6 +1431,21 @@ D32 copyは全subresource、source boxなし、destination XYZ0とし、RGBA16F�
 全資源のlegacy state遷移と必要な依存はshippingにも残す。共有provenanceはindexとそのcopy元だけを追跡し、
 未知内容・頂点範囲外を記録前に拒否する。index本文のprefix要約は内容の更新で失効する。
 
+`D3D12FrameCapacity::provenance_segments_per_resource`は各物理bufferとcopy scratchの既知slice数を
+操作数・draw数から独立して予約する。既定は64で、操作数を増やしてもこの予約量は増えない。
+buffer-only、または完全な不変meshのindex要約だけを使う場合は0を指定できる。
+一般upload/copyの内容追跡に足りない場合は`CapacityExhausted`を返し、暗黙の拡張・待機はしない。
+必要な上限は明示した準備・変更境界で選ぶ。既定のsegment枠は3 execution×17 buffer/scratch×64であり、
+以前の操作数4096との結合に比べ64分の1になる。これは予約枠数の比較であり常駐byteや実行時間の測定ではない。
+
+各Rasterのbuffer用途は、そのpassの不変access列だけを二回列挙して合成・適用する。
+同じbufferのVertex/Index/Uniformのstateを合わせ、最初の適用でscratchをCOMMONへ戻すため、
+後段のindex拒否・cancelや次passへ用途を残さない。clear-onlyではbuffer slotへ触れない。
+全Graphのbuffer数に比例する初期化・走査と追加の使用列metadataを避ける代わりに、
+重複bindingを含むaccess列を二回歩く。密な入力の時間改善は測定なしに主張しない。
+depth clearの有限値・範囲・subnormal拒否はGraph構築で確立し、privateな不変operandを引き継ぐ。
+native適用時に同じ値を再検査せず、MRT未対応、実Deviceへの適合、容量・同期・完了管理は維持する。
+
 Graphのclear値はframeやpassで変えられるが、D3D12のoptimized clear値は資源作成時に固定される。
 作成時に値を渡さないclearは厳格受入でwarning820/821を発生させる。固定optimized値と異なる値も
 API上は許可されるが効率上の警告対象であり、診断を抑制して通常の受入を通さない。
