@@ -6,6 +6,10 @@ use std::alloc::System;
 #[path = "support/frame_memory.rs"]
 mod frame_memory;
 
+#[cfg(feature = "vulkan")]
+#[path = "support/frame_memory_image.rs"]
+mod frame_memory_image;
+
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
 
@@ -22,8 +26,12 @@ fn main() {
         "cpu" => frame_memory::cpu_lifecycle(baseline),
         #[cfg(feature = "vulkan")]
         "vulkan" => frame_memory::vulkan_buffer_lifecycle(baseline),
+        #[cfg(feature = "vulkan")]
+        "vulkan-image" => frame_memory_image::lifecycle(baseline),
         #[cfg(all(feature = "d3d12", windows))]
         "d3d12" => frame_memory::d3d12_buffer_lifecycle(baseline),
-        _ => panic!("supported modes: cpu/vulkan/d3d12 [--baseline] (backend feature required)"),
+        _ => panic!(
+            "supported modes: cpu/vulkan/vulkan-image/d3d12 [--baseline] (backend feature required)"
+        ),
     }
 }
