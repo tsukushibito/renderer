@@ -8,9 +8,11 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ops::Range;
 
+mod index;
 mod intervals;
 #[cfg(feature = "development-validation")]
 use super::accesses::{IndexedAccess, conflicting_ranges_in};
+use index::Index;
 use intervals::{Entry, Intervals};
 
 #[derive(Clone, Copy, Debug)]
@@ -199,18 +201,18 @@ impl Output {
 #[derive(Clone, Copy)]
 struct ContentSegment {
     initialized: bool,
-    producer: Option<usize>,
+    producer: Option<Index>,
 }
 
 #[derive(Clone, Copy)]
 struct HazardSegment {
-    writer: Option<usize>,
-    readers: Option<usize>,
+    writer: Option<Index>,
+    readers: Option<Index>,
 }
 
 struct Reader {
     pass: usize,
-    previous: Option<usize>,
+    previous: Option<Index>,
     visited: usize,
 }
 
@@ -347,7 +349,7 @@ impl Workspace {
                 range,
                 ContentSegment {
                     initialized,
-                    producer,
+                    producer: producer.map(Index::new),
                 },
             )
             .map_err(|_| Error::capacity(Capacity::Segments))
@@ -386,6 +388,7 @@ impl Workspace {
                 return Err(error);
             }
             if let Some(from) = segment.value.producer {
+                let from = from.get();
                 if let Some(to) = pass {
                     self.add_data(from, to)?;
                 } else {
@@ -433,6 +436,7 @@ impl Workspace {
                 break;
             }
             if let Some(from) = segment.value.writer {
+                let from = from.get();
                 if access.read {
                     self.add_edge(from, to, DependencyKind::Raw)?;
                 }
@@ -443,6 +447,7 @@ impl Workspace {
             if access.write {
                 let mut reader = segment.value.readers;
                 while let Some(index) = reader {
+                    let index = index.get();
                     if self.readers[index].visited == self.visit_epoch {
                         break;
                     }
@@ -465,7 +470,7 @@ impl Workspace {
                     access.resource,
                     access.range.clone(),
                     HazardSegment {
-                        writer: Some(pass),
+                        writer: Some(Index::new(pass)),
                         readers: None,
                     },
                 )
@@ -497,7 +502,7 @@ impl Workspace {
                 self.hazards.set_cursor_value(
                     current,
                     HazardSegment {
-                        readers: Some(reader),
+                        readers: Some(Index::new(reader)),
                         ..segment.value
                     },
                 );

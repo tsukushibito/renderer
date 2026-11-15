@@ -5,12 +5,12 @@
 
 use std::ops::Range;
 
-use super::Capacity;
+use super::{Capacity, index::Index};
 
-type Link = Option<usize>;
+type Link = Option<Index>;
 
 #[derive(Clone, Copy)]
-pub(super) struct Cursor(usize);
+pub(super) struct Cursor(Index);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Entry<T> {
@@ -63,6 +63,12 @@ impl<T: Copy> Intervals<T> {
     }
 
     pub fn insert(&mut self, resource: usize, entry: Entry<T>) -> Result<(), ()> {
+        let index = self.allocate(entry)?;
+        self.roots[resource] = Some(self.insert_at(self.roots[resource], index));
+        Ok(())
+    }
+
+    fn allocate(&mut self, entry: Entry<T>) -> Result<Index, ()> {
         if self.len == self.limit {
             return Err(());
         }
@@ -74,22 +80,71 @@ impl<T: Copy> Intervals<T> {
             height: 1,
         };
         let index = if let Some(index) = self.free {
-            self.free = self.nodes[index].left;
-            self.nodes[index] = node;
+            self.free = self.nodes[index.get()].left;
+            self.nodes[index.get()] = node;
             index
         } else {
-            let index = self.nodes.len();
+            let index = Index::new(self.nodes.len());
             self.nodes.push(node);
             index
         };
         self.len += 1;
-        self.roots[resource] = Some(self.insert_at(self.roots[resource], index));
-        Ok(())
+        Ok(index)
+    }
+
+    // A split inserts immediately after an already located interval. Its
+    // successor can be found locally without searching again from the root.
+    fn insert_after(
+        &mut self,
+        resource: usize,
+        predecessor: Index,
+        entry: Entry<T>,
+    ) -> Result<Index, ()> {
+        let index = self.allocate(entry)?;
+        let parent = if let Some(mut next) = self.nodes[predecessor.get()].right {
+            while let Some(left) = self.nodes[next.get()].left {
+                next = left;
+            }
+            self.nodes[next.get()].left = Some(index);
+            next
+        } else {
+            self.nodes[predecessor.get()].right = Some(index);
+            predecessor
+        };
+        self.nodes[index.get()].parent = Some(parent);
+        self.rebalance_from(resource, parent);
+        Ok(index)
+    }
+
+    fn rebalance_from(&mut self, resource: usize, mut index: Index) {
+        loop {
+            let old_height = self.nodes[index.get()].height;
+            let parent = self.nodes[index.get()].parent;
+            let root = self.balance(index);
+            if let Some(parent) = parent {
+                let node = &mut self.nodes[parent.get()];
+                if node.left == Some(index) {
+                    node.left = Some(root);
+                } else {
+                    node.right = Some(root);
+                }
+            } else {
+                self.roots[resource] = Some(root);
+            }
+            // The parent's balance cannot change without a height change.
+            if self.nodes[root.get()].height == old_height {
+                break;
+            }
+            let Some(parent) = parent else {
+                break;
+            };
+            index = parent;
+        }
     }
 
     pub fn at(&self, resource: usize, point: u64) -> Option<Entry<T>> {
         self.index_at(resource, point)
-            .map(|index| self.nodes[index].entry)
+            .map(|index| self.nodes[index.get()].entry)
     }
 
     pub fn find(&self, resource: usize, point: u64) -> Option<Cursor> {
@@ -97,19 +152,19 @@ impl<T: Copy> Intervals<T> {
     }
 
     pub fn entry(&self, cursor: Cursor) -> Entry<T> {
-        self.nodes[cursor.0].entry
+        self.nodes[cursor.0.get()].entry
     }
 
     pub fn next(&self, cursor: Cursor) -> Option<Cursor> {
         let mut index = cursor.0;
-        if let Some(mut right) = self.nodes[index].right {
-            while let Some(left) = self.nodes[right].left {
+        if let Some(mut right) = self.nodes[index.get()].right {
+            while let Some(left) = self.nodes[right.get()].left {
                 right = left;
             }
             return Some(Cursor(right));
         }
-        while let Some(parent) = self.nodes[index].parent {
-            if self.nodes[parent].left == Some(index) {
+        while let Some(parent) = self.nodes[index.get()].parent {
+            if self.nodes[parent.get()].left == Some(index) {
                 return Some(Cursor(parent));
             }
             index = parent;
@@ -118,13 +173,13 @@ impl<T: Copy> Intervals<T> {
     }
 
     pub fn set_cursor_value(&mut self, cursor: Cursor, value: T) {
-        self.nodes[cursor.0].entry.value = value;
+        self.nodes[cursor.0.get()].entry.value = value;
     }
 
     fn index_at(&self, resource: usize, point: u64) -> Link {
         let mut next = self.roots[resource];
         while let Some(index) = next {
-            let node = &self.nodes[index];
+            let node = &self.nodes[index.get()];
             if point < node.entry.start {
                 next = node.left;
             } else if point >= node.entry.end {
@@ -140,51 +195,56 @@ impl<T: Copy> Intervals<T> {
         let Some(index) = self.index_at(resource, point) else {
             return Ok(());
         };
-        let entry = self.nodes[index].entry;
+        let entry = self.nodes[index.get()].entry;
         if entry.start == point {
             return Ok(());
         }
         if self.len == self.limit {
             return Err(());
         }
-        self.nodes[index].entry.end = point;
-        self.insert(
+        self.nodes[index.get()].entry.end = point;
+        self.insert_after(
             resource,
+            index,
             Entry {
                 start: point,
                 ..entry
             },
         )
+        .map(|_| ())
     }
 
     pub fn replace(&mut self, resource: usize, range: Range<u64>, value: T) -> Result<(), ()> {
         let index = self
             .index_at(resource, range.start)
             .expect("frontier covers resource");
-        let head = self.nodes[index].entry;
+        let head = self.nodes[index.get()].entry;
         if range.end <= head.end {
             let added = usize::from(head.start < range.start) + usize::from(range.end < head.end);
             if self.len + added > self.limit {
                 return Err(());
             }
-            if head.start == range.start {
-                self.nodes[index].entry.end = range.end;
-                self.nodes[index].entry.value = value;
+            let middle = if head.start == range.start {
+                self.nodes[index.get()].entry.end = range.end;
+                self.nodes[index.get()].entry.value = value;
+                index
             } else {
-                self.nodes[index].entry.end = range.start;
-                self.insert(
+                self.nodes[index.get()].entry.end = range.start;
+                self.insert_after(
                     resource,
+                    index,
                     Entry {
                         start: range.start,
                         end: range.end,
                         value,
                     },
                 )
-                .expect("preflighted capacity");
-            }
+                .expect("preflighted capacity")
+            };
             if range.end < head.end {
-                self.insert(
+                self.insert_after(
                     resource,
+                    middle,
                     Entry {
                         start: range.end,
                         ..head
@@ -252,57 +312,60 @@ impl<T: Copy> Intervals<T> {
     }
 
     fn height(&self, link: Link) -> u8 {
-        link.map_or(0, |i| self.nodes[i].height)
+        link.map_or(0, |i| self.nodes[i.get()].height)
     }
 
-    fn update(&mut self, index: usize) {
-        self.nodes[index].height = 1 + self
-            .height(self.nodes[index].left)
-            .max(self.height(self.nodes[index].right));
+    fn update(&mut self, index: Index) {
+        self.nodes[index.get()].height = 1 + self
+            .height(self.nodes[index.get()].left)
+            .max(self.height(self.nodes[index.get()].right));
     }
 
-    fn rotate_left(&mut self, index: usize) -> usize {
-        let pivot = self.nodes[index].right.unwrap();
-        self.nodes[pivot].parent = self.nodes[index].parent;
-        self.nodes[index].right = self.nodes[pivot].left;
-        if let Some(child) = self.nodes[index].right {
-            self.nodes[child].parent = Some(index);
+    fn rotate_left(&mut self, index: Index) -> Index {
+        let pivot = self.nodes[index.get()].right.unwrap();
+        self.nodes[pivot.get()].parent = self.nodes[index.get()].parent;
+        self.nodes[index.get()].right = self.nodes[pivot.get()].left;
+        if let Some(child) = self.nodes[index.get()].right {
+            self.nodes[child.get()].parent = Some(index);
         }
-        self.nodes[pivot].left = Some(index);
-        self.nodes[index].parent = Some(pivot);
+        self.nodes[pivot.get()].left = Some(index);
+        self.nodes[index.get()].parent = Some(pivot);
         self.update(index);
         self.update(pivot);
         pivot
     }
 
-    fn rotate_right(&mut self, index: usize) -> usize {
-        let pivot = self.nodes[index].left.unwrap();
-        self.nodes[pivot].parent = self.nodes[index].parent;
-        self.nodes[index].left = self.nodes[pivot].right;
-        if let Some(child) = self.nodes[index].left {
-            self.nodes[child].parent = Some(index);
+    fn rotate_right(&mut self, index: Index) -> Index {
+        let pivot = self.nodes[index.get()].left.unwrap();
+        self.nodes[pivot.get()].parent = self.nodes[index.get()].parent;
+        self.nodes[index.get()].left = self.nodes[pivot.get()].right;
+        if let Some(child) = self.nodes[index.get()].left {
+            self.nodes[child.get()].parent = Some(index);
         }
-        self.nodes[pivot].right = Some(index);
-        self.nodes[index].parent = Some(pivot);
+        self.nodes[pivot.get()].right = Some(index);
+        self.nodes[index.get()].parent = Some(pivot);
         self.update(index);
         self.update(pivot);
         pivot
     }
 
-    fn balance(&mut self, index: usize) -> usize {
+    fn balance(&mut self, index: Index) -> Index {
         self.update(index);
-        let left = self.nodes[index].left;
-        let right = self.nodes[index].right;
+        let left = self.nodes[index.get()].left;
+        let right = self.nodes[index.get()].right;
         if self.height(left) > self.height(right) + 1 {
             let left = left.unwrap();
-            if self.height(self.nodes[left].right) > self.height(self.nodes[left].left) {
-                self.nodes[index].left = Some(self.rotate_left(left));
+            if self.height(self.nodes[left.get()].right) > self.height(self.nodes[left.get()].left)
+            {
+                self.nodes[index.get()].left = Some(self.rotate_left(left));
             }
             self.rotate_right(index)
         } else if self.height(right) > self.height(left) + 1 {
             let right = right.unwrap();
-            if self.height(self.nodes[right].left) > self.height(self.nodes[right].right) {
-                self.nodes[index].right = Some(self.rotate_right(right));
+            if self.height(self.nodes[right.get()].left)
+                > self.height(self.nodes[right.get()].right)
+            {
+                self.nodes[index.get()].right = Some(self.rotate_right(right));
             }
             self.rotate_left(index)
         } else {
@@ -310,42 +373,52 @@ impl<T: Copy> Intervals<T> {
         }
     }
 
-    fn insert_at(&mut self, root: Link, index: usize) -> usize {
+    fn insert_at(&mut self, root: Link, index: Index) -> Index {
         let Some(root) = root else {
             return index;
         };
-        if self.nodes[index].entry.start < self.nodes[root].entry.start {
-            let child = self.insert_at(self.nodes[root].left, index);
-            self.nodes[root].left = Some(child);
-            self.nodes[child].parent = Some(root);
+        if self.nodes[index.get()].entry.start < self.nodes[root.get()].entry.start {
+            let height = self.height(self.nodes[root.get()].left);
+            let child = self.insert_at(self.nodes[root.get()].left, index);
+            self.nodes[root.get()].left = Some(child);
+            self.nodes[child.get()].parent = Some(root);
+            if self.nodes[child.get()].height == height {
+                return root;
+            }
         } else {
-            let child = self.insert_at(self.nodes[root].right, index);
-            self.nodes[root].right = Some(child);
-            self.nodes[child].parent = Some(root);
+            let height = self.height(self.nodes[root.get()].right);
+            let child = self.insert_at(self.nodes[root.get()].right, index);
+            self.nodes[root.get()].right = Some(child);
+            self.nodes[child.get()].parent = Some(root);
+            if self.nodes[child.get()].height == height {
+                return root;
+            }
         }
         self.balance(root)
     }
 
-    fn remove_at(&mut self, root: usize, start: u64) -> Link {
-        if start < self.nodes[root].entry.start {
-            self.nodes[root].left = self.remove_at(self.nodes[root].left.unwrap(), start);
-        } else if start > self.nodes[root].entry.start {
-            self.nodes[root].right = self.remove_at(self.nodes[root].right.unwrap(), start);
+    fn remove_at(&mut self, root: Index, start: u64) -> Link {
+        if start < self.nodes[root.get()].entry.start {
+            self.nodes[root.get()].left =
+                self.remove_at(self.nodes[root.get()].left.unwrap(), start);
+        } else if start > self.nodes[root.get()].entry.start {
+            self.nodes[root.get()].right =
+                self.remove_at(self.nodes[root.get()].right.unwrap(), start);
         } else {
-            let left = self.nodes[root].left;
-            let right = self.nodes[root].right;
+            let left = self.nodes[root.get()].left;
+            let right = self.nodes[root.get()].right;
             if let (Some(_), Some(mut successor)) = (left, right) {
-                while let Some(left) = self.nodes[successor].left {
+                while let Some(left) = self.nodes[successor.get()].left {
                     successor = left;
                 }
-                let entry = self.nodes[successor].entry;
-                self.nodes[root].entry = entry;
-                self.nodes[root].right = self.remove_at(right.unwrap(), entry.start);
+                let entry = self.nodes[successor.get()].entry;
+                self.nodes[root.get()].entry = entry;
+                self.nodes[root.get()].right = self.remove_at(right.unwrap(), entry.start);
             } else {
                 if let Some(child) = left.or(right) {
-                    self.nodes[child].parent = self.nodes[root].parent;
+                    self.nodes[child.get()].parent = self.nodes[root.get()].parent;
                 }
-                self.nodes[root].left = self.free;
+                self.nodes[root.get()].left = self.free;
                 self.free = Some(root);
                 self.len -= 1;
                 return left.or(right);
@@ -368,9 +441,9 @@ mod tests {
         let Some(index) = root else {
             return (0, 0);
         };
-        let node = &map.nodes[index];
+        let node = &map.nodes[index.get()];
         for child in [node.left, node.right].into_iter().flatten() {
-            assert_eq!(map.nodes[child].parent, Some(index));
+            assert_eq!(map.nodes[child.get()].parent, Some(index));
         }
         assert!(low.is_none_or(|low| node.entry.start > low));
         assert!(high.is_none_or(|high| node.entry.start < high));
@@ -407,8 +480,9 @@ mod tests {
             map.replace(resource, start as u64..end as u64, value)
                 .unwrap();
             dense[resource][start..end].fill(value);
+            map.split(resource, (seed >> 16) % 65).unwrap();
             for (r, expected) in dense.iter().enumerate() {
-                assert!(map.nodes[map.roots[r].unwrap()].parent.is_none());
+                assert!(map.nodes[map.roots[r].unwrap().get()].parent.is_none());
                 for (p, &value) in expected.iter().enumerate() {
                     assert_eq!(map.at(r, p as u64).unwrap().value, value);
                 }
