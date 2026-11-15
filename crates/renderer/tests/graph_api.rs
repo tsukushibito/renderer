@@ -1,7 +1,7 @@
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, ComputeTransform, Graph,
-    GraphCapacity, GraphError, GraphErrorKind, GraphPool, ImageAspect, ImageDesc, ImageHandle,
-    PassKind,
+    GraphCapacity, GraphCapacityKind, GraphError, GraphErrorKind, GraphPool, ImageAspect,
+    ImageDesc, ImageHandle, PassKind,
 };
 use renderer::graph::{
     Attachment, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
@@ -271,4 +271,139 @@ fn application_errors_have_an_explicit_category() {
     assert_eq!(error.resource(), None);
     assert_eq!(error.range(), None);
     assert!(error.cycle_passes().is_empty());
+}
+
+#[test]
+fn interleaved_dependencies_preserve_order_and_capacity_failure_is_transactional() {
+    let mut pool = GraphPool::new(
+        GraphCapacity {
+            dependencies: 4,
+            ..GraphCapacity::default()
+        },
+        1,
+    )
+    .unwrap();
+    let mut graph = pool.begin().unwrap();
+    let tail = graph
+        .declare_pass("tail", PassKind::Copy, &[], true)
+        .unwrap();
+    let first = graph
+        .declare_pass("first", PassKind::Copy, &[], false)
+        .unwrap();
+    let middle = graph
+        .declare_pass("middle", PassKind::Copy, &[], false)
+        .unwrap();
+    let last = graph
+        .declare_pass("last", PassKind::Copy, &[], false)
+        .unwrap();
+    graph.depends_on(tail, middle).unwrap();
+    graph.depends_on(last, first).unwrap();
+    graph.depends_on(tail, last).unwrap();
+    graph.depends_on(middle, first).unwrap();
+    // Duplicate edges need no additional storage, even at capacity.
+    graph.depends_on(tail, middle).unwrap();
+    let error = graph.depends_on(first, tail).unwrap_err();
+    let capacity = error.capacity().unwrap();
+    assert_eq!(capacity.kind, GraphCapacityKind::Dependencies);
+    assert_eq!((capacity.limit, capacity.required), (4, Some(5)));
+    assert_eq!(
+        graph
+            .compile()
+            .unwrap()
+            .ordered_pass_names()
+            .collect::<Vec<_>>(),
+        ["first", "middle", "last", "tail"]
+    );
+    // Reusing the same prepared slot must not retain old dependency nodes.
+    let graph = pool.begin().unwrap();
+    assert_eq!(graph.compile().unwrap().pass_count(), 0);
+}
+
+#[test]
+fn capacity_errors_identify_builder_limits_and_return_slots() {
+    let defaults = GraphCapacity::default();
+    for kind in [
+        GraphCapacityKind::Resources,
+        GraphCapacityKind::Passes,
+        GraphCapacityKind::Accesses,
+        GraphCapacityKind::NameBytes,
+        GraphCapacityKind::UploadBytes,
+    ] {
+        let mut capacity = defaults;
+        match kind {
+            GraphCapacityKind::Resources => capacity.resources = 0,
+            GraphCapacityKind::Passes => capacity.passes = 0,
+            GraphCapacityKind::Accesses => capacity.accesses = 0,
+            GraphCapacityKind::NameBytes => capacity.name_bytes = 0,
+            GraphCapacityKind::UploadBytes => capacity.upload_bytes = 0,
+            _ => unreachable!(),
+        }
+        let mut pool = GraphPool::new(capacity, 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let error = match kind {
+            GraphCapacityKind::Resources | GraphCapacityKind::NameBytes => {
+                graph.buffer("x", BufferDesc { size: 4 }).unwrap_err()
+            }
+            GraphCapacityKind::Passes => graph
+                .declare_pass("p", PassKind::Copy, &[], true)
+                .unwrap_err(),
+            _ => {
+                let buffer = graph.buffer("b", BufferDesc { size: 4 }).unwrap();
+                graph
+                    .upload_buffer("upload", buffer, 0, &[1; 4])
+                    .unwrap_err()
+            }
+        };
+        assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
+        let details = error.capacity().unwrap();
+        assert_eq!(details.kind, kind);
+        assert_eq!(details.limit, 0);
+        assert!(details.required.is_some_and(|count| count > 0));
+        assert!(matches!(error.message, std::borrow::Cow::Borrowed(_)));
+        drop(graph);
+        assert!(pool.is_idle());
+    }
+    let mut pool = GraphPool::new(defaults, 1).unwrap();
+    let plan = pool.begin().unwrap().compile().unwrap();
+    let details = pool.begin().unwrap_err().capacity().unwrap();
+    assert_eq!(details.kind, GraphCapacityKind::Slots);
+    assert_eq!((details.limit, details.required), (1, Some(2)));
+    drop(plan);
+    assert!(pool.begin().is_ok());
+}
+
+#[test]
+fn compile_capacity_errors_preserve_analysis_dimension() {
+    for kind in [
+        GraphCapacityKind::Edges,
+        GraphCapacityKind::Segments,
+        GraphCapacityKind::Readers,
+    ] {
+        let mut capacity = GraphCapacity::default();
+        match kind {
+            GraphCapacityKind::Edges => capacity.edges = 0,
+            GraphCapacityKind::Segments => capacity.segments = 0,
+            GraphCapacityKind::Readers => capacity.readers = 0,
+            _ => unreachable!(),
+        }
+        let mut pool = GraphPool::new(capacity, 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        if kind == GraphCapacityKind::Edges {
+            let a = graph.declare_pass("a", PassKind::Copy, &[], false).unwrap();
+            let b = graph.declare_pass("b", PassKind::Copy, &[], true).unwrap();
+            graph.depends_on(b, a).unwrap();
+        } else {
+            let buffer = graph.buffer("b", BufferDesc { size: 4 }).unwrap();
+            if kind == GraphCapacityKind::Readers {
+                graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
+                graph.readback_buffer("read", buffer, 0, 4).unwrap();
+            }
+        }
+        let error = graph.compile().unwrap_err();
+        let details = error.capacity().unwrap();
+        assert_eq!(details.kind, kind);
+        assert_eq!(details.limit, 0);
+        assert_eq!(details.required, None);
+        assert!(pool.is_idle());
+    }
 }

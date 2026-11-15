@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use super::{AccessRange, Graph, GraphError, GraphErrorKind, ImageAspect};
+use super::{AccessRange, Graph, GraphCapacityKind, GraphError, GraphErrorKind, ImageAspect};
 
 /// A graph-local buffer; handles cannot be moved between graph instances.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -140,14 +140,24 @@ impl Graph {
         revision: u64,
         initial: &[Range<u64>],
     ) -> Result<usize, GraphError> {
-        if self.resources.len() == self.capacity.resources
-            || initial.len()
-                > self
-                    .capacity
-                    .initial_ranges
-                    .saturating_sub(self.initial_ranges.len())
+        if self.resources.len() == self.capacity.resources {
+            return Err(super::storage::capacity_error(
+                GraphCapacityKind::Resources,
+                self.capacity.resources,
+                self.resources.len().checked_add(1),
+            ));
+        }
+        if initial.len()
+            > self
+                .capacity
+                .initial_ranges
+                .saturating_sub(self.initial_ranges.len())
         {
-            return Err(super::storage::capacity_error());
+            return Err(super::storage::capacity_error(
+                GraphCapacityKind::InitialRanges,
+                self.capacity.initial_ranges,
+                self.initial_ranges.len().checked_add(initial.len()),
+            ));
         }
         let name = self.store_name(name)?;
         let index = self.resources.len();
