@@ -211,9 +211,6 @@ impl GraphStorage {
     pub(crate) fn raster_draws(&self, range: &Range<usize>) -> &[RasterDrawOperands] {
         &self.draws[range.clone()]
     }
-    pub(crate) fn attachment_operands(&self, range: Range<usize>) -> &[AttachmentOperand] {
-        &self.attachments[range]
-    }
     pub(crate) fn upload_data<'a>(&'a self, operation: &'a super::Operation) -> &'a [u8] {
         let source = match operation {
             super::Operation::UploadBuffer { data, .. }

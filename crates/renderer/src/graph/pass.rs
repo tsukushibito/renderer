@@ -326,7 +326,21 @@ pub(crate) enum Operation {
         clear_depth: f32,
     },
     AttachmentPass {
+        #[cfg_attr(
+            not(test),
+            allow(
+                dead_code,
+                reason = "owned attachment Views for general native graphics are subsequent work"
+            )
+        )]
         colors: Range<usize>,
+        #[cfg_attr(
+            not(test),
+            allow(
+                dead_code,
+                reason = "owned attachment Views for general native graphics are subsequent work"
+            )
+        )]
         depth: Option<usize>,
         simple_clear: Option<AttachmentClearOperands>,
     },
