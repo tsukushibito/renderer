@@ -96,7 +96,6 @@ impl Driver {
                 staging_bytes: STAGING_BYTES,
                 staging_ranges: 256,
                 max_shader_bindings: 64,
-                ..Default::default()
             },
             mode.validation(),
         )?;
