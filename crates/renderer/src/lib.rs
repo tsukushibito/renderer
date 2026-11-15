@@ -17,6 +17,13 @@ pub mod program;
 #[cfg(feature = "memory-profiling")]
 pub mod measurement;
 
+// Existing ignored native acceptance tests run in this binary. Normal library
+// consumers still choose their own allocator; this affects unit-test builds only.
+#[cfg(all(test, feature = "memory-profiling"))]
+#[global_allocator]
+static TEST_ALLOCATOR: measurement::CountingAllocator<std::alloc::System> =
+    measurement::CountingAllocator::new(std::alloc::System);
+
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 mod backends;
 

@@ -34,9 +34,15 @@ pub enum HostEvent {
     Deallocate,
 }
 
-/// Renderer-issued native requests. Count creation attempts before the call,
-/// including failures, and destruction at the final Renderer owner release.
+/// Observed native events with backend-specific units, rather than net memory
+/// or a uniform count of native API calls. Object/resource factory attempts
+/// include failures; destroy events mean the final Renderer owner release.
 /// COM reference clones/releases are not independent object creation/destruction.
+/// Vulkan memory allocation events are successful VMA device-memory callback
+/// notifications. D3D12 committed-resource factories count their implicit heap
+/// allocation attempts as well as resource attempts. Descriptor events count
+/// requested/freed Vulkan sets or D3D12 heap descriptor elements, not calls.
+/// These categories overlap and must not be summed as physical allocations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]
 pub enum NativeEvent {
@@ -91,7 +97,31 @@ impl Snapshot {
         }
     }
 
-    /// All observed allocation/free request counts are zero. Reset/reuse may
+    /// Accumulate disjoint intervals in fixed storage. Overflow saturates and
+    /// invalidates zero acceptance; it cannot wrap a nonzero total back to zero.
+    pub fn accumulate(&mut self, value: Self) {
+        fn add(total: &mut u64, value: u64, overflowed: &mut bool) {
+            *total = total.checked_add(value).unwrap_or_else(|| {
+                *overflowed = true;
+                u64::MAX
+            });
+        }
+        self.overflowed |= value.overflowed;
+        for (total, value) in self
+            .rust
+            .iter_mut()
+            .zip(value.rust)
+            .chain(self.vma_host.iter_mut().zip(value.vma_host))
+        {
+            add(&mut total.calls, value.calls, &mut self.overflowed);
+            add(&mut total.bytes, value.bytes, &mut self.overflowed);
+        }
+        for (total, value) in self.native.iter_mut().zip(value.native) {
+            add(total, value, &mut self.overflowed);
+        }
+    }
+
+    /// All observed allocation/free event counts are zero. Reset/reuse may
     /// occur; implicit frees must also be classified as descriptor free events.
     /// A zero snapshot cannot establish coverage of missing instrumentation.
     pub fn is_allocation_free(&self) -> bool {
@@ -159,8 +189,9 @@ impl Counters {
 
 static COUNTERS: Counters = Counters::new();
 
-/// Record an actual Renderer native call. This hook has no allocation, logging,
-/// failure handling, or required native side effects.
+/// Record the number of observed native events/units described by [`NativeEvent`].
+/// This hook has no allocation, logging, failure handling, or required native
+/// side effects. A missing event hook cannot be proved by a zero count.
 pub fn record_native(event: NativeEvent, count: u64) {
     COUNTERS.add(&COUNTERS.native[event as usize], count);
 }
@@ -233,6 +264,15 @@ mod tests {
         );
         assert_eq!(delta.vma_host[HostEvent::Deallocate as usize].calls, 1);
         assert!(!delta.is_allocation_free());
+        let mut sum = initial;
+        sum.accumulate(delta);
+        assert_eq!(sum, delta);
+        sum.native[NativeEvent::ObjectCreate as usize] = u64::MAX;
+        let mut extra = Snapshot::default();
+        extra.native[NativeEvent::ObjectCreate as usize] = 1;
+        sum.accumulate(extra);
+        assert!(sum.overflowed);
+        assert_eq!(sum.native[NativeEvent::ObjectCreate as usize], u64::MAX);
         let reset_only = Snapshot {
             native: [0, 0, 0, 0, 0, 0, 0, 0, 1],
             ..Snapshot::default()
