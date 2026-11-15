@@ -202,6 +202,18 @@ fn counts(snapshot: Snapshot) -> serde_json::Value {
     })
 }
 
+fn semantics() -> serde_json::Value {
+    serde_json::json!({
+        "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
+        "vma_host": "VMA native host callback calls/known requested bytes, forwarded separately from the Rust global allocator",
+        "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
+        "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
+        "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
+        "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
+        "scope": "overlapping categories must not be summed as physical allocations; driver-internal allocations are unobserved",
+    })
+}
+
 fn features() -> serde_json::Value {
     serde_json::json!({
         "development_validation": cfg!(feature = "development-validation"),
@@ -277,6 +289,7 @@ pub fn cpu_lifecycle(baseline: bool) {
         "scenario": "cpu_snapshot_build_compile_return",
         "mode": if baseline { "baseline" } else { "require_zero" },
         "features": features(),
+        "counter_semantics": semantics(),
         "warmup_frames": WARMUP,
         "measured_frames": FRAMES,
         "retained_frame_slots": IN_FLIGHT,
@@ -422,6 +435,13 @@ mod buffer {
             }
             drop(pending);
         });
+        // An application may discard completed CPU output without reading it.
+        // Returning that result must recycle its prepared range and metadata.
+        let (discarded, _) = phase(&mut phases[0], || graph(pool, &inputs[0], 3));
+        let discarded = phase(&mut phases[1], || discarded.compile().unwrap());
+        let mut work = phase(&mut phases[2], || runtime.submit(&discarded));
+        let result = phase(&mut phases[3], || B::complete(&mut work));
+        phase(&mut phases[4], || drop((result, work, discarded)));
         let oversized = phase(&mut phases[0], || {
             let mut graph = pool.begin().unwrap();
             let buffer = graph
@@ -512,6 +532,7 @@ mod buffer {
             "scenario": name,
             "mode": if baseline { "baseline" } else { "require_zero" },
             "features": features(),
+            "counter_semantics": semantics(),
             "native_request": if cfg!(feature = "development-validation") { "Required" } else { "Disabled" },
             "warmup_frames": GPU_WARMUP,
             "measured_frames": GPU_FRAMES,
@@ -530,6 +551,8 @@ mod buffer {
                 "detached_submission_runtime_poll": B::DETACHED_REAP,
             },
             "detached_reap_submissions": usize::from(B::DETACHED_REAP),
+            "completed_unconsumed_drop_submissions": 1,
+            "frame_count_excludes_lifetime_boundary_submissions": true,
             "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI",
             "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit fence waits/polls",
             "unobserved": "driver-internal host/device allocations",
