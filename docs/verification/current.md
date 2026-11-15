@@ -7,7 +7,10 @@
 
 ## 通常フレームのメモリ規約と実装
 
-`renderer-dzz` / `renderer-7ft.2.2.1`。実装確認点は`43ef7e9`。
+`renderer-dzz` / `renderer-7ft.2.2.1`。従来の実装確認点は`43ef7e9`。
+Graph改善の`2dfca14`でも下表の5経路を製品releaseで再受入し、全ての通常窓でゼロを維持した。
+最新の容量・counter・実行コマンドは[ソースレビューの証拠](source-review.json)の
+`rendergraph_efficiency_improvements.current_memory_reports`、旧基準と負の対照は[従来の計測](frame-memory.json)にある。
 [規約](../design/implementation-policy.md#steady-state-memory)に従い、準備済み資源・容量内の通常frameでは
 Rendererの汎用heap alloc/alloc_zeroed/realloc/deallocと、Renderer発行のnative資源/メモリ作成・破棄を行わない。
 入力・draw数・pass構成を毎frame変え、構築/compileからGPU/present完了、CPU結果消費/返却まで確認した。
@@ -27,7 +30,8 @@ Rust欄はalloc/alloc_zeroed/realloc/dealloc、host欄はallocate/reallocate/fre
 CPUのみのnativeゼロは証拠に使わない。[機械可読の結果・容量・実行コマンド](frame-memory.json)と
 [再実行手順](../guides/development.md#通常フレームのメモリ計測)を参照する。
 
-共通はGraph/Snapshot/ImportRangesの準備済みslot、flatなaccess/draw/name/upload/区間配列と解析workspaceへ移行した。
+共通はGraph/Snapshot/ImportRangesの準備済みslot、flatなaccess/draw/name/uploadと解析workspaceを使う。
+論理Graphの区間は予約済みAVL node arenaへ移行し、offset順による全配列の後続移動を除去した。
 `Graph::compile(self)`で同じbackingを凍結し、consumerが終わるまでpinする。全accessの一時Vecも`.2.2.1`で除去した。
 Vulkanはnative実行/descriptor/stagingとwork/result/exportを別寿命のpoolへ分け、D3D12もnative実行と独立resultを事前作成する。
 通常の容量不足では増設・暗黙waitをせず、必要な検査・同期・GPU/present/CPU寿命・native失敗処理を維持する。
@@ -41,7 +45,7 @@ native/host callbackはevent pump中も含むepoch全体を数え、callerとRen
 資源変更/resize/VSync/suspend/取得後取消、明示保守、追加1sourceのpending終了は別境界に記録した。
 旧世代の実破棄を通常pollへ戻さず、完了観測と枠返却は通常経路に維持した。
 
-Windows x64/Rust 1.99.0、RTX 3060/driver 610.88で、開発release CPU230件/製品release CPU214件と各Rustdoc1件、
+以下は`43ef7e9`時点の受入範囲である。Windows x64/Rust 1.99.0、RTX 3060/driver 610.88で、開発release CPU230件/製品release CPU214件と各Rustdoc1件、
 全target Clippyの有効/無効構成、fmtが成功した。strict Vulkan51件（WSI以外）、WSI1件、
 32 CPU asset/GPU常駐3のstream/churn/複数View/別renderer/replay受入をstrict/製品で確認した。
 二API共通の10pass Graphはstrict/製品とも308 byte全一致。D3D12 strict寿命1件・管理下Program2件も成功した。
@@ -56,7 +60,7 @@ Vulkan device memoryは成功通知、D3D12 committed resourceは暗黙heap要�
 callback外のdriver/OS/native内部、D3D12 bootstrap/CPU shader blobとtest専用旧factoryは未観測であり、
 後者を通常の準備済みframe経路で呼ばないことを別に監査した。
 別GPU/driver・Linux実GPU・長時間耐久・実native OOM/loss・時間性能/物理VRAM改善は未確認である。
-準備容量による常駐量増加と区間配列の線形操作は代償として残り、ゼロからCPU/GPU高速化を推定しない。
+準備容量による常駐量増加、木の更新とprovenance等の配列操作は代償として残り、ゼロからCPU/GPU高速化を推定しない。
 
 CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回だった。
 同構成のrequire-zeroが旧基準を拒否する負の対照も保存した。
@@ -65,6 +69,47 @@ CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回�
 実装commitの[CI 43674843105](https://github.com/tsukushibito/renderer/actions/runs/43674843105)は全10job成功、初回、4分53秒だった。
 
 ## Graph・表示・descriptorの効率整理
+
+`renderer-6de` / `renderer-ygu` / `renderer-xqo` / `renderer-0g6` / `renderer-9nb` / `renderer-agu`。
+比較元は`1fbe51c`、統合実装は`2dfca14`。[生sample・同一public API harness・実行コマンド](source-review.json)の
+`rendergraph_efficiency_improvements`へ記録した。
+
+明示依存をpassごとの予約済みlinked arenaへ追記し、後続passのoffset更新を除去した。
+内容/hazardの区間はresourceごとの予約済みAVL frontierへ移し、無関係な後続segmentの移動を除去した。
+producer、未初期化read拒否、culling後の再解析、RAW/WAR/WAW、容量上限は維持する。
+構築時と追加検証のoverlap判定、Raster/clearのtargetとclear値検査は共通helperへ整理した。
+容量不足は11項目とGraph/import slot等の種別・上限・判明した必要数を、heap確保なしで返す。
+
+Windows x64 / Core i5-14600KF / Rust 1.99.0、`rustc -O`のfeatureなしで同じharnessを使い、
+計測processだけを同じlogical CPU（mask `0x1`）へ固定した。各入力は8回warm-up後9回、表は中央値である。
+clock/priorityは固定せず、変更前→変更後を別processで逐次実行した。非固定CPUの初回値も証拠に残す。
+
+| 合成CPU入力 | 変更前 | 変更後 |
+|---|---:|---:|
+| 8,192passの疎な依存chain追加のみ | 28.818 ms | 0.0278 ms |
+| 8,192個の穴を挟むwriteのcompile、offset降順 | 120.379 ms | 4.131 ms |
+| 同、固定seedの順序 | 62.484 ms | 8.140 ms |
+| 同、offset昇順 | 1.641 ms | 5.042 ms |
+| 8,192個の隣接write＋全域read、昇順 | 1.461 ms | 2.807 ms |
+| 同、固定seedの順序 | 41.770 ms | 5.565 ms |
+
+旧配列に有利な昇順入力では木の更新費用が増える。最悪の追加順への偏りを減らした結果であり、
+全入力の高速化、実アプリ全体、GPU時間やFPSの改善を示さない。壁時計の固定CI閾値も追加しない。
+同じCPUメモリfixtureの準備時Rust要求byteは114,504→153,240へ増えたが、通常24frameは全counterゼロを維持した。
+
+Vulkanは最後に確立したreadのexact stage/access pairを累積readerとwriterから分離し、
+同じbuffer readのCPU回帰で依存生成8→1を確認した。新scope、write、layout変更は必要依存を保持する。
+Snapshotごとに16 byte増える。submit/retire/reset等は予約上限全体ではなく当該Graphのresource prefixだけを走査し、
+大小のGraph再利用と取消・途中失敗を確認した。D3D12 mapの二重初期化も除去した。
+
+統合後はCPUのみ83件、開発release241件、製品release225件と各Rustdoc1件、fmtと全target Clippyが成功した。
+RTX 3060 / driver 610.88でstrict Vulkan52件（WSI込み）、D3D12寿命1件、二API共有bufferのstrict/製品を逐次実行した。
+共有bufferは各backend308 byte全一致。strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終native解放後まで警告/error等ゼロを要求する。
+製品の同一reader、並べ替えreadback、mesh描画、旧mesh退役、5経路のメモリ・表示受入も成功した。
+strict専用M2試験を製品featureへ指定した初回の失敗はcommand誤りとして記録し、検査を緩めず対応する製品試験で確認した。
+適用した同期・所有・入力保証の一般推奨からの新しい例外やpolicy変更はない。
+Linux/別GPU・driver、Bistro全体、実OOM/loss、長時間耐久、GPU性能・物理VRAM改善は未確認である。
+shader/生成bindingsは無変更で再生成Verifyは今回未実行。既知の未再現起動異常`renderer-0pb`の解決も主張しない。
 
 `renderer-agv`、比較元`413ff7d`。read/exportのproducerを最終依存集合へ直接追加し、
 readごとの一時BTreeSetと取り込み直しを除去した。途中に未初期化の穴があれば解析全体を失敗にし、

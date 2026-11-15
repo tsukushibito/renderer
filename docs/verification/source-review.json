@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "verification_date": "2026-11-14",
+  "verification_date": "2026-11-15",
   "issue": "renderer-420",
   "baseline_commit": "f649bcf58709fd97315e3693b75beb8b790ef8be",
   "current_efficiency_cleanup": {
@@ -29,7 +29,11 @@
         "before_and_after_allocation_calls": 18,
         "before_and_after_requested_bytes": 1706449
       },
-      "not_measured": ["resident/peak memory", "CPU wall-clock time", "GPU performance"]
+      "not_measured": [
+        "resident/peak memory",
+        "CPU wall-clock time",
+        "GPU performance"
+      ]
     },
     "removed_work": [
       "Temporary producer BTreeSet and reinsertion for each read/export; mandatory initialization, dataflow, culling and scheduling remain.",
@@ -38,16 +42,34 @@
       "D3D12 root-buffer descriptor range elements and buffer-only all-None table-handle allocation; mixed root-index tables and native/resource ownership remain."
     ],
     "deferred": "All-pass CompileAccess temporary Vec projection is unchanged and assigned to renderer-7ft.2.2 by the user.",
-    "cpu_tests": {"no_features": 71, "shipping_release": 192, "development_release": 203, "rustdoc_per_configuration": 1},
+    "cpu_tests": {
+      "no_features": 71,
+      "shipping_release": 192,
+      "development_release": 203,
+      "rustdoc_per_configuration": 1
+    },
     "gpu": {
       "hardware": "NVIDIA GeForce RTX 3060, driver 610.88",
       "strict_features": "--all-features",
       "shipping_features": "--no-default-features --features presentation,d3d12",
       "configuration": "--release, --ignored --nocapture --test-threads=1; each gate in a separate sequential process",
       "filters_per_configuration": [
-        {"target": "lib", "filter": "vulkan_presentation_graph_resize_cancel_and_pending_shutdown", "passed": 1},
-        {"target": "lib", "filter": "d3d12_managed_", "passed": 2},
-        {"target": "test d3d12_graph", "filter": "m4_buffer_shared_graph_strict OR m4_buffer_shared_graph_shipping", "exact": true, "passed": 1}
+        {
+          "target": "lib",
+          "filter": "vulkan_presentation_graph_resize_cancel_and_pending_shutdown",
+          "passed": 1
+        },
+        {
+          "target": "lib",
+          "filter": "d3d12_managed_",
+          "passed": 2
+        },
+        {
+          "target": "test d3d12_graph",
+          "filter": "m4_buffer_shared_graph_strict OR m4_buffer_shared_graph_shipping",
+          "exact": true,
+          "passed": 1
+        }
       ],
       "total_tests_passed": 8,
       "wsi_sources_accepted_twice_per_configuration": 18,
@@ -55,9 +77,22 @@
       "strict_final_native_warning_error_counts": 0,
       "shipping_native_request": "Disabled; external injection absence is not claimed"
     },
-    "checks": ["fmt", "all-target Clippy -D warnings in CPU/development/shipping", "independent code and documentation review", "git diff --check"],
+    "checks": [
+      "fmt",
+      "all-target Clippy -D warnings in CPU/development/shipping",
+      "independent code and documentation review",
+      "git diff --check"
+    ],
     "logs": ".tools/agv/gates/",
-    "unexecuted": ["full Graph/transfer real-GPU suite", "shader/binding regeneration (unchanged)", "Linux/other GPU/driver", "full Bistro", "wall-clock/performance/endurance", "real native OOM/loss", "renderer-0pb reproduction or resolution"]
+    "unexecuted": [
+      "full Graph/transfer real-GPU suite",
+      "shader/binding regeneration (unchanged)",
+      "Linux/other GPU/driver",
+      "full Bistro",
+      "wall-clock/performance/endurance",
+      "real native OOM/loss",
+      "renderer-0pb reproduction or resolution"
+    ]
   },
   "review_scope": {
     "renderer_src_rust_files": 64,
@@ -472,6 +507,4092 @@
       "other GPUs/drivers",
       "full Bistro rendering/performance",
       "reproduction or resolution of renderer-0pb"
+    ]
+  },
+  "rendergraph_efficiency_improvements": {
+    "issues": [
+      "renderer-6de",
+      "renderer-ygu",
+      "renderer-xqo",
+      "renderer-0g6",
+      "renderer-9nb",
+      "renderer-agu"
+    ],
+    "baseline_commit": "1fbe51cc942d5d1a4d16275a9a09eff15e06e796",
+    "implementation_commit": "2dfca14",
+    "worker_commits": [
+      "050682696d01f619a80d20c85981fdc0bf2b9c20",
+      "c42fb14",
+      "e2a8a3a4abe8bd3b367ad6a5c5dc58b118a2741a"
+    ],
+    "environment": {
+      "platform": "Windows x64",
+      "cpu": "Intel Core i5-14600KF",
+      "rust": "rustc 1.99.0 (b940084d7 2026-09-28)",
+      "gpu": "NVIDIA GeForce RTX 3060",
+      "vulkan_driver": "610.88",
+      "cargo_incremental": "0"
+    },
+    "scaling_probe": {
+      "configuration": "rustc -O, edition2024, no features; only each measurement process pinned to lowest allowed logical CPU (affinity mask0x1); clocks/priority not fixed; before then after,8warmups and9samples per scenario",
+      "measured_scope": "Public Graph::compile consumes a prebuilt declaration graph; explicit dependency timing excludes pool and pass preparation. Preparation, Graph input build and plan destruction are outside these timing windows. Full lifecycle allocation gates are separate.",
+      "patterns": "One buffer; N independent writes, ascending/descending/fixed-seed shuffled offsets. Gapped writes have4-byte payload and4-byte holes, all passes side effects. Wide-read case uses adjacent4-byte writes then one whole-buffer read. Dependency case constructs N empty declaration passes then N-1 chain edges.",
+      "before": [
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 1024,
+          "median_ns": 226000,
+          "raw_ns": [
+            247000,
+            233700,
+            226000,
+            225400,
+            214600,
+            212900,
+            369700,
+            281000,
+            191900
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 1024,
+          "median_ns": 1787100,
+          "raw_ns": [
+            1778000,
+            1824500,
+            1806400,
+            1787100,
+            1830200,
+            1776300,
+            1783100,
+            1894000,
+            1770800
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 1024,
+          "median_ns": 956900,
+          "raw_ns": [
+            956900,
+            973600,
+            954400,
+            956100,
+            969800,
+            958500,
+            971600,
+            954300,
+            952000
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 1024,
+          "median_ns": 138900,
+          "raw_ns": [
+            138900,
+            138900,
+            138700,
+            139000,
+            138800,
+            138700,
+            147000,
+            138400,
+            142000
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 1024,
+          "median_ns": 557200,
+          "raw_ns": [
+            564100,
+            555900,
+            551000,
+            548900,
+            597600,
+            557200,
+            586700,
+            557400,
+            548600
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 2048,
+          "median_ns": 328200,
+          "raw_ns": [
+            327700,
+            326900,
+            329900,
+            328200,
+            329100,
+            328300,
+            328200,
+            330000,
+            328200
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 2048,
+          "median_ns": 7456900,
+          "raw_ns": [
+            7420500,
+            7495200,
+            7456900,
+            7453400,
+            7417200,
+            7498900,
+            7538400,
+            7479700,
+            7427800
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 2048,
+          "median_ns": 3960700,
+          "raw_ns": [
+            3960700,
+            3949400,
+            3993000,
+            3963400,
+            3999500,
+            3951100,
+            3941400,
+            4074700,
+            3954500
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 2048,
+          "median_ns": 307600,
+          "raw_ns": [
+            309000,
+            305900,
+            308600,
+            310800,
+            308200,
+            307600,
+            307400,
+            307600,
+            307200
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 2048,
+          "median_ns": 2446000,
+          "raw_ns": [
+            2432000,
+            2435600,
+            2467500,
+            2423900,
+            2475400,
+            2439700,
+            2458300,
+            2463700,
+            2446000
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 4096,
+          "median_ns": 735300,
+          "raw_ns": [
+            733200,
+            736400,
+            728900,
+            738800,
+            730200,
+            736700,
+            766400,
+            735300,
+            734200
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 4096,
+          "median_ns": 29977600,
+          "raw_ns": [
+            30013700,
+            29865000,
+            34413700,
+            29935800,
+            29842800,
+            29874800,
+            29985800,
+            29977600,
+            34600800
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 4096,
+          "median_ns": 15592400,
+          "raw_ns": [
+            15710600,
+            15617800,
+            15530500,
+            15645600,
+            15480500,
+            15554700,
+            15592400,
+            15689000,
+            15512300
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 4096,
+          "median_ns": 680800,
+          "raw_ns": [
+            679200,
+            681100,
+            680000,
+            680300,
+            680800,
+            678200,
+            684000,
+            685600,
+            715800
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 4096,
+          "median_ns": 10314300,
+          "raw_ns": [
+            10403400,
+            10282200,
+            10223700,
+            10341600,
+            10314300,
+            10206200,
+            10383100,
+            10404400,
+            10274100
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 8192,
+          "median_ns": 1641000,
+          "raw_ns": [
+            1641000,
+            1627100,
+            1771300,
+            1666100,
+            1644200,
+            1617200,
+            1638300,
+            1690500,
+            1638600
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 8192,
+          "median_ns": 120378600,
+          "raw_ns": [
+            120365700,
+            120378600,
+            120388700,
+            121272100,
+            123000300,
+            119152600,
+            118938400,
+            119826600,
+            121020800
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 8192,
+          "median_ns": 62483700,
+          "raw_ns": [
+            62483700,
+            63806100,
+            62780400,
+            61831000,
+            62111300,
+            62907700,
+            62378200,
+            62598300,
+            62445100
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 8192,
+          "median_ns": 1460600,
+          "raw_ns": [
+            1717900,
+            1470600,
+            1475000,
+            1493400,
+            1457500,
+            1457400,
+            1457400,
+            1460600,
+            1458200
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 8192,
+          "median_ns": 41770300,
+          "raw_ns": [
+            41604500,
+            41770300,
+            41527000,
+            42440200,
+            41498700,
+            41442800,
+            41810200,
+            41916100,
+            42188200
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 1024,
+          "median_ns": 254200,
+          "raw_ns": [
+            257300,
+            254200,
+            254100,
+            254000,
+            273900,
+            253800,
+            306900,
+            253500,
+            278500
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 2048,
+          "median_ns": 1593200,
+          "raw_ns": [
+            1580000,
+            1839100,
+            1589500,
+            1626300,
+            1587800,
+            1580600,
+            1593200,
+            1615900,
+            1597700
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 4096,
+          "median_ns": 6982100,
+          "raw_ns": [
+            7033800,
+            6982100,
+            7027800,
+            6930700,
+            6933400,
+            7009400,
+            6902400,
+            6945900,
+            7014400
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 8192,
+          "median_ns": 28818100,
+          "raw_ns": [
+            28670400,
+            28818800,
+            28616300,
+            29064500,
+            28803300,
+            28818100,
+            28833900,
+            31296900,
+            28248400
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 16384,
+          "median_ns": 116086600,
+          "raw_ns": [
+            116086600,
+            116388000,
+            114936300,
+            116632000,
+            115556200,
+            116436000,
+            113692800,
+            114957200,
+            116312700
+          ]
+        }
+      ],
+      "after": [
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 1024,
+          "median_ns": 554300,
+          "raw_ns": [
+            879000,
+            833700,
+            667300,
+            587900,
+            554300,
+            483600,
+            460300,
+            443900,
+            457900
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 1024,
+          "median_ns": 369400,
+          "raw_ns": [
+            370200,
+            369100,
+            368700,
+            396400,
+            368800,
+            403200,
+            369400,
+            369200,
+            372500
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 1024,
+          "median_ns": 700600,
+          "raw_ns": [
+            695300,
+            695600,
+            749500,
+            701500,
+            689400,
+            714900,
+            700200,
+            719200,
+            700600
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 1024,
+          "median_ns": 264900,
+          "raw_ns": [
+            264900,
+            265700,
+            269000,
+            265200,
+            263900,
+            263600,
+            264900,
+            264800,
+            264700
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 1024,
+          "median_ns": 473500,
+          "raw_ns": [
+            475400,
+            473400,
+            472800,
+            473700,
+            471900,
+            500700,
+            472000,
+            473500,
+            482600
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 2048,
+          "median_ns": 988200,
+          "raw_ns": [
+            1020500,
+            1044400,
+            993200,
+            987800,
+            984400,
+            986600,
+            987500,
+            989200,
+            988200
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 2048,
+          "median_ns": 817500,
+          "raw_ns": [
+            815100,
+            810600,
+            816600,
+            820900,
+            861800,
+            817500,
+            846000,
+            856700,
+            814400
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 2048,
+          "median_ns": 1622600,
+          "raw_ns": [
+            1606700,
+            1889200,
+            1622600,
+            1628000,
+            1609600,
+            1609600,
+            1609200,
+            1648000,
+            1665700
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 2048,
+          "median_ns": 584500,
+          "raw_ns": [
+            587300,
+            621800,
+            583400,
+            584500,
+            588100,
+            583600,
+            583900,
+            586900,
+            583700
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 2048,
+          "median_ns": 1084400,
+          "raw_ns": [
+            1083300,
+            1084400,
+            1080700,
+            1123300,
+            1121200,
+            1080700,
+            1087700,
+            1077500,
+            1324200
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 4096,
+          "median_ns": 2183900,
+          "raw_ns": [
+            2202200,
+            2183900,
+            2228100,
+            2190000,
+            2182800,
+            2176600,
+            2221800,
+            2170800,
+            2177000
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 4096,
+          "median_ns": 1804700,
+          "raw_ns": [
+            1818200,
+            1794200,
+            1825900,
+            1846900,
+            1792300,
+            1816600,
+            1789200,
+            1798200,
+            1804700
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 4096,
+          "median_ns": 3609300,
+          "raw_ns": [
+            3592600,
+            3609300,
+            3700000,
+            3639900,
+            3604300,
+            3662800,
+            3597400,
+            3645100,
+            3597100
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 4096,
+          "median_ns": 1290600,
+          "raw_ns": [
+            1287200,
+            1338200,
+            1289900,
+            1297800,
+            1277200,
+            1305200,
+            1290600,
+            1286800,
+            1331600
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 4096,
+          "median_ns": 2505900,
+          "raw_ns": [
+            2503800,
+            2516300,
+            2529200,
+            2502000,
+            2484900,
+            2473400,
+            2538100,
+            2505900,
+            2516400
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_ascending",
+          "passes": 8192,
+          "median_ns": 5041600,
+          "raw_ns": [
+            5041600,
+            5040100,
+            5033300,
+            5087600,
+            5025200,
+            5078200,
+            5043600,
+            5069600,
+            5023600
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_descending",
+          "passes": 8192,
+          "median_ns": 4131100,
+          "raw_ns": [
+            4083000,
+            4155000,
+            4157600,
+            4154200,
+            4079000,
+            4131800,
+            4095200,
+            4131100,
+            4101300
+          ]
+        },
+        {
+          "scenario": "fragmented_compile_shuffled",
+          "passes": 8192,
+          "median_ns": 8139600,
+          "raw_ns": [
+            8181300,
+            8168100,
+            8126000,
+            8106700,
+            8133600,
+            8139600,
+            8277100,
+            8154800,
+            8105300
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_ascending",
+          "passes": 8192,
+          "median_ns": 2807000,
+          "raw_ns": [
+            2803500,
+            2845300,
+            2808600,
+            2804700,
+            2891400,
+            2802200,
+            2796100,
+            2807000,
+            2830300
+          ]
+        },
+        {
+          "scenario": "fragmented_wide_read_compile_shuffled",
+          "passes": 8192,
+          "median_ns": 5564500,
+          "raw_ns": [
+            5529100,
+            5515000,
+            5622600,
+            5564500,
+            5654800,
+            5549700,
+            5561600,
+            5593500,
+            5572600
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 1024,
+          "median_ns": 3400,
+          "raw_ns": [
+            3500,
+            3400,
+            3400,
+            3400,
+            3500,
+            3500,
+            3500,
+            3400,
+            3400
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 2048,
+          "median_ns": 7700,
+          "raw_ns": [
+            7700,
+            7700,
+            7800,
+            7700,
+            7700,
+            7800,
+            7600,
+            8900,
+            7800
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 4096,
+          "median_ns": 13800,
+          "raw_ns": [
+            13800,
+            13800,
+            13800,
+            13800,
+            13800,
+            13800,
+            13500,
+            13600,
+            13600
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 8192,
+          "median_ns": 27800,
+          "raw_ns": [
+            27900,
+            27800,
+            27900,
+            28500,
+            27600,
+            27800,
+            35800,
+            27700,
+            27800
+          ]
+        },
+        {
+          "scenario": "explicit_dependency_insertion",
+          "passes": 16384,
+          "median_ns": 70400,
+          "raw_ns": [
+            70400,
+            70500,
+            69200,
+            70600,
+            70200,
+            69800,
+            69600,
+            70700,
+            70400
+          ]
+        }
+      ],
+      "first_unpinned_run": {
+        "before": [
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 1024,
+            "median_ns": 168000,
+            "raw_ns": [
+              196400,
+              196100,
+              178700,
+              171000,
+              168000,
+              163100,
+              163300,
+              156000,
+              148500
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 1024,
+            "median_ns": 1790000,
+            "raw_ns": [
+              1797600,
+              1790000,
+              1791400,
+              1789100,
+              1785600,
+              1794400,
+              1813700,
+              1778100,
+              1785300
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 1024,
+            "median_ns": 1094700,
+            "raw_ns": [
+              955100,
+              1094700,
+              3031800,
+              5087700,
+              3555000,
+              2525100,
+              967900,
+              985300,
+              957700
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 1024,
+            "median_ns": 138400,
+            "raw_ns": [
+              137800,
+              141100,
+              139200,
+              138200,
+              137900,
+              137600,
+              138400,
+              142100,
+              141300
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 1024,
+            "median_ns": 562500,
+            "raw_ns": [
+              621400,
+              562500,
+              562500,
+              563900,
+              556000,
+              551700,
+              557700,
+              587100,
+              551900
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 2048,
+            "median_ns": 323000,
+            "raw_ns": [
+              325100,
+              322100,
+              330700,
+              323000,
+              318400,
+              319200,
+              322000,
+              328200,
+              323500
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 2048,
+            "median_ns": 7490600,
+            "raw_ns": [
+              7473500,
+              7459100,
+              7844500,
+              7465000,
+              7547500,
+              8522700,
+              7534000,
+              7490600,
+              7439400
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 2048,
+            "median_ns": 3999800,
+            "raw_ns": [
+              4014900,
+              4437200,
+              4164300,
+              3937400,
+              4057800,
+              3990500,
+              3985400,
+              3953900,
+              3999800
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 2048,
+            "median_ns": 312500,
+            "raw_ns": [
+              316800,
+              334600,
+              309600,
+              312500,
+              308600,
+              311700,
+              312000,
+              313200,
+              314200
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 2048,
+            "median_ns": 2970400,
+            "raw_ns": [
+              2970400,
+              3405600,
+              3492300,
+              3558200,
+              2730600,
+              3364400,
+              2752400,
+              2458500,
+              2455800
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 4096,
+            "median_ns": 746000,
+            "raw_ns": [
+              754000,
+              750900,
+              738500,
+              736900,
+              744100,
+              746000,
+              748300,
+              739900,
+              755400
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 4096,
+            "median_ns": 29822800,
+            "raw_ns": [
+              29823400,
+              30147200,
+              31022100,
+              29822800,
+              32659700,
+              29744500,
+              29773000,
+              29697600,
+              29758900
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 4096,
+            "median_ns": 15475600,
+            "raw_ns": [
+              15475600,
+              15546000,
+              15487000,
+              15550300,
+              15401000,
+              15444500,
+              15518300,
+              15359200,
+              15400200
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 4096,
+            "median_ns": 683100,
+            "raw_ns": [
+              660300,
+              672400,
+              664100,
+              700500,
+              683100,
+              686500,
+              668600,
+              684400,
+              694300
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 4096,
+            "median_ns": 10134200,
+            "raw_ns": [
+              10130400,
+              10096500,
+              10134200,
+              10097400,
+              10120200,
+              10138900,
+              10185100,
+              10154100,
+              10299800
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 8192,
+            "median_ns": 1698200,
+            "raw_ns": [
+              1707600,
+              1698200,
+              1757600,
+              1968600,
+              1724700,
+              1679700,
+              1685700,
+              1692200,
+              1673400
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 8192,
+            "median_ns": 121997300,
+            "raw_ns": [
+              118861700,
+              118718100,
+              120992900,
+              121997300,
+              121379800,
+              600496800,
+              916304800,
+              1076970500,
+              1117048500
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 8192,
+            "median_ns": 439065300,
+            "raw_ns": [
+              144689500,
+              601500300,
+              628196800,
+              387348100,
+              736293900,
+              287773000,
+              439065300,
+              412093700,
+              477422300
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 8192,
+            "median_ns": 14918800,
+            "raw_ns": [
+              14918800,
+              14943500,
+              14501300,
+              14901100,
+              15257800,
+              16723600,
+              15250400,
+              14459000,
+              13652700
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 8192,
+            "median_ns": 295066200,
+            "raw_ns": [
+              396314500,
+              318759900,
+              484130500,
+              144135200,
+              250790600,
+              295066200,
+              377776000,
+              123787200,
+              111903300
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 1024,
+            "median_ns": 1038500,
+            "raw_ns": [
+              1180400,
+              1166800,
+              1125100,
+              1069700,
+              1038500,
+              1000700,
+              966600,
+              933900,
+              899800
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 2048,
+            "median_ns": 13416200,
+            "raw_ns": [
+              14486400,
+              20341300,
+              19581600,
+              18164700,
+              13416200,
+              9012300,
+              5807200,
+              4180500,
+              3507900
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 4096,
+            "median_ns": 15406300,
+            "raw_ns": [
+              61636800,
+              15406300,
+              14484800,
+              14732900,
+              14621700,
+              14894400,
+              39030500,
+              78435700,
+              76783100
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 8192,
+            "median_ns": 262934500,
+            "raw_ns": [
+              251880500,
+              112092700,
+              212970600,
+              315194500,
+              311112100,
+              262934500,
+              215515000,
+              310723000,
+              283235200
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 16384,
+            "median_ns": 970651300,
+            "raw_ns": [
+              1096543500,
+              911483000,
+              983971700,
+              1018131000,
+              590179700,
+              738623900,
+              527504900,
+              1217431700,
+              970651300
+            ]
+          }
+        ],
+        "after": [
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 1024,
+            "median_ns": 478600,
+            "raw_ns": [
+              768400,
+              671200,
+              608400,
+              553800,
+              478600,
+              459100,
+              442400,
+              446100,
+              440000
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 1024,
+            "median_ns": 375600,
+            "raw_ns": [
+              372800,
+              377500,
+              375200,
+              376400,
+              372900,
+              375600,
+              400100,
+              372800,
+              379100
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 1024,
+            "median_ns": 734000,
+            "raw_ns": [
+              740900,
+              724600,
+              757000,
+              734000,
+              722000,
+              736200,
+              722700,
+              734300,
+              732100
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 1024,
+            "median_ns": 266500,
+            "raw_ns": [
+              268900,
+              265100,
+              267000,
+              264200,
+              264600,
+              270100,
+              266800,
+              265900,
+              266500
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 1024,
+            "median_ns": 508100,
+            "raw_ns": [
+              532700,
+              505100,
+              511700,
+              508100,
+              500500,
+              505900,
+              508700,
+              514400,
+              503400
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 2048,
+            "median_ns": 1002600,
+            "raw_ns": [
+              1010600,
+              1011800,
+              997100,
+              1002000,
+              1002600,
+              1014700,
+              998100,
+              993500,
+              1005900
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 2048,
+            "median_ns": 833300,
+            "raw_ns": [
+              841100,
+              841500,
+              833300,
+              833500,
+              843400,
+              824900,
+              833300,
+              823300,
+              819300
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 2048,
+            "median_ns": 1625300,
+            "raw_ns": [
+              1625300,
+              1596000,
+              1622700,
+              1602300,
+              1628400,
+              1626700,
+              1640200,
+              1628200,
+              1623200
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 2048,
+            "median_ns": 597100,
+            "raw_ns": [
+              586400,
+              590400,
+              585600,
+              586600,
+              597100,
+              607500,
+              600100,
+              597800,
+              611800
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 2048,
+            "median_ns": 1134000,
+            "raw_ns": [
+              1156100,
+              1247400,
+              1544300,
+              1117200,
+              1121200,
+              1137800,
+              1123000,
+              1117600,
+              1134000
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 4096,
+            "median_ns": 2193600,
+            "raw_ns": [
+              2193600,
+              2183500,
+              2193000,
+              2195600,
+              2209300,
+              2207400,
+              2189100,
+              2221800,
+              2186300
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 4096,
+            "median_ns": 1782400,
+            "raw_ns": [
+              1781700,
+              1791000,
+              1792500,
+              1779700,
+              1773500,
+              1785900,
+              1803100,
+              1782400,
+              1773000
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 4096,
+            "median_ns": 3639700,
+            "raw_ns": [
+              3643400,
+              3570900,
+              3639700,
+              3667000,
+              3625100,
+              3628400,
+              3637800,
+              3653800,
+              3704900
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 4096,
+            "median_ns": 1334600,
+            "raw_ns": [
+              1331800,
+              1359500,
+              1334600,
+              1334000,
+              1352200,
+              1338500,
+              1330800,
+              1354500,
+              1325400
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 4096,
+            "median_ns": 2527100,
+            "raw_ns": [
+              2534400,
+              2527100,
+              2516300,
+              2504700,
+              2540300,
+              2532900,
+              2524500,
+              2537900,
+              2526100
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_ascending",
+            "passes": 8192,
+            "median_ns": 5026000,
+            "raw_ns": [
+              5024500,
+              5050300,
+              5111800,
+              5026000,
+              4979500,
+              5028000,
+              4960800,
+              5000800,
+              5027700
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_descending",
+            "passes": 8192,
+            "median_ns": 4089200,
+            "raw_ns": [
+              4084400,
+              4086900,
+              4089200,
+              4109800,
+              4126300,
+              4110800,
+              4056900,
+              4059500,
+              4140600
+            ]
+          },
+          {
+            "scenario": "fragmented_compile_shuffled",
+            "passes": 8192,
+            "median_ns": 8096900,
+            "raw_ns": [
+              8154700,
+              8092000,
+              8118200,
+              8122800,
+              8119000,
+              8065700,
+              8085800,
+              8096900,
+              8085500
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_ascending",
+            "passes": 8192,
+            "median_ns": 2846600,
+            "raw_ns": [
+              2946100,
+              2918800,
+              2882400,
+              2800400,
+              2806700,
+              2819000,
+              2846600,
+              2809700,
+              2849100
+            ]
+          },
+          {
+            "scenario": "fragmented_wide_read_compile_shuffled",
+            "passes": 8192,
+            "median_ns": 5599200,
+            "raw_ns": [
+              5565200,
+              5512300,
+              6233900,
+              5538300,
+              5599200,
+              5769600,
+              5616700,
+              5604900,
+              5570900
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 1024,
+            "median_ns": 3400,
+            "raw_ns": [
+              3400,
+              3400,
+              3400,
+              3400,
+              3400,
+              3300,
+              3400,
+              3400,
+              3500
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 2048,
+            "median_ns": 7500,
+            "raw_ns": [
+              7500,
+              7800,
+              7500,
+              7300,
+              7500,
+              7400,
+              7500,
+              7500,
+              7500
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 4096,
+            "median_ns": 15200,
+            "raw_ns": [
+              15400,
+              15200,
+              15300,
+              15200,
+              15300,
+              15000,
+              13500,
+              13600,
+              13600
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 8192,
+            "median_ns": 29900,
+            "raw_ns": [
+              29900,
+              29900,
+              29800,
+              29900,
+              29900,
+              29100,
+              29200,
+              29900,
+              30100
+            ]
+          },
+          {
+            "scenario": "explicit_dependency_insertion",
+            "passes": 16384,
+            "median_ns": 70000,
+            "raw_ns": [
+              69200,
+              70100,
+              70000,
+              68900,
+              70000,
+              69900,
+              72000,
+              69400,
+              70000
+            ]
+          }
+        ],
+        "note": "Preserved initial8warmup/9sample run. Unpinned timings varied; contributions from scheduling, clocks and background work were not isolated. The same process affinity was added to both measurement executables, not to the Renderer."
+      },
+      "source_sha256": "86bc50fe5c2cd19670f0c8325ae50a5cc2fc04bc0025ae94b1c9062de52c258f",
+      "harness_source_utf8": "use renderer::graph::{\n    Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, GraphCapacity, GraphPool,\n    PassKind,\n};\nuse std::{hint::black_box, time::Instant};\n\nconst WARMUP: usize = 8;\n\n#[cfg(windows)]\nfn pin_measurement_process() {\n    use std::ffi::c_void;\n    unsafe extern \"system\" {\n        fn GetCurrentProcess() -> *mut c_void;\n        fn GetProcessAffinityMask(process: *mut c_void, process_mask: *mut usize, system_mask: *mut usize) -> i32;\n        fn SetProcessAffinityMask(process: *mut c_void, mask: usize) -> i32;\n    }\n    let mut allowed = 0usize;\n    let mut system = 0usize;\n    // Only this probe process is pinned, identically for before and after.\n    unsafe {\n        let process = GetCurrentProcess();\n        assert_ne!(GetProcessAffinityMask(process, &mut allowed, &mut system), 0);\n        assert_ne!(allowed, 0);\n        let selected = allowed & allowed.wrapping_neg();\n        assert_ne!(SetProcessAffinityMask(process, selected), 0);\n        eprintln!(\"measurement_process_affinity_mask={selected:#x}\");\n    }\n}\n\nfn capacity(n: usize) -> GraphCapacity {\n    GraphCapacity {\n        resources: 1,\n        passes: n,\n        accesses: n,\n        draws: 0,\n        dependencies: n,\n        initial_ranges: 0,\n        name_bytes: n + 1,\n        upload_bytes: 0,\n        edges: n,\n        segments: 2 * n + 1,\n        readers: n,\n    }\n}\n\nfn report(scenario: &str, n: usize, raw: &[u128]) {\n    let mut sorted = raw.to_vec();\n    sorted.sort_unstable();\n    println!(\n        r#\"{{\"scenario\":\"{scenario}\",\"passes\":{n},\"median_ns\":{},\"raw_ns\":{raw:?}}}\"#,\n        sorted[sorted.len() / 2]\n    );\n}\n\nfn intervals(n: usize, order: &str, wide_read: bool) {\n    let mut offsets: Vec<_> = (0..n).collect();\n    if order == \"descending\" {\n        offsets.reverse();\n    } else if order == \"shuffled\" {\n        let mut seed = 0x6a09_e667_f3bc_c909_u64;\n        for index in (1..n).rev() {\n            seed ^= seed << 13;\n            seed ^= seed >> 7;\n            seed ^= seed << 17;\n            offsets.swap(index, (seed % (index as u64 + 1)) as usize);\n        }\n    }\n    let mut pool = GraphPool::new(capacity(n + 1), 1).unwrap();\n    let mut raw = Vec::with_capacity(9);\n    for sample in 0..WARMUP + 9 {\n        let mut graph = pool.begin().unwrap();\n        let stride = if wide_read { 4 } else { 8 };\n        let buffer = graph.buffer(\"b\", BufferDesc { size: n as u64 * stride }).unwrap();\n        for &offset in &offsets {\n            let start = offset as u64 * stride;\n            graph.declare_pass(\"p\", PassKind::Copy, &[Access {\n                resource: buffer.into(),\n                range: AccessRange::Buffer(start..start + 4),\n                kind: AccessKind::Write,\n                purpose: AccessPurpose::CopyDestination,\n            }], true).unwrap();\n        }\n        if wide_read {\n            graph.declare_pass(\"r\", PassKind::Copy, &[Access {\n                resource: buffer.into(),\n                range: AccessRange::Buffer(0..n as u64 * stride),\n                kind: AccessKind::Read,\n                purpose: AccessPurpose::CopySource,\n            }], true).unwrap();\n        }\n        let started = Instant::now();\n        let plan = graph.compile().unwrap();\n        let elapsed = started.elapsed().as_nanos();\n        assert_eq!(plan.pass_count(), n + usize::from(wide_read));\n        black_box(&plan);\n        if sample >= WARMUP { raw.push(elapsed); }\n    }\n    let scenario = if wide_read { \"fragmented_wide_read_compile\" } else { \"fragmented_compile\" };\n    report(&format!(\"{scenario}_{order}\"), n, &raw);\n}\n\nfn dependencies(n: usize) {\n    let mut pool = GraphPool::new(capacity(n), 1).unwrap();\n    let mut handles = Vec::with_capacity(n);\n    let mut raw = Vec::with_capacity(9);\n    for sample in 0..WARMUP + 9 {\n        let mut graph = pool.begin().unwrap();\n        handles.clear();\n        for _ in 0..n {\n            handles.push(graph.declare_pass(\"p\", PassKind::Copy, &[], true).unwrap());\n        }\n        let started = Instant::now();\n        for p in 1..n {\n            graph.depends_on(handles[p], handles[p - 1]).unwrap();\n        }\n        let elapsed = started.elapsed().as_nanos();\n        black_box(&graph);\n        if sample >= WARMUP { raw.push(elapsed); }\n    }\n    report(\"explicit_dependency_insertion\", n, &raw);\n}\n\nfn main() {\n    #[cfg(windows)]\n    pin_measurement_process();\n    for n in [1024, 2048, 4096, 8192] {\n        for order in [\"ascending\", \"descending\", \"shuffled\"] { intervals(n, order, false); }\n        for order in [\"ascending\", \"shuffled\"] { intervals(n, order, true); }\n    }\n    for n in [1024, 2048, 4096, 8192, 16384] { dependencies(n); }\n}\n",
+      "reproduction": [
+        "Write harness_source_utf8 to scaling.rs; create a detached baseline checkout at baseline_commit with Git LFS smudge disabled.",
+        "rustc -O --edition 2024 --crate-name renderer --crate-type rlib <baseline-checkout>/crates/renderer/src/lib.rs -o librenderer-before.rlib",
+        "rustc -O --edition 2024 --crate-name renderer --crate-type rlib crates/renderer/src/lib.rs -o librenderer-after.rlib",
+        "rustc -O --edition 2024 --extern renderer=librenderer-before.rlib scaling.rs -o scaling-before.exe",
+        "rustc -O --edition 2024 --extern renderer=librenderer-after.rlib scaling.rs -o scaling-after.exe",
+        "Run scaling-before.exe then scaling-after.exe, separately from builds and GPU gates; keep all raw samples."
+      ],
+      "limits": [
+        "Synthetic CPU workload; no GPU, displayed FPS or full application speedup claim.",
+        "Ascending array-friendly compile and broad-read ascending inputs get slower; record both directions.",
+        "No fixed wall-clock threshold in CI. AVL metadata and updates cost more than the favorable old array case."
+      ]
+    },
+    "native_visibility": {
+      "same_scope_buffer_read_dependency_count_before": 8,
+      "same_scope_buffer_read_dependency_count_after": 1,
+      "scope": "CPU regression plus strict/shipping pending buffer import, reads, subsequent partial write and readback contents",
+      "retained": "Last writer, aggregate prior reader scope, layouts, revisions, lifetime and failure handling",
+      "exact_read_pair_extra_bytes_per_snapshot": 16,
+      "contract": "https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdPipelineBarrier2.html"
+    },
+    "capacity_api": "GraphError.capacity returns allocation-free GraphCapacityError {kind,limit,required}; all11GraphCapacity dimensions, Graph slots and import ranges/slots are classified.",
+    "verification": [
+      {
+        "name": "fmt",
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.719,
+        "raw_log": ".tools/graph-review/gates/fmt.log"
+      },
+      {
+        "name": "clippy-cpu",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--no-default-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.28,
+        "raw_log": ".tools/graph-review/gates/clippy-cpu.log"
+      },
+      {
+        "name": "clippy-strict",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 5.447,
+        "raw_log": ".tools/graph-review/gates/clippy-strict.log"
+      },
+      {
+        "name": "clippy-shipping",
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12,memory-profiling",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 3.419,
+        "raw_log": ".tools/graph-review/gates/clippy-shipping.log"
+      },
+      {
+        "name": "test-cpu",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace",
+          "--no-default-features",
+          "--",
+          "--quiet"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 4.429,
+        "raw_log": ".tools/graph-review/gates/test-cpu.log",
+        "passed_including_rustdoc": 84,
+        "ignored": 0
+      },
+      {
+        "name": "test-strict",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "--workspace",
+          "--all-features",
+          "--",
+          "--quiet"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 32.6,
+        "raw_log": ".tools/graph-review/gates/test-strict.log",
+        "passed_including_rustdoc": 242,
+        "ignored": 64
+      },
+      {
+        "name": "test-shipping",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "--workspace",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12",
+          "--",
+          "--quiet"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 26.344,
+        "raw_log": ".tools/graph-review/gates/test-shipping.log",
+        "passed_including_rustdoc": 226,
+        "ignored": 59
+      },
+      {
+        "name": "gpu-vulkan-strict",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--all-features",
+          "::vulkan_",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 15.01,
+        "raw_log": ".tools/graph-review/gates/gpu-vulkan-strict.log",
+        "passed_including_rustdoc": 52,
+        "ignored": 0
+      },
+      {
+        "name": "gpu-d3d12-strict",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--all-features",
+          "buffer_graph_lifetimes_partial_creation_and_pending_drop",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.368,
+        "raw_log": ".tools/graph-review/gates/gpu-d3d12-strict.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "gpu-shared-buffer-strict",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--test",
+          "d3d12_graph",
+          "--all-features",
+          "m4_buffer_shared_graph_strict",
+          "--",
+          "--ignored",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 1.005,
+        "raw_log": ".tools/graph-review/gates/gpu-shared-buffer-strict.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "gpu-shipping-readers",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12",
+          "vulkan_graph_repeated_reader_visibility",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.405,
+        "raw_log": ".tools/graph-review/gates/gpu-shipping-readers.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "gpu-shipping-readback",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12",
+          "vulkan_graph_readback_identity_survives_reordered_execution",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.447,
+        "raw_log": ".tools/graph-review/gates/gpu-shipping-readback.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "gpu-shipping-pipeline",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12",
+          "vulkan_graph_full_m2_composite_and_pending_handoff",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 101,
+        "elapsed_seconds": 0.379,
+        "raw_log": ".tools/graph-review/gates/gpu-shipping-pipeline.log",
+        "classification": "invalid invocation of an existing strict-only test; no product change or check suppression",
+        "resolution": "full M2 passed in strict suite; shipping repeated readers/readback, shipping mesh pixels and public Raster/Compute/Composite full-lifecycle memory gates passed"
+      },
+      {
+        "name": "gpu-shared-buffer-shipping",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--test",
+          "d3d12_graph",
+          "--no-default-features",
+          "--features",
+          "vulkan,d3d12",
+          "m4_buffer_shared_graph_shipping",
+          "--",
+          "--ignored",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 5.38,
+        "raw_log": ".tools/graph-review/gates/gpu-shared-buffer-shipping.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "memory-shipping",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--test",
+          "frame_memory",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12,memory-profiling",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 6.333,
+        "raw_log": ".tools/graph-review/gates/memory-shipping.log",
+        "passed_including_rustdoc": 4,
+        "ignored": 0
+      },
+      {
+        "name": "memory-wsi-shipping",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "presentation,memory-profiling",
+          "vulkan_presentation_graph_resize_cancel_and_pending_shutdown",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 26.38,
+        "raw_log": ".tools/graph-review/gates/memory-wsi-shipping.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "gpu-shipping-mesh",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "presentation,d3d12",
+          "vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.468,
+        "raw_log": ".tools/graph-review/gates/gpu-shipping-mesh.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      },
+      {
+        "name": "memory-retired-mesh-shipping",
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--release",
+          "-p",
+          "renderer",
+          "--lib",
+          "--no-default-features",
+          "--features",
+          "presentation,memory-profiling",
+          "vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance",
+          "--",
+          "--ignored",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "exit_code": 0,
+        "elapsed_seconds": 0.441,
+        "raw_log": ".tools/graph-review/gates/memory-retired-mesh-shipping.log",
+        "passed_including_rustdoc": 1,
+        "ignored": 0
+      }
+    ],
+    "current_memory_reports": [
+      {
+        "raw_log": ".tools/graph-review/gates/memory-shipping.log",
+        "report": {
+          "boundary_cases": [
+            "snapshot/graph busy",
+            "draw/resource capacity",
+            "unbuilt snapshot/uncompiled graph cancel"
+          ],
+          "counter_semantics": {
+            "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
+            "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
+            "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
+            "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
+            "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
+            "scope": "overlapping categories must not be summed as physical allocations; driver/OS/native allocations outside the configured callbacks are unobserved",
+            "vma_host": "requests through host callbacks supplied to VMA, including callbacks forwarded to Vulkan; VMA/driver origin is not separated; forwarded independently of the Rust global allocator"
+          },
+          "coverage": "Rust snapshot/build/compile and all normal-frame owners dropped; no native execution or presentation",
+          "draw_counts": [
+            0,
+            1,
+            4,
+            2
+          ],
+          "extra_compute_passes": [
+            0,
+            1,
+            2
+          ],
+          "features": {
+            "d3d12": true,
+            "d3d12_diagnostics": false,
+            "debug_assertions": false,
+            "development_validation": false,
+            "graph_diagnostics": false,
+            "presentation": true,
+            "vulkan": true,
+            "vulkan_diagnostics": false
+          },
+          "graph_capacity": {
+            "accesses": 32,
+            "dependencies": 8,
+            "draws": 4,
+            "edges": 128,
+            "initial_ranges": 16,
+            "name_bytes": 512,
+            "passes": 8,
+            "readers": 128,
+            "resources": 8,
+            "segments": 128,
+            "upload_bytes": 128
+          },
+          "measured_frames": 24,
+          "mode": "require_zero",
+          "phases_snapshot_build_compile_return": [
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "retained_frame_slots": 3,
+          "scenario": "cpu_snapshot_build_compile_return",
+          "shutdown_outside_normal_frames": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              132
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              153144
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "startup_positive_control": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              134,
+              0,
+              0,
+              2
+            ],
+            "rust_requested_bytes": [
+              153240,
+              0,
+              0,
+              96
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "total": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "warmup_frames": 12
+        }
+      },
+      {
+        "raw_log": ".tools/graph-review/gates/memory-shipping.log",
+        "report": {
+          "boundary_cases": {
+            "detached_submission_runtime_poll": true,
+            "native_busy_rejection": true,
+            "readback_wrong_length_preserves_result": true,
+            "unprepared_64byte_buffer_rejection": true,
+            "unsubmitted_recording_cancel": true
+          },
+          "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit fence waits/polls",
+          "completed_readbacks_held": 3,
+          "completed_unconsumed_drop_submissions": 1,
+          "copy_passes": [
+            0,
+            1,
+            2,
+            1
+          ],
+          "counter_semantics": {
+            "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
+            "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
+            "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
+            "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
+            "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
+            "scope": "overlapping categories must not be summed as physical allocations; driver/OS/native allocations outside the configured callbacks are unobserved",
+            "vma_host": "requests through host callbacks supplied to VMA, including callbacks forwarded to Vulkan; VMA/driver origin is not separated; forwarded independently of the Rust global allocator"
+          },
+          "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI",
+          "detached_reap_submissions": 1,
+          "features": {
+            "d3d12": true,
+            "d3d12_diagnostics": false,
+            "debug_assertions": false,
+            "development_validation": false,
+            "graph_diagnostics": false,
+            "presentation": true,
+            "vulkan": true,
+            "vulkan_diagnostics": false
+          },
+          "frame_count_excludes_lifetime_boundary_submissions": true,
+          "graph_capacity": {
+            "accesses": 32,
+            "dependencies": 8,
+            "draws": 4,
+            "edges": 128,
+            "initial_ranges": 16,
+            "name_bytes": 512,
+            "passes": 8,
+            "readers": 128,
+            "resources": 8,
+            "segments": 128,
+            "upload_bytes": 128
+          },
+          "graph_slots": 12,
+          "input_versions": 4,
+          "last_case_is_disjoint_self_copy": true,
+          "measured_frames": 48,
+          "mode": "require_zero",
+          "native_capacity": {
+            "buffer_bytes": 32,
+            "buffers": 2,
+            "executions": 3,
+            "operations": 4,
+            "readback_bytes": 16,
+            "resources": 2,
+            "results": 6,
+            "scratch_bytes": 16,
+            "upload_bytes": 32
+          },
+          "native_request": "Disabled",
+          "pending_capacity_exercised": 3,
+          "phases_build_compile_submit_complete_return": [
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                198
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "retained_provenance_graph_slots_after_window": 0,
+          "scenario": "d3d12_buffer_full_lifecycle",
+          "shutdown_outside_normal_frames": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              9,
+              0,
+              18,
+              0,
+              18,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              488
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              604472
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "startup_positive_control": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              9,
+              0,
+              18,
+              0,
+              18,
+              0,
+              0,
+              0,
+              102
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              489,
+              0,
+              1,
+              0
+            ],
+            "rust_requested_bytes": [
+              604572,
+              0,
+              24,
+              0
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "total": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              198
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "unobserved": "driver/OS/native allocations outside the configured callbacks; D3D12 bootstrap and test-only legacy factories are outside native hook coverage",
+          "warmup_frames": 24
+        }
+      },
+      {
+        "raw_log": ".tools/graph-review/gates/memory-shipping.log",
+        "report": {
+          "boundary_cases": {
+            "detached_submission_runtime_poll": false,
+            "native_busy_rejection": true,
+            "readback_wrong_length_preserves_result": true,
+            "unprepared_64byte_buffer_rejection": true,
+            "unsubmitted_recording_cancel": false
+          },
+          "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit fence waits/polls",
+          "completed_readbacks_held": 3,
+          "completed_unconsumed_drop_submissions": 1,
+          "copy_passes": [
+            0,
+            1,
+            2,
+            1
+          ],
+          "counter_semantics": {
+            "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
+            "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
+            "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
+            "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
+            "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
+            "scope": "overlapping categories must not be summed as physical allocations; driver/OS/native allocations outside the configured callbacks are unobserved",
+            "vma_host": "requests through host callbacks supplied to VMA, including callbacks forwarded to Vulkan; VMA/driver origin is not separated; forwarded independently of the Rust global allocator"
+          },
+          "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI",
+          "detached_reap_submissions": 0,
+          "features": {
+            "d3d12": true,
+            "d3d12_diagnostics": false,
+            "debug_assertions": false,
+            "development_validation": false,
+            "graph_diagnostics": false,
+            "presentation": true,
+            "vulkan": true,
+            "vulkan_diagnostics": false
+          },
+          "frame_count_excludes_lifetime_boundary_submissions": true,
+          "graph_capacity": {
+            "accesses": 32,
+            "dependencies": 8,
+            "draws": 4,
+            "edges": 128,
+            "initial_ranges": 16,
+            "name_bytes": 512,
+            "passes": 8,
+            "readers": 128,
+            "resources": 8,
+            "segments": 128,
+            "upload_bytes": 128
+          },
+          "graph_slots": 12,
+          "input_versions": 4,
+          "last_case_is_disjoint_self_copy": true,
+          "measured_frames": 48,
+          "mode": "require_zero",
+          "native_capacity": {
+            "additional_buffer_classes": [
+              {
+                "bytes": 32,
+                "instances": 3
+              },
+              {
+                "bytes": 16,
+                "instances": 3
+              }
+            ],
+            "execution_slots": 3,
+            "initialized_ranges_per_resource": 8,
+            "max_shader_bindings": 8,
+            "metadata_slots": 16,
+            "provenance_segments_per_resource": 8,
+            "range_snapshots": 32,
+            "resource_capacity": 8,
+            "result_slots": 6,
+            "staging_bytes": 16384,
+            "staging_ranges": 32,
+            "work_slots": 3
+          },
+          "native_request": "Disabled",
+          "pending_capacity_exercised": 3,
+          "phases_build_compile_submit_complete_return": [
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                2
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                98
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "retained_provenance_graph_slots_after_window": 0,
+          "scenario": "vulkan_buffer_full_lifecycle",
+          "shutdown_outside_normal_frames": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              11,
+              0,
+              8,
+              0,
+              3,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              712
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              674283
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              66
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "startup_positive_control": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              11,
+              0,
+              8,
+              0,
+              3,
+              0,
+              0,
+              0,
+              52
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              760,
+              0,
+              2,
+              48
+            ],
+            "rust_requested_bytes": [
+              683027,
+              0,
+              60,
+              8774
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              41,
+              0,
+              7
+            ],
+            "vma_host_requested_bytes": [
+              513888,
+              0,
+              0
+            ]
+          },
+          "total": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              100
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "unobserved": "driver/OS/native allocations outside the configured callbacks; D3D12 bootstrap and test-only legacy factories are outside native hook coverage",
+          "warmup_frames": 24
+        }
+      },
+      {
+        "raw_log": ".tools/graph-review/gates/memory-shipping.log",
+        "report": {
+          "additional_working_set_images": {
+            "depth32": 3,
+            "rgba8": 12
+          },
+          "boundary_cases": [
+            "compiled/uncompiled prepared cancel",
+            "prepared frame capacity/busy rejection"
+          ],
+          "caller": "fixed pending/result arrays and 1024-byte output; explicit per-frame fence waits only when pending array fills; report outside measurement",
+          "completed_readbacks_held": 3,
+          "counter_semantics": {
+            "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
+            "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
+            "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
+            "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
+            "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
+            "scope": "overlapping categories must not be summed as physical allocations; driver/OS/native allocations outside the configured callbacks are unobserved",
+            "vma_host": "requests through host callbacks supplied to VMA, including callbacks forwarded to Vulkan; VMA/driver origin is not separated; forwarded independently of the Rust global allocator"
+          },
+          "coverage": "ordinary public Engine snapshot/build/compile, resident mesh Raster, image Compute/Composite, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
+          "draw_counts": [
+            0,
+            1,
+            4,
+            2
+          ],
+          "engine_graph_slots": 12,
+          "engine_prepared_frames": 3,
+          "extent": [
+            16,
+            16
+          ],
+          "features": {
+            "d3d12": true,
+            "d3d12_diagnostics": false,
+            "debug_assertions": false,
+            "development_validation": false,
+            "graph_diagnostics": false,
+            "presentation": true,
+            "vulkan": true,
+            "vulkan_diagnostics": false
+          },
+          "graph_capacity": {
+            "accesses": 32,
+            "dependencies": 8,
+            "draws": 4,
+            "edges": 128,
+            "initial_ranges": 16,
+            "name_bytes": 512,
+            "passes": 8,
+            "readers": 128,
+            "resources": 8,
+            "segments": 128,
+            "upload_bytes": 128
+          },
+          "invert_passes": [
+            0,
+            1,
+            2
+          ],
+          "measured_frames": 48,
+          "mode": "require_zero",
+          "pending_frames": 3,
+          "phases_snapshot_build_compile_submit_complete_return": [
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                96
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "overflowed": false,
+              "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "rust_requested_bytes": [
+                0,
+                0,
+                0,
+                0
+              ],
+              "vma_host_calls_alloc_realloc_free": [
+                0,
+                0,
+                0
+              ],
+              "vma_host_requested_bytes": [
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "scenario": "vulkan_engine_image_full_lifecycle",
+          "shutdown_outside_normal_frames": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              38,
+              0,
+              19,
+              0,
+              3,
+              0,
+              48,
+              0
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              2806
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              1423731
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              100
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "startup_positive_control": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              43,
+              5,
+              19,
+              0,
+              3,
+              0,
+              48,
+              0,
+              52
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              2894,
+              0,
+              2,
+              88
+            ],
+            "rust_requested_bytes": [
+              1440243,
+              0,
+              60,
+              16542
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              53,
+              0,
+              7
+            ],
+            "vma_host_requested_bytes": [
+              535224,
+              0,
+              0
+            ]
+          },
+          "total": {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              96
+            ],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "rust_requested_bytes": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "vma_host_calls_alloc_realloc_free": [
+              0,
+              0,
+              0
+            ],
+            "vma_host_requested_bytes": [
+              0,
+              0,
+              0
+            ]
+          },
+          "unobserved": "driver/OS/native allocations outside the configured callbacks",
+          "verified_pixels": {
+            "background": "four corners",
+            "left": [
+              5,
+              8
+            ],
+            "right": [
+              10,
+              8
+            ]
+          },
+          "warmup_frames": 24,
+          "x_translations": [
+            -0.25,
+            0.25
+          ]
+        }
+      },
+      {
+        "raw_log": ".tools/graph-review/gates/memory-wsi-shipping.log",
+        "report": {
+          "caller": {
+            "native": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                950,
+                388664
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                9,
+                1500
+              ],
+              [
+                918,
+                44594
+              ]
+            ],
+            "vma_host": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          },
+          "caller_scope": "synchronous winit/Window Rust work on the isolated fixture thread, with no Renderer Rust workers; native/VMA events are never excluded from the complete normal epoch",
+          "counter_order": {
+            "native": [
+              "object_create",
+              "object_destroy",
+              "resource_create",
+              "resource_destroy",
+              "memory_allocate",
+              "memory_free",
+              "descriptor_allocate",
+              "descriptor_free",
+              "reset"
+            ],
+            "rust": [
+              "allocate",
+              "allocate_zeroed",
+              "reallocate",
+              "deallocate"
+            ],
+            "vma_host": [
+              "allocate",
+              "reallocate",
+              "deallocate"
+            ]
+          },
+          "explicitly_collected_old_swapchains_after_normal": 1,
+          "extra_shutdown_accepted_presents": 1,
+          "features": {
+            "development_validation": false,
+            "gpu_profiling": false,
+            "graph_diagnostics": false,
+            "memory_profiling": true,
+            "optimized": true,
+            "vulkan_diagnostics": false
+          },
+          "host_callback_scope": "VMA and driver host requests routed through installed allocation callbacks; request origin is not distinguished",
+          "mode": "require_zero",
+          "normal": {
+            "accepted_presents": 36,
+            "changing_inputs": "transform, tint, clear and zero/one/two Invert passes; every source is built and compiled",
+            "extent": [
+              160,
+              112
+            ],
+            "max_held_cpu_results": 3,
+            "max_live_readbacks": 6,
+            "max_pending_graphs": 3,
+            "retained_eligible_old_swapchains": 1,
+            "scope": "all Renderer preparation checks, build/compile, submission, GPU/present polling, CPU readback, metadata/result/output return and final present drain",
+            "sources": 18,
+            "verified_readbacks": 18
+          },
+          "normal_caller": {
+            "native": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                316,
+                7584
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                316,
+                7584
+              ]
+            ],
+            "vma_host": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          },
+          "normal_process": {
+            "native": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              576
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                316,
+                7584
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                316,
+                7584
+              ]
+            ],
+            "vma_host": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          },
+          "overall_process": {
+            "native": [
+              172,
+              172,
+              94,
+              94,
+              3,
+              3,
+              771,
+              771,
+              610
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                2782,
+                1453356
+              ],
+              [
+                2,
+                1444
+              ],
+              [
+                11,
+                1560
+              ],
+              [
+                2753,
+                1110808
+              ]
+            ],
+            "vma_host": [
+              [
+                130,
+                648144
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                334,
+                0
+              ]
+            ]
+          },
+          "prepared": {
+            "depth_instances_per_extent": 3,
+            "frame_pools": {
+              "initialized_ranges_per_resource": 16,
+              "metadata_slots": 12,
+              "provenance_segments_per_resource": 32,
+              "range_snapshots": 256,
+              "result_slots": 8,
+              "work_slots": 6
+            },
+            "graph": {
+              "accesses": 32,
+              "dependencies": 16,
+              "draws": 4,
+              "edges": 64,
+              "initial_ranges": 16,
+              "name_bytes": 1024,
+              "passes": 8,
+              "readers": 128,
+              "resources": 8,
+              "segments": 64,
+              "upload_bytes": 256
+            },
+            "graph_slots": 12,
+            "image_extents": [
+              [
+                128,
+                96
+              ],
+              [
+                160,
+                112
+              ],
+              [
+                176,
+                120
+              ],
+              [
+                144,
+                104
+              ],
+              [
+                192,
+                128
+              ]
+            ],
+            "mesh_graph_slots": 1,
+            "presentation": {
+              "desired_images": 3,
+              "max_frames": 3,
+              "max_retired_swapchains": 2,
+              "vsync_normal": true
+            },
+            "rgba8_instances_per_extent": 15,
+            "runtime": {
+              "execution_slots": 6,
+              "max_shader_bindings": 64,
+              "resource_capacity": 128,
+              "staging_bytes_each": 4194304,
+              "staging_ranges": 256
+            }
+          },
+          "renderer_normal": {
+            "native": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              576
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "vma_host": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          },
+          "renderer_normal_actions": {
+            "native": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              576
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "vma_host": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          },
+          "renderer_setup_change": {
+            "native": [
+              172,
+              23,
+              94,
+              0,
+              3,
+              0,
+              771,
+              0,
+              29
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                1832,
+                1064692
+              ],
+              [
+                2,
+                1444
+              ],
+              [
+                2,
+                60
+              ],
+              [
+                225,
+                119019
+              ]
+            ],
+            "vma_host": [
+              [
+                130,
+                648144
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                7,
+                0
+              ]
+            ]
+          },
+          "renderer_shutdown": {
+            "native": [
+              0,
+              149,
+              0,
+              94,
+              0,
+              3,
+              0,
+              771,
+              5
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                1610,
+                947195
+              ]
+            ],
+            "vma_host": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                327,
+                0
+              ]
+            ]
+          },
+          "renderer_total": {
+            "native": [
+              172,
+              172,
+              94,
+              94,
+              3,
+              3,
+              771,
+              771,
+              610
+            ],
+            "overflowed": false,
+            "rust": [
+              [
+                1832,
+                1064692
+              ],
+              [
+                2,
+                1444
+              ],
+              [
+                2,
+                60
+              ],
+              [
+                1835,
+                1066214
+              ]
+            ],
+            "vma_host": [
+              [
+                130,
+                648144
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                334,
+                0
+              ]
+            ]
+          },
+          "row_semantics": "normal Rust excludes synchronous caller work; normal native/VMA cover the entire epoch, so caller and renderer rows are not disjoint native/VMA totals",
+          "setup_change_accepted_presents": 6,
+          "setup_change_scope": "explicit pools and native working set, residency, warm-up, resize/VSync/suspend/acquire-cancel and their completed owner retirement",
+          "setup_change_sources": 3,
+          "shutdown_scope": "one additional ordinary-builder source retains pending presentation ownership for close; complete native owner teardown",
+          "tracing_filter": "warn",
+          "unobserved": "driver-internal allocation outside installed callbacks; Renderer native requests are counted separately"
+        }
+      }
+    ],
+    "independent_review": "Interval tree and analysis semantics, native visibility/lifetime and API/dependency representations independently reviewed; no unresolved findings. Mixed-edit interval model/fuzz evidence also executed by worker.",
+    "unexecuted": [
+      "Linux real GPU and alternate GPU/driver",
+      "full Bistro workload",
+      "real native OOM/device-loss injection",
+      "GPU timing or physical VRAM improvement",
+      "long-duration endurance",
+      "shader/bindings regeneration (unchanged)",
+      "resolution of existing renderer-0pb startup observation"
     ]
   }
 }
