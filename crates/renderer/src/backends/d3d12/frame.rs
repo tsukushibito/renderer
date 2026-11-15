@@ -13,6 +13,7 @@ use super::{
     bindings::*,
     device::DeviceOwner,
     raster::RasterPipeline,
+    raster_clear::ClearPrograms,
     raster_storage::{D3D12ImageClass, RasterStorage},
     resources::{DeviceBuffer, MAX_BUFFER_BYTES},
 };
@@ -284,6 +285,7 @@ struct PoolState {
 pub(super) struct FramePool {
     capacity: D3D12FrameCapacity,
     pub(super) raster_programs: Vec<RasterPipeline>,
+    pub(super) clear_programs: Option<ClearPrograms>,
     state: Mutex<PoolState>,
     // Declared last so native fields are destroyed while the Device remains live.
     owner: Arc<DeviceOwner>,
@@ -329,6 +331,7 @@ impl FramePool {
         Ok(Arc::new(Self {
             capacity,
             raster_programs: Vec::new(),
+            clear_programs: None,
             state: Mutex::new(PoolState {
                 executions,
                 results,
@@ -352,6 +355,7 @@ impl FramePool {
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
         let mut pool = Self::new(owner, capacity)?;
         let pool_mut = Arc::get_mut(&mut pool).expect("new unshared pool");
+        pool_mut.clear_programs = Some(ClearPrograms::new(&pool_mut.owner, classes)?);
         pool_mut
             .raster_programs
             .try_reserve_exact(programs.len().saturating_mul(2))
@@ -540,6 +544,7 @@ impl Drop for FramePool {
             // graphics PSOs/signatures as well as resources. Their pool-level
             // owners must survive the same unproven-completion teardown.
             std::mem::forget(std::mem::take(&mut self.raster_programs));
+            std::mem::forget(self.clear_programs.take());
             std::mem::forget(Arc::clone(&self.owner));
         }
     }

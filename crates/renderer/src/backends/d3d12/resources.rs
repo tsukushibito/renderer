@@ -371,15 +371,37 @@ impl DeviceImage {
         };
         // A preferred clear value is an immutable creation hint, not an
         // initialization operation. The public boundary validated D32/range.
-        let clear = desc.preferred_depth_clear.map(|value| D3D12_CLEAR_VALUE {
-            Format: DXGI_FORMAT_D32_FLOAT,
-            Anonymous: D3D12_CLEAR_VALUE_0 {
-                DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                    Depth: value,
-                    Stencil: 0,
+        let clear = if graph {
+            Some(D3D12_CLEAR_VALUE {
+                Format: if desc.format == crate::program::ImageFormat::D32Float {
+                    DXGI_FORMAT_D32_FLOAT
+                } else {
+                    image_format(desc.format)
                 },
-            },
-        });
+                Anonymous: if desc.format == crate::program::ImageFormat::D32Float {
+                    D3D12_CLEAR_VALUE_0 {
+                        DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
+                            Depth: 1.0,
+                            Stencil: 0,
+                        },
+                    }
+                } else {
+                    D3D12_CLEAR_VALUE_0 {
+                        Color: [0.0, 0.0, 0.0, 1.0],
+                    }
+                },
+            })
+        } else {
+            desc.preferred_depth_clear.map(|value| D3D12_CLEAR_VALUE {
+                Format: DXGI_FORMAT_D32_FLOAT,
+                Anonymous: D3D12_CLEAR_VALUE_0 {
+                    DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
+                        Depth: value,
+                        Stencil: 0,
+                    },
+                },
+            })
+        };
         let mut desc = image_desc(desc);
         if graph && desc.Flags == D3D12_RESOURCE_FLAG_NONE {
             desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;

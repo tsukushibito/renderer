@@ -459,9 +459,14 @@ pub(super) fn prepare(
             Operation::ReadbackImage { src } => {
                 super::raster::readback_image(&mut work, &owner, pass, *src)?
             }
-            Operation::Raster { .. } | Operation::AttachmentPass { .. } => {
-                super::raster::record(work.slot_mut(), &owner, graph, pass, &pool.raster_programs)?
-            }
+            Operation::Raster { .. } | Operation::AttachmentPass { .. } => super::raster::record(
+                work.slot_mut(),
+                &owner,
+                graph,
+                pass,
+                &pool.raster_programs,
+                pool.clear_programs.as_ref().unwrap(),
+            )?,
             _ => unreachable!("preflight established supported immutable operations"),
         }
     }
