@@ -111,6 +111,7 @@ pub struct GraphStorage {
     pub(super) bindings: Vec<BindingOperands>,
     pub(super) attachments: Vec<AttachmentOperand>,
     pub(super) raster_ranges: Vec<[u64; 2]>,
+    pub(super) raster_resources: Vec<usize>,
     pub(super) overlap: Vec<super::accesses::IndexedAccess>,
     pub(super) workspace: analysis::Workspace,
     pub(super) output: analysis::Output,
@@ -148,6 +149,7 @@ impl GraphStorage {
             bindings: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             attachments: buffer(capacity.attachments, GraphCapacityKind::Attachments)?,
             raster_ranges,
+            raster_resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             overlap: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
             workspace: analysis::Workspace::new(capacity.analysis())
                 .map_err(|error| capacity.analysis_error(error))?,
@@ -159,6 +161,7 @@ impl GraphStorage {
         })
     }
     fn reset(&mut self, id: u64) {
+        self.clear_raster_ranges();
         self.id = id;
         self.passes.clear();
         self.resources.clear();
@@ -175,6 +178,12 @@ impl GraphStorage {
         self.attachments.clear();
         #[cfg(feature = "graph-diagnostics")]
         self.dump.take();
+    }
+    pub(super) fn clear_raster_ranges(&mut self) {
+        for &resource in &self.raster_resources {
+            self.raster_ranges[resource] = [0; 2];
+        }
+        self.raster_resources.clear();
     }
     pub(super) fn name(&self, range: &Range<usize>) -> &str {
         // Only UTF-8 source strings are appended, with boundaries retained.

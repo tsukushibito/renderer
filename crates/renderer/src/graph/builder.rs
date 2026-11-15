@@ -319,8 +319,7 @@ impl Graph {
                 ));
             }
             let first_access = graph.accesses.len();
-            let resources = graph.resources.len();
-            graph.data_mut().raster_ranges[..resources].fill([0; 2]);
+            graph.data_mut().clear_raster_ranges();
             for draw in draws {
                 let (vertices, indices, index_count, parameters, bindings) = draw?;
                 let bindings =
@@ -334,8 +333,15 @@ impl Graph {
                 let vs = graph.resources[vertices].desc.units();
                 let ix = u64::from(index_count) * 4;
                 let data = graph.data_mut();
-                data.raster_ranges[vertices][0] = vs;
-                data.raster_ranges[indices][1] = data.raster_ranges[indices][1].max(ix);
+                for (resource, purpose, size) in [(vertices, 0, vs), (indices, 1, ix)] {
+                    if data.raster_ranges[resource] == [0; 2] {
+                        // A validated resource is registered once, so this list
+                        // fits the same prepared resource capacity as the ranges.
+                        data.raster_resources.push(resource);
+                    }
+                    let range = &mut data.raster_ranges[resource][purpose];
+                    *range = (*range).max(size);
+                }
                 data.draws.push(RasterDrawOperands {
                     bindings,
                     vertices,
@@ -344,7 +350,10 @@ impl Graph {
                     parameters: parameters.get(),
                 });
             }
-            for resource in 0..resources {
+            // Preserve resource-order accesses without scanning unused resources.
+            graph.data_mut().raster_resources.sort_unstable();
+            for index in 0..graph.raster_resources.len() {
+                let resource = graph.raster_resources[index];
                 let [vertices, indices] = graph.raster_ranges[resource];
                 if vertices != 0 {
                     graph.append_access(read(resource, 0..vertices, AccessPurpose::Vertex))?;
