@@ -32,10 +32,13 @@ impl<T> Slots<T> {
         if capacity == 0 {
             return Err(TransferError::InvalidPool("capacity must be nonzero"));
         }
+        let mut idle = Vec::new();
+        idle.try_reserve_exact(capacity)
+            .map_err(|_| TransferError::InvalidPool("cannot reserve execution slot storage"))?;
         Ok(Self {
             capacity,
             allocated: 0,
-            idle: Vec::new(),
+            idle,
             native_creates: 0,
             reuses: 0,
             resets: 0,
@@ -43,20 +46,23 @@ impl<T> Slots<T> {
         })
     }
 
-    /// None reserves room for creation; Some returns an already-reset slot.
-    fn acquire(&mut self) -> Result<Option<T>, TransferError> {
+    fn insert_prepared(&mut self, slot: T) {
+        assert!(self.allocated < self.capacity);
+        self.allocated += 1;
+        self.native_creates += 1;
+        self.idle.push(slot);
+    }
+
+    /// Ordinary reservation never grows or repairs the prepared working set.
+    fn acquire(&mut self) -> Result<T, TransferError> {
         if let Some(slot) = self.idle.pop() {
             self.reuses = self.reuses.saturating_add(1);
-            return Ok(Some(slot));
+            return Ok(slot);
         }
-        if self.allocated == self.capacity {
-            self.capacity_exhaustions = self.capacity_exhaustions.saturating_add(1);
-            return Err(TransferError::CapacityExhausted {
-                capacity: self.capacity,
-            });
-        }
-        self.allocated += 1;
-        Ok(None)
+        self.capacity_exhaustions = self.capacity_exhaustions.saturating_add(1);
+        Err(TransferError::CapacityExhausted {
+            capacity: self.capacity,
+        })
     }
 
     fn release(&mut self, slot: T) {
@@ -102,7 +108,7 @@ impl PoolState {
             .device
             .ensure_active()
             .map_err(TransferError::DeviceUnavailable)?;
-        let existing = {
+        let native = {
             let mut slots = self.lock();
             self.owner
                 .device
@@ -110,33 +116,29 @@ impl PoolState {
                 .map_err(TransferError::DeviceUnavailable)?;
             slots.acquire()?
         };
-        // Establish the reservation before any native creation or logging that
-        // can fail/unwind. A failed new slot releases its reserved capacity.
-        let mut lease = NativeLease {
-            native: existing,
+        Ok(NativeLease {
+            native: Some(native),
             recycler: Some(Arc::clone(self)),
-        };
-        if lease.native.is_none() {
-            lease.native = Some(NativeTransfer::new(Arc::clone(&self.owner))?);
-            let mut slots = self.lock();
-            slots.native_creates = slots.native_creates.saturating_add(1);
-        }
-        Ok(lease)
+        })
     }
 }
 
 impl ExecutionPool {
     /// The limit includes idle slots, reservations, and in-flight submissions.
-    /// Slots are created lazily and acquisition never waits for GPU completion.
+    /// Prepare every native slot and return-array entry before publication.
+    /// Acquisition never creates native objects or waits for GPU completion.
     pub(in crate::backends::vulkan) fn new(
         owner: Arc<MemoryOwner>,
         max_slots: usize,
     ) -> Result<Self, TransferError> {
-        let slots = Slots::new(max_slots)?;
+        let mut slots = Slots::new(max_slots)?;
         owner
             .device
             .ensure_active()
             .map_err(TransferError::DeviceUnavailable)?;
+        for _ in 0..max_slots {
+            slots.insert_prepared(NativeTransfer::new(Arc::clone(&owner))?);
+        }
         Ok(Self {
             state: Arc::new(PoolState {
                 owner,
@@ -271,8 +273,10 @@ mod tests {
             Err(TransferError::InvalidPool(_))
         ));
         let mut slots = Slots::<usize>::new(2).unwrap();
-        assert_eq!(slots.acquire().unwrap(), None);
-        assert_eq!(slots.acquire().unwrap(), None);
+        slots.insert_prepared(17);
+        slots.insert_prepared(23);
+        assert_eq!(slots.acquire().unwrap(), 23);
+        assert_eq!(slots.acquire().unwrap(), 17);
         assert!(matches!(
             slots.acquire(),
             Err(TransferError::CapacityExhausted { capacity: 2 })
@@ -282,29 +286,32 @@ mod tests {
         slots.release(17);
         assert_eq!(slots.stats().idle, 1);
         assert_eq!(slots.stats().leased, 1);
-        assert_eq!(slots.acquire().unwrap(), Some(17));
-        assert_eq!(slots.stats().reuses, 1);
+        assert_eq!(slots.acquire().unwrap(), 17);
+        assert_eq!(slots.stats().reuses, 3);
         assert_eq!(slots.stats().resets, 1);
         assert_eq!(slots.stats().allocated, 2);
         slots.discard();
         assert_eq!(slots.stats().allocated, 1);
-        assert_eq!(slots.acquire().unwrap(), None);
-        assert_eq!(slots.stats().leased, 2);
+        assert!(matches!(
+            slots.acquire(),
+            Err(TransferError::CapacityExhausted { .. })
+        ));
+        assert_eq!(slots.stats().leased, 1);
     }
 
     #[test]
-    fn failed_creation_or_reset_releases_capacity_instead_of_recycling() {
+    fn failed_reset_never_recreates_an_unprepared_slot() {
         let mut slots = Slots::<usize>::new(1).unwrap();
-        assert_eq!(slots.acquire().unwrap(), None);
+        slots.insert_prepared(23);
+        assert_eq!(slots.acquire().unwrap(), 23);
         slots.discard();
         assert_eq!(slots.stats().allocated, 0);
         assert_eq!(slots.stats().idle, 0);
-        assert_eq!(slots.acquire().unwrap(), None);
-        slots.release(23);
-        assert_eq!(slots.acquire().unwrap(), Some(23));
-        slots.discard();
-        assert_eq!(slots.stats().allocated, 0);
-        assert_eq!(slots.stats().resets, 1);
+        assert!(matches!(
+            slots.acquire(),
+            Err(TransferError::CapacityExhausted { .. })
+        ));
+        assert_eq!(slots.stats().native_creates, 1);
     }
 
     #[test]
@@ -348,8 +355,8 @@ mod tests {
             // Resetting the pool must precede release of its referenced buffers.
             drop(pool.reserve().unwrap());
             drop(pool.record(payload(&allocator, 0x13)).unwrap());
-            assert_eq!(pool.stats().native_creates, 1);
-            assert_eq!(pool.stats().idle, 1);
+            assert_eq!(pool.stats().native_creates, 2);
+            assert_eq!(pool.stats().idle, 2);
 
             let mut first = pool
                 .record(payload(&allocator, 0x37))

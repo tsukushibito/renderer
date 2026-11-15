@@ -15,6 +15,7 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
             resource_capacity: 4,
             staging_bytes: 4096,
             max_shader_bindings: 2,
+            staging_ranges: 256,
         })
         .expect("real Vulkan runtime is required");
         assert_ne!(
@@ -129,6 +130,7 @@ fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
             resource_capacity: 2,
             staging_bytes: 4096,
             max_shader_bindings: 2,
+            staging_ranges: 256,
         })
         .expect("real Vulkan runtime is required");
         assert_ne!(

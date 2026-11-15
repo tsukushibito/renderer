@@ -468,6 +468,7 @@ mod tests {
                 resource_capacity: 4,
                 staging_bytes: 4096,
                 max_shader_bindings: 2,
+                staging_ranges: 256,
             })
             .expect("real Vulkan runtime is required");
             assert_ne!(
