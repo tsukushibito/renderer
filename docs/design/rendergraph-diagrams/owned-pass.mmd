@@ -1,7 +1,7 @@
 classDiagram
     direction TB
     accTitle: owned passとflat arenaの所有・参照
-    accDescr: GraphStorageがPass、draw、attachment、binding、accessの配列を実所有する。PassはOperationを内包し、access配列へは範囲で参照する。Raster OperationはManagedRasterProgramを値で所有し、drawとattachment配列へ範囲またはindexで参照する。Dispatch Operationは別のManagedProgramとbuffer binding範囲を持つ。これらは論理命令でありnative PSOの所有図ではない。
+    accDescr: GraphStorageがPass、draw、attachment、binding、accessの配列を実所有する。PassはOperationを内包し、access配列へは範囲で参照する。Raster OperationはManagedRasterProgramを値で所有し、drawとattachment配列を範囲またはindexで参照する。各drawとDispatchはBindingOperandsの範囲を持つ。BindingOperandsはBuffer、ImageView、Samplerの列挙型で、ResourceAccessは別途shader stageを保持する。これは論理命令の図でありnative PSOの所有図ではない。
     class GraphStorage {
         -passes
         -draws
@@ -21,12 +21,14 @@ classDiagram
     }
     class ManagedRasterProgram {
         +mesh()
+        +textured_mesh()
         -manifest: static参照
     }
     class ManagedProgram {
         -manifest: static参照
     }
     class RasterDrawOperands {
+        -bindings: Range
         -vertices: resource_index
         -indices: resource_index
         -index_count
@@ -37,19 +39,22 @@ classDiagram
         -ops
         -clear
     }
-    class BufferBindingOperands {
-        -resource: usize
-        -range: BufferRange
+    class BindingOperands {
+        <<enum>>
+        Buffer
+        ImageView
+        Sampler
     }
     class ResourceAccess {
         -resource
         -range
         -purpose
+        -stages: ShaderStages
     }
     GraphStorage *-- Pass : 配列を実所有
     GraphStorage *-- RasterDrawOperands : draws arena
     GraphStorage *-- AttachmentOperand : attachments arena
-    GraphStorage *-- BufferBindingOperands : bindings arena
+    GraphStorage *-- BindingOperands : bindings arena
     GraphStorage *-- ResourceAccess : accesses arena
     Pass *-- Operation : 値を内包
     Pass ..> ResourceAccess : accesses範囲
@@ -57,4 +62,5 @@ classDiagram
     Operation *-- ManagedProgram : Dispatchの値
     Operation ..> RasterDrawOperands : Rasterのdraws範囲
     Operation ..> AttachmentOperand : colors範囲とdepth index
-    Operation ..> BufferBindingOperands : Dispatchのbindings範囲
+    Operation ..> BindingOperands : Dispatchのbindings範囲
+    RasterDrawOperands ..> BindingOperands : 各drawのbindings範囲

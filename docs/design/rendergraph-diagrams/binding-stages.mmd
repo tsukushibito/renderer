@@ -1,0 +1,13 @@
+flowchart TB
+    accTitle: Program manifestからbinding用途とshader stageを導く
+    accDescr: 信頼済みProgramのBindingLayoutがkindとShaderStagesを定める。利用側はBuffer、ImageView、SamplerのBindingを渡し、builderは型とABIを照合してmanifest順にBindingOperandsを所有する。Bufferはレビュー済みfootprint、ImageViewは選択mip/layer全域のResourceAccessを作り、用途とshader stageはmanifestから導く。Samplerは設定だけで内容accessを作らない。Vertex、Index、Attachmentは別用途として扱う。
+    program["信頼済みProgram manifest"] --> layout["BindingLayout：kind・ShaderStages"]
+    input["利用側Binding：資源の指定"] --> canonical["照合・manifest順のBindingOperands"]
+    layout --> canonical
+    canonical --> buffer["Buffer：レビュー済みbyte範囲"]
+    canonical --> view["ImageView：選択mip/layer全域"]
+    canonical --> sampler["Sampler：設定のみ・内容accessなし"]
+    buffer --> access["ResourceAccess：範囲・用途・ShaderStages"]
+    view --> access
+    layout -->|"shader用途・stageを導出"| access
+    fixed["Vertex・Index・Attachment"] -->|"独立したpurpose"| access
