@@ -54,7 +54,7 @@ fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
     let (_partial_pool, mut partial) = prepared_graph(GraphCapacity::default());
     let target = partial.buffer("partial", BufferDesc { size: 8 }).unwrap();
     partial
-        .upload_buffer_slice("tail only", target, 4, input, 1..5)
+        .upload_buffer_slice("tail only", target, 4, Arc::clone(&input), 1..5)
         .unwrap();
     partial.export_buffer(target).unwrap();
     let error = partial.compile().unwrap_err();
@@ -79,7 +79,7 @@ fn invalid_upload_slices_preserve_builder_context_without_a_pass() {
     // Keep the existing copy contract: offsets are aligned, but a source
     // slice may start anywhere and need not contain a multiple of four bytes.
     graph
-        .upload_buffer_slice("three bytes", buffer, 0, input, 1..4)
+        .upload_buffer_slice("three bytes", buffer, 0, Arc::clone(&input), 1..4)
         .unwrap();
 }
 
@@ -94,13 +94,11 @@ fn many_exports_keep_declaration_order_and_indexed_membership() {
         segments: COUNT + 1,
         ..GraphCapacity::default()
     });
-    let bytes: Arc<[u8]> = vec![1; 4].into();
+    let bytes = [1; 4];
     let buffers = (0..COUNT)
         .map(|_| {
             let buffer = graph.buffer("asset", BufferDesc { size: 4 }).unwrap();
-            graph
-                .upload_buffer_shared("upload", buffer, 0, Arc::clone(&bytes))
-                .unwrap();
+            graph.upload_buffer("upload", buffer, 0, &bytes).unwrap();
             buffer
         })
         .collect::<Vec<_>>();
@@ -128,40 +126,41 @@ fn many_exports_keep_declaration_order_and_indexed_membership() {
 }
 
 #[test]
-fn compilation_shares_live_uploads_and_recycles_payloads_after_all_plan_consumers() {
+fn compilation_retains_anchored_mesh_bytes_and_captured_uploads_until_recycle() {
+    // Shared sources model the private, immutable mesh-version path. Their
+    // asset anchors remain alive through every ordinary pool reuse.
     let buffer_bytes: Arc<[u8]> = vec![1; 4].into();
-    let image_bytes: Arc<[u8]> = vec![2; 4].into();
     let dead_buffer_bytes: Arc<[u8]> = vec![3; 4].into();
-    let dead_image_bytes: Arc<[u8]> = vec![4; 4].into();
-    let buffer_lifetime = Arc::downgrade(&buffer_bytes);
-    let image_lifetime = Arc::downgrade(&image_bytes);
-    let dead_buffer_lifetime = Arc::downgrade(&dead_buffer_bytes);
-    let dead_image_lifetime = Arc::downgrade(&dead_image_bytes);
+    let mut image_bytes = [2; 4];
     let (mut graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let buffer = graph.buffer("live buffer", BufferDesc { size: 4 }).unwrap();
     let image = graph.image("live image", ImageDesc::rgba8(1, 1)).unwrap();
     let dead_buffer = graph.buffer("dead buffer", BufferDesc { size: 4 }).unwrap();
     let dead_image = graph.image("dead image", ImageDesc::rgba8(1, 1)).unwrap();
     let buffer_upload = graph
-        .upload_buffer_shared("live buffer upload", buffer, 0, Arc::clone(&buffer_bytes))
+        .upload_buffer_slice(
+            "live buffer upload",
+            buffer,
+            0,
+            Arc::clone(&buffer_bytes),
+            0..4,
+        )
         .unwrap();
     let image_upload = graph
-        .upload_image_shared("live image upload", image, Arc::clone(&image_bytes))
+        .upload_image("live image upload", image, &image_bytes)
         .unwrap();
+    image_bytes.fill(9);
     let dead_buffer_upload = graph
-        .upload_buffer_shared(
+        .upload_buffer_slice(
             "dead buffer upload",
             dead_buffer,
             0,
             Arc::clone(&dead_buffer_bytes),
+            0..4,
         )
         .unwrap();
     let dead_image_upload = graph
-        .upload_image_shared(
-            "dead image upload",
-            dead_image,
-            Arc::clone(&dead_image_bytes),
-        )
+        .upload_image("dead image upload", dead_image, &[4; 4])
         .unwrap();
     graph.export_buffer(buffer).unwrap();
     graph.export_image(image).unwrap();
@@ -175,14 +174,10 @@ fn compilation_shares_live_uploads_and_recycles_payloads_after_all_plan_consumer
         panic!("live buffer upload must remain executable");
     };
     assert!(Arc::ptr_eq(bytes, &buffer_bytes));
-    let Operation::UploadImage {
-        data: UploadSource::Shared { bytes, .. },
-        ..
-    } = &plan.passes[image_upload.index].operation
-    else {
-        panic!("live image upload must remain executable");
-    };
-    assert!(Arc::ptr_eq(bytes, &image_bytes));
+    assert_eq!(
+        plan.upload_data(&plan.passes[image_upload.index].operation),
+        &[2; 4]
+    );
     assert_eq!(plan.pass_count(), 2);
     assert!(!plan.order.contains(&dead_buffer_upload.index));
     assert!(!plan.order.contains(&dead_image_upload.index));
@@ -191,14 +186,6 @@ fn compilation_shares_live_uploads_and_recycles_payloads_after_all_plan_consumer
         ["live buffer upload", "live image upload"]
     );
 
-    drop((
-        buffer_bytes,
-        image_bytes,
-        dead_buffer_bytes,
-        dead_image_bytes,
-    ));
-    assert!(buffer_lifetime.upgrade().is_some());
-    assert!(image_lifetime.upgrade().is_some());
     let consumer = plan.clone();
     assert_eq!(
         graph_pool.begin().unwrap_err().kind(),
@@ -209,16 +196,16 @@ fn compilation_shares_live_uploads_and_recycles_payloads_after_all_plan_consumer
         graph_pool.begin().unwrap_err().kind(),
         GraphErrorKind::CapacityExhausted
     );
-    assert!(buffer_lifetime.upgrade().is_some());
-    assert!(image_lifetime.upgrade().is_some());
+    assert_eq!(
+        consumer.upload_data(&consumer.passes[image_upload.index].operation),
+        &[2; 4]
+    );
     drop(consumer);
-    // Culling changes execution; backing storage is reset only after all plan
-    // consumers finish. Source removal and this fixture reset are change work.
+    // Recycle releases Graph references, while the immutable asset anchors
+    // prevent a final payload deallocation in this ordinary reset path.
     let _recycled = graph_pool.begin().unwrap();
-    assert!(buffer_lifetime.upgrade().is_none());
-    assert!(image_lifetime.upgrade().is_none());
-    assert!(dead_buffer_lifetime.upgrade().is_none());
-    assert!(dead_image_lifetime.upgrade().is_none());
+    assert_eq!(Arc::strong_count(&buffer_bytes), 1);
+    assert_eq!(Arc::strong_count(&dead_buffer_bytes), 1);
 }
 
 #[test]
@@ -281,6 +268,8 @@ fn zero_extents_overflows_and_invalid_byte_ranges_are_rejected() {
 
 #[test]
 fn repeated_imports_share_one_identity_and_reject_changed_snapshots() {
+    let mut range_pool = ImportRangesPool::new(1, 1).unwrap();
+    let initial = 0..8;
     let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let import = ImportBuffer {
         key: ResourceKey {
@@ -290,7 +279,7 @@ fn repeated_imports_share_one_identity_and_reject_changed_snapshots() {
         },
         revision: 9,
         desc: BufferDesc { size: 16 },
-        initialized: std::iter::once(0..8).collect(),
+        initialized: range_pool.capture(std::slice::from_ref(&initial)).unwrap(),
     };
     let first = graph.import_buffer("first", &import).unwrap();
     let again = graph.import_buffer("again", &import).unwrap();
@@ -867,6 +856,9 @@ fn public_raster_parameters_are_checked_before_creating_a_pass() {
 
 #[test]
 fn import_identity_survives_interleaved_transients_and_failed_aliases() {
+    let mut range_pool = ImportRangesPool::new(1, 1).unwrap();
+    let initial = 0..12;
+    let initialized = range_pool.capture(std::slice::from_ref(&initial)).unwrap();
     let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let sources = (0..64)
         .map(|index| ImportBuffer {
@@ -877,7 +869,7 @@ fn import_identity_survives_interleaved_transients_and_failed_aliases() {
             },
             revision: u64::from(index) + 1,
             desc: BufferDesc { size: 12 },
-            initialized: std::iter::once(0..12).collect(),
+            initialized: initialized.clone(),
         })
         .collect::<Vec<_>>();
     let mut handles = Vec::new();
@@ -885,7 +877,7 @@ fn import_identity_survives_interleaved_transients_and_failed_aliases() {
         graph.image("transient", ImageDesc::rgba8(2, 2)).unwrap();
         handles.push(
             graph
-                .import_buffer(format!("import {index}"), source)
+                .import_buffer(&format!("import {index}"), source)
                 .unwrap(),
         );
     }

@@ -40,6 +40,7 @@ impl Graph {
 
     /// Retain a slice of shared immutable input without allocating a chunk copy.
     /// The CPU source offset is independent of the aligned GPU destination offset.
+    #[cfg(test)]
     pub(crate) fn upload_buffer_slice(
         &mut self,
         name: &str,
@@ -585,7 +586,6 @@ impl Graph {
         name: &str,
         build: impl FnOnce(&mut Self) -> Result<(Operation, Range<usize>, bool), GraphError>,
     ) -> Result<PassHandle, GraphError> {
-        let name = name;
         let checkpoint = (
             self.accesses.len(),
             self.draws.len(),
