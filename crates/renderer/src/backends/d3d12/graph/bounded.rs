@@ -83,9 +83,7 @@ pub(super) fn requirements(
     // This scans changing work; it does not revalidate Graph byte-range contents.
     for &pass in &graph.order {
         match &graph.passes[pass].operation {
-            Operation::UploadBuffer {
-                dst, bytes, source, ..
-            } => {
+            Operation::UploadBuffer { dst, .. } => {
                 use_buffer(
                     graph,
                     *dst,
@@ -96,7 +94,7 @@ pub(super) fn requirements(
                 )?;
                 add_bytes(
                     &mut upload_bytes,
-                    bytes[source.clone()].len() as u64,
+                    graph.upload_data(&graph.passes[pass].operation).len() as u64,
                     capacity.upload_bytes,
                 )?;
             }
@@ -169,14 +167,8 @@ pub(super) fn prepare(
     }
     for &pass in &graph.order {
         match &graph.passes[pass].operation {
-            Operation::UploadBuffer {
-                dst,
-                offset,
-                bytes,
-                source,
-                ..
-            } => {
-                let bytes = &bytes[source.clone()];
+            Operation::UploadBuffer { dst, offset, .. } => {
+                let bytes = graph.upload_data(&graph.passes[pass].operation);
                 let slot = work.slot_mut();
                 let destination = slot.resource_map[*dst];
                 let start = slot.upload_used;

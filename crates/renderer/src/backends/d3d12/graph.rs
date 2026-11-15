@@ -83,18 +83,12 @@ impl<'a> Plan<'a> {
         // culled shader operation must not make a buffer-only graph unsupported.
         for &pass in &graph.order {
             let operation = match &graph.passes[pass].operation {
-                Operation::UploadBuffer {
-                    dst,
-                    offset,
-                    bytes,
-                    source,
-                    ..
-                } => {
+                Operation::UploadBuffer { dst, offset, .. } => {
                     plan.use_buffer(graph, *dst)?;
                     PlannedOperation::Upload {
                         dst: *dst,
                         offset: *offset,
-                        bytes: &bytes[source.clone()],
+                        bytes: graph.upload_data(&graph.passes[pass].operation),
                     }
                 }
                 Operation::CopyBuffer {
@@ -1004,16 +998,21 @@ impl FixtureResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{BufferDesc, Graph, ImageDesc};
+    use crate::graph::{BufferDesc, Graph, GraphCapacity, GraphPool, ImageDesc};
+
+    fn prepared_graph() -> (GraphPool, Graph) {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let graph = pool.begin().unwrap();
+        (pool, graph)
+    }
 
     #[cfg(feature = "d3d12-diagnostics")]
-    fn copy_graph() -> (CompiledGraph, [PassHandle; 3], PassHandle) {
-        let mut graph = Graph::new();
+    fn copy_graph() -> (GraphPool, CompiledGraph, [PassHandle; 3], PassHandle) {
+        let (_graph_pool, mut graph) = prepared_graph();
         let a = graph.buffer("a", BufferDesc { size: 32 }).unwrap();
         let b = graph.buffer("b", BufferDesc { size: 32 }).unwrap();
-        let upload = graph
-            .upload_buffer("upload", a, 4, (0u8..24).collect::<Vec<_>>())
-            .unwrap();
+        let bytes: [u8; 24] = std::array::from_fn(|index| index as u8);
+        let upload = graph.upload_buffer("upload", a, 4, &bytes).unwrap();
         graph.copy_buffer("copy", a, 8, b, 12, 12).unwrap();
         let copied = graph.readback_buffer("copied", b, 12, 12).unwrap();
         let source = graph.readback_buffer("source", a, 4, 8).unwrap();
@@ -1021,7 +1020,12 @@ mod tests {
         // Ensure native recording order differs from pass-index order; result
         // lookup must work after completed entries are indexed independently.
         graph.depends_on(copied, tail).unwrap();
-        (graph.compile().unwrap(), [copied, source, tail], upload)
+        (
+            _graph_pool,
+            graph.compile().unwrap(),
+            [copied, source, tail],
+            upload,
+        )
     }
 
     fn requirements(graph: &CompiledGraph) -> Result<usize, D3D12RuntimeError> {
@@ -1035,15 +1039,13 @@ mod tests {
 
     #[test]
     fn plan_uses_shared_culled_order_and_ignores_unused_resources() {
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let image = graph.image("unused image", ImageDesc::rgba8(1, 1)).unwrap();
         graph
-            .upload_image("culled image upload", image, vec![0; 4])
+            .upload_image("culled image upload", image, &[0; 4])
             .unwrap();
         let buffer = graph.buffer("buffer", BufferDesc { size: 4 }).unwrap();
-        graph
-            .upload_buffer("upload", buffer, 0, vec![1; 4])
-            .unwrap();
+        graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.readback_buffer("readback", buffer, 0, 4).unwrap();
         let graph = graph.compile().unwrap();
         let mut mapping = [usize::MAX; 2];
@@ -1070,15 +1072,13 @@ mod tests {
 
     #[test]
     fn plan_rejects_exports_and_backend_capacity_before_native_allocation() {
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let buffer = graph.buffer("export", BufferDesc { size: 4 }).unwrap();
-        graph
-            .upload_buffer("upload", buffer, 0, vec![1; 4])
-            .unwrap();
+        graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.export_buffer(buffer).unwrap();
         assert!(requirements(&graph.compile().unwrap()).is_err());
 
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let buffer = graph
             .buffer(
                 "large",
@@ -1087,20 +1087,16 @@ mod tests {
                 },
             )
             .unwrap();
-        graph
-            .upload_buffer("upload", buffer, 0, vec![1; 4])
-            .unwrap();
+        graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.readback_buffer("readback", buffer, 0, 4).unwrap();
         assert!(requirements(&graph.compile().unwrap()).is_err());
     }
 
     #[test]
     fn plan_rejects_live_image_work() {
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let image = graph.image("image", ImageDesc::rgba8(1, 1)).unwrap();
-        graph
-            .upload_image("upload image", image, vec![0; 4])
-            .unwrap();
+        graph.upload_image("upload image", image, &[0; 4]).unwrap();
         graph.readback_image("readback image", image).unwrap();
         assert!(requirements(&graph.compile().unwrap()).is_err());
 
@@ -1112,9 +1108,9 @@ mod tests {
             },
             revision: 0,
             desc: BufferDesc { size: 4 },
-            initialized: std::iter::once(0..4).collect(),
+            initialized: crate::graph::ImportRanges::test_capture(std::slice::from_ref(&(0..4))),
         };
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let imported = graph.import_buffer("external buffer", &source).unwrap();
         graph
             .readback_buffer("readback external", imported, 0, 4)
@@ -1134,7 +1130,7 @@ mod tests {
         .expect("real D3D12 hardware and strict validation prerequisites");
         let monitor = runtime.validation_monitor();
         let weak = Arc::downgrade(&runtime.device);
-        let (graph, [copied, source, tail], upload) = copy_graph();
+        let (_graph_pool, graph, [copied, source, tail], upload) = copy_graph();
         let baseline = Arc::strong_count(&runtime.device);
 
         let canceled = runtime.prepare(&graph).expect("recorded work");
@@ -1174,11 +1170,9 @@ mod tests {
             .wait(Duration::from_secs(30))
             .unwrap()
             .expect("second completion");
-        let mut foreign = Graph::new();
+        let (_foreign_pool, mut foreign) = prepared_graph();
         let buffer = foreign.buffer("foreign", BufferDesc { size: 4 }).unwrap();
-        foreign
-            .upload_buffer("upload", buffer, 0, vec![0; 4])
-            .unwrap();
+        foreign.upload_buffer("upload", buffer, 0, &[0; 4]).unwrap();
         let foreign_readback = foreign.readback_buffer("readback", buffer, 0, 4).unwrap();
         assert_eq!(
             result.readback(foreign_readback).unwrap_err().kind(),
@@ -1235,7 +1229,8 @@ mod tests {
         })
         .unwrap();
         let monitor = runtime.validation_monitor();
-        let mut pending = runtime.submit(&Graph::new().compile().unwrap()).unwrap();
+        let (_empty_pool, empty_graph) = prepared_graph();
+        let mut pending = runtime.submit(&empty_graph.compile().unwrap()).unwrap();
         assert!(!runtime.shutdown().unwrap().teardown_checked);
         let empty_result = pending.wait(Duration::from_secs(30)).unwrap().unwrap();
         let report = monitor.snapshot();
