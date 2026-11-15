@@ -29,8 +29,8 @@ pub use pass::{
     LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
-    AttachmentClearOperands, AttachmentOperand, AttachmentOps, Dependency, DependencyList,
-    LoadAction, MeshUpload, Operation, Pass, RasterDrawOperands, ResourceAccess, UploadSource,
+    AttachmentOperand, AttachmentOps, Dependency, DependencyList, LoadAction, MeshUpload,
+    Operation, Pass, RasterAttachmentOperands, RasterDrawOperands, ResourceAccess, UploadSource,
     ValidatedRasterParameters,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};

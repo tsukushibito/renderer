@@ -158,17 +158,26 @@ impl FrameSnapshot {
             })?;
             Ok((vertices, indices, draw.data.index_count, draw.parameters))
         });
-        graph.raster_batch(
+        graph.raster_validated(
             if self.draws.is_empty() {
                 "view clear"
             } else {
                 "view opaque batch"
             },
+            &crate::program::ManagedRasterProgram::mesh(),
             draws,
-            color,
-            depth,
-            self.view.clear_color,
-            1.0,
+            crate::graph::RasterAttachments {
+                colors: &[crate::graph::Attachment {
+                    view: graph.image_view(color, 0, 0)?,
+                    load: crate::graph::LoadOp::Clear(self.view.clear_color),
+                    store: crate::graph::StoreOp::Store,
+                }],
+                depth: Some(crate::graph::Attachment {
+                    view: graph.image_view(depth, 0, 0)?,
+                    load: crate::graph::LoadOp::Clear(1.0),
+                    store: crate::graph::StoreOp::Store,
+                }),
+            },
         )?;
         // Mesh scratch belongs only to construction. Release it before running
         // user code, which may independently build another graph from this input.

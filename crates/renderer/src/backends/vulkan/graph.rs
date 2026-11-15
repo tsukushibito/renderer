@@ -1013,6 +1013,14 @@ impl VulkanRuntime {
         for &pass in &graph.order {
             if matches!(
                 &graph.passes[pass].operation,
+                Operation::Raster { targets: None, .. }
+            ) {
+                return Err(RuntimeError::unsupported(
+                    "Raster Program/attachment shape has no native execution support",
+                ));
+            }
+            if matches!(
+                &graph.passes[pass].operation,
                 Operation::AttachmentPass {
                     simple_clear: None,
                     ..

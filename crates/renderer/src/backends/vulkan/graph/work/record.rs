@@ -172,38 +172,14 @@ impl TransferPayload for GraphWork {
                         )
                     }
                     PreparedOperation::Raster {
-                        vertices,
-                        indices,
-                        index_count,
+                        draws,
                         color,
                         depth,
                         color_ops,
                         depth_ops,
                         clear_color,
                         clear_depth,
-                        parameters,
-                    } => self.programs.as_ref().unwrap().record_raster(
-                        command,
-                        self.resource(*vertices).buffer().handle,
-                        self.resource(*indices).buffer().handle,
-                        *index_count,
-                        self.resource(*color).image(),
-                        self.resource(*depth).image(),
-                        load(color_ops.load),
-                        store(color_ops.store),
-                        *clear_color,
-                        load(depth_ops.load),
-                        store(depth_ops.store),
-                        *clear_depth,
-                        parameters,
-                    ),
-                    PreparedOperation::RasterBatch {
-                        draws,
-                        color,
-                        depth,
-                        clear_color,
-                        clear_depth,
-                    } => self.programs.as_ref().unwrap().record_raster_batch(
+                    } => self.programs.as_ref().unwrap().record_rasters(
                         command,
                         self.plan
                             .as_ref()
@@ -220,7 +196,11 @@ impl TransferPayload for GraphWork {
                             }),
                         self.resource(*color).image(),
                         self.resource(*depth).image(),
+                        load(color_ops.load),
+                        store(color_ops.store),
                         *clear_color,
+                        load(depth_ops.load),
+                        store(depth_ops.store),
                         *clear_depth,
                     ),
                     PreparedOperation::ClearAttachments {

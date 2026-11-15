@@ -58,11 +58,13 @@ pub(crate) struct AttachmentOperand {
         reason = "fixed clear operands are consumed by Vulkan lowering"
     )
 )]
-pub(crate) struct AttachmentClearOperands {
+pub(crate) struct RasterAttachmentOperands {
     pub color: usize,
     pub depth: usize,
     pub clear_color: [f32; 4],
     pub clear_depth: f32,
+    pub color_ops: AttachmentOps,
+    pub depth_ops: AttachmentOps,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -314,23 +316,19 @@ pub(crate) enum Operation {
         workgroups: [u32; 3],
     },
     Raster {
-        vertices: usize,
-        indices: usize,
-        index_count: u32,
-        color: usize,
-        depth: usize,
-        color_ops: AttachmentOps,
-        depth_ops: AttachmentOps,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-        parameters: RasterParameters,
-    },
-    RasterBatch {
+        program: crate::program::ManagedRasterProgram,
         draws: Range<usize>,
-        color: usize,
-        depth: usize,
-        clear_color: [f32; 4],
-        clear_depth: f32,
+        #[cfg_attr(
+            not(test),
+            allow(dead_code, reason = "owned general graphics attachments")
+        )]
+        colors: Range<usize>,
+        #[cfg_attr(
+            not(test),
+            allow(dead_code, reason = "owned general graphics attachments")
+        )]
+        depth: Option<usize>,
+        targets: Option<RasterAttachmentOperands>,
     },
     AttachmentPass {
         #[cfg_attr(
@@ -349,7 +347,7 @@ pub(crate) enum Operation {
             )
         )]
         depth: Option<usize>,
-        simple_clear: Option<AttachmentClearOperands>,
+        simple_clear: Option<RasterAttachmentOperands>,
     },
     Composite {
         src: usize,
