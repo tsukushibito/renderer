@@ -45,6 +45,167 @@ fn color(graph: &mut Graph, name: &str) -> Attachment<[f32; 4]> {
     }
 }
 
+#[test]
+fn hdr_output_format_is_checked_without_consuming_draw_or_attachment_capacity() {
+    let mut pool = GraphPool::new(
+        GraphCapacity {
+            draws: 1,
+            attachments: 1,
+            ..GraphCapacity::default()
+        },
+        1,
+    )
+    .unwrap();
+    let mut graph = pool.begin().unwrap();
+    let draw = mesh(&mut graph, "mesh", true, true);
+    let unorm = color(&mut graph, "unorm");
+    let hdr = graph.image("hdr", ImageDesc::rgba16_float(2, 2)).unwrap();
+    let hdr = Attachment {
+        view: graph.image_view(hdr, 0, 0).unwrap(),
+        ..unorm
+    };
+    for (program, target) in [
+        (ManagedRasterProgram::mesh_hdr(), unorm),
+        (ManagedRasterProgram::mesh(), hdr),
+    ] {
+        let error = graph
+            .raster(
+                "mismatched color",
+                &program,
+                &[draw],
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.resource(), Some(target.view.image().into()));
+    }
+    graph
+        .raster(
+            "hdr draw",
+            &ManagedRasterProgram::mesh_hdr(),
+            &[draw],
+            RasterAttachments {
+                colors: &[hdr],
+                depth: None,
+            },
+        )
+        .unwrap();
+    graph
+        .readback_image("hdr pixels", hdr.view.image())
+        .unwrap();
+    assert_eq!(
+        graph
+            .compile()
+            .unwrap()
+            .ordered_pass_names()
+            .collect::<Vec<_>>(),
+        ["mesh vertices", "mesh indices", "hdr draw", "hdr pixels"]
+    );
+}
+
+#[test]
+fn whole_image_transfers_use_format_bytes_and_read_back_stored_depth() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let hdr = graph.image("hdr", ImageDesc::rgba16_float(2, 2)).unwrap();
+    assert_eq!(
+        graph.image_view(hdr, 0, 0).unwrap().aspect(),
+        renderer::graph::ImageAspect::Color
+    );
+    assert_eq!(
+        graph
+            .upload_image("short HDR upload", hdr, &[0; 16])
+            .unwrap_err()
+            .kind(),
+        GraphErrorKind::InvalidInput
+    );
+    graph.upload_image("HDR upload", hdr, &[0; 32]).unwrap();
+    graph.readback_image("HDR result", hdr).unwrap();
+    let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+    let view = graph.image_view(depth, 0, 0).unwrap();
+    assert_eq!(view.aspect(), renderer::graph::ImageAspect::Depth);
+    assert_eq!(
+        graph
+            .upload_image("unsupported depth upload", depth, &[0; 16])
+            .unwrap_err()
+            .kind(),
+        GraphErrorKind::InvalidInput
+    );
+    graph
+        .attachment_pass(
+            "depth clear",
+            RasterAttachments {
+                colors: &[],
+                depth: Some(Attachment {
+                    view,
+                    load: LoadOp::Clear(0.5),
+                    store: StoreOp::Store,
+                }),
+            },
+        )
+        .unwrap();
+    graph.readback_image("depth result", depth).unwrap();
+    assert_eq!(
+        graph
+            .compile()
+            .unwrap()
+            .ordered_pass_names()
+            .collect::<Vec<_>>(),
+        ["HDR upload", "HDR result", "depth clear", "depth result"]
+    );
+}
+
+#[test]
+fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    for store in [StoreOp::Store, StoreOp::Discard] {
+        let mut graph = pool.begin().unwrap();
+        let draw = mesh(&mut graph, "mesh", true, true);
+        let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+        assert_eq!(
+            graph
+                .raster(
+                    "missing depth",
+                    &ManagedRasterProgram::depth_only(),
+                    &[draw],
+                    RasterAttachments {
+                        colors: &[],
+                        depth: None
+                    },
+                )
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        graph
+            .raster(
+                "depth draw",
+                &ManagedRasterProgram::depth_only(),
+                &[draw],
+                RasterAttachments {
+                    colors: &[],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store,
+                    }),
+                },
+            )
+            .unwrap();
+        graph.readback_image("depth read", depth).unwrap();
+        if store == StoreOp::Store {
+            assert_eq!(graph.compile().unwrap().pass_count(), 4);
+        } else {
+            let error = graph.compile().unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::UninitializedRead);
+            assert_eq!(error.resource(), Some(depth.into()));
+        }
+    }
+}
+
 fn observe(graph: &mut Graph, name: &str, view: ImageView) {
     graph
         .declare_pass(

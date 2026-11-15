@@ -18,9 +18,9 @@ impl Graph {
     /// Owns the borrowed color array and optional depth after this call. Each
     /// View selects one complete mip/layer; all selected extents must match.
     ///
-    /// CPU planning supports MRT, color-only and depth-only passes. Vulkan
-    /// currently executes only the original one-color-plus-depth Clear/Store
-    /// form on single-subresource images; other native forms are unsupported.
+    /// Color targets may be RGBA8 or RGBA16F; depth targets use D32. CPU planning
+    /// supports MRT and selected mip/layer Views. Native support and prepared
+    /// capacity are established separately by the selected backend.
     pub fn attachment_pass(
         &mut self,
         name: &str,
@@ -89,7 +89,7 @@ impl Graph {
                     ops: attachment.ops(),
                     clear,
                 },
-                ImageFormat::Rgba8Unorm,
+                super::ImageAspect::Color,
                 &mut extent,
             )?;
         }
@@ -113,7 +113,7 @@ impl Graph {
                     ops: attachment.ops(),
                     clear: [value, 0.0, 0.0, 0.0],
                 },
-                ImageFormat::Depth32Float,
+                super::ImageAspect::Depth,
                 &mut extent,
             )?;
             Some(index)
@@ -150,9 +150,10 @@ impl Graph {
         let targets = if let (1, Some(depth)) = (colors.len(), depth) {
             let color = self.attachments[colors.start];
             let depth = self.attachments[depth];
-            if self
-                .image_desc_at(color.view.image.index)?
-                .is_single_subresource()
+            if self.image_desc_at(color.view.image.index)?.format == ImageFormat::Rgba8Unorm
+                && self
+                    .image_desc_at(color.view.image.index)?
+                    .is_single_subresource()
                 && self
                     .image_desc_at(depth.view.image.index)?
                     .is_single_subresource()
@@ -182,12 +183,12 @@ impl Graph {
     fn append_attachment(
         &mut self,
         operand: AttachmentOperand,
-        format: ImageFormat,
+        aspect: super::ImageAspect,
         extent: &mut Option<[u32; 2]>,
     ) -> Result<(), GraphError> {
         let resource = self.image_id(operand.view.image)?;
         let desc = self.image_desc_at(resource)?;
-        if desc.format != format {
+        if desc.format.aspect() != aspect {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
                 "attachment format does not match its color/depth role",
@@ -217,7 +218,7 @@ impl Graph {
             write: true,
             initializes: operand.ops.load != LoadAction::Discard,
             discard_after: operand.ops.store == StoreOp::Discard,
-            purpose: if format == ImageFormat::Rgba8Unorm {
+            purpose: if aspect == super::ImageAspect::Color {
                 AccessPurpose::ColorAttachment
             } else {
                 AccessPurpose::DepthAttachment

@@ -62,7 +62,24 @@ pub struct BufferDesc {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageFormat {
     Rgba8Unorm,
+    Rgba16Float,
     Depth32Float,
+}
+
+impl ImageFormat {
+    pub(crate) const fn texel_bytes(self) -> u64 {
+        match self {
+            Self::Rgba8Unorm | Self::Depth32Float => 4,
+            Self::Rgba16Float => 8,
+        }
+    }
+
+    pub(crate) const fn aspect(self) -> ImageAspect {
+        match self {
+            Self::Rgba8Unorm | Self::Rgba16Float => ImageAspect::Color,
+            Self::Depth32Float => ImageAspect::Depth,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -93,6 +110,14 @@ impl ImageDesc {
             array_layers: 1,
         }
     }
+    /// Scene-linear floating-point color, packed as four IEEE 754 binary16
+    /// components per texel in little-endian component order.
+    pub fn rgba16_float(width: u32, height: u32) -> Self {
+        Self {
+            format: ImageFormat::Rgba16Float,
+            ..Self::rgba8(width, height)
+        }
+    }
     pub fn byte_len(self) -> Option<u64> {
         if self.width == 0
             || self.height == 0
@@ -107,7 +132,7 @@ impl ImageDesc {
             let [width, height] = self.mip_extent(mip)?;
             let level = u64::from(width)
                 .checked_mul(u64::from(height))?
-                .checked_mul(4)?;
+                .checked_mul(self.format.texel_bytes())?;
             bytes = bytes.checked_add(level)?;
         }
         bytes.checked_mul(u64::from(self.array_layers))
@@ -280,10 +305,7 @@ impl Graph {
     ) -> Result<ImageView, GraphError> {
         let id = self.image_id(image)?;
         let desc = self.image_desc_at(id)?;
-        let aspect = match desc.format {
-            ImageFormat::Rgba8Unorm => ImageAspect::Color,
-            ImageFormat::Depth32Float => ImageAspect::Depth,
-        };
+        let aspect = desc.format.aspect();
         if mip >= desc.mip_levels || layer >= desc.array_layers {
             return Err(self
                 .resource_error(
@@ -540,11 +562,7 @@ impl Graph {
                 // subresource, rather than reporting the flattened unit index.
                 mip: (range.start % u64::from(desc.mip_levels)) as u32,
                 layer: (range.start / u64::from(desc.mip_levels)) as u32,
-                aspect: if desc.format == ImageFormat::Rgba8Unorm {
-                    ImageAspect::Color
-                } else {
-                    ImageAspect::Depth
-                },
+                aspect: desc.format.aspect(),
             },
         }
     }
@@ -570,6 +588,16 @@ mod tests {
         assert!(!desc.is_single_subresource());
         assert_eq!(ImageDesc::rgba8(4, 2).byte_len(), Some(32));
         assert_eq!(ImageDesc::depth32(4, 2).byte_len(), Some(32));
+        assert_eq!(ImageDesc::rgba16_float(4, 2).byte_len(), Some(64));
+        assert_eq!(
+            ImageDesc {
+                format: ImageFormat::Rgba16Float,
+                ..desc
+            }
+            .byte_len(),
+            Some(176)
+        );
+        assert_eq!(ImageDesc::rgba16_float(u32::MAX, u32::MAX).byte_len(), None);
         assert!(ImageDesc::depth32(4, 2).is_single_subresource());
     }
 

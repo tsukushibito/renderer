@@ -11,6 +11,7 @@ pub struct ManagedRasterProgram {
 }
 
 struct Manifest {
+    native_id: usize,
     vertex_stride: u32,
     parameter_size: u32,
     color_outputs: &'static [ImageFormat],
@@ -20,9 +21,14 @@ struct Manifest {
     vertex_spirv: &'static [u8],
     #[cfg(feature = "vulkan")]
     fragment_spirv: &'static [u8],
+    #[cfg(all(feature = "d3d12", windows))]
+    vertex_dxil: &'static [u8],
+    #[cfg(all(feature = "d3d12", windows))]
+    fragment_dxil: &'static [u8],
 }
 
 static MESH: Manifest = Manifest {
+    native_id: 0,
     vertex_stride: 28,
     parameter_size: 80,
     color_outputs: &[ImageFormat::Rgba8Unorm],
@@ -32,9 +38,14 @@ static MESH: Manifest = Manifest {
     vertex_spirv: include_bytes!("../../shaders/mesh.vert.spv"),
     #[cfg(feature = "vulkan")]
     fragment_spirv: include_bytes!("../../shaders/mesh.frag.spv"),
+    #[cfg(all(feature = "d3d12", windows))]
+    vertex_dxil: include_bytes!("../../shaders/dxil/mesh.vert.dxil"),
+    #[cfg(all(feature = "d3d12", windows))]
+    fragment_dxil: include_bytes!("../../shaders/dxil/mesh.frag.dxil"),
 };
 
 static TEXTURED_MESH: Manifest = Manifest {
+    native_id: 1,
     vertex_stride: 28,
     parameter_size: 80,
     color_outputs: &[ImageFormat::Rgba8Unorm],
@@ -68,6 +79,37 @@ static TEXTURED_MESH: Manifest = Manifest {
     vertex_spirv: include_bytes!("../../shaders/textured.vert.spv"),
     #[cfg(feature = "vulkan")]
     fragment_spirv: include_bytes!("../../shaders/textured.frag.spv"),
+    #[cfg(all(feature = "d3d12", windows))]
+    vertex_dxil: include_bytes!("../../shaders/dxil/textured.vert.dxil"),
+    #[cfg(all(feature = "d3d12", windows))]
+    fragment_dxil: include_bytes!("../../shaders/dxil/textured.frag.dxil"),
+};
+
+// Fragment float outputs use the attachment's native UNORM or float conversion.
+// These immutable manifests select the pipeline format without changing the
+// shader's resource access or inline/vertex ABI.
+static MESH_HDR: Manifest = Manifest {
+    native_id: 2,
+    color_outputs: &[ImageFormat::Rgba16Float],
+    ..MESH
+};
+
+static TEXTURED_MESH_HDR: Manifest = Manifest {
+    native_id: 3,
+    color_outputs: &[ImageFormat::Rgba16Float],
+    ..TEXTURED_MESH
+};
+
+// No fragment shader or color output is needed for an opaque depth pass. The
+// same vertex transform establishes the depth; there are no shader side effects.
+static DEPTH_ONLY: Manifest = Manifest {
+    native_id: 4,
+    color_outputs: &[],
+    #[cfg(feature = "vulkan")]
+    fragment_spirv: &[],
+    #[cfg(all(feature = "d3d12", windows))]
+    fragment_dxil: &[],
+    ..MESH
 };
 
 impl std::fmt::Debug for ManagedRasterProgram {
@@ -88,14 +130,32 @@ impl ManagedRasterProgram {
     /// or storage side effects. The generated DXIL represents the same inline
     /// parameters as its `b0` constant block; it is not a new Graph buffer binding.
     ///
-    /// The current command contract uses u32 triangle indices from first index
+    /// The command contract uses u32 triangle indices from first index
     /// zero, base vertex zero and one instance. It admits one color output with
     /// optional depth in CPU plans; native support remains backend-specific.
     pub const fn mesh() -> Self {
         Self { manifest: &MESH }
     }
 
-    /// A reviewed descriptor-bound mesh pair for logical Graph planning.
+    /// The mesh shader pair with one linear RGBA16F output. Values outside zero
+    /// to one remain floating-point color; no exposure or tone mapping is added.
+    /// Its vertex, inline parameter and resource binding ABIs match [`Self::mesh`].
+    pub const fn mesh_hdr() -> Self {
+        Self {
+            manifest: &MESH_HDR,
+        }
+    }
+
+    /// The mesh vertex transform with no color output or fragment shader.
+    /// A Raster pass using this program requires a depth attachment and uses
+    /// the same normal-Z LESS test/write and inline matrix/tint ABI as the mesh.
+    pub const fn depth_only() -> Self {
+        Self {
+            manifest: &DEPTH_ONLY,
+        }
+    }
+
+    /// A reviewed descriptor-bound mesh pair.
     /// The vertex shader reads one 16-byte clip-space offset from Uniform
     /// group 0/binding 0 in addition to the usual inline matrix/tint. The
     /// fragment shader reads one float 2D sampled image at group 1/binding 0
@@ -105,11 +165,19 @@ impl ManagedRasterProgram {
     ///
     /// The mesh vertex/index and inline parameter ABIs match [`Self::mesh`].
     /// The complete selected mip/layer must be initialized; Raster does not
-    /// guarantee complete attachment coverage. Native execution is subsequent
-    /// work and must reject this Program until its PSO/bindings are supported.
+    /// guarantee complete attachment coverage.
     pub const fn textured_mesh() -> Self {
         Self {
             manifest: &TEXTURED_MESH,
+        }
+    }
+
+    /// The descriptor-bound mesh pair with one linear RGBA16F output. Shader
+    /// behavior and binding footprints match [`Self::textured_mesh`]; the output
+    /// keeps HDR values without tone mapping or UNORM clamping.
+    pub const fn textured_mesh_hdr() -> Self {
+        Self {
+            manifest: &TEXTURED_MESH_HDR,
         }
     }
 
@@ -137,7 +205,21 @@ impl ManagedRasterProgram {
     }
 
     pub(crate) fn is_mesh(&self) -> bool {
-        std::ptr::eq(self.manifest, &MESH)
+        self.native_id() == 0
+    }
+
+    /// Stable key for this finite set of reviewed immutable native contracts.
+    pub(crate) fn native_id(&self) -> usize {
+        self.manifest.native_id
+    }
+
+    #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub(crate) fn is_textured(&self) -> bool {
+        matches!(self.native_id(), 1 | 3)
+    }
+
+    pub(crate) fn is_depth_only(&self) -> bool {
+        self.native_id() == 4
     }
 
     #[cfg(feature = "vulkan")]
@@ -149,11 +231,74 @@ impl ManagedRasterProgram {
     pub(crate) fn fragment_spirv(&self) -> &'static [u8] {
         self.manifest.fragment_spirv
     }
+
+    #[cfg(all(feature = "d3d12", windows))]
+    pub(crate) fn vertex_dxil(&self) -> &'static [u8] {
+        self.manifest.vertex_dxil
+    }
+
+    #[cfg(all(feature = "d3d12", windows))]
+    pub(crate) fn fragment_dxil(&self) -> &'static [u8] {
+        self.manifest.fragment_dxil
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdr_and_depth_contracts_preserve_the_reviewed_shader_abis() {
+        for (program, original) in [
+            (
+                ManagedRasterProgram::mesh_hdr(),
+                ManagedRasterProgram::mesh(),
+            ),
+            (
+                ManagedRasterProgram::textured_mesh_hdr(),
+                ManagedRasterProgram::textured_mesh(),
+            ),
+        ] {
+            assert_eq!(program.color_outputs(), &[ImageFormat::Rgba16Float]);
+            assert_eq!(program.vertex_stride(), original.vertex_stride());
+            assert_eq!(program.parameter_size(), original.parameter_size());
+            assert_eq!(program.bindings(), original.bindings());
+            assert_eq!(program.binding_bytes(), original.binding_bytes());
+            assert_eq!(program.is_textured(), original.is_textured());
+            assert!(!program.is_mesh());
+            assert!(!program.is_depth_only());
+            #[cfg(feature = "vulkan")]
+            {
+                assert_eq!(program.vertex_spirv(), original.vertex_spirv());
+                assert_eq!(program.fragment_spirv(), original.fragment_spirv());
+            }
+            #[cfg(all(feature = "d3d12", windows))]
+            {
+                assert_eq!(program.vertex_dxil(), original.vertex_dxil());
+                assert_eq!(program.fragment_dxil(), original.fragment_dxil());
+            }
+        }
+        let program = ManagedRasterProgram::depth_only();
+        let mesh = ManagedRasterProgram::mesh();
+        assert!(program.color_outputs().is_empty());
+        assert!(program.bindings().is_empty());
+        assert!(program.binding_bytes().is_empty());
+        assert!(program.is_depth_only());
+        assert!(!program.is_textured());
+        assert!(!program.is_mesh());
+        assert_eq!(program.vertex_stride(), mesh.vertex_stride());
+        assert_eq!(program.parameter_size(), mesh.parameter_size());
+        #[cfg(feature = "vulkan")]
+        {
+            assert_eq!(program.vertex_spirv(), mesh.vertex_spirv());
+            assert!(program.fragment_spirv().is_empty());
+        }
+        #[cfg(all(feature = "d3d12", windows))]
+        {
+            assert_eq!(program.vertex_dxil(), mesh.vertex_dxil());
+            assert!(program.fragment_dxil().is_empty());
+        }
+    }
 
     fn signature<'a>(reflection: &'a str, heading: &str) -> &'a str {
         reflection
@@ -359,7 +504,7 @@ mod tests {
 
     #[cfg(feature = "vulkan")]
     #[test]
-    fn textured_native_assets_are_distinct_from_the_unsupported_mesh_pipeline() {
+    fn textured_native_assets_are_distinct_from_the_mesh_pipeline() {
         let program = ManagedRasterProgram::textured_mesh();
         assert_eq!(
             program.vertex_spirv(),
