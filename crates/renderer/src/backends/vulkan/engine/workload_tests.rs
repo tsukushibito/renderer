@@ -7,8 +7,9 @@ use super::test_input::{Assets as Engine, graph};
 use super::{EngineFrameCapacity, MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
 use crate::{
     RuntimeConfig, ValidationMode, VulkanRuntime,
+    backends::vulkan::graph::{FrameCapacity, ResourceClass},
     engine::{Draw, IDENTITY, Material, View},
-    graph::ResourceKey,
+    graph::{BufferDesc, ImageDesc, ResourceKey},
 };
 
 #[path = "../../../../examples/support/engine_geometry.rs"]
@@ -40,6 +41,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
             max_meshes: 1,
             max_bytes: 2 * 1024 * 1024,
             max_upload_submissions: 2,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
@@ -47,6 +49,26 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
     let mut assets = Engine::new(1, 1).unwrap();
     let generated = engine_geometry::grid(112);
     assert!(generated.vertices.len() as u64 > STAGING);
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.vertices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.indices.len() as u64,
+                    },
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
     let material = assets.create_material(Material::default()).unwrap();
     let snapshot = assets
@@ -66,12 +88,16 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
         .unwrap();
     let partial = renderer.prepare_snapshot(&snapshot).unwrap();
     assert!(partial.submitted_bytes > 0 && partial.remaining_bytes > 0);
-    renderer.cancel_uploads().unwrap();
-    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 0);
+    renderer.cancel_uploads();
+    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 1);
+    assert_eq!(renderer.mesh_cache_stats().queued_meshes, 0);
+    assert!(renderer.residents.values().all(|entry| entry.retiring));
     let cancelled = renderer.wait_uploads(TIMEOUT).unwrap();
     assert_eq!(cancelled.remaining_bytes, 0);
     assert_eq!(cancelled.pending_submissions, 0);
-    assert!(renderer.retiring.is_empty());
+    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 1);
+    assert_eq!(renderer.collect_retired_meshes(Some(&assets)).unwrap(), 1);
+    assert!(renderer.residents.is_empty());
 
     let mut progress = renderer.prepare_snapshot(&snapshot).unwrap();
     let started = Instant::now();
@@ -92,8 +118,9 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
     let indices = buffers.indices;
     read_all(&mut renderer, vertices, &generated.vertices);
     read_all(&mut renderer, indices, &generated.indices);
-    renderer.unload_all_meshes().unwrap();
-    assert!(renderer.residents.is_empty() && renderer.retiring.is_empty());
+    renderer.unload_all_meshes();
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
+    assert!(renderer.residents.is_empty());
     drop(renderer);
     let report = monitor.report();
     #[cfg(feature = "development-validation")]
@@ -167,6 +194,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             max_meshes: 2,
             max_bytes: 16 * 1024 * 1024,
             max_upload_submissions: 3,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
@@ -174,6 +202,26 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
     let mut assets = Engine::new(2, 1).unwrap();
     let generated = engine_geometry::grid(400);
     assert!(generated.vertices.len() > 4 * 1024 * 1024);
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.vertices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.indices.len() as u64,
+                    },
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mesh = assets.create_mesh(generated.mesh).unwrap();
     let material = assets.create_material(Material::default()).unwrap();
     let snapshot = assets
@@ -217,7 +265,8 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             .peak_reserved_bytes
             <= STAGING
     );
-    renderer.unload_mesh(mesh).unwrap();
+    renderer.unload_mesh(mesh);
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
     assert!(
         assets.mesh_revision(mesh).is_ok(),
         "GPU unload must preserve the CPU asset"
@@ -258,12 +307,42 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
             max_meshes: 2,
             max_bytes: 1024 * 1024,
             max_upload_submissions: 1,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
     .unwrap();
     let mut assets = Engine::new(1, 1).unwrap();
-    let mesh = assets.create_mesh(engine_geometry::grid(4).mesh).unwrap();
+    let generated = engine_geometry::grid(4);
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.vertices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc {
+                        size: generated.indices.len() as u64,
+                    },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
+    let mesh = assets.create_mesh(generated.mesh).unwrap();
     let material = assets
         .create_material(Material {
             tint: [0.0, 1.0, 1.0, 1.0],
@@ -351,6 +430,22 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         EngineFrameCapacity::default(),
     )
     .unwrap();
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(8, 8),
+                    count: 2,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(8, 8),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mut graph = graph();
     let caller_image = graph
         .image(
@@ -472,10 +567,35 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             max_meshes: 16,
             max_bytes: 1024 * 1024,
             max_upload_submissions: 1,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
     .unwrap();
+    renderer
+        .runtime_mut()
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 112 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 24 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mut assets = Engine::new(3, 1).unwrap();
     let material = assets.create_material(Material::default()).unwrap();
     let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
@@ -529,6 +649,8 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         }
     };
     for (snapshot, color) in snapshots.iter().zip(colors) {
+        // Switching the admitted asset is an explicit maintenance boundary.
+        renderer.collect_retired_meshes(Some(&assets)).unwrap();
         ready(&mut renderer, snapshot);
         let mut frame = renderer
             .render_snapshot(snapshot, true, |_, image| Ok(image))
@@ -554,6 +676,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             assert!(assets.mesh_revision(mesh).is_ok());
         }
     }
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
     ready(&mut renderer, &snapshots[0]);
     let pinned = renderer
         .build_snapshot(&snapshots[0], false, |_, image| Ok(image))
@@ -565,6 +688,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         ))
     ));
     drop(pinned);
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
     ready(&mut renderer, &snapshots[1]);
     drop(renderer);
     let report = monitor.report();

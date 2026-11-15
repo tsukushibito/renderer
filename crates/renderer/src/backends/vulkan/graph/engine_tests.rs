@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{RuntimeConfig, VulkanRuntime};
+use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
     test_input::{Assets as Engine, graph},
@@ -11,7 +11,7 @@ use crate::{
     EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
     RenderedFrame, VulkanEngine,
     engine::{Draw, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
-    graph::{ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
+    graph::{BufferDesc, ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
 };
 
 fn mesh(color: [f32; 4]) -> MeshData {
@@ -26,7 +26,7 @@ fn mesh(color: [f32; 4]) -> MeshData {
 fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
-        let runtime = VulkanRuntime::new(RuntimeConfig {
+        let mut runtime = VulkanRuntime::new(RuntimeConfig {
             execution_slots: 4,
             ..RuntimeConfig::default()
         })
@@ -37,25 +37,58 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
         );
         let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
+        runtime
+            .prepare_working_set(
+                FrameCapacity::default(),
+                &[
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 84 },
+                        count: 8,
+                    },
+                    ResourceClass::Buffer {
+                        desc: BufferDesc { size: 12 },
+                        count: 8,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(32, 32),
+                        count: 12,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::depth32(32, 32),
+                        count: 4,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::rgba8(8, 8),
+                        count: 8,
+                    },
+                    ResourceClass::Image {
+                        desc: ImageDesc::depth32(8, 8),
+                        count: 4,
+                    },
+                ],
+            )
+            .unwrap();
         let mut engine = VulkanEngine::new(
             runtime,
             MeshCacheConfig {
                 max_meshes: 8,
                 max_bytes: mesh([1.0; 4]).byte_len() * 8,
                 max_upload_submissions: 1,
+                max_retired_sources: 16,
             },
             EngineFrameCapacity::default(),
         )
         .unwrap();
         let mut assets = Engine::new(4, 4).unwrap();
         test(&mut engine, &mut assets);
-        engine.unload_all_meshes().unwrap();
+        engine.unload_all_meshes();
         assert!(
             engine
                 .runtime_mut()
                 .drain_frames(Duration::from_secs(10))
                 .unwrap()
         );
+        engine.collect_retired_meshes(Some(&assets)).unwrap();
         drop(engine);
         let report = diagnostics.snapshot();
         assert!(
@@ -214,7 +247,8 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             [255, 0, 255, 255],
         ));
         assets.delete_mesh(mesh_handle).unwrap();
-        engine.unload_mesh(mesh_handle).unwrap();
+        engine.unload_mesh(mesh_handle);
+        engine.collect_retired_meshes(Some(assets)).unwrap();
         assets.delete_material(material).unwrap();
         assert_eq!(engine.runtime().pending_frames(), 4);
         collect(engine, &expected);
@@ -299,8 +333,9 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
         engine.release_output(&mut second).unwrap();
         for handle in [near, far, equal] {
             assets.delete_mesh(handle).unwrap();
-            engine.unload_mesh(handle).unwrap();
+            engine.unload_mesh(handle);
         }
+        engine.collect_retired_meshes(Some(assets)).unwrap();
         for handle in [red, green, blue] {
             assets.delete_material(handle).unwrap();
         }
@@ -443,7 +478,8 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         let mut pending = engine.submit_frame(cached).unwrap();
         engine.release_output(&mut pending).unwrap();
         assets.delete_mesh(handle).unwrap();
-        engine.unload_mesh(handle).unwrap();
+        engine.unload_mesh(handle);
+        engine.collect_retired_meshes(Some(assets)).unwrap();
         assets.delete_material(material).unwrap();
         collect(
             engine,
@@ -481,7 +517,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
 fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     use std::sync::Arc;
 
-    let runtime = VulkanRuntime::new_with_validation(
+    let mut runtime = VulkanRuntime::new_with_validation(
         RuntimeConfig::default(),
         crate::ValidationMode::Disabled,
     )
@@ -491,6 +527,29 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
         ash::vk::PhysicalDeviceType::CPU
     );
     let monitor = runtime.validation_monitor();
+    runtime
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 84 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 12 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
     let mut engine = VulkanEngine::new(
         runtime,
         MeshCacheConfig::default(),
@@ -524,6 +583,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     assets.delete_mesh(mesh_handle).unwrap();
     assets.delete_material(material).unwrap();
     engine.release_idle_inputs();
+    engine.collect_retired_meshes(Some(&assets)).unwrap();
     assets.collect_retired_meshes();
     assert!(
         vertices.upgrade().is_none(),
@@ -553,7 +613,8 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
             [255, 0, 0, 255],
         )],
     );
-    engine.unload_all_meshes().unwrap();
+    engine.unload_all_meshes();
+    engine.collect_retired_meshes(Some(&assets)).unwrap();
     assert!(
         engine
             .runtime_mut()
