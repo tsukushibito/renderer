@@ -190,8 +190,9 @@ fn run_shared_graph(strict_validation: bool) {
         d3d12_result
             .readback_into(readback.pass, &mut actual_d3d12)
             .expect("completed D3D12 readback");
-        let actual_vulkan = vulkan_result
-            .readback(readback.pass)
+        let mut actual_vulkan = vec![0; readback.bytes.len()];
+        vulkan_result
+            .readback_into(readback.pass, &mut actual_vulkan)
             .expect("completed Vulkan readback");
         let matches = actual_d3d12 == readback.bytes
             && actual_vulkan == readback.bytes
