@@ -138,6 +138,7 @@ impl ExportLease {
         self.slot().entries().values.len()
     }
 
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.len() == 0
     }
