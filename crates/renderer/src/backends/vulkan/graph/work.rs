@@ -192,7 +192,7 @@ impl PreparedOperation {
                 clear_depth,
             },
             Operation::Composite { dst, .. } => Self::Composite { dst },
-            Operation::Culled | Operation::Declared(_) => {
+            Operation::Declared(_) => {
                 return Err(RuntimeError::unsupported(
                     "pass has no executable operation",
                 ));
@@ -613,7 +613,7 @@ impl GraphWork {
                         }
                     }
                     Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}
-                    Operation::Culled | Operation::Declared(_) => {
+                    Operation::Declared(_) => {
                         return Err(RuntimeError::unsupported(
                             "declaration-only pass is not executable",
                         ));

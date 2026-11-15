@@ -675,6 +675,24 @@ cargo test --locked --release -p renderer --lib --no-default-features --features
 正常終了はframeの回収とPresenterの明示closeを行い、最後に保持したValidationMonitorで
 native所有者の破棄後までwarning／error／callback失敗ゼロを確認します。
 
+### 通常フレームのメモリ計測
+
+`memory-profiling`は追加検証から独立した計測featureで、offでは専用counter moduleを除外する。
+計測用実行ファイルは`CountingAllocator<System>`をglobal allocatorに設定し、alloc/alloc_zeroed/realloc/deallocを別計測する。
+library本体はアプリのglobal allocatorを強制しない。native作成/破棄、descriptor、VMA host metadataは別eventで扱う。
+counterがゼロでも未接続のhookを覆った証拠にはならないため、実行した経路と観測範囲を報告する。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu --baseline
+cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu
+```
+
+`--baseline`は現在の非ゼロ値を記録するだけで、ゼロ目標の受入には使わない。
+省略時は観測した確保/解放のどれかが残れば失敗する。現在のCPU caseはsnapshot/build/compileと全owner返却までを含み、
+draw数0/1/4/2、追加compute pass0/1/2、入力値を変え、3frame分のCPU ownerを保持してから全て返却する。
+report構築・資源準備/終了は計測窓外。GPU実行・readback・present・cancel/backpressureの全体受入はまだ接続中である。
+現行結果と測定範囲は[通常フレームのメモリ計測](../verification/frame-memory.json)を参照する。
+
 ### 表示FPSの計測方針
 
 `windowed`には現在FPS集計を実装していません。追加する場合は、単調増加時計に対する

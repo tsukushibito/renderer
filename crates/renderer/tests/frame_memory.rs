@@ -9,6 +9,10 @@ use std::alloc::System;
 #[path = "../examples/support/frame_memory.rs"]
 mod frame_memory;
 
+#[cfg(feature = "vulkan")]
+#[path = "../examples/support/frame_memory_image.rs"]
+mod frame_memory_image;
+
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
 
@@ -31,6 +35,13 @@ fn baseline() -> bool {
 #[ignore = "explicit Vulkan public buffer full-lifecycle memory gate, including held readbacks; native hooks required"]
 fn frame_memory_vulkan_buffer_full_lifecycle() {
     frame_memory::vulkan_buffer_lifecycle(baseline());
+}
+
+#[cfg(feature = "vulkan")]
+#[test]
+#[ignore = "explicit optimized Vulkan Engine/Raster/Compute image full-lifecycle memory gate; native hooks required"]
+fn frame_memory_vulkan_engine_image_full_lifecycle() {
+    frame_memory_image::lifecycle(baseline());
 }
 
 #[cfg(all(feature = "d3d12", windows))]

@@ -339,6 +339,17 @@ impl Engine {
         before - self.retired_meshes.len()
     }
 
+    /// Transfer a native source anchor only to a version this asset owner keeps
+    /// until explicit collection (or shutdown), rather than to a frame snapshot.
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn anchors_mesh_data(&self, data: &Arc<MeshData>) -> bool {
+        self.meshes
+            .iter()
+            .filter_map(|slot| slot.value.as_ref())
+            .chain(&self.retired_meshes)
+            .any(|version| Arc::ptr_eq(&version.data, data))
+    }
+
     fn stream_is_anchored(&self, bytes: &Arc<[u8]>, candidate: usize) -> bool {
         Arc::strong_count(bytes) == 1
             || self
