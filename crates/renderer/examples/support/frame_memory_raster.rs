@@ -524,10 +524,9 @@ impl Backend for renderer::VulkanRuntime {
 
 #[cfg(feature = "vulkan")]
 pub fn vulkan(baseline: bool) {
-    assert!(
-        !cfg!(debug_assertions),
-        "memory acceptance requires --release"
-    );
+    if cfg!(debug_assertions) {
+        panic!("memory acceptance requires --release");
+    }
     let start = Snapshot::now();
     let mut runtime = renderer::VulkanRuntime::new(renderer::RuntimeConfig {
         execution_slots: IN_FLIGHT,
@@ -664,10 +663,9 @@ impl Backend for renderer::D3D12Runtime {
 
 #[cfg(all(feature = "d3d12", windows))]
 pub fn d3d12(baseline: bool) {
-    assert!(
-        !cfg!(debug_assertions),
-        "memory acceptance requires --release"
-    );
+    if cfg!(debug_assertions) {
+        panic!("memory acceptance requires --release");
+    }
     let start = Snapshot::now();
     let mut config = renderer::D3D12RuntimeConfig::default();
     config.capacity.executions = IN_FLIGHT;
