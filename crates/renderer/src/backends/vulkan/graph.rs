@@ -3,7 +3,7 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -236,9 +236,10 @@ pub struct VulkanRuntime {
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
     entries: Vec<Entry>,
-    vacant: BTreeSet<usize>,
+    vacant: Vec<usize>,
     available: CacheIndex<CacheDescriptor>,
     recycle: Arc<RecycleQueue>,
+    recycle_pending: Vec<usize>,
     frames: frames::FrameQueue<frames::PendingFrame>,
     timestamp_pool: Option<metrics::TimestampPool>,
     profiling_enabled: bool,
@@ -352,6 +353,24 @@ impl VulkanRuntime {
         let id = NEXT_RUNTIME
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| RuntimeError::capacity("runtime identity exhausted"))?;
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let mut vacant = Vec::new();
+        vacant
+            .try_reserve_exact(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let mut recycle_pending = Vec::new();
+        recycle_pending
+            .try_reserve_exact(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let available = CacheIndex::new(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let recycle = Arc::new(
+            RecycleQueue::new(config.resource_capacity)
+                .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?,
+        );
         Ok(Self {
             owner,
             #[cfg(any(test, feature = "vulkan-diagnostics"))]
@@ -360,10 +379,11 @@ impl VulkanRuntime {
             upload,
             readback,
             programs: None,
-            entries: Vec::new(),
-            vacant: BTreeSet::new(),
-            available: CacheIndex::default(),
-            recycle: Arc::new(RecycleQueue::default()),
+            entries,
+            vacant,
+            available,
+            recycle,
+            recycle_pending,
             frames: frames::FrameQueue::new(config.execution_slots)?,
             timestamp_pool: None,
             profiling_enabled: false,
@@ -462,8 +482,10 @@ impl VulkanRuntime {
             // The registry is the sole owner. Dropping its Arc destroys the
             // native allocation and any content metadata, without a GPU wait.
             entry.physical = None;
-            if entry.generation < u32::MAX {
-                self.vacant.insert(index);
+            if entry.generation < u32::MAX
+                && let Err(position) = self.vacant.binary_search(&index)
+            {
+                self.vacant.insert(position, index);
             }
             released += 1;
         }
@@ -492,9 +514,15 @@ impl VulkanRuntime {
     }
 
     fn collect_recycled(&mut self) {
-        for index in self.recycle.take() {
+        // Drop the queue lock before acquiring physical state locks. Keep the
+        // prepared scratch backing through every collection and lease return.
+        let mut pending = std::mem::take(&mut self.recycle_pending);
+        self.recycle.drain_into(&mut pending);
+        for &index in &pending {
             self.recycle_entry(index);
         }
+        pending.clear();
+        self.recycle_pending = pending;
     }
 
     fn lease(&self, key: ResourceKey) -> Result<PhysicalLease, RuntimeError> {
@@ -566,7 +594,7 @@ impl VulkanRuntime {
         let native = match desc {
             ResourceDesc::Buffer(desc) => NativeResource::Buffer(
                 DeviceBuffer::new(Arc::clone(&self.owner), desc.size, name)
-                    .map_err(|error| error.context(format!("resource {name:?}")))?,
+                    .map_err(|error| error.context(format_args!("resource {name:?}")))?,
             ),
             ResourceDesc::Image(desc) => NativeResource::Image(
                 DeviceImage::new(
@@ -579,7 +607,7 @@ impl VulkanRuntime {
                     },
                     name,
                 )
-                .map_err(|error| error.context(format!("resource {name:?}")))?,
+                .map_err(|error| error.context(format_args!("resource {name:?}")))?,
             ),
         };
         let physical = Arc::new(Physical {
@@ -600,7 +628,9 @@ impl VulkanRuntime {
         };
         if replace.is_some() {
             self.available.remove(index);
-            self.vacant.remove(&index);
+            if let Ok(position) = self.vacant.binary_search(&index) {
+                self.vacant.remove(position);
+            }
             self.entries[index] = entry;
         } else {
             self.entries.push(entry);

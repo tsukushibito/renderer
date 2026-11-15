@@ -1,6 +1,6 @@
 //! Backend execution errors, preserving native causes without exposing native types.
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 use ash::vk;
 
@@ -30,49 +30,88 @@ pub enum RuntimeErrorKind {
 /// Context and its original error chain, with native API types erased.
 #[derive(Debug)]
 pub struct RuntimeError {
-    pub message: String,
+    pub message: Cow<'static, str>,
     kind: RuntimeErrorKind,
-    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    source: Option<RuntimeCause>,
 }
+
+#[derive(Debug)]
+enum RuntimeCause {
+    TransferCapacity {
+        capacity: usize,
+    },
+    StagingCapacity {
+        capacity: u64,
+        requested: u64,
+        reserved: u64,
+    },
+    Other(Box<dyn std::error::Error + Send + Sync>),
+}
+impl RuntimeCause {
+    fn as_error(&self) -> &(dyn std::error::Error + 'static) {
+        match self {
+            Self::Other(source) => source.as_ref(),
+            _ => self,
+        }
+    }
+}
+impl fmt::Display for RuntimeCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TransferCapacity { capacity } => {
+                write!(f, "execution pool has no free slot (capacity {capacity})")
+            }
+            Self::StagingCapacity {
+                capacity,
+                requested,
+                reserved,
+            } => write!(
+                f,
+                "staging has no contiguous range for {requested} bytes (capacity {capacity}, reserved {reserved})"
+            ),
+            Self::Other(source) => source.fmt(f),
+        }
+    }
+}
+impl std::error::Error for RuntimeCause {}
 
 impl RuntimeError {
     pub(super) fn is_staging_exhausted(&self) -> bool {
-        matches!(
-            self.source
-                .as_deref()
-                .and_then(|cause| cause.downcast_ref::<StagingError>()),
-            Some(StagingError::CapacityExhausted { .. })
-        )
+        matches!(self.source, Some(RuntimeCause::StagingCapacity { .. }))
     }
     pub fn kind(&self) -> RuntimeErrorKind {
         self.kind
     }
 
     pub(super) fn context(mut self, context: impl fmt::Display) -> Self {
-        self.message = format!("{context}: {}", self.message);
+        // Expected backpressure stays scalar/static, including when a pass or
+        // frame adds context. Formatting belongs to explicit error reporting.
+        if self.kind != RuntimeErrorKind::CapacityExhausted {
+            self.message = format!("{context}: {}", self.message).into();
+        }
         self
     }
 
-    fn classified(kind: RuntimeErrorKind, message: impl Into<String>) -> Self {
+    fn classified(kind: RuntimeErrorKind, message: impl Into<Cow<'static, str>>) -> Self {
         Self {
             message: message.into(),
             kind,
             source: None,
         }
     }
-    pub(super) fn invalid(message: impl Into<String>) -> Self {
+    pub(super) fn invalid(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::InvalidInput, message)
     }
-    pub(super) fn unsupported(message: impl Into<String>) -> Self {
+    pub(super) fn unsupported(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::Unsupported, message)
     }
-    pub(super) fn capacity(message: impl Into<String>) -> Self {
+    pub(super) fn capacity(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::CapacityExhausted, message)
     }
-    pub(super) fn stale(message: impl Into<String>) -> Self {
+    pub(super) fn stale(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::StaleResource, message)
     }
-    pub(super) fn wrong_owner(message: impl Into<String>) -> Self {
+    pub(super) fn wrong_owner(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::WrongOwner, message)
     }
     pub(super) fn with_source<E: std::error::Error + Send + Sync + 'static>(
@@ -80,9 +119,9 @@ impl RuntimeError {
         source: E,
     ) -> Self {
         Self {
-            message: source.to_string(),
+            message: source.to_string().into(),
             kind,
-            source: Some(Box::new(source)),
+            source: Some(RuntimeCause::Other(Box::new(source))),
         }
     }
     pub(super) fn device_unavailable(state: DeviceState) -> Self {
@@ -108,14 +147,15 @@ impl RuntimeError {
 }
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        match &self.source {
+            Some(RuntimeCause::Other(_)) | None => f.write_str(&self.message),
+            Some(capacity) => capacity.fmt(f),
+        }
     }
 }
 impl std::error::Error for RuntimeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source
-            .as_ref()
-            .map(|source| source.as_ref() as &(dyn std::error::Error + 'static))
+        self.source.as_ref().map(RuntimeCause::as_error)
     }
 }
 
@@ -167,6 +207,13 @@ fn buffer_error_kind(error: &BufferError) -> RuntimeErrorKind {
 }
 impl From<TransferError> for RuntimeError {
     fn from(error: TransferError) -> Self {
+        if let TransferError::CapacityExhausted { capacity } = error {
+            return Self {
+                message: "execution pool has no free slot".into(),
+                kind: RuntimeErrorKind::CapacityExhausted,
+                source: Some(RuntimeCause::TransferCapacity { capacity }),
+            };
+        }
         let kind = match &error {
             TransferError::CapacityExhausted { .. } => RuntimeErrorKind::CapacityExhausted,
             TransferError::DeviceUnavailable(state) => device_kind(*state),
@@ -178,6 +225,22 @@ impl From<TransferError> for RuntimeError {
 }
 impl From<StagingError> for RuntimeError {
     fn from(error: StagingError) -> Self {
+        if let StagingError::CapacityExhausted {
+            capacity,
+            requested,
+            reserved,
+        } = error
+        {
+            return Self {
+                message: "staging has no contiguous free range".into(),
+                kind: RuntimeErrorKind::CapacityExhausted,
+                source: Some(RuntimeCause::StagingCapacity {
+                    capacity,
+                    requested,
+                    reserved,
+                }),
+            };
+        }
         let kind = match &error {
             StagingError::CapacityExhausted { .. } => RuntimeErrorKind::CapacityExhausted,
             StagingError::DeviceUnavailable(state) => device_kind(*state),
@@ -336,5 +399,25 @@ mod tests {
             RuntimeError::wrong_owner("different runtime").kind(),
             RuntimeErrorKind::WrongOwner
         );
+    }
+
+    #[test]
+    fn capacity_context_preserves_recovery_details_without_eager_formatting() {
+        let error = RuntimeError::from(StagingError::CapacityExhausted {
+            capacity: 128,
+            requested: 64,
+            reserved: 96,
+        })
+        .context(format_args!("pass {}", 7));
+        assert!(error.is_staging_exhausted());
+        assert_eq!(error.kind(), RuntimeErrorKind::CapacityExhausted);
+        let reported = error.to_string();
+        assert!(reported.contains("128") && reported.contains("64") && reported.contains("96"));
+        let execution = RuntimeError::from(TransferError::CapacityExhausted { capacity: 3 });
+        assert_eq!(
+            execution.to_string(),
+            "execution pool has no free slot (capacity 3)"
+        );
+        assert!(!execution.is_staging_exhausted());
     }
 }

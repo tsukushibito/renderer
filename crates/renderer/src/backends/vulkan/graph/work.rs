@@ -520,7 +520,7 @@ impl GraphWork {
                                     owner.device.max_draw_indexed_index_value(),
                                 )
                                 .map_err(|error| {
-                                    index_error(error).context(format!("draw {draw_index}"))
+                                    index_error(error).context(format_args!("draw {draw_index}"))
                                 })?;
                         }
                     }
@@ -533,7 +533,7 @@ impl GraphWork {
                 }
                 Ok(())
             })()
-            .map_err(|error| error.context(format!("pass {:?}", pass.name)))?;
+            .map_err(|error| error.context(format_args!("pass {:?}", pass.name)))?;
             passes.push(prepared);
         }
         for (index, state) in states.iter_mut().enumerate() {
