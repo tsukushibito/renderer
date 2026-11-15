@@ -523,6 +523,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     drop(snapshot);
     assets.delete_mesh(mesh_handle).unwrap();
     assets.delete_material(material).unwrap();
+    engine.release_idle_inputs();
     assets.collect_retired_meshes();
     assert!(
         vertices.upgrade().is_none(),

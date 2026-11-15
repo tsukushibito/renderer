@@ -1,5 +1,5 @@
 use super::*;
-use crate::graph::{BufferDesc, Graph, ImageDesc};
+use crate::graph::{BufferDesc, Graph, GraphCapacity, GraphPool, ImageDesc, ImportRanges};
 
 #[test]
 #[ignore = "explicit real GPU pass-identity readback test; run shipping and strict validation separately"]
@@ -33,18 +33,18 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
             .kind(),
         RuntimeErrorKind::InvalidInput
     );
-    let mut graph = Graph::new();
+    let mut graph = Graph::test_new();
     let buffer = graph
         .buffer("readback source", BufferDesc { size: 8 })
         .unwrap();
     graph
-        .upload_buffer("upload", buffer, 0, vec![1, 2, 3, 4, 5, 6, 7, 8])
+        .upload_buffer("upload", buffer, 0, &[1, 2, 3, 4, 5, 6, 7, 8])
         .unwrap();
     let first = graph.readback_buffer("first", buffer, 0, 4).unwrap();
     let second = graph.readback_buffer("second", buffer, 4, 4).unwrap();
     graph.depends_on(first, second).unwrap();
     let plan = graph.compile().unwrap();
-    assert_eq!(plan.ordered_pass_names(), ["upload", "second", "first"]);
+    assert!(plan.ordered_pass_names().eq(["upload", "second", "first"]));
     let mut submission = runtime.submit(&plan).unwrap();
     let mut result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
     assert_eq!(result.test_readback(first).unwrap(), [1, 2, 3, 4]);
@@ -53,10 +53,10 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
         result.test_readback(first).unwrap_err().kind(),
         RuntimeErrorKind::InvalidInput
     );
-    let mut foreign = Graph::new();
+    let mut foreign = Graph::test_new();
     let foreign_buffer = foreign.buffer("foreign", BufferDesc { size: 4 }).unwrap();
     foreign
-        .upload_buffer("upload", foreign_buffer, 0, vec![0; 4])
+        .upload_buffer("upload", foreign_buffer, 0, &[0; 4])
         .unwrap();
     let foreign_read = foreign
         .readback_buffer("read", foreign_buffer, 0, 4)
@@ -105,7 +105,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         let image_bytes = (0..17 * 13 * 4)
             .map(|byte| (byte * 37 + 11) as u8)
             .collect::<Vec<_>>();
-        let mut producer = Graph::new();
+        let mut producer = Graph::test_new();
         let buffer = producer
             .buffer("shared.buffer", BufferDesc { size: 16 })
             .unwrap();
@@ -113,21 +113,25 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             .image("shared.image", ImageDesc::rgba8(17, 13))
             .unwrap();
         producer
-            .upload_buffer("upload.buffer", buffer, 0, buffer_bytes.clone())
+            .upload_buffer("upload.buffer", buffer, 0, &buffer_bytes)
             .unwrap();
         producer
-            .upload_image("upload.image", image, image_bytes.clone())
+            .upload_image("upload.image", image, &image_bytes)
             .unwrap();
         let dead = producer.buffer("dead", BufferDesc { size: 4 }).unwrap();
         producer
-            .upload_buffer("unused.upload", dead, 0, vec![0; 4])
+            .upload_buffer("unused.upload", dead, 0, &[0; 4])
             .unwrap();
         producer.export_buffer(buffer).unwrap();
         producer.export_image(image).unwrap();
         let plan = producer.compile().unwrap();
-        assert!(!plan.ordered_pass_names().contains(&"unused.upload"));
+        assert!(
+            !plan
+                .ordered_pass_names()
+                .any(|name| name == "unused.upload")
+        );
         #[cfg(feature = "graph-diagnostics")]
-        assert_eq!(plan.culled_pass_names(), ["unused.upload"]);
+        assert!(plan.culled_pass_names().eq(["unused.upload"]));
         let mut first = runtime.submit(&plan).unwrap();
         let buffer_export = first.export_buffer(buffer).unwrap();
         let image_export = first.export_image(image).unwrap();
@@ -136,7 +140,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             2,
             "dead resource must not allocate"
         );
-        let mut consumer = Graph::new();
+        let mut consumer = Graph::test_new();
         let input = consumer
             .import_buffer("canonical.buffer", &buffer_export)
             .unwrap();
@@ -206,7 +210,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         drop(state);
         // B only read the image. Its changed native layout/serial must not
         // invalidate A's unchanged content snapshot.
-        let mut unchanged = Graph::new();
+        let mut unchanged = Graph::test_new();
         let old = unchanged
             .import_image("unchanged.snapshot", &image_export)
             .unwrap();
@@ -220,7 +224,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         );
         runtime.delete(image_export.key()).unwrap();
         drop((first, second, result, reader, read_result));
-        let mut repeated = Graph::new();
+        let mut repeated = Graph::test_new();
         let source = repeated
             .buffer("repeat.src", BufferDesc { size: 16 })
             .unwrap();
@@ -228,7 +232,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             .buffer("repeat.dst", BufferDesc { size: 16 })
             .unwrap();
         repeated
-            .upload_buffer("repeat.upload", source, 0, buffer_bytes.clone())
+            .upload_buffer("repeat.upload", source, 0, &buffer_bytes)
             .unwrap();
         repeated
             .copy_buffer("repeat.copy", source, 0, target, 0, 16)
@@ -314,53 +318,56 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
         );
 
         let size = 1024 * 1024;
-        let (key, old_input) = {
-            let input: Arc<[u8]> = vec![17; size].into();
-            let weak = Arc::downgrade(&input);
-            let mut graph = Graph::new();
+        let capacity = GraphCapacity {
+            upload_bytes: size,
+            ..GraphCapacity::default()
+        };
+        let mut old_input = GraphPool::new(capacity, 1).unwrap();
+        let mut current_input = GraphPool::new(capacity, 1).unwrap();
+        let key = {
+            let input = vec![17; size];
+            let mut graph = old_input.begin().unwrap();
             let buffer = graph
                 .buffer("persistent", BufferDesc { size: size as u64 })
                 .unwrap();
-            graph
-                .upload_buffer_shared("A.upload", buffer, 0, input)
-                .unwrap();
+            graph.upload_buffer("A.upload", buffer, 0, &input).unwrap();
+            drop(input);
             graph.export_buffer(buffer).unwrap();
             let plan = graph.compile().unwrap();
             let mut pending = runtime.submit(&plan).unwrap();
             let key = pending.export_buffer(buffer).unwrap().key();
             drop(pending.wait(Duration::from_secs(10)).unwrap().unwrap());
-            (key, weak)
+            key
         };
-        assert!(
-            old_input.upgrade().is_some(),
+        assert_eq!(
+            old_input.leased_slots(),
+            1,
             "current contents support future index use"
         );
 
-        let current_input = {
-            let input: Arc<[u8]> = vec![29; size].into();
-            let weak = Arc::downgrade(&input);
-            let mut graph = Graph::new();
+        {
+            let input = vec![29; size];
+            let mut graph = current_input.begin().unwrap();
             let buffer = graph
                 .import_buffer("persistent", &runtime.refresh_buffer(key).unwrap())
                 .unwrap();
-            graph
-                .upload_buffer_shared("B.upload", buffer, 0, input)
-                .unwrap();
+            graph.upload_buffer("B.upload", buffer, 0, &input).unwrap();
+            drop(input);
             let plan = graph.compile().unwrap();
             let pending = runtime.submit(&plan).unwrap();
-            drop((graph, plan));
+            drop(plan);
             // Normal Drop retirement must not require a later explicit wait to
             // release the superseded version of the CPU-known contents.
             drop(pending);
-            weak
-        };
-        assert!(
-            old_input.upgrade().is_none(),
+        }
+        assert_eq!(
+            old_input.leased_slots(),
+            0,
             "obsolete completed contents must not pin A"
         );
-        assert!(current_input.upgrade().is_some());
+        assert_eq!(current_input.leased_slots(), 1);
         {
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let buffer = graph
                 .import_buffer("current", &runtime.refresh_buffer(key).unwrap())
                 .unwrap();
@@ -373,7 +380,7 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
         }
         runtime.delete(key).unwrap();
         drop(runtime);
-        assert!(current_input.upgrade().is_none());
+        assert_eq!(current_input.leased_slots(), 0);
         assert!(
             diagnostics.snapshot().is_clean(),
             "{:#?}",
@@ -401,7 +408,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             runtime.owner.device.device_type(),
             vk::PhysicalDeviceType::CPU
         );
-        let mut over_capacity = Graph::new();
+        let mut over_capacity = Graph::test_new();
         let source = over_capacity
             .buffer("source", BufferDesc { size: 16 })
             .unwrap();
@@ -409,7 +416,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             .buffer("target", BufferDesc { size: 16 })
             .unwrap();
         over_capacity
-            .upload_buffer("upload", source, 0, vec![1; 16])
+            .upload_buffer("upload", source, 0, &[1; 16])
             .unwrap();
         over_capacity
             .copy_buffer("copy", source, 0, target, 0, 16)
@@ -426,12 +433,12 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             RuntimeErrorKind::CapacityExhausted
         );
         assert_eq!(runtime.stats().registered_resources, 0);
-        let mut over_staging = Graph::new();
+        let mut over_staging = Graph::test_new();
         let large = over_staging
             .buffer("large", BufferDesc { size: 512 })
             .unwrap();
         over_staging
-            .upload_buffer("large.upload", large, 0, vec![1; 512])
+            .upload_buffer("large.upload", large, 0, &[1; 512])
             .unwrap();
         over_staging.export_buffer(large).unwrap();
         assert_eq!(
@@ -444,11 +451,9 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
         );
         assert_eq!(runtime.stats().registered_resources, 0);
         assert_eq!(runtime.stats().upload_live_ranges, 0);
-        let mut valid = Graph::new();
+        let mut valid = Graph::test_new();
         let value = valid.buffer("value", BufferDesc { size: 16 }).unwrap();
-        valid
-            .upload_buffer("upload", value, 0, vec![7; 16])
-            .unwrap();
+        valid.upload_buffer("upload", value, 0, &[7; 16]).unwrap();
         let read = valid.readback_buffer("read", value, 0, 16).unwrap();
         valid.export_buffer(value).unwrap();
         let plan = valid.compile().unwrap();
@@ -464,7 +469,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
         let mut foreign_runtime = VulkanRuntime::new(config).unwrap();
         let foreign_diagnostics = foreign_runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&foreign_diagnostics);
-        let mut imported = Graph::new();
+        let mut imported = Graph::test_new();
         let input = imported.import_buffer("input", &first_export).unwrap();
         imported
             .readback_buffer("input.read", input, 0, 16)
@@ -479,8 +484,8 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             // This diagnostic deliberately violates a private invariant. Public
             // callers cannot forge initialized ranges for an unchanged revision.
             let mut forged = first_export.clone();
-            forged.initialized = std::iter::once(0..8).collect();
-            let mut malformed = Graph::new();
+            forged.initialized = ImportRanges::test_capture(&[0..8]);
+            let mut malformed = Graph::test_new();
             let input = malformed.import_buffer("forged", &forged).unwrap();
             malformed.readback_buffer("read", input, 0, 8).unwrap();
             assert_eq!(

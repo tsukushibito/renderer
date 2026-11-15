@@ -193,6 +193,7 @@ fn runtime(strict: bool) -> D3D12Runtime {
         } else {
             D3D12ValidationMode::Disabled
         },
+        ..Default::default()
     })
     .expect("real D3D12 hardware and requested diagnostics")
 }

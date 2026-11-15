@@ -18,7 +18,7 @@
 
 use std::time::Duration;
 
-use renderer::graph::{BufferDesc, CompiledGraph, Graph, PassHandle};
+use renderer::graph::{BufferDesc, CompiledGraph, GraphCapacity, GraphPool, PassHandle};
 use renderer::{
     D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode, RuntimeConfig, ValidationMode,
     VulkanRuntime,
@@ -31,8 +31,9 @@ struct ExpectedReadback {
     bytes: Vec<u8>,
 }
 
-fn shared_buffer_graph() -> (CompiledGraph, Vec<ExpectedReadback>) {
-    let mut graph = Graph::new();
+fn shared_buffer_graph() -> (GraphPool, CompiledGraph, Vec<ExpectedReadback>) {
+    let mut graph_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = graph_pool.begin().unwrap();
     let source = graph.buffer("source", BufferDesc { size: 128 }).unwrap();
     let intermediate = graph
         .buffer("intermediate", BufferDesc { size: 160 })
@@ -46,23 +47,18 @@ fn shared_buffer_graph() -> (CompiledGraph, Vec<ExpectedReadback>) {
     let mut intermediate_bytes = vec![0xcc; 160];
     let mut destination_bytes = vec![0x5a; 128];
     graph
-        .upload_buffer("source contents", source, 0, source_bytes.clone())
+        .upload_buffer("source contents", source, 0, &source_bytes)
         .unwrap();
     graph
         .upload_buffer(
             "intermediate contents",
             intermediate,
             0,
-            intermediate_bytes.clone(),
+            &intermediate_bytes,
         )
         .unwrap();
     graph
-        .upload_buffer(
-            "destination contents",
-            destination,
-            0,
-            destination_bytes.clone(),
-        )
+        .upload_buffer("destination contents", destination, 0, &destination_bytes)
         .unwrap();
 
     graph
@@ -94,6 +90,7 @@ fn shared_buffer_graph() -> (CompiledGraph, Vec<ExpectedReadback>) {
         .readback_buffer("source range", source, 20, 36)
         .unwrap();
     (
+        graph_pool,
         graph.compile().unwrap(),
         vec![
             ExpectedReadback {
@@ -146,6 +143,7 @@ fn run_shared_graph(strict_validation: bool) {
         } else {
             D3D12ValidationMode::Disabled
         },
+        ..Default::default()
     })
     .expect("D3D12 hardware and requested validation are required");
     let vulkan_info = vulkan.device_info();
@@ -164,7 +162,7 @@ fn run_shared_graph(strict_validation: bool) {
     let vulkan_monitor = vulkan.validation_monitor();
     let d3d12_monitor = d3d12.validation_monitor();
 
-    let (plan, expected) = shared_buffer_graph();
+    let (_graph_pool, plan, expected) = shared_buffer_graph();
     let pass_count = plan.pass_count();
     let mut vulkan_submission = vulkan.submit(&plan).expect("submit common Graph to Vulkan");
     let mut vulkan_result = vulkan_submission
@@ -185,11 +183,13 @@ fn run_shared_graph(strict_validation: bool) {
     let mut all_bytes_match = true;
     let mut compared_bytes = 0;
     for readback in expected {
-        let actual_d3d12 = d3d12_result
-            .readback(readback.pass)
+        let mut actual_d3d12 = vec![0; readback.bytes.len()];
+        d3d12_result
+            .readback_into(readback.pass, &mut actual_d3d12)
             .expect("completed D3D12 readback");
-        let actual_vulkan = vulkan_result
-            .readback(readback.pass)
+        let mut actual_vulkan = vec![0; readback.bytes.len()];
+        vulkan_result
+            .readback_into(readback.pass, &mut actual_vulkan)
             .expect("completed Vulkan readback");
         let matches = actual_d3d12 == readback.bytes
             && actual_vulkan == readback.bytes
