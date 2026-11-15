@@ -105,6 +105,8 @@ impl VulkanImage {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
         // SAFETY: Checked exact request. VMA binds an unaliased image allocation
         // and is retained by its immediate owner, including partial failures.
         let (handle, allocation) = unsafe { owner.raw.create_image(&info, &allocation_info) }
@@ -135,6 +137,8 @@ pub(super) struct ImageState {
 }
 impl Drop for Image {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
         // SAFETY: Views/bindings/work retain the image through all recorded and
         // GPU uses. No allocation, layout mutation or mapping escapes publicly.
         unsafe {
@@ -184,6 +188,8 @@ impl VulkanImageView {
             .format(native_format(image.desc().format))
             .subresource_range(range)
             .push_next(&mut usage);
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Same-Device immutable image retains its creation format and
         // usage. This View uses that exact format and a checked full subresource.
         let handle = unsafe { owner.device.raw().create_image_view(&info, None) }
@@ -202,6 +208,8 @@ pub(super) struct ImageView {
 }
 impl Drop for ImageView {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: Binding/work owners retain the View until retirement/cancel.
         // Its image and Device are released only after destroying this View.
         unsafe {

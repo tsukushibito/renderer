@@ -20,6 +20,8 @@ struct ShaderModule {
 impl ShaderModule {
     fn new(owner: Arc<MemoryOwner>, bytes: &[u8]) -> Result<Self, RuntimeError> {
         let words = spirv_words(bytes)?;
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Only fixed, validated, repository-owned shaders enter here;
         // words are aligned and stay live through synchronous module creation.
         let module = unsafe {
@@ -51,6 +53,8 @@ fn spirv_words(bytes: &[u8]) -> Result<Vec<u32>, RuntimeError> {
 
 impl Drop for ShaderModule {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: Module creation use ends with synchronous pipeline creation;
         // pipelines do not retain a lifetime dependency on ShaderModule.
         unsafe {
@@ -228,6 +232,8 @@ impl Program {
         // handle is immediately owned here, including on failure or unwind.
         unsafe {
             if !bindings.is_empty() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
                 self.set_layout = device
                     .create_descriptor_set_layout(
                         &vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings),
@@ -256,6 +262,8 @@ impl Program {
             if matches!(kind, ProgramKind::Compute | ProgramKind::Raster) {
                 layout_info = layout_info.push_constant_ranges(&pushes);
             }
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             self.layout = device
                 .create_pipeline_layout(&layout_info, None)
                 .map_err(|r| native(&self.owner, "vkCreatePipelineLayout(Graph)", r))?;
@@ -308,6 +316,8 @@ impl Program {
         let info = [vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(self.layout)];
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Fixed module and layout ABI agree. Local arrays remain live
         // through creation. Partial pipeline successes are destroyed on failure.
         match unsafe {
@@ -319,6 +329,14 @@ impl Program {
             Ok(pipelines) => Ok(pipelines[0]),
             Err((partial, error)) => {
                 for pipeline in partial {
+                    if pipeline == vk::Pipeline::null() {
+                        continue;
+                    }
+                    #[cfg(feature = "memory-profiling")]
+                    crate::measurement::record_native(
+                        crate::measurement::NativeEvent::ObjectDestroy,
+                        1,
+                    );
                     // SAFETY: Returned partial pipelines have no recorded uses.
                     unsafe { self.owner.device.raw().destroy_pipeline(pipeline, None) };
                 }
@@ -424,6 +442,8 @@ impl Program {
             .dynamic_state(&dynamic)
             .layout(self.layout)
             .push_next(&mut rendering)];
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: All pointers refer to local live arrays and the fixed shader
         // ABI; Dynamic Rendering1.3 and the queried attachment formats are used.
         match unsafe {
@@ -436,6 +456,14 @@ impl Program {
             Ok(pipelines) => Ok(pipelines[0]),
             Err((partial, error)) => {
                 for pipeline in partial {
+                    if pipeline == vk::Pipeline::null() {
+                        continue;
+                    }
+                    #[cfg(feature = "memory-profiling")]
+                    crate::measurement::record_native(
+                        crate::measurement::NativeEvent::ObjectDestroy,
+                        1,
+                    );
                     // SAFETY: Returned partial pipelines have no recorded uses.
                     unsafe { self.owner.device.raw().destroy_pipeline(pipeline, None) };
                 }
@@ -455,9 +483,30 @@ impl Drop for Program {
         // retires. Unpublished partial programs have never been recorded.
         unsafe {
             let device = self.owner.device.raw();
-            device.destroy_pipeline(self.pipeline, None);
-            device.destroy_pipeline_layout(self.layout, None);
-            device.destroy_descriptor_set_layout(self.set_layout, None);
+            if self.pipeline != vk::Pipeline::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                device.destroy_pipeline(self.pipeline, None);
+            }
+            if self.layout != vk::PipelineLayout::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                device.destroy_pipeline_layout(self.layout, None);
+            }
+            if self.set_layout != vk::DescriptorSetLayout::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                device.destroy_descriptor_set_layout(self.set_layout, None);
+            }
             self.owner.device.destroy_sampler(self.sampler);
         }
     }

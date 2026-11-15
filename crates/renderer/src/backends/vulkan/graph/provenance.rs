@@ -2,13 +2,19 @@
 //! retains byte provenance because partial writes/copies must establish a sound
 //! index guarantee. Unknown holes never become initialized index contents.
 
-use std::collections::BTreeMap;
 use std::ops::Range;
+#[cfg(test)]
 use std::sync::Arc;
 
-#[derive(Clone, Default)]
+use crate::graph::CompiledGraph;
+
+/// Sorted disjoint known byte slices, with storage prepared at a change boundary.
+/// Ordinary updates never grow or release this metadata allocation. Graph upload
+/// pins borrow the pool's prepared backing; the runtime must keep the GraphPool
+/// alive until its canonical provenance and all work snapshots have been cleared.
+#[derive(Default)]
 pub(super) struct BufferProvenance {
-    segments: BTreeMap<u64, Segment>,
+    segments: Vec<Segment>,
     // A content maximum is independent of a draw's vertex/Device bounds. Keep
     // one prefix summary; changing only those bounds never rescans the bytes.
     validation: Option<IndexValidation>,
@@ -33,9 +39,31 @@ struct MeshIndexSummary {
 }
 
 #[derive(Clone)]
+enum SourceBytes {
+    Graph {
+        graph: CompiledGraph,
+        pass: usize,
+    },
+    // CPU tests keep a separate owner alive when measuring ordinary mutations.
+    // Production uploads pin Graph storage, including asset-backed operations.
+    #[cfg(test)]
+    Asset(Arc<[u8]>),
+}
+
+impl SourceBytes {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Graph { graph, pass } => graph.upload_data(&graph.passes[*pass].operation),
+            #[cfg(test)]
+            Self::Asset(bytes) => bytes,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct Segment {
     start: u64,
-    bytes: Arc<[u8]>,
+    bytes: SourceBytes,
     range: Range<usize>,
 }
 
@@ -46,6 +74,12 @@ impl Segment {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ProvenanceCapacityError {
+    pub(super) required: usize,
+    pub(super) capacity: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum IndexError {
     UnknownContents,
     VertexBounds { index: u32, vertex_count: u64 },
@@ -53,6 +87,55 @@ pub(super) enum IndexError {
 }
 
 impl BufferProvenance {
+    pub(super) fn with_capacity(segments: usize) -> Self {
+        Self {
+            segments: Vec::with_capacity(segments),
+            ..Self::default()
+        }
+    }
+
+    /// Explicit preparation/change boundary; never called by ordinary mutation.
+    pub(super) fn segment_capacity(&self) -> usize {
+        self.segments.capacity()
+    }
+
+    fn require_capacity(&self, required: usize) -> Result<(), ProvenanceCapacityError> {
+        if required > self.segment_capacity() {
+            return Err(ProvenanceCapacityError {
+                required,
+                capacity: self.segment_capacity(),
+            });
+        }
+        Ok(())
+    }
+
+    /// The external GraphPool owner keeps its allocations alive when pins drop.
+    /// Clearing state does not discard the prepared segment storage.
+    pub(super) fn clear(&mut self) {
+        self.segments.clear();
+        self.validation = None;
+        self.mesh = None;
+        #[cfg(test)]
+        {
+            self.validation_scans = 0;
+        }
+    }
+
+    /// Copy an independent metadata version into already prepared storage. The
+    /// immutable backing and prefix summary can be shared without revalidation.
+    pub(super) fn copy_from(&mut self, source: &Self) -> Result<(), ProvenanceCapacityError> {
+        self.require_capacity(source.segments.len())?;
+        self.segments.clear();
+        self.segments.extend(source.segments.iter().cloned());
+        self.validation = source.validation;
+        self.mesh = source.mesh;
+        #[cfg(test)]
+        {
+            self.validation_scans = source.validation_scans;
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn test_evidence(&self) -> (usize, usize) {
         (self.segments.len(), self.validation_scans)
@@ -77,129 +160,195 @@ impl BufferProvenance {
         self.mesh = Some(proof);
     }
 
-    /// `target` and `bytes` describe an already validated graph upload.
     #[cfg(test)]
-    pub(super) fn write(&mut self, target: Range<u64>, bytes: Arc<[u8]>) {
+    fn write(&mut self, target: Range<u64>, bytes: Arc<[u8]>) {
         let length = bytes.len();
-        self.write_slice(target, bytes, 0..length);
+        self.write_slice(target, &bytes, 0..length)
+            .expect("prepared test provenance capacity");
     }
 
-    /// The source slice is validated by Graph, including its destination length.
+    /// The source range indexes `upload_data`, which already applies the Graph
+    /// operation's original source range. The immutable Graph guarantees the
+    /// target and source slice. A pin prevents that upload's prepared backing
+    /// from being reused while retained.
+    pub(super) fn write_graph_slice(
+        &mut self,
+        target: Range<u64>,
+        graph: &CompiledGraph,
+        pass: usize,
+        source: Range<usize>,
+    ) -> Result<(), ProvenanceCapacityError> {
+        let bytes = graph.upload_data(&graph.passes[pass].operation);
+        debug_assert!(bytes.get(source.clone()).is_some());
+        debug_assert_eq!(target.end - target.start, source.len() as u64);
+        self.write_into(target, source, || SourceBytes::Graph {
+            graph: graph.clone(),
+            pass,
+        })
+    }
+
+    #[cfg(test)]
     pub(super) fn write_slice(
         &mut self,
         target: Range<u64>,
-        bytes: Arc<[u8]>,
+        bytes: &Arc<[u8]>,
         source: Range<usize>,
-    ) {
+    ) -> Result<(), ProvenanceCapacityError> {
         debug_assert!(bytes.get(source.clone()).is_some());
         debug_assert_eq!(target.end - target.start, source.len() as u64);
-        self.replace(
-            target.clone(),
-            Self {
-                segments: BTreeMap::from([(
-                    target.start,
-                    Segment {
-                        start: target.start,
-                        bytes,
-                        range: source,
-                    },
-                )]),
-                ..Self::default()
-            },
-        );
+        self.write_into(target, source, || SourceBytes::Asset(Arc::clone(bytes)))
     }
 
-    /// Return shared known slices at their destination positions. The source and
-    /// destination ranges are graph-validated; gaps are deliberately preserved.
-    /// Obtain this before replacing the destination to support disjoint self-copy.
-    pub(super) fn copied(&self, source: Range<u64>, destination: u64) -> Self {
-        // An exact complete mesh stream keeps its proof. Arbitrary byte slices
-        // cannot reconstruct an exact index maximum without the source bytes.
-        let mesh = self.mesh.filter(|proof| {
+    fn write_into(
+        &mut self,
+        target: Range<u64>,
+        source: Range<usize>,
+        bytes: impl FnOnce() -> SourceBytes,
+    ) -> Result<(), ProvenanceCapacityError> {
+        if target.is_empty() {
+            return Ok(());
+        }
+        let overlap = self.overlap_indices(&target);
+        self.require_capacity(self.replacement_len(&target, &overlap, 1))?;
+        // Clone only after the capacity check, preserving ownership on failure.
+        let segment = Segment {
+            start: target.start,
+            bytes: bytes(),
+            range: source,
+        };
+        self.replace_segments(target, overlap, std::slice::from_ref(&segment), None);
+        Ok(())
+    }
+
+    /// Copy known slices into prepared scratch at their destination positions,
+    /// preserving holes. Snapshot first, then replace, for disjoint self-copies.
+    pub(super) fn copy_into(
+        &self,
+        source: Range<u64>,
+        destination: u64,
+        output: &mut Self,
+    ) -> Result<(), ProvenanceCapacityError> {
+        let overlap = self.overlap_indices(&source);
+        output.require_capacity(overlap.len())?;
+        output.clear();
+        output.mesh = self.mesh.filter(|proof| {
             destination == 0
                 && source == (0..proof.byte_len)
                 && proof.known_prefix == proof.byte_len
         });
-        Self {
-            mesh,
-            segments: self
-                .overlapping(&source)
-                .filter_map(|segment| {
-                    let start = source.start.max(segment.start);
-                    let end = source.end.min(segment.end());
-                    (start < end).then(|| {
-                        let position = destination + (start - source.start);
-                        (
-                            position,
-                            Segment {
-                                start: position,
-                                bytes: Arc::clone(&segment.bytes),
-                                range: segment.range.start + (start - segment.start) as usize
-                                    ..segment.range.start + (end - segment.start) as usize,
-                            },
-                        )
-                    })
-                })
-                .collect(),
-            ..Self::default()
+        for segment in &self.segments[overlap] {
+            let start = source.start.max(segment.start);
+            let end = source.end.min(segment.end());
+            let position = destination + (start - source.start);
+            output.segments.push(Segment {
+                start: position,
+                bytes: segment.bytes.clone(),
+                range: segment.range.start + (start - segment.start) as usize
+                    ..segment.range.start + (end - segment.start) as usize,
+            });
         }
+        Ok(())
     }
 
     /// Overwrite the whole target, including unknown portions of a GPU copy.
-    pub(super) fn replace(&mut self, target: Range<u64>, mut contents: Self) {
-        // Mutation invalidates both successful and failed validation results.
-        // Other clones still describe their old immutable contents.
-        self.validation = None;
-        // A generic mutation invalidates a managed proof. Only a complete,
-        // position-preserving copy can install another such proof.
-        self.mesh = contents
-            .mesh
-            .take()
-            .filter(|proof| target == (0..proof.byte_len));
-        let keys = self
-            .overlapping(&target)
-            .map(|segment| segment.start)
-            .collect::<Vec<_>>();
-        for key in keys {
-            let segment = self.segments.remove(&key).expect("overlapping segment");
-            if segment.start < target.start {
-                let count = (target.start - segment.start) as usize;
-                self.segments.insert(
-                    segment.start,
-                    Segment {
-                        start: segment.start,
-                        bytes: Arc::clone(&segment.bytes),
-                        range: segment.range.start..segment.range.start + count,
-                    },
-                );
-            }
-            if segment.end() > target.end {
-                let skip = (target.end - segment.start) as usize;
-                self.segments.insert(
-                    target.end,
-                    Segment {
-                        start: target.end,
-                        bytes: segment.bytes,
-                        range: segment.range.start + skip..segment.range.end,
-                    },
-                );
-            }
+    /// Incoming known segments have already been positioned within `target` by
+    /// copy_into. Capacity failure leaves data, proof and cached summary intact.
+    pub(super) fn replace(
+        &mut self,
+        target: Range<u64>,
+        contents: &Self,
+    ) -> Result<(), ProvenanceCapacityError> {
+        if target.is_empty() {
+            return Ok(());
         }
-        self.segments.extend(contents.segments);
+        let overlap = self.overlap_indices(&target);
+        self.require_capacity(self.replacement_len(&target, &overlap, contents.segments.len()))?;
+        self.replace_segments(target, overlap, &contents.segments, contents.mesh);
+        Ok(())
     }
 
-    /// Include the predecessor only if it overlaps, then visit intersecting
-    /// segments. Updating a narrow range never scans unrelated known contents.
-    fn overlapping(&self, range: &Range<u64>) -> impl Iterator<Item = &Segment> {
-        let first = self
+    #[cfg(test)]
+    pub(super) fn clear_range(
+        &mut self,
+        target: Range<u64>,
+    ) -> Result<(), ProvenanceCapacityError> {
+        if target.is_empty() {
+            return Ok(());
+        }
+        let overlap = self.overlap_indices(&target);
+        self.require_capacity(self.replacement_len(&target, &overlap, 0))?;
+        self.replace_segments(target, overlap, &[], None);
+        Ok(())
+    }
+
+    fn replacement_len(
+        &self,
+        target: &Range<u64>,
+        overlap: &Range<usize>,
+        incoming: usize,
+    ) -> usize {
+        let retained = self.segments[overlap.clone()]
+            .first()
+            .is_some_and(|segment| segment.start < target.start) as usize
+            + self.segments[overlap.clone()]
+                .last()
+                .is_some_and(|segment| segment.end() > target.end) as usize;
+        self.segments.len() - overlap.len() + retained + incoming
+    }
+
+    fn replace_segments(
+        &mut self,
+        target: Range<u64>,
+        overlap: Range<usize>,
+        incoming: &[Segment],
+        mesh: Option<MeshIndexSummary>,
+    ) {
+        let left = self.segments[overlap.clone()].first().and_then(|segment| {
+            (segment.start < target.start).then(|| Segment {
+                start: segment.start,
+                bytes: segment.bytes.clone(),
+                range: segment.range.start
+                    ..segment.range.start + (target.start - segment.start) as usize,
+            })
+        });
+        let right = self.segments[overlap.clone()].last().and_then(|segment| {
+            (segment.end() > target.end).then(|| Segment {
+                start: target.end,
+                bytes: segment.bytes.clone(),
+                range: segment.range.start + (target.end - segment.start) as usize
+                    ..segment.range.end,
+            })
+        });
+        let mut position = overlap.start;
+        self.segments.drain(overlap);
+        if let Some(segment) = left {
+            self.segments.insert(position, segment);
+            position += 1;
+        }
+        for segment in incoming {
+            self.segments.insert(position, segment.clone());
+            position += 1;
+        }
+        if let Some(segment) = right {
+            self.segments.insert(position, segment);
+        }
+        // Every successful generic mutation invalidates successful and failed
+        // validation. Other prepared snapshots retain their immutable version.
+        self.validation = None;
+        self.mesh = mesh.filter(|proof| target == (0..proof.byte_len));
+    }
+
+    /// Include only intersecting segments. A narrow write/copy locates its
+    /// bounds by binary search without scanning unrelated known contents.
+    fn overlap_indices(&self, range: &Range<u64>) -> Range<usize> {
+        let start = self
             .segments
-            .range(..=range.start)
-            .next_back()
-            .map_or(range.start, |(&start, _)| start);
-        self.segments
-            .range(first..range.end)
-            .map(|(_, segment)| segment)
-            .filter(move |segment| segment.end() > range.start)
+            .partition_point(|segment| segment.end() <= range.start);
+        if range.is_empty() {
+            return start..start;
+        }
+        let count = self.segments[start..].partition_point(|segment| segment.start < range.end);
+        start..start + count
     }
 
     /// Validate little-endian u32 indices without reconstructing a byte buffer.
@@ -240,7 +389,7 @@ impl BufferProvenance {
         let mut cursor = 0;
         let mut pending = [0u8; 4];
         let mut filled = 0;
-        for segment in self.segments.values() {
+        for segment in &self.segments {
             if segment.end() <= cursor {
                 continue;
             }
@@ -250,7 +399,7 @@ impl BufferProvenance {
             let begin = segment.range.start + (cursor - segment.start) as usize;
             let next = end.min(segment.end());
             let length = (next - cursor) as usize;
-            let mut bytes = &segment.bytes[begin..begin + length];
+            let mut bytes = &segment.bytes.bytes()[begin..begin + length];
             if filled != 0 {
                 let length = (4 - filled).min(bytes.len());
                 pending[filled..filled + length].copy_from_slice(&bytes[..length]);
@@ -300,12 +449,37 @@ fn validate_index(index: u32, vertex_count: u64, maximum: u32) -> Result<(), Ind
 mod tests {
     use super::*;
 
+    fn prepared() -> BufferProvenance {
+        BufferProvenance::with_capacity(256)
+    }
+
+    fn snapshot(source: &BufferProvenance) -> BufferProvenance {
+        let mut result = prepared();
+        result.copy_from(source).unwrap();
+        result
+    }
+
+    fn copy_range(
+        source: &BufferProvenance,
+        range: Range<u64>,
+        destination: u64,
+    ) -> BufferProvenance {
+        let mut result = prepared();
+        source.copy_into(range, destination, &mut result).unwrap();
+        result
+    }
+
+    fn shares(segment: &Segment, input: &Arc<[u8]>) -> bool {
+        matches!(&segment.bytes, SourceBytes::Asset(bytes) if Arc::ptr_eq(bytes, input))
+    }
+
     fn bytes(contents: &BufferProvenance, range: Range<u64>) -> Vec<Option<u8>> {
         range
             .map(|offset| {
-                contents.segments.values().find_map(|segment| {
+                contents.segments.iter().find_map(|segment| {
                     (segment.start <= offset && offset < segment.end()).then(|| {
-                        segment.bytes[segment.range.start + (offset - segment.start) as usize]
+                        segment.bytes.bytes()
+                            [segment.range.start + (offset - segment.start) as usize]
                     })
                 })
             })
@@ -319,28 +493,28 @@ mod tests {
             input.extend_from_slice(&index.to_le_bytes());
         }
         let input: Arc<[u8]> = input.into();
-        let mut contents = BufferProvenance::default();
+        let mut contents = prepared();
         for (target, source) in [(0..2, 3..5), (2..6, 5..9), (6..12, 9..15)] {
-            contents.write_slice(target, Arc::clone(&input), source);
+            contents.write_slice(target, &input, source).unwrap();
         }
         assert!(
             contents
                 .segments
-                .values()
-                .all(|segment| Arc::ptr_eq(&segment.bytes, &input))
+                .iter()
+                .all(|segment| shares(segment, &input))
         );
         assert_eq!(contents.validate_indices(3, 8, u32::MAX), Ok(()));
-        let copied = contents.copied(2..10, 4);
+        let copied = copy_range(&contents, 2..10, 4);
         assert_eq!(bytes(&copied, 4..12), bytes(&contents, 2..10));
         assert!(
             copied
                 .segments
-                .values()
-                .all(|segment| Arc::ptr_eq(&segment.bytes, &input))
+                .iter()
+                .all(|segment| shares(segment, &input))
         );
         // A patch from another slice of the same allocation invalidates the
         // previous successful bounds check and uses that slice's exact bytes.
-        contents.write_slice(4..8, Arc::clone(&input), 15..19);
+        contents.write_slice(4..8, &input, 15..19).unwrap();
         assert_eq!(
             contents.validate_indices(3, 8, u32::MAX),
             Err(IndexError::VertexBounds {
@@ -348,7 +522,7 @@ mod tests {
                 vertex_count: 8
             })
         );
-        contents.replace(1..2, BufferProvenance::default());
+        contents.clear_range(1..2).unwrap();
         assert_eq!(
             contents.validate_indices(3, 10, u32::MAX),
             Err(IndexError::UnknownContents)
@@ -358,13 +532,15 @@ mod tests {
     #[test]
     fn copies_share_input_and_preserve_partial_known_contents_and_holes() {
         let upload: Arc<[u8]> = Arc::from([1u8, 2, 3, 4, 5, 6, 7, 8]);
-        let mut source = BufferProvenance::default();
+        let mut source = prepared();
         source.write(0..8, Arc::clone(&upload));
         source.write(2..4, Arc::from([9u8, 10]));
-        let mut target = BufferProvenance::default();
+        let mut target = prepared();
         target.write(0..16, Arc::from([99u8; 16]));
-        source.replace(3..5, BufferProvenance::default());
-        target.replace(8..14, source.copied(1..7, 8));
+        source.clear_range(3..5).unwrap();
+        target
+            .replace(8..14, &copy_range(&source, 1..7, 8))
+            .unwrap();
         assert_eq!(
             bytes(&target, 8..14),
             [Some(2), Some(9), None, None, Some(6), Some(7)]
@@ -374,19 +550,19 @@ mod tests {
         assert!(
             target
                 .segments
-                .values()
-                .any(|segment| Arc::ptr_eq(&segment.bytes, &upload))
+                .iter()
+                .any(|segment| shares(segment, &upload))
         );
         // A disjoint same-buffer copy snapshots its slices before overwriting.
-        let copied = source.copied(0..8, 8);
-        source.replace(8..16, copied);
+        let copied = copy_range(&source, 0..8, 8);
+        source.replace(8..16, &copied).unwrap();
         assert_eq!(bytes(&source, 0..8), bytes(&source, 8..16));
     }
 
     #[test]
     fn index_checks_span_shared_slices_and_enforce_both_bounds() {
         let maximum: u32 = (1 << 24) - 1;
-        let mut contents = BufferProvenance::default();
+        let mut contents = prepared();
         contents.write(0..12, Arc::from([0u8; 12]));
         let bytes = maximum.to_le_bytes();
         contents.write(1..2, Arc::from([bytes[1]]));
@@ -410,7 +586,7 @@ mod tests {
                 maximum: maximum - 1
             })
         );
-        contents.replace(5..6, BufferProvenance::default());
+        contents.clear_range(5..6).unwrap();
         assert_eq!(
             contents.validate_indices(3, u64::MAX, u32::MAX),
             Err(IndexError::UnknownContents)
@@ -427,7 +603,7 @@ mod tests {
 
     #[test]
     fn partial_updates_and_copies_match_known_byte_model() {
-        let mut contents = BufferProvenance::default();
+        let mut contents = prepared();
         let mut expected = vec![None; 128];
         let mut random = 0x7265_6e64_6572u64;
         for step in 0..1_200 {
@@ -451,7 +627,7 @@ mod tests {
                 }
                 1 => {
                     expected[start..start + length].fill(None);
-                    contents.replace(range, BufferProvenance::default());
+                    contents.clear_range(range).unwrap();
                 }
                 _ => {
                     // Snapshot before replacement, like a disjoint same-buffer
@@ -459,9 +635,14 @@ mod tests {
                     let source = start % 48;
                     let target = 64 + source;
                     let values = expected[source..source + length].to_vec();
-                    let copied =
-                        contents.copied(source as u64..(source + length) as u64, target as u64);
-                    contents.replace(target as u64..(target + length) as u64, copied);
+                    let copied = copy_range(
+                        &contents,
+                        source as u64..(source + length) as u64,
+                        target as u64,
+                    );
+                    contents
+                        .replace(target as u64..(target + length) as u64, &copied)
+                        .unwrap();
                     expected[target..target + length].copy_from_slice(&values);
                 }
             }
@@ -471,13 +652,13 @@ mod tests {
 
     #[test]
     fn validation_reuses_content_maximum_across_vertex_and_device_bounds() {
-        let mut contents = BufferProvenance::default();
+        let mut contents = prepared();
         contents.write(0..8, Arc::from([0u8; 8]));
         for _ in 0..100 {
             assert_eq!(contents.validate_indices(2, 1, 0), Ok(()));
         }
         assert_eq!(contents.validation_scans, 1);
-        let mut old_contents = contents.clone();
+        let mut old_contents = snapshot(&contents);
         // Vertex and Device bounds are applied to the content maximum, so
         // changing them does not scan again. A different prefix is summarized
         // independently, including when the previous draw's bounds failed.
@@ -511,9 +692,11 @@ mod tests {
             })
         );
         // Copy replacement and unknown holes also invalidate prior failures.
-        contents.replace(0..4, old_contents.copied(0..4, 0));
+        contents
+            .replace(0..4, &copy_range(&old_contents, 0..4, 0))
+            .unwrap();
         assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
-        contents.replace(1..2, BufferProvenance::default());
+        contents.clear_range(1..2).unwrap();
         assert_eq!(
             contents.validate_indices(1, 1, 0),
             Err(IndexError::UnknownContents)
@@ -524,13 +707,13 @@ mod tests {
 
     #[test]
     fn managed_mesh_has_no_payload_or_scans_and_rechecks_dynamic_bounds() {
-        let mut contents = BufferProvenance::default();
+        let mut contents = prepared();
         contents.write_mesh_indices(0..4, 12, 2);
         assert_eq!(
             contents.validate_indices(3, 3, 2),
             Err(IndexError::UnknownContents)
         );
-        let mut unaccepted = contents.clone();
+        let mut unaccepted = snapshot(&contents);
         contents.write_mesh_indices(4..12, 12, 2);
         for draw in 0..32 {
             assert_eq!(contents.validate_indices(3, 3 + draw % 2, 2), Ok(()));
@@ -557,7 +740,7 @@ mod tests {
         assert_eq!(contents.test_evidence(), (0, 0));
         // Replacing a stream with another mesh of the same byte length must
         // never lower the bound while old chunks can still contribute bytes.
-        let mut mixed = BufferProvenance::default();
+        let mut mixed = prepared();
         mixed.write_mesh_indices(0..4, 12, 7);
         mixed.write_mesh_indices(4..12, 12, 2);
         assert_eq!(mixed.validate_indices(3, 8, 7), Ok(()));
@@ -572,13 +755,15 @@ mod tests {
 
     #[test]
     fn managed_mesh_copy_and_mutation_have_explicit_proof_boundaries() {
-        let mut original = BufferProvenance::default();
+        let mut original = prepared();
         original.write_mesh_indices(0..12, 12, 2);
-        let mut copied = BufferProvenance::default();
-        copied.replace(0..12, original.copied(0..12, 0));
+        let mut copied = prepared();
+        copied
+            .replace(0..12, &copy_range(&original, 0..12, 0))
+            .unwrap();
         assert_eq!(copied.validate_indices(3, 3, 2), Ok(()));
         assert_eq!(copied.test_evidence(), (0, 0));
-        let mut partial = original.copied(0..4, 0);
+        let mut partial = copy_range(&original, 0..4, 0);
         assert_eq!(
             partial.validate_indices(1, 3, 2),
             Err(IndexError::UnknownContents)
@@ -600,7 +785,7 @@ mod tests {
             Ok(()),
             "a complete generic replacement re-establishes byte provenance"
         );
-        let mut sparse = BufferProvenance::default();
+        let mut sparse = prepared();
         sparse.write_mesh_indices(4..12, 12, 2);
         sparse.write_mesh_indices(0..4, 12, 2);
         assert_eq!(
@@ -611,7 +796,7 @@ mod tests {
 
     #[test]
     fn generic_alternating_vertex_bounds_share_one_content_summary() {
-        let mut contents = BufferProvenance::default();
+        let mut contents = prepared();
         contents.write(
             0..12,
             [0u32, 1, 2]
@@ -624,5 +809,134 @@ mod tests {
             assert_eq!(contents.validate_indices(3, 3 + draw % 2, u32::MAX), Ok(()));
         }
         assert_eq!(contents.validation_scans, 1);
+    }
+
+    #[test]
+    fn capacity_failure_preserves_bytes_summary_and_backing_owners() {
+        let input: Arc<[u8]> = Arc::from([0u8; 12]);
+        let patch: Arc<[u8]> = Arc::from([1u8; 4]);
+        let mut contents = BufferProvenance::with_capacity(2);
+        contents.write_slice(0..12, &input, 0..12).unwrap();
+        assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
+        let retained = Arc::strong_count(&input);
+        assert_eq!(
+            contents.write_slice(4..8, &patch, 0..4),
+            Err(ProvenanceCapacityError {
+                required: 3,
+                capacity: 2
+            })
+        );
+        assert_eq!(Arc::strong_count(&input), retained);
+        assert_eq!(Arc::strong_count(&patch), 1);
+        assert_eq!(bytes(&contents, 0..12), [Some(0); 12]);
+        assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(contents.validation_scans, 1);
+        contents.reserve_segments(3);
+        contents.write_slice(4..8, &patch, 0..4).unwrap();
+        assert_eq!(
+            bytes(&contents, 0..12),
+            [
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(0),
+                Some(0),
+                Some(0),
+            ]
+        );
+        assert!(matches!(
+            contents.validate_indices(3, 1, 0),
+            Err(IndexError::VertexBounds { .. })
+        ));
+        assert_eq!(contents.validation_scans, 2);
+    }
+
+    #[test]
+    fn failed_replacement_and_copy_leave_destination_version_intact() {
+        let input: Arc<[u8]> = Arc::from([0u8; 12]);
+        let mut source = BufferProvenance::with_capacity(3);
+        source.write_slice(0..4, &input, 0..4).unwrap();
+        source.write_slice(8..12, &input, 8..12).unwrap();
+        let mut target = BufferProvenance::with_capacity(1);
+        target.write_mesh_indices(0..12, 12, 2);
+        let failure = Err(ProvenanceCapacityError {
+            required: 2,
+            capacity: 1,
+        });
+        assert_eq!(source.copy_into(0..12, 0, &mut target), failure);
+        assert_eq!(target.copy_from(&source), failure);
+        assert_eq!(target.replace(0..12, &source), failure);
+        assert_eq!(target.validate_indices(3, 3, 2), Ok(()));
+        assert_eq!(target.test_evidence(), (0, 0));
+
+        // Clearing a hole can itself need an extra retained edge segment.
+        target.write_slice(0..12, &input, 0..12).unwrap();
+        assert_eq!(target.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(target.clear_range(4..8), failure);
+        assert_eq!(bytes(&target, 0..12), [Some(0); 12]);
+        assert_eq!(target.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(target.validation_scans, 1);
+    }
+
+    #[test]
+    fn prepared_churn_clear_and_empty_ranges_keep_metadata_storage() {
+        // Separate backing owners model a live GraphPool. They remain alive
+        // through mutation/reset so removing metadata cannot free byte storage.
+        let input: Arc<[u8]> = Arc::from([0u8; 32]);
+        let patch: Arc<[u8]> = Arc::from([1u8; 4]);
+        let mut source = BufferProvenance::with_capacity(8);
+        let mut target = BufferProvenance::with_capacity(8);
+        let mut scratch = BufferProvenance::with_capacity(8);
+        let pointers = [
+            source.segments.as_ptr(),
+            target.segments.as_ptr(),
+            scratch.segments.as_ptr(),
+        ];
+        let capacities = [
+            source.segment_capacity(),
+            target.segment_capacity(),
+            scratch.segment_capacity(),
+        ];
+        for _ in 0..100 {
+            source.write_slice(0..16, &input, 0..16).unwrap();
+            source.write_slice(4..8, &patch, 0..4).unwrap();
+            source.clear_range(10..12).unwrap();
+            source.copy_into(0..16, 16, &mut scratch).unwrap();
+            target.copy_from(&source).unwrap();
+            target.replace(16..32, &scratch).unwrap();
+            assert_eq!(target.segments.len(), 8);
+            // No-op empty writes/copies never manufacture empty segments.
+            source.write_slice(5..5, &patch, 1..1).unwrap();
+            source.clear_range(5..5).unwrap();
+            source.copy_into(5..5, 0, &mut scratch).unwrap();
+            assert!(scratch.segments.is_empty());
+            source.clear();
+            target.clear();
+            scratch.clear();
+            assert_eq!(
+                [
+                    source.segments.as_ptr(),
+                    target.segments.as_ptr(),
+                    scratch.segments.as_ptr()
+                ],
+                pointers
+            );
+            assert_eq!(
+                [
+                    source.segment_capacity(),
+                    target.segment_capacity(),
+                    scratch.segment_capacity()
+                ],
+                capacities
+            );
+        }
+        assert_eq!(Arc::strong_count(&input), 1);
+        assert_eq!(Arc::strong_count(&patch), 1);
     }
 }
