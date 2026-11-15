@@ -25,7 +25,7 @@ pub enum GpuTiming {
 /// Optional CPU phases and the GPU Graph interval. Build/compile are caller work.
 #[derive(Clone, Copy, Debug)]
 pub struct SubmissionMetrics {
-    /// Validation, resource preparation and lazy pipeline creation before record.
+    /// Resource and command planning within the explicitly prepared working set.
     pub cpu_prepare: Duration,
     /// Command recording, including its begin/end calls.
     pub cpu_record: Duration,
@@ -388,10 +388,14 @@ pub(super) struct WorkProfile {
 }
 
 impl WorkProfile {
-    pub(super) fn new(lease: TimestampLease, started: Instant) -> Self {
+    pub(super) fn new(
+        lease: TimestampLease,
+        started: Instant,
+        cpu_pending: Arc<Mutex<[Duration; 2]>>,
+    ) -> Self {
         Self {
             lease: Some(lease),
-            cpu_pending: Arc::new(Mutex::new([Duration::ZERO; 2])),
+            cpu_pending,
             started,
             retire_started: None,
             result: SubmissionMetrics {

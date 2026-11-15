@@ -300,7 +300,7 @@ mod tests {
         let graph = 17;
         let mut pool = super::super::exports::ExportPool::new(4_096, 1).unwrap();
         let mut exports = pool.acquire().unwrap();
-        let initialized = crate::graph::ImportRanges::test_capture(&[0..4]);
+        let initialized = crate::graph::ImportRanges::test_capture(std::slice::from_ref(&(0..4)));
         for index in (0..4_096).rev() {
             let key = ResourceKey {
                 owner: 9,
