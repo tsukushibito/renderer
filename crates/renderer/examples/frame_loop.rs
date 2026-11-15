@@ -13,10 +13,13 @@ use std::{
 };
 
 use renderer::{
-    FrameId, GpuTiming, MemoryStats, MeshCacheConfig, MeshUploadState, RuntimeConfig, RuntimeStats,
-    SubmissionResult, ValidationMode, ValidationReport, VulkanEngine, VulkanRuntime,
-    engine::{Engine, FrameSnapshot, Material, MaterialHandle, MeshHandle},
-    graph::{ComputeTransform, ImageDesc, ImportImage, PassHandle},
+    EngineFrameCapacity, FrameCapacity, FrameId, GpuTiming, MemoryStats, MeshCacheConfig,
+    MeshUploadState, ResourceClass, RuntimeConfig, RuntimeStats, SubmissionResult, ValidationMode,
+    ValidationReport, VulkanEngine, VulkanRuntime,
+    engine::{
+        Engine, EngineCapacity, FrameSnapshot, Material, MaterialHandle, MeshHandle, SnapshotPool,
+    },
+    graph::{ComputeTransform, GraphCapacity, ImageDesc, ImportImage, PassHandle},
 };
 
 #[path = "support/frame_report.rs"]
@@ -291,7 +294,9 @@ struct Collector {
     peak_pending_frames: usize,
     last_pixels: Option<Vec<u8>>,
     held_readback: Option<CompletedReadback>,
-    static_pixels: Option<Vec<u8>>,
+    pixels: Vec<u8>,
+    static_pixels: Vec<u8>,
+    static_pixels_valid: bool,
 }
 
 struct CompletedReadback {
@@ -372,9 +377,12 @@ impl Collector {
         options: &Options,
     ) -> Result<(), Box<dyn Error>> {
         let pending = completed.pending;
-        let rgba = completed.result.readback(pending.color_readback)?;
+        completed
+            .result
+            .readback_into(pending.color_readback, &mut self.pixels)?;
+        let rgba = &self.pixels;
         frame_scaling::verify(
-            &rgba,
+            rgba,
             options.width,
             options.height,
             options.draws,
@@ -382,16 +390,18 @@ impl Collector {
             pending.expected_center,
         )?;
         if !options.churn {
-            if let Some(reference) = &self.static_pixels {
-                if reference != &rgba {
+            if self.static_pixels_valid {
+                if &self.static_pixels != rgba {
                     return Err(format!("static output changed at frame {}", pending.frame).into());
                 }
             } else {
-                self.static_pixels = Some(rgba.clone());
+                self.static_pixels.copy_from_slice(rgba);
+                self.static_pixels_valid = true;
             }
         }
         if let Some(pass) = pending.history_readback {
-            let history = completed.result.readback(pass)?;
+            let mut history = [0; 4];
+            completed.result.readback_into(pass, &mut history)?;
             if history != pending.expected_history {
                 return Err(
                     format!("history mismatch at frame {}: {history:?}", pending.frame).into(),
@@ -411,13 +421,16 @@ impl Collector {
                 observed_latency_ns: completed.observed_latency_ns,
                 completion_wait_ns: completed.completion_wait_ns,
                 profile: completed.profile,
-                output_checksum: checksum(&rgba),
+                output_checksum: checksum(rgba),
             });
         }
         if pending.frame == options.warmup + options.frames - 1
             && (options.ppm.is_some() || options.rgba.is_some())
         {
-            self.last_pixels = Some(rgba);
+            self.last_pixels
+                .as_mut()
+                .expect("prepared final pixel buffer")
+                .copy_from_slice(rgba);
         }
         Ok(())
     }
@@ -498,8 +511,58 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     let device = runtime.device_info();
     let monitor = runtime.validation_monitor();
     let geometry = scene::triangle([1.0, 0.0, 0.0, 1.0])?;
-    let mut engine = VulkanEngine::new(runtime, options.mesh_cache_config(geometry.byte_len())?)?;
-    let mut assets = Engine::new(options.mesh_capacity(), 4)?;
+    let graph_resources = 2 * options.unique_mesh_count() + 16;
+    let graph_passes = 2 * options.unique_mesh_count() + 16;
+    let graph_capacity = GraphCapacity {
+        resources: graph_resources,
+        passes: graph_passes,
+        accesses: (4 * options.draws + 64).max(2048),
+        draws: options.draws.max(1),
+        name_bytes: 128 * (graph_resources + graph_passes),
+        ..GraphCapacity::default()
+    };
+    let mut resource_classes = vec![
+        ResourceClass::Image {
+            desc: ImageDesc::rgba8(options.width, options.height),
+            count: IN_FLIGHT * (1 + usize::from(options.custom)),
+        },
+        ResourceClass::Image {
+            desc: ImageDesc::depth32(options.width, options.height),
+            count: IN_FLIGHT,
+        },
+    ];
+    if options.history {
+        resource_classes.push(ResourceClass::Image {
+            desc: ImageDesc::rgba8(1, 1),
+            count: IN_FLIGHT + 2,
+        });
+    }
+    runtime.prepare_working_set(
+        FrameCapacity {
+            graph: graph_capacity,
+            work_slots: IN_FLIGHT,
+            result_slots: IN_FLIGHT + 1,
+            metadata_slots: IN_FLIGHT + 1,
+            range_snapshots: graph_resources * (IN_FLIGHT + 8),
+            ..FrameCapacity::default()
+        },
+        &resource_classes,
+    )?;
+    let mut engine = VulkanEngine::new(
+        runtime,
+        options.mesh_cache_config(geometry.byte_len())?,
+        EngineFrameCapacity {
+            prepared_frames: IN_FLIGHT,
+            graph_slots: 4 * IN_FLIGHT + 4,
+            graph: graph_capacity,
+        },
+    )?;
+    let mut assets = Engine::new(EngineCapacity {
+        meshes: options.mesh_capacity(),
+        materials: 4,
+        retired_mesh_versions: 64,
+    })?;
+    let snapshots = SnapshotPool::new(options.draws, 2)?;
     let mut meshes = (0..options.mesh_asset_count())
         .map(|_| assets.create_mesh(geometry.clone()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -507,19 +570,22 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
     let view = scene::view(options.width, options.height);
     let mut draws = frame_scaling::draws(&meshes, material, options.draws, options.layout, 0.0);
     let mut collector = Collector {
-        pending: HashMap::new(),
+        pending: HashMap::with_capacity(IN_FLIGHT),
         samples: Vec::with_capacity(options.frames),
         wait_calls: 0,
         timed_out_waits: 0,
         wait_total_ns: 0,
         peak_pending_frames: 0,
-        last_pixels: None,
+        last_pixels: (options.ppm.is_some() || options.rgba.is_some())
+            .then(|| vec![0; options.width as usize * options.height as usize * 4]),
         held_readback: None,
-        static_pixels: None,
+        pixels: vec![0; options.width as usize * options.height as usize * 4],
+        static_pixels: vec![0; options.width as usize * options.height as usize * 4],
+        static_pixels_valid: false,
     };
     // Initial residency, including its explicit waits, precedes the measured loop.
     let startup_snapshot_start = Instant::now();
-    let startup_snapshot = assets.snapshot(&view, &draws)?;
+    let startup_snapshot = assets.snapshot(&snapshots, &view, &draws)?;
     let startup_snapshot_ns = startup_snapshot_start.elapsed().as_nanos();
     let startup_upload = prepare_meshes(&mut engine, &startup_snapshot, &mut collector, options)?;
     let startup_mesh_upload_bytes = geometry.byte_len() * options.unique_mesh_count() as u64;
@@ -543,6 +609,8 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let mut asset_update_ns = 0;
         if options.churn && frame > 0 && frame.is_multiple_of(8) {
             let asset_update_start = Instant::now();
+            engine.release_idle_inputs();
+            assets.collect_retired_meshes();
             change_assets(&mut assets, &mut meshes[0], &mut material, phase)?;
             asset_update_ns = asset_update_start.elapsed().as_nanos();
             draws = frame_scaling::draws(
@@ -554,7 +622,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             );
         }
         let snapshot_start = Instant::now();
-        let snapshot = assets.snapshot(&view, &draws)?;
+        let snapshot = assets.snapshot(&snapshots, &view, &draws)?;
         let snapshot_ns = snapshot_start.elapsed().as_nanos();
         let upload = prepare_meshes(&mut engine, &snapshot, &mut collector, options)?;
         let build_start = Instant::now();
@@ -571,7 +639,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
                     .image("history seed", ImageDesc::rgba8(1, 1))?;
                 prepared
                     .graph
-                    .upload_image("initialize history", source, HISTORY_SEED.to_vec())?;
+                    .upload_image("initialize history", source, &HISTORY_SEED)?;
                 source
             };
             let output = prepared
@@ -588,9 +656,9 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         };
         let build_ns = build_start.elapsed().as_nanos();
         let compile_start = Instant::now();
-        let plan = prepared.graph.compile()?;
+        let plan = prepared.compile()?;
         let compile_ns = compile_start.elapsed().as_nanos();
-        let mut rendered = engine.submit_frame(prepared, &plan)?;
+        let mut rendered = engine.submit_frame(plan)?;
         let submitted = Instant::now();
         let active_cpu_ns = submitted.duration_since(build_start).as_nanos();
         if let Some(output) = history_output {
