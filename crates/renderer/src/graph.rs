@@ -26,16 +26,13 @@ pub use compile::CompiledGraph;
 pub(crate) use dispatch::BindingOperands;
 pub use dispatch::{Binding, BindingResource};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
-#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
-pub(crate) use pass::AttachmentOps;
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,
     LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
     AttachmentOperand, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,
-    RasterAttachmentOperands, RasterDrawOperands, ResourceAccess, UploadSource,
-    ValidatedRasterParameters,
+    RasterDrawOperands, ResourceAccess, UploadSource, ValidatedRasterParameters,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};
 pub use resource::{

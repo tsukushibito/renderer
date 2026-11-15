@@ -204,6 +204,7 @@ impl ManagedRasterProgram {
         self.manifest.binding_bytes
     }
 
+    #[cfg(test)]
     pub(crate) fn is_mesh(&self) -> bool {
         self.native_id() == 0
     }
