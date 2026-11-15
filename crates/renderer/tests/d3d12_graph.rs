@@ -390,9 +390,15 @@ fn run_shared_graph(strict_validation: bool) {
             d3d12
                 .submit(&rejected)
                 .err()
-                .expect("live managed operation is unsupported")
+                .expect("the unsupported or unprepared plan must be rejected")
                 .kind(),
-            D3D12RuntimeErrorKind::Unsupported
+            if mode == 0 {
+                D3D12RuntimeErrorKind::Unsupported
+            } else {
+                // Images are now supported. This buffer-only working set
+                // rejects the preceding image upload before reaching dispatch.
+                D3D12RuntimeErrorKind::CapacityExhausted
+            }
         );
         #[cfg(feature = "memory-profiling")]
         {
@@ -409,7 +415,7 @@ fn run_shared_graph(strict_validation: bool) {
         assert_eq!(vulkan.stats().resources_reused, before.resources_reused);
         drop((rejected, rejected_pool));
     }
-    // A rejected dispatch must return reusable recording/result reservations;
+    // A rejected plan must return reusable recording/result reservations;
     // the following ordinary Graph still executes successfully on both APIs.
     let pass_count = plan.pass_count();
     let mut vulkan_submission = vulkan.submit(&plan).expect("submit common Graph to Vulkan");
@@ -518,7 +524,8 @@ fn run_shared_graph(strict_validation: bool) {
                 "vulkan_rejection_resource_create_reuse_unchanged": true,
                 "vulkan_culled_branches_no_new_resources": true,
                 "rejection_native_event_counters_checked": cfg!(feature = "memory-profiling"),
-                "rejection_order":["buffer_dispatch_plan","sampled_dispatch_plan"],
+                "rejection_order":["buffer_dispatch_plan","sampled_dispatch_plan_with_unprepared_image"],
+                "d3d12_rejection_kinds":["Unsupported","CapacityExhausted"],
                 "rejection_native_events_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": rejection_native_events,
                 "culled_branches_do_not_prevent_common_execution": true,
                 "native_compute_execution_supported": false,
