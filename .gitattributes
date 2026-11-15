@@ -20,3 +20,8 @@
 /tools/bistro/conditions.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /tools/bistro/*conditions*.py text eol=lf
 /docs/verification/bistro-*.json text eol=lf
+
+# The documentation bundle, license and digest are reproduced byte-for-byte.
+/docs/theme/vendor/* text eol=lf
+# Upstream template-literal whitespace is content; verify the reproduced digest.
+/docs/theme/vendor/mermaid.min.js -whitespace linguist-vendored=true

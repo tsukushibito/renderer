@@ -2,6 +2,7 @@
 
 [設計ガイドの入口](README.md)
 [図で読む RenderGraph](design/rendergraph-overview.md)
+[型・依存・寿命の設計図集](design/rendergraph-diagrams.md)
 
 # 現在の設計
 

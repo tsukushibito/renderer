@@ -5,23 +5,31 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
-## RenderGraph設計ガイドのHTML
+## RenderGraph設計ガイドのHTMLとMermaid図
 
-`renderer-chk`。mdBook 0.5.4で既存文書と[図解の導入](../design/rendergraph-overview.md)をHTMLへ生成した。
-フレームワークの比較・選定、固定版の導入、生成・配布・更新方法は[文書ガイド](../guides/html-docs.md)にある。
-導入の実装確認点は`9e93fda`。作業中に別のRaster実装がmainで進んだため、その未検証変更を説明へ混ぜず、
-確認点とソースリンクを固定した。既存cache説明も、通常実行と明示準備・作成境界の区別を明記した。
+`renderer-chk`。mdBook 0.5.4 / mdbook-mermaid 0.17.1 / Mermaid 12.3.0で、
+既存文書と[導入](../design/rendergraph-overview.md)、[設計図集](../design/rendergraph-diagrams.md)をHTMLへ生成した。
+現在の実装確認点は`367c021`。主要Rust型の共有所有、flat arenaとowned命令、compile、
+producer/culling、live hazard、範囲/subresource、native投入、別々の寿命、work/result状態、
+importのrevision、容量の12図をMermaid原本へまとめた。導入の3図も同じ原本をincludeする。
+生成・配布・固定版・ライセンスと更新方法は[文書ガイド](../guides/html-docs.md)を参照する。
 
-Windows x64で公式配布ZIPのSHA-256照合、HTML生成、全ページのローカルリンク・fragment・
-画像/script/CSSの実在検査、SVG3点のXML・代替説明、文書内の完全なCPU Rust例のcompile/runが成功した。
-ChromeでHTTP配信した同じ生成物を確認し、入口から本文への移動、SVG表示、`GraphPool`検索、
-明暗テーマ、幅390px（本文横overflowなし）を確認した。日本語の`寿命`検索は一致せず、標準検索の
-分かち書き制限をガイドへ明記した。図はクリックで拡大でき、外部CDNに依存しない。
-ブラウザー自動化のURL制約で`file:`直接表示は未確認。配布物内のローカル参照は上記検査で確認した。
+Windows x64で固定CLI配布物のSHA-256照合、npm lockfileの導入、表示用bundleの再生成一致、
+生成済み全17ページのローカルリンク・fragment・asset検査が成功した。
+隔離Chromiumで12図の30表示箇所（導入3＋図集12＋全章印刷15）を描画し、構文・SVG title/description、
+拡大/縮小/原寸/全体表示、Escでの返却、拡大中のPDF印刷、明暗テーマ、390pxの本文横overflowなし、
+印刷時の操作ボタン非表示、localhost以外の文書asset要求なしを確認した。
+Chromeでも型関係図・シーケンス図の文字と矢印、原寸拡大、Esc/閉じるでの復帰、暗色テーマと章内移動を確認した。
+掲載した完全なCPU Rust例は最新実装でcompile/runが成功した。
+
+図はJavaScriptによりSVGへ描画する。表示ライブラリは同梱し外部CDNへ依存しない。
+mdbook-mermaidはビルド元mdBook 0.5.0と呼出元0.5.4の版差を警告するが、上記の生成・実描画検査は成功した。
+標準検索の日本語分かち書き制限はガイドに明記した。ブラウザー自動化のURL制約で`file:`直接表示は未確認。
+CIには固定CLI取得・ハッシュ照合、bundle一致、HTMLリンクと実描画検査、`rendergraph-html` artifact保存を追加した。
 
 Rendererの実装・validation配置・同期・GPU寿命・メモリ方針は変更しない。新たな推奨例外はない。
-実GPU受入・性能計測・shader/bindings再生成はこの文書変更では再実行していない。
-CIには固定mdBook配布物のハッシュ照合、生成・リンク検査、`rendergraph-html` artifact保存を追加した。
+実GPU受入・性能計測・shader/bindings再生成は文書変更のため再実行していない。
+
 ## 明示Programとowned Raster列
 
 `renderer-7ft.2.2.4`、実装・統合確認点`5d7fb6b`。

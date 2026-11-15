@@ -10,6 +10,8 @@ permissions:
 jobs:
   documentation:
     runs-on: ubuntu-24.04
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: .tools/playwright-browsers
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,6 +19,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - name: Download and verify pinned mdBook 0.5.4
         shell: bash
         run: |
@@ -25,10 +30,24 @@ jobs:
           echo '5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89  .tools/mdbook-0.5.4/mdbook.tar.gz' | sha256sum --check
           tar -xzf .tools/mdbook-0.5.4/mdbook.tar.gz -C .tools/mdbook-0.5.4
           .tools/mdbook-0.5.4/mdbook --version
+      - name: Download and verify pinned mdbook-mermaid 0.17.1
+        shell: bash
+        run: |
+          mkdir -p .tools/mdbook-mermaid-0.17.1
+          curl --fail --location --retry 3 https://github.com/badboy/mdbook-mermaid/releases/download/v0.17.1/mdbook-mermaid-v0.17.1-x86_64-unknown-linux-musl.tar.gz --output .tools/mdbook-mermaid-0.17.1/mdbook-mermaid.tar.gz
+          echo '42aca57eea8521971cc595fe4bb853c5b8b7d9f7138a2ec9f14a0a72c210922d  .tools/mdbook-mermaid-0.17.1/mdbook-mermaid.tar.gz' | sha256sum --check
+          tar -xzf .tools/mdbook-mermaid-0.17.1/mdbook-mermaid.tar.gz -C .tools/mdbook-mermaid-0.17.1
+          echo "$GITHUB_WORKSPACE/.tools/mdbook-mermaid-0.17.1" >> "$GITHUB_PATH"
+      - name: Install documentation checks and verify the vendored Mermaid bundle
+        run: |
+          npm ci --ignore-scripts --prefix tools/docs
+          npm run bundle --prefix tools/docs -- --check
+          node tools/docs/node_modules/playwright/cli.js install --with-deps chromium --only-shell
       - name: Build and check portable HTML documentation
         run: |
           .tools/mdbook-0.5.4/mdbook build docs
           python -B tools/docs/check_html.py target/rendergraph-book
+          npm run check --prefix tools/docs -- "$GITHUB_WORKSPACE/target/rendergraph-book"
       - uses: actions/upload-artifact@v4
         with:
           name: rendergraph-html

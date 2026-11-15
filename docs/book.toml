@@ -15,6 +15,11 @@ use-default-preprocessors = false
 [preprocessor.repository-links]
 command = "python ../tools/docs/repository_links.py"
 after = ["links"]
+before = ["mermaid"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+after = ["links", "repository-links"]
 
 [output.html]
 default-theme = "light"
@@ -23,6 +28,7 @@ additional-css = ["theme/renderer.css"]
 git-repository-url = "https://github.com/tsukushibito/renderer"
 edit-url-template = "https://github.com/tsukushibito/renderer/edit/main/docs/{path}"
 smart-punctuation = false
+additional-js = ["theme/vendor/mermaid.min.js", "theme/diagrams.js"]
 
 [output.html.playground]
 runnable = false

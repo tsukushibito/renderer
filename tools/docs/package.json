@@ -1,0 +1,14 @@
+{
+  "name": "renderer-documentation-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bundle": "node bundle_mermaid.mjs",
+    "check": "node check_mermaid.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "mermaid": "12.3.0",
+    "playwright": "1.65.1"
+  }
+}

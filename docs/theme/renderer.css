@@ -80,6 +80,73 @@
     line-height: 1.7;
 }
 
+.diagram {
+    margin: 1.8em 0;
+    border: 1px solid var(--table-border-color);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.diagram figcaption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: .5em;
+    padding: .6em .9em;
+    background: var(--quote-bg);
+    font-weight: 600;
+}
+
+.diagram button, .diagram-dialog button {
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--table-border-color);
+    border-radius: 5px;
+    padding: .45em .75em;
+    font: inherit;
+    cursor: pointer;
+}
+
+.diagram button:focus-visible, .diagram-dialog button:focus-visible,
+.diagram-canvas:focus-visible, .diagram-viewport:focus-visible {
+    outline: 2px solid var(--links);
+    outline-offset: -2px;
+}
+
+.diagram-canvas {
+    overflow: auto;
+    padding: 16px;
+    background: var(--bg);
+}
+
+.diagram-canvas svg { display: block; margin: auto; }
+.diagram-source { padding: .6em .9em; border-top: 1px solid var(--table-border-color); }
+.diagram-source summary { cursor: pointer; }
+.diagram-source pre { margin-bottom: .3em; }
+
+.diagram-dialog {
+    box-sizing: border-box;
+    width: 96vw;
+    max-width: 1600px;
+    height: 92vh;
+    max-height: 92vh;
+    padding: 0;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--table-border-color);
+    border-radius: 10px;
+}
+
+.diagram-dialog[open] { display: flex; flex-direction: column; }
+.diagram-dialog::backdrop { background: rgba(0, 0, 0, .65); }
+.diagram-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 1em; padding: .8em 1em; }
+.diagram-dialog h2 { font-size: 1.1em; margin: 0; }
+.diagram-tools { display: flex; align-items: center; flex-wrap: wrap; gap: .6em; padding: 0 1em .8em; }
+.diagram-tools span { font-size: .85em; }
+.diagram-viewport { flex: 1; min-height: 0; overflow: auto; padding: 16px; border-top: 1px solid var(--table-border-color); }
+.diagram-viewport svg { display: block; max-width: none; margin-inline: auto; }
+
 @media (max-width: 600px) {
     .content {
         padding: 0 16px;
@@ -95,4 +162,8 @@
     .content table { display: table; font-size: 9pt; }
     .content img, .content pre, .content blockquote { break-inside: avoid; }
     .content h2, .content h3 { break-after: avoid; }
+    .diagram { break-inside: avoid; }
+    .diagram button, .diagram-source, .diagram-dialog { display: none !important; }
+    .diagram-canvas { overflow: visible; padding: 4px; }
+    .diagram-canvas svg { width: 100% !important; max-width: 100% !important; height: auto !important; print-color-adjust: exact; }
 }
