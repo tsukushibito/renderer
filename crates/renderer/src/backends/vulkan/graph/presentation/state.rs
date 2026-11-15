@@ -9,6 +9,7 @@ pub(super) struct Inner {
     pub(super) retired: Vec<Arc<Swapchain>>,
     pub(super) slots: Vec<SlotRecord>,
     pub(super) programs: Vec<Arc<Program>>,
+    pub(super) prepared_format: Option<vk::Format>,
     pub(super) pending: Vec<PendingTransfer<PresentWork>>,
     pub(super) desired: (u32, u32),
     pub(super) dirty: bool,
@@ -86,6 +87,7 @@ impl Inner {
             return Ok(Some(PresentOutcome::Suspended));
         }
         if !self.dirty && self.current.is_some() {
+            self.prepare_slots(self.current.as_ref().unwrap().format)?;
             return Ok(None);
         }
         // The public prepare/present entry points already poll before calling
@@ -116,7 +118,23 @@ impl Inner {
             old_handle,
         )?);
         self.dirty = false;
+        self.prepare_slots(self.current.as_ref().unwrap().format)?;
         Ok(Some(PresentOutcome::Recreated))
+    }
+
+    fn prepare_slots(&mut self, format: vk::Format) -> Result<(), RuntimeError> {
+        if self.prepared_format == Some(format) {
+            return Ok(());
+        }
+        let program = self.program(format)?;
+        for slot in &mut self.slots {
+            slot.prepare_format(Arc::clone(&program))?;
+        }
+        while self.slots.len() < self.config.max_frames {
+            self.slots.push(SlotRecord::new(Arc::clone(&program))?);
+        }
+        self.prepared_format = Some(format);
+        Ok(())
     }
 
     pub(super) fn slot(
@@ -124,17 +142,15 @@ impl Inner {
         format: vk::Format,
         source: vk::ImageView,
     ) -> Result<Option<usize>, RuntimeError> {
-        let index = self.slots.iter().position(SlotRecord::reusable);
-        let index = match index {
-            Some(index) => index,
-            None if self.slots.len() < self.config.max_frames => {
-                let program = self.program(format)?;
-                self.slots.push(SlotRecord::new(program)?);
-                self.slots.len() - 1
-            }
-            None => return Ok(None),
+        let Some(index) = self.slots.iter().position(SlotRecord::reusable) else {
+            return Ok(None);
         };
-        let program = self.program(format)?;
+        let program = Arc::clone(
+            self.programs
+                .iter()
+                .find(|program| program.format == format)
+                .expect("successful preparation retains the current format program"),
+        );
         // SAFETY: Selection above proved both completion conditions and sole
         // Arc ownership; the source is held by the caller's canonical lease.
         // Cached programs and source images belong to this runtime's Device.
