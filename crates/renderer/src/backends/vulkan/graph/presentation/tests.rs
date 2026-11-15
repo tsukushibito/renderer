@@ -67,7 +67,7 @@ fn mesh(runtime: &mut VulkanRuntime) -> (ResourceKey, ResourceKey) {
         .into_iter()
         .flat_map(u32::to_ne_bytes)
         .collect::<Vec<_>>();
-    let mut graph = Graph::new();
+    let mut graph = Graph::test_new();
     let vb = graph
         .buffer(
             "wsi.mesh.vertices",
@@ -85,10 +85,10 @@ fn mesh(runtime: &mut VulkanRuntime) -> (ResourceKey, ResourceKey) {
         )
         .unwrap();
     graph
-        .upload_buffer("wsi.upload.vertices", vb, 0, vertices)
+        .upload_buffer("wsi.upload.vertices", vb, 0, &vertices)
         .unwrap();
     graph
-        .upload_buffer("wsi.upload.indices", ib, 0, indices)
+        .upload_buffer("wsi.upload.indices", ib, 0, &indices)
         .unwrap();
     graph.export_buffer(vb).unwrap();
     graph.export_buffer(ib).unwrap();
@@ -105,7 +105,7 @@ fn image_frame(
     width: u32,
     height: u32,
 ) -> Result<(FrameSubmission, ImportImage, PassHandle), RuntimeError> {
-    let mut graph = Graph::new();
+    let mut graph = Graph::test_new();
     let vertices = graph
         .import_buffer("wsi.vertices", &runtime.refresh_buffer(mesh.0)?)
         .unwrap();

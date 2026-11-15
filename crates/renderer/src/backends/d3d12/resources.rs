@@ -1,4 +1,4 @@
-//! Committed buffer/image ownership and scoped CPU mapping, independent of Graph plans.
+//! Committed buffer/image ownership and scoped or persistent CPU mapping.
 //! Managed owners and queue work retain the Device and release native resources first.
 
 use std::{ffi::c_void, ptr};
@@ -35,6 +35,24 @@ fn validate_buffer_request(
 
 pub(super) struct DeviceBuffer {
     raw: ID3D12Resource,
+    mapped: Option<ptr::NonNull<c_void>>,
+}
+
+impl Drop for DeviceBuffer {
+    fn drop(&mut self) {
+        if self.mapped.is_some() {
+            // SAFETY: Persistent mapping belongs to this resource's sole owner.
+            // Slot retirement established GPU/CPU completion before this Drop.
+            unsafe {
+                self.raw.Unmap(0, None);
+            }
+        }
+        #[cfg(feature = "memory-profiling")]
+        {
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
+            crate::measurement::record_native(crate::measurement::NativeEvent::MemoryFree, 1);
+        }
+    }
 }
 
 impl DeviceBuffer {
@@ -92,6 +110,13 @@ impl DeviceBuffer {
         // SAFETY: The creation boundary checked nonzero supported size and heap;
         // node masks and fixed heap states satisfy committed buffer contracts.
         // The owned output slot is empty and remains local on failure.
+        #[cfg(feature = "memory-profiling")]
+        {
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
+            crate::measurement::record_native(crate::measurement::NativeEvent::MemoryAllocate, 1);
+        }
+        // SAFETY: The checked creation request and owned output satisfy the
+        // committed resource contract described above; instrumentation is inert.
         unsafe {
             owner.raw.CreateCommittedResource(
                 &heap_properties,
@@ -105,7 +130,43 @@ impl DeviceBuffer {
         .map_err(|error| owner.native("ID3D12Device::CreateCommittedResource", error))?;
         let raw =
             raw.ok_or_else(|| missing_output(owner, "ID3D12Device::CreateCommittedResource"))?;
-        Ok(Self { raw })
+        Ok(Self { raw, mapped: None })
+    }
+
+    /// Maps a newly owned CPU-visible arena once at the explicit preparation
+    /// boundary. Later accesses still require separate CPU/GPU lease guarantees.
+    pub(super) fn map_persistent(
+        &mut self,
+        owner: &DeviceOwner,
+        size: u64,
+        read: bool,
+    ) -> Result<(), D3D12RuntimeError> {
+        if self.mapped.is_some() {
+            return Ok(());
+        }
+        let end = usize::try_from(size)
+            .ok()
+            .filter(|size| *size <= isize::MAX as usize)
+            .ok_or_else(|| D3D12RuntimeError::invalid("mapped arena exceeds CPU address space"))?;
+        let range = D3D12_RANGE {
+            Begin: 0,
+            End: if read { end } else { 0 },
+        };
+        let mut pointer = ptr::null_mut();
+        // SAFETY: Only a newly owned CPU-visible frame arena reaches this call;
+        // the caller provided its exact physical capacity and no GPU use exists.
+        unsafe { self.raw.Map(0, Some(&range), &mut pointer) }
+            .ok()
+            .map_err(|error| owner.native("ID3D12Resource::Map(persistent)", error))?;
+        let Some(pointer) = ptr::NonNull::new(pointer) else {
+            // SAFETY: Balance the successful Map even for a missing pointer.
+            unsafe {
+                self.raw.Unmap(0, Some(&D3D12_RANGE { Begin: 0, End: 0 }));
+            }
+            return Err(missing_output(owner, "ID3D12Resource::Map(persistent)"));
+        };
+        self.mapped = Some(pointer);
+        Ok(())
     }
 
     /// # Safety
@@ -118,17 +179,54 @@ impl DeviceBuffer {
         owner: &DeviceOwner,
         bytes: &[u8],
     ) -> Result<(), D3D12RuntimeError> {
+        // SAFETY: The caller supplies the same exclusive upload guarantees for
+        // the prefix range as write_at requires for an arbitrary range.
+        unsafe { self.write_at(owner, 0, bytes) }
+    }
+
+    /// # Safety
+    /// The caller exclusively owns the UPLOAD range `offset..offset+bytes.len()`
+    /// before GPU access. That range must fit the live resource, and the CPU
+    /// source must not overlap it. The Device owner outlives mapping and release.
+    pub(super) unsafe fn write_at(
+        &self,
+        owner: &DeviceOwner,
+        offset: u64,
+        bytes: &[u8],
+    ) -> Result<(), D3D12RuntimeError> {
+        let begin = usize::try_from(offset)
+            .map_err(|_| D3D12RuntimeError::invalid("upload offset exceeds CPU address space"))?;
+        let end = begin
+            .checked_add(bytes.len())
+            .filter(|end| *end <= isize::MAX as usize)
+            .ok_or_else(|| D3D12RuntimeError::invalid("upload range exceeds CPU address space"))?;
+        if let Some(pointer) = self.mapped {
+            // SAFETY: The caller supplies exclusive in-bounds upload ownership;
+            // persistent Map remains live until the resource's final Drop.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    pointer.as_ptr().cast::<u8>().add(begin),
+                    bytes.len(),
+                );
+            }
+            return Ok(());
+        }
         let empty = D3D12_RANGE { Begin: 0, End: 0 };
         let written = D3D12_RANGE {
-            Begin: 0,
-            End: bytes.len(),
+            Begin: begin,
+            End: end,
         };
         let mapping = Mapping::new(owner, &self.raw, empty, written)?;
         // SAFETY: The caller guarantees at least bytes.len() writable bytes;
         // it has not been submitted and the mapped native pointer is nonnull.
         // The CPU source and native allocation do not overlap.
         unsafe {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), mapping.pointer.cast(), bytes.len());
+            ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                mapping.pointer.cast::<u8>().add(begin),
+                bytes.len(),
+            );
         }
         Ok(())
     }
@@ -138,6 +236,7 @@ impl DeviceBuffer {
     /// initialized logical bytes and `size <= isize::MAX`. Actual successful GPU
     /// completion must be established, with no concurrent CPU/GPU access. The
     /// native owner must remain retained through this access and buffer release.
+    #[cfg(test)]
     pub(super) unsafe fn read(
         &self,
         owner: &DeviceOwner,
@@ -162,12 +261,73 @@ impl DeviceBuffer {
         bytes.extend_from_slice(mapped);
         Ok(bytes)
     }
+
+    /// # Safety
+    /// The READBACK range must fit the retained resource and contain initialized
+    /// bytes from proven-complete GPU work. No GPU access may overlap this CPU
+    /// access, and the destination must not alias the mapped native range.
+    pub(super) unsafe fn read_into_at(
+        &self,
+        owner: &DeviceOwner,
+        offset: u64,
+        destination: &mut [u8],
+    ) -> Result<(), D3D12RuntimeError> {
+        let begin = usize::try_from(offset)
+            .map_err(|_| D3D12RuntimeError::invalid("readback offset exceeds CPU address space"))?;
+        let end = begin
+            .checked_add(destination.len())
+            .filter(|end| *end <= isize::MAX as usize)
+            .ok_or_else(|| {
+                D3D12RuntimeError::invalid("readback range exceeds CPU address space")
+            })?;
+        if let Some(pointer) = self.mapped {
+            // SAFETY: Normal Fence completion and the retained CPU lease protect
+            // this initialized mapped range from another GPU writer.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    pointer.as_ptr().cast::<u8>().add(begin),
+                    destination.as_mut_ptr(),
+                    destination.len(),
+                );
+            }
+            return Ok(());
+        }
+        let mapping = Mapping::new(
+            owner,
+            &self.raw,
+            D3D12_RANGE {
+                Begin: begin,
+                End: end,
+            },
+            D3D12_RANGE { Begin: 0, End: 0 },
+        )?;
+        // SAFETY: The caller supplies an initialized, completed exclusive range;
+        // the checked pointer displacement remains inside its native allocation.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                mapping.pointer.cast::<u8>().add(begin),
+                destination.as_mut_ptr(),
+                destination.len(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Physical sampled image ownership. Its sole creation caller establishes
 /// nonzero Device-supported extent/format before reaching this native factory.
 pub(super) struct DeviceImage {
     raw: ID3D12Resource,
+}
+
+impl Drop for DeviceImage {
+    fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        {
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
+            crate::measurement::record_native(crate::measurement::NativeEvent::MemoryFree, 1);
+        }
+    }
 }
 impl DeviceImage {
     pub(super) fn new(
@@ -197,6 +357,17 @@ impl DeviceImage {
         // mip/layer/sample description and format support. COMMON has no valid
         // contents yet. The owned COM output is released on every failure path.
         unsafe {
+            #[cfg(feature = "memory-profiling")]
+            {
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ResourceCreate,
+                    1,
+                );
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::MemoryAllocate,
+                    1,
+                );
+            }
             owner.raw.CreateCommittedResource(
                 &properties,
                 D3D12_HEAP_FLAG_NONE,

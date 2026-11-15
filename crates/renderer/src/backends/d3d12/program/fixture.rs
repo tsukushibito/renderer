@@ -256,8 +256,8 @@ impl D3D12Bindings {
         // guarantees; the caller supplies initialized contents and valid states
         // for the reviewed shader and retains every referenced native object.
         unsafe {
-            list.SetPipelineState(&program._pipeline);
-            list.SetComputeRootSignature(&program._signature);
+            list.SetPipelineState(&*program._pipeline);
+            list.SetComputeRootSignature(&*program._signature);
             for (root, (slot, resource)) in self.layout().iter().zip(&binding.resources).enumerate()
             {
                 match resource {

@@ -66,7 +66,7 @@ fn opaque_batch_comparison(
     empty: bool,
     invalid_last_indices: bool,
 ) -> (CompiledGraph, PassHandle) {
-    let mut graph = Graph::new();
+    let mut graph = Graph::test_new();
     let mut upload_mesh = |name: &str, z: f32, invalid: bool| {
         let bytes = [[-0.4_f32, -0.4, z], [0.4, -0.4, z], [0.0, 0.4, z]]
             .into_iter()
@@ -74,26 +74,26 @@ fn opaque_batch_comparison(
             .flat_map(f32::to_ne_bytes)
             .collect::<Vec<_>>();
         let vertices = graph
-            .buffer(format!("{name} vertices"), BufferDesc { size: 84 })
+            .buffer(&format!("{name} vertices"), BufferDesc { size: 84 })
             .unwrap();
         graph
-            .upload_buffer(format!("{name} vertices upload"), vertices, 0, bytes)
+            .upload_buffer(&format!("{name} vertices upload"), vertices, 0, &bytes)
             .unwrap();
         let source = graph
-            .buffer(format!("{name} index source"), BufferDesc { size: 12 })
+            .buffer(&format!("{name} index source"), BufferDesc { size: 12 })
             .unwrap();
         let indices = graph
-            .buffer(format!("{name} indices"), BufferDesc { size: 12 })
+            .buffer(&format!("{name} indices"), BufferDesc { size: 12 })
             .unwrap();
         let bytes: Vec<u8> = [0_u32, 1, if invalid { 9 } else { 2 }]
             .into_iter()
             .flat_map(u32::to_ne_bytes)
             .collect();
         graph
-            .upload_buffer(format!("{name} index upload"), source, 0, bytes)
+            .upload_buffer(&format!("{name} index upload"), source, 0, &bytes)
             .unwrap();
         graph
-            .copy_buffer(format!("{name} index copy"), source, 0, indices, 0, 12)
+            .copy_buffer(&format!("{name} index copy"), source, 0, indices, 0, 12)
             .unwrap();
         (vertices, indices)
     };
@@ -225,7 +225,7 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
 
         // One index buffer can be legal for the first draw but illegal for the
         // next draw's smaller vertex extent. Reuse must include those bounds.
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let full = graph
             .buffer("three vertices", BufferDesc { size: 84 })
             .unwrap();
@@ -234,17 +234,17 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
             .buffer("shared indices", BufferDesc { size: 12 })
             .unwrap();
         graph
-            .upload_buffer("full upload", full, 0, vec![0; 84])
+            .upload_buffer("full upload", full, 0, &[0; 84])
             .unwrap();
         graph
-            .upload_buffer("short upload", short, 0, vec![0; 28])
+            .upload_buffer("short upload", short, 0, &[0; 28])
             .unwrap();
         graph
             .upload_buffer(
                 "index upload",
                 indices,
                 0,
-                [0_u32, 1, 2]
+                &[0_u32, 1, 2]
                     .into_iter()
                     .flat_map(u32::to_ne_bytes)
                     .collect::<Vec<_>>(),
@@ -284,14 +284,14 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
 #[ignore = "real-GPU shared vertex/index buffer in an opaque batch; requires Core/SyncVal"]
 fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
     real_gpu(|runtime| {
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let buffer = graph
             .buffer("shared input", BufferDesc { size: 84 })
             .unwrap();
         // Zero index values address the first vertex. The degenerate triangles
         // leave the clear intact while exercising both native read purposes.
         graph
-            .upload_buffer("shared upload", buffer, 0, vec![0; 84])
+            .upload_buffer("shared upload", buffer, 0, &[0; 84])
             .unwrap();
         let color = graph.image("color", ImageDesc::rgba8(4, 4)).unwrap();
         let depth = graph.image("depth", ImageDesc::depth32(4, 4)).unwrap();
@@ -338,7 +338,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             ..RuntimeConfig::default()
         },
         |runtime| {
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let source = graph
                 .image("capacity-source", ImageDesc::rgba8(8, 8))
                 .unwrap();
@@ -350,7 +350,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 .unwrap();
             let bytes = [13, 29, 87, 173].repeat(64);
             graph
-                .upload_image("capacity-upload", source, bytes.clone())
+                .upload_image("capacity-upload", source, &bytes)
                 .unwrap();
             graph
                 .compute("first-binding", source, first, ComputeTransform::Invert)
@@ -372,7 +372,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             assert_eq!(failed.registered_resources, 0);
             // A smaller graph reuses the canceled arena, images and staging without
             // accidentally publishing the rejected graph's initialized contents.
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let source = graph
                 .image("recovered-source", ImageDesc::rgba8(8, 8))
                 .unwrap();
@@ -380,7 +380,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 .image("recovered-destination", ImageDesc::rgba8(8, 8))
                 .unwrap();
             graph
-                .upload_image("recovered-upload", source, bytes.clone())
+                .upload_image("recovered-upload", source, &bytes)
                 .unwrap();
             graph
                 .compute(
@@ -410,15 +410,10 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             // Byte extent validation alone cannot establish safe indexed access.
             // A partial upload that changes one actual index must be rejected while
             // still unsubmitted, with all acquired leases canceled.
-            let mut invalid = Graph::new();
+            let mut invalid = Graph::test_new();
             let (vertices, indices) = add_mesh(&mut invalid, false);
             invalid
-                .upload_buffer(
-                    "invalid-first-index",
-                    indices,
-                    0,
-                    999u32.to_le_bytes().to_vec(),
-                )
+                .upload_buffer("invalid-first-index", indices, 0, &999u32.to_le_bytes())
                 .unwrap();
             let color = invalid
                 .image("invalid-index-color", ImageDesc::rgba8(16, 16))
@@ -471,7 +466,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
 #[ignore = "explicit real-GPU image Compute dependencies; requires Core/SyncVal"]
 fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
     real_gpu(|runtime| {
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let desc = ImageDesc::rgba8(17, 13); // dispatch tail requires shader bounds guard
         let source = graph.image("compute-source", desc).unwrap();
         let first = graph.image("compute-inverted", desc).unwrap();
@@ -486,7 +481,7 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
                 ]
             })
             .collect();
-        graph.upload_image("upload", source, bytes.clone()).unwrap();
+        graph.upload_image("upload", source, &bytes).unwrap();
         graph
             .compute("invert", source, first, ComputeTransform::Invert)
             .unwrap();
@@ -540,7 +535,7 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
 #[ignore = "explicit real-GPU lazy program creation with pending work; requires Core/SyncVal"]
 fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
     real_gpu(|runtime| {
-        let mut producer = Graph::new();
+        let mut producer = Graph::test_new();
         let source = producer
             .image("lazy-source", ImageDesc::rgba8(4, 4))
             .unwrap();
@@ -549,7 +544,7 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
             .unwrap();
         let bytes = [13, 29, 87, 173].repeat(16);
         producer
-            .upload_image("lazy-upload", source, bytes.clone())
+            .upload_image("lazy-upload", source, &bytes)
             .unwrap();
         producer
             .compute("lazy-compute", source, output, ComputeTransform::Invert)
@@ -562,7 +557,7 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
         assert_eq!(first[1..], [vk::Pipeline::null(); 2]);
 
         // Add composite while the Compute submission still owns its program.
-        let mut consumer = Graph::new();
+        let mut consumer = Graph::test_new();
         let source = consumer.import_image("lazy-import", &exported).unwrap();
         let output = consumer
             .image("lazy-composite", ImageDesc::rgba8(4, 4))
@@ -579,7 +574,7 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
 
         // Add mesh without replacing either earlier program. All three kinds
         // coexist while the prior submissions still retain their leases.
-        let mut mesh = Graph::new();
+        let mut mesh = Graph::test_new();
         let (vertices, indices) = add_mesh(&mut mesh, false);
         let color = mesh.image("lazy-color", ImageDesc::rgba8(16, 16)).unwrap();
         let depth = mesh
@@ -703,10 +698,10 @@ fn add_mesh(graph: &mut Graph, reverse: bool) -> (BufferHandle, BufferHandle) {
         )
         .unwrap();
     graph
-        .upload_buffer("upload-vertices", v, 0, vertices)
+        .upload_buffer("upload-vertices", v, 0, &vertices)
         .unwrap();
     graph
-        .upload_buffer("upload-indices", i, 0, indices)
+        .upload_buffer("upload-indices", i, 0, &indices)
         .unwrap();
     (v, i)
 }
@@ -716,7 +711,7 @@ fn add_mesh(graph: &mut Graph, reverse: bool) -> (BufferHandle, BufferHandle) {
 fn vulkan_graph_depth_occlusion_and_attachment_load() {
     real_gpu(|runtime| {
         for reverse in [false, true] {
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let (vertices, indices) = add_mesh(&mut graph, reverse);
             // The same upload writer must become visible to both COPY reads
             // and later VERTEX_ATTRIBUTE/INDEX reads, rather than replacing its
@@ -773,14 +768,14 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                 .buffer("background-indices", BufferDesc { size: 24 })
                 .unwrap();
             graph
-                .upload_buffer("upload-background-vertices", blue_vertices, 0, blue)
+                .upload_buffer("upload-background-vertices", blue_vertices, 0, &blue)
                 .unwrap();
             graph
                 .upload_buffer(
                     "upload-background-indices",
                     blue_indices,
                     0,
-                    index_bytes(&[0, 1, 2, 2, 3, 0]),
+                    &index_bytes(&[0, 1, 2, 2, 3, 0]),
                 )
                 .unwrap();
             graph
@@ -841,7 +836,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
         );
         let expected_consumer = transform(&expected, ComputeTransform::Invert);
         for reverse in [false, true] {
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let (vertices, indices) = add_mesh(&mut graph, reverse);
             let color = graph
                 .image("scene-color", ImageDesc::rgba8(16, 16))
@@ -905,8 +900,12 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let final_read = graph.readback_image("read-final", final_image).unwrap();
             let compiled = graph.compile().unwrap();
             #[cfg(feature = "graph-diagnostics")]
-            assert_eq!(compiled.culled_pass_names(), ["unused-branch"]);
-            assert!(!compiled.ordered_pass_names().contains(&"unused-branch"));
+            assert!(compiled.culled_pass_names().eq(["unused-branch"]));
+            assert!(
+                !compiled
+                    .ordered_pass_names()
+                    .any(|name| name == "unused-branch")
+            );
             #[cfg(feature = "graph-diagnostics")]
             let (mut producer, lowering) = runtime.submit_with_diagnostics(&compiled).unwrap();
             #[cfg(not(feature = "graph-diagnostics"))]
@@ -934,7 +933,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let exported = producer.export_image(final_image).unwrap();
             // No CPU wait occurs between A and B. B inherits accepted native
             // layout/access/content and uses another descriptor arena.
-            let mut consumer = Graph::new();
+            let mut consumer = Graph::test_new();
             let source = consumer.import_image("pending-final", &exported).unwrap();
             let destination = consumer
                 .image("consumer-inverted", ImageDesc::rgba8(16, 16))
