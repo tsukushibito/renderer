@@ -1,5 +1,8 @@
 # RenderGraphの契約
 
+全体像と具体例は[図で読むRenderGraph](rendergraph-overview.md)、
+検索・章ナビゲーション付きHTMLの生成は[文書ガイド](../guides/html-docs.md)を参照する。
+
 Graphの宣言・解析はGPUとウィンドウに依存せず、通常のCPU構成で利用する。
 Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出さない。
 Windowsの`d3d12` featureは同じ`CompiledGraph`のbuffer upload・copy・readbackを実行する。
@@ -385,8 +388,10 @@ owner・世代・内容revisionの照合は製品でも行う。同じ世代のd
 exportした資源はruntimeへ登録され、明示的な`delete`で登録を解除する。
 CPUハンドルをdropするだけでは登録を解除しない。
 未登録資源は保持参照がなくなってから再利用でき、同じ作成条件ならallocationとViewを保持する。
-同じ作成条件がなければresource容量までentryを追加し、異なる条件のcacheも保持する。
-上限時だけ、空いている未登録entryのうち最後に受理した利用serialが最も古いものを置き換える。
+通常Graph実行は、明示準備済みで同じ作成条件のinstanceだけを借り、不足時は容量エラーを返す。
+`prepare_working_set`や`create_buffer`等の明示準備・作成境界では、同じ作成条件がなければ
+resource容量までentryを追加し、異なる条件のcacheも保持する。
+これらの境界で上限に達した場合だけ、空いている未登録entryのうち最後に受理した利用serialが最も古いものを置き換える。
 同じserialならentryのindex順とし、登録中・保持参照があるentry・世代上限のentryを選ばない。
 置換先の作成・命名が成功するまで旧entryを維持する。再利用時はnative同期状態を保持し、
 以前の内容の初期化情報とCPU provenanceを新しい論理資源へ引き継がない。

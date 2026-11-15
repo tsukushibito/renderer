@@ -1,0 +1,37 @@
+[book]
+title = "Renderer — RenderGraph 設計ガイド"
+description = "現在の RenderGraph を図と具体例で理解する。宣言、依存解析、GPU 実行、同期、寿命と容量の契約。"
+authors = ["Renderer contributors"]
+language = "ja"
+src = "."
+
+[build]
+build-dir = "../target/rendergraph-book"
+create-missing = false
+use-default-preprocessors = false
+
+[preprocessor.links]
+
+[preprocessor.repository-links]
+command = "python ../tools/docs/repository_links.py"
+after = ["links"]
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+additional-css = ["theme/renderer.css"]
+git-repository-url = "https://github.com/tsukushibito/renderer"
+edit-url-template = "https://github.com/tsukushibito/renderer/edit/main/docs/{path}"
+smart-punctuation = false
+
+[output.html.playground]
+runnable = false
+
+[output.html.search]
+enable = true
+limit-results = 20
+heading-split-level = 3
+
+[output.html.print]
+enable = true
+

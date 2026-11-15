@@ -17,6 +17,7 @@ Windowsの`d3d12` featureでは、同じGPU非依存Graphのbuffer upload・copy
 [二APIの実GPU受入手順](docs/guides/development.md#d3d12-buffer-acceptance)を参照してください。
 
 - [ドキュメント一覧](docs/README.md)
+- [図で読むRenderGraph設計](docs/design/rendergraph-overview.md)・[HTML版の生成](docs/guides/html-docs.md)
 - [開発・ビルド・試験](docs/guides/development.md)
 - [開発ツール](docs/guides/tooling.md)
 - [Vulkanベストプラクティス](docs/guides/vulkan-best-practices.md)

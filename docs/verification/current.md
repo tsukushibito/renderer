@@ -5,6 +5,24 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## RenderGraph設計ガイドのHTML
+
+`renderer-chk`。mdBook 0.5.4で既存文書と[図解の導入](../design/rendergraph-overview.md)をHTMLへ生成した。
+フレームワークの比較・選定、固定版の導入、生成・配布・更新方法は[文書ガイド](../guides/html-docs.md)にある。
+導入の実装確認点は`9e93fda`。作業中に別のRaster実装がmainで進んだため、その未検証変更を説明へ混ぜず、
+確認点とソースリンクを固定した。既存cache説明も、通常実行と明示準備・作成境界の区別を明記した。
+
+Windows x64で公式配布ZIPのSHA-256照合、HTML生成、全ページのローカルリンク・fragment・
+画像/script/CSSの実在検査、SVG3点のXML・代替説明、文書内の完全なCPU Rust例のcompile/runが成功した。
+ChromeでHTTP配信した同じ生成物を確認し、入口から本文への移動、SVG表示、`GraphPool`検索、
+明暗テーマ、幅390px（本文横overflowなし）を確認した。日本語の`寿命`検索は一致せず、標準検索の
+分かち書き制限をガイドへ明記した。図はクリックで拡大でき、外部CDNに依存しない。
+ブラウザー自動化のURL制約で`file:`直接表示は未確認。配布物内のローカル参照は上記検査で確認した。
+
+Rendererの実装・validation配置・同期・GPU寿命・メモリ方針は変更しない。新たな推奨例外はない。
+実GPU受入・性能計測・shader/bindings再生成はこの文書変更では再実行していない。
+CIには固定mdBook配布物のハッシュ照合、生成・リンク検査、`rendergraph-html` artifact保存を追加した。
+
 ## attachment配列と画像subresourceのCPU計画
 
 `renderer-7ft.2.2.3`、実装・統合確認点`f290cef`。
