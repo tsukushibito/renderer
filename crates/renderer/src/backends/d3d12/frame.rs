@@ -6,10 +6,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::{graph::provenance::BufferProvenance, program::ManagedRasterProgram};
+
 use super::{
     D3D12RuntimeError,
     bindings::*,
     device::DeviceOwner,
+    raster::RasterPipeline,
+    raster_storage::{D3D12ImageClass, RasterStorage},
     resources::{DeviceBuffer, MAX_BUFFER_BYTES},
 };
 
@@ -87,6 +91,12 @@ pub(super) struct ExecutionSlot {
     pub(super) buffers_used: usize,
     pub(super) upload_used: u64,
     pub(super) scratch_state: D3D12_RESOURCE_STATES,
+    pub(super) raster: Option<RasterStorage>,
+    pub(super) raster_draws_used: usize,
+    pub(super) buffer_scopes: Vec<D3D12_RESOURCE_STATES>,
+    pub(super) provenance: Vec<BufferProvenance>,
+    pub(super) provenance_needed: Vec<bool>,
+    pub(super) provenance_scratch: BufferProvenance,
 }
 // SAFETY: These free-threaded native objects move as one exclusive lease. Their
 // allocator and resources are never reset/reused before actual GPU completion.
@@ -138,7 +148,25 @@ impl ExecutionSlot {
         resource_map.resize(capacity.resources, usize::MAX);
         let mut upload = DeviceBuffer::new(owner, capacity.upload_bytes, D3D12_HEAP_TYPE_UPLOAD)?;
         upload.map_persistent(owner, capacity.upload_bytes, false)?;
+        let mut provenance = reserved(capacity.buffers)?;
+        for _ in 0..capacity.buffers {
+            provenance.push(BufferProvenance::with_capacity(capacity.operations));
+        }
         Ok(Self {
+            raster: None,
+            raster_draws_used: 0,
+            buffer_scopes: {
+                let mut values = reserved(capacity.buffers)?;
+                values.resize(capacity.buffers, D3D12_RESOURCE_STATE_COMMON);
+                values
+            },
+            provenance,
+            provenance_needed: {
+                let mut v = reserved(capacity.resources)?;
+                v.resize(capacity.resources, false);
+                v
+            },
+            provenance_scratch: BufferProvenance::with_capacity(capacity.operations),
             allocator,
             list,
             fence,
@@ -169,9 +197,17 @@ impl ExecutionSlot {
             .ok()
             .map_err(|error| owner.native("ID3D12GraphicsCommandList::Reset", error))?;
         self.states.fill(D3D12_RESOURCE_STATE_COMMON);
+        for provenance in &mut self.provenance {
+            provenance.clear();
+        }
+        self.provenance_scratch.clear();
+        if let Some(raster) = &mut self.raster {
+            raster.reset();
+        }
         // Graph requirements initializes the active logical resource map once.
         self.buffers_used = 0;
         self.upload_used = 0;
+        self.raster_draws_used = 0;
         self.scratch_state = D3D12_RESOURCE_STATE_COMMON;
         Ok(())
     }
@@ -190,6 +226,13 @@ pub(super) struct ReadbackMeta {
     pub(super) size: usize,
     pub(super) offset: u64,
     pub(super) consumed: bool,
+    pub(super) image: Option<ReadbackImage>,
+}
+#[derive(Clone, Copy)]
+pub(super) struct ReadbackImage {
+    pub(super) row_bytes: usize,
+    pub(super) row_pitch: usize,
+    pub(super) rows: usize,
 }
 pub(super) struct ResultSlot {
     pub(super) buffer: DeviceBuffer,
@@ -223,15 +266,15 @@ struct ResultLease {
     slot: ResultSlot,
 }
 struct DetachedWork {
-    slot: ExecutionSlot,
+    slot: Box<ExecutionSlot>,
     result: Option<ResultLease>,
     target: u64,
 }
 enum ExecutionEntry {
-    Available(ExecutionSlot),
+    Available(Box<ExecutionSlot>),
     Leased,
     Detached(DetachedWork),
-    Poisoned { _slot: ExecutionSlot },
+    Poisoned { _slot: Box<ExecutionSlot> },
     Quarantined(DetachedWork),
 }
 struct PoolState {
@@ -240,6 +283,7 @@ struct PoolState {
 }
 pub(super) struct FramePool {
     capacity: D3D12FrameCapacity,
+    pub(super) raster_programs: Vec<RasterPipeline>,
     state: Mutex<PoolState>,
     // Declared last so native fields are destroyed while the Device remains live.
     owner: Arc<DeviceOwner>,
@@ -274,9 +318,9 @@ impl FramePool {
         }
         let mut executions = reserved(capacity.executions)?;
         for _ in 0..capacity.executions {
-            executions.push(ExecutionEntry::Available(ExecutionSlot::new(
+            executions.push(ExecutionEntry::Available(Box::new(ExecutionSlot::new(
                 &owner, capacity,
-            )?));
+            )?)));
         }
         let mut results = reserved(capacity.results)?;
         for _ in 0..capacity.results {
@@ -284,12 +328,70 @@ impl FramePool {
         }
         Ok(Arc::new(Self {
             capacity,
+            raster_programs: Vec::new(),
             state: Mutex::new(PoolState {
                 executions,
                 results,
             }),
             owner,
         }))
+    }
+    pub(super) fn is_idle(&self) -> bool {
+        let state = self.state();
+        state
+            .executions
+            .iter()
+            .all(|entry| matches!(entry, ExecutionEntry::Available(_)))
+            && state.results.iter().all(Option::is_some)
+    }
+    pub(super) fn with_raster(
+        owner: Arc<DeviceOwner>,
+        capacity: D3D12FrameCapacity,
+        classes: &[D3D12ImageClass],
+        programs: &[ManagedRasterProgram],
+    ) -> Result<Arc<Self>, D3D12RuntimeError> {
+        let mut pool = Self::new(owner, capacity)?;
+        let pool_mut = Arc::get_mut(&mut pool).expect("new unshared pool");
+        pool_mut
+            .raster_programs
+            .try_reserve_exact(programs.len().saturating_mul(2))
+            .map_err(|_| {
+                D3D12RuntimeError::capacity("Raster pipeline capacity reservation failed")
+            })?;
+        for program in programs {
+            for depth in [false, true] {
+                if program.is_depth_only() && !depth {
+                    continue;
+                }
+                if !pool_mut
+                    .raster_programs
+                    .iter()
+                    .any(|pipeline| pipeline.matches(program, depth))
+                {
+                    pool_mut.raster_programs.push(RasterPipeline::new(
+                        &pool_mut.owner,
+                        program,
+                        depth,
+                    )?);
+                }
+            }
+        }
+        for entry in &mut pool_mut
+            .state
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .executions
+        {
+            let ExecutionEntry::Available(slot) = entry else {
+                unreachable!()
+            };
+            slot.raster = Some(RasterStorage::new(
+                &pool_mut.owner,
+                classes,
+                capacity.operations,
+            )?);
+        }
+        Ok(pool)
     }
     pub(super) fn capacity(&self) -> D3D12FrameCapacity {
         self.capacity
@@ -434,6 +536,10 @@ impl Drop for FramePool {
             }
         }
         if unproven {
+            // The intentionally retained pending command lists may reference
+            // graphics PSOs/signatures as well as resources. Their pool-level
+            // owners must survive the same unproven-completion teardown.
+            std::mem::forget(std::mem::take(&mut self.raster_programs));
             std::mem::forget(Arc::clone(&self.owner));
         }
     }
@@ -451,7 +557,7 @@ enum Phase {
 pub(super) struct FrameWork {
     pool: Arc<FramePool>,
     index: usize,
-    slot: Option<ExecutionSlot>,
+    slot: Option<Box<ExecutionSlot>>,
     result: Option<ResultLease>,
     graph: u64,
     target: u64,
@@ -598,6 +704,13 @@ impl Drop for FrameWork {
                 Phase::Poisoned
             };
         }
+        // CPU provenance only establishes index safety while recording. Even
+        // a rejected late draw/cancel must return its Graph pins immediately;
+        // the prepared buffers, descriptors and native chain remain retained.
+        for provenance in &mut self.slot.as_mut().unwrap().provenance {
+            provenance.clear();
+        }
+        self.slot.as_mut().unwrap().provenance_scratch.clear();
         let work = self.detached();
         let mut state = self.pool.state();
         match self.phase {
@@ -714,10 +827,20 @@ impl FrameResult {
         // SAFETY: This result exists only after normal Fence completion. The
         // readback lease remains exclusive until CPU consumption has finished.
         unsafe {
-            result
-                .slot
-                .buffer
-                .read_into_at(owner, meta.offset, destination)?;
+            if let Some(image) = meta.image {
+                for row in 0..image.rows {
+                    result.slot.buffer.read_into_at(
+                        owner,
+                        meta.offset + (row * image.row_pitch) as u64,
+                        &mut destination[row * image.row_bytes..(row + 1) * image.row_bytes],
+                    )?;
+                }
+            } else {
+                result
+                    .slot
+                    .buffer
+                    .read_into_at(owner, meta.offset, destination)?;
+            }
         }
         owner.check_native_active()?;
         self.result.as_mut().unwrap().slot.readbacks[index].consumed = true;

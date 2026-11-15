@@ -442,10 +442,6 @@ impl RasterStorage {
         }
     }
 
-    pub(super) fn draw_capacity(&self) -> usize {
-        self.draw_capacity
-    }
-
     pub(super) fn texture_cpu(&self, index: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         assert!(
             index < self.draw_capacity,

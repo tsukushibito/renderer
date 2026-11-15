@@ -57,10 +57,21 @@ fn add_bytes(total: &mut u64, bytes: u64, maximum: u64) -> Result<(), D3D12Runti
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn requirements(
     graph: &CompiledGraph,
     resource_map: &mut [usize],
     capacity: D3D12FrameCapacity,
+) -> Result<usize, D3D12RuntimeError> {
+    requirements_inner(graph, resource_map, capacity, None, &[])
+}
+
+fn requirements_inner(
+    graph: &CompiledGraph,
+    resource_map: &mut [usize],
+    capacity: D3D12FrameCapacity,
+    mut raster: Option<&mut super::super::raster_storage::RasterStorage>,
+    programs: &[super::super::raster::RasterPipeline],
 ) -> Result<usize, D3D12RuntimeError> {
     if !graph.exports.is_empty() {
         return Err(D3D12RuntimeError::unsupported(
@@ -81,6 +92,7 @@ pub(super) fn requirements(
     let mut used = 0;
     let mut upload_bytes = 0;
     let mut readback_bytes = 0;
+    let mut draws_total = 0usize;
     // Establish support and all variable capacity requirements before recording.
     // This scans changing work; it does not revalidate Graph byte-range contents.
     for &pass in &graph.order {
@@ -134,9 +146,93 @@ pub(super) fn requirements(
                 )?;
                 add_bytes(&mut readback_bytes, *size, capacity.readback_bytes)?;
             }
+            Operation::UploadImage { dst, .. } | Operation::ReadbackImage { src: dst } => {
+                let storage = raster.as_deref_mut().ok_or_else(|| {
+                    D3D12RuntimeError::capacity("Raster image working set has not been prepared")
+                })?;
+                super::raster::use_image(graph, *dst, resource_map, storage)?;
+                let image = &storage.images[resource_map[*dst]];
+                let total = if matches!(graph.passes[pass].operation, Operation::UploadImage { .. })
+                {
+                    &mut upload_bytes
+                } else {
+                    &mut readback_bytes
+                };
+                let maximum =
+                    if matches!(graph.passes[pass].operation, Operation::UploadImage { .. }) {
+                        capacity.upload_bytes
+                    } else {
+                        capacity.readback_bytes
+                    };
+                *total = super::raster::align_transfer(*total)?;
+                add_bytes(total, image.total_bytes, maximum)?;
+            }
+            Operation::Raster {
+                program,
+                draws,
+                colors,
+                depth,
+                ..
+            } => {
+                if !programs
+                    .iter()
+                    .any(|pipeline| pipeline.matches(program, depth.is_some()))
+                {
+                    return Err(D3D12RuntimeError::capacity(
+                        "Raster pipeline working set has not been prepared",
+                    ));
+                }
+                draws_total = draws_total
+                    .checked_add(draws.len())
+                    .filter(|count| *count <= capacity.operations)
+                    .ok_or_else(|| {
+                        D3D12RuntimeError::capacity(
+                            "prepared Raster draw descriptor capacity exhausted",
+                        )
+                    })?;
+                let storage = raster.as_deref_mut().ok_or_else(|| {
+                    D3D12RuntimeError::capacity("Raster image working set has not been prepared")
+                })?;
+                for access in graph.accesses(pass) {
+                    match graph.resources[access.resource].desc {
+                        ResourceDesc::Buffer(_) => use_buffer(
+                            graph,
+                            access.resource,
+                            resource_map,
+                            &mut used,
+                            capacity.buffer_bytes,
+                            capacity.buffers,
+                        )?,
+                        ResourceDesc::Image(_) => {
+                            super::raster::use_image(graph, access.resource, resource_map, storage)?
+                        }
+                    }
+                }
+                for draw in graph.raster_draws(draws) {
+                    for binding in graph.raster_bindings(&draw.bindings) {
+                        if let crate::graph::BindingOperands::Buffer { range, .. } = binding
+                            && range.offset % 256 != 0
+                        {
+                            return Err(D3D12RuntimeError::unsupported(
+                                "D3D12 Raster uniform GPU address must be 256-byte aligned",
+                            ));
+                        }
+                    }
+                }
+                super::raster::validate_targets(graph, colors, depth)?;
+            }
+            Operation::AttachmentPass { colors, depth, .. } => {
+                let storage = raster.as_deref_mut().ok_or_else(|| {
+                    D3D12RuntimeError::capacity("Raster image working set has not been prepared")
+                })?;
+                for access in graph.accesses(pass) {
+                    super::raster::use_image(graph, access.resource, resource_map, storage)?;
+                }
+                super::raster::validate_targets(graph, colors, depth)?;
+            }
             _ => {
                 return Err(D3D12RuntimeError::unsupported(
-                    "D3D12 supports live buffer upload, copy and readback",
+                    "D3D12 supports live buffer transfers, image transfers and owned Raster",
                 ));
             }
         }
@@ -151,13 +247,21 @@ pub(super) fn prepare(
     let needs_result = graph.order.iter().any(|&pass| {
         matches!(
             &graph.passes[pass].operation,
-            Operation::ReadbackBuffer { .. }
+            Operation::ReadbackBuffer { .. } | Operation::ReadbackImage { .. }
         )
     });
     let mut work = pool.acquire(needs_result)?;
     work.set_graph(graph.id);
     let capacity = work.capacity();
-    let used = requirements(graph, &mut work.slot_mut().resource_map, capacity)?;
+    let slot = work.slot_mut();
+    let used = requirements_inner(
+        graph,
+        &mut slot.resource_map,
+        capacity,
+        slot.raster.as_mut(),
+        &pool.raster_programs,
+    )?;
+    super::raster::provenance_requirements(graph, &mut slot.provenance_needed);
     work.slot_mut().buffers_used = used;
     let owner = Arc::clone(work.owner());
     let list = work.slot().list.clone();
@@ -195,6 +299,27 @@ pub(super) fn prepare(
                     )
                 };
                 slot.upload_used += bytes.len() as u64;
+                if slot.provenance_needed[*dst] {
+                    let provenance = &mut slot.provenance[destination];
+                    let target = *offset..*offset + bytes.len() as u64;
+                    match &graph.passes[pass].operation {
+                        Operation::UploadBuffer {
+                            mesh: Some(crate::graph::MeshUpload::Indices { byte_len, maximum }),
+                            ..
+                        } => provenance.write_mesh_indices(target, *byte_len, *maximum),
+                        Operation::UploadBuffer {
+                            mesh: Some(crate::graph::MeshUpload::Vertices),
+                            ..
+                        } => provenance.clear(),
+                        _ => provenance
+                            .write_graph_slice(target, graph, pass, 0..bytes.len())
+                            .map_err(|_| {
+                                D3D12RuntimeError::capacity(
+                                    "prepared index provenance capacity exhausted",
+                                )
+                            })?,
+                    }
+                }
             }
             Operation::CopyBuffer {
                 src,
@@ -272,6 +397,26 @@ pub(super) fn prepare(
                         )
                     };
                 }
+                if slot.provenance_needed[*dst] {
+                    slot.provenance[source]
+                        .copy_into(
+                            *src_offset..*src_offset + *size,
+                            *dst_offset,
+                            &mut slot.provenance_scratch,
+                        )
+                        .map_err(|_| {
+                            D3D12RuntimeError::capacity(
+                                "prepared index provenance copy capacity exhausted",
+                            )
+                        })?;
+                    slot.provenance[destination]
+                        .replace(*dst_offset..*dst_offset + *size, &slot.provenance_scratch)
+                        .map_err(|_| {
+                            D3D12RuntimeError::capacity(
+                                "prepared index provenance replacement capacity exhausted",
+                            )
+                        })?;
+                }
             }
             Operation::ReadbackBuffer { src, offset, size } => {
                 let start = work.result().unwrap().used;
@@ -300,8 +445,22 @@ pub(super) fn prepare(
                     size: *size as usize,
                     offset: start,
                     consumed: false,
+                    image: None,
                 });
                 result.used += *size;
+            }
+            Operation::UploadImage { dst, .. } => super::raster::upload_image(
+                work.slot_mut(),
+                &owner,
+                graph,
+                *dst,
+                &graph.passes[pass].operation,
+            )?,
+            Operation::ReadbackImage { src } => {
+                super::raster::readback_image(&mut work, &owner, pass, *src)?
+            }
+            Operation::Raster { .. } | Operation::AttachmentPass { .. } => {
+                super::raster::record(work.slot_mut(), &owner, graph, pass, &pool.raster_programs)?
             }
             _ => unreachable!("preflight established supported immutable operations"),
         }
@@ -321,6 +480,24 @@ pub(super) fn prepare(
         &mut slot.scratch_state,
         D3D12_RESOURCE_STATE_COMMON,
     );
+    if let Some(storage) = &mut slot.raster {
+        for image in &mut storage.images {
+            if image.used {
+                transition(
+                    &list,
+                    image.native.raw(),
+                    &mut image.state,
+                    D3D12_RESOURCE_STATE_COMMON,
+                );
+            }
+        }
+    }
+    // Recording no longer needs CPU provenance. Native operands remain in the
+    // execution lease; release Graph pins before returning the prepared work.
+    for provenance in &mut slot.provenance {
+        provenance.clear();
+    }
+    slot.provenance_scratch.clear();
     work.finish_recording()?;
     Ok(work)
 }
