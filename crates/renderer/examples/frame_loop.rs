@@ -490,6 +490,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         execution_slots: IN_FLIGHT,
         resource_capacity: options.resource_capacity(),
         staging_bytes: options.staging_bytes(),
+        staging_ranges: 256,
         max_shader_bindings: MAX_SHADER_BINDINGS,
     };
     let mut runtime = VulkanRuntime::new_with_validation(config, validation)?;

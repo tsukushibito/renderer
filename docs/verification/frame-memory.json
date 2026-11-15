@@ -1,0 +1,237 @@
+{
+  "schema": 1,
+  "status": "in_progress",
+  "issue": "renderer-dzz",
+  "objective": "通常フレームの確保・再確保・解放ゼロ",
+  "goal_achieved": false,
+  "configuration": "Windows x64, Rust 1.99.0, release, no-default-features, memory-profiling, CARGO_INCREMENTAL=0",
+  "instrumentation_commit": "9472e4307106c415d43b2d6329005aa587557b41",
+  "baseline_source_commit": "117ae5bfd427e7bb34435d58c43428d9b3c7f3f6",
+  "baseline_command": "cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu --baseline",
+  "baseline_cpu": {
+    "coverage": "Rust snapshot/build/compile and all normal-frame owners dropped; no native execution or presentation",
+    "draw_counts": [
+      0,
+      1,
+      4,
+      2
+    ],
+    "extra_compute_passes": [
+      0,
+      1,
+      2
+    ],
+    "measured_frames": 24,
+    "mode": "baseline",
+    "phases_snapshot_build_compile_return": [
+      {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+          18,
+          0,
+          0,
+          0
+        ],
+        "rust_requested_bytes": [
+          4704,
+          0,
+          0,
+          0
+        ],
+        "vma_host_calls_alloc_realloc_free": [
+          0,
+          0,
+          0
+        ],
+        "vma_host_requested_bytes": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+          492,
+          0,
+          24,
+          54
+        ],
+        "rust_requested_bytes": [
+          65838,
+          0,
+          30720,
+          19200
+        ],
+        "vma_host_calls_alloc_realloc_free": [
+          0,
+          0,
+          0
+        ],
+        "vma_host_requested_bytes": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+          1992,
+          24,
+          38,
+          1440
+        ],
+        "rust_requested_bytes": [
+          305798,
+          108,
+          1408,
+          251964
+        ],
+        "vma_host_calls_alloc_realloc_free": [
+          0,
+          0,
+          0
+        ],
+        "vma_host_requested_bytes": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+          0,
+          0,
+          0,
+          1032
+        ],
+        "rust_requested_bytes": [
+          0,
+          0,
+          0,
+          121360
+        ],
+        "vma_host_calls_alloc_realloc_free": [
+          0,
+          0,
+          0
+        ],
+        "vma_host_requested_bytes": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "retained_frame_slots": 3,
+    "scenario": "cpu_snapshot_build_compile_return",
+    "total": {
+      "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "overflowed": false,
+      "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+        2502,
+        24,
+        62,
+        2526
+      ],
+      "rust_requested_bytes": [
+        376340,
+        108,
+        32128,
+        392524
+      ],
+      "vma_host_calls_alloc_realloc_free": [
+        0,
+        0,
+        0
+      ],
+      "vma_host_requested_bytes": [
+        0,
+        0,
+        0
+      ]
+    },
+    "warmup_frames": 12
+  },
+  "coverage_limits": [
+    "CPU snapshot/build/compile and owner return/drop only; no native execute/readback/present in this baseline",
+    "Native/VMA zero counters in this CPU-only run do not prove native/VMA coverage or allocation freedom",
+    "Full target requires changing inputs/pass topology, prepared bounds, GPU/CPU result lifetimes, cancellation and backpressure across supported APIs",
+    "Driver-internal allocations and development diagnostics are separately observed; zero goal not yet achieved"
+  ],
+  "raw_log": ".tools/dzz/gates/cpu-baseline.log",
+  "zero_gate_negative_control": {
+    "configuration_matches_baseline": true,
+    "expected_nonzero_exit": 101,
+    "zero_was_rejected": true,
+    "raw_log": ".tools/dzz/gates/cpu-zero-negative-control.log"
+  },
+  "partial_integration_validation": {
+    "cpu_development_release": 207,
+    "cpu_shipping_release": 194,
+    "rustdoc_each": 1,
+    "clippy": "all-targets all-features and shipping no-profiling passed",
+    "vulkan_strict_unique_tests": 51,
+    "first_strict_attempt": "49 passed; 2 legacy lazy-creation count assertions failed",
+    "focused_recheck": "2 passed after checking prepared capacity plus 1/2 leased executions",
+    "shipping_mesh_tests": 1,
+    "shipping_wsi_tests": 1,
+    "goal_zero_proof": false
+  }
+}

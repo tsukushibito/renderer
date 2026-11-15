@@ -637,7 +637,10 @@ VMAは重なるメモリ領域へリソースをバインドする構成を支�
 
 アップロードとreadbackは、staging領域の再利用条件、GPU完了、アクセス範囲を追跡する。非coherentメモリでは適切なflush / invalidateを行う。mapできることとGPUとの同期が不要であることを混同しない。[^allocator]
 
-高頻度の転送へ接続する前に、capacityを持つbufferのoffset・sizeで複数copyを扱い、完了後に領域を再利用できるようにする。配置にはVMA Virtual allocatorを利用し、GPU完了やCPUによるreadback利用終了の判定をRendererが担う。VMAの既定メモリpoolと、作成済みbuffer内の領域管理は別の層である。
+高頻度の転送へ接続する前に、capacityを持つbufferのoffset・sizeで複数copyを扱い、完了後に領域を再利用できるようにする。
+現在のVulkan staging配置は、ゼロ確保目標に向け準備済みmetadataのfree-range配列を使う。
+VMA Virtual allocatorから変更した理由、代案、整列/結合と探索費用の扱いは[Vulkan設計](vulkan.md#実行資源と共有stagingの再利用)に記す。
+GPU完了やCPUによるreadback利用終了の判定はRendererが担う。VMAの既定メモリpoolと、作成済みbuffer内の領域管理は別の層である。
 
 VMAが所有するメモリを直接bind / mapする必要がある場合は、VMA側の同期契約と競合しないかを確認する。通常は対応するVMAのAPIを利用する。[^allocator]
 
