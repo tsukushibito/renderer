@@ -5,6 +5,44 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 明示Programとowned Raster列
+
+`renderer-7ft.2.2.4`、実装・統合確認点`5d7fb6b`。
+実在する両APIのmesh資産へ結び付いた`ManagedRasterProgram::mesh()`と借用draw sliceを公開Rasterへ接続し、
+従来のsingle-draw操作とEngine内部batchを同じprepared owned coreへ統合した。
+Program identity、順序、各80-byte定数とbuffer/attachment参照を保持し、Engineの有限値保証は再走査しない。
+空sliceはattachment-onlyへ正規化する。Vulkanは同じmesh shaderとnative所有者を使い、
+複数drawでも指定したLoad/Storeを記録する。
+契約と未対応形は[Graph設計](../design/rendergraph.md#producer範囲attachment)と[Vulkan設計](../design/vulkan.md#graphのshaderと描画)に従う。
+
+Windows x64 / Rust 1.99.0で、公開API8件・内部所有/解決失敗2件・Program資産契約1件（Vulkan有効時は2件）の新規回帰を含め、
+CPU default122件、`vulkan,d3d12`のrelease製品257件・追加検証/graph診断あり270件、各Rustdoc1件が成功した。
+fmtと全target Clippyは`presentation,d3d12,memory-profiling`の追加検証/graph診断有無で成功した。
+短命sliceの変更後も残るdraw順/定数/Program/View、後半drawの未初期化・foreign buffer・非有限値・容量・解決失敗、
+共有Vertex/Index用途、culling、Load/Discard、slot pin/返却を確認した。
+頂点stride28・VS定数80 byte・1 RGBA8出力は既存DXIL reflectionとsource、Vulkan実asset対応へ結び付けた。
+
+製品CPUの新しい`owned_raster`窓は24変動frame、0/1/4/2 draw、共有2mesh、任意depth、定数/clear値変更、
+呼出元配列の変更、未compile取消、不要な後続write、3plan保持、全返却/resetまで含み、
+Rust alloc/alloc_zeroed/realloc/deallocと要求byteは全0だった。既存CPUの3窓も全0を維持し、
+追加検証/graph診断ありは別baselineで確認した。CPU rowだけをnative実行の証拠にしない。
+
+RTX 3060 / driver 610.88でVulkan strictの正しさゲート52件（WSI込み）が成功し、
+製品構成の境界テストも別に実行した。depth0と青色をseedした後のLoad/Load複数drawは1024 byteの青色を保持し、
+旧batchのClear固定へ戻る退行を検出する。既存のdraw順/深度/Compute連携、後半index不正、共有buffer用途も通過した。
+CPU color-only Rasterのnative拒否と、その後の正常実行を確認した。
+Engine製品48frame、WSI製品18source/36present・18readbackも再受入し、RendererのRust4event・
+VMA host3event・Resetを除くnative作成/解放8eventは全0だった。WSI caller要求は別rowに保持する。
+二API共有buffer Graphはstrict/製品とも308 byte全一致。strictはCore/SyncValまたはDebug Layer/GBVの実効と
+最終native所有者解放後まで警告/error等ゼロを確認し、製品は追加診断除外/native Requested Disabledで確認した。
+
+このmeshはdescriptor bindingを持たない。一般graphics bindingのstage導出、他のshader/PSO、
+D3D12 Raster、depth-only/MRT描画、first_index/base_vertex/多instanceと一般native subresource実行は後続に残る。
+index本文の範囲・未知内容・Device上限とGPU寿命は既存native経路で維持し、CPU Programだけから安全を推定しない。
+新しい規約例外はない。Linux/別GPU・driver実GPU、長時間耐久、実native OOM/loss、時間性能と物理VRAM改善は未確認。
+shader/bindingsは無変更で再生成Verifyは未実行。コマンド・生counter・容量・native結果は
+[機械可読記録](frame-memory.json)の`owned_raster`にある。
+
 ## attachment配列と画像subresourceのCPU計画
 
 `renderer-7ft.2.2.3`、実装・統合確認点`f290cef`。
