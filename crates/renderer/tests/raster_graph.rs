@@ -711,9 +711,8 @@ fn owned_raster_common_graph_strict() {
 #[test]
 #[ignore = "requires same-adapter Vulkan/D3D12 hardware; run optimized with diagnostics excluded"]
 fn owned_raster_common_graph_shipping() {
-    assert!(
-        !cfg!(debug_assertions),
-        "shipping acceptance requires --release"
-    );
+    if cfg!(debug_assertions) {
+        panic!("shipping acceptance requires --release");
+    }
     run(false);
 }
