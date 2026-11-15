@@ -187,7 +187,8 @@ impl Measurements {
                     "caller_scope": "winit event pumping and Window operations; reported separately without resetting counters",
                     "setup_change_scope": "explicit pools and native working set, residency, warm-up, resize/VSync/suspend/acquire-cancel and their completed owner retirement",
                     "shutdown_scope": "one additional ordinary-builder source retains pending presentation ownership for close; complete native owner teardown",
-                    "unobserved": "driver-internal allocation; Renderer native calls and VMA host callbacks are separate counters",
+                    "host_callback_scope": "VMA and driver host requests routed through installed allocation callbacks; request origin is not distinguished",
+                    "unobserved": "driver-internal allocation outside installed callbacks; Renderer native requests are counted separately",
                 })
             );
             assert!(!process.overflowed && !self.renderer.overflowed && !self.caller.overflowed);
