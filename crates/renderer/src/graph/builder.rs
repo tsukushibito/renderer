@@ -581,3 +581,191 @@ fn validate_purpose(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{
+        Attachment, BufferDesc, GraphCapacity, GraphPool, LoadAction, LoadOp, RasterParameters,
+        StoreOp,
+    };
+    use crate::program::ManagedRasterProgram;
+
+    fn uploaded_draw(graph: &mut Graph, name: &str) -> RasterDraw {
+        let vertices = graph.buffer(name, BufferDesc { size: 84 }).unwrap();
+        let indices = graph.buffer(name, BufferDesc { size: 12 }).unwrap();
+        graph.upload_buffer(name, vertices, 0, &[0; 84]).unwrap();
+        graph.upload_buffer(name, indices, 0, &[0; 12]).unwrap();
+        RasterDraw {
+            vertices,
+            indices,
+            index_count: 3,
+            parameters: RasterParameters::default(),
+        }
+    }
+
+    #[test]
+    fn frozen_raster_retains_program_draw_order_constants_and_attachment_views() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mut first = uploaded_draw(&mut graph, "first");
+        first.indices = first.vertices;
+        first.parameters.tint = [0.25, 0.5, 0.75, 1.0];
+        let mut second = uploaded_draw(&mut graph, "second");
+        second.parameters.transform[3][0] = 0.5;
+        let image = graph
+            .image(
+                "array color",
+                ImageDesc {
+                    mip_levels: 2,
+                    array_layers: 2,
+                    ..ImageDesc::rgba8(4, 4)
+                },
+            )
+            .unwrap();
+        let color = graph.image_view(image, 1, 1).unwrap();
+        let depth_image = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+        let depth = graph.image_view(depth_image, 0, 0).unwrap();
+        let pass = {
+            let mut draws = [first, second];
+            let mut colors = [Attachment {
+                view: color,
+                load: LoadOp::Clear([0.1, 0.2, 0.3, 1.0]),
+                store: StoreOp::Store,
+            }];
+            let pass = graph
+                .raster(
+                    "owned",
+                    &ManagedRasterProgram::mesh(),
+                    &draws,
+                    RasterAttachments {
+                        colors: &colors,
+                        depth: Some(Attachment {
+                            view: depth,
+                            load: LoadOp::Clear(0.75),
+                            store: StoreOp::Store,
+                        }),
+                    },
+                )
+                .unwrap();
+            draws.swap(0, 1);
+            draws[0].parameters.tint = [0.0; 4];
+            colors[0].load = LoadOp::Discard;
+            std::hint::black_box((draws, colors));
+            pass
+        };
+        graph
+            .declare_pass(
+                "observe",
+                PassKind::Copy,
+                &[Access {
+                    resource: image.into(),
+                    range: AccessRange::Image {
+                        mip: 1,
+                        layer: 1,
+                        aspect: ImageAspect::Color,
+                    },
+                    kind: AccessKind::Read,
+                    purpose: AccessPurpose::CopySource,
+                }],
+                true,
+            )
+            .unwrap();
+        let plan = graph.compile().unwrap();
+        let Operation::Raster {
+            program,
+            draws,
+            colors,
+            depth: depth_index,
+            targets,
+        } = &plan.passes[pass.index].operation
+        else {
+            panic!("owned Raster operation")
+        };
+        assert!(program.is_mesh());
+        let owned = plan.raster_draws(draws);
+        assert_eq!(owned.len(), 2);
+        for (actual, expected) in owned.iter().zip([first, second]) {
+            assert_eq!(actual.vertices, expected.vertices.index);
+            assert_eq!(actual.indices, expected.indices.index);
+            assert_eq!(actual.index_count, expected.index_count);
+            assert_eq!(actual.parameters, expected.parameters);
+        }
+        assert_eq!(colors.len(), 1);
+        let attachment = plan.attachments[colors.start];
+        assert_eq!(attachment.view, color);
+        assert_eq!(attachment.clear, [0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(attachment.ops.load, LoadAction::Clear);
+        let owned_depth = plan.attachments[depth_index.unwrap()];
+        assert_eq!(owned_depth.view, depth);
+        assert_eq!(owned_depth.clear[0], 0.75);
+        let accesses = plan.accesses(pass.index);
+        assert!(
+            accesses
+                .iter()
+                .any(|access| access.resource == first.vertices.index
+                    && access.purpose == AccessPurpose::Vertex
+                    && access.range == (0..84))
+        );
+        assert!(
+            accesses
+                .iter()
+                .any(|access| access.resource == first.vertices.index
+                    && access.purpose == AccessPurpose::Index
+                    && access.range == (0..12))
+        );
+        assert!(
+            targets.is_none(),
+            "multi-subresource Raster must not inherit native baseline support"
+        );
+    }
+
+    #[test]
+    fn late_engine_resolution_failure_returns_all_owned_draw_capacity() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                draws: 2,
+                attachments: 1,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let draw = uploaded_draw(&mut graph, "mesh");
+        let image = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
+        let target = Attachment {
+            view: graph.image_view(image, 0, 0).unwrap(),
+            load: LoadOp::Clear([0.0; 4]),
+            store: StoreOp::Store,
+        };
+        let validated = ValidatedRasterParameters::new(draw.parameters).unwrap();
+        let tuple = (draw.vertices, draw.indices, draw.index_count, validated);
+        let error = graph
+            .raster_validated(
+                "resolution failed",
+                &ManagedRasterProgram::mesh(),
+                [Ok(tuple), Err(GraphError::custom("missing resolved mesh"))].into_iter(),
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::Custom);
+        assert_eq!(error.pass_name(), Some("resolution failed"));
+        graph
+            .raster_validated(
+                "retry",
+                &ManagedRasterProgram::mesh(),
+                [Ok(tuple), Ok(tuple)].into_iter(),
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        graph.readback_image("pixels", image).unwrap();
+        assert_eq!(graph.compile().unwrap().pass_count(), 4);
+    }
+}
