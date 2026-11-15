@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 #[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CString;
+use std::ops::Range;
 use std::sync::Arc;
 
 use ash::vk;
@@ -16,7 +17,7 @@ use super::provenance::{BufferProvenance, IndexError};
 use super::{NativeResource, Physical, PhysicalLease, RuntimeError, Snapshot};
 use crate::graph::{
     AccessPurpose, AttachmentOps, CompiledGraph, ComputeTransform, MeshUpload, Operation,
-    RasterDrawOperands, RasterParameters, ResourceDesc,
+    RasterParameters, ResourceDesc,
 };
 
 #[cfg(feature = "graph-diagnostics")]
@@ -98,7 +99,7 @@ enum PreparedOperation {
         parameters: RasterParameters,
     },
     RasterBatch {
-        draws: Arc<[RasterDrawOperands]>,
+        draws: Range<usize>,
         color: usize,
         depth: usize,
         clear_color: [f32; 4],
@@ -115,20 +116,13 @@ enum PreparedOperation {
     },
 }
 
-impl TryFrom<&Operation> for PreparedOperation {
-    type Error = RuntimeError;
-
-    fn try_from(operation: &Operation) -> Result<Self, Self::Error> {
+impl PreparedOperation {
+    fn from_graph(graph: &CompiledGraph, operation: &Operation) -> Result<Self, RuntimeError> {
         Ok(match *operation {
-            Operation::UploadBuffer {
+            Operation::UploadBuffer { dst, offset, .. } => Self::UploadBuffer {
                 dst,
                 offset,
-                ref source,
-                ..
-            } => Self::UploadBuffer {
-                dst,
-                offset,
-                size: source.len() as u64,
+                size: graph.upload_data(operation).len() as u64,
             },
             Operation::CopyBuffer {
                 src,
@@ -180,7 +174,7 @@ impl TryFrom<&Operation> for PreparedOperation {
                 clear_color,
                 clear_depth,
             } => Self::RasterBatch {
-                draws: Arc::clone(draws),
+                draws: draws.clone(),
                 color,
                 depth,
                 clear_color,
@@ -245,7 +239,7 @@ fn provenance_requirements(graph: &CompiledGraph) -> (Vec<bool>, Vec<bool>) {
         match &graph.passes[pass].operation {
             Operation::Raster { indices, .. } => needed[*indices] = true,
             Operation::RasterBatch { draws, .. } => {
-                for draw in draws.iter() {
+                for draw in graph.raster_draws(draws) {
                     needed[draw.indices] = true;
                 }
             }
@@ -282,6 +276,7 @@ pub(super) struct GraphWork {
     pub(super) readbacks: Vec<(usize, Option<StagingRange>)>,
     programs: Option<Arc<ShaderPrograms>>,
     bindings: Option<ShaderBindings>,
+    plan: Option<CompiledGraph>,
     pub(super) profile: Option<metrics::WorkProfile>,
 }
 
@@ -300,8 +295,38 @@ impl GraphWork {
     ) -> Result<Self, RuntimeError> {
         let mut states = physical
             .iter()
-            .map(|value| value.as_ref().map(|value| value.lock().scheduled.clone()))
-            .collect::<Vec<_>>();
+            .enumerate()
+            .map(|(index, value)| {
+                value
+                    .as_ref()
+                    .map(|value| {
+                        let previous = value.lock();
+                        let mut snapshot = Snapshot::with_capacity(
+                            previous
+                                .scheduled
+                                .initialized
+                                .len()
+                                .max(graph.final_contents(index).len()),
+                            previous
+                                .scheduled
+                                .provenance
+                                .segment_capacity()
+                                .max(graph.passes.len().saturating_mul(2)),
+                        )?;
+                        snapshot.copy_from(&previous.scheduled)?;
+                        Ok(snapshot)
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>, RuntimeError>>()?;
+        let mut copy_scratch = BufferProvenance::with_capacity(
+            states
+                .iter()
+                .flatten()
+                .map(|state| state.provenance.segment_capacity())
+                .max()
+                .unwrap_or(0),
+        );
         let (provenance_needed, retain_provenance) = provenance_requirements(graph);
         let mut passes = Vec::new();
         let mut uploads = Vec::new();
@@ -314,9 +339,9 @@ impl GraphWork {
             }
             let mut prepared = PreparedPass {
                 #[cfg(feature = "vulkan-diagnostics")]
-                name: CString::new(pass.name.as_str())
+                name: CString::new(graph.pass_name(index))
                     .map_err(|_| RuntimeError::invalid("pass debug name contains a NUL byte"))?,
-                operation: PreparedOperation::try_from(&pass.operation)?,
+                operation: PreparedOperation::from_graph(graph, &pass.operation)?,
                 buffers: Vec::new(),
                 images: Vec::new(),
                 staging: None,
@@ -325,7 +350,7 @@ impl GraphWork {
             // Aggregate one pass's uses before modifying previous-access state;
             // disjoint self-copies must not appear to depend on themselves.
             let mut uses: BTreeMap<usize, Use> = BTreeMap::new();
-            for access in &pass.accesses {
+            for access in graph.accesses(index) {
                 let current = usage(access.purpose);
                 let target = uses.entry(access.resource).or_default();
                 target.stage |= current.stage;
@@ -409,13 +434,9 @@ impl GraphWork {
             (|| -> Result<(), RuntimeError> {
                 match &pass.operation {
                     Operation::UploadBuffer {
-                        dst,
-                        offset,
-                        bytes,
-                        source,
-                        mesh,
+                        dst, offset, mesh, ..
                     } => {
-                        let slice = &bytes[source.clone()];
+                        let slice = graph.upload_data(&pass.operation);
                         let mut range = upload.allocate(slice.len() as u64)?;
                         range.write(slice)?;
                         prepared.staging = Some(uploads.len());
@@ -424,17 +445,17 @@ impl GraphWork {
                             let target = *offset..*offset + slice.len() as u64;
                             let provenance = &mut states[*dst].as_mut().unwrap().provenance;
                             match mesh {
-                                Some(MeshUpload::Vertices) => {
-                                    *provenance = BufferProvenance::default()
-                                }
+                                Some(MeshUpload::Vertices) => provenance.clear(),
                                 Some(MeshUpload::Indices { byte_len, maximum }) => {
                                     provenance.write_mesh_indices(target, *byte_len, *maximum);
                                 }
-                                None => provenance.write_slice(
-                                    target,
-                                    Arc::clone(bytes),
-                                    source.clone(),
-                                ),
+                                None => provenance
+                                    .write_graph_slice(target, graph, index, 0..slice.len())
+                                    .map_err(|_| {
+                                        RuntimeError::capacity(
+                                            "prepared provenance capacity exhausted",
+                                        )
+                                    })?,
                             }
                         }
                     }
@@ -446,19 +467,34 @@ impl GraphWork {
                         size,
                     } => {
                         if provenance_needed[*dst] {
-                            let contents = states[*src]
+                            states[*src]
                                 .as_ref()
                                 .unwrap()
                                 .provenance
-                                .copied(*src_offset..*src_offset + *size, *dst_offset);
+                                .copy_into(
+                                    *src_offset..*src_offset + *size,
+                                    *dst_offset,
+                                    &mut copy_scratch,
+                                )
+                                .map_err(|_| {
+                                    RuntimeError::capacity(
+                                        "prepared provenance copy capacity exhausted",
+                                    )
+                                })?;
                             states[*dst]
                                 .as_mut()
                                 .unwrap()
                                 .provenance
-                                .replace(*dst_offset..*dst_offset + *size, contents);
+                                .replace(*dst_offset..*dst_offset + *size, &copy_scratch)
+                                .map_err(|_| {
+                                    RuntimeError::capacity(
+                                        "prepared provenance replacement capacity exhausted",
+                                    )
+                                })?;
                         }
                     }
-                    Operation::UploadImage { bytes, .. } => {
+                    Operation::UploadImage { .. } => {
+                        let bytes = graph.upload_data(&pass.operation);
                         let mut range = upload.allocate(bytes.len() as u64)?;
                         range.write(bytes)?;
                         prepared.staging = Some(uploads.len());
@@ -508,7 +544,7 @@ impl GraphWork {
                             .map_err(index_error)?;
                     }
                     Operation::RasterBatch { draws, .. } => {
-                        for (draw_index, draw) in draws.iter().enumerate() {
+                        for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
                             let vertex_count = graph.resources[draw.vertices].desc.units() / 28;
                             states[draw.indices]
                                 .as_mut()
@@ -533,17 +569,17 @@ impl GraphWork {
                 }
                 Ok(())
             })()
-            .map_err(|error| error.context(format_args!("pass {:?}", pass.name)))?;
+            .map_err(|error| error.context(format_args!("pass {:?}", graph.pass_name(index))))?;
             passes.push(prepared);
         }
         for (index, state) in states.iter_mut().enumerate() {
             if let Some(state) = state {
                 state.serial = serial;
-                state.initialized = graph.final_contents[index].clone();
+                state.set_initialized(graph.final_contents(index))?;
                 // Transient index validation has finished. Only canonical imports
                 // and exports can acquire a future index role in another graph.
                 if !retain_provenance[index] {
-                    state.provenance = BufferProvenance::default();
+                    state.provenance.clear();
                 }
             }
         }
@@ -561,6 +597,7 @@ impl GraphWork {
             readbacks,
             programs,
             bindings,
+            plan: Some(graph.clone()),
             profile: None,
         })
     }

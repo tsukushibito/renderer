@@ -34,6 +34,7 @@ mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
 mod provenance;
+mod snapshots;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
 mod work;
@@ -91,7 +92,6 @@ pub struct RuntimeStats {
     pub descriptor_arenas_reused: usize,
 }
 
-#[derive(Clone)]
 struct Snapshot {
     // Changes only when accepted work writes or invalidates logical contents.
     revision: u64,
@@ -104,6 +104,19 @@ struct Snapshot {
     writer_stage: vk::PipelineStageFlags2,
     writer_access: vk::AccessFlags2,
     provenance: BufferProvenance,
+}
+
+#[cfg(test)]
+impl Clone for Snapshot {
+    fn clone(&self) -> Self {
+        let mut result = Self::with_capacity(
+            self.initialized.capacity(),
+            self.provenance.segment_capacity(),
+        )
+        .unwrap();
+        result.copy_from(self).unwrap();
+        result
+    }
 }
 
 impl Default for Snapshot {
@@ -511,11 +524,16 @@ impl VulkanRuntime {
             return;
         };
         if entry.reusable() {
-            self.available.insert(
-                index,
-                entry.physical().desc.into(),
-                entry.physical().lock().scheduled.serial,
-            );
+            let serial = {
+                let mut state = entry.physical().lock();
+                // No public key or recording/GPU lease can read these logical
+                // contents again. Release provenance pins before the next Graph
+                // builder checkout; retain actual native layout and last writer.
+                state.scheduled.clear_contents();
+                state.scheduled.serial
+            };
+            self.available
+                .insert(index, entry.physical().desc.into(), serial);
         } else {
             self.available.remove(index);
         }
@@ -576,7 +594,7 @@ impl VulkanRuntime {
             let mut state = entry.physical().lock();
             // Preserve actual native synchronization, never old logical contents.
             state.scheduled.initialized.clear();
-            state.scheduled.provenance = BufferProvenance::default();
+            state.scheduled.provenance.clear();
             drop(state);
             self.resources_reused += 1;
             return Ok((
@@ -709,10 +727,10 @@ impl VulkanRuntime {
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
                     "pass {} is declaration-only {kind:?}; native execution unsupported",
-                    graph.passes[pass].name
+                    graph.pass_name(pass)
                 )));
             }
-            for access in &graph.passes[pass].accesses {
+            for access in graph.accesses(pass) {
                 needed[access.resource] = true;
             }
         }
@@ -722,7 +740,7 @@ impl VulkanRuntime {
         // Validate logical contents, including culled imports, before allocation.
         // Read-only uses may have advanced native scopes/layouts since compile;
         // prepare rebases those from the latest canonical scheduled state.
-        for resource in &graph.resources {
+        for (resource_index, resource) in graph.resources.iter().enumerate() {
             if let Some(key) = resource.import {
                 let physical = self.entry(key)?.physical();
                 let state = physical.lock();
@@ -734,11 +752,11 @@ impl VulkanRuntime {
                 #[cfg(feature = "development-validation")]
                 let inconsistent = inconsistent
                     || physical.desc != resource.desc
-                    || state.scheduled.initialized != resource.initial;
+                    || state.scheduled.initialized != graph.initial_contents(resource_index);
                 if inconsistent {
                     return Err(RuntimeError::stale(format!(
                         "stale or inconsistent import snapshot for {}; refresh and recompile",
-                        resource.name
+                        graph.resource_name(resource_index)
                     )));
                 }
             }
@@ -752,7 +770,7 @@ impl VulkanRuntime {
             let (key, value) = if let Some(key) = resource.import {
                 (key, self.lease(key)?)
             } else {
-                self.acquire(resource.desc, &resource.name)?
+                self.acquire(resource.desc, graph.resource_name(index))?
             };
             keys[index] = Some(key);
             physical[index] = Some(value);
