@@ -1,0 +1,13 @@
+flowchart TB
+    accTitle: 宣言から不変計画を作るcompileの流れ
+    accDescr: 構築時にowner、範囲、用途、容量を保証した入力からcompileを開始する。import初期内容を置き、全readを宣言順に検査してproducerを求める。export、readback、副作用、import資源へのwriteから必要passを選び、liveなhazardと明示依存を求め、循環を拒否して実行順と最終有効内容を確定する。開発検証は追加の独立再点検である。
+    built["構築済み入力：owner・範囲・用途を保証"] --> initial["importの初期有効範囲を設定"]
+    initial --> data["全readを検査・宣言順producer解析"]
+    data --> roots["export・readback・副作用・外部write"]
+    roots --> live["live passのRAW・WAR・WAWと明示依存"]
+    live --> order["live循環を拒否・実行順を確定"]
+    order --> contents["必要なら再計算・最終有効範囲を確定"]
+    contents --> frozen["同じslotをCompiledGraphへ凍結"]
+    built -. "開発構成のみ独立再点検" .-> diagnostics["宣言整合性・dead部分の循環等"]
+    data -. "未初期化・容量不足等" .-> error["GraphError：計画を公開しない"]
+    order -. "循環・容量不足等" .-> error

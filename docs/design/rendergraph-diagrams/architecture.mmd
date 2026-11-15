@@ -1,0 +1,11 @@
+flowchart TB
+    accTitle: 宣言からGPU実行までの責務
+    accDescr: 利用側とEngineが共通Graphを構築する。CPU解析は必要なproducerとpassを選び不変CompiledGraphを作る。VulkanまたはD3D12 runtimeが対応する操作をnative記録と投入へ変換し、正常完了後にCPU結果を返す。
+    client["利用側・Engine"] --> build["Graph構築・入力の保証"]
+    build --> analysis["CPU解析・culling・実行順"]
+    analysis --> plan["不変CompiledGraph"]
+    plan --> vulkan["Vulkan runtime"]
+    plan --> d3d["D3D12 runtime：bufferのみ"]
+    vulkan --> gpu["native記録・同期・GPU投入"]
+    d3d --> gpu
+    gpu -->|"正常完了を観測"| result["CPU結果の消費・返却"]

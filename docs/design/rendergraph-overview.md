@@ -4,9 +4,10 @@ RenderGraphは、**何を読み、何を書き、何を結果として残すか*
 必要な処理とその順序を求め、GPUへ安全に実行するための計画へつなぐ仕組みです。
 利用側の描画意図、CPU上の依存解析、backend固有の同期・資源管理を分けて扱います。
 
-この案内は実装確認点[`9e93fda`](https://github.com/tsukushibito/renderer/tree/9e93fdac7e48e56d40eed92e92c5642562161c25)の現在の動作を説明します。
+この案内は実装確認点[`367c021`](https://github.com/tsukushibito/renderer/tree/367c0216236139fbe0cb6040874e71788827194c)の現在の動作を説明します。
 詳細な契約は[RenderGraph設計](rendergraph.md)、実行した確認の範囲は[現在の検証状況](../verification/current.md)を参照してください。
 後続のB1計画を、実装済みの機能としては扱いません。
+型の所有・compile・native実行等を詳しく追うには[設計図集](rendergraph-diagrams.md)を参照してください。
 
 ## 1. 宣言からGPU実行へ
 
@@ -14,7 +15,9 @@ RenderGraphは、**何を読み、何を書き、何を結果として残すか*
 `compile`が作るのは、backendから独立した不変の`CompiledGraph`です。
 VulkanやD3D12のruntimeが、その中の生き残った処理をnative命令へ変換します。
 
-![利用側、共通Graph、backendの三つの責務。宣言から不変計画、native記録・投入、正常完了へ進む。](rendergraph-overview/architecture.svg)
+```mermaid
+{{#include rendergraph-diagrams/architecture.mmd}}
+```
 
 | 境界 | 決めること | 主な入力・出力 |
 |---|---|---|
@@ -70,7 +73,9 @@ native実行では、正常完了後に結果の`readback_into`へ利用側の�
 `old upload`の内容は`unused copy`だけが使い、そのcopy先は結果として観測されません。
 したがって、最初の二つのpassは除去できます。これが不要パス除去、cullingです。
 
-![四つの宣言から、内容を作るproducerを辿って二つのpassを残す例。順序制約だけでは不要passを残さない。](rendergraph-overview/dependencies.svg)
+```mermaid
+{{#include rendergraph-diagrams/producer-culling.mmd}}
+```
 
 ここには別の二種類の依存があります。
 
@@ -99,7 +104,7 @@ compileは概ね次の処理を行います。
 
 未初期化readはculling前に検出します。結果に使わないpassでも不正なreadはエラーです。
 一方、除去される部分だけの循環を追加で診断するかは開発用検証の設定によります。
-処理の根拠は[共通解析](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph/analysis.rs#L640)にあります。
+処理の根拠は[共通解析](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph/analysis.rs#L640)にあります。
 
 ## 4. 内容・GPU状態・完了は別の情報
 
@@ -149,7 +154,8 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 | 機能 | 共通CPU計画 | Vulkan実行 | D3D12実行 |
 |---|---|---|---|
 | buffer upload/copy/readback | 対応 | 対応 | transient bufferで対応 |
-| 画像copy・固定Compute・mesh raster・composite | 対応 | 限定した管理下操作に対応 | 未対応 |
+| 画像copy・固定Compute・composite | 対応 | 限定した管理下操作に対応 | 未対応 |
+| 管理下owned Raster | 1 RGBA8＋任意depth、複数draw | 1 RGBA8＋D32、各1subresource、指定Load/Storeを保持 | 未対応 |
 | `Graph::dispatch` | 管理下buffer asset、workgroups `[1,1,1]` | liveなdispatchは未対応 | liveなdispatchは未対応 |
 | `attachment_pass` | color-only・depth-only・MRT、単一mip/layer View | 1 RGBA8＋D32、各1subresource、両方Clear/Storeのみ | 未対応 |
 | 複数mip/layerの画像 | subresource単位に解析 | native画像は各1のみ | 画像実行未対応 |
@@ -161,6 +167,12 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 32 byteのdescriptorを渡しても、出力末尾16 byteを初期化したことにはなりません。
 これはABI最小sizeからの推測ではなく、レビュー済みshaderと一緒に管理する実行契約です。
 
+`Graph::raster(name, &program, draws, attachments)`は`ManagedRasterProgram::mesh()`と借用draw sliceを受け取ります。
+Program identity、draw順、各定数、buffer/View参照を同じ予約済みarenaへ所有し、
+Vertex/Index用途をdrawから導きます。Programはstatic manifestに結び付くCPU契約で、native PSOではありません。
+現在のmeshはdescriptor bindingを持たず、任意shaderや一般graphics bindingを追加済みとは扱いません。
+空draw sliceはattachment-onlyへ正規化するため、その場合のnative形は表の`attachment_pass`に従います。
+
 ## 6. 不変planと、再利用してよい時点
 
 `GraphPool`はpass、resource、access、名前、upload本文、binding、attachment、
@@ -168,7 +180,9 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 `Graph::compile(self)`は同じ領域を凍結するため、入力全体を別planへコピーしません。
 GraphはCloneできず、完成planのCloneは既存slotへのArc pinを増やします。
 
-![構築領域とnative実行枠、物理資源、CPU結果が異なる時点まで保持される寿命の図。](rendergraph-overview/lifetimes.svg)
+```mermaid
+{{#include rendergraph-diagrams/lifetimes.mmd}}
+```
 
 呼出元のupload byte列は構築時に予約済みblobへcaptureします。
 bindingやattachmentの短命sliceも、必要な値をplan側に所有します。
@@ -182,7 +196,9 @@ slotを再利用できるのは、planと、それを保持するnative・CPU co
 容量を変えるときも旧poolのconsumerを確認し、通常frameの返却で最後のbackingを解放しないようにします。
 
 GPU正常完了後、native実行枠とupload等は先に回収できる場合があります。
-未読readbackはCPU結果側に残り、`readback_into`で消費してから領域を返します。
+未読readbackはCPU結果側に残り、`readback_into`で消費してからそのstaging領域を返します。
+未読結果が常にplanをpinするとは限りません。Graph slotは全plan pinの返却、
+CPU結果の領域は消費・返却という別の条件で再利用します。
 「実行枠が空いた」ことと「全ての資源・結果を再利用できる」ことを同一視しません。
 詳細は[slotの所有契約](rendergraph.md#prepared-graph-storage)にあります。
 
@@ -251,7 +267,7 @@ Renderer発行のnative資源・memory作成・破棄をゼロにする方針で
 既存の[検証記録](../verification/current.md#通常フレームのメモリ規約と実装)では、
 製品releaseのCPU24frame、D3D12/Vulkan buffer各48frame、Vulkan Engine48frame、
 Vulkan WSI18source/36present等の指定窓で、対象の確保・解放counterゼロを確認しています。
-新attachment/subresourceのCPU計画も、24変動frameの別窓で確認されています。
+attachment/subresourceのCPU計画とowned Rasterも、それぞれ24変動frameの別窓で確認されています。
 Windows x64、RTX 3060等の条件、準備容量、観測範囲と未実行項目は同記録を正とします。
 
 予約容量による常駐量、区間木の更新、provenance配列操作等の費用は残ります。
@@ -263,16 +279,17 @@ CPUだけの試験はnative dispatch対応やnative allocationゼロの証拠に
 
 | 確かめたいこと | 固定した実装への入口 |
 |---|---|
-| facade・Graph identity・明示依存 | [`graph.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph.rs) |
-| 準備済みslotと再利用 | [`graph/storage.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph/storage.rs) |
-| builderの検査・途中失敗の巻き戻し | [`graph/builder.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph/builder.rs) |
-| compileと不変plan | [`graph/compile.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph/compile.rs) |
-| owned dispatchとshader footprint | [`graph/dispatch.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph/dispatch.rs) |
-| attachmentの所有と限定lowering形 | [`graph/attachments.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/src/graph/attachments.rs) |
-| 公開APIを使うCPU回帰 | [`tests/graph_api.rs`](https://github.com/tsukushibito/renderer/blob/9e93fdac7e48e56d40eed92e92c5642562161c25/crates/renderer/tests/graph_api.rs) |
+| facade・Graph identity・明示依存 | [`graph.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph.rs) |
+| 準備済みslotと再利用 | [`graph/storage.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph/storage.rs) |
+| builderの検査・途中失敗の巻き戻し | [`graph/builder.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph/builder.rs) |
+| compileと不変plan | [`graph/compile.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph/compile.rs) |
+| owned RasterとProgram契約 | [`program/raster.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/program/raster.rs) |
+| owned dispatchとshader footprint | [`graph/dispatch.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph/dispatch.rs) |
+| attachmentの所有と限定lowering形 | [`graph/attachments.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/src/graph/attachments.rs) |
+| 公開APIを使うCPU回帰 | [`tests/graph_api.rs`](https://github.com/tsukushibito/renderer/blob/367c0216236139fbe0cb6040874e71788827194c/crates/renderer/tests/graph_api.rs) |
 
-B1では、binding/attachmentからアクセスを導く構築時owned命令を出発点として、
-一般Raster・Compute、Program/PSOの所有と二API実行を段階的に実証します。
+B1では、実装済みの管理下owned命令とbinding/attachment由来のアクセスを出発点として、
+利用側の独自Program/PSO、一般binding、Raster・Computeの二API実行を段階的に実証します。
 現在の限定操作を互換性のために固定する方針ではありません。
 一般shader、native MRT/mip/layer、Bistro描画や複数queue・物理aliasingの対応状況は、
 [公開API比較](implementation-policy.md#public-api-comparison)と[Bistro計画](implementation-policy.md#bistro-roadmap)で確認してください。

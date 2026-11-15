@@ -1,0 +1,20 @@
+sequenceDiagram
+    accTitle: importの内容revisionと予定状態・実完了を区別する
+    accDescr: Graph Aのwriteをruntimeが受理すると内容revisionとcanonical予定状態を更新する。snapshotはowner、世代、内容revision、有効範囲を示し、古い同期状態は持たない。Graph Bはfresh snapshotから構築し、AをCPU待機せず投入できる。runtimeは投入時のcanonical予定状態から依存を作る。Fence正常完了は別に観測する。
+    participant app as 利用側
+    participant runtime as Runtime状態
+    participant queue as 同じQueue
+    participant completion as 完了APIとFence
+    app->>runtime: Graph Aをsubmit 内容write
+    runtime->>queue: Aを投入
+    queue-->>runtime: 投入成功
+    runtime->>runtime: 内容revision r+1・予定状態を公開
+    runtime-->>app: fresh snapshot r+1
+    app->>app: Bをimport・構築・compile
+    app->>runtime: Bをsubmit AのCPU待機なし
+    runtime->>runtime: owner・世代・revision照合
+    runtime->>queue: canonical予定状態から依存・Bを投入
+    queue-->>runtime: 投入成功
+    runtime->>runtime: read・layout変更だけならrevision不変
+    app->>completion: 後でwait・pollして正常完了を観測
+    completion-->>app: 正常完了時だけCPU利用・回収へ

@@ -1,0 +1,12 @@
+flowchart TB
+    accTitle: 準備済み容量と明示的なbackpressure
+    accDescr: 明示準備でpoolとworking setを用意し、通常frameは必要なslotとmetadataが容量内なら実行する。不足は型付き容量エラーで返し、暗黙のheap拡張、native増設、GPU待機は行わない。slot不足ならconsumer返却を進め、metadata不足なら明示準備境界で容量を変更して再試行する。
+    prepare["明示準備：pool・working set"] --> attempt["通常frameの構築・実行要求"]
+    attempt --> fits{"必要な容量があるか"}
+    fits -->|"はい"| run["準備済み領域で処理"]
+    fits -->|"いいえ"| error["型付き容量エラー・暗黙拡張なし"]
+    error --> reason{"不足の種類"}
+    reason -->|"slot・保持枠"| release["利用側がconsumer返却を進める"]
+    reason -->|"metadata・作成条件"| change["明示準備・変更境界で容量を見直す"]
+    release --> attempt
+    change --> prepare

@@ -1,0 +1,51 @@
+classDiagram
+    direction TB
+    accTitle: Graphの主要なRust型とslot共有所有
+    accDescr: GraphPoolは複数のSlotへのArcを保持する。GraphとCompiledGraphも同じSlotをArcで保持するが、compileはGraphを消費してCompiledGraphへ変換する。SlotはGraphStorageを内包する。buffer、image、passのhandleはGraph identityとindexを持つ値でありSlotの所有を延長しない。ImageViewはImageHandleとsubresource値を内包する。
+    class GraphPool {
+        +new(capacity, slots)
+        +begin() Graph
+        +is_idle() bool
+    }
+    class Graph {
+        +compile() CompiledGraph
+    }
+    class CompiledGraph {
+        +clone() CompiledGraph
+        +ordered_pass_names()
+    }
+    class Slot {
+        <<private>>
+        -data: UnsafeCell
+    }
+    class GraphStorage {
+        <<private_fields>>
+        -id: u64
+    }
+    class BufferHandle {
+        -graph: u64
+        -index: usize
+    }
+    class ImageHandle {
+        -graph: u64
+        -index: usize
+    }
+    class PassHandle {
+        -graph: u64
+        -index: usize
+    }
+    class ImageView {
+        -mip: u32
+        -layer: u32
+        -aspect
+    }
+    GraphPool --> "1..*" Slot : Arc共有保持
+    Graph --> "1" Slot : 排他checkoutのArc
+    CompiledGraph --> "1" Slot : 凍結planのArc pin
+    Slot *-- GraphStorage : 実内包
+    GraphPool ..> Graph : beginで作成
+    Graph ..> CompiledGraph : compileでselfを消費
+    BufferHandle ..> GraphStorage : identityとindexで識別
+    ImageHandle ..> GraphStorage : identityとindexで識別
+    PassHandle ..> GraphStorage : identityとindexで識別
+    ImageView *-- ImageHandle : 値を内包

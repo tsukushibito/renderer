@@ -1,0 +1,18 @@
+stateDiagram-v2
+    accTitle: workの未投入・pending・CPU結果の所有状態
+    accDescr: 準備済みworkは未投入ならキャンセルできる。投入受理後はpendingとなりtimeoutでもpendingに留まる。Fence正常完了を観測すると実行枠等を回収してCPU結果だけを保持できる。CPU消費または完了済み結果の破棄で結果領域を返す。完了不明の失敗は停止と所有保持へ進み、通常の再利用へ戻さない。
+    state "準備済みwork・未投入" as prepared
+    state "pending・GPU参照を保持" as pending
+    state "未投入cancel・予約を返却" as cancelled
+    state "正常完了済みCPU結果を保持" as cpuResult
+    state "結果領域を返却" as returned
+    state "停止・完了不明の所有を保持" as stopped
+    [*] --> prepared
+    prepared --> cancelled : 未投入のcancel
+    prepared --> pending : native投入受理
+    pending --> pending : timeout
+    pending --> cpuResult : 正常完了を観測・実行枠等を回収
+    pending --> stopped : Device loss等の完了不明
+    cpuResult --> returned : CPU消費または完了済み結果の破棄
+    cancelled --> [*]
+    returned --> [*]

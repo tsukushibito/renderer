@@ -1,0 +1,12 @@
+flowchart TB
+    accTitle: liveなpassのRAW・WAR・WAW
+    accDescr: 各例はpassが既にliveで、同じ資源の重なる範囲へアクセスする前提。writeからreadへのRAWは内容の可視性を、readからwriteへのWARは先のreadが終わる順序を、writeからwriteへのWAWは書き込み順序を要求する。Graphの順序だけでnativeメモリ依存が成立するわけではない。
+    subgraph raw ["RAW：書いた内容を読む"]
+        rawWrite["先行write"] -->|"RAW"| rawRead["後続read"]
+    end
+    subgraph war ["WAR：読み終えてから上書き"]
+        warRead["先行read"] -->|"WAR"| warWrite["後続write"]
+    end
+    subgraph waw ["WAW：writeの順序を保つ"]
+        firstWrite["先行write"] -->|"WAW"| lastWrite["後続write"]
+    end

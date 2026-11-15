@@ -1,0 +1,14 @@
+flowchart TB
+    accTitle: producerと順序制約を分けて不要passを除去する
+    accDescr: 宣言順はP0 old upload、P1 unused copy、P2 replacement、P3 readback。P0の内容をP1が、P2の内容をP3が読む。WAWやWARの順序制約だけで不要なP0とP1を残さず、readbackからproducerを辿ってP2とP3だけを残す。
+    subgraph before ["除去前：宣言順 P0 → P1 → P2 → P3"]
+        old["P0 old upload"] -->|"内容のproducer"| unused["P1 unused copy"]
+        replace["P2 replacement"] -->|"内容のproducer"| readback["P3 readback：観測起点"]
+        old -. "WAW：順序制約" .-> replace
+        unused -. "WAR：順序制約" .-> replace
+    end
+    readback -->|"必要なproducerを辿る"| cull["P0・P1を除去"]
+    subgraph after ["除去後：liveだけで順序を再計算"]
+        liveWrite["P2 replacement"] -->|"RAW"| liveRead["P3 readback"]
+    end
+    cull --> liveWrite

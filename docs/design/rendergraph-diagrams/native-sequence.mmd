@@ -1,0 +1,27 @@
+sequenceDiagram
+    accTitle: Vulkanのsubmit・wait・readbackの成功とtimeout
+    accDescr: 利用側がCompiledGraphをsubmitする。runtimeは準備済み容量を予約してnative記録し、queueへ投入する。投入成功後に予定状態を公開する。waitのtimeoutは所有を維持し、再waitでFenceの正常完了を確認した後にのみCPU結果を返す。readback_into成功でそのstaging範囲を返却する。
+    participant app as 利用側
+    participant runtime as VulkanRuntime
+    participant submission as Submission
+    participant queue as Queue
+    participant fence as Fence
+    participant result as CPU結果
+    app->>runtime: submit CompiledGraph
+    runtime->>runtime: 容量予約・native記録
+    runtime->>queue: native submit
+    queue-->>runtime: 投入成功
+    runtime->>runtime: canonical予定状態を公開
+    runtime-->>app: Submission
+    app->>submission: wait timeout
+    submission->>fence: 正常完了を問い合わせ
+    fence-->>submission: TIMEOUT
+    submission-->>app: None：所有を保持
+    app->>submission: waitを再試行
+    submission->>fence: 正常完了を問い合わせ
+    fence-->>submission: 正常完了
+    submission->>result: 未読readbackを保持して結果化
+    submission-->>app: SubmissionResult
+    app->>result: readback_into 準備済み出力領域
+    result->>result: 必要なinvalidate・CPU copy
+    result-->>app: copy成功・staging範囲を返却

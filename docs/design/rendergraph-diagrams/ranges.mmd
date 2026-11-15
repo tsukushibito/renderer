@@ -1,0 +1,16 @@
+flowchart TB
+    accTitle: bufferのbyte範囲と画像subresourceを別々に追跡する
+    accDescr: bufferの0から16 byteはproducer Aによる有効内容、16から32 byteは未初期化。8から24 byteを読むと後半に穴があり拒否する。同じ論理画像のmip0 layer0とmip1 layer0は別範囲として内容を管理する。Viewは別の物理画像を作らず、layoutとGPU完了は別途追跡する。
+    subgraph buffer ["buffer：半開byte範囲"]
+        whole["buffer 0..32"] --> ready["0..16：producer Aで有効"]
+        whole --> hole["16..32：未初期化"]
+        ready --> read["read 8..24"]
+        hole --> read
+        read --> reject["16..24の穴で拒否"]
+    end
+    subgraph image ["画像：同じImageHandleのsubresource"]
+        logical["論理画像：2 mip"] --> mipZero["View mip0 / layer0：有効"]
+        logical --> mipOne["View mip1 / layer0：未初期化"]
+        mipZero --> export["画像全域exportは拒否"]
+        mipOne --> export
+    end

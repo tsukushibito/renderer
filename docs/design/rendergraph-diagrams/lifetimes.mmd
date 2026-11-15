@@ -1,0 +1,12 @@
+flowchart TB
+    accTitle: GPU完了と所有の終了を分ける
+    accDescr: Graph構築からcompile、submit受理、正常完了の観測へ進む。完了観測後はnative実行枠等を回収できるが未読readbackはCPU結果が保持する。利用側やnative等の全plan pinが返ればGraph slotを再利用でき、未読readbackの保持とは条件が異なる。export物理資源の登録解除も別の明示deleteである。
+    build["Graph構築：slotを借りる"] --> frozen["compile：同じslotを凍結"]
+    frozen --> accepted["submit受理：native所有を保持"]
+    accepted --> observed["実GPUの正常完了を観測"]
+    observed --> execution["native実行枠等を回収可能"]
+    observed --> readback["未読readbackはCPU結果に保持"]
+    readback --> consumed["CPU消費・結果返却"]
+    execution --> consumers["必要な全consumerがpinを返却"]
+    frozen -. "利用側のplan pinも返却" .-> consumers
+    consumers --> reuse["Graph slot再取得・新identity"]

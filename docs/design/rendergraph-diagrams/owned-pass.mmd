@@ -1,0 +1,60 @@
+classDiagram
+    direction TB
+    accTitle: owned passとflat arenaの所有・参照
+    accDescr: GraphStorageがPass、draw、attachment、binding、accessの配列を実所有する。PassはOperationを内包し、access配列へは範囲で参照する。Raster OperationはManagedRasterProgramを値で所有し、drawとattachment配列へ範囲またはindexで参照する。Dispatch Operationは別のManagedProgramとbuffer binding範囲を持つ。これらは論理命令でありnative PSOの所有図ではない。
+    class GraphStorage {
+        -passes
+        -draws
+        -attachments
+        -bindings
+        -accesses
+    }
+    class Pass {
+        -accesses: Range
+        -side_effect: bool
+    }
+    class Operation {
+        <<enum_subset>>
+        Raster
+        Dispatch
+        AttachmentPass
+    }
+    class ManagedRasterProgram {
+        +mesh()
+        -manifest: static参照
+    }
+    class ManagedProgram {
+        -manifest: static参照
+    }
+    class RasterDrawOperands {
+        -vertices: resource_index
+        -indices: resource_index
+        -index_count
+        -parameters
+    }
+    class AttachmentOperand {
+        -view: ImageView
+        -ops
+        -clear
+    }
+    class BufferBindingOperands {
+        -resource: usize
+        -range: BufferRange
+    }
+    class ResourceAccess {
+        -resource
+        -range
+        -purpose
+    }
+    GraphStorage *-- Pass : 配列を実所有
+    GraphStorage *-- RasterDrawOperands : draws arena
+    GraphStorage *-- AttachmentOperand : attachments arena
+    GraphStorage *-- BufferBindingOperands : bindings arena
+    GraphStorage *-- ResourceAccess : accesses arena
+    Pass *-- Operation : 値を内包
+    Pass ..> ResourceAccess : accesses範囲
+    Operation *-- ManagedRasterProgram : Rasterの値
+    Operation *-- ManagedProgram : Dispatchの値
+    Operation ..> RasterDrawOperands : Rasterのdraws範囲
+    Operation ..> AttachmentOperand : colors範囲とdepth index
+    Operation ..> BufferBindingOperands : Dispatchのbindings範囲
