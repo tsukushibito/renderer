@@ -668,12 +668,15 @@ fn run(strict: bool) {
         "vulkan_readbacks":vk_pixels,"d3d12_readbacks":dx_pixels,
         "validation":{
             "vulkan":{"requested":format!("{:?}",vk_report.requested),"core":vk_report.core_validation,"sync":vk_report.synchronization_validation,"warnings":vk_report.warnings,"errors":vk_report.errors,"callback_failures":vk_report.callback_failures,"dropped_problems":vk_report.dropped_problems,"dropped_layer_statuses":vk_report.dropped_layer_statuses,"problems":vk_report.problems,"layer_status_messages":vk_report.layer_status_messages},
-            "d3d12":{"debug_layer":dx_report.debug_layer_enabled,"gbv":dx_report.gpu_based_validation_enabled,"teardown_checked":dx_report.teardown_checked,"warnings":dx_report.warnings,"errors":dx_report.errors,"corruption":dx_report.corruption,"callback_failures":dx_report.callback_failures,"dropped_messages":dx_report.dropped_messages,"messages":format!("{:?}",dx_report.messages)}
+            "d3d12":{"debug_layer":dx_report.debug_layer_enabled,"gbv":dx_report.gpu_based_validation_enabled,"teardown_checked":dx_report.teardown_checked,"warnings":dx_report.warnings,"errors":dx_report.errors,"corruption":dx_report.corruption,"callback_failures":dx_report.callback_failures,"dropped_messages":dx_report.dropped_messages,"retained_message_count":dx_report.messages.len()}
         }
     });
     eprintln!("RASTER_GRAPH_REPORT={report}");
     assert!(vk_report.is_clean(), "Vulkan diagnostics: {report}");
-    assert!(dx_report.is_clean(), "D3D12 diagnostics: {report}");
+    assert!(
+        dx_report.is_clean(),
+        "D3D12 diagnostics: {dx_report:?}; {report}"
+    );
     if strict {
         assert_eq!(vk_report.core_validation, Some(true), "{report}");
         assert_eq!(vk_report.synchronization_validation, Some(true), "{report}");
