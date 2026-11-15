@@ -313,8 +313,13 @@ mod buffer {
     // A measurement adapter only: both normal public APIs exercise the same
     // graph and ownership schedule. It exposes no renderer-internal operands.
     trait Backend {
+        const RECORDING_CANCEL: bool;
+        const DETACHED_REAP: bool;
         type Pending;
         type Completed;
+        fn cancel_recording(&mut self, graph: &CompiledGraph);
+        fn reject_capacity(&mut self, graph: &CompiledGraph);
+        fn reap_detached(&mut self);
         fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending;
         fn complete(pending: &mut Self::Pending) -> Self::Completed;
         fn consume(result: &mut Self::Completed, pass: PassHandle, expected: &[u8; 16]);
@@ -386,8 +391,14 @@ mod buffer {
             let (graph, pass) = phase(&mut phases[0], || graph(pool, &inputs[version], copies));
             let plan = phase(&mut phases[1], || graph.compile().unwrap());
             assert_eq!(plan.pass_count(), if copies == 3 { 3 } else { 2 + copies });
-            let work = phase(&mut phases[2], || runtime.submit(&plan));
+            let work = phase(&mut phases[2], || {
+                runtime.cancel_recording(&plan);
+                runtime.submit(&plan)
+            });
             pending[slot] = Some((work, pass, expected[version]));
+            if frame >= IN_FLIGHT - 1 {
+                phase(&mut phases[2], || runtime.reject_capacity(&plan));
+            }
             phase(&mut phases[4], || drop(plan));
         }
         for slot in 0..IN_FLIGHT {
@@ -410,6 +421,34 @@ mod buffer {
                 drop(result);
             }
             drop(pending);
+        });
+        let oversized = phase(&mut phases[0], || {
+            let mut graph = pool.begin().unwrap();
+            let buffer = graph
+                .buffer("over capacity", BufferDesc { size: 64 })
+                .unwrap();
+            graph
+                .upload_buffer("over capacity upload", buffer, 0, &inputs[0])
+                .unwrap();
+            graph
+                .readback_buffer("over capacity readback", buffer, 0, 16)
+                .unwrap();
+            graph
+        });
+        let oversized = phase(&mut phases[1], || oversized.compile().unwrap());
+        // The normal native working set reserves 32-byte and 16-byte buffers;
+        // a new 64-byte class must fail without hidden growth or a GPU wait.
+        phase(&mut phases[2], || runtime.reject_capacity(&oversized));
+        phase(&mut phases[4], || drop(oversized));
+        if B::DETACHED_REAP {
+            let (graph, _) = phase(&mut phases[0], || graph(pool, &inputs[0], 3));
+            let plan = phase(&mut phases[1], || graph.compile().unwrap());
+            let detached = phase(&mut phases[2], || runtime.submit(&plan));
+            phase(&mut phases[4], || drop(detached));
+            phase(&mut phases[3], || runtime.reap_detached());
+            phase(&mut phases[4], || drop(plan));
+        }
+        phase(&mut phases[4], || {
             recycle_graph_slots::<{ IN_FLIGHT * 2 }>(pool);
         });
         Report {
@@ -462,7 +501,7 @@ mod buffer {
         );
     }
 
-    fn report(
+    fn report<B: Backend>(
         name: &str,
         baseline: bool,
         startup: Snapshot,
@@ -483,8 +522,16 @@ mod buffer {
             "input_versions": 4,
             "copy_passes": [0, 1, 2, 1],
             "last_case_is_disjoint_self_copy": true,
-            "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI or cancel/busy proof",
-            "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit per-submission fence waits",
+            "boundary_cases": {
+                "native_busy_rejection": true,
+                "unprepared_64byte_buffer_rejection": true,
+                "readback_wrong_length_preserves_result": true,
+                "unsubmitted_recording_cancel": B::RECORDING_CANCEL,
+                "detached_submission_runtime_poll": B::DETACHED_REAP,
+            },
+            "detached_reap_submissions": usize::from(B::DETACHED_REAP),
+            "coverage": "public buffer Graph build/compile/submit/complete/readback/return; no raster/image/WSI",
+            "caller": "fixed arrays and prepared input bytes; report outside measurement; explicit fence waits/polls",
             "unobserved": "driver-internal host/device allocations",
             "startup_positive_control": counts(startup),
             "shutdown_outside_normal_frames": counts(shutdown),
@@ -504,8 +551,18 @@ mod buffer {
 
     #[cfg(feature = "vulkan")]
     impl Backend for renderer::VulkanRuntime {
+        const RECORDING_CANCEL: bool = false;
+        const DETACHED_REAP: bool = false;
         type Pending = renderer::Submission;
         type Completed = renderer::SubmissionResult;
+        fn cancel_recording(&mut self, _: &CompiledGraph) {}
+        fn reap_detached(&mut self) {}
+        fn reject_capacity(&mut self, graph: &CompiledGraph) {
+            assert_eq!(
+                self.submit(graph).err().unwrap().kind(),
+                renderer::RuntimeErrorKind::CapacityExhausted
+            );
+        }
         fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending {
             self.submit(graph).unwrap()
         }
@@ -513,6 +570,13 @@ mod buffer {
             pending.wait(Duration::from_secs(30)).unwrap().unwrap()
         }
         fn consume(result: &mut Self::Completed, pass: PassHandle, expected: &[u8; 16]) {
+            assert_eq!(result.readback_len(pass).unwrap(), 16);
+            let mut wrong = [0xcc; 15];
+            assert_eq!(
+                result.readback_into(pass, &mut wrong).unwrap_err().kind(),
+                renderer::RuntimeErrorKind::InvalidInput
+            );
+            assert_eq!(wrong, [0xcc; 15]);
             assert_eq!(result.readback_len(pass).unwrap(), 16);
             let mut bytes = [0; 16];
             result.readback_into(pass, &mut bytes).unwrap();
@@ -571,7 +635,7 @@ mod buffer {
         } else {
             assert_eq!(validation.requested, renderer::ValidationMode::Disabled);
         }
-        report(
+        report::<renderer::VulkanRuntime>(
             "vulkan_buffer_full_lifecycle",
             baseline,
             startup,
@@ -582,8 +646,32 @@ mod buffer {
 
     #[cfg(all(feature = "d3d12", windows))]
     impl Backend for renderer::D3D12Runtime {
+        const RECORDING_CANCEL: bool = true;
+        const DETACHED_REAP: bool = true;
         type Pending = renderer::D3D12Submission;
         type Completed = renderer::D3D12SubmissionResult;
+        fn cancel_recording(&mut self, graph: &CompiledGraph) {
+            drop(self.prepare(graph).unwrap());
+        }
+        fn reject_capacity(&mut self, graph: &CompiledGraph) {
+            assert_eq!(
+                self.prepare(graph).err().unwrap().kind(),
+                renderer::D3D12RuntimeErrorKind::CapacityExhausted
+            );
+        }
+        fn reap_detached(&mut self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if self.poll().unwrap() == 1 {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "detached frame timed out"
+                );
+                std::thread::yield_now();
+            }
+        }
         fn submit(&mut self, graph: &CompiledGraph) -> Self::Pending {
             self.submit(graph).unwrap()
         }
@@ -591,9 +679,17 @@ mod buffer {
             pending.wait(Duration::from_secs(30)).unwrap().unwrap()
         }
         fn consume(result: &mut Self::Completed, pass: PassHandle, expected: &[u8; 16]) {
-            let bytes = result.readback(pass).unwrap();
-            assert_eq!(bytes, expected);
-            drop(bytes);
+            assert_eq!(result.readback_len(pass).unwrap(), 16);
+            let mut wrong = [0xcc; 15];
+            assert_eq!(
+                result.readback_into(pass, &mut wrong).unwrap_err().kind(),
+                renderer::D3D12RuntimeErrorKind::InvalidInput
+            );
+            assert_eq!(wrong, [0xcc; 15]);
+            assert_eq!(result.readback_len(pass).unwrap(), 16);
+            let mut bytes = [0; 16];
+            result.readback_into(pass, &mut bytes).unwrap();
+            assert_eq!(&bytes, expected);
         }
     }
 
@@ -603,8 +699,17 @@ mod buffer {
             panic!("memory acceptance requires --release");
         }
         let start = Snapshot::now();
-        let mut runtime =
-            renderer::D3D12Runtime::new(renderer::D3D12RuntimeConfig::default()).unwrap();
+        let mut config = renderer::D3D12RuntimeConfig::default();
+        config.capacity.executions = IN_FLIGHT;
+        config.capacity.results = IN_FLIGHT * 2;
+        config.capacity.resources = 2;
+        config.capacity.operations = 4;
+        config.capacity.buffers = 2;
+        config.capacity.buffer_bytes = 32;
+        config.capacity.upload_bytes = 32;
+        config.capacity.readback_bytes = 16;
+        config.capacity.scratch_bytes = 16;
+        let mut runtime = renderer::D3D12Runtime::new(config).unwrap();
         let monitor = runtime.validation_monitor();
         let (inputs, expected) = inputs();
         let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT * 2).unwrap();
@@ -630,7 +735,7 @@ mod buffer {
             validation.gpu_based_validation_enabled,
             cfg!(feature = "development-validation")
         );
-        report(
+        report::<renderer::D3D12Runtime>(
             "d3d12_buffer_full_lifecycle",
             baseline,
             startup,
