@@ -1,5 +1,6 @@
 //! Explicit GPU coverage of runtime-owned frame submission and result lifetime.
 
+use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{BufferDesc, Graph};
 use std::collections::HashMap;
@@ -25,6 +26,15 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
         );
         let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
+        prepare_scenario(
+            &mut runtime,
+            1,
+            2,
+            &[ResourceClass::Buffer {
+                desc: BufferDesc { size: 16 },
+                count: 2,
+            }],
+        );
 
         let bytes = [17, 29, 83, 211].repeat(4);
         let mut graph = Graph::test_new();
@@ -140,6 +150,15 @@ fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
         );
         let diagnostics = runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&diagnostics);
+        prepare_scenario(
+            &mut runtime,
+            1,
+            2,
+            &[ResourceClass::Buffer {
+                desc: BufferDesc { size: 64 },
+                count: 2,
+            }],
+        );
 
         let bytes = [7, 43, 101, 239].repeat(16);
         let mut graph = Graph::test_new();

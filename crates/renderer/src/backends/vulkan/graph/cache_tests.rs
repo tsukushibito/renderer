@@ -1,5 +1,6 @@
 //! Cache policy and real-GPU descriptor churn, pressure and failure regressions.
 
+use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{BufferDesc, Graph, ImageDesc};
 
@@ -65,16 +66,40 @@ fn complete_image(runtime: &mut VulkanRuntime, size: u32, value: u8) -> Resource
     key
 }
 
+fn prepare_images(runtime: &mut VulkanRuntime, sizes: &[u32]) {
+    let classes = sizes
+        .iter()
+        .map(|&size| ResourceClass::Image {
+            desc: ImageDesc::rgba8(size, size),
+            count: 1,
+        })
+        .collect::<Vec<_>>();
+    prepare_scenario(runtime, 1, 2, &classes);
+}
+
+/// Asset replacement is explicit even while other prepared frames are pending.
+fn replace_image_asset(runtime: &mut VulkanRuntime, size: u32) {
+    let (_, lease) = runtime
+        .acquire_inner(
+            ResourceDesc::Image(ImageDesc::rgba8(size, size)),
+            "replacement asset",
+            true,
+        )
+        .unwrap();
+    drop(lease);
+}
+
 #[test]
 #[ignore = "explicit real-GPU alternating cache descriptors; requires Core/SyncVal"]
 fn vulkan_graph_cache_retains_alternating_image_extents() {
     real_gpu(8, 1, |runtime| {
+        prepare_images(runtime, &[2, 3]);
         for frame in 0..8 {
             let size = if frame % 2 == 0 { 2 } else { 3 };
             complete_image(runtime, size, frame + 1);
         }
         assert_eq!(runtime.stats().resources_created, 2);
-        assert_eq!(runtime.stats().resources_reused, 6);
+        assert_eq!(runtime.stats().resources_reused, 8);
         assert_eq!(runtime.entries.len(), 2);
         assert_eq!(runtime.memory_stats().unwrap().cached_logical_bytes, 52);
     });
@@ -84,26 +109,31 @@ fn vulkan_graph_cache_retains_alternating_image_extents() {
 #[ignore = "explicit real-GPU cache eviction and generations; requires Core/SyncVal"]
 fn vulkan_graph_cache_pressure_preserves_recent_descriptors_and_generations() {
     real_gpu(2, 1, |runtime| {
+        prepare_images(runtime, &[2, 3]);
         let first_a = complete_image(runtime, 2, 11);
         let first_b = complete_image(runtime, 3, 22);
         let second_a = complete_image(runtime, 2, 33);
         assert_eq!(second_a.index, first_a.index);
         assert_eq!(second_a.generation, first_a.generation + 1);
+        // Changing the prepared envelope may replace idle native allocations;
+        // ordinary submit only reuses already prepared descriptor classes.
+        prepare_images(runtime, &[4]);
         let c = complete_image(runtime, 4, 44);
         assert_eq!(c.index, first_b.index, "replace B, not recently reused A");
-        assert_eq!(c.generation, first_b.generation + 1);
+        assert!(c.generation > first_b.generation);
         let third_a = complete_image(runtime, 2, 55);
         assert_eq!(third_a.index, first_a.index);
         assert_eq!(third_a.generation, second_a.generation + 1);
         assert_eq!(runtime.stats().resources_created, 3);
-        assert_eq!(runtime.stats().resources_reused, 2);
+        assert_eq!(runtime.stats().resources_reused, 5);
         assert_eq!(runtime.entries.len(), 2);
 
         // A saturated generation cannot be reused even for the same descriptor.
         runtime.entries[c.index as usize].generation = u32::MAX;
+        prepare_images(runtime, &[4]);
         let replacement = complete_image(runtime, 4, 66);
         assert_eq!(replacement.index, third_a.index);
-        assert_eq!(replacement.generation, third_a.generation + 1);
+        assert!(replacement.generation > third_a.generation);
         runtime.entries[replacement.index as usize].generation = u32::MAX;
         let (plan, _, _) = image_plan(4, 77);
         assert_eq!(
@@ -118,6 +148,7 @@ fn vulkan_graph_cache_pressure_preserves_recent_descriptors_and_generations() {
 #[ignore = "explicit real-GPU registered and pending cache protection; requires Core/SyncVal"]
 fn vulkan_graph_cache_never_evicts_registered_or_unobserved_pending_resources() {
     real_gpu(2, 3, |runtime| {
+        prepare_images(runtime, &[2, 3]);
         let (first_plan, first_image, first_read) = image_plan(2, 17);
         let mut first = runtime.submit(&first_plan).unwrap();
         let first_key = first.export_image(first_image).unwrap().key();
@@ -129,14 +160,29 @@ fn vulkan_graph_cache_never_evicts_registered_or_unobserved_pending_resources() 
         assert_eq!(
             runtime.submit(&third_plan).err().unwrap().kind(),
             RuntimeErrorKind::CapacityExhausted,
-            "a signaled Fence does not remove the unobserved pending lease"
+            "ordinary submit cannot create an unprepared descriptor class"
+        );
+        assert_eq!(
+            runtime
+                .acquire_inner(
+                    ResourceDesc::Image(ImageDesc::rgba8(4, 4)),
+                    "blocked replacement",
+                    true,
+                )
+                .err()
+                .unwrap()
+                .kind(),
+            RuntimeErrorKind::CapacityExhausted,
+            "even explicit replacement cannot evict registered or unobserved pending owners"
         );
         assert_eq!(runtime.stats().resources_created, 2);
         check_result(&mut second, second_read, 3, 29);
+        replace_image_asset(runtime, 4);
         let third_key = complete_image(runtime, 4, 41);
         assert_eq!(third_key.index, second_key.index);
-        assert_eq!(third_key.generation, second_key.generation + 1);
+        assert!(third_key.generation > second_key.generation);
         check_result(&mut first, first_read, 2, 17);
+        replace_image_asset(runtime, 2);
         let same_descriptor = complete_image(runtime, 2, 53);
         assert_ne!(same_descriptor.index, first_key.index);
         assert!(runtime.refresh_image(first_key).is_ok());
@@ -148,6 +194,7 @@ fn vulkan_graph_cache_never_evicts_registered_or_unobserved_pending_resources() 
 #[ignore = "explicit real-GPU failed cache replacement retains its victim; requires Core/SyncVal"]
 fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
     real_gpu(1, 1, |runtime| {
+        prepare_images(runtime, &[2]);
         let original = complete_image(runtime, 2, 7);
         let entry = &runtime.entries[original.index as usize];
         let native_image = entry.physical().image().image;
@@ -155,7 +202,11 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
         // Exercise the native resource boundary directly: Graph names are user
         // input, and a failed constructor must not destroy the selected victim.
         let error = runtime
-            .acquire(ResourceDesc::Image(ImageDesc::rgba8(3, 3)), "invalid\0name")
+            .acquire_inner(
+                ResourceDesc::Image(ImageDesc::rgba8(3, 3)),
+                "invalid\0name",
+                true,
+            )
             .err()
             .expect("invalid naming input must reject replacement");
         assert_eq!(error.kind(), RuntimeErrorKind::InvalidInput);
@@ -169,7 +220,7 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
         assert_eq!(reused.index, original.index);
         assert_eq!(reused.generation, original.generation + 1);
         assert_eq!(runtime.stats().resources_created, 1);
-        assert_eq!(runtime.stats().resources_reused, 1);
+        assert_eq!(runtime.stats().resources_reused, 2);
     });
 }
 
@@ -178,6 +229,7 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
 fn vulkan_graph_trim_releases_idle_working_set_and_preserves_live_owners() {
     real_gpu(8, 3, |runtime| {
         let baseline = runtime.memory_stats().unwrap();
+        prepare_images(runtime, &[4, 8, 3]);
         let first = complete_image(runtime, 4, 11);
         let second = complete_image(runtime, 8, 22);
         let registered = runtime
@@ -229,7 +281,11 @@ fn vulkan_graph_trim_releases_idle_working_set_and_preserves_live_owners() {
         // generation untouched. Its next successful creation gets a new key.
         assert_eq!(
             runtime
-                .acquire(ResourceDesc::Buffer(BufferDesc { size: 0 }), "invalid size")
+                .acquire_inner(
+                    ResourceDesc::Buffer(BufferDesc { size: 0 }),
+                    "invalid size",
+                    true,
+                )
                 .err()
                 .unwrap()
                 .kind(),
@@ -280,6 +336,7 @@ fn vulkan_graph_trim_releases_idle_working_set_and_preserves_live_owners() {
 fn vulkan_graph_trim_releases_saturated_generations_without_reviving_keys() {
     real_gpu(1, 1, |runtime| {
         let baseline = runtime.memory_stats().unwrap();
+        prepare_images(runtime, &[2]);
         let key = complete_image(runtime, 2, 17);
         runtime.entries[key.index as usize].generation = u32::MAX;
         assert_eq!(runtime.trim_idle_resources(), 1);

@@ -1,5 +1,38 @@
 use super::*;
-use crate::graph::{BufferDesc, Graph, GraphCapacity, GraphPool, ImageDesc, ImportRanges};
+#[cfg(feature = "development-validation")]
+use crate::graph::ImportRanges;
+use crate::graph::{BufferDesc, Graph, GraphCapacity, GraphPool, ImageDesc};
+
+/// Preparation is a scenario setup boundary, never an implicit submit fallback.
+pub(super) fn prepare_scenario(
+    runtime: &mut VulkanRuntime,
+    resources: usize,
+    passes: usize,
+    classes: &[ResourceClass],
+) {
+    let slots = runtime.config.execution_slots;
+    runtime
+        .prepare_working_set(
+            FrameCapacity {
+                graph: GraphCapacity {
+                    resources,
+                    passes,
+                    accesses: resources * passes * 2,
+                    draws: passes * 4,
+                    name_bytes: passes * 128,
+                    ..GraphCapacity::default()
+                },
+                work_slots: slots,
+                // Completed CPU results may outlive several GPU batches.
+                result_slots: slots * 4,
+                metadata_slots: slots * 4,
+                range_snapshots: (resources + passes) * slots * 8,
+                ..FrameCapacity::default()
+            },
+            classes,
+        )
+        .unwrap();
+}
 
 #[test]
 #[ignore = "explicit real GPU pass-identity readback test; run shipping and strict validation separately"]
@@ -32,6 +65,15 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
             .unwrap_err()
             .kind(),
         RuntimeErrorKind::InvalidInput
+    );
+    prepare_scenario(
+        &mut runtime,
+        1,
+        3,
+        &[ResourceClass::Buffer {
+            desc: BufferDesc { size: 8 },
+            count: 1,
+        }],
     );
     let mut graph = Graph::test_new();
     let buffer = graph
@@ -99,6 +141,22 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             runtime.owner.device.device_type(),
             vk::PhysicalDeviceType::CPU
         );
+        prepare_scenario(
+            &mut runtime,
+            4,
+            4,
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 16 },
+                    count: 2,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(17, 13),
+                    count: 2,
+                },
+            ],
+        );
+        let prepared_resources = runtime.stats().resources_created;
         let buffer_bytes = (0u8..16)
             .map(|byte| byte.wrapping_mul(17))
             .collect::<Vec<_>>();
@@ -137,8 +195,8 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         let image_export = first.export_image(image).unwrap();
         assert_eq!(
             runtime.stats().resources_created,
-            2,
-            "dead resource must not allocate"
+            prepared_resources,
+            "culled resources must not allocate outside the prepared classes"
         );
         let mut consumer = Graph::test_new();
         let input = consumer
@@ -318,6 +376,15 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
         );
 
         let size = 1024 * 1024;
+        prepare_scenario(
+            &mut runtime,
+            1,
+            1,
+            &[ResourceClass::Buffer {
+                desc: BufferDesc { size: size as u64 },
+                count: 1,
+            }],
+        );
         let capacity = GraphCapacity {
             upload_bytes: size,
             ..GraphCapacity::default()
@@ -379,6 +446,31 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
             assert_eq!(result.test_readback(read).unwrap(), vec![29; size]);
         }
         runtime.delete(key).unwrap();
+        {
+            // Standalone completion must release deleted upload provenance
+            // without requiring a later runtime poll or another submission.
+            let mut deleted_input = GraphPool::new(capacity, 1).unwrap();
+            let mut graph = deleted_input.begin().unwrap();
+            let buffer = graph
+                .buffer("deleted pending", BufferDesc { size: size as u64 })
+                .unwrap();
+            graph
+                .upload_buffer("deleted upload", buffer, 0, &vec![41; size])
+                .unwrap();
+            graph.export_buffer(buffer).unwrap();
+            let plan = graph.compile().unwrap();
+            let mut pending = runtime.submit(&plan).unwrap();
+            let deleted_key = pending.export_buffer(buffer).unwrap().key();
+            drop(plan);
+            assert_eq!(deleted_input.leased_slots(), 1);
+            runtime.delete(deleted_key).unwrap();
+            drop(pending.wait(Duration::from_secs(10)).unwrap().unwrap());
+            drop(pending);
+            assert!(
+                deleted_input.begin().is_ok(),
+                "standalone completion releases deleted contents' Graph slot"
+            );
+        }
         drop(runtime);
         assert_eq!(current_input.leased_slots(), 0);
         assert!(
@@ -408,6 +500,15 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             runtime.owner.device.device_type(),
             vk::PhysicalDeviceType::CPU
         );
+        prepare_scenario(
+            &mut runtime,
+            2,
+            3,
+            &[ResourceClass::Buffer {
+                desc: BufferDesc { size: 16 },
+                count: 1,
+            }],
+        );
         let mut over_capacity = Graph::test_new();
         let source = over_capacity
             .buffer("source", BufferDesc { size: 16 })
@@ -433,6 +534,15 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             RuntimeErrorKind::CapacityExhausted
         );
         assert_eq!(runtime.stats().registered_resources, 0);
+        prepare_scenario(
+            &mut runtime,
+            2,
+            3,
+            &[ResourceClass::Buffer {
+                desc: BufferDesc { size: 512 },
+                count: 1,
+            }],
+        );
         let mut over_staging = Graph::test_new();
         let large = over_staging
             .buffer("large", BufferDesc { size: 512 })
@@ -451,6 +561,15 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
         );
         assert_eq!(runtime.stats().registered_resources, 0);
         assert_eq!(runtime.stats().upload_live_ranges, 0);
+        prepare_scenario(
+            &mut runtime,
+            2,
+            3,
+            &[ResourceClass::Buffer {
+                desc: BufferDesc { size: 16 },
+                count: 1,
+            }],
+        );
         let mut valid = Graph::test_new();
         let value = valid.buffer("value", BufferDesc { size: 16 }).unwrap();
         valid.upload_buffer("upload", value, 0, &[7; 16]).unwrap();
@@ -467,6 +586,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             "failed acquisitions do not grow the registry"
         );
         let mut foreign_runtime = VulkanRuntime::new(config).unwrap();
+        prepare_scenario(&mut foreign_runtime, 2, 3, &[]);
         let foreign_diagnostics = foreign_runtime.diagnostics.clone();
         crate::backends::vulkan::assert_real_validation(&foreign_diagnostics);
         let mut imported = Graph::test_new();
@@ -484,7 +604,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             // This diagnostic deliberately violates a private invariant. Public
             // callers cannot forge initialized ranges for an unchanged revision.
             let mut forged = first_export.clone();
-            forged.initialized = ImportRanges::test_capture(&[0..8]);
+            forged.initialized = ImportRanges::test_capture(std::slice::from_ref(&(0..8)));
             let mut malformed = Graph::test_new();
             let input = malformed.import_buffer("forged", &forged).unwrap();
             malformed.readback_buffer("read", input, 0, 8).unwrap();
