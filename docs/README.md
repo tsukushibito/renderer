@@ -6,7 +6,7 @@
 RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)から読み始められます。
 [Mermaid の設計図集](design/rendergraph-diagrams.md)では、主要な型、依存解析、GPU実行、資源の寿命と容量を辿れます。
 検索・章ナビゲーション付きの HTML 版は [mdBook の生成手順](guides/html-docs.md)に従って作成します。
-生成先は `target/rendergraph-book/index.html`、CI の配布物は `rendergraph-html` です。
+生成先は `build/docs/index.html`、配布用ZIPは `build/rendergraph-html.zip`、CI の配布物は `rendergraph-html` です。
 
 ## 最初に読む
 

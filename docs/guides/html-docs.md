@@ -43,7 +43,7 @@ cargo install mdbook --version 0.5.4 --locked
 cargo install mdbook-mermaid --version 0.17.1 --locked
 mdbook --version
 mdbook build docs
-python -B tools/docs/check_html.py target/rendergraph-book
+python -B tools/docs/check_html.py build/docs
 ```
 
 この Windows 環境では公式 ZIP を SHA-256 照合後に `.tools/mdbook-0.5.4/` へ展開している。
@@ -51,8 +51,8 @@ python -B tools/docs/check_html.py target/rendergraph-book
 ```powershell
 $env:PATH = (Resolve-Path .tools/mdbook-mermaid-0.17.1).Path + [IO.Path]::PathSeparator + $env:PATH
 & ./.tools/mdbook-0.5.4/mdbook.exe build docs
-python -B tools/docs/check_html.py target/rendergraph-book
-Start-Process ./target/rendergraph-book/index.html
+python -B tools/docs/check_html.py build/docs
+Start-Process ./build/docs/index.html
 ```
 
 Windows x64 MSVC ZIP の SHA-256 は
@@ -67,10 +67,16 @@ CI の Linux x64 musl tarball は `42aca57eea8521971cc595fe4bb853c5b8b7d9f7138a2
 この版は mdBook 0.5.0 に対してビルドされているため 0.5.4 の呼出し時に版差の警告を出す。
 本リポジトリでは下記の実描画検査により、この組合せの出力を確認する。
 
-生成先は `target/rendergraph-book/`。`index.html` が閲覧の入口で、
+生成先は `build/docs/`。`index.html` が閲覧の入口で、
 図解の本文は `design/rendergraph-overview.html`、設計図集は `design/rendergraph-diagrams.html`、全章印刷用は `print.html`。
 **配布時はディレクトリ全体を ZIP 等で渡す。** HTML ファイル単体ではテーマ・検索・図が不足する。
 生成物とダウンロードしたツールは Git の追跡対象に含めない。
+原稿は `docs/`、生成HTMLは `build/docs/`、Cargoの出力は `target/` に分離する。
+配布用ZIPも `build/` 配下へ作成する。
+
+```powershell
+Compress-Archive -Path ./build/docs/* -DestinationPath ./build/rendergraph-html.zip -Force
+```
 
 更新をすぐ確認する場合は `mdbook serve docs --hostname 127.0.0.1 --port 3000` を使い、
 `http://127.0.0.1:3000` で読む。これはローカル確認用で、公開ホスティングの設定ではない。
@@ -97,8 +103,11 @@ Markdown の `mermaid` コードブロック内で mdBook の `include` を使�
 npm ci --ignore-scripts --prefix tools/docs
 npm run bundle --prefix tools/docs -- --check
 node tools/docs/node_modules/playwright/cli.js install chromium --only-shell
-npm run check --prefix tools/docs -- /absolute/path/to/target/rendergraph-book
+npm run check --prefix tools/docs
 ```
+
+検査の引数を省略すると、このリポジトリの `build/docs/` を使用する。
+生成先を上書きした場合は、`npm run check --prefix tools/docs -- /absolute/path/to/output` で指定できる。
 
 Windows では npm を `npm.cmd` で呼べる。
 ブラウザー保存先をリポジトリ内へ限定する場合は、install と check の両方に同じ

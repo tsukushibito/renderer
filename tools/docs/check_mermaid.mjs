@@ -2,10 +2,12 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { chromium } from "playwright";
 
-const root = path.resolve(process.argv[2] || "target/rendergraph-book");
+const defaultRoot = fileURLToPath(new URL("../../build/docs", import.meta.url));
+const root = path.resolve(process.argv[2] || defaultRoot);
 const mime = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".json": "application/json" };
 const server = createServer(async (request, response) => {
     try {

@@ -13,3 +13,6 @@
 
 # Rust build output (Cargo.lock is tracked for reproducible dependency resolution)
 /target/
+
+# Generated documentation
+/build/

@@ -47,12 +47,12 @@ jobs:
         run: |
           git lfs pull --include="docs/verification/*-preview.png" --exclude=""
           .tools/mdbook-0.5.4/mdbook build docs
-          python -B tools/docs/check_html.py target/rendergraph-book
-          npm run check --prefix tools/docs -- "$GITHUB_WORKSPACE/target/rendergraph-book"
+          python -B tools/docs/check_html.py build/docs
+          npm run check --prefix tools/docs
       - uses: actions/upload-artifact@v4
         with:
           name: rendergraph-html
-          path: target/rendergraph-book/
+          path: build/docs/
           if-no-files-found: error
 
   asset-tools:

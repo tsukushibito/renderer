@@ -6,7 +6,7 @@ language = "ja"
 src = "."
 
 [build]
-build-dir = "../target/rendergraph-book"
+build-dir = "../build/docs"
 create-missing = false
 use-default-preprocessors = false
 

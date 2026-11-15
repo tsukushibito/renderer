@@ -14,6 +14,11 @@ producer/culling、live hazard、範囲/subresource、native投入、別々の�
 importのrevision、binding/stage導出、容量の13図をMermaid原本へまとめた。導入の3図も同じ原本をincludeする。
 生成・配布・固定版・ライセンスと更新方法は[文書ガイド](../guides/html-docs.md)を参照する。
 
+`renderer-6vt`で生成HTMLを`build/docs/`、配布ZIPを`build/rendergraph-html.zip`へ分離した。
+mdBook設定、検査の既定値、CIの検査・artifact保存先、利用文書とGit ignoreを同じ配置へ更新した。
+新しい配置で17ページのローカル参照検査と全32箇所のMermaid実描画検査、ZIPの完全性確認が成功した。
+旧配置の文書生成物だけを除去し、Cargoの出力は保持した。
+
 Windows x64で固定CLI配布物のSHA-256照合、npm lockfileの導入、表示用bundleの再生成一致、
 生成済み全17ページのローカルリンク・fragment・asset検査が成功した。
 隔離Chromiumで13図の32表示箇所（導入3＋図集13＋全章印刷16）を描画し、構文・SVG title/description、
