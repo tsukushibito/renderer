@@ -110,8 +110,8 @@ impl ImageDesc {
             array_layers: 1,
         }
     }
-    /// Scene-linear floating-point color, packed as four IEEE 754 binary16
-    /// components per texel in little-endian component order.
+    /// Scene-linear floating-point color, packed as four little-endian IEEE 754
+    /// binary16 components per texel in RGBA order.
     pub fn rgba16_float(width: u32, height: u32) -> Self {
         Self {
             format: ImageFormat::Rgba16Float,
