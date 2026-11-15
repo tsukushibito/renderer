@@ -5,6 +5,40 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## attachment配列と画像subresourceのCPU計画
+
+`renderer-7ft.2.2.3`、実装・統合確認点`f290cef`。
+`ImageDesc`のmip/layer数と同じ論理画像に属する単一subresource View、
+描画命令なしの`attachment_pass`のcolor配列/optional depthを追加した。
+短命sliceの所有、各mip/layerの初期化・producer・RAW/WAR/WAW・culling・全域export、
+Load/Store/Discardとowner/extent/format/alias/容量失敗後の再利用を確認した。
+旧`clear_attachments`入口は置換し、固定mesh Rasterは従来の形だけを扱う。
+CPUで扱える構成とnative実行範囲は[Graph契約](../design/rendergraph.md#画像subresourceとowned-attachment配列)に従う。
+
+Windows x64 / Rust 1.99.0で、公開API8件・所有/限定lowering2件・資源契約4件の新規回帰を含め、
+CPU default111件、`vulkan,d3d12`のrelease製品245件・追加検証/graph診断あり258件、各Rustdoc1件が成功した。
+fmtと全target Clippyは`presentation,d3d12,memory-profiling`の追加検証/graph診断有無で成功した。
+新しいCPUメモリ窓は24変動frame、3mip×2layer、color-only/depth-only/MRT、Load/Store、
+clear値変更、未compile取消、culled枝、3plan保持、全owner返却とslot resetまでを含み、
+製品releaseのRust alloc/alloc_zeroed/realloc/deallocと要求byteは全0だった。
+従来のsnapshotとowned Computeの窓も全0を維持し、追加検証ありは別baselineで確認した。
+準備境界のattachment arenaによる保持容量は増える。counterゼロから常駐量・時間性能の改善は推定しない。
+
+RTX 3060 / driver 610.88で、Vulkan strictの正しさゲート52件（WSI込み）が成功した。
+新しいnative境界テストはstrict/製品で別実行し、単一画像cacheと同じbase extentを持つmulti画像の取得・準備拒否、
+liveなcolor-only/depth-only/MRT拒否、culled multi枝の非取得、従来clearの赤色64 byteを確認した。
+Engineの製品48frameとWSIの製品18source/36present・18readbackも再受入し、RendererのRust4event、
+VMA host3event、Resetを除くnative作成/解放8eventは全0だった。WSIの同期的なcaller要求は別rowに保持する。
+二API共有Graphはstrict/製品とも10pass・308 byteが全一致した。
+strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終native所有者解放後まで警告/error等ゼロを要求した。
+製品は追加検証・専用診断を除外してnative Requested Disabledとし、外部layer注入の不存在証明にはしない。
+
+native画像は今も1mip/1layerのみで、新attachmentのloweringは従来の1 RGBA8＋D32・両方Clear/Storeだけである。
+一般owned Raster・graphics Program/PSO、複数subresourceを覆うViewとnative実行、Bistro描画は後続に残る。
+同期/寿命/validation配置/shader信頼境界の新たな例外はない。Linux/別GPU・driverの実GPU、長時間耐久、
+実native OOM/loss、時間性能は未確認。shader/生成bindingsは無変更のため再生成Verifyは未実行とした。
+実行コマンド・生counter・native境界の結果は[機械可読記録](frame-memory.json)の`attachment_subresource_cpu`にある。
+
 ## 管理下buffer Computeのowned計画
 
 `renderer-7ft.2.2.2`、実装・統合確認点`65893fa`。
@@ -12,7 +46,7 @@
 manifest順の論理buffer descriptorを準備済み領域へ所有する。
 shader実footprintを別契約として保持し、32-byte descriptorでも読書き・初期化は先頭16 byteだけに限定した。
 所有・保証境界・制限は[Graph契約](../design/rendergraph.md#管理下buffer-computeのowned計画)に従う。
-一般Computeのnative実行、native Program/Bindingsのimport/保持、画像/MRT/subresource、一般Rasterは未実装のままである。
+一般Computeのnative実行、native Program/Bindingsのimport/保持、MRT/subresourceのnative実行、一般Rasterは未実装のままである。
 
 Windows x64 / Rust 1.99.0で、公開API8件と内部契約2件の新規回帰を含め、
 CPU default97件、`vulkan,d3d12`のrelease製品231件・追加検証/graph診断あり244件、各Rustdoc1件が成功した。
