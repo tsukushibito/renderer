@@ -326,6 +326,18 @@ source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/fo
 
 ## 管理下資源Programの作成と受入
 
+Graphのowned構成は、SDKやGPUを使わず次の例で確認できる。
+
+```powershell
+cargo run --locked -p renderer --example graph_composition
+cargo test --locked -p renderer --test graph_shader_bindings
+```
+
+例は利用側の関数に二段のsampled Rasterと中間画像を隠し、出力handleだけを返す。
+短命draw/binding配列をGraphが所有し、用途とVertex/Fragment stageを実Programから導く。
+これはCPU計画の例で、一般native graphics/dispatch実行やBloom処理の受入ではない。
+現在の範囲と保証境界は[Graph設計](../design/rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
+
 `renderer-7ft.2.1.2`の公開入口は`program::ManagedProgram::uniform_readback()`と
 両runtimeの`create_program`、`create_managed_buffer`、`create_bindings`である。
 `.2.1.4`は`ManagedProgram::sampled_readback()`と、`create_managed_image`、

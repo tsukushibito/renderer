@@ -294,10 +294,10 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
 `.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
-一般owned passとの接続、他format/mip/layer/filter、任意shader取込は後続へ残す。
-`.2.2.2`の`Graph::dispatch`は管理下buffer assetの論理CPU計画までを接続する。
+一般owned passのnative実行、他format/mip/layer/filter、任意shader取込は後続へ残す。
+`.2.2.5`の`Graph::dispatch`は管理下buffer・sampled assetの論理CPU計画を接続する。各drawの型付きbindingと共に、manifest由来のVertex/Fragment/Compute stageと実footprintを保持する。新しい`textured_mesh()`はVS UniformとFS sampled画像/samplerのCPU計画を扱い、native PSOへは未接続のため取得前に拒否する。
 native Program/Bindingsを実行する経路は未実装で、live dispatchは物理資源の取得前に拒否する。
-culled dispatchだけを含む枝は除去できる。Uniformの用途はCompute/UNIFORM_READへ対応づけるが、
+culledな未対応枝は除去できる。Uniform/storage/sampled用途は保持した実shader stageと対応するaccessへ具体化し、Vertex/Index fetchはそれぞれ入力stageを使うが、
 この対応表を一般dispatchのnative実行対応とみなさない。
 
 safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`storage_readback()`、
