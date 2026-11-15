@@ -312,6 +312,14 @@ impl VulkanEngine {
     pub fn runtime_mut(&mut self) -> &mut VulkanRuntime {
         &mut self.runtime
     }
+
+    /// Release asset inputs retained by idle Graph backing at an explicit
+    /// asset-change or maintenance boundary. Call this before collecting retired
+    /// CPU mesh versions. Recorded, GPU and canonical content owners stay pinned.
+    pub fn release_idle_inputs(&mut self) -> usize {
+        self.graph_pool.release_idle() + self.upload_graphs.release_idle()
+    }
+
     pub fn render_snapshot(
         &mut self,
         snapshot: &FrameSnapshot,

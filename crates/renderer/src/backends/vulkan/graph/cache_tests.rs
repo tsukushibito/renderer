@@ -33,12 +33,12 @@ fn real_gpu(capacity: usize, slots: usize, test: impl FnOnce(&mut VulkanRuntime)
 }
 
 fn image_plan(size: u32, value: u8) -> (CompiledGraph, ImageHandle, PassHandle) {
-    let mut graph = Graph::new();
+    let mut graph = Graph::test_new();
     let image = graph
         .image("cached image", ImageDesc::rgba8(size, size))
         .unwrap();
     graph
-        .upload_image("upload", image, vec![value; (size * size * 4) as usize])
+        .upload_image("upload", image, &vec![value; (size * size * 4) as usize])
         .unwrap();
     let read = graph.readback_image("read", image).unwrap();
     graph.export_image(image).unwrap();

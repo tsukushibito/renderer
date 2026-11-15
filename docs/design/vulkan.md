@@ -455,10 +455,13 @@ working setを保持する。上限時だけ、同じ再利用条件を満たす
 登録中、記録・pendingのleaseが残る資源、世代上限のentryは置換しない。候補がなければ
 内部で待機せず容量不足を返す。失敗した準備を受理済み利用として新しく扱わない。
 
-再利用候補はdescriptor別のindex集合と`(serial, index)`の退避順で索引化する。
+再利用候補はregistry容量分を準備したrecord配列と、利用可能なindexだけの整列配列で保持する。
 登録中やlease保持中のentryを候補に残して全資源を毎回走査しない。
-nativeの外部参照はleaseを通し、解放通知をentryごとに集約して取得時に候補へ戻す。
+nativeの外部参照はleaseを通し、解放通知を準備済みbitmapとindex queueでentryごとに集約する。
+取得時には通知indexだけを消費して候補へ戻し、bitmap全体の反復走査をしない。
 通知を消費した時点でも登録・世代・参照数を確認する。候補の選択だけでは旧entryを削除しない。
+木nodeの確保/解放を避ける代わりに、候補のdescriptor一致/oldest選択は利用可能候補数に比例する。
+通知queueを含むmetadata容量を初期化で予約し、時間性能の改善は未測定として扱う。
 
 再利用は旧内容の初期化状態とCPU provenanceを消す一方、実際のlayout・access・writer scopeは保持する。
 新しいnative資源とViewの作成・命名がすべて成功してから置換し、失敗時には既存entryのallocation・
@@ -482,14 +485,20 @@ VMAは空blockを保持し得るので、解放数や論理byte減少をprocess 
 上位のmesh常駐には別に件数・論理byte予算を設ける。常駐解除後のidle物理cacheやpending参照は
 その常駐予算とは寿命が異なるため、この値をDeviceの総VRAM上限と説明しない。
 
-`ExecutionPool`はCommandPool・一次CommandBuffer・Fenceの組を上限付きで遅延作成する。
+`ExecutionPool`は初期化で指定した全枠のCommandPool・一次CommandBuffer・Fenceと返却配列を準備する。
 予約を先に取得でき、空き不足は待たずに返す。待機・再試行は呼び出し元が選ぶ。
 未投入キャンセルまたは実Fence完了後にpoolとFenceをresetし、成功した枠だけを再利用する。
-reset失敗やDevice停止・lossでは再貸出しない。
+reset失敗やDevice停止・lossでは再貸出しない。通常予約で失った枠を暗黙に再作成しない。
 貸出中のleaseがpool状態を保持し、idle資源からpoolへの循環参照は作らない。
 
 `TransferPool`はUpload／Readback各1本の固定容量bufferを共有する。
-内部の領域配置・分割・結合はVMA Virtual allocatorへ任せ、Rendererはleaseの寿命を管理する。
+実buffer/allocationの所有はVMAへ任せ、内部領域は準備済みfree-range配列で配置・分割・結合する。
+`RuntimeConfig::staging_ranges`は同時range lease数の上限（既定256）で、byte容量と独立に不足を返す。
+N個のlive rangeが作る空隙は最大N+1個であり、返却前に隣接空隙を結合して一時的な配列増設も避ける。
+従来のVMA Virtual allocatorはmetadata nodeの成長を持つため、通常frameのhost確保ゼロ目標に対し、
+準備済み配列で上限を保証できる方式へ変更した。代案はVMA側のhost metadata poolを独立に準備・検証する方式。
+自前の範囲管理に伴う整列/結合の不具合と線形探索の費用がリスクであり、
+alignment・byte/range容量・分割/結合とGPU/CPU leaseの回帰で正しさを確認し、速度優位は主張しない。
 バッチ専用bufferより余剰容量を共有しやすくする一方、GPU完了とCPU利用終了を区別して回収する。
 
 容量はCPU-addressableな非ゼロ値で、`max(4, nonCoherentAtomSize)`の倍数を要求する。

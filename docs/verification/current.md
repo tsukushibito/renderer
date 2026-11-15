@@ -7,6 +7,20 @@
 
 ## 通常フレームのメモリ規約と現行実装
 
+`renderer-dzz`の実装を進行中で、ゼロ達成は未証明である。
+独立`memory-profiling`とCPU frame lifecycle harnessを追加した。
+release/追加検証なしで12frame warm-up後、24frameの入力/draw数/pass構成を変え、3frame分のCPU owner保持から全返却まで測定した。
+alloc/alloc_zeroed/realloc/deallocは2,502/24/62/2,526回であり、現行経路は明確に未達である。
+GPU未実行のこのcaseのnative/VMA eventゼロは、それらの観測/ゼロ達成の証拠には使わない。
+fullphase GPU・readback・present・capacity/cancel受入と、共通Graph/Engine・両backendのpool化を接続中である。
+[機械可読の基準値](frame-memory.json)と[再実行手順](../guides/development.md#通常フレームのメモリ計測)を参照する。
+Vulkanは実行枠の事前作成、stagingの固定range metadata、recycle/cacheの予約済み配列、presentのscalar状態更新を先行実装した。
+この一部の変更だけで全通常フレームのゼロを達成したとは扱わない。
+先行範囲の統合で開発release CPU207件/製品release CPU194件と各Rustdoc1件、全target Clippyが成功した。
+適用したstrict Vulkan実GPU51件と製品mesh/WSI各1件で内容・同期・寿命の回帰を確認した。
+最初のstrict runの2件は旧lazy作成数のassertだけが失敗し、全枠事前作成数と1/2枠の実lease数を確認する形へ更新後、
+当該2件が成功した。これらはnative機能の回帰であり、全フレームゼロ計測の成功ではない。
+
 `renderer-gsw`。[確保・解放ゼロの設計目標](../design/implementation-policy.md#steady-state-memory)を
 AGENTSと既存実装方針へ明文化した。準備済み上限内のGraph構築から完了処理/結果返却までを対象にし、
 事前領域内の再利用、明示した準備・変更境界、容量不足、GPU/present/CPU寿命と診断の計測範囲を定めた。
@@ -17,7 +31,7 @@ deallocや通常フレーム全体、native作成/破棄ゼロの確認ではな
 全accessの一時Vec整理は引き続き`renderer-7ft.2.2`へ残し、同課題以降の設計/実装に新規約を適用する。
 通常フレーム全体の計測とゼロ目標への移行は、同課題に依存する`renderer-dzz`で追跡する。
 変更文書5件の相対link/anchor 140件とdiff確認が成功し、規約間整合の独立レビューに未解決指摘はない。
-CPU/GPU試験のローカル再実行は対象外とした。
+`renderer-gsw`の規約変更時はCPU/GPU試験のローカル再実行を対象外とした。
 
 ## Graph・表示・descriptorの効率整理
 

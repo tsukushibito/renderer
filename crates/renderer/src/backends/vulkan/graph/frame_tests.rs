@@ -27,12 +27,12 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
         crate::backends::vulkan::assert_real_validation(&diagnostics);
 
         let bytes = [17, 29, 83, 211].repeat(4);
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let buffer = graph
             .buffer("frame-buffer", BufferDesc { size: 16 })
             .unwrap();
         graph
-            .upload_buffer("frame-upload", buffer, 0, bytes.clone())
+            .upload_buffer("frame-upload", buffer, 0, &bytes)
             .unwrap();
         let read = graph.readback_buffer("frame-read", buffer, 0, 16).unwrap();
         graph.export_buffer(buffer).unwrap();
@@ -41,7 +41,7 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
         let first = runtime.submit_frame(&plan).unwrap();
         let first_id = first.id();
         let first_key = first.export_buffer(buffer).unwrap().key();
-        let mut foreign = Graph::new();
+        let mut foreign = Graph::test_new();
         let foreign_buffer = foreign.buffer("foreign", BufferDesc { size: 16 }).unwrap();
         assert_eq!(
             first.export_buffer(foreign_buffer).unwrap_err().kind(),
@@ -111,7 +111,7 @@ fn vulkan_frames_metadata_drop_capacity_poll_and_explicit_drain() {
         assert_eq!(runtime.stats().readback_live_ranges, 0);
         assert!(runtime.poll_frame().unwrap().is_none());
         assert!(runtime.drain_frames(Duration::ZERO).unwrap());
-        drop((complete, plan, graph, runtime));
+        drop((complete, plan, runtime));
         let report = diagnostics.snapshot();
         assert!(
             report.is_clean(),
@@ -142,12 +142,12 @@ fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
         crate::backends::vulkan::assert_real_validation(&diagnostics);
 
         let bytes = [7, 43, 101, 239].repeat(16);
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let buffer = graph
             .buffer("wait frame buffer", BufferDesc { size: 64 })
             .unwrap();
         graph
-            .upload_buffer("wait frame upload", buffer, 0, bytes.clone())
+            .upload_buffer("wait frame upload", buffer, 0, &bytes)
             .unwrap();
         let read = graph
             .readback_buffer("wait frame readback", buffer, 0, 64)
@@ -188,7 +188,7 @@ fn vulkan_frames_wait_returns_one_result_without_discarding_other_frames() {
                 .unwrap()
                 .is_none()
         );
-        drop((results, graph, plan, runtime));
+        drop((results, plan, runtime));
         let report = diagnostics.snapshot();
         assert!(
             report.is_clean(),
