@@ -1,7 +1,6 @@
 //! Shared executable acceptance scenarios. GPU creation is always explicit.
 
 use std::{
-    collections::HashMap,
     error::Error,
     fmt::Write as _,
     process::Command,
@@ -9,10 +8,13 @@ use std::{
 };
 
 use renderer::{
-    FrameId, GpuTiming, MeshCacheConfig, MeshUploadState, RenderedFrame, RuntimeConfig,
-    ValidationMode, ValidationReport, VulkanEngine, VulkanRuntime,
-    engine::{Draw, Engine, FrameSnapshot, IDENTITY, Material, MeshHandle, View},
-    graph::{ComputeTransform, PassHandle},
+    FrameCapacity, FrameId, GpuTiming, MeshCacheConfig, MeshUploadState, RenderedFrame,
+    ResourceClass, RuntimeConfig, ValidationMode, ValidationReport, VulkanEngine, VulkanRuntime,
+    engine::{
+        Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MeshHandle, SnapshotPool,
+        View,
+    },
+    graph::{ComputeTransform, ImageDesc, PassHandle},
 };
 
 use super::engine_geometry::{grid, rectangle};
@@ -23,6 +25,8 @@ const STAGING_BYTES: u64 = 256 * 1024;
 const IN_FLIGHT: usize = 3;
 const CACHE_MESHES: usize = 4;
 const CACHE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_IMAGE_BYTES: usize = 64 * 64 * 4;
+const MAX_SAMPLES: usize = 3 * 128;
 const BLACK: [u8; 4] = [0, 0, 0, 255];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,7 +52,7 @@ struct ColdUpload {
     completed_us: f64,
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Sample {
     build_us: f64,
     compile_us: f64,
@@ -62,16 +66,22 @@ struct Sample {
     gpu_us: Option<f64>,
 }
 
-struct Expected {
+struct PendingExpected {
+    id: FrameId,
     pass: PassHandle,
-    bytes: Vec<u8>,
     sample: Option<Sample>,
     submitted: Instant,
 }
 
+struct Expected {
+    pending: Option<PendingExpected>,
+    bytes: Vec<u8>,
+}
+
 struct Driver {
     renderer: VulkanEngine,
-    pending: HashMap<FrameId, Expected>,
+    pending: [Expected; IN_FLIGHT],
+    pixels: Vec<u8>,
     samples: Vec<Sample>,
     images_checked: usize,
     max_pending: usize,
@@ -95,6 +105,43 @@ impl Driver {
         if mode == Mode::Benchmark {
             runtime.set_profiling(true)?;
         }
+        // Reserve every scenario's targets before residency acquires import
+        // metadata. Streaming meshes can then change with three frames pending.
+        runtime.prepare_working_set(
+            FrameCapacity {
+                // Keep a loader slot available while three rendered frames
+                // and their results remain pending during mesh streaming.
+                work_slots: IN_FLIGHT + 1,
+                result_slots: IN_FLIGHT + 1,
+                ..Default::default()
+            },
+            &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(64, 64),
+                    count: IN_FLIGHT,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(64, 64),
+                    count: IN_FLIGHT,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(48, 32),
+                    count: 2,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(48, 32),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(32, 32),
+                    count: IN_FLIGHT,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(32, 32),
+                    count: IN_FLIGHT,
+                },
+            ],
+        )?;
         let renderer = VulkanEngine::new(
             runtime,
             MeshCacheConfig {
@@ -102,11 +149,16 @@ impl Driver {
                 max_bytes: CACHE_BYTES,
                 max_upload_submissions: 3,
             },
+            Default::default(),
         )?;
         Ok(Self {
             renderer,
-            pending: HashMap::new(),
-            samples: Vec::new(),
+            pending: std::array::from_fn(|_| Expected {
+                pending: None,
+                bytes: Vec::with_capacity(MAX_IMAGE_BYTES),
+            }),
+            pixels: vec![0; MAX_IMAGE_BYTES],
+            samples: Vec::with_capacity(MAX_SAMPLES),
             images_checked: 0,
             max_pending: 0,
         })
@@ -143,11 +195,11 @@ impl Driver {
     fn enqueue(
         &mut self,
         snapshot: &FrameSnapshot,
-        expected: Vec<u8>,
+        expected: &[u8],
         compute: bool,
         measured: bool,
     ) -> Result<()> {
-        while self.renderer.runtime().pending_frames() >= IN_FLIGHT {
+        while self.pending_count() >= IN_FLIGHT {
             self.wait_one()?;
         }
         let started = Instant::now();
@@ -164,9 +216,9 @@ impl Driver {
                 }
             })?;
         let built = Instant::now();
-        let plan = prepared.graph.compile()?;
+        let plan = prepared.compile()?;
         let compiled = Instant::now();
-        let frame = self.renderer.submit_frame(prepared, &plan)?;
+        let frame = self.renderer.submit_frame(plan)?;
         let submitted = Instant::now();
         self.accept_frame(
             frame,
@@ -184,21 +236,28 @@ impl Driver {
     fn accept_frame(
         &mut self,
         mut frame: RenderedFrame,
-        bytes: Vec<u8>,
+        bytes: &[u8],
         sample: Option<Sample>,
     ) -> Result<()> {
         let pass = frame.readback.ok_or("workload frame is missing readback")?;
-        self.pending.insert(
-            frame.submission.id(),
-            Expected {
-                pass,
-                bytes,
-                sample,
-                submitted: Instant::now(),
-            },
-        );
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err("workload image exceeds prepared CPU pixel capacity".into());
+        }
+        let expected = self
+            .pending
+            .iter_mut()
+            .find(|entry| entry.pending.is_none())
+            .ok_or("workload expected-result slots are full")?;
+        expected.bytes.clear();
+        expected.bytes.extend_from_slice(bytes);
+        expected.pending = Some(PendingExpected {
+            id: frame.submission.id(),
+            pass,
+            sample,
+            submitted: Instant::now(),
+        });
         self.renderer.release_output(&mut frame)?;
-        self.max_pending = self.max_pending.max(self.pending.len());
+        self.max_pending = self.max_pending.max(self.pending_count());
         Ok(())
     }
 
@@ -208,12 +267,19 @@ impl Driver {
             .runtime_mut()
             .wait_frame(BUDGET)?
             .ok_or("frame completion timed out")?;
-        let mut expected = self
+        let expected = self
             .pending
-            .remove(&completed.id())
+            .iter_mut()
+            .find(|entry| {
+                entry
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.id == completed.id())
+            })
             .ok_or("unexpected frame completion")?;
-        if let Some(sample) = &mut expected.sample {
-            sample.observed_latency_us = micros(expected.submitted.elapsed());
+        let pending = expected.pending.as_mut().unwrap();
+        if let Some(sample) = &mut pending.sample {
+            sample.observed_latency_us = micros(pending.submitted.elapsed());
             if let Some(metrics) = completed.result.metrics() {
                 sample.prepare_us = Some(micros(metrics.cpu_prepare));
                 sample.record_us = Some(micros(metrics.cpu_record));
@@ -224,8 +290,13 @@ impl Driver {
                 }
             }
         }
-        let bytes = completed.result.readback(expected.pass)?;
-        if bytes != expected.bytes {
+        let length = completed.result.readback_len(pending.pass)?;
+        if length != expected.bytes.len() || length > self.pixels.len() {
+            return Err("workload readback length differs from its prepared expectation".into());
+        }
+        let bytes = &mut self.pixels[..length];
+        completed.result.readback_into(pending.pass, bytes)?;
+        if &*bytes != expected.bytes.as_slice() {
             let mismatch = bytes.iter().zip(&expected.bytes).position(|(a, b)| a != b);
             return Err(format!(
                 "whole RGBA mismatch at byte {mismatch:?}, lengths {} vs {}",
@@ -234,15 +305,27 @@ impl Driver {
             )
             .into());
         }
+        let pending = expected.pending.take().unwrap();
+        expected.bytes.clear();
         self.images_checked += 1;
-        if let Some(sample) = expected.sample {
+        if let Some(sample) = pending.sample {
+            if self.samples.len() == MAX_SAMPLES {
+                return Err("prepared measurement sample capacity exhausted".into());
+            }
             self.samples.push(sample);
         }
         Ok(())
     }
 
+    fn pending_count(&self) -> usize {
+        self.pending
+            .iter()
+            .filter(|entry| entry.pending.is_some())
+            .count()
+    }
+
     fn drain(&mut self) -> Result<()> {
-        while !self.pending.is_empty() {
+        while self.pending_count() != 0 {
             self.wait_one()?;
         }
         Ok(())
@@ -264,11 +347,13 @@ fn view(width: u32, height: u32) -> View {
 
 fn snapshot(
     assets: &Engine,
+    snapshots: &SnapshotPool,
     mesh: MeshHandle,
     material: renderer::engine::MaterialHandle,
     view: &View,
 ) -> Result<FrameSnapshot> {
     Ok(assets.snapshot(
+        snapshots,
         view,
         &[Draw {
             mesh,
@@ -329,7 +414,12 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let mut driver = Driver::new(mode)?;
     let monitor = driver.renderer.runtime().validation_monitor();
     let device = driver.renderer.runtime().device_info();
-    let mut assets = Engine::new(64, 8)?;
+    let mut assets = Engine::new(EngineCapacity {
+        meshes: 64,
+        materials: 8,
+        retired_mesh_versions: 64,
+    })?;
+    let snapshots = SnapshotPool::new(2, 8)?;
     let red = assets.create_material(Material {
         tint: [1.0, 0.0, 0.0, 1.0],
     })?;
@@ -349,6 +439,7 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     drop(secondary_grid.vertices);
     drop(secondary_grid.indices);
     let both = assets.snapshot(
+        &snapshots,
         &view(64, 64),
         &[
             Draw {
@@ -370,29 +461,30 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     {
         return Err("large workload did not exercise split upload".into());
     }
-    let captured = snapshot(&assets, mesh, red, &view(64, 64))?;
+    let captured = snapshot(&assets, &snapshots, mesh, red, &view(64, 64))?;
     let runs = if mode == Mode::Benchmark { 3 } else { 1 };
     let warmup = if mode == Mode::Benchmark { 32 } else { 3 };
     let frames = if mode == Mode::Benchmark { 128 } else { 3 };
     let expected = rectangle(64, 64, [8, 8, 56, 56], [255, 0, 0, 255], BLACK);
     for _ in 0..runs {
         for _ in 0..warmup {
-            driver.enqueue(&captured, expected.clone(), false, false)?;
+            driver.enqueue(&captured, &expected, false, false)?;
         }
         driver.drain()?;
         for _ in 0..frames {
-            driver.enqueue(&captured, expected.clone(), false, true)?;
+            driver.enqueue(&captured, &expected, false, true)?;
         }
         driver.drain()?;
     }
 
     // Both Views are built before either is accepted. They share the same
     // immutable resident geometry, but have different transforms and consumers.
-    let a = snapshot(&assets, mesh, red, &view(64, 64))?;
+    let a = snapshot(&assets, &snapshots, mesh, red, &view(64, 64))?;
     let mut transform = IDENTITY;
     transform[0][0] = 0.5;
     transform[3][0] = 0.125;
     let b = assets.snapshot(
+        &snapshots,
         &view(48, 32),
         &[Draw {
             mesh,
@@ -413,49 +505,41 @@ pub(super) fn run(mode: Mode) -> Result<String> {
         )?;
         Ok(output)
     })?;
-    let plan_a = pa.graph.compile()?;
-    let plan_b = pb.graph.compile()?;
-    let fa = driver.renderer.submit_frame(pa, &plan_a)?;
-    driver.accept_frame(fa, expected.clone(), None)?;
-    let fb = driver.renderer.submit_frame(pb, &plan_b)?;
+    let plan_a = pa.compile()?;
+    let plan_b = pb.compile()?;
+    let fa = driver.renderer.submit_frame(plan_a)?;
+    driver.accept_frame(fa, &expected, None)?;
+    let fb = driver.renderer.submit_frame(plan_b)?;
     driver.accept_frame(
         fb,
-        rectangle(48, 32, [18, 4, 36, 28], [255, 255, 0, 255], [255; 4]),
+        &rectangle(48, 32, [18, 4, 36, 28], [255, 255, 0, 255], [255; 4]),
         None,
     )?;
     driver.drain()?;
 
     // Keep every CPU mesh alive while revisiting a working set much larger than
     // GPU residency. The first three outputs remain pending across CPU mutation.
-    let mut stream = Vec::new();
+    let stream_red = rectangle(32, 32, [4, 4, 28, 28], [255, 0, 0, 255], BLACK);
+    let stream_blue = rectangle(32, 32, [4, 4, 28, 28], [0, 0, 255, 255], BLACK);
+    let mut stream = Vec::with_capacity(32);
     for _ in 0..32 {
         stream.push(assets.create_mesh(grid(8).mesh)?);
     }
     for handle in stream.iter().take(3) {
-        let frame = snapshot(&assets, *handle, red, &view(32, 32))?;
+        let frame = snapshot(&assets, &snapshots, *handle, red, &view(32, 32))?;
         driver.ready(&frame)?;
-        driver.enqueue(
-            &frame,
-            rectangle(32, 32, [4, 4, 28, 28], [255, 0, 0, 255], BLACK),
-            false,
-            false,
-        )?;
+        driver.enqueue(&frame, &stream_red, false, false)?;
     }
-    if driver.pending.len() != IN_FLIGHT {
+    if driver.pending_count() != IN_FLIGHT {
         return Err("three in-flight frame ownership was not exercised".into());
     }
     assets.update_mesh(stream[0], grid(12).mesh)?;
     assets.delete_mesh(stream[1])?;
     stream[1] = assets.create_mesh(grid(10).mesh)?;
     for &handle in &stream {
-        let frame = snapshot(&assets, handle, red, &view(32, 32))?;
+        let frame = snapshot(&assets, &snapshots, handle, red, &view(32, 32))?;
         driver.ready(&frame)?;
-        driver.enqueue(
-            &frame,
-            rectangle(32, 32, [4, 4, 28, 28], [255, 0, 0, 255], BLACK),
-            false,
-            false,
-        )?;
+        driver.enqueue(&frame, &stream_red, false, false)?;
         if driver.renderer.runtime().stats().registered_resources > CACHE_MESHES * 2 {
             return Err("mesh registrations exceeded configured bounded residency".into());
         }
@@ -463,14 +547,9 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     driver.drain()?;
     // Explicit unload must preserve CPU assets and permit later re-upload.
     driver.renderer.unload_mesh(stream[0])?;
-    let replay = snapshot(&assets, stream[0], blue, &view(32, 32))?;
+    let replay = snapshot(&assets, &snapshots, stream[0], blue, &view(32, 32))?;
     driver.ready(&replay)?;
-    driver.enqueue(
-        &replay,
-        rectangle(32, 32, [4, 4, 28, 28], [0, 0, 255, 255], BLACK),
-        false,
-        false,
-    )?;
+    driver.enqueue(&replay, &stream_blue, false, false)?;
     driver.drain()?;
 
     // The same owned snapshot survives CPU deletion and remains an input to a
@@ -480,12 +559,7 @@ pub(super) fn run(mode: Mode) -> Result<String> {
     let mut second = Driver::new(mode)?;
     let second_monitor = second.renderer.runtime().validation_monitor();
     second.ready(&replay)?;
-    second.enqueue(
-        &replay,
-        rectangle(32, 32, [4, 4, 28, 28], [0, 0, 255, 255], BLACK),
-        false,
-        false,
-    )?;
+    second.enqueue(&replay, &stream_blue, false, false)?;
     second.drain()?;
     drop(second);
     let second_report = second_monitor.report();
