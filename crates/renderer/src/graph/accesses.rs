@@ -74,23 +74,35 @@ pub(super) fn conflicting_accesses_in<T>(
     view: impl Fn(&T) -> (usize, Range<u64>, bool),
     sorted: &mut Vec<IndexedAccess>,
 ) -> Result<Option<(usize, usize)>, ()> {
+    conflicting_ranges_in(|| accesses.iter().map(&view), sorted)
+}
+
+/// The factory must replay the same immutable declarations in the same order.
+/// Sharing the normalized iterator keeps builder and development diagnostics on
+/// one overlap algorithm without projecting their inputs into another array.
+pub(super) fn conflicting_ranges_in<I>(
+    accesses: impl Fn() -> I,
+    sorted: &mut Vec<IndexedAccess>,
+) -> Result<Option<(usize, usize)>, ()>
+where
+    I: Iterator<Item = (usize, Range<u64>, bool)>,
+{
     sorted.clear();
-    if !accesses.iter().any(|access| view(access).2) {
+    if !accesses().any(|(_, _, write)| write) {
         return Ok(None);
     }
-    if accesses.len() > sorted.capacity() {
-        return Err(());
-    }
-    sorted.extend(accesses.iter().enumerate().map(|(index, access)| {
-        let (resource, range, write) = view(access);
-        IndexedAccess {
+    for (index, (resource, range, write)) in accesses().enumerate() {
+        if sorted.len() == sorted.capacity() {
+            return Err(());
+        }
+        sorted.push(IndexedAccess {
             resource,
             range,
             write,
             index,
             prefix: Prefix::default(),
-        }
-    }));
+        });
+    }
     sorted.sort_unstable_by_key(|access| {
         (
             access.resource,
@@ -115,8 +127,7 @@ pub(super) fn conflicting_accesses_in<T>(
         );
         access.prefix = prefix;
     }
-    for (left, access) in accesses.iter().enumerate() {
-        let (resource, range, write) = view(access);
+    for (left, (resource, range, write)) in accesses().enumerate() {
         let end = sorted.partition_point(|other| {
             other.resource < resource
                 || (other.resource == resource && other.range.start < range.end)
@@ -128,16 +139,15 @@ pub(super) fn conflicting_accesses_in<T>(
             // The first original access with a conflict has no conflicting
             // predecessor: that predecessor would already have found this one.
             // Scan only its suffix to select the earliest second declaration.
-            return Ok(accesses[left + 1..]
-                .iter()
-                .position(|other| {
-                    let (other_resource, other_range, other_write) = view(other);
-                    resource == other_resource
+            return Ok(accesses().enumerate().skip(left + 1).find_map(
+                |(right, (other_resource, other_range, other_write))| {
+                    (resource == other_resource
                         && range.start < other_range.end
                         && other_range.start < range.end
-                        && (write || other_write)
-                })
-                .map(|offset| (left, left + 1 + offset)));
+                        && (write || other_write))
+                        .then_some((left, right))
+                },
+            ));
         }
     }
     Ok(None)
@@ -164,6 +174,37 @@ mod tests {
 
     fn view(access: &Access) -> (usize, Range<u64>, bool) {
         (access.resource, access.range.clone(), access.write)
+    }
+
+    #[test]
+    fn replayed_owned_ranges_preserve_conflicts_and_refuse_scratch_growth() {
+        let declarations = || {
+            (0..3).map(|index| {
+                let range = if index == 2 {
+                    2..6
+                } else {
+                    index * 4..index * 4 + 4
+                };
+                (0, range, index == 2)
+            })
+        };
+        let mut short = Vec::with_capacity(2);
+        let pointer = short.as_ptr();
+        assert_eq!(conflicting_ranges_in(declarations, &mut short), Err(()));
+        assert_eq!(short.as_ptr(), pointer);
+        assert_eq!(short.capacity(), 2);
+
+        let mut prepared = Vec::with_capacity(3);
+        assert_eq!(
+            conflicting_ranges_in(declarations, &mut prepared),
+            Ok(Some((0, 2))),
+        );
+        let mut empty = Vec::new();
+        assert_eq!(
+            conflicting_ranges_in(|| (0..100).map(|_| (0, 0..8, false)), &mut empty),
+            Ok(None),
+        );
+        assert_eq!(empty.capacity(), 0);
     }
 
     #[test]

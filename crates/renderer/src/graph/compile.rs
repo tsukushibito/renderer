@@ -139,8 +139,10 @@ impl analysis::Input for Input<'_> {
     fn pass_side_effect(&self, p: usize) -> bool {
         self.passes[p].side_effect
     }
-    fn pass_dependencies(&self, p: usize) -> &[usize] {
-        &self.dependencies[self.passes[p].dependencies.clone()]
+    fn pass_dependencies(&self, p: usize) -> impl Iterator<Item = usize> {
+        self.dependencies[self.passes[p].dependencies.clone()]
+            .iter()
+            .copied()
     }
     fn pass_accesses(&self, p: usize) -> impl Iterator<Item = analysis::Access> {
         self.accesses[self.passes[p].accesses.clone()]
