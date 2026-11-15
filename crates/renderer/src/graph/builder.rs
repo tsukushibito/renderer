@@ -164,6 +164,8 @@ impl Graph {
             ))
         })
     }
+    /// Upload every texel of a single-mip, single-layer RGBA8 or RGBA16F image.
+    /// Bytes use tightly packed rows and components in the format's order.
     pub fn upload_image(
         &mut self,
         name: &str,
@@ -218,6 +220,8 @@ impl Graph {
             ))
         })
     }
+    /// Read every texel of a single-mip, single-layer image, including D32.
+    /// Results use tightly packed rows in the image's native component format.
     pub fn readback_image(
         &mut self,
         name: &str,
