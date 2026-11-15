@@ -31,6 +31,10 @@ impl std::fmt::Debug for CompiledGraph {
     }
 }
 impl CompiledGraph {
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        allow(dead_code, reason = "used by the Vulkan engine")
+    )]
     pub(crate) fn has_export(&self, resource: usize) -> bool {
         self.exported.get(resource).copied().unwrap_or(false)
     }
@@ -111,13 +115,7 @@ struct Input<'a> {
     accesses: &'a [ResourceAccess],
     dependencies: &'a [usize],
     initial: &'a [Range<u64>],
-    names: &'a [u8],
     exports: &'a [usize],
-}
-impl Input<'_> {
-    fn name(&self, range: &Range<usize>) -> &str {
-        std::str::from_utf8(&self.names[range.clone()]).expect("stored UTF-8")
-    }
 }
 impl analysis::Input for Input<'_> {
     fn resource_count(&self) -> usize {
@@ -132,17 +130,11 @@ impl analysis::Input for Input<'_> {
     fn resource_external(&self, r: usize) -> bool {
         self.resources[r].import.is_some()
     }
-    fn resource_name(&self, r: usize) -> &str {
-        self.name(&self.resources[r].name)
-    }
     fn pass_count(&self) -> usize {
         self.passes.len()
     }
     fn access_count(&self) -> usize {
         self.accesses.len()
-    }
-    fn pass_name(&self, p: usize) -> &str {
-        self.name(&self.passes[p].name)
     }
     fn pass_side_effect(&self, p: usize) -> bool {
         self.passes[p].side_effect
@@ -179,7 +171,6 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
             accesses: &data.accesses,
             dependencies: &data.dependencies,
             initial: &data.initial_ranges,
-            names: &data.names,
             exports: &data.exports,
         };
         analysis::analyze(&input, &mut data.workspace, &mut data.output)
@@ -189,13 +180,41 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
             analysis::ErrorKind::Capacity(_) => return Err(capacity_error()),
             analysis::ErrorKind::UninitializedRead => GraphErrorKind::UninitializedRead,
             analysis::ErrorKind::DependencyCycle => GraphErrorKind::DependencyCycle,
+            #[cfg(feature = "development-validation")]
             _ => GraphErrorKind::InvalidInput,
         };
         let message = match error.kind {
             analysis::ErrorKind::UninitializedRead => {
-                format!("uninitialized resource contents at {:?}", error.range)
+                let resource = error.resource.expect("hole identifies its resource");
+                let range = error.range.as_ref().expect("hole identifies its range");
+                if let Some(pass) = error.pass {
+                    format!(
+                        "pass {:?} reads uninitialized resource {:?} at {}..{}",
+                        graph.pass_name(pass),
+                        graph.resource_name(resource),
+                        range.start,
+                        range.end
+                    )
+                } else {
+                    format!(
+                        "export reads uninitialized resource {:?} at {}..{}",
+                        graph.resource_name(resource),
+                        range.start,
+                        range.end
+                    )
+                }
             }
-            analysis::ErrorKind::DependencyCycle => String::from("dependency cycle"),
+            analysis::ErrorKind::DependencyCycle => {
+                use std::fmt::Write;
+                let mut message = String::from("dependency cycle: ");
+                for (position, &pass) in graph.output.cycle.iter().enumerate() {
+                    if position != 0 {
+                        message.push_str(" -> ");
+                    }
+                    write!(message, "{:?}", graph.pass_name(pass)).expect("String writing");
+                }
+                message
+            }
             _ => String::from("invalid Graph declaration"),
         };
         let mut reported = GraphError::new(kind, message);
