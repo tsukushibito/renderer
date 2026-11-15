@@ -7,15 +7,16 @@ use renderer::graph::{
 use std::{error::Error, io::Write, time::Duration};
 
 use renderer::{
-    RuntimeConfig, VulkanRuntime,
-    graph::{BufferDesc, ComputeTransform, Graph, ImageDesc},
+    FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime,
+    graph::{BufferDesc, ComputeTransform, GraphCapacity, GraphPool, ImageDesc},
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
     let output = std::env::args_os()
         .nth(1)
         .ok_or("pass an output PPM path")?;
-    let mut graph = Graph::new();
+    let mut graph_pool = GraphPool::new(GraphCapacity::default(), 1)?;
+    let mut graph = graph_pool.begin()?;
     // Near red triangle is submitted before the overlapping far green triangle.
     // Conventional Z and LESS depth testing keep the near triangle visible.
     let mut vertices = Vec::new();
@@ -33,20 +34,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .into_iter()
         .flat_map(u32::to_ne_bytes)
         .collect::<Vec<_>>();
-    let vertex_buffer = graph.buffer(
-        "mesh vertices",
-        BufferDesc {
-            size: vertices.len() as u64,
-        },
-    )?;
-    let index_buffer = graph.buffer(
-        "mesh indices",
-        BufferDesc {
-            size: indices.len() as u64,
-        },
-    )?;
-    graph.upload_buffer("upload vertices", vertex_buffer, 0, vertices)?;
-    graph.upload_buffer("upload indices", index_buffer, 0, indices)?;
+    let vertex_desc = BufferDesc {
+        size: vertices.len() as u64,
+    };
+    let index_desc = BufferDesc {
+        size: indices.len() as u64,
+    };
+    let vertex_buffer = graph.buffer("mesh vertices", vertex_desc)?;
+    let index_buffer = graph.buffer("mesh indices", index_desc)?;
+    graph.upload_buffer("upload vertices", vertex_buffer, 0, &vertices)?;
+    graph.upload_buffer("upload indices", index_buffer, 0, &indices)?;
     let desc = ImageDesc::rgba8(128, 96);
     let color = graph.image("mesh color", desc)?;
     let depth = graph.image("mesh depth", ImageDesc::depth32(desc.width, desc.height))?;
@@ -86,16 +83,39 @@ fn main() -> Result<(), Box<dyn Error>> {
     let readback = graph.readback_image("final readback", final_image)?;
     // This valid branch has no observable output and must be culled.
     let unused = graph.image("unused image", ImageDesc::rgba8(1, 1))?;
-    graph.upload_image("unused upload", unused, vec![1, 2, 3, 255])?;
+    graph.upload_image("unused upload", unused, &[1, 2, 3, 255])?;
     let plan = graph.compile()?;
     #[cfg(feature = "graph-diagnostics")]
     println!("{}", plan.dump());
     let mut runtime = VulkanRuntime::new(RuntimeConfig::default())?;
+    runtime.prepare_working_set(
+        FrameCapacity {
+            work_slots: 1,
+            result_slots: 1,
+            ..Default::default()
+        },
+        &[
+            ResourceClass::Buffer {
+                desc: vertex_desc,
+                count: 1,
+            },
+            ResourceClass::Buffer {
+                desc: index_desc,
+                count: 1,
+            },
+            ResourceClass::Image { desc, count: 4 },
+            ResourceClass::Image {
+                desc: ImageDesc::depth32(desc.width, desc.height),
+                count: 1,
+            },
+        ],
+    )?;
+    let mut rgba = vec![0; desc.width as usize * desc.height as usize * 4];
     let mut submission = runtime.submit(&plan)?;
     let mut result = submission
         .wait(Duration::from_secs(10))?
         .ok_or("GPU completion timed out")?;
-    let rgba = result.readback(readback)?;
+    result.readback_into(readback, &mut rgba)?;
     let center = (desc.height as usize / 2 * desc.width as usize + desc.width as usize / 2) * 4;
     if rgba[center..center + 4] != [255, 255, 0, 255] || rgba[..4] != [255, 255, 255, 255] {
         return Err("unexpected mesh/depth/Compute/composite output".into());

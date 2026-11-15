@@ -17,9 +17,14 @@ mod demo {
     #[cfg(feature = "vulkan-diagnostics")]
     use renderer::ValidationMonitor;
     use renderer::{
-        EngineRenderError, MeshCacheConfig, MeshUploadState, PresentOutcome, PresentationConfig,
-        Presenter, RenderedFrame, RuntimeConfig, RuntimeErrorKind, VulkanEngine, VulkanRuntime,
-        engine::{Engine, Material, MaterialHandle, MeshHandle},
+        EngineRenderError, FrameCapacity, MeshCacheConfig, MeshPreparationError, MeshUploadState,
+        PresentOutcome, PresentationConfig, Presenter, RenderedFrame, ResourceClass, RuntimeConfig,
+        RuntimeErrorKind, VulkanEngine, VulkanRuntime,
+        engine::{
+            Engine, EngineCapacity, EngineErrorKind, Material, MaterialHandle, MeshHandle,
+            SnapshotPool,
+        },
+        graph::{GraphErrorKind, ImageDesc},
     };
     use winit::{
         application::ApplicationHandler,
@@ -104,6 +109,7 @@ mod demo {
 
     struct SceneAssets {
         inputs: Engine,
+        snapshots: SnapshotPool,
         mesh: MeshHandle,
         material: MaterialHandle,
     }
@@ -119,6 +125,7 @@ mod demo {
         #[cfg(feature = "vulkan-diagnostics")]
         validation: Option<ValidationMonitor>,
         output: Option<RenderedFrame>,
+        prepared_extent: Option<(u32, u32)>,
         presented: u32,
         resized: bool,
         minimized: bool,
@@ -142,6 +149,7 @@ mod demo {
                 #[cfg(feature = "vulkan-diagnostics")]
                 validation: None,
                 output: None,
+                prepared_extent: None,
                 presented: 0,
                 resized: false,
                 minimized: false,
@@ -193,12 +201,18 @@ mod demo {
                     max_bytes: geometry.byte_len(),
                     max_upload_submissions: 1,
                 },
+                Default::default(),
             )?;
-            let mut inputs = Engine::new(1, 1)?;
+            let mut inputs = Engine::new(EngineCapacity {
+                meshes: 1,
+                materials: 1,
+                retired_mesh_versions: 1,
+            })?;
             let mesh = inputs.create_mesh(geometry)?;
             let material = inputs.create_material(Material::default())?;
             let assets = SceneAssets {
                 inputs,
+                snapshots: SnapshotPool::new(1, 4)?,
                 mesh,
                 material,
             };
@@ -261,24 +275,50 @@ mod demo {
                 let Some((width, height)) = presenter.extent() else {
                     return Ok(());
                 };
-                let view = scene::view(width, height);
-                let draws = [scene::draw(assets.mesh, assets.material, 0.0)];
-                let snapshot = assets.inputs.snapshot(&view, &draws)?;
-                let upload = engine.prepare_snapshot(&snapshot)?;
-                if upload.state != MeshUploadState::Ready {
-                    return Ok(());
-                }
-                let prepared = engine.build_snapshot(&snapshot, false, |graph, color| {
-                    scene::custom_pass(graph, color, true)
-                })?;
-                let plan = prepared.graph.compile()?;
-                match engine.submit_frame(prepared, &plan) {
-                    Ok(rendered) => self.output = Some(rendered),
-                    Err(EngineRenderError::Runtime(error))
-                        if error.kind() == RuntimeErrorKind::CapacityExhausted =>
-                    {
-                        return Ok(());
+                if self.prepared_extent != Some((width, height)) {
+                    // Initialization and extent changes are explicit preparation
+                    // boundaries. Retry after old frame/presentation consumers
+                    // retire; an ordinary full pool never waits or grows here.
+                    engine.release_idle_inputs();
+                    match engine.runtime_mut().prepare_working_set(
+                        FrameCapacity::default(),
+                        &[
+                            ResourceClass::Image {
+                                desc: ImageDesc::rgba8(width, height),
+                                // Two targets per graph plus retained present
+                                // sources share four native execution slots.
+                                count: 12,
+                            },
+                            ResourceClass::Image {
+                                desc: ImageDesc::depth32(width, height),
+                                count: 4,
+                            },
+                        ],
+                    ) {
+                        Ok(()) => self.prepared_extent = Some((width, height)),
+                        Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error.into()),
                     }
+                }
+                let rendered = (|| -> Result<Option<RenderedFrame>, EngineRenderError> {
+                    let view = scene::view(width, height);
+                    let draws = [scene::draw(assets.mesh, assets.material, 0.0)];
+                    let snapshot = assets.inputs.snapshot(&assets.snapshots, &view, &draws)?;
+                    let upload = engine.prepare_snapshot(&snapshot)?;
+                    if upload.state != MeshUploadState::Ready {
+                        return Ok(None);
+                    }
+                    let prepared = engine.build_snapshot(&snapshot, false, |graph, color| {
+                        scene::custom_pass(graph, color, true)
+                    })?;
+                    Ok(Some(engine.submit_frame(prepared.compile()?)?))
+                })();
+                match rendered {
+                    Ok(Some(rendered)) => self.output = Some(rendered),
+                    Ok(None) => return Ok(()),
+                    Err(error) if is_capacity(&error) => return Ok(()),
                     Err(error) => return Err(error.into()),
                 }
             }
@@ -350,6 +390,18 @@ mod demo {
             self.error = Some(error.to_string());
             let _ = self.shutdown();
             event_loop.exit();
+        }
+    }
+
+    fn is_capacity(error: &EngineRenderError) -> bool {
+        match error {
+            EngineRenderError::Input(error) => error.kind() == EngineErrorKind::CapacityExhausted,
+            EngineRenderError::Graph(error) => error.kind() == GraphErrorKind::CapacityExhausted,
+            EngineRenderError::Runtime(error) => {
+                error.kind() == RuntimeErrorKind::CapacityExhausted
+            }
+            EngineRenderError::Preparation(MeshPreparationError::FrameCapacityExhausted) => true,
+            _ => false,
         }
     }
 
