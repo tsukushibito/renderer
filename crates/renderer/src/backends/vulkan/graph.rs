@@ -34,19 +34,18 @@ mod frames;
 mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
-mod provenance;
 mod snapshots;
 mod storage;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
 mod work;
 use super::resources::{DeviceBuffer, DeviceImage};
+use crate::graph::provenance::{self, BufferProvenance};
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
 pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
 #[cfg(all(feature = "presentation", windows))]
 pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
-use provenance::BufferProvenance;
 use storage::StoragePool;
 use work::GraphWork;
 use work::{ResultData, WorkData};

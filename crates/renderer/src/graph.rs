@@ -16,6 +16,8 @@ mod compile;
 mod dispatch;
 mod error;
 mod pass;
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+pub(crate) mod provenance;
 mod ranges;
 mod resource;
 mod storage;
@@ -24,7 +26,7 @@ pub use compile::CompiledGraph;
 pub(crate) use dispatch::BindingOperands;
 pub use dispatch::{Binding, BindingResource};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
-#[cfg(feature = "vulkan")]
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub(crate) use pass::AttachmentOps;
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,

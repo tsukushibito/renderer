@@ -13,7 +13,7 @@ use crate::graph::CompiledGraph;
 /// pins borrow the pool's prepared backing; the runtime must keep the GraphPool
 /// alive until its canonical provenance and all work snapshots have been cleared.
 #[derive(Default)]
-pub(super) struct BufferProvenance {
+pub(crate) struct BufferProvenance {
     segments: Vec<Segment>,
     // A content maximum is independent of a draw's vertex/Device bounds. Keep
     // one prefix summary; changing only those bounds never rescans the bytes.
@@ -74,20 +74,20 @@ impl Segment {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ProvenanceCapacityError {
-    pub(super) required: usize,
-    pub(super) capacity: usize,
+pub(crate) struct ProvenanceCapacityError {
+    pub(crate) required: usize,
+    pub(crate) capacity: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum IndexError {
+pub(crate) enum IndexError {
     UnknownContents,
     VertexBounds { index: u32, vertex_count: u64 },
     DeviceLimit { index: u32, maximum: u32 },
 }
 
 impl BufferProvenance {
-    pub(super) fn with_capacity(segments: usize) -> Self {
+    pub(crate) fn with_capacity(segments: usize) -> Self {
         Self {
             segments: Vec::with_capacity(segments),
             ..Self::default()
@@ -102,7 +102,7 @@ impl BufferProvenance {
         }
     }
 
-    pub(super) fn segment_capacity(&self) -> usize {
+    pub(crate) fn segment_capacity(&self) -> usize {
         self.segments.capacity()
     }
 
@@ -118,7 +118,7 @@ impl BufferProvenance {
 
     /// The external GraphPool owner keeps its allocations alive when pins drop.
     /// Clearing state does not discard the prepared segment storage.
-    pub(super) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.segments.clear();
         self.validation = None;
         self.mesh = None;
@@ -130,7 +130,7 @@ impl BufferProvenance {
 
     /// Copy an independent metadata version into already prepared storage. The
     /// immutable backing and prefix summary can be shared without revalidation.
-    pub(super) fn copy_from(&mut self, source: &Self) -> Result<(), ProvenanceCapacityError> {
+    pub(crate) fn copy_from(&mut self, source: &Self) -> Result<(), ProvenanceCapacityError> {
         self.require_capacity(source.segments.len())?;
         self.segments.clear();
         self.segments.extend(source.segments.iter().cloned());
@@ -144,14 +144,14 @@ impl BufferProvenance {
     }
 
     #[cfg(test)]
-    pub(super) fn test_evidence(&self) -> (usize, usize) {
+    pub(crate) fn test_evidence(&self) -> (usize, usize) {
         (self.segments.len(), self.validation_scans)
     }
 
     /// Mesh uploads are generated in stream order, at four-byte boundaries.
     /// Only a complete stream can become the immutable mesh's index proof.
     /// Sparse/out-of-order writes remain unproven, never initialized by fiat.
-    pub(super) fn write_mesh_indices(&mut self, target: Range<u64>, byte_len: u64, maximum: u32) {
+    pub(crate) fn write_mesh_indices(&mut self, target: Range<u64>, byte_len: u64, maximum: u32) {
         self.segments.clear();
         self.validation = None;
         let previous = self.mesh.take().filter(|proof| proof.byte_len == byte_len);
@@ -178,7 +178,7 @@ impl BufferProvenance {
     /// operation's original source range. The immutable Graph guarantees the
     /// target and source slice. A pin prevents that upload's prepared backing
     /// from being reused while retained.
-    pub(super) fn write_graph_slice(
+    pub(crate) fn write_graph_slice(
         &mut self,
         target: Range<u64>,
         graph: &CompiledGraph,
@@ -195,7 +195,7 @@ impl BufferProvenance {
     }
 
     #[cfg(test)]
-    pub(super) fn write_slice(
+    pub(crate) fn write_slice(
         &mut self,
         target: Range<u64>,
         bytes: &Arc<[u8]>,
@@ -229,7 +229,7 @@ impl BufferProvenance {
 
     /// Copy known slices into prepared scratch at their destination positions,
     /// preserving holes. Snapshot first, then replace, for disjoint self-copies.
-    pub(super) fn copy_into(
+    pub(crate) fn copy_into(
         &self,
         source: Range<u64>,
         destination: u64,
@@ -260,7 +260,7 @@ impl BufferProvenance {
     /// Overwrite the whole target, including unknown portions of a GPU copy.
     /// Incoming known segments have already been positioned within `target` by
     /// copy_into. Capacity failure leaves data, proof and cached summary intact.
-    pub(super) fn replace(
+    pub(crate) fn replace(
         &mut self,
         target: Range<u64>,
         contents: &Self,
@@ -275,7 +275,7 @@ impl BufferProvenance {
     }
 
     #[cfg(test)]
-    pub(super) fn clear_range(
+    pub(crate) fn clear_range(
         &mut self,
         target: Range<u64>,
     ) -> Result<(), ProvenanceCapacityError> {
@@ -360,7 +360,7 @@ impl BufferProvenance {
 
     /// Validate little-endian u32 indices without reconstructing a byte buffer.
     /// Partial writes may split an index across multiple backing slices.
-    pub(super) fn validate_indices(
+    pub(crate) fn validate_indices(
         &mut self,
         count: u32,
         vertex_count: u64,
