@@ -169,7 +169,7 @@ impl ExecutionSlot {
             .ok()
             .map_err(|error| owner.native("ID3D12GraphicsCommandList::Reset", error))?;
         self.states.fill(D3D12_RESOURCE_STATE_COMMON);
-        self.resource_map.fill(usize::MAX);
+        // Graph requirements initializes the active logical resource map once.
         self.buffers_used = 0;
         self.upload_used = 0;
         self.scratch_state = D3D12_RESOURCE_STATE_COMMON;

@@ -42,6 +42,8 @@ impl Snapshot {
         self.access = source.access;
         self.writer_stage = source.writer_stage;
         self.writer_access = source.writer_access;
+        self.read_stage = source.read_stage;
+        self.read_access = source.read_access;
         Ok(())
     }
 
@@ -80,6 +82,8 @@ impl Snapshot {
         self.access = vk::AccessFlags2::NONE;
         self.writer_stage = vk::PipelineStageFlags2::NONE;
         self.writer_access = vk::AccessFlags2::NONE;
+        self.read_stage = vk::PipelineStageFlags2::NONE;
+        self.read_access = vk::AccessFlags2::NONE;
     }
 }
 
@@ -97,6 +101,8 @@ mod tests {
         snapshot.access = vk::AccessFlags2::TRANSFER_READ;
         snapshot.writer_stage = vk::PipelineStageFlags2::COMPUTE_SHADER;
         snapshot.writer_access = vk::AccessFlags2::SHADER_WRITE;
+        snapshot.read_stage = vk::PipelineStageFlags2::COPY;
+        snapshot.read_access = vk::AccessFlags2::TRANSFER_READ;
     }
 
     fn assert_native_state(snapshot: &Snapshot) {
@@ -110,6 +116,10 @@ mod tests {
             vk::PipelineStageFlags2::COMPUTE_SHADER
         );
         assert_eq!(snapshot.writer_access, vk::AccessFlags2::SHADER_WRITE);
+        assert!(snapshot.has_read_visibility(
+            vk::PipelineStageFlags2::COPY,
+            vk::AccessFlags2::TRANSFER_READ
+        ));
     }
 
     #[test]
@@ -211,6 +221,8 @@ mod tests {
             assert_eq!(state.access, vk::AccessFlags2::NONE);
             assert_eq!(state.writer_stage, vk::PipelineStageFlags2::NONE);
             assert_eq!(state.writer_access, vk::AccessFlags2::NONE);
+            assert_eq!(state.read_stage, vk::PipelineStageFlags2::NONE);
+            assert_eq!(state.read_access, vk::AccessFlags2::NONE);
             assert_eq!(state.initialized.as_ptr(), initialized_pointer);
             assert_eq!(state.initialized.capacity(), initialized_capacity);
             assert_eq!(state.provenance.segment_capacity(), provenance_capacity);

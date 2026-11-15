@@ -1048,13 +1048,28 @@ mod tests {
         graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.readback_buffer("readback", buffer, 0, 4).unwrap();
         let graph = graph.compile().unwrap();
-        let mut mapping = [usize::MAX; 2];
+        let mut mapping = [0; 4];
         let capacity = super::super::D3D12FrameCapacity::default();
         assert_eq!(
             bounded::requirements(&graph, &mut mapping, capacity).unwrap(),
             1
         );
-        assert_eq!(mapping, [usize::MAX, 0]);
+        assert_eq!(&mapping[..2], &[usize::MAX, 0]);
+
+        let (_graph_pool, mut smaller) = prepared_graph();
+        let buffer = smaller.buffer("small", BufferDesc { size: 4 }).unwrap();
+        smaller.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
+        smaller.readback_buffer("read", buffer, 0, 4).unwrap();
+        assert_eq!(
+            bounded::requirements(&smaller.compile().unwrap(), &mut mapping, capacity).unwrap(),
+            1
+        );
+        assert_eq!(mapping[0], 0);
+        assert_eq!(
+            bounded::requirements(&graph, &mut mapping, capacity).unwrap(),
+            1
+        );
+        assert_eq!(&mapping[..2], &[usize::MAX, 0]);
         assert_eq!(
             bounded::requirements(
                 &graph,

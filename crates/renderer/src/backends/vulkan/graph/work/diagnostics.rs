@@ -53,9 +53,10 @@ pub(in super::super) fn begin(
 fn state(output: &mut String, label: &str, snapshot: &Snapshot) {
     writeln!(
         output,
-        "  {label} revision={} last_use_serial={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?}",
+        "  {label} revision={} last_use_serial={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?} read_stage={:?} read_access={:?}",
         snapshot.revision, snapshot.serial, snapshot.initialized, snapshot.stage, snapshot.access,
         snapshot.layout, snapshot.writer_stage, snapshot.writer_access,
+        snapshot.read_stage, snapshot.read_access,
     )
     .expect("writing String");
 }
@@ -74,7 +75,14 @@ pub(super) fn pass(output: &mut String, graph: &CompiledGraph, index: usize) {
 
 fn reason(previous: &Snapshot, current: Use, layout_change: bool, emitted: bool) -> &'static str {
     if !emitted {
-        "no prior writer or layout change requiring a dependency"
+        if !current.writes
+            && !layout_change
+            && previous.has_read_visibility(current.stage, current.access)
+        {
+            "writer already visible to this exact read scope"
+        } else {
+            "no prior writer or layout change requiring a dependency"
+        }
     } else if layout_change
         && previous.layout == vk::ImageLayout::UNDEFINED
         && (previous.stage | previous.writer_stage).is_empty()
@@ -241,6 +249,20 @@ mod tests {
         );
         assert!(output.contains("emitted=false reason=no prior writer"));
         assert!(!output.contains("src_stage="));
+        output.clear();
+        let reader = Use {
+            access: vk::AccessFlags2::TRANSFER_READ,
+            ..current
+        };
+        let previous = Snapshot {
+            writer_stage: vk::PipelineStageFlags2::COPY,
+            writer_access: vk::AccessFlags2::TRANSFER_WRITE,
+            read_stage: reader.stage,
+            read_access: reader.access,
+            ..Snapshot::default()
+        };
+        dependency(&mut output, 0, &previous, reader, false, None, None);
+        assert!(output.contains("writer already visible to this exact read scope"));
     }
 
     #[test]

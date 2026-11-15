@@ -33,21 +33,39 @@ impl Snapshot {
         stage: vk::PipelineStageFlags2,
         access: vk::AccessFlags2,
     ) -> bool {
-        self.stage == stage && self.access == access
+        self.read_stage == stage && self.read_access == access
+    }
+
+    pub(super) fn record_read(
+        &mut self,
+        stage: vk::PipelineStageFlags2,
+        access: vk::AccessFlags2,
+        layout_change: bool,
+    ) {
+        if layout_change {
+            self.stage = stage;
+            self.access = access;
+        } else {
+            self.stage |= stage;
+            self.access |= access;
+        }
+        // This pair describes one real dependency destination, never the
+        // cross-product of independently accumulated stage/access masks.
+        self.read_stage = stage;
+        self.read_access = access;
     }
 
     fn record_access(&mut self, current: Use, layout_change: bool, serial: u64) {
-        if !current.writes && !layout_change {
-            self.stage |= current.stage;
-            self.access |= current.access;
-        } else {
+        if current.writes {
             self.stage = current.stage;
             self.access = current.access;
-        }
-        if current.writes {
             self.writer_stage = current.stage;
             self.writer_access = current.access;
+            self.read_stage = vk::PipelineStageFlags2::NONE;
+            self.read_access = vk::AccessFlags2::NONE;
             self.revision = serial;
+        } else {
+            self.record_read(current.stage, current.access, layout_change);
         }
     }
 }
@@ -231,7 +249,8 @@ fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool], retained:
             retained[resource] = true;
         }
     }
-    needed.copy_from_slice(retained);
+    let resources = graph.resources.len();
+    needed[..resources].copy_from_slice(&retained[..resources]);
     for &pass in &graph.order {
         match &graph.passes[pass].operation {
             Operation::Raster { indices, .. } => needed[*indices] = true,
@@ -294,7 +313,7 @@ impl GraphWork {
         graph: &CompiledGraph,
         serial: u64,
     ) -> Result<Self, RuntimeError> {
-        let data = work.acquire()?;
+        let mut data = work.acquire()?;
         let limit = data.limit.graph;
         if graph.resources.len() > limit.resources
             || graph.order.len() > limit.passes
@@ -310,6 +329,9 @@ impl GraphWork {
             ));
         }
         let result = results.acquire()?;
+        // Set before any logical resource or partial preparation can retain a
+        // lease/state. Every failure then resets precisely this active prefix.
+        data.active_resources = graph.resources.len();
         Ok(Self {
             owner,
             data: Some(data),
@@ -764,8 +786,8 @@ fn source_scope(
             scope
         }
     } else if previous.has_read_visibility(current.stage, current.access) {
-        // A prior read-only layout transition already exposed this writer to
-        // this exact destination scope. A pipeline barrier's second scope also
+        // A prior dependency already exposed this writer to this exact read
+        // scope. A pipeline barrier's second scope also
         // includes later commands on the same queue; no intervening write or
         // layout transition has invalidated that visibility. Equality keeps
         // this deliberately narrow and does not infer stage/access pairings
@@ -1089,6 +1111,50 @@ mod tests {
     }
 
     #[test]
+    fn buffer_read_visibility_reuses_exact_pairs_and_keeps_all_reader_scopes() {
+        let mut state = Snapshot::default();
+        let mut write = usage(AccessPurpose::CopyDestination);
+        write.writes = true;
+        state.record_access(write, false, 7);
+        let copied = usage(AccessPurpose::CopySource);
+        let mut dependencies = 0;
+        for reader in 0..8 {
+            dependencies += usize::from(!source_scope(&state, copied, false).0.is_empty());
+            state.record_access(copied, false, 8 + reader);
+        }
+        assert_eq!(dependencies, 1);
+        assert_eq!(state.revision, 7);
+        assert!(state.access.contains(vk::AccessFlags2::TRANSFER_WRITE));
+        assert!(source_scope(&state.clone(), copied, false).0.is_empty());
+
+        let storage = usage(AccessPurpose::StorageRead);
+        assert_eq!(
+            source_scope(&state, storage, false),
+            (write.stage, write.access)
+        );
+        state.record_access(storage, false, 16);
+        assert!(source_scope(&state, storage, false).0.is_empty());
+        let combined = Use {
+            stage: copied.stage | storage.stage,
+            access: copied.access | storage.access,
+            ..copied
+        };
+        assert!(
+            !source_scope(&state, combined, false).0.is_empty(),
+            "independently accumulated stage/access masks do not prove another exact pair"
+        );
+        let (stages, accesses) = source_scope(&state, write, false);
+        assert!(stages.contains(copied.stage | storage.stage));
+        assert!(accesses.contains(write.access | copied.access | storage.access));
+        state.record_access(write, false, 17);
+        assert_eq!(state.revision, 17);
+        assert_eq!(
+            source_scope(&state, storage, false),
+            (write.stage, write.access)
+        );
+    }
+
+    #[test]
     #[ignore = "explicit real GPU repeated reader visibility; run strict and shipping separately"]
     fn vulkan_graph_repeated_reader_visibility() {
         let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
@@ -1104,10 +1170,16 @@ mod tests {
             runtime
                 .prepare_working_set(
                     super::super::FrameCapacity::default(),
-                    &[super::super::ResourceClass::Image {
-                        desc: ImageDesc::rgba8(2, 2),
-                        count: 4,
-                    }],
+                    &[
+                        super::super::ResourceClass::Image {
+                            desc: ImageDesc::rgba8(2, 2),
+                            count: 4,
+                        },
+                        super::super::ResourceClass::Buffer {
+                            desc: BufferDesc { size: 16 },
+                            count: 1,
+                        },
+                    ],
                 )
                 .unwrap();
             let diagnostics = runtime.diagnostics.clone();
@@ -1126,11 +1198,18 @@ mod tests {
                 .upload_image("source.upload", source, &pixels)
                 .unwrap();
             graph.export_image(source).unwrap();
+            let buffer = graph.buffer("buffer", BufferDesc { size: 16 }).unwrap();
+            graph
+                .upload_buffer("buffer.upload", buffer, 0, &pixels)
+                .unwrap();
+            graph.export_buffer(buffer).unwrap();
             let mut producer = runtime.submit(&graph.compile().unwrap()).unwrap();
             let exported = producer.export_image(source).unwrap();
+            let exported_buffer = producer.export_buffer(buffer).unwrap();
 
             let mut graph = Graph::test_new();
             let source = graph.import_image("source", &exported).unwrap();
+            let buffer = graph.import_buffer("buffer", &exported_buffer).unwrap();
             let mut reads = Vec::new();
             for index in 0..3 {
                 let output = graph
@@ -1145,14 +1224,51 @@ mod tests {
                         .unwrap(),
                 );
             }
+            let mut buffer_reads = Vec::new();
+            for range in [0..16, 4..8, 8..16] {
+                buffer_reads.push((
+                    graph
+                        .readback_buffer(
+                            "buffer.read",
+                            buffer,
+                            range.start,
+                            range.end - range.start,
+                        )
+                        .unwrap(),
+                    range,
+                ));
+            }
             let mut consumer = runtime.submit(&graph.compile().unwrap()).unwrap();
+
+            // A later pending writer must order all earlier readers, including
+            // the reads whose identical writer dependencies were elided.
+            let mut graph = Graph::test_new();
+            let buffer = graph.import_buffer("buffer", &exported_buffer).unwrap();
+            graph
+                .upload_buffer("buffer.patch", buffer, 4, &[3, 5, 7, 11])
+                .unwrap();
+            let patched = graph
+                .readback_buffer("buffer.patched", buffer, 0, 16)
+                .unwrap();
+            let mut writer = runtime.submit(&graph.compile().unwrap()).unwrap();
             let mut result = consumer.wait(Duration::from_secs(10)).unwrap().unwrap();
             for read in reads {
                 assert_eq!(result.test_readback(read).unwrap(), pixels);
             }
+            for (read, range) in buffer_reads {
+                assert_eq!(
+                    result.test_readback(read).unwrap(),
+                    pixels[range.start as usize..range.end as usize]
+                );
+            }
+            let mut written = writer.wait(Duration::from_secs(10)).unwrap().unwrap();
+            let mut expected = pixels;
+            expected[4..8].copy_from_slice(&[3, 5, 7, 11]);
+            assert_eq!(written.test_readback(patched).unwrap(), expected);
             producer.wait(Duration::from_secs(10)).unwrap().unwrap();
             runtime.delete(exported.key()).unwrap();
-            drop((producer, consumer, result, runtime));
+            runtime.delete(exported_buffer.key()).unwrap();
+            drop((producer, consumer, writer, result, written, runtime));
             assert!(
                 diagnostics.snapshot().is_clean(),
                 "{:#?}",
