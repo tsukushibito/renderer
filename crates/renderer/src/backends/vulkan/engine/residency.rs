@@ -429,7 +429,7 @@ impl VulkanEngine {
         let submission = loop {
             let mut graph = match self.upload_graphs.begin() {
                 Ok(graph) => graph,
-                Err(error) if error.kind == GraphErrorKind::CapacityExhausted => {
+                Err(error) if error.kind() == GraphErrorKind::CapacityExhausted => {
                     return Ok(self.progress(0));
                 }
                 Err(error) => return Err(error.into()),
