@@ -519,6 +519,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         passes: graph_passes,
         accesses: (4 * options.draws + 64).max(2048),
         draws: options.draws.max(1),
+        initial_ranges: graph_resources.max(2048),
         name_bytes: 128 * (graph_resources + graph_passes),
         ..GraphCapacity::default()
     };

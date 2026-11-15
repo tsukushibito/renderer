@@ -21,6 +21,14 @@ pub(super) struct Measurements {
     renderer: Snapshot,
     #[cfg(feature = "memory-profiling")]
     phases: [Snapshot; 3],
+    #[cfg(feature = "memory-profiling")]
+    normal_window: Option<(Snapshot, Snapshot)>,
+    #[cfg(feature = "memory-profiling")]
+    normal_process: Snapshot,
+    #[cfg(feature = "memory-profiling")]
+    normal_caller: Snapshot,
+    #[cfg(feature = "memory-profiling")]
+    normal_actions: Snapshot,
 }
 
 #[derive(Default)]
@@ -47,6 +55,42 @@ impl Measurements {
             renderer: Snapshot::default(),
             #[cfg(feature = "memory-profiling")]
             phases: [Snapshot::default(); 3],
+            #[cfg(feature = "memory-profiling")]
+            normal_window: None,
+            #[cfg(feature = "memory-profiling")]
+            normal_process: Snapshot::default(),
+            #[cfg(feature = "memory-profiling")]
+            normal_caller: Snapshot::default(),
+            #[cfg(feature = "memory-profiling")]
+            normal_actions: Snapshot::default(),
+        }
+    }
+
+    pub(super) fn begin_normal(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        {
+            assert!(self.normal_window.is_none());
+            self.normal_window = Some((Snapshot::now(), self.caller));
+        }
+    }
+
+    pub(super) fn end_normal(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        {
+            let (start, caller_start) = self.normal_window.take().expect("normal epoch started");
+            self.normal_process = Snapshot::now().since(start);
+            self.normal_caller = self.caller.since(caller_start);
+            // Shipping Renderer Rust work runs on this isolated fixture thread;
+            // the caller bucket contains only synchronous winit/Window work.
+            // Native/VMA callbacks may run on another thread: never subtract
+            // those events, including callbacks arriving during event pumping.
+            let mut normal = self.normal_process.since(self.normal_caller);
+            normal.native = self.normal_process.native;
+            normal.vma_host = self.normal_process.vma_host;
+            self.normal_actions = self.phases[Phase::Normal as usize];
+            self.renderer = self.renderer.since(self.normal_actions);
+            self.renderer.accumulate(normal);
+            self.phases[Phase::Normal as usize] = normal;
         }
     }
 
@@ -97,6 +141,7 @@ impl Measurements {
 
         #[cfg(feature = "memory-profiling")]
         {
+            assert!(self.normal_window.is_none());
             let process = Snapshot::now().since(self.start);
             let baseline = cfg!(any(
                 feature = "development-validation",
@@ -183,11 +228,16 @@ impl Measurements {
                     "renderer_total": counts(self.renderer),
                     "renderer_setup_change": counts(self.phases[Phase::Setup as usize]),
                     "renderer_normal": counts(normal),
+                    "normal_process": counts(self.normal_process),
+                    "normal_caller": counts(self.normal_caller),
+                    "renderer_normal_actions": counts(self.normal_actions),
+                    "row_semantics": "normal Rust excludes synchronous caller work; normal native/VMA cover the entire epoch, so caller and renderer rows are not disjoint native/VMA totals",
                     "renderer_shutdown": counts(self.phases[Phase::Shutdown as usize]),
-                    "caller_scope": "winit event pumping and Window operations; reported separately without resetting counters",
+                    "caller_scope": "synchronous winit/Window Rust work on the isolated fixture thread, with no Renderer Rust workers; native/VMA events are never excluded from the complete normal epoch",
                     "setup_change_scope": "explicit pools and native working set, residency, warm-up, resize/VSync/suspend/acquire-cancel and their completed owner retirement",
                     "shutdown_scope": "one additional ordinary-builder source retains pending presentation ownership for close; complete native owner teardown",
-                    "unobserved": "driver-internal allocation; Renderer native calls and VMA host callbacks are separate counters",
+                    "host_callback_scope": "VMA and driver host requests routed through installed allocation callbacks; request origin is not distinguished",
+                    "unobserved": "driver-internal allocation outside installed callbacks; Renderer native requests are counted separately",
                 })
             );
             assert!(!process.overflowed && !self.renderer.overflowed && !self.caller.overflowed);

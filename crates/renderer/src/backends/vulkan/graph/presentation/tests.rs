@@ -685,6 +685,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         let extent = presenter.extent().unwrap();
         observations.normal_extent = Some(extent);
         let mut held: [Option<HeldResult>; IN_FLIGHT] = std::array::from_fn(|_| None);
+        measurements.begin_normal();
         for batch in 0..NORMAL_SOURCES / IN_FLIGHT {
             let mut sources: [Option<Source>; IN_FLIGHT] = std::array::from_fn(|_| None);
             let mut reads: [Option<PixelCheck>; IN_FLIGHT] = [None; IN_FLIGHT];
@@ -755,6 +756,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         });
 
         // Keep pending-close coverage without moving any normal return to shutdown.
+        measurements.end_normal();
         let mut final_source = measurements.renderer(Phase::Shutdown, || {
             image_frame(&mut runtime, &mut frame_graphs, mesh, extent, 20).unwrap()
         });
