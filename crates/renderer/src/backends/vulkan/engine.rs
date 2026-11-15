@@ -446,3 +446,6 @@ mod workload_tests;
 
 #[cfg(test)]
 pub(crate) mod test_input;
+
+#[cfg(all(test, feature = "memory-profiling"))]
+mod retired_memory_tests;

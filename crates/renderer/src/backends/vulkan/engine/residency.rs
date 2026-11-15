@@ -616,11 +616,16 @@ impl VulkanEngine {
         {
             self.remove_resident(key, assets)?;
         }
+        // Unregistering an idle native buffer can release its canonical Graph
+        // provenance, making an upload slot newly idle at this same boundary.
+        self.release_idle_inputs();
         self.retired_sources.collect(assets, &self.residents);
         Ok(before - self.residents.len())
     }
-    /// Stop incomplete work; accepted GPU chunks retain native leases until retired.
-    pub fn cancel_uploads(&mut self) -> Result<(), EngineRenderError> {
+    /// Stop incomplete work. Accepted GPU chunks return their execution leases
+    /// through ordinary completion observation. Obsolete mesh registrations and
+    /// sources remain bounded until explicit [`Self::collect_retired_meshes`].
+    pub fn cancel_uploads(&mut self) {
         if let Some(active) = &self.active_upload {
             for key in &active.keys {
                 if let Some(entry) = self.residents.get_mut(key)
@@ -631,10 +636,12 @@ impl VulkanEngine {
             }
         }
         self.finish_active_upload();
-        self.collect_retired_meshes(None).map(|_| ())
     }
-    /// Unregister GPU versions without deleting the CPU asset or invalidating prepared pins.
-    pub fn unload_mesh(&mut self, mesh: MeshHandle) -> Result<usize, EngineRenderError> {
+    /// Make GPU versions unavailable to new frames without deleting the CPU
+    /// asset or invalidating prepared frames. Explicit collection unregisters
+    /// them once prepared pins finish; normal frame processing never destroys
+    /// these obsolete assets. Returns the number of matching versions.
+    pub fn unload_mesh(&mut self, mesh: MeshHandle) -> usize {
         let mut count = 0;
         for (key, entry) in &mut self.residents {
             if key.mesh == mesh {
@@ -652,15 +659,14 @@ impl VulkanEngine {
                 self.finish_active_upload();
             }
         }
-        self.collect_retired_meshes(None)?;
-        Ok(count)
+        count
     }
-    pub fn unload_all_meshes(&mut self) -> Result<(), EngineRenderError> {
+    /// Mark every GPU mesh version for explicit collection.
+    pub fn unload_all_meshes(&mut self) {
         self.finish_active_upload();
         for entry in self.residents.values_mut() {
             entry.retiring = true;
         }
-        self.collect_retired_meshes(None).map(|_| ())
     }
     pub fn mesh_cache_stats(&self) -> MeshCacheStats {
         MeshCacheStats {
@@ -691,6 +697,18 @@ impl VulkanEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::{Draw, EngineCapacity, IDENTITY, Material, SnapshotPool, Vertex, View};
+
+    fn triangle() -> MeshData {
+        MeshData::new(
+            &[[-0.4, -0.4, 0.25], [0.4, -0.4, 0.25], [0.0, 0.4, 0.25]].map(|position| Vertex {
+                position,
+                color: [1.0; 4],
+            }),
+            &[0, 1, 2],
+        )
+        .unwrap()
+    }
 
     fn key(index: u32) -> MeshVersionKey {
         MeshVersionKey::new(
@@ -701,6 +719,106 @@ mod tests {
             },
             1,
         )
+    }
+
+    #[test]
+    fn source_retirement_preserves_external_consumers_and_transfers_only_to_the_asset_owner() {
+        let residents = BTreeMap::new();
+        let mut deferred = DeferredSources::new(1).unwrap();
+        let snapshot = Arc::new(triangle());
+        let weak = Arc::downgrade(&snapshot);
+        let upload = Arc::clone(&snapshot.vertices);
+        deferred.retain(Arc::clone(&snapshot));
+        assert!(!deferred.can_retain(&Arc::new(triangle())));
+        deferred.collect(None, &residents);
+        assert_eq!(deferred.sources.len(), 1);
+        drop(snapshot);
+        deferred.collect(None, &residents);
+        assert_eq!(
+            deferred.sources.len(),
+            1,
+            "Graph stream still needs its anchor"
+        );
+        drop(upload);
+        deferred.collect(None, &residents);
+        assert!(deferred.sources.is_empty());
+        assert!(weak.upgrade().is_none());
+
+        let mut assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let unrelated = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let mesh = assets.create_mesh(triangle()).unwrap();
+        let material = assets.create_material(Material::default()).unwrap();
+        let snapshots = SnapshotPool::new(1, 1).unwrap();
+        let snapshot = assets
+            .snapshot(
+                &snapshots,
+                &View {
+                    width: 8,
+                    height: 8,
+                    clip_from_world: IDENTITY,
+                    clear_color: [0.0, 0.0, 0.0, 1.0],
+                },
+                &[Draw {
+                    mesh,
+                    material,
+                    world_from_model: IDENTITY,
+                }],
+            )
+            .unwrap();
+        deferred.retain(Arc::clone(&snapshot.draws[0].data));
+        assets.delete_mesh(mesh).unwrap();
+        deferred.collect(Some(&unrelated), &residents);
+        assert_eq!(deferred.sources.len(), 1, "unrelated owner proves nothing");
+        assert_eq!(assets.collect_retired_meshes(), 0);
+        deferred.collect(Some(&assets), &residents);
+        assert!(deferred.sources.is_empty());
+        drop(snapshot);
+        assert_eq!(
+            assets.collect_retired_meshes(),
+            1,
+            "owners must not wait on one another"
+        );
+
+        // Distinct MeshData versions can share immutable leaf streams. The
+        // sequential pass preserves the final anchor without retaining a cycle.
+        let first = Arc::new(triangle());
+        let second = Arc::new((*first).clone());
+        let mut deferred = DeferredSources::new(2).unwrap();
+        deferred.retain(first);
+        deferred.retain(second);
+        deferred.collect(None, &residents);
+        assert!(deferred.sources.is_empty());
+
+        let first = Arc::new(triangle());
+        let second = Arc::new((*first).clone());
+        let mut residents = BTreeMap::new();
+        residents.insert(
+            key(0),
+            ResidentMesh {
+                bytes: second.byte_len(),
+                uploaded: second.byte_len(),
+                data: Some(second),
+                buffers: None,
+                last_use: AtomicU64::new(0),
+                retiring: false,
+            },
+        );
+        deferred.retain(first);
+        deferred.collect(None, &residents);
+        assert!(
+            deferred.sources.is_empty(),
+            "resident stream remains anchored"
+        );
     }
 
     #[test]
