@@ -73,7 +73,7 @@ fn half(value: f32) -> u16 {
 
 fn half_pixel(values: [f32; 4]) -> [u8; 8] {
     let mut pixel = [0; 8];
-    for (destination, value) in pixel.chunks_exact_mut(2).zip(values) {
+    for (destination, value) in pixel.as_chunks_mut::<2>().0.iter_mut().zip(values) {
         destination.copy_from_slice(&half(value).to_le_bytes());
     }
     pixel
@@ -105,13 +105,15 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
     let mut vertices = [0; 84];
     // The oversized triangle covers the complete target even when the vertex
     // Uniform translates it. Every texel can be checked without edge tolerances.
-    for (destination, position) in vertices.chunks_exact_mut(28).zip([
+    for (destination, position) in vertices.as_chunks_mut::<28>().0.iter_mut().zip([
         [-2.0f32, -2.0, 0.0],
         [6.0, -2.0, 0.0],
         [-2.0, 6.0, 0.0],
     ]) {
         for (component, value) in destination
-            .chunks_exact_mut(4)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(position.into_iter().chain([1.0; 4]))
         {
             component.copy_from_slice(&value.to_le_bytes());
@@ -122,7 +124,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         .unwrap();
     let indices = [0u32, 1, 2];
     let mut index_bytes = [0; 12];
-    for (destination, value) in index_bytes.chunks_exact_mut(4).zip(indices) {
+    for (destination, value) in index_bytes.as_chunks_mut::<4>().0.iter_mut().zip(indices) {
         destination.copy_from_slice(&value.to_le_bytes());
     }
     graph
@@ -204,7 +206,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         parameters.transform[3][2] = 0.75 - draw as f32 * 0.25;
         parameters.tint = if textured {
             [
-                if !float_color || (frame / 6) % 2 == 0 {
+                if !float_color || (frame / 6).is_multiple_of(2) {
                     1.0
                 } else {
                     0.5
