@@ -74,19 +74,21 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
                 max_meshes: 8,
                 max_bytes: mesh([1.0; 4]).byte_len() * 8,
                 max_upload_submissions: 1,
+                max_retired_sources: 16,
             },
             EngineFrameCapacity::default(),
         )
         .unwrap();
         let mut assets = Engine::new(4, 4).unwrap();
         test(&mut engine, &mut assets);
-        engine.unload_all_meshes().unwrap();
+        engine.unload_all_meshes();
         assert!(
             engine
                 .runtime_mut()
                 .drain_frames(Duration::from_secs(10))
                 .unwrap()
         );
+        engine.collect_retired_meshes(Some(&assets)).unwrap();
         drop(engine);
         let report = diagnostics.snapshot();
         assert!(
@@ -245,7 +247,8 @@ fn vulkan_engine_owned_inputs_transform_and_survive_pending_updates() {
             [255, 0, 255, 255],
         ));
         assets.delete_mesh(mesh_handle).unwrap();
-        engine.unload_mesh(mesh_handle).unwrap();
+        engine.unload_mesh(mesh_handle);
+        engine.collect_retired_meshes(Some(assets)).unwrap();
         assets.delete_material(material).unwrap();
         assert_eq!(engine.runtime().pending_frames(), 4);
         collect(engine, &expected);
@@ -330,8 +333,9 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
         engine.release_output(&mut second).unwrap();
         for handle in [near, far, equal] {
             assets.delete_mesh(handle).unwrap();
-            engine.unload_mesh(handle).unwrap();
+            engine.unload_mesh(handle);
         }
+        engine.collect_retired_meshes(Some(assets)).unwrap();
         for handle in [red, green, blue] {
             assets.delete_material(handle).unwrap();
         }
@@ -474,7 +478,8 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         let mut pending = engine.submit_frame(cached).unwrap();
         engine.release_output(&mut pending).unwrap();
         assets.delete_mesh(handle).unwrap();
-        engine.unload_mesh(handle).unwrap();
+        engine.unload_mesh(handle);
+        engine.collect_retired_meshes(Some(assets)).unwrap();
         assets.delete_material(material).unwrap();
         collect(
             engine,
@@ -578,6 +583,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     assets.delete_mesh(mesh_handle).unwrap();
     assets.delete_material(material).unwrap();
     engine.release_idle_inputs();
+    engine.collect_retired_meshes(Some(&assets)).unwrap();
     assets.collect_retired_meshes();
     assert!(
         vertices.upgrade().is_none(),
@@ -607,7 +613,8 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
             [255, 0, 0, 255],
         )],
     );
-    engine.unload_all_meshes().unwrap();
+    engine.unload_all_meshes();
+    engine.collect_retired_meshes(Some(&assets)).unwrap();
     assert!(
         engine
             .runtime_mut()

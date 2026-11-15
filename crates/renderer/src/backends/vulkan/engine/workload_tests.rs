@@ -41,6 +41,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
             max_meshes: 1,
             max_bytes: 2 * 1024 * 1024,
             max_upload_submissions: 2,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
@@ -87,12 +88,16 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
         .unwrap();
     let partial = renderer.prepare_snapshot(&snapshot).unwrap();
     assert!(partial.submitted_bytes > 0 && partial.remaining_bytes > 0);
-    renderer.cancel_uploads().unwrap();
-    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 0);
+    renderer.cancel_uploads();
+    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 1);
+    assert_eq!(renderer.mesh_cache_stats().queued_meshes, 0);
+    assert!(renderer.residents.values().all(|entry| entry.retiring));
     let cancelled = renderer.wait_uploads(TIMEOUT).unwrap();
     assert_eq!(cancelled.remaining_bytes, 0);
     assert_eq!(cancelled.pending_submissions, 0);
-    assert!(renderer.retiring.is_empty());
+    assert_eq!(renderer.mesh_cache_stats().resident_meshes, 1);
+    assert_eq!(renderer.collect_retired_meshes(Some(&assets)).unwrap(), 1);
+    assert!(renderer.residents.is_empty());
 
     let mut progress = renderer.prepare_snapshot(&snapshot).unwrap();
     let started = Instant::now();
@@ -113,8 +118,9 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
     let indices = buffers.indices;
     read_all(&mut renderer, vertices, &generated.vertices);
     read_all(&mut renderer, indices, &generated.indices);
-    renderer.unload_all_meshes().unwrap();
-    assert!(renderer.residents.is_empty() && renderer.retiring.is_empty());
+    renderer.unload_all_meshes();
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
+    assert!(renderer.residents.is_empty());
     drop(renderer);
     let report = monitor.report();
     #[cfg(feature = "development-validation")]
@@ -188,6 +194,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             max_meshes: 2,
             max_bytes: 16 * 1024 * 1024,
             max_upload_submissions: 3,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
@@ -258,7 +265,8 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             .peak_reserved_bytes
             <= STAGING
     );
-    renderer.unload_mesh(mesh).unwrap();
+    renderer.unload_mesh(mesh);
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
     assert!(
         assets.mesh_revision(mesh).is_ok(),
         "GPU unload must preserve the CPU asset"
@@ -299,6 +307,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
             max_meshes: 2,
             max_bytes: 1024 * 1024,
             max_upload_submissions: 1,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
@@ -558,6 +567,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             max_meshes: 16,
             max_bytes: 1024 * 1024,
             max_upload_submissions: 1,
+            max_retired_sources: 16,
         },
         EngineFrameCapacity::default(),
     )
@@ -639,6 +649,8 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         }
     };
     for (snapshot, color) in snapshots.iter().zip(colors) {
+        // Switching the admitted asset is an explicit maintenance boundary.
+        renderer.collect_retired_meshes(Some(&assets)).unwrap();
         ready(&mut renderer, snapshot);
         let mut frame = renderer
             .render_snapshot(snapshot, true, |_, image| Ok(image))
@@ -664,6 +676,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             assert!(assets.mesh_revision(mesh).is_ok());
         }
     }
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
     ready(&mut renderer, &snapshots[0]);
     let pinned = renderer
         .build_snapshot(&snapshots[0], false, |_, image| Ok(image))
@@ -675,6 +688,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         ))
     ));
     drop(pinned);
+    renderer.collect_retired_meshes(Some(&assets)).unwrap();
     ready(&mut renderer, &snapshots[1]);
     drop(renderer);
     let report = monitor.report();
