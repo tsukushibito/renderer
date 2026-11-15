@@ -9,6 +9,9 @@ use ash::vk;
 use super::device::VulkanDevice;
 use super::instance::{LOG_TARGET, REQUIRED_API};
 
+#[cfg(feature = "memory-profiling")]
+mod profiling;
+
 #[derive(Debug)]
 pub(super) struct AllocatorInitError {
     result: vk::Result,
@@ -48,9 +51,30 @@ impl VulkanAllocator {
         );
         // Match the application's Instance API, not the adapter's newer API.
         create_info.vulkan_api_version = REQUIRED_API;
+        #[cfg(feature = "memory-profiling")]
+        let host_callbacks = profiling::host_callbacks();
+        #[cfg(feature = "memory-profiling")]
+        let mut device_callbacks =
+            create_info
+                .device_memory_callbacks
+                .copied()
+                .unwrap_or_else(|| {
+                    // SAFETY: The pinned VmaDeviceMemoryCallbacks contains only optional
+                    // function pointers and a user pointer; all-null is its valid default.
+                    unsafe { std::mem::zeroed() }
+                });
+        #[cfg(feature = "memory-profiling")]
+        {
+            device_callbacks.pfnAllocate = Some(profiling::device_allocate::<_>);
+            device_callbacks.pfnFree = Some(profiling::device_free::<_>);
+            create_info.allocation_callbacks = Some(&host_callbacks);
+            create_info.device_memory_callbacks = Some(&device_callbacks);
+        }
         // SAFETY: All three Vulkan objects belong to this Device owner. The
         // resulting MemoryOwner retains them and drops VMA before the Device.
         // Default flags preserve VMA's internal host synchronization.
+        // VMA copies both callback structs; their function pointers are static
+        // and user data is null, so none borrow these temporary stack values.
         let raw = unsafe { vk_mem::Allocator::new(create_info) }.map_err(|result| {
             let error = AllocatorInitError { result };
             tracing::error!(target: LOG_TARGET, device = device.name(), error = %error,

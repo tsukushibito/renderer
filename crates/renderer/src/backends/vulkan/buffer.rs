@@ -308,6 +308,11 @@ impl VulkanAllocator {
                 self.owner.device.max_buffer_size(),
                 flags,
                 |buffer_info, allocation_info| {
+                    #[cfg(feature = "memory-profiling")]
+                    crate::measurement::record_native(
+                        crate::measurement::NativeEvent::ResourceCreate,
+                        1,
+                    );
                     // SAFETY: The live allocator owns its Vulkan dependencies. The
                     // request creates a uniquely owned, unaliased transfer buffer.
                     unsafe { self.owner.raw.create_buffer(buffer_info, allocation_info) }
@@ -631,6 +636,8 @@ impl VulkanBuffer {
 
 impl Drop for VulkanBuffer {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
         // SAFETY: This owner uniquely owns the pair; all scoped mappings have
         // ended and any recording/pending transfer owner has retired before
         // returning the buffer or allowing this destruction.
