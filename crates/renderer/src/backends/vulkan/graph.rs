@@ -1095,9 +1095,7 @@ impl VulkanRuntime {
         for &pass in &graph.order {
             match graph.passes[pass].operation {
                 Operation::Compute { .. } => shader_needs.compute = true,
-                Operation::Raster { .. } => {
-                    shader_needs.raster = true
-                }
+                Operation::Raster { .. } => shader_needs.raster = true,
                 Operation::Composite { .. } => shader_needs.composite = true,
                 _ => {}
             }

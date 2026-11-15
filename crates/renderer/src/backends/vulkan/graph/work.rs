@@ -231,13 +231,10 @@ fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool], retained:
     let resources = graph.resources.len();
     needed[..resources].copy_from_slice(&retained[..resources]);
     for &pass in &graph.order {
-        match &graph.passes[pass].operation {
-            Operation::Raster { draws, .. } => {
-                for draw in graph.raster_draws(draws) {
-                    needed[draw.indices] = true;
-                }
+        if let Operation::Raster { draws, .. } = &graph.passes[pass].operation {
+            for draw in graph.raster_draws(draws) {
+                needed[draw.indices] = true;
             }
-            _ => {}
         }
     }
     for &pass in graph.order.iter().rev() {

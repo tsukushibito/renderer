@@ -24,13 +24,15 @@ pub use compile::CompiledGraph;
 pub use dispatch::BufferBinding;
 pub(crate) use dispatch::BufferBindingOperands;
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
+#[cfg(feature = "vulkan")]
+pub(crate) use pass::AttachmentOps;
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,
     LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
-    AttachmentOperand, AttachmentOps, Dependency, DependencyList, LoadAction, MeshUpload,
-    Operation, Pass, RasterAttachmentOperands, RasterDrawOperands, ResourceAccess, UploadSource,
+    AttachmentOperand, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,
+    RasterAttachmentOperands, RasterDrawOperands, ResourceAccess, UploadSource,
     ValidatedRasterParameters,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};

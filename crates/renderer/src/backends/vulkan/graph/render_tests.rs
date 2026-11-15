@@ -44,6 +44,22 @@ fn vulkan_attachment_subresource_native_boundaries() {
                     desc: depth_desc,
                     count: 1,
                 },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 224 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 48 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(16, 16),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(16, 16),
+                    count: 1,
+                },
             ],
         );
         // Both descriptors would hit an existing base-extent cache key without
@@ -119,6 +135,114 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 RuntimeErrorKind::Unsupported
             );
         }
+
+        let mut unsupported = Graph::test_new();
+        let (vertices, indices) = add_mesh(&mut unsupported, false);
+        let color = unsupported.image("color-only Raster", color_desc).unwrap();
+        unsupported
+            .raster(
+                "CPU color-only plan",
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[RasterDraw {
+                    vertices,
+                    indices,
+                    index_count: 12,
+                    parameters: RasterParameters::default(),
+                }],
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: unsupported.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        unsupported
+            .readback_image("live CPU-only shape", color)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .submit(&unsupported.compile().unwrap())
+                .err()
+                .unwrap()
+                .kind(),
+            RuntimeErrorKind::Unsupported
+        );
+
+        let mut loaded = Graph::test_new();
+        let (vertices, indices) = add_mesh(&mut loaded, false);
+        let color = loaded
+            .image("loaded color", ImageDesc::rgba8(16, 16))
+            .unwrap();
+        let depth = loaded
+            .image("loaded depth", ImageDesc::depth32(16, 16))
+            .unwrap();
+        let color_view = loaded.image_view(color, 0, 0).unwrap();
+        let depth_view = loaded.image_view(depth, 0, 0).unwrap();
+        loaded
+            .attachment_pass(
+                "blue seed",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: color_view,
+                        load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Clear(0.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        loaded
+            .raster(
+                "loaded draw list",
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                ],
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: color_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        let read = loaded.readback_image("loaded pixels", color).unwrap();
+        let mut submission = runtime.submit(&loaded.compile().unwrap()).unwrap();
+        let mut result = submission.wait(WAIT).unwrap().unwrap();
+        let bytes = result.test_readback(read).unwrap();
+        assert_eq!(bytes.len(), 1024);
+        assert!(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 0, 255, 255])
+        );
+        drop((result, submission));
 
         let mut graph = Graph::test_new();
         let color = graph.image("clear color", color_desc).unwrap();
