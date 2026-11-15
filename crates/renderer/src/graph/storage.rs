@@ -220,6 +220,18 @@ impl GraphStorage {
     pub(crate) fn raster_draws(&self, range: &Range<usize>) -> &[RasterDrawOperands] {
         &self.draws[range.clone()]
     }
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub(crate) fn raster_bindings(&self, range: &Range<usize>) -> &[BindingOperands] {
+        &self.bindings[range.clone()]
+    }
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub(crate) fn raster_attachments(&self, range: &Range<usize>) -> &[AttachmentOperand] {
+        &self.attachments[range.clone()]
+    }
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub(crate) fn raster_attachment(&self, index: usize) -> &AttachmentOperand {
+        &self.attachments[index]
+    }
     pub(crate) fn upload_data<'a>(&'a self, operation: &'a super::Operation) -> &'a [u8] {
         let source = match operation {
             super::Operation::UploadBuffer { data, .. }
