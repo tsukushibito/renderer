@@ -205,71 +205,128 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
 
 #[test]
 fn late_draw_and_attachment_capacity_failures_leave_room_for_a_valid_sequence() {
-    let mut pool = GraphPool::new(
-        GraphCapacity {
-            draws: 2,
-            attachments: 1,
-            ..GraphCapacity::default()
-        },
-        1,
-    )
-    .unwrap();
-    let mut graph = pool.begin().unwrap();
-    let a = mesh(&mut graph, "a", true, true);
-    let b = mesh(&mut graph, "b", true, true);
-    let target = color(&mut graph, "color");
-    let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
-    let depth = Attachment {
-        view: graph.image_view(depth, 0, 0).unwrap(),
-        load: LoadOp::Clear(1.0),
-        store: StoreOp::Store,
-    };
-    let mut invalid = b;
-    invalid.parameters.tint[2] = f32::NAN;
-    assert_eq!(
-        graph
-            .raster(
-                "bad second draw",
-                &ManagedRasterProgram::mesh(),
-                &[a, invalid],
-                RasterAttachments {
-                    colors: &[target],
-                    depth: None
-                }
-            )
-            .unwrap_err()
-            .kind(),
-        GraphErrorKind::InvalidInput
-    );
-    let error = graph
-        .raster(
-            "too many targets",
-            &ManagedRasterProgram::mesh(),
-            &[a, b],
-            RasterAttachments {
-                colors: &[target],
-                depth: Some(depth),
+    for exhausted in [GraphCapacityKind::Attachments, GraphCapacityKind::Accesses] {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                draws: 2,
+                attachments: if exhausted == GraphCapacityKind::Attachments {
+                    1
+                } else {
+                    2
+                },
+                accesses: if exhausted == GraphCapacityKind::Accesses {
+                    7
+                } else {
+                    GraphCapacity::default().accesses
+                },
+                ..GraphCapacity::default()
             },
-        )
-        .unwrap_err();
-    assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
-    assert_eq!(
-        error.capacity().unwrap().kind,
-        GraphCapacityKind::Attachments
-    );
-    graph
-        .raster(
-            "valid",
-            &ManagedRasterProgram::mesh(),
-            &[a, b],
-            RasterAttachments {
-                colors: &[target],
-                depth: None,
-            },
+            1,
         )
         .unwrap();
-    observe(&mut graph, "pixels", target.view);
-    assert_eq!(graph.compile().unwrap().pass_count(), 6);
+        let mut graph = pool.begin().unwrap();
+        let a = mesh(&mut graph, "a", true, true);
+        let b = mesh(&mut graph, "b", true, true);
+        let target = color(&mut graph, "color");
+        let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+        let depth = Attachment {
+            view: graph.image_view(depth, 0, 0).unwrap(),
+            load: LoadOp::Clear(1.0),
+            store: StoreOp::Store,
+        };
+        let mut invalid = b;
+        invalid.parameters.tint[2] = f32::NAN;
+        assert_eq!(
+            graph
+                .raster(
+                    "bad second draw",
+                    &ManagedRasterProgram::mesh(),
+                    &[a, invalid],
+                    RasterAttachments {
+                        colors: &[target],
+                        depth: None
+                    }
+                )
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        let error = graph
+            .raster(
+                "too many operands",
+                &ManagedRasterProgram::mesh(),
+                &[a, b],
+                RasterAttachments {
+                    colors: &[target],
+                    depth: Some(depth),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
+        assert_eq!(error.capacity().unwrap().kind, exhausted);
+        graph
+            .raster(
+                "valid",
+                &ManagedRasterProgram::mesh(),
+                &[b],
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        graph.export_image(target.view.image()).unwrap();
+        assert_eq!(
+            graph
+                .compile()
+                .unwrap()
+                .ordered_pass_names()
+                .collect::<Vec<_>>(),
+            ["b vertices", "b indices", "valid"],
+            "failed draws must not keep unrelated inputs live"
+        );
+    }
+}
+
+#[test]
+fn later_raster_passes_and_recycled_slots_do_not_keep_previous_draw_inputs() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    for _ in 0..2 {
+        let mut graph = pool.begin().unwrap();
+        for _ in 0..24 {
+            graph.buffer("unused", BufferDesc { size: 4 }).unwrap();
+        }
+        let old = mesh(&mut graph, "old", true, true);
+        let current = mesh(&mut graph, "current", true, true);
+        let target = color(&mut graph, "color");
+        for (name, draw) in [("old draw", old), ("current draw", current)] {
+            graph
+                .raster(
+                    name,
+                    &ManagedRasterProgram::mesh(),
+                    &[draw],
+                    RasterAttachments {
+                        colors: &[target],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+        }
+        observe(&mut graph, "pixels", target.view);
+        assert_eq!(
+            graph
+                .compile()
+                .unwrap()
+                .ordered_pass_names()
+                .collect::<Vec<_>>(),
+            [
+                "current vertices",
+                "current indices",
+                "current draw",
+                "pixels"
+            ]
+        );
+    }
 }
 
 #[test]
