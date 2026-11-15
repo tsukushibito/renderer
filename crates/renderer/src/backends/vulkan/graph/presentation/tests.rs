@@ -681,6 +681,15 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         });
         assert_eq!(runtime.pending_frames(), 0);
         assert!(presenter.inner.as_ref().unwrap().idle());
+        // Retain only scalar identity: cloning the Arc here would mask a
+        // regression that drops eligible generations during ordinary polling.
+        let retired_handle = measurements.renderer(Phase::Setup, || {
+            let retired = &presenter.inner.as_ref().unwrap().retired;
+            assert!(!retired.is_empty(), "resize retains an old generation");
+            assert!(retired.iter().all(|chain| Arc::strong_count(chain) == 1));
+            observations.normal_retired_swapchains = retired.len();
+            retired[0].handle
+        });
 
         let extent = presenter.extent().unwrap();
         observations.normal_extent = Some(extent);
@@ -753,10 +762,27 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                 frame_graphs.is_idle(),
                 "normal plans return after GPU/CPU/present completion"
             );
+            let retired = &presenter.inner.as_ref().unwrap().retired;
+            assert_eq!(retired.len(), observations.normal_retired_swapchains);
+            assert!(
+                retired.iter().any(|chain| {
+                    chain.handle == retired_handle && Arc::strong_count(chain) == 1
+                }),
+                "ordinary prepare/poll/drain retains the eligible old generation"
+            );
         });
 
         // Keep pending-close coverage without moving any normal return to shutdown.
         measurements.end_normal();
+        measurements.renderer(Phase::Setup, || {
+            observations.collected_retired_swapchains = presenter.collect_retired_swapchains();
+            assert_eq!(
+                observations.collected_retired_swapchains,
+                observations.normal_retired_swapchains
+            );
+            assert!(presenter.inner.as_ref().unwrap().retired.is_empty());
+            assert_eq!(presenter.collect_retired_swapchains(), 0);
+        });
         let mut final_source = measurements.renderer(Phase::Shutdown, || {
             image_frame(&mut runtime, &mut frame_graphs, mesh, extent, 20).unwrap()
         });

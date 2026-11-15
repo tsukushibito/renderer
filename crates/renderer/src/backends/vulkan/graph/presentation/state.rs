@@ -67,11 +67,20 @@ impl Inner {
                 }
             }
         }
-        self.retired.retain(|chain| Arc::strong_count(chain) != 1);
         match first_error {
             Some(error) => Err(error),
             None => Ok(retired),
         }
+    }
+
+    pub(super) fn collect_retired_swapchains(&mut self) -> usize {
+        let before = self.retired.len();
+        // Every outstanding GPU command and queued present owns its own Arc.
+        // A sole retired anchor therefore proves both uses have completed.
+        // Keep these anchors through ordinary polling so their last-owner
+        // native destruction and backing release stay at a change boundary.
+        self.retired.retain(|chain| Arc::strong_count(chain) != 1);
+        before - self.retired.len()
     }
 
     pub(super) fn ensure_swapchain(&mut self) -> Result<Option<PresentOutcome>, RuntimeError> {
@@ -97,6 +106,10 @@ impl Inner {
         else {
             return Ok(Some(PresentOutcome::Suspended));
         };
+        // This is an explicit recreation boundary, after the clean-ready and
+        // suspended paths. Reclaim completed generations before reserving the
+        // next bounded retirement entry, including capacity-error retries.
+        self.collect_retired_swapchains();
         if self.current.is_some() && self.retired.len() >= self.config.max_retired_swapchains {
             return Err(RuntimeError::capacity(
                 "retired Swapchain capacity exhausted; poll/wait before retry",
