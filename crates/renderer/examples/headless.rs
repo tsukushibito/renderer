@@ -52,12 +52,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let final_image = graph.image("final composite", desc)?;
     graph.raster(
         "indexed mesh and depth",
-        RasterDraw {
+        &renderer::program::ManagedRasterProgram::mesh(),
+        &[RasterDraw {
             vertices: vertex_buffer,
             indices: index_buffer,
             index_count: 6,
             parameters: RasterParameters::default(),
-        },
+        }],
         RasterAttachments {
             colors: &[Attachment {
                 view: graph.image_view(color, 0, 0)?,
