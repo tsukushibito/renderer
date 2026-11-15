@@ -15,10 +15,9 @@ use std::time::Instant;
 #[ignore = "explicit isolated real GPU allocation-counter regression; run shipping and strict separately"]
 fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     const WAIT: Duration = Duration::from_secs(30);
-    assert!(
-        !cfg!(debug_assertions),
-        "allocation acceptance requires --release"
-    );
+    if cfg!(debug_assertions) {
+        panic!("allocation acceptance requires --release");
+    }
     let mut assets = Engine::new(EngineCapacity {
         meshes: 2,
         materials: 1,
