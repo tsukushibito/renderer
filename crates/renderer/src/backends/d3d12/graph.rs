@@ -13,8 +13,6 @@ use std::{mem::ManuallyDrop, sync::Arc, time::Duration};
 use windows_core::{Error, HRESULT};
 
 use crate::graph::{CompiledGraph, PassHandle};
-#[cfg(all(test, feature = "d3d12-diagnostics"))]
-use crate::graph::{Operation, ResourceDesc};
 
 mod bounded;
 
@@ -43,122 +41,6 @@ enum PlannedOperation<'a> {
         binding: &'a super::program::D3D12Bindings,
         initialize: Option<super::program::ImageInitialization<'a>>,
     },
-    #[cfg(feature = "d3d12-diagnostics")]
-    Upload {
-        dst: usize,
-        offset: u64,
-        bytes: &'a [u8],
-    },
-    #[cfg(feature = "d3d12-diagnostics")]
-    Copy {
-        src: usize,
-        dst: usize,
-        src_offset: u64,
-        dst_offset: u64,
-        size: u64,
-    },
-    #[cfg(feature = "d3d12-diagnostics")]
-    Readback {
-        pass: usize,
-        src: usize,
-        offset: u64,
-        size: usize,
-    },
-}
-
-#[cfg(all(test, feature = "d3d12-diagnostics"))]
-impl<'a> Plan<'a> {
-    fn new(graph: &'a CompiledGraph) -> Result<Self, D3D12RuntimeError> {
-        if !graph.exports.is_empty() {
-            return Err(D3D12RuntimeError::unsupported(
-                "D3D12 Graph export is not implemented at M4-04",
-            ));
-        }
-        let mut plan = Self {
-            graph: graph.id,
-            buffers: vec![None; graph.resources.len()],
-            operations: Vec::with_capacity(graph.order.len()),
-        };
-        // Only retained operations need native support. An unused image or
-        // culled shader operation must not make a buffer-only graph unsupported.
-        for &pass in &graph.order {
-            let operation = match &graph.passes[pass].operation {
-                Operation::UploadBuffer { dst, offset, .. } => {
-                    plan.use_buffer(graph, *dst)?;
-                    PlannedOperation::Upload {
-                        dst: *dst,
-                        offset: *offset,
-                        bytes: graph.upload_data(&graph.passes[pass].operation),
-                    }
-                }
-                Operation::CopyBuffer {
-                    src,
-                    dst,
-                    src_offset,
-                    dst_offset,
-                    size,
-                } => {
-                    plan.use_buffer(graph, *src)?;
-                    plan.use_buffer(graph, *dst)?;
-                    PlannedOperation::Copy {
-                        src: *src,
-                        dst: *dst,
-                        src_offset: *src_offset,
-                        dst_offset: *dst_offset,
-                        size: *size,
-                    }
-                }
-                Operation::ReadbackBuffer { src, offset, size } => {
-                    plan.use_buffer(graph, *src)?;
-                    let size = usize::try_from(*size).map_err(|_| {
-                        D3D12RuntimeError::unsupported("readback exceeds CPU address space")
-                    })?;
-                    if size > isize::MAX as usize {
-                        return Err(D3D12RuntimeError::unsupported(
-                            "readback exceeds Rust's maximum allocation length",
-                        ));
-                    }
-                    PlannedOperation::Readback {
-                        pass,
-                        src: *src,
-                        offset: *offset,
-                        size,
-                    }
-                }
-                _ => {
-                    return Err(D3D12RuntimeError::unsupported(
-                        "D3D12 M4-04 supports only live buffer upload, copy and readback operations",
-                    ));
-                }
-            };
-            plan.operations.push(operation);
-        }
-        Ok(plan)
-    }
-
-    fn use_buffer(&mut self, graph: &CompiledGraph, index: usize) -> Result<(), D3D12RuntimeError> {
-        if self.buffers[index].is_some() {
-            return Ok(());
-        }
-        let resource = &graph.resources[index];
-        if resource.import.is_some() {
-            return Err(D3D12RuntimeError::unsupported(
-                "D3D12 Graph import is not implemented at M4-04",
-            ));
-        }
-        let ResourceDesc::Buffer(desc) = resource.desc else {
-            return Err(D3D12RuntimeError::unsupported(
-                "D3D12 image resources require M4-05",
-            ));
-        };
-        if desc.size > MAX_BUFFER_BYTES {
-            return Err(D3D12RuntimeError::unsupported(
-                "buffer exceeds the D3D12 M4-04 supported 2 GiB per-buffer limit",
-            ));
-        }
-        self.buffers[index] = Some(desc.size);
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -179,7 +61,6 @@ struct Work {
     depth_targets: Vec<super::program::DepthTarget>,
     buffers: Vec<Option<DeviceBuffer>>,
     staging: Vec<DeviceBuffer>,
-    scratch: Vec<DeviceBuffer>,
     readbacks: Vec<Readback>,
     _allocator: ID3D12CommandAllocator,
     list: ID3D12GraphicsCommandList,
@@ -256,15 +137,12 @@ impl Work {
             depth_targets: Vec::new(),
             buffers,
             staging: Vec::new(),
-            scratch: Vec::new(),
             readbacks: Vec::new(),
             _allocator: allocator,
             list,
             fence,
             owner,
         };
-        #[cfg(feature = "d3d12-diagnostics")]
-        let mut states = vec![D3D12_RESOURCE_STATE_COMMON; work.buffers.len()];
         for operation in plan.operations {
             match operation {
                 #[cfg(test)]
@@ -279,150 +157,6 @@ impl Work {
                 PlannedOperation::StorageReadFixture(plan) => {
                     let recording = plan.record(&work.list)?;
                     work.retain_fixture(recording);
-                }
-                #[cfg(feature = "d3d12-diagnostics")]
-                PlannedOperation::Upload { dst, offset, bytes } => {
-                    let upload =
-                        DeviceBuffer::new(&work.owner, bytes.len() as u64, D3D12_HEAP_TYPE_UPLOAD)?;
-                    // SAFETY: This exact-sized upload is newly owned here and
-                    // no native command can access it before queue submission.
-                    // Owned CPU input cannot overlap this new native allocation.
-                    unsafe {
-                        upload.write(&work.owner, bytes)?;
-                    }
-                    transition(
-                        &work.list,
-                        work.buffers[dst].as_ref().unwrap().raw(),
-                        &mut states[dst],
-                        D3D12_RESOURCE_STATE_COPY_DEST,
-                    );
-                    // SAFETY: The immutable compiled graph establishes ranges,
-                    // and the newly allocated upload has exactly bytes.len().
-                    // Both buffers remain owned by work through GPU completion.
-                    unsafe {
-                        work.list.CopyBufferRegion(
-                            work.buffers[dst].as_ref().unwrap().raw(),
-                            offset,
-                            upload.raw(),
-                            0,
-                            bytes.len() as u64,
-                        );
-                    }
-                    work.staging.push(upload);
-                }
-                #[cfg(feature = "d3d12-diagnostics")]
-                PlannedOperation::Copy {
-                    src,
-                    dst,
-                    src_offset,
-                    dst_offset,
-                    size,
-                } => {
-                    transition(
-                        &work.list,
-                        work.buffers[src].as_ref().unwrap().raw(),
-                        &mut states[src],
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    );
-                    if src == dst {
-                        // Legacy barriers cannot make one resource both source
-                        // and destination. Preserve legal nonoverlapping Graph
-                        // self-copy semantics with an independent scratch buffer.
-                        let scratch =
-                            DeviceBuffer::new(&work.owner, size, D3D12_HEAP_TYPE_DEFAULT)?;
-                        let mut state = D3D12_RESOURCE_STATE_COMMON;
-                        transition(
-                            &work.list,
-                            scratch.raw(),
-                            &mut state,
-                            D3D12_RESOURCE_STATE_COPY_DEST,
-                        );
-                        // SAFETY: Graph guarantees the source range, scratch is
-                        // exactly size bytes, and both resources are retained.
-                        unsafe {
-                            work.list.CopyBufferRegion(
-                                scratch.raw(),
-                                0,
-                                work.buffers[src].as_ref().unwrap().raw(),
-                                src_offset,
-                                size,
-                            );
-                        }
-                        transition(
-                            &work.list,
-                            scratch.raw(),
-                            &mut state,
-                            D3D12_RESOURCE_STATE_COPY_SOURCE,
-                        );
-                        transition(
-                            &work.list,
-                            work.buffers[dst].as_ref().unwrap().raw(),
-                            &mut states[dst],
-                            D3D12_RESOURCE_STATE_COPY_DEST,
-                        );
-                        // SAFETY: Independent source and destination now have
-                        // matching native states and checked logical ranges.
-                        unsafe {
-                            work.list.CopyBufferRegion(
-                                work.buffers[dst].as_ref().unwrap().raw(),
-                                dst_offset,
-                                scratch.raw(),
-                                0,
-                                size,
-                            );
-                        }
-                        work.scratch.push(scratch);
-                    } else {
-                        transition(
-                            &work.list,
-                            work.buffers[dst].as_ref().unwrap().raw(),
-                            &mut states[dst],
-                            D3D12_RESOURCE_STATE_COPY_DEST,
-                        );
-                        // SAFETY: Distinct private buffers have the required
-                        // states and immutable Graph-validated copy ranges.
-                        unsafe {
-                            work.list.CopyBufferRegion(
-                                work.buffers[dst].as_ref().unwrap().raw(),
-                                dst_offset,
-                                work.buffers[src].as_ref().unwrap().raw(),
-                                src_offset,
-                                size,
-                            );
-                        }
-                    }
-                }
-                #[cfg(feature = "d3d12-diagnostics")]
-                PlannedOperation::Readback {
-                    pass,
-                    src,
-                    offset,
-                    size,
-                } => {
-                    let readback =
-                        DeviceBuffer::new(&work.owner, size as u64, D3D12_HEAP_TYPE_READBACK)?;
-                    transition(
-                        &work.list,
-                        work.buffers[src].as_ref().unwrap().raw(),
-                        &mut states[src],
-                        D3D12_RESOURCE_STATE_COPY_SOURCE,
-                    );
-                    // SAFETY: The source range is Graph-validated; the private
-                    // readback destination is exactly size bytes in COPY_DEST.
-                    unsafe {
-                        work.list.CopyBufferRegion(
-                            readback.raw(),
-                            0,
-                            work.buffers[src].as_ref().unwrap().raw(),
-                            offset,
-                            size as u64,
-                        );
-                    }
-                    work.readbacks.push(Readback {
-                        pass,
-                        size,
-                        buffer: Some(readback),
-                    });
                 }
             }
         }
@@ -839,7 +573,6 @@ impl FixtureSubmission {
             owner,
             buffers,
             staging,
-            scratch,
             _allocator,
             list,
             fence,
@@ -849,7 +582,7 @@ impl FixtureSubmission {
         // active; a partial pattern with `..` would defer these fields too far.
         #[cfg(test)]
         drop(depth_targets);
-        drop((buffers, staging, scratch, list, _allocator, fence));
+        drop((buffers, staging, list, _allocator, fence));
         #[cfg(test)]
         {
             for lease in &resource_leases {
@@ -857,9 +590,8 @@ impl FixtureSubmission {
             }
             drop((managed_bindings, resource_leases));
         }
-        // Recording order is the Graph's execution order, which need not match
-        // pass indices. No command operands refer to these entries after the
-        // completed work has retired; index them once for result consumption.
+        // Native work is retired, so only CPU result lookup uses these entries.
+        // Keep them indexed by the logical fixture pass for result consumption.
         readbacks.sort_unstable_by_key(|readback| readback.pass);
         let remaining_readbacks = readbacks.len();
         let owner = if readbacks.is_empty() {
@@ -980,8 +712,9 @@ impl FixtureResult {
         let owner = self.owner.as_ref().unwrap();
         owner.check_native_active()?;
         // SAFETY: Normal Fence completion retired the GPU copy before this
-        // result existed. The plan checked this exact readback length against
-        // the allocation and Rust slice limits; owner remains retained here.
+        // result existed. The private fixture recorder creates this exact-sized
+        // readback and copies its fixed, reviewed output into it. Its small byte
+        // count fits Rust slice limits; owner remains retained here.
         let bytes = unsafe { buffer.read(owner, readback.size)? };
         // Removal may occur while a previously completed readback is held or
         // copied. Do not publish bytes as a valid result after native failure.
@@ -1157,9 +890,15 @@ mod tests {
             "unsubmitted owner released"
         );
 
+        // This fault happens before command recording; one real buffer is
+        // sufficient to verify cleanup without a second Graph lowering path.
         let error = Work::prepare(
             Arc::clone(&runtime.device),
-            Plan::new(&graph).unwrap(),
+            Plan {
+                graph: graph.id,
+                buffers: vec![Some(4)],
+                operations: vec![],
+            },
             true,
         )
         .err()
