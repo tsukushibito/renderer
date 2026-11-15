@@ -82,11 +82,22 @@ impl Presenter {
             inner.desired = (width, height);
         }
     }
+    /// Observe GPU/present completion and return reusable slots. Retired
+    /// Swapchain generations remain anchored until collection or recreation.
     pub fn poll(&mut self) -> Result<usize, RuntimeError> {
         self.inner
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("Presenter is closed"))?
             .poll(Duration::ZERO)
+    }
+    /// Destroy retired Swapchain generations whose GPU and present ownership
+    /// has already returned. Does not poll or wait; unobserved completions keep
+    /// their generations retained. Call at an explicit change/maintenance
+    /// boundary. Recreation also collects before checking retired capacity.
+    pub fn collect_retired_swapchains(&mut self) -> usize {
+        self.inner
+            .as_mut()
+            .map_or(0, Inner::collect_retired_swapchains)
     }
     /// Wait only this Presenter's GPU/present work, never Device/Queue idle.
     pub fn wait_idle(&mut self, timeout: Duration) -> Result<bool, RuntimeError> {

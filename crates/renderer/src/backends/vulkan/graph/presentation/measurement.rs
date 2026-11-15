@@ -42,6 +42,8 @@ pub(super) struct Observations {
     pub(super) readback_peak: usize,
     pub(super) shutdown_presents: usize,
     pub(super) normal_extent: Option<(u32, u32)>,
+    pub(super) normal_retired_swapchains: usize,
+    pub(super) collected_retired_swapchains: usize,
 }
 
 impl Measurements {
@@ -135,6 +137,11 @@ impl Measurements {
         assert!(observed.readback_peak >= 6);
         assert_eq!(observed.shutdown_presents, 1);
         assert!(observed.normal_extent.is_some());
+        assert!(observed.normal_retired_swapchains > 0);
+        assert_eq!(
+            observed.collected_retired_swapchains,
+            observed.normal_retired_swapchains
+        );
 
         #[cfg(not(feature = "memory-profiling"))]
         let _ = (runtime, presentation, frame, extents, graph_slots);
@@ -184,11 +191,13 @@ impl Measurements {
                         "max_held_cpu_results": observed.held_peak,
                         "max_live_readbacks": observed.readback_peak,
                         "extent": observed.normal_extent,
+                        "retained_eligible_old_swapchains": observed.normal_retired_swapchains,
                         "changing_inputs": "transform, tint, clear and zero/one/two Invert passes; every source is built and compiled",
                         "scope": "all Renderer preparation checks, build/compile, submission, GPU/present polling, CPU readback, metadata/result/output return and final present drain",
                     },
                     "setup_change_sources": observed.setup_sources,
                     "setup_change_accepted_presents": observed.setup_sources * 2,
+                    "explicitly_collected_old_swapchains_after_normal": observed.collected_retired_swapchains,
                     "extra_shutdown_accepted_presents": observed.shutdown_presents,
                     "prepared": {
                         "runtime": {
