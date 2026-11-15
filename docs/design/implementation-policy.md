@@ -1108,14 +1108,14 @@ native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換
 `.2.2.2`では管理下buffer Computeのowned命令・論理bindingとshader実footprintを共通CPU計画へ接続した。
 現在はuniform/storage readbackの一workgroupだけを扱い、binding全descriptorと16-byte実アクセスを分ける。
 これは`.2.1`で作成したnative Program/Bindingsの実行ではなく、Device固有の保証と二APIの一般実行は`.2.4`へ残す。
-prepared arena・所有・初期化・依存・cullingとnative未対応拒否の範囲は[Graph契約](rendergraph.md#管理下buffer-computeのowned計画)に従う。
+prepared arena・所有・初期化・依存・cullingとnative未対応拒否の範囲は[Graph契約](rendergraph.md#program由来bindingとshader-stageのowned計画)に従う。
 `.2.2.3`は描画命令なしのattachment配列/optional depthと単一mip/layer ViewをCPU計画へ追加し、
 Load/Store、各subresourceの初期化・producer/hazard/culling、全域exportを実証する。
 旧clear入口は置換し、nativeは従来の1color＋depth Clear/Storeだけをlowerする。
 owned一般Raster命令・graphics stage/vertex/PSOと実描画、複数subresource View/native実行をこの完了に含めない。
 `.2.2.4`は実在mesh assetの`ManagedRasterProgram`を明示するowned複数drawへ公開Raster/Engine batchを統合する。
 Program・定数・draw順・attachmentを同じ準備済み計画へ所有し、既存VulkanでLoad/Storeとindex provenanceを維持して実行する。
-このmeshはdescriptorを使わないため、一般graphics bindingのstage導出・新PSO・D3D12実Rasterの実証は`.2.3`へ残る。
+このmeshはdescriptorを使わない。`.2.2.5`は別の実shader `textured_mesh()`でVS UniformとFS画像/samplerを導き、各drawのbindingをowned計画へ接続する。Computeのsampled assetも同じ型付きbindingを使い、ShaderStagesと実footprintを共通解析へ保持する。利用側の二段sampled RasterとCompute readbackで短命入力・画像依存・cullingを実証する。これは設計比較の構成パターンの接続であり、BloomアルゴリズムはB4、HDR Graph/新PSOとD3D12 Rasterは`.2.3`、一般native Compute/copyは`.2.4`に残る。
 任意/MRT Program、first_index/base_vertex/多instance、複数subresourceを覆うViewをこの完了の保証にしない。
 他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、

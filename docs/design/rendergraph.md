@@ -70,36 +70,47 @@ private受入のproducer→consumer同期を、公開Graphの一般dispatch対�
 一般owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`で進める。
 その作成領域・解析workspace・不変planの所有は、以下の準備済みslotへ移行した。
 
-### 管理下buffer Computeのowned計画
+### Program由来bindingとshader stageのowned計画
 
-`renderer-7ft.2.2.2`では`Graph::dispatch(name, &program, &bindings, workgroups)`を追加した。
-`ManagedProgram::uniform_readback()`と`storage_readback()`、`[1, 1, 1]` workgroupsを扱い、
-sampled assetや他のdispatch数は構築時に`Unsupported`として拒否する。
-`graph::BufferBinding`にはgroup/binding、論理buffer、offset/sizeだけを指定する。
-用途はProgramから導き、別のread/write一覧を要求しない。
+`Graph::dispatch(name, &program, &bindings, workgroups)`は管理下の四Compute assetを
+`[1, 1, 1]` workgroupsで計画する。`graph::Binding`はgroup/bindingと
+`BindingResource::{Buffer { buffer, offset, size }, ImageView, Sampler}`をまとめる。
+各drawも同じ型のbinding sliceを借用し、用途・shader stage・実アクセス範囲をProgramから導く。
+利用側に別のread/write一覧を要求せず、旧buffer専用入口は残さない。
 
-命令は不変な管理下Programのidentity、dispatch数、manifest順に正規化したbindingを所有する。
-Programはprivateなstatic manifestを参照し、bindingは準備済みarenaへ値として格納するため、
-呼出元のProgram変数・binding sliceを変更/破棄しても完成planは変わらない。
-これは論理bufferの命令であり、`.2.1`のnative Program/Bindingsをimportした所有契約ではない。
+命令は不変な管理下Program identity、dispatch数、manifest順のbindingを所有する。
+Programのprivate static manifestと準備済みarenaへコピーしたbuffer descriptor・単一subresource View・
+sampler設定により、呼出元のProgram変数・binding/draw sliceが変更・破棄されてもplanは変わらない。
+同じRaster内のdrawごとに異なるmaterial bindingを指定できる。これは論理Graph資源の所有であり、
+`.2.1`のnative Program/Bindingsをimportした契約ではない。
 
-descriptor全範囲の非ゼロ・ABI最小size・論理buffer内の境界を構築時に確認し、全offset/sizeを保持する。
-解析にはshaderの実際のread/write footprintだけを使う。現在の二assetはbinding先頭16 byteを読み、
-出力先頭16 byteだけを初期化する。32 byteのdescriptorを渡しても残り16 byteを初期化済みとしない。
-この保証はABIの`min_size`から推定せず、レビュー済みshaderと同時管理するprivate実行契約に置く。
-shaderやdispatch条件を変える際はfootprint・初期化保証も改訂する。
-Uniform readは`AccessPurpose::Uniform`であり、StorageReadへ代用しない。
-同passでwriteを含む実footprintが重なるbindingは拒否し、descriptorだけが重なる非重複範囲は区別する。
+全slotの過不足・重複・種別・owner、非ゼロのbuffer範囲・ABI最小size・論理境界を構築時に確認する。
+解析にはABI最小sizeから推定した量ではなく、shaderと同時にレビューするprivate footprintを使う。
+uniform/storage readbackは先頭16 byteだけを読み書きし、sampled readbackの出力は16 byte、
+sampled float readbackは64 byteだけを初期化する。大きなdescriptorの未書込tailは有効にならない。
+sampled入力は選択したViewのmip/layer全域を読むものとして扱い、sampler自体は資源内容アクセスを作らない。
+shaderやdispatch条件を変える際はfootprintと初期化保証も改訂する。
 
-初期化・宣言順producer・RAW/WAR/WAW・culling・循環は既存の共通解析へ接続する。
-`GraphCapacity::bindings`が全passのbinding上限で、超過は`GraphCapacityKind::Bindings`として返す。
-途中のslot/range/access/name/capacity失敗はbindingとaccessの追加を戻し、通常frameでheapを増設しない。
+`BindingLayout::stages`はVertex/Fragment/Computeを表し、用途と共に実行計画へ保持する。
+UniformをStorageReadで代用せず、vertex/index fetchはshader stageとは別の入力用途として扱う。
+同passでwriteを含む実範囲が重なるbinding、および全drawのsampled入力とattachmentのfeedbackを拒否する。
+read/read重複と同じ画像の異なるmip/layerは区別する。初期化・宣言順producer・RAW/WAR/WAW・
+culling・循環は既存の共通解析へ接続する。
 
-native実行は後続`.2.4`であり、両backendはliveなmanaged dispatchを明示拒否する。
-culled dispatchは実行を妨げず、その論理buffer用のnative資源も取得しない。
-Device固有のalignment・usage・descriptor/dispatch上限、native Program/bindingの所有、
+`GraphCapacity::bindings`はdispatchと全drawで共有する上限である。
+途中のslot/range/access/attachment/name/capacity失敗は追加した全operandを戻し、通常frameでheapを増設しない。
+planとnative consumerのpinが全て返るまでslotを再利用しない。
+
+native dispatch実行は後続`.2.4`であり、両backendはliveなmanaged dispatchを取得前に拒否する。
+新しいdescriptor-bound Rasterのnative PSO/実行は`.2.3`で扱い、現行meshとして誤実行しない。
+culledな未対応枝は実行を妨げず、その枝専用のnative資源も取得しない。
+Device固有のalignment・usage・descriptor/dispatch上限、native Program/binding所有、
 D3D12のresource単位の状態互換性はCPU計画だけでは保証しない。
-MRT、画像subresource、一般Raster、一般Computeの二API実行を`.2.2.2`の完了に含めない。
+
+`examples/graph_composition.rs`は実Graph上で、短命binding/draw列、利用側に隠した中間画像、
+二つのsampled Rasterと出力handleを示す。無効時は入力handleをそのまま返せる。
+設計比較用`Study/scenario/bloom`の構成・所有パターンを実APIへ接続する例であり、
+Bloomアルゴリズム、HDR Graph画像、一般native shader実行の完成を示すものではない。
 
 <a id="prepared-graph-storage"></a>
 
@@ -238,7 +249,7 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 安定した機械可読形式や実行間で同一のdumpは保証しない。
 
 `Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`と借用draw sliceを受け取る。
-各`RasterDraw`はvertex／index buffer・index count・`RasterParameters`をまとめ、
+各`RasterDraw`はvertex／index buffer・index count・`RasterParameters`と借用binding sliceをまとめ、
 attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
 現在の管理下mesh Programは1 RGBA8出力を持ち、CPU計画ではdepthを省略できる。
 Vulkanのnative実行は従来の1color＋depth・単一subresource画像だけを扱い、他の形は物理取得前に`Unsupported`にする。
@@ -251,13 +262,18 @@ Vulkanのnative実行は従来の1color＋depth・単一subresource画像だけ�
 頂点stride 28、vertex段のcolumn-major行列＋tint 80 byte、fragment出力location 0を定める。
 これはnative PSO作成やDevice能力の保証ではなく、任意source/binaryや自己申告のmanifestを受け入れない。
 このshaderはdescriptor bindingとstorage副作用を持たない。DXILのb0は同じinline描画定数の表現であり、
-一般graphicsのUniform binding/stage導出や新しいGraph資源bindingを実装したとは扱わない。
+このmeshだけから一般graphicsのUniform bindingを推定しない。
+`textured_mesh()`は実際の別VS/FSに結び付き、`group 0/binding 0`のVS Uniform先頭16 byteを
+clip-space offsetへ使い、`group 1/binding 0`の画像と`binding 1`のsamplerをFSで読む。
+stride 28・inline引数80 byte・1 RGBA8出力は同じで、native PSOは未接続である。
+生成DXILではUniformが`b0/space0`、inline引数が`b1/space0`であり、
+meshのinline `b0`と同じnative layoutを流用できる契約ではない。
 
 planはProgram identity、draw順、各定数、全buffer/View参照を準備済みarenaへ所有する。
 vertex/index用途はdrawから導き、共有bufferの各用途を失わずに集約する。Indexはu32三角形、
 first index/base vertexは0、instance数は1だけを扱う。CPU計画だけでindex本文の範囲内や実Device上限を保証せず、
 既存のnative provenance・更新時の失効・未知内容の拒否を維持する。
-後半drawの構築失敗でもdraw/access/attachment/nameを戻し、途中のpassを公開しない。
+後半drawの構築失敗でもdraw/binding/access/attachment/nameを戻し、途中のpassを公開しない。
 Engineはsnapshotで確立した有限値のprivate保証を同じcoreへ渡し、描画引数を再走査しない。
 空draw sliceはProgramを使わないattachment-onlyへ正規化するため、空の場合はattachment配列の一般形も扱える。
 旧single-draw/batch APIの互換入口は残さない。複数drawも同じLoad/Storeを共有し、Clear/Storeへ暗黙に置き換えない。

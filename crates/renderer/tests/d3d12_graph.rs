@@ -21,7 +21,7 @@ use std::time::Duration;
 use renderer::graph::{
     Binding, BufferDesc, BufferHandle, CompiledGraph, Graph, GraphCapacity, GraphPool, PassHandle,
 };
-use renderer::program::ManagedProgram;
+use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
 use renderer::{
     D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode, ResourceClass,
     RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime,
@@ -135,6 +135,8 @@ fn shared_buffer_graph() -> (GraphPool, CompiledGraph, Vec<ExpectedReadback>) {
     // Unsupported execution must be checked only for live operations. This
     // branch is fully culled and must not acquire either physical buffer.
     append_owned_dispatch(&mut graph);
+    append_owned_textured_raster(&mut graph);
+    append_owned_sampled_dispatch(&mut graph);
     (
         graph_pool,
         graph.compile().unwrap(),
@@ -156,6 +158,132 @@ fn shared_buffer_graph() -> (GraphPool, CompiledGraph, Vec<ExpectedReadback>) {
             },
         ],
     )
+}
+
+fn append_owned_textured_raster(graph: &mut Graph) -> renderer::graph::ImageHandle {
+    use renderer::graph::{
+        Attachment, Binding, BindingResource, ImageDesc, LoadOp, RasterAttachments, RasterDraw,
+        RasterParameters, StoreOp,
+    };
+    let vertices = graph
+        .buffer("textured vertices", BufferDesc { size: 28 })
+        .unwrap();
+    let indices = graph
+        .buffer("textured indices", BufferDesc { size: 12 })
+        .unwrap();
+    let uniform = graph
+        .buffer("textured offset", BufferDesc { size: 16 })
+        .unwrap();
+    graph
+        .upload_buffer("textured vertex bytes", vertices, 0, &[0; 28])
+        .unwrap();
+    graph
+        .upload_buffer("textured index bytes", indices, 0, &[0; 12])
+        .unwrap();
+    graph
+        .upload_buffer("textured offset bytes", uniform, 0, &[0; 16])
+        .unwrap();
+    let source = graph
+        .image("textured source", ImageDesc::rgba8(2, 2))
+        .unwrap();
+    let output = graph
+        .image("textured output", ImageDesc::rgba8(2, 2))
+        .unwrap();
+    let depth = graph
+        .image("textured depth", ImageDesc::depth32(2, 2))
+        .unwrap();
+    graph
+        .upload_image("textured pixels", source, &[255; 16])
+        .unwrap();
+    let bindings = [
+        Binding {
+            group: 0,
+            binding: 0,
+            resource: BindingResource::Buffer {
+                buffer: uniform,
+                offset: 0,
+                size: 16,
+            },
+        },
+        Binding {
+            group: 1,
+            binding: 0,
+            resource: BindingResource::ImageView(graph.image_view(source, 0, 0).unwrap()),
+        },
+        Binding {
+            group: 1,
+            binding: 1,
+            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+        },
+    ];
+    graph
+        .raster(
+            "textured Raster",
+            &ManagedRasterProgram::textured_mesh(),
+            &[RasterDraw {
+                vertices,
+                indices,
+                index_count: 3,
+                parameters: RasterParameters::default(),
+                bindings: &bindings,
+            }],
+            RasterAttachments {
+                colors: &[Attachment {
+                    view: graph.image_view(output, 0, 0).unwrap(),
+                    load: LoadOp::Clear([0.0; 4]),
+                    store: StoreOp::Store,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(depth, 0, 0).unwrap(),
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+        )
+        .unwrap();
+    output
+}
+
+fn append_owned_sampled_dispatch(graph: &mut Graph) -> BufferHandle {
+    use renderer::graph::{Binding, BindingResource, ImageDesc};
+    let source = graph
+        .image("sampled source", ImageDesc::rgba8(2, 2))
+        .unwrap();
+    let output = graph
+        .buffer("sampled output", BufferDesc { size: 64 })
+        .unwrap();
+    graph
+        .upload_image("sampled input", source, &[127; 16])
+        .unwrap();
+    graph
+        .dispatch(
+            "sampled dispatch",
+            &ManagedProgram::sampled_float_readback(),
+            &[
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::ImageView(graph.image_view(source, 0, 0).unwrap()),
+                },
+                Binding {
+                    group: 0,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: output,
+                        offset: 0,
+                        size: 64,
+                    },
+                },
+            ],
+            [1; 3],
+        )
+        .unwrap();
+    output
 }
 
 fn checksum(bytes: &[u8]) -> String {
@@ -224,34 +352,78 @@ fn run_shared_graph(strict_validation: bool) {
             ],
         )
         .expect("prepare all native resource classes before submitting the common Graph");
-    let mut rejected_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let mut rejected_graph = rejected_pool.begin().unwrap();
-    let output = append_owned_dispatch(&mut rejected_graph);
-    rejected_graph
-        .readback_buffer("live dispatch result", output, 0, 16)
-        .unwrap();
-    let rejected = rejected_graph.compile().unwrap();
-    assert_eq!(
-        vulkan
-            .submit(&rejected)
-            .err()
-            .expect("live managed dispatch is unsupported")
-            .kind(),
-        RuntimeErrorKind::Unsupported
-    );
-    assert_eq!(
-        d3d12
-            .submit(&rejected)
-            .err()
-            .expect("live managed dispatch is unsupported")
-            .kind(),
-        D3D12RuntimeErrorKind::Unsupported
-    );
-    drop((rejected, rejected_pool));
+    let prepared_resources = vulkan.stats().resources_created;
+    #[cfg(feature = "memory-profiling")]
+    let mut rejection_native_events = Some([[0_u64; 9]; 3]);
+    #[cfg(not(feature = "memory-profiling"))]
+    let rejection_native_events: Option<[[u64; 9]; 3]> = None;
+    for mode in 0..3 {
+        let mut rejected_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut rejected_graph = rejected_pool.begin().unwrap();
+        match mode {
+            0 => {
+                let output = append_owned_dispatch(&mut rejected_graph);
+                rejected_graph
+                    .readback_buffer("live dispatch result", output, 0, 16)
+                    .unwrap();
+            }
+            1 => {
+                let output = append_owned_textured_raster(&mut rejected_graph);
+                rejected_graph
+                    .readback_image("live textured result", output)
+                    .unwrap();
+            }
+            _ => {
+                let output = append_owned_sampled_dispatch(&mut rejected_graph);
+                rejected_graph
+                    .readback_buffer("live sampled result", output, 0, 64)
+                    .unwrap();
+            }
+        }
+        let rejected = rejected_graph.compile().unwrap();
+        let before = vulkan.stats();
+        #[cfg(feature = "memory-profiling")]
+        let before_native = renderer::measurement::Snapshot::now();
+        assert_eq!(
+            vulkan
+                .submit(&rejected)
+                .err()
+                .expect("live managed operation is unsupported")
+                .kind(),
+            RuntimeErrorKind::Unsupported
+        );
+        assert_eq!(
+            d3d12
+                .submit(&rejected)
+                .err()
+                .expect("live managed operation is unsupported")
+                .kind(),
+            D3D12RuntimeErrorKind::Unsupported
+        );
+        #[cfg(feature = "memory-profiling")]
+        {
+            let events = renderer::measurement::Snapshot::now().since(before_native);
+            assert!(!events.overflowed);
+            assert_eq!(
+                &events.native[..renderer::measurement::NativeEvent::Reset as usize],
+                &[0; 8],
+                "rejection created or destroyed a native object/resource: {events:?}"
+            );
+            rejection_native_events.as_mut().unwrap()[mode] = events.native;
+        }
+        assert_eq!(vulkan.stats().resources_created, before.resources_created);
+        assert_eq!(vulkan.stats().resources_reused, before.resources_reused);
+        drop((rejected, rejected_pool));
+    }
     // A rejected dispatch must return reusable recording/result reservations;
     // the following ordinary Graph still executes successfully on both APIs.
     let pass_count = plan.pass_count();
     let mut vulkan_submission = vulkan.submit(&plan).expect("submit common Graph to Vulkan");
+    assert_eq!(
+        vulkan.stats().resources_created,
+        prepared_resources,
+        "culled shader branches acquired physical resources"
+    );
     let mut vulkan_result = vulkan_submission
         .wait(Duration::from_secs(30))
         .expect("Vulkan Fence observation")
@@ -346,6 +518,18 @@ fn run_shared_graph(strict_validation: bool) {
                 "live_rejected_by_both_backends": true,
                 "culled_branch_does_not_prevent_execution": true,
                 "native_dispatch_execution_supported": false,
+            },
+            "shader_bindings": {
+                "live_textured_plan_rejected_by_both_backends": true,
+                "live_sampled_plan_rejected_by_both_backends": true,
+                "d3d12_rejects_prior_image_upload": true,
+                "vulkan_rejection_resource_create_reuse_unchanged": true,
+                "vulkan_culled_branches_no_new_resources": true,
+                "rejection_native_event_counters_checked": cfg!(feature = "memory-profiling"),
+                "rejection_order":["buffer_dispatch_plan","textured_raster_plan","sampled_dispatch_plan"],
+                "rejection_native_events_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": rejection_native_events,
+                "culled_branches_do_not_prevent_common_execution": true,
+                "native_shader_execution_supported": false,
             },
         },
         "validation": {
