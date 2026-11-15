@@ -82,9 +82,22 @@ pub(super) fn root_parameters(
 }
 
 pub(super) struct DescriptorHeaps {
-    _views: Option<ID3D12DescriptorHeap>,
-    _samplers: Option<ID3D12DescriptorHeap>,
+    _views: Option<NativeObject<ID3D12DescriptorHeap>>,
+    _samplers: Option<NativeObject<ID3D12DescriptorHeap>>,
+    #[cfg(feature = "memory-profiling")]
+    _allocations: [DescriptorAllocation; 2],
     pub(super) _tables: Box<[Option<D3D12_GPU_DESCRIPTOR_HANDLE>]>,
+}
+#[cfg(feature = "memory-profiling")]
+struct DescriptorAllocation(usize);
+#[cfg(feature = "memory-profiling")]
+impl Drop for DescriptorAllocation {
+    fn drop(&mut self) {
+        crate::measurement::record_native(
+            crate::measurement::NativeEvent::DescriptorFree,
+            self.0 as u64,
+        );
+    }
 }
 // SAFETY: Heaps are free-threaded D3D12 objects. Descriptor writes finish before
 // publication; immutable bindings retain all referenced resources and Device.
@@ -126,11 +139,15 @@ impl DescriptorHeaps {
             return Ok(Self {
                 _views: None,
                 _samplers: None,
+                #[cfg(feature = "memory-profiling")]
+                _allocations: [DescriptorAllocation(0), DescriptorAllocation(0)],
                 _tables: Box::new([]),
             });
         }
         let create =
-            |count: usize, kind| -> Result<Option<ID3D12DescriptorHeap>, D3D12RuntimeError> {
+            |count: usize,
+             kind|
+             -> Result<Option<NativeObject<ID3D12DescriptorHeap>>, D3D12RuntimeError> {
                 if count == 0 {
                     return Ok(None);
                 }
@@ -140,13 +157,21 @@ impl DescriptorHeaps {
                     Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
                     NodeMask: 0,
                 };
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::DescriptorAllocate,
+                    count as u64,
+                );
                 // SAFETY: The Program's root budget bounds these exact counts. Each
                 // supported shader-visible heap is newly owned and immutable later.
-                unsafe { owner.raw.CreateDescriptorHeap(&desc) }
-                    .map(Some)
-                    .map_err(|error| owner.native("ID3D12Device::CreateDescriptorHeap", error))
+                object(owner, "ID3D12Device::CreateDescriptorHeap", || unsafe {
+                    owner.raw.CreateDescriptorHeap(&desc)
+                })
+                .map(Some)
             };
         let views = create(counts[0], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)?;
+        #[cfg(feature = "memory-profiling")]
+        let view_allocation = DescriptorAllocation(counts[0]);
         #[cfg(test)]
         if fail_after_views && views.is_some() {
             return Err(owner.native(
@@ -155,6 +180,8 @@ impl DescriptorHeaps {
             ));
         }
         let samplers = create(counts[1], D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER)?;
+        #[cfg(feature = "memory-profiling")]
+        let sampler_allocation = DescriptorAllocation(counts[1]);
         let mut tables = Vec::with_capacity(resources.len());
         let mut used = [0usize; 2];
         for resource in resources {
@@ -196,6 +223,8 @@ impl DescriptorHeaps {
         Ok(Self {
             _views: views,
             _samplers: samplers,
+            #[cfg(feature = "memory-profiling")]
+            _allocations: [view_allocation, sampler_allocation],
             _tables: tables.into_boxed_slice(),
         })
     }
@@ -206,8 +235,12 @@ impl DescriptorHeaps {
         // binding. D3D12 permits one heap of each type, set together in one call.
         unsafe {
             match (&self._views, &self._samplers) {
-                (Some(a), Some(b)) => list.SetDescriptorHeaps(&[Some(a.clone()), Some(b.clone())]),
-                (Some(a), None) | (None, Some(a)) => list.SetDescriptorHeaps(&[Some(a.clone())]),
+                (Some(a), Some(b)) => {
+                    list.SetDescriptorHeaps(&[Some((**a).clone()), Some((**b).clone())])
+                }
+                (Some(a), None) | (None, Some(a)) => {
+                    list.SetDescriptorHeaps(&[Some((**a).clone())])
+                }
                 (None, None) => {}
             }
         }

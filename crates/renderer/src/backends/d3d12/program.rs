@@ -7,6 +7,7 @@
 use std::sync::atomic::AtomicBool;
 use std::{fmt, mem::ManuallyDrop, sync::Arc};
 
+use super::frame::{NativeObject, object};
 use super::image::{D3D12ImageView, D3D12Sampler};
 use super::resources::{DeviceBuffer, MAX_BUFFER_BYTES};
 
@@ -33,8 +34,8 @@ const STORAGE_ALIGNMENT: u64 = D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT as u64;
 const MAX_UNIFORM_RANGE: u64 = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT as u64 * 16;
 
 struct ProgramOwner {
-    _pipeline: ID3D12PipelineState,
-    _signature: ID3D12RootSignature,
+    _pipeline: NativeObject<ID3D12PipelineState>,
+    _signature: NativeObject<ID3D12RootSignature>,
     managed: ManagedProgram,
     owner: Arc<DeviceOwner>,
 }
@@ -220,11 +221,11 @@ impl D3D12Runtime {
             std::slice::from_raw_parts(pointer.cast::<u8>(), size)
         };
         // SAFETY: The serialized v1.0 signature is valid on the retained Device.
-        let signature: ID3D12RootSignature =
-            unsafe { self.device.raw.CreateRootSignature(0, bytes) }.map_err(|error| {
-                self.device
-                    .native("ID3D12Device::CreateRootSignature", error)
-            })?;
+        let signature: NativeObject<ID3D12RootSignature> = object(
+            &self.device,
+            "ID3D12Device::CreateRootSignature",
+            || unsafe { self.device.raw.CreateRootSignature(0, bytes) },
+        )?;
         #[cfg(test)]
         if fail_after_signature {
             return Err(self.device.native(
@@ -243,14 +244,15 @@ impl D3D12Runtime {
         };
         // SAFETY: The registry supplies validated SM6.0 DXIL and its matching
         // signature. Both bytecode and COM reference outlive this native call.
-        let pipeline = unsafe { self.device.raw.CreateComputePipelineState(&pipeline_desc) };
+        let pipeline = object(
+            &self.device,
+            "ID3D12Device::CreateComputePipelineState",
+            || unsafe { self.device.raw.CreateComputePipelineState(&pipeline_desc) },
+        );
         // SAFETY: The generated field suppresses Drop; balance our clone after
         // the synchronous call, including its failure path.
         unsafe { ManuallyDrop::drop(&mut pipeline_desc.pRootSignature) };
-        let pipeline = pipeline.map_err(|error| {
-            self.device
-                .native("ID3D12Device::CreateComputePipelineState", error)
-        })?;
+        let pipeline = pipeline?;
         Ok(D3D12Program(Arc::new(ProgramOwner {
             _pipeline: pipeline,
             _signature: signature,
