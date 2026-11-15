@@ -271,7 +271,7 @@ impl TransferPayload for GraphWork {
     fn submitted(&mut self) {
         // No allocation, logging or application callbacks at this commit point.
         let data = &mut **self.data.as_mut().unwrap();
-        for index in 0..data.physical.len() {
+        for index in 0..data.active_resources {
             let Some(physical) = &data.physical[index] else {
                 continue;
             };
@@ -286,7 +286,7 @@ impl TransferPayload for GraphWork {
         if let Some(profile) = &mut self.profile {
             profile.begin_retire();
         }
-        for physical in self.physical.iter().flatten() {
+        for physical in self.physical[..self.active_resources].iter().flatten() {
             let mut state = physical.lock();
             // Waiting A after B must never overwrite B's accepted state, or
             // a later completion already observed by another submission.

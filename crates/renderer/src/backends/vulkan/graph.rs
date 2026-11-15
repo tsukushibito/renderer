@@ -147,6 +147,10 @@ struct Snapshot {
     access: vk::AccessFlags2,
     writer_stage: vk::PipelineStageFlags2,
     writer_access: vk::AccessFlags2,
+    // One exact read scope exposed since the last write/layout transition.
+    // Kept separate from accumulated scopes needed to order later writes.
+    read_stage: vk::PipelineStageFlags2,
+    read_access: vk::AccessFlags2,
     provenance: BufferProvenance,
 }
 
@@ -174,6 +178,8 @@ impl Default for Snapshot {
             access: vk::AccessFlags2::NONE,
             writer_stage: vk::PipelineStageFlags2::NONE,
             writer_access: vk::AccessFlags2::NONE,
+            read_stage: vk::PipelineStageFlags2::NONE,
+            read_access: vk::AccessFlags2::NONE,
             provenance: BufferProvenance::default(),
         }
     }

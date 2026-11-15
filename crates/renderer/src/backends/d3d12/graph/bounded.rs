@@ -75,7 +75,9 @@ pub(super) fn requirements(
             "prepared Graph metadata capacity exhausted",
         ));
     }
-    resource_map.fill(usize::MAX);
+    // Each Graph uses only this prefix; later checkouts reinitialize their own
+    // full active range, including when it grows after a smaller Graph.
+    resource_map[..graph.resources.len()].fill(usize::MAX);
     let mut used = 0;
     let mut upload_bytes = 0;
     let mut readback_bytes = 0;

@@ -12,6 +12,9 @@ use crate::backends::vulkan::graph::{
 use crate::backends::vulkan::transfer::staging::StagingRange;
 
 pub(in crate::backends::vulkan::graph) struct WorkData {
+    // All resource-indexed arrays are prepared once. Only this prefix may be
+    // read or modified by the current checkout, including partial preparation.
+    pub(in crate::backends::vulkan::graph) active_resources: usize,
     pub(in crate::backends::vulkan::graph) physical: Vec<Option<PhysicalLease>>,
     pub(in crate::backends::vulkan::graph) keys: Vec<Option<ResourceKey>>,
     pub(in crate::backends::vulkan::graph) needed: Vec<bool>,
@@ -57,6 +60,7 @@ impl WorkData {
             )?));
         }
         Ok(Self {
+            active_resources: 0,
             physical,
             keys,
             needed,
@@ -84,15 +88,16 @@ impl WorkData {
     }
 
     pub(in crate::backends::vulkan::graph) fn reset(&mut self) {
-        for physical in &mut self.physical {
+        let resources = self.active_resources;
+        for physical in &mut self.physical[..resources] {
             physical.take();
         }
-        self.keys.fill(None);
-        self.needed.fill(false);
-        self.used.fill(false);
-        self.provenance_needed.fill(false);
-        self.retain_provenance.fill(false);
-        for state in self.final_states.iter_mut().flatten() {
+        self.keys[..resources].fill(None);
+        self.needed[..resources].fill(false);
+        self.used[..resources].fill(false);
+        self.provenance_needed[..resources].fill(false);
+        self.retain_provenance[..resources].fill(false);
+        for state in self.final_states[..resources].iter_mut().flatten() {
             state.reset();
         }
         #[cfg(feature = "vulkan-diagnostics")]
@@ -102,8 +107,9 @@ impl WorkData {
         self.images.clear();
         self.uploads.clear();
         self.touched.clear();
-        self.uses.fill(Use::default());
+        self.uses[..resources].fill(Use::default());
         self.copy_scratch.clear();
+        self.active_resources = 0;
     }
 }
 
@@ -124,5 +130,68 @@ impl ResultData {
             .cpu_pending
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = [Duration::ZERO; 2];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::vulkan::graph::storage::StoragePool;
+    use crate::graph::GraphCapacity;
+
+    #[test]
+    fn cancelled_work_returns_active_metadata_across_shrinking_and_growing_graphs() {
+        let capacity = FrameCapacity {
+            graph: GraphCapacity {
+                resources: 8,
+                ..GraphCapacity::default()
+            },
+            initialized_ranges_per_resource: 1,
+            provenance_segments_per_resource: 1,
+            ..FrameCapacity::default()
+        };
+        let pool = StoragePool::new(1, || WorkData::new(capacity), WorkData::reset).unwrap();
+        let bytes: Arc<[u8]> = Arc::from([1u8; 4]);
+        let prepared = pool.acquire().unwrap();
+        let backing = prepared.final_states.as_ptr();
+        let initialized = prepared.final_states[0]
+            .as_ref()
+            .unwrap()
+            .initialized
+            .as_ptr();
+        drop(prepared);
+        for resources in [6, 2, 8, 0, 3] {
+            let mut work = pool.acquire().unwrap();
+            assert_eq!(work.active_resources, 0);
+            assert_eq!(work.final_states.as_ptr(), backing);
+            assert_eq!(
+                work.final_states[0].as_ref().unwrap().initialized.as_ptr(),
+                initialized
+            );
+            for state in work.final_states.iter().flatten() {
+                assert!(state.initialized.is_empty());
+                assert_eq!(state.provenance.test_evidence(), (0, 0));
+                assert_eq!(state.serial, 0);
+            }
+            assert!(work.needed.iter().all(|&needed| !needed));
+            assert!(work.provenance_needed.iter().all(|&needed| !needed));
+            assert!(work.retain_provenance.iter().all(|&retained| !retained));
+            work.active_resources = resources;
+            for index in 0..resources {
+                work.needed[index] = true;
+                work.provenance_needed[index] = true;
+                work.retain_provenance[index] = true;
+                let state = work.final_states[index].as_mut().unwrap();
+                state.serial = 7;
+                state
+                    .set_initialized(std::slice::from_ref(&(0..4)))
+                    .unwrap();
+                state.provenance.write_slice(0..4, &bytes, 0..4).unwrap();
+            }
+            // Cancellation and a failed partial prepare both return this same
+            // storage lease before any native submission is accepted.
+            drop(work);
+            assert_eq!(Arc::strong_count(&bytes), 1);
+        }
     }
 }

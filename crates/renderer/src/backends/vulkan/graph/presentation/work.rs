@@ -30,10 +30,14 @@ pub(super) fn prepare_source(previous: &Snapshot) -> Option<SourceScope> {
 fn commit_source(state: &mut Snapshot, serial: u64) {
     // Presentation changes only scheduled native read scope. Mutating these
     // scalars preserves content metadata and its reserved backing allocation.
+    let layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+    state.record_read(
+        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+        vk::AccessFlags2::SHADER_SAMPLED_READ,
+        state.layout != layout,
+    );
     state.serial = serial;
-    state.stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
-    state.access = vk::AccessFlags2::SHADER_SAMPLED_READ;
-    state.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+    state.layout = layout;
 }
 impl TransferPayload for PresentWork {
     fn owner(&self) -> &Arc<MemoryOwner> {
@@ -103,10 +107,12 @@ mod tests {
         for changed in [
             Snapshot {
                 stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
+                read_stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
                 ..next.clone()
             },
             Snapshot {
                 access: vk::AccessFlags2::SHADER_STORAGE_READ,
+                read_access: vk::AccessFlags2::SHADER_STORAGE_READ,
                 ..next.clone()
             },
             Snapshot {
@@ -119,6 +125,8 @@ mod tests {
                 access: vk::AccessFlags2::SHADER_STORAGE_WRITE,
                 writer_stage: vk::PipelineStageFlags2::COMPUTE_SHADER,
                 writer_access: vk::AccessFlags2::SHADER_STORAGE_WRITE,
+                read_stage: vk::PipelineStageFlags2::NONE,
+                read_access: vk::AccessFlags2::NONE,
                 ..next
             },
         ] {
@@ -127,5 +135,35 @@ mod tests {
                 "new reader scopes, layouts and writes still need a dependency"
             );
         }
+    }
+
+    #[test]
+    fn elided_presentation_dependency_keeps_prior_reader_scopes_for_later_writes() {
+        let mut next = Snapshot {
+            layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            writer_stage: vk::PipelineStageFlags2::COPY,
+            writer_access: vk::AccessFlags2::TRANSFER_WRITE,
+            ..Snapshot::default()
+        };
+        next.record_read(
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_STORAGE_READ,
+            false,
+        );
+        next.record_read(
+            vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            vk::AccessFlags2::SHADER_SAMPLED_READ,
+            false,
+        );
+        assert!(prepare_source(&next).is_none());
+        commit_source(&mut next, 8);
+        assert!(next.stage.contains(
+            vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER
+        ));
+        assert!(next.access.contains(
+            vk::AccessFlags2::SHADER_STORAGE_READ | vk::AccessFlags2::SHADER_SAMPLED_READ
+        ));
+        assert_eq!(next.writer_stage, vk::PipelineStageFlags2::COPY);
+        assert_eq!(next.writer_access, vk::AccessFlags2::TRANSFER_WRITE);
     }
 }
