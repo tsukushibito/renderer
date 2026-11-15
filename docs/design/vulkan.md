@@ -635,6 +635,11 @@ enqueue済みとして扱われる。OOMの状態不変保証と同じrollback�
 保持世代数には上限があり、回収前の上限到達は容量不足として返す。
 `poll`はGPU Fenceとpresent fenceを観測し、`wait_idle`／`close`はこのPresenterの処理だけを待つ。
 Queue／Device全体のidleをpresent完了の証明には使わない。
+`poll`・ready状態の`prepare`・`wait_idle`は完了した枠を返すが、旧Swapchainの最後のanchorを破棄しない。
+旧世代は`max_retired_swapchains`内で保持し、明示した`collect_retired_swapchains()`が
+GPU/present参照のない世代だけを待機なしで破棄する。dirty状態の再作成境界でも容量確認前に同じ回収を行い、
+旧世代がpendingなら上限不足を返す。リサイズが終わった後の通常pollへnative破棄・Vec解放を流さないための方針である。
+待機完了は実破棄の指示とは分け、必要な保守時機と旧世代の上限分の保持量を呼び出し側が選ぶ。
 正常終了はGraph frameを回収し、Presenterを明示closeしてからnative所有者を破棄する。
 Dropの保守的回収でも完了を証明できない場合は、Window・Surface・同期・Device等の所有連鎖を保持する。
 

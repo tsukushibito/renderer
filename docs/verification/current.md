@@ -1,44 +1,75 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-15（規約/文書の確認。以下の既存実行結果の日付は各記録に従う）。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日: 2026-11-15。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
-## 通常フレームのメモリ規約と現行実装
+## 通常フレームのメモリ規約と実装
 
-`renderer-dzz`の実装を進行中で、ゼロ達成は未証明である。
-独立`memory-profiling`とCPU frame lifecycle harnessを追加した。
-release/追加検証なしで12frame warm-up後、24frameの入力/draw数/pass構成を変え、3frame分のCPU owner保持から全返却まで測定した。
-alloc/alloc_zeroed/realloc/deallocは2,502/24/62/2,526回であり、現行経路は明確に未達である。
-GPU未実行のこのcaseのnative/VMA eventゼロは、それらの観測/ゼロ達成の証拠には使わない。
-fullphase GPU・readback・present・capacity/cancel受入と、共通Graph/Engine・両backendのpool化を接続中である。
-[機械可読の基準値](frame-memory.json)と[再実行手順](../guides/development.md#通常フレームのメモリ計測)を参照する。
-Vulkanは実行枠の事前作成、stagingの固定range metadata、recycle/cacheの予約済み配列、presentのscalar状態更新を先行実装した。
-この一部の変更だけで全通常フレームのゼロを達成したとは扱わない。
-先行範囲の統合で開発release CPU207件/製品release CPU194件と各Rustdoc1件、全target Clippyが成功した。
-適用したstrict Vulkan実GPU51件と製品mesh/WSI各1件で内容・同期・寿命の回帰を確認した。
-最初のstrict runの2件は旧lazy作成数のassertだけが失敗し、全枠事前作成数と1/2枠の実lease数を確認する形へ更新後、
-当該2件が成功した。これらはnative機能の回帰であり、全フレームゼロ計測の成功ではない。
+`renderer-dzz` / `renderer-7ft.2.2.1`。実装確認点は`43ef7e9`。
+[規約](../design/implementation-policy.md#steady-state-memory)に従い、準備済み資源・容量内の通常frameでは
+Rendererの汎用heap alloc/alloc_zeroed/realloc/deallocと、Renderer発行のnative資源/メモリ作成・破棄を行わない。
+入力・draw数・pass構成を毎frame変え、構築/compileからGPU/present完了、CPU結果消費/返却まで確認した。
+固定plan再生だけの別入口や、元の確保する通常入口は残していない。
 
-`renderer-gsw`。[確保・解放ゼロの設計目標](../design/implementation-policy.md#steady-state-memory)を
-AGENTSと既存実装方針へ明文化した。準備済み上限内のGraph構築から完了処理/結果返却までを対象にし、
-事前領域内の再利用、明示した準備・変更境界、容量不足、GPU/present/CPU寿命と診断の計測範囲を定めた。
-今回の変更は規約/文書のみで、実装の確保・解放をゼロにする変更や新しい測定は行っていない。
+| 製品releaseの計測 | 通常窓 | Rust 4 event | VMA host 3 event | native作成/解放8 event |
+|---|---|---|---|---|
+| CPU snapshot/build/compile/return | 24frame、3owner保持 | 0/0/0/0 | 対象外 | 対象外 |
+| D3D12 buffer | 48frame＋未消費結果破棄/切離し退役 | 0/0/0/0 | 対象外 | 全0 |
+| Vulkan buffer | 48frame＋未消費結果破棄 | 0/0/0/0 | 0/0/0 | 全0 |
+| Vulkan Engine Raster/Compute/Composite | 48frame、3pending/3held結果 | 0/0/0/0 | 0/0/0 | 全0 |
+| Vulkan WSI | 18source/36present、18readback（同時保持6）、3pending/3held結果 | 0/0/0/0 | 0/0/0 | 全0 |
 
-現行のGraph compile等は未達である。下記`renderer-agv`の37,953回は合成入力のalloc/realloc要求であり、
-deallocや通常フレーム全体、native作成/破棄ゼロの確認ではない。
-全accessの一時Vec整理は引き続き`renderer-7ft.2.2`へ残し、同課題以降の設計/実装に新規約を適用する。
-通常フレーム全体の計測とゼロ目標への移行は、同課題に依存する`renderer-dzz`で追跡する。
-変更文書5件の相対link/anchor 140件とdiff確認が成功し、規約間整合の独立レビューに未解決指摘はない。
-`renderer-gsw`の規約変更時はCPU/GPU試験のローカル再実行を対象外とした。
+Rust欄はalloc/alloc_zeroed/realloc/dealloc、host欄はallocate/reallocate/freeの順で、要求byteも全0だった。
+既存枠のResetは許可し、descriptorの暗黙freeとは区別する。
+全ての通常owner Dropを窓内に含め、setup/shutdownの正の対照でhook稼働を確認した。
+CPUのみのnativeゼロは証拠に使わない。[機械可読の結果・容量・実行コマンド](frame-memory.json)と
+[再実行手順](../guides/development.md#通常フレームのメモリ計測)を参照する。
+
+共通はGraph/Snapshot/ImportRangesの準備済みslot、flatなaccess/draw/name/upload/区間配列と解析workspaceへ移行した。
+`Graph::compile(self)`で同じbackingを凍結し、consumerが終わるまでpinする。全accessの一時Vecも`.2.2.1`で除去した。
+Vulkanはnative実行/descriptor/stagingとwork/result/exportを別寿命のpoolへ分け、D3D12もnative実行と独立resultを事前作成する。
+通常の容量不足では増設・暗黙waitをせず、必要な検査・同期・GPU/present/CPU寿命・native失敗処理を維持する。
+資源変更に伴う旧meshの最後のsource/登録/Map nodeと旧Swapchainの破棄は明示保守へ分け、
+通常frameの作業枠・readback返却はそのまま進める。旧meshのprepared pinが後から戻るcaseと、
+回収可能な旧Swapchainを保持したまま18sourceを描くcaseでもゼロを確認した。
+
+WSIは通常epoch全体を囲み、同期的なwinit/WindowのRust要求を別rowへ示す。
+この独立fixtureはshipping RendererのRust worker/native Rust診断callbackを持たない。
+native/host callbackはevent pump中も含むepoch全体を数え、callerとRendererのnative/host rowは重複し得る。
+資源変更/resize/VSync/suspend/取得後取消、明示保守、追加1sourceのpending終了は別境界に記録した。
+旧世代の実破棄を通常pollへ戻さず、完了観測と枠返却は通常経路に維持した。
+
+Windows x64/Rust 1.99.0、RTX 3060/driver 610.88で、開発release CPU230件/製品release CPU214件と各Rustdoc1件、
+全target Clippyの有効/無効構成、fmtが成功した。strict Vulkan51件（WSI以外）、WSI1件、
+32 CPU asset/GPU常駐3のstream/churn/複数View/別renderer/replay受入をstrict/製品で確認した。
+二API共通の10pass Graphはstrict/製品とも308 byte全一致。D3D12 strict寿命1件・管理下Program2件も成功した。
+strictはCore/SyncValまたはDebug Layer/GBVの実効と最終native所有者解放後までwarning/error等ゼロを維持する。
+製品測定は追加検証なし・native Requested Disabledで行い、外部Layer注入の不存在を証明したとは扱わない。
+固定D3D12 bindings再生成VerifyのSHA-256は`c179861321f92adb42ccd014b0284a9d8e0e37e02f5cc21c9c7e51cc1b3e7f1c`。
+shaderは無変更で今回の再生成Verifyは対象外とした。
+
+native hookの独立監査では通常frame/退役/presentの未計測factory/drop/resetはなかった。
+VMA host rowはVulkanへ転送されたcallback要求も含み、VMA/driverの起源を分けない。
+Vulkan device memoryは成功通知、D3D12 committed resourceは暗黙heap要求、descriptorはset/要素数で、物理割当数として加算しない。
+callback外のdriver/OS/native内部、D3D12 bootstrap/CPU shader blobとtest専用旧factoryは未観測であり、
+後者を通常の準備済みframe経路で呼ばないことを別に監査した。
+別GPU/driver・Linux実GPU・長時間耐久・実native OOM/loss・時間性能/物理VRAM改善は未確認である。
+準備容量による常駐量増加と区間配列の線形操作は代償として残り、ゼロからCPU/GPU高速化を推定しない。
+
+CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回だった。
+同構成のrequire-zeroが旧基準を拒否する負の対照も保存した。
+旧合成compileの37,953要求は別入力のalloc/realloc要求で、deallocや通常frame全体の証拠ではない。
+`.2.2`の後続owned命令・MRT/subresource等まで実装完了したとは扱わない。
+実装commitの[CI 43674843105](https://github.com/tsukushibito/renderer/actions/runs/43674843105)は全10job成功、初回、4分53秒だった。
 
 ## Graph・表示・descriptorの効率整理
 
 `renderer-agv`、比較元`413ff7d`。read/exportのproducerを最終依存集合へ直接追加し、
 readごとの一時BTreeSetと取り込み直しを除去した。途中に未初期化の穴があれば解析全体を失敗にし、
 producer/culling/hazard/live cycleと最終内容再計算は維持する。
-全accessの解析用一時Vecはユーザー指定に従い未変更で、`renderer-7ft.2.2`に残す。
+この比較点では全accessの解析用一時Vecは未変更だった。現行では上記`.2.2.1`の準備済みworkspaceへ移行済みである。
 
 表示は同queueでcanonical scopeが正確にFRAGMENT/SAMPLED_READ、layoutがSHADER_READ_ONLYのときだけ
 source画像barrierを省き、Swapchain画像barrierと呼出しは残す。新write/scope/layoutでは必要依存を記録する。
@@ -100,7 +131,7 @@ float出力のarray 4、literal count、stride 16、offset 0、block size 64も�
 D3D12 bindings Verifyが成功した。既存8shaderの43 source/binary/HLSL/reflectionファイルは比較元`35ae8f0`と不変である。
 storage-read SPIR-Vは`10aa5b93fa3e89a5e9d7c4b32921e4edac215ddc64c1f33dd45cc08d446d4398`、
 DXILは`4b249dc0d1728365f867e2219cc556ef1f57141ed1b99ae37d60cb3457a37c6a`。
-生成bindingsにはroot SRV記録に必要なAPIを追加し、固定generatorとのSHA-256一致
+当該管理下Programの作業点では生成bindingsへroot SRV記録に必要なAPIを追加し、固定generatorとのSHA-256一致
 `fbb5d0a887223679910c3e2baa7d0abf7e3c82d52cacc298456d18a195d3564d`を確認した。
 
 作成境界で全slotの欠落/重複/余剰、resource kind/用途、owner、論理buffer範囲とDevice alignment、

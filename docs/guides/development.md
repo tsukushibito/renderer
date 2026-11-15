@@ -679,18 +679,43 @@ native所有者の破棄後までwarning／error／callback失敗ゼロを確認
 
 `memory-profiling`は追加検証から独立した計測featureで、offでは専用counter moduleを除外する。
 計測用実行ファイルは`CountingAllocator<System>`をglobal allocatorに設定し、alloc/alloc_zeroed/realloc/deallocを別計測する。
-library本体はアプリのglobal allocatorを強制しない。native作成/破棄、descriptor、VMA host metadataは別eventで扱う。
+library本体はアプリのglobal allocatorを強制しない。native作成/破棄、descriptor、VMAへ渡したhost callback要求は別eventで扱う。
+host callbackはVulkanへ転送されることもあるため、VMA/driverの起源は区別しない。
+Vulkan memory eventはVMAの成功通知、D3D12はcommitted resourceの暗黙heap要求であり、物理割当数として加算しない。
 counterがゼロでも未接続のhookを覆った証拠にはならないため、実行した経路と観測範囲を報告する。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu --baseline
+$env:CARGO_INCREMENTAL='0'
 cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu
+cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12
+cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan
+cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-image
+cargo test --locked --release -p renderer --lib --no-default-features --features presentation,memory-profiling vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
 ```
 
-`--baseline`は現在の非ゼロ値を記録するだけで、ゼロ目標の受入には使わない。
-省略時は観測した確保/解放のどれかが残れば失敗する。現在のCPU caseはsnapshot/build/compileと全owner返却までを含み、
+末尾の`--baseline`は値を記録しゼロassertを省く観測モードで、ゼロ目標の受入には使わない。
+省略時は観測した確保/再確保/解放のどれかが残れば失敗する。Resetだけは既存枠の再利用として許可する。
+CPU caseはsnapshot/build/compileと全owner返却までを含み、
 draw数0/1/4/2、追加compute pass0/1/2、入力値を変え、3frame分のCPU ownerを保持してから全て返却する。
-report構築・資源準備/終了は計測窓外。GPU実行・readback・present・cancel/backpressureの全体受入はまだ接続中である。
+capacity/busy拒否と未構築snapshot/未compile Graphの取消も窓内に含む。
+buffer caseは3pending/3held結果、可変copyと自己copy、長さ不一致後のreadback再試行、未消費結果破棄まで含み、
+D3D12では未投入取消とsubmission破棄後のruntime pollも通す。
+image caseは通常の公開Engine APIでRaster→0/1/2段のInvert→Compositeを毎frame構築し、
+3pending/3held結果とprepared/compiled取消から全出力・結果返却まで測る。固定のplan再生専用経路ではない。
+
+WSIは18sourceを毎回build/compileし、36present・18readbackと最終GPU/present退役を一つの通常epochに含める。
+プロセス全体、同期的なwinit/Window呼出し、Rendererのsetup/normal/shutdownを別rowへ記録する。
+shipping RendererにRust workerがないこの独立fixtureでは、通常epoch全体からcallerのRust要求だけを除く。
+native/host callbackはcaller呼出し中も含むepoch全体を数え、rowの合計が重複する場合がある。
+資源変更・resize/VSync/suspend/acquire取消とそれに紐づく明示回収は別境界とし、通常frameの結果返却をそこへ移さない。
+回収可能な旧Swapchainも通常epoch中は保持したままゼロを確認し、その後`collect_retired_swapchains`で明示回収する。
+
+追加検証ありの正しさは別runで確認する。standaloneはfeatureへ`development-validation,graph-diagnostics`を加え、
+`--baseline`で追加診断の費用を観測する。WSIも同featureを加えると診断baselineとなり、終了後までCore/SyncValを要求する。
+旧meshの遅延退役回帰は`vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance`を同様に明示実行する。
+準備/終了は通常窓外の正の対照として記録し、hook未接続のゼロを受理しない。
+callbackに現れないdriver/OS/native内部確保は未観測。D3D12 bootstrap/CPU shader blobとtest専用旧経路はnative hook対象外で、
+通常の準備済みframe経路で呼ばないことを別に監査する。時間性能や物理VRAMの改善率はこのevent計測から推定しない。
 現行結果と測定範囲は[通常フレームのメモリ計測](../verification/frame-memory.json)を参照する。
 
 ### 表示FPSの計測方針
