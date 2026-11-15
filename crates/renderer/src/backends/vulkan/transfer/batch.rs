@@ -95,11 +95,17 @@ impl TransferPool {
     ) -> Result<Self, BatchError> {
         Ok(Self {
             execution: ExecutionPool::new(Arc::clone(&owner), max_slots)?,
-            upload: SharedStaging::new(Arc::clone(&owner), BufferRole::Upload, upload_capacity)?,
+            upload: SharedStaging::new(
+                Arc::clone(&owner),
+                BufferRole::Upload,
+                upload_capacity,
+                256,
+            )?,
             readback: SharedStaging::new(
                 Arc::clone(&owner),
                 BufferRole::Readback,
                 readback_capacity,
+                256,
             )?,
             owner,
         })

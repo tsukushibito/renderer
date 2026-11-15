@@ -17,6 +17,7 @@ fn real_gpu(test: impl FnOnce(&mut VulkanRuntime)) {
             resource_capacity: 16,
             staging_bytes: 4096,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         })
         .expect("real Vulkan runtime is required");
         assert_ne!(
@@ -151,16 +152,16 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
         let mut b_result = completed(&mut b);
         let mut c_result = completed(&mut c);
         assert_eq!(
-            a_result.readback(compute_pixels).unwrap(),
+            a_result.test_readback(compute_pixels).unwrap(),
             [245, 235, 225, 255].repeat(4)
         );
-        assert_eq!(a_result.readback(compute_bytes).unwrap(), bytes);
-        assert_eq!(b_result.readback(sampled_pixels).unwrap(), pixels);
-        assert_eq!(b_result.readback(sampled_bytes).unwrap(), bytes);
-        assert_eq!(c_result.readback(written_image).unwrap(), [91; 16]);
+        assert_eq!(a_result.test_readback(compute_bytes).unwrap(), bytes);
+        assert_eq!(b_result.test_readback(sampled_pixels).unwrap(), pixels);
+        assert_eq!(b_result.test_readback(sampled_bytes).unwrap(), bytes);
+        assert_eq!(c_result.test_readback(written_image).unwrap(), [91; 16]);
         let mut replaced = bytes;
         replaced[4..12].fill(73);
-        assert_eq!(c_result.readback(written_buffer).unwrap(), replaced);
+        assert_eq!(c_result.test_readback(written_buffer).unwrap(), replaced);
         runtime.delete(source_image.key()).unwrap();
         runtime.delete(source_buffer.key()).unwrap();
     });

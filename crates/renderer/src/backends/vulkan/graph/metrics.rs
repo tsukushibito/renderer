@@ -468,6 +468,7 @@ mod tests {
                 resource_capacity: 4,
                 staging_bytes: 4096,
                 max_shader_bindings: 2,
+                staging_ranges: 256,
             })
             .expect("real Vulkan runtime is required");
             assert_ne!(
@@ -563,7 +564,7 @@ mod tests {
             let expected_peak = runtime.memory_stats().unwrap().readback.reserved_bytes;
             for mut frame in results {
                 let (read, value) = expected.remove(&frame.id()).unwrap();
-                assert_eq!(frame.result.readback(read).unwrap(), vec![value; 16]);
+                assert_eq!(frame.result.test_readback(read).unwrap(), vec![value; 16]);
             }
             assert!(expected.is_empty());
             let memory = runtime.memory_stats().unwrap();

@@ -93,17 +93,21 @@ impl VulkanRuntime {
         let ResourceDesc::Image(desc) = source.desc else {
             return Err(RuntimeError::invalid("presentation source is not an image"));
         };
-        let previous = source.lock().scheduled.clone();
-        if desc != image.desc
-            || previous.revision != image.revision
-            || !image.initialized
-            || previous.initialized.len() != 1
-            || previous.initialized[0] != (0..1)
-        {
-            return Err(RuntimeError::stale(
-                "presentation source snapshot is stale/uninitialized; refresh and retry",
-            ));
-        }
+        let previous = {
+            let state = source.lock();
+            let previous = &state.scheduled;
+            if desc != image.desc
+                || previous.revision != image.revision
+                || !image.initialized
+                || previous.initialized.len() != 1
+                || previous.initialized[0] != (0..1)
+            {
+                return Err(RuntimeError::stale(
+                    "presentation source snapshot is stale/uninitialized; refresh and retry",
+                ));
+            }
+            prepare_source(previous)
+        };
         let chain = Arc::clone(inner.current.as_ref().expect("configured Swapchain"));
         if desc.format != ImageFormat::Rgba8Unorm
             || (desc.width, desc.height) != (chain.extent.width, chain.extent.height)
@@ -153,11 +157,9 @@ impl VulkanRuntime {
             .serial
             .checked_add(1)
             .ok_or_else(|| RuntimeError::capacity("submission serial exhausted"))?;
-        let (previous, next) = prepare_source(previous, serial);
         let work = PresentWork {
             source,
             previous,
-            next: Some(next),
             serial,
             commands: PresentCommands::new(
                 Arc::clone(&self.owner),

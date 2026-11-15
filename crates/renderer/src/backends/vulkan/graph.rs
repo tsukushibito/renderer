@@ -3,7 +3,7 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -59,6 +59,7 @@ pub struct RuntimeConfig {
     pub execution_slots: usize,
     pub resource_capacity: usize,
     pub staging_bytes: u64,
+    pub staging_ranges: usize,
     pub max_shader_bindings: u32,
 }
 
@@ -69,6 +70,7 @@ impl Default for RuntimeConfig {
             resource_capacity: 64,
             staging_bytes: 4 * 1024 * 1024,
             max_shader_bindings: 64,
+            staging_ranges: 256,
         }
     }
 }
@@ -236,9 +238,10 @@ pub struct VulkanRuntime {
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
     entries: Vec<Entry>,
-    vacant: BTreeSet<usize>,
+    vacant: Vec<usize>,
     available: CacheIndex<CacheDescriptor>,
     recycle: Arc<RecycleQueue>,
+    recycle_pending: Vec<usize>,
     frames: frames::FrameQueue<frames::PendingFrame>,
     timestamp_pool: Option<metrics::TimestampPool>,
     profiling_enabled: bool,
@@ -326,6 +329,7 @@ impl VulkanRuntime {
             || config.resource_capacity == 0
             || config.resource_capacity > u32::MAX as usize
             || config.max_shader_bindings == 0
+            || config.staging_ranges == 0
         {
             return Err(RuntimeError::invalid(
                 "runtime capacities must be nonzero and resource capacity fit u32",
@@ -342,16 +346,39 @@ impl VulkanRuntime {
         let allocator = VulkanAllocator::new(device)?;
         let owner = allocator.owner;
         let execution = ExecutionPool::new(Arc::clone(&owner), config.execution_slots)?;
-        let upload =
-            SharedStaging::new(Arc::clone(&owner), BufferRole::Upload, config.staging_bytes)?;
+        let upload = SharedStaging::new(
+            Arc::clone(&owner),
+            BufferRole::Upload,
+            config.staging_bytes,
+            config.staging_ranges,
+        )?;
         let readback = SharedStaging::new(
             Arc::clone(&owner),
             BufferRole::Readback,
             config.staging_bytes,
+            config.staging_ranges,
         )?;
         let id = NEXT_RUNTIME
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .map_err(|_| RuntimeError::capacity("runtime identity exhausted"))?;
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let mut vacant = Vec::new();
+        vacant
+            .try_reserve_exact(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let mut recycle_pending = Vec::new();
+        recycle_pending
+            .try_reserve_exact(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let available = CacheIndex::new(config.resource_capacity)
+            .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
+        let recycle = Arc::new(
+            RecycleQueue::new(config.resource_capacity)
+                .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?,
+        );
         Ok(Self {
             owner,
             #[cfg(any(test, feature = "vulkan-diagnostics"))]
@@ -360,10 +387,11 @@ impl VulkanRuntime {
             upload,
             readback,
             programs: None,
-            entries: Vec::new(),
-            vacant: BTreeSet::new(),
-            available: CacheIndex::default(),
-            recycle: Arc::new(RecycleQueue::default()),
+            entries,
+            vacant,
+            available,
+            recycle,
+            recycle_pending,
             frames: frames::FrameQueue::new(config.execution_slots)?,
             timestamp_pool: None,
             profiling_enabled: false,
@@ -462,8 +490,10 @@ impl VulkanRuntime {
             // The registry is the sole owner. Dropping its Arc destroys the
             // native allocation and any content metadata, without a GPU wait.
             entry.physical = None;
-            if entry.generation < u32::MAX {
-                self.vacant.insert(index);
+            if entry.generation < u32::MAX
+                && let Err(position) = self.vacant.binary_search(&index)
+            {
+                self.vacant.insert(position, index);
             }
             released += 1;
         }
@@ -492,9 +522,15 @@ impl VulkanRuntime {
     }
 
     fn collect_recycled(&mut self) {
-        for index in self.recycle.take() {
+        // Drop the queue lock before acquiring physical state locks. Keep the
+        // prepared scratch backing through every collection and lease return.
+        let mut pending = std::mem::take(&mut self.recycle_pending);
+        self.recycle.drain_into(&mut pending);
+        for &index in &pending {
             self.recycle_entry(index);
         }
+        pending.clear();
+        self.recycle_pending = pending;
     }
 
     fn lease(&self, key: ResourceKey) -> Result<PhysicalLease, RuntimeError> {
@@ -566,7 +602,7 @@ impl VulkanRuntime {
         let native = match desc {
             ResourceDesc::Buffer(desc) => NativeResource::Buffer(
                 DeviceBuffer::new(Arc::clone(&self.owner), desc.size, name)
-                    .map_err(|error| error.context(format!("resource {name:?}")))?,
+                    .map_err(|error| error.context(format_args!("resource {name:?}")))?,
             ),
             ResourceDesc::Image(desc) => NativeResource::Image(
                 DeviceImage::new(
@@ -579,7 +615,7 @@ impl VulkanRuntime {
                     },
                     name,
                 )
-                .map_err(|error| error.context(format!("resource {name:?}")))?,
+                .map_err(|error| error.context(format_args!("resource {name:?}")))?,
             ),
         };
         let physical = Arc::new(Physical {
@@ -600,7 +636,9 @@ impl VulkanRuntime {
         };
         if replace.is_some() {
             self.available.remove(index);
-            self.vacant.remove(&index);
+            if let Ok(position) = self.vacant.binary_search(&index) {
+                self.vacant.remove(position);
+            }
             self.entries[index] = entry;
         } else {
             self.entries.push(entry);
@@ -911,26 +949,51 @@ pub struct SubmissionResult {
     work: GraphWork,
 }
 impl SubmissionResult {
-    /// Copies and releases this pass's readback lease. A failed read preserves
-    /// the lease for retry. No native pointer or mapped memory escapes.
-    pub fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, RuntimeError> {
+    fn readback_index(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
         if pass.graph != self.graph {
             return Err(RuntimeError::wrong_owner("foreign graph readback handle"));
         }
-        let index = self
-            .work
+        self.work
             .readbacks
             .binary_search_by_key(&pass.index, |(index, _)| *index)
-            .map_err(|_| RuntimeError::invalid("pass has no readback result"))?;
+            .map_err(|_| RuntimeError::invalid("pass has no readback result"))
+    }
+
+    /// Exact size of an unconsumed readback. No native mapping or allocation.
+    pub fn readback_len(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
+        let index = self.readback_index(pass)?;
+        let value = self.work.readbacks[index]
+            .1
+            .as_ref()
+            .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
+        usize::try_from(value.size())
+            .map_err(|_| RuntimeError::unsupported("readback exceeds CPU address space"))
+    }
+
+    /// Copy into caller-owned prepared storage and return this readback range.
+    /// A length mismatch or failed read preserves the lease for retry. No native
+    /// pointer or mapped memory escapes, and no output backing is allocated.
+    pub fn readback_into(
+        &mut self,
+        pass: PassHandle,
+        output: &mut [u8],
+    ) -> Result<(), RuntimeError> {
+        let index = self.readback_index(pass)?;
         let (_, range) = &mut self.work.readbacks[index];
         let value = range
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
-        let length = usize::try_from(value.size())
-            .map_err(|_| RuntimeError::unsupported("readback exceeds CPU address space"))?;
-        let mut bytes = vec![0; length];
-        value.read(&mut bytes)?;
+        value.read(output)?;
         range.take();
+        Ok(())
+    }
+
+    // Content-focused unit/GPU acceptance uses an owned output for assertions.
+    // Allocation acceptance and every production consumer use readback_into.
+    #[cfg(test)]
+    pub(super) fn test_readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, RuntimeError> {
+        let mut bytes = vec![0; self.readback_len(pass)?];
+        self.readback_into(pass, &mut bytes)?;
         Ok(bytes)
     }
 }

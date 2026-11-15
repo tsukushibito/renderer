@@ -119,7 +119,7 @@ fn collect(engine: &mut VulkanEngine, expected: &[(FrameId, PassHandle, usize, [
             .iter()
             .find(|(id, ..)| *id == completion.id())
             .unwrap();
-        let bytes = completion.result.readback(pass).unwrap();
+        let bytes = completion.result.test_readback(pass).unwrap();
         assert_eq!(&bytes[pixel * 4..pixel * 4 + 4], &color);
         assert_eq!(&bytes[..4], &[0, 0, 0, 255]);
         completed.push(completion.id());
@@ -348,7 +348,10 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             .wait_frame(Duration::from_secs(10))
             .unwrap()
             .expect("engine GPU completion timed out");
-        let bytes = complete.result.readback(frame.readback.unwrap()).unwrap();
+        let bytes = complete
+            .result
+            .test_readback(frame.readback.unwrap())
+            .unwrap();
         assert_eq!(bytes, [255, 255, 0, 255].repeat(64));
         let before = engine.runtime().stats().registered_resources;
         let rejected = build_frame(engine, assets, &view, &[], false, |_, _| {
