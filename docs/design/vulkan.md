@@ -255,11 +255,14 @@ front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段�
 u32 indexは頂点bufferの範囲と、起動時に保持した実際の`maxDrawIndexedIndexValue`の両方を検査する。
 Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有効化だけで上限を推定しない。
 
-標準opaqueの`RasterBatch`は一つのDynamic Rendering区間でcolor/depthをClear/Storeし、
+明示した`ManagedRasterProgram::mesh()`のowned Raster列は一つのDynamic Rendering区間で宣言したcolor/depthのLoad/Storeを適用し、
 pipelineとviewportを設定してから、owned draw列の順にbuffer binding・80-byte引数・indexed drawを記録する。
 draw命令自体はdraw数分あり、instancingやmulti-drawへの変換、描画順の並べ替えは行わない。
 空listにはclear-onlyの既存経路を使い、Raster Programの作成を要求しない。
-参照用の単一draw Rasterも同じoperand検査・描画引数の記録を使う。
+単一drawも同じ列で記録する。Engineの標準opaqueは従来どおりClear/Storeを明示する。
+ProgramのSPIR-Vは管理下manifestから既存factoryへ渡し、native pipelineは準備済み`ShaderPrograms`が保持する。
+CPUのstatic Program identityだけでnative所有者を代替せず、WorkのProgram/資源保持とplan pinをGPU完了まで維持する。
+color-onlyやmulti-subresourceのCPU Raster計画は現在のPSOでは実行せず、物理取得前に拒否する。
 
 最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
 scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と

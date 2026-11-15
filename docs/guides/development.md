@@ -703,6 +703,8 @@ consumer数1/2/3、binding offset 0/16/32、入力値、culled枝を変え、32-
 3plan保持、未compile dispatch取消、全owner返却と次のslot resetも窓内に含める。native dispatch実行の測定ではない。
 `attachment_subresources`欄は3mip×2layerの画像でcolor-only/depth-only/MRT、Load/Store、入力clear値とViewを変え、
 取消・culled枝・3plan保持・全返却/resetまで別窓で測る。native MRT/subresource実行の証拠にはしない。
+`owned_raster`欄は公開のProgram＋draw sliceで0/1/4/2 draw、共有する2mesh、任意depth、定数/clear値を変え、
+呼出元sliceの変更・未compile取消・不要write・3plan保持・全返却/resetまで測る。CPU窓とnative画像/WSI窓を区別する。
 buffer caseは3pending/3held結果、可変copyと自己copy、長さ不一致後のreadback再試行、未消費結果破棄まで含み、
 D3D12では未投入取消とsubmission破棄後のruntime pollも通す。
 image caseは通常の公開Engine APIでRaster→0/1/2段のInvert→Compositeを毎frame構築し、
