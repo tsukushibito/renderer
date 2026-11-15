@@ -1054,6 +1054,10 @@ fn replace<T: Copy>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::single_range_in_vec_init,
+    reason = "Typed dataflow fixtures intentionally describe one initialized byte interval."
+)]
 mod tests {
     use super::*;
 

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::single_range_in_vec_init,
+    reason = "Typed fixtures intentionally describe a single initialized byte interval."
+)]
+
 //! Builder contract and ownership regressions.
 
 use super::*;

@@ -9,31 +9,45 @@ use std::sync::{Arc, Mutex};
 
 /// At most one pending notification per registry entry, even if callers hold
 /// or drop many cloned leases without performing another acquisition.
-pub(super) struct RecycleQueue(Mutex<Vec<bool>>);
+pub(super) struct RecycleQueue(Mutex<RecycleState>);
+
+struct RecycleState {
+    queued: Vec<bool>,
+    indices: Vec<usize>,
+}
 
 impl RecycleQueue {
     pub(super) fn new(capacity: usize) -> Result<Self, TryReserveError> {
         let mut queued = Vec::new();
         queued.try_reserve_exact(capacity)?;
         queued.resize(capacity, false);
-        Ok(Self(Mutex::new(queued)))
+        let mut indices = Vec::new();
+        indices.try_reserve_exact(capacity)?;
+        Ok(Self(Mutex::new(RecycleState { queued, indices })))
     }
 
     fn released(&self, index: usize) {
-        self.0.lock().unwrap_or_else(|error| error.into_inner())[index] = true;
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.queued[index] {
+            state.queued[index] = true;
+            // One queued entry per registry index fits the prepared capacity.
+            state.indices.push(index);
+        }
     }
 
     pub(super) fn drain_into(&self, output: &mut Vec<usize>) {
-        let mut queued = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
         assert!(
-            output.capacity() >= queued.len(),
+            output.capacity() >= state.queued.len(),
             "prepared recycle scratch capacity"
         );
         output.clear();
-        for (index, queued) in queued.iter_mut().enumerate() {
-            if std::mem::take(queued) {
-                output.push(index);
-            }
+        let RecycleState { queued, indices } = &mut *state;
+        // Visit only notifications, including with a large registered prefix.
+        // Drain retains the prepared backing and duplicate releases use no slot.
+        for index in indices.drain(..) {
+            queued[index] = false;
+            output.push(index);
         }
     }
 
@@ -43,6 +57,7 @@ impl RecycleQueue {
             .0
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+            .queued
             .len();
         let mut result = Vec::with_capacity(capacity);
         self.drain_into(&mut result);
