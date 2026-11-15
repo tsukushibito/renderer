@@ -360,11 +360,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         .unwrap();
     let caller_bytes = [17u8, 34, 51, 255].repeat(8 * 8);
     graph
-        .upload_image(
-            "initialize caller output",
-            caller_image,
-            &caller_bytes,
-        )
+        .upload_image("initialize caller output", caller_image, &caller_bytes)
         .unwrap();
     graph.export_image(caller_image).unwrap();
     let mut upload = renderer
