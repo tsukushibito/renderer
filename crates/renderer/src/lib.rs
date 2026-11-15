@@ -14,6 +14,9 @@ pub mod engine;
 pub mod graph;
 pub mod program;
 
+#[cfg(feature = "memory-profiling")]
+pub mod measurement;
+
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 mod backends;
 
