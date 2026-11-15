@@ -906,3 +906,52 @@ fn import_identity_survives_interleaved_transients_and_failed_aliases() {
     );
     assert_eq!(graph.resources.len(), sources.len() * 2);
 }
+
+#[test]
+fn import_and_batch_limits_report_their_distinct_capacity_dimensions() {
+    let (_pool, mut graph) = prepared_graph(GraphCapacity {
+        initial_ranges: 0,
+        draws: 0,
+        ..GraphCapacity::default()
+    });
+    let mut ranges = ImportRangesPool::new(1, 1).unwrap();
+    let initialized = ranges.capture(&[0..4]).unwrap();
+    let source = ImportBuffer {
+        key: ResourceKey {
+            owner: 1,
+            index: 0,
+            generation: 1,
+        },
+        revision: 1,
+        desc: BufferDesc { size: 4 },
+        initialized,
+    };
+    let details = graph
+        .import_buffer("input", &source)
+        .unwrap_err()
+        .capacity()
+        .unwrap();
+    assert_eq!(details.kind, GraphCapacityKind::InitialRanges);
+    assert_eq!((details.limit, details.required), (0, Some(1)));
+    assert!(graph.resources.is_empty());
+    let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
+    let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
+    let color = graph.image("color", ImageDesc::rgba8(1, 1)).unwrap();
+    let depth = graph.image("depth", ImageDesc::depth32(1, 1)).unwrap();
+    let error = graph
+        .raster_batch(
+            "batch",
+            batch_draws(vec![(vertices, indices, 3, RasterParameters::default())]),
+            color,
+            depth,
+            [0.0; 4],
+            1.0,
+        )
+        .unwrap_err();
+    let details = error.capacity().unwrap();
+    assert_eq!(details.kind, GraphCapacityKind::Draws);
+    assert_eq!((details.limit, details.required), (0, Some(1)));
+    assert!(graph.passes.is_empty());
+    assert!(graph.draws.is_empty());
+    assert!(graph.accesses.is_empty());
+}

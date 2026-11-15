@@ -322,7 +322,31 @@ pub(crate) struct Pass {
     pub operation: Operation,
     pub accesses: Range<usize>,
     pub side_effect: bool,
-    pub dependencies: Range<usize>,
+    pub dependencies: DependencyList,
+}
+
+/// Indices into the prepared dependency arena, in original insertion order.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DependencyList {
+    pub head: Option<usize>,
+    pub tail: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Dependency {
+    pub target: usize,
+    pub next: Option<usize>,
+}
+
+impl DependencyList {
+    pub fn iter(self, arena: &[Dependency]) -> impl Iterator<Item = usize> {
+        let mut next = self.head;
+        std::iter::from_fn(move || {
+            let node = &arena[next?];
+            next = node.next;
+            Some(node.target)
+        })
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -328,7 +328,11 @@ impl Graph {
                 attachment_clear_values(LoadOp::Clear(clear_color), LoadOp::Clear(clear_depth))?;
             let first_draw = graph.draws.len();
             if draws.len() > graph.capacity.draws.saturating_sub(first_draw) {
-                return Err(super::storage::capacity_error());
+                return Err(super::storage::capacity_error(
+                    super::GraphCapacityKind::Draws,
+                    graph.capacity.draws,
+                    first_draw.checked_add(draws.len()),
+                ));
             }
             let resources = graph.resources.len();
             graph.data_mut().raster_ranges[..resources].fill([0; 2]);
@@ -503,7 +507,7 @@ impl Graph {
             let encoded = first_access..graph.accesses.len();
             let conflict = { let data=graph.data_mut(); conflicting_accesses_in(&data.accesses[encoded.clone()], |access| {
                 (access.resource, access.range.clone(), access.write)
-            }, &mut data.overlap).map_err(|_| super::storage::capacity_error())? };
+            }, &mut data.overlap).map_err(|_| super::storage::capacity_error(super::GraphCapacityKind::Accesses, data.capacity.accesses, Some(encoded.len())))? };
             if let Some((left, _)) = conflict {
                 let access = &graph.accesses[encoded.start + left];
                 return Err(graph.resource_error(GraphErrorKind::InvalidInput,

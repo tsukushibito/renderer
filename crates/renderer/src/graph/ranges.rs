@@ -6,7 +6,9 @@ use std::{
     sync::Arc,
 };
 
-use super::{GraphError, GraphErrorKind};
+#[cfg(test)]
+use super::GraphErrorKind;
+use super::{GraphCapacityKind, GraphError};
 
 struct RangeSlot {
     ranges: Vec<Range<u64>>,
@@ -64,17 +66,25 @@ pub struct ImportRangesPool {
 impl ImportRangesPool {
     pub fn new(range_capacity: usize, slots: usize) -> Result<Self, GraphError> {
         if slots == 0 {
-            return Err(capacity("import range pool needs at least one slot"));
+            return Err(GraphError::capacity_error(
+                GraphCapacityKind::ImportRangeSlots,
+                0,
+                Some(1),
+            ));
         }
         let mut prepared = Vec::new();
-        prepared
-            .try_reserve_exact(slots)
-            .map_err(|_| capacity("import range slot reservation failed"))?;
+        prepared.try_reserve_exact(slots).map_err(|_| {
+            GraphError::capacity_error(GraphCapacityKind::ImportRangeSlots, slots, Some(slots))
+        })?;
         for _ in 0..slots {
             let mut ranges = Vec::new();
-            ranges
-                .try_reserve_exact(range_capacity)
-                .map_err(|_| capacity("import range reservation failed"))?;
+            ranges.try_reserve_exact(range_capacity).map_err(|_| {
+                GraphError::capacity_error(
+                    GraphCapacityKind::ImportRanges,
+                    range_capacity,
+                    Some(range_capacity),
+                )
+            })?;
             prepared.push(Arc::new(RangeSlot { ranges }));
         }
         Ok(Self {
@@ -88,7 +98,11 @@ impl ImportRangesPool {
     /// separately establishes resource bounds and initialized-range validity.
     pub fn capture(&mut self, ranges: &[Range<u64>]) -> Result<ImportRanges, GraphError> {
         if ranges.len() > self.range_capacity {
-            return Err(capacity("initialized ranges exceed prepared capacity"));
+            return Err(GraphError::capacity_error(
+                GraphCapacityKind::ImportRanges,
+                self.range_capacity,
+                Some(ranges.len()),
+            ));
         }
         for slot in &mut self.slots {
             if let Some(storage) = Arc::get_mut(slot) {
@@ -97,7 +111,11 @@ impl ImportRangesPool {
                 return Ok(ImportRanges(Arc::clone(slot)));
             }
         }
-        Err(capacity("all prepared import range slots are retained"))
+        Err(GraphError::capacity_error(
+            GraphCapacityKind::ImportRangeSlots,
+            self.slots.len(),
+            self.slots.len().checked_add(1),
+        ))
     }
 
     /// Observes how many slots currently have tokens. Concurrent token drops
@@ -130,10 +148,6 @@ impl fmt::Debug for ImportRangesPool {
     }
 }
 
-fn capacity(message: &'static str) -> GraphError {
-    GraphError::new(GraphErrorKind::CapacityExhausted, message)
-}
-
 #[cfg(test)]
 #[allow(
     clippy::single_range_in_vec_init,
@@ -151,10 +165,9 @@ mod tests {
         assert!(!pool.is_idle());
         assert_eq!(&*retained, &[0..4, 8..12]);
         drop(token);
-        assert_eq!(
-            pool.capture(&[4..8]).unwrap_err().kind(),
-            GraphErrorKind::CapacityExhausted
-        );
+        let details = pool.capture(&[4..8]).unwrap_err().capacity().unwrap();
+        assert_eq!(details.kind, GraphCapacityKind::ImportRangeSlots);
+        assert_eq!((details.limit, details.required), (1, Some(2)));
         drop(retained);
         assert_eq!(pool.leased_slots(), 0);
         assert!(pool.is_idle());
@@ -174,10 +187,13 @@ mod tests {
         );
         let mut pool = ImportRangesPool::new(1, 2).unwrap();
         let token = pool.capture(&[0..4]).unwrap();
-        assert_eq!(
-            pool.capture(&[0..4, 8..12]).unwrap_err().kind(),
-            GraphErrorKind::CapacityExhausted
-        );
+        let details = pool
+            .capture(&[0..4, 8..12])
+            .unwrap_err()
+            .capacity()
+            .unwrap();
+        assert_eq!(details.kind, GraphCapacityKind::ImportRanges);
+        assert_eq!((details.limit, details.required), (1, Some(2)));
         assert_eq!(token.as_slice(), &[0..4]);
         let empty = pool.capture(&[]).unwrap();
         assert!(empty.is_empty());

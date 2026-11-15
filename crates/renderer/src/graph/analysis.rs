@@ -37,7 +37,7 @@ pub(crate) trait Input {
     fn pass_count(&self) -> usize;
     fn access_count(&self) -> usize;
     fn pass_side_effect(&self, pass: usize) -> bool;
-    fn pass_dependencies(&self, pass: usize) -> &[usize];
+    fn pass_dependencies(&self, pass: usize) -> impl Iterator<Item = usize>;
     fn pass_accesses(&self, pass: usize) -> impl Iterator<Item = Access>;
     fn exports(&self) -> impl Iterator<Item = (usize, Range<u64>)>;
 }
@@ -666,7 +666,7 @@ impl Workspace {
             if !live[pass] {
                 continue;
             }
-            for &from in input.pass_dependencies(pass) {
+            for from in input.pass_dependencies(pass) {
                 if live[from] {
                     self.add_edge(from, pass, DependencyKind::Explicit)?;
                 }
@@ -774,7 +774,7 @@ pub(crate) fn analyze(
     for pass in 0..passes {
         let begin = work.data.len();
         work.roots[pass] = input.pass_side_effect(pass);
-        for &from in input.pass_dependencies(pass) {
+        for from in input.pass_dependencies(pass) {
             work.add_data(from, pass)?;
         }
         for access in input.pass_accesses(pass) {
@@ -911,7 +911,7 @@ fn validate(input: &impl Input, work: &mut Workspace) -> Result<(), Error> {
         }
     }
     for pass in 0..input.pass_count() {
-        for &dependency in input.pass_dependencies(pass) {
+        for dependency in input.pass_dependencies(pass) {
             if dependency >= input.pass_count() {
                 return Err(Error::new(ErrorKind::InvalidPass).at_pass(pass));
             }
@@ -1099,8 +1099,8 @@ mod tests {
         fn pass_side_effect(&self, pass: usize) -> bool {
             self.passes[pass].side_effect
         }
-        fn pass_dependencies(&self, pass: usize) -> &[usize] {
-            &self.passes[pass].dependencies
+        fn pass_dependencies(&self, pass: usize) -> impl Iterator<Item = usize> {
+            self.passes[pass].dependencies.iter().copied()
         }
         fn pass_accesses(&self, pass: usize) -> impl Iterator<Item = Access> {
             self.passes[pass].accesses.iter().cloned()

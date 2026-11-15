@@ -1,6 +1,6 @@
 //! Consuming analysis freezes the same prepared backing; no projection or clone.
 
-use super::storage::{Slot, capacity_error};
+use super::storage::Slot;
 use super::{
     Graph, GraphError, GraphErrorKind, GraphStorage, Pass, PassHandle, Resource, ResourceAccess,
     analysis,
@@ -113,7 +113,7 @@ struct Input<'a> {
     resources: &'a [Resource],
     passes: &'a [Pass],
     accesses: &'a [ResourceAccess],
-    dependencies: &'a [usize],
+    dependencies: &'a [super::Dependency],
     initial: &'a [Range<u64>],
     exports: &'a [usize],
 }
@@ -139,8 +139,8 @@ impl analysis::Input for Input<'_> {
     fn pass_side_effect(&self, p: usize) -> bool {
         self.passes[p].side_effect
     }
-    fn pass_dependencies(&self, p: usize) -> &[usize] {
-        &self.dependencies[self.passes[p].dependencies.clone()]
+    fn pass_dependencies(&self, p: usize) -> impl Iterator<Item = usize> {
+        self.passes[p].dependencies.iter(self.dependencies)
     }
     fn pass_accesses(&self, p: usize) -> impl Iterator<Item = analysis::Access> {
         self.accesses[self.passes[p].accesses.clone()]
@@ -177,7 +177,9 @@ pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
     };
     if let Err(error) = result {
         let kind = match error.kind {
-            analysis::ErrorKind::Capacity(_) => return Err(capacity_error()),
+            analysis::ErrorKind::Capacity(kind) => {
+                return Err(graph.capacity.analysis_capacity_error(kind));
+            }
             analysis::ErrorKind::UninitializedRead => GraphErrorKind::UninitializedRead,
             analysis::ErrorKind::DependencyCycle => GraphErrorKind::DependencyCycle,
             #[cfg(feature = "development-validation")]

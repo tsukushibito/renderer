@@ -4,6 +4,40 @@ use std::{borrow::Cow, fmt};
 
 use super::{AccessRange, PassHandle, ResourceHandle};
 
+/// The prepared limit that prevented Graph construction or analysis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum GraphCapacityKind {
+    /// All prepared Graph slots are retained, or no slots were prepared.
+    Slots,
+    Resources,
+    Passes,
+    Accesses,
+    Draws,
+    Dependencies,
+    InitialRanges,
+    NameBytes,
+    UploadBytes,
+    Edges,
+    Segments,
+    Readers,
+    /// Initialized ranges in one [`super::ImportRangesPool`] snapshot.
+    ImportRanges,
+    /// Retained slots in an [`super::ImportRangesPool`].
+    ImportRangeSlots,
+}
+
+/// Allocation-free details for capacity backpressure or a failed reservation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GraphCapacityError {
+    pub kind: GraphCapacityKind,
+    /// The configured limit; reservation failures may occur below this limit.
+    pub limit: usize,
+    /// The minimum required count observed at the failure, when available.
+    /// `None` means analysis did not report a count or arithmetic overflowed.
+    pub required: Option<usize>,
+}
+
 /// Native-independent categories for handling graph construction and analysis errors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -45,6 +79,7 @@ pub struct GraphError {
     pub message: Cow<'static, str>,
     kind: GraphErrorKind,
     context: Option<Box<GraphErrorContext>>,
+    capacity: Option<GraphCapacityError>,
 }
 impl GraphError {
     /// Creates an application-defined error, for example from a graph extension.
@@ -54,6 +89,11 @@ impl GraphError {
 
     pub fn kind(&self) -> GraphErrorKind {
         self.kind
+    }
+    /// Identifies which prepared limit to adjust, or which pool needs owners
+    /// returned before retrying. These details never allocate or retain a Graph.
+    pub fn capacity(&self) -> Option<GraphCapacityError> {
+        self.capacity
     }
     /// An existing pass involved in the error. Failed builders have no pass yet.
     pub fn pass(&self) -> Option<PassHandle> {
@@ -88,6 +128,24 @@ impl GraphError {
             message: message.into(),
             kind,
             context: None,
+            capacity: None,
+        }
+    }
+    pub(super) fn capacity_error(
+        kind: GraphCapacityKind,
+        limit: usize,
+        required: Option<usize>,
+    ) -> Self {
+        Self {
+            capacity: Some(GraphCapacityError {
+                kind,
+                limit,
+                required,
+            }),
+            ..Self::new(
+                GraphErrorKind::CapacityExhausted,
+                "prepared Graph capacity exhausted",
+            )
         }
     }
     pub(super) fn with_cycle_passes(mut self, passes: Vec<PassHandle>) -> Self {
@@ -113,28 +171,27 @@ impl GraphError {
         self
     }
     pub(super) fn with_pass(mut self, handle: PassHandle, name: Option<&str>) -> Self {
-        let name = if self.kind == GraphErrorKind::CapacityExhausted {
-            None
-        } else {
-            name
-        };
+        if self.kind == GraphErrorKind::CapacityExhausted {
+            return self;
+        }
         let context = self.context_mut();
         context.pass = Some(handle);
         context.pass_name = name.map(str::to_owned);
         self
     }
     pub(crate) fn with_resource(mut self, handle: ResourceHandle, name: Option<&str>) -> Self {
-        let name = if self.kind == GraphErrorKind::CapacityExhausted {
-            None
-        } else {
-            name
-        };
+        if self.kind == GraphErrorKind::CapacityExhausted {
+            return self;
+        }
         let context = self.context_mut();
         context.resource = Some(handle);
         context.resource_name = name.map(str::to_owned);
         self
     }
     pub(super) fn with_range(mut self, range: AccessRange) -> Self {
+        if self.kind == GraphErrorKind::CapacityExhausted {
+            return self;
+        }
         self.context_mut().range = Some(range);
         self
     }

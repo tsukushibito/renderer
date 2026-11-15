@@ -1,8 +1,8 @@
 //! Prepared backing shared by the unique builder and its immutable plans.
 
 use super::{
-    Graph, GraphError, GraphErrorKind, Pass, RasterDrawOperands, Resource, ResourceAccess,
-    ResourceKey, analysis,
+    Dependency, Graph, GraphCapacityKind, GraphError, Pass, RasterDrawOperands, Resource,
+    ResourceAccess, ResourceKey, analysis,
 };
 use std::{
     cell::UnsafeCell,
@@ -45,6 +45,23 @@ impl Default for GraphCapacity {
     }
 }
 impl GraphCapacity {
+    pub(super) fn analysis_capacity_error(self, kind: analysis::Capacity) -> GraphError {
+        let (kind, limit) = match kind {
+            analysis::Capacity::Resources => (GraphCapacityKind::Resources, self.resources),
+            analysis::Capacity::Passes => (GraphCapacityKind::Passes, self.passes),
+            analysis::Capacity::Accesses => (GraphCapacityKind::Accesses, self.accesses),
+            analysis::Capacity::Edges => (GraphCapacityKind::Edges, self.edges),
+            analysis::Capacity::Segments => (GraphCapacityKind::Segments, self.segments),
+            analysis::Capacity::Readers => (GraphCapacityKind::Readers, self.readers),
+        };
+        capacity_error(kind, limit, None)
+    }
+    fn analysis_error(self, error: analysis::Error) -> GraphError {
+        match error.kind {
+            analysis::ErrorKind::Capacity(kind) => self.analysis_capacity_error(kind),
+            _ => unreachable!("analysis preparation only fails on reservation"),
+        }
+    }
     fn analysis(self) -> analysis::Limits {
         analysis::Limits {
             resources: self.resources,
@@ -56,17 +73,18 @@ impl GraphCapacity {
         }
     }
 }
-pub(super) fn capacity_error() -> GraphError {
-    GraphError::new(
-        GraphErrorKind::CapacityExhausted,
-        "prepared Graph capacity exhausted",
-    )
+pub(super) fn capacity_error(
+    kind: GraphCapacityKind,
+    limit: usize,
+    required: Option<usize>,
+) -> GraphError {
+    GraphError::capacity_error(kind, limit, required)
 }
-fn buffer<T>(capacity: usize) -> Result<Vec<T>, GraphError> {
+fn buffer<T>(capacity: usize, kind: GraphCapacityKind) -> Result<Vec<T>, GraphError> {
     let mut result = Vec::new();
     result
         .try_reserve_exact(capacity)
-        .map_err(|_| capacity_error())?;
+        .map_err(|_| capacity_error(kind, capacity, Some(capacity)))?;
     Ok(result)
 }
 
@@ -81,7 +99,7 @@ pub struct GraphStorage {
     pub(super) exported: Vec<bool>,
     pub(super) imports: Vec<(ResourceKey, usize)>,
     pub(super) accesses: Vec<ResourceAccess>,
-    pub(super) dependencies: Vec<usize>,
+    pub(super) dependencies: Vec<Dependency>,
     pub(super) initial_ranges: Vec<Range<u64>>,
     pub(super) names: Vec<u8>,
     pub(super) uploads: Vec<u8>,
@@ -106,26 +124,27 @@ impl Deref for GraphStorage {
 )]
 impl GraphStorage {
     fn new(capacity: GraphCapacity) -> Result<Self, GraphError> {
-        let mut raster_ranges = buffer(capacity.resources)?;
+        let mut raster_ranges = buffer(capacity.resources, GraphCapacityKind::Resources)?;
         raster_ranges.resize(capacity.resources, [0; 2]);
         Ok(Self {
             id: 0,
-            resources: buffer(capacity.resources)?,
-            passes: buffer(capacity.passes)?,
-            exports: buffer(capacity.resources)?,
-            exported: buffer(capacity.resources)?,
-            imports: buffer(capacity.resources)?,
-            accesses: buffer(capacity.accesses)?,
-            dependencies: buffer(capacity.dependencies)?,
-            initial_ranges: buffer(capacity.initial_ranges)?,
-            names: buffer(capacity.name_bytes)?,
-            uploads: buffer(capacity.upload_bytes)?,
-            draws: buffer(capacity.draws)?,
+            resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            passes: buffer(capacity.passes, GraphCapacityKind::Passes)?,
+            exports: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            exported: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            imports: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            accesses: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
+            dependencies: buffer(capacity.dependencies, GraphCapacityKind::Dependencies)?,
+            initial_ranges: buffer(capacity.initial_ranges, GraphCapacityKind::InitialRanges)?,
+            names: buffer(capacity.name_bytes, GraphCapacityKind::NameBytes)?,
+            uploads: buffer(capacity.upload_bytes, GraphCapacityKind::UploadBytes)?,
+            draws: buffer(capacity.draws, GraphCapacityKind::Draws)?,
             raster_ranges,
-            overlap: buffer(capacity.accesses)?,
+            overlap: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
             workspace: analysis::Workspace::new(capacity.analysis())
-                .map_err(|_| capacity_error())?,
-            output: analysis::Output::new(capacity.analysis()).map_err(|_| capacity_error())?,
+                .map_err(|error| capacity.analysis_error(error))?,
+            output: analysis::Output::new(capacity.analysis())
+                .map_err(|error| capacity.analysis_error(error))?,
             capacity,
             #[cfg(feature = "graph-diagnostics")]
             dump: std::sync::OnceLock::new(),
@@ -229,9 +248,9 @@ impl fmt::Debug for GraphPool {
 impl GraphPool {
     pub fn new(capacity: GraphCapacity, slots: usize) -> Result<Self, GraphError> {
         if slots == 0 {
-            return Err(capacity_error());
+            return Err(capacity_error(GraphCapacityKind::Slots, 0, Some(1)));
         }
-        let mut prepared = buffer(slots)?;
+        let mut prepared = buffer(slots, GraphCapacityKind::Slots)?;
         for _ in 0..slots {
             prepared.push(Arc::new(Slot {
                 data: UnsafeCell::new(GraphStorage::new(capacity)?),
@@ -284,14 +303,20 @@ impl GraphPool {
                 });
             }
         }
-        Err(capacity_error())
+        Err(capacity_error(
+            GraphCapacityKind::Slots,
+            self.slots.len(),
+            self.slots.len().checked_add(1),
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, PassKind};
+    use crate::graph::{
+        Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, GraphErrorKind, PassKind,
+    };
 
     #[test]
     fn frozen_clones_pin_the_slot_and_reuse_rejects_old_handles() {

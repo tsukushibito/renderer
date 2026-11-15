@@ -19,14 +19,14 @@ mod resource;
 mod storage;
 
 pub use compile::CompiledGraph;
-pub use error::{GraphError, GraphErrorKind};
+pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,
     LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
-    AttachmentOps, LoadAction, MeshUpload, Operation, Pass, RasterDrawOperands, ResourceAccess,
-    UploadSource, ValidatedRasterParameters,
+    AttachmentOps, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,
+    RasterDrawOperands, ResourceAccess, UploadSource, ValidatedRasterParameters,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};
 pub use resource::{
@@ -80,6 +80,13 @@ impl Graph {
         // slot while this Arc is held. The returned borrow is tied to &mut self.
         unsafe { &mut *self.slot.data.get() }
     }
+    /// Requires `dependency` to execute before `pass`, keeping the dependency
+    /// live whenever `pass` is live. Repeating the same edge has no effect.
+    ///
+    /// This constrains execution order only: reads still consume contents from
+    /// preceding declarations, so a forward edge cannot select a later writer.
+    /// Live cycles are rejected by [`Self::compile`]; additional development
+    /// validation also diagnoses cycles in otherwise culled declarations.
     pub fn depends_on(
         &mut self,
         pass: PassHandle,
@@ -87,18 +94,30 @@ impl Graph {
     ) -> Result<(), GraphError> {
         let pass = self.pass_id(pass)?;
         let dependency = self.pass_id(dependency)?;
-        let range = self.passes[pass].dependencies.clone();
-        if !self.dependencies[range.clone()].contains(&dependency) {
+        let list = self.passes[pass].dependencies;
+        if !list
+            .iter(&self.dependencies)
+            .any(|target| target == dependency)
+        {
             if self.dependencies.len() == self.capacity.dependencies {
-                return Err(capacity_error());
+                return Err(capacity_error(
+                    GraphCapacityKind::Dependencies,
+                    self.capacity.dependencies,
+                    self.dependencies.len().checked_add(1),
+                ));
             }
             let data = self.data_mut();
-            data.dependencies.insert(range.end, dependency);
-            data.passes[pass].dependencies.end += 1;
-            for later in &mut data.passes[pass + 1..] {
-                later.dependencies.start += 1;
-                later.dependencies.end += 1;
+            let index = data.dependencies.len();
+            data.dependencies.push(Dependency {
+                target: dependency,
+                next: None,
+            });
+            if let Some(tail) = list.tail {
+                data.dependencies[tail].next = Some(index);
+            } else {
+                data.passes[pass].dependencies.head = Some(index);
             }
+            data.passes[pass].dependencies.tail = Some(index);
         }
         Ok(())
     }
@@ -113,11 +132,15 @@ impl Graph {
         side_effect: bool,
     ) -> Result<PassHandle, GraphError> {
         if self.passes.len() == self.capacity.passes {
-            return Err(capacity_error());
+            return Err(capacity_error(
+                GraphCapacityKind::Passes,
+                self.capacity.passes,
+                self.passes.len().checked_add(1),
+            ));
         }
         let name = self.store_name(name)?;
         let index = self.passes.len();
-        let dependencies = self.dependencies.len()..self.dependencies.len();
+        let dependencies = DependencyList::default();
         self.data_mut().passes.push(Pass {
             name,
             operation,
@@ -132,16 +155,26 @@ impl Graph {
     }
     fn store_name(&mut self, name: &str) -> Result<Range<usize>, GraphError> {
         let start = self.names.len();
-        let end = start.checked_add(name.len()).ok_or_else(capacity_error)?;
+        let end = start.checked_add(name.len()).ok_or_else(|| {
+            capacity_error(GraphCapacityKind::NameBytes, self.capacity.name_bytes, None)
+        })?;
         if end > self.capacity.name_bytes {
-            return Err(capacity_error());
+            return Err(capacity_error(
+                GraphCapacityKind::NameBytes,
+                self.capacity.name_bytes,
+                Some(end),
+            ));
         }
         self.data_mut().names.extend_from_slice(name.as_bytes());
         Ok(start..end)
     }
     fn append_access(&mut self, access: ResourceAccess) -> Result<(), GraphError> {
         if self.accesses.len() == self.capacity.accesses {
-            return Err(capacity_error());
+            return Err(capacity_error(
+                GraphCapacityKind::Accesses,
+                self.capacity.accesses,
+                self.accesses.len().checked_add(1),
+            ));
         }
         self.data_mut().accesses.push(access);
         Ok(())
@@ -152,16 +185,30 @@ impl Graph {
     ) -> Result<Range<usize>, GraphError> {
         let start = self.accesses.len();
         if N > self.capacity.accesses.saturating_sub(start) {
-            return Err(capacity_error());
+            return Err(capacity_error(
+                GraphCapacityKind::Accesses,
+                self.capacity.accesses,
+                start.checked_add(N),
+            ));
         }
         self.data_mut().accesses.extend(accesses);
         Ok(start..self.accesses.len())
     }
     fn append_upload(&mut self, bytes: &[u8]) -> Result<UploadSource, GraphError> {
         let start = self.uploads.len();
-        let end = start.checked_add(bytes.len()).ok_or_else(capacity_error)?;
+        let end = start.checked_add(bytes.len()).ok_or_else(|| {
+            capacity_error(
+                GraphCapacityKind::UploadBytes,
+                self.capacity.upload_bytes,
+                None,
+            )
+        })?;
         if end > self.capacity.upload_bytes {
-            return Err(capacity_error());
+            return Err(capacity_error(
+                GraphCapacityKind::UploadBytes,
+                self.capacity.upload_bytes,
+                Some(end),
+            ));
         }
         self.data_mut().uploads.extend_from_slice(bytes);
         Ok(UploadSource::Frame(start..end))
