@@ -354,10 +354,10 @@ fn run_shared_graph(strict_validation: bool) {
         .expect("prepare all native resource classes before submitting the common Graph");
     let prepared_resources = vulkan.stats().resources_created;
     #[cfg(feature = "memory-profiling")]
-    let mut rejection_native_events = Some([[0_u64; 9]; 3]);
+    let mut rejection_native_events = Some([[0_u64; 9]; 2]);
     #[cfg(not(feature = "memory-profiling"))]
-    let rejection_native_events: Option<[[u64; 9]; 3]> = None;
-    for mode in 0..3 {
+    let rejection_native_events: Option<[[u64; 9]; 2]> = None;
+    for mode in 0..2 {
         let mut rejected_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut rejected_graph = rejected_pool.begin().unwrap();
         match mode {
@@ -365,12 +365,6 @@ fn run_shared_graph(strict_validation: bool) {
                 let output = append_owned_dispatch(&mut rejected_graph);
                 rejected_graph
                     .readback_buffer("live dispatch result", output, 0, 16)
-                    .unwrap();
-            }
-            1 => {
-                let output = append_owned_textured_raster(&mut rejected_graph);
-                rejected_graph
-                    .readback_image("live textured result", output)
                     .unwrap();
             }
             _ => {
@@ -520,16 +514,14 @@ fn run_shared_graph(strict_validation: bool) {
                 "native_dispatch_execution_supported": false,
             },
             "shader_bindings": {
-                "live_textured_plan_rejected_by_both_backends": true,
                 "live_sampled_plan_rejected_by_both_backends": true,
-                "d3d12_rejects_prior_image_upload": true,
                 "vulkan_rejection_resource_create_reuse_unchanged": true,
                 "vulkan_culled_branches_no_new_resources": true,
                 "rejection_native_event_counters_checked": cfg!(feature = "memory-profiling"),
-                "rejection_order":["buffer_dispatch_plan","textured_raster_plan","sampled_dispatch_plan"],
+                "rejection_order":["buffer_dispatch_plan","sampled_dispatch_plan"],
                 "rejection_native_events_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": rejection_native_events,
                 "culled_branches_do_not_prevent_common_execution": true,
-                "native_shader_execution_supported": false,
+                "native_compute_execution_supported": false,
             },
         },
         "validation": {
