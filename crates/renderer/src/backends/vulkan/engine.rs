@@ -3,7 +3,10 @@
 use super::graph::{FrameSubmission, RuntimeError, Submission, VulkanRuntime};
 use crate::{
     engine::{EngineError, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle},
-    graph::{CompiledGraph, Graph, GraphError, ImageHandle, ImportImage, PassHandle, ResourceKey},
+    graph::{
+        CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageHandle, ImportImage,
+        PassHandle, ResourceKey,
+    },
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -13,6 +16,28 @@ use std::{
 };
 mod residency;
 use residency::{ActiveUpload, MeshVersionKey, ResidentBuffers, ResidentMesh};
+mod frames;
+use frames::{FrameScratchLease, FrameScratchPool};
+
+/// CPU construction bounds, independent of native execution and CPU results.
+#[derive(Clone, Copy, Debug)]
+pub struct EngineFrameCapacity {
+    /// CPU prepared/compiled frames retaining resident-mesh pins.
+    pub prepared_frames: usize,
+    /// Graphs held by CPU frames, accepted work or retained content provenance.
+    pub graph_slots: usize,
+    pub graph: GraphCapacity,
+}
+
+impl Default for EngineFrameCapacity {
+    fn default() -> Self {
+        Self {
+            prepared_frames: 4,
+            graph_slots: 8,
+            graph: GraphCapacity::default(),
+        }
+    }
+}
 
 /// Logical registered mesh bounds; not total VRAM or pending-native limits.
 #[derive(Clone, Copy, Debug)]
@@ -46,6 +71,7 @@ pub enum MeshPreparationError {
     UploadBusy,
     ResidencyPinned,
     NotResident,
+    FrameCapacityExhausted,
 }
 impl fmt::Display for MeshPreparationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -74,6 +100,9 @@ impl fmt::Display for MeshPreparationError {
             }
             Self::NotResident => f.write_str(
                 "snapshot meshes are not resident; prepare and advance upload progress first",
+            ),
+            Self::FrameCapacityExhausted => f.write_str(
+                "prepared frame capacity exhausted; submit or drop a prepared frame before retrying",
             ),
         }
     }
@@ -172,9 +201,41 @@ pub struct PreparedEngineFrame {
     source_graph: u64,
     source_output: ImageHandle,
     output_ownership: FrameOutputOwnership,
-    pins: Vec<Arc<ResidentBuffers>>,
+    scratch: FrameScratchLease,
 }
 impl PreparedEngineFrame {
+    pub fn output_ownership(&self) -> FrameOutputOwnership {
+        self.output_ownership
+    }
+
+    /// Consume this mutable graph while retaining the original output authority
+    /// and resident mesh pins until submission or cancellation.
+    pub fn compile(self) -> Result<CompiledEngineFrame, GraphError> {
+        Ok(CompiledEngineFrame {
+            graph: self.graph.compile()?,
+            output: self.output,
+            readback: self.readback,
+            owner: self.owner,
+            source_graph: self.source_graph,
+            source_output: self.source_output,
+            output_ownership: self.output_ownership,
+            scratch: self.scratch,
+        })
+    }
+}
+
+pub struct CompiledEngineFrame {
+    pub graph: CompiledGraph,
+    pub output: ImageHandle,
+    pub readback: Option<PassHandle>,
+    owner: Arc<()>,
+    source_graph: u64,
+    source_output: ImageHandle,
+    output_ownership: FrameOutputOwnership,
+    scratch: FrameScratchLease,
+}
+
+impl CompiledEngineFrame {
     pub fn output_ownership(&self) -> FrameOutputOwnership {
         self.output_ownership
     }
@@ -184,15 +245,24 @@ pub struct VulkanEngine {
     runtime: VulkanRuntime,
     config: MeshCacheConfig,
     owner: Arc<()>,
+    graph_pool: GraphPool,
+    upload_graphs: GraphPool,
+    frame_scratch: FrameScratchPool,
     residents: BTreeMap<MeshVersionKey, ResidentMesh>,
     retiring: BTreeSet<MeshVersionKey>,
     active_upload: Option<ActiveUpload>,
+    idle_upload_keys: Vec<MeshVersionKey>,
+    required_meshes: Vec<(MeshVersionKey, Arc<MeshData>)>,
     pending_uploads: Vec<Submission>,
     clock: AtomicU64,
     evictions: usize,
 }
 impl VulkanEngine {
-    pub fn new(runtime: VulkanRuntime, config: MeshCacheConfig) -> Result<Self, EngineError> {
+    pub fn new(
+        runtime: VulkanRuntime,
+        config: MeshCacheConfig,
+        frames: EngineFrameCapacity,
+    ) -> Result<Self, EngineError> {
         if config.max_meshes == 0
             || config.max_meshes > u32::MAX as usize
             || config.max_bytes == 0
@@ -206,13 +276,31 @@ impl VulkanEngine {
         pending_uploads
             .try_reserve_exact(config.max_upload_submissions)
             .map_err(|_| EngineError::new("unable to reserve bounded upload bookkeeping"))?;
+        let mut idle_upload_keys = Vec::new();
+        let mut required_meshes = Vec::new();
+        idle_upload_keys
+            .try_reserve_exact(config.max_meshes)
+            .map_err(|_| EngineError::new("unable to reserve bounded mesh upload keys"))?;
+        required_meshes
+            .try_reserve_exact(config.max_meshes)
+            .map_err(|_| EngineError::new("unable to reserve bounded mesh admission scratch"))?;
+        let graph_pool = GraphPool::new(frames.graph, frames.graph_slots)
+            .map_err(|_| EngineError::new("unable to reserve Engine Graph storage"))?;
+        let upload_graphs = GraphPool::new(frames.graph, config.max_upload_submissions)
+            .map_err(|_| EngineError::new("unable to reserve mesh upload Graph storage"))?;
+        let frame_scratch = FrameScratchPool::new(config.max_meshes, frames.prepared_frames)?;
         Ok(Self {
             runtime,
             config,
             owner: Arc::new(()),
+            graph_pool,
+            upload_graphs,
+            frame_scratch,
             residents: BTreeMap::new(),
             retiring: BTreeSet::new(),
             active_upload: None,
+            idle_upload_keys,
+            required_meshes,
             pending_uploads,
             clock: AtomicU64::new(0),
             evictions: 0,
@@ -231,24 +319,26 @@ impl VulkanEngine {
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<RenderedFrame, EngineRenderError> {
         let prepared = self.build_snapshot(snapshot, readback, extension)?;
-        let plan = prepared.graph.compile()?;
-        self.submit_frame(prepared, &plan)
+        self.submit_frame(prepared.compile()?)
     }
     /// Construct only: missing residency is reported without hidden uploads.
     pub fn build_snapshot(
-        &self,
+        &mut self,
         snapshot: &FrameSnapshot,
         readback: bool,
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<PreparedEngineFrame, EngineRenderError> {
-        let mut graph = Graph::new();
-        let mut resolved = BTreeMap::new();
-        let mut pins = Vec::new();
+        let mut scratch = self.frame_scratch.acquire()?;
+        let mut graph = self.graph_pool.begin()?;
+        let frame_scratch = scratch.scratch();
         let serial = self.next_use()?;
         for draw in &snapshot.draws {
-            if resolved.contains_key(&draw.mesh) {
+            let Err(index) = frame_scratch
+                .resolved
+                .binary_search_by_key(&draw.mesh, |(mesh, _)| *mesh)
+            else {
                 continue;
-            }
+            };
             let resident = self
                 .residents
                 .get(&MeshVersionKey::new(draw.mesh, draw.revision))
@@ -267,10 +357,25 @@ impl VulkanEngine {
             resident
                 .last_use
                 .store(serial, std::sync::atomic::Ordering::Relaxed);
-            resolved.insert(draw.mesh, (vertices, indices));
-            pins.push(Arc::clone(buffers));
+            // The ready resident set is bounded by max_meshes; these arrays
+            // were reserved for that bound at Engine construction.
+            frame_scratch
+                .resolved
+                .insert(index, (draw.mesh, (vertices, indices)));
+            frame_scratch.pins.push(Arc::clone(buffers));
         }
-        let frame = snapshot.build_graph_with_meshes(graph, &resolved, readback, extension)?;
+        let frame = snapshot.build_graph_with_meshes(
+            graph,
+            |mesh| {
+                frame_scratch
+                    .resolved
+                    .binary_search_by_key(&mesh, |(mesh, _)| *mesh)
+                    .ok()
+                    .map(|index| frame_scratch.resolved[index].1)
+            },
+            readback,
+            extension,
+        )?;
         let output_ownership = frame.output_ownership();
         Ok(PreparedEngineFrame {
             source_graph: frame.graph.id,
@@ -280,29 +385,27 @@ impl VulkanEngine {
             readback: frame.readback,
             owner: Arc::clone(&self.owner),
             output_ownership,
-            pins,
+            scratch,
         })
     }
     pub fn submit_frame(
         &mut self,
-        prepared: PreparedEngineFrame,
-        plan: &CompiledGraph,
+        prepared: CompiledEngineFrame,
     ) -> Result<RenderedFrame, EngineRenderError> {
         if !Arc::ptr_eq(&prepared.owner, &self.owner)
-            || prepared.source_graph != plan.id
-            || prepared.graph.id != plan.id
+            || prepared.source_graph != prepared.graph.id
             || prepared.output != prepared.source_output
-            || !plan.has_export(prepared.output.index)
+            || !prepared.graph.has_export(prepared.output.index)
         {
             return Err(EngineError::new(
                 "prepared frame or compiled plan belongs to another owner/Graph",
             )
             .into());
         }
-        let submission = self.runtime.submit_frame(plan)?;
+        let submission = self.runtime.submit_frame(&prepared.graph)?;
         let output = submission.export_image(prepared.output)?;
         let ownership = prepared.output_ownership;
-        drop(prepared.pins);
+        drop(prepared.scratch);
         self.reap_retiring()?;
         Ok(RenderedFrame {
             submission,
@@ -324,3 +427,6 @@ impl VulkanEngine {
 
 #[cfg(test)]
 mod workload_tests;
+
+#[cfg(test)]
+pub(crate) mod test_input;

@@ -3,11 +3,12 @@
 
 use std::time::{Duration, Instant};
 
-use super::{MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
+use super::test_input::{Assets as Engine, graph};
+use super::{EngineFrameCapacity, MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
 use crate::{
     RuntimeConfig, ValidationMode, VulkanRuntime,
-    engine::{Draw, Engine, IDENTITY, Material, View},
-    graph::{Graph, ResourceKey},
+    engine::{Draw, IDENTITY, Material, View},
+    graph::ResourceKey,
 };
 
 #[path = "../../../../examples/support/engine_geometry.rs"]
@@ -40,6 +41,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
             max_bytes: 2 * 1024 * 1024,
             max_upload_submissions: 2,
         },
+        EngineFrameCapacity::default(),
     )
     .unwrap();
     let mut assets = Engine::new(1, 1).unwrap();
@@ -108,7 +110,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
 fn read_all(renderer: &mut VulkanEngine, key: ResourceKey, expected: &[u8]) {
     for (part, bytes) in expected.chunks(STAGING as usize).enumerate() {
         let offset = part as u64 * STAGING;
-        let mut graph = Graph::new();
+        let mut graph = graph();
         let source = graph
             .import_buffer(
                 "resident mesh byte verification",
@@ -166,6 +168,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
             max_bytes: 16 * 1024 * 1024,
             max_upload_submissions: 3,
         },
+        EngineFrameCapacity::default(),
     )
     .unwrap();
     let mut assets = Engine::new(2, 1).unwrap();
@@ -256,6 +259,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
             max_bytes: 1024 * 1024,
             max_upload_submissions: 1,
         },
+        EngineFrameCapacity::default(),
     )
     .unwrap();
     let mut assets = Engine::new(1, 1).unwrap();
@@ -341,8 +345,13 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         "real GPU required"
     );
     let monitor = runtime.validation_monitor();
-    let mut renderer = VulkanEngine::new(runtime, MeshCacheConfig::default()).unwrap();
-    let mut graph = Graph::new();
+    let mut renderer = VulkanEngine::new(
+        runtime,
+        MeshCacheConfig::default(),
+        EngineFrameCapacity::default(),
+    )
+    .unwrap();
+    let mut graph = graph();
     let caller_image = graph
         .image(
             "caller-owned extension output",
@@ -468,6 +477,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             max_bytes: 1024 * 1024,
             max_upload_submissions: 1,
         },
+        EngineFrameCapacity::default(),
     )
     .unwrap();
     let mut assets = Engine::new(3, 1).unwrap();
