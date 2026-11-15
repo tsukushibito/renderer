@@ -228,7 +228,7 @@ passのhead/tailを保持する分、旧flat配列より予約metadataが増え�
 
 read/exportのproducerは最終的な依存集合へ直接追加し、readごとの一時集合を作って取り込み直さない。
 途中に未初期化の穴があれば解析全体を失敗にし、追加済みprefixの依存を含む不完全な計画を公開しない。
-producerの重複排除、内容の有効性、culling後の最終内容再計算は維持する。
+producerの重複排除、内容の有効性、実行されるwriteに対応した最終内容の確定は維持する。
 `renderer-7ft.2.2.1`で全accessの一時Vec射影を除去し、予約済み配列のindexを直接使う。
 
 内容のproducerを特定するdataflowと、同じ物理資源のRAW・WAR・WAWによる順序制約は区別する。
@@ -244,18 +244,38 @@ arenaの予約領域は再利用する。長い連鎖の破棄で再帰する所
 内容とhazardの区間はそれぞれ、resourceごとのrootを持つ予約済みAVL node arenaへ保持する。
 リンクはindexで、削除枠はfree listへ戻す。回転・分割・置換で無関係なresourceや配列の
 後続全体を動かさず、offsetの追加順に依存した二乗時間を避ける。通常frameのheap node確保・解放はない。
+リンクとproducer/writer/readerの任意indexは、checkedなone-based `NonZeroUsize`へ格納する。
+`Option`を一つのmachine wordで表し、現行Windows x64測定の内容/hazard nodeは各64 byte、reader履歴は24 byteとなる。
+32-bitの固定index上限を導入せず、準備済み非ZST Vecが表現できるindex範囲を維持する。
 区間数S、対象区間数Kに対し検索と連続読取はO(log S + K)、複数nodeの置換はO((K + 1) log S)となる。
 単一区間内の置換は既存nodeを再利用し、容量不足は必要な残存区間数を先に確認してから拒否する。
-reader履歴の共有と非再帰の破棄、producer/culling後の再計算は維持する。
+分割時は既知の前区間とそのsuccessorの間へ挿入し、rootからの再検索をしない。
+回転後の親/root接続を確定し、subtree高さが変わらなければ祖先の再balanceを打ち切る。
+resourceの全域置換では、そのrootだけを切り離してnodeをpostorderでfree listへ戻し、
+一つのnodeへまとめる。部分範囲と別resourceは触らず、再帰深さはAVLの高さに限定する。
+少なくとも置換用node一つを回収できるため、切り離し後に容量不足は起こらない。
+この場合はO(log S + K)で、古い区間ごとの検索・削除・回転を繰り返さない。
+reader履歴は共有indexを保持し、長い履歴の返却で所有連鎖の再帰Dropを起こさない。
+producerとcullingの意味は維持する。
 
 単純な整列配列に比べ、nodeのリンク・height・rootと木の更新費用が増える。
-旧配列に有利な昇順入力では遅くなる場合もあり、全入力での高速化を主張しない。
+木の更新費用は残るため、全入力での高速化を主張しない。
 全access境界を先に分割する代案は、後のdeadな境界まで初期区間数に含め、
 広いwriteを繰り返す入力の走査量とpeak容量を増やすため採用しなかった。
 動的な区間数と準備容量の意味を保つ方法を選び、昇順・降順・固定seedの順序と広いreadで比較する。
 隣接表・ready heapも予約済み領域を使うが、必要な区間数・依存数自体が増える費用は残る。
 開発構成では全宣言の循環を確認し、通常の実行順は残ったパスだけで順序依存を組み直す。
 除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
+
+hazardと容量検査を終えた全辺が`from < to`なら、liveなpassを宣言順に並べるだけで
+従来の最小ready-index順と同じ実行順を得られる。この場合はCSR/入次数/ready heapの構築を省く。
+後向き辺や自己依存が一つでもあれば従来の整列・topological・循環経路を使う。
+診断構成では直接順序を選ぶ場合も辺を整列し、dumpと試験の順序を維持する。
+
+全passが宣言順のまま残った場合、最初のdataflow解析で求めた内容は最終実行内容と等しいため、
+同じwriteを再び区間木へ反映しない。cullingまたは並べ替えがあれば初期内容からliveなwriteを再計算する。
+診断用lifetimesは別に求める。いずれもそのframeで構築した入力を解析し直す通常compileの処理で、
+固定Graphのplan cacheや未初期化read・hazard・容量検査の省略ではない。
 
 解析専用の`declare_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
 共有の競合検査は宣言順で最初の衝突pairを選び、read/readや無関係な資源の総当たりをしない。

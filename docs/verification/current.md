@@ -8,9 +8,9 @@
 ## 通常フレームのメモリ規約と実装
 
 `renderer-dzz` / `renderer-7ft.2.2.1`。従来の実装確認点は`43ef7e9`。
-Graph改善の`2dfca14`でも下表の5経路を製品releaseで再受入し、全ての通常窓でゼロを維持した。
+追加compile改善の`d633021`でも下表の5経路を製品releaseで再受入し、全ての通常窓でゼロを維持した。
 最新の容量・counter・実行コマンドは[ソースレビューの証拠](source-review.json)の
-`rendergraph_efficiency_improvements.current_memory_reports`、旧基準と負の対照は[従来の計測](frame-memory.json)にある。
+`rendergraph_efficiency_improvements.compile_time_reduction.current_memory_reports`、旧基準と負の対照は[従来の計測](frame-memory.json)にある。
 [規約](../design/implementation-policy.md#steady-state-memory)に従い、準備済み資源・容量内の通常frameでは
 Rendererの汎用heap alloc/alloc_zeroed/realloc/deallocと、Renderer発行のnative資源/メモリ作成・破棄を行わない。
 入力・draw数・pass構成を毎frame変え、構築/compileからGPU/present完了、CPU結果消費/返却まで確認した。
@@ -70,9 +70,10 @@ CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回�
 
 ## Graph・表示・descriptorの効率整理
 
-`renderer-6de` / `renderer-ygu` / `renderer-xqo` / `renderer-0g6` / `renderer-9nb` / `renderer-agu`。
-比較元は`1fbe51c`、統合実装は`2dfca14`。[生sample・同一public API harness・実行コマンド](source-review.json)の
-`rendergraph_efficiency_improvements`へ記録した。
+`renderer-l3g`と、`renderer-6de` / `renderer-ygu` / `renderer-xqo` / `renderer-0g6` / `renderer-9nb` / `renderer-agu`。
+追加compile改善は`2b392d3`との比較で、統合実装は`d633021`。配列実装`1fbe51c`も同じharnessで再測定した。
+[生sample・public API/Engine harness・実行コマンド](source-review.json)の
+`rendergraph_efficiency_improvements.compile_time_reduction`へ記録した。途中のpipeline単体と初回計測も残す。
 
 明示依存をpassごとの予約済みlinked arenaへ追記し、後続passのoffset更新を除去した。
 内容/hazardの区間はresourceごとの予約済みAVL frontierへ移し、無関係な後続segmentの移動を除去した。
@@ -80,33 +81,49 @@ producer、未初期化read拒否、culling後の再解析、RAW/WAR/WAW、容�
 構築時と追加検証のoverlap判定、Raster/clearのtargetとclear値検査は共通helperへ整理した。
 容量不足は11項目とGraph/import slot等の種別・上限・判明した必要数を、heap確保なしで返す。
 
+追加改善では、全辺が前向きなら従来と同じ順序を直接出力し、CSR/ready heapの構築を省く。
+全passが宣言順のまま残る場合だけ初回dataflowの内容を再利用し、同じwriteのreplayを省く。
+cullingや並べ替えがあれば再計算し、hazard・容量拒否・循環・診断lifetimesは維持する。
+区間nodeは96/104→64/64 byte、reader履歴は32→24 byteへ縮小した。
+既知の隣接位置を分割に使い、高さ不変で再balanceを止め、全域置換では古い木をまとめて回収する。
+固定planのcacheや診断を外して見掛けの時間だけを減らした比較ではない。
+
 Windows x64 / Core i5-14600KF / Rust 1.99.0、`rustc -O`のfeatureなしで同じharnessを使い、
-計測processだけを同じlogical CPU（mask `0x1`）へ固定した。各入力は8回warm-up後9回、表は中央値である。
-clock/priorityは固定せず、変更前→変更後を別processで逐次実行した。非固定CPUの初回値も証拠に残す。
+計測processだけを同じlogical CPU（mask `0x1`）へ固定した。100msの共通process warm-upに続き、各入力は8回warm-up後9回、表は中央値である。
+clock/priorityは固定せず、前回→pipeline単体→今回→配列参考の順で別processを逐次実行した。
+初回の小規模caseに見えた悪化は共通warm-up後に再現せず、初回sampleも保存した。周波数・schedule・背景負荷の寄与は分離していない。
+時間はGraph構築後のcompileのみで、構築・plan返却は含まない。全寿命の確保ゼロは別の連続区間で確認する。
 
-| 合成CPU入力 | 変更前 | 変更後 |
-|---|---:|---:|
-| 8,192passの疎な依存chain追加のみ | 28.818 ms | 0.0278 ms |
-| 8,192個の穴を挟むwriteのcompile、offset降順 | 120.379 ms | 4.131 ms |
-| 同、固定seedの順序 | 62.484 ms | 8.140 ms |
-| 同、offset昇順 | 1.641 ms | 5.042 ms |
-| 8,192個の隣接write＋全域read、昇順 | 1.461 ms | 2.807 ms |
-| 同、固定seedの順序 | 41.770 ms | 5.565 ms |
+| CPU入力 | 配列参考 `1fbe51c` | 前回 `2b392d3` | 今回 `d633021` |
+|---|---:|---:|---:|
+| 8,192passの疎な依存chain追加のみ | 28.669 ms | 0.0276 ms | 0.0279 ms |
+| 8,192個の穴を挟むwriteのcompile、offset降順 | 120.549 ms | 4.117 ms | 1.202 ms |
+| 同、固定seedの順序 | 62.719 ms | 8.251 ms | 2.905 ms |
+| 同、offset昇順 | 1.638 ms | 5.085 ms | 1.414 ms |
+| 8,192個の隣接write＋全域read、昇順 | 1.470 ms | 2.883 ms | 1.188 ms |
+| 同、固定seedの順序 | 41.913 ms | 5.517 ms | 2.574 ms |
+| 8,192passのdisjointな後向き依存chain | 20.177 ms | 2.579 ms | 1.502 ms |
+| 8,192個のwriteを全域writeで上書きして除去 | 0.439 ms | 1.184 ms | 0.398 ms |
+| Engine 128mesh/1,024draw＋2Compute/readback、260pass | 0.0842 ms | 0.0192 ms | 0.0121 ms |
+| Engine 1,024mesh/1,024draw＋2Compute/readback、2,052pass | 3.8434 ms | 0.1600 ms | 0.0924 ms |
+| 同、未使用Compute branchも追加して除去 | 3.8383 ms | 0.1558 ms | 0.1137 ms |
 
-旧配列に有利な昇順入力では木の更新費用が増える。最悪の追加順への偏りを減らした結果であり、
-全入力の高速化、実アプリ全体、GPU時間やFPSの改善を示さない。壁時計の固定CI閾値も追加しない。
-同じCPUメモリfixtureの準備時Rust要求byteは114,504→153,240へ増えたが、通常24frameは全counterゼロを維持した。
+前回悪化した昇順・広いreadも今回の同条件では短縮した。Engine入力は小さなtriangleの共有/別meshであり、
+重いgeometry・Bistro・実アプリ全体・GPU時間・FPSの改善を示さない。16/128passの小規模入力と不要branchも測定した。
+1mesh/8,192drawをbatch化した6passのEngine caseは約0.5〜0.7µsで、100nsの時計粒度付近の差を改善・退行と断定しない。
+全入力での速度を保証せず、壁時計の固定CI閾値も追加しない。
+同じCPUメモリfixtureの準備時Rust要求byteは配列114,504→前回153,240→今回122,088となった。常駐/peak/VRAMの値ではない。
+通常24frameの全counterゼロは維持した。
 
 Vulkanは最後に確立したreadのexact stage/access pairを累積readerとwriterから分離し、
 同じbuffer readのCPU回帰で依存生成8→1を確認した。新scope、write、layout変更は必要依存を保持する。
 Snapshotごとに16 byte増える。submit/retire/reset等は予約上限全体ではなく当該Graphのresource prefixだけを走査し、
 大小のGraph再利用と取消・途中失敗を確認した。D3D12 mapの二重初期化も除去した。
 
-統合後はCPUのみ83件、開発release241件、製品release225件と各Rustdoc1件、fmtと全target Clippyが成功した。
+統合後はCPUのみ87件、開発release245件、製品release229件と各Rustdoc1件、fmtと全target Clippyが成功した。
 RTX 3060 / driver 610.88でstrict Vulkan52件（WSI込み）、D3D12寿命1件、二API共有bufferのstrict/製品を逐次実行した。
 共有bufferは各backend308 byte全一致。strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終native解放後まで警告/error等ゼロを要求する。
 製品の同一reader、並べ替えreadback、mesh描画、旧mesh退役、5経路のメモリ・表示受入も成功した。
-strict専用M2試験を製品featureへ指定した初回の失敗はcommand誤りとして記録し、検査を緩めず対応する製品試験で確認した。
 適用した同期・所有・入力保証の一般推奨からの新しい例外やpolicy変更はない。
 Linux/別GPU・driver、Bistro全体、実OOM/loss、長時間耐久、GPU性能・物理VRAM改善は未確認である。
 shader/生成bindingsは無変更で再生成Verifyは今回未実行。既知の未再現起動異常`renderer-0pb`の解決も主張しない。
