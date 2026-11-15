@@ -83,12 +83,6 @@ pub(crate) struct AttachmentOps {
     pub load: LoadAction,
     pub store: StoreOp,
 }
-impl AttachmentOps {
-    pub const CLEAR_STORE: Self = Self {
-        load: LoadAction::Clear,
-        store: StoreOp::Store,
-    };
-}
 
 /// Trusted built-in shader transformations; no arbitrary SPIR-V is accepted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
