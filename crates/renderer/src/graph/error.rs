@@ -44,7 +44,7 @@ struct GraphErrorContext {
 pub struct GraphError {
     pub message: Cow<'static, str>,
     kind: GraphErrorKind,
-    context: Option<GraphErrorContext>,
+    context: Option<Box<GraphErrorContext>>,
 }
 impl GraphError {
     /// Creates an application-defined error, for example from a graph extension.
@@ -96,7 +96,7 @@ impl GraphError {
     }
 
     fn context_mut(&mut self) -> &mut GraphErrorContext {
-        self.context.get_or_insert_with(GraphErrorContext::default)
+        self.context.get_or_insert_with(Box::default)
     }
     pub(crate) fn with_pass_name(mut self, name: &str) -> Self {
         if self.kind == GraphErrorKind::CapacityExhausted {
