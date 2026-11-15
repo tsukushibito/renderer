@@ -371,9 +371,10 @@ mod buffer {
             pending.wait(Duration::from_secs(30)).unwrap().unwrap()
         }
         fn consume(result: &mut Self::Completed, pass: PassHandle, expected: &[u8; 16]) {
-            let bytes = result.readback(pass).unwrap();
-            assert_eq!(bytes, expected);
-            drop(bytes);
+            assert_eq!(result.readback_len(pass).unwrap(), 16);
+            let mut bytes = [0; 16];
+            result.readback_into(pass, &mut bytes).unwrap();
+            assert_eq!(&bytes, expected);
         }
     }
 
@@ -387,6 +388,7 @@ mod buffer {
             execution_slots: IN_FLIGHT,
             resource_capacity: 32,
             staging_bytes: 16 * 1024,
+            staging_ranges: 32,
             max_shader_bindings: 8,
         })
         .unwrap();
