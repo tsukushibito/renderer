@@ -34,10 +34,8 @@ pub(crate) trait Input {
     fn resource_size(&self, resource: usize) -> u64;
     fn initial_ranges(&self, resource: usize) -> &[Range<u64>];
     fn resource_external(&self, resource: usize) -> bool;
-    fn resource_name(&self, resource: usize) -> &str;
     fn pass_count(&self) -> usize;
     fn access_count(&self) -> usize;
-    fn pass_name(&self, pass: usize) -> &str;
     fn pass_side_effect(&self, pass: usize) -> bool;
     fn pass_dependencies(&self, pass: usize) -> &[usize];
     fn pass_accesses(&self, pass: usize) -> impl Iterator<Item = Access>;
@@ -57,10 +55,15 @@ pub(crate) enum Capacity {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ErrorKind {
     Capacity(Capacity),
+    #[cfg(feature = "development-validation")]
     InvalidResource,
+    #[cfg(feature = "development-validation")]
     InvalidPass,
+    #[cfg(feature = "development-validation")]
     InvalidRange,
+    #[cfg(feature = "development-validation")]
     InvalidAccess,
+    #[cfg(feature = "development-validation")]
     ConflictingAccesses,
     UninitializedRead,
     DependencyCycle,
@@ -156,6 +159,10 @@ impl Output {
         })
     }
 
+    #[cfg_attr(
+        not(any(test, feature = "vulkan")),
+        allow(dead_code, reason = "used by Vulkan lowering and CPU contracts")
+    )]
     pub(crate) fn final_contents(&self, resource: usize) -> &[Range<u64>] {
         &self.final_ranges[self.final_offsets[resource].clone()]
     }
@@ -1079,17 +1086,11 @@ mod tests {
         fn resource_external(&self, resource: usize) -> bool {
             self.resources[resource].external
         }
-        fn resource_name(&self, _: usize) -> &str {
-            "resource"
-        }
         fn pass_count(&self) -> usize {
             self.passes.len()
         }
         fn access_count(&self) -> usize {
             self.passes.iter().map(|p| p.accesses.len()).sum()
-        }
-        fn pass_name(&self, _: usize) -> &str {
-            "pass"
         }
         fn pass_side_effect(&self, pass: usize) -> bool {
             self.passes[pass].side_effect

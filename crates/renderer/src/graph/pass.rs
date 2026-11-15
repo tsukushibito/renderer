@@ -61,11 +61,6 @@ impl AttachmentOps {
         load: LoadAction::Clear,
         store: StoreOp::Store,
     };
-    #[cfg(test)]
-    pub const LOAD_STORE: Self = Self {
-        load: LoadAction::Load,
-        store: StoreOp::Store,
-    };
 }
 
 /// Trusted built-in shader transformations; no arbitrary SPIR-V is accepted.
@@ -333,6 +328,13 @@ pub(crate) struct Pass {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),
+    allow(
+        dead_code,
+        reason = "upload bytes are read by optional native lowering"
+    )
+)]
 pub(crate) enum UploadSource {
     Frame(Range<usize>),
     Shared {
