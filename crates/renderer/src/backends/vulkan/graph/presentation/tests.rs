@@ -162,7 +162,7 @@ type Reads = HashMap<FrameId, (PassHandle, u32, u32)>;
 fn observe(runtime: &mut VulkanRuntime, reads: &mut Reads, verified: &mut usize) {
     while let Some(mut completed) = runtime.poll_frame().unwrap() {
         if let Some((pass, width, height)) = reads.remove(&completed.id()) {
-            let bytes = completed.result.readback(pass).unwrap();
+            let bytes = completed.result.test_readback(pass).unwrap();
             let center = (height as usize / 2 * width as usize + width as usize / 2) * 4;
             assert_eq!(
                 &bytes[center..center + 4],

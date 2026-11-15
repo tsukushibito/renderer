@@ -51,7 +51,7 @@ fn check_result(submission: &mut Submission, read: PassHandle, size: u32, value:
         .unwrap()
         .expect("GPU image operation must complete");
     assert_eq!(
-        result.readback(read).unwrap(),
+        result.test_readback(read).unwrap(),
         vec![value; (size * size * 4) as usize]
     );
 }

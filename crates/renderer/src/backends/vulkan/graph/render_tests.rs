@@ -188,7 +188,7 @@ fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
                     let (plan, pass) = opaque_batch_comparison(batched, reverse, empty, false);
                     let mut submission = runtime.submit(&plan).unwrap();
                     let mut result = submission.wait(WAIT).unwrap().unwrap();
-                    let bytes = result.readback(pass).unwrap();
+                    let bytes = result.test_readback(pass).unwrap();
                     assert_eq!(&bytes[..4], &[255, 255, 255, 255]);
                     let center = (32 * 64 + 32) * 4;
                     let expected = if empty {
@@ -276,7 +276,7 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
         let (plan, pass) = opaque_batch_comparison(true, false, false, false);
         let mut submission = runtime.submit(&plan).unwrap();
         let mut result = submission.wait(WAIT).unwrap().unwrap();
-        assert_eq!(result.readback(pass).unwrap().len(), 64 * 64 * 4);
+        assert_eq!(result.test_readback(pass).unwrap().len(), 64 * 64 * 4);
     });
 }
 
@@ -322,7 +322,7 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
         );
         let mut result = submission.wait(WAIT).unwrap().unwrap();
         assert_eq!(
-            result.readback(readback).unwrap(),
+            result.test_readback(readback).unwrap(),
             [0, 0, 255, 255].repeat(16)
         );
     });
@@ -397,7 +397,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 .unwrap()
                 .expect("recovered graph must complete");
             assert_eq!(
-                result.readback(read).unwrap(),
+                result.test_readback(read).unwrap(),
                 transform(&bytes, ComputeTransform::Invert)
             );
             let recovered = runtime.stats();
@@ -514,8 +514,8 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
                 .wait(WAIT)
                 .unwrap()
                 .expect("Compute must complete");
-            assert_eq!(result.readback(first_read).unwrap(), expected_first);
-            assert_eq!(result.readback(second_read).unwrap(), expected_second);
+            assert_eq!(result.test_readback(first_read).unwrap(), expected_first);
+            assert_eq!(result.test_readback(second_read).unwrap(), expected_second);
         }
         let stats = runtime.stats();
         assert_eq!(stats.resources_created, 3, "images/views must be reused");
@@ -610,7 +610,7 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
         assert_ne!(third[1], vk::Pipeline::null());
         let mut mesh_result = pending_mesh.wait(WAIT).unwrap().expect("mesh must finish");
         assert_eq!(
-            mesh_result.readback(mesh_read).unwrap(),
+            mesh_result.test_readback(mesh_read).unwrap(),
             expected_mesh([0; 4])
         );
         let mut composite_result = pending_composite
@@ -618,7 +618,7 @@ fn vulkan_graph_adds_program_kinds_without_replacing_pending_programs() {
             .unwrap()
             .expect("composite must finish");
         assert_eq!(
-            composite_result.readback(read).unwrap(),
+            composite_result.test_readback(read).unwrap(),
             transform(&bytes, ComputeTransform::Invert)
         );
         assert!(pending_compute.wait(WAIT).unwrap().is_some());
@@ -806,15 +806,18 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             let mut submission = runtime.submit(&compiled).unwrap();
             let mut result = submission.wait(WAIT).unwrap().expect("mesh must complete");
             let (expected_vertices, expected_indices) = mesh(reverse);
-            assert_eq!(result.readback(vertex_proof).unwrap(), expected_vertices);
-            assert_eq!(result.readback(index_proof).unwrap(), expected_indices);
             assert_eq!(
-                result.readback(initial).unwrap(),
+                result.test_readback(vertex_proof).unwrap(),
+                expected_vertices
+            );
+            assert_eq!(result.test_readback(index_proof).unwrap(), expected_indices);
+            assert_eq!(
+                result.test_readback(initial).unwrap(),
                 expected_mesh([0, 0, 0, 255]),
                 "depth must be independent of triangle order"
             );
             assert_eq!(
-                result.readback(loaded).unwrap(),
+                result.test_readback(loaded).unwrap(),
                 expected_mesh([0, 0, 255, 255]),
                 "LOAD must preserve both color and depth across rendering scopes and a Copy read"
             );
@@ -961,14 +964,14 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                 .unwrap()
                 .expect("consumer must complete");
             assert_eq!(
-                consumer_result.readback(consumer_read).unwrap(),
+                consumer_result.test_readback(consumer_read).unwrap(),
                 expected_consumer
             );
             let mut producer_result = producer
                 .wait(WAIT)
                 .unwrap()
                 .expect("producer must complete");
-            assert_eq!(producer_result.readback(final_read).unwrap(), expected);
+            assert_eq!(producer_result.test_readback(final_read).unwrap(), expected);
         }
         let stats = runtime.stats();
         assert_eq!(
