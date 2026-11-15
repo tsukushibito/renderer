@@ -130,6 +130,7 @@ impl BufferProvenance {
 
     /// Copy an independent metadata version into already prepared storage. The
     /// immutable backing and prefix summary can be shared without revalidation.
+    #[cfg(any(feature = "vulkan", test))]
     pub(crate) fn copy_from(&mut self, source: &Self) -> Result<(), ProvenanceCapacityError> {
         self.require_capacity(source.segments.len())?;
         self.segments.clear();
