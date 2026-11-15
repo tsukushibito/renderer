@@ -43,6 +43,8 @@ def main():
             count += 1
             if not target.is_relative_to(root) or not target.is_file():
                 failures.append(f"{source.relative_to(root)}: missing local target {value}")
+            elif target.suffix.lower() == ".png" and not target.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"):
+                failures.append(f"{source.relative_to(root)}: invalid PNG asset {value}; hydrate documentation LFS images")
             elif url.fragment and target in pages:
                 fragment = unquote(url.fragment)
                 if fragment not in pages[target].ids:

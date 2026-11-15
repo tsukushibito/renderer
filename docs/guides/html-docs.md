@@ -26,7 +26,13 @@ GitHub 上のソースや外部の一次資料を開く場合は接続が必要�
 
 Python 3.11 以降、Git、mdBook **0.5.4**、mdbook-mermaid **0.17.1** を使用する。
 Python はリポジトリへのリンク変換と HTML の検査に使う。
-GPU・Vulkan SDK・Bistro の LFS 実データは文書生成に必要ない。
+GPU・Vulkan SDK・Bistro シーン/HDR の実入力は文書生成に必要ない。
+全文書に含める既存の検証プレビューだけは、次のコマンドで LFS 実体を取得する。CI もこの範囲だけを取得する。
+
+```sh
+git lfs pull --include="docs/verification/*-preview.png" --exclude=""
+```
+
 各コマンドはリポジトリのルートで実行する。
 
 mdBook は[公式リリース v0.5.4](https://github.com/rust-lang/mdBook/releases/tag/v0.5.4)の
