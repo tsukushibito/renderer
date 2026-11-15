@@ -51,6 +51,8 @@ impl GpuTimer {
         };
         let period_ns = f64::from(properties.limits.timestamp_period);
         assert!(period_ns.is_finite() && period_ns > 0.0);
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: This creates two timestamp queries on the live Device. The
         // unique timer immediately owns the successful pool and retains Device.
         let pool = unsafe {
@@ -74,6 +76,8 @@ impl GpuTimer {
     /// `command` records on this Device and exclusively retains this timer
     /// through execution. A previous use, if any, has completed on its Fence.
     unsafe fn begin(&self, command: vk::CommandBuffer) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::Reset, 1);
         // SAFETY: The caller provides exclusive, retained recording ownership;
         // these queries are reset before either timestamp is written.
         unsafe {
@@ -129,6 +133,8 @@ impl GpuTimer {
 
 impl Drop for GpuTimer {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: This timer is owned by its payload. The transfer owner only
         // releases it before submit or after proven retirement; unresolved
         // submissions retain the entire payload instead of running this Drop.

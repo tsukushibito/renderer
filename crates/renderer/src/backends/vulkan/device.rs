@@ -431,6 +431,8 @@ impl VulkanDevice {
             .map_err(|()| {
                 super::error::RuntimeError::capacity("Device sampler allocation limit exhausted")
             })?;
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: The caller guarantees configuration/feature validity. The
         // reservation establishes the Device-wide maxSamplerAllocationCount.
         match unsafe { self.device.create_sampler(info, None) } {
@@ -454,6 +456,8 @@ impl VulkanDevice {
     /// destroyed once, after all recorded/native uses retire or are canceled.
     pub(super) unsafe fn destroy_sampler(&self, sampler: vk::Sampler) {
         if sampler != vk::Sampler::null() {
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
             // SAFETY: The caller establishes native lifetime and exclusive use.
             unsafe { self.device.destroy_sampler(sampler, None) };
             self.samplers.release();
@@ -724,6 +728,8 @@ impl VulkanDevice {
             selected.queue_family_index,
             presentation,
             |create_info| {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
                 // SAFETY: Selected features and queue family were queried from this
                 // Instance/device. All create-info storage remains live for the call.
                 // No extensions, children, custom allocator, or work are introduced.
@@ -795,6 +801,8 @@ impl VulkanDevice {
 
 impl Drop for VulkanDevice {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: Buffer and submission owners retain the containing MemoryOwner.
         // Submitted work is completed or retired after Device loss before those
         // owners are released. Unresolved work instead retains/leaks its owner.

@@ -224,6 +224,11 @@ impl VulkanAllocator {
                     Ok(limits)
                 },
                 |image_info, allocation_info| {
+                    #[cfg(feature = "memory-profiling")]
+                    crate::measurement::record_native(
+                        crate::measurement::NativeEvent::ResourceCreate,
+                        1,
+                    );
                     // SAFETY: Validated, supported creation parameters produce
                     // a unique unaliased image/allocation pair. VMA and all its
                     // Vulkan dependencies are alive through the allocator owner.
@@ -323,6 +328,8 @@ impl VulkanImage {
 
 impl Drop for VulkanImage {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
         // SAFETY: This owner uniquely owns the image/allocation pair. Transfer
         // owners retain it through pending use and retire only before submit,
         // after completion or under lost-device rules. There are no ImageViews.

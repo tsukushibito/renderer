@@ -63,6 +63,11 @@ impl DeviceBuffer {
             .map_err(|_| RuntimeError::invalid("graph buffer debug name contains a NUL byte"))?;
         let (handle, allocation) =
             create_buffer(size, owner.device.max_buffer_size(), |info, allocation| {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ResourceCreate,
+                    1,
+                );
                 // SAFETY: VMA and its Device are retained by owner. This request
                 // creates an unaliased, device-only buffer with no escaped mapping.
                 let result = unsafe { owner.raw.create_buffer(info, allocation) };
@@ -114,6 +119,8 @@ impl DeviceBuffer {
 
 impl Drop for DeviceBuffer {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
         // SAFETY: Graph recording/pending owners retain the physical allocation.
         // Destruction is reached only before submit or after safe retirement;
         // unresolved submissions retain their complete ownership chain instead.
@@ -253,6 +260,8 @@ impl DeviceImage {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
         // SAFETY: VMA retains this Device, internally synchronizes allocation,
         // and satisfies the exact native image's requirements/bind operation.
         let (image, allocation) = unsafe { owner.raw.create_image(&info, &allocation_info) }
@@ -275,6 +284,8 @@ impl DeviceImage {
             .view_type(vk::ImageViewType::TYPE_2D)
             .format(format)
             .subresource_range(range);
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Image and allocation are immediately owned by result. A failed
         // view creation releases the image through Drop; no GPU use exists yet.
         result.view = unsafe {
@@ -337,7 +348,16 @@ impl Drop for DeviceImage {
         // SAFETY: Runtime leases retain storage through recording and GPU use.
         // The view is destroyed before its image, then the retained VMA/Device.
         unsafe {
-            self.owner.device.raw().destroy_image_view(self.view, None);
+            if self.view != vk::ImageView::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                self.owner.device.raw().destroy_image_view(self.view, None);
+            }
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
             self.owner
                 .raw
                 .destroy_image(self.image, &mut self.allocation);

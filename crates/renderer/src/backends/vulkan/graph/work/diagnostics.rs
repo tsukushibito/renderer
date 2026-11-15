@@ -5,8 +5,9 @@ use std::fmt::Write;
 
 use ash::vk;
 
-use super::{NativeResource, PhysicalLease, Snapshot, Use};
-use crate::graph::{CompiledGraph, Pass, ResourceKey};
+use super::super::PhysicalLease;
+use super::{NativeResource, Snapshot, Use};
+use crate::graph::{CompiledGraph, ResourceKey};
 
 pub(in super::super) fn begin(
     graph: &CompiledGraph,
@@ -27,7 +28,7 @@ pub(in super::super) fn begin(
         writeln!(
             output,
             "resource {index} {:?} physical_key owner={} index={} generation={} desc={:?} imported={} import_revision={}",
-            resource.name, key.owner, key.index, key.generation, resource.desc,
+            graph.resource_name(index), key.owner, key.index, key.generation, resource.desc,
             resource.import.is_some(), resource.import_revision,
         )
         .expect("writing String");
@@ -59,9 +60,9 @@ fn state(output: &mut String, label: &str, snapshot: &Snapshot) {
     .expect("writing String");
 }
 
-pub(super) fn pass(output: &mut String, index: usize, pass: &Pass) {
-    writeln!(output, "pass {index} {:?}", pass.name).expect("writing String");
-    for access in &pass.accesses {
+pub(super) fn pass(output: &mut String, graph: &CompiledGraph, index: usize) {
+    writeln!(output, "pass {index} {:?}", graph.pass_name(index)).expect("writing String");
+    for access in graph.accesses(index) {
         writeln!(
             output,
             "  use resource={} range={:?} purpose={:?} read={} write={}",

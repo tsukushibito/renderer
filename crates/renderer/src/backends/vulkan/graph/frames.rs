@@ -1,8 +1,8 @@
 //! Bounded runtime ownership of in-flight frames, separate from CPU results.
 
-use std::collections::BTreeMap;
 use std::time::Instant;
 
+use super::exports::ExportLease;
 use super::{
     BufferHandle, CompiledGraph, Duration, Export, GraphWork, ImageHandle, ImportBuffer,
     ImportImage, PendingTransfer, RuntimeError, RuntimeErrorKind, Submission, SubmissionResult,
@@ -29,7 +29,7 @@ impl FrameId {
 pub struct FrameSubmission {
     id: FrameId,
     graph: u64,
-    exports: BTreeMap<usize, Export>,
+    exports: ExportLease,
 }
 
 impl FrameSubmission {
@@ -42,9 +42,9 @@ impl FrameSubmission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .get(&handle.index)
+            .get(handle.index)
             .and_then(|value| match value {
-                Export::Buffer(value) => Some(value.clone()),
+                Export::Buffer(value) => Some(value),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("buffer was not exported"))
@@ -55,9 +55,9 @@ impl FrameSubmission {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));
         }
         self.exports
-            .get(&handle.index)
+            .get(handle.index)
             .and_then(|value| match value {
-                Export::Image(value) => Some(value.clone()),
+                Export::Image(value) => Some(value),
                 _ => None,
             })
             .ok_or_else(|| RuntimeError::invalid("image was not exported"))
@@ -265,8 +265,11 @@ impl VulkanRuntime {
     ) -> Result<Option<FrameCompletion>, RuntimeError> {
         // Do not reject a stopped/lost Device before observing each actual Fence
         // result. This preserves the transfer retirement contract after loss.
-        self.frames
-            .wait_one(timeout, |frame, budget| frame.observe(budget))
+        let result = self
+            .frames
+            .wait_one(timeout, |frame, budget| frame.observe(budget));
+        self.collect_recycled();
+        result
     }
 
     /// Explicit shutdown/backpressure wait, discarding completed frame results.
