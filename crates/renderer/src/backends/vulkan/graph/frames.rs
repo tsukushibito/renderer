@@ -103,7 +103,7 @@ impl PendingFrame {
                 },
             },
             Err(error) => Observation::Failed {
-                error: RuntimeError::from(error).context(format!("frame {:?}", self.id)),
+                error: RuntimeError::from(error).context(format_args!("frame {:?}", self.id)),
                 retired: !self.pending.is_pending(),
             },
         }

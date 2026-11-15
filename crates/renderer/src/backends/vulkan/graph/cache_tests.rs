@@ -13,6 +13,7 @@ fn real_gpu(capacity: usize, slots: usize, test: impl FnOnce(&mut VulkanRuntime)
             resource_capacity: capacity,
             staging_bytes: 4096,
             max_shader_bindings: 1,
+            staging_ranges: 256,
         })
         .expect("real Vulkan runtime is required");
         assert_ne!(
@@ -50,7 +51,7 @@ fn check_result(submission: &mut Submission, read: PassHandle, size: u32, value:
         .unwrap()
         .expect("GPU image operation must complete");
     assert_eq!(
-        result.readback(read).unwrap(),
+        result.test_readback(read).unwrap(),
         vec![value; (size * size * 4) as usize]
     );
 }

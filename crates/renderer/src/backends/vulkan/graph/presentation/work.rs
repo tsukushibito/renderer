@@ -5,32 +5,35 @@ use super::*;
 pub(super) struct PresentWork {
     pub(super) source: PhysicalLease,
     pub(super) previous: Option<SourceScope>,
-    pub(super) next: Option<Snapshot>,
     pub(super) serial: u64,
     pub(super) commands: PresentCommands,
 }
 
-pub(super) fn prepare_source(mut next: Snapshot, serial: u64) -> (Option<SourceScope>, Snapshot) {
+pub(super) fn prepare_source(previous: &Snapshot) -> Option<SourceScope> {
     let stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
     let access = vk::AccessFlags2::SHADER_SAMPLED_READ;
     let layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
     // A prior same-queue barrier exposes the writer to every later command in
     // this exact read scope. New writes/scopes/layouts require a dependency.
-    // Keep the last writer in the moved Snapshot for those future consumers.
-    let previous = if next.layout == layout && next.has_read_visibility(stage, access) {
+    // Keep the last writer in canonical state for those future consumers.
+    if previous.layout == layout && previous.has_read_visibility(stage, access) {
         None
     } else {
         Some(SourceScope {
-            stage: next.stage | next.writer_stage,
-            access: next.access | next.writer_access,
-            layout: next.layout,
+            stage: previous.stage | previous.writer_stage,
+            access: previous.access | previous.writer_access,
+            layout: previous.layout,
         })
-    };
-    next.serial = serial;
-    next.stage = stage;
-    next.access = access;
-    next.layout = layout;
-    (previous, next)
+    }
+}
+
+fn commit_source(state: &mut Snapshot, serial: u64) {
+    // Presentation changes only scheduled native read scope. Mutating these
+    // scalars preserves content metadata and its reserved backing allocation.
+    state.serial = serial;
+    state.stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
+    state.access = vk::AccessFlags2::SHADER_SAMPLED_READ;
+    state.layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
 }
 impl TransferPayload for PresentWork {
     fn owner(&self) -> &Arc<MemoryOwner> {
@@ -56,9 +59,7 @@ impl TransferPayload for PresentWork {
     }
     fn submitted(&mut self) {
         self.commands.submitted();
-        if let Some(next) = self.next.take() {
-            self.source.lock().scheduled = next;
-        }
+        commit_source(&mut self.source.lock().scheduled, self.serial);
     }
     unsafe fn establish_contents(&mut self) {
         let mut state = self.source.lock();
@@ -72,7 +73,7 @@ mod tests {
 
     #[test]
     fn presentation_reuses_only_exact_read_visibility_and_preserves_contents() {
-        let initial = Snapshot {
+        let mut next = Snapshot {
             revision: 7,
             serial: 7,
             initialized: std::iter::once(0..1).collect(),
@@ -83,13 +84,15 @@ mod tests {
             writer_access: vk::AccessFlags2::TRANSFER_WRITE,
             ..Snapshot::default()
         };
-        let (first, next) = prepare_source(initial, 8);
-        let first = first.expect("initial presentation must expose the writer");
+        let first = prepare_source(&next).expect("initial presentation must expose the writer");
         assert_eq!(first.stage, vk::PipelineStageFlags2::COPY);
         assert_eq!(first.access, vk::AccessFlags2::TRANSFER_WRITE);
         assert_eq!(first.layout, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
-        let (repeated, next) = prepare_source(next, 9);
-        assert!(repeated.is_none());
+        let initialized_storage = next.initialized.as_ptr();
+        commit_source(&mut next, 8);
+        assert!(prepare_source(&next).is_none());
+        commit_source(&mut next, 9);
+        assert_eq!(next.initialized.as_ptr(), initialized_storage);
         assert_eq!(next.revision, 7);
         assert_eq!(next.serial, 9);
         assert_eq!(next.initialized.len(), 1);
@@ -120,7 +123,7 @@ mod tests {
             },
         ] {
             assert!(
-                prepare_source(changed, 11).0.is_some(),
+                prepare_source(&changed).is_some(),
                 "new reader scopes, layouts and writes still need a dependency"
             );
         }

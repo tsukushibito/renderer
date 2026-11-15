@@ -146,8 +146,8 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
             // Native execution, upload, images/Views and descriptor arenas have all
             // been reused before these old CPU results are read for the first time.
             for (mut result, (buffer_read, bytes, image_read, pixels)) in retained {
-                assert_eq!(result.readback(buffer_read).unwrap(), bytes);
-                assert_eq!(result.readback(image_read).unwrap(), pixels);
+                assert_eq!(result.test_readback(buffer_read).unwrap(), bytes);
+                assert_eq!(result.test_readback(image_read).unwrap(), pixels);
             }
             assert_eq!(runtime.stats().readback_live_ranges, 0);
         },
@@ -225,7 +225,7 @@ fn vulkan_frames_delete_pending_resources_and_recover_readback_capacity() {
                 "rejected preparation releases upload lease"
             );
             let mut retained = first_result.expect("first completed result");
-            assert_eq!(retained.readback(first_read).unwrap(), vec![17; 2048]);
+            assert_eq!(retained.test_readback(first_read).unwrap(), vec![17; 2048]);
             assert_eq!(runtime.stats().readback_live_ranges, 1);
             let submitted = runtime.submit_frame(&replacement).unwrap();
             let replacement_key = submitted.export_buffer(replacement_buffer).unwrap().key();
@@ -247,9 +247,12 @@ fn vulkan_frames_delete_pending_resources_and_recover_readback_capacity() {
             runtime.delete(replacement_key).unwrap();
             drop(submitted);
             let mut result = completion(runtime).result;
-            assert_eq!(result.readback(replacement_read).unwrap(), vec![93; 1024]);
             assert_eq!(
-                second_result.unwrap().readback(second_read).unwrap(),
+                result.test_readback(replacement_read).unwrap(),
+                vec![93; 1024]
+            );
+            assert_eq!(
+                second_result.unwrap().test_readback(second_read).unwrap(),
                 vec![41; 2048]
             );
             assert_eq!(runtime.stats().readback_live_ranges, 0);
@@ -327,7 +330,7 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                     for _ in 0..3 {
                         let mut completed = completion(runtime);
                         let (read, bytes) = expected.remove(&completed.id()).unwrap();
-                        assert_eq!(completed.result.readback(read).unwrap(), bytes);
+                        assert_eq!(completed.result.test_readback(read).unwrap(), bytes);
                     }
                 }
                 // Read-only work advances native queue state, not the content
@@ -354,7 +357,10 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                 // Invalidating a history registration must not retire the
                 // accepted reader or overwrite its still-unconsumed output.
                 for _ in 0..2 {
-                    assert_eq!(completion(runtime).result.readback(read).unwrap(), pixels);
+                    assert_eq!(
+                        completion(runtime).result.test_readback(read).unwrap(),
+                        pixels
+                    );
                 }
             }
             assert_eq!(runtime.stats().registered_resources, 0);

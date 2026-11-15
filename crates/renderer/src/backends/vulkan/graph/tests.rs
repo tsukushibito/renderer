@@ -9,6 +9,7 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
         resource_capacity: 1,
         staging_bytes: 4096,
         max_shader_bindings: 1,
+        staging_ranges: 256,
     })
     .unwrap();
     assert_ne!(
@@ -46,10 +47,10 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
     assert_eq!(plan.ordered_pass_names(), ["upload", "second", "first"]);
     let mut submission = runtime.submit(&plan).unwrap();
     let mut result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
-    assert_eq!(result.readback(first).unwrap(), [1, 2, 3, 4]);
-    assert_eq!(result.readback(second).unwrap(), [5, 6, 7, 8]);
+    assert_eq!(result.test_readback(first).unwrap(), [1, 2, 3, 4]);
+    assert_eq!(result.test_readback(second).unwrap(), [5, 6, 7, 8]);
     assert_eq!(
-        result.readback(first).unwrap_err().kind(),
+        result.test_readback(first).unwrap_err().kind(),
         RuntimeErrorKind::InvalidInput
     );
     let mut foreign = Graph::new();
@@ -61,7 +62,7 @@ fn vulkan_graph_readback_identity_survives_reordered_execution() {
         .readback_buffer("read", foreign_buffer, 0, 4)
         .unwrap();
     assert_eq!(
-        result.readback(foreign_read).unwrap_err().kind(),
+        result.test_readback(foreign_read).unwrap_err().kind(),
         RuntimeErrorKind::WrongOwner
     );
     drop(result);
@@ -89,6 +90,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             resource_capacity: 6,
             staging_bytes: 4096,
             max_shader_bindings: 8,
+            staging_ranges: 256,
         })
         .unwrap();
         let diagnostics = runtime.diagnostics.clone();
@@ -168,9 +170,16 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         runtime.delete(buffer_export.key()).unwrap();
         assert!(runtime.refresh_buffer(buffer_export.key()).is_err());
         let mut result = second.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(result.readback(buffer_read).unwrap(), buffer_bytes);
-        assert_eq!(result.readback(image_read).unwrap(), image_bytes);
-        assert!(result.readback(image_read).is_err());
+        assert_eq!(result.readback_len(buffer_read).unwrap(), 16);
+        assert!(result.readback_into(buffer_read, &mut [0; 15]).is_err());
+        assert_eq!(
+            result.readback_len(buffer_read).unwrap(),
+            16,
+            "a rejected destination length preserves the readback lease"
+        );
+        assert_eq!(result.test_readback(buffer_read).unwrap(), buffer_bytes);
+        assert_eq!(result.test_readback(image_read).unwrap(), image_bytes);
+        assert!(result.test_readback(image_read).is_err());
         let accepted = runtime.entries[image_export.key.index as usize]
             .physical()
             .lock()
@@ -204,7 +213,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         let old_read = unchanged.readback_image("unchanged.read", old).unwrap();
         let mut reader = runtime.submit(&unchanged.compile().unwrap()).unwrap();
         let mut read_result = reader.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(read_result.readback(old_read).unwrap(), image_bytes);
+        assert_eq!(read_result.test_readback(old_read).unwrap(), image_bytes);
         assert_eq!(
             runtime.refresh_image(image_export.key()).unwrap(),
             image_export
@@ -264,7 +273,7 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
             let mut result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
             assert_eq!(runtime.stats().upload_live_ranges, 0);
             assert_eq!(runtime.stats().readback_live_ranges, 1);
-            assert_eq!(result.readback(read).unwrap(), buffer_bytes);
+            assert_eq!(result.test_readback(read).unwrap(), buffer_bytes);
         }
         let stats = runtime.stats();
         assert!(stats.resources_created <= 6, "{stats:?}");
@@ -294,6 +303,7 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
             resource_capacity: 2,
             staging_bytes: 4 * 1024 * 1024,
             max_shader_bindings: 4,
+            staging_ranges: 256,
         })
         .unwrap();
         let diagnostics = runtime.diagnostics.clone();
@@ -359,7 +369,7 @@ fn vulkan_graph_full_replacement_releases_old_completed_input() {
                 .unwrap();
             let mut pending = runtime.submit(&graph.compile().unwrap()).unwrap();
             let mut result = pending.wait(Duration::from_secs(10)).unwrap().unwrap();
-            assert_eq!(result.readback(read).unwrap(), vec![29; size]);
+            assert_eq!(result.test_readback(read).unwrap(), vec![29; size]);
         }
         runtime.delete(key).unwrap();
         drop(runtime);
@@ -382,6 +392,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
             resource_capacity: 1,
             staging_bytes: 256,
             max_shader_bindings: 2,
+            staging_ranges: 256,
         };
         let mut runtime = VulkanRuntime::new(config).unwrap();
         let diagnostics = runtime.diagnostics.clone();
@@ -444,7 +455,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
         let mut submission = runtime.submit(&plan).unwrap();
         let first_export = submission.export_buffer(value).unwrap();
         let mut result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
-        assert_eq!(result.readback(read).unwrap(), [7; 16]);
+        assert_eq!(result.test_readback(read).unwrap(), [7; 16]);
         assert_eq!(
             runtime.entries.len(),
             1,
