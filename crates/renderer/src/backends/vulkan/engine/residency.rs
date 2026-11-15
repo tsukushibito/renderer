@@ -586,6 +586,26 @@ impl VulkanEngine {
         Ok(())
     }
 
+    fn release_ready_sources(&mut self, assets: Option<&Engine>) {
+        while let Some(key) = self.residents.iter().find_map(|(key, entry)| {
+            (entry.ready()
+                && entry.data.as_ref().is_some_and(|data| {
+                    source_releasable(
+                        data,
+                        assets,
+                        self.retired_sources.sources.iter().chain(
+                            self.residents.iter().filter_map(|(other, entry)| {
+                                (other != key).then_some(entry.data.as_ref()).flatten()
+                            }),
+                        ),
+                    )
+                }))
+            .then_some(*key)
+        }) {
+            self.residents.get_mut(&key).expect("ready resident").data = None;
+        }
+    }
+
     /// Reclaim obsolete GPU registrations and CPU sources at an explicit asset
     /// change or maintenance boundary. This never polls or waits for the GPU;
     /// prepared frames keep their registered mesh versions pinned, and recorded
@@ -593,7 +613,9 @@ impl VulkanEngine {
     ///
     /// Pass the CPU asset owner when available. Pointer identity establishes
     /// that it anchors the same current or retired immutable version, allowing
-    /// this Engine to release its source without waiting for CPU asset deletion.
+    /// this Engine to release ready resident sources as well as obsolete sources
+    /// without waiting for CPU asset deletion. GPU mesh registrations and their
+    /// prepared pins are independent of that CPU source ownership.
     /// Keep that CPU Engine alive throughout ordinary processing of its derived
     /// frames; destroying it begins shutdown, including surviving consumers.
     /// An absent or unrelated owner retains sources until external snapshots and
@@ -607,6 +629,7 @@ impl VulkanEngine {
         assets: Option<&Engine>,
     ) -> Result<usize, EngineRenderError> {
         self.release_idle_inputs();
+        self.release_ready_sources(assets);
         self.retired_sources.collect(assets, &self.residents);
         let before = self.residents.len();
         while let Some(key) = self
@@ -619,6 +642,7 @@ impl VulkanEngine {
         // Unregistering an idle native buffer can release its canonical Graph
         // provenance, making an upload slot newly idle at this same boundary.
         self.release_idle_inputs();
+        self.release_ready_sources(assets);
         self.retired_sources.collect(assets, &self.residents);
         Ok(before - self.residents.len())
     }
