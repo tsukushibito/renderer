@@ -511,19 +511,25 @@ impl FrameWork {
         })?;
         owner.ensure_active()?;
         let list: ID3D12CommandList = self.slot().list.0.clone().into();
-        // Publish uncertain ownership before the void Execute call, including
-        // unwinding. Neither a failed later Signal nor Drop can roll it back.
-        self.phase = Phase::Pending;
-        // SAFETY: The closed list, allocator and all operands remain exclusively
-        // owned by this pending lease; the queue gate serializes Execute/Signal.
-        unsafe {
-            owner.queue.ExecuteCommandLists(&[Some(list)]);
-        }
-        // SAFETY: The live slot fence uses a unique increasing target, and this
-        // queue operation follows the only execution covered by that target.
-        if let Err(error) = unsafe { owner.queue.Signal(&*self.slot().fence, self.target) }.ok() {
+        let fence = self.slot().fence.0.clone();
+        let target = self.target;
+        let signaled = execute_and_signal(
+            &mut self.phase,
+            |_| {
+                // SAFETY: The closed list, allocator and all operands remain
+                // owned by this pending lease; the gate serializes Execute/Signal.
+                unsafe {
+                    owner.queue.ExecuteCommandLists(&[Some(list)]);
+                }
+            },
+            || {
+                // SAFETY: The live slot fence uses a unique increasing target;
+                // the queue operation follows the execution covered by that target.
+                unsafe { owner.queue.Signal(&fence, target) }.ok()
+            },
+        );
+        if let Err(error) = signaled {
             owner.mark_stopped();
-            self.phase = Phase::Quarantined;
             return Err(owner.native("ID3D12CommandQueue::Signal", error));
         }
         Ok(FrameSubmission { work: Some(self) })
@@ -562,6 +568,23 @@ impl FrameWork {
         }
     }
 }
+
+// Publish uncertain ownership before the void Execute call. A failed Signal or
+// unwind cannot prove rejection/completion, so Drop must retain the native chain.
+fn execute_and_signal<E>(
+    phase: &mut Phase,
+    execute: impl FnOnce(&Phase),
+    signal: impl FnOnce() -> Result<(), E>,
+) -> Result<(), E> {
+    *phase = Phase::Pending;
+    execute(phase);
+    let signaled = signal();
+    if signaled.is_err() {
+        *phase = Phase::Quarantined;
+    }
+    signaled
+}
+
 impl Drop for FrameWork {
     fn drop(&mut self) {
         if self.slot.is_none() {
@@ -713,5 +736,59 @@ impl FrameResult {
 impl Drop for FrameResult {
     fn drop(&mut self) {
         self.return_result();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        cell::Cell,
+        panic::{AssertUnwindSafe, catch_unwind},
+    };
+
+    use super::{Phase, execute_and_signal};
+
+    #[test]
+    fn signal_failure_follows_execution_and_quarantines_published_pending_work() {
+        let mut phase = Phase::Recorded;
+        let stage = Cell::new(0);
+        let result = execute_and_signal(
+            &mut phase,
+            |published| {
+                assert!(matches!(published, Phase::Pending));
+                assert_eq!(stage.replace(1), 0);
+            },
+            || {
+                assert_eq!(stage.replace(2), 1);
+                Err("signal failed")
+            },
+        );
+        assert_eq!(result, Err("signal failed"));
+        assert_eq!(stage.get(), 2);
+        assert!(matches!(phase, Phase::Quarantined));
+    }
+
+    #[test]
+    fn unwinding_execution_or_signal_keeps_pending_ownership() {
+        for unwind_in_execute in [true, false] {
+            let mut phase = Phase::Recorded;
+            let signal_called = Cell::new(false);
+            let unwound = catch_unwind(AssertUnwindSafe(|| {
+                let _: Result<(), ()> = execute_and_signal(
+                    &mut phase,
+                    |published| {
+                        assert!(matches!(published, Phase::Pending));
+                        assert!(!unwind_in_execute, "injected Execute unwind");
+                    },
+                    || {
+                        signal_called.set(true);
+                        panic!("injected Signal unwind");
+                    },
+                );
+            }));
+            assert!(unwound.is_err());
+            assert!(matches!(phase, Phase::Pending));
+            assert_eq!(signal_called.get(), !unwind_in_execute);
+        }
     }
 }
