@@ -8,6 +8,11 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::ops::Range;
 
+mod intervals;
+#[cfg(feature = "development-validation")]
+use super::accesses::{IndexedAccess, conflicting_ranges_in};
+use intervals::{Entry, Intervals};
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
     pub resources: usize,
@@ -193,18 +198,12 @@ impl Output {
 
 #[derive(Clone, Copy)]
 struct ContentSegment {
-    resource: usize,
-    start: u64,
-    end: u64,
     initialized: bool,
     producer: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
 struct HazardSegment {
-    resource: usize,
-    start: u64,
-    end: u64,
     writer: Option<usize>,
     readers: Option<usize>,
 }
@@ -215,59 +214,10 @@ struct Reader {
     visited: usize,
 }
 
-#[cfg(feature = "development-validation")]
-#[derive(Clone, Copy)]
-struct End {
-    value: u64,
-    index: usize,
-}
-
-#[cfg(feature = "development-validation")]
-#[derive(Clone, Copy, Default)]
-struct Prefix {
-    longest: Option<End>,
-    second: Option<End>,
-    writer: Option<End>,
-}
-
-#[cfg(feature = "development-validation")]
-impl Prefix {
-    fn insert(&mut self, end: End, write: bool) {
-        if self.longest.is_none_or(|v| end.value > v.value) {
-            self.second = self.longest;
-            self.longest = Some(end);
-        } else if self.second.is_none_or(|v| end.value > v.value) {
-            self.second = Some(end);
-        }
-        if write && self.writer.is_none_or(|v| end.value > v.value) {
-            self.writer = Some(end);
-        }
-    }
-    fn overlaps(self, index: usize, start: u64, write: bool) -> bool {
-        let candidate = if write {
-            self.longest.filter(|v| v.index != index).or(self.second)
-        } else {
-            self.writer
-        };
-        candidate.is_some_and(|v| v.value > start)
-    }
-}
-
-#[cfg(feature = "development-validation")]
-#[derive(Clone, Copy)]
-struct IndexedAccess {
-    resource: usize,
-    start: u64,
-    end: u64,
-    write: bool,
-    index: usize,
-    prefix: Prefix,
-}
-
 pub(crate) struct Workspace {
     limits: Limits,
-    contents: Vec<ContentSegment>,
-    hazards: Vec<HazardSegment>,
+    contents: Intervals<ContentSegment>,
+    hazards: Intervals<HazardSegment>,
     readers: Vec<Reader>,
     visit_epoch: usize,
     data: Vec<(usize, usize)>,
@@ -297,8 +247,8 @@ impl Workspace {
             .map_err(|_| Error::capacity(Capacity::Passes))?;
         Ok(Self {
             limits,
-            contents: reserve(limits.segments, Capacity::Segments)?,
-            hazards: reserve(limits.segments, Capacity::Segments)?,
+            contents: Intervals::new(limits.resources, limits.segments).map_err(Error::capacity)?,
+            hazards: Intervals::new(limits.resources, limits.segments).map_err(Error::capacity)?,
             readers: reserve(limits.readers, Capacity::Readers)?,
             visit_epoch: 0,
             data: reserve(limits.edges, Capacity::Edges)?,
@@ -334,8 +284,6 @@ impl Workspace {
     }
 
     fn reset(&mut self, passes: usize) {
-        self.contents.clear();
-        self.hazards.clear();
         self.readers.clear();
         self.visit_epoch = 0;
         self.data.clear();
@@ -364,20 +312,21 @@ impl Workspace {
     }
 
     fn initialize_contents(&mut self, input: &impl Input) -> Result<(), Error> {
-        self.contents.clear();
+        self.contents.clear(input.resource_count());
         for resource in 0..input.resource_count() {
-            push(
-                &mut self.contents,
-                ContentSegment {
+            self.contents
+                .insert(
                     resource,
-                    start: 0,
-                    end: input.resource_size(resource),
-                    initialized: false,
-                    producer: None,
-                },
-                self.limits.segments,
-                Capacity::Segments,
-            )?;
+                    Entry {
+                        start: 0,
+                        end: input.resource_size(resource),
+                        value: ContentSegment {
+                            initialized: false,
+                            producer: None,
+                        },
+                    },
+                )
+                .map_err(|_| Error::capacity(Capacity::Segments))?;
             for range in input.initial_ranges(resource) {
                 self.write_contents(resource, range.clone(), true, None)?;
             }
@@ -392,46 +341,16 @@ impl Workspace {
         initialized: bool,
         producer: Option<usize>,
     ) -> Result<(), Error> {
-        let first = self.contents.partition_point(|s| {
-            s.resource < resource || (s.resource == resource && s.end <= range.start)
-        });
-        let end = self.contents.partition_point(|s| {
-            s.resource < resource || (s.resource == resource && s.start < range.end)
-        });
-        let head = self.contents[first];
-        let tail = self.contents[end - 1];
-        let middle = ContentSegment {
-            resource,
-            start: range.start,
-            end: range.end,
-            initialized,
-            producer,
-        };
-        let mut replacement = [middle; 3];
-        let mut count = 0;
-        if head.start < range.start {
-            replacement[count] = ContentSegment {
-                end: range.start,
-                ..head
-            };
-            count += 1;
-        }
-        replacement[count] = middle;
-        count += 1;
-        if range.end < tail.end {
-            replacement[count] = ContentSegment {
-                start: range.end,
-                ..tail
-            };
-            count += 1;
-        }
-        replace(
-            &mut self.contents,
-            first..end,
-            &replacement[..count],
-            self.limits.segments,
-            Capacity::Segments,
-        )
+        self.contents
+            .replace(
+                resource,
+                range,
+                ContentSegment {
+                    initialized,
+                    producer,
+                },
+            )
+            .map_err(|_| Error::capacity(Capacity::Segments))
     }
 
     fn add_data(&mut self, from: usize, to: usize) -> Result<(), Error> {
@@ -453,28 +372,27 @@ impl Workspace {
         range: Range<u64>,
         pass: Option<usize>,
     ) -> Result<(), Error> {
-        let first = self.contents.partition_point(|s| {
-            s.resource < resource || (s.resource == resource && s.end <= range.start)
-        });
-        for index in first..self.contents.len() {
-            let segment = self.contents[index];
-            if segment.resource != resource || segment.start >= range.end {
+        let mut cursor = self.contents.find(resource, range.start);
+        while let Some(current) = cursor {
+            let segment = self.contents.entry(current);
+            if segment.start >= range.end {
                 break;
             }
-            if !segment.initialized {
+            if !segment.value.initialized {
                 let mut error = Error::new(ErrorKind::UninitializedRead)
                     .at_resource(resource)
                     .at_range(segment.start.max(range.start)..segment.end.min(range.end));
                 error.pass = pass;
                 return Err(error);
             }
-            if let Some(from) = segment.producer {
+            if let Some(from) = segment.value.producer {
                 if let Some(to) = pass {
                     self.add_data(from, to)?;
                 } else {
                     self.roots[from] = true;
                 }
             }
+            cursor = self.contents.next(current);
         }
         Ok(())
     }
@@ -508,16 +426,13 @@ impl Workspace {
                 self.visit_epoch += 1;
             }
         }
-        let first = self.hazards.partition_point(|s| {
-            s.resource < access.resource
-                || (s.resource == access.resource && s.end <= access.range.start)
-        });
-        for index in first..self.hazards.len() {
-            let segment = self.hazards[index];
-            if segment.resource != access.resource || segment.start >= access.range.end {
+        let mut cursor = self.hazards.find(access.resource, access.range.start);
+        while let Some(current) = cursor {
+            let segment = self.hazards.entry(current);
+            if segment.start >= access.range.end {
                 break;
             }
-            if let Some(from) = segment.writer {
+            if let Some(from) = segment.value.writer {
                 if access.read {
                     self.add_edge(from, to, DependencyKind::Raw)?;
                 }
@@ -526,7 +441,7 @@ impl Workspace {
                 }
             }
             if access.write {
-                let mut reader = segment.readers;
+                let mut reader = segment.value.readers;
                 while let Some(index) = reader {
                     if self.readers[index].visited == self.visit_epoch {
                         break;
@@ -538,90 +453,34 @@ impl Workspace {
                     self.add_edge(from, to, DependencyKind::War)?;
                 }
             }
+            cursor = self.hazards.next(current);
         }
-        Ok(())
-    }
-
-    fn split_hazard(&mut self, resource: usize, point: u64) -> Result<(), Error> {
-        let end = self.hazards.partition_point(|s| {
-            s.resource < resource || (s.resource == resource && s.start <= point)
-        });
-        if end == 0 {
-            return Ok(());
-        }
-        let index = end - 1;
-        let segment = self.hazards[index];
-        if segment.resource != resource || segment.start == point || point >= segment.end {
-            return Ok(());
-        }
-        if self.hazards.len() == self.limits.segments {
-            return Err(Error::capacity(Capacity::Segments));
-        }
-        self.hazards[index].end = point;
-        self.hazards.insert(
-            index + 1,
-            HazardSegment {
-                start: point,
-                ..segment
-            },
-        );
         Ok(())
     }
 
     fn record_hazard(&mut self, pass: usize, access: &Access) -> Result<(), Error> {
         if access.write {
-            let first = self.hazards.partition_point(|s| {
-                s.resource < access.resource
-                    || (s.resource == access.resource && s.end <= access.range.start)
-            });
-            let end = self.hazards.partition_point(|s| {
-                s.resource < access.resource
-                    || (s.resource == access.resource && s.start < access.range.end)
-            });
-            let head = self.hazards[first];
-            let tail = self.hazards[end - 1];
-            let middle = HazardSegment {
-                resource: access.resource,
-                start: access.range.start,
-                end: access.range.end,
-                writer: Some(pass),
-                readers: None,
-            };
-            let mut replacement = [middle; 3];
-            let mut count = 0;
-            if head.start < access.range.start {
-                replacement[count] = HazardSegment {
-                    end: access.range.start,
-                    ..head
-                };
-                count += 1;
-            }
-            replacement[count] = middle;
-            count += 1;
-            if access.range.end < tail.end {
-                replacement[count] = HazardSegment {
-                    start: access.range.end,
-                    ..tail
-                };
-                count += 1;
-            }
-            replace(
-                &mut self.hazards,
-                first..end,
-                &replacement[..count],
-                self.limits.segments,
-                Capacity::Segments,
-            )?;
+            self.hazards
+                .replace(
+                    access.resource,
+                    access.range.clone(),
+                    HazardSegment {
+                        writer: Some(pass),
+                        readers: None,
+                    },
+                )
+                .map_err(|_| Error::capacity(Capacity::Segments))?;
         } else {
-            self.split_hazard(access.resource, access.range.start)?;
-            self.split_hazard(access.resource, access.range.end)?;
-            let first = self.hazards.partition_point(|s| {
-                s.resource < access.resource
-                    || (s.resource == access.resource && s.end <= access.range.start)
-            });
-            for index in first..self.hazards.len() {
-                let segment = self.hazards[index];
-                if segment.resource != access.resource || segment.start >= access.range.end {
+            self.hazards
+                .split(access.resource, access.range.start)
+                .map_err(|_| Error::capacity(Capacity::Segments))?;
+            self.hazards
+                .split(access.resource, access.range.end)
+                .map_err(|_| Error::capacity(Capacity::Segments))?;
+            let mut cursor = self.hazards.find(access.resource, access.range.start);
+            while let Some(current) = cursor {
+                let segment = self.hazards.entry(current);
+                if segment.start >= access.range.end {
                     break;
                 }
                 let reader = self.readers.len();
@@ -629,38 +488,46 @@ impl Workspace {
                     &mut self.readers,
                     Reader {
                         pass,
-                        previous: segment.readers,
+                        previous: segment.value.readers,
                         visited: 0,
                     },
                     self.limits.readers,
                     Capacity::Readers,
                 )?;
-                self.hazards[index].readers = Some(reader);
+                self.hazards.set_cursor_value(
+                    current,
+                    HazardSegment {
+                        readers: Some(reader),
+                        ..segment.value
+                    },
+                );
+                cursor = self.hazards.next(current);
             }
         }
         Ok(())
     }
 
     fn ordering(&mut self, input: &impl Input, live: &[bool]) -> Result<(), Error> {
-        self.hazards.clear();
+        self.hazards.clear(input.resource_count());
         self.readers.clear();
         self.edges.clear();
         self.visit_epoch = 0;
         self.edge_marks.fill(usize::MAX);
         self.edge_kinds.fill(0);
         for resource in 0..input.resource_count() {
-            push(
-                &mut self.hazards,
-                HazardSegment {
+            self.hazards
+                .insert(
                     resource,
-                    start: 0,
-                    end: input.resource_size(resource),
-                    writer: None,
-                    readers: None,
-                },
-                self.limits.segments,
-                Capacity::Segments,
-            )?;
+                    Entry {
+                        start: 0,
+                        end: input.resource_size(resource),
+                        value: HazardSegment {
+                            writer: None,
+                            readers: None,
+                        },
+                    },
+                )
+                .map_err(|_| Error::capacity(Capacity::Segments))?;
         }
         for pass in 0..input.pass_count() {
             if !live[pass] {
@@ -850,13 +717,13 @@ pub(crate) fn analyze(
             }
         }
     }
-    let mut segment = 0;
     for resource in 0..resources {
         let begin = out.final_ranges.len();
-        while segment < work.contents.len() && work.contents[segment].resource == resource {
-            let entry = work.contents[segment];
-            segment += 1;
-            if !entry.initialized {
+        let mut cursor = work.contents.find(resource, 0);
+        while let Some(current) = cursor {
+            let entry = work.contents.entry(current);
+            cursor = work.contents.next(current);
+            if !entry.value.initialized {
                 continue;
             }
             if out.final_ranges.len() != begin
@@ -926,73 +793,24 @@ fn validate(input: &impl Input, work: &mut Workspace) -> Result<(), Error> {
                     .at_range(access.range));
             }
         }
-        if !input.pass_accesses(pass).any(|a| a.write) {
-            continue;
-        }
-        work.conflicts.clear();
-        for (index, access) in input.pass_accesses(pass).enumerate() {
-            push(
-                &mut work.conflicts,
-                IndexedAccess {
-                    resource: access.resource,
-                    start: access.range.start,
-                    end: access.range.end,
-                    write: access.write,
-                    index,
-                    prefix: Prefix::default(),
-                },
-                work.limits.accesses,
-                Capacity::Accesses,
-            )?;
-        }
-        work.conflicts
-            .sort_unstable_by_key(|a| (a.resource, a.start, a.end, a.index));
-        let mut resource = None;
-        let mut prefix = Prefix::default();
-        for access in &mut work.conflicts {
-            if resource != Some(access.resource) {
-                resource = Some(access.resource);
-                prefix = Prefix::default();
-            }
-            prefix.insert(
-                End {
-                    value: access.end,
-                    index: access.index,
-                },
-                access.write,
-            );
-            access.prefix = prefix;
-        }
-        // Query in declaration order to preserve first-conflict attribution.
-        for (index, access) in input.pass_accesses(pass).enumerate() {
-            let end = work.conflicts.partition_point(|other| {
-                other.resource < access.resource
-                    || (other.resource == access.resource && other.start < access.range.end)
-            });
-            if work.conflicts[..end]
-                .last()
-                .filter(|other| other.resource == access.resource)
-                .is_some_and(|other| {
-                    other
-                        .prefix
-                        .overlaps(index, access.range.start, access.write)
-                })
-            {
-                let later = input
+        if let Some((_, later)) = conflicting_ranges_in(
+            || {
+                input
                     .pass_accesses(pass)
-                    .skip(index + 1)
-                    .find(|other| {
-                        access.resource == other.resource
-                            && access.range.start < other.range.end
-                            && other.range.start < access.range.end
-                            && (access.write || other.write)
-                    })
-                    .expect("first conflicting access has a later partner");
-                return Err(Error::new(ErrorKind::ConflictingAccesses)
-                    .at_pass(pass)
-                    .at_resource(later.resource)
-                    .at_range(later.range));
-            }
+                    .map(|a| (a.resource, a.range, a.write))
+            },
+            &mut work.conflicts,
+        )
+        .map_err(|_| Error::capacity(Capacity::Accesses))?
+        {
+            let access = input
+                .pass_accesses(pass)
+                .nth(later)
+                .expect("conflicting access index");
+            return Err(Error::new(ErrorKind::ConflictingAccesses)
+                .at_pass(pass)
+                .at_resource(access.resource)
+                .at_range(access.range));
         }
     }
     for (resource, range) in input.exports() {
@@ -1029,27 +847,6 @@ fn push<T>(items: &mut Vec<T>, value: T, limit: usize, kind: Capacity) -> Result
         return Err(Error::capacity(kind));
     }
     items.push(value);
-    Ok(())
-}
-
-fn replace<T: Copy>(
-    items: &mut Vec<T>,
-    range: Range<usize>,
-    replacement: &[T],
-    limit: usize,
-    kind: Capacity,
-) -> Result<(), Error> {
-    let old_len = items.len();
-    let new_len = old_len - (range.end - range.start) + replacement.len();
-    if new_len > limit || new_len > items.capacity() {
-        return Err(Error::capacity(kind));
-    }
-    if new_len > old_len {
-        items.resize(new_len, replacement[0]);
-    }
-    items.copy_within(range.end..old_len, range.start + replacement.len());
-    items[range.start..range.start + replacement.len()].copy_from_slice(replacement);
-    items.truncate(new_len);
     Ok(())
 }
 
