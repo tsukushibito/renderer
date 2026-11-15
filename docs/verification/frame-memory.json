@@ -2906,5 +2906,888 @@
       "time performance/physical VRAM improvement",
       "shader/bindings regeneration Verify (unchanged assets)"
     ]
+  },
+  "owned_shader_bindings": {
+    "issue": "renderer-7ft.2.2.5",
+    "parent_issue": "renderer-7ft.2.2",
+    "implementation_commit": "52a5d748ed7593bab1c97dc0863b28e60b52b8f3",
+    "scope": "CPU owned Graph composition/binding/access/stage planning; general native Raster/dispatch and Bloom remain subsequent work",
+    "environment": {
+      "date": "2026-11-15",
+      "platform": "Windows x64",
+      "rust": "1.99.0",
+      "cargo_incremental": "0",
+      "adapter": {
+        "d3d12_driver_version": 9007199255790656,
+        "d3d12_name": "NVIDIA GeForce RTX 3060",
+        "device_id": 9351,
+        "luid": [116, 226, 0, 0, 0, 0, 0, 0],
+        "same_adapter": true,
+        "vendor_id": 4318,
+        "vulkan_device_type": "DISCRETE_GPU",
+        "vulkan_driver_info": "610.88",
+        "vulkan_driver_name": "NVIDIA",
+        "vulkan_driver_version_raw": 2559967232,
+        "vulkan_name": "NVIDIA GeForce RTX 3060"
+      }
+    },
+    "commands": {
+      "cpu_default": "cargo test --locked --workspace --no-default-features",
+      "cpu_shipping": "cargo test --locked --release --workspace --no-default-features --features vulkan,d3d12",
+      "cpu_development": "cargo test --locked --release --workspace --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics",
+      "composition_example": "cargo run --locked -p renderer --example graph_composition",
+      "composition_disabled_test": "cargo test --locked -p renderer --example graph_composition",
+      "shader_abi": "./crates/renderer/shaders/test-managed-abi.ps1",
+      "shader_regeneration": "./crates/renderer/shaders/regenerate-dxil.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify",
+      "clippy_shipping": "cargo clippy --locked --workspace --all-targets --no-default-features --features presentation,d3d12,memory-profiling -- -D warnings",
+      "clippy_development": "cargo clippy --locked --workspace --all-targets --no-default-features --features presentation,d3d12,memory-profiling,development-validation,graph-diagnostics -- -D warnings",
+      "cpu_memory_shipping": "cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu",
+      "cpu_memory_development": "cargo run --locked --release -p renderer --no-default-features --features memory-profiling,development-validation,graph-diagnostics --example frame_memory -- cpu --baseline",
+      "vulkan_strict": "cargo test --locked --release -p renderer --lib --no-default-features --features presentation,development-validation,graph-diagnostics,memory-profiling vulkan_ -- --ignored --nocapture --test-threads=1",
+      "vulkan_shipping_boundary": "cargo test --locked --release -p renderer --lib --no-default-features --features presentation,memory-profiling vulkan_attachment_subresource_native_boundaries -- --ignored --nocapture --test-threads=1",
+      "shared_strict": "cargo test --locked --release -p renderer --test d3d12_graph --no-default-features --features vulkan,d3d12,memory-profiling,development-validation,graph-diagnostics -- --ignored --nocapture --test-threads=1",
+      "shared_shipping": "cargo test --locked --release -p renderer --test d3d12_graph --no-default-features --features vulkan,d3d12,memory-profiling -- --ignored --nocapture --test-threads=1",
+      "engine_shipping": "cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-image",
+      "wsi_shipping": "cargo test --locked --release -p renderer --lib --no-default-features --features presentation,memory-profiling vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1"
+    },
+    "cpu_contract_tests": {
+      "default": 132,
+      "release_shipping": 269,
+      "release_development": 282,
+      "rustdoc_each": 1,
+      "new_public_binding_tests": 8,
+      "composition_disabled_test": 1
+    },
+    "shader_checks": {
+      "sdk_free_abi_and_mismatch_tests": "passed",
+      "pinned_regeneration_verify": "passed in shader worker at bf14345",
+      "spirv_dxil_reflection_identity": "passed",
+      "arbitrary_shader_import_supported": false
+    },
+    "cpu_shipping": {
+      "features": {
+        "d3d12": false,
+        "d3d12_diagnostics": false,
+        "debug_assertions": false,
+        "development_validation": false,
+        "graph_diagnostics": false,
+        "presentation": false,
+        "vulkan": false,
+        "vulkan_diagnostics": false
+      },
+      "warmup_frames": 12,
+      "shader_bindings": {
+        "array_layers": 2,
+        "boundary_cases": [
+          "short-lived per-draw binding arrays",
+          "mutated caller draw slice",
+          "uncompiled cancel",
+          "culled later write",
+          "busy slots",
+          "all owners returned and backing reset"
+        ],
+        "capacity": {
+          "accesses": 64,
+          "bindings": 24,
+          "draws": 7,
+          "passes": 12,
+          "resources": 8
+        },
+        "coverage": "typed per-draw graphics and sampled Compute bindings build/compile/return; no native execution in this CPU row",
+        "draws_per_pass": 2,
+        "measured_frames": 24,
+        "mip_levels": 3,
+        "phases_build_compile_return": [
+          {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+            "rust_requested_bytes": [0, 0, 0, 0],
+            "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+            "vma_host_requested_bytes": [0, 0, 0]
+          },
+          {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+            "rust_requested_bytes": [0, 0, 0, 0],
+            "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+            "vma_host_requested_bytes": [0, 0, 0]
+          },
+          {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+            "rust_requested_bytes": [0, 0, 0, 0],
+            "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+            "vma_host_requested_bytes": [0, 0, 0]
+          }
+        ],
+        "raster_pass_counts": [1, 2, 3],
+        "retained_frame_slots": 3,
+        "sampled_compute_output_bytes": 64,
+        "total": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        "uniform_offsets": [0, 16, 32],
+        "varying_selected_view": true
+      },
+      "startup_positive_control": {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [636, 0, 0, 2],
+        "rust_requested_bytes": [636912, 0, 0, 96],
+        "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+        "vma_host_requested_bytes": [0, 0, 0]
+      },
+      "shutdown_outside_normal_frames": {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 634],
+        "rust_requested_bytes": [0, 0, 0, 636816],
+        "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+        "vma_host_requested_bytes": [0, 0, 0]
+      },
+      "existing_window_totals": {
+        "snapshot": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        "owned_compute": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        "attachment_subresources": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        "owned_raster": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        }
+      }
+    },
+    "cpu_development_baseline": {
+      "features": {
+        "d3d12": false,
+        "d3d12_diagnostics": true,
+        "debug_assertions": false,
+        "development_validation": true,
+        "graph_diagnostics": true,
+        "presentation": false,
+        "vulkan": false,
+        "vulkan_diagnostics": true
+      },
+      "mode": "baseline",
+      "shader_bindings": {
+        "array_layers": 2,
+        "boundary_cases": [
+          "short-lived per-draw binding arrays",
+          "mutated caller draw slice",
+          "uncompiled cancel",
+          "culled later write",
+          "busy slots",
+          "all owners returned and backing reset"
+        ],
+        "capacity": {
+          "accesses": 64,
+          "bindings": 24,
+          "draws": 7,
+          "passes": 12,
+          "resources": 8
+        },
+        "coverage": "typed per-draw graphics and sampled Compute bindings build/compile/return; no native execution in this CPU row",
+        "draws_per_pass": 2,
+        "measured_frames": 24,
+        "mip_levels": 3,
+        "phases_build_compile_return": [
+          {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+            "rust_requested_bytes": [0, 0, 0, 0],
+            "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+            "vma_host_requested_bytes": [0, 0, 0]
+          },
+          {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+            "rust_requested_bytes": [0, 0, 0, 0],
+            "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+            "vma_host_requested_bytes": [0, 0, 0]
+          },
+          {
+            "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "overflowed": false,
+            "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+            "rust_requested_bytes": [0, 0, 0, 0],
+            "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+            "vma_host_requested_bytes": [0, 0, 0]
+          }
+        ],
+        "raster_pass_counts": [1, 2, 3],
+        "retained_frame_slots": 3,
+        "sampled_compute_output_bytes": 64,
+        "total": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        "uniform_offsets": [0, 16, 32],
+        "varying_selected_view": true
+      }
+    },
+    "vulkan_strict_tests": 53,
+    "vulkan_shipping_boundary_tests": 1,
+    "two_api_strict": {
+      "adapter": {
+        "d3d12_driver_version": 9007199255790656,
+        "d3d12_name": "NVIDIA GeForce RTX 3060",
+        "device_id": 9351,
+        "luid": [116, 226, 0, 0, 0, 0, 0, 0],
+        "same_adapter": true,
+        "vendor_id": 4318,
+        "vulkan_device_type": "DISCRETE_GPU",
+        "vulkan_driver_info": "610.88",
+        "vulkan_driver_name": "NVIDIA",
+        "vulkan_driver_version_raw": 2559967232,
+        "vulkan_name": "NVIDIA GeForce RTX 3060"
+      },
+      "configuration": {
+        "d3d12_diagnostics_compiled": true,
+        "debug_assertions": false,
+        "development_validation": true,
+        "external_validation_injection_checked": false,
+        "graph_diagnostics_compiled": true,
+        "strict_validation": true,
+        "vulkan_diagnostics_compiled": true
+      },
+      "graph": {
+        "all_bytes_match": true,
+        "compared_bytes_per_backend": 308,
+        "compiled_once": true,
+        "copy_passes": 4,
+        "disjoint_self_copy_passes": 1,
+        "native_runs_sequential": true,
+        "owned_dispatch": {
+          "culled_branch_does_not_prevent_execution": true,
+          "live_rejected_by_both_backends": true,
+          "native_dispatch_execution_supported": false
+        },
+        "pass_count": 10,
+        "readback_passes": 3,
+        "readbacks": [
+          {
+            "all_bytes_match": true,
+            "byte_count": 160,
+            "d3d12_checksum_fnv1a64": "aec71f5f717e27bd",
+            "expected_checksum_fnv1a64": "aec71f5f717e27bd",
+            "name": "whole intermediate",
+            "vulkan_checksum_fnv1a64": "aec71f5f717e27bd"
+          },
+          {
+            "all_bytes_match": true,
+            "byte_count": 112,
+            "d3d12_checksum_fnv1a64": "1d7aab25d767f365",
+            "expected_checksum_fnv1a64": "1d7aab25d767f365",
+            "name": "destination range",
+            "vulkan_checksum_fnv1a64": "1d7aab25d767f365"
+          },
+          {
+            "all_bytes_match": true,
+            "byte_count": 36,
+            "d3d12_checksum_fnv1a64": "af34b5e8373eb549",
+            "expected_checksum_fnv1a64": "af34b5e8373eb549",
+            "name": "source range",
+            "vulkan_checksum_fnv1a64": "af34b5e8373eb549"
+          }
+        ],
+        "shader_bindings": {
+          "culled_branches_do_not_prevent_common_execution": true,
+          "d3d12_rejects_prior_image_upload": true,
+          "live_sampled_plan_rejected_by_both_backends": true,
+          "live_textured_plan_rejected_by_both_backends": true,
+          "native_shader_execution_supported": false,
+          "rejection_native_event_counters_checked": true,
+          "rejection_native_events_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+            [0, 0, 0, 0, 0, 0, 0, 0, 4],
+            [0, 0, 0, 0, 0, 0, 0, 0, 4],
+            [0, 0, 0, 0, 0, 0, 0, 0, 4]
+          ],
+          "rejection_order": [
+            "buffer_dispatch_plan",
+            "textured_raster_plan",
+            "sampled_dispatch_plan"
+          ],
+          "vulkan_culled_branches_no_new_resources": true,
+          "vulkan_rejection_resource_create_reuse_unchanged": true
+        },
+        "upload_passes": 3
+      },
+      "schema_version": 1,
+      "scope": "m4-buffer-common-graph",
+      "validation": {
+        "d3d12": {
+          "callback_failures": 0,
+          "corruption": 0,
+          "debug_layer_enabled": true,
+          "dropped_messages": 0,
+          "errors": 0,
+          "gbv_shader_exercised": false,
+          "gpu_based_validation_enabled": true,
+          "teardown_checked": true,
+          "warnings": 0
+        },
+        "vulkan": {
+          "callback_failures": 0,
+          "core_validation": true,
+          "dropped_layer_statuses": 0,
+          "dropped_problems": 0,
+          "errors": 0,
+          "native_owners_dropped": true,
+          "problems": [],
+          "requested": "Required",
+          "synchronization_validation": true,
+          "teardown_checked": true,
+          "warnings": 0
+        }
+      }
+    },
+    "two_api_shipping": {
+      "adapter": {
+        "d3d12_driver_version": 9007199255790656,
+        "d3d12_name": "NVIDIA GeForce RTX 3060",
+        "device_id": 9351,
+        "luid": [116, 226, 0, 0, 0, 0, 0, 0],
+        "same_adapter": true,
+        "vendor_id": 4318,
+        "vulkan_device_type": "DISCRETE_GPU",
+        "vulkan_driver_info": "610.88",
+        "vulkan_driver_name": "NVIDIA",
+        "vulkan_driver_version_raw": 2559967232,
+        "vulkan_name": "NVIDIA GeForce RTX 3060"
+      },
+      "configuration": {
+        "d3d12_diagnostics_compiled": false,
+        "debug_assertions": false,
+        "development_validation": false,
+        "external_validation_injection_checked": false,
+        "graph_diagnostics_compiled": false,
+        "strict_validation": false,
+        "vulkan_diagnostics_compiled": false
+      },
+      "graph": {
+        "all_bytes_match": true,
+        "compared_bytes_per_backend": 308,
+        "compiled_once": true,
+        "copy_passes": 4,
+        "disjoint_self_copy_passes": 1,
+        "native_runs_sequential": true,
+        "owned_dispatch": {
+          "culled_branch_does_not_prevent_execution": true,
+          "live_rejected_by_both_backends": true,
+          "native_dispatch_execution_supported": false
+        },
+        "pass_count": 10,
+        "readback_passes": 3,
+        "readbacks": [
+          {
+            "all_bytes_match": true,
+            "byte_count": 160,
+            "d3d12_checksum_fnv1a64": "aec71f5f717e27bd",
+            "expected_checksum_fnv1a64": "aec71f5f717e27bd",
+            "name": "whole intermediate",
+            "vulkan_checksum_fnv1a64": "aec71f5f717e27bd"
+          },
+          {
+            "all_bytes_match": true,
+            "byte_count": 112,
+            "d3d12_checksum_fnv1a64": "1d7aab25d767f365",
+            "expected_checksum_fnv1a64": "1d7aab25d767f365",
+            "name": "destination range",
+            "vulkan_checksum_fnv1a64": "1d7aab25d767f365"
+          },
+          {
+            "all_bytes_match": true,
+            "byte_count": 36,
+            "d3d12_checksum_fnv1a64": "af34b5e8373eb549",
+            "expected_checksum_fnv1a64": "af34b5e8373eb549",
+            "name": "source range",
+            "vulkan_checksum_fnv1a64": "af34b5e8373eb549"
+          }
+        ],
+        "shader_bindings": {
+          "culled_branches_do_not_prevent_common_execution": true,
+          "d3d12_rejects_prior_image_upload": true,
+          "live_sampled_plan_rejected_by_both_backends": true,
+          "live_textured_plan_rejected_by_both_backends": true,
+          "native_shader_execution_supported": false,
+          "rejection_native_event_counters_checked": true,
+          "rejection_native_events_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+            [0, 0, 0, 0, 0, 0, 0, 0, 4],
+            [0, 0, 0, 0, 0, 0, 0, 0, 4],
+            [0, 0, 0, 0, 0, 0, 0, 0, 4]
+          ],
+          "rejection_order": [
+            "buffer_dispatch_plan",
+            "textured_raster_plan",
+            "sampled_dispatch_plan"
+          ],
+          "vulkan_culled_branches_no_new_resources": true,
+          "vulkan_rejection_resource_create_reuse_unchanged": true
+        },
+        "upload_passes": 3
+      },
+      "schema_version": 1,
+      "scope": "m4-buffer-common-graph",
+      "validation": {
+        "d3d12": {
+          "callback_failures": 0,
+          "corruption": 0,
+          "debug_layer_enabled": false,
+          "dropped_messages": 0,
+          "errors": 0,
+          "gbv_shader_exercised": false,
+          "gpu_based_validation_enabled": false,
+          "teardown_checked": false,
+          "warnings": 0
+        },
+        "vulkan": {
+          "callback_failures": 0,
+          "core_validation": null,
+          "dropped_layer_statuses": 0,
+          "dropped_problems": 0,
+          "errors": 0,
+          "native_owners_dropped": true,
+          "problems": [],
+          "requested": "Disabled",
+          "synchronization_validation": null,
+          "teardown_checked": false,
+          "warnings": 0
+        }
+      }
+    },
+    "engine_shipping": {
+      "additional_working_set_images": {
+        "depth32": 3,
+        "rgba8": 12
+      },
+      "boundary_cases": [
+        "compiled/uncompiled prepared cancel",
+        "prepared frame capacity/busy rejection"
+      ],
+      "caller": "fixed pending/result arrays and 1024-byte output; explicit per-frame fence waits only when pending array fills; report outside measurement",
+      "completed_readbacks_held": 3,
+      "counter_semantics": {
+        "native_descriptors": "requested/freed Vulkan descriptor sets or D3D12 heap descriptor elements, not API calls",
+        "native_memory": "Vulkan successful VMA device-memory notifications; D3D12 committed-resource implicit heap allocation attempts/final owner release",
+        "native_objects_resources": "Renderer factory attempts including failures; final Renderer owner release for destruction",
+        "native_reset": "reuse/reset events; implicit descriptor frees are also counted separately",
+        "rust": "allocator entry-point calls and requested bytes, including frees of allocations made before the interval",
+        "scope": "overlapping categories must not be summed as physical allocations; driver/OS/native allocations outside the configured callbacks are unobserved",
+        "vma_host": "requests through host callbacks supplied to VMA, including callbacks forwarded to Vulkan; VMA/driver origin is not separated; forwarded independently of the Rust global allocator"
+      },
+      "coverage": "ordinary public Engine snapshot/build/compile, resident mesh Raster, image Compute/Composite, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
+      "draw_counts": [0, 1, 4, 2],
+      "engine_graph_slots": 12,
+      "engine_prepared_frames": 3,
+      "extent": [16, 16],
+      "features": {
+        "d3d12": false,
+        "d3d12_diagnostics": false,
+        "debug_assertions": false,
+        "development_validation": false,
+        "graph_diagnostics": false,
+        "presentation": false,
+        "vulkan": true,
+        "vulkan_diagnostics": false
+      },
+      "graph_capacity": {
+        "accesses": 32,
+        "attachments": 16,
+        "bindings": 16,
+        "dependencies": 8,
+        "draws": 4,
+        "edges": 128,
+        "initial_ranges": 16,
+        "name_bytes": 512,
+        "passes": 8,
+        "readers": 128,
+        "resources": 8,
+        "segments": 128,
+        "upload_bytes": 128
+      },
+      "invert_passes": [0, 1, 2],
+      "measured_frames": 48,
+      "mode": "require_zero",
+      "pending_frames": 3,
+      "phases_snapshot_build_compile_submit_complete_return": [
+        {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 96],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        },
+        {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+          "rust_requested_bytes": [0, 0, 0, 0],
+          "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+          "vma_host_requested_bytes": [0, 0, 0]
+        }
+      ],
+      "scenario": "vulkan_engine_image_full_lifecycle",
+      "shutdown_outside_normal_frames": {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 38, 0, 19, 0, 3, 0, 48, 0],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 2832],
+        "rust_requested_bytes": [0, 0, 0, 1302683],
+        "vma_host_calls_alloc_realloc_free": [0, 0, 100],
+        "vma_host_requested_bytes": [0, 0, 0]
+      },
+      "startup_positive_control": {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [43, 5, 19, 0, 3, 0, 48, 0, 52],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [2920, 0, 2, 88],
+        "rust_requested_bytes": [1319195, 0, 60, 16542],
+        "vma_host_calls_alloc_realloc_free": [53, 0, 7],
+        "vma_host_requested_bytes": [535224, 0, 0]
+      },
+      "total": {
+        "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [0, 0, 0, 0, 0, 0, 0, 0, 96],
+        "overflowed": false,
+        "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [0, 0, 0, 0],
+        "rust_requested_bytes": [0, 0, 0, 0],
+        "vma_host_calls_alloc_realloc_free": [0, 0, 0],
+        "vma_host_requested_bytes": [0, 0, 0]
+      },
+      "unobserved": "driver/OS/native allocations outside the configured callbacks",
+      "verified_pixels": {
+        "background": "four corners",
+        "left": [5, 8],
+        "right": [10, 8]
+      },
+      "warmup_frames": 24,
+      "x_translations": [-0.25, 0.25]
+    },
+    "wsi_shipping": {
+      "caller": {
+        "native": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "overflowed": false,
+        "rust": [
+          [953, 388736],
+          [0, 0],
+          [9, 1500],
+          [921, 44666]
+        ],
+        "vma_host": [
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ]
+      },
+      "caller_scope": "synchronous winit/Window Rust work on the isolated fixture thread, with no Renderer Rust workers; native/VMA events are never excluded from the complete normal epoch",
+      "counter_order": {
+        "native": [
+          "object_create",
+          "object_destroy",
+          "resource_create",
+          "resource_destroy",
+          "memory_allocate",
+          "memory_free",
+          "descriptor_allocate",
+          "descriptor_free",
+          "reset"
+        ],
+        "rust": [
+          "allocate",
+          "allocate_zeroed",
+          "reallocate",
+          "deallocate"
+        ],
+        "vma_host": [
+          "allocate",
+          "reallocate",
+          "deallocate"
+        ]
+      },
+      "explicitly_collected_old_swapchains_after_normal": 1,
+      "extra_shutdown_accepted_presents": 1,
+      "features": {
+        "development_validation": false,
+        "gpu_profiling": false,
+        "graph_diagnostics": false,
+        "memory_profiling": true,
+        "optimized": true,
+        "vulkan_diagnostics": false
+      },
+      "host_callback_scope": "VMA and driver host requests routed through installed allocation callbacks; request origin is not distinguished",
+      "mode": "require_zero",
+      "normal": {
+        "accepted_presents": 36,
+        "changing_inputs": "transform, tint, clear and zero/one/two Invert passes; every source is built and compiled",
+        "extent": [160, 112],
+        "max_held_cpu_results": 3,
+        "max_live_readbacks": 6,
+        "max_pending_graphs": 3,
+        "retained_eligible_old_swapchains": 1,
+        "scope": "all Renderer preparation checks, build/compile, submission, GPU/present polling, CPU readback, metadata/result/output return and final present drain",
+        "sources": 18,
+        "verified_readbacks": 18
+      },
+      "normal_caller": {
+        "native": [0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "overflowed": false,
+        "rust": [
+          [319, 7656],
+          [0, 0],
+          [0, 0],
+          [319, 7656]
+        ],
+        "vma_host": [
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ]
+      },
+      "normal_process": {
+        "native": [0, 0, 0, 0, 0, 0, 0, 0, 556],
+        "overflowed": false,
+        "rust": [
+          [319, 7656],
+          [0, 0],
+          [0, 0],
+          [319, 7656]
+        ],
+        "vma_host": [
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ]
+      },
+      "overall_process": {
+        "native": [172, 172, 94, 94, 3, 3, 771, 771, 590],
+        "overflowed": false,
+        "rust": [
+          [2798, 1384196],
+          [2, 1444],
+          [11, 1560],
+          [2769, 1041648]
+        ],
+        "vma_host": [
+          [130, 648144],
+          [0, 0],
+          [334, 0]
+        ]
+      },
+      "prepared": {
+        "depth_instances_per_extent": 3,
+        "frame_pools": {
+          "initialized_ranges_per_resource": 16,
+          "metadata_slots": 12,
+          "provenance_segments_per_resource": 32,
+          "range_snapshots": 256,
+          "result_slots": 8,
+          "work_slots": 6
+        },
+        "graph": {
+          "accesses": 32,
+          "attachments": 16,
+          "bindings": 0,
+          "dependencies": 16,
+          "draws": 4,
+          "edges": 64,
+          "initial_ranges": 16,
+          "name_bytes": 1024,
+          "passes": 8,
+          "readers": 128,
+          "resources": 8,
+          "segments": 64,
+          "upload_bytes": 256
+        },
+        "graph_slots": 12,
+        "image_extents": [
+          [128, 96],
+          [160, 112],
+          [176, 120],
+          [144, 104],
+          [192, 128]
+        ],
+        "mesh_graph_slots": 1,
+        "presentation": {
+          "desired_images": 3,
+          "max_frames": 3,
+          "max_retired_swapchains": 2,
+          "vsync_normal": true
+        },
+        "rgba8_instances_per_extent": 15,
+        "runtime": {
+          "execution_slots": 6,
+          "max_shader_bindings": 64,
+          "resource_capacity": 128,
+          "staging_bytes_each": 4194304,
+          "staging_ranges": 256
+        }
+      },
+      "renderer_normal": {
+        "native": [0, 0, 0, 0, 0, 0, 0, 0, 556],
+        "overflowed": false,
+        "rust": [
+          [0, 0],
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ],
+        "vma_host": [
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ]
+      },
+      "renderer_normal_actions": {
+        "native": [0, 0, 0, 0, 0, 0, 0, 0, 556],
+        "overflowed": false,
+        "rust": [
+          [0, 0],
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ],
+        "vma_host": [
+          [0, 0],
+          [0, 0],
+          [0, 0]
+        ]
+      },
+      "renderer_setup_change": {
+        "native": [172, 23, 94, 0, 3, 0, 771, 0, 29],
+        "overflowed": false,
+        "rust": [
+          [1845, 995460],
+          [2, 1444],
+          [2, 60],
+          [225, 119019]
+        ],
+        "vma_host": [
+          [130, 648144],
+          [0, 0],
+          [7, 0]
+        ]
+      },
+      "renderer_shutdown": {
+        "native": [0, 149, 0, 94, 0, 3, 0, 771, 5],
+        "overflowed": false,
+        "rust": [
+          [0, 0],
+          [0, 0],
+          [0, 0],
+          [1623, 877963]
+        ],
+        "vma_host": [
+          [0, 0],
+          [0, 0],
+          [327, 0]
+        ]
+      },
+      "renderer_total": {
+        "native": [172, 172, 94, 94, 3, 3, 771, 771, 590],
+        "overflowed": false,
+        "rust": [
+          [1845, 995460],
+          [2, 1444],
+          [2, 60],
+          [1848, 996982]
+        ],
+        "vma_host": [
+          [130, 648144],
+          [0, 0],
+          [334, 0]
+        ]
+      },
+      "row_semantics": "normal Rust excludes synchronous caller work; normal native/VMA cover the entire epoch, so caller and renderer rows are not disjoint native/VMA totals",
+      "setup_change_accepted_presents": 6,
+      "setup_change_scope": "explicit pools and native working set, residency, warm-up, resize/VSync/suspend/acquire-cancel and their completed owner retirement",
+      "setup_change_sources": 3,
+      "shutdown_scope": "one additional ordinary-builder source retains pending presentation ownership for close; complete native owner teardown",
+      "tracing_filter": "warn",
+      "unobserved": "driver-internal allocation outside installed callbacks; Renderer native requests are counted separately"
+    },
+    "guidance": [
+      "immutable reviewed shader ABI/footprint and Graph construction guarantees",
+      "explicit actual shader stages; fixed vertex/index fetch stages remain distinct",
+      "prepared bounded storage and all-consumer pin lifetime",
+      "unsupported native plans rejected before resource acquisition",
+      "no new policy exceptions"
+    ],
+    "unexecuted_or_unsupported": [
+      "new textured Raster native PSO/execution (.2.3)",
+      "general native Compute/copy (.2.4)",
+      "D3D12 reaching the textured instruction (image upload rejects the plan earlier)",
+      "HDR Graph formats/storage-image Compute/multi-subresource Views",
+      "Bloom algorithm and Bistro rendering",
+      "Linux/other GPU or driver real GPU",
+      "long duration/native OOM or loss",
+      "time performance and physical VRAM improvements"
+    ]
   }
 }
