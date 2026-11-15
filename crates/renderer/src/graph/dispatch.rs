@@ -177,3 +177,98 @@ impl Graph {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+
+    #[test]
+    fn reviewed_buffer_footprints_cover_each_slot_and_fit_the_abi() {
+        for program in [
+            ManagedProgram::uniform_readback(),
+            ManagedProgram::storage_readback(),
+        ] {
+            let contract = program.buffer_dispatch().unwrap();
+            assert_eq!(contract.workgroups, [1, 1, 1]);
+            assert_eq!(contract.bytes.len(), program.bindings().len());
+            for (slot, &bytes) in program.bindings().iter().zip(contract.bytes) {
+                assert!(bytes > 0 && bytes <= slot.min_size);
+                assert!(matches!(
+                    slot.kind,
+                    BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn plan_retains_program_and_complete_canonical_descriptors_separately_from_footprints() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let source = graph.buffer("uniform", BufferDesc { size: 64 }).unwrap();
+        let output = graph.buffer("output", BufferDesc { size: 64 }).unwrap();
+        graph.upload_buffer("seed", source, 16, &[0; 16]).unwrap();
+        let dispatch = {
+            let bindings = [
+                BufferBinding {
+                    group: 1,
+                    binding: 0,
+                    buffer: output,
+                    offset: 32,
+                    size: 32,
+                },
+                BufferBinding {
+                    group: 0,
+                    binding: 0,
+                    buffer: source,
+                    offset: 16,
+                    size: 48,
+                },
+            ];
+            graph
+                .dispatch(
+                    "dispatch",
+                    &ManagedProgram::uniform_readback(),
+                    &bindings,
+                    [1; 3],
+                )
+                .unwrap()
+        };
+        graph.readback_buffer("result", output, 32, 16).unwrap();
+        let plan = graph.compile().unwrap();
+        let Operation::Dispatch {
+            program,
+            bindings,
+            workgroups,
+        } = &plan.passes[dispatch.index].operation
+        else {
+            panic!("expected the owned dispatch operation");
+        };
+        assert_eq!(program.bindings()[0].kind, BindingType::Uniform);
+        assert_eq!(*workgroups, [1, 1, 1]);
+        let operands = &plan.bindings[bindings.clone()];
+        assert_eq!(operands.len(), 2);
+        assert_eq!(operands[0].resource, source.index);
+        assert_eq!(
+            operands[0].range,
+            BufferRange {
+                offset: 16,
+                size: 48
+            }
+        );
+        assert_eq!(operands[1].resource, output.index);
+        assert_eq!(
+            operands[1].range,
+            BufferRange {
+                offset: 32,
+                size: 32
+            }
+        );
+        let accesses = plan.accesses(dispatch.index);
+        assert_eq!(accesses[0].range, 16..32);
+        assert_eq!(accesses[0].purpose, AccessPurpose::Uniform);
+        assert_eq!(accesses[1].range, 32..48);
+        assert_eq!(accesses[1].purpose, AccessPurpose::StorageWrite);
+    }
+}
