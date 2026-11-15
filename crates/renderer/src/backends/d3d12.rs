@@ -1,10 +1,11 @@
 //! D3D12 single-queue native ownership. Native types stay backend-private.
 
-use std::fmt;
 use std::sync::Arc;
+use std::{borrow::Cow, fmt};
 
 mod device;
 mod diagnostics;
+mod frame;
 mod graph;
 mod image;
 mod program;
@@ -12,6 +13,7 @@ mod resources;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
 pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12ValidationReport};
+pub use frame::D3D12FrameCapacity;
 pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 pub use image::{D3D12Image, D3D12ImageView, D3D12Sampler};
 pub use program::{D3D12Bindings, D3D12Buffer, D3D12Program};
@@ -37,6 +39,8 @@ impl Default for D3D12ValidationMode {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct D3D12RuntimeConfig {
     pub validation: D3D12ValidationMode,
+    /// Explicitly prepared execution, transfer and result capacities.
+    pub capacity: D3D12FrameCapacity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,7 +58,7 @@ pub enum D3D12RuntimeErrorKind {
 /// Native operation context and the original HRESULT remain in the error chain.
 #[derive(Debug)]
 pub struct D3D12RuntimeError {
-    pub message: String,
+    pub message: Cow<'static, str>,
     kind: D3D12RuntimeErrorKind,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
@@ -63,23 +67,26 @@ impl D3D12RuntimeError {
     pub fn kind(&self) -> D3D12RuntimeErrorKind {
         self.kind
     }
-    pub(super) fn classified(kind: D3D12RuntimeErrorKind, message: impl Into<String>) -> Self {
+    pub(super) fn classified(
+        kind: D3D12RuntimeErrorKind,
+        message: impl Into<Cow<'static, str>>,
+    ) -> Self {
         Self {
             message: message.into(),
             kind,
             source: None,
         }
     }
-    pub(super) fn invalid(message: impl Into<String>) -> Self {
+    pub(super) fn invalid(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(D3D12RuntimeErrorKind::InvalidInput, message)
     }
-    pub(super) fn unsupported(message: impl Into<String>) -> Self {
+    pub(super) fn unsupported(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(D3D12RuntimeErrorKind::Unsupported, message)
     }
-    pub(super) fn capacity(message: impl Into<String>) -> Self {
+    pub(super) fn capacity(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(D3D12RuntimeErrorKind::CapacityExhausted, message)
     }
-    pub(super) fn wrong_owner(message: impl Into<String>) -> Self {
+    pub(super) fn wrong_owner(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(D3D12RuntimeErrorKind::WrongOwner, message)
     }
     pub(super) fn native(
@@ -99,7 +106,7 @@ impl D3D12RuntimeError {
             error,
         };
         Self {
-            message: cause.to_string(),
+            message: cause.to_string().into(),
             kind,
             source: Some(Box::new(cause)),
         }
@@ -150,18 +157,23 @@ impl std::error::Error for NativeCause {
 /// libraries: enabling native debug controls after any Device exists removes it.
 pub struct D3D12Runtime {
     device: Arc<DeviceOwner>,
+    pool: Arc<frame::FramePool>,
 }
 impl D3D12Runtime {
     pub fn new(config: D3D12RuntimeConfig) -> Result<Self, D3D12RuntimeError> {
-        Ok(Self {
-            device: DeviceOwner::new(config.validation)?,
-        })
+        let device = DeviceOwner::new(config.validation)?;
+        let pool = frame::FramePool::new(Arc::clone(&device), config.capacity)?;
+        Ok(Self { device, pool })
     }
     pub fn device_info(&self) -> D3D12DeviceInfo {
         self.device.info.clone()
     }
     pub fn validation_monitor(&self) -> D3D12ValidationMonitor {
         self.device.monitor.clone()
+    }
+    /// Retires detached submissions without waiting or changing capacity.
+    pub fn poll(&mut self) -> Result<usize, D3D12RuntimeError> {
+        self.pool.reap()
     }
     /// Release this client's native ownership. Escaped work and other clients
     /// retain their ownership; observe the independent monitor after dropping
@@ -249,6 +261,7 @@ mod tests {
     fn required_without_native_diagnostics_rejects_before_device_creation() {
         let error = D3D12Runtime::new(D3D12RuntimeConfig {
             validation: D3D12ValidationMode::Required,
+            ..Default::default()
         })
         .unwrap_err();
         assert_eq!(error.kind(), D3D12RuntimeErrorKind::Unsupported);
@@ -260,6 +273,7 @@ mod tests {
     fn d3d12_runtime_hardware() {
         let config = D3D12RuntimeConfig {
             validation: D3D12ValidationMode::Required,
+            ..Default::default()
         };
         let first = D3D12Runtime::new(config).expect("hardware Device and DIRECT queue");
         let info = first.device_info();
@@ -277,6 +291,7 @@ mod tests {
         assert!(Arc::ptr_eq(&first.device, &second.device));
         let incompatible = D3D12Runtime::new(D3D12RuntimeConfig {
             validation: D3D12ValidationMode::Disabled,
+            ..Default::default()
         })
         .unwrap_err();
         assert_eq!(incompatible.kind(), D3D12RuntimeErrorKind::Unsupported);

@@ -59,3 +59,7 @@ workspace = true
 [[example]]
 name = "engine_workloads"
 required-features = ["vulkan"]
+
+[[example]]
+name = "frame_memory"
+required-features = ["memory-profiling"]

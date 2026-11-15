@@ -1,31 +1,40 @@
 //! The first D3D12 lowering: transient buffers, one DIRECT queue, no aliasing.
 //!
 //! The shared compiled graph owns logical validity and scheduling. Preparation
-//! checks backend support and capacity, creates private native operands, and
-//! records once. Submission does not revalidate immutable graph contents.
+//! checks backend support and capacity, leases prepared native operands, and
+//! re-records changing work. Submission does not revalidate Graph contents.
 
-use std::{
-    mem::ManuallyDrop,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+#[cfg(test)]
+use std::time::Instant;
+
+use std::{mem::ManuallyDrop, sync::Arc, time::Duration};
 
 #[cfg(test)]
 use windows_core::{Error, HRESULT};
 
-use crate::graph::{CompiledGraph, Operation, PassHandle, ResourceDesc};
+use crate::graph::{CompiledGraph, PassHandle};
+#[cfg(all(test, feature = "d3d12-diagnostics"))]
+use crate::graph::{Operation, ResourceDesc};
 
+mod bounded;
+
+#[cfg(test)]
+use super::device::DeviceOwner;
+#[cfg(test)]
 use super::resources::{DeviceBuffer, MAX_BUFFER_BYTES};
-use super::{D3D12Runtime, D3D12RuntimeError, bindings::*, device::DeviceOwner};
+use super::{D3D12Runtime, D3D12RuntimeError, bindings::*};
 
+#[cfg(test)]
 const DROP_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[cfg(test)]
 struct Plan<'a> {
     graph: u64,
     buffers: Vec<Option<u64>>,
     operations: Vec<PlannedOperation<'a>>,
 }
 
+#[cfg(test)]
 enum PlannedOperation<'a> {
     #[cfg(test)]
     StorageReadFixture(super::program::StorageReadFixture<'a>),
@@ -34,11 +43,13 @@ enum PlannedOperation<'a> {
         binding: &'a super::program::D3D12Bindings,
         initialize: Option<super::program::ImageInitialization<'a>>,
     },
+    #[cfg(feature = "d3d12-diagnostics")]
     Upload {
         dst: usize,
         offset: u64,
         bytes: &'a [u8],
     },
+    #[cfg(feature = "d3d12-diagnostics")]
     Copy {
         src: usize,
         dst: usize,
@@ -46,6 +57,7 @@ enum PlannedOperation<'a> {
         dst_offset: u64,
         size: u64,
     },
+    #[cfg(feature = "d3d12-diagnostics")]
     Readback {
         pass: usize,
         src: usize,
@@ -54,6 +66,7 @@ enum PlannedOperation<'a> {
     },
 }
 
+#[cfg(all(test, feature = "d3d12-diagnostics"))]
 impl<'a> Plan<'a> {
     fn new(graph: &'a CompiledGraph) -> Result<Self, D3D12RuntimeError> {
         if !graph.exports.is_empty() {
@@ -70,18 +83,12 @@ impl<'a> Plan<'a> {
         // culled shader operation must not make a buffer-only graph unsupported.
         for &pass in &graph.order {
             let operation = match &graph.passes[pass].operation {
-                Operation::UploadBuffer {
-                    dst,
-                    offset,
-                    bytes,
-                    source,
-                    ..
-                } => {
+                Operation::UploadBuffer { dst, offset, .. } => {
                     plan.use_buffer(graph, *dst)?;
                     PlannedOperation::Upload {
                         dst: *dst,
                         offset: *offset,
-                        bytes: &bytes[source.clone()],
+                        bytes: graph.upload_data(&graph.passes[pass].operation),
                     }
                 }
                 Operation::CopyBuffer {
@@ -154,12 +161,14 @@ impl<'a> Plan<'a> {
     }
 }
 
+#[cfg(test)]
 struct Readback {
     pass: usize,
     size: usize,
     buffer: Option<DeviceBuffer>,
 }
 
+#[cfg(test)]
 struct Work {
     graph: u64,
     #[cfg(test)]
@@ -178,6 +187,7 @@ struct Work {
     owner: Arc<DeviceOwner>,
 }
 
+#[cfg(test)]
 impl Work {
     #[cfg(test)]
     fn retain_fixture(&mut self, recording: super::program::FixtureRecording) {
@@ -253,6 +263,7 @@ impl Work {
             fence,
             owner,
         };
+        #[cfg(feature = "d3d12-diagnostics")]
         let mut states = vec![D3D12_RESOURCE_STATE_COMMON; work.buffers.len()];
         for operation in plan.operations {
             match operation {
@@ -269,6 +280,7 @@ impl Work {
                     let recording = plan.record(&work.list)?;
                     work.retain_fixture(recording);
                 }
+                #[cfg(feature = "d3d12-diagnostics")]
                 PlannedOperation::Upload { dst, offset, bytes } => {
                     let upload =
                         DeviceBuffer::new(&work.owner, bytes.len() as u64, D3D12_HEAP_TYPE_UPLOAD)?;
@@ -298,6 +310,7 @@ impl Work {
                     }
                     work.staging.push(upload);
                 }
+                #[cfg(feature = "d3d12-diagnostics")]
                 PlannedOperation::Copy {
                     src,
                     dst,
@@ -379,6 +392,7 @@ impl Work {
                         }
                     }
                 }
+                #[cfg(feature = "d3d12-diagnostics")]
                 PlannedOperation::Readback {
                     pass,
                     src,
@@ -480,7 +494,12 @@ pub(super) fn transition(
 /// Recorded but not submitted work. Dropping this value cancels immediately;
 /// every native object remains private and has never been used by the GPU.
 pub struct D3D12PreparedGraph {
-    work: Work,
+    kind: PreparedWork,
+}
+enum PreparedWork {
+    Pooled(super::frame::FrameWork),
+    #[cfg(test)]
+    Fixture(Work),
 }
 
 impl D3D12Runtime {
@@ -532,7 +551,9 @@ impl D3D12Runtime {
             },
             false,
         )?;
-        Ok(D3D12PreparedGraph { work })
+        Ok(D3D12PreparedGraph {
+            kind: PreparedWork::Fixture(work),
+        })
     }
 
     #[cfg(test)]
@@ -554,20 +575,17 @@ impl D3D12Runtime {
             },
             false,
         )?;
-        Ok(D3D12PreparedGraph { work })
+        Ok(D3D12PreparedGraph {
+            kind: PreparedWork::Fixture(work),
+        })
     }
 
     /// Records retained buffer operations without submitting or waiting. Input
     /// validity and ordering come from the shared immutable compiled graph.
     pub fn prepare(&self, graph: &CompiledGraph) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        let plan = Plan::new(graph)?;
-        let work = Work::prepare(
-            Arc::clone(&self.device),
-            plan,
-            #[cfg(test)]
-            false,
-        )?;
-        Ok(D3D12PreparedGraph { work })
+        Ok(D3D12PreparedGraph {
+            kind: PreparedWork::Pooled(bounded::prepare(&self.pool, graph)?),
+        })
     }
 
     /// Convenience preparation and asynchronous submission; no GPU wait occurs.
@@ -584,7 +602,27 @@ impl D3D12Runtime {
         &mut self,
         prepared: D3D12PreparedGraph,
     ) -> Result<D3D12Submission, D3D12RuntimeError> {
-        let mut retained = Retained::recorded(prepared.work);
+        match prepared.kind {
+            PreparedWork::Pooled(work) => {
+                if !Arc::ptr_eq(&self.device, work.owner()) {
+                    return Err(D3D12RuntimeError::wrong_owner(
+                        "prepared Graph belongs to another D3D12 device",
+                    ));
+                }
+                Ok(D3D12Submission {
+                    kind: SubmissionKind::Pooled(work.submit()?),
+                })
+            }
+            #[cfg(test)]
+            PreparedWork::Fixture(work) => Ok(D3D12Submission {
+                kind: SubmissionKind::Fixture(self.submit_fixture(work)?),
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    fn submit_fixture(&mut self, work: Work) -> Result<FixtureSubmission, D3D12RuntimeError> {
+        let mut retained = Retained::recorded(work);
         let work = retained.value().unwrap();
         if !Arc::ptr_eq(&self.device, &work.owner) {
             return Err(D3D12RuntimeError::wrong_owner(
@@ -626,28 +664,156 @@ impl D3D12Runtime {
             // Retaining the entire chain also retains diagnostics and the device.
             return Err(error);
         }
-        Ok(D3D12Submission { retained })
+        Ok(FixtureSubmission { retained })
     }
 }
 
-/// Owns all GPU references until its private fence proves completion. Dropping
-/// pending work waits up to five seconds for that submission, then stops and
-/// retains unproven native work. Normal prepare/submit never waits.
+/// A prepared-capacity submission. Pending Drop detaches ownership for polling;
+/// it does not wait, destroy resources, or increase the prepared capacity.
 pub struct D3D12Submission {
+    kind: SubmissionKind,
+}
+enum SubmissionKind {
+    Pooled(super::frame::FrameSubmission),
+    #[cfg(test)]
+    Fixture(FixtureSubmission),
+}
+impl D3D12Submission {
+    pub fn poll(&mut self) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
+        match &mut self.kind {
+            SubmissionKind::Pooled(submission) => {
+                Ok(submission.poll()?.map(|result| D3D12SubmissionResult {
+                    kind: ResultKind::Pooled(result),
+                }))
+            }
+            #[cfg(test)]
+            SubmissionKind::Fixture(submission) => {
+                Ok(submission.poll()?.map(|result| D3D12SubmissionResult {
+                    kind: ResultKind::Fixture(result),
+                }))
+            }
+        }
+    }
+    pub fn wait(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
+        match &mut self.kind {
+            SubmissionKind::Pooled(submission) => {
+                Ok(submission
+                    .wait(timeout)?
+                    .map(|result| D3D12SubmissionResult {
+                        kind: ResultKind::Pooled(result),
+                    }))
+            }
+            #[cfg(test)]
+            SubmissionKind::Fixture(submission) => {
+                Ok(submission
+                    .wait(timeout)?
+                    .map(|result| D3D12SubmissionResult {
+                        kind: ResultKind::Fixture(result),
+                    }))
+            }
+        }
+    }
+}
+
+/// CPU readback ownership is separate from reusable command execution slots.
+pub struct D3D12SubmissionResult {
+    kind: ResultKind,
+}
+enum ResultKind {
+    Pooled(super::frame::FrameResult),
+    #[cfg(test)]
+    Fixture(FixtureResult),
+}
+impl D3D12SubmissionResult {
+    fn check_graph(&self, pass: PassHandle) -> Result<(), D3D12RuntimeError> {
+        let graph = match &self.kind {
+            ResultKind::Pooled(result) => result.graph(),
+            #[cfg(test)]
+            ResultKind::Fixture(result) => result.graph,
+        };
+        if graph != pass.graph {
+            return Err(D3D12RuntimeError::wrong_owner(
+                "foreign Graph readback handle",
+            ));
+        }
+        Ok(())
+    }
+    pub fn readback_len(&self, pass: PassHandle) -> Result<usize, D3D12RuntimeError> {
+        self.check_graph(pass)?;
+        match &self.kind {
+            ResultKind::Pooled(result) => result.readback_len(pass.index),
+            #[cfg(test)]
+            ResultKind::Fixture(result) => {
+                let index = result
+                    .readbacks
+                    .binary_search_by_key(&pass.index, |entry| entry.pass)
+                    .map_err(|_| D3D12RuntimeError::invalid("pass has no readback result"))?;
+                let entry = &result.readbacks[index];
+                if entry.buffer.is_none() {
+                    return Err(D3D12RuntimeError::invalid("readback was already consumed"));
+                }
+                Ok(entry.size)
+            }
+        }
+    }
+    /// Copies into already prepared caller storage and consumes this readback.
+    /// A wrong destination length or native failure leaves the lease available.
+    pub fn readback_into(
+        &mut self,
+        pass: PassHandle,
+        destination: &mut [u8],
+    ) -> Result<(), D3D12RuntimeError> {
+        self.check_graph(pass)?;
+        match &mut self.kind {
+            ResultKind::Pooled(result) => result.readback_into(pass.index, destination),
+            #[cfg(test)]
+            ResultKind::Fixture(result) => {
+                let index = result
+                    .readbacks
+                    .binary_search_by_key(&pass.index, |entry| entry.pass)
+                    .map_err(|_| D3D12RuntimeError::invalid("pass has no readback result"))?;
+                if destination.len() != result.readbacks[index].size {
+                    return Err(D3D12RuntimeError::invalid(
+                        "destination length does not match readback",
+                    ));
+                }
+                destination.copy_from_slice(&result.readback(pass)?);
+                Ok(())
+            }
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
+        let mut bytes = vec![0; self.readback_len(pass)?];
+        self.readback_into(pass, &mut bytes)?;
+        Ok(bytes)
+    }
+    #[cfg(all(test, feature = "d3d12-diagnostics"))]
+    fn has_owner(&self) -> bool {
+        match &self.kind {
+            ResultKind::Pooled(result) => result.has_owner(),
+            ResultKind::Fixture(result) => result.owner.is_some(),
+        }
+    }
+}
+
+#[cfg(test)]
+struct FixtureSubmission {
     retained: Retained<Work>,
 }
 
-impl D3D12Submission {
-    pub fn poll(&mut self) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
+#[cfg(test)]
+impl FixtureSubmission {
+    pub fn poll(&mut self) -> Result<Option<FixtureResult>, D3D12RuntimeError> {
         self.wait(Duration::ZERO)
     }
 
     /// A timeout preserves the complete pending owner for another wait. Device
     /// removal never returns readable data, including UINT64_MAX fence values.
-    pub fn wait(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
+    pub fn wait(&mut self, timeout: Duration) -> Result<Option<FixtureResult>, D3D12RuntimeError> {
         let work = self
             .retained
             .value()
@@ -701,7 +867,7 @@ impl D3D12Submission {
         } else {
             Some(owner)
         };
-        Ok(Some(D3D12SubmissionResult {
+        Ok(Some(FixtureResult {
             graph,
             readbacks,
             remaining_readbacks,
@@ -710,7 +876,8 @@ impl D3D12Submission {
     }
 }
 
-impl Drop for D3D12Submission {
+#[cfg(test)]
+impl Drop for FixtureSubmission {
     fn drop(&mut self) {
         if !self.retained.pending {
             return;
@@ -731,10 +898,12 @@ impl Drop for D3D12Submission {
 
 /// Own the complete native dependency chain before the void Execute call. An
 /// unproven Signal/wait failure or unwind must not free that chain.
+#[cfg(test)]
 struct Retained<T> {
     value: Option<T>,
     pending: bool,
 }
+#[cfg(test)]
 impl<T> Retained<T> {
     fn recorded(value: T) -> Self {
         Self {
@@ -756,6 +925,7 @@ impl<T> Retained<T> {
         }
     }
 }
+#[cfg(test)]
 impl<T> Drop for Retained<T> {
     fn drop(&mut self) {
         if self.pending
@@ -768,6 +938,7 @@ impl<T> Drop for Retained<T> {
 
 // The small boundary is shared with failure-path tests. Neither a failed
 // separate Signal nor unwinding after Execute proves commands were rejected.
+#[cfg(test)]
 fn execute_and_signal<T, E>(
     retained: &mut Retained<T>,
     execute: impl FnOnce(&T),
@@ -780,13 +951,15 @@ fn execute_and_signal<T, E>(
 }
 
 /// Readback leases exposed only after real fence completion on an active device.
-pub struct D3D12SubmissionResult {
+#[cfg(test)]
+struct FixtureResult {
     graph: u64,
     readbacks: Vec<Readback>,
     remaining_readbacks: usize,
     owner: Option<Arc<DeviceOwner>>,
 }
-impl D3D12SubmissionResult {
+#[cfg(test)]
+impl FixtureResult {
     /// Copies and consumes a pass's private native readback. Wrong handles and
     /// repeated consumption fail; a Map/allocation failure preserves the lease.
     pub fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
@@ -825,17 +998,21 @@ impl D3D12SubmissionResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{BufferDesc, Graph, ImageDesc};
-    use std::{cell::Cell, rc::Rc};
+    use crate::graph::{BufferDesc, Graph, GraphCapacity, GraphPool, ImageDesc};
+
+    fn prepared_graph() -> (GraphPool, Graph) {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let graph = pool.begin().unwrap();
+        (pool, graph)
+    }
 
     #[cfg(feature = "d3d12-diagnostics")]
-    fn copy_graph() -> (CompiledGraph, [PassHandle; 3], PassHandle) {
-        let mut graph = Graph::new();
+    fn copy_graph() -> (GraphPool, CompiledGraph, [PassHandle; 3], PassHandle) {
+        let (_graph_pool, mut graph) = prepared_graph();
         let a = graph.buffer("a", BufferDesc { size: 32 }).unwrap();
         let b = graph.buffer("b", BufferDesc { size: 32 }).unwrap();
-        let upload = graph
-            .upload_buffer("upload", a, 4, (0u8..24).collect::<Vec<_>>())
-            .unwrap();
+        let bytes: [u8; 24] = std::array::from_fn(|index| index as u8);
+        let upload = graph.upload_buffer("upload", a, 4, &bytes).unwrap();
         graph.copy_buffer("copy", a, 8, b, 12, 12).unwrap();
         let copied = graph.readback_buffer("copied", b, 12, 12).unwrap();
         let source = graph.readback_buffer("source", a, 4, 8).unwrap();
@@ -843,38 +1020,65 @@ mod tests {
         // Ensure native recording order differs from pass-index order; result
         // lookup must work after completed entries are indexed independently.
         graph.depends_on(copied, tail).unwrap();
-        (graph.compile().unwrap(), [copied, source, tail], upload)
+        (
+            _graph_pool,
+            graph.compile().unwrap(),
+            [copied, source, tail],
+            upload,
+        )
+    }
+
+    fn requirements(graph: &CompiledGraph) -> Result<usize, D3D12RuntimeError> {
+        let mut mapping = vec![usize::MAX; graph.resources.len()];
+        bounded::requirements(
+            graph,
+            &mut mapping,
+            super::super::D3D12FrameCapacity::default(),
+        )
     }
 
     #[test]
     fn plan_uses_shared_culled_order_and_ignores_unused_resources() {
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let image = graph.image("unused image", ImageDesc::rgba8(1, 1)).unwrap();
         graph
-            .upload_image("culled image upload", image, vec![0; 4])
+            .upload_image("culled image upload", image, &[0; 4])
             .unwrap();
         let buffer = graph.buffer("buffer", BufferDesc { size: 4 }).unwrap();
-        graph
-            .upload_buffer("upload", buffer, 0, vec![1; 4])
-            .unwrap();
+        graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.readback_buffer("readback", buffer, 0, 4).unwrap();
         let graph = graph.compile().unwrap();
-        let plan = Plan::new(&graph).unwrap();
-        assert_eq!(plan.operations.len(), graph.pass_count());
-        assert_eq!(plan.buffers, [None, Some(4)]);
+        let mut mapping = [usize::MAX; 2];
+        let capacity = super::super::D3D12FrameCapacity::default();
+        assert_eq!(
+            bounded::requirements(&graph, &mut mapping, capacity).unwrap(),
+            1
+        );
+        assert_eq!(mapping, [usize::MAX, 0]);
+        assert_eq!(
+            bounded::requirements(
+                &graph,
+                &mut mapping,
+                super::super::D3D12FrameCapacity {
+                    upload_bytes: 3,
+                    ..capacity
+                }
+            )
+            .unwrap_err()
+            .kind(),
+            super::super::D3D12RuntimeErrorKind::CapacityExhausted
+        );
     }
 
     #[test]
     fn plan_rejects_exports_and_backend_capacity_before_native_allocation() {
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let buffer = graph.buffer("export", BufferDesc { size: 4 }).unwrap();
-        graph
-            .upload_buffer("upload", buffer, 0, vec![1; 4])
-            .unwrap();
+        graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.export_buffer(buffer).unwrap();
-        assert!(Plan::new(&graph.compile().unwrap()).is_err());
+        assert!(requirements(&graph.compile().unwrap()).is_err());
 
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let buffer = graph
             .buffer(
                 "large",
@@ -883,22 +1087,18 @@ mod tests {
                 },
             )
             .unwrap();
-        graph
-            .upload_buffer("upload", buffer, 0, vec![1; 4])
-            .unwrap();
+        graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.readback_buffer("readback", buffer, 0, 4).unwrap();
-        assert!(Plan::new(&graph.compile().unwrap()).is_err());
+        assert!(requirements(&graph.compile().unwrap()).is_err());
     }
 
     #[test]
     fn plan_rejects_live_image_work() {
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let image = graph.image("image", ImageDesc::rgba8(1, 1)).unwrap();
-        graph
-            .upload_image("upload image", image, vec![0; 4])
-            .unwrap();
+        graph.upload_image("upload image", image, &[0; 4]).unwrap();
         graph.readback_image("readback image", image).unwrap();
-        assert!(Plan::new(&graph.compile().unwrap()).is_err());
+        assert!(requirements(&graph.compile().unwrap()).is_err());
 
         let source = crate::graph::ImportBuffer {
             key: crate::graph::ResourceKey {
@@ -908,70 +1108,14 @@ mod tests {
             },
             revision: 0,
             desc: BufferDesc { size: 4 },
-            initialized: std::iter::once(0..4).collect(),
+            initialized: crate::graph::ImportRanges::test_capture(std::slice::from_ref(&(0..4))),
         };
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph();
         let imported = graph.import_buffer("external buffer", &source).unwrap();
         graph
             .readback_buffer("readback external", imported, 0, 4)
             .unwrap();
-        assert!(Plan::new(&graph.compile().unwrap()).is_err());
-    }
-
-    struct DropProbe(Rc<Cell<usize>>);
-    impl Drop for DropProbe {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
-
-    #[test]
-    fn cancellation_and_signal_failure_have_distinct_retirement_contracts() {
-        let drops = Rc::new(Cell::new(0));
-        drop(Retained::recorded(DropProbe(Rc::clone(&drops))));
-        assert_eq!(drops.get(), 1, "unsubmitted work cancels immediately");
-
-        let mut retained = Retained::recorded(DropProbe(Rc::clone(&drops)));
-        let executed = Cell::new(false);
-        let signal_error = execute_and_signal(
-            &mut retained,
-            |_| executed.set(true),
-            |_| {
-                assert!(executed.get());
-                Err("Signal failed after Execute")
-            },
-        );
-        assert_eq!(signal_error, Err("Signal failed after Execute"));
-        assert!(
-            retained.take_retired().is_none(),
-            "separate signal failure is no rollback proof"
-        );
-        assert_eq!(drops.get(), 1);
-        // Only subsequent real completion may authorize native destruction.
-        retained.complete();
-        drop(retained.take_retired());
-        assert_eq!(drops.get(), 2);
-    }
-
-    #[test]
-    fn unwinding_after_execute_retains_the_complete_owner_chain() {
-        let drops = Rc::new(Cell::new(0));
-        let retained_owner = Rc::clone(&drops);
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut retained = Retained::recorded(DropProbe(retained_owner));
-            let _: Result<(), ()> = execute_and_signal(
-                &mut retained,
-                |_| panic!("native boundary interrupted after acceptance"),
-                |_| Ok(()),
-            );
-        }));
-        assert!(panic.is_err());
-        assert_eq!(
-            drops.get(),
-            0,
-            "uncertain native ownership must survive unwind"
-        );
-        assert_eq!(Rc::strong_count(&drops), 2, "entire owner was retained");
+        assert!(requirements(&graph.compile().unwrap()).is_err());
     }
 
     #[test]
@@ -981,15 +1125,16 @@ mod tests {
         use super::super::{D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode};
         let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
             validation: D3D12ValidationMode::Required,
+            ..Default::default()
         })
         .expect("real D3D12 hardware and strict validation prerequisites");
         let monitor = runtime.validation_monitor();
         let weak = Arc::downgrade(&runtime.device);
-        let (graph, [copied, source, tail], upload) = copy_graph();
+        let (_graph_pool, graph, [copied, source, tail], upload) = copy_graph();
         let baseline = Arc::strong_count(&runtime.device);
 
         let canceled = runtime.prepare(&graph).expect("recorded work");
-        assert_eq!(Arc::strong_count(&runtime.device), baseline + 1);
+        assert!(weak.upgrade().is_some());
         drop(canceled);
         assert_eq!(
             Arc::strong_count(&runtime.device),
@@ -1025,11 +1170,9 @@ mod tests {
             .wait(Duration::from_secs(30))
             .unwrap()
             .expect("second completion");
-        let mut foreign = Graph::new();
+        let (_foreign_pool, mut foreign) = prepared_graph();
         let buffer = foreign.buffer("foreign", BufferDesc { size: 4 }).unwrap();
-        foreign
-            .upload_buffer("upload", buffer, 0, vec![0; 4])
-            .unwrap();
+        foreign.upload_buffer("upload", buffer, 0, &[0; 4]).unwrap();
         let foreign_readback = foreign.readback_buffer("readback", buffer, 0, 4).unwrap();
         assert_eq!(
             result.readback(foreign_readback).unwrap_err().kind(),
@@ -1049,10 +1192,7 @@ mod tests {
             result.readback(source).unwrap_err().kind(),
             D3D12RuntimeErrorKind::InvalidInput
         );
-        assert!(
-            result.owner.is_some(),
-            "unconsumed readbacks retain the owner"
-        );
+        assert!(result.has_owner(), "unconsumed readbacks retain the owner");
         assert_eq!(
             result.readback(copied).unwrap(),
             (4u8..16).collect::<Vec<_>>()
@@ -1061,7 +1201,7 @@ mod tests {
             result.readback(tail).unwrap(),
             (8u8..16).collect::<Vec<_>>()
         );
-        assert!(result.owner.is_none(), "last readback releases the owner");
+        assert!(!result.has_owner(), "last readback releases the owner");
         assert_eq!(
             result.readback(copied).unwrap_err().kind(),
             D3D12RuntimeErrorKind::InvalidInput
@@ -1085,10 +1225,12 @@ mod tests {
         // COM references must be released before the last diagnostic owner.
         let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
             validation: D3D12ValidationMode::Required,
+            ..Default::default()
         })
         .unwrap();
         let monitor = runtime.validation_monitor();
-        let mut pending = runtime.submit(&Graph::new().compile().unwrap()).unwrap();
+        let (_empty_pool, empty_graph) = prepared_graph();
+        let mut pending = runtime.submit(&empty_graph.compile().unwrap()).unwrap();
         assert!(!runtime.shutdown().unwrap().teardown_checked);
         let empty_result = pending.wait(Duration::from_secs(30)).unwrap().unwrap();
         let report = monitor.snapshot();
