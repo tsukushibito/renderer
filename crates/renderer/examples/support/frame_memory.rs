@@ -19,25 +19,10 @@ struct Report<const N: usize> {
     phases: [Snapshot; N],
 }
 
-fn add(total: &mut Snapshot, value: Snapshot) {
-    for (total, value) in total.rust.iter_mut().zip(value.rust) {
-        total.calls += value.calls;
-        total.bytes += value.bytes;
-    }
-    for (total, value) in total.vma_host.iter_mut().zip(value.vma_host) {
-        total.calls += value.calls;
-        total.bytes += value.bytes;
-    }
-    for (total, value) in total.native.iter_mut().zip(value.native) {
-        *total += value;
-    }
-    total.overflowed |= value.overflowed;
-}
-
 fn phase<T>(totals: &mut Snapshot, operation: impl FnOnce() -> T) -> T {
     let before = Snapshot::now();
     let value = operation();
-    add(totals, Snapshot::now().since(before));
+    totals.accumulate(Snapshot::now().since(before));
     value
 }
 

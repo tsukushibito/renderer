@@ -97,6 +97,30 @@ impl Snapshot {
         }
     }
 
+    /// Accumulate disjoint intervals in fixed storage. Overflow saturates and
+    /// invalidates zero acceptance; it cannot wrap a nonzero total back to zero.
+    pub fn accumulate(&mut self, value: Self) {
+        fn add(total: &mut u64, value: u64, overflowed: &mut bool) {
+            *total = total.checked_add(value).unwrap_or_else(|| {
+                *overflowed = true;
+                u64::MAX
+            });
+        }
+        self.overflowed |= value.overflowed;
+        for (total, value) in self
+            .rust
+            .iter_mut()
+            .zip(value.rust)
+            .chain(self.vma_host.iter_mut().zip(value.vma_host))
+        {
+            add(&mut total.calls, value.calls, &mut self.overflowed);
+            add(&mut total.bytes, value.bytes, &mut self.overflowed);
+        }
+        for (total, value) in self.native.iter_mut().zip(value.native) {
+            add(total, value, &mut self.overflowed);
+        }
+    }
+
     /// All observed allocation/free event counts are zero. Reset/reuse may
     /// occur; implicit frees must also be classified as descriptor free events.
     /// A zero snapshot cannot establish coverage of missing instrumentation.
@@ -240,6 +264,15 @@ mod tests {
         );
         assert_eq!(delta.vma_host[HostEvent::Deallocate as usize].calls, 1);
         assert!(!delta.is_allocation_free());
+        let mut sum = initial;
+        sum.accumulate(delta);
+        assert_eq!(sum, delta);
+        sum.native[NativeEvent::ObjectCreate as usize] = u64::MAX;
+        let mut extra = Snapshot::default();
+        extra.native[NativeEvent::ObjectCreate as usize] = 1;
+        sum.accumulate(extra);
+        assert!(sum.overflowed);
+        assert_eq!(sum.native[NativeEvent::ObjectCreate as usize], u64::MAX);
         let reset_only = Snapshot {
             native: [0, 0, 0, 0, 0, 0, 0, 0, 1],
             ..Snapshot::default()
