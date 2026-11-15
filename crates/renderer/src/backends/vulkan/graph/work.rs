@@ -210,9 +210,9 @@ impl PreparedOperation {
                 clear_depth,
             },
             Operation::Composite { dst, .. } => Self::Composite { dst },
-            Operation::Declared(_) => {
+            Operation::Dispatch { .. } | Operation::Declared(_) => {
                 return Err(RuntimeError::unsupported(
-                    "pass has no executable operation",
+                    "pass has no supported native operation",
                 ));
             }
         })
@@ -637,9 +637,9 @@ impl GraphWork {
                         }
                     }
                     Operation::CopyImage { .. } | Operation::ClearAttachments { .. } => {}
-                    Operation::Declared(_) => {
+                    Operation::Dispatch { .. } | Operation::Declared(_) => {
                         return Err(RuntimeError::unsupported(
-                            "declaration-only pass is not executable",
+                            "pass has no supported native operation",
                         ));
                     }
                 }
@@ -711,6 +711,11 @@ fn usage(purpose: AccessPurpose) -> Use {
             vk::PipelineStageFlags2::COPY,
             vk::AccessFlags2::TRANSFER_WRITE,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        ),
+        Uniform => (
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::UNIFORM_READ,
+            vk::ImageLayout::UNDEFINED,
         ),
         StorageRead => (
             vk::PipelineStageFlags2::COMPUTE_SHADER,

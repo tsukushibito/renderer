@@ -14,6 +14,7 @@ pub enum GraphCapacityKind {
     Passes,
     Accesses,
     Draws,
+    Bindings,
     Dependencies,
     InitialRanges,
     NameBytes,
@@ -69,6 +70,7 @@ struct GraphErrorContext {
     pass_name: Option<String>,
     resource_name: Option<String>,
     range: Option<AccessRange>,
+    binding: Option<(u32, u32)>,
     cycle_passes: Vec<PassHandle>,
 }
 
@@ -115,6 +117,10 @@ impl GraphError {
     pub fn range(&self) -> Option<&AccessRange> {
         self.context.as_ref()?.range.as_ref()
     }
+    /// The Program's `(group, binding)` slot involved in a construction error.
+    pub fn binding(&self) -> Option<(u32, u32)> {
+        self.context.as_ref()?.binding
+    }
     /// The directed cycle, including its repeated first pass at the end.
     /// Names may be duplicated; these handles identify the actual participants.
     pub fn cycle_passes(&self) -> &[PassHandle] {
@@ -155,6 +161,12 @@ impl GraphError {
 
     fn context_mut(&mut self) -> &mut GraphErrorContext {
         self.context.get_or_insert_with(Box::default)
+    }
+    pub(super) fn with_binding(mut self, group: u32, binding: u32) -> Self {
+        if self.kind != GraphErrorKind::CapacityExhausted {
+            self.context_mut().binding = Some((group, binding));
+        }
+        self
     }
     pub(crate) fn with_pass_name(mut self, name: &str) -> Self {
         if self.kind == GraphErrorKind::CapacityExhausted {

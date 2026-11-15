@@ -212,10 +212,19 @@ struct Manifest {
     entry: &'static str,
     workgroup_size: [u32; 3],
     bindings: &'static [BindingLayout],
+    buffer_dispatch: Option<BufferDispatch>,
     #[cfg(feature = "vulkan")]
     spirv: &'static [u8],
     #[cfg(all(feature = "d3d12", windows))]
     dxil: &'static [u8],
+}
+
+/// Reviewed execution footprint, separate from the ABI's minimum descriptor
+/// size. Entries follow manifest binding order and access a prefix of each
+/// bound range. Changing shader behavior requires reviewing this contract too.
+pub(crate) struct BufferDispatch {
+    pub workgroups: [u32; 3],
+    pub bytes: &'static [u64],
 }
 
 impl std::fmt::Debug for ManagedProgram {
@@ -231,6 +240,10 @@ impl std::fmt::Debug for ManagedProgram {
 static UNIFORM_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
+    buffer_dispatch: Some(BufferDispatch {
+        workgroups: [1, 1, 1],
+        bytes: &[16, 16],
+    }),
     bindings: &[
         BindingLayout {
             group: 0,
@@ -254,6 +267,10 @@ static UNIFORM_READBACK: Manifest = Manifest {
 static STORAGE_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
+    buffer_dispatch: Some(BufferDispatch {
+        workgroups: [1, 1, 1],
+        bytes: &[16, 16],
+    }),
     bindings: &[
         BindingLayout {
             group: 0,
@@ -277,6 +294,7 @@ static STORAGE_READBACK: Manifest = Manifest {
 static SAMPLED_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
+    buffer_dispatch: None,
     bindings: &[
         BindingLayout {
             group: 0,
@@ -306,6 +324,7 @@ static SAMPLED_READBACK: Manifest = Manifest {
 static SAMPLED_FLOAT_READBACK: Manifest = Manifest {
     entry: "main",
     workgroup_size: [1, 1, 1],
+    buffer_dispatch: None,
     bindings: &[
         BindingLayout {
             group: 0,
@@ -379,6 +398,10 @@ impl ManagedProgram {
 
     pub const fn bindings(&self) -> &'static [BindingLayout] {
         self.manifest.bindings
+    }
+
+    pub(crate) const fn buffer_dispatch(&self) -> Option<&'static BufferDispatch> {
+        self.manifest.buffer_dispatch.as_ref()
     }
 
     #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]

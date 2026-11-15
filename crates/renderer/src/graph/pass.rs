@@ -145,6 +145,7 @@ pub enum AccessKind {
 pub enum AccessPurpose {
     CopySource,
     CopyDestination,
+    Uniform,
     StorageRead,
     StorageWrite,
     StorageReadWrite,
@@ -277,6 +278,15 @@ pub(crate) enum Operation {
         src: usize,
         dst: usize,
         transform: ComputeTransform,
+    },
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "native managed dispatch is subsequent work")
+    )]
+    Dispatch {
+        program: crate::program::ManagedProgram,
+        bindings: Range<usize>,
+        workgroups: [u32; 3],
     },
     Raster {
         vertices: usize,

@@ -998,6 +998,12 @@ impl VulkanRuntime {
             serial,
         )?;
         for &pass in &graph.order {
+            if let Operation::Dispatch { .. } = &graph.passes[pass].operation {
+                return Err(RuntimeError::unsupported(format!(
+                    "pass {} uses managed dispatch; native execution unsupported",
+                    graph.pass_name(pass)
+                )));
+            }
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
                     "pass {} is declaration-only {kind:?}; native execution unsupported",

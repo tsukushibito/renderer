@@ -518,7 +518,7 @@ impl Graph {
             Ok((Operation::Declared(kind), encoded, side_effect))
         })
     }
-    fn build_pass(
+    pub(super) fn build_pass(
         &mut self,
         name: &str,
         build: impl FnOnce(&mut Self) -> Result<(Operation, Range<usize>, bool), GraphError>,
@@ -528,6 +528,7 @@ impl Graph {
             self.draws.len(),
             self.uploads.len(),
             self.names.len(),
+            self.bindings.len(),
         );
         let result = build(self).and_then(|(operation, accesses, side_effect)| {
             self.push(name, operation, accesses, side_effect)
@@ -538,6 +539,7 @@ impl Graph {
             data.draws.truncate(checkpoint.1);
             data.uploads.truncate(checkpoint.2);
             data.names.truncate(checkpoint.3);
+            data.bindings.truncate(checkpoint.4);
         }
         result.map_err(|error| error.with_pass_name(name))
     }
@@ -668,13 +670,14 @@ fn validate_purpose(
 ) -> Result<(), GraphError> {
     use AccessPurpose::*;
     let mode = match purpose {
-        CopySource | StorageRead | Sampled | Vertex | Index => access == AccessKind::Read,
+        CopySource | Uniform | StorageRead | Sampled | Vertex | Index => access == AccessKind::Read,
         CopyDestination | StorageWrite => access == AccessKind::Write,
         StorageReadWrite => access == AccessKind::ReadWrite,
         ColorAttachment | DepthAttachment => access != AccessKind::Read,
     };
     let domain = match purpose {
         CopySource | CopyDestination => kind == PassKind::Copy,
+        Uniform => kind == PassKind::Compute && matches!(desc, ResourceDesc::Buffer(_)),
         StorageRead | StorageWrite | StorageReadWrite => kind == PassKind::Compute,
         Sampled => {
             kind == PassKind::Raster

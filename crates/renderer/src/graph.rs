@@ -12,6 +12,7 @@ mod accesses;
 mod analysis;
 mod builder;
 mod compile;
+mod dispatch;
 mod error;
 mod pass;
 mod ranges;
@@ -19,6 +20,8 @@ mod resource;
 mod storage;
 
 pub use compile::CompiledGraph;
+pub use dispatch::BufferBinding;
+pub(crate) use dispatch::BufferBindingOperands;
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,
