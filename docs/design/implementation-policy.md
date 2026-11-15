@@ -323,6 +323,54 @@ Rendererが制御しないdriver内部の確保は保証と区別し、未観測
 未達箇所・対応範囲と未実行の確認はBeadsと[現在の検証状況](../verification/current.md)へ記録する。
 この規約の制定は、現行実装のゼロ達成や性能改善を示すものではない。
 
+<a id="prepared-frame-storage"></a>
+
+### 4.4 共通Graph・Engineの準備済み領域
+
+`renderer-7ft.2.2.1`は、前節の通常フレーム規約に従って共通の入力・命令・解析領域を予約する。
+実装した所有契約は[RenderGraphのslot設計](rendergraph.md#prepared-graph-storage)を正とする。
+これはMRT/mipや任意shaderを実装したという意味でも、native実行・表示・CPU結果まで含む
+全体のゼロ達成の宣言でもない。実行した構成と残る確認は[検証状況](../verification/current.md)へ記録する。
+
+| 準備境界 | 通常フレームで使うものと容量 |
+|---|---|
+| `Engine::new(EngineCapacity)` | mesh/materialの登録枠、更新・削除された旧mesh版のretired枠 |
+| `SnapshotPool::new(draw_capacity, slots)` | 可変draw入力のcapture、mesh解決scratch、同時snapshotの所有 |
+| `GraphPool::new(GraphCapacity, slots)` | resource/pass/access/draw、明示依存、初期化range、名前/upload byte、解析edge/区間/readerの予約領域 |
+| `ImportRangesPool::new(range_capacity, slots)` | runtimeが公開する不変な初期化範囲snapshot、Clone・返却用slot |
+
+構築は`GraphPool::begin(&mut self)`から始め、`Graph::compile(self)`で同じ領域を凍結する。
+GraphはCloneせず、`CompiledGraph`のCloneは予約済みslotへのArc pinだけを追加する。
+全accessを解析用Vecへ射影せず、flatな入力sliceと、重ならないworkspace/outputを分けて借用する。
+dataflow・culling・live hazard・順序・最終内容は、変わる入力とpass構成について毎回計算する。
+固定planのcache、一定draw数だけの特別経路、構築・返却を測定外へ移す方法で対象を狭めない。
+
+各slotの再取得は全consumer終了後だけに許可する。`GraphPool::begin`と範囲snapshotのcaptureは
+`Arc::get_mut`で排他性・退役時の同期を確立し、Graph identityも再取得時に更新する。
+poolの所有者は通常処理の間保持し、nativeのprovenanceや未読CPU結果が持つpinも同時容量へ含める。
+`GraphPool`／`ImportRangesPool`の容量変更では`is_idle`を確認する。
+これらが使用中の場合や`SnapshotPool`を変更する場合は、必要なconsumerが終わるまで旧pool ownerを保持し、
+変更に紐づく明示保守で破棄する。通常frameの返却による最後の解放を保守扱いへ移さない。
+通常のslot不足・metadata不足は型付き容量エラーで返し、暗黙の拡張、native増設、GPU待機は行わない。
+capacity/backpressureのmessageはstaticとし、不正入力・native異常の詳細診断とは別に計測する。
+
+公開uploadは`&[u8]`から予約済みblobへcaptureする。所有Vecと公開Shared uploadは撤去し、
+任意の最後のArcが通常のplan返却でheapを解放する経路を残さない。
+private mesh uploadだけは、常駐またはretired assetがanchorを持つ不変streamを共有する。
+culled命令は実行順から除外するが、bounded backingには元の入力が残り得る。
+plan返却後も容量は保持し、次のcheckoutでresetするため、従来の「culled本文を直ちに非保持」とは保持時期が異なる。
+この差を、culled writeによる内容初期化や、通常frameの回収全体を変更境界へ移す理由にはしない。
+
+assetの更新・削除時は旧版をbounded retired領域へ移す。明示保守でidle Graph slotの
+private asset pinを`release_idle`により返し、`collect_retired_meshes`が外側のmesh版と
+両byte streamのconsumerを確認して最後のanchorを退役させる。
+上限不足なら変更を部分適用せずに返す。asset変更後の最終解放を通常frameへ漏らさない所有契約と、
+通常のsnapshot/Graph/plan入力領域を再利用する契約を区別する。
+
+CPUのallocation、reallocation、deallocationは、それぞれcaptureから結果返却までの連続区間で確認する。
+optional dump/ログの費用やnative作成・破棄は別に記録する。区間表を予約済み配列へ変更したため
+挿入・削除はO(S)であり、確保ゼロだけでCPU時間の改善を主張しない。
+
 ## 5. RHIを抽出する進め方
 
 ### 5.1 最初に固定しないもの
@@ -565,7 +613,7 @@ pass parameterに基づく依存と、遅延lambdaの寿命・CPU副作用への
 | CPU段階 | Aで必要な仕事 | Bで必要な仕事 |
 |---|---|---|
 | build | 全宣言の命令生成・格納、入力から用途導出 | pass data／宣言集合とcallbackの保持。capture所有は選択方式による |
-| compile | live解析・初期化／hazard／順序等。除去命令を解放 | 同じ解析。保守的な宣言集合が広ければ余分な依存・生存を作り得る |
+| compile | live解析・初期化／hazard／順序等。除去対象を実行順へ入れず、入力領域は所有終了後に再利用 | 同じ解析。保守的な宣言集合が広ければ余分な依存・生存を作り得る |
 | record | live命令の走査とnative変換 | live callback呼出し、命令生成／native変換、宣言集合の逸脱を防ぐ処理 |
 | retain／retire | 命令payloadとnative leaseを必要期間だけ保持 | callback／captureはrecordまで、native leaseは実完了まで保持 |
 
@@ -573,7 +621,8 @@ CPU試作のpass・命令・用途件数はこの違いを観察する構造的�
 Rustのcode size・cache効率・native record時間の計測ではない。
 実測時はbuild／compile／prepare-record／submit／retire、確保回数／保持byteを同じdraw数とculling率で分ける。
 同じ資源を繰り返す場合と異なる資源、動的binding、解像度変更、検証on/offを比較し、
-pipeline初回作成と定常状態を分離する。専用arena、plan cache、並列recordは測定後の選択とする。
+pipeline初回作成と定常状態を分離する。現行共通領域の予約・再利用は
+[4.4節](#prepared-frame-storage)で定め、plan cacheや並列recordは別の測定後の選択とする。
 GPU同期・寿命・shader ABI・画像結果・Windows表示・性能の確認はB1以降の実機受入へ残す。
 基盤の維持／改修／置換／外部利用と総工数の比較は[3.3節](#foundation-selection)に記す。
 
