@@ -674,7 +674,6 @@ mod tests {
                 readback_bytes: 2048,
                 ..Default::default()
             },
-            ..Default::default()
         })
         .unwrap();
         let monitor = runtime.validation_monitor();
