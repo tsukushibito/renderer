@@ -20,6 +20,68 @@ fn clear(graph: &mut Graph, name: &str, view: ImageView) -> PassHandle {
         .unwrap()
 }
 
+#[test]
+fn subnormal_depth_clear_rejection_returns_capacity_for_zero_and_normal_minimum() {
+    let mut pool = GraphPool::new(
+        GraphCapacity {
+            attachments: 2,
+            accesses: 4,
+            ..GraphCapacity::default()
+        },
+        1,
+    )
+    .unwrap();
+    for accepted in [0.0, f32::MIN_POSITIVE] {
+        let mut graph = pool.begin().unwrap();
+        let color_image = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
+        let color_view = graph.image_view(color_image, 0, 0).unwrap();
+        let depth_image = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+        let depth_view = graph.image_view(depth_image, 0, 0).unwrap();
+        let colors = [color(color_view, LoadOp::Clear([0.25; 4]), StoreOp::Store)];
+        let error = graph
+            .attachment_pass(
+                "subnormal depth",
+                RasterAttachments {
+                    colors: &colors,
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Clear(f32::MIN_POSITIVE / 2.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.resource(), Some(depth_image.into()));
+        assert_eq!(error.pass_name(), Some("subnormal depth"));
+        // The failed pass had already appended its color operand/access. A
+        // successful retry at the exact prepared bounds proves both roll back.
+        graph
+            .attachment_pass(
+                "accepted depth",
+                RasterAttachments {
+                    colors: &colors,
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Clear(accepted),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        graph.readback_image("color result", color_image).unwrap();
+        graph.readback_image("depth result", depth_image).unwrap();
+        assert_eq!(
+            graph
+                .compile()
+                .unwrap()
+                .ordered_pass_names()
+                .collect::<Vec<_>>(),
+            ["accepted depth", "color result", "depth result"]
+        );
+    }
+}
+
 fn observe(graph: &mut Graph, name: &str, view: ImageView) {
     graph
         .declare_pass(
