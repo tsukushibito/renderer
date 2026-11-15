@@ -354,6 +354,14 @@ impl VulkanRuntime {
         capacity: FrameCapacity,
         resources: &[ResourceClass],
     ) -> Result<(), RuntimeError> {
+        if resources.iter().any(|class| {
+            matches!(class,
+            ResourceClass::Image {desc,..} if !desc.is_single_subresource())
+        }) {
+            return Err(RuntimeError::unsupported(
+                "native images require one mip and one layer",
+            ));
+        }
         self.owner
             .device
             .ensure_active()

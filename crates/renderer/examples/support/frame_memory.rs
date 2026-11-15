@@ -5,8 +5,9 @@ use renderer::engine::{
     SnapshotPool, Vertex, View,
 };
 use renderer::graph::{
-    BufferBinding, BufferDesc, CompiledGraph, ComputeTransform, Graph, GraphCapacity,
-    GraphErrorKind, GraphPool, ImageDesc,
+    Access, AccessKind, AccessPurpose, AccessRange, Attachment, BufferBinding, BufferDesc,
+    CompiledGraph, ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc,
+    LoadOp, PassKind, RasterAttachments, StoreOp,
 };
 use renderer::measurement::Snapshot;
 use renderer::program::ManagedProgram;
@@ -276,7 +277,115 @@ fn owned_compute_graph(pool: &mut GraphPool, frame: usize) -> Graph {
     graph
 }
 
-fn owned_compute_frames(pool: &mut GraphPool, count: usize) -> Report<3> {
+fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
+    let mut graph = pool.begin().unwrap();
+    let colors = graph
+        .image(
+            "mipped color",
+            ImageDesc {
+                mip_levels: 3,
+                array_layers: 2,
+                ..ImageDesc::rgba8(4, 4)
+            },
+        )
+        .unwrap();
+    let depth = graph
+        .image(
+            "mipped depth",
+            ImageDesc {
+                mip_levels: 3,
+                array_layers: 2,
+                ..ImageDesc::depth32(4, 4)
+            },
+        )
+        .unwrap();
+    let mip = (frame % 3) as u32;
+    let layer = ((frame / 3) % 2) as u32;
+    let color_views = [
+        graph.image_view(colors, mip, layer).unwrap(),
+        graph.image_view(colors, mip, 1 - layer).unwrap(),
+    ];
+    let depth_view = graph.image_view(depth, mip, layer).unwrap();
+    let color_count = [1, 0, 2][frame % 3];
+    let has_depth = frame % 3 != 0;
+    let mut targets = color_views.map(|view| Attachment {
+        view,
+        load: LoadOp::Clear([frame as f32, 0.0, 0.0, 1.0]),
+        store: StoreOp::Store,
+    });
+    graph
+        .attachment_pass(
+            "seed Views",
+            RasterAttachments {
+                colors: &targets[..color_count],
+                depth: has_depth.then_some(Attachment {
+                    view: depth_view,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+        )
+        .unwrap();
+    for target in &mut targets {
+        target.load = LoadOp::Load;
+    }
+    graph
+        .attachment_pass(
+            "load Views",
+            RasterAttachments {
+                colors: &targets[..color_count],
+                depth: has_depth.then_some(Attachment {
+                    view: depth_view,
+                    load: LoadOp::Load,
+                    store: StoreOp::Store,
+                }),
+            },
+        )
+        .unwrap();
+    let mut reads = [color_views[0], color_views[1], depth_view].map(|view| Access {
+        resource: view.image().into(),
+        range: AccessRange::Image {
+            mip: view.mip_level(),
+            layer: view.array_layer(),
+            aspect: view.aspect(),
+        },
+        kind: AccessKind::Read,
+        purpose: AccessPurpose::CopySource,
+    });
+    if color_count == 0 {
+        reads[0] = reads[2].clone();
+    }
+    graph
+        .declare_pass(
+            "consume Views",
+            PassKind::Copy,
+            &reads[..color_count + usize::from(has_depth)],
+            true,
+        )
+        .unwrap();
+    let unused = graph.image_view(colors, (mip + 1) % 3, 0).unwrap();
+    graph
+        .attachment_pass(
+            "dead View",
+            RasterAttachments {
+                colors: &[Attachment {
+                    view: unused,
+                    load: LoadOp::Clear([0.0; 4]),
+                    store: StoreOp::Store,
+                }],
+                depth: None,
+            },
+        )
+        .unwrap();
+    graph
+}
+
+fn planned_frames(
+    pool: &mut GraphPool,
+    count: usize,
+    build: fn(&mut GraphPool, usize) -> Graph,
+    pass_count: fn(usize) -> usize,
+) -> Report<3> {
     let mut plans: [Option<CompiledGraph>; IN_FLIGHT] = std::array::from_fn(|_| None);
     let mut phases = [Snapshot::default(); 3];
     let before = Snapshot::now();
@@ -284,11 +393,11 @@ fn owned_compute_frames(pool: &mut GraphPool, count: usize) -> Report<3> {
         let slot = frame % IN_FLIGHT;
         phase(&mut phases[2], || drop(plans[slot].take()));
         let graph = phase(&mut phases[0], || {
-            drop(owned_compute_graph(pool, frame));
-            owned_compute_graph(pool, frame)
+            drop(build(pool, frame));
+            build(pool, frame)
         });
         let plan = phase(&mut phases[1], || graph.compile().unwrap());
-        assert_eq!(plan.pass_count(), 4 + frame % 3);
+        assert_eq!(plan.pass_count(), pass_count(frame));
         plans[slot] = Some(plan);
         if frame >= IN_FLIGHT - 1 {
             assert_eq!(
@@ -357,6 +466,7 @@ pub fn cpu_lifecycle(baseline: bool) {
     let snapshots = SnapshotPool::new(4, IN_FLIGHT).unwrap();
     let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mut owned_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
+    let mut attachment_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
             MeshData::new(
@@ -386,18 +496,25 @@ pub fn cpu_lifecycle(baseline: bool) {
         world_from_model: IDENTITY,
     }; 4];
     cpu_frames(&engine, &snapshots, &mut pool, &draws, WARMUP);
-    owned_compute_frames(&mut owned_pool, WARMUP);
+    planned_frames(&mut owned_pool, WARMUP, owned_compute_graph, |frame| {
+        4 + frame % 3
+    });
+    planned_frames(&mut attachment_pool, WARMUP, attachment_graph, |_| 3);
     let startup = Snapshot::now().since(start);
     assert!(
         startup.rust[renderer::measurement::RustEvent::Allocate as usize].calls != 0,
         "Rust global allocator hooks are absent or unexercised"
     );
     let report = cpu_frames(&engine, &snapshots, &mut pool, &draws, FRAMES);
-    let owned_report = owned_compute_frames(&mut owned_pool, FRAMES);
+    let owned_report = planned_frames(&mut owned_pool, FRAMES, owned_compute_graph, |frame| {
+        4 + frame % 3
+    });
+    let attachment_report = planned_frames(&mut attachment_pool, FRAMES, attachment_graph, |_| 3);
     assert!(pool.is_idle());
     assert!(owned_pool.is_idle());
+    assert!(attachment_pool.is_idle());
     let before_shutdown = Snapshot::now();
-    drop((owned_pool, pool, snapshots, engine));
+    drop((attachment_pool, owned_pool, pool, snapshots, engine));
     let shutdown = Snapshot::now().since(before_shutdown);
     assert!(
         shutdown.rust[renderer::measurement::RustEvent::Deallocate as usize].calls != 0,
@@ -431,8 +548,20 @@ pub fn cpu_lifecycle(baseline: bool) {
             "total": counts(owned_report.total),
             "phases_build_compile_return": owned_report.phases.map(counts),
         },
+        "attachment_subresources": {
+            "coverage":"logical owned attachment build/compile/return; no native MRT or subresource execution",
+            "measured_frames":FRAMES,"retained_frame_slots":IN_FLIGHT,
+            "mip_levels":3,"array_layers":2,"color_counts":[1,0,2],
+            "depth_present":[false,true,true],"load_store":true,
+            "boundary_cases":["uncompiled attachment cancel","culled View","busy slots","all owners returned and backing reset"],
+            "total":counts(attachment_report.total),"phases_build_compile_return":attachment_report.phases.map(counts),
+        },
     });
     println!("FRAME_MEMORY_REPORT={json}");
+    assert!(
+        !attachment_report.total.overflowed,
+        "attachment measurement counter overflowed"
+    );
     assert!(!report.total.overflowed, "measurement counter overflowed");
     assert!(
         !owned_report.total.overflowed,
@@ -448,6 +577,11 @@ pub fn cpu_lifecycle(baseline: bool) {
             owned_report.total.is_allocation_free(),
             "owned Compute lifecycle still allocates or frees: {:?}",
             owned_report.total
+        );
+        assert!(
+            attachment_report.total.is_allocation_free(),
+            "attachment lifecycle still allocates or frees: {:?}",
+            attachment_report.total
         );
     }
 }

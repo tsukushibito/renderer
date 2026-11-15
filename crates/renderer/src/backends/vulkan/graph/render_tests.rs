@@ -10,6 +10,153 @@ use crate::graph::{
 
 const WAIT: Duration = Duration::from_secs(10);
 
+#[test]
+#[ignore = "real GPU attachment lowering, cache rejection and culled subresources; run strict and shipping separately"]
+fn vulkan_attachment_subresource_native_boundaries() {
+    real_gpu(|runtime| {
+        let color_desc = ImageDesc::rgba8(4, 4);
+        let depth_desc = ImageDesc::depth32(4, 4);
+        prepare_scenario(
+            runtime,
+            6,
+            8,
+            &[
+                ResourceClass::Image {
+                    desc: color_desc,
+                    count: 2,
+                },
+                ResourceClass::Image {
+                    desc: depth_desc,
+                    count: 1,
+                },
+            ],
+        );
+        // Both descriptors would hit an existing base-extent cache key without
+        // the capability guard. Rejection must precede selection/reuse.
+        let before = runtime.stats();
+        for desc in [
+            ImageDesc {
+                mip_levels: 2,
+                ..color_desc
+            },
+            ImageDesc {
+                array_layers: 2,
+                ..color_desc
+            },
+        ] {
+            assert_eq!(
+                runtime
+                    .acquire_inner(ResourceDesc::Image(desc), "unsupported cache lookup", true)
+                    .err()
+                    .unwrap()
+                    .kind(),
+                RuntimeErrorKind::Unsupported
+            );
+            assert_eq!(
+                runtime
+                    .prepare_working_set(
+                        Default::default(),
+                        &[ResourceClass::Image { desc, count: 1 }]
+                    )
+                    .unwrap_err()
+                    .kind(),
+                RuntimeErrorKind::Unsupported
+            );
+        }
+        assert_eq!(runtime.stats().resources_created, before.resources_created);
+        assert_eq!(runtime.stats().resources_reused, before.resources_reused);
+
+        for mode in 0..3 {
+            let mut graph = Graph::test_new();
+            let color = graph.image("color", color_desc).unwrap();
+            let second = graph.image("second", color_desc).unwrap();
+            let depth = graph.image("depth", depth_desc).unwrap();
+            let colors = [color, second].map(|image| Attachment {
+                view: graph.image_view(image, 0, 0).unwrap(),
+                load: LoadOp::Clear([1.0; 4]),
+                store: StoreOp::Store,
+            });
+            let depth_attachment = Attachment {
+                view: graph.image_view(depth, 0, 0).unwrap(),
+                load: LoadOp::Clear(1.0),
+                store: StoreOp::Store,
+            };
+            graph
+                .attachment_pass(
+                    "unsupported shape",
+                    RasterAttachments {
+                        colors: &colors[..[1, 0, 2][mode]],
+                        depth: (mode == 1).then_some(depth_attachment),
+                    },
+                )
+                .unwrap();
+            if mode == 1 {
+                graph.export_image(depth).unwrap();
+            } else {
+                graph.export_image(color).unwrap();
+            }
+            assert_eq!(
+                runtime
+                    .submit(&graph.compile().unwrap())
+                    .err()
+                    .unwrap()
+                    .kind(),
+                RuntimeErrorKind::Unsupported
+            );
+        }
+
+        let mut graph = Graph::test_new();
+        let color = graph.image("clear color", color_desc).unwrap();
+        let depth = graph.image("clear depth", depth_desc).unwrap();
+        graph
+            .attachment_pass(
+                "supported clear",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([1.0, 0.0, 0.0, 1.0]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        let read = graph.readback_image("color bytes", color).unwrap();
+        let multi = graph
+            .image(
+                "dead multi image",
+                ImageDesc {
+                    mip_levels: 2,
+                    array_layers: 2,
+                    ..color_desc
+                },
+            )
+            .unwrap();
+        graph
+            .attachment_pass(
+                "dead subresource",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(multi, 1, 1).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        let mut submission = runtime.submit(&graph.compile().unwrap()).unwrap();
+        let mut result = submission.wait(WAIT).unwrap().unwrap();
+        let bytes = result.test_readback(read).unwrap();
+        assert_eq!(bytes.len(), 64);
+        assert!(bytes.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
+    });
+}
+
 fn batch_draws(
     draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
 ) -> impl ExactSizeIterator<

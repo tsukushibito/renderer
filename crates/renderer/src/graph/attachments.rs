@@ -2,7 +2,7 @@
 
 use super::{
     AccessPurpose, AttachmentClearOperands, AttachmentOperand, Graph, GraphCapacityKind,
-    GraphError, GraphErrorKind, ImageFormat, ImageView, LoadAction, LoadOp, Operation, PassHandle,
+    GraphError, GraphErrorKind, ImageFormat, LoadAction, LoadOp, Operation, PassHandle,
     RasterAttachments, ResourceAccess, StoreOp, storage::capacity_error,
 };
 
@@ -200,13 +200,6 @@ impl Graph {
             },
         })?;
         self.data_mut().attachments.push(operand);
-        Ok(())
-    }
-
-    pub(super) fn base_attachment_view(&self, view: ImageView) -> Result<(), GraphError> {
-        let resource = self.image_id(view.image)?;
-        self.single_image(resource)?;
-        // Single-subresource images admit only the base View by construction.
         Ok(())
     }
 }

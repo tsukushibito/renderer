@@ -51,6 +51,13 @@ pub(crate) struct AttachmentOperand {
 
 /// The already-established Clear/Store shape used by existing native lowering.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(feature = "vulkan"),
+    allow(
+        dead_code,
+        reason = "fixed clear operands are consumed by Vulkan lowering"
+    )
+)]
 pub(crate) struct AttachmentClearOperands {
     pub color: usize,
     pub depth: usize,

@@ -276,8 +276,6 @@ impl Graph {
                     "built-in mesh Raster requires a depth attachment",
                 )
             })?;
-            graph.base_attachment_view(color_attachment.view)?;
-            graph.base_attachment_view(depth_attachment.view)?;
             let draw = graph.raster_draw(
                 draw.vertices,
                 draw.indices,
