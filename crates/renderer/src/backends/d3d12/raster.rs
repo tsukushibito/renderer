@@ -23,6 +23,7 @@ pub(super) struct RasterPipeline {
     pub(super) signature: NativeObject<ID3D12RootSignature>,
     pub(super) managed: ManagedRasterProgram,
     pub(super) depth: bool,
+    clear: bool,
 }
 // SAFETY: Native pipeline/signature interfaces are free-threaded. Their immutable
 // descriptors are never modified; the containing FramePool retains the Device.
@@ -163,13 +164,38 @@ fn signature(
 
 impl RasterPipeline {
     pub(super) fn matches(&self, managed: &ManagedRasterProgram, depth: bool) -> bool {
-        self.depth == depth && self.managed.native_id() == managed.native_id()
+        !self.clear && self.depth == depth && self.managed.native_id() == managed.native_id()
     }
 
     pub(super) fn new(
         owner: &DeviceOwner,
         managed: &ManagedRasterProgram,
         depth: bool,
+    ) -> Result<Self, D3D12RuntimeError> {
+        Self::new_inner(owner, managed, depth, false)
+    }
+
+    /// Prepares an untextured fullscreen clear program. Depth writes replace
+    /// existing values regardless of their prior contents; color writes use the
+    /// same unblended attachment output as ordinary mesh drawing.
+    pub(super) fn clear(
+        owner: &DeviceOwner,
+        managed: &ManagedRasterProgram,
+        depth: bool,
+    ) -> Result<Self, D3D12RuntimeError> {
+        if managed.is_textured() {
+            return Err(D3D12RuntimeError::invalid(
+                "fullscreen clear requires an untextured Raster program",
+            ));
+        }
+        Self::new_inner(owner, managed, depth, true)
+    }
+
+    fn new_inner(
+        owner: &DeviceOwner,
+        managed: &ManagedRasterProgram,
+        depth: bool,
+        clear: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
         if owner.info.shader_model < D3D_SHADER_MODEL_6_0 as u32 {
@@ -288,7 +314,11 @@ impl RasterPipeline {
                 } else {
                     D3D12_DEPTH_WRITE_MASK_ZERO
                 },
-                DepthFunc: D3D12_COMPARISON_FUNC_LESS,
+                DepthFunc: if clear {
+                    D3D12_COMPARISON_FUNC_ALWAYS
+                } else {
+                    D3D12_COMPARISON_FUNC_LESS
+                },
                 StencilEnable: false.into(),
                 StencilReadMask: u8::MAX,
                 StencilWriteMask: u8::MAX,
@@ -330,6 +360,7 @@ impl RasterPipeline {
             signature,
             managed: *managed,
             depth,
+            clear,
         })
     }
 }
@@ -375,6 +406,16 @@ mod tests {
                 }
                 drop(pipeline);
             }
+        }
+        for (program, depth) in [
+            (ManagedRasterProgram::mesh(), false),
+            (ManagedRasterProgram::mesh_hdr(), false),
+            (depth_only, true),
+        ] {
+            let pipeline = RasterPipeline::clear(&owner, &program, depth)
+                .expect("reviewed fullscreen color/depth clear program");
+            assert!(!pipeline.matches(&program, depth));
+            drop(pipeline);
         }
         drop(owner);
         let report = monitor.snapshot();
