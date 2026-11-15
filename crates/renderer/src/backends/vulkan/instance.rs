@@ -527,6 +527,8 @@ impl VulkanInstance {
         if validation == ValidationMode::Required {
             create_info = create_info.push_next(&mut layer_settings);
         }
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: All names and pNext data remain live for the call. The Arc
         // allocation behind user_data remains live through vkDestroyInstance.
         // No surface, Device, queue, or other instance child exists at this stage.
@@ -577,6 +579,8 @@ impl VulkanInstance {
                 operation: "vkCreateDebugUtilsMessengerEXT",
                 result,
             })?;
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
             // SAFETY: The extension and its functions were checked, callback state
             // belongs to the live guard, and the resulting messenger is owned once.
             let messenger = unsafe {
@@ -603,11 +607,15 @@ impl Drop for VulkanInstance {
     fn drop(&mut self) {
         #[cfg(feature = "vulkan-diagnostics")]
         if let (Some(debug_utils), Some(messenger)) = (&self.debug_utils, self.messenger.take()) {
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
             // SAFETY: We exclusively own this live messenger and Instance; no
             // concurrent API calls exist. A containing Device owner has already
             // destroyed its Device before dropping this value. The callback Arc lives.
             unsafe { debug_utils.destroy_debug_utils_messenger(messenger, None) };
         }
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         // SAFETY: All children are destroyed, Instance is uniquely owned, Entry
         // and the pNext callback's user_data remain live until this call returns.
         unsafe { self.instance.destroy_instance(None) };

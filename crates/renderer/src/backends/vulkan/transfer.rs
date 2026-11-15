@@ -330,6 +330,8 @@ impl NativeTransfer {
             fence: vk::Fence::null(),
         };
         let device = &native.owner.device;
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: This independent pool belongs to the selected Device/family,
         // and this owner exclusively synchronizes all of its host operations.
         native.pool = unsafe {
@@ -341,6 +343,8 @@ impl NativeTransfer {
             )
         }
         .map_err(|result| native_error(device, "vkCreateCommandPool", result))?;
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Live, uniquely owned pool; ash manages the output storage.
         native.command = unsafe {
             device.raw().allocate_command_buffers(
@@ -351,6 +355,8 @@ impl NativeTransfer {
             )
         }
         .map_err(|result| native_error(device, "vkAllocateCommandBuffers", result))?[0];
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Independent unsignaled Fence, immediately retained by owner.
         native.fence = unsafe {
             device
@@ -420,6 +426,8 @@ impl NativeTransfer {
     /// Called only after this slot is unsubmitted or its Fence actually retired.
     fn reset(&self) -> Result<(), TransferError> {
         let device = &self.owner.device;
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::Reset, 1);
         // SAFETY: The enclosing lease is uniquely owned and no command from
         // this pool is pending. Reset before payload resources can be released.
         unsafe {
@@ -428,6 +436,8 @@ impl NativeTransfer {
                 .reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty())
         }
         .map_err(|result| native_error(device, "vkResetCommandPool", result))?;
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::Reset, 1);
         // SAFETY: The same retirement proof excludes a pending Fence operation.
         // An unsubmitted unsignaled Fence can also be reset before reuse.
         unsafe { device.raw().reset_fences(&[self.fence]) }
@@ -442,9 +452,19 @@ impl Drop for NativeTransfer {
         // Unresolved pending owners leak the whole resource chain instead.
         unsafe {
             if self.fence != vk::Fence::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
                 self.owner.device.raw().destroy_fence(self.fence, None);
             }
             if self.pool != vk::CommandPool::null() {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1 + u64::from(self.command != vk::CommandBuffer::null()),
+                );
                 self.owner
                     .device
                     .raw()

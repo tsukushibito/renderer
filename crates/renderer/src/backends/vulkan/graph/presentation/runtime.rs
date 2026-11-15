@@ -48,6 +48,7 @@ impl VulkanRuntime {
             retired,
             slots,
             programs: Vec::with_capacity(2),
+            prepared_format: None,
             pending,
             desired: (size.width, size.height),
             dirty: true,

@@ -23,10 +23,13 @@ impl TransferPayload for GraphWork {
         &self.owner
     }
     fn bytes(&self) -> u64 {
-        self.uploads
-            .iter()
+        self.data
+            .as_ref()
+            .into_iter()
+            .flat_map(|data| data.uploads.iter())
             .chain(
-                self.readbacks
+                self.result
+                    .readbacks
                     .iter()
                     .filter_map(|(_, range)| range.as_ref()),
             )
@@ -55,14 +58,18 @@ impl TransferPayload for GraphWork {
                 #[cfg(feature = "vulkan-diagnostics")]
                 device.debug_utils().cmd_begin_debug_utils_label(
                     command,
-                    &vk::DebugUtilsLabelEXT::default().label_name(&pass.name),
+                    &vk::DebugUtilsLabelEXT::default().label_name(
+                        // SAFETY: Preparation appended one NUL after checking
+                        // the copied label has no interior NUL; backing is held.
+                        CStr::from_bytes_with_nul_unchecked(&self.labels[pass.name.clone()]),
+                    ),
                 );
                 if !pass.buffers.is_empty() || !pass.images.is_empty() {
                     device.raw().cmd_pipeline_barrier2(
                         command,
                         &vk::DependencyInfo::default()
-                            .buffer_memory_barriers(&pass.buffers)
-                            .image_memory_barriers(&pass.images),
+                            .buffer_memory_barriers(&self.buffers[pass.buffers.clone()])
+                            .image_memory_barriers(&self.images[pass.images.clone()]),
                     );
                 }
                 match &pass.operation {
@@ -95,7 +102,10 @@ impl TransferPayload for GraphWork {
                             .size(*size)],
                     ),
                     PreparedOperation::ReadbackBuffer { src, offset, size } => {
-                        let range = self.readbacks[pass.staging.unwrap()].1.as_ref().unwrap();
+                        let range = self.result.readbacks[pass.staging.unwrap()]
+                            .1
+                            .as_ref()
+                            .unwrap();
                         device.raw().cmd_copy_buffer(
                             command,
                             self.resource(*src).buffer().handle,
@@ -137,7 +147,10 @@ impl TransferPayload for GraphWork {
                         );
                     }
                     PreparedOperation::ReadbackImage { src } => {
-                        let range = self.readbacks[pass.staging.unwrap()].1.as_ref().unwrap();
+                        let range = self.result.readbacks[pass.staging.unwrap()]
+                            .1
+                            .as_ref()
+                            .unwrap();
                         let image = self.resource(*src).image();
                         device.raw().cmd_copy_image_to_buffer(
                             command,
@@ -192,14 +205,19 @@ impl TransferPayload for GraphWork {
                         clear_depth,
                     } => self.programs.as_ref().unwrap().record_raster_batch(
                         command,
-                        draws.iter().map(|draw| {
-                            (
-                                self.resource(draw.vertices).buffer().handle,
-                                self.resource(draw.indices).buffer().handle,
-                                draw.index_count,
-                                &draw.parameters,
-                            )
-                        }),
+                        self.plan
+                            .as_ref()
+                            .unwrap()
+                            .raster_draws(draws)
+                            .iter()
+                            .map(|draw| {
+                                (
+                                    self.resource(draw.vertices).buffer().handle,
+                                    self.resource(draw.indices).buffer().handle,
+                                    draw.index_count,
+                                    &draw.parameters,
+                                )
+                            }),
                         self.resource(*color).image(),
                         self.resource(*depth).image(),
                         *clear_color,
@@ -232,7 +250,7 @@ impl TransferPayload for GraphWork {
                 device.debug_utils().cmd_end_debug_utils_label(command);
             }
         }
-        if !self.readbacks.is_empty() {
+        if !self.result.readbacks.is_empty() {
             // SAFETY: Only retained copy-written readback ranges are host-read.
             // CPU access additionally requires successful Fence wait/invalidate.
             unsafe {
@@ -252,10 +270,15 @@ impl TransferPayload for GraphWork {
 
     fn submitted(&mut self) {
         // No allocation, logging or application callbacks at this commit point.
-        for (index, physical) in self.physical.iter().enumerate() {
-            if let Some(physical) = physical {
-                physical.lock().scheduled = self.final_states[index].take().unwrap();
-            }
+        let data = &mut **self.data.as_mut().unwrap();
+        for index in 0..data.physical.len() {
+            let Some(physical) = &data.physical[index] else {
+                continue;
+            };
+            std::mem::swap(
+                &mut physical.lock().scheduled,
+                data.final_states[index].as_mut().unwrap(),
+            );
         }
     }
 
@@ -269,17 +292,16 @@ impl TransferPayload for GraphWork {
             // a later completion already observed by another submission.
             state.completed_serial = state.completed_serial.max(self.serial);
         }
-        for (_, range) in &mut self.readbacks {
+        for (_, range) in &mut self.result.readbacks {
             // SAFETY: Caller obtained actual completion of this whole payload.
             unsafe {
                 range.as_mut().unwrap().establish_contents();
             }
         }
-        self.passes.clear();
-        self.uploads.clear();
-        self.physical.clear();
         self.bindings.take();
         self.programs.take();
+        self.plan.take();
+        self.data.take();
     }
 
     fn retired(&mut self) {
