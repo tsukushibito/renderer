@@ -136,6 +136,11 @@ bufferは問題のbyte範囲、画像はmip・layer・aspectを返す。内部�
 構造化contextの追加により、旧`GraphError { message }`という直接構築はconstructorへ移行する。
 これは今回の公開API変更であり、既存literalとの互換層は追加しない。
 通常の容量不足はstaticなmessageを持ち、名前の複製やcontext用のheap確保を行わない。
+`GraphError::capacity()`は確保なしの`GraphCapacityError`を返し、`GraphCapacityKind`で
+11個のGraph容量、Graph slot、import範囲とそのslotを区別する。`limit`は設定上限、
+`required`は判明した必要数であり、解析が個数を報告しない場合や演算overflowでは`None`となる。
+slot不足なら既存consumerの返却、metadata不足なら明示準備境界で該当容量の見直しを選べる。
+予約自体の失敗でも同じ種別を返すため、上限を増やせば必ず確保できる保証ではない。
 不正入力の詳細診断はこの通常backpressure経路と区別して計測する。
 
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
@@ -210,9 +215,16 @@ import／exportしたbufferは後のGraphでindexに使えるため、元の入�
 
 ## 論理的な依存と実行順
 
-解析は同じslotのresource/pass/access/初期化範囲/明示依存をsliceとして借用する。
+解析は同じslotのresource/pass/access/初期化範囲と明示依存arenaを借用する。
 入力sliceとworkspace/outputは互いに重ならないfieldへ分けて借用し、
 完成した`CompiledGraph`はslotをpinする。呼出し元のframe借用や自己参照を残さない。
+
+明示依存は予約済みarenaへ追記し、各passのhead/tailとnodeのnext indexで挿入順に辿る。
+`depends_on`は対象passの依存数Dに比例する重複照合の後、O(1)で追加する。
+後続passのoffsetや既存依存の配列を動かさず、疎な依存chainを二乗時間で構築しない。
+満杯でも既存辺の再追加は成功し、新しい辺の容量不足では既存辺を変更しない。
+高fan-inの一つのpassへ多数追加する場合の重複照合費用は残る。代わりにnodeのnextと
+passのhead/tailを保持する分、旧flat配列より予約metadataが増える。
 
 read/exportのproducerは最終的な依存集合へ直接追加し、readごとの一時集合を作って取り込み直さない。
 途中に未初期化の穴があれば解析全体を失敗にし、追加済みprefixの依存を含む不完全な計画を公開しない。
@@ -229,16 +241,27 @@ nativeのstage・access・layoutは、残った実際の操作から具体化す
 reader履歴はindexで参照する不変のarenaへ保持し、区間の分割では履歴を共有する。
 writeで複数区間のreaderを辿る際も共有tailを重複して走査しない。履歴はcompileごとにresetし、
 arenaの予約領域は再利用する。長い連鎖の破棄で再帰する所有構造にはしない。
-区間・依存・隣接表・ready heapも予約済み配列を使う。区間配列の挿入・削除はO(S)であり、
-旧BTreeの更新費用と異なるため、確保ゼロだけをCPU時間の改善根拠にしない。
-複雑な重複範囲で触る区間数や必要な依存自体が
-増える費用は残るため、すべての入力に線形時間を保証するものではない。
+内容とhazardの区間はそれぞれ、resourceごとのrootを持つ予約済みAVL node arenaへ保持する。
+リンクはindexで、削除枠はfree listへ戻す。回転・分割・置換で無関係なresourceや配列の
+後続全体を動かさず、offsetの追加順に依存した二乗時間を避ける。通常frameのheap node確保・解放はない。
+区間数S、対象区間数Kに対し検索と連続読取はO(log S + K)、複数nodeの置換はO((K + 1) log S)となる。
+単一区間内の置換は既存nodeを再利用し、容量不足は必要な残存区間数を先に確認してから拒否する。
+reader履歴の共有と非再帰の破棄、producer/culling後の再計算は維持する。
+
+単純な整列配列に比べ、nodeのリンク・height・rootと木の更新費用が増える。
+旧配列に有利な昇順入力では遅くなる場合もあり、全入力での高速化を主張しない。
+全access境界を先に分割する代案は、後のdeadな境界まで初期区間数に含め、
+広いwriteを繰り返す入力の走査量とpeak容量を増やすため採用しなかった。
+動的な区間数と準備容量の意味を保つ方法を選び、昇順・降順・固定seedの順序と広いreadで比較する。
+隣接表・ready heapも予約済み領域を使うが、必要な区間数・依存数自体が増える費用は残る。
 開発構成では全宣言の循環を確認し、通常の実行順は残ったパスだけで順序依存を組み直す。
 除去された途中のwriter／readerが、必要なパス同士の順序を消さないためである。
 
 解析専用の`declare_pass`もsafe入力の保証境界であり、owner・範囲・用途を先に検査してから競合を拒否する。
 共有の競合検査は宣言順で最初の衝突pairを選び、read/readや無関係な資源の総当たりをしない。
 Aアクセスに対してO(A log A)の処理とO(A)の予約済みscratchを使い、全readならO(A)でsortを省略する。
+構築境界と追加検証は同じhelperへ不変なaccess iteratorを渡し、判定algorithmを二重保持しない。
+単純な総当たりの参照モデルは試験内で使い、宣言順の診断とread/read許容を独立に照合する。
 private builderが保証した入力のcompile再点検は`development-validation`へ分離する。
 producer・初期化・culling・live hazard／topological計画・最終内容の確定は製品でも実行する。
 

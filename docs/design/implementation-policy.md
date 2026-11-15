@@ -368,8 +368,9 @@ private asset pinを`release_idle`により返し、`collect_retired_meshes`が�
 通常のsnapshot/Graph/plan入力領域を再利用する契約を区別する。
 
 CPUのallocation、reallocation、deallocationは、それぞれcaptureから結果返却までの連続区間で確認する。
-optional dump/ログの費用やnative作成・破棄は別に記録する。区間表を予約済み配列へ変更したため
-挿入・削除はO(S)であり、確保ゼロだけでCPU時間の改善を主張しない。
+optional dump/ログの費用やnative作成・破棄は別に記録する。
+論理Graphの区間は予約済みAVL node arena、nativeのCPU provenance等は予約済み配列を使う。
+木のmetadataと更新、配列の挿入・削除の費用は残るため、確保ゼロだけでCPU時間の改善を主張しない。
 
 ## 5. RHIを抽出する進め方
 

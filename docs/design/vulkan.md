@@ -405,9 +405,12 @@ cancel、受理済み予定状態、実Fence退役、最終解放は既存fixtur
 
 ## 投入・完了・異常時の保持
 
-同じqueueで前のread-only layout遷移が既にwriterを可視化した後、write/layout変更がなく、
-stage/accessが完全に同じ次のreadにはwriter→reader barrierを重複記録しない。
-最後のwriter自体は保持し、異なるread scope、後続writeとlayout変更では既存の依存を使う。
+同じqueueでwriterをreadへ可視化した後、write/layout変更がなく、直近に確立したreadの
+stage/access pairが完全に同じならwriter→reader barrierを重複記録しない。bufferと画像の両方へ適用する。
+このexact pairを最後のwriterと累積reader scopeから分け、Snapshotごとに16 byte追加する。
+writeでpairを失効し、異なるreadでは必要なwriter依存を設けてpairを置換する。
+後続write/layout変更は累積readerとwriterを使い、pair一致だけでWAR/WAWを省略しない。
+presentationも同じ更新を使い、layout不変の再presentで過去readerのscopeを失わない。
 累積maskから任意のstage/accessの組合せの可視性を推論しない。一般Programへの拡張時は再検証する。
 根拠は[`vkCmdPipelineBarrier2`の同一queueの後続命令への第2scope](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdPipelineBarrier2.html)である。
 
@@ -457,6 +460,12 @@ Graphの配列上限とwork/result/export枠、import範囲snapshot、CPU proven
 `ResourceClass`はbackend非依存のbuffer/image descriptorと同時保持数であり、登録済み入力とは別に
 記録・GPU・exportが保持し得る未登録instance数を含める。変更には既存のframe/result/metadata/range tokenの返却が必要である。
 入力やdraw/pass構成は準備済み上限内で毎frame変更でき、固定planの再生を条件にしない。
+
+workのresource-indexed配列とSnapshot backingは上限全体を事前準備するが、通常のsubmit、
+完了観測、返却時のresetとprovenance mask copyは当該Graphの宣言resource prefixだけを辿る。
+このprefix長は最初のlease取得前に設定し、途中失敗・取消でも取得済み参照と状態を全て返す。
+次のGraphが小さくても前回のprefixは返却時にreset済みで、再び大きいGraphを作ったときに旧状態を復活させない。
+準備時の容量と常駐量は減らさず、予約上限だけに比例する通常frameの走査を除去する。
 
 通常Graphは同じ`ResourceDesc`で登録解除済み・leaseなし・世代を更新可能なentryだけを再利用し、
 一致がなければ容量不足を返す。native作成・置換・待機を暗黙に行わない。
