@@ -173,14 +173,23 @@ fn validate_program(
     }
 }
 
+fn raster_format(program: crate::program::ManagedRasterProgram) -> vk::Format {
+    match program.color_outputs().first() {
+        Some(crate::program::ImageFormat::Rgba8Unorm) => vk::Format::R8G8B8A8_UNORM,
+        Some(crate::program::ImageFormat::Rgba16Float) => vk::Format::R16G16B16A16_SFLOAT,
+        _ => vk::Format::UNDEFINED,
+    }
+}
+
 /// One immutable program owns its complete native dependency chain. Null fields
 /// permit immediate ownership and cleanup of partially initialized programs.
-pub(super) struct Program {
+pub(in crate::backends::vulkan) struct Program {
     owner: Arc<MemoryOwner>,
     pub(super) set_layout: vk::DescriptorSetLayout,
     pub(super) layout: vk::PipelineLayout,
     pub(super) pipeline: vk::Pipeline,
-    pub(super) sampler: vk::Sampler,
+    pub(in crate::backends::vulkan) sampler: vk::Sampler,
+    pub(super) raster_layouts: [vk::DescriptorSetLayout; 2],
 }
 
 impl Program {
@@ -204,8 +213,165 @@ impl Program {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
+            raster_layouts: [vk::DescriptorSetLayout::null(); 2],
         };
         result.initialize(kind)?;
+        Ok(result)
+    }
+
+    /// Explicit preparation for a reviewed Raster variant. Native handles are
+    /// owned immediately, including partial layout/pipeline failures.
+    pub(super) fn new_raster(
+        owner: Arc<MemoryOwner>,
+        managed: crate::program::ManagedRasterProgram,
+        depth: bool,
+    ) -> Result<Self, RuntimeError> {
+        let limits = owner.device.limits();
+        if limits.max_push_constants_size < managed.parameter_size()
+            || limits.max_vertex_input_attributes < 2
+            || limits.max_vertex_input_bindings < 1
+            || limits.max_vertex_input_binding_stride < managed.vertex_stride()
+            || limits.max_vertex_input_attribute_offset < 12
+            || (!managed.color_outputs().is_empty() && limits.max_color_attachments < 1)
+            || (managed.is_textured()
+                && (limits.max_bound_descriptor_sets < 2
+                    || limits.max_per_stage_descriptor_uniform_buffers < 1
+                    || limits.max_descriptor_set_uniform_buffers < 1
+                    || limits.max_uniform_buffer_range < 16
+                    || limits.max_per_stage_descriptor_sampled_images < 1
+                    || limits.max_descriptor_set_sampled_images < 1
+                    || limits.max_per_stage_descriptor_samplers < 1
+                    || limits.max_descriptor_set_samplers < 1
+                    || limits.max_per_stage_resources < 2))
+        {
+            return Err(RuntimeError::unsupported(
+                "Device does not support reviewed Raster ABI",
+            ));
+        }
+        for (format, features, buffer) in [
+            (
+                vk::Format::R32G32B32_SFLOAT,
+                vk::FormatFeatureFlags::VERTEX_BUFFER,
+                true,
+            ),
+            (
+                vk::Format::R32G32B32A32_SFLOAT,
+                vk::FormatFeatureFlags::VERTEX_BUFFER,
+                true,
+            ),
+            (
+                raster_format(managed),
+                vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+                false,
+            ),
+            (
+                if depth {
+                    vk::Format::D32_SFLOAT
+                } else {
+                    vk::Format::UNDEFINED
+                },
+                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+                false,
+            ),
+        ] {
+            if format == vk::Format::UNDEFINED {
+                continue;
+            }
+            // SAFETY: Retained Device owns this adapter and Instance.
+            let properties = unsafe {
+                owner
+                    .device
+                    .instance_raw()
+                    .get_physical_device_format_properties(owner.device.physical_device(), format)
+            };
+            let available = if buffer {
+                properties.buffer_features
+            } else {
+                properties.optimal_tiling_features
+            };
+            if !available.contains(features) {
+                return Err(RuntimeError::unsupported(
+                    "Device lacks reviewed Raster format support",
+                ));
+            }
+        }
+        let mut result = Self {
+            owner,
+            set_layout: vk::DescriptorSetLayout::null(),
+            layout: vk::PipelineLayout::null(),
+            pipeline: vk::Pipeline::null(),
+            sampler: vk::Sampler::null(),
+            raster_layouts: [vk::DescriptorSetLayout::null(); 2],
+        };
+        if managed.is_textured() {
+            let uniform = [vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX)];
+            let sampled = [
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(0)
+                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(1)
+                    .descriptor_type(vk::DescriptorType::SAMPLER)
+                    .descriptor_count(1)
+                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            ];
+            for (slot, bindings) in result
+                .raster_layouts
+                .iter_mut()
+                .zip([&uniform[..], &sampled[..]])
+            {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+                // SAFETY: Reviewed descriptors; each successful handle is owned before the next call.
+                *slot = unsafe {
+                    result.owner.device.raw().create_descriptor_set_layout(
+                        &vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings),
+                        None,
+                    )
+                }
+                .map_err(|r| native(&result.owner, "vkCreateDescriptorSetLayout(Raster)", r))?;
+            }
+            // SAFETY: Fixed nearest/clamp sampler requires no optional feature; result owns the handle.
+            result.sampler = unsafe {
+                result.owner.device.create_sampler(
+                    &vk::SamplerCreateInfo::default()
+                        .mag_filter(vk::Filter::NEAREST)
+                        .min_filter(vk::Filter::NEAREST)
+                        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
+                        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+                        .max_lod(0.0),
+                )?
+            };
+        }
+        let pushes = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            offset: 0,
+            size: managed.parameter_size(),
+        }];
+        let mut info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&pushes);
+        if managed.is_textured() {
+            info = info.set_layouts(&result.raster_layouts);
+        }
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+        // SAFETY: All layouts are retained by result; ABI limits checked above.
+        result.layout = unsafe {
+            result
+                .owner
+                .device
+                .raw()
+                .create_pipeline_layout(&info, None)
+        }
+        .map_err(|r| native(&result.owner, "vkCreatePipelineLayout(Raster)", r))?;
+        result.pipeline = result.graphics_pipeline(Some((managed, depth)))?;
         Ok(result)
     }
 
@@ -282,8 +448,10 @@ impl Program {
         }
         self.pipeline = match kind {
             ProgramKind::Compute => self.compute_pipeline()?,
-            ProgramKind::Raster => self.graphics_pipeline(true)?,
-            ProgramKind::Composite => self.graphics_pipeline(false)?,
+            ProgramKind::Raster => {
+                self.graphics_pipeline(Some((crate::program::ManagedRasterProgram::mesh(), true)))?
+            }
+            ProgramKind::Composite => self.graphics_pipeline(None)?,
         };
         #[cfg(feature = "vulkan-diagnostics")]
         {
@@ -348,23 +516,33 @@ impl Program {
             }
         }
     }
-    fn graphics_pipeline(&self, mesh: bool) -> Result<vk::Pipeline, RuntimeError> {
+    fn graphics_pipeline(
+        &self,
+        raster_program: Option<(crate::program::ManagedRasterProgram, bool)>,
+    ) -> Result<vk::Pipeline, RuntimeError> {
+        let mesh = raster_program.is_some();
+        let depth_enabled = raster_program.is_some_and(|(_, depth)| depth);
+        let depth_only = raster_program.is_some_and(|(program, _)| program.is_depth_only());
         let vertex = ShaderModule::new(
             Arc::clone(&self.owner),
-            if mesh {
-                crate::program::ManagedRasterProgram::mesh().vertex_spirv()
+            if let Some((program, _)) = raster_program {
+                program.vertex_spirv()
             } else {
                 include_bytes!("../../../../shaders/composite.vert.spv")
             },
         )?;
-        let fragment = ShaderModule::new(
-            Arc::clone(&self.owner),
-            if mesh {
-                crate::program::ManagedRasterProgram::mesh().fragment_spirv()
-            } else {
-                include_bytes!("../../../../shaders/composite.frag.spv")
-            },
-        )?;
+        let fragment = if depth_only {
+            None
+        } else {
+            Some(ShaderModule::new(
+                Arc::clone(&self.owner),
+                if let Some((program, _)) = raster_program {
+                    program.fragment_spirv()
+                } else {
+                    include_bytes!("../../../../shaders/composite.frag.spv")
+                },
+            )?)
+        };
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
@@ -372,9 +550,18 @@ impl Program {
                 .name(c"main"),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment.module)
+                .module(
+                    fragment
+                        .as_ref()
+                        .map_or(vk::ShaderModule::null(), |module| module.module),
+                )
                 .name(c"main"),
         ];
+        let stages = if depth_only {
+            &stages[..1]
+        } else {
+            &stages[..]
+        };
         let bindings = [vk::VertexInputBindingDescription {
             binding: 0,
             stride: 28,
@@ -413,25 +600,32 @@ impl Program {
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
         let depth = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(mesh)
-            .depth_write_enable(mesh)
+            .depth_test_enable(depth_enabled)
+            .depth_write_enable(depth_enabled)
             .depth_compare_op(vk::CompareOp::LESS);
         let color_attachments = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
-        let blend =
-            vk::PipelineColorBlendStateCreateInfo::default().attachments(&color_attachments);
+        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(if depth_only {
+            &[]
+        } else {
+            &color_attachments
+        });
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let formats = [vk::Format::R8G8B8A8_UNORM];
+        let formats = [
+            raster_program.map_or(vk::Format::R8G8B8A8_UNORM, |(program, _)| {
+                raster_format(program)
+            }),
+        ];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&formats)
-            .depth_attachment_format(if mesh {
+            .color_attachment_formats(if depth_only { &[] } else { &formats })
+            .depth_attachment_format(if depth_enabled {
                 vk::Format::D32_SFLOAT
             } else {
                 vk::Format::UNDEFINED
             });
         let infos = [vk::GraphicsPipelineCreateInfo::default()
-            .stages(&stages)
+            .stages(stages)
             .vertex_input_state(&vertex_input)
             .input_assembly_state(&assembly)
             .viewport_state(&viewport)
@@ -506,6 +700,16 @@ impl Drop for Program {
                     1,
                 );
                 device.destroy_descriptor_set_layout(self.set_layout, None);
+            }
+            for layout in self.raster_layouts {
+                if layout != vk::DescriptorSetLayout::null() {
+                    #[cfg(feature = "memory-profiling")]
+                    crate::measurement::record_native(
+                        crate::measurement::NativeEvent::ObjectDestroy,
+                        1,
+                    );
+                    device.destroy_descriptor_set_layout(layout, None);
+                }
             }
             self.owner.device.destroy_sampler(self.sampler);
         }

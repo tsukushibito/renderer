@@ -122,20 +122,25 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 )
                 .unwrap();
             if mode == 1 {
-                graph.export_image(depth).unwrap();
+                graph.readback_image("depth-only contents", depth).unwrap();
             } else {
-                graph.export_image(color).unwrap();
+                graph.readback_image("color-only contents", color).unwrap();
             }
-            assert_eq!(
-                runtime
-                    .submit(&graph.compile().unwrap())
-                    .err()
-                    .unwrap()
-                    .kind(),
-                RuntimeErrorKind::Unsupported
-            );
+            let plan = graph.compile().unwrap();
+            if mode == 2 {
+                assert_eq!(
+                    runtime.submit(&plan).err().unwrap().kind(),
+                    RuntimeErrorKind::Unsupported
+                );
+            } else {
+                let mut pending = runtime.submit(&plan).unwrap();
+                assert!(pending.wait(WAIT).unwrap().is_some());
+            }
         }
 
+        runtime
+            .prepare_raster_programs(&[crate::program::ManagedRasterProgram::mesh()])
+            .unwrap();
         let mut unsupported = Graph::test_new();
         let (vertices, indices) = add_mesh(&mut unsupported, false);
         let color = unsupported.image("color-only Raster", color_desc).unwrap();
@@ -163,14 +168,8 @@ fn vulkan_attachment_subresource_native_boundaries() {
         unsupported
             .readback_image("live CPU-only shape", color)
             .unwrap();
-        assert_eq!(
-            runtime
-                .submit(&unsupported.compile().unwrap())
-                .err()
-                .unwrap()
-                .kind(),
-            RuntimeErrorKind::Unsupported
-        );
+        let mut color_only = runtime.submit(&unsupported.compile().unwrap()).unwrap();
+        assert!(color_only.wait(WAIT).unwrap().is_some());
 
         let mut loaded = Graph::test_new();
         let (vertices, indices) = add_mesh(&mut loaded, false);
@@ -313,6 +312,161 @@ fn vulkan_attachment_subresource_native_boundaries() {
         assert_eq!(report.requested, super::super::ValidationMode::Disabled);
         assert_eq!(report.core_validation, None);
         assert_eq!(report.synchronization_validation, None);
+    }
+}
+
+#[test]
+#[ignore = "real GPU Raster descriptor exhaustion/recovery and HDR content; run strict and shipping separately"]
+fn vulkan_owned_raster_descriptor_capacity_recovery() {
+    use crate::graph::{Binding, BindingResource};
+    use crate::program::{ManagedRasterProgram, SamplerDescriptor};
+    fn plan(draw_count: usize) -> (CompiledGraph, PassHandle) {
+        let mut graph = Graph::test_new();
+        let vertices = graph.buffer("vertices", BufferDesc { size: 112 }).unwrap();
+        let indices = graph.buffer("indices", BufferDesc { size: 24 }).unwrap();
+        let uniform = graph.buffer("uniform", BufferDesc { size: 16 }).unwrap();
+        let source = graph.image("source", ImageDesc::rgba8(2, 2)).unwrap();
+        let target = graph
+            .image("target", ImageDesc::rgba16_float(4, 4))
+            .unwrap();
+        let vertices_data: Vec<u8> = [[-1.0f32, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]]
+            .into_iter()
+            .flat_map(|[x, y]| [x, y, 0.5, 1.0, 1.0, 1.0, 1.0])
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        let indices_data: Vec<u8> = [0u32, 1, 2, 2, 1, 3]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        graph
+            .upload_buffer("vertices", vertices, 0, &vertices_data)
+            .unwrap();
+        graph
+            .upload_buffer("indices", indices, 0, &indices_data)
+            .unwrap();
+        graph.upload_buffer("offset", uniform, 0, &[0; 16]).unwrap();
+        graph
+            .upload_image("red", source, &[255, 0, 0, 255].repeat(4))
+            .unwrap();
+        let bindings = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    offset: 0,
+                    size: 16,
+                },
+            },
+            Binding {
+                group: 1,
+                binding: 0,
+                resource: BindingResource::ImageView(graph.image_view(source, 0, 0).unwrap()),
+            },
+            Binding {
+                group: 1,
+                binding: 1,
+                resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+            },
+        ];
+        let draws = [RasterDraw {
+            bindings: &bindings,
+            vertices,
+            indices,
+            index_count: 6,
+            parameters: RasterParameters::default(),
+        }; 2];
+        graph
+            .raster(
+                "HDR",
+                &ManagedRasterProgram::textured_mesh_hdr(),
+                &draws[..draw_count],
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(target, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        let read = graph.readback_image("HDR result", target).unwrap();
+        (graph.compile().unwrap(), read)
+    }
+    let strict = cfg!(feature = "vulkan-diagnostics");
+    let mut runtime = VulkanRuntime::new_with_validation(
+        RuntimeConfig {
+            max_shader_bindings: 1,
+            ..RuntimeConfig::default()
+        },
+        if strict {
+            super::super::ValidationMode::Required
+        } else {
+            super::super::ValidationMode::Disabled
+        },
+    )
+    .unwrap();
+    assert_ne!(
+        runtime.owner.device.device_type(),
+        vk::PhysicalDeviceType::CPU
+    );
+    let monitor = runtime.validation_monitor();
+    runtime
+        .prepare_working_set(
+            FrameCapacity::default(),
+            &[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 112 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 24 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 16 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(2, 2),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba16_float(4, 4),
+                    count: 1,
+                },
+            ],
+        )
+        .unwrap();
+    runtime
+        .prepare_raster_programs(&[ManagedRasterProgram::textured_mesh_hdr()])
+        .unwrap();
+    let (too_many, _) = plan(2);
+    assert_eq!(
+        runtime.submit(&too_many).err().unwrap().kind(),
+        RuntimeErrorKind::CapacityExhausted
+    );
+    let stats = runtime.stats();
+    assert_eq!(
+        (stats.upload_live_ranges, stats.readback_live_ranges),
+        (0, 0)
+    );
+    let (valid, read) = plan(1);
+    let mut pending = runtime.submit(&valid).unwrap();
+    let mut result = pending.wait(WAIT).unwrap().expect("actual completion");
+    assert_eq!(
+        result.test_readback(read).unwrap(),
+        [0u8, 60, 0, 0, 0, 0, 0, 60].repeat(16)
+    );
+    drop(result);
+    drop(pending);
+    drop(runtime);
+    let report = monitor.report();
+    assert!(report.is_clean(), "teardown diagnostics: {report:?}");
+    if strict {
+        assert_eq!(report.core_validation, Some(true));
+        assert_eq!(report.synchronization_validation, Some(true));
     }
 }
 

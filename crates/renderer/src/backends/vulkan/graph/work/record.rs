@@ -10,7 +10,6 @@ use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
 use super::super::super::transfer::{TransferError, TransferPayload};
 use super::{ComputeTransform, GraphWork, PreparedOperation};
-use crate::graph::{LoadAction, StoreOp};
 
 impl TransferPayload for GraphWork {
     fn validate(&self) -> Result<(), TransferError> {
@@ -172,51 +171,64 @@ impl TransferPayload for GraphWork {
                         )
                     }
                     PreparedOperation::Raster {
+                        program,
                         draws,
-                        color,
+                        colors,
                         depth,
-                        color_ops,
-                        depth_ops,
-                        clear_color,
-                        clear_depth,
-                    } => self.programs.as_ref().unwrap().record_rasters(
-                        command,
-                        self.plan
-                            .as_ref()
-                            .unwrap()
-                            .raster_draws(draws)
-                            .iter()
-                            .map(|draw| {
-                                (
-                                    self.resource(draw.vertices).buffer().handle,
-                                    self.resource(draw.indices).buffer().handle,
-                                    draw.index_count,
-                                    &draw.parameters,
-                                )
-                            }),
-                        self.resource(*color).image(),
-                        self.resource(*depth).image(),
-                        load(color_ops.load),
-                        store(color_ops.store),
-                        *clear_color,
-                        load(depth_ops.load),
-                        store(depth_ops.store),
-                        *clear_depth,
-                    ),
-                    PreparedOperation::ClearAttachments {
-                        color,
-                        depth,
-                        clear_color,
-                        clear_depth,
                     } => {
-                        record_clear_attachments(
-                            device.raw(),
+                        let plan = self.plan.as_ref().unwrap();
+                        let programs = self.programs.as_ref().unwrap();
+                        let native_program = programs
+                            .raster_program(*program, depth.is_some())
+                            .expect("prepared Raster Program");
+                        let color = plan.raster_attachments(colors).first().map(|attachment| {
+                            (
+                                self.resource(attachment.view.image().index).image(),
+                                attachment,
+                            )
+                        });
+                        let depth = depth.map(|index| {
+                            let attachment = plan.raster_attachment(index);
+                            (
+                                self.resource(attachment.view.image().index).image(),
+                                attachment,
+                            )
+                        });
+                        programs.record_rasters(
                             command,
-                            self.resource(*color).image(),
-                            self.resource(*depth).image(),
-                            *clear_color,
-                            *clear_depth,
+                            native_program,
+                            plan.raster_draws(draws)
+                                .iter()
+                                .zip(&self.raster_descriptors[pass.raster_descriptors.clone()])
+                                .map(|(draw, &sets)| {
+                                    (
+                                        self.resource(draw.vertices).buffer().handle,
+                                        self.resource(draw.indices).buffer().handle,
+                                        draw.index_count,
+                                        &draw.parameters,
+                                        sets,
+                                    )
+                                }),
+                            color,
+                            depth,
                         );
+                    }
+                    PreparedOperation::ClearAttachments { colors, depth } => {
+                        let plan = self.plan.as_ref().unwrap();
+                        let color = plan.raster_attachments(colors).first().map(|attachment| {
+                            (
+                                self.resource(attachment.view.image().index).image(),
+                                attachment,
+                            )
+                        });
+                        let depth = depth.map(|index| {
+                            let attachment = plan.raster_attachment(index);
+                            (
+                                self.resource(attachment.view.image().index).image(),
+                                attachment,
+                            )
+                        });
+                        record_clear_attachments(device.raw(), command, color, depth);
                     }
                     PreparedOperation::Composite { dst, .. } => {
                         self.programs.as_ref().unwrap().record_composite(
@@ -297,48 +309,37 @@ impl TransferPayload for GraphWork {
 unsafe fn record_clear_attachments(
     device: &ash::Device,
     command: vk::CommandBuffer,
-    color: &DeviceImage,
-    depth: &DeviceImage,
-    clear_color: [f32; 4],
-    clear_depth: f32,
+    color: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
+    depth: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
 ) {
-    let colors = [vk::RenderingAttachmentInfo::default()
-        .image_view(color.view)
-        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .clear_value(vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: clear_color,
-            },
-        })];
-    let depth = vk::RenderingAttachmentInfo::default()
-        .image_view(depth.view)
-        .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-        .load_op(vk::AttachmentLoadOp::CLEAR)
-        .store_op(vk::AttachmentStoreOp::STORE)
-        .clear_value(vk::ClearValue {
-            depth_stencil: vk::ClearDepthStencilValue {
-                depth: clear_depth,
-                stencil: 0,
-            },
-        });
-    let info = vk::RenderingInfo::default()
+    let extent = color
+        .map(|(image, _)| image.extent)
+        .or_else(|| depth.map(|(image, _)| image.extent))
+        .unwrap();
+    let colors = [color.map_or_else(
+        vk::RenderingAttachmentInfo::default,
+        |(image, attachment)| super::super::super::program::attachment_info(image, attachment),
+    )];
+    let depth_attachment = depth.map(|(image, attachment)| {
+        super::super::super::program::attachment_info(image, attachment)
+    });
+    let mut info = vk::RenderingInfo::default()
         .render_area(vk::Rect2D {
             offset: vk::Offset2D::default(),
-            extent: color.extent,
+            extent,
         })
         .layer_count(1)
-        .color_attachments(&colors)
-        .depth_attachment(&depth);
-    // SAFETY: The caller establishes the documented layout, dependency,
-    // lifetime and recording conditions; no pipeline is needed for load clears.
+        .color_attachments(if color.is_some() { &colors } else { &[] });
+    if let Some(attachment) = &depth_attachment {
+        info = info.depth_attachment(attachment);
+    }
+    // SAFETY: Caller's retained images are transitioned and loads validated;
+    // no shader commands/barriers execute inside this attachment-only scope.
     unsafe {
         device.cmd_begin_rendering(command, &info);
         device.cmd_end_rendering(command);
     }
 }
-
 fn layers(image: &DeviceImage) -> vk::ImageSubresourceLayers {
     vk::ImageSubresourceLayers::default()
         .aspect_mask(image.aspect)
@@ -353,17 +354,4 @@ fn image_copy(image: &DeviceImage, offset: u64) -> vk::BufferImageCopy {
             height: image.extent.height,
             depth: 1,
         })
-}
-fn load(value: LoadAction) -> vk::AttachmentLoadOp {
-    match value {
-        LoadAction::Clear => vk::AttachmentLoadOp::CLEAR,
-        LoadAction::Load => vk::AttachmentLoadOp::LOAD,
-        LoadAction::Discard => vk::AttachmentLoadOp::DONT_CARE,
-    }
-}
-fn store(value: StoreOp) -> vk::AttachmentStoreOp {
-    match value {
-        StoreOp::Store => vk::AttachmentStoreOp::STORE,
-        StoreOp::Discard => vk::AttachmentStoreOp::DONT_CARE,
-    }
 }

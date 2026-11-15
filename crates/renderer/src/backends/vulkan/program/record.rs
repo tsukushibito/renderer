@@ -64,57 +64,46 @@ impl ShaderPrograms {
     pub(in crate::backends::vulkan) unsafe fn record_rasters<'a>(
         &self,
         command: vk::CommandBuffer,
-        draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,
-        color: &DeviceImage,
-        depth: &DeviceImage,
-        color_load: vk::AttachmentLoadOp,
-        color_store: vk::AttachmentStoreOp,
-        clear_color: [f32; 4],
-        depth_load: vk::AttachmentLoadOp,
-        depth_store: vk::AttachmentStoreOp,
-        clear_depth: f32,
+        program: &super::Program,
+        draws: impl IntoIterator<
+            Item = (
+                vk::Buffer,
+                vk::Buffer,
+                u32,
+                &'a RasterParameters,
+                [vk::DescriptorSet; 2],
+            ),
+        >,
+        color: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
+        depth: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
     ) {
-        let color_attachments = [vk::RenderingAttachmentInfo::default()
-            .image_view(color.view)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(color_load)
-            .store_op(color_store)
-            .clear_value(vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: clear_color,
-                },
-            })];
-        let depth_attachment = vk::RenderingAttachmentInfo::default()
-            .image_view(depth.view)
-            .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
-            .load_op(depth_load)
-            .store_op(depth_store)
-            .clear_value(vk::ClearValue {
-                depth_stencil: vk::ClearDepthStencilValue {
-                    depth: clear_depth,
-                    stencil: 0,
-                },
-            });
-        let info = vk::RenderingInfo::default()
+        let extent = color
+            .map(|(image, _)| image.extent)
+            .or_else(|| depth.map(|(image, _)| image.extent))
+            .unwrap();
+        let colors = [color.map_or_else(
+            vk::RenderingAttachmentInfo::default,
+            |(image, attachment)| attachment_info(image, attachment),
+        )];
+        let depth_attachment = depth.map(|(image, attachment)| attachment_info(image, attachment));
+        let mut info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D::default(),
-                extent: color.extent,
+                extent,
             })
             .layer_count(1)
-            .color_attachments(&color_attachments)
-            .depth_attachment(&depth_attachment);
+            .color_attachments(if color.is_some() { &colors } else { &[] });
+        if let Some(attachment) = &depth_attachment {
+            info = info.depth_attachment(attachment);
+        }
         let device = self.owner.device.raw();
-        // SAFETY: Caller establishes outside-scope dependencies and valid
-        // resource/range/binding/layout state. No barrier occurs in this scope.
+        // SAFETY: Caller retains compatible pipeline, descriptors, attachments
+        // and buffers through actual retirement; all dependencies precede scope.
         unsafe {
             device.cmd_begin_rendering(command, &info);
-            device.cmd_bind_pipeline(
-                command,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.raster().pipeline,
-            );
-            self.viewport(command, color.extent);
-            for (vertices, indices, index_count, parameters) in draws {
+            device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, program.pipeline);
+            self.viewport(command, extent);
+            for (vertices, indices, index_count, parameters, sets) in draws {
                 let mut bytes = [0_u8; 80];
                 for (value, output) in parameters
                     .transform
@@ -127,11 +116,21 @@ impl ShaderPrograms {
                 }
                 device.cmd_push_constants(
                     command,
-                    self.raster().layout,
+                    program.layout,
                     vk::ShaderStageFlags::VERTEX,
                     0,
                     &bytes,
                 );
+                if sets[0] != vk::DescriptorSet::null() {
+                    device.cmd_bind_descriptor_sets(
+                        command,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        program.layout,
+                        0,
+                        &sets,
+                        &[],
+                    );
+                }
                 device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
                 device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
                 device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
@@ -213,4 +212,43 @@ impl ShaderPrograms {
                 .cmd_set_scissor(command, 0, &[scissor]);
         }
     }
+}
+
+/// Native interpretation of one owned, validated attachment.
+pub(in crate::backends::vulkan) fn attachment_info<'a>(
+    image: &DeviceImage,
+    attachment: &crate::graph::AttachmentOperand,
+) -> vk::RenderingAttachmentInfo<'a> {
+    use crate::graph::{LoadAction, StoreOp};
+    let depth = image.aspect == vk::ImageAspectFlags::DEPTH;
+    vk::RenderingAttachmentInfo::default()
+        .image_view(image.view)
+        .image_layout(if depth {
+            vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL
+        } else {
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL
+        })
+        .load_op(match attachment.ops.load {
+            LoadAction::Load => vk::AttachmentLoadOp::LOAD,
+            LoadAction::Clear => vk::AttachmentLoadOp::CLEAR,
+            LoadAction::Discard => vk::AttachmentLoadOp::DONT_CARE,
+        })
+        .store_op(match attachment.ops.store {
+            StoreOp::Store => vk::AttachmentStoreOp::STORE,
+            StoreOp::Discard => vk::AttachmentStoreOp::DONT_CARE,
+        })
+        .clear_value(if depth {
+            vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: attachment.clear[0],
+                    stencil: 0,
+                },
+            }
+        } else {
+            vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: attachment.clear,
+                },
+            }
+        })
 }

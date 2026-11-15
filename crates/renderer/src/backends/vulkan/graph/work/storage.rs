@@ -20,6 +20,7 @@ pub(in crate::backends::vulkan::graph) struct WorkData {
     pub(in crate::backends::vulkan::graph) needed: Vec<bool>,
     pub(in crate::backends::vulkan::graph) final_states: Vec<Option<Snapshot>>,
     pub(super) passes: Vec<PreparedPass>,
+    pub(super) raster_descriptors: Vec<[vk::DescriptorSet; 2]>,
     #[cfg(feature = "vulkan-diagnostics")]
     pub(super) labels: Vec<u8>,
     pub(super) buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
@@ -79,6 +80,7 @@ impl WorkData {
                     .ok_or_else(|| RuntimeError::capacity("debug label capacity overflow"))?,
             )?,
             passes: reserved(limit.graph.passes)?,
+            raster_descriptors: reserved(limit.graph.draws)?,
             buffers: reserved(limit.graph.accesses)?,
             images: reserved(limit.graph.accesses)?,
             uploads: reserved(limit.graph.passes)?,
@@ -103,6 +105,7 @@ impl WorkData {
         #[cfg(feature = "vulkan-diagnostics")]
         self.labels.clear();
         self.passes.clear();
+        self.raster_descriptors.clear();
         self.buffers.clear();
         self.images.clear();
         self.uploads.clear();

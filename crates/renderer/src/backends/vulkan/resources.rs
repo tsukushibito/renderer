@@ -38,7 +38,8 @@ fn create_buffer<T>(
             vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::VERTEX_BUFFER
-                | vk::BufferUsageFlags::INDEX_BUFFER,
+                | vk::BufferUsageFlags::INDEX_BUFFER
+                | vk::BufferUsageFlags::UNIFORM_BUFFER,
         )
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
     let allocation = vk_mem::AllocationCreateInfo {
@@ -175,8 +176,18 @@ impl DeviceImage {
                     | vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 vk::ImageAspectFlags::COLOR,
             ),
+            vk::Format::R16G16B16A16_SFLOAT => (
+                vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                vk::ImageAspectFlags::COLOR,
+            ),
             vk::Format::D32_SFLOAT => (
-                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED,
                 vk::ImageAspectFlags::DEPTH,
             ),
             _ => {
@@ -394,6 +405,7 @@ mod tests {
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::VERTEX_BUFFER
                     | vk::BufferUsageFlags::INDEX_BUFFER
+                    | vk::BufferUsageFlags::UNIFORM_BUFFER
             );
             assert_eq!(allocation.usage, vk_mem::MemoryUsage::AutoPreferDevice);
             assert!(allocation.flags.is_empty());
