@@ -135,6 +135,11 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     renderer.unload_mesh(old);
     assets.delete_mesh(old).unwrap();
     assert_eq!(renderer.mesh_cache_stats().prepared_retained_meshes, 1);
+    let old_vertices = renderer.residents[&MeshVersionKey::new(old, 1)]
+        .buffers
+        .as_ref()
+        .unwrap()
+        .vertices;
 
     let before = Snapshot::now();
     drop((pinned, old_snapshot));
@@ -163,8 +168,10 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
         ))
     ));
     assert_eq!(renderer.mesh_cache_stats().resident_meshes, 2);
+    renderer.runtime().refresh_buffer(old_vertices).unwrap();
     assert_eq!(renderer.collect_retired_meshes(Some(&assets)).unwrap(), 1);
     assert_eq!(renderer.mesh_cache_stats().resident_meshes, 1);
+    assert!(renderer.runtime().refresh_buffer(old_vertices).is_err());
     assert_eq!(assets.collect_retired_meshes(), 1);
     drop((renderer, current_snapshot, snapshots, assets));
     let report = monitor.report();
