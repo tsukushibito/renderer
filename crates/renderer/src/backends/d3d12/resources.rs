@@ -1,4 +1,4 @@
-//! Committed buffer/image ownership and scoped CPU mapping, independent of Graph plans.
+//! Committed buffer/image ownership and scoped or persistent CPU mapping.
 //! Managed owners and queue work retain the Device and release native resources first.
 
 use std::{ffi::c_void, ptr};
@@ -48,7 +48,10 @@ impl Drop for DeviceBuffer {
             }
         }
         #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
+        {
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
+            crate::measurement::record_native(crate::measurement::NativeEvent::MemoryFree, 1);
+        }
     }
 }
 
@@ -108,7 +111,10 @@ impl DeviceBuffer {
         // node masks and fixed heap states satisfy committed buffer contracts.
         // The owned output slot is empty and remains local on failure.
         #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
+        {
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
+            crate::measurement::record_native(crate::measurement::NativeEvent::MemoryAllocate, 1);
+        }
         // SAFETY: The checked creation request and owned output satisfy the
         // committed resource contract described above; instrumentation is inert.
         unsafe {
@@ -230,6 +236,7 @@ impl DeviceBuffer {
     /// initialized logical bytes and `size <= isize::MAX`. Actual successful GPU
     /// completion must be established, with no concurrent CPU/GPU access. The
     /// native owner must remain retained through this access and buffer release.
+    #[cfg(test)]
     pub(super) unsafe fn read(
         &self,
         owner: &DeviceOwner,
@@ -316,7 +323,10 @@ pub(super) struct DeviceImage {
 impl Drop for DeviceImage {
     fn drop(&mut self) {
         #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
+        {
+            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
+            crate::measurement::record_native(crate::measurement::NativeEvent::MemoryFree, 1);
+        }
     }
 }
 impl DeviceImage {
@@ -348,7 +358,16 @@ impl DeviceImage {
         // contents yet. The owned COM output is released on every failure path.
         unsafe {
             #[cfg(feature = "memory-profiling")]
-            crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
+            {
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ResourceCreate,
+                    1,
+                );
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::MemoryAllocate,
+                    1,
+                );
+            }
             owner.raw.CreateCommittedResource(
                 &properties,
                 D3D12_HEAP_FLAG_NONE,

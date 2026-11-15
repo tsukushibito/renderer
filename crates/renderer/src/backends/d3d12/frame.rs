@@ -459,10 +459,10 @@ pub(super) struct FrameWork {
 }
 impl FrameWork {
     pub(super) fn owner(&self) -> &Arc<DeviceOwner> {
-        &self.pool.owner
+        self.pool.owner()
     }
     pub(super) fn capacity(&self) -> D3D12FrameCapacity {
-        self.pool.capacity
+        self.pool.capacity()
     }
     pub(super) fn slot(&self) -> &ExecutionSlot {
         self.slot.as_ref().unwrap()
@@ -675,6 +675,7 @@ impl FrameResult {
     pub(super) fn graph(&self) -> u64 {
         self.graph
     }
+    #[cfg(all(test, feature = "d3d12-diagnostics"))]
     pub(super) fn has_owner(&self) -> bool {
         self.pool.is_some()
     }

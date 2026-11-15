@@ -146,6 +146,7 @@ fn run_shared_graph(strict_validation: bool) {
         } else {
             D3D12ValidationMode::Disabled
         },
+        ..Default::default()
     })
     .expect("D3D12 hardware and requested validation are required");
     let vulkan_info = vulkan.device_info();
@@ -185,8 +186,9 @@ fn run_shared_graph(strict_validation: bool) {
     let mut all_bytes_match = true;
     let mut compared_bytes = 0;
     for readback in expected {
-        let actual_d3d12 = d3d12_result
-            .readback(readback.pass)
+        let mut actual_d3d12 = vec![0; readback.bytes.len()];
+        d3d12_result
+            .readback_into(readback.pass, &mut actual_d3d12)
             .expect("completed D3D12 readback");
         let actual_vulkan = vulkan_result
             .readback(readback.pass)
