@@ -435,7 +435,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             !cached
                 .graph
                 .ordered_pass_names()
-                .contains(&"mesh vertex upload")
+                .any(|name| name == "mesh vertex upload")
         );
         let mut pending = engine.submit_frame(cached).unwrap();
         engine.release_output(&mut pending).unwrap();

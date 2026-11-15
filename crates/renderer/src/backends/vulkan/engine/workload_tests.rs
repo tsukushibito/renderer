@@ -363,7 +363,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         .upload_image(
             "initialize caller output",
             caller_image,
-            caller_bytes.clone(),
+            &caller_bytes,
         )
         .unwrap();
     graph.export_image(caller_image).unwrap();
