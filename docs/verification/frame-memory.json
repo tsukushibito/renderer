@@ -3789,5 +3789,413 @@
       "long duration/native OOM or loss",
       "time performance and physical VRAM improvements"
     ]
+  },
+  "graph_review_cleanup": {
+    "issue": "renderer-0dm",
+    "source_checkpoint": "9f65b97584152bb79d53603261589a7287344efd",
+    "baseline": "e10d730",
+    "worker_commits": [
+      "5138ac3edb3393eb2e43eeb0cf9c93c355e00210",
+      "819be547c91069a4b2af022e0a72556367bce652"
+    ],
+    "source_sha256": {
+      "crates/renderer/src/graph/builder.rs": "15d7679e26af1344160359ad19e6594fa05a5f8ca08667b7f2c434e559f10fd3",
+      "crates/renderer/src/graph/storage.rs": "a0a2218c79d41874c1f37e83b5cb2ababe71ac1683429b4aedf170ebce46ff2e",
+      "crates/renderer/src/backends/d3d12/graph.rs": "f422c092a1ab776fa314619f76c979c388f214bf2a34c61383b7331a572f852f",
+      "crates/renderer/tests/raster_api.rs": "6f089fb232741c68f2e8a2148ffcbf7d8a5a5e3dca864157f914bb69b81689d6"
+    },
+    "environment": {
+      "date": "2026-11-15",
+      "platform": "Windows x64",
+      "rust": "1.99.0",
+      "cargo_incremental": "0"
+    },
+    "raster_aggregation": {
+      "previous_work": "Clear and scan every declared resource per nonempty Raster",
+      "current_work": "O(D + U log U) for D draws and U used vertex/index resources; clear previous U at next Raster or slot reset",
+      "extra_prepared_bytes_per_slot": "resource capacity * sizeof(usize), 2048 bytes for default capacity on x64",
+      "guarantees": [
+        "both vertex/index purposes",
+        "max index byte range",
+        "resource-order accesses",
+        "failure retry and slot reset",
+        "bounded capacity and no ordinary heap growth"
+      ],
+      "wall_time_measured": false
+    },
+    "d3d12_cleanup": {
+      "removed": "unused legacy buffer Plan::new/use_buffer, Upload/Copy/Readback variants and recording, scratch retention",
+      "retained": "managed/storage shader fixtures, real first-buffer creation failure/cause/owner cleanup",
+      "production_bounded_path_changed": false
+    },
+    "cpu": {
+      "default": {
+        "passed_including_rustdoc": 134,
+        "rustdoc": 1
+      },
+      "shipping": {
+        "passed_including_rustdoc": 271,
+        "rustdoc": 1
+      },
+      "dev": {
+        "passed_including_rustdoc": 284,
+        "rustdoc": 1
+      }
+    },
+    "format_and_all_target_clippy": "passed; presentation,d3d12,memory-profiling with and without development-validation,graph-diagnostics",
+    "cpu_memory": {
+      "shipping": {
+        "measured_frames_per_window": 24,
+        "windows": [
+          "total",
+          "owned_compute",
+          "attachment_subresources",
+          "owned_raster",
+          "shader_bindings"
+        ],
+        "every_window_rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "every_window_rust_requested_bytes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "overflowed": false,
+        "coverage": "CPU build/compile/return; no native execution in these rows",
+        "mode": "require_zero",
+        "startup_positive_control": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+            651,
+            0,
+            0,
+            2
+          ],
+          "rust_requested_bytes": [
+            638232,
+            0,
+            0,
+            96
+          ],
+          "vma_host_calls_alloc_realloc_free": [
+            0,
+            0,
+            0
+          ],
+          "vma_host_requested_bytes": [
+            0,
+            0,
+            0
+          ]
+        },
+        "shutdown_outside_normal_frames": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+            0,
+            0,
+            0,
+            649
+          ],
+          "rust_requested_bytes": [
+            0,
+            0,
+            0,
+            638136
+          ],
+          "vma_host_calls_alloc_realloc_free": [
+            0,
+            0,
+            0
+          ],
+          "vma_host_requested_bytes": [
+            0,
+            0,
+            0
+          ]
+        }
+      },
+      "dev": {
+        "measured_frames_per_window": 24,
+        "windows": [
+          "total",
+          "owned_compute",
+          "attachment_subresources",
+          "owned_raster",
+          "shader_bindings"
+        ],
+        "every_window_rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "every_window_rust_requested_bytes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "overflowed": false,
+        "coverage": "CPU build/compile/return; no native execution in these rows",
+        "mode": "baseline",
+        "startup_positive_control": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+            711,
+            0,
+            0,
+            2
+          ],
+          "rust_requested_bytes": [
+            784344,
+            0,
+            0,
+            96
+          ],
+          "vma_host_calls_alloc_realloc_free": [
+            0,
+            0,
+            0
+          ],
+          "vma_host_requested_bytes": [
+            0,
+            0,
+            0
+          ]
+        },
+        "shutdown_outside_normal_frames": {
+          "native_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "overflowed": false,
+          "rust_calls_alloc_alloc_zeroed_realloc_dealloc": [
+            0,
+            0,
+            0,
+            709
+          ],
+          "rust_requested_bytes": [
+            0,
+            0,
+            0,
+            784248
+          ],
+          "vma_host_calls_alloc_realloc_free": [
+            0,
+            0,
+            0
+          ],
+          "vma_host_requested_bytes": [
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "gpu_test_counts": {
+      "vulkan-batch-strict": 3,
+      "vulkan-boundary-shipping": 1,
+      "d3d12-managed-strict": 2,
+      "d3d12-managed-shipping": 2,
+      "d3d12-lifetime-strict": 1,
+      "two-api-strict": 1,
+      "two-api-shipping": 1
+    },
+    "two_api_common_buffer_graph": {
+      "strict": {
+        "configuration": {
+          "d3d12_diagnostics_compiled": true,
+          "debug_assertions": false,
+          "development_validation": true,
+          "external_validation_injection_checked": false,
+          "graph_diagnostics_compiled": true,
+          "strict_validation": true,
+          "vulkan_diagnostics_compiled": true
+        },
+        "adapter": {
+          "d3d12_driver_version": 9007199255790656,
+          "d3d12_name": "NVIDIA GeForce RTX 3060",
+          "device_id": 9351,
+          "luid": [
+            116,
+            226,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "same_adapter": true,
+          "vendor_id": 4318,
+          "vulkan_device_type": "DISCRETE_GPU",
+          "vulkan_driver_info": "610.88",
+          "vulkan_driver_name": "NVIDIA",
+          "vulkan_driver_version_raw": 2559967232,
+          "vulkan_name": "NVIDIA GeForce RTX 3060"
+        },
+        "pass_count": 10,
+        "compared_bytes_per_backend": 308,
+        "all_bytes_match": true,
+        "validation": {
+          "d3d12": {
+            "callback_failures": 0,
+            "corruption": 0,
+            "debug_layer_enabled": true,
+            "dropped_messages": 0,
+            "errors": 0,
+            "gbv_shader_exercised": false,
+            "gpu_based_validation_enabled": true,
+            "teardown_checked": true,
+            "warnings": 0
+          },
+          "vulkan": {
+            "callback_failures": 0,
+            "core_validation": true,
+            "dropped_layer_statuses": 0,
+            "dropped_problems": 0,
+            "errors": 0,
+            "native_owners_dropped": true,
+            "requested": "Required",
+            "synchronization_validation": true,
+            "teardown_checked": true,
+            "warnings": 0
+          }
+        }
+      },
+      "shipping": {
+        "configuration": {
+          "d3d12_diagnostics_compiled": false,
+          "debug_assertions": false,
+          "development_validation": false,
+          "external_validation_injection_checked": false,
+          "graph_diagnostics_compiled": false,
+          "strict_validation": false,
+          "vulkan_diagnostics_compiled": false
+        },
+        "adapter": {
+          "d3d12_driver_version": 9007199255790656,
+          "d3d12_name": "NVIDIA GeForce RTX 3060",
+          "device_id": 9351,
+          "luid": [
+            116,
+            226,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "same_adapter": true,
+          "vendor_id": 4318,
+          "vulkan_device_type": "DISCRETE_GPU",
+          "vulkan_driver_info": "610.88",
+          "vulkan_driver_name": "NVIDIA",
+          "vulkan_driver_version_raw": 2559967232,
+          "vulkan_name": "NVIDIA GeForce RTX 3060"
+        },
+        "pass_count": 10,
+        "compared_bytes_per_backend": 308,
+        "all_bytes_match": true,
+        "validation": {
+          "d3d12": {
+            "callback_failures": 0,
+            "corruption": 0,
+            "debug_layer_enabled": false,
+            "dropped_messages": 0,
+            "errors": 0,
+            "gbv_shader_exercised": false,
+            "gpu_based_validation_enabled": false,
+            "teardown_checked": false,
+            "warnings": 0
+          },
+          "vulkan": {
+            "callback_failures": 0,
+            "core_validation": null,
+            "dropped_layer_statuses": 0,
+            "dropped_problems": 0,
+            "errors": 0,
+            "native_owners_dropped": true,
+            "requested": "Disabled",
+            "synchronization_validation": null,
+            "teardown_checked": false,
+            "warnings": 0
+          }
+        }
+      }
+    },
+    "commands": [
+      "cargo test --locked -p renderer --no-default-features",
+      "cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12",
+      "cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics",
+      "cargo clippy --locked --workspace --all-targets --no-default-features --features presentation,d3d12,memory-profiling -- -D warnings",
+      "cargo clippy --locked --workspace --all-targets --no-default-features --features presentation,d3d12,memory-profiling,development-validation,graph-diagnostics -- -D warnings",
+      "cargo run --locked --release -p renderer --no-default-features --features memory-profiling --example frame_memory -- cpu",
+      "cargo run --locked --release -p renderer --no-default-features --features memory-profiling,development-validation,graph-diagnostics --example frame_memory -- cpu --baseline",
+      "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics vulkan_graph_batch_ -- --ignored --nocapture --test-threads=1",
+      "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics d3d12_managed_ -- --ignored --nocapture --test-threads=1",
+      "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics buffer_graph_lifetimes_partial_creation_and_pending_drop -- --ignored --nocapture --test-threads=1",
+      "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,d3d12 d3d12_managed_ -- --ignored --nocapture --test-threads=1",
+      "cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,d3d12 vulkan_attachment_subresource_native_boundaries -- --ignored --nocapture --test-threads=1",
+      "cargo test --locked --release -p renderer --test d3d12_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics m4_buffer_shared_graph_strict -- --exact --ignored --nocapture --test-threads=1",
+      "cargo test --locked --release -p renderer --test d3d12_graph --no-default-features --features vulkan,d3d12 m4_buffer_shared_graph_shipping -- --exact --ignored --nocapture --test-threads=1"
+    ],
+    "guidance": "Keep construction guarantees, actual native scopes and all-consumer lifetimes; no new policy exceptions",
+    "unexecuted": [
+      "CPU/GPU wall-time comparison",
+      "physical VRAM improvement",
+      "real native OOM/device loss",
+      "other GPU/driver",
+      "full WSI memory replay",
+      "unchanged shader/bindings regeneration"
+    ]
   }
 }

@@ -246,6 +246,30 @@ CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回�
 
 ## Graph・表示・descriptorの効率整理
 
+`renderer-0dm`の2.2レビュー修正は`9f65b97`で統合確認した。
+Rasterのvertex/index集約は使用resource列だけを初期化・sort・列挙し、各passでの全resource走査を除去した。
+同一bufferの両用途、最大index範囲、従来のaccess順を保ち、後半draw/attachment/access容量失敗後の
+別meshによる再試行と、pass間・slot再利用の回帰を確認した。追加準備領域はresource上限×usize、
+既定x64で2 KiB/slotである。密な入力のsort費用を含む実時間性能は未測定。
+D3D12は製品の`bounded`経路に重複する未使用のtest用buffer計画・記録を削除し、
+実buffer一つの作成後失敗fixtureと、管理下shaderのprivate実GPU受入を維持した。
+
+Windows x64 / Rust 1.99.0でCPU133件、`vulkan,d3d12`のrelease製品270件・
+追加検証/graph診断あり283件と各Rustdoc1件、fmt、全target Clippyの
+`presentation,d3d12,memory-profiling`の追加検証/graph診断有無が成功した。
+CPUの既存5計測窓は各24変動frameで、両構成のRust確保/ゼロ初期化確保/再確保/解放と要求byteが全0だった。
+追加検証ありは別baselineであり、CPU窓をnative実行のメモリ計測とは扱わない。
+
+RTX 3060 / driver 610.88でVulkan batchの順序/深度/Compute内容、後半不正index、
+共有Vertex/Indexの厳格3件、製品構成のattachment境界1件が成功した。
+D3D12は実buffer部分作成失敗/取消/pending寿命の厳格1件、保持した管理下shader fixtureの
+strict2件・製品2件が成功した。二API共通buffer Graphも別processのstrict/製品で各10pass・308 byte全一致。
+strictは最終native解放後まで警告/error・callback失敗ゼロ、製品は追加診断除外/native Requested Disabledを確認した。
+外部layer注入の不存在、実OOM/loss、別GPU/driver、時間性能・物理VRAM改善は未確認。
+同期・GPU/CPU寿命・容量/native失敗の保証とvalidation配置を維持し、新しい規約例外はない。
+shader/生成bindingsは無変更で再生成Verifyは実行していない。コマンド・counter・確認点は
+[機械可読記録](frame-memory.json)の`graph_review_cleanup`に記録した。
+
 `renderer-l3g`と、`renderer-6de` / `renderer-ygu` / `renderer-xqo` / `renderer-0g6` / `renderer-9nb` / `renderer-agu`。
 追加compile改善は`2b392d3`との比較で、統合実装は`d633021`。配列実装`1fbe51c`も同じharnessで再測定した。
 [生sample・public API/Engine harness・実行コマンド](source-review.json)の
