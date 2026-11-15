@@ -3,6 +3,14 @@
 use super::*;
 use std::sync::Arc;
 
+// Fixture preparation is separate from the normal-frame allocation harness.
+// Every caller retains the pool until its builder and plans have been released.
+fn prepared_graph(capacity: GraphCapacity) -> (GraphPool, Graph) {
+    let mut pool = GraphPool::new(capacity, 1).unwrap();
+    let graph = pool.begin().unwrap();
+    (pool, graph)
+}
+
 fn batch_draws(
     draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
 ) -> impl ExactSizeIterator<
@@ -19,7 +27,7 @@ fn batch_draws(
 #[test]
 fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
     let input: Arc<[u8]> = Arc::from([99, 1, 2, 3, 4, 5, 6, 7, 8, 88]);
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let buffer = graph
         .buffer("sliced destination", BufferDesc { size: 8 })
         .unwrap();
@@ -32,15 +40,18 @@ fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
     graph.export_buffer(buffer).unwrap();
     let plan = graph.compile().unwrap();
     for (pass, expected_source, expected_target) in [(first, 1..5, 0..4), (second, 5..9, 4..8)] {
-        let Operation::UploadBuffer { bytes, source, .. } = &plan.passes[pass.index].operation
+        let Operation::UploadBuffer {
+            data: UploadSource::Shared { bytes, source },
+            ..
+        } = &plan.passes[pass.index].operation
         else {
             panic!("live sliced upload must retain its source");
         };
         assert!(Arc::ptr_eq(bytes, &input));
         assert_eq!(*source, expected_source);
-        assert_eq!(plan.passes[pass.index].accesses[0].range, expected_target);
+        assert_eq!(plan.accesses(pass.index)[0].range, expected_target);
     }
-    let mut partial = Graph::new();
+    let (_partial_pool, mut partial) = prepared_graph(GraphCapacity::default());
     let target = partial.buffer("partial", BufferDesc { size: 8 }).unwrap();
     partial
         .upload_buffer_slice("tail only", target, 4, input, 1..5)
@@ -54,7 +65,7 @@ fn sliced_uploads_share_backing_and_initialize_only_selected_bytes() {
 #[test]
 fn invalid_upload_slices_preserve_builder_context_without_a_pass() {
     let input: Arc<[u8]> = vec![0; 16].into();
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let buffer = graph.buffer("destination", BufferDesc { size: 8 }).unwrap();
     for source in [Range { start: 8, end: 4 }, 13..17, 4..4, 0..12] {
         let error = graph
@@ -74,9 +85,17 @@ fn invalid_upload_slices_preserve_builder_context_without_a_pass() {
 
 #[test]
 fn many_exports_keep_declaration_order_and_indexed_membership() {
-    let mut graph = Graph::new();
+    const COUNT: usize = 4_096;
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity {
+        resources: COUNT + 1,
+        passes: COUNT,
+        accesses: COUNT,
+        name_bytes: 65_536,
+        segments: COUNT + 1,
+        ..GraphCapacity::default()
+    });
     let bytes: Arc<[u8]> = vec![1; 4].into();
-    let buffers = (0..4_096)
+    let buffers = (0..COUNT)
         .map(|_| {
             let buffer = graph.buffer("asset", BufferDesc { size: 4 }).unwrap();
             graph
@@ -109,7 +128,7 @@ fn many_exports_keep_declaration_order_and_indexed_membership() {
 }
 
 #[test]
-fn compilation_shares_live_uploads_and_releases_culled_payloads() {
+fn compilation_shares_live_uploads_and_recycles_payloads_after_all_plan_consumers() {
     let buffer_bytes: Arc<[u8]> = vec![1; 4].into();
     let image_bytes: Arc<[u8]> = vec![2; 4].into();
     let dead_buffer_bytes: Arc<[u8]> = vec![3; 4].into();
@@ -118,7 +137,7 @@ fn compilation_shares_live_uploads_and_releases_culled_payloads() {
     let image_lifetime = Arc::downgrade(&image_bytes);
     let dead_buffer_lifetime = Arc::downgrade(&dead_buffer_bytes);
     let dead_image_lifetime = Arc::downgrade(&dead_image_bytes);
-    let mut graph = Graph::new();
+    let (mut graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let buffer = graph.buffer("live buffer", BufferDesc { size: 4 }).unwrap();
     let image = graph.image("live image", ImageDesc::rgba8(1, 1)).unwrap();
     let dead_buffer = graph.buffer("dead buffer", BufferDesc { size: 4 }).unwrap();
@@ -148,22 +167,29 @@ fn compilation_shares_live_uploads_and_releases_culled_payloads() {
     graph.export_image(image).unwrap();
 
     let plan = graph.compile().unwrap();
-    let Operation::UploadBuffer { bytes, .. } = &plan.passes[buffer_upload.index].operation else {
+    let Operation::UploadBuffer {
+        data: UploadSource::Shared { bytes, .. },
+        ..
+    } = &plan.passes[buffer_upload.index].operation
+    else {
         panic!("live buffer upload must remain executable");
     };
     assert!(Arc::ptr_eq(bytes, &buffer_bytes));
-    let Operation::UploadImage { bytes, .. } = &plan.passes[image_upload.index].operation else {
+    let Operation::UploadImage {
+        data: UploadSource::Shared { bytes, .. },
+        ..
+    } = &plan.passes[image_upload.index].operation
+    else {
         panic!("live image upload must remain executable");
     };
     assert!(Arc::ptr_eq(bytes, &image_bytes));
-    assert!(matches!(
-        plan.passes[dead_buffer_upload.index].operation,
-        Operation::Culled
-    ));
-    assert!(matches!(
-        plan.passes[dead_image_upload.index].operation,
-        Operation::Culled
-    ));
+    assert_eq!(plan.pass_count(), 2);
+    assert!(!plan.order.contains(&dead_buffer_upload.index));
+    assert!(!plan.order.contains(&dead_image_upload.index));
+    assert_eq!(
+        plan.ordered_pass_names().collect::<Vec<_>>(),
+        ["live buffer upload", "live image upload"]
+    );
 
     drop((
         buffer_bytes,
@@ -171,27 +197,37 @@ fn compilation_shares_live_uploads_and_releases_culled_payloads() {
         dead_buffer_bytes,
         dead_image_bytes,
     ));
-    drop(graph);
     assert!(buffer_lifetime.upgrade().is_some());
     assert!(image_lifetime.upgrade().is_some());
-    assert!(dead_buffer_lifetime.upgrade().is_none());
-    assert!(dead_image_lifetime.upgrade().is_none());
+    let consumer = plan.clone();
+    assert_eq!(
+        graph_pool.begin().unwrap_err().kind(),
+        GraphErrorKind::CapacityExhausted
+    );
     drop(plan);
+    assert_eq!(
+        graph_pool.begin().unwrap_err().kind(),
+        GraphErrorKind::CapacityExhausted
+    );
+    assert!(buffer_lifetime.upgrade().is_some());
+    assert!(image_lifetime.upgrade().is_some());
+    drop(consumer);
+    // Culling changes execution; backing storage is reset only after all plan
+    // consumers finish. Source removal and this fixture reset are change work.
+    let _recycled = graph_pool.begin().unwrap();
     assert!(buffer_lifetime.upgrade().is_none());
     assert!(image_lifetime.upgrade().is_none());
+    assert!(dead_buffer_lifetime.upgrade().is_none());
+    assert!(dead_image_lifetime.upgrade().is_none());
 }
 
 #[test]
 fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let buffer = graph.buffer("bytes", BufferDesc { size: 16 }).unwrap();
     let image = graph.image("rgba", ImageDesc::rgba8(2, 2)).unwrap();
-    let mut other = Graph::new();
-    assert!(
-        other
-            .upload_buffer("foreign", buffer, 0, vec![1; 4])
-            .is_err()
-    );
+    let (_other_pool, mut other) = prepared_graph(GraphCapacity::default());
+    assert!(other.upload_buffer("foreign", buffer, 0, &[1; 4]).is_err());
     assert!(
         graph
             .upload_buffer(
@@ -201,7 +237,7 @@ fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {
                     index: 100
                 },
                 0,
-                vec![1; 4]
+                &[1; 4]
             )
             .is_err()
     );
@@ -214,7 +250,7 @@ fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {
                     index: image.index
                 },
                 0,
-                vec![1; 4]
+                &[1; 4]
             )
             .is_err()
     );
@@ -223,7 +259,7 @@ fn typed_handles_reject_foreign_undefined_and_wrong_kind_resources() {
 
 #[test]
 fn zero_extents_overflows_and_invalid_byte_ranges_are_rejected() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     assert!(graph.buffer("empty", BufferDesc { size: 0 }).is_err());
     assert!(graph.image("zero", ImageDesc::rgba8(0, 2)).is_err());
     assert!(
@@ -232,9 +268,9 @@ fn zero_extents_overflows_and_invalid_byte_ranges_are_rejected() {
             .is_err()
     );
     let b = graph.buffer("bytes", BufferDesc { size: 16 }).unwrap();
-    assert!(graph.upload_buffer("empty", b, 0, vec![]).is_err());
-    assert!(graph.upload_buffer("alignment", b, 1, vec![0; 4]).is_err());
-    assert!(graph.upload_buffer("past end", b, 16, vec![0]).is_err());
+    assert!(graph.upload_buffer("empty", b, 0, &[]).is_err());
+    assert!(graph.upload_buffer("alignment", b, 1, &[0; 4]).is_err());
+    assert!(graph.upload_buffer("past end", b, 16, &[0]).is_err());
     assert!(
         graph
             .copy_buffer("overflow", b, u64::MAX - 3, b, 0, 8)
@@ -245,7 +281,7 @@ fn zero_extents_overflows_and_invalid_byte_ranges_are_rejected() {
 
 #[test]
 fn repeated_imports_share_one_identity_and_reject_changed_snapshots() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let import = ImportBuffer {
         key: ResourceKey {
             owner: 4,
@@ -277,7 +313,7 @@ fn repeated_imports_share_one_identity_and_reject_changed_snapshots() {
 
 #[test]
 fn image_metadata_preserves_imports_and_rejects_invalid_local_handles() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let source = ImportImage {
         key: ResourceKey {
             owner: 7,
@@ -318,7 +354,7 @@ fn image_metadata_preserves_imports_and_rejects_invalid_local_handles() {
 
 #[test]
 fn only_supported_whole_image_subresources_are_accepted() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let image = graph.image("rgba", ImageDesc::rgba8(2, 2)).unwrap();
     for range in [
         AccessRange::Image {
@@ -343,7 +379,7 @@ fn only_supported_whole_image_subresources_are_accepted() {
                 .declare_pass(
                     "unsupported",
                     PassKind::Compute,
-                    vec![Access {
+                    &[Access {
                         resource: image.into(),
                         range,
                         kind: AccessKind::Write,
@@ -358,7 +394,7 @@ fn only_supported_whole_image_subresources_are_accepted() {
         .declare_pass(
             "whole",
             PassKind::Compute,
-            vec![Access {
+            &[Access {
                 resource: image.into(),
                 range: AccessRange::Image {
                     mip: 0,
@@ -376,7 +412,7 @@ fn only_supported_whole_image_subresources_are_accepted() {
 
 #[test]
 fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let earlier_resource = graph
         .buffer("earlier resource", BufferDesc { size: 16 })
         .unwrap();
@@ -405,7 +441,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
     ];
     let before = graph.passes.len();
     let error = graph
-        .declare_pass("conflicts", PassKind::Copy, accesses.clone(), false)
+        .declare_pass("conflicts", PassKind::Copy, &accesses, false)
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     assert_eq!(error.pass_name(), Some("conflicts"));
@@ -415,7 +451,7 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
 
     accesses.push(access(earlier_resource, 16..20, false));
     let error = graph
-        .declare_pass("invalid range first", PassKind::Copy, accesses, false)
+        .declare_pass("invalid range first", PassKind::Copy, &accesses, false)
         .unwrap_err();
     assert_eq!(error.resource(), Some(earlier_resource.into()));
     assert_eq!(error.range(), Some(&AccessRange::Buffer(16..20)));
@@ -425,7 +461,12 @@ fn declaration_conflicts_keep_first_pair_context_and_validate_inputs_first() {
 
 #[test]
 fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity {
+        // Include the already-published reader pass and the attempted pass so
+        // the latter reaches its access-conflict check before rollback.
+        accesses: 8_192 + 8_193,
+        ..GraphCapacity::default()
+    });
     let buffer = graph.buffer("source", BufferDesc { size: 64 }).unwrap();
     let mut accesses = vec![
         Access {
@@ -437,7 +478,7 @@ fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
         8_192
     ];
     graph
-        .declare_pass("many readers", PassKind::Copy, accesses.clone(), false)
+        .declare_pass("many readers", PassKind::Copy, &accesses, false)
         .unwrap();
     accesses.push(Access {
         resource: buffer.into(),
@@ -446,7 +487,7 @@ fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
         purpose: AccessPurpose::CopyDestination,
     });
     let error = graph
-        .declare_pass("reader and writer", PassKind::Copy, accesses, false)
+        .declare_pass("reader and writer", PassKind::Copy, &accesses, false)
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     assert_eq!(error.resource(), Some(buffer.into()));
@@ -455,16 +496,12 @@ fn declaration_allows_many_overlapping_readers_then_rejects_a_writer() {
 
 #[test]
 fn fixed_operations_check_binding_formats_extents_and_aliasing() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let a = graph.image("a", ImageDesc::rgba8(2, 2)).unwrap();
     let b = graph.image("b", ImageDesc::rgba8(3, 2)).unwrap();
     let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
-    assert!(graph.upload_image("short", a, vec![0; 15]).is_err());
-    assert!(
-        graph
-            .upload_image("depth bytes", depth, vec![0; 16])
-            .is_err()
-    );
+    assert!(graph.upload_image("short", a, &[0; 15]).is_err());
+    assert!(graph.upload_image("depth bytes", depth, &[0; 16]).is_err());
     assert!(
         graph
             .compute("alias", a, a, ComputeTransform::Invert)
@@ -481,7 +518,7 @@ fn fixed_operations_check_binding_formats_extents_and_aliasing() {
             .declare_pass(
                 "bad binding",
                 PassKind::Compute,
-                vec![Access {
+                &[Access {
                     resource: a.into(),
                     range: AccessRange::Image {
                         mip: 0,
@@ -501,10 +538,10 @@ fn mesh(graph: &mut Graph) -> (BufferHandle, BufferHandle, ImageHandle, ImageHan
     let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
     let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
     graph
-        .upload_buffer("upload vertices", vertices, 0, vec![0; 84])
+        .upload_buffer("upload vertices", vertices, 0, &[0; 84])
         .unwrap();
     graph
-        .upload_buffer("upload indices", indices, 0, vec![0; 12])
+        .upload_buffer("upload indices", indices, 0, &[0; 12])
         .unwrap();
     let color = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
     let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
@@ -522,7 +559,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
         (LoadOp::Discard, LoadOp::Clear(-0.1), false),
         (LoadOp::Load, LoadOp::Clear(1.1), false),
     ] {
-        let mut graph = Graph::new();
+        let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
         let (vertices, indices, color, depth) = mesh(&mut graph);
         let result = graph.raster(
             "attachment input",
@@ -555,7 +592,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
 
 #[test]
 fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (v, i, c, d) = mesh(&mut graph);
     graph
         .raster(
@@ -588,7 +625,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
             .contains("uninitialized")
     );
 
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (v, i, c, d) = mesh(&mut graph);
     graph
         .raster(
@@ -625,7 +662,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
 
 #[test]
 fn partial_raster_after_discard_does_not_claim_full_initialization() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (v, i, c, d) = mesh(&mut graph);
     graph
         .raster(
@@ -662,7 +699,7 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
 
 #[test]
 fn batch_requires_initialized_buffers_from_later_draws() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (vertices, indices, color, depth) = mesh(&mut graph);
     let missing = graph
         .buffer("later vertices", BufferDesc { size: 84 })
@@ -690,7 +727,7 @@ fn batch_requires_initialized_buffers_from_later_draws() {
 
 #[test]
 fn batch_same_buffer_can_supply_vertex_and_index_reads() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (vertices, _, color, depth) = mesh(&mut graph);
     graph
         .raster_batch(
@@ -717,7 +754,7 @@ fn batch_same_buffer_can_supply_vertex_and_index_reads() {
 
 #[test]
 fn batch_rejections_preserve_builder_context_without_partial_declarations() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (vertices, indices, color, depth) = mesh(&mut graph);
     let before = graph.passes.len();
     let error = graph
@@ -740,7 +777,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
     assert_eq!(error.resource_name(), Some("indices"));
     assert_eq!(graph.passes.len(), before);
 
-    let mut other = Graph::new();
+    let (_other_pool, mut other) = prepared_graph(GraphCapacity::default());
     let foreign = other
         .buffer("foreign vertices", BufferDesc { size: 84 })
         .unwrap();
@@ -790,7 +827,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
 
 #[test]
 fn public_raster_parameters_are_checked_before_creating_a_pass() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let (vertices, indices, color, depth) = mesh(&mut graph);
     let before = graph.passes.len();
     let mut transform = RasterParameters::default();
@@ -830,7 +867,7 @@ fn public_raster_parameters_are_checked_before_creating_a_pass() {
 
 #[test]
 fn import_identity_survives_interleaved_transients_and_failed_aliases() {
-    let mut graph = Graph::new();
+    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let sources = (0..64)
         .map(|index| ImportBuffer {
             key: ResourceKey {

@@ -1,10 +1,10 @@
 //! Lower owned engine input into ordinary, GPU-independent Graph operations.
 
-use std::{collections::BTreeMap, ops::Range};
+use std::ops::Range;
 
-use super::{FrameSnapshot, MeshData, MeshHandle};
+use super::{FrameSnapshot, MeshData, MeshHandle, SnapshotMesh};
 use crate::graph::{
-    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, ImageDesc, ImageHandle,
+    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, GraphPool, ImageDesc, ImageHandle,
     MeshUpload, PassHandle,
 };
 
@@ -41,7 +41,7 @@ impl MeshData {
     pub(crate) fn upload_graph_slice(
         &self,
         graph: &mut Graph,
-        name: impl Into<String>,
+        name: impl AsRef<str>,
         dst: BufferHandle,
         indices: bool,
         source: Range<usize>,
@@ -57,7 +57,7 @@ impl MeshData {
         } else {
             (&self.vertices, MeshUpload::Vertices)
         };
-        graph.upload_mesh_slice(name, dst, bytes, source, provenance)
+        graph.upload_mesh_slice(name.as_ref(), dst, bytes, source, provenance)
     }
 }
 
@@ -72,15 +72,30 @@ impl FrameSnapshot {
     /// validate handles, declared operation purposes and contents normally.
     pub fn build_graph(
         &self,
+        pool: &mut GraphPool,
         readback: bool,
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<FrameGraph, GraphError> {
-        let mut graph = Graph::new();
-        let mut meshes = BTreeMap::new();
-        for draw in &self.draws {
-            if meshes.contains_key(&draw.mesh) {
-                continue;
-            }
+        let mut graph = pool.begin()?;
+        let mut meshes = self
+            .meshes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        meshes.clear();
+        meshes.extend(
+            self.draws
+                .iter()
+                .enumerate()
+                .map(|(index, draw)| SnapshotMesh {
+                    mesh: draw.mesh,
+                    draw: index,
+                    buffers: None,
+                }),
+        );
+        meshes.sort_unstable_by_key(|entry| entry.mesh);
+        meshes.dedup_by_key(|entry| entry.mesh);
+        for entry in meshes.iter_mut() {
+            let draw = &self.draws[entry.draw];
             let vertices = graph.buffer(
                 "mesh vertices",
                 BufferDesc {
@@ -107,15 +122,25 @@ impl FrameSnapshot {
                 true,
                 0..draw.data.indices.len(),
             )?;
-            meshes.insert(draw.mesh, (vertices, indices));
+            entry.buffers = Some((vertices, indices));
         }
-        self.build_graph_with_meshes(graph, &meshes, readback, extension)
+        self.build_graph_with_meshes(
+            graph,
+            move |handle| {
+                meshes
+                    .binary_search_by_key(&handle, |entry| entry.mesh)
+                    .ok()
+                    .and_then(|index| meshes[index].buffers)
+            },
+            readback,
+            extension,
+        )
     }
 
     pub(crate) fn build_graph_with_meshes(
         &self,
         mut graph: Graph,
-        meshes: &BTreeMap<MeshHandle, (BufferHandle, BufferHandle)>,
+        mut resolve: impl FnMut(MeshHandle) -> Option<(BufferHandle, BufferHandle)>,
         readback: bool,
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<FrameGraph, GraphError> {
@@ -125,7 +150,7 @@ impl FrameSnapshot {
         // The fixed opaque list shares one clear and rendering scope. An empty
         // list retains the clear-only path without requiring a Raster program.
         let draws = self.draws.iter().map(|draw| {
-            let &(vertices, indices) = meshes.get(&draw.mesh).ok_or_else(|| {
+            let (vertices, indices) = resolve(draw.mesh).ok_or_else(|| {
                 GraphError::new(
                     GraphErrorKind::InvalidInput,
                     "missing resolved mesh buffers",
@@ -145,6 +170,9 @@ impl FrameSnapshot {
             self.view.clear_color,
             1.0,
         )?;
+        // Mesh scratch belongs only to construction. Release it before running
+        // user code, which may independently build another graph from this input.
+        drop(resolve);
         let output = extension(&mut graph, color)?;
         let output_desc = graph
             .image_desc(output)
@@ -155,7 +183,7 @@ impl FrameSnapshot {
                 format!("frame extension output must match View RGBA8 description {desc:?}; got {output_desc:?}"),
             )
             .with_pass_name("view output")
-            .with_resource(output.into(), Some(&graph.resources[output.index].name)));
+            .with_resource(output.into(), Some(graph.resource_name(output.index))));
         }
         let output_ownership = if graph.resources[output.index].import.is_some() {
             FrameOutputOwnership::Caller
@@ -179,10 +207,26 @@ impl FrameSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use crate::engine::{Draw, Engine, IDENTITY, Material, MeshData, Vertex, View};
-    use crate::graph::{Graph, GraphErrorKind, ImageDesc, ImageHandle, ImportImage, ResourceKey};
+    use crate::engine::{
+        Draw, Engine, EngineCapacity, IDENTITY, Material, MeshData, SnapshotPool, Vertex, View,
+    };
+    use crate::graph::{
+        GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, ImageHandle, ImportImage, ResourceKey,
+    };
 
     use super::FrameOutputOwnership;
+
+    fn graph_pool() -> GraphPool {
+        GraphPool::new(
+            GraphCapacity {
+                resources: 512,
+                passes: 512,
+                ..GraphCapacity::default()
+            },
+            2,
+        )
+        .unwrap()
+    }
 
     fn triangle() -> MeshData {
         MeshData::new(
@@ -206,11 +250,12 @@ mod tests {
 
     #[test]
     fn immutable_mesh_upload_preserves_stream_provenance_and_failed_append_atomicity() {
-        use crate::graph::{MeshUpload, Operation};
+        use crate::graph::{MeshUpload, Operation, UploadSource};
         use std::sync::Arc;
 
         let data = triangle();
-        let mut graph = Graph::new();
+        let mut graph_pool = graph_pool();
+        let mut graph = graph_pool.begin().unwrap();
         let indices = graph
             .buffer(
                 "indices",
@@ -223,8 +268,7 @@ mod tests {
             .upload_graph_slice(&mut graph, "index chunk", indices, true, 4..8)
             .unwrap();
         let Operation::UploadBuffer {
-            bytes,
-            source,
+            data: UploadSource::Shared { bytes, source },
             offset,
             mesh,
             ..
@@ -253,7 +297,7 @@ mod tests {
             assert_eq!(graph.passes.len(), 1, "failed mesh upload appends nothing");
         }
         graph
-            .upload_buffer("raw bytes", indices, 0, vec![0; 4])
+            .upload_buffer("raw bytes", indices, 0, &[0; 4])
             .unwrap();
         assert!(matches!(
             graph.passes.last().unwrap().operation,
@@ -263,7 +307,14 @@ mod tests {
 
     #[test]
     fn opaque_pass_count_is_independent_of_repeated_draw_count() {
-        let mut assets = Engine::new(1, 1).unwrap();
+        let mut graph_pool = graph_pool();
+        let pool = SnapshotPool::new(256, 1).unwrap();
+        let mut assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
         let mesh = assets.create_mesh(triangle()).unwrap();
         let material = assets.create_material(Material::default()).unwrap();
         let draw = Draw {
@@ -272,8 +323,10 @@ mod tests {
             world_from_model: IDENTITY,
         };
         for count in [1, 32, 256] {
-            let snapshot = assets.snapshot(&view(), &vec![draw; count]).unwrap();
-            let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
+            let snapshot = assets.snapshot(&pool, &view(), &vec![draw; count]).unwrap();
+            let frame = snapshot
+                .build_graph(&mut graph_pool, false, |_, color| Ok(color))
+                .unwrap();
             // Two shared mesh uploads and one opaque list; output is the list's color.
             assert_eq!(frame.graph.compile().unwrap().pass_count(), 3);
         }
@@ -281,8 +334,15 @@ mod tests {
 
     #[test]
     fn opaque_pass_keeps_every_distinct_mesh_producer() {
+        let mut graph_pool = graph_pool();
+        let pool = SnapshotPool::new(256, 1).unwrap();
         const MESHES: usize = 128;
-        let mut assets = Engine::new(MESHES, 1).unwrap();
+        let mut assets = Engine::new(EngineCapacity {
+            meshes: MESHES,
+            materials: 1,
+            retired_mesh_versions: MESHES,
+        })
+        .unwrap();
         let material = assets.create_material(Material::default()).unwrap();
         let draws = (0..MESHES)
             .map(|_| Draw {
@@ -291,19 +351,29 @@ mod tests {
                 world_from_model: IDENTITY,
             })
             .collect::<Vec<_>>();
-        let snapshot = assets.snapshot(&view(), &draws).unwrap();
-        let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
+        let snapshot = assets.snapshot(&pool, &view(), &draws).unwrap();
+        let frame = snapshot
+            .build_graph(&mut graph_pool, false, |_, color| Ok(color))
+            .unwrap();
         let plan = frame.graph.compile().unwrap();
         assert_eq!(plan.pass_count(), MESHES * 2 + 1);
         #[cfg(feature = "graph-diagnostics")]
-        assert!(plan.culled_pass_names().is_empty());
+        assert!(plan.culled_pass_names().next().is_none());
     }
 
     #[test]
     fn empty_view_has_initialized_output_without_uploads() {
-        let assets = Engine::new(1, 1).unwrap();
+        let mut graph_pool = graph_pool();
+        let pool = SnapshotPool::new(256, 1).unwrap();
+        let assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
         let snapshot = assets
             .snapshot(
+                &pool,
                 &View {
                     width: 4,
                     height: 3,
@@ -313,23 +383,35 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let frame = snapshot.build_graph(false, |_, color| Ok(color)).unwrap();
-        let plan = frame.graph.compile().unwrap();
-        assert_eq!(plan.ordered_pass_names(), ["view clear"]);
-        assert_eq!(plan.pass_count(), 1);
+        let frame = snapshot
+            .build_graph(&mut graph_pool, false, |_, color| Ok(color))
+            .unwrap();
         assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
         assert!(frame.readback.is_none());
+        let plan = frame.graph.compile().unwrap();
+        assert_eq!(
+            plan.ordered_pass_names().collect::<Vec<_>>(),
+            ["view clear"]
+        );
+        assert_eq!(plan.pass_count(), 1);
     }
 
     #[test]
     fn extension_output_checks_owner_format_extent_and_initialization() {
-        let assets = Engine::new(1, 1).unwrap();
-        let snapshot = assets.snapshot(&view(), &[]).unwrap();
-        let mut foreign_graph = Graph::new();
+        let mut graph_pool = graph_pool();
+        let pool = SnapshotPool::new(256, 1).unwrap();
+        let assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let snapshot = assets.snapshot(&pool, &view(), &[]).unwrap();
+        let mut foreign_graph = graph_pool.begin().unwrap();
         let foreign = foreign_graph
             .image("foreign", ImageDesc::rgba8(16, 16))
             .unwrap();
-        let error = match snapshot.build_graph(false, |_, _| Ok(foreign)) {
+        let error = match snapshot.build_graph(&mut graph_pool, false, |_, _| Ok(foreign)) {
             Ok(_) => panic!("foreign output must fail during build"),
             Err(error) => error,
         };
@@ -342,7 +424,9 @@ mod tests {
             ("wrong format", ImageDesc::depth32(16, 16)),
             ("wrong extent", ImageDesc::rgba8(8, 16)),
         ] {
-            let error = match snapshot.build_graph(false, |graph, _| graph.image(name, desc)) {
+            let error = match snapshot
+                .build_graph(&mut graph_pool, false, |graph, _| graph.image(name, desc))
+            {
                 Ok(_) => panic!("incompatible output must fail during build"),
                 Err(error) => error,
             };
@@ -358,7 +442,7 @@ mod tests {
 
         let mut uninitialized = None::<ImageHandle>;
         let frame = snapshot
-            .build_graph(false, |graph, color| {
+            .build_graph(&mut graph_pool, false, |graph, color| {
                 let output = graph.image("uninitialized output", graph.image_desc(color)?)?;
                 uninitialized = Some(output);
                 Ok(output)
@@ -371,8 +455,15 @@ mod tests {
 
     #[test]
     fn imported_extension_output_keeps_caller_registration_ownership() {
-        let assets = Engine::new(1, 1).unwrap();
-        let snapshot = assets.snapshot(&view(), &[]).unwrap();
+        let mut graph_pool = graph_pool();
+        let pool = SnapshotPool::new(256, 1).unwrap();
+        let assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 1,
+        })
+        .unwrap();
+        let snapshot = assets.snapshot(&pool, &view(), &[]).unwrap();
         let imported = ImportImage {
             key: ResourceKey {
                 owner: 9,
@@ -385,7 +476,7 @@ mod tests {
         };
         let mut returned = None;
         let frame = snapshot
-            .build_graph(false, |graph, _| {
+            .build_graph(&mut graph_pool, false, |graph, _| {
                 let handle = graph.import_image("caller image", &imported)?;
                 returned = Some(handle);
                 Ok(handle)

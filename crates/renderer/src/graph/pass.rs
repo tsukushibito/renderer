@@ -254,8 +254,7 @@ pub(crate) enum Operation {
     UploadBuffer {
         dst: usize,
         offset: u64,
-        bytes: Arc<[u8]>,
-        source: Range<usize>,
+        data: UploadSource,
         mesh: Option<MeshUpload>,
     },
     CopyBuffer {
@@ -267,7 +266,7 @@ pub(crate) enum Operation {
     },
     UploadImage {
         dst: usize,
-        bytes: Arc<[u8]>,
+        data: UploadSource,
     },
     CopyImage {
         src: usize,
@@ -299,7 +298,7 @@ pub(crate) enum Operation {
         parameters: RasterParameters,
     },
     RasterBatch {
-        draws: Arc<[RasterDrawOperands]>,
+        draws: Range<usize>,
         color: usize,
         depth: usize,
         clear_color: [f32; 4],
@@ -326,9 +325,18 @@ pub(crate) enum Operation {
     )
 )]
 pub(crate) struct Pass {
-    pub name: String,
+    pub name: Range<usize>,
     pub operation: Operation,
-    pub accesses: Vec<ResourceAccess>,
+    pub accesses: Range<usize>,
     pub side_effect: bool,
-    pub dependencies: Vec<usize>,
+    pub dependencies: Range<usize>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum UploadSource {
+    Frame(Range<usize>),
+    Shared {
+        bytes: Arc<[u8]>,
+        source: Range<usize>,
+    },
 }
