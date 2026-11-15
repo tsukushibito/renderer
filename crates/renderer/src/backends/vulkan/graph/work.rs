@@ -791,14 +791,15 @@ mod tests {
     fn prepared_upload_uses_slice_length_without_retaining_source_bytes() {
         let input: Arc<[u8]> = vec![7; 64].into();
         let weak = Arc::downgrade(&input);
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let buffer = graph.buffer("slice", BufferDesc { size: 4 }).unwrap();
         let upload = graph
             .upload_buffer_slice("upload", buffer, 0, input, 5..9)
             .unwrap();
         graph.readback_buffer("read", buffer, 0, 4).unwrap();
         let plan = graph.compile().unwrap();
-        let operation = PreparedOperation::try_from(&plan.passes[upload.index].operation).unwrap();
+        let operation =
+            PreparedOperation::from_graph(&plan, &plan.passes[upload.index].operation).unwrap();
         assert!(matches!(
             &operation,
             PreparedOperation::UploadBuffer {
@@ -807,7 +808,6 @@ mod tests {
                 ..
             }
         ));
-        drop(graph);
         drop(plan);
         assert!(
             weak.upgrade().is_none(),
@@ -817,16 +817,16 @@ mod tests {
 
     #[test]
     fn provenance_follows_index_copy_sources_and_persistent_imports_only() {
-        let mut graph = Graph::new();
+        let mut graph = Graph::test_new();
         let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
         graph
-            .upload_buffer("vertices.upload", vertices, 0, vec![0; 84])
+            .upload_buffer("vertices.upload", vertices, 0, &[0; 84])
             .unwrap();
         let source = graph.buffer("source", BufferDesc { size: 12 }).unwrap();
         let middle = graph.buffer("middle", BufferDesc { size: 12 }).unwrap();
         let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
         graph
-            .upload_buffer("index.upload", source, 0, vec![0; 12])
+            .upload_buffer("index.upload", source, 0, &[0; 12])
             .unwrap();
         graph
             .copy_buffer("index.copy1", source, 0, middle, 0, 12)
@@ -871,14 +871,19 @@ mod tests {
                     },
                     revision: 1,
                     desc: BufferDesc { size: 12 },
-                    initialized: std::iter::once(0..12).collect(),
+                    initialized: crate::graph::ImportRanges::test_capture(std::slice::from_ref(
+                        &(0..12),
+                    )),
                 },
             )
             .unwrap();
         graph
             .readback_buffer("persistent.read", imported, 0, 12)
             .unwrap();
-        let (needed, retained) = provenance_requirements(&graph.compile().unwrap());
+        let plan = graph.compile().unwrap();
+        let mut needed = vec![false; plan.resources.len()];
+        let mut retained = vec![false; plan.resources.len()];
+        provenance_requirements(&plan, &mut needed, &mut retained);
         assert!(
             !needed[vertices.index],
             "vertex-only input needs no CPU copy"
@@ -1094,6 +1099,15 @@ mod tests {
                 staging_ranges: 256,
             })
             .unwrap();
+            runtime
+                .prepare_working_set(
+                    super::super::FrameCapacity::default(),
+                    &[super::super::ResourceClass::Image {
+                        desc: ImageDesc::rgba8(2, 2),
+                        count: 4,
+                    }],
+                )
+                .unwrap();
             let diagnostics = runtime.diagnostics.clone();
             #[cfg(feature = "development-validation")]
             crate::backends::vulkan::assert_real_validation(&diagnostics);
@@ -1104,26 +1118,28 @@ mod tests {
             let pixels = [
                 11, 23, 37, 255, 41, 53, 67, 255, 71, 83, 97, 255, 101, 113, 127, 255,
             ];
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let source = graph.image("source", ImageDesc::rgba8(2, 2)).unwrap();
-            graph.upload_image("source.upload", source, pixels).unwrap();
+            graph
+                .upload_image("source.upload", source, &pixels)
+                .unwrap();
             graph.export_image(source).unwrap();
             let mut producer = runtime.submit(&graph.compile().unwrap()).unwrap();
             let exported = producer.export_image(source).unwrap();
 
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let source = graph.import_image("source", &exported).unwrap();
             let mut reads = Vec::new();
             for index in 0..3 {
                 let output = graph
-                    .image(format!("output.{index}"), ImageDesc::rgba8(2, 2))
+                    .image(&format!("output.{index}"), ImageDesc::rgba8(2, 2))
                     .unwrap();
                 graph
-                    .composite(format!("sample.{index}"), source, output)
+                    .composite(&format!("sample.{index}"), source, output)
                     .unwrap();
                 reads.push(
                     graph
-                        .readback_image(format!("read.{index}"), output)
+                        .readback_image(&format!("read.{index}"), output)
                         .unwrap(),
                 );
             }
@@ -1155,6 +1171,45 @@ mod tests {
                 staging_ranges: 256,
             })
             .unwrap();
+            runtime
+                .prepare_working_set(
+                    super::super::FrameCapacity::default(),
+                    &[
+                        super::super::ResourceClass::Buffer {
+                            desc: BufferDesc { size: 16 },
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Buffer {
+                            desc: BufferDesc { size: 12 },
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Buffer {
+                            desc: BufferDesc { size: 4 },
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Buffer {
+                            desc: BufferDesc { size: 84 },
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Image {
+                            desc: ImageDesc::rgba8(2, 2),
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Image {
+                            desc: ImageDesc::rgba8(3, 1),
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Image {
+                            desc: ImageDesc::rgba8(1, 1),
+                            count: 1,
+                        },
+                        super::super::ResourceClass::Image {
+                            desc: ImageDesc::depth32(1, 1),
+                            count: 1,
+                        },
+                    ],
+                )
+                .unwrap();
             let diagnostics = runtime.diagnostics.clone();
             crate::backends::vulkan::assert_real_validation(&diagnostics);
             assert_ne!(
@@ -1169,16 +1224,16 @@ mod tests {
                 let image_bytes: Arc<[u8]> = Arc::from([29u8; 16]);
                 let buffer_input = Arc::downgrade(&buffer_bytes);
                 let image_input = Arc::downgrade(&image_bytes);
-                let mut graph = Graph::new();
+                let mut graph = Graph::test_new();
                 let buffer = graph.buffer("transient", BufferDesc { size: 16 }).unwrap();
                 let image = graph
                     .image("transient-image", ImageDesc::rgba8(2, 2))
                     .unwrap();
                 graph
-                    .upload_buffer_shared("buffer.upload", buffer, 0, buffer_bytes)
+                    .upload_buffer("buffer.upload", buffer, 0, &buffer_bytes)
                     .unwrap();
                 graph
-                    .upload_image_shared("image.upload", image, image_bytes)
+                    .upload_image("image.upload", image, &image_bytes)
                     .unwrap();
                 let buffer_read = graph.readback_buffer("buffer.read", buffer, 0, 16).unwrap();
                 let image_read = graph.readback_image("image.read", image).unwrap();
@@ -1196,7 +1251,7 @@ mod tests {
             assert!(image_input.upgrade().is_none());
             let mut result = pending.wait(Duration::from_secs(10)).unwrap().unwrap();
             assert!(
-                result.work.passes.is_empty(),
+                result.work.data.is_none(),
                 "completed output retains no recording plan"
             );
             assert_eq!(result.test_readback(buffer_read).unwrap(), [17u8; 16]);
@@ -1205,26 +1260,26 @@ mod tests {
 
             // The initial-transition ordering also covers earlier copies in other
             // submissions on the same queue. Only C is waited before reading A/B.
-            let mut producer = Graph::new();
+            let mut producer = Graph::test_new();
             let buffer = producer
                 .buffer("pending-buffer", BufferDesc { size: 16 })
                 .unwrap();
             producer
-                .upload_buffer("pending.upload", buffer, 0, vec![17; 16])
+                .upload_buffer("pending.upload", buffer, 0, &[17; 16])
                 .unwrap();
             producer.export_buffer(buffer).unwrap();
             let mut first = runtime.submit(&producer.compile().unwrap()).unwrap();
             let buffer = first.export_buffer(buffer).unwrap();
-            let mut images = Graph::new();
+            let mut images = Graph::test_new();
             // A distinct extent requires a fresh native image with UNDEFINED layout.
             let image = images.image("new-image", ImageDesc::rgba8(3, 1)).unwrap();
             images
-                .upload_image("new-image.upload", image, vec![29; 12])
+                .upload_image("new-image.upload", image, &[29; 12])
                 .unwrap();
             images.export_image(image).unwrap();
             let mut second = runtime.submit(&images.compile().unwrap()).unwrap();
             let image = second.export_image(image).unwrap();
-            let mut consumer = Graph::new();
+            let mut consumer = Graph::test_new();
             let input_buffer = consumer.import_buffer("pending-buffer", &buffer).unwrap();
             let input_image = consumer.import_image("pending-image", &image).unwrap();
             let buffer_read = consumer
@@ -1246,12 +1301,12 @@ mod tests {
             // A generic exported buffer can first acquire an index role in a later
             // graph. Updating that import without re-export must preserve provenance.
             let (initial, indices) = {
-                let mut graph = Graph::new();
+                let mut graph = Graph::test_new();
                 let indices = graph
                     .buffer("future-indices", BufferDesc { size: 12 })
                     .unwrap();
                 graph
-                    .upload_buffer("indices.upload", indices, 0, vec![0; 12])
+                    .upload_buffer("indices.upload", indices, 0, &[0; 12])
                     .unwrap();
                 graph.export_buffer(indices).unwrap();
                 (graph.compile().unwrap(), indices)
@@ -1259,13 +1314,13 @@ mod tests {
             let mut first = runtime.submit(&initial).unwrap();
             let exported = first.export_buffer(indices).unwrap();
             drop(initial);
-            let mut update = Graph::new();
+            let mut update = Graph::test_new();
             let indices = update
                 .import_buffer("persistent-indices", &exported)
                 .unwrap();
             let patch = update.buffer("patch", BufferDesc { size: 4 }).unwrap();
             update
-                .upload_buffer("patch.upload", patch, 0, 1u32.to_le_bytes().to_vec())
+                .upload_buffer("patch.upload", patch, 0, &1u32.to_le_bytes())
                 .unwrap();
             update
                 .copy_buffer("patch.copy", patch, 0, indices, 4, 4)
@@ -1274,10 +1329,10 @@ mod tests {
             second.wait(Duration::from_secs(10)).unwrap().unwrap();
             first.wait(Duration::from_secs(10)).unwrap().unwrap();
             let current = runtime.refresh_buffer(exported.key()).unwrap();
-            let mut draw = Graph::new();
+            let mut draw = Graph::test_new();
             let indices = draw.import_buffer("indices", &current).unwrap();
             let vertices = draw.buffer("vertices", BufferDesc { size: 84 }).unwrap();
-            draw.upload_buffer("vertices.upload", vertices, 0, vec![0; 84])
+            draw.upload_buffer("vertices.upload", vertices, 0, &[0; 84])
                 .unwrap();
             let color = draw.image("color", ImageDesc::rgba8(1, 1)).unwrap();
             let depth = draw.image("depth", ImageDesc::depth32(1, 1)).unwrap();

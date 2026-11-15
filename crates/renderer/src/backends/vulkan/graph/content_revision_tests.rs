@@ -1,5 +1,6 @@
 //! Content versions remain stable across read-only queue-state changes.
 
+use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
 use crate::graph::{
@@ -47,6 +48,21 @@ fn completed(submission: &mut Submission) -> SubmissionResult {
 #[ignore = "explicit real-GPU readonly import rebasing and writer staleness; requires Core/SyncVal"]
 fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            3,
+            4,
+            &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(2, 2),
+                    count: 3,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 16 },
+                    count: 1,
+                },
+            ],
+        );
         let pixels = [10, 20, 30, 255].repeat(4);
         let bytes = (0..16).collect::<Vec<u8>>();
         let mut initial = Graph::test_new();
@@ -171,6 +187,29 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
 #[ignore = "explicit real-GPU clear/discard content revisions; requires Core/SyncVal"]
 fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() {
     real_gpu(|runtime| {
+        prepare_scenario(
+            runtime,
+            4,
+            3,
+            &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(2, 2),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(2, 2),
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 84 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 12 },
+                    count: 1,
+                },
+            ],
+        );
         let mut initial = Graph::test_new();
         let color = initial.image("color", ImageDesc::rgba8(2, 2)).unwrap();
         let depth = initial.image("depth", ImageDesc::depth32(2, 2)).unwrap();

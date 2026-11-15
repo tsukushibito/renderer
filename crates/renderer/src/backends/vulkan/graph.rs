@@ -440,24 +440,37 @@ impl VulkanRuntime {
                 snapshots.push((index, snapshot));
             }
         }
-        if self.programs.is_none() {
-            self.programs = Some(ShaderPrograms::new(
-                Arc::clone(&self.owner),
-                self.config.execution_slots,
-                self.config.max_shader_bindings,
-            )?);
+        // Derive private shader needs from actual prepared/registered resource
+        // classes. Buffer-only working sets impose no unrelated image features;
+        // color/depth classes permit every supported pass mix using them.
+        let mut color = false;
+        let mut depth = false;
+        for entry in &self.entries {
+            if let Some(physical) = &entry.physical {
+                match physical.desc {
+                    ResourceDesc::Image(desc) => match desc.format {
+                        ImageFormat::Rgba8Unorm => color = true,
+                        ImageFormat::Depth32Float => depth = true,
+                    },
+                    ResourceDesc::Buffer(_) => {}
+                }
+            }
         }
-        // The current supported Graph envelope includes all three native shader
-        // classes. Public preparation describes capacity/resources, not private
-        // program kinds; a later frame may select any supported pass mix.
-        self.programs
-            .as_ref()
-            .unwrap()
-            .prepare_bindings(ShaderNeeds {
-                compute: true,
-                raster: true,
-                composite: true,
-            })?;
+        let needs = ShaderNeeds {
+            compute: color,
+            raster: color && depth,
+            composite: color,
+        };
+        if needs.any() {
+            if self.programs.is_none() {
+                self.programs = Some(ShaderPrograms::new(
+                    Arc::clone(&self.owner),
+                    self.config.execution_slots,
+                    self.config.max_shader_bindings,
+                )?);
+            }
+            self.programs.as_ref().unwrap().prepare_bindings(needs)?;
+        }
         for (index, snapshot) in snapshots {
             self.entries[index].physical().lock().scheduled = snapshot;
         }
@@ -693,6 +706,15 @@ impl VulkanRuntime {
         self.entry(key)?;
         let index = key.index as usize;
         self.entries[index].registered = false;
+        // The key can no longer prepare another CPU index consumer. Already
+        // recorded work owns its native buffers, staging and Graph operands,
+        // so logical provenance need not pin a builder slot until a later poll.
+        // Preserve native scopes, layouts and revision until physical reuse.
+        self.entries[index]
+            .physical()
+            .lock()
+            .scheduled
+            .clear_contents();
         self.recycle_entry(index);
         Ok(())
     }
@@ -1067,7 +1089,11 @@ impl VulkanRuntime {
             diagnostic.as_mut(),
         )?;
         work.profile = timestamp.map(|lease| {
-            metrics::WorkProfile::new(lease, profile_started.expect("profiling enabled"))
+            metrics::WorkProfile::new(
+                lease,
+                profile_started.expect("profiling enabled"),
+                Arc::clone(&work.result.cpu_pending),
+            )
         });
         let cpu_pending = work
             .profile
@@ -1291,3 +1317,68 @@ mod frame_scenarios;
 
 #[cfg(test)]
 mod frame_tests;
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_exports_rollback_only_new_names_and_acceptance_keeps_them() {
+        let mut pool = ExportPool::new(2, 1).unwrap();
+        let mut exports = pool.acquire().unwrap();
+        for index in 0..2 {
+            exports
+                .insert(
+                    index,
+                    Export::Image(ImportImage {
+                        key: ResourceKey {
+                            owner: 1,
+                            index: index as u32,
+                            generation: 1,
+                        },
+                        revision: 41,
+                        desc: crate::graph::ImageDesc::rgba8(1, 1),
+                        initialized: true,
+                    }),
+                )
+                .unwrap();
+        }
+        let mut entries = [
+            Entry {
+                generation: 1,
+                registered: true,
+                pending_registration: 41,
+                physical: None,
+            },
+            Entry {
+                generation: 1,
+                registered: true,
+                pending_registration: 0,
+                physical: None,
+            },
+        ];
+        drop(Registration {
+            entries: &mut entries,
+            exports: &exports,
+            logical: &[0, 1],
+            serial: 41,
+            keep: false,
+        });
+        assert!(!entries[0].registered);
+        assert!(
+            entries[1].registered,
+            "an existing import remains named on rejected work"
+        );
+        entries[0].registered = true;
+        entries[0].pending_registration = 42;
+        drop(Registration {
+            entries: &mut entries,
+            exports: &exports,
+            logical: &[0, 1],
+            serial: 42,
+            keep: true,
+        });
+        assert!(entries.iter().all(|entry| entry.registered));
+        assert!(entries.iter().all(|entry| entry.pending_registration == 0));
+    }
+}

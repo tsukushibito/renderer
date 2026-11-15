@@ -1,6 +1,8 @@
 //! Independent prepared command/planning and CPU-result backings.
 
 use ash::vk;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use super::{PreparedPass, Use};
 use crate::backends::vulkan::graph::{
@@ -106,15 +108,21 @@ impl WorkData {
 }
 
 pub(in crate::backends::vulkan::graph) struct ResultData {
+    pub(in crate::backends::vulkan::graph) cpu_pending: Arc<Mutex<[Duration; 2]>>,
     pub(in crate::backends::vulkan::graph) readbacks: Vec<(usize, Option<StagingRange>)>,
 }
 impl ResultData {
     pub(in crate::backends::vulkan::graph) fn new(passes: usize) -> Result<Self, RuntimeError> {
         Ok(Self {
             readbacks: reserved(passes)?,
+            cpu_pending: Arc::new(Mutex::new([Duration::ZERO; 2])),
         })
     }
     pub(in crate::backends::vulkan::graph) fn reset(&mut self) {
         self.readbacks.clear();
+        *self
+            .cpu_pending
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = [Duration::ZERO; 2];
     }
 }

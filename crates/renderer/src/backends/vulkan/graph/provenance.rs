@@ -95,6 +95,13 @@ impl BufferProvenance {
     }
 
     /// Explicit preparation/change boundary; never called by ordinary mutation.
+    #[cfg(test)]
+    fn reserve_segments(&mut self, capacity: usize) {
+        if self.segments.capacity() < capacity {
+            self.segments.reserve_exact(capacity - self.segments.len());
+        }
+    }
+
     pub(super) fn segment_capacity(&self) -> usize {
         self.segments.capacity()
     }
