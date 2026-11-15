@@ -39,6 +39,8 @@ impl<T> Attachment<T> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterAttachments<'a> {
     pub colors: &'a [Attachment<[f32; 4]>],
+    /// Depth clear values must be zero or normal finite values in `[0, 1]`.
+    /// Subnormal values are unsupported across the native clear paths.
     pub depth: Option<Attachment<f32>>,
 }
 
