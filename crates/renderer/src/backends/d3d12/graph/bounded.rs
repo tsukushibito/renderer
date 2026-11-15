@@ -219,16 +219,16 @@ fn requirements_inner(
                         }
                     }
                 }
-                super::raster::validate_targets(graph, colors, depth)?;
+                super::raster::validate_targets(colors)?;
             }
-            Operation::AttachmentPass { colors, depth, .. } => {
+            Operation::AttachmentPass { colors, .. } => {
                 let storage = raster.as_deref_mut().ok_or_else(|| {
                     D3D12RuntimeError::capacity("Raster image working set has not been prepared")
                 })?;
                 for access in graph.accesses(pass) {
                     super::raster::use_image(graph, access.resource, resource_map, storage)?;
                 }
-                super::raster::validate_targets(graph, colors, depth)?;
+                super::raster::validate_targets(colors)?;
             }
             _ => {
                 return Err(D3D12RuntimeError::unsupported(

@@ -55,25 +55,54 @@ pub(super) fn use_image(
     Ok(())
 }
 
-pub(super) fn validate_targets(
-    graph: &CompiledGraph,
-    colors: &Range<usize>,
-    depth: &Option<usize>,
-) -> Result<(), D3D12RuntimeError> {
+pub(super) fn validate_targets(colors: &Range<usize>) -> Result<(), D3D12RuntimeError> {
     if colors.len() > 1 {
         return Err(D3D12RuntimeError::unsupported(
             "D3D12 Raster supports one color attachment",
         ));
     }
-    if let Some(index) = depth {
-        let attachment = graph.raster_attachment(*index);
-        if attachment.ops.load == LoadAction::Clear && !(0.0..=1.0).contains(&attachment.clear[0]) {
-            return Err(D3D12RuntimeError::unsupported(
-                "D3D12 depth clear must be normalized",
-            ));
+    Ok(())
+}
+
+fn buffer_scopes(
+    graph: &CompiledGraph,
+    pass: usize,
+    resource_map: &[usize],
+    scopes: &mut [D3D12_RESOURCE_STATES],
+    mut apply: impl FnMut(usize, D3D12_RESOURCE_STATES),
+) {
+    // Graph derives these uses from immutable commands. Combine native read
+    // states for shared Vertex/Index/Uniform buffers using only this pass's
+    // accesses, without clearing or scanning unrelated Graph buffers.
+    for access in graph.accesses(pass) {
+        if matches!(
+            graph.resources[access.resource].desc,
+            ResourceDesc::Buffer(_)
+        ) {
+            scopes[resource_map[access.resource]] |= match access.purpose {
+                AccessPurpose::Vertex | AccessPurpose::Uniform => {
+                    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+                }
+                AccessPurpose::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
+                _ => unreachable!("reviewed Raster has read-only geometry/uniform buffer uses"),
+            };
         }
     }
-    Ok(())
+    // Entries start at COMMON and are drained before any later fallible work.
+    // Repeated accesses apply the combined scope once; every pass, including a
+    // clear-only pass, leaves the scratch array ready for its next use.
+    for access in graph.accesses(pass) {
+        if matches!(
+            graph.resources[access.resource].desc,
+            ResourceDesc::Buffer(_)
+        ) {
+            let index = resource_map[access.resource];
+            let scope = std::mem::replace(&mut scopes[index], D3D12_RESOURCE_STATE_COMMON);
+            if scope != D3D12_RESOURCE_STATE_COMMON {
+                apply(index, scope);
+            }
+        }
+    }
 }
 
 pub(super) fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool]) {
@@ -230,33 +259,20 @@ pub(super) fn record(
         Operation::AttachmentPass { colors, depth, .. } => (None, None, colors, depth),
         _ => unreachable!(),
     };
-    slot.buffer_scopes[..slot.buffers_used].fill(D3D12_RESOURCE_STATE_COMMON);
-    // Graph derives these uses once from immutable commands. Native read states
-    // are combined per buffer, including a shared Vertex/Index/Uniform resource.
-    for access in graph.accesses(pass) {
-        if matches!(
-            graph.resources[access.resource].desc,
-            ResourceDesc::Buffer(_)
-        ) {
-            slot.buffer_scopes[slot.resource_map[access.resource]] |= match access.purpose {
-                AccessPurpose::Vertex | AccessPurpose::Uniform => {
-                    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
-                }
-                AccessPurpose::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
-                _ => unreachable!("reviewed Raster has read-only geometry/uniform buffer uses"),
-            };
-        }
-    }
-    for index in 0..slot.buffers_used {
-        if slot.buffer_scopes[index] != D3D12_RESOURCE_STATE_COMMON {
+    buffer_scopes(
+        graph,
+        pass,
+        &slot.resource_map,
+        &mut slot.buffer_scopes,
+        |index, scope| {
             transition(
                 &slot.list,
                 slot.buffers[index].raw(),
                 &mut slot.states[index],
-                slot.buffer_scopes[index],
+                scope,
             );
-        }
-    }
+        },
+    );
     let storage = slot.raster.as_mut().unwrap();
     for access in graph.accesses(pass) {
         if matches!(
@@ -313,8 +329,8 @@ pub(super) fn record(
         if attachment.ops.load == LoadAction::Clear
             && attachment.clear[0].to_bits() == 1.0f32.to_bits()
         {
-            // SAFETY: Prepared full D32 DSV is DEPTH_WRITE; preflight established
-            // normalized clear depth, and this lease retains descriptor/image.
+            // SAFETY: Prepared full D32 DSV is DEPTH_WRITE; Graph construction
+            // established normalized clear depth, and this lease retains it.
             unsafe {
                 slot.list.ClearDepthStencilView(
                     handle,
@@ -482,4 +498,218 @@ pub(super) fn record(
         slot.raster_draws_used += 1;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        backends::d3d12::{
+            D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+            D3D12ValidationMode,
+        },
+        graph::{
+            Attachment, Binding, BindingResource, BufferDesc, BufferHandle, GraphCapacity,
+            GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterDraw,
+            RasterParameters, StoreOp,
+        },
+        program::{ManagedRasterProgram, SamplerDescriptor},
+    };
+    use std::time::Duration;
+
+    struct ScopeFixture {
+        _pool: GraphPool,
+        plan: CompiledGraph,
+        buffers: [BufferHandle; 2],
+        passes: [PassHandle; 3],
+        readbacks: [PassHandle; 3],
+    }
+
+    fn scope_fixture() -> ScopeFixture {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let shared = graph
+            .buffer("shared geometry", BufferDesc { size: 84 })
+            .unwrap();
+        let other = graph
+            .buffer("other geometry", BufferDesc { size: 84 })
+            .unwrap();
+        for buffer in [shared, other] {
+            // Zero indices and vertices form a valid degenerate triangle; the
+            // first 16 bytes also provide the textured shader's zero offset.
+            graph
+                .upload_buffer("zero geometry", buffer, 0, &[0; 84])
+                .unwrap();
+        }
+        let texture = graph.image("texture", ImageDesc::rgba8(1, 1)).unwrap();
+        graph.upload_image("white", texture, &[255; 4]).unwrap();
+        let target = graph.image("target", ImageDesc::rgba8(1, 1)).unwrap();
+        let mut passes = Vec::new();
+        let mut readbacks = Vec::new();
+        for (vertices, uniform, clear) in [
+            (shared, shared, [1.0, 0.0, 0.0, 1.0]),
+            (other, other, [0.0, 1.0, 0.0, 1.0]),
+        ] {
+            let bindings = [
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: uniform,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::ImageView(graph.image_view(texture, 0, 0).unwrap()),
+                },
+                Binding {
+                    group: 1,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+            ];
+            passes.push(
+                graph
+                    .raster(
+                        "shared buffer scopes",
+                        &ManagedRasterProgram::textured_mesh(),
+                        &[RasterDraw {
+                            bindings: &bindings,
+                            vertices,
+                            indices: shared,
+                            index_count: 3,
+                            parameters: RasterParameters::default(),
+                        }],
+                        RasterAttachments {
+                            colors: &[Attachment {
+                                view: graph.image_view(target, 0, 0).unwrap(),
+                                load: LoadOp::Clear(clear),
+                                store: StoreOp::Store,
+                            }],
+                            depth: None,
+                        },
+                    )
+                    .unwrap(),
+            );
+            readbacks.push(graph.readback_image("raster result", target).unwrap());
+        }
+        passes.push(
+            graph
+                .attachment_pass(
+                    "clear only",
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: graph.image_view(target, 0, 0).unwrap(),
+                            load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
+                            store: StoreOp::Store,
+                        }],
+                        depth: None,
+                    },
+                )
+                .unwrap(),
+        );
+        readbacks.push(graph.readback_image("clear result", target).unwrap());
+        ScopeFixture {
+            _pool: pool,
+            plan: graph.compile().unwrap(),
+            buffers: [shared, other],
+            passes: passes.try_into().unwrap(),
+            readbacks: readbacks.try_into().unwrap(),
+        }
+    }
+
+    #[test]
+    fn buffer_read_scopes_combine_once_and_do_not_leak_into_later_passes() {
+        let fixture = scope_fixture();
+        let mut map = vec![usize::MAX; fixture.plan.resources.len()];
+        for (index, buffer) in fixture.buffers.iter().enumerate() {
+            map[buffer.index] = index;
+        }
+        let combined =
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER;
+        let expected = [
+            vec![(0, combined)],
+            vec![
+                (0, D3D12_RESOURCE_STATE_INDEX_BUFFER),
+                (1, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER),
+            ],
+            vec![],
+        ];
+        let mut scopes = [D3D12_RESOURCE_STATE_COMMON; 2];
+        for (pass, expected) in fixture.passes.iter().zip(expected) {
+            let mut applied = Vec::new();
+            buffer_scopes(
+                &fixture.plan,
+                pass.index,
+                &map,
+                &mut scopes,
+                |index, scope| {
+                    applied.push((index, scope));
+                },
+            );
+            applied.sort_by_key(|(index, _)| *index);
+            assert_eq!(applied, expected);
+            assert_eq!(scopes, [D3D12_RESOURCE_STATE_COMMON; 2]);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware and requested native diagnostics"]
+    fn d3d12_shared_buffer_scopes_preserve_clear_results() {
+        let strict = cfg!(feature = "development-validation");
+        let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
+            validation: if strict {
+                D3D12ValidationMode::Required
+            } else {
+                D3D12ValidationMode::Disabled
+            },
+            capacity: D3D12FrameCapacity {
+                executions: 1,
+                buffers: 2,
+                buffer_bytes: 84,
+                upload_bytes: 1024,
+                readback_bytes: 2048,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        let monitor = runtime.validation_monitor();
+        runtime
+            .prepare_raster_working_set(
+                &[D3D12ImageClass {
+                    desc: ImageDesc::rgba8(1, 1),
+                    count: 2,
+                }],
+                &[ManagedRasterProgram::textured_mesh()],
+            )
+            .unwrap();
+        let fixture = scope_fixture();
+        let mut submission = runtime.submit(&fixture.plan).unwrap();
+        let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
+        for (pass, expected) in
+            fixture
+                .readbacks
+                .iter()
+                .zip([[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]])
+        {
+            let mut actual = [0; 4];
+            result.readback_into(*pass, &mut actual).unwrap();
+            assert_eq!(actual, expected);
+        }
+        drop((result, submission, fixture));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:#?}");
+        if strict {
+            assert!(
+                report.teardown_checked
+                    && report.debug_layer_enabled
+                    && report.gpu_based_validation_enabled
+            );
+        }
+    }
 }
