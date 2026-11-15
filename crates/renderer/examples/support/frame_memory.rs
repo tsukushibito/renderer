@@ -10,7 +10,7 @@ use renderer::graph::{
     RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::measurement::Snapshot;
-use renderer::program::{ManagedProgram, ManagedRasterProgram};
+use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
 
 const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;
@@ -485,6 +485,161 @@ fn planned_frames(
     }
 }
 
+fn shader_graph_capacity() -> GraphCapacity {
+    GraphCapacity {
+        resources: 8,
+        passes: 12,
+        accesses: 64,
+        draws: 7,
+        bindings: 24,
+        ..graph_capacity()
+    }
+}
+
+fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
+    use renderer::graph::{Binding, BindingResource};
+    let mut graph = pool.begin().unwrap();
+    let vertices = graph.buffer("vertices", BufferDesc { size: 28 }).unwrap();
+    let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
+    let uniform = graph.buffer("offsets", BufferDesc { size: 64 }).unwrap();
+    let result = graph
+        .buffer("sample result", BufferDesc { size: 96 })
+        .unwrap();
+    graph
+        .upload_buffer("vertex bytes", vertices, 0, &[0; 28])
+        .unwrap();
+    graph
+        .upload_buffer("index bytes", indices, 0, &[0; 12])
+        .unwrap();
+    graph
+        .upload_buffer("offset bytes", uniform, 0, &[frame as u8; 64])
+        .unwrap();
+    let desc = ImageDesc {
+        mip_levels: 3,
+        array_layers: 2,
+        ..ImageDesc::rgba8(4, 4)
+    };
+    let images = [
+        graph.image("ping", desc).unwrap(),
+        graph.image("pong", desc).unwrap(),
+    ];
+    let views = images.map(|image| {
+        graph
+            .image_view(image, (frame % 3) as u32, (frame % 2) as u32)
+            .unwrap()
+    });
+    let target = |view| Attachment {
+        view,
+        load: LoadOp::Clear([frame as f32, 0.25, 0.5, 1.0]),
+        store: StoreOp::Store,
+    };
+    graph
+        .attachment_pass(
+            "source texels",
+            RasterAttachments {
+                colors: &[target(views[0])],
+                depth: None,
+            },
+        )
+        .unwrap();
+    let mut current = 0;
+    for hop in 0..=frame % 3 {
+        let bindings = std::array::from_fn::<_, 2, _>(|draw| {
+            [
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: uniform,
+                        offset: ((frame + hop + draw) % 3) as u64 * 16,
+                        size: 32,
+                    },
+                },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::ImageView(views[current]),
+                },
+                Binding {
+                    group: 1,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+            ]
+        });
+        let mut draws = std::array::from_fn::<_, 2, _>(|draw| RasterDraw {
+            vertices,
+            indices,
+            index_count: 3,
+            parameters: RasterParameters {
+                tint: [frame as f32, hop as f32, draw as f32, 1.0],
+                ..RasterParameters::default()
+            },
+            bindings: &bindings[draw],
+        });
+        graph
+            .raster(
+                "sampled hop",
+                &ManagedRasterProgram::textured_mesh(),
+                &draws,
+                RasterAttachments {
+                    colors: &[target(views[1 - current])],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        let discarded_input = RasterDraw {
+            bindings: &[],
+            ..draws[0]
+        };
+        draws.fill(discarded_input);
+        std::hint::black_box(draws);
+        current = 1 - current;
+    }
+    let offset = (frame % 3) as u64 * 16;
+    graph
+        .dispatch(
+            "sampled compute",
+            &ManagedProgram::sampled_float_readback(),
+            &[
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::ImageView(views[current]),
+                },
+                Binding {
+                    group: 0,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: result,
+                        offset,
+                        size: 64,
+                    },
+                },
+            ],
+            [1; 3],
+        )
+        .unwrap();
+    graph.readback_buffer("output", result, offset, 64).unwrap();
+    // A later write must not keep itself alive or replace the earlier producer
+    // consumed by the sampled dispatch above.
+    graph
+        .attachment_pass(
+            "dead later write",
+            RasterAttachments {
+                colors: &[target(views[current])],
+                depth: None,
+            },
+        )
+        .unwrap();
+    graph
+}
+
 pub(crate) fn counts(snapshot: Snapshot) -> serde_json::Value {
     serde_json::json!({
         "rust_calls_alloc_alloc_zeroed_realloc_dealloc": snapshot.rust.map(|value| value.calls),
@@ -537,6 +692,7 @@ pub fn cpu_lifecycle(baseline: bool) {
     let mut owned_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mut attachment_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mut raster_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
+    let mut shader_pool = GraphPool::new(shader_graph_capacity(), IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
             MeshData::new(
@@ -573,6 +729,9 @@ pub fn cpu_lifecycle(baseline: bool) {
     planned_frames(&mut raster_pool, WARMUP, raster_graph, |frame| {
         2 + 2 * [0, 1, 2, 2][frame % 4]
     });
+    planned_frames(&mut shader_pool, WARMUP, shader_bindings_graph, |frame| {
+        7 + frame % 3
+    });
     let startup = Snapshot::now().since(start);
     assert!(
         startup.rust[renderer::measurement::RustEvent::Allocate as usize].calls != 0,
@@ -586,12 +745,17 @@ pub fn cpu_lifecycle(baseline: bool) {
     let raster_report = planned_frames(&mut raster_pool, FRAMES, raster_graph, |frame| {
         2 + 2 * [0, 1, 2, 2][frame % 4]
     });
+    let shader_report = planned_frames(&mut shader_pool, FRAMES, shader_bindings_graph, |frame| {
+        7 + frame % 3
+    });
     assert!(pool.is_idle());
     assert!(owned_pool.is_idle());
     assert!(attachment_pool.is_idle());
     assert!(raster_pool.is_idle());
+    assert!(shader_pool.is_idle());
     let before_shutdown = Snapshot::now();
     drop((
+        shader_pool,
         raster_pool,
         attachment_pool,
         owned_pool,
@@ -647,6 +811,16 @@ pub fn cpu_lifecycle(baseline: bool) {
             "boundary_cases":["mutated caller draw slice","uncompiled cancel","culled later write","busy slots","all owners returned and backing reset"],
             "total":counts(raster_report.total),"phases_build_compile_return":raster_report.phases.map(counts),
         },
+        "shader_bindings": {
+            "coverage":"typed per-draw graphics and sampled Compute bindings build/compile/return; no native execution in this CPU row",
+            "measured_frames":FRAMES,"retained_frame_slots":IN_FLIGHT,
+            "raster_pass_counts":[1,2,3],"draws_per_pass":2,
+            "uniform_offsets":[0,16,32],"mip_levels":3,"array_layers":2,
+            "sampled_compute_output_bytes":64,"varying_selected_view":true,
+            "capacity":{"resources":8,"passes":12,"accesses":64,"draws":7,"bindings":24},
+            "boundary_cases":["short-lived per-draw binding arrays","mutated caller draw slice","uncompiled cancel","culled later write","busy slots","all owners returned and backing reset"],
+            "total":counts(shader_report.total),"phases_build_compile_return":shader_report.phases.map(counts),
+        },
     });
     println!("FRAME_MEMORY_REPORT={json}");
     assert!(
@@ -661,6 +835,10 @@ pub fn cpu_lifecycle(baseline: bool) {
     assert!(
         !owned_report.total.overflowed,
         "owned Compute measurement counter overflowed"
+    );
+    assert!(
+        !shader_report.total.overflowed,
+        "shader binding measurement counter overflowed"
     );
     if !baseline {
         assert!(
@@ -682,6 +860,11 @@ pub fn cpu_lifecycle(baseline: bool) {
             raster_report.total.is_allocation_free(),
             "owned Raster lifecycle still allocates or frees: {:?}",
             raster_report.total
+        );
+        assert!(
+            shader_report.total.is_allocation_free(),
+            "shader binding lifecycle still allocates or frees: {:?}",
+            shader_report.total
         );
     }
 }
