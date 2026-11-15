@@ -134,7 +134,7 @@ fn read_all(renderer: &mut VulkanEngine, key: ResourceKey, expected: &[u8]) {
             .unwrap()
             .expect("resident mesh readback timed out");
         assert_eq!(
-            result.readback(pass).unwrap(),
+            result.test_readback(pass).unwrap(),
             bytes,
             "resident bytes at offset {offset}"
         );
@@ -310,7 +310,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
         .expect("ready mesh draw timed out");
     assert_eq!(completion.id(), frame.submission.id());
     assert_eq!(
-        completion.result.readback(pass).unwrap(),
+        completion.result.test_readback(pass).unwrap(),
         engine_geometry::rectangle(32, 32, [4, 4, 28, 28], [0, 255, 255, 255], [0, 0, 0, 255],)
     );
     drop(completion);
@@ -409,7 +409,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         .unwrap()
         .expect("caller output frame timed out");
     assert_eq!(
-        completed.result.readback(borrowed_pass).unwrap(),
+        completed.result.test_readback(borrowed_pass).unwrap(),
         caller_bytes
     );
     drop(completed);
@@ -435,7 +435,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         .unwrap()
         .expect("owned output frame timed out");
     assert_eq!(
-        completed.result.readback(owned_pass).unwrap(),
+        completed.result.test_readback(owned_pass).unwrap(),
         [0u8, 0, 0, 255].repeat(8 * 8)
     );
     drop(completed);
@@ -545,7 +545,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
             .unwrap()
             .expect("four-resource View timed out");
         assert_eq!(
-            completed.result.readback(pass).unwrap(),
+            completed.result.test_readback(pass).unwrap(),
             engine_geometry::rectangle(32, 32, [4, 4, 28, 28], color, [0, 0, 0, 255],)
         );
         drop(completed);

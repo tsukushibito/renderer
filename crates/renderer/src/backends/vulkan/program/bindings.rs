@@ -11,17 +11,21 @@ use super::super::memory::MemoryOwner;
 use super::super::resources::DeviceImage;
 #[cfg(feature = "vulkan-diagnostics")]
 use super::name_object;
-use super::{ShaderPrograms, native};
+use super::{ShaderNeeds, ShaderPrograms, native};
 
 struct DescriptorArena {
     owner: Arc<MemoryOwner>,
     pool: vk::DescriptorPool,
+    compute: Vec<vk::DescriptorSet>,
+    composite: Vec<vk::DescriptorSet>,
 }
 
 impl DescriptorArena {
     fn new(
         owner: Arc<MemoryOwner>,
         max_bindings: u32,
+        compute: Option<vk::DescriptorSetLayout>,
+        composite: Option<vk::DescriptorSetLayout>,
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] ordinal: usize,
     ) -> Result<Self, RuntimeError> {
         let sizes = [
@@ -34,14 +38,60 @@ impl DescriptorArena {
                 descriptor_count: max_bindings,
             },
         ];
+        let kinds = u32::from(compute.is_some()) + u32::from(composite.is_some());
+        let sizes = match (compute.is_some(), composite.is_some()) {
+            (true, true) => &sizes[..],
+            (true, false) => &sizes[..1],
+            (false, true) => &sizes[1..],
+            (false, false) => {
+                return Err(RuntimeError::invalid(
+                    "descriptor preparation requires a layout",
+                ));
+            }
+        };
         let info = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(max_bindings)
-            .pool_sizes(&sizes);
+            .max_sets(max_bindings * kinds)
+            .pool_sizes(sizes);
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
         // SAFETY: Counts checked at ShaderPrograms creation; this arena is
         // exclusively leased, and its pool remains live through recorded use.
         let pool = unsafe { owner.device.raw().create_descriptor_pool(&info, None) }
             .map_err(|result| native(&owner, "vkCreateDescriptorPool(Graph)", result))?;
-        let result = Self { owner, pool };
+        let mut result = Self {
+            owner,
+            pool,
+            compute: Vec::new(),
+            composite: Vec::new(),
+        };
+        for (layout, sets) in [
+            (compute, &mut result.compute),
+            (composite, &mut result.composite),
+        ] {
+            if let Some(layout) = layout {
+                let layouts = vec![layout; max_bindings as usize];
+                let allocation = vk::DescriptorSetAllocateInfo::default()
+                    .descriptor_pool(pool)
+                    .set_layouts(&layouts);
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::DescriptorAllocate,
+                    u64::from(max_bindings),
+                );
+                // SAFETY: Explicit preparation owns the fresh pool. Every set
+                // remains allocated until arena destruction, including failures.
+                *sets = unsafe {
+                    result
+                        .owner
+                        .device
+                        .raw()
+                        .allocate_descriptor_sets(&allocation)
+                }
+                .map_err(|r| {
+                    native(&result.owner, "vkAllocateDescriptorSets(Graph prepared)", r)
+                })?;
+            }
+        }
         #[cfg(feature = "vulkan-diagnostics")]
         {
             let name = CString::new(format!("m2-descriptor-arena-{ordinal}"))
@@ -54,6 +104,14 @@ impl DescriptorArena {
 
 impl Drop for DescriptorArena {
     fn drop(&mut self) {
+        #[cfg(feature = "memory-profiling")]
+        {
+            crate::measurement::record_native(
+                crate::measurement::NativeEvent::DescriptorFree,
+                (self.compute.len() + self.composite.len()) as u64,
+            );
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
+        }
         // SAFETY: A checked-out arena cannot reach Drop before its executor
         // proves retirement (or cancellation); unknown completion retains it.
         unsafe {
@@ -76,6 +134,10 @@ pub(in crate::backends::vulkan) struct ShaderStats {
 struct DescriptorCache {
     idle: Vec<DescriptorArena>,
     stats: ShaderStats,
+    layouts: (
+        Option<vk::DescriptorSetLayout>,
+        Option<vk::DescriptorSetLayout>,
+    ),
 }
 
 /// Bounded descriptor allocation state, independent of program publication.
@@ -98,6 +160,54 @@ impl BindingPool {
             max_bindings,
             cache: Mutex::new(DescriptorCache::default()),
         })
+    }
+
+    pub(super) fn is_prepared(&self, needs: ShaderNeeds) -> Result<bool, RuntimeError> {
+        let cache = self
+            .cache
+            .lock()
+            .map_err(|_| RuntimeError::invalid("Graph descriptor cache lock poisoned"))?;
+        Ok((!needs.compute || cache.layouts.0.is_some())
+            && (!needs.composite || cache.layouts.1.is_some()))
+    }
+
+    pub(super) fn prepare(
+        &self,
+        owner: &Arc<MemoryOwner>,
+        compute: Option<vk::DescriptorSetLayout>,
+        composite: Option<vk::DescriptorSetLayout>,
+    ) -> Result<(), RuntimeError> {
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| RuntimeError::invalid("Graph descriptor cache lock poisoned"))?;
+        if cache.layouts == (compute, composite) {
+            return Ok(());
+        }
+        if cache.stats.descriptor_arenas_leased != 0 {
+            return Err(RuntimeError::capacity(
+                "Graph descriptor preparation requires retired leases",
+            ));
+        }
+        let mut prepared = Vec::new();
+        prepared
+            .try_reserve_exact(self.slots)
+            .map_err(|_| RuntimeError::capacity("cannot reserve Graph descriptor arenas"))?;
+        for ordinal in 0..self.slots {
+            prepared.push(DescriptorArena::new(
+                Arc::clone(owner),
+                self.max_bindings,
+                compute,
+                composite,
+                cache.stats.descriptor_arenas_created + ordinal,
+            )?);
+        }
+        cache.stats.descriptor_arenas_created += self.slots;
+        cache.layouts = (compute, composite);
+        let previous = std::mem::replace(&mut cache.idle, prepared);
+        drop(cache);
+        drop(previous);
+        Ok(())
     }
 
     pub(super) fn clear(&mut self) {
@@ -127,23 +237,17 @@ impl ShaderPrograms {
                 "Graph descriptor arena capacity exhausted",
             ));
         }
-        let arena = if let Some(arena) = cache.idle.pop() {
-            cache.stats.descriptor_arenas_reused += 1;
-            arena
-        } else {
-            let arena = DescriptorArena::new(
-                Arc::clone(&self.owner),
-                self.bindings.max_bindings,
-                cache.stats.descriptor_arenas_created,
-            )?;
-            cache.stats.descriptor_arenas_created += 1;
-            arena
-        };
+        let arena = cache.idle.pop().ok_or_else(|| {
+            RuntimeError::capacity("Graph descriptor working set is not prepared or exhausted")
+        })?;
+        cache.stats.descriptor_arenas_reused += 1;
         cache.stats.descriptor_arenas_leased += 1;
         Ok(ShaderBindings {
             programs: Arc::clone(self),
             arena: Some(arena),
             used: 0,
+            compute_used: 0,
+            composite_used: 0,
         })
     }
 
@@ -162,34 +266,29 @@ pub(in crate::backends::vulkan) struct ShaderBindings {
     programs: Arc<ShaderPrograms>,
     arena: Option<DescriptorArena>,
     used: u32,
+    compute_used: usize,
+    composite_used: usize,
 }
 
 impl ShaderBindings {
-    fn allocate(
-        &mut self,
-        layout: vk::DescriptorSetLayout,
-    ) -> Result<vk::DescriptorSet, RuntimeError> {
+    fn prepared_set(&mut self, compute: bool) -> Result<vk::DescriptorSet, RuntimeError> {
         if self.used >= self.programs.bindings.max_bindings {
             return Err(RuntimeError::capacity(
                 "Graph descriptor binding capacity exhausted",
             ));
         }
-        let layouts = [layout];
-        let info = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(self.arena.as_ref().expect("live descriptor lease").pool)
-            .set_layouts(&layouts);
-        // SAFETY: This lease has exclusive host access to its pool. A freshly
-        // allocated set has no command references and can be updated once.
-        let sets = unsafe {
-            self.programs
-                .owner
-                .device
-                .raw()
-                .allocate_descriptor_sets(&info)
-        }
-        .map_err(|r| native(&self.programs.owner, "vkAllocateDescriptorSets(Graph)", r))?;
+        let arena = self.arena.as_ref().expect("live descriptor lease");
+        let (sets, used) = if compute {
+            (&arena.compute, &mut self.compute_used)
+        } else {
+            (&arena.composite, &mut self.composite_used)
+        };
+        let set = *sets
+            .get(*used)
+            .ok_or_else(|| RuntimeError::capacity("Graph descriptor layout is not prepared"))?;
+        *used += 1;
         self.used += 1;
-        Ok(sets[0])
+        Ok(set)
     }
 
     pub(in crate::backends::vulkan) fn compute(
@@ -218,7 +317,7 @@ impl ShaderBindings {
                 "Compute dispatch exceeds adapter workgroup counts",
             ));
         }
-        let set = self.allocate(self.programs.compute().set_layout)?;
+        let set = self.prepared_set(true)?;
         let source_info = [vk::DescriptorImageInfo::default()
             .image_view(source.view)
             .image_layout(vk::ImageLayout::GENERAL)];
@@ -237,8 +336,9 @@ impl ShaderBindings {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&destination_info),
         ];
-        // SAFETY: Set is fresh/unbound and exclusively owned. Image views belong
-        // to Device and match shader ABI; executor retains them until retirement.
+        // SAFETY: This exclusive lease updates each prepared set once. Prior
+        // recorded uses canceled or retired and are never resubmitted; no
+        // pending use remains. The executor retains matching image views.
         unsafe {
             self.programs
                 .owner
@@ -258,7 +358,7 @@ impl ShaderBindings {
                 "Composite binding requires same-Device RGBA8 image",
             ));
         }
-        let set = self.allocate(self.programs.composite().set_layout)?;
+        let set = self.prepared_set(false)?;
         let image_info = [vk::DescriptorImageInfo::default()
             .sampler(self.programs.composite().sampler)
             .image_view(source.view)
@@ -268,8 +368,9 @@ impl ShaderBindings {
             .dst_binding(0)
             .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
             .image_info(&image_info)];
-        // SAFETY: Fresh set, immutable after this update, fixed combined sampler
-        // ABI; executor retains image/view and this lease through retirement.
+        // SAFETY: The exclusive prepared set has no pending use and is immutable
+        // after this lease's update. Old canceled/retired commands are never
+        // resubmitted; executor retains the image/view through retirement.
         unsafe {
             self.programs
                 .owner
@@ -296,21 +397,9 @@ impl Drop for ShaderBindings {
         if self.programs.owner.device.ensure_active().is_err() {
             return;
         }
-        // SAFETY: Executor releases this lease only after cancellation or proven
-        // retirement. No pending command uses these sets; executable commands
-        // invalidated by reset are never submitted again and reset before reuse.
-        let reset = unsafe {
-            self.programs
-                .owner
-                .device
-                .raw()
-                .reset_descriptor_pool(arena.pool, vk::DescriptorPoolResetFlags::empty())
-        };
-        match reset {
-            Ok(()) => cache.idle.push(arena),
-            Err(result) => {
-                self.programs.owner.device.observe_result(result);
-            }
-        }
+        // All sets remain allocated. Executor returns the lease only after
+        // cancellation or retirement; old commands are never resubmitted.
+        // A subsequent lease may update each set once before its next recording.
+        cache.idle.push(arena);
     }
 }

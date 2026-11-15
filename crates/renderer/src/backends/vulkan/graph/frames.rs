@@ -265,8 +265,11 @@ impl VulkanRuntime {
     ) -> Result<Option<FrameCompletion>, RuntimeError> {
         // Do not reject a stopped/lost Device before observing each actual Fence
         // result. This preserves the transfer retirement contract after loss.
-        self.frames
-            .wait_one(timeout, |frame, budget| frame.observe(budget))
+        let result = self
+            .frames
+            .wait_one(timeout, |frame, budget| frame.observe(budget));
+        self.collect_recycled();
+        result
     }
 
     /// Explicit shutdown/backpressure wait, discarding completed frame results.

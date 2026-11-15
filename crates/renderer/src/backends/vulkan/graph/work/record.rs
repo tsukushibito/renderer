@@ -192,14 +192,19 @@ impl TransferPayload for GraphWork {
                         clear_depth,
                     } => self.programs.as_ref().unwrap().record_raster_batch(
                         command,
-                        draws.iter().map(|draw| {
-                            (
-                                self.resource(draw.vertices).buffer().handle,
-                                self.resource(draw.indices).buffer().handle,
-                                draw.index_count,
-                                &draw.parameters,
-                            )
-                        }),
+                        self.plan
+                            .as_ref()
+                            .unwrap()
+                            .raster_draws(draws)
+                            .iter()
+                            .map(|draw| {
+                                (
+                                    self.resource(draw.vertices).buffer().handle,
+                                    self.resource(draw.indices).buffer().handle,
+                                    draw.index_count,
+                                    &draw.parameters,
+                                )
+                            }),
                         self.resource(*color).image(),
                         self.resource(*depth).image(),
                         *clear_color,
@@ -280,6 +285,7 @@ impl TransferPayload for GraphWork {
         self.physical.clear();
         self.bindings.take();
         self.programs.take();
+        self.plan.take();
     }
 
     fn retired(&mut self) {

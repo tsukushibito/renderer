@@ -34,6 +34,7 @@ mod metrics;
 #[cfg(all(feature = "presentation", windows))]
 mod presentation;
 mod provenance;
+mod snapshots;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
 mod work;
@@ -91,7 +92,6 @@ pub struct RuntimeStats {
     pub descriptor_arenas_reused: usize,
 }
 
-#[derive(Clone)]
 struct Snapshot {
     // Changes only when accepted work writes or invalidates logical contents.
     revision: u64,
@@ -104,6 +104,19 @@ struct Snapshot {
     writer_stage: vk::PipelineStageFlags2,
     writer_access: vk::AccessFlags2,
     provenance: BufferProvenance,
+}
+
+#[cfg(test)]
+impl Clone for Snapshot {
+    fn clone(&self) -> Self {
+        let mut result = Self::with_capacity(
+            self.initialized.capacity(),
+            self.provenance.segment_capacity(),
+        )
+        .unwrap();
+        result.copy_from(self).unwrap();
+        result
+    }
 }
 
 impl Default for Snapshot {
@@ -511,11 +524,16 @@ impl VulkanRuntime {
             return;
         };
         if entry.reusable() {
-            self.available.insert(
-                index,
-                entry.physical().desc.into(),
-                entry.physical().lock().scheduled.serial,
-            );
+            let serial = {
+                let mut state = entry.physical().lock();
+                // No public key or recording/GPU lease can read these logical
+                // contents again. Release provenance pins before the next Graph
+                // builder checkout; retain actual native layout and last writer.
+                state.scheduled.clear_contents();
+                state.scheduled.serial
+            };
+            self.available
+                .insert(index, entry.physical().desc.into(), serial);
         } else {
             self.available.remove(index);
         }
@@ -576,7 +594,7 @@ impl VulkanRuntime {
             let mut state = entry.physical().lock();
             // Preserve actual native synchronization, never old logical contents.
             state.scheduled.initialized.clear();
-            state.scheduled.provenance = BufferProvenance::default();
+            state.scheduled.provenance.clear();
             drop(state);
             self.resources_reused += 1;
             return Ok((
@@ -709,10 +727,10 @@ impl VulkanRuntime {
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
                     "pass {} is declaration-only {kind:?}; native execution unsupported",
-                    graph.passes[pass].name
+                    graph.pass_name(pass)
                 )));
             }
-            for access in &graph.passes[pass].accesses {
+            for access in graph.accesses(pass) {
                 needed[access.resource] = true;
             }
         }
@@ -722,7 +740,7 @@ impl VulkanRuntime {
         // Validate logical contents, including culled imports, before allocation.
         // Read-only uses may have advanced native scopes/layouts since compile;
         // prepare rebases those from the latest canonical scheduled state.
-        for resource in &graph.resources {
+        for (resource_index, resource) in graph.resources.iter().enumerate() {
             if let Some(key) = resource.import {
                 let physical = self.entry(key)?.physical();
                 let state = physical.lock();
@@ -734,11 +752,11 @@ impl VulkanRuntime {
                 #[cfg(feature = "development-validation")]
                 let inconsistent = inconsistent
                     || physical.desc != resource.desc
-                    || state.scheduled.initialized != resource.initial;
+                    || state.scheduled.initialized != graph.initial_contents(resource_index);
                 if inconsistent {
                     return Err(RuntimeError::stale(format!(
                         "stale or inconsistent import snapshot for {}; refresh and recompile",
-                        resource.name
+                        graph.resource_name(resource_index)
                     )));
                 }
             }
@@ -752,7 +770,7 @@ impl VulkanRuntime {
             let (key, value) = if let Some(key) = resource.import {
                 (key, self.lease(key)?)
             } else {
-                self.acquire(resource.desc, &resource.name)?
+                self.acquire(resource.desc, graph.resource_name(index))?
             };
             keys[index] = Some(key);
             physical[index] = Some(value);
@@ -949,26 +967,51 @@ pub struct SubmissionResult {
     work: GraphWork,
 }
 impl SubmissionResult {
-    /// Copies and releases this pass's readback lease. A failed read preserves
-    /// the lease for retry. No native pointer or mapped memory escapes.
-    pub fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, RuntimeError> {
+    fn readback_index(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
         if pass.graph != self.graph {
             return Err(RuntimeError::wrong_owner("foreign graph readback handle"));
         }
-        let index = self
-            .work
+        self.work
             .readbacks
             .binary_search_by_key(&pass.index, |(index, _)| *index)
-            .map_err(|_| RuntimeError::invalid("pass has no readback result"))?;
+            .map_err(|_| RuntimeError::invalid("pass has no readback result"))
+    }
+
+    /// Exact size of an unconsumed readback. No native mapping or allocation.
+    pub fn readback_len(&self, pass: PassHandle) -> Result<usize, RuntimeError> {
+        let index = self.readback_index(pass)?;
+        let value = self.work.readbacks[index]
+            .1
+            .as_ref()
+            .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
+        usize::try_from(value.size())
+            .map_err(|_| RuntimeError::unsupported("readback exceeds CPU address space"))
+    }
+
+    /// Copy into caller-owned prepared storage and return this readback range.
+    /// A length mismatch or failed read preserves the lease for retry. No native
+    /// pointer or mapped memory escapes, and no output backing is allocated.
+    pub fn readback_into(
+        &mut self,
+        pass: PassHandle,
+        output: &mut [u8],
+    ) -> Result<(), RuntimeError> {
+        let index = self.readback_index(pass)?;
         let (_, range) = &mut self.work.readbacks[index];
         let value = range
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("readback was already consumed"))?;
-        let length = usize::try_from(value.size())
-            .map_err(|_| RuntimeError::unsupported("readback exceeds CPU address space"))?;
-        let mut bytes = vec![0; length];
-        value.read(&mut bytes)?;
+        value.read(output)?;
         range.take();
+        Ok(())
+    }
+
+    // Content-focused unit/GPU acceptance uses an owned output for assertions.
+    // Allocation acceptance and every production consumer use readback_into.
+    #[cfg(test)]
+    pub(super) fn test_readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, RuntimeError> {
+        let mut bytes = vec![0; self.readback_len(pass)?];
+        self.readback_into(pass, &mut bytes)?;
         Ok(bytes)
     }
 }
