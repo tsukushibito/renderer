@@ -29,3 +29,6 @@ use work::{PresentWork, prepare_source};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod measurement;
