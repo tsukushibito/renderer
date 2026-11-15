@@ -190,7 +190,8 @@ impl Graph {
         })
     }
 
-    /// Retains one complete packed RGBA8 image as shared immutable upload data.
+    /// Copies a complete RGBA8 image into a distinct image of the same extent.
+    /// The source contents are selected by declaration order and must be initialized.
     pub fn copy_image(
         &mut self,
         name: &str,
@@ -271,44 +272,12 @@ impl Graph {
             )?;
             let vertices = draw.vertices;
             let indices = draw.indices;
-            let color = graph.image_id(attachments.color.image)?;
-            let depth = graph.image_id(attachments.depth.image)?;
-            graph.color(color)?;
-            let c = graph.image_desc_at(color)?;
-            let d = graph.image_desc_at(depth)?;
-            if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-                return Err(graph.resource_error(
-                    GraphErrorKind::InvalidInput,
-                    "raster needs matching RGBA8 color and D32 depth extents",
-                    depth,
-                ));
-            }
+            let (color, depth) =
+                graph.raster_targets(attachments.color.image, attachments.depth.image)?;
             let vs = graph.resources[vertices].desc.units();
             let ix = u64::from(draw.index_count) * 4;
-            let clear_color = match attachments.color.load {
-                LoadOp::Clear(value) => {
-                    if value.iter().any(|x| !x.is_finite()) {
-                        return Err(GraphError::new(
-                            GraphErrorKind::InvalidInput,
-                            "invalid attachment clear value",
-                        ));
-                    }
-                    value
-                }
-                LoadOp::Load | LoadOp::Discard => [0.0; 4],
-            };
-            let clear_depth = match attachments.depth.load {
-                LoadOp::Clear(value) => {
-                    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                        return Err(GraphError::new(
-                            GraphErrorKind::InvalidInput,
-                            "invalid attachment clear value",
-                        ));
-                    }
-                    value
-                }
-                LoadOp::Load | LoadOp::Discard => 0.0,
-            };
+            let (clear_color, clear_depth) =
+                attachment_clear_values(attachments.color.load, attachments.depth.load)?;
             let color_ops = attachments.color.ops();
             let depth_ops = attachments.depth.ops();
             Ok((
@@ -354,27 +323,9 @@ impl Graph {
             return self.clear_attachments(name, color, depth, clear_color, clear_depth);
         }
         self.build_pass(name, |graph| {
-            let color = graph.image_id(color)?;
-            let depth = graph.image_id(depth)?;
-            graph.color(color)?;
-            let c = graph.image_desc_at(color)?;
-            let d = graph.image_desc_at(depth)?;
-            if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-                return Err(graph.resource_error(
-                    GraphErrorKind::InvalidInput,
-                    "raster batch needs matching RGBA8 color and D32 depth extents",
-                    depth,
-                ));
-            }
-            if !clear_depth.is_finite()
-                || !(0.0..=1.0).contains(&clear_depth)
-                || clear_color.iter().any(|x| !x.is_finite())
-            {
-                return Err(GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "invalid attachment clear value",
-                ));
-            }
+            let (color, depth) = graph.raster_targets(color, depth)?;
+            let (clear_color, clear_depth) =
+                attachment_clear_values(LoadOp::Clear(clear_color), LoadOp::Clear(clear_depth))?;
             let first_draw = graph.draws.len();
             if draws.len() > graph.capacity.draws.saturating_sub(first_draw) {
                 return Err(super::storage::capacity_error());
@@ -440,27 +391,9 @@ impl Graph {
         clear_depth: f32,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let color = graph.image_id(color)?;
-            let depth = graph.image_id(depth)?;
-            graph.color(color)?;
-            let c = graph.image_desc_at(color)?;
-            let d = graph.image_desc_at(depth)?;
-            if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-                return Err(graph.resource_error(
-                    GraphErrorKind::InvalidInput,
-                    "clear needs matching RGBA8 color and D32 depth extents",
-                    depth,
-                ));
-            }
-            if !clear_depth.is_finite()
-                || !(0.0..=1.0).contains(&clear_depth)
-                || clear_color.iter().any(|x| !x.is_finite())
-            {
-                return Err(GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "invalid attachment clear value",
-                ));
-            }
+            let (color, depth) = graph.raster_targets(color, depth)?;
+            let (clear_color, clear_depth) =
+                attachment_clear_values(LoadOp::Clear(clear_color), LoadOp::Clear(clear_depth))?;
             Ok((
                 Operation::ClearAttachments {
                     color,
@@ -604,6 +537,26 @@ impl Graph {
         }
         result.map_err(|error| error.with_pass_name(name))
     }
+    fn raster_targets(
+        &self,
+        color: ImageHandle,
+        depth: ImageHandle,
+    ) -> Result<(usize, usize), GraphError> {
+        let color = self.image_id(color)?;
+        let depth = self.image_id(depth)?;
+        self.color(color)?;
+        let c = self.image_desc_at(color)?;
+        let d = self.image_desc_at(depth)?;
+        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "raster targets need matching RGBA8 color and D32 depth extents",
+                depth,
+            ));
+        }
+        Ok((color, depth))
+    }
+
     fn raster_draw(
         &self,
         vertices: BufferHandle,
@@ -645,6 +598,29 @@ impl Graph {
         }
         Ok((vertices, indices))
     }
+}
+
+fn attachment_clear_values(
+    color: LoadOp<[f32; 4]>,
+    depth: LoadOp<f32>,
+) -> Result<([f32; 4], f32), GraphError> {
+    let invalid_clear = || {
+        GraphError::new(
+            GraphErrorKind::InvalidInput,
+            "invalid attachment clear value",
+        )
+    };
+    let color = match color {
+        LoadOp::Clear(value) if value.iter().all(|value| value.is_finite()) => value,
+        LoadOp::Clear(_) => return Err(invalid_clear()),
+        LoadOp::Load | LoadOp::Discard => [0.0; 4],
+    };
+    let depth = match depth {
+        LoadOp::Clear(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
+        LoadOp::Clear(_) => return Err(invalid_clear()),
+        LoadOp::Load | LoadOp::Discard => 0.0,
+    };
+    Ok((color, depth))
 }
 
 fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
