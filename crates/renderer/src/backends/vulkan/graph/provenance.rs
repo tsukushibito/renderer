@@ -95,12 +95,6 @@ impl BufferProvenance {
     }
 
     /// Explicit preparation/change boundary; never called by ordinary mutation.
-    pub(super) fn reserve_segments(&mut self, capacity: usize) {
-        if self.segments.capacity() < capacity {
-            self.segments.reserve_exact(capacity - self.segments.len());
-        }
-    }
-
     pub(super) fn segment_capacity(&self) -> usize {
         self.segments.capacity()
     }
@@ -273,6 +267,7 @@ impl BufferProvenance {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn clear_range(
         &mut self,
         target: Range<u64>,

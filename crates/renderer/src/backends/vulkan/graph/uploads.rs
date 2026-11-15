@@ -42,7 +42,7 @@ impl VulkanRuntime {
                 desc.size,
             )));
         }
-        let (key, physical) = self.acquire(ResourceDesc::Buffer(desc), name)?;
+        let (key, physical) = self.acquire_inner(ResourceDesc::Buffer(desc), name, true)?;
         let revision = physical.lock().scheduled.revision;
         // A poisoned resource state stops the Device. Do not publish a new
         // registration after acquisition has observed that terminal condition.
@@ -50,12 +50,13 @@ impl VulkanRuntime {
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
+        let initialized = self.capture_ranges(&[])?;
         self.register(key.index as usize);
         Ok(ImportBuffer {
             key,
             revision,
             desc,
-            initialized: Vec::new(),
+            initialized,
         })
     }
 

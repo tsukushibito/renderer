@@ -143,7 +143,9 @@ impl super::SubmissionResult {
         // Recording uses readback vector offsets, so reorder only after actual
         // completion retired those operands. Pass identities are unique; every
         // result lookup can now use binary search without another retained index.
-        work.readbacks.sort_unstable_by_key(|(index, _)| *index);
+        work.result
+            .readbacks
+            .sort_unstable_by_key(|(index, _)| *index);
         if let Some(profile) = &mut work.profile {
             profile.end_retire();
             // SAFETY: Only the successful PendingTransfer wait/poll path calls
