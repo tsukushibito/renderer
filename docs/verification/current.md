@@ -5,6 +5,42 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 管理下buffer Computeのowned計画
+
+`renderer-7ft.2.2.2`、実装・統合確認点`65893fa`。
+`Graph::dispatch`は管理下uniform/storage readbackのProgram identity・workgroup数と、
+manifest順の論理buffer descriptorを準備済み領域へ所有する。
+shader実footprintを別契約として保持し、32-byte descriptorでも読書き・初期化は先頭16 byteだけに限定した。
+所有・保証境界・制限は[Graph契約](../design/rendergraph.md#管理下buffer-computeのowned計画)に従う。
+一般Computeのnative実行、native Program/Bindingsのimport/保持、画像/MRT/subresource、一般Rasterは未実装のままである。
+
+Windows x64 / Rust 1.99.0で、公開API8件と内部契約2件の新規回帰を含め、
+CPU default97件、`vulkan,d3d12`のrelease製品231件・追加検証/graph診断あり244件、各Rustdoc1件が成功した。
+短命入力後の所有、descriptor tailの未初期化拒否、直前producerとculling、RAW/WAR/WAWの逆順制約拒否、
+同bufferの非重複実範囲、slot/foreign・旧世代handle/range/alias/dispatch不正、途中容量失敗後の再利用とplan pinを確認した。
+fmtと全target Clippyは`presentation,d3d12,memory-profiling`の追加検証/graph診断有無で成功した。
+shader・生成bindingsは変更せず、既存SPIR-V/DXIL reflectionのABI一致・不一致拒否スクリプトも成功した。
+shader/bindings再生成Verifyは今回未実行である。
+
+CPUメモリfixtureへowned dispatchの別計測窓を追加した。24変動frame、consumer数1/2/3、
+offset 0/16/32と入力値変更、culled枝、未compile取消、3plan保持、全owner返却とslot resetを含め、
+製品releaseのRust alloc/alloc_zeroed/realloc/deallocと要求byteは全0だった。
+従来のsnapshot/build/compile/return窓も全0を維持し、setup/shutdownの正の対照を確認した。
+追加検証/graph診断ありreleaseは別baseline実行で正しさとcounterを観測した。
+CPUのみのnative counterゼロをnative dispatchの証拠には使わない。
+[容量・生counter・コマンド・native境界の結果](frame-memory.json)の`owned_compute_cpu`へ記録した。
+
+RTX 3060 / driver 610.88で、二API共有buffer Graphをstrictと製品の別runで逐次実行した。
+両backendのlive dispatch拒否、その後の実行枠再利用、culled dispatch枝の非取得を確認し、
+既存10passの308 byteは各backend・CPU期待値間で全一致した。
+strictはCore/SyncValとD3D12 Debug Layer/GBVの実効、最終native所有者解放後まで警告/error等ゼロを確認した。
+既存管理下buffer資源/版・producer→StorageReadのnative回帰もstrict3件・製品3件を逐次実行し成功した。
+これは既存private実行fixtureの回帰であり、新しいGraph dispatchの実GPU実行ではない。
+製品は追加検証・専用診断を除外しnative Requested Disabledで確認した。外部layer注入の不存在証明にはしない。
+同期・資源寿命・shader信頼境界・準備容量・validation配置の一般推奨から新たな例外はない。
+Linux/別GPU・driverの実GPU、長時間耐久、実native OOM/loss、一般dispatchの二API内容照合は未確認であり、
+親`.2.2`と後続`.2.3`/`.2.4`を完了したとは扱わない。時間性能・物理VRAMの改善も主張しない。
+
 ## 通常フレームのメモリ規約と実装
 
 `renderer-dzz` / `renderer-7ft.2.2.1`。従来の実装確認点は`43ef7e9`。
