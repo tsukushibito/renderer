@@ -210,12 +210,13 @@ fn image_frame(
     graph
         .raster(
             "wsi.standard.mesh",
-            RasterDraw {
+            &crate::program::ManagedRasterProgram::mesh(),
+            &[RasterDraw {
                 vertices,
                 indices,
                 index_count: 3,
                 parameters,
-            },
+            }],
             RasterAttachments {
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),

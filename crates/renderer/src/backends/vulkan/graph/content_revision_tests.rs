@@ -292,12 +292,13 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         discard
             .raster(
                 "discard",
-                RasterDraw {
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[RasterDraw {
                     vertices,
                     indices,
                     index_count: 3,
                     parameters: RasterParameters::default(),
-                },
+                }],
                 RasterAttachments {
                     colors: &[Attachment {
                         view: discard.image_view(color_target, 0, 0).unwrap(),
