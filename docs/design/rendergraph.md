@@ -275,6 +275,12 @@ planはProgram identity、draw順、各定数、全buffer/View参照を準備済
 vertex/index用途はdrawから導き、共有bufferの各用途を失わずに集約する。Indexはu32三角形、
 first index/base vertexは0、instance数は1だけを扱う。CPU計画だけでindex本文の範囲内や実Device上限を保証せず、
 既存のnative provenance・更新時の失効・未知内容の拒否を維持する。
+集約用range表に加え、各slotでresource上限分の使用index列を準備する。同じbufferは一度だけ列へ登録し、
+前回触れたrangeだけを消す。今回の使用indexだけをsortして従来のresource昇順でaccessを追加するため、
+非空Rasterごとの全resourceクリア・走査は行わない。draw数D・使用resource数Uに対して
+集約・列挙はO(D + U log U)、片付けは前回のUに比例する。slotごとに`usize × resource上限`の
+準備領域を追加する交換条件であり、密な入力や実時間性能での優位は未計測である。
+構築失敗後も使用列を保持し、次の非空Rasterまたはslot resetでrangeとともに消す。
 後半drawの構築失敗でもdraw/binding/access/attachment/nameを戻し、途中のpassを公開しない。
 Engineはsnapshotで確立した有限値のprivate保証を同じcoreへ渡し、描画引数を再走査しない。
 空draw sliceはProgramを使わないattachment-onlyへ正規化するため、空の場合はattachment配列の一般形も扱える。

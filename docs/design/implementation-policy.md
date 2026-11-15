@@ -1385,6 +1385,12 @@ Graph構築で保証した内容を再走査せず、未対応操作、D3D12固�
 不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
 bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
 
+製品bufferの具体化は`graph/bounded.rs`だけが行う。test専用の`graph.rs`には管理下shaderの
+実GPU fixtureと、実bufferを一つ作成した直後の失敗注入を残す。失敗注入は命令記録前に終了するため、
+旧buffer Graphの別の計画・upload/copy/readback記録処理は保持しない。
+実bufferの部分作成後の解放・エラー原因保持を確認する限定fixtureであり、実ドライバーのOOMや
+製品pool初期化の全ての部分失敗を注入した証拠とは区別する。
+
 DEFAULT、UPLOAD、READBACKのcommitted resourceを使い、legacy barrierで全bufferの状態を追跡する。
 `D3D12RuntimeConfig::capacity`の`D3D12FrameCapacity`でexecution/result/resource/operation枠、
 buffer数と各buffer・upload・readback・scratchのbyte上限を明示し、runtime初期化で全枠を作成する。
