@@ -33,8 +33,9 @@ impl<T> Attachment<T> {
     }
 }
 
-/// Borrowed attachment inputs. An attachment pass owns copies after construction;
-/// the built-in mesh pipeline currently requires one color and one depth target.
+/// Borrowed attachment inputs. A pass owns copies after construction. The
+/// Program determines its color output count/formats; depth is optional except
+/// for a depth-only Program, which requires it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterAttachments<'a> {
     pub colors: &'a [Attachment<[f32; 4]>],
