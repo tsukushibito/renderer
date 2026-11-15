@@ -171,6 +171,13 @@ VMAのmap／unmap呼び出しを、毎回必ずnative mappingを作り直す処�
 
 ## 画像とcopyの範囲
 
+論理Graphは`ImageDesc::mip_levels`/`array_layers`と単一subresource ViewをCPUで計画できるが、
+このbackendのnative画像は引き続き各1だけを扱う。`.2.2.3`のowned attachment passは、
+1 RGBA8＋D32・両方Clear/Store・単一subresourceの場合だけ既存のBegin/EndRenderingへlowerする。
+その他のlive attachment構成は物理取得前、multi-subresource資源はworking-set準備入口とcache lookup前にも拒否する。
+cache keyがbase extent/formatである現実装で、multi画像を既存1mip画像へ誤再利用しないための能力境界である。
+culledな未対応枝は取得しない。一般graphicsやnative mip/layer実行を追加済みとは扱わない。
+
 既存の転送試験用`VulkanImage`はRGBA8_UNORM、2D、optimal tiling、mip・layer・sample各1、
 transfer source／destination、EXCLUSIVE共有、初期layout UNDEFINEDに限定する。
 作成時に実際のformat・type・tiling・usage・flagsで能力を照会し、返された上限を確認する。

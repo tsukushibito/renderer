@@ -13,7 +13,23 @@ const WAIT: Duration = Duration::from_secs(10);
 #[test]
 #[ignore = "real GPU attachment lowering, cache rejection and culled subresources; run strict and shipping separately"]
 fn vulkan_attachment_subresource_native_boundaries() {
-    real_gpu(|runtime| {
+    let strict = cfg!(feature = "vulkan-diagnostics");
+    let mut runtime = VulkanRuntime::new_with_validation(
+        RuntimeConfig::default(),
+        if strict {
+            super::super::ValidationMode::Required
+        } else {
+            super::super::ValidationMode::Disabled
+        },
+    )
+    .unwrap();
+    assert_ne!(
+        runtime.owner.device.device_type(),
+        vk::PhysicalDeviceType::CPU
+    );
+    let monitor = runtime.validation_monitor();
+    {
+        let runtime = &mut runtime;
         let color_desc = ImageDesc::rgba8(4, 4);
         let depth_desc = ImageDesc::depth32(4, 4);
         prepare_scenario(
@@ -153,8 +169,25 @@ fn vulkan_attachment_subresource_native_boundaries() {
         let mut result = submission.wait(WAIT).unwrap().unwrap();
         let bytes = result.test_readback(read).unwrap();
         assert_eq!(bytes.len(), 64);
-        assert!(bytes.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
-    });
+        assert!(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255, 0, 0, 255])
+        );
+    }
+    drop(runtime);
+    let report = monitor.report();
+    assert!(report.is_clean(), "teardown diagnostics: {report:?}");
+    if strict {
+        assert_eq!(report.core_validation, Some(true));
+        assert_eq!(report.synchronization_validation, Some(true));
+    } else {
+        assert_eq!(report.requested, super::super::ValidationMode::Disabled);
+        assert_eq!(report.core_validation, None);
+        assert_eq!(report.synchronization_validation, None);
+    }
 }
 
 fn batch_draws(

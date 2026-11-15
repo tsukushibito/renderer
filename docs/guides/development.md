@@ -701,6 +701,8 @@ capacity/busy拒否と未構築snapshot/未compile Graphの取消も窓内に含
 同じCPU実行の`owned_compute`欄は管理下buffer dispatchの論理build/compile/返却を別窓で測る。
 consumer数1/2/3、binding offset 0/16/32、入力値、culled枝を変え、32-byte descriptorと16-byte実footprintを区別する。
 3plan保持、未compile dispatch取消、全owner返却と次のslot resetも窓内に含める。native dispatch実行の測定ではない。
+`attachment_subresources`欄は3mip×2layerの画像でcolor-only/depth-only/MRT、Load/Store、入力clear値とViewを変え、
+取消・culled枝・3plan保持・全返却/resetまで別窓で測る。native MRT/subresource実行の証拠にはしない。
 buffer caseは3pending/3held結果、可変copyと自己copy、長さ不一致後のreadback再試行、未消費結果破棄まで含み、
 D3D12では未投入取消とsubmission破棄後のruntime pollも通す。
 image caseは通常の公開Engine APIでRaster→0/1/2段のInvert→Compositeを毎frame構築し、

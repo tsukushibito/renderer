@@ -36,7 +36,8 @@ engine側からGraphのpassを直接変更せず、任意のpublic byte upload�
 
 Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなし、
 2D画像のmip・layer・sample各1を対象とする。
-bufferは半開byte範囲を指定し、未対応の画像subresource指定は拒否する。
+これはnative実行の範囲である。論理Graphは以下のmip/layer単位のCPU計画も扱う。
+bufferは半開byte範囲を指定する。
 論理ハンドルと物理資源の識別、内容の有効性と画像layout、
 予定されたGPU状態と実際の完了を別々に管理する。
 
@@ -107,7 +108,7 @@ MRT、画像subresource、一般Raster、一般Computeの二API実行を`.2.2.2`
 GraphはCloneできず、完成planのCloneは既存slotへのArc参照だけを増やす。
 構築途中のDrop、compile失敗、planのDropはslotへの参照を返す。
 
-容量はresource、pass、access、draw、binding、明示依存、初期化range、名前byte、upload byte、
+容量はresource、pass、access、draw、binding、attachment、明示依存、初期化range、名前byte、upload byte、
 解析edge、区間、reader nodeを含む。draw数だけでなく、変動するpass構成・入力が
 必要とする全metadataも準備した上限内へ収める。上限超過や使用中slot不足は
 `GraphErrorKind::CapacityExhausted`で返し、通常経路で拡張・別確保・GPU待機へfallbackしない。
@@ -137,6 +138,38 @@ native実行枠・物理資源・readback結果の準備は各backendの所有�
 native作成・破棄や表示・結果消費を含む全体のゼロ達成を主張しない。
 
 ## producer・範囲・Attachment
+
+### 画像subresourceとowned attachment配列
+
+`renderer-7ft.2.2.3`。`ImageDesc`は`mip_levels`と`array_layers`を持ち、
+`rgba8`/`depth32` constructorは各1を設定する。mip数は最大extentから許される段数まで、
+layer数は非ゼロとし、全mipの縮小extentとlayer数のpacked byte合計をchecked演算で検査する。
+これはnative allocation sizeやVRAM使用量の見積もりではない。
+
+`Graph::image_view(image, mip, layer)`は同じ画像の単一subresourceを指す不変な値を返す。
+owner・範囲を作成境界で確認し、aspectをRGBA8のColor／D32のDepthから導く。
+`ImageView`は画像を別resourceとして登録せず、複数Viewの重なりを元の画像で解析する。
+現行は単一mip/layer Viewであり、複数mip/layerを覆う一つのViewは未対応である。
+論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
+`declare_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
+`export_image`は全subresourceの有効内容を要求する。既存native importのinitialized boolは画像全体を表し、nativeは今も各1だけを生成する。
+
+`Graph::attachment_pass(name, RasterAttachments)`は描画命令を持たないattachment操作を追加する。
+color配列は0個以上、depthは任意だが、全体が空の指定は拒否する。
+各`Attachment { view, load, store }`を準備済みarenaへcopyし、呼出元のsliceを変更/破棄してもplanは変わらない。
+選択mipのextentは全targetで一致させ、色/深度の形式、clear値、owner、同一subresourceへの重複writeを構築時に拒否する。
+同じ画像の非重複layerは別のtargetにできる。Load/Store/Discardは選択subresourceだけに適用し、
+loadがDiscardの操作だけで有効な内容を確立したとは扱わない。
+`GraphCapacity::attachments`はcolorとdepthを合わせた保持数の上限で、失敗時には途中のarena/access/name追加を戻す。
+旧`clear_attachments`はこのAPIへ置換し、互換入口を残さない。
+
+Vulkanへlowerできるのは従来の1 RGBA8＋D32・単一subresource・両方Clear/Storeの形だけである。
+この形は構築時に確定して保持し、native記録で入力配列の保証を再走査しない。
+color-only/depth-only/MRTやmulti-subresource画像のlive使用はnative資源の取得前に`Unsupported`を返す。
+資源準備と画像cacheのlookup前にもmulti-subresourceを拒否し、古い1mip画像を誤って再利用しない。
+culledな未対応枝は実行や物理資源取得を妨げない。D3D12の画像実行、一般Rasterとmulti-subresource native実行は後続に残る。
+既存のwhole-image upload/copy/readback/Compute/compositeは単一subresource画像だけを受け入れ、
+一部の操作を画像全体の初期化として扱わない。
 
 資源は可変で、readは宣言順で直前までに書かれた内容を使う。
 bufferの異なるbyte範囲には異なるproducerがあり得る。
@@ -168,7 +201,7 @@ bufferは問題のbyte範囲、画像はmip・layer・aspectを返す。内部�
 これは今回の公開API変更であり、既存literalとの互換層は追加しない。
 通常の容量不足はstaticなmessageを持ち、名前の複製やcontext用のheap確保を行わない。
 `GraphError::capacity()`は確保なしの`GraphCapacityError`を返し、`GraphCapacityKind`で
-11個のGraph容量、Graph slot、import範囲とそのslotを区別する。`limit`は設定上限、
+Graphの各容量、Graph slot、import範囲とそのslotを区別する。`limit`は設定上限、
 `required`は判明した必要数であり、解析が個数を報告しない場合や演算overflowでは`None`となる。
 slot不足なら既存consumerの返却、metadata不足なら明示準備境界で該当容量の見直しを選べる。
 予約自体の失敗でも同じ種別を返すため、上限を増やせば必ず確保できる保証ではない。
@@ -203,12 +236,13 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 
 `Graph::raster(name, draw, attachments)`は名前付きの`RasterDraw`と`RasterAttachments`を受け取る。
 drawはvertex／index buffer・index count・`RasterParameters`をまとめ、
-attachmentsはcolorの`Attachment<[f32; 4]>`とdepthの`Attachment<f32>`を区別する。
+attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
+固定mesh shaderの`raster`は従来の1color＋depth・単一subresource画像だけを受け入れ、他の形は`Unsupported`にする。
 各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
 `Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
 既定の描画引数には`RasterParameters::default()`を明示する。
 
-Attachmentは画像全域をrender areaとする。`Load`は既存内容を要求し、
+Attachmentは選択mip/layer全域をrender areaとする。`Load`は既存内容を要求し、
 `Clear(value)`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
 確立したとみなさない。storeの`Discard`は後続の内容を無効にする。
 `Load`／`Clear`と`Store`の組だけが、meshの外側も含めた有効内容を引き継げる。

@@ -218,6 +218,7 @@ impl Measurements {
                         "graph": {
                             "resources": frame.graph.resources, "passes": frame.graph.passes,
                             "accesses": frame.graph.accesses, "draws": frame.graph.draws,
+                            "bindings": frame.graph.bindings, "attachments": frame.graph.attachments,
                             "dependencies": frame.graph.dependencies, "initial_ranges": frame.graph.initial_ranges,
                             "name_bytes": frame.graph.name_bytes, "upload_bytes": frame.graph.upload_bytes,
                             "edges": frame.graph.edges, "segments": frame.graph.segments, "readers": frame.graph.readers,

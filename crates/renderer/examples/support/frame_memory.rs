@@ -307,7 +307,7 @@ fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
     ];
     let depth_view = graph.image_view(depth, mip, layer).unwrap();
     let color_count = [1, 0, 2][frame % 3];
-    let has_depth = frame % 3 != 0;
+    let has_depth = !frame.is_multiple_of(3);
     let mut targets = color_views.map(|view| Attachment {
         view,
         load: LoadOp::Clear([frame as f32, 0.0, 0.0, 1.0]),
