@@ -16,8 +16,7 @@ use super::provenance::IndexError;
 use super::storage::{StorageLease, StoragePool};
 use super::{NativeResource, Physical, RuntimeError, Snapshot};
 use crate::graph::{
-    AccessPurpose, AttachmentOps, CompiledGraph, ComputeTransform, MeshUpload, Operation,
-    ResourceDesc,
+    AccessPurpose, CompiledGraph, ComputeTransform, MeshUpload, Operation, ResourceDesc,
 };
 
 #[cfg(feature = "graph-diagnostics")]
@@ -107,19 +106,14 @@ enum PreparedOperation {
         transform: ComputeTransform,
     },
     Raster {
+        program: crate::program::ManagedRasterProgram,
         draws: Range<usize>,
-        color: usize,
-        depth: usize,
-        color_ops: AttachmentOps,
-        depth_ops: AttachmentOps,
-        clear_color: [f32; 4],
-        clear_depth: f32,
+        colors: Range<usize>,
+        depth: Option<usize>,
     },
     ClearAttachments {
-        color: usize,
-        depth: usize,
-        clear_color: [f32; 4],
-        clear_depth: f32,
+        colors: Range<usize>,
+        depth: Option<usize>,
     },
     Composite {
         dst: usize,
@@ -155,39 +149,23 @@ impl PreparedOperation {
             Operation::ReadbackImage { src } => Self::ReadbackImage { src },
             Operation::Compute { dst, transform, .. } => Self::Compute { dst, transform },
             Operation::Raster {
+                program,
                 ref draws,
-                targets: Some(targets),
+                ref colors,
+                depth,
                 ..
             } => Self::Raster {
+                program,
                 draws: draws.clone(),
-                color: targets.color,
-                depth: targets.depth,
-                color_ops: targets.color_ops,
-                depth_ops: targets.depth_ops,
-                clear_color: targets.clear_color,
-                clear_depth: targets.clear_depth,
+                colors: colors.clone(),
+                depth,
             },
-            Operation::Raster { targets: None, .. } => {
-                return Err(RuntimeError::unsupported(
-                    "Raster Program/attachment shape has no native execution support",
-                ));
-            }
             Operation::AttachmentPass {
-                simple_clear: Some(clear),
-                ..
+                ref colors, depth, ..
             } => Self::ClearAttachments {
-                color: clear.color,
-                depth: clear.depth,
-                clear_color: clear.clear_color,
-                clear_depth: clear.clear_depth,
+                colors: colors.clone(),
+                depth,
             },
-            Operation::AttachmentPass {
-                simple_clear: None, ..
-            } => {
-                return Err(RuntimeError::unsupported(
-                    "attachment shape has no native execution support",
-                ));
-            }
             Operation::Composite { dst, .. } => Self::Composite { dst },
             Operation::Dispatch { .. } | Operation::Declared(_) => {
                 return Err(RuntimeError::unsupported(
@@ -254,6 +232,7 @@ struct PreparedPass {
     images: Range<usize>,
     staging: Option<usize>,
     descriptor: Option<vk::DescriptorSet>,
+    raster_descriptors: Range<usize>,
 }
 
 pub(super) struct GraphWork {
@@ -290,7 +269,16 @@ impl GraphWork {
     ) -> Result<Self, RuntimeError> {
         let mut data = work.acquire()?;
         let limit = data.limit.graph;
-        if graph.resources.len() > limit.resources
+        let draws = graph
+            .order
+            .iter()
+            .filter_map(|&pass| match &graph.passes[pass].operation {
+                Operation::Raster { draws, .. } => Some(draws.len()),
+                _ => None,
+            })
+            .try_fold(0usize, usize::checked_add);
+        if draws.is_none_or(|draws| draws > limit.draws)
+            || graph.resources.len() > limit.resources
             || graph.order.len() > limit.passes
             || graph
                 .order
@@ -344,6 +332,7 @@ impl GraphWork {
             provenance_needed,
             retain_provenance,
             copy_scratch,
+            raster_descriptors,
             ..
         } = data;
         #[cfg(feature = "vulkan-diagnostics")]
@@ -387,6 +376,7 @@ impl GraphWork {
                 images: images.len()..images.len(),
                 staging: None,
                 descriptor: None,
+                raster_descriptors: raster_descriptors.len()..raster_descriptors.len(),
             };
             // Aggregate one pass's uses before modifying previous-access state;
             // disjoint self-copies must not appear to depend on themselves.
@@ -576,7 +566,12 @@ impl GraphWork {
                                 .composite(physical[*src].as_ref().unwrap().image())?,
                         );
                     }
-                    Operation::Raster { program, draws, .. } => {
+                    Operation::Raster {
+                        program,
+                        draws,
+                        depth,
+                        ..
+                    } => {
                         for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
                             let vertex_count = graph.resources[draw.vertices].desc.units()
                                 / u64::from(program.vertex_stride());
@@ -592,7 +587,36 @@ impl GraphWork {
                                 .map_err(|error| {
                                     index_error(error).context(format_args!("draw {draw_index}"))
                                 })?;
+                            let sets = if program.is_textured() {
+                                let operands = graph.raster_bindings(&draw.bindings);
+                                let [
+                                    crate::graph::BindingOperands::Buffer { resource, range },
+                                    crate::graph::BindingOperands::ImageView(view),
+                                    crate::graph::BindingOperands::Sampler(
+                                        crate::program::SamplerDescriptor::NearestClamp,
+                                    ),
+                                ] = operands
+                                else {
+                                    unreachable!("reviewed canonical Raster bindings")
+                                };
+                                let native_program = programs
+                                    .as_ref()
+                                    .unwrap()
+                                    .raster_program(*program, depth.is_some())?;
+                                bindings.as_mut().unwrap().raster(
+                                    super::super::program::raster_key(*program, depth.is_some()),
+                                    physical[*resource].as_ref().unwrap().buffer().handle,
+                                    range.offset,
+                                    range.size,
+                                    physical[view.image().index].as_ref().unwrap().image(),
+                                    native_program.sampler,
+                                )?
+                            } else {
+                                [vk::DescriptorSet::null(); 2]
+                            };
+                            raster_descriptors.push(sets);
                         }
+                        prepared.raster_descriptors.end = raster_descriptors.len();
                     }
                     Operation::CopyImage { .. } | Operation::AttachmentPass { .. } => {}
                     Operation::Dispatch { .. } | Operation::Declared(_) => {

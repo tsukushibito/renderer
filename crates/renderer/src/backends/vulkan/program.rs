@@ -16,6 +16,7 @@ use super::memory::MemoryOwner;
 mod bindings;
 mod creation;
 mod record;
+pub(super) use record::attachment_info;
 
 use bindings::BindingPool;
 pub(super) use bindings::ShaderBindings;
@@ -46,6 +47,10 @@ fn name_object<H: vk::Handle>(
     .map_err(|r| native(owner, "vkSetDebugUtilsObjectNameEXT(Graph)", r))
 }
 
+pub(super) fn raster_key(program: crate::program::ManagedRasterProgram, depth: bool) -> usize {
+    program.native_id() * 2 + usize::from(depth)
+}
+
 /// The live operations of one graph. Unused programs impose no capabilities or
 /// native creation work; adding another kind never replaces a published program.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -68,6 +73,7 @@ pub(super) struct ShaderPrograms {
     owner: Arc<MemoryOwner>,
     compute: OnceLock<Program>,
     raster: OnceLock<Program>,
+    rasters: [OnceLock<Program>; 10],
     composite: OnceLock<Program>,
     initialization: Mutex<()>,
     limits: vk::PhysicalDeviceLimits,
@@ -90,6 +96,7 @@ impl ShaderPrograms {
             owner,
             compute: OnceLock::new(),
             raster: OnceLock::new(),
+            rasters: std::array::from_fn(|_| OnceLock::new()),
             composite: OnceLock::new(),
             initialization: Mutex::new(()),
             limits,
@@ -104,7 +111,6 @@ impl ShaderPrograms {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         if (!needs.compute || self.compute.get().is_some())
-            && (!needs.raster || self.raster.get().is_some())
             && (!needs.composite || self.composite.get().is_some())
             && self.bindings.is_prepared(needs)?
         {
@@ -146,18 +152,74 @@ impl ShaderPrograms {
             &self.owner,
             self.compute.get().map(|program| program.set_layout),
             self.composite.get().map(|program| program.set_layout),
+            self.raster_layouts(),
         )
+    }
+
+    fn raster_layouts(&self) -> [Option<[vk::DescriptorSetLayout; 2]>; 10] {
+        std::array::from_fn(|key| {
+            self.rasters[key]
+                .get()
+                .filter(|program| program.raster_layouts[0] != vk::DescriptorSetLayout::null())
+                .map(|program| program.raster_layouts)
+        })
+    }
+
+    pub(super) fn prepare_rasters(
+        &self,
+        programs: &[crate::program::ManagedRasterProgram],
+        depth_available: bool,
+    ) -> Result<(), RuntimeError> {
+        let _initialization = self
+            .initialization
+            .lock()
+            .map_err(|_| RuntimeError::invalid("Graph program initialization lock poisoned"))?;
+        for &managed in programs {
+            for depth in [false, true] {
+                if (managed.is_depth_only() && !depth)
+                    || (depth && !depth_available && !managed.is_depth_only())
+                {
+                    continue;
+                }
+                if managed.native_id() == 0 && depth && self.raster.get().is_some() {
+                    continue;
+                }
+                let slot = &self.rasters[raster_key(managed, depth)];
+                if slot.get().is_none() {
+                    let program = Program::new_raster(Arc::clone(&self.owner), managed, depth)?;
+                    slot.set(program)
+                        .map_err(|_| RuntimeError::invalid("Raster unexpectedly published"))?;
+                }
+            }
+        }
+        self.bindings.prepare(
+            &self.owner,
+            self.compute.get().map(|program| program.set_layout),
+            self.composite.get().map(|program| program.set_layout),
+            self.raster_layouts(),
+        )
+    }
+
+    pub(super) fn raster_program(
+        &self,
+        managed: crate::program::ManagedRasterProgram,
+        depth: bool,
+    ) -> Result<&Program, RuntimeError> {
+        if managed.native_id() == 0
+            && depth
+            && let Some(program) = self.raster.get()
+        {
+            return Ok(program);
+        }
+        self.rasters[raster_key(managed, depth)]
+            .get()
+            .ok_or_else(|| RuntimeError::capacity("Raster Program variant is not prepared"))
     }
 
     fn compute(&self) -> &Program {
         self.compute
             .get()
             .expect("Compute program prepared before recording")
-    }
-    fn raster(&self) -> &Program {
-        self.raster
-            .get()
-            .expect("Raster program prepared before recording")
     }
     fn composite(&self) -> &Program {
         self.composite

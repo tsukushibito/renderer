@@ -259,6 +259,7 @@ impl Entry {
 enum CacheDescriptor {
     Buffer(u64),
     Rgba8(u32, u32),
+    Rgba16(u32, u32),
     Depth32(u32, u32),
 }
 impl From<ResourceDesc> for CacheDescriptor {
@@ -267,6 +268,7 @@ impl From<ResourceDesc> for CacheDescriptor {
             ResourceDesc::Buffer(desc) => Self::Buffer(desc.size),
             ResourceDesc::Image(desc) => match desc.format {
                 ImageFormat::Rgba8Unorm => Self::Rgba8(desc.width, desc.height),
+                ImageFormat::Rgba16Float => Self::Rgba16(desc.width, desc.height),
                 ImageFormat::Depth32Float => Self::Depth32(desc.width, desc.height),
             },
         }
@@ -463,6 +465,7 @@ impl VulkanRuntime {
                 match physical.desc {
                     ResourceDesc::Image(desc) => match desc.format {
                         ImageFormat::Rgba8Unorm => color = true,
+                        ImageFormat::Rgba16Float => {}
                         ImageFormat::Depth32Float => depth = true,
                     },
                     ResourceDesc::Buffer(_) => {}
@@ -496,6 +499,41 @@ impl VulkanRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = ranges;
         Ok(())
+    }
+
+    /// Prepare the selected reviewed Raster programs before ordinary frames.
+    /// Color programs prepare color-only variants and depth-enabled variants
+    /// when the prepared resource working set includes depth images.
+    /// All recorded/pending commands must retire before extending descriptor layouts.
+    pub fn prepare_raster_programs(
+        &mut self,
+        programs: &[crate::program::ManagedRasterProgram],
+    ) -> Result<(), RuntimeError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        if self.frame_capacity.is_none() {
+            return Err(RuntimeError::capacity("frame working set is not prepared"));
+        }
+        if self.execution.stats().leased != 0 {
+            return Err(RuntimeError::capacity(
+                "Raster preparation requires retired execution slots",
+            ));
+        }
+        if self.programs.is_none() {
+            self.programs = Some(ShaderPrograms::new(
+                Arc::clone(&self.owner),
+                self.config.execution_slots,
+                self.config.max_shader_bindings,
+            )?);
+        }
+        let depth_available = self.entries.iter().any(|entry| entry.physical.as_ref()
+            .is_some_and(|physical| matches!(physical.desc, ResourceDesc::Image(desc) if desc.format == ImageFormat::Depth32Float)));
+        self.programs
+            .as_ref()
+            .unwrap()
+            .prepare_rasters(programs, depth_available)
     }
 
     /// Create an immutable managed pipeline independently of any Graph.
@@ -897,6 +935,7 @@ impl VulkanRuntime {
                     desc.height,
                     match desc.format {
                         ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+                        ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
                         ImageFormat::Depth32Float => vk::Format::D32_SFLOAT,
                     },
                     name,
@@ -1010,24 +1049,29 @@ impl VulkanRuntime {
             serial,
         )?;
         for &pass in &graph.order {
-            if matches!(
-                &graph.passes[pass].operation,
-                Operation::Raster { targets: None, .. }
-            ) {
-                return Err(RuntimeError::unsupported(
-                    "Raster Program/attachment shape has no native execution support",
-                ));
-            }
-            if matches!(
-                &graph.passes[pass].operation,
-                Operation::AttachmentPass {
-                    simple_clear: None,
+            match &graph.passes[pass].operation {
+                Operation::Raster {
+                    program,
+                    colors,
+                    depth,
                     ..
+                } => {
+                    if colors.len() > 1 {
+                        return Err(RuntimeError::unsupported(
+                            "Raster supports at most one color attachment",
+                        ));
+                    }
+                    self.programs
+                        .as_ref()
+                        .ok_or_else(|| RuntimeError::capacity("Raster programs are not prepared"))?
+                        .raster_program(*program, depth.is_some())?;
                 }
-            ) {
-                return Err(RuntimeError::unsupported(
-                    "attachment shape has no native execution support",
-                ));
+                Operation::AttachmentPass { colors, .. } if colors.len() > 1 => {
+                    return Err(RuntimeError::unsupported(
+                        "native passes support at most one color attachment",
+                    ));
+                }
+                _ => {}
             }
             if let Operation::Dispatch { .. } = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
@@ -1109,7 +1153,11 @@ impl VulkanRuntime {
         if let Some(programs) = &programs {
             programs.ensure(shader_needs)?;
         }
-        let bindings = if shader_needs.compute || shader_needs.composite {
+        let textured_raster = graph.order.iter().any(|&pass| {
+            matches!(&graph.passes[pass].operation,
+            Operation::Raster { program, .. } if program.is_textured())
+        });
+        let bindings = if shader_needs.compute || shader_needs.composite || textured_raster {
             Some(programs.as_ref().unwrap().acquire_bindings()?)
         } else {
             None

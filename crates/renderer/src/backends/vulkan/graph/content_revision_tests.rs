@@ -4,8 +4,7 @@ use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
 use crate::graph::{
-    AttachmentOps, BufferDesc, ComputeTransform, Graph, GraphErrorKind, ImageDesc, LoadAction,
-    RasterParameters,
+    BufferDesc, ComputeTransform, Graph, GraphErrorKind, ImageDesc, RasterParameters,
 };
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -285,10 +284,6 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         discard
             .upload_buffer("indices", indices, 0, &[0; 12])
             .unwrap();
-        let discard_ops = AttachmentOps {
-            load: LoadAction::Load,
-            store: StoreOp::Discard,
-        };
         discard
             .raster(
                 "discard",
@@ -303,21 +298,13 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                 RasterAttachments {
                     colors: &[Attachment {
                         view: discard.image_view(color_target, 0, 0).unwrap(),
-                        load: match discard_ops.load {
-                            LoadAction::Clear => LoadOp::Clear([0.0; 4]),
-                            LoadAction::Load => LoadOp::Load,
-                            LoadAction::Discard => LoadOp::Discard,
-                        },
-                        store: discard_ops.store,
+                        load: LoadOp::Load,
+                        store: StoreOp::Discard,
                     }],
                     depth: Some(Attachment {
                         view: discard.image_view(depth_target, 0, 0).unwrap(),
-                        load: match discard_ops.load {
-                            LoadAction::Clear => LoadOp::Clear(1.0),
-                            LoadAction::Load => LoadOp::Load,
-                            LoadAction::Discard => LoadOp::Discard,
-                        },
-                        store: discard_ops.store,
+                        load: LoadOp::Load,
+                        store: StoreOp::Discard,
                     }),
                 },
             )
