@@ -1,10 +1,17 @@
 //! Owned attachment operations, independent of a graphics shader or native API.
 
 use super::{
-    AccessPurpose, AttachmentClearOperands, AttachmentOperand, Graph, GraphCapacityKind,
-    GraphError, GraphErrorKind, ImageFormat, LoadAction, LoadOp, Operation, PassHandle,
+    AccessPurpose, AttachmentOperand, Graph, GraphCapacityKind, GraphError, GraphErrorKind,
+    ImageFormat, LoadAction, LoadOp, Operation, PassHandle, RasterAttachmentOperands,
     RasterAttachments, ResourceAccess, StoreOp, storage::capacity_error,
 };
+
+pub(super) struct AttachmentPlan {
+    pub colors: std::ops::Range<usize>,
+    pub depth: Option<usize>,
+    pub targets: Option<RasterAttachmentOperands>,
+    pub accesses: std::ops::Range<usize>,
+}
 
 impl Graph {
     /// Apply attachment Load/Clear/Discard and Store/Discard without drawing.
@@ -20,139 +27,155 @@ impl Graph {
         attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let count = attachments
-                .colors
-                .len()
-                .checked_add(usize::from(attachments.depth.is_some()));
-            if count == Some(0) {
-                return Err(GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "attachment pass requires at least one target",
-                ));
-            }
-            let required = count.and_then(|count| graph.attachments.len().checked_add(count));
-            if required.is_none_or(|required| required > graph.capacity.attachments) {
-                return Err(capacity_error(
-                    GraphCapacityKind::Attachments,
-                    graph.capacity.attachments,
-                    required,
-                ));
-            }
-            let first = graph.attachments.len();
-            let first_access = graph.accesses.len();
-            let mut extent = None;
-            for attachment in attachments.colors {
-                let clear = match attachment.load {
-                    LoadOp::Clear(value) if value.iter().all(|v| v.is_finite()) => value,
-                    LoadOp::Clear(_) => {
-                        return Err(graph.resource_error(
-                            GraphErrorKind::InvalidInput,
-                            "color attachment clear must be finite",
-                            graph.image_id(attachment.view.image)?,
-                        ));
-                    }
-                    _ => [0.0; 4],
-                };
-                graph.append_attachment(
-                    AttachmentOperand {
-                        view: attachment.view,
-                        ops: attachment.ops(),
-                        clear,
-                    },
-                    ImageFormat::Rgba8Unorm,
-                    &mut extent,
-                )?;
-            }
-            let colors = first..graph.attachments.len();
-            let depth = if let Some(attachment) = attachments.depth {
-                let value = match attachment.load {
-                    LoadOp::Clear(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
-                        value
-                    }
-                    LoadOp::Clear(_) => {
-                        return Err(graph.resource_error(
-                            GraphErrorKind::InvalidInput,
-                            "depth clear must be finite and within zero and one",
-                            graph.image_id(attachment.view.image)?,
-                        ));
-                    }
-                    _ => 0.0,
-                };
-                let index = graph.attachments.len();
-                graph.append_attachment(
-                    AttachmentOperand {
-                        view: attachment.view,
-                        ops: attachment.ops(),
-                        clear: [value, 0.0, 0.0, 0.0],
-                    },
-                    ImageFormat::Depth32Float,
-                    &mut extent,
-                )?;
-                Some(index)
-            } else {
-                None
-            };
-            let accesses = first_access..graph.accesses.len();
-            let conflict = {
-                let data = graph.data_mut();
-                super::accesses::conflicting_accesses_in(
-                    &data.accesses[accesses.clone()],
-                    |access| (access.resource, access.range.clone(), true),
-                    &mut data.overlap,
-                )
-                .map_err(|_| {
-                    capacity_error(
-                        GraphCapacityKind::Accesses,
-                        data.capacity.accesses,
-                        Some(accesses.len()),
-                    )
-                })?
-            };
-            if let Some((left, _)) = conflict {
-                let access = &graph.accesses[accesses.start + left];
-                return Err(graph
-                    .resource_error(
-                        GraphErrorKind::InvalidInput,
-                        "attachment Views must not overlap",
-                        access.resource,
-                    )
-                    .with_range(graph.access_range(access.resource, access.range.clone())));
-            }
-            let simple_clear = if let (1, Some(depth)) = (colors.len(), depth) {
-                let color = graph.attachments[colors.start];
-                let depth = graph.attachments[depth];
-                if color.ops.load == LoadAction::Clear
-                    && color.ops.store == StoreOp::Store
-                    && depth.ops.load == LoadAction::Clear
-                    && depth.ops.store == StoreOp::Store
-                    && graph
-                        .image_desc_at(color.view.image.index)?
-                        .is_single_subresource()
-                    && graph
-                        .image_desc_at(depth.view.image.index)?
-                        .is_single_subresource()
-                {
-                    Some(AttachmentClearOperands {
-                        color: color.view.image.index,
-                        depth: depth.view.image.index,
-                        clear_color: color.clear,
-                        clear_depth: depth.clear[0],
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let plan = graph.append_attachments(attachments)?;
+            let simple_clear = plan.targets.filter(|targets| {
+                targets.color_ops.load == LoadAction::Clear
+                    && targets.color_ops.store == StoreOp::Store
+                    && targets.depth_ops.load == LoadAction::Clear
+                    && targets.depth_ops.store == StoreOp::Store
+            });
             Ok((
                 Operation::AttachmentPass {
-                    colors,
-                    depth,
+                    colors: plan.colors,
+                    depth: plan.depth,
                     simple_clear,
                 },
-                accesses,
+                plan.accesses,
                 false,
             ))
+        })
+    }
+
+    pub(super) fn append_attachments(
+        &mut self,
+        attachments: RasterAttachments<'_>,
+    ) -> Result<AttachmentPlan, GraphError> {
+        let count = attachments
+            .colors
+            .len()
+            .checked_add(usize::from(attachments.depth.is_some()));
+        if count == Some(0) {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "attachment pass requires at least one target",
+            ));
+        }
+        let required = count.and_then(|count| self.attachments.len().checked_add(count));
+        if required.is_none_or(|required| required > self.capacity.attachments) {
+            return Err(capacity_error(
+                GraphCapacityKind::Attachments,
+                self.capacity.attachments,
+                required,
+            ));
+        }
+        let first = self.attachments.len();
+        let first_access = self.accesses.len();
+        let mut extent = None;
+        for attachment in attachments.colors {
+            let clear = match attachment.load {
+                LoadOp::Clear(value) if value.iter().all(|v| v.is_finite()) => value,
+                LoadOp::Clear(_) => {
+                    return Err(self.resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "color attachment clear must be finite",
+                        self.image_id(attachment.view.image)?,
+                    ));
+                }
+                _ => [0.0; 4],
+            };
+            self.append_attachment(
+                AttachmentOperand {
+                    view: attachment.view,
+                    ops: attachment.ops(),
+                    clear,
+                },
+                ImageFormat::Rgba8Unorm,
+                &mut extent,
+            )?;
+        }
+        let colors = first..self.attachments.len();
+        let depth = if let Some(attachment) = attachments.depth {
+            let value = match attachment.load {
+                LoadOp::Clear(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
+                LoadOp::Clear(_) => {
+                    return Err(self.resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "depth clear must be finite and within zero and one",
+                        self.image_id(attachment.view.image)?,
+                    ));
+                }
+                _ => 0.0,
+            };
+            let index = self.attachments.len();
+            self.append_attachment(
+                AttachmentOperand {
+                    view: attachment.view,
+                    ops: attachment.ops(),
+                    clear: [value, 0.0, 0.0, 0.0],
+                },
+                ImageFormat::Depth32Float,
+                &mut extent,
+            )?;
+            Some(index)
+        } else {
+            None
+        };
+        let accesses = first_access..self.accesses.len();
+        let conflict = {
+            let data = self.data_mut();
+            super::accesses::conflicting_accesses_in(
+                &data.accesses[accesses.clone()],
+                |access| (access.resource, access.range.clone(), true),
+                &mut data.overlap,
+            )
+            .map_err(|_| {
+                capacity_error(
+                    GraphCapacityKind::Accesses,
+                    data.capacity.accesses,
+                    Some(accesses.len()),
+                )
+            })?
+        };
+        if let Some((left, _)) = conflict {
+            let access = &self.accesses[accesses.start + left];
+            return Err(self
+                .resource_error(
+                    GraphErrorKind::InvalidInput,
+                    "attachment Views must not overlap",
+                    access.resource,
+                )
+                .with_range(self.access_range(access.resource, access.range.clone())));
+        }
+
+        let targets = if let (1, Some(depth)) = (colors.len(), depth) {
+            let color = self.attachments[colors.start];
+            let depth = self.attachments[depth];
+            if self
+                .image_desc_at(color.view.image.index)?
+                .is_single_subresource()
+                && self
+                    .image_desc_at(depth.view.image.index)?
+                    .is_single_subresource()
+            {
+                Some(RasterAttachmentOperands {
+                    color: color.view.image.index,
+                    depth: depth.view.image.index,
+                    color_ops: color.ops,
+                    depth_ops: depth.ops,
+                    clear_color: color.clear,
+                    clear_depth: depth.clear[0],
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(AttachmentPlan {
+            colors,
+            depth,
+            targets,
+            accesses,
         })
     }
 

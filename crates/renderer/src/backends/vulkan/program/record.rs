@@ -55,78 +55,13 @@ impl ShaderPrograms {
     }
 
     /// # Safety
-    /// Command records outside rendering; all supplied resources and programs
-    /// survive retirement. Vertex/index ranges obey the fixed ABI and validated
-    /// indices. Color/depth are distinct, equal extents and in attachment layouts
-    /// after dependencies, with valid contents for LOAD. Attachments are whole.
+    /// The command is recording outside rendering. All ordered draws, Programs
+    /// and attachments survive actual GPU completion; indices/ranges/ABI obey
+    /// the reviewed mesh contract. Dependencies establish attachment layouts
+    /// and valid contents for LOAD before this scope; no storage side effects
+    /// or barriers are admitted within the rendering scope.
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::backends::vulkan) unsafe fn record_raster(
-        &self,
-        command: vk::CommandBuffer,
-        vertices: vk::Buffer,
-        indices: vk::Buffer,
-        index_count: u32,
-        color: &DeviceImage,
-        depth: &DeviceImage,
-        color_load: vk::AttachmentLoadOp,
-        color_store: vk::AttachmentStoreOp,
-        clear_color: [f32; 4],
-        depth_load: vk::AttachmentLoadOp,
-        depth_store: vk::AttachmentStoreOp,
-        clear_depth: f32,
-        parameters: &RasterParameters,
-    ) {
-        // SAFETY: The caller supplies a validated draw and retained attachments.
-        unsafe {
-            self.record_rasters(
-                command,
-                std::iter::once((vertices, indices, index_count, parameters)),
-                color,
-                depth,
-                color_load,
-                color_store,
-                clear_color,
-                depth_load,
-                depth_store,
-                clear_depth,
-            );
-        }
-    }
-
-    /// # Safety
-    /// All fixed-pipeline draws are validated and retained through retirement.
-    /// External dependencies precede this whole scope. No shader storage writes
-    /// occur; draw order preserves primitive-order attachment operations.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::backends::vulkan) unsafe fn record_raster_batch<'a>(
-        &self,
-        command: vk::CommandBuffer,
-        draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,
-        color: &DeviceImage,
-        depth: &DeviceImage,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-    ) {
-        // SAFETY: The graph batch declares the full clear and every buffer read;
-        // the caller validates indices and establishes all attachment layouts.
-        unsafe {
-            self.record_rasters(
-                command,
-                draws,
-                color,
-                depth,
-                vk::AttachmentLoadOp::CLEAR,
-                vk::AttachmentStoreOp::STORE,
-                clear_color,
-                vk::AttachmentLoadOp::CLEAR,
-                vk::AttachmentStoreOp::STORE,
-                clear_depth,
-            );
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn record_rasters<'a>(
+    pub(in crate::backends::vulkan) unsafe fn record_rasters<'a>(
         &self,
         command: vk::CommandBuffer,
         draws: impl IntoIterator<Item = (vk::Buffer, vk::Buffer, u32, &'a RasterParameters)>,

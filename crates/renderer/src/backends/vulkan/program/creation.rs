@@ -352,7 +352,7 @@ impl Program {
         let vertex = ShaderModule::new(
             Arc::clone(&self.owner),
             if mesh {
-                include_bytes!("../../../../shaders/mesh.vert.spv")
+                crate::program::ManagedRasterProgram::mesh().vertex_spirv()
             } else {
                 include_bytes!("../../../../shaders/composite.vert.spv")
             },
@@ -360,7 +360,7 @@ impl Program {
         let fragment = ShaderModule::new(
             Arc::clone(&self.owner),
             if mesh {
-                include_bytes!("../../../../shaders/mesh.frag.spv")
+                crate::program::ManagedRasterProgram::mesh().fragment_spirv()
             } else {
                 include_bytes!("../../../../shaders/composite.frag.spv")
             },

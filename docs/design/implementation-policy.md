@@ -492,7 +492,7 @@ callbackでも型付きpass data／bindingから宣言を作れるため、callb
 |---|---|---|
 | A: 構築時に命令を所有 | 即時closureでframeのdraw slice等を借用し、終了後は命令・定数・資源参照をplanが所有する | 実際のbinding／attachmentから用途・範囲を導ける。除去される処理も命令生成する。命令列の格納とnative記録時の走査が必要 |
 | B: frame内の遅延callback | 宣言時に型付きpass dataを渡し、同じdataと制限されたencoderで後から記録する。`FnOnce + 'frame`で借用できる | 不要passのcallbackを呼ばずに済む。先に宣言したアクセス集合を実命令が越えない保証、captureの寿命、record時の失敗処理が必要 |
-| 現行固定操作 | `Graph::raster`、固定`ComputeTransform`、build時custom closure | 現在の正しい比較基準。公開rasterは一draw＋color/depth、標準描画の内部batchは複数draw。独自program・depth-only・HDR等の代わりにはならない |
+| B0比較元の固定操作 | 当時の単一draw `Graph::raster`、固定`ComputeTransform`、build時custom closure | 比較元の正しい基準。現在のmesh Rasterは明示Program＋owned draw列へ統合済みだが、独自shader・depth-only・HDR等の代わりにはならない |
 
 **第一案はAと、binding／attachmentからアクセスを導く公開builderの組合せ**とする。
 通常作者が入出力とdraw／dispatchを同じ場所で書け、実命令が確定した境界で検査でき、
@@ -1113,6 +1113,10 @@ prepared arena・所有・初期化・依存・cullingとnative未対応拒否�
 Load/Store、各subresourceの初期化・producer/hazard/culling、全域exportを実証する。
 旧clear入口は置換し、nativeは従来の1color＋depth Clear/Storeだけをlowerする。
 owned一般Raster命令・graphics stage/vertex/PSOと実描画、複数subresource View/native実行をこの完了に含めない。
+`.2.2.4`は実在mesh assetの`ManagedRasterProgram`を明示するowned複数drawへ公開Raster/Engine batchを統合する。
+Program・定数・draw順・attachmentを同じ準備済み計画へ所有し、既存VulkanでLoad/Storeとindex provenanceを維持して実行する。
+このmeshはdescriptorを使わないため、一般graphics bindingのstage導出・新PSO・D3D12実Rasterの実証は`.2.3`へ残る。
+任意/MRT Program、first_index/base_vertex/多instance、複数subresourceを覆うViewをこの完了の保証にしない。
 他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。

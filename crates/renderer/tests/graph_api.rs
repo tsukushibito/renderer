@@ -29,12 +29,13 @@ fn offscreen_pipeline(graph: &mut Graph) {
     graph
         .raster(
             "mesh",
-            RasterDraw {
+            &renderer::program::ManagedRasterProgram::mesh(),
+            &[RasterDraw {
                 vertices,
                 indices,
                 index_count: 3,
                 parameters: RasterParameters::default(),
-            },
+            }],
             RasterAttachments {
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),

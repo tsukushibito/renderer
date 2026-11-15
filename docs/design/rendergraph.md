@@ -237,13 +237,30 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 文字列は資源の所有を保持せず、GPU完了tokenでもない。native handle等は実行ごとに変わるため、
 安定した機械可読形式や実行間で同一のdumpは保証しない。
 
-`Graph::raster(name, draw, attachments)`は名前付きの`RasterDraw`と`RasterAttachments`を受け取る。
-drawはvertex／index buffer・index count・`RasterParameters`をまとめ、
+`Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`と借用draw sliceを受け取る。
+各`RasterDraw`はvertex／index buffer・index count・`RasterParameters`をまとめ、
 attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
-固定mesh shaderの`raster`は従来の1color＋depth・単一subresource画像だけを受け入れ、他の形は`Unsupported`にする。
+現在の管理下mesh Programは1 RGBA8出力を持ち、CPU計画ではdepthを省略できる。
+Vulkanのnative実行は従来の1color＋depth・単一subresource画像だけを扱い、他の形は物理取得前に`Unsupported`にする。
 各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
 `Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
 既定の描画引数には`RasterParameters::default()`を明示する。
+
+`renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
+`ManagedRasterProgram::mesh()`は実在する両APIのmesh VS/FSに結び付き、private static manifestが
+頂点stride 28、vertex段のcolumn-major行列＋tint 80 byte、fragment出力location 0を定める。
+これはnative PSO作成やDevice能力の保証ではなく、任意source/binaryや自己申告のmanifestを受け入れない。
+このshaderはdescriptor bindingとstorage副作用を持たない。DXILのb0は同じinline描画定数の表現であり、
+一般graphicsのUniform binding/stage導出や新しいGraph資源bindingを実装したとは扱わない。
+
+planはProgram identity、draw順、各定数、全buffer/View参照を準備済みarenaへ所有する。
+vertex/index用途はdrawから導き、共有bufferの各用途を失わずに集約する。Indexはu32三角形、
+first index/base vertexは0、instance数は1だけを扱う。CPU計画だけでindex本文の範囲内や実Device上限を保証せず、
+既存のnative provenance・更新時の失効・未知内容の拒否を維持する。
+後半drawの構築失敗でもdraw/access/attachment/nameを戻し、途中のpassを公開しない。
+Engineはsnapshotで確立した有限値のprivate保証を同じcoreへ渡し、描画引数を再走査しない。
+空draw sliceはProgramを使わないattachment-onlyへ正規化するため、空の場合はattachment配列の一般形も扱える。
+旧single-draw/batch APIの互換入口は残さない。複数drawも同じLoad/Storeを共有し、Clear/Storeへ暗黙に置き換えない。
 
 Attachmentは選択mip/layer全域をrender areaとする。`Load`は既存内容を要求し、
 `Clear(value)`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
@@ -524,8 +541,8 @@ Modelを含めない責務境界と理由は[実装方針](implementation-policy
 `FrameSnapshot`はmeshの版とtint・行列を所有し、
 後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
 `clip_from_world * world_from_model`を合成する。clip depthは0〜W、viewport高さは正、通常Zである。
-有限なdrawパラメーターはsnapshotでprivateな検証済み値として確立し、batch構築で再走査しない。
-public `Graph::raster`のraw入力検査は維持する。batchのowned operandはfallible iteratorから直接作り、
+有限なdrawパラメーターはsnapshotでprivateな検証済み値として確立し、owned Raster構築で再走査しない。
+public `Graph::raster`のraw入力検査は維持する。Engineのowned operandは同じcoreでfallible iteratorから直接作り、
 途中失敗時はpassを追加しない。
 snapshotはCloneせず、必要な同時frame数のslotを準備する。capture途中の失敗と通常Dropは
 draw配列・mesh解決用scratchをpoolへ返す。元のEngineとSnapshotPoolは通常処理の間保持し、
@@ -582,7 +599,7 @@ frame・execution・readbackのleaseを従来どおり返すが、旧assetを最
 所有するsubmissionを分ける。`build_snapshot`は準備済み常駐を使い、uploadや待機を隠して実行しない。
 Fence完了後の結果・計測取得だけが失敗した場合も、退役済みuploadを回収して元のエラーを返す。
 完了不明のFenceエラーやtimeoutは同じ回収扱いにせず、所有を維持する。
-標準の不透明描画はowned draw listを一つの`RasterBatch`操作にする。
+標準の不透明描画は管理下mesh Programとowned draw listを一つの`Raster`操作にする。
 空draw listはclear-only、非空ならcolor/depthを一回clearし、宣言された順に全drawを描いてStoreする。
 Rasterノード数はdraw数によらず一件で、custom Compute・明示的なcomposite・readback等は別ノードのままである。
 同じmeshの再利用と、異なるmeshの組合せの両方を扱い、drawの行列・tint・index数を所有する。
@@ -593,8 +610,8 @@ indexは各drawの頂点範囲とDevice上限について記録前に検査し�
 canonical importは`ResourceKey`をkeyとするprivateな索引で検索し、同一性とsnapshot整合性の検査を保つ。
 Vulkanの用途集約も論理資源indexの準備済み配列と利用index列を使い、多数の異なるmeshを一つのパスへ集めても全入力対を走査しない。
 
-`Graph::raster`等の単一draw操作は参照経路と明示的なGraph構築に残す。
-今回のbatchは固定shaderの標準opaque描画をまとめる契約で、公開PassEncoderや任意パスの自動統合ではない。
+単一drawの比較は同じ公開APIで一drawずつpassを作り、複数drawの一passと出力を照合する。
+標準opaqueは管理下mesh shaderを明示する契約で、公開PassEncoderや任意パスの自動統合ではない。
 別の描画先、Compute、copy等の必要な境界と同期は維持する。
 共有mesh／異なるmeshの画像・同期・性能の確認は[検証記録](../verification/current.md#draw-listの本実装と比較計測)を参照する。
 

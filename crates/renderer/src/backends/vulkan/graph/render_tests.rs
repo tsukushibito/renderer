@@ -4,8 +4,7 @@ use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
 use crate::graph::{
-    BufferDesc, BufferHandle, ComputeTransform, Graph, GraphError, ImageDesc, RasterParameters,
-    ValidatedRasterParameters,
+    BufferDesc, BufferHandle, ComputeTransform, Graph, ImageDesc, RasterParameters,
 };
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -43,6 +42,22 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 },
                 ResourceClass::Image {
                     desc: depth_desc,
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 224 },
+                    count: 1,
+                },
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 48 },
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba8(16, 16),
+                    count: 1,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::depth32(16, 16),
                     count: 1,
                 },
             ],
@@ -121,6 +136,114 @@ fn vulkan_attachment_subresource_native_boundaries() {
             );
         }
 
+        let mut unsupported = Graph::test_new();
+        let (vertices, indices) = add_mesh(&mut unsupported, false);
+        let color = unsupported.image("color-only Raster", color_desc).unwrap();
+        unsupported
+            .raster(
+                "CPU color-only plan",
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[RasterDraw {
+                    vertices,
+                    indices,
+                    index_count: 12,
+                    parameters: RasterParameters::default(),
+                }],
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: unsupported.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        unsupported
+            .readback_image("live CPU-only shape", color)
+            .unwrap();
+        assert_eq!(
+            runtime
+                .submit(&unsupported.compile().unwrap())
+                .err()
+                .unwrap()
+                .kind(),
+            RuntimeErrorKind::Unsupported
+        );
+
+        let mut loaded = Graph::test_new();
+        let (vertices, indices) = add_mesh(&mut loaded, false);
+        let color = loaded
+            .image("loaded color", ImageDesc::rgba8(16, 16))
+            .unwrap();
+        let depth = loaded
+            .image("loaded depth", ImageDesc::depth32(16, 16))
+            .unwrap();
+        let color_view = loaded.image_view(color, 0, 0).unwrap();
+        let depth_view = loaded.image_view(depth, 0, 0).unwrap();
+        loaded
+            .attachment_pass(
+                "blue seed",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: color_view,
+                        load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Clear(0.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        loaded
+            .raster(
+                "loaded draw list",
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                    RasterDraw {
+                        vertices,
+                        indices,
+                        index_count: 12,
+                        parameters: RasterParameters::default(),
+                    },
+                ],
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: color_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        let read = loaded.readback_image("loaded pixels", color).unwrap();
+        let mut submission = runtime.submit(&loaded.compile().unwrap()).unwrap();
+        let mut result = submission.wait(WAIT).unwrap().unwrap();
+        let bytes = result.test_readback(read).unwrap();
+        assert_eq!(bytes.len(), 1024);
+        assert!(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 0, 255, 255])
+        );
+        drop((result, submission));
+
         let mut graph = Graph::test_new();
         let color = graph.image("clear color", color_desc).unwrap();
         let depth = graph.image("clear depth", depth_desc).unwrap();
@@ -190,17 +313,16 @@ fn vulkan_attachment_subresource_native_boundaries() {
     }
 }
 
-fn batch_draws(
-    draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>,
-) -> impl ExactSizeIterator<
-    Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
-> {
+fn batch_draws(draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>) -> Vec<RasterDraw> {
     draws
         .into_iter()
-        .map(|(vertices, indices, count, parameters)| {
-            ValidatedRasterParameters::new(parameters)
-                .map(|parameters| (vertices, indices, count, parameters))
+        .map(|(vertices, indices, index_count, parameters)| RasterDraw {
+            vertices,
+            indices,
+            index_count,
+            parameters,
         })
+        .collect()
 }
 
 fn real_gpu(test: impl FnOnce(&mut VulkanRuntime)) {
@@ -302,13 +424,22 @@ fn opaque_batch_comparison(
     }
     if batched {
         graph
-            .raster_batch(
+            .raster(
                 "opaque batch",
-                batch_draws(draws),
-                color,
-                depth,
-                [0.0, 0.0, 0.0, 1.0],
-                1.0,
+                &crate::program::ManagedRasterProgram::mesh(),
+                &batch_draws(draws),
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
             )
             .unwrap();
     } else {
@@ -333,12 +464,13 @@ fn opaque_batch_comparison(
             graph
                 .raster(
                     "scalar draw",
-                    RasterDraw {
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    &[RasterDraw {
                         vertices,
                         indices,
                         index_count: count,
                         parameters,
-                    },
+                    }],
                     RasterAttachments {
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
@@ -489,16 +621,25 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
         let color = graph.image("color", ImageDesc::rgba8(1, 1)).unwrap();
         let depth = graph.image("depth", ImageDesc::depth32(1, 1)).unwrap();
         graph
-            .raster_batch(
+            .raster(
                 "bounds batch",
-                batch_draws(vec![
+                &crate::program::ManagedRasterProgram::mesh(),
+                &batch_draws(vec![
                     (full, indices, 3, RasterParameters::default()),
                     (short, indices, 3, RasterParameters::default()),
                 ]),
-                color,
-                depth,
-                [0.0; 4],
-                1.0,
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
             )
             .unwrap();
         graph.readback_image("read", color).unwrap();
@@ -551,13 +692,22 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
         let color = graph.image("color", ImageDesc::rgba8(4, 4)).unwrap();
         let depth = graph.image("depth", ImageDesc::depth32(4, 4)).unwrap();
         graph
-            .raster_batch(
+            .raster(
                 "shared input batch",
-                batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
-                color,
-                depth,
-                [0.0, 0.0, 1.0, 1.0],
-                1.0,
+                &crate::program::ManagedRasterProgram::mesh(),
+                &batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(color, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
             )
             .unwrap();
         let readback = graph.readback_image("read", color).unwrap();
@@ -709,12 +859,13 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             invalid
                 .raster(
                     "reject-invalid-index",
-                    RasterDraw {
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    &[RasterDraw {
                         vertices,
                         indices,
                         index_count: 12,
                         parameters: RasterParameters::default(),
-                    },
+                    }],
                     RasterAttachments {
                         colors: &[Attachment {
                             view: invalid.image_view(color, 0, 0).unwrap(),
@@ -919,12 +1070,13 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
             .unwrap();
         mesh.raster(
             "lazy-mesh",
-            RasterDraw {
+            &crate::program::ManagedRasterProgram::mesh(),
+            &[RasterDraw {
                 vertices,
                 indices,
                 index_count: 12,
                 parameters: RasterParameters::default(),
-            },
+            }],
             RasterAttachments {
                 colors: &[Attachment {
                     view: mesh.image_view(color, 0, 0).unwrap(),
@@ -1096,12 +1248,13 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             graph
                 .raster(
                     "mesh-clear",
-                    RasterDraw {
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    &[RasterDraw {
                         vertices,
                         indices,
                         index_count: 12,
                         parameters: RasterParameters::default(),
-                    },
+                    }],
                     RasterAttachments {
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
@@ -1148,12 +1301,13 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             graph
                 .raster(
                     "mesh-load",
-                    RasterDraw {
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    &[RasterDraw {
                         vertices: blue_vertices,
                         indices: blue_indices,
                         index_count: 6,
                         parameters: RasterParameters::default(),
-                    },
+                    }],
                     RasterAttachments {
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
@@ -1249,12 +1403,13 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             graph
                 .raster(
                     "scene-mesh-depth",
-                    RasterDraw {
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    &[RasterDraw {
                         vertices,
                         indices,
                         index_count: 12,
                         parameters: RasterParameters::default(),
-                    },
+                    }],
                     RasterAttachments {
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),

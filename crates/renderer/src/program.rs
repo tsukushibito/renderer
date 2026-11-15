@@ -51,6 +51,10 @@
 //! }
 //! ```
 
+mod raster;
+
+pub use raster::ManagedRasterProgram;
+
 /// A resource's immutable native usage. No CPU mapping or mutation is exposed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BufferUsage {

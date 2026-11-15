@@ -4,6 +4,8 @@
 use std::ops::{Deref, DerefMut, Range};
 use std::sync::Arc;
 
+#[cfg(test)]
+use crate::graph::RasterParameters;
 use ash::vk;
 
 use super::super::memory::MemoryOwner;
@@ -15,7 +17,7 @@ use super::storage::{StorageLease, StoragePool};
 use super::{NativeResource, Physical, RuntimeError, Snapshot};
 use crate::graph::{
     AccessPurpose, AttachmentOps, CompiledGraph, ComputeTransform, MeshUpload, Operation,
-    RasterParameters, ResourceDesc,
+    ResourceDesc,
 };
 
 #[cfg(feature = "graph-diagnostics")]
@@ -105,21 +107,11 @@ enum PreparedOperation {
         transform: ComputeTransform,
     },
     Raster {
-        vertices: usize,
-        indices: usize,
-        index_count: u32,
+        draws: Range<usize>,
         color: usize,
         depth: usize,
         color_ops: AttachmentOps,
         depth_ops: AttachmentOps,
-        clear_color: [f32; 4],
-        clear_depth: f32,
-        parameters: RasterParameters,
-    },
-    RasterBatch {
-        draws: Range<usize>,
-        color: usize,
-        depth: usize,
         clear_color: [f32; 4],
         clear_depth: f32,
     },
@@ -163,41 +155,23 @@ impl PreparedOperation {
             Operation::ReadbackImage { src } => Self::ReadbackImage { src },
             Operation::Compute { dst, transform, .. } => Self::Compute { dst, transform },
             Operation::Raster {
-                vertices,
-                indices,
-                index_count,
-                color,
-                depth,
-                color_ops,
-                depth_ops,
-                clear_color,
-                clear_depth,
-                parameters,
-            } => Self::Raster {
-                vertices,
-                indices,
-                index_count,
-                color,
-                depth,
-                color_ops,
-                depth_ops,
-                clear_color,
-                clear_depth,
-                parameters,
-            },
-            Operation::RasterBatch {
                 ref draws,
-                color,
-                depth,
-                clear_color,
-                clear_depth,
-            } => Self::RasterBatch {
+                targets: Some(targets),
+                ..
+            } => Self::Raster {
                 draws: draws.clone(),
-                color,
-                depth,
-                clear_color,
-                clear_depth,
+                color: targets.color,
+                depth: targets.depth,
+                color_ops: targets.color_ops,
+                depth_ops: targets.depth_ops,
+                clear_color: targets.clear_color,
+                clear_depth: targets.clear_depth,
             },
+            Operation::Raster { targets: None, .. } => {
+                return Err(RuntimeError::unsupported(
+                    "Raster Program/attachment shape has no native execution support",
+                ));
+            }
             Operation::AttachmentPass {
                 simple_clear: Some(clear),
                 ..
@@ -257,14 +231,10 @@ fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool], retained:
     let resources = graph.resources.len();
     needed[..resources].copy_from_slice(&retained[..resources]);
     for &pass in &graph.order {
-        match &graph.passes[pass].operation {
-            Operation::Raster { indices, .. } => needed[*indices] = true,
-            Operation::RasterBatch { draws, .. } => {
-                for draw in graph.raster_draws(draws) {
-                    needed[draw.indices] = true;
-                }
+        if let Operation::Raster { draws, .. } = &graph.passes[pass].operation {
+            for draw in graph.raster_draws(draws) {
+                needed[draw.indices] = true;
             }
-            _ => {}
         }
     }
     for &pass in graph.order.iter().rev() {
@@ -606,27 +576,10 @@ impl GraphWork {
                                 .composite(physical[*src].as_ref().unwrap().image())?,
                         );
                     }
-                    Operation::Raster {
-                        vertices,
-                        indices,
-                        index_count,
-                        ..
-                    } => {
-                        let vertex_count = graph.resources[*vertices].desc.units() / 28;
-                        states[*indices]
-                            .as_mut()
-                            .unwrap()
-                            .provenance
-                            .validate_indices(
-                                *index_count,
-                                vertex_count,
-                                owner.device.max_draw_indexed_index_value(),
-                            )
-                            .map_err(index_error)?;
-                    }
-                    Operation::RasterBatch { draws, .. } => {
+                    Operation::Raster { program, draws, .. } => {
                         for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
-                            let vertex_count = graph.resources[draw.vertices].desc.units() / 28;
+                            let vertex_count = graph.resources[draw.vertices].desc.units()
+                                / u64::from(program.vertex_stride());
                             states[draw.indices]
                                 .as_mut()
                                 .unwrap()
@@ -873,12 +826,13 @@ mod tests {
         graph
             .raster(
                 "mesh",
-                RasterDraw {
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[RasterDraw {
                     vertices,
                     indices,
                     index_count: 3,
                     parameters: RasterParameters::default(),
-                },
+                }],
                 RasterAttachments {
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
@@ -1466,12 +1420,13 @@ mod tests {
             let depth = draw.image("depth", ImageDesc::depth32(1, 1)).unwrap();
             draw.raster(
                 "degenerate-mesh",
-                RasterDraw {
+                &crate::program::ManagedRasterProgram::mesh(),
+                &[RasterDraw {
                     vertices,
                     indices,
                     index_count: 3,
                     parameters: RasterParameters::default(),
-                },
+                }],
                 RasterAttachments {
                     colors: &[Attachment {
                         view: draw.image_view(color, 0, 0).unwrap(),

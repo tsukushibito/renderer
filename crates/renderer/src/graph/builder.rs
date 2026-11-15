@@ -6,11 +6,11 @@ use std::{ops::Range, sync::Arc};
 
 use super::accesses::conflicting_accesses_in;
 use super::{
-    Access, AccessKind, AccessPurpose, AccessRange, AttachmentOps, BufferHandle, ComputeTransform,
-    Graph, GraphError, GraphErrorKind, ImageAspect, ImageDesc, ImageFormat, ImageHandle,
-    LoadAction, LoadOp, MeshUpload, Operation, PassHandle, PassKind, RasterAttachments, RasterDraw,
-    RasterDrawOperands, RasterParameters, ResourceAccess, ResourceDesc, ResourceHandle, StoreOp,
-    UploadSource, ValidatedRasterParameters, overlaps,
+    Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
+    GraphError, GraphErrorKind, ImageAspect, ImageDesc, ImageFormat, ImageHandle, MeshUpload,
+    Operation, PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands,
+    ResourceAccess, ResourceDesc, ResourceHandle, UploadSource, ValidatedRasterParameters,
+    overlaps,
 };
 
 impl Graph {
@@ -252,106 +252,48 @@ impl Graph {
             ))
         })
     }
-    /// Draw u32 indexed triangles using tightly packed seven-f32 vertices
-    /// (`xyz`, then linear `rgba`). The runtime checks CPU-known index values
-    /// against the vertex extent and rejects unknown index contents.
-    /// Transform and tint are owned values; no scene borrow or arbitrary shader
-    /// or native commands are retained. Load/Discard require no clear value.
+    /// Own a draw sequence using an explicit reviewed Raster Program. Current
+    /// mesh inputs are u32 triangles and tightly packed xyz/rgba vertices.
+    /// Constants and draws are copied into prepared storage in caller order.
     pub fn raster(
         &mut self,
         name: &str,
-        draw: RasterDraw,
+        program: &crate::program::ManagedRasterProgram,
+        draws: &[RasterDraw],
         attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
-        self.build_pass(name, |graph| {
-            let [color_attachment] = attachments.colors else {
-                return Err(GraphError::new(
-                    GraphErrorKind::Unsupported,
-                    "built-in mesh Raster requires one color attachment",
-                ));
-            };
-            let depth_attachment = attachments.depth.ok_or_else(|| {
-                GraphError::new(
-                    GraphErrorKind::Unsupported,
-                    "built-in mesh Raster requires a depth attachment",
-                )
-            })?;
-            let draw = graph.raster_draw(
-                draw.vertices,
-                draw.indices,
-                draw.index_count,
-                draw.parameters,
-            )?;
-            let vertices = draw.vertices;
-            let indices = draw.indices;
-            let (color, depth) =
-                graph.raster_targets(color_attachment.view.image, depth_attachment.view.image)?;
-            let vs = graph.resources[vertices].desc.units();
-            let ix = u64::from(draw.index_count) * 4;
-            let (clear_color, clear_depth) =
-                attachment_clear_values(color_attachment.load, depth_attachment.load)?;
-            let color_ops = color_attachment.ops();
-            let depth_ops = depth_attachment.ops();
-            Ok((
-                Operation::Raster {
-                    vertices,
-                    indices,
-                    index_count: draw.index_count,
-                    color,
-                    depth,
-                    color_ops,
-                    depth_ops,
-                    clear_color,
-                    clear_depth,
-                    parameters: draw.parameters,
-                },
-                graph.append_accesses([
-                    read(vertices, 0..vs, AccessPurpose::Vertex),
-                    read(indices, 0..ix, AccessPurpose::Index),
-                    attachment(color, color_ops, AccessPurpose::ColorAttachment),
-                    attachment(depth, depth_ops, AccessPurpose::DepthAttachment),
-                ])?,
-                false,
-            ))
-        })
+        self.raster_validated(
+            name,
+            program,
+            draws.iter().map(|draw| {
+                ValidatedRasterParameters::new(draw.parameters)
+                    .map(|parameters| (draw.vertices, draw.indices, draw.index_count, parameters))
+            }),
+            attachments,
+        )
     }
 
-    /// Engine-only opaque list: clear once and store both complete targets.
-    /// Draw order is retained. External buffer dependencies precede the single
-    /// rendering scope; this operation admits no arbitrary shader side effects.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn raster_batch(
+    /// The Engine already guarantees finite immutable parameters at snapshot
+    /// creation. This adapter consumes that proof without scanning values again.
+    pub(crate) fn raster_validated(
         &mut self,
         name: &str,
+        program: &crate::program::ManagedRasterProgram,
         draws: impl ExactSizeIterator<
             Item = Result<(BufferHandle, BufferHandle, u32, ValidatedRasterParameters), GraphError>,
         >,
-        color: ImageHandle,
-        depth: ImageHandle,
-        clear_color: [f32; 4],
-        clear_depth: f32,
+        attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
         if draws.len() == 0 {
-            return self.attachment_pass(
-                name,
-                RasterAttachments {
-                    colors: &[super::Attachment {
-                        view: self.image_view(color, 0, 0)?,
-                        load: LoadOp::Clear(clear_color),
-                        store: StoreOp::Store,
-                    }],
-                    depth: Some(super::Attachment {
-                        view: self.image_view(depth, 0, 0)?,
-                        load: LoadOp::Clear(clear_depth),
-                        store: StoreOp::Store,
-                    }),
-                },
-            );
+            return self.attachment_pass(name, attachments);
         }
         self.build_pass(name, |graph| {
-            let (color, depth) = graph.raster_targets(color, depth)?;
-            let (clear_color, clear_depth) =
-                attachment_clear_values(LoadOp::Clear(clear_color), LoadOp::Clear(clear_depth))?;
+            if attachments.colors.len() != program.color_outputs().len() {
+                return Err(GraphError::new(
+                    GraphErrorKind::Unsupported,
+                    "Raster attachment count differs from the Program output contract",
+                ));
+            }
             let first_draw = graph.draws.len();
             if draws.len() > graph.capacity.draws.saturating_sub(first_draw) {
                 return Err(super::storage::capacity_error(
@@ -360,11 +302,17 @@ impl Graph {
                     first_draw.checked_add(draws.len()),
                 ));
             }
+            let first_access = graph.accesses.len();
             let resources = graph.resources.len();
             graph.data_mut().raster_ranges[..resources].fill([0; 2]);
             for draw in draws {
                 let (vertices, indices, index_count, parameters) = draw?;
-                let (vertices, indices) = graph.raster_buffers(vertices, indices, index_count)?;
+                let (vertices, indices) = graph.raster_buffers(
+                    vertices,
+                    indices,
+                    index_count,
+                    u64::from(program.vertex_stride()),
+                )?;
                 let vs = graph.resources[vertices].desc.units();
                 let ix = u64::from(index_count) * 4;
                 let data = graph.data_mut();
@@ -377,7 +325,6 @@ impl Graph {
                     parameters: parameters.get(),
                 });
             }
-            let first_access = graph.accesses.len();
             for resource in 0..resources {
                 let [vertices, indices] = graph.raster_ranges[resource];
                 if vertices != 0 {
@@ -387,23 +334,15 @@ impl Graph {
                     graph.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
                 }
             }
-            graph.append_access(attachment(
-                color,
-                AttachmentOps::CLEAR_STORE,
-                AccessPurpose::ColorAttachment,
-            ))?;
-            graph.append_access(attachment(
-                depth,
-                AttachmentOps::CLEAR_STORE,
-                AccessPurpose::DepthAttachment,
-            ))?;
+            let plan = graph.append_attachments(attachments)?;
+            let targets = plan.targets.filter(|_| program.is_mesh());
             Ok((
-                Operation::RasterBatch {
+                Operation::Raster {
+                    program: *program,
                     draws: first_draw..graph.draws.len(),
-                    color,
-                    depth,
-                    clear_color,
-                    clear_depth,
+                    colors: plan.colors,
+                    depth: plan.depth,
+                    targets,
                 },
                 first_access..graph.accesses.len(),
                 false,
@@ -536,56 +475,19 @@ impl Graph {
         }
         result.map_err(|error| error.with_pass_name(name))
     }
-    fn raster_targets(
-        &self,
-        color: ImageHandle,
-        depth: ImageHandle,
-    ) -> Result<(usize, usize), GraphError> {
-        let color = self.image_id(color)?;
-        let depth = self.image_id(depth)?;
-        self.single_image(depth)?;
-        self.color(color)?;
-        let c = self.image_desc_at(color)?;
-        let d = self.image_desc_at(depth)?;
-        if d.format != ImageFormat::Depth32Float || (c.width, c.height) != (d.width, d.height) {
-            return Err(self.resource_error(
-                GraphErrorKind::InvalidInput,
-                "raster targets need matching RGBA8 color and D32 depth extents",
-                depth,
-            ));
-        }
-        Ok((color, depth))
-    }
-
-    fn raster_draw(
-        &self,
-        vertices: BufferHandle,
-        indices: BufferHandle,
-        index_count: u32,
-        parameters: RasterParameters,
-    ) -> Result<RasterDrawOperands, GraphError> {
-        let (vertices, indices) = self.raster_buffers(vertices, indices, index_count)?;
-        let parameters = ValidatedRasterParameters::new(parameters)?;
-        Ok(RasterDrawOperands {
-            vertices,
-            indices,
-            index_count,
-            parameters: parameters.get(),
-        })
-    }
-
     fn raster_buffers(
         &self,
         vertices: BufferHandle,
         indices: BufferHandle,
         index_count: u32,
+        stride: u64,
     ) -> Result<(usize, usize), GraphError> {
         let vertices = self.buffer_id(vertices)?;
         let indices = self.buffer_id(indices)?;
         let vs = self.resources[vertices].desc.units();
         let ix = u64::from(index_count) * 4;
-        if vs < 28
-            || !vs.is_multiple_of(28)
+        if vs < stride
+            || !vs.is_multiple_of(stride)
             || index_count == 0
             || !index_count.is_multiple_of(3)
             || ix > self.resources[indices].desc.units()
@@ -593,34 +495,11 @@ impl Graph {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
                 "raster requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
-                if vs < 28 || !vs.is_multiple_of(28) { vertices } else { indices },
+                if vs < stride || !vs.is_multiple_of(stride) { vertices } else { indices },
             ));
         }
         Ok((vertices, indices))
     }
-}
-
-fn attachment_clear_values(
-    color: LoadOp<[f32; 4]>,
-    depth: LoadOp<f32>,
-) -> Result<([f32; 4], f32), GraphError> {
-    let invalid_clear = || {
-        GraphError::new(
-            GraphErrorKind::InvalidInput,
-            "invalid attachment clear value",
-        )
-    };
-    let color = match color {
-        LoadOp::Clear(value) if value.iter().all(|value| value.is_finite()) => value,
-        LoadOp::Clear(_) => return Err(invalid_clear()),
-        LoadOp::Load | LoadOp::Discard => [0.0; 4],
-    };
-    let depth = match depth {
-        LoadOp::Clear(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
-        LoadOp::Clear(_) => return Err(invalid_clear()),
-        LoadOp::Load | LoadOp::Discard => 0.0,
-    };
-    Ok((color, depth))
 }
 
 fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
@@ -642,17 +521,6 @@ fn write(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> Resource
         write: true,
         initializes: true,
         discard_after: false,
-        purpose,
-    }
-}
-fn attachment(resource: usize, ops: AttachmentOps, purpose: AccessPurpose) -> ResourceAccess {
-    ResourceAccess {
-        resource,
-        range: 0..1,
-        read: ops.load == LoadAction::Load,
-        write: true,
-        initializes: ops.load != LoadAction::Discard,
-        discard_after: ops.store == StoreOp::Discard,
         purpose,
     }
 }
@@ -712,4 +580,192 @@ fn validate_purpose(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{
+        Attachment, BufferDesc, GraphCapacity, GraphPool, LoadAction, LoadOp, RasterParameters,
+        StoreOp,
+    };
+    use crate::program::ManagedRasterProgram;
+
+    fn uploaded_draw(graph: &mut Graph, name: &str) -> RasterDraw {
+        let vertices = graph.buffer(name, BufferDesc { size: 84 }).unwrap();
+        let indices = graph.buffer(name, BufferDesc { size: 12 }).unwrap();
+        graph.upload_buffer(name, vertices, 0, &[0; 84]).unwrap();
+        graph.upload_buffer(name, indices, 0, &[0; 12]).unwrap();
+        RasterDraw {
+            vertices,
+            indices,
+            index_count: 3,
+            parameters: RasterParameters::default(),
+        }
+    }
+
+    #[test]
+    fn frozen_raster_retains_program_draw_order_constants_and_attachment_views() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mut first = uploaded_draw(&mut graph, "first");
+        first.indices = first.vertices;
+        first.parameters.tint = [0.25, 0.5, 0.75, 1.0];
+        let mut second = uploaded_draw(&mut graph, "second");
+        second.parameters.transform[3][0] = 0.5;
+        let image = graph
+            .image(
+                "array color",
+                ImageDesc {
+                    mip_levels: 2,
+                    array_layers: 2,
+                    ..ImageDesc::rgba8(4, 4)
+                },
+            )
+            .unwrap();
+        let color = graph.image_view(image, 1, 1).unwrap();
+        let depth_image = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+        let depth = graph.image_view(depth_image, 0, 0).unwrap();
+        let pass = {
+            let mut draws = [first, second];
+            let mut colors = [Attachment {
+                view: color,
+                load: LoadOp::Clear([0.1, 0.2, 0.3, 1.0]),
+                store: StoreOp::Store,
+            }];
+            let pass = graph
+                .raster(
+                    "owned",
+                    &ManagedRasterProgram::mesh(),
+                    &draws,
+                    RasterAttachments {
+                        colors: &colors,
+                        depth: Some(Attachment {
+                            view: depth,
+                            load: LoadOp::Clear(0.75),
+                            store: StoreOp::Store,
+                        }),
+                    },
+                )
+                .unwrap();
+            draws.swap(0, 1);
+            draws[0].parameters.tint = [0.0; 4];
+            colors[0].load = LoadOp::Discard;
+            std::hint::black_box((draws, colors));
+            pass
+        };
+        graph
+            .declare_pass(
+                "observe",
+                PassKind::Copy,
+                &[Access {
+                    resource: image.into(),
+                    range: AccessRange::Image {
+                        mip: 1,
+                        layer: 1,
+                        aspect: ImageAspect::Color,
+                    },
+                    kind: AccessKind::Read,
+                    purpose: AccessPurpose::CopySource,
+                }],
+                true,
+            )
+            .unwrap();
+        let plan = graph.compile().unwrap();
+        let Operation::Raster {
+            program,
+            draws,
+            colors,
+            depth: depth_index,
+            targets,
+        } = &plan.passes[pass.index].operation
+        else {
+            panic!("owned Raster operation")
+        };
+        assert!(program.is_mesh());
+        let owned = plan.raster_draws(draws);
+        assert_eq!(owned.len(), 2);
+        for (actual, expected) in owned.iter().zip([first, second]) {
+            assert_eq!(actual.vertices, expected.vertices.index);
+            assert_eq!(actual.indices, expected.indices.index);
+            assert_eq!(actual.index_count, expected.index_count);
+            assert_eq!(actual.parameters, expected.parameters);
+        }
+        assert_eq!(colors.len(), 1);
+        let attachment = plan.attachments[colors.start];
+        assert_eq!(attachment.view, color);
+        assert_eq!(attachment.clear, [0.1, 0.2, 0.3, 1.0]);
+        assert_eq!(attachment.ops.load, LoadAction::Clear);
+        let owned_depth = plan.attachments[depth_index.unwrap()];
+        assert_eq!(owned_depth.view, depth);
+        assert_eq!(owned_depth.clear[0], 0.75);
+        let accesses = plan.accesses(pass.index);
+        assert!(
+            accesses
+                .iter()
+                .any(|access| access.resource == first.vertices.index
+                    && access.purpose == AccessPurpose::Vertex
+                    && access.range == (0..84))
+        );
+        assert!(
+            accesses
+                .iter()
+                .any(|access| access.resource == first.vertices.index
+                    && access.purpose == AccessPurpose::Index
+                    && access.range == (0..12))
+        );
+        assert!(
+            targets.is_none(),
+            "multi-subresource Raster must not inherit native baseline support"
+        );
+    }
+
+    #[test]
+    fn late_engine_resolution_failure_returns_all_owned_draw_capacity() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                draws: 2,
+                attachments: 1,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let draw = uploaded_draw(&mut graph, "mesh");
+        let image = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
+        let target = Attachment {
+            view: graph.image_view(image, 0, 0).unwrap(),
+            load: LoadOp::Clear([0.0; 4]),
+            store: StoreOp::Store,
+        };
+        let validated = ValidatedRasterParameters::new(draw.parameters).unwrap();
+        let tuple = (draw.vertices, draw.indices, draw.index_count, validated);
+        let error = graph
+            .raster_validated(
+                "resolution failed",
+                &ManagedRasterProgram::mesh(),
+                [Ok(tuple), Err(GraphError::custom("missing resolved mesh"))].into_iter(),
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::Custom);
+        assert_eq!(error.pass_name(), Some("resolution failed"));
+        graph
+            .raster_validated(
+                "retry",
+                &ManagedRasterProgram::mesh(),
+                [Ok(tuple), Ok(tuple)].into_iter(),
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap();
+        graph.readback_image("pixels", image).unwrap();
+        assert_eq!(graph.compile().unwrap().pass_count(), 4);
+    }
 }

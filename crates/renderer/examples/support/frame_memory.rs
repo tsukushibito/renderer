@@ -7,10 +7,10 @@ use renderer::engine::{
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, BufferBinding, BufferDesc,
     CompiledGraph, ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc,
-    LoadOp, PassKind, RasterAttachments, StoreOp,
+    LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::measurement::Snapshot;
-use renderer::program::ManagedProgram;
+use renderer::program::{ManagedProgram, ManagedRasterProgram};
 
 const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;
@@ -380,6 +380,70 @@ fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
     graph
 }
 
+fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
+    let mut graph = pool.begin().unwrap();
+    let vertices = [
+        graph.buffer("vertices a", BufferDesc { size: 28 }).unwrap(),
+        graph.buffer("vertices b", BufferDesc { size: 28 }).unwrap(),
+    ];
+    let indices = [
+        graph.buffer("indices a", BufferDesc { size: 12 }).unwrap(),
+        graph.buffer("indices b", BufferDesc { size: 12 }).unwrap(),
+    ];
+    for buffer in vertices {
+        graph
+            .upload_buffer("vertex bytes", buffer, 0, &[0; 28])
+            .unwrap();
+    }
+    for buffer in indices {
+        graph
+            .upload_buffer("index bytes", buffer, 0, &[0; 12])
+            .unwrap();
+    }
+    let color = graph.image("raster color", ImageDesc::rgba8(1, 1)).unwrap();
+    let depth = graph
+        .image("raster depth", ImageDesc::depth32(1, 1))
+        .unwrap();
+    let count = [0, 1, 4, 2][frame % 4];
+    let mut draws = std::array::from_fn::<_, 4, _>(|draw| RasterDraw {
+        vertices: vertices[draw % 2],
+        indices: indices[draw % 2],
+        index_count: 3,
+        parameters: RasterParameters {
+            tint: [frame as f32, draw as f32, 0.25, 1.0],
+            ..RasterParameters::default()
+        },
+    });
+    graph
+        .raster(
+            "owned raster",
+            &ManagedRasterProgram::mesh(),
+            &draws[..count],
+            RasterAttachments {
+                colors: &[Attachment {
+                    view: graph.image_view(color, 0, 0).unwrap(),
+                    load: LoadOp::Clear([frame as f32, 0.0, 0.0, 1.0]),
+                    store: StoreOp::Store,
+                }],
+                depth: frame.is_multiple_of(2).then_some(Attachment {
+                    view: graph.image_view(depth, 0, 0).unwrap(),
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+        )
+        .unwrap();
+    // The caller may reuse or discard this input immediately after construction.
+    for draw in &mut draws {
+        draw.parameters.tint = [0.0; 4];
+    }
+    graph.readback_image("raster output", color).unwrap();
+    graph
+        .upload_buffer("dead later write", vertices[0], 0, &[0; 28])
+        .unwrap();
+    graph
+}
+
 fn planned_frames(
     pool: &mut GraphPool,
     count: usize,
@@ -467,6 +531,7 @@ pub fn cpu_lifecycle(baseline: bool) {
     let mut pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mut owned_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mut attachment_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
+    let mut raster_pool = GraphPool::new(graph_capacity(), IN_FLIGHT).unwrap();
     let mesh = engine
         .create_mesh(
             MeshData::new(
@@ -500,6 +565,9 @@ pub fn cpu_lifecycle(baseline: bool) {
         4 + frame % 3
     });
     planned_frames(&mut attachment_pool, WARMUP, attachment_graph, |_| 3);
+    planned_frames(&mut raster_pool, WARMUP, raster_graph, |frame| {
+        2 + 2 * [0, 1, 2, 2][frame % 4]
+    });
     let startup = Snapshot::now().since(start);
     assert!(
         startup.rust[renderer::measurement::RustEvent::Allocate as usize].calls != 0,
@@ -510,11 +578,22 @@ pub fn cpu_lifecycle(baseline: bool) {
         4 + frame % 3
     });
     let attachment_report = planned_frames(&mut attachment_pool, FRAMES, attachment_graph, |_| 3);
+    let raster_report = planned_frames(&mut raster_pool, FRAMES, raster_graph, |frame| {
+        2 + 2 * [0, 1, 2, 2][frame % 4]
+    });
     assert!(pool.is_idle());
     assert!(owned_pool.is_idle());
     assert!(attachment_pool.is_idle());
+    assert!(raster_pool.is_idle());
     let before_shutdown = Snapshot::now();
-    drop((attachment_pool, owned_pool, pool, snapshots, engine));
+    drop((
+        raster_pool,
+        attachment_pool,
+        owned_pool,
+        pool,
+        snapshots,
+        engine,
+    ));
     let shutdown = Snapshot::now().since(before_shutdown);
     assert!(
         shutdown.rust[renderer::measurement::RustEvent::Deallocate as usize].calls != 0,
@@ -556,6 +635,13 @@ pub fn cpu_lifecycle(baseline: bool) {
             "boundary_cases":["uncompiled attachment cancel","culled View","busy slots","all owners returned and backing reset"],
             "total":counts(attachment_report.total),"phases_build_compile_return":attachment_report.phases.map(counts),
         },
+        "owned_raster": {
+            "coverage":"public Program + draw-slice Raster build/compile/return; no native execution in this CPU row",
+            "measured_frames":FRAMES,"retained_frame_slots":IN_FLIGHT,
+            "draw_counts":[0,1,4,2],"shared_meshes":2,"optional_depth":true,"program":"managed mesh",
+            "boundary_cases":["mutated caller draw slice","uncompiled cancel","culled later write","busy slots","all owners returned and backing reset"],
+            "total":counts(raster_report.total),"phases_build_compile_return":raster_report.phases.map(counts),
+        },
     });
     println!("FRAME_MEMORY_REPORT={json}");
     assert!(
@@ -563,6 +649,10 @@ pub fn cpu_lifecycle(baseline: bool) {
         "attachment measurement counter overflowed"
     );
     assert!(!report.total.overflowed, "measurement counter overflowed");
+    assert!(
+        !raster_report.total.overflowed,
+        "Raster measurement counter overflowed"
+    );
     assert!(
         !owned_report.total.overflowed,
         "owned Compute measurement counter overflowed"
@@ -582,6 +672,11 @@ pub fn cpu_lifecycle(baseline: bool) {
             attachment_report.total.is_allocation_free(),
             "attachment lifecycle still allocates or frees: {:?}",
             attachment_report.total
+        );
+        assert!(
+            raster_report.total.is_allocation_free(),
+            "owned Raster lifecycle still allocates or frees: {:?}",
+            raster_report.total
         );
     }
 }
