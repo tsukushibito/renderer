@@ -484,14 +484,21 @@ mod tests {
                 vk::PhysicalDeviceType::CPU,
                 "CPU fallback is not real-GPU acceptance"
             );
+            runtime
+                .prepare_working_set(
+                    super::super::FrameCapacity::default(),
+                    &[super::super::ResourceClass::Buffer {
+                        desc: BufferDesc { size: 16 },
+                        count: 2,
+                    }],
+                )
+                .unwrap();
             let diagnostics = runtime.diagnostics.clone();
             crate::backends::vulkan::assert_real_validation(&diagnostics);
 
-            let mut graph = Graph::new();
+            let mut graph = Graph::test_new();
             let buffer = graph.buffer("unprofiled", BufferDesc { size: 16 }).unwrap();
-            graph
-                .upload_buffer("upload", buffer, 0, vec![9; 16])
-                .unwrap();
+            graph.upload_buffer("upload", buffer, 0, &[9; 16]).unwrap();
             graph.readback_buffer("read", buffer, 0, 16).unwrap();
             let mut submission = runtime.submit(&graph.compile().unwrap()).unwrap();
             let result = submission.wait(Duration::from_secs(10)).unwrap().unwrap();
@@ -510,10 +517,10 @@ mod tests {
             for epoch in 0_u32..2 {
                 for index in 0..2 {
                     let value = (epoch * 2 + index + 1) as u8;
-                    let mut graph = Graph::new();
+                    let mut graph = Graph::test_new();
                     let buffer = graph.buffer("profiled", BufferDesc { size: 16 }).unwrap();
                     graph
-                        .upload_buffer("upload", buffer, 0, vec![value; 16])
+                        .upload_buffer("upload", buffer, 0, &[value; 16])
                         .unwrap();
                     let read = graph.readback_buffer("read", buffer, 0, 16).unwrap();
                     let frame = runtime.submit_frame(&graph.compile().unwrap()).unwrap();

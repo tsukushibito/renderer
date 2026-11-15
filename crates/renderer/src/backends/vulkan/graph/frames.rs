@@ -298,32 +298,32 @@ mod tests {
         use crate::graph::{BufferDesc, ImageDesc, ResourceKey};
 
         let graph = 17;
-        let exports = (0..4_096)
-            .rev()
-            .map(|index| {
-                let key = ResourceKey {
-                    owner: 9,
-                    index: index as u32,
-                    generation: 1,
-                };
-                let value = if index % 2 == 0 {
-                    Export::Buffer(ImportBuffer {
-                        key,
-                        revision: 73,
-                        desc: BufferDesc { size: 4 },
-                        initialized: std::iter::once(0..4).collect(),
-                    })
-                } else {
-                    Export::Image(ImportImage {
-                        key,
-                        revision: 73,
-                        desc: ImageDesc::rgba8(1, 1),
-                        initialized: true,
-                    })
-                };
-                (index, value)
-            })
-            .collect();
+        let mut pool = super::super::exports::ExportPool::new(4_096, 1).unwrap();
+        let mut exports = pool.acquire().unwrap();
+        let initialized = crate::graph::ImportRanges::test_capture(&[0..4]);
+        for index in (0..4_096).rev() {
+            let key = ResourceKey {
+                owner: 9,
+                index: index as u32,
+                generation: 1,
+            };
+            let value = if index % 2 == 0 {
+                Export::Buffer(ImportBuffer {
+                    key,
+                    revision: 73,
+                    desc: BufferDesc { size: 4 },
+                    initialized: initialized.clone(),
+                })
+            } else {
+                Export::Image(ImportImage {
+                    key,
+                    revision: 73,
+                    desc: ImageDesc::rgba8(1, 1),
+                    initialized: true,
+                })
+            };
+            exports.insert(index, value).unwrap();
+        }
         let frame = FrameSubmission {
             id: FrameId::new(9, 73),
             graph,

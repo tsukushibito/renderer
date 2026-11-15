@@ -1291,3 +1291,68 @@ mod frame_scenarios;
 
 #[cfg(test)]
 mod frame_tests;
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    #[test]
+    fn rejected_exports_rollback_only_new_names_and_acceptance_keeps_them() {
+        let mut pool = ExportPool::new(2, 1).unwrap();
+        let mut exports = pool.acquire().unwrap();
+        for index in 0..2 {
+            exports
+                .insert(
+                    index,
+                    Export::Image(ImportImage {
+                        key: ResourceKey {
+                            owner: 1,
+                            index: index as u32,
+                            generation: 1,
+                        },
+                        revision: 41,
+                        desc: crate::graph::ImageDesc::rgba8(1, 1),
+                        initialized: true,
+                    }),
+                )
+                .unwrap();
+        }
+        let mut entries = [
+            Entry {
+                generation: 1,
+                registered: true,
+                pending_registration: 41,
+                physical: None,
+            },
+            Entry {
+                generation: 1,
+                registered: true,
+                pending_registration: 0,
+                physical: None,
+            },
+        ];
+        drop(Registration {
+            entries: &mut entries,
+            exports: &exports,
+            logical: &[0, 1],
+            serial: 41,
+            keep: false,
+        });
+        assert!(!entries[0].registered);
+        assert!(
+            entries[1].registered,
+            "an existing import remains named on rejected work"
+        );
+        entries[0].registered = true;
+        entries[0].pending_registration = 42;
+        drop(Registration {
+            entries: &mut entries,
+            exports: &exports,
+            logical: &[0, 1],
+            serial: 42,
+            keep: true,
+        });
+        assert!(entries.iter().all(|entry| entry.registered));
+        assert!(entries.iter().all(|entry| entry.pending_registration == 0));
+    }
+}
