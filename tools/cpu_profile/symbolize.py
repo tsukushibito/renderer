@@ -69,8 +69,13 @@ def main(argv=None):
         if args.image_base <= 0 or args.top <= 0:
             raise ValueError("--image-base and --top must be positive")
         summary = json.loads(args.summary.read_text(encoding="utf-8"))
-        addresses = [entry["name"] for entry in summary["sampled"]["instruction_pointers"][:args.top]]
+        entries = summary["sampled"]["instruction_pointers"][:args.top]
+        addresses = [entry["name"] for entry in entries]
         report = resolve_addresses(args.manifest, args.image_base, addresses, args.symbolizer)
+        for resolved, entry in zip(report["addresses"], entries):
+            resolved["sample_weight_ms"] = entry["weight_ms"]
+        report["selected_ip_weight_ms"] = sum(entry["weight_ms"] for entry in entries)
+        report["total_sample_weight_ms"] = summary["sampled"]["weight_ms"]
         args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(args.output)
         return 0

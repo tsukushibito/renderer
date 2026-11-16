@@ -255,6 +255,7 @@ def record_owned(plan, runner=logged, launcher=subprocess.Popen, monotonic=time.
             state["marker_begin"] = {"before_utc": utc(), "text": plan["instance"] + "_BEGIN"}
             state["marker_begin"]["exit_code"] = control("marker_begin", "wpr-marker-begin")
             state["marker_begin"]["after_utc"] = utc()
+            guard()
             send_input(process, "GO")
             state["handshake_done"] = wait_event(process, events, "DONE", guard, sleeper)
             state["marker_end"] = {"before_utc": utc(), "text": plan["instance"] + "_END"}
@@ -334,6 +335,8 @@ def record_owned(plan, runner=logged, launcher=subprocess.Popen, monotonic=time.
 
 
 def export_trace(args):
+    if not 0 < args.timeout_seconds <= 3600:
+        raise ValueError("--timeout-seconds must be in (0, 3600]")
     metadata_path = args.capture.resolve()
     capture = json.loads(metadata_path.read_text(encoding="utf-8"))
     if capture.get("session_state") != "stopped" or not capture.get("capture_valid"):
@@ -354,7 +357,7 @@ def export_trace(args):
     if args.microsoft_symbols:
         env["_NT_SYMBOL_PATH"] += ";srv*" + str(output / "symbols") + "*https://msdl.microsoft.com/download/symbols"
     env["_NT_SYMCACHE_PATH"] = str(cache)
-    source_profile = args.wpa_profile or args.wpt / "Catalog/AppLaunch.wpaProfile"
+    source_profile = (args.wpa_profile or args.wpt / "Catalog/AppLaunch.wpaProfile").resolve()
     profile = prepare_profile(source_profile, output / "cpu-events.wpaProfile")
     commands = {"wpa": [str(args.wpt / "wpaexporter.exe"), "-i", str(etl), "-symbols", "-profile", str(profile),
                         "-outputfolder", str(output)],
