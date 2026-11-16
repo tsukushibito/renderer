@@ -89,7 +89,7 @@ impl SnapshotInputs<'_> {
                 vertices,
                 indices,
                 index_count: draw.data.index_count,
-                parameters: draw.parameters,
+                parameters: draw.parameters.into(),
                 bindings: &[],
             }
         })

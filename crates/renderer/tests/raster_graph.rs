@@ -103,19 +103,19 @@ fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw<'static> {
         vertices,
         indices,
         index_count: 6,
-        parameters: RasterParameters::default(),
+        parameters: RasterParameters::default().into(),
     }
 }
 
 fn placed(mut draw: RasterDraw<'_>, left: bool, depth: f32, tint: [f32; 4]) -> RasterDraw<'_> {
-    let mut transform = *draw.parameters.transform();
+    let mut transform = *RasterParameters::default().transform();
     transform[2][2] = 0.0;
     transform[3][2] = depth;
     if left {
         transform[0][0] = 0.5;
         transform[3][0] = -0.5;
     }
-    draw.parameters = RasterParameters::new(transform, tint).unwrap();
+    draw.parameters = RasterParameters::new(transform, tint).unwrap().into();
     draw
 }
 
@@ -345,10 +345,9 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         }),
     ));
     let mut right_overlay = placed(quad, true, 0.5, [0.0, 0.0, 1.0, 1.0]);
-    let mut transform = *right_overlay.parameters.transform();
-    transform[3][0] = 0.5;
-    right_overlay.parameters =
-        RasterParameters::new(transform, *right_overlay.parameters.tint()).unwrap();
+    let mut words: [u32; 20] = right_overlay.parameters.words().try_into().unwrap();
+    words[12] = 0.5_f32.to_bits();
+    right_overlay.parameters = renderer::graph::RasterConstants::new(&words).unwrap();
     graph
         .raster(
             "load existing color and replace right half",
@@ -512,9 +511,9 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .image("two textured panels", ImageDesc::rgba8(4, 4))
         .unwrap();
     let mut panel = quad;
-    let mut transform = *panel.parameters.transform();
-    transform[0][0] = 0.5;
-    panel.parameters = RasterParameters::new(transform, *panel.parameters.tint()).unwrap();
+    let mut words: [u32; 20] = panel.parameters.words().try_into().unwrap();
+    words[0] = 0.5_f32.to_bits();
+    panel.parameters = renderer::graph::RasterConstants::new(&words).unwrap();
     graph
         .raster(
             "per-draw descriptor ownership",

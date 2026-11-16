@@ -1,7 +1,7 @@
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, BufferDesc, Graph, GraphCapacity,
     GraphCapacityKind, GraphErrorKind, GraphPool, ImageDesc, ImageView, LoadOp, PassKind,
-    RasterAttachments, RasterDraw, RasterParameters, StoreOp,
+    RasterAttachments, RasterConstants, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::ManagedRasterProgram;
 
@@ -32,7 +32,7 @@ fn mesh(
         vertices,
         indices,
         index_count: 3,
-        parameters: RasterParameters::default(),
+        parameters: RasterParameters::default().into(),
     }
 }
 
@@ -332,7 +332,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
         vertices: shared,
         indices: shared,
         index_count: 3,
-        parameters: RasterParameters::default(),
+        parameters: RasterParameters::default().into(),
     };
     let target = color(&mut graph, "color");
     graph
@@ -474,7 +474,7 @@ fn later_raster_passes_and_recycled_slots_do_not_keep_previous_draw_inputs() {
 }
 
 #[test]
-fn unsupported_draw_outputs_can_still_be_used_by_an_empty_attachment_pass() {
+fn empty_raster_checks_program_outputs_and_clear_only_uses_attachment_pass() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     for depth_only in [true, false] {
         let mut graph = pool.begin().unwrap();
@@ -502,14 +502,19 @@ fn unsupported_draw_outputs_can_still_be_used_by_an_empty_attachment_pass() {
                 .kind(),
             GraphErrorKind::Unsupported
         );
-        graph
-            .raster(
-                "empty draw list",
-                &ManagedRasterProgram::mesh(),
-                std::iter::empty::<RasterDraw<'_>>(),
-                targets,
-            )
-            .unwrap();
+        assert_eq!(
+            graph
+                .raster(
+                    "empty draw list",
+                    &ManagedRasterProgram::mesh(),
+                    std::iter::empty::<RasterDraw<'_>>(),
+                    targets,
+                )
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::Unsupported
+        );
+        graph.attachment_pass("clear only", targets).unwrap();
         observe(
             &mut graph,
             "pixels",
@@ -525,7 +530,7 @@ fn unsupported_draw_outputs_can_still_be_used_by_an_empty_attachment_pass() {
                 .unwrap()
                 .ordered_pass_names()
                 .collect::<Vec<_>>(),
-            ["empty draw list", "pixels"]
+            ["clear only", "pixels"]
         );
     }
 }
@@ -820,4 +825,150 @@ fn raster_uses_actual_iterator_items_for_empty_paths_and_capacity() {
             if count == 0 { 2 } else { 4 }
         );
     }
+}
+
+#[test]
+fn generic_constants_own_every_word_and_reject_oversized_payloads() {
+    let mut words = [0x7fc0_1234, u32::MAX, 0, 0x8000_0000];
+    let constants = RasterConstants::new(&words).unwrap();
+    words.fill(7);
+    assert_eq!(constants.words(), &[0x7fc0_1234, u32::MAX, 0, 0x8000_0000]);
+    assert!(RasterConstants::default().words().is_empty());
+    assert_eq!(RasterConstants::new(&[3; 32]).unwrap().words(), &[3; 32]);
+    assert_eq!(
+        RasterConstants::new(&[0; 33]).unwrap_err().kind(),
+        GraphErrorKind::InvalidInput
+    );
+    let mesh: RasterConstants = RasterParameters::default().into();
+    assert_eq!(mesh.words().len(), 20);
+    for index in 0..16 {
+        assert_eq!(
+            mesh.words()[index],
+            if index % 5 == 0 { 1.0_f32.to_bits() } else { 0 }
+        );
+    }
+    assert_eq!(&mesh.words()[16..], &[1.0_f32.to_bits(); 4]);
+}
+
+#[test]
+fn wrong_constant_length_returns_draw_capacity_for_a_correct_retry() {
+    let mut pool = GraphPool::new(
+        GraphCapacity {
+            draws: 1,
+            ..GraphCapacity::default()
+        },
+        1,
+    )
+    .unwrap();
+    let mut graph = pool.begin().unwrap();
+    let draw = mesh(&mut graph, "mesh", true, true);
+    let target = color(&mut graph, "color");
+    for length in [0, 19, 21] {
+        let wrong = RasterDraw {
+            parameters: RasterConstants::new(&[0; 32][..length]).unwrap(),
+            ..draw
+        };
+        let error = graph
+            .raster(
+                "wrong inline ABI",
+                &ManagedRasterProgram::mesh(),
+                [wrong],
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some("wrong inline ABI"));
+    }
+    graph
+        .raster(
+            "correct inline ABI",
+            &ManagedRasterProgram::mesh(),
+            [draw],
+            RasterAttachments {
+                colors: &[target],
+                depth: None,
+            },
+        )
+        .unwrap();
+    observe(&mut graph, "pixels", target.view);
+    graph.compile().unwrap();
+}
+
+#[test]
+fn empty_draws_enforce_custom_depth_and_output_contracts() {
+    use renderer::program::{CompareOp, DepthState, RasterProgramDescriptor};
+    static REQUIRED: RasterProgramDescriptor = RasterProgramDescriptor {
+        depth: DepthState::Required {
+            compare: CompareOp::Greater,
+            write: false,
+            require_load: false,
+        },
+        ..*ManagedRasterProgram::mesh().descriptor()
+    };
+    // SAFETY: The unchanged reviewed mesh binaries and ABI support this fixed
+    // depth state; there are no new resources, shader accesses or capabilities.
+    let program = unsafe { ManagedRasterProgram::from_trusted_descriptor(&REQUIRED) };
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let target = color(&mut graph, "color");
+    let empty = std::iter::empty::<RasterDraw<'_>>;
+    assert_eq!(
+        graph
+            .raster(
+                "missing required depth",
+                &program,
+                empty(),
+                RasterAttachments {
+                    colors: &[target],
+                    depth: None
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        GraphErrorKind::InvalidInput
+    );
+    let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
+    let depth = Attachment {
+        view: graph.image_view(depth, 0, 0).unwrap(),
+        load: LoadOp::Clear(0.0),
+        store: StoreOp::Store,
+    };
+    let hdr = graph
+        .image("wrong format", ImageDesc::rgba16_float(2, 2))
+        .unwrap();
+    let wrong = Attachment {
+        view: graph.image_view(hdr, 0, 0).unwrap(),
+        ..target
+    };
+    assert_eq!(
+        graph
+            .raster(
+                "wrong empty format",
+                &program,
+                empty(),
+                RasterAttachments {
+                    colors: &[wrong],
+                    depth: Some(depth)
+                }
+            )
+            .unwrap_err()
+            .kind(),
+        GraphErrorKind::InvalidInput
+    );
+    graph
+        .raster(
+            "empty with all required targets",
+            &program,
+            empty(),
+            RasterAttachments {
+                colors: &[target],
+                depth: Some(depth),
+            },
+        )
+        .unwrap();
+    observe(&mut graph, "pixels", target.view);
+    graph.compile().unwrap();
 }

@@ -228,7 +228,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             indices: index_buffer,
             index_count: 3,
             bindings: if textured { &bindings[draw] } else { &[] },
-            parameters: RasterParameters::new(transform, tint).unwrap(),
+            parameters: RasterParameters::new(transform, tint).unwrap().into(),
         }
     });
     let program = if depth_only {
@@ -277,13 +277,14 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         } else if textured {
             texture_colors[(draw_count - 1 + frame / 12) % 2]
         } else {
-            *draws[draw_count - 1].parameters.tint()
+            std::array::from_fn::<_, 4, _>(|i| {
+                f32::from_bits(draws[draw_count - 1].parameters.words()[16 + i])
+            })
         };
         if draw_count != 0 && textured {
-            for (component, tint) in value
-                .iter_mut()
-                .zip(*draws[draw_count - 1].parameters.tint())
-            {
+            for (component, tint) in value.iter_mut().zip(std::array::from_fn::<_, 4, _>(|i| {
+                f32::from_bits(draws[draw_count - 1].parameters.words()[16 + i])
+            })) {
                 *component *= tint;
             }
         }
@@ -305,7 +306,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             &if draw_count == 0 {
                 clear_depth
             } else {
-                draws[draw_count - 1].parameters.transform()[3][2]
+                f32::from_bits(draws[draw_count - 1].parameters.words()[14])
             }
             .to_le_bytes(),
         );

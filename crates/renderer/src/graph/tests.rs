@@ -26,7 +26,7 @@ fn batch_draws(
             vertices,
             indices,
             index_count,
-            parameters,
+            parameters: parameters.into(),
         })
         .collect()
 }
@@ -565,7 +565,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
                 vertices,
                 indices,
                 index_count: 3,
-                parameters: RasterParameters::default(),
+                parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {
@@ -601,7 +601,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 vertices: v,
                 indices: i,
                 index_count: 3,
-                parameters: RasterParameters::default(),
+                parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {
@@ -636,7 +636,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 vertices: v,
                 indices: i,
                 index_count: 3,
-                parameters: RasterParameters::default(),
+                parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {
@@ -675,7 +675,7 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
                 vertices: v,
                 indices: i,
                 index_count: 3,
-                parameters: RasterParameters::default(),
+                parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {

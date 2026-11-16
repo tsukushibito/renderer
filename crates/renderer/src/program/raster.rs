@@ -247,7 +247,8 @@ impl ManagedRasterProgram {
     /// vertex/fragment programs for `entry = "main"`, using only enabled backend
     /// features. Their stage interfaces, descriptor slots, vertex attributes,
     /// inline parameters and outputs must exactly match this complete descriptor.
-    /// There is one per-vertex stream, nonzero stride, at most 16 unique attribute locations below 16,
+    /// There is one per-vertex stream with a nonzero, four-byte-aligned stride,
+    /// and at most 16 unique attribute locations below 16,
     /// with four-byte aligned offsets and formats wholly within that stride.
     /// DXIL uses TEXCOORD semantic indices equal to attribute locations. Indices
     /// are u32 triangle lists, with first index/base vertex zero and one instance.

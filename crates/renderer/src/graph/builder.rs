@@ -263,8 +263,8 @@ impl Graph {
             ))
         })
     }
-    /// Own a draw sequence using an explicit reviewed Raster Program. Current
-    /// mesh inputs are u32 triangles and tightly packed xyz/rgba vertices.
+    /// Own a draw sequence using an explicit trusted Raster Program. Inputs are
+    /// u32 triangles in the Program's single per-vertex stream layout.
     /// Accepts borrowed slices or iterators of owned or borrowed draws. Constants
     /// and draws are captured into prepared storage in caller order. Iterator
     /// size hints are not trusted for capacity or empty-pass decisions.
@@ -290,11 +290,7 @@ impl Graph {
             )
             .with_pass_name(name));
         }
-        let mut draws = draws.into_iter().peekable();
-        if draws.peek().is_none() {
-            return self.attachment_pass(name, attachments);
-        }
-        self.build_pass(name, |graph| {
+        (|| {
             if program.requires_depth() && attachments.depth.is_none() {
                 return Err(GraphError::new(
                     GraphErrorKind::InvalidInput,
@@ -308,20 +304,28 @@ impl Graph {
                 ));
             }
             for (attachment, format) in attachments.colors.iter().zip(program.color_outputs()) {
-                let resource = graph.image_id(attachment.view.image)?;
+                let resource = self.image_id(attachment.view.image)?;
                 let expected = match format {
                     crate::program::ImageFormat::Rgba8Unorm => ImageFormat::Rgba8Unorm,
                     crate::program::ImageFormat::Rgba16Float => ImageFormat::Rgba16Float,
                     crate::program::ImageFormat::D32Float => unreachable!("color output manifest"),
                 };
-                if graph.image_desc_at(resource)?.format != expected {
-                    return Err(graph.resource_error(
+                if self.image_desc_at(resource)?.format != expected {
+                    return Err(self.resource_error(
                         GraphErrorKind::InvalidInput,
                         "Raster attachment format differs from the Program output contract",
                         resource,
                     ));
                 }
             }
+            Ok(())
+        })()
+        .map_err(|error: GraphError| error.with_pass_name(name))?;
+        let mut draws = draws.into_iter().peekable();
+        if draws.peek().is_none() {
+            return self.attachment_pass(name, attachments);
+        }
+        self.build_pass(name, |graph| {
             let first_draw = graph.draws.len();
             let first_access = graph.accesses.len();
             graph.data_mut().clear_raster_ranges();
@@ -667,7 +671,7 @@ mod tests {
             vertices,
             indices,
             index_count: 3,
-            parameters: RasterParameters::default(),
+            parameters: RasterParameters::default().into(),
         }
     }
 
@@ -766,12 +770,16 @@ mod tests {
         let mut graph = pool.begin().unwrap();
         let mut first = uploaded_draw(&mut graph, "first");
         first.indices = first.vertices;
-        first.parameters =
-            RasterParameters::new(*first.parameters.transform(), [0.25, 0.5, 0.75, 1.0]).unwrap();
+        first.parameters = RasterParameters::new(
+            *RasterParameters::default().transform(),
+            [0.25, 0.5, 0.75, 1.0],
+        )
+        .unwrap()
+        .into();
         let mut second = uploaded_draw(&mut graph, "second");
-        let mut transform = *second.parameters.transform();
+        let mut transform = *RasterParameters::default().transform();
         transform[3][0] = 0.5;
-        second.parameters = RasterParameters::new(transform, *second.parameters.tint()).unwrap();
+        second.parameters = RasterParameters::new(transform, [1.0; 4]).unwrap().into();
         let image = graph
             .image(
                 "array color",
@@ -809,7 +817,9 @@ mod tests {
                 .unwrap();
             draws.swap(0, 1);
             draws[0].parameters =
-                RasterParameters::new(*draws[0].parameters.transform(), [0.0; 4]).unwrap();
+                RasterParameters::new(*RasterParameters::default().transform(), [0.0; 4])
+                    .unwrap()
+                    .into();
             colors[0].load = LoadOp::Discard;
             std::hint::black_box((draws, colors));
             pass
@@ -841,7 +851,7 @@ mod tests {
         else {
             panic!("owned Raster operation")
         };
-        assert!(program.is_mesh());
+        assert!(program.same(&ManagedRasterProgram::mesh()));
         let owned = plan.raster_draws(draws);
         assert_eq!(owned.len(), 2);
         for (actual, expected) in owned.iter().zip([first, second]) {

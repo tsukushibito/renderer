@@ -123,7 +123,9 @@ fn draws(graph: &mut Graph, frame: usize) -> [RasterDraw<'static>; 4] {
             indices,
             index_count: 3,
             bindings: &[],
-            parameters: RasterParameters::new(transform, tint(frame, draw)).unwrap(),
+            parameters: RasterParameters::new(transform, tint(frame, draw))
+                .unwrap()
+                .into(),
         }
     })
 }

@@ -18,7 +18,7 @@ fn geometry(graph: &mut Graph) -> RasterDraw<'static> {
         vertices,
         indices,
         index_count: 3,
-        parameters: RasterParameters::default(),
+        parameters: RasterParameters::default().into(),
         bindings: &[],
     }
 }

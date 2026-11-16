@@ -35,7 +35,7 @@ fn offscreen_pipeline(graph: &mut Graph) {
                 vertices,
                 indices,
                 index_count: 3,
-                parameters: RasterParameters::default(),
+                parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {

@@ -133,7 +133,7 @@ impl Default for RasterParameters {
 /// Owned per-draw inline words. Construction copies at most 128 bytes without
 /// allocating; Graph captures this immutable value into its prepared draw slot.
 /// Shader-specific values and their interpretation belong to the trusted Program.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RasterConstants {
     words: [u32; 32],
     len: u8,
@@ -154,14 +154,6 @@ impl RasterConstants {
     }
     pub fn words(&self) -> &[u32] {
         &self.words[..usize::from(self.len)]
-    }
-}
-impl Default for RasterConstants {
-    fn default() -> Self {
-        Self {
-            words: [0; 32],
-            len: 0,
-        }
     }
 }
 impl From<RasterParameters> for RasterConstants {
