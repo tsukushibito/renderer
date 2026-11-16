@@ -64,6 +64,32 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
 
+<a id="bistro-tools"></a>
+
+## Bistroのcook・材質shader・比較
+
+[runtime cookと描画手順](development.md#bistro-pbr)は通常のRust buildから分離する。
+`tools/bistro/mikk.py`がoffline用C helperをClangで作り、`cook.py`が固定glTFと元DDSの全mipを
+実行用streamへ変換する。MikkTSpaceの固定commit、無変更upstream fileのhash、保持した
+zlib-style licenseの所在は[provenance](../../tools/bistro/mikktspace/provenance.json)へ記録する。
+ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
+
+PBRと最終SDR resolveの利用側shaderは`examples/support/bistro/shaders/`に置く。
+通常buildは生成済みSPIR-V／DXILを使い、変更時は固定SDKで再生成する。
+
+```powershell
+& ./crates/renderer/examples/support/bistro/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+```
+
+`-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
+更新を意図する場合は`-Verify`を外し、shaderとRust descriptorのABI、footprintと安全性契約をレビューする。
+hash/reflectionの一致だけで未信頼shaderを安全とみなさない。
+
+`compare_runtime.py`はrunnerの`report.json`とHDR/SDR/depthを読み、固定profileと全画素・ROIの誤差を集計する。
+`measure_runtime.py`は通常releaseの保存済みEXEを逐次実行し、非収集runとGPU query off/onを分ける。
+これらの計測にWPRや管理者実行は不要であり、ETWの収集手順とは独立する。
+実行したprofile/hash・レビュー修正・二APIの内容照合と計測値は[現行検証](../verification/current.md#bistro-pbr)へまとめる。
+
 ## D3D12 bindingsの生成
 
 `d3d12` featureはWindows限定のprivate bindingsを使う。公開Graph／Engineへnative型を出さず、

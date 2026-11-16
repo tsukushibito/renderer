@@ -36,7 +36,7 @@ upload/copyによる保証の確立・失効、未知の穴の拒否、容量と
 公開型はfacadeから直接reexportし、並行する互換APIを作らない。
 
 画像形式はGraphとProgramで共通の`renderer::ImageFormat`を使う。
-`Rgba8Unorm`、`Rgba16Float`、`Depth32Float`の意味を一つの型で定め、
+`Rgba8Unorm`、`Rgba8Srgb`、`Rgba16Float`、`Depth32Float`の意味を一つの型で定め、
 論理資源とshaderのformat契約を別enum間の変換で対応づけない。
 nativeのresource／sampled view／depth viewの形式は用途ごとに導出し、
 共通format型の採用を未対応の用途やformatを許可する理由にはしない。
@@ -46,11 +46,22 @@ Graphから`engine`の型を参照しない。`MeshData::upload_graph_slice`は�
 engine側からGraphのpassを直接変更せず、任意のpublic byte uploadからmesh provenanceを作らない。
 元のArc、slice位置とappend失敗時の状態を維持し、chunkごとのpayload複製や追加scanを入れない。
 
+一般の頂点形式には`geometry::GeometryData::new(vertex_stride, vertices, indices)`を使える。
+非ゼロの4-byte整列stride、stream長、非空triangle list、u32 countと全indexの頂点範囲を生成時に保証する。
+頂点fieldの意味・有限値・paddingはopaqueであり、Bistroではcook/loaderが48-byte形式として保証する。
+`upload_vertices`／`upload_indices`はprivateなstreamと全index streamの最大値を既存のmesh upload経路へ引き継ぐ。
+native provenanceはbyte長・既知の全stream範囲・最大indexを保持し、検査用CPU index byte列やproducer Graphを保持しない。
+この証明を任意prefix drawへ転用せず、実Programのstride・頂点数・Device上限はnative適合境界で確認する。
+任意のwrite/copyは既存のprovenance規則で失効・再確立する。
+setupのGraphPool/planはupload streamのArcを保持し得るため、GPU完了後の明示した準備・保守境界で
+GeometryDataとidle upload poolを解放する。次の通常frameのresetへ最後のCPU解放を持ち越さない。
+
 ## 対応範囲と処理の境界
 
-Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなし、
-2D画像のmip・layer・sample各1を対象とする。
-これはnative実行の範囲である。論理Graphは以下のmip/layer単位のCPU計画も扱う。
+Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなしを基準とする。
+両backendのnative画像は2D・layer/sample各1で、sampled入力とwhole-chain uploadは複数mipを扱う。
+attachment/storage画像、画像copy/readbackはmip数1に限定する。
+論理Graphは、以下のより広いmip/layer単位のCPU計画も扱う。
 bufferは半開byte範囲を指定する。
 論理ハンドルと物理資源の識別、内容の有効性と画像layout、
 予定されたGPU状態と実際の完了を別々に管理する。
@@ -71,7 +82,8 @@ bufferは半開byte範囲を指定する。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
-Program、Uniform/Storage buffer、RGBA8/RGBA16F/D32画像/View、nearest/clamp samplerの共通binding作成APIを用意する。
+Program、Uniform/Storage buffer、RGBA8/RGBA16F/D32画像/View、samplerの共通binding作成APIを用意する。
+`Rgba8Srgb`とsampled mip範囲、`LinearRepeat`はB2の材質入力用に加えた。
 Viewはsampled用とD32のdepth attachment用を区別し、aspectはformatから導出する。
 bindingはmanifest順に
 実Programと全資源の版/範囲を保持する。Storage本文はGPU可変で、作成を初期化とは扱わない。
@@ -94,7 +106,7 @@ Graph外のbinding作成と、Graph内の論理bindingからnative命令へ具�
 利用側に別のread/write一覧を要求せず、旧buffer専用入口は残さない。
 
 命令は不変な管理下Program identity、dispatch数、manifest順のbindingを所有する。
-Programの不変static descriptorと準備済みarenaへコピーしたbuffer descriptor・単一subresource View・
+Programの不変static descriptorと準備済みarenaへコピーしたbuffer descriptor・subresource View・
 sampler設定により、呼出元のProgram変数・binding/draw sliceが変更・破棄されてもplanは変わらない。
 同じRaster内のdrawごとに異なるmaterial bindingを指定できる。これは論理Graph資源の所有であり、
 `.2.1`のnative Program/Bindingsをimportした契約ではない。
@@ -103,7 +115,8 @@ sampler設定により、呼出元のProgram変数・binding/draw sliceが変更
 解析にはABI最小sizeから推定した量ではなく、shaderと同時にレビューするfootprintを使う。
 uniform/storage readbackは先頭16 byteだけを読み書きし、sampled readbackの出力は16 byte、
 sampled float readbackは64 byteだけを初期化する。大きなdescriptorの未書込tailは有効にならない。
-sampled入力は選択したViewのmip/layer全域を読むものとして扱い、sampler自体は資源内容アクセスを作らない。
+sampled入力は選択したViewのmip範囲/layer全域を読むものとして扱い、sampler自体は資源内容アクセスを作らない。
+LODが特定のmipへ偏ると推測して、選択範囲の未初期化検査やhazardを省略しない。
 shaderやdispatch条件を変える際はfootprintと初期化保証も改訂する。
 
 `StorageImageRead(format)`と`StorageImageWrite(format)`は型付きの単一subresource Viewを使う。
@@ -178,17 +191,21 @@ native作成・破棄や表示・結果消費を含む全体のゼロ達成を�
 ### 画像subresourceとowned attachment配列
 
 `renderer-7ft.2.2.3`。`ImageDesc`は`mip_levels`と`array_layers`を持ち、
-`rgba8`/`rgba16_float`/`depth32` constructorは各1を設定する。mip数は最大extentから許される段数まで、
+`rgba8`/`rgba8_srgb`/`rgba16_float`/`depth32` constructorは各1を設定する。mip数は最大extentから許される段数まで、
 layer数は非ゼロとし、全mipの縮小extentとlayer数のpacked byte合計をchecked演算で検査する。
 これはnative allocation sizeやVRAM使用量の見積もりではない。
 
 `Graph::image_view(image, mip, layer)`は同じ画像の単一subresourceを指す不変な値を返す。
-owner・範囲を作成境界で確認し、aspectをRGBA8/RGBA16FのColor／D32のDepthから導く。
+owner・範囲を作成境界で確認し、aspectをRGBA8（UNORM/sRGB）/RGBA16FのColor／D32のDepthから導く。
 `ImageView`は画像を別resourceとして登録せず、複数Viewの重なりを元の画像で解析する。
-現行は単一mip/layer Viewであり、複数mip/layerを覆う一つのViewは未対応である。
+`Graph::sampled_image_view(image, base_mip, mip_level_count)`は単一layerの連続mip範囲を選ぶ。
+`ImageView::mip_level_count()`で範囲を確認でき、`image_view`のcountは1である。
+storage/attachment Viewはcount1を要求する。native sampled実行はcount1の任意mip、または
+base0から全chainまでのViewを扱い、部分的な複数mip範囲は明示的に未対応とする。
 論理解析は`layer * mip_levels + mip`の区間へ写像し、producer・未初期化拒否・RAW/WAR/WAW・cullingを共通解析へ接続する。
 `declare_pass`の画像範囲も同じ各subresourceを扱う。エラーでは最初の未初期化subresourceをmip/layer/aspectへ戻す。
-`export_image`は全subresourceの有効内容を要求する。既存native importのinitialized boolは画像全体を表し、nativeは今も各1だけを生成する。
+`export_image`は全subresourceの有効内容を要求する。native importのinitialized boolは画像全体を表し、
+全mipの内容が確立した場合にだけ有効なsnapshotとなる。
 
 `Graph::attachment_pass(name, RasterAttachments)`は描画命令を持たないattachment操作を追加する。
 color配列は0個以上、depthは任意だが、全体が空の指定は拒否する。
@@ -204,16 +221,23 @@ loadがDiscardの操作だけで有効な内容を確立したとは扱わない
 
 両backendのnative attachment操作とRasterはcolor一個（RGBA8またはRGBA16F）、optional D32、
 またはcolorなし＋D32を扱う。Load/Clear/DiscardとStore/Discardを保持し、ダミーattachmentは要求しない。
-MRTやmulti-subresource画像のlive計画はpreflightで拒否し、native記録・投入へ進めない。
-Vulkanは物理取得・資源準備と画像cacheのlookup前にもmulti-subresourceを拒否し、古い1mip画像を誤って再利用しない。
+MRT、複数layer、multi-mip画像をattachment/storageへ使うlive計画はpreflightで拒否し、native記録・投入へ進めない。
+sampled mip chainのcache identityはmip数も区別し、同じbase extent/formatの1mip画像を誤再利用しない。
 D3D12のprepareは既存execution枠の取得後に適合を検査する。未準備容量の不足が先に返る場合があり、
 全backendのエラー種別の優先順位を固定する契約ではない。
 culledな未対応枝は実行や物理資源取得を妨げない。
-whole-image uploadはRGBA8/RGBA16F、readbackはこれらとD32のpacked bytesを扱う。
+whole-image uploadはRGBA8（UNORM/sRGB）/RGBA16Fを扱う。複数mipはmip0から順に、
+各levelを隙間のないrow-major texel列として連結する。whole-chainの長さ・全level初期化を保証し、
+nativeのrow pitch・offset alignmentはbackendのstaging配置へ変換する。
+readbackはmip数1のRGBA8/RGBA16F/D32のpacked bytesを扱う。
 texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation sizeの代用にはしない。
-画像copyは同じextent/formatのRGBA8・RGBA16F、固定Compute/compositeはRGBA8を受け入れる。
-native実行は単一subresource画像に限定し、
-一部の操作を画像全体の初期化として扱わない。
+画像copyは同じextent/formatでmip数1のRGBA8・RGBA16F、固定Compute/compositeはRGBA8_UNORMを受け入れる。
+`Rgba8Srgb`はsample/transfer用途で、storage/attachmentへは受け付けない。
+linear filteringの実format能力は作成・準備境界で確認する。
+`NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、
+repeat、選択View内のLOD範囲を使う。Graphのsampler operandに従ってnative設定を選び、
+比較・anisotropy samplerや一般的な任意設定へは広げない。
+画像単位の保守的なnative state/layout管理を維持し、一部の操作を画像全体の初期化として扱わない。
 
 資源は可変で、readは宣言順で直前までに書かれた内容を使う。
 bufferの異なるbyte範囲には異なるproducerがあり得る。
@@ -618,12 +642,17 @@ native実行前に容量とexport tokenを全て予約し、ExecuteとSignal成�
 Signal失敗ではDeviceを停止し、内容を公開せず、実行資源・program・Deviceを含む所有を隔離保持する。
 [Fenceの`UINT64_MAX`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-getcompletedvalue)を正常完了と扱わない。
 
-新しい未登録物理bufferを`executions * buffers`、画像を`executions * 各image classのcount`準備する。
+`D3D12Runtime::new_with_working_set`は`D3D12BufferClass { size, count }`と画像classの
+globalな個数を直接準備する。class countへexecution数を自動で掛けない。
+`D3D12FrameCapacity::buffers`は各executionのlogical buffer operand枠、`buffer_bytes`は最大logical sizeであり、
+物理資源の個数・実sizeは指定classから決める。均一poolを使う`new`の初期buffer数とは区別する。
 登録済み資源はこの追加準備分と独立に維持する。`resource_capacity`（既定1024）は登録・未登録cacheを
 含むregistry entry総数の上限であり、各Graphの論理資源上限`resources`やbyte budgetとは別である。
-bufferのnative sizeは`buffer_bytes`、論理sizeは各Graphのdescriptorである。画像は完全一致するclassを使う。
+bufferはlogical size以上の最小classから空きを選び、画像はmip数も含め完全一致するclassを使う。
+小さいlogical bufferへ再利用しても、実際のnative capacityをclass metadataへ保持する。
 空き候補は準備済みのclass別indexで管理し、登録中のentryは候補から除外する。
-各bindのcursorが同classの未登録候補を最大一回確認し、登録済みprefixや別classを資源ごとに再走査しない。
+buffer classをbinary searchとprepared bitmap/cursorで選び、各classのcursorは未登録候補を最大一回確認する。
+登録済みprefixやregistry全体を資源ごとに再走査しない。
 登録・delete・世代上限・working set再準備でindexを更新し、実際のArc参照数・世代・descriptorを
 最終的な貸出し条件として維持する。cursor通過後に参照が返った候補は次のrecordingから使えるため、
 現在のbindが一時的な容量不足を返す場合がある。内部waitや候補領域の増設は行わない。
@@ -643,7 +672,8 @@ resizeの反復でregistryを追加し続けない。Device removal等による�
 
 registryを複数pool世代で共有する案より、返却済みの変更境界で値を移す方式を選ぶ。
 pending中の再準備を追加せず、共有寿命・退役世代・新しい回収APIを増やさないためである。
-Graph color画像はtransfer／sampled／RT／UAVの固定用途とし、初回Program集合に関わらず後のstorage利用を許す。
+GraphのUNORM/float color画像はtransfer／sampled／RT／UAVの固定用途とし、初回Program集合に関わらず後のstorage利用を許す。
+`Rgba8Srgb`はsample/transferだけに限定し、RT/UAV用途を加えない。
 Microsoftは[UAV flagによるlayout効率への影響](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_flags)も説明する。
 用途限定画像と必要時のcopyを使う代案より、Vulkanと同じ資源の再利用契約を優先した基準である。
 copyによる移行・新しいGPU transactionは導入せず、速度やmemory効率の優位は未測定とする。
@@ -758,7 +788,7 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 
 初期標準描画は照明を計算しない。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
 RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。
-現在のnative対象は2D・mip/layer各1・sample数1であり、MSAAやMRT、reversed-Zは提供しない。
+これらのnative attachmentは2D・mip/layer各1・sample数1であり、MSAAやMRT、reversed-Zは提供しない。
 `opaque`単体はcolor-onlyも許す。recipeの`depth: false`ならdepthは作らず、post入力のdepthも`None`となる。
 必要なdepthがなければ利用側は明示的に拒否するか別の処理を選び、暗黙の代用画像を作らない。
 

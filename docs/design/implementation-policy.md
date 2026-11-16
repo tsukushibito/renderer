@@ -1054,7 +1054,8 @@ ORM画像がない瓶ラベル1材質はnonmetal/roughness 0.5を明示した暫
 
 使用中の`MASTER_Glass_Dirty_MASKED`と`Paris_LiquorBottle_01_Labels`は画像alphaが全0で、計222面に影響する。
 `renderer-7ft.1.1.2`では下記の根拠と近景比較から、**元alphaを保持し、不透明overrideを加えない**方針を確定した。
-PNGはbase mipだけの中間形式であり、元DDS・mip情報は保存する。実行用のmipとMikkTSpace生成はB2で確定する。
+PNGはbase mipだけの中間形式であり、元DDS・mip情報は保存する。
+B2の[実行用cook](#bistro-runtime-cook)では元DDSの全mipとMikkTSpace tangentを接続する。
 TANGENTは元にも検証glTFにもなく、[glTF仕様](https://github.com/KhronosGroup/glTF/blob/main/specification/2.0/Specification.adoc)に従いconsumerで生成する。
 この構成の公式Validator警告1,591件と、保持した未使用LightMapUVに関するinfo 1,591件は原文を残す。
 native API受入の警告/エラーゼロを緩和する例外ではない。
@@ -1280,6 +1281,50 @@ Graph構築で範囲・ABI・重複subresource・dispatch/extentを保証する�
 ModelをRendererへ持ち込まず、取込/作成/更新境界の保証を保持し、毎drawでasset本文を再検査しない。
 同じ入力と公開Graphを二APIへ接続する。
 
+<a id="bistro-runtime-cook"></a>
+
+#### 実行用cookとForward PBRの境界
+
+`.3.1`のcookと`.3.2`の`examples/bistro`はRenderer外の利用側処理とする。
+全1,296 mesh・132材質・405画像をmanifestへ対応付け、glTFのnode transformをgeometryへ反映する。
+頂点はposition、normal、tangentとhandedness、UVを持つ48-byte stream、indexはlittle-endian u32とする。
+normalを正規化してMikkTSpaceを実行し、退化UV/geometry、またはfloat32の角度重みの
+collapseで有効な接線が得られないcornerはnormalと直交する決定的なfallbackへ置き換える。
+適用件数を原因別に記録し、Mikkが返した有効なhandednessは保持する。
+world transformの反射・非一様scaleでもnormal、接線の直交性・単位長とhandednessを保持する。
+元のnode/mesh/primitive/materialとtransformの対応を残し、頂点分割や順序の変化で欠落を隠さない。
+
+runtime画像は元DDSの3,529 mipを独立にRGBA8へ復号し、base mipを既存PNGと照合する。
+BC5 normalは正Z復元と緑成分反転を全mipへ同じ規則で適用する。
+供給済みchainを保持する方針であり、PNG baseからの新しいmip生成や、圧縮DDSのGPU直接利用とは区別する。
+base colorとemissiveは`Rgba8Srgb`、normalとORMは`Rgba8Unorm`とし、
+色成分はnative samplingで線形化してからfilterする。alphaは線形の不透明度として保持する。
+全画像のpacked byte量5,011,178,404 byteはnative allocation量やVRAM予算の代用にはしない。
+全量を一度にstagingへ複製せず、ロード境界で画像ごとにuploadし、定常描画用の資源を保持する。
+
+cookのhashは同じ入力・生成物を識別するために使い、意味的な正しさの証明とはしない。
+Rustの読込境界で形式version、byte長、有限値、index範囲、材質・画像参照、mip範囲を確定する。
+読込後はprivateな不変データとnative/import ownerで保証を引き継ぎ、asset本文をdrawごとに再検査しない。
+素材・cook recipe・stream・材質や画像を更新した場合は、該当する保証とprepared working setを再確立する。
+Device能力、同期、容量不足、native失敗、GPU完了の処理はこの保証とは別に維持する。
+GPUへのgeometry取込は`geometry::GeometryData`のtyped full-stream uploadを使い、
+stride/長さ/index範囲の生成時保証をprivateな最大index要約へ引き継ぐ。
+頂点fieldの意味・有限値はcook/loaderの責任であり、汎用GeometryDataだけでPBRの属性を保証しない。
+通常の任意byte uploadへこの保証を与えず、内容のwrite/copyで該当provenanceを失効させる。
+取込用GraphPoolとCPU streamはGPU完了後の準備・保守境界で返し、検査用CPU index本文を定常描画へ保持しない。
+
+材質shaderは利用側のtrusted `ManagedRasterProgram`で、GGX metallic-roughness、normal map、
+AO、emissive、両面と元のOPAQUE/MASK/BLENDを扱う。元alpha0の2材質を保持し、
+alpha0をcolor/depth write前に除外する。不透明overrideは受入の感度確認だけに使う。
+不透明・maskの後にblendをcameraからの距離で安定に並べ、線形RGBA16Fへ合成する。
+B2の照明はsunと明示した一定ambientであり、B3のIBL・影・固定EV/PBR Neutralを完了した意味ではない。
+SDR確認用のclampとsRGB OETFは利用側の別passで一度だけ行う。
+標準forwardのunlit recipeへPBR固有のeffect列挙やasset読込を追加しない。
+
+手順は[開発ガイド](../guides/development.md#bistro-pbr)、実行した内容照合・レビュー修正・
+CPU/GPU計測と未確認範囲は[現行検証](../verification/current.md#bistro-pbr)へ集約する。
+`.3.3`の常駐・更新とallocation予算、B3/B4/B5の品質・表示の最終受入は各課題で扱う。
+
 ### B3: 影・線形HDR・トーンマッピング
 
 `renderer-7ft.4`。B0で選ぶ照明・描画方式に従い、depth-only shadow、PBR照明、浮動小数点HDR中間画像、出力変換を組み合わせる。
@@ -1441,9 +1486,10 @@ input/outputが同じbufferならbyte範囲が別でもprivate prepareで拒否�
 producer/consumerのasset identityと同じBuffer版・先頭16 byteを準備時に照合し、
 input/outputを各一度leaseして両Program/Bindingsとともにcancel/実Fence退役まで保持する。
 
-管理下画像はRGBA8_UNORM、RGBA16FまたはD32 Texture2D、mip/layer/sample各1、DEFAULT heap、
+管理下画像はRGBA8_UNORM/sRGB、RGBA16FまたはD32 Texture2D、layer/sample各1、DEFAULT heap、
 初期COMMON、未初期化である。実DeviceのTEXTURE2D/SHADER_SAMPLE対応とextent上限を作成時に保証する。
-Viewはfull mip0/layer0の用途とImage owner、Samplerはnearest/clamp/LOD0定義とDeviceを保持する。
+`ImageDescriptor::mip_levels`を検査し、Viewは選択mip範囲・用途とImage owner、Samplerは
+`NearestClamp`または`LinearRepeat`の定義とDeviceを保持する。
 `ImageViewUsage::Sampled`が既定であり、`DepthAttachment`はD32だけに許可する。
 attachment Viewはsampled bindingへ受け付けない。aspectはImageのformatから導出する。
 non-comparison POINT filterのComparisonFuncはNEVERとし、無視される設定にもnative警告を残さない。
@@ -1541,7 +1587,10 @@ bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnativ
 
 DEFAULT、UPLOAD、READBACKのcommitted resourceを使い、legacy barrierで全bufferの状態を追跡する。
 `D3D12RuntimeConfig::capacity`の`D3D12FrameCapacity`でexecution/result/resource/operation枠、
-buffer数と各buffer・upload・readback・scratchのbyte上限を明示し、runtime初期化で全枠を作成する。
+buffer operand数と最大logical size、upload・readback・scratchのbyte上限を明示し、runtime初期化で全枠を作成する。
+`D3D12Runtime::new_with_working_set`は`D3D12BufferClass { size, count }`、画像classとProgramを受け、
+必要な実サイズの物理bufferをglobalな個数で直接準備する。初期の均一な最大size poolを先に作らない。
+`capacity.buffers`はimportも含むexecutionごとのlogical operand枠であり、物理bufferの個数とは別である。
 通常prepareはその上限内で変わる入力を記録し直し、native資源やCPU配列を増設しない。
 枠不足・上限超過は待たずに型付きエラーを返す。容量変更は旧consumerの寿命を終えた明示準備境界で行う。
 DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit promotion／decayによるbarrier削減は
@@ -1550,21 +1599,31 @@ DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit pro
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
 Enhanced Barriers、外部suballocatorは未対応である。import／exportは後述の共有registryを使う。
 
-`prepare_graph_working_set(&[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result、
+`prepare_graph_working_set(Option<&[D3D12BufferClass]>, &[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result、
 export付きsubmission、export／refreshした`ImportBuffer`とそのcloneが返った
-明示準備境界で画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
+明示準備境界でbuffer/画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
+buffer指定の`None`は既存のfree class budgetを保持し、`Some`は置き換える。buffer/画像のclass countは
+globalな準備数で、execution数を自動で掛けない。登録済み資源の保持はこの追加budgetと分ける。
 登録資源のdeleteは要求しない。key・内容revision・初期化範囲・provenanceとnative資源を保持し、
 再準備後は保持したkeyからbuffer snapshotをrefreshする。scalarな`ImportImage`はそのまま保持できる。
 各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠、
-および一個の不変nearest/clamp sampler descriptorを所有する。新classにない登録画像のdescriptor枠も補う。
-RGBA8/RGBA16Fのcolor targetとoptional D32、またはdepth-onlyを扱い、MRTと複数mip/layerは拒否する。
+および不変nearest/clamp・linear/repeat sampler descriptorを所有する。Graphのsampler operandに従って選び、
+新classにない登録画像のdescriptor枠も補う。
+RGBA8/RGBA16Fのcolor targetとoptional D32、またはdepth-onlyを扱い、MRTと複数layer、
+multi-mip画像のattachment/storage利用は拒否する。
 実formatのrender target/depth/sample能力、SM6.0、root signature、native作成失敗はこの境界で扱う。
-Graphのcolor画像は初回からRT／UAVの固定用途で作成し、後から追加したProgramも同じ登録画像を使える。
+GraphのRGBA8_UNORM/RGBA16F画像は初回からRT／UAVの固定用途で作成し、後から追加したProgramも同じ登録画像を使える。
 typed UAV view能力を画像準備で、load/store能力をProgramの用途に応じて確認する。
+`Rgba8Srgb`はsRGB SRVによるsampleとtransferだけに用い、RT/UAV用途を要求しない。
+実formatのlinear filtering能力を準備境界で確認し、色を線形化してからfilterする。
 depth画像へUAVを付けない。固定effect名の分岐ではなく、Programの不変binding ABIから
 root CBV/SRV/UAVとdescriptor tableを導く。依存dispatchは別passとし、同じUAV状態のままでも
 必要なread/write依存へUAV barrierを置く。descriptorはslotの命令記録・実GPU完了まで排他で保持する。
-画像copyは同extent/formatのRGBA8/RGBA16Fを全subresourceで転送し、COPY_SOURCE/DEST状態へ遷移する。
+single-layer 2Dの複数mipは、mip0から順のpacked chainをuploadし、全levelの内容を確立する。
+levelごとの`GetCopyableFootprints`とrow pitch／配置offsetを使い、prepared stagingの範囲内へ配置する。
+sampled Viewは任意のcount1 mip、またはbase0からの全chainを選べる。
+部分的な複数mip範囲とarrayは未対応として拒否し、native resource stateは画像全体を保守的に管理する。
+画像copy/readbackはmip数1に限定し、同extent/formatのRGBA8/RGBA16F copyをCOPY_SOURCE/DEST状態で行う。
 一度準備した各drawのdescriptorは未投入cancelまたは実Fence完了まで再利用しない。
 D3D12は選択color Programごとのdepth有／無を準備する。Vulkanはprepared画像にD32がある場合だけ
 depth有のcolor Programも準備する。buffer-onlyの初期化ではどちらもgraphicsの能力を要求しない。

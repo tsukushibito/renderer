@@ -31,8 +31,12 @@ camera背景は一定色とし、IBLは照明と反射へ残す。原本のbyte�
 明示的PBR/alpha recipe、重複面の頂点分離、raw normal保持を行った。
 元DDSの全mipをPNGへ収録したとは扱わない。使用中2材質は[alphaの確定方針](../../docs/design/implementation-policy.md#bistro-alpha)に従い、
 元alphaを保持して不透明化しない。元DDSの全mipでalpha 0を確認し、窓・瓶の近景比較とFalcor一次ソースを記録した。
-mesh/materialは保持する。runtimeの接線/mip生成は後続課題であり、
-このglTFはRendererの完成済みcook形式でもVulkan/D3D12の受入済み画像でもない。
+mesh/materialは保持する。このglTFは検証用の中間形式であり、利用側の
+[runtime cookとForward PBR](../../docs/guides/development.md#bistro-pbr)へ入力する。
+cookは正規化したnormalからMikkTSpace tangentを生成し、元DDSの全mipを読み戻す。
+405画像の3,529 mipは展開後RGBA8で5,011,178,404 byteとなるため、生成物と実行時の準備容量は
+このLFS配布量とは別に扱う。cook生成物は`.tools/`に置き、原本・中間形式を上書きしない。
+Vulkan/D3D12の実行・比較・計測の確認範囲は[現行検証](../../docs/verification/current.md#bistro-pbr)を参照する。
 詳細と完全性の証拠は[現在の検証結果](../../docs/verification/current.md#bistro-assets)を参照する。
 
 取得はルートから次を実行する。Git LFSを先にインストールし、Beadsと共用する追跡済みhooksを使う。

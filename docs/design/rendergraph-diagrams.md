@@ -113,7 +113,7 @@ Samplerは設定をcaptureしますが、内容accessやproducer辺を作りま�
 | 対象 | `ResourceAccess`の範囲・用途・stage |
 |---|---|
 | ProgramのBuffer binding | レビュー済みbyte footprint、Uniform/Storage用途、manifestの`ShaderStages` |
-| Programのsampled View | 選択mip/layer全域、Sampled用途、manifestの`ShaderStages` |
+| Programのsampled View | 選択mip範囲/layer全域、Sampled用途、manifestの`ShaderStages` |
 | Programのstorage View | typed formatとdispatch/extentに結び付く選択mip/layer全域、StorageRead/Write用途、COMPUTE |
 | vertex/index buffer・attachment | operand由来のVertex/Index/ColorAttachment/DepthAttachment用途。shader stageとは独立 |
 
@@ -202,6 +202,8 @@ bufferは半開byte範囲、画像はmip/layer/aspectで内容を扱います。
 画像Viewは同じImageHandleへ戻る値で、新しい物理画像の作成ではありません。
 exportは全域に有効内容を要求するため、図の画像はmip0だけのclearではexportできません。
 CPUのsubresource解析と、nativeが複数mip/layer画像を実行できるかは別の能力です。
+現在のnative sampled入力は単一layerの全mip chain、またはその中の一つのmipを扱います。
+attachment/storage・copy/readbackの制限は[現行契約](rendergraph.md#画像subresourceとowned-attachment配列)を参照してください。
 
 内容の有効性は「読む値が定義されているか」、layoutは「native用途に適した状態か」、
 正常完了は「GPUが成功して終わったか」です。画像が適切なlayoutでも内容が有効とは限らず、

@@ -134,6 +134,7 @@ readbackのHOST_READ依存や、非coherent memoryのinvalidateも実行側の�
 
 bufferは`0..16`のような半開byte範囲で扱い、範囲ごとに異なるproducerを持てます。
 論理画像はmip数・layer数を持ち、`image_view(image, mip, layer)`で一つのsubresourceを選びます。
+sampled入力の連続mip範囲には`sampled_image_view(image, base_mip, mip_level_count)`を使います。
 Viewは元の画像を参照する不変値で、独立した資源として重複登録しません。
 画像のaspectはformatからColorまたはDepthへ導きます。
 
@@ -161,13 +162,14 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 | 機能 | 共通CPU計画 | Vulkan実行 | D3D12実行 |
 |---|---|---|---|
 | buffer upload/copy/readback | 対応 | 対応 | transient bufferで対応 |
-| 画像upload/readback | RGBA8/RGBA16F upload、これらとD32 readback | 各1 subresource | transient画像・各1 subresource |
+| 画像upload/readback | RGBA8/RGBA16F upload、これらとD32 readback | uploadは全2D mip chain、readbackはmip数1 | 同じnative範囲で対応 |
 | 画像copy | 同extent/formatのRGBA8・RGBA16F | 各1 subresource | 同じ契約のtransient画像で対応 |
 | 固定Compute・composite | 対応 | 限定した管理下操作に対応 | 未対応 |
 | 管理下owned Raster | mesh/textured meshのRGBA8/RGBA16F、depth-only、複数draw | 最大一色＋任意depth、各1 subresource、指定Load/Store・bindingを保持 | 同じ契約のtransient資源で対応 |
 | `Graph::dispatch` | 管理下Programとbuffer・sampled/storage画像のbinding、固定または画像extent由来dispatch | 明示準備したpipeline/descriptorで対応 | 同じ契約のtransient資源で対応 |
 | `attachment_pass` | color-only・depth-only・MRT、単一mip/layer View | 最大一色＋任意depth、各1 subresource | 同じnative形状で対応 |
-| 複数mip/layerの画像 | subresource単位に解析 | native画像は各1のみ | native画像は各1のみ |
+| sampled mip chain | 選択範囲をsubresource単位に解析 | layer数1、任意count1 mipまたは全chain View | 同じnative範囲で対応 |
+| 複数layerの画像 | subresource単位に解析 | 未対応 | 未対応 |
 | import/export・履歴 | 宣言・解析に対応 | canonical状態と連携 | canonical identity/revision、COMMON境界と連携 |
 | 複数queue・物理aliasing | 一般実装なし | 単一Graphics＋Compute queue、aliasingなし | 単一DIRECT queue、aliasingなし |
 
@@ -183,7 +185,8 @@ Buffer・ImageView・Samplerを所有します。callerがread/writeやshader st
 | `sampled_float_readback()` | 選択mip/layer全域を保守的にread | Storage先頭64 byte |
 
 全てworkgroupsは`[1,1,1]`です。descriptorの余分なbyteを初期化したことにはしません。
-Samplerはnearest/clampの不変設定を保持し、別の内容資源やread/write accessを作りません。
+Samplerは`NearestClamp`または`LinearRepeat`の不変設定を保持し、別の内容資源やread/write accessを作りません。
+`Rgba8Srgb`の色成分は線形化してからfilterし、normal/ORM等のdata画像はUNORMのままsampleします。
 これらに加え、利用側のレビュー済みCompute descriptorを明示したunsafe境界で取り込めます。
 型付きstorage画像の全域writeは対象extentとdispatchの契約に結び付け、両backendのowned命令へ接続します。
 
@@ -321,5 +324,7 @@ B1では、実装済みの管理下owned命令とbinding/attachment由来のア�
 公開構成への移行は[作業順序](implementation-policy.md#public-api-migration)に従い、Compute/copyの受入後、一般import・寿命管理の前に進めます。
 標準グラフの定義を再利用してもframeごとの描画対象は変更できます。基本は入力から各frameのGraphを構築・compileし、
 不変のCompiledGraphへdraw列を後から差し込む機能の実装とは区別します。
-一般shader、native MRT/mip/layer、Bistro描画や複数queue・物理aliasingの対応状況は、
-[公開API比較](implementation-policy.md#public-api-comparison)と[Bistro計画](implementation-policy.md#bistro-roadmap)で確認してください。
+利用側のBistro例は、cook済みのgeometry/materialとPBR shaderを同じGraphへ接続します。
+[実行手順](../guides/development.md#bistro-pbr)と[現在の検証](../verification/current.md#bistro-pbr)で範囲を確認できます。
+一般shader、native MRT/layer、複数queue・物理aliasingの計画は、
+[公開API比較](implementation-policy.md#public-api-comparison)と[Bistro計画](implementation-policy.md#bistro-roadmap)を参照してください。
