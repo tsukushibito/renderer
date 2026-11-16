@@ -139,7 +139,7 @@ Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phas
 先行したwarmup 60 frameの独立12 runも補助記録として保持した。通常process CPU中央値は18.950／33.524msで、API差の傾向は同じだった。
 主結果には固定の二周warmupを満たす表の値を使い、両batchを混ぜて集計しない。
 独立レビューでも全reportのhash・数値・ROI・同一EXE・画像hashを再照合し、不整合を認めなかった。
-ドキュメントは17 HTML page・2,236 local link/resource/fragment、32 diagram instanceを検査し、viewer・theme・mobile・printの表示を確認した。
+ドキュメントは17 HTML page・2,246 local link/resource/fragment、32 diagram instanceを検査し、viewer・theme・mobile・printの表示を確認した。
 これは新しいPBR負荷の基準測定であり、PBR未実装時との速度改善率ではない。
 
 素材全量の更新・実VRAM予算の`.3.3`、B3以降の画質、他機材・長時間soak・device lossはこの受入へ追加していない。
@@ -1309,9 +1309,11 @@ B0で維持・改修・置換・外部基盤を比較し、[native上位置換�
 素材の取得・棚卸し・変換とCPU検証を下記へ記録した。`renderer-7ft.1.1.1`がこの作業の追跡先である。
 全ゼロalphaに加え、最終camera/path/light/IBL/露出と再現・比較手順を下記のとおり固定した。
 要求・比較入力の固定に続き、公開APIの利用例と基盤比較・採用・移行範囲を設計し、B0の設計を完了した。
-B0ではRenderer本体・管理下shader・native経路は変更せず、以降の既存GPU・Rust試験表は従来の固定ソースの実績として保持する。
-BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12表示は未実行である。
-画像閾値の校正・性能予算・RTX 3060での全体収容も未実測であり、offline変換をその成功へ流用しない。
+B0の設計確認ではRenderer本体・管理下shader・native経路を変更せず、offline素材検証と実GPU受入を分けた。
+現在は一般owned Graph／Program／bindingへB2のcookと二API PBRを接続し、
+[本書冒頭](#bistro-pbr)の画像・alpha・確保・native受入とRTX 3060での性能測定を完了した。
+独自Bloom、IBL・影・最終tone mapping、BistroのWindows表示・操作は後続範囲に残る。
+実VRAM常駐・更新予算の`.3.3`も未実測であり、packed素材byteやoffline変換をその証拠へ流用しない。
 
 <a id="public-api-comparison"></a>
 
@@ -1320,7 +1322,8 @@ BistroのRenderer描画、独自Bloom、公開パスAPIの二API実証とD3D12�
 `renderer-7ft.1.2`の[比較と第一案](../design/implementation-policy.md#public-api-comparison)を記録した。
 構築時owned命令案Aとframe内借用callback案Bに同じ型付きpass dataを使い、記録時期と依存宣言の軸を分けた。
 第一案はA＋binding／attachment由来のアクセスである。理由は実命令の確定境界と所有契約の単純さで、
-CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。B1の実Renderer二API実証は未完了である。
+CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。
+一般owned命令は現行Graphへ接続済みで、B2の二API PBR受入も[本書冒頭](#bistro-pbr)へ記録した。
 
 [Rust試作](../../crates/renderer/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較する。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
@@ -1510,14 +1513,15 @@ noise除去前/後のscene-linear 32-bit EXRとPNGを生成し、CSM/PBR/IBL前�
 
 画像閾値は同API反復3回以上・二API差・既知の誤りへの検出感度で受入前に校正する手順とし、
 性能はcold準備、1800 frame×2 warm-up＋×3計測、生sampleとphase別p50/p95を記録する手順を固定した。
-数値閾値・FPS/VRAM予算は未校正で、B2/B3/B4/B5の実装・RTX 3060実GPU受入に残る。
-alpha 0のcolor/depth/shadow被覆0、二APIの表示/操作/resize/終了と破棄後の厳格native検証も未実行である。
-near .02/far 500 mの通常Zにおける遠方のdepth精度も未検証であり、B1/B3の実GPUで確認し、必要なら条件を改訂する。
+B2のfixture／scene用数値閾値、既知誤りの検出、alpha 0のcolor／depth被覆0、終了後までの厳格native検証と性能は
+[本書冒頭](#bistro-pbr)の実GPU受入で確認した。shadow被覆、B3以降の最終画質閾値、FPS／実VRAM予算、
+Bistroの二API表示／操作／resizeは後続範囲に残る。
+near .02/far 500 mの通常Zにおける遠方depthの最終画質上の分解能も別途評価し、必要なら条件を改訂する。
 Python 57件・Node 5件、文書5件のUTF-8/fence・相対link/anchor 124件、全412 payloadのsize/SHA、
 固定条件を含む素材reportの再生成とdiff checkを確認した。改行変換による記録hashの不一致を防ぐため、
 条件JSONの元byteと新規tool/検証JSONのLFを属性へ固定し、既存alpha reportの参照SHAもGit blobに一致させた。
-Rust/native変更がないため、ローカル実GPU試験は今回対象外である。
-Rust/native/shader・製品版の検証経路は変更せず、入力走査をdraw/submitへ追加していない。
+固定条件のoffline作成時にはRust/native/shaderを変更せず、GPU受入をその作業の成功へ含めなかった。
+後続B2の実装・実GPU結果は[本書冒頭](#bistro-pbr)に示し、素材の入力走査は取込境界へ置いている。
 
 ## 環境と対応範囲
 

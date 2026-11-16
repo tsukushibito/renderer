@@ -1415,7 +1415,9 @@ Apple展開が優先要件になった場合やWindows実機を維持できな�
 | 検証 | Device作成前のDebug Layer／GBV設定、InfoQueueとGBV有効の起動報告、最終COM Release後までの診断を3回反復確認。shaderのGBV実行と画像等価性は未実施。GBVは性能測定と分ける。[^d3dvalidation] |
 | CI | Windows／Linuxのbuild・check・CPU試験を維持し、WindowsのD3D12単独／Vulkan併用を追加。実GPU runnerはなく、管理者のWindows実機で逐次受入する。[実行手順](../guides/development.md#m4のd3d12準備と実gpu受入経路)を使う。 |
 
-旧M4は固定操作をD3D12へ移植してから公開契約を抽出する計画だった。未着手分はB0〜B5へ置換した。B0の設計に続き、次の作業はB1の一般Program/bindingとownedパスの二API実証とする。
+旧M4は固定操作をD3D12へ移植してから公開契約を抽出する計画だった。未着手分はB0〜B5へ置換した。
+現在は一般Program/bindingとownedパスへB2のcook・二API PBRを接続済みで、[実GPU受入と測定](../verification/current.md#bistro-pbr)を記録した。
+全量常駐・更新と実VRAM予算は`.3.3`、IBL・影・最終tone mapping以降はB3〜B5で扱う。
 D3D12での表示経路を、共通契約の検証に先立つ必須条件にはしない。
 ただし[Bistroの確定要件](#bistro-requirements)により、両APIでのWindows表示は最終受入の必須条件である。
 
