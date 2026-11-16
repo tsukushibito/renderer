@@ -1,51 +1,156 @@
-//! Minimal Windows presentation example. `--smoke` exercises a bounded run,
-//! resize, minimization, restoration and shutdown while work may be pending.
-//! `--vsync on|off` selects the initial mode; V toggles it at runtime.
+//! App-owned Windows loop, free camera and repeatable two-API presentation.
+//! `--api vulkan|d3d12 --graph standard|custom --vsync on|off` selects execution.
+//! WASD/QE move, Shift accelerates, hold right mouse to look, T toggles the tour,
+//! V toggles VSync and Escape exits. `--smoke` exercises window transitions;
+//! `--measure` reports separate CPU/GPU phases from the displayed workload.
 
-#[cfg(windows)]
-#[path = "support/scene.rs"]
-mod scene;
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
+#[path = "support/window_backend.rs"]
+mod window_backend;
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
+#[path = "support/window_camera.rs"]
+mod window_camera;
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
+#[path = "support/window_scene.rs"]
+mod window_scene;
 
-#[cfg(windows)]
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 mod demo {
+    use super::{
+        window_backend::{self as backend, Api, Backend, Monitor, Pending, Result},
+        window_camera::{Camera, Motion},
+        window_scene::{self as scene, Composition},
+    };
+    use renderer::{
+        graph::{GraphPool, ImportBuffer, ImportImage, PassHandle, ResourceKey},
+        presentation::PresentOutcome,
+        profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics},
+    };
     use std::{
-        error::Error,
         sync::Arc,
         time::{Duration, Instant},
-    };
-
-    #[cfg(feature = "vulkan-diagnostics")]
-    use renderer::ValidationMonitor;
-    use renderer::{
-        EngineRenderError, FrameCapacity, MeshCacheConfig, MeshPreparationError, MeshUploadState,
-        PresentOutcome, PresentationConfig, Presenter, RenderedFrame, ResourceClass, RuntimeConfig,
-        RuntimeErrorKind, VulkanEngine, VulkanRuntime,
-        engine::{
-            Engine, EngineCapacity, EngineErrorKind, Material, MaterialHandle, MeshHandle,
-            SnapshotPool,
-        },
-        graph::{GraphErrorKind, ImageDesc},
     };
     use winit::{
         application::ApplicationHandler,
         dpi::PhysicalSize,
-        event::{ElementState, WindowEvent},
+        event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
         event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
         keyboard::{KeyCode, PhysicalKey},
-        window::{Window, WindowId},
+        window::{CursorGrabMode, Window, WindowId},
     };
 
-    use super::scene;
-
     const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
-    const SMOKE_BUDGET: Duration = Duration::from_secs(20);
-    const REDRAW_INTERVAL: Duration = Duration::from_millis(4);
+    const RUN_BUDGET: Duration = Duration::from_secs(90);
+    const RETRY_INTERVAL: Duration = Duration::from_millis(1);
+    const IN_FLIGHT: usize = 3;
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    struct Options {
+        api: Api,
+        composition: Composition,
+        vsync: bool,
+        smoke: bool,
+        tour: bool,
+        verify: bool,
+        measure: bool,
+        frames: Option<usize>,
+        warmup: usize,
+    }
+    impl Options {
+        fn parse(arguments: impl IntoIterator<Item = String>) -> std::result::Result<Self, String> {
+            let mut value = Self {
+                api: if cfg!(feature = "vulkan") {
+                    Api::Vulkan
+                } else {
+                    Api::D3d12
+                },
+                composition: Composition::Standard,
+                vsync: true,
+                smoke: false,
+                tour: false,
+                verify: false,
+                measure: false,
+                frames: None,
+                warmup: 24,
+            };
+            let mut args = arguments.into_iter();
+            while let Some(argument) = args.next() {
+                match argument.as_str() {
+                    "--api" => {
+                        value.api = match args.next().as_deref() {
+                            Some("vulkan") => Api::Vulkan,
+                            Some("d3d12") => Api::D3d12,
+                            _ => return Err("--api requires vulkan or d3d12".into()),
+                        }
+                    }
+                    "--graph" => {
+                        value.composition = match args.next().as_deref() {
+                            Some("standard") => Composition::Standard,
+                            Some("custom") => Composition::Custom,
+                            _ => return Err("--graph requires standard or custom".into()),
+                        }
+                    }
+                    "--vsync" => {
+                        value.vsync = match args.next().as_deref() {
+                            Some("on") => true,
+                            Some("off") => false,
+                            _ => return Err("--vsync requires on or off".into()),
+                        }
+                    }
+                    "--smoke" => value.smoke = true,
+                    "--tour" => value.tour = true,
+                    "--verify" => value.verify = true,
+                    "--measure" => value.measure = true,
+                    "--frames" | "--warmup" => {
+                        let count = args
+                            .next()
+                            .and_then(|text| text.parse::<usize>().ok())
+                            .filter(|count| *count <= 4096)
+                            .ok_or_else(|| format!("{argument} requires an integer in 0..=4096"))?;
+                        if argument == "--frames" {
+                            if count == 0 {
+                                return Err("--frames must be nonzero".into());
+                            }
+                            value.frames = Some(count);
+                        } else {
+                            value.warmup = count;
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "unknown argument {argument}; see windowed example source for options"
+                        ));
+                    }
+                }
+            }
+            if value.smoke {
+                value.tour = true;
+                value.verify = true;
+            }
+            if value.measure {
+                value.frames.get_or_insert(96);
+                value.tour = true;
+            }
+            if value.verify {
+                value
+                    .frames
+                    .get_or_insert(if value.smoke { 24 } else { 96 });
+            }
+            if value.smoke && value.measure {
+                return Err("use separate --smoke and --measure runs so transitions are not included in steady timing".into());
+            }
+            Ok(value)
+        }
+        fn target(&self) -> Option<usize> {
+            self.frames
+                .map(|count| count + if self.measure { self.warmup } else { 0 })
+        }
+    }
 
     struct RedrawSchedule {
         next: Instant,
         drawable: bool,
     }
-
     impl RedrawSchedule {
         fn new(now: Instant) -> Self {
             Self {
@@ -53,367 +158,640 @@ mod demo {
                 drawable: false,
             }
         }
-
         fn resize(&mut self, width: u32, height: u32) {
             self.drawable = width != 0 && height != 0;
         }
-
         fn next_wake(&self) -> Option<Instant> {
             self.drawable.then_some(self.next)
         }
-
         fn request_due(&mut self, now: Instant) -> bool {
             if !self.drawable || now < self.next {
                 return false;
             }
-            // Schedule from this request instead of issuing catch-up redraws.
-            // Unrelated early event-loop wakeups leave the deadline unchanged.
-            self.next = now + REDRAW_INTERVAL;
+            self.next = now + RETRY_INTERVAL;
             true
         }
     }
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct Options {
-        smoke: bool,
-        vsync: bool,
+    #[derive(Default)]
+    struct Sample {
+        ordinal: u64,
+        extent: (u32, u32),
+        camera: [f32; 3],
+        accepted: bool,
+        digest: Option<u64>,
+        geometry_pixels: usize,
+        build: Duration,
+        compile: Duration,
+        submit_api: Duration,
+        poll_api: Duration,
+        result_return: Duration,
+        frame_interval: Option<Duration>,
+        graph: Option<SubmissionMetrics>,
     }
-
-    impl Options {
-        fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, String> {
-            let mut options = Self {
-                smoke: false,
-                vsync: true,
-            };
-            let mut arguments = arguments.into_iter();
-            while let Some(argument) = arguments.next() {
-                match argument.as_str() {
-                    "--smoke" => options.smoke = true,
-                    "--vsync" => {
-                        options.vsync = match arguments.next().as_deref() {
-                            Some("on") => true,
-                            Some("off") => false,
-                            _ => return Err("--vsync requires on or off".into()),
-                        }
-                    }
-                    _ => {
-                        return Err(format!(
-                            "unknown argument {argument}; use --smoke and/or --vsync on|off"
-                        ));
-                    }
-                }
-            }
-            Ok(options)
-        }
+    struct Frame {
+        pending: Option<Pending>,
+        image: Option<ImportImage>,
+        readback: Option<PassHandle>,
+        bytes: usize,
+        sample: Option<usize>,
     }
-
-    struct SceneAssets {
-        inputs: Engine,
-        snapshots: SnapshotPool,
-        mesh: MeshHandle,
-        material: MaterialHandle,
-    }
-
     struct App {
-        smoke: bool,
-        vsync: bool,
-        mode_switches: u8,
+        options: Options,
         window: Option<Arc<Window>>,
-        engine: Option<VulkanEngine>,
-        presenter: Option<Presenter>,
-        assets: Option<SceneAssets>,
-        #[cfg(feature = "vulkan-diagnostics")]
-        validation: Option<ValidationMonitor>,
-        output: Option<RenderedFrame>,
+        backend: Option<Backend>,
+        monitor: Option<Monitor>,
+        device: Option<serde_json::Value>,
+        buffers: Option<[ImportBuffer; 2]>,
+        keys: Option<[ResourceKey; 2]>,
+        pool: GraphPool,
+        frames: [Option<Frame>; IN_FLIGHT],
+        readback: Vec<u8>,
+        samples: Vec<Sample>,
+        presentation_samples: Vec<PresentationMetrics>,
         prepared_extent: Option<(u32, u32)>,
-        presented: u32,
-        resized: bool,
-        minimized: bool,
-        restore_at: Option<Instant>,
+        accepted: usize,
+        camera: Camera,
+        looking: bool,
+        last_step: Instant,
+        last_present: Option<Instant>,
         redraw: RedrawSchedule,
         started: Instant,
+        transition: usize,
+        restore_at: Option<Instant>,
+        retries: usize,
+        present_attempts: usize,
+        present_api: Duration,
+        poll_api: Duration,
+        prepare_api: Duration,
+        result_return: Duration,
+        draw_cpu: Duration,
+        shutdown_wait: Duration,
+        backpressure_since: Option<Instant>,
+        backpressure_time: Duration,
+        pending_at_shutdown: usize,
         error: Option<String>,
+        validation: Option<serde_json::Value>,
     }
-
     impl App {
-        fn new(options: Options) -> Self {
+        fn new(options: Options) -> Result<Self> {
             let now = Instant::now();
-            Self {
-                smoke: options.smoke,
-                vsync: options.vsync,
-                mode_switches: 0,
+            let capacity = options.target().unwrap_or(0) + 64;
+            Ok(Self {
+                options,
                 window: None,
-                engine: None,
-                presenter: None,
-                assets: None,
-                #[cfg(feature = "vulkan-diagnostics")]
-                validation: None,
-                output: None,
+                backend: None,
+                monitor: None,
+                device: None,
+                buffers: None,
+                keys: None,
+                pool: GraphPool::new(scene::capacity(), IN_FLIGHT + 2)?,
+                frames: std::array::from_fn(|_| None),
+                readback: Vec::new(),
+                samples: Vec::with_capacity(capacity),
+                presentation_samples: Vec::with_capacity(capacity * 4),
                 prepared_extent: None,
-                presented: 0,
-                resized: false,
-                minimized: false,
-                restore_at: None,
+                accepted: 0,
+                camera: Camera::default(),
+                looking: false,
+                last_step: now,
+                last_present: None,
                 redraw: RedrawSchedule::new(now),
                 started: now,
+                transition: 0,
+                restore_at: None,
+                retries: 0,
+                present_attempts: 0,
+                present_api: Duration::ZERO,
+                poll_api: Duration::ZERO,
+                prepare_api: Duration::ZERO,
+                result_return: Duration::ZERO,
+                draw_cpu: Duration::ZERO,
+                shutdown_wait: Duration::ZERO,
+                backpressure_since: None,
+                backpressure_time: Duration::ZERO,
+                pending_at_shutdown: 0,
                 error: None,
-            }
+                validation: None,
+            })
         }
-
-        fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<(), Box<dyn Error>> {
+        fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
             if self.window.is_some() {
                 return Ok(());
             }
             let window = Arc::new(
                 event_loop.create_window(
                     Window::default_attributes()
-                        .with_title("Renderer M3")
+                        .with_title("Renderer: WASD/QE, right mouse, T tour, V VSync")
                         .with_inner_size(PhysicalSize::new(640, 480)),
                 )?,
             );
-            let (runtime, presenter) = VulkanRuntime::for_window(
-                RuntimeConfig::default(),
+            let backend = Backend::new(
+                self.options.api,
                 Arc::clone(&window),
-                PresentationConfig {
-                    vsync: self.vsync,
-                    ..Default::default()
-                },
+                self.options.vsync,
+                self.options.measure,
             )?;
-            #[cfg(feature = "vulkan-diagnostics")]
-            let validation = runtime.validation_monitor();
-            #[cfg(feature = "development-validation")]
-            {
-                let report = validation.report();
-                if report.core_validation != Some(true)
-                    || report.synchronization_validation != Some(true)
-                {
-                    return Err(format!(
-                        "Core/SyncVal effective settings are unverified: {report:?}"
-                    )
-                    .into());
-                }
-            }
-            let geometry = scene::triangle([1.0, 0.0, 0.0, 1.0])?;
-            let engine = VulkanEngine::new(
-                runtime,
-                MeshCacheConfig {
-                    max_meshes: 1,
-                    max_bytes: geometry.byte_len(),
-                    max_upload_submissions: 1,
-                    max_retired_sources: 16,
-                },
-                Default::default(),
-            )?;
-            let mut inputs = Engine::new(EngineCapacity {
-                meshes: 1,
-                materials: 1,
-                retired_mesh_versions: 1,
-            })?;
-            let mesh = inputs.create_mesh(geometry)?;
-            let material = inputs.create_material(Material::default())?;
-            let assets = SceneAssets {
-                inputs,
-                snapshots: SnapshotPool::new(1, 4)?,
-                mesh,
-                material,
-            };
+            let monitor = backend.monitor();
+            monitor.check(false)?;
+            self.device = Some(backend.device());
             let size = window.inner_size();
             self.redraw.resize(size.width, size.height);
             self.window = Some(window);
-            self.engine = Some(engine);
-            self.presenter = Some(presenter);
-            self.assets = Some(assets);
-            #[cfg(feature = "vulkan-diagnostics")]
-            {
-                self.validation = Some(validation);
-            }
+            self.backend = Some(backend);
+            self.monitor = Some(monitor);
             self.update_title();
             Ok(())
         }
-
         fn update_title(&self) {
             if let Some(window) = &self.window {
                 window.set_title(&format!(
-                    "Renderer M3 - VSync {} (V to toggle)",
-                    if self.vsync { "ON" } else { "OFF" }
+                    "Renderer {} / {:?} / VSync {} / {} — WASD/QE, right mouse, T, V",
+                    self.options.api.name(),
+                    self.options.composition,
+                    if self.options.vsync { "ON" } else { "OFF" },
+                    if self.options.tour {
+                        "fixed tour"
+                    } else {
+                        "free camera"
+                    }
                 ));
             }
         }
-
-        fn toggle_vsync(&mut self) -> Result<(), Box<dyn Error>> {
-            if let Some(presenter) = &mut self.presenter {
-                presenter.set_vsync(!self.vsync)?;
-                self.vsync = !self.vsync;
-                self.update_title();
-            }
-            Ok(())
+        fn retry(&mut self) {
+            self.retries += 1;
+            self.backpressure_since.get_or_insert_with(Instant::now);
         }
-
-        fn draw(&mut self) -> Result<(), Box<dyn Error>> {
-            let (Some(engine), Some(presenter), Some(assets)) =
-                (&mut self.engine, &mut self.presenter, &self.assets)
-            else {
+        fn drain_profiles(&mut self) -> Result<()> {
+            let Some(backend) = self.backend.as_mut() else {
                 return Ok(());
             };
-            while engine.runtime_mut().poll_frame()?.is_some() {}
-            engine.poll_uploads()?;
+            while let Some(profile) = backend.take_profile() {
+                if self.presentation_samples.len() == self.presentation_samples.capacity() {
+                    return Err("prepared presentation report capacity exhausted".into());
+                }
+                self.presentation_samples.push(profile);
+            }
+            Ok(())
+        }
+        fn poll_frames(&mut self) -> Result<()> {
+            for slot in &mut self.frames {
+                let Some(frame) = slot else {
+                    continue;
+                };
+                if let Some(pending) = &mut frame.pending {
+                    let started = self.options.measure.then(Instant::now);
+                    let result = pending.wait(Duration::ZERO)?;
+                    let poll_elapsed = elapsed(started);
+                    self.poll_api += poll_elapsed;
+                    if let Some(index) = frame.sample {
+                        self.samples[index].poll_api += poll_elapsed;
+                    }
+                    if let Some(mut result) = result {
+                        let started = self.options.measure.then(Instant::now);
+                        if let Some(pass) = frame.readback.take() {
+                            let bytes = &mut self.readback[..frame.bytes];
+                            result.readback_into(pass, bytes)?;
+                            let (digest, geometry) = scene::verify(bytes).map_err(str::to_owned)?;
+                            if let Some(index) = frame.sample {
+                                self.samples[index].digest = Some(digest);
+                                self.samples[index].geometry_pixels = geometry;
+                            }
+                        }
+                        if let Some(index) = frame.sample {
+                            self.samples[index].graph = result.metrics();
+                        }
+                        drop(result);
+                        frame.pending = None;
+                        if let Some(index) = frame.sample {
+                            self.samples[index].result_return = elapsed(started);
+                            self.result_return += self.samples[index].result_return;
+                        }
+                    }
+                }
+                if frame.pending.is_none() && frame.image.is_none() {
+                    *slot = None;
+                }
+            }
+            Ok(())
+        }
+        fn discard_outputs(&mut self) -> Result<()> {
+            let Some(backend) = &mut self.backend else {
+                return Ok(());
+            };
+            for frame in self.frames.iter_mut().flatten() {
+                if let Some(image) = frame.image.take() {
+                    backend.delete(image.key())?;
+                }
+            }
+            Ok(())
+        }
+        fn prepare_extent(&mut self, extent: (u32, u32)) -> Result<bool> {
+            if self.prepared_extent == Some(extent) {
+                return Ok(true);
+            }
+            self.discard_outputs()?;
+            if self.frames.iter().any(Option::is_some) {
+                return Ok(false);
+            }
+            let backend = self.backend.as_mut().expect("initialized backend");
+            if !backend.presentation_idle()? {
+                return Ok(false);
+            }
+            self.buffers = None;
+            match backend.prepare_resources(extent) {
+                Ok(()) => {}
+                Err(error) if backend::is_capacity(error.as_ref()) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+            if let Some(keys) = self.keys {
+                self.buffers = Some([
+                    backend.refresh_buffer(keys[0])?,
+                    backend.refresh_buffer(keys[1])?,
+                ]);
+            } else {
+                let mut graph = self.pool.begin()?;
+                let (vertices, indices) = scene::upload(&mut graph)?;
+                let plan = graph.compile()?;
+                let mut pending = backend.submit(&plan)?;
+                let buffers = [
+                    pending.export_buffer(vertices)?,
+                    pending.export_buffer(indices)?,
+                ];
+                let result = pending
+                    .wait(SHUTDOWN_BUDGET)?
+                    .ok_or("initial scene upload timed out")?;
+                drop(result);
+                drop(pending);
+                drop(plan);
+                self.keys = Some(buffers.each_ref().map(|buffer| buffer.key()));
+                self.buffers = Some(buffers);
+            }
+            if self.options.verify {
+                let bytes = usize::try_from(u64::from(extent.0) * u64::from(extent.1) * 4)?;
+                self.readback.resize(bytes, 0);
+            }
+            self.prepared_extent = Some(extent);
+            Ok(true)
+        }
+        fn draw(&mut self) -> Result<()> {
+            let started = self.options.measure.then(Instant::now);
+            let result = self.draw_inner();
+            self.draw_cpu += elapsed(started);
+            result
+        }
+        fn poll(&mut self) -> Result<()> {
+            let started = self.options.measure.then(Instant::now);
+            let result = self.backend.as_mut().unwrap().poll();
+            self.poll_api += elapsed(started);
+            result?;
+            let started = self.options.measure.then(Instant::now);
+            let result = self.drain_profiles();
+            self.result_return += elapsed(started);
+            result?;
+            self.poll_frames()
+        }
+        fn draw_inner(&mut self) -> Result<()> {
+            let Some(backend) = &mut self.backend else {
+                return Ok(());
+            };
+            let _ = backend;
+            self.poll()?;
             if self.restore_at.is_some() {
-                presenter.poll()?;
                 return Ok(());
             }
-            match presenter.prepare() {
-                Ok(Some(PresentOutcome::Recreated)) => {
-                    if let Some(mut output) = self.output.take() {
-                        engine.release_output(&mut output)?;
-                    }
+            let started = self.options.measure.then(Instant::now);
+            let prepared = self.backend.as_mut().unwrap().prepare();
+            self.prepare_api += elapsed(started);
+            let prepared = match prepared {
+                Ok(value) => value,
+                Err(error) if backend::is_capacity(error.as_ref()) => {
+                    self.retry();
+                    return Ok(());
                 }
-                Ok(Some(PresentOutcome::NotReady | PresentOutcome::Suspended)) => return Ok(()),
-                Ok(_) => {}
-                Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => return Ok(()),
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error),
+            };
+            if matches!(
+                prepared,
+                Some(PresentOutcome::NotReady | PresentOutcome::Suspended)
+            ) {
+                self.retry();
+                return Ok(());
             }
-            if self.output.is_none() {
-                let Some((width, height)) = presenter.extent() else {
+            let Some(extent) = self.backend.as_ref().unwrap().extent() else {
+                return Ok(());
+            };
+            if !self.prepare_extent(extent)? {
+                self.retry();
+                return Ok(());
+            }
+            let outstanding = self
+                .frames
+                .iter()
+                .position(|value| value.as_ref().is_some_and(|frame| frame.image.is_some()));
+            let slot = if let Some(slot) = outstanding {
+                slot
+            } else {
+                let Some(slot) = self.frames.iter().position(Option::is_none) else {
+                    self.retry();
                     return Ok(());
                 };
-                if self.prepared_extent != Some((width, height)) {
-                    // Initialization and extent changes are explicit preparation
-                    // boundaries. Retry after old frame/presentation consumers
-                    // retire; an ordinary full pool never waits or grows here.
-                    engine.release_idle_inputs();
-                    match engine.runtime_mut().prepare_working_set(
-                        FrameCapacity::default(),
-                        &[
-                            ResourceClass::Image {
-                                desc: ImageDesc::rgba8(width, height),
-                                // Two targets per graph plus retained present
-                                // sources share four native execution slots.
-                                count: 12,
-                            },
-                            ResourceClass::Image {
-                                desc: ImageDesc::depth32(width, height),
-                                count: 4,
-                            },
-                        ],
-                    ) {
-                        Ok(()) => self.prepared_extent = Some((width, height)),
-                        Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {
-                            return Ok(());
-                        }
-                        Err(error) => return Err(error.into()),
+                let now = Instant::now();
+                if self.options.tour {
+                    self.camera.tour(self.accepted as u64);
+                } else {
+                    self.camera.step(now.duration_since(self.last_step));
+                }
+                self.last_step = now;
+                let started = self.options.measure.then(Instant::now);
+                let mut graph = self.pool.begin()?;
+                let image = scene::build(
+                    &mut graph,
+                    self.buffers.as_ref().unwrap(),
+                    self.camera.clip_from_world(extent.0, extent.1),
+                    extent,
+                    self.options.composition,
+                )?;
+                let readback = if self.options.verify {
+                    Some(graph.readback_image("verify displayed source", image)?)
+                } else {
+                    None
+                };
+                let build = elapsed(started);
+                let started = self.options.measure.then(Instant::now);
+                let plan = graph.compile()?;
+                let compile = elapsed(started);
+                let started = self.options.measure.then(Instant::now);
+                let pending = match self.backend.as_mut().unwrap().submit(&plan) {
+                    Ok(value) => value,
+                    Err(error) if backend::is_capacity(error.as_ref()) => {
+                        self.retry();
+                        return Ok(());
+                    }
+                    Err(error) => return Err(error),
+                };
+                let submit_api = elapsed(started);
+                let image = pending.export_image(image)?;
+                let sample = if self.options.verify || self.options.measure {
+                    if self.samples.len() == self.samples.capacity() {
+                        return Err("prepared report sample capacity exhausted".into());
+                    }
+                    let index = self.samples.len();
+                    self.samples.push(Sample {
+                        ordinal: self.accepted as u64,
+                        extent,
+                        camera: self.camera.position(),
+                        build,
+                        compile,
+                        submit_api,
+                        ..Default::default()
+                    });
+                    Some(index)
+                } else {
+                    None
+                };
+                self.frames[slot] = Some(Frame {
+                    pending: Some(pending),
+                    image: Some(image),
+                    readback,
+                    bytes: self.readback.len(),
+                    sample,
+                });
+                drop(plan);
+                slot
+            };
+            let frame = self.frames[slot].as_mut().unwrap();
+            let image = frame.image.as_ref().unwrap();
+            let started = self.options.measure.then(Instant::now);
+            self.present_attempts += 1;
+            let outcome = self.backend.as_mut().unwrap().present(image);
+            self.present_api += elapsed(started);
+            let outcome = match outcome {
+                Ok(value) => value,
+                Err(error) if backend::is_capacity(error.as_ref()) => {
+                    self.retry();
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
+            match outcome {
+                PresentOutcome::Presented { .. } => {
+                    let now = Instant::now();
+                    if let Some(index) = frame.sample {
+                        self.samples[index].accepted = true;
+                        self.samples[index].frame_interval =
+                            self.last_present.map(|last| now.duration_since(last));
+                    }
+                    self.last_present = Some(now);
+                    self.backend
+                        .as_mut()
+                        .unwrap()
+                        .delete(frame.image.take().unwrap().key())?;
+                    self.accepted += 1;
+                    if let Some(started) = self.backpressure_since.take() {
+                        self.backpressure_time += now.duration_since(started);
                     }
                 }
-                let rendered = (|| -> Result<Option<RenderedFrame>, EngineRenderError> {
-                    let view = scene::view(width, height);
-                    let draws = [scene::draw(assets.mesh, assets.material, 0.0)];
-                    let snapshot = assets.inputs.snapshot(&assets.snapshots, &view, &draws)?;
-                    let upload = engine.prepare_snapshot(&snapshot, 2)?;
-                    if upload.state != MeshUploadState::Ready {
-                        return Ok(None);
-                    }
-                    let prepared = engine.build_snapshot(&snapshot, false, |graph, color| {
-                        scene::custom_pass(graph, color, true)
-                    })?;
-                    Ok(Some(engine.submit_frame(prepared.compile()?)?))
-                })();
-                match rendered {
-                    Ok(Some(rendered)) => self.output = Some(rendered),
-                    Ok(None) => return Ok(()),
-                    Err(error) if is_capacity(&error) => return Ok(()),
-                    Err(error) => return Err(error.into()),
+                PresentOutcome::Recreated | PresentOutcome::RecreateRequired => {
+                    self.backend
+                        .as_mut()
+                        .unwrap()
+                        .delete(frame.image.take().unwrap().key())?;
                 }
-            }
-            let output = self.output.as_mut().expect("output created above");
-            match engine.runtime_mut().present(presenter, &output.output) {
-                Ok(PresentOutcome::Presented { .. }) => {
-                    engine.release_output(output)?;
-                    self.output = None;
-                    self.presented += 1;
-                }
-                Ok(PresentOutcome::Recreated | PresentOutcome::RecreateRequired) => {
-                    engine.release_output(output)?;
-                    self.output = None;
-                }
-                Ok(PresentOutcome::NotReady | PresentOutcome::Suspended) => {}
-                Err(error) if error.kind() == RuntimeErrorKind::CapacityExhausted => {}
-                Err(error) => return Err(error.into()),
+                PresentOutcome::NotReady | PresentOutcome::Suspended => self.retry(),
             }
             Ok(())
         }
-
-        fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
-            if let Some(presenter) = &mut self.presenter
-                && !presenter.close(SHUTDOWN_BUDGET)?
-            {
-                return Err("presentation shutdown timed out".into());
+        fn toggle_vsync(&mut self) -> Result<()> {
+            if let Some(backend) = &mut self.backend {
+                backend.set_vsync(!self.options.vsync)?;
             }
-            if let Some(engine) = &mut self.engine {
-                if !engine.runtime_mut().drain_frames(SHUTDOWN_BUDGET)? {
-                    return Err("frame shutdown timed out".into());
+            self.options.vsync = !self.options.vsync;
+            self.update_title();
+            Ok(())
+        }
+        fn capture_mouse(&mut self, enabled: bool) {
+            self.looking = enabled;
+            if let Some(window) = &self.window {
+                if enabled {
+                    if window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
+                        let _ = window.set_cursor_grab(CursorGrabMode::Locked);
+                    }
+                } else {
+                    let _ = window.set_cursor_grab(CursorGrabMode::None);
                 }
-                let deadline = Instant::now() + SHUTDOWN_BUDGET;
-                loop {
+                window.set_cursor_visible(!enabled);
+            }
+            if !enabled {
+                self.camera.clear_input();
+            }
+        }
+        fn shutdown(&mut self) -> Result<()> {
+            if self.backend.is_none() {
+                return Ok(());
+            }
+            let started = Instant::now();
+            self.pending_at_shutdown = self
+                .frames
+                .iter()
+                .filter(|frame| frame.as_ref().is_some_and(|frame| frame.pending.is_some()))
+                .count();
+            self.discard_outputs()?;
+            let deadline = Instant::now() + SHUTDOWN_BUDGET;
+            for slot in &mut self.frames {
+                if let Some(frame) = slot
+                    && let Some(pending) = &mut frame.pending
+                {
                     let remaining = deadline
                         .checked_duration_since(Instant::now())
-                        .ok_or("mesh upload shutdown timed out")?;
-                    let progress = engine.wait_uploads(remaining)?;
-                    if progress.state == MeshUploadState::Ready && progress.pending_submissions == 0
-                    {
-                        break;
+                        .ok_or("Graph shutdown timed out")?;
+                    let mut result = pending.wait(remaining)?.ok_or("Graph shutdown timed out")?;
+                    if let Some(pass) = frame.readback.take() {
+                        let bytes = &mut self.readback[..frame.bytes];
+                        result.readback_into(pass, bytes)?;
+                        let (digest, geometry) = scene::verify(bytes).map_err(str::to_owned)?;
+                        if let Some(index) = frame.sample {
+                            self.samples[index].digest = Some(digest);
+                            self.samples[index].geometry_pixels = geometry;
+                        }
                     }
+                    if let Some(index) = frame.sample {
+                        self.samples[index].graph = result.metrics();
+                    }
+                    drop(result);
                 }
-                if let Some(mut output) = self.output.take() {
-                    engine.release_output(&mut output)?;
-                }
-                engine.unload_all_meshes();
-                if let Some(mut assets) = self.assets.take() {
-                    engine.collect_retired_meshes(Some(&assets.inputs))?;
-                    assets.inputs.delete_mesh(assets.mesh)?;
-                    assets.inputs.delete_material(assets.material)?;
+                *slot = None;
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or("presentation shutdown timed out")?;
+            if !self.backend.as_mut().unwrap().close(remaining)? {
+                return Err("presentation shutdown timed out".into());
+            }
+            self.drain_profiles()?;
+            self.buffers = None;
+            if let Some(keys) = self.keys.take() {
+                for key in keys {
+                    self.backend.as_mut().unwrap().delete(key)?;
                 }
             }
-            self.presenter = None;
-            self.engine = None;
+            self.backend = None;
             self.window = None;
-            #[cfg(feature = "vulkan-diagnostics")]
-            if let Some(validation) = &self.validation {
-                let report = validation.report();
-                if !report.is_clean() {
-                    return Err(format!(
-                        "Vulkan validation failed, including shutdown: {report:?}"
-                    )
-                    .into());
-                }
+            if let Some(monitor) = &self.monitor {
+                self.validation = Some(monitor.check(true)?);
+            }
+            self.shutdown_wait += started.elapsed();
+            Ok(())
+        }
+        fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl std::fmt::Display) {
+            self.error = Some(error.to_string());
+            if let Err(error) = self.shutdown() {
+                self.error = Some(format!(
+                    "{}; shutdown: {error}",
+                    self.error.as_deref().unwrap_or("failure")
+                ));
+            }
+            event_loop.exit();
+        }
+        fn finish(&self) -> Result<()> {
+            if let Some(error) = &self.error {
+                return Err(error.clone().into());
+            }
+            if self.options.smoke && self.transition != 6 {
+                return Err("smoke run did not finish every window transition".into());
+            }
+            if self.options.measure && self.samples.iter().any(|sample| sample.graph.is_none()) {
+                return Err("a submitted measured frame has no completed Graph timing".into());
+            }
+            if self.options.measure && self.presentation_samples.len() < self.accepted {
+                return Err(
+                    "not all accepted presentations returned completed timing samples".into(),
+                );
+            }
+            if self.options.verify && self.samples.iter().any(|sample| sample.digest.is_none()) {
+                return Err("a submitted verification frame has no completed readback".into());
+            }
+            if self.options.smoke || self.options.verify || self.options.measure {
+                let samples:Vec<_>=self.samples.iter().map(|sample|serde_json::json!({
+                    "ordinal":sample.ordinal,"extent":sample.extent,"camera":sample.camera,
+                    "accepted":sample.accepted,"warmup":self.options.measure && sample.ordinal<(self.options.warmup as u64),
+                    "digest":sample.digest.map(|digest|format!("{digest:016x}")),"geometry_pixels":sample.geometry_pixels,
+                    "cpu_ns":{"build":ns(sample.build),"compile":ns(sample.compile),"submit_api":ns(sample.submit_api),
+                        "poll_api":ns(sample.poll_api),"result_consumption_return":ns(sample.result_return)},
+                    "graph":sample.graph.map(graph_json),"frame_interval_ns":sample.frame_interval.map(ns),
+                })).collect();
+                let presentation_samples: Vec<_> = self
+                    .presentation_samples
+                    .iter()
+                    .copied()
+                    .map(presentation_json)
+                    .collect();
+                println!(
+                    "WINDOWED_ACCEPTANCE {}",
+                    serde_json::json!({
+                        "api":self.options.api.name(),"composition":format!("{:?}",self.options.composition),
+                        "device":self.device,"validation":self.validation,"accepted_frames":self.accepted,
+                        "smoke":self.options.smoke,"transitions":self.transition,"pending_graph_owners_at_shutdown":self.pending_at_shutdown,
+                        "verify":self.options.verify,"profiling":self.options.measure,"vsync_final":self.options.vsync,
+                        "retry_interval_ns":ns(RETRY_INTERVAL),"backpressure_retries":self.retries,
+                        "backpressure_wall_ns":ns(self.backpressure_time),"explicit_capacity_blocking_wait_ns":0,
+                        "present_attempts":self.present_attempts,"present_api_total_ns":ns(self.present_api),
+                    "poll_api_total_ns":ns(self.poll_api),"prepare_api_total_ns":ns(self.prepare_api),
+                    "result_consumption_return_total_ns":ns(self.result_return),"draw_cpu_total_ns":ns(self.draw_cpu),
+                    "shutdown_total_ns":ns(self.shutdown_wait),
+                    "cpu_totals_scope":"outer API totals overlap native phase samples; do not add them; draw total includes initial preparation, warmup and nonblocking final drain",
+                        "timing_scope":"real window; Graph GPU and fullscreen presentation GPU separately; frame interval includes event-loop scheduling and native pacing; not display completion",
+                        "features":{"optimized":!cfg!(debug_assertions),"development_validation":cfg!(feature="development-validation"),
+                            "vulkan_diagnostics":cfg!(feature="vulkan-diagnostics"),"d3d12_diagnostics":cfg!(feature="d3d12-diagnostics"),
+                            "graph_diagnostics":cfg!(feature="graph-diagnostics")},"samples":samples,
+                        "presentation_samples":presentation_samples,
+                    })
+                );
             }
             Ok(())
         }
-
-        fn fail(&mut self, event_loop: &ActiveEventLoop, error: impl std::fmt::Display) {
-            self.error = Some(error.to_string());
-            let _ = self.shutdown();
-            event_loop.exit();
-        }
     }
-
-    fn is_capacity(error: &EngineRenderError) -> bool {
-        match error {
-            EngineRenderError::Input(error) => error.kind() == EngineErrorKind::CapacityExhausted,
-            EngineRenderError::Graph(error) => error.kind() == GraphErrorKind::CapacityExhausted,
-            EngineRenderError::Runtime(error) => {
-                error.kind() == RuntimeErrorKind::CapacityExhausted
+    fn elapsed(started: Option<Instant>) -> Duration {
+        started.map_or(Duration::ZERO, |started| started.elapsed())
+    }
+    fn ns(duration: Duration) -> u64 {
+        duration.as_nanos().min(u64::MAX as u128) as u64
+    }
+    fn gpu_json(timing: GpuTiming) -> serde_json::Value {
+        match timing {
+            GpuTiming::Available {
+                elapsed,
+                timestamp_period_ns,
+                valid_bits,
+            } => {
+                serde_json::json!({"ns":ns(elapsed),"timestamp_period_ns":timestamp_period_ns,"valid_bits":valid_bits})
             }
-            EngineRenderError::Preparation(MeshPreparationError::FrameCapacityExhausted) => true,
-            _ => false,
+            _ => serde_json::json!({"unavailable":format!("{timing:?}")}),
         }
     }
-
+    fn graph_json(value: SubmissionMetrics) -> serde_json::Value {
+        serde_json::json!({"cpu_prepare_ns":ns(value.cpu_prepare),"cpu_record_ns":ns(value.cpu_record),
+            "cpu_submit_ns":ns(value.cpu_submit),"cpu_retire_ns":ns(value.cpu_retire),"gpu":gpu_json(value.gpu)})
+    }
+    fn presentation_json(value: PresentationMetrics) -> serde_json::Value {
+        serde_json::json!({"cpu_acquire_ns":ns(value.cpu_acquire),"cpu_prepare_ns":ns(value.cpu_prepare),
+            "cpu_record_ns":ns(value.cpu_record),"cpu_submit_ns":ns(value.cpu_submit),"cpu_present_ns":ns(value.cpu_present),
+            "cpu_retire_ns":ns(value.cpu_retire),"gpu":gpu_json(value.gpu)})
+    }
     impl ApplicationHandler for App {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if let Err(error) = self.initialize(event_loop) {
                 self.fail(event_loop, error);
             }
         }
-
+        fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+            if self.looking
+                && !self.options.tour
+                && let DeviceEvent::MouseMotion { delta } = event
+            {
+                self.camera.look(delta.0, delta.1);
+            }
+        }
         fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
             if self.window.as_ref().is_none_or(|window| window.id() != id) {
                 return;
@@ -426,9 +804,64 @@ mod demo {
                     event_loop.exit();
                 }
                 WindowEvent::Resized(size) => {
+                    if self.options.measure
+                        && self
+                            .prepared_extent
+                            .is_some_and(|extent| extent != (size.width, size.height))
+                    {
+                        self.fail(event_loop, "window extent changed during a fixed-workload measurement; restart the run");
+                        return;
+                    }
                     self.redraw.resize(size.width, size.height);
-                    if let Some(presenter) = &mut self.presenter {
-                        presenter.resize(size.width, size.height);
+                    if let Some(backend) = &mut self.backend {
+                        backend.resize(size.width, size.height);
+                    }
+                }
+                WindowEvent::Focused(false) => self.capture_mouse(false),
+                WindowEvent::MouseInput {
+                    state,
+                    button: MouseButton::Right,
+                    ..
+                } => self.capture_mouse(state == ElementState::Pressed),
+                WindowEvent::KeyboardInput { event, .. } => {
+                    if let PhysicalKey::Code(key) = event.physical_key {
+                        let pressed = event.state == ElementState::Pressed;
+                        match key {
+                            KeyCode::KeyW => self.camera.set_motion(Motion::Forward, pressed),
+                            KeyCode::KeyS => self.camera.set_motion(Motion::Backward, pressed),
+                            KeyCode::KeyA => self.camera.set_motion(Motion::Left, pressed),
+                            KeyCode::KeyD => self.camera.set_motion(Motion::Right, pressed),
+                            KeyCode::KeyQ => self.camera.set_motion(Motion::Down, pressed),
+                            KeyCode::KeyE => self.camera.set_motion(Motion::Up, pressed),
+                            KeyCode::ShiftLeft | KeyCode::ShiftRight => {
+                                self.camera.set_fast(pressed)
+                            }
+                            KeyCode::KeyT if pressed && !event.repeat => {
+                                if self.options.measure {
+                                    self.fail(event_loop, "camera mode changed during a fixed-workload measurement; restart the run");
+                                    return;
+                                }
+                                self.options.tour = !self.options.tour;
+                                self.camera.clear_input();
+                                self.update_title();
+                            }
+                            KeyCode::KeyV if pressed && !event.repeat => {
+                                if self.options.measure {
+                                    self.fail(event_loop, "VSync changed during a fixed-workload measurement; restart the run");
+                                    return;
+                                }
+                                if let Err(error) = self.toggle_vsync() {
+                                    self.fail(event_loop, error);
+                                }
+                            }
+                            KeyCode::Escape if pressed => {
+                                if let Err(error) = self.shutdown() {
+                                    self.error = Some(error.to_string());
+                                }
+                                event_loop.exit();
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 WindowEvent::RedrawRequested => {
@@ -436,51 +869,46 @@ mod demo {
                         self.fail(event_loop, error);
                     }
                 }
-                WindowEvent::KeyboardInput { event, .. }
-                    if event.state == ElementState::Pressed
-                        && !event.repeat
-                        && event.physical_key == PhysicalKey::Code(KeyCode::KeyV) =>
-                {
-                    if let Err(error) = self.toggle_vsync() {
-                        eprintln!("VSync unchanged: {error}");
-                    }
-                }
                 _ => {}
             }
         }
-
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
             let now = Instant::now();
-            if self.smoke && now.duration_since(self.started) >= SMOKE_BUDGET {
-                self.fail(event_loop, "windowed smoke run timed out");
+            if self.options.target().is_some() && now.duration_since(self.started) >= RUN_BUDGET {
+                self.fail(event_loop, "bounded windowed run timed out");
                 return;
             }
-            if self.smoke
-                && ((self.presented >= 2 && self.mode_switches == 0)
-                    || (self.presented >= 6 && self.mode_switches == 1))
-            {
-                if let Err(error) = self.toggle_vsync() {
-                    self.fail(event_loop, error);
-                    return;
+            if self.options.smoke {
+                let trigger = [2, 4, 6, 8, 10, 12][self.transition.min(5)];
+                if self.transition < 6 && self.accepted >= trigger && self.restore_at.is_none() {
+                    match self.transition {
+                        0 | 5 => {
+                            if let Err(error) = self.toggle_vsync() {
+                                self.fail(event_loop, error);
+                                return;
+                            }
+                        }
+                        1..=3 => {
+                            let (width, height) =
+                                [(512, 384), (672, 448), (600, 400)][self.transition - 1];
+                            if let Some(window) = &self.window {
+                                let _ = window.request_inner_size(PhysicalSize::new(width, height));
+                            }
+                        }
+                        4 => {
+                            if let Some(window) = &self.window {
+                                window.set_minimized(true);
+                            }
+                            if let Some(backend) = &mut self.backend {
+                                backend.resize(0, 0);
+                            }
+                            self.redraw.resize(0, 0);
+                            self.restore_at = Some(now + Duration::from_millis(80));
+                        }
+                        _ => {}
+                    }
+                    self.transition += 1;
                 }
-                self.mode_switches += 1;
-            }
-            if self.smoke && self.presented >= 4 && !self.resized {
-                self.resized = true;
-                if let Some(window) = &self.window {
-                    let _ = window.request_inner_size(PhysicalSize::new(512, 384));
-                }
-            }
-            if self.smoke && self.presented >= 8 && !self.minimized {
-                self.minimized = true;
-                if let Some(window) = &self.window {
-                    window.set_minimized(true);
-                }
-                if let Some(presenter) = &mut self.presenter {
-                    presenter.resize(0, 0);
-                }
-                self.redraw.resize(0, 0);
-                self.restore_at = Some(now + Duration::from_millis(50));
             }
             if self.restore_at.is_some_and(|deadline| now >= deadline) {
                 self.restore_at = None;
@@ -488,12 +916,47 @@ mod demo {
                     window.set_minimized(false);
                     let _ = window.request_inner_size(PhysicalSize::new(640, 480));
                 }
-                if let Some(presenter) = &mut self.presenter {
-                    presenter.resize(640, 480);
+                if let Some(backend) = &mut self.backend {
+                    backend.resize(640, 480);
                 }
                 self.redraw.resize(640, 480);
             }
-            if self.smoke && self.presented >= 12 {
+            if self
+                .options
+                .target()
+                .is_some_and(|target| self.accepted >= target)
+            {
+                if self.options.measure {
+                    // Include the tail in ordinary nonblocking completion and
+                    // result return. Smoke deliberately enters close with live
+                    // accepted owners instead.
+                    let started = self.options.measure.then(Instant::now);
+                    let drained = (|| -> Result<bool> {
+                        self.poll()?;
+                        if self.frames.iter().any(Option::is_some) {
+                            return Ok(false);
+                        }
+                        let started = self.options.measure.then(Instant::now);
+                        let idle = self.backend.as_mut().unwrap().presentation_idle();
+                        self.poll_api += elapsed(started);
+                        let idle = idle?;
+                        self.drain_profiles()?;
+                        Ok(idle)
+                    })();
+                    self.draw_cpu += elapsed(started);
+                    match drained {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            event_loop
+                                .set_control_flow(ControlFlow::WaitUntil(now + RETRY_INTERVAL));
+                            return;
+                        }
+                        Err(error) => {
+                            self.fail(event_loop, error);
+                            return;
+                        }
+                    }
+                }
                 if let Err(error) = self.shutdown() {
                     self.error = Some(error.to_string());
                 }
@@ -508,26 +971,20 @@ mod demo {
                 }
                 self.redraw.next_wake()
             } else {
-                // A zero-extent Window has nothing to draw. Resume on a resize
-                // event, or the explicit smoke-test restoration deadline.
                 None
             };
-            let next_wake = [
+            let wake = [
                 next_redraw,
                 self.restore_at,
-                self.smoke.then_some(self.started + SMOKE_BUDGET),
+                self.options.target().map(|_| self.started + RUN_BUDGET),
             ]
             .into_iter()
             .flatten()
             .min();
-            event_loop.set_control_flow(match next_wake {
-                Some(deadline) => ControlFlow::WaitUntil(deadline),
-                None => ControlFlow::Wait,
-            });
+            event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
         }
     }
-
-    pub fn run() -> Result<(), Box<dyn Error>> {
+    pub fn run() -> Result<()> {
         let options = Options::parse(std::env::args().skip(1))?;
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -537,94 +994,71 @@ mod demo {
             .try_init()
             .map_err(|error| error.to_string())?;
         let event_loop = EventLoop::new()?;
-        let mut app = App::new(options);
+        let mut app = App::new(options)?;
         event_loop.run_app(&mut app)?;
         app.shutdown()?;
-        if let Some(error) = app.error {
-            return Err(error.into());
-        }
-        Ok(())
+        app.finish()
     }
-
     #[cfg(test)]
     mod tests {
-        use super::{Options, REDRAW_INTERVAL, RedrawSchedule};
-        use std::time::{Duration, Instant};
-
+        use super::*;
         #[test]
-        fn redraw_deadline_survives_early_wakeups_and_does_not_catch_up() {
-            let start = Instant::now();
-            let mut schedule = RedrawSchedule::new(start);
-            schedule.resize(640, 480);
-            assert!(schedule.request_due(start));
-            let deadline = start + REDRAW_INTERVAL;
-            assert_eq!(schedule.next, deadline);
-            for millis in [1, 2, 3] {
-                assert!(!schedule.request_due(start + Duration::from_millis(millis)));
-                assert_eq!(schedule.next, deadline);
+        fn options_keep_timing_and_transition_acceptance_separate() {
+            let parse =
+                |args: &[&str]| Options::parse(args.iter().map(|value| (*value).to_owned()));
+            let options = parse(&[
+                "--api",
+                "d3d12",
+                "--graph",
+                "custom",
+                "--measure",
+                "--vsync",
+                "off",
+                "--frames",
+                "8",
+                "--warmup",
+                "2",
+            ])
+            .unwrap();
+            assert_eq!(options.target(), Some(10));
+            assert!(options.tour);
+            assert!(!options.verify);
+            assert_eq!(options.api, Api::D3d12);
+            assert_eq!(options.composition, Composition::Custom);
+            assert_eq!(parse(&["--smoke"]).unwrap().target(), Some(24));
+            for args in [
+                &["--measure", "--smoke"][..],
+                &["--frames", "0"],
+                &["--warmup", "5000"],
+                &["--api", "metal"],
+                &["--vsync"],
+            ] {
+                assert!(parse(args).is_err());
             }
-            assert!(schedule.request_due(deadline));
-            assert!(!schedule.request_due(deadline));
-            let late = deadline + Duration::from_secs(1);
-            assert!(schedule.request_due(late));
-            assert_eq!(schedule.next, late + REDRAW_INTERVAL);
-            assert!(!schedule.request_due(late));
         }
-
         #[test]
-        fn nonzero_window_size_schedules_first_draw_without_a_swapchain() {
-            let start = Instant::now();
-            let mut schedule = RedrawSchedule::new(start);
-            assert_eq!(schedule.next_wake(), None);
-            assert!(!schedule.request_due(start));
-
-            // Only a Window size is needed to enter the draw/prepare path,
-            // including when construction was minimized and no chain exists.
+        fn early_events_do_not_push_back_redraw_and_zero_extent_waits() {
+            let now = Instant::now();
+            let mut schedule = RedrawSchedule::new(now);
+            assert!(!schedule.request_due(now));
             schedule.resize(640, 480);
-            assert!(schedule.request_due(start));
-            assert_eq!(schedule.next_wake(), Some(start + REDRAW_INTERVAL));
-
+            assert!(schedule.request_due(now));
+            let next = now + RETRY_INTERVAL;
+            assert!(!schedule.request_due(now));
+            assert_eq!(schedule.next_wake(), Some(next));
             schedule.resize(0, 480);
             assert_eq!(schedule.next_wake(), None);
-            let restored = start + Duration::from_secs(1);
-            assert!(!schedule.request_due(restored));
             schedule.resize(640, 480);
-            assert!(schedule.request_due(restored));
-            assert_eq!(schedule.next_wake(), Some(restored + REDRAW_INTERVAL));
-        }
-
-        #[test]
-        fn options_select_vsync_and_reject_invalid_requests() {
-            let parse =
-                |args: &[&str]| Options::parse(args.iter().map(|argument| (*argument).to_owned()));
-            assert_eq!(
-                parse(&[]).unwrap(),
-                Options {
-                    smoke: false,
-                    vsync: true
-                }
-            );
-            assert_eq!(
-                parse(&["--vsync", "off", "--smoke"]).unwrap(),
-                Options {
-                    smoke: true,
-                    vsync: false
-                }
-            );
-            assert!(parse(&["--vsync", "on"]).unwrap().vsync);
-            for arguments in [&["--vsync"][..], &["--vsync", "invalid"], &["--unknown"]] {
-                assert!(parse(arguments).is_err());
-            }
+            assert!(schedule.request_due(now + Duration::from_secs(1)));
         }
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     demo::run()
 }
-
-#[cfg(not(windows))]
+#[cfg(not(all(windows, any(feature = "vulkan", feature = "d3d12"))))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    Err("the M3 windowed example currently requires Windows".into())
+    Err("the windowed example requires Windows and --features vulkan,presentation or d3d12,presentation".into())
 }
