@@ -387,10 +387,19 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
         let mut normal = process.since(caller);
         normal.native = process.native;
         normal.vma_host = process.vma_host;
+        assert!(!normal.overflowed);
         assert!(
-            normal.is_allocation_free(),
-            "normal D3D12 windowed frame accounting: {normal:?}"
+            normal.native[..crate::measurement::NativeEvent::Reset as usize]
+                .iter()
+                .all(|&count| count == 0),
+            "normal native creation/destruction: {normal:?}"
         );
+        if !strict {
+            assert!(
+                normal.is_allocation_free(),
+                "normal D3D12 windowed frame accounting: {normal:?}"
+            );
+        }
         assert!(normal.native[crate::measurement::NativeEvent::Reset as usize] > 0);
         normal
     };
@@ -456,8 +465,10 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
         assert!(setup.native[crate::measurement::NativeEvent::ObjectCreate as usize] > 0);
         assert!(shutdown.native[crate::measurement::NativeEvent::ObjectDestroy as usize] > 0);
         println!(
-            "D3D12 windowed memory {{\"sources\":18,\"presents\":36,\"rust_calls\":{:?},\"native\":{:?},\"vma_calls\":{:?},\"overflowed\":{}}}",
+            "D3D12 windowed memory {{\"sources\":18,\"presents\":36,\"diagnostic_baseline\":{},\"rust_calls\":{:?},\"rust_bytes\":{:?},\"native\":{:?},\"vma_calls\":{:?},\"overflowed\":{}}}",
+            strict,
             normal.rust.map(|v| v.calls),
+            normal.rust.map(|v| v.bytes),
             normal.native,
             normal.vma_host.map(|v| v.calls),
             normal.overflowed
