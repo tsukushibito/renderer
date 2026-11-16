@@ -1,0 +1,127 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_11" : {
+            "name" : "_11",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4"
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "float"
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                }
+            ]
+        },
+        "_17" : {
+            "name" : "_17",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "_m4",
+                    "type" : "vec4",
+                    "offset" : 112
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "_25",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "_39",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_43",
+            "location" : 2
+        },
+        {
+            "type" : "vec2",
+            "name" : "_49",
+            "location" : 3
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec3",
+            "name" : "_36",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "_38",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_41",
+            "location" : 2
+        },
+        {
+            "type" : "vec2",
+            "name" : "_47",
+            "location" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_17",
+            "name" : "_17_19",
+            "block_size" : 128,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}
