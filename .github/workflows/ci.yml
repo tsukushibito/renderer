@@ -167,9 +167,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($env:BACKEND -like '*presentation*') {
+              cargo test --locked -p renderer --example windowed @featureArgs
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              cargo test --locked --release -p renderer --example windowed @featureArgs
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
           }
       - name: Check optimized backend execution with and without development validation
-        if: matrix.backend == 'vulkan' || contains(matrix.backend, 'd3d12')
+        if: contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
