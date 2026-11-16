@@ -29,7 +29,7 @@ fn consumer_owned_hdr_programs_form_a_changing_multistage_graph() {
                 .iter()
                 .map(|entry| entry.len)
                 .sum::<usize>(),
-            320
+            fixture::READBACK_BYTES
         );
         let names = plan.ordered_pass_names().collect::<Vec<_>>();
         assert!(names.contains(&"sample HDR with per-frame uniform"));
@@ -519,7 +519,7 @@ mod native {
             "configuration": { "development_validation": cfg!(feature="development-validation"), "graph_diagnostics": cfg!(feature="graph-diagnostics"), "vulkan_diagnostics": cfg!(feature="vulkan-diagnostics"), "d3d12_diagnostics": cfg!(feature="d3d12-diagnostics"), "debug_assertions": cfg!(debug_assertions), "external_layer_injection_checked": false },
             "adapter": { "name": vk_info.name, "luid": dx_info.luid, "vendor_id": dx_info.vendor_id, "device_id": dx_info.device_id, "vulkan_driver": vk_info.driver_info, "d3d12_driver": dx_info.driver_version },
             "extent": [fixture::WIDTH, fixture::HEIGHT], "custom_workgroup_size": [4,4,1], "custom_workgroups": [1,2,1],
-            "compared_bytes_per_backend_per_run": 320, "successful_runs_per_backend": 3, "same_compiled_graph_runs_per_backend": 2,
+            "compared_bytes_per_backend_per_run": fixture::READBACK_BYTES, "successful_runs_per_backend": 3, "same_compiled_graph_runs_per_backend": 2,
             "missing_preparation_rejected": true, "insufficient_image_capacity_rejected_then_explicitly_grown": true, "d3d12_record_cancel_reuse": true, "native_runs_sequential": true,
             "runtime_and_all_public_plan_handles_dropped_before_completion_observation": true,
             "vulkan_readbacks": vk_output, "d3d12_readbacks": dx_output,
