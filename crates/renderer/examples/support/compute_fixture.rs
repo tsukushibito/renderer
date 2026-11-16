@@ -171,7 +171,7 @@ fn half_exact(value: f32) -> u16 {
     sign | ((exponent - 112) << 10) as u16 | ((bits >> 13) & 0x3ff) as u16
 }
 
-fn image_bytes(pixels: &[[f32; 4]; PIXELS]) -> [u8; IMAGE_BYTES] {
+pub fn image_bytes(pixels: &[[f32; 4]; PIXELS]) -> [u8; IMAGE_BYTES] {
     let mut bytes = [0; IMAGE_BYTES];
     for (output, pixel) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(pixels) {
         for (component, value) in output.as_chunks_mut::<2>().0.iter_mut().zip(pixel) {
@@ -181,7 +181,7 @@ fn image_bytes(pixels: &[[f32; 4]; PIXELS]) -> [u8; IMAGE_BYTES] {
     bytes
 }
 
-fn vec4_bytes(value: [f32; 4]) -> [u8; 16] {
+pub fn vec4_bytes(value: [f32; 4]) -> [u8; 16] {
     let mut bytes = [0; 16];
     for (component, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(value) {
         component.copy_from_slice(&value.to_le_bytes());
