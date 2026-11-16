@@ -86,7 +86,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
             }],
         )
         .unwrap();
-    let partial = renderer.prepare_snapshot(&snapshot).unwrap();
+    let partial = renderer.prepare_snapshot(&snapshot, 2).unwrap();
     assert!(partial.submitted_bytes > 0 && partial.remaining_bytes > 0);
     renderer.cancel_uploads();
     assert_eq!(renderer.mesh_cache_stats().resident_meshes, 1);
@@ -99,7 +99,7 @@ fn vulkan_engine_cancelled_upload_can_readmit_same_snapshot() {
     assert_eq!(renderer.collect_retired_meshes(Some(&assets)).unwrap(), 1);
     assert!(renderer.residents.is_empty());
 
-    let mut progress = renderer.prepare_snapshot(&snapshot).unwrap();
+    let mut progress = renderer.prepare_snapshot(&snapshot, 2).unwrap();
     let started = Instant::now();
     while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
         assert!(
@@ -240,7 +240,7 @@ fn vulkan_engine_large_resident_mesh_matches_every_uploaded_byte() {
         )
         .unwrap();
     let began = Instant::now();
-    let mut progress = renderer.prepare_snapshot(&snapshot).unwrap();
+    let mut progress = renderer.prepare_snapshot(&snapshot, 2).unwrap();
     while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
         assert!(began.elapsed() < TIMEOUT, "large resident upload timed out");
         progress = renderer
@@ -364,7 +364,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
         )
         .unwrap();
     let began = Instant::now();
-    let mut progress = renderer.prepare_snapshot(&snapshot).unwrap();
+    let mut progress = renderer.prepare_snapshot(&snapshot, 2).unwrap();
     while progress.state != MeshUploadState::Ready {
         assert!(began.elapsed() < TIMEOUT, "mesh readiness timed out");
         progress = renderer
@@ -637,7 +637,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
     }
     let ready = |renderer: &mut VulkanEngine, snapshot: &crate::engine::FrameSnapshot| {
         let began = Instant::now();
-        let mut progress = renderer.prepare_snapshot(snapshot).unwrap();
+        let mut progress = renderer.prepare_snapshot(snapshot, 2).unwrap();
         while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
             assert!(
                 began.elapsed() < TIMEOUT,
@@ -682,7 +682,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         .build_snapshot(&snapshots[0], false, |_, image| Ok(image))
         .unwrap();
     assert!(matches!(
-        renderer.prepare_snapshot(&snapshots[1]),
+        renderer.prepare_snapshot(&snapshots[1], 2),
         Err(super::EngineRenderError::Preparation(
             super::MeshPreparationError::ResidencyPinned
         ))

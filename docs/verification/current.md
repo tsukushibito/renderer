@@ -5,6 +5,39 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 利用側Graphへの入力接続と出力選択
+
+`renderer-7ft.2.7.2`。`FrameSnapshot::connect_graph`と、Vulkan常駐入力向けの
+`begin_graph`／`connect_snapshot`／`submit_graph`を追加した。接続だけではRaster・画像・export・readbackを追加しない。
+複数snapshot/View、同mesh旧新版、任意の画像/buffer出力を扱い、一画像の便利経路も構成後に`select_output`する。
+`prepare_snapshot`の非mesh登録余裕も利用側指定とし、標準color/depth用の二枠を一律に要求しない。
+公開標準パス・標準グラフの抽出は後続`.2.7.3`、一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
+
+`RasterParameters::new`で有限値を保証する不変公開型へ統一し、snapshotと利用側が同じ`Graph::raster`を使う。
+保証済み定数の再走査とEngine専用のvalidated描画入口を除去し、公開iteratorの実要素ごとに容量を確認する。
+接続scratchはuser code中にlockを保持せず、正常・失敗・unwindで返却する。
+常駐meshは構築からcompile・submit/cancelまで既存の準備済みleaseでpinし、受理後はRuntimeのGPU所有へ引き継ぐ。
+公開したmesh bufferはwriteと直接exportを構築時に拒否し、不変版とindex provenanceを保つ。
+同期・GPU完了・native失敗・owner/世代・容量の保証は製品構成にも残す。
+
+Windows x64、Rust 1.99.0、NVIDIA RTX3060／driver610.88でGPU試験と計測を逐次実行した。
+
+| 確認 | 結果 |
+|---|---|
+| workspace CPU試験 | 通常構成と最適化済み検証有効・無効構成が成功。短命入力・接続のみのculling・容量・不正iterator・有限値生成を確認 |
+| 新公開APIのVulkan実GPU | Core/SyncVal有効と製品相当の両構成で成功。snapshotなしCompute/copy、旧新meshの異なる寸法HDR全画素、複数export、未投入cancel・pending削除・出力権限を照合 |
+| mesh-onlyの最小registry | 二つのmesh bufferだけのregistryで成功。非mesh余裕0で画像出力なしのreadback、余裕1と過大値の容量拒否を確認 |
+| 既存Rasterの二API受入 | Vulkan/D3D12のstrict・shipping両構成で成功。各backend各3回、順序・Load・深度・texture・HDRの9出力を既存期待値と照合 |
+| 既存Engine回帰 | Core/SyncVal有効の8試験と、製品相当のpending旧mesh保守退役・無確保試験が成功 |
+| 新接続経路のメモリ | CPU24frame、Vulkan画像48frameの可変draw/パス・複数pending・cancel・容量不足・CPU結果返却を含む計測で、Rust alloc/alloc_zeroed/realloc/dealloc、VMA host alloc/realloc/free、native資源・memory作成/破棄はすべて0。native reset96回は再利用として別計上 |
+| 静的検査・レビュー | 全feature/targetのClippy、format、diff検査と独立した所有/APIレビューが成功。重大・中程度の指摘なし |
+
+実行コマンド、ソースhash、メモリのraw報告は[検証データの`graph_input_connection`](frame-memory.json)を参照する。
+Vulkan Core/SyncValとD3D12 Debug Layer/GBVのstrict回帰は最終native破棄後までwarning/errorゼロ。
+製品相当はRenderer追加検証・診断featureを無効にしnative検証をDisabled指定した。
+非観測の外部Layer注入やdriver内部確保、表示・通常frame時間性能、一般D3D12常駐入力、履歴は今回の実証範囲に含めない。
+本変更は既存の同期・寿命・生成時保証を引き継ぎ、Vulkan/VMA一般推奨からの新たな例外は設けていない。
+
 ## 公開APIの三層方針と移行計画
 
 `renderer-7ft.2.7.1`。[公開API方針](../design/implementation-policy.md#public-api-layers)として、

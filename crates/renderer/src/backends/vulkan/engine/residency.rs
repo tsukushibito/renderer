@@ -208,12 +208,18 @@ impl VulkanEngine {
     }
     /// Admit one immutable working set and submit at most one upload chunk.
     /// Oversized sets fail before eviction; a different active set requires explicit cancellation.
+    /// `non_mesh_resources` is caller-selected registry headroom for this
+    /// composition. It need not include color/depth for buffer-only work.
+    /// This admission limit does not reserve physical resources or guarantee
+    /// that the caller's complete Graph working set fits.
     pub fn prepare_snapshot(
         &mut self,
         snapshot: &FrameSnapshot,
+        non_mesh_resources: usize,
     ) -> Result<MeshUploadProgress, EngineRenderError> {
         let mut required = std::mem::take(&mut self.required_meshes);
-        let result = self.prepare_snapshot_with_scratch(snapshot, &mut required);
+        let result =
+            self.prepare_snapshot_with_scratch(snapshot, non_mesh_resources, &mut required);
         required.clear();
         self.required_meshes = required;
         result
@@ -222,6 +228,7 @@ impl VulkanEngine {
     fn prepare_snapshot_with_scratch(
         &mut self,
         snapshot: &FrameSnapshot,
+        non_mesh_resources: usize,
         required: &mut Vec<(MeshVersionKey, Arc<MeshData>)>,
     ) -> Result<MeshUploadProgress, EngineRenderError> {
         let mut required_bytes = 0u64;
@@ -254,7 +261,10 @@ impl VulkanEngine {
             }
             .into());
         }
-        let required_resources = required.len() * 2 + 2;
+        let required_resources = required
+            .len()
+            .saturating_mul(2)
+            .saturating_add(non_mesh_resources);
         if required_resources > self.runtime.resource_capacity() {
             return Err(MeshPreparationError::ResourceCapacityTooSmall {
                 required_resources,
@@ -283,9 +293,12 @@ impl VulkanEngine {
             .fold((0usize, 0u64), |(count, bytes), (_, entry)| {
                 (count + 1, bytes.saturating_add(entry.bytes))
             });
-        // Mesh registrations must leave room for the standard color/depth
-        // targets, even when logical cache limits are larger than the registry.
-        let physical_mesh_limit = self.runtime.resource_capacity().saturating_sub(2) / 2;
+        // The composition owns output selection and its non-mesh headroom.
+        let physical_mesh_limit = self
+            .runtime
+            .resource_capacity()
+            .saturating_sub(non_mesh_resources)
+            / 2;
         if pinned_count.saturating_add(required.len())
             > self.config.max_meshes.min(physical_mesh_limit)
             || pinned_bytes.saturating_add(required_bytes) > self.config.max_bytes

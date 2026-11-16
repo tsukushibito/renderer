@@ -307,7 +307,7 @@ mod demo {
                     let view = scene::view(width, height);
                     let draws = [scene::draw(assets.mesh, assets.material, 0.0)];
                     let snapshot = assets.inputs.snapshot(&assets.snapshots, &view, &draws)?;
-                    let upload = engine.prepare_snapshot(&snapshot)?;
+                    let upload = engine.prepare_snapshot(&snapshot, 2)?;
                     if upload.state != MeshUploadState::Ready {
                         return Ok(None);
                     }

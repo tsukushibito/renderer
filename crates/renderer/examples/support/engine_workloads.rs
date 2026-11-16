@@ -168,7 +168,7 @@ impl Driver {
     fn ready(&mut self, snapshot: &FrameSnapshot) -> Result<ColdUpload> {
         let started = Instant::now();
         let mut report = ColdUpload::default();
-        let mut progress = self.renderer.prepare_snapshot(snapshot)?;
+        let mut progress = self.renderer.prepare_snapshot(snapshot, 2)?;
         loop {
             if progress.submitted_bytes != 0 {
                 report.submitted_bytes += progress.submitted_bytes;

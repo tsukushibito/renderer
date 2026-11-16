@@ -9,8 +9,11 @@ use renderer::engine::{
     Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MaterialHandle, MeshData,
     SnapshotPool, Vertex, View,
 };
-use renderer::graph::{ComputeTransform, ImageDesc, PassHandle};
+use renderer::graph::{
+    Attachment, ComputeTransform, ImageDesc, LoadOp, PassHandle, RasterAttachments, StoreOp,
+};
 use renderer::measurement::{HostEvent, NativeEvent, RustEvent, Snapshot};
+use renderer::program::ManagedRasterProgram;
 use renderer::{
     EngineFrameCapacity, EngineRenderError, FrameCapacity, FrameCompletion, MeshCacheConfig,
     MeshPreparationError, MeshUploadState, PreparedEngineFrame, RenderedFrame, ResourceClass,
@@ -51,24 +54,56 @@ fn build(
     invert_passes: usize,
     readback: bool,
 ) -> PreparedEngineFrame {
-    renderer
-        .build_snapshot(snapshot, readback, |graph, mut color| {
-            for _ in 0..invert_passes {
-                let output =
-                    graph.image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))?;
-                graph.compute(
-                    "memory image transform",
-                    color,
-                    output,
-                    ComputeTransform::Invert,
-                )?;
-                color = output;
-            }
-            let output = graph.image("memory standard output", ImageDesc::rgba8(WIDTH, HEIGHT))?;
-            graph.composite("memory standard composite", color, output)?;
-            Ok(output)
-        })
-        .unwrap()
+    let mut prepared = renderer.begin_graph().unwrap();
+    let inputs = renderer.connect_snapshot(&mut prepared, snapshot).unwrap();
+    let graph = &mut prepared.graph;
+    let mut color = graph
+        .image("memory color", ImageDesc::rgba8(WIDTH, HEIGHT))
+        .unwrap();
+    let depth = graph
+        .image("memory depth", ImageDesc::depth32(WIDTH, HEIGHT))
+        .unwrap();
+    graph
+        .raster(
+            "memory raster",
+            &ManagedRasterProgram::mesh(),
+            inputs.draws(),
+            RasterAttachments {
+                colors: &[Attachment {
+                    view: graph.image_view(color, 0, 0).unwrap(),
+                    load: LoadOp::Clear(snapshot.view().clear_color),
+                    store: StoreOp::Store,
+                }],
+                depth: Some(Attachment {
+                    view: graph.image_view(depth, 0, 0).unwrap(),
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+        )
+        .unwrap();
+    drop(inputs);
+    for _ in 0..invert_passes {
+        let output = graph
+            .image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))
+            .unwrap();
+        graph
+            .compute(
+                "memory image transform",
+                color,
+                output,
+                ComputeTransform::Invert,
+            )
+            .unwrap();
+        color = output;
+    }
+    let output = graph
+        .image("memory standard output", ImageDesc::rgba8(WIDTH, HEIGHT))
+        .unwrap();
+    graph
+        .composite("memory standard composite", color, output)
+        .unwrap();
+    prepared.select_output(output, readback).unwrap()
 }
 
 fn cancel_and_exhaust(renderer: &mut VulkanEngine, snapshot: &FrameSnapshot) {
@@ -79,7 +114,7 @@ fn cancel_and_exhaust(renderer: &mut VulkanEngine, snapshot: &FrameSnapshot) {
     // Both compiled and mutable frames retain the same prepared-frame pins.
     // Exhaustion must reject the next checkout without growing or waiting.
     assert!(matches!(
-        renderer.build_snapshot(snapshot, false, |_, color| Ok(color)),
+        renderer.begin_graph(),
         Err(EngineRenderError::Preparation(
             MeshPreparationError::FrameCapacityExhausted
         ))
@@ -405,7 +440,7 @@ pub fn lifecycle(baseline: bool) {
             &draws,
         )
         .unwrap();
-    let mut upload = renderer.prepare_snapshot(&resident).unwrap();
+    let mut upload = renderer.prepare_snapshot(&resident, 2).unwrap();
     let upload_start = Instant::now();
     while upload.state != MeshUploadState::Ready || upload.pending_submissions != 0 {
         assert!(

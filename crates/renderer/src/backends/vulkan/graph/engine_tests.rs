@@ -100,7 +100,7 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
 
 fn prepare_meshes(engine: &mut VulkanEngine, snapshot: &FrameSnapshot) {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut progress = engine.prepare_snapshot(snapshot).unwrap();
+    let mut progress = engine.prepare_snapshot(snapshot, 2).unwrap();
     while progress.state != MeshUploadState::Ready || progress.pending_submissions != 0 {
         let remaining = deadline
             .checked_duration_since(Instant::now())

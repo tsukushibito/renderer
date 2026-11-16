@@ -8,8 +8,8 @@ use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
     GraphError, GraphErrorKind, ImageDesc, ImageFormat, ImageHandle, MeshUpload, Operation,
-    PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, RasterParameters,
-    ResourceAccess, ResourceDesc, ResourceHandle, UploadSource, overlaps,
+    PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess,
+    ResourceDesc, ResourceHandle, UploadSource, overlaps,
 };
 
 impl Graph {
@@ -279,43 +279,7 @@ impl Graph {
         I: IntoIterator<Item = D>,
         D: Borrow<RasterDraw<'a>>,
     {
-        self.raster_validated(
-            name,
-            program,
-            draws.into_iter().map(|draw| {
-                let draw = draw.borrow();
-                Ok((
-                    draw.vertices,
-                    draw.indices,
-                    draw.index_count,
-                    draw.parameters,
-                    draw.bindings,
-                ))
-            }),
-            attachments,
-        )
-    }
-
-    /// Capture immutable creation-validated parameters without rescanning them.
-    pub(crate) fn raster_validated<'a>(
-        &mut self,
-        name: &str,
-        program: &crate::program::ManagedRasterProgram,
-        draws: impl Iterator<
-            Item = Result<
-                (
-                    BufferHandle,
-                    BufferHandle,
-                    u32,
-                    RasterParameters,
-                    &'a [super::Binding],
-                ),
-                GraphError,
-            >,
-        >,
-        attachments: RasterAttachments<'_>,
-    ) -> Result<PassHandle, GraphError> {
-        let mut draws = draws.peekable();
+        let mut draws = draws.into_iter().peekable();
         if draws.peek().is_none() {
             return self.attachment_pass(name, attachments);
         }
@@ -351,7 +315,14 @@ impl Graph {
             let first_access = graph.accesses.len();
             graph.data_mut().clear_raster_ranges();
             for draw in draws {
-                let (vertices, indices, index_count, parameters, bindings) = draw?;
+                let draw = draw.borrow();
+                let (vertices, indices, index_count, parameters, bindings) = (
+                    draw.vertices,
+                    draw.indices,
+                    draw.index_count,
+                    draw.parameters,
+                    draw.bindings,
+                );
                 if graph.draws.len() == graph.capacity.draws {
                     return Err(super::storage::capacity_error(
                         super::GraphCapacityKind::Draws,
@@ -799,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn late_engine_resolution_failure_returns_all_owned_draw_capacity() {
+    fn late_invalid_draw_returns_all_owned_draw_capacity() {
         let mut pool = GraphPool::new(
             GraphCapacity {
                 draws: 2,
@@ -817,32 +788,28 @@ mod tests {
             load: LoadOp::Clear([0.0; 4]),
             store: StoreOp::Store,
         };
-        let validated = draw.parameters;
-        let tuple = (
-            draw.vertices,
-            draw.indices,
-            draw.index_count,
-            validated,
-            &[] as &[super::super::Binding],
-        );
+        let invalid = RasterDraw {
+            index_count: 0,
+            ..draw
+        };
         let error = graph
-            .raster_validated(
+            .raster(
                 "resolution failed",
                 &ManagedRasterProgram::mesh(),
-                [Ok(tuple), Err(GraphError::custom("missing resolved mesh"))].into_iter(),
+                [draw, invalid],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,
                 },
             )
             .unwrap_err();
-        assert_eq!(error.kind(), GraphErrorKind::Custom);
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
         assert_eq!(error.pass_name(), Some("resolution failed"));
         graph
-            .raster_validated(
+            .raster(
                 "retry",
                 &ManagedRasterProgram::mesh(),
-                [Ok(tuple), Ok(tuple)].into_iter(),
+                [draw, draw],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,

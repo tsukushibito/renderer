@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use super::{FrameSnapshot, MeshData, MeshHandle, SnapshotMesh};
+use super::{FrameSnapshot, MeshData, SnapshotDraw, SnapshotMesh, View};
 use crate::graph::{
     BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, GraphPool, ImageDesc, ImageHandle,
     MeshUpload, PassHandle,
@@ -61,41 +61,68 @@ impl MeshData {
     }
 }
 
-impl FrameSnapshot {
-    /// Builds a self-contained graph without a device or window. This standalone
-    /// path uploads each distinct mesh once per graph. `VulkanEngine` reuses
-    /// persistent GPU meshes instead. The extension runs during graph building,
-    /// after opaque drawing and before output export, not during GPU recording.
-    ///
-    /// It receives complete linear RGBA8 color at the View extent. Return a
-    /// complete, initialized image of the same extent. Existing Graph checks
-    /// validate handles, declared operation purposes and contents normally.
-    pub fn build_graph(
-        &self,
-        pool: &mut GraphPool,
-        readback: bool,
-        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-    ) -> Result<FrameGraph, GraphError> {
-        let mut graph = pool.begin()?;
-        let mut meshes = self
+/// A temporary connection of one snapshot to a particular Graph. Draws borrow
+/// this lease only during construction; Graph commands own their parameters.
+/// Drop it before reconnecting the same snapshot. Other snapshots can be
+/// connected independently, including different versions of the same mesh.
+pub struct SnapshotInputs<'a> {
+    snapshot: &'a FrameSnapshot,
+    meshes: Vec<SnapshotMesh>,
+}
+
+impl SnapshotInputs<'_> {
+    pub fn view(&self) -> &View {
+        &self.snapshot.view
+    }
+
+    /// Immutable indexed operands for the ordinary public Raster builder.
+    /// Their mesh buffers are read-only Graph inputs. Copy to another buffer
+    /// when mutable contents or a persistent export are needed.
+    pub fn draws(&self) -> impl ExactSizeIterator<Item = crate::graph::RasterDraw<'static>> + '_ {
+        self.snapshot.draws.iter().map(|draw| {
+            let index = self
+                .meshes
+                .binary_search_by_key(&draw.mesh, |entry| entry.mesh)
+                .expect("connected snapshot mesh");
+            let (vertices, indices) = self.meshes[index].buffers.expect("connected mesh buffers");
+            crate::graph::RasterDraw {
+                vertices,
+                indices,
+                index_count: draw.data.index_count,
+                parameters: draw.parameters,
+                bindings: &[],
+            }
+        })
+    }
+}
+
+impl Drop for SnapshotInputs<'_> {
+    fn drop(&mut self) {
+        let mut meshes = std::mem::take(&mut self.meshes);
+        meshes.clear();
+        *self
+            .snapshot
             .meshes
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        meshes.clear();
-        meshes.extend(
-            self.draws
-                .iter()
-                .enumerate()
-                .map(|(index, draw)| SnapshotMesh {
-                    mesh: draw.mesh,
-                    draw: index,
-                    buffers: None,
-                }),
-        );
-        meshes.sort_unstable_by_key(|entry| entry.mesh);
-        meshes.dedup_by_key(|entry| entry.mesh);
-        for entry in meshes.iter_mut() {
-            let draw = &self.draws[entry.draw];
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(meshes);
+    }
+}
+
+impl FrameSnapshot {
+    /// Connect immutable mesh and draw inputs to a caller-created Graph.
+    /// Adds mesh buffers/uploads only; no Raster, image, export or readback is
+    /// selected. Unused uploads are culled normally. Native residency uses
+    /// `VulkanEngine::connect_snapshot` instead of uploading every frame.
+    ///
+    /// One live connection lease is supported per snapshot; a second connection
+    /// returns capacity backpressure without waiting. The scratch is returned
+    /// on every success, failure or unwind path. Commands already constructed
+    /// from these inputs remain valid after the lease and snapshot are dropped.
+    pub fn connect_graph<'a>(
+        &'a self,
+        graph: &mut Graph,
+    ) -> Result<SnapshotInputs<'a>, GraphError> {
+        self.connect_with(graph, |graph, draw| {
             let vertices = graph.buffer(
                 "mesh vertices",
                 BufferDesc {
@@ -109,38 +136,91 @@ impl FrameSnapshot {
                 },
             )?;
             draw.data.upload_graph_slice(
-                &mut graph,
+                graph,
                 "mesh vertex upload",
                 vertices,
                 false,
                 0..draw.data.vertices.len(),
             )?;
             draw.data.upload_graph_slice(
-                &mut graph,
+                graph,
                 "mesh index upload",
                 indices,
                 true,
                 0..draw.data.indices.len(),
             )?;
-            entry.buffers = Some((vertices, indices));
-        }
-        self.build_graph_with_meshes(
-            graph,
-            move |handle| {
-                meshes
-                    .binary_search_by_key(&handle, |entry| entry.mesh)
-                    .ok()
-                    .and_then(|index| meshes[index].buffers)
-            },
-            readback,
-            extension,
-        )
+            graph.protect_input(vertices, true)?;
+            graph.protect_input(indices, true)?;
+            Ok((vertices, indices))
+        })
     }
 
-    pub(crate) fn build_graph_with_meshes(
+    pub(crate) fn connect_with<'a, E: From<GraphError>>(
+        &'a self,
+        graph: &mut Graph,
+        mut resolve: impl FnMut(&mut Graph, &SnapshotDraw) -> Result<(BufferHandle, BufferHandle), E>,
+    ) -> Result<SnapshotInputs<'a>, E> {
+        let meshes = self
+            .meshes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .ok_or_else(|| {
+                GraphError::capacity_error(
+                    crate::graph::GraphCapacityKind::SnapshotInputs,
+                    1,
+                    Some(2),
+                )
+            })?;
+        let mut inputs = SnapshotInputs {
+            snapshot: self,
+            meshes,
+        };
+        // A forgotten public lease may permanently lose this scratch backing.
+        // Return backpressure instead of growing a replacement on the frame path.
+        if inputs.meshes.capacity() < self.draws.len() {
+            return Err(GraphError::capacity_error(
+                crate::graph::GraphCapacityKind::SnapshotInputs,
+                0,
+                Some(1),
+            )
+            .into());
+        }
+        inputs.meshes.extend(
+            self.draws
+                .iter()
+                .enumerate()
+                .map(|(index, draw)| SnapshotMesh {
+                    mesh: draw.mesh,
+                    draw: index,
+                    buffers: None,
+                }),
+        );
+        inputs.meshes.sort_unstable_by_key(|entry| entry.mesh);
+        inputs.meshes.dedup_by_key(|entry| entry.mesh);
+        for entry in &mut inputs.meshes {
+            entry.buffers = Some(resolve(graph, &self.draws[entry.draw])?);
+        }
+        Ok(inputs)
+    }
+
+    /// Build the current standard RGBA8 graph. The generic input connection
+    /// above does not impose this recipe's View/output restrictions.
+    pub fn build_graph(
+        &self,
+        pool: &mut GraphPool,
+        readback: bool,
+        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
+    ) -> Result<FrameGraph, GraphError> {
+        let mut graph = pool.begin()?;
+        let inputs = self.connect_graph(&mut graph)?;
+        self.build_graph_with_inputs(graph, inputs, readback, extension)
+    }
+
+    pub(crate) fn build_graph_with_inputs(
         &self,
         mut graph: Graph,
-        mut resolve: impl FnMut(MeshHandle) -> Option<(BufferHandle, BufferHandle)>,
+        inputs: SnapshotInputs<'_>,
         readback: bool,
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<FrameGraph, GraphError> {
@@ -149,29 +229,14 @@ impl FrameSnapshot {
         let depth = graph.image("view depth", ImageDesc::depth32(desc.width, desc.height))?;
         // The fixed opaque list shares one clear and rendering scope. An empty
         // list retains the clear-only path without requiring a Raster program.
-        let draws = self.draws.iter().map(|draw| {
-            let (vertices, indices) = resolve(draw.mesh).ok_or_else(|| {
-                GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "missing resolved mesh buffers",
-                )
-            })?;
-            Ok((
-                vertices,
-                indices,
-                draw.data.index_count,
-                draw.parameters,
-                &[] as &[crate::graph::Binding],
-            ))
-        });
-        graph.raster_validated(
+        graph.raster(
             if self.draws.is_empty() {
                 "view clear"
             } else {
                 "view opaque batch"
             },
             &crate::program::ManagedRasterProgram::mesh(),
-            draws,
+            inputs.draws(),
             crate::graph::RasterAttachments {
                 colors: &[crate::graph::Attachment {
                     view: graph.image_view(color, 0, 0)?,
@@ -187,7 +252,7 @@ impl FrameSnapshot {
         )?;
         // Mesh scratch belongs only to construction. Release it before running
         // user code, which may independently build another graph from this input.
-        drop(resolve);
+        drop(inputs);
         let output = extension(&mut graph, color)?;
         let output_desc = graph
             .image_desc(output)

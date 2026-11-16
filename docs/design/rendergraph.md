@@ -272,14 +272,17 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 文字列は資源の所有を保持せず、GPU完了tokenでもない。native handle等は実行ごとに変わるため、
 安定した機械可読形式や実行間で同一のdumpは保証しない。
 
-`Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`と借用draw sliceを受け取る。
+`Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`とdrawのiteratorを受け取る。
+配列・sliceと`SnapshotInputs::draws()`は同じ入口を使い、要素は値または`Borrow<RasterDraw>`とする。
 各`RasterDraw`はvertex／index buffer・index count・`RasterParameters`と借用binding sliceをまとめ、
 attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
 管理下の色Programは出力形式に一致する一個のcolorを要求し、depthを省略できる。
 `depth_only()`はcolorを持たず、depthを要求する。native実行は単一subresource画像を扱う。
 各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
 `Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
-既定の描画引数には`RasterParameters::default()`を明示する。
+描画引数は`RasterParameters::new(transform, tint)`で有限値を保証し、privateな不変値として保持する。
+変更時は新しい値を生成し、既定値は`RasterParameters::default()`とする。Graph構築では保証済みの値を再走査しない。
+公開iteratorのsize_hintやExactSizeIteratorの長さを容量の保証には使わず、実際の要素ごとに準備済みdraw容量を確認する。
 
 `renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
 `ManagedRasterProgram::mesh()`は実在する両APIのmesh VS/FSに結び付き、private static manifestが
@@ -312,8 +315,8 @@ first index/base vertexは0、instance数は1だけを扱う。CPU計画だけ�
 準備領域を追加する交換条件であり、密な入力や実時間性能での優位は未計測である。
 構築失敗後も使用列を保持し、次の非空Rasterまたはslot resetでrangeとともに消す。
 後半drawの構築失敗でもdraw/binding/access/attachment/nameを戻し、途中のpassを公開しない。
-Engineはsnapshotで確立した有限値のprivate保証を同じcoreへ渡し、描画引数を再走査しない。
-空draw sliceはProgramを使わないattachment-onlyへ正規化するため、空の場合はattachment配列の一般形も扱える。
+Engineと利用側は同じ不変`RasterParameters`と公開Raster構築APIを使い、描画引数を再走査しない。
+空draw iteratorはProgramを使わないattachment-onlyへ正規化するため、空の場合はattachment配列の一般形も扱える。
 旧single-draw/batch APIの互換入口は残さない。複数drawも同じLoad/Storeを共有し、Clear/Storeへ暗黙に置き換えない。
 
 Attachmentは選択mip/layer全域をrender areaとする。`Load`は既存内容を要求し、
@@ -581,10 +584,10 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 
 ## エンジン入力と標準描画
 
-**現行実装:** Engine層はassetとframe入力だけでなく、以下の標準opaque・出力・readbackのGraph構築も行う。
-移行後は[公開標準パスと標準グラフ](implementation-policy.md#public-api-layers)へ構成を分離し、
-標準機能の全体利用・部分交換・利用側の独自Graphを同じ実行経路へ接続する。
-この方針の文書化だけで、現行のRGBA8拡張点や単一出力の制約を解除したとは扱わない。
+**現行実装:** 利用側がGraphから構築を始め、必要なsnapshotだけを接続できる。
+Engine層には標準opaque・出力・readbackを構築する便利経路も残る。
+そのRGBA8・View寸法・単一出力の契約は便利経路に限り、入力接続そのものには課さない。
+[公開標準パスと標準グラフ](implementation-policy.md#public-api-layers)への部品抽出は後続課題とする。
 
 GPU非依存の`engine::Engine`は`EngineCapacity { meshes, materials, retired_mesh_versions }`で
 mesh/materialと変更済み旧版の容量を準備する。`Engine::new`の資源登録容量と、
@@ -600,14 +603,50 @@ Modelを含めない責務境界と理由は[実装方針](implementation-policy
 `FrameSnapshot`はmeshの版とtint・行列を所有し、
 後続のCPU更新・削除や一時借用に依存しない。`Matrix4`はcolumn-major、column vectorとし、
 `clip_from_world * world_from_model`を合成する。clip depthは0〜W、viewport高さは正、通常Zである。
-有限なdrawパラメーターはsnapshotでprivateな検証済み値として確立し、owned Raster構築で再走査しない。
-public `Graph::raster`のraw入力検査は維持する。Engineのowned operandは同じcoreでfallible iteratorから直接作り、
-途中失敗時はpassを追加しない。
+drawパラメーターはsnapshot作成時に公開の不変`RasterParameters`へ確定し、owned Raster構築で再走査しない。
+利用側も同じ生成時保証を使い、途中失敗時はRaster passを追加しない。
 snapshotはCloneせず、必要な同時frame数のslotを準備する。capture途中の失敗と通常Dropは
 draw配列・mesh解決用scratchをpoolへ返す。元のEngineとSnapshotPoolは通常処理の間保持し、
 これらを先に終了して残存snapshotへ最後のheap解放を移す処理は終了境界として扱う。
 投影とhandednessは入力行列で選ぶ。Rustのstruct layoutをGPU ABIとせず、
 頂点は明示byte化し、描画引数も64-byte MVPと16-byte tintへ明示的に変換する。
+
+### 利用側からの入力接続と出力選択
+
+GPUなしでは`GraphPool::begin()`から構築を開始し、`snapshot.connect_graph(&mut graph)`で
+`SnapshotInputs`を得る。接続はmesh bufferとuploadだけを追加し、Raster・画像・export・readbackは追加しない。
+`inputs.draws()`を通常の`Graph::raster`へ渡し、Program・描画先・Load/Store・後続処理を利用側で定める。
+使わないuploadは通常のcullingで除去する。複数snapshot/Viewや同じmeshの異なる版も接続できる。
+入力leaseとsnapshotをdropした後も、構築済み命令は定数と必要なmesh streamを保持する。
+
+接続のmesh解決配列はsnapshotの準備済み領域から一時的に借りる。user code中にmutexを保持せず、
+同じsnapshotへ同時に二つ目の接続を要求した場合は`SnapshotInputs`容量不足（上限1）を返す。
+`inputs`のDropで配列を返し、その後は同じsnapshotを再接続できる。失敗・unwindでも配列は返る。
+接続途中のGraph容量不足では一部の未使用buffer/uploadが残り得るため、Graphをcancelするか、
+残る容量内で構築を続ける。既存命令は変更せず、暗黙の容量拡張や待機をしない。
+
+Vulkan常駐入力では`VulkanEngine::begin_graph()`が`PreparedEngineGraph`を返し、
+`connect_snapshot(&mut prepared, &snapshot)`で同じ`SnapshotInputs`を得る。接続時に必要版をpinし、
+`compile()`の`CompiledEngineGraph`、submit/cancelまで保持する。
+接続cacheはmesh handleとrevisionで区別し、複数Viewで版を混同しない。
+常駐していない版は`NotResident`、prepared枠/mesh接続容量不足は型付き不足を返し、uploadやwaitへfallbackしない。
+この所有型は既存Graph/CompiledGraphと準備済み常駐pin leaseを包み、別のGraph解析や実行経路を持たない。
+
+接続したmesh bufferはGraph内で読み取り専用とし、upload・copy先・shader write・宣言writeを拒否する。
+常駐版の不変性をexport経由で破れないよう直接のbuffer exportも拒否する。
+必要なら独立bufferへcopyしてその結果を書き換え/exportする。owner/世代、canonical import、index provenanceは通常の保証を維持する。
+
+任意個数の画像/buffer出力は`prepared.graph.export_*`／`readback_*`で利用側が選択し、
+`prepared.compile()`と`VulkanEngine::submit_graph`で通常の`FrameSubmission`へ進める。
+新規に作ったexportの登録はconsumerを投入後に利用側が`runtime.delete(key)`で解除する。
+importした出力の登録は元の所有者が管理する。中間資源の一律exportは行わない。
+一画像の便利経路は構成後に`prepared.select_output(image, readback)`を選ぶ。
+形式や寸法をViewへ合わせる制約はなく、初期化・handleはGraphの通常の契約で検査する。
+元のGraph・選択出力・Frame/Callerの解放権限を確定して、既存の`submit_frame`／`release_output`へ接続する。
+GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame metadataのDropを完了とはしない。
+一般D3D12 import/履歴は後続の`.2.5`とし、この接続追加だけで実証済みとは扱わない。
+
+### 現行の標準描画便利経路
 
 snapshotの`build_graph(&mut graph_pool, readback, extension)`はGPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
@@ -630,7 +669,9 @@ GPU常駐はmeshのowner・index・generation・revisionで識別し、`MeshCach
 論理byte数を制限する。CPU assetの削除と別に`unload_mesh`で常駐を解除でき、
 新しいworking setの準備では、必要でなくpinもない常駐meshを決定的な順に退避する。
 必要working set自体が予算を超える場合と、一時的なpending資源の容量不足を区別する。
-通常Viewのcolor/depth二資源を含む物理容量も入場判定に使い、論理mesh予算内でも
+`prepare_snapshot(snapshot, non_mesh_resources)`では、合成側がmesh以外に残す登録容量を指定する。
+buffer-onlyなら0、現行の標準Viewではcolor/depth用に2を指定する。これは描画先の固定や物理予約ではない。
+指定された余裕を含む物理容量も入場判定に使い、論理mesh予算内でも
 古い登録が描画先の枠を埋めるときは退避する。prepared pinで必要枠を確保できなければ明示エラーを返す。
 準備済みframeは必要な登録をpinし、submit後のnative所有は通常のGPU leaseへ引き継ぐ。
 CPU更新・削除後の旧snapshotも、そのimmutableな版として独立して準備できる。
@@ -649,7 +690,7 @@ frame・execution・readbackのleaseを従来どおり返すが、旧assetを最
 `None`または別ownerでは、外側とvertex/index両streamのconsumerが終わるまでsourceを保持する。
 これにより二つの退役poolの相互待ちを避けつつ、CPU入力の最後の解放を通常frameへ移さない。
 
-`prepare_snapshot`と`poll_uploads`は明示的に分割uploadを進める。
+`prepare_snapshot(snapshot, non_mesh_resources)`と`poll_uploads`は明示的に分割uploadを進める。
 一つのmeshや全入力がstaging容量を超えても、同じ上限付きpoolを再利用する。
 `Ready`は必要なbyte列がすべてqueueへ受理されていることを意味し、GPU完了ではない。
 内容の版ごとに元のimmutableな入力を共有し、chunkごとのCPUコピーを永続的な鏡像として保持しない。

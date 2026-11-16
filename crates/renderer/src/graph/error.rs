@@ -10,6 +10,8 @@ use super::{AccessRange, PassHandle, ResourceHandle};
 pub enum GraphCapacityKind {
     /// All prepared Graph slots are retained, or no slots were prepared.
     Slots,
+    /// A snapshot's prepared input scratch is already connected.
+    SnapshotInputs,
     Resources,
     Passes,
     Accesses,
@@ -138,7 +140,7 @@ impl GraphError {
             capacity: None,
         }
     }
-    pub(super) fn capacity_error(
+    pub(crate) fn capacity_error(
         kind: GraphCapacityKind,
         limit: usize,
         required: Option<usize>,

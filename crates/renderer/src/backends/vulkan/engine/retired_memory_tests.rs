@@ -94,7 +94,7 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
         .unwrap();
     for snapshot in [&old_snapshot, &current_snapshot] {
         let deadline = Instant::now() + WAIT;
-        let mut upload = renderer.prepare_snapshot(snapshot).unwrap();
+        let mut upload = renderer.prepare_snapshot(snapshot, 2).unwrap();
         while upload.state != MeshUploadState::Ready || upload.pending_submissions != 0 {
             upload = renderer
                 .wait_uploads(
@@ -147,7 +147,7 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     for count in [0, 1, 2, 1] {
         let draws = [draw(current); 2];
         let snapshot = assets.snapshot(&snapshots, &view, &draws[..count]).unwrap();
-        renderer.prepare_snapshot(&snapshot).unwrap();
+        renderer.prepare_snapshot(&snapshot, 2).unwrap();
         let frame = renderer
             .render_snapshot(&snapshot, true, |_, color| Ok(color))
             .unwrap();

@@ -695,14 +695,28 @@ readback結果は`FrameCompletion::result`から消費でき、未読結果の�
 `engine::Engine`はGPUなしでmesh/materialとowned View/draw snapshotを扱い、
 `VulkanEngine`は外部で作ったsnapshotを上限付きGPU mesh cacheと通常のGraphへ接続します。
 `MeshCacheConfig`で常駐件数・論理byte数・未回収upload数を指定します。
-`prepare_snapshot`／`poll_uploads`で分割転送を進め、必要なら`wait_uploads(timeout)`で明示的に待ちます。
+`prepare_snapshot(snapshot, non_mesh_resources)`／`poll_uploads`で分割転送を進め、必要なら`wait_uploads(timeout)`で明示的に待ちます。
+第二引数はmesh以外に残す登録容量で、buffer-onlyでは0、現行の標準color/depth構成では2を指定します。
 `Ready`は全uploadの受理済みを表し、GPU完了を待たずにbuild、compile、submitへ進めます。
 `unload_mesh`はCPU assetを削除せずGPU常駐を解除します。準備済みframeと未完了GPU参照は保護します。
-custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
+利用側が構成する場合は`begin_graph()` → 必要な`connect_snapshot()` → 公開Graph操作 →
+`compile()` → `submit_graph()`を使います。snapshotなし、複数View、任意の画像/buffer出力も同じ入口です。
+一画像の出力と解放をまとめる場合は構成後に`select_output(image, readback)`を選び、`submit_frame`へ渡します。
+`SnapshotInputs::draws()`は通常の`Graph::raster`で使い、接続leaseは構築後に返します。
+mesh inputは読み取り専用で直接exportできません。必要な変更・exportは独立bufferへのcopy後に行います。
+既存の`build_snapshot`の便利経路では、custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
 返した画像を直接exportし、無変換の全画面copyを追加しません。
 出力はconsumer投入後に`release_output`で解放します。callerがimportした出力の登録は維持します。
 任意shaderや生CommandBufferを受け取るAPIではありません。
 詳細は[Graphの契約](../design/rendergraph.md#エンジン入力と標準描画)を参照してください。
+
+入力接続・任意出力の実GPU受入は、snapshotなしCompute、同mesh旧新版の複数View、HDR全画素、
+cancel、readonly、出力解放権限を通常経路とCore/SyncVal有効経路で確認します。
+
+```powershell
+cargo test --locked --release -p renderer --test engine_graph --no-default-features --features vulkan,development-validation,graph-diagnostics caller_composed_engine_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --test engine_graph --no-default-features --features vulkan caller_composed_engine_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+```
 
 次の例は標準描画、外部custom処理、1×1の履歴chainを同じGraphで動かします。
 `--churn`はCPU入力の更新・削除も行い、各frameの画像と履歴を照合します。

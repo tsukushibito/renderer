@@ -147,23 +147,48 @@ fn cpu_frames(
         });
         let extra_passes = frame % 3;
         let graph = phase(&mut phases[1], || {
-            captured
-                .build_graph(pool, true, |graph, mut color| {
-                    for _ in 0..extra_passes {
-                        let output = graph.image("memory transform", ImageDesc::rgba8(16, 16))?;
-                        graph.compute(
-                            "memory transform",
-                            color,
-                            output,
-                            ComputeTransform::Invert,
-                        )?;
-                        color = output;
-                    }
-                    Ok(color)
-                })
-                .unwrap()
+            let mut graph = pool.begin().unwrap();
+            let inputs = captured.connect_graph(&mut graph).unwrap();
+            let mut color = graph
+                .image("memory color", ImageDesc::rgba8(16, 16))
+                .unwrap();
+            let depth = graph
+                .image("memory depth", ImageDesc::depth32(16, 16))
+                .unwrap();
+            graph
+                .raster(
+                    "memory raster",
+                    &ManagedRasterProgram::mesh(),
+                    inputs.draws(),
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: graph.image_view(color, 0, 0).unwrap(),
+                            load: LoadOp::Clear(view.clear_color),
+                            store: StoreOp::Store,
+                        }],
+                        depth: Some(Attachment {
+                            view: graph.image_view(depth, 0, 0).unwrap(),
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        }),
+                    },
+                )
+                .unwrap();
+            drop(inputs);
+            for _ in 0..extra_passes {
+                let output = graph
+                    .image("memory transform", ImageDesc::rgba8(16, 16))
+                    .unwrap();
+                graph
+                    .compute("memory transform", color, output, ComputeTransform::Invert)
+                    .unwrap();
+                color = output;
+            }
+            graph.export_image(color).unwrap();
+            graph.readback_image("memory readback", color).unwrap();
+            graph
         });
-        let plan = phase(&mut phases[2], || graph.graph.compile().unwrap());
+        let plan = phase(&mut phases[2], || graph.compile().unwrap());
         assert_eq!(
             plan.pass_count(),
             if draw_count == 0 { 2 } else { 4 } + extra_passes

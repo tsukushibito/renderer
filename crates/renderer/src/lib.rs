@@ -29,9 +29,9 @@ mod backends;
 
 #[cfg(feature = "vulkan")]
 pub use backends::vulkan::engine::{
-    CompiledEngineFrame, EngineFrameCapacity, EngineRenderError, MeshCacheConfig, MeshCacheStats,
-    MeshPreparationError, MeshUploadProgress, MeshUploadState, PreparedEngineFrame, RenderedFrame,
-    VulkanEngine,
+    CompiledEngineFrame, CompiledEngineGraph, EngineFrameCapacity, EngineRenderError,
+    MeshCacheConfig, MeshCacheStats, MeshPreparationError, MeshUploadProgress, MeshUploadState,
+    PreparedEngineFrame, PreparedEngineGraph, RenderedFrame, VulkanEngine,
 };
 
 #[cfg(feature = "vulkan")]

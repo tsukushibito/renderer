@@ -4,7 +4,8 @@ RenderGraphは、**何を読み、何を書き、何を結果として残すか*
 必要な処理とその順序を求め、GPUへ安全に実行するための計画へつなぐ仕組みです。
 利用側の描画意図、CPU上の依存解析、backend固有の同期・資源管理を分けて扱います。
 
-この案内は実装確認点[`adb51d1`](https://github.com/tsukushibito/renderer/tree/adb51d17e3c1f43b380163a444f750ee9ff9edf5)の現在の動作を説明します。
+基本実行モデルは実装確認点[`adb51d1`](https://github.com/tsukushibito/renderer/tree/adb51d17e3c1f43b380163a444f750ee9ff9edf5)に基づき、
+入力接続の分離（`renderer-7ft.2.7.2`）を反映しています。
 詳細な契約は[RenderGraph設計](rendergraph.md)、実行した確認の範囲は[現在の検証状況](../verification/current.md)を参照してください。
 後続のB1計画を、実装済みの機能としては扱いません。
 型の所有・compile・native実行等を詳しく追うには[設計図集](rendergraph-diagrams.md)を参照してください。
@@ -29,7 +30,9 @@ VulkanやD3D12のruntimeが、その中の生き残った処理をnative命令�
 GraphからEngineの型には依存しません。Engineは不変mesh入力をGraphへ渡し、
 Graphのprivateな保証境界を通します。任意の生CommandBufferを受け取るAPIも現在はありません。
 操作と宣言した用途・範囲を対応させることで、解析した計画と実際の処理を結び付けます。
-現行Engine層はassetとframe入力に加え、標準opaqueや出力のGraph構築も担当します。
+利用側は`FrameSnapshot::connect_graph`、常駐入力では`VulkanEngine::begin_graph`／`connect_snapshot`から
+描画を強制せず構築を始められます。`SnapshotInputs::draws()`を公開の`Graph::raster`へ渡し、出力を利用側で選びます。
+現行Engine層には、標準opaqueや出力を構築する便利経路も残ります。
 採用した[三層の公開API方針](implementation-policy.md#public-api-layers)では、その構成を公開標準パスと標準グラフへ分離します。
 ユーザーは標準グラフの全体利用、一部の交換、公開部品を使う独自Graphを選べるようにします。これは今後の移行方針です。
 

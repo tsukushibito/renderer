@@ -591,6 +591,16 @@ pool所有者は通常処理中保持し、pool先終了後の最後のbacking�
 
 ### 大きなmeshの準備
 
+常駐入力の利用側Graphは`VulkanEngine::begin_graph`から始め、必要なsnapshotだけを`connect_snapshot`する。
+既存の準備済みframe scratchがmesh handleとrevisionごとの登録pinを保持し、Graphと一緒にcompile・cancel・submitへ進む。
+接続はRasterや出力を追加せず、出力の形式・寸法・個数をViewへ固定しない。
+常駐準備の`prepare_snapshot(snapshot, non_mesh_resources)`は利用側が指定した非meshの登録余裕を使い、
+標準color/depth用の二枠を一律には要求しない。これは物理予約や全Graphの容量保証ではない。
+submit成功時は通常のRuntimeのWork/resource leaseへ所有を渡してscratchを返す。
+接続後のmesh入力はwriteと直接exportをGraph構築で拒否し、不変常駐版の保証を維持する。
+public Rasterも生成時に有限値を保証した`RasterParameters`を使い、Engine専用の描画能力に依存しない。
+一般import/履歴の拡張とは分け、既存のFence・同期・失敗時保持・物理資源再利用契約を変更しない。
+
 入場したupload集合はcursorと未投入byte数を持ち、chunkごとに完了prefixと全meshを再走査しない。
 進捗はsubmit受理後だけ更新し、cancel/unload/再入場で残量と退役索引を更新する。
 通常のpollでは実際のretiring登録だけを調べ、予算内の常駐済み準備でLRU候補をsortしない。

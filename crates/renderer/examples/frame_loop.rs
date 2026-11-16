@@ -463,7 +463,7 @@ fn prepare_meshes(
     let deadline = Instant::now() + COMPLETION_BUDGET;
     let mut timing = UploadTiming::default();
     let start = Instant::now();
-    let mut progress = engine.prepare_snapshot(snapshot)?;
+    let mut progress = engine.prepare_snapshot(snapshot, 2)?;
     timing.prepare_ns += start.elapsed().as_nanos();
     // Explicitly retire the private uploads too: startup/frame build begins with
     // reusable execution slots, while application readbacks remain in Collector.

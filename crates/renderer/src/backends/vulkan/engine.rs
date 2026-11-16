@@ -2,7 +2,9 @@
 
 use super::graph::{FrameSubmission, RuntimeError, Submission, VulkanRuntime};
 use crate::{
-    engine::{EngineError, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle},
+    engine::{
+        EngineError, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle, SnapshotInputs,
+    },
     graph::{
         CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageHandle, ImportImage,
         PassHandle, ResourceKey,
@@ -201,6 +203,79 @@ impl RenderedFrame {
         self.output_ownership
     }
 }
+/// A caller-composed Graph with registered mesh versions pinned from connection
+/// through compile and submission/cancellation. No output or drawing is implied.
+pub struct PreparedEngineGraph {
+    pub graph: Graph,
+    owner: Arc<()>,
+    source_graph: u64,
+    scratch: FrameScratchLease,
+}
+
+impl PreparedEngineGraph {
+    /// Optionally finish a single-image convenience frame after composition.
+    /// Any supported extent/format is accepted. General multiple-image/buffer
+    /// exports use Graph's export methods and submit_graph instead.
+    pub fn select_output(
+        mut self,
+        output: ImageHandle,
+        readback: bool,
+    ) -> Result<PreparedEngineFrame, GraphError> {
+        self.graph.image_desc(output)?;
+        let output_ownership = if self.graph.resources[output.index].import.is_some() {
+            FrameOutputOwnership::Caller
+        } else {
+            FrameOutputOwnership::Frame
+        };
+        self.graph.export_image(output)?;
+        let readback = if readback {
+            Some(self.graph.readback_image("frame output readback", output)?)
+        } else {
+            None
+        };
+        Ok(PreparedEngineFrame {
+            source_graph: self.source_graph,
+            source_output: output,
+            graph: self.graph,
+            output,
+            readback,
+            owner: self.owner,
+            output_ownership,
+            scratch: self.scratch,
+        })
+    }
+
+    pub fn compile(self) -> Result<CompiledEngineGraph, GraphError> {
+        if self.source_graph != self.graph.id {
+            return Err(GraphError::new(
+                crate::graph::GraphErrorKind::WrongOwner,
+                "replaced prepared Graph",
+            ));
+        }
+        Ok(CompiledEngineGraph {
+            graph: self.graph.compile()?,
+            owner: self.owner,
+            scratch: self.scratch,
+        })
+    }
+}
+
+/// The compiled plan is immutable and its resident-input pins remain attached.
+pub struct CompiledEngineGraph {
+    graph: CompiledGraph,
+    owner: Arc<()>,
+    scratch: FrameScratchLease,
+}
+
+impl CompiledEngineGraph {
+    pub fn pass_count(&self) -> usize {
+        self.graph.pass_count()
+    }
+    pub fn ordered_pass_names(&self) -> impl Iterator<Item = &str> {
+        self.graph.ordered_pass_names()
+    }
+}
+
 /// Pins registered immutable mesh versions until submission or drop.
 pub struct PreparedEngineFrame {
     pub graph: Graph,
@@ -338,31 +413,61 @@ impl VulkanEngine {
         let prepared = self.build_snapshot(snapshot, readback, extension)?;
         self.submit_frame(prepared.compile()?)
     }
-    /// Construct only: missing residency is reported without hidden uploads.
-    pub fn build_snapshot(
+    /// Start a caller-composed Graph, including snapshot-free Compute/copy work.
+    pub fn begin_graph(&mut self) -> Result<PreparedEngineGraph, EngineRenderError> {
+        let scratch = self.frame_scratch.acquire()?;
+        let graph = self.graph_pool.begin()?;
+        Ok(PreparedEngineGraph {
+            source_graph: graph.id,
+            graph,
+            owner: Arc::clone(&self.owner),
+            scratch,
+        })
+    }
+
+    /// Connect resident immutable inputs only. No uploads, waits, Raster,
+    /// output images, exports or readback are added. A missing version reports
+    /// NotResident. The returned construction lease does not own the native pins.
+    pub fn connect_snapshot<'a>(
         &mut self,
-        snapshot: &FrameSnapshot,
-        readback: bool,
-        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-    ) -> Result<PreparedEngineFrame, EngineRenderError> {
-        let mut scratch = self.frame_scratch.acquire()?;
-        let mut graph = self.graph_pool.begin()?;
-        let frame_scratch = scratch.scratch();
+        frame: &mut PreparedEngineGraph,
+        snapshot: &'a FrameSnapshot,
+    ) -> Result<SnapshotInputs<'a>, EngineRenderError> {
+        if !Arc::ptr_eq(&frame.owner, &self.owner) || frame.source_graph != frame.graph.id {
+            return Err(EngineError::new("prepared Graph belongs to another owner/Graph").into());
+        }
+        self.connect_inputs(&mut frame.graph, &mut frame.scratch, snapshot)
+    }
+
+    fn connect_inputs<'a>(
+        &mut self,
+        graph: &mut Graph,
+        scratch: &mut FrameScratchLease,
+        snapshot: &'a FrameSnapshot,
+    ) -> Result<SnapshotInputs<'a>, EngineRenderError> {
         let serial = self.next_use()?;
-        for draw in &snapshot.draws {
-            let Err(index) = frame_scratch
+        // Resolve and pin before exposing logical handles to user code. Keys
+        // include revision because one Graph may read old and new snapshots.
+        let frame_scratch = scratch.scratch();
+        snapshot.connect_with(graph, |graph, draw| {
+            let key = MeshVersionKey::new(draw.mesh, draw.revision);
+            let index = match frame_scratch
                 .resolved
-                .binary_search_by_key(&draw.mesh, |(mesh, _)| *mesh)
-            else {
-                continue;
+                .binary_search_by_key(&key, |(key, _)| *key)
+            {
+                Ok(index) => return Ok(frame_scratch.resolved[index].1),
+                Err(index) => index,
             };
+            if frame_scratch.resolved.len() == self.config.max_meshes {
+                return Err(MeshPreparationError::FrameCapacityExhausted.into());
+            }
             let resident = self
                 .residents
-                .get(&MeshVersionKey::new(draw.mesh, draw.revision))
+                .get(&key)
                 .filter(|entry| entry.ready() && !entry.retiring)
                 .ok_or(MeshPreparationError::NotResident)?;
             let buffers = resident.buffers.as_ref().expect("ready mesh owns buffers");
-            // Content revisions stay stable for reads; native scopes rebase at submit.
+            let first_resource = graph.resources.len();
             let vertices = graph.import_buffer(
                 "resident mesh vertices",
                 &self.runtime.refresh_buffer(buffers.vertices)?,
@@ -371,28 +476,46 @@ impl VulkanEngine {
                 "resident mesh indices",
                 &self.runtime.refresh_buffer(buffers.indices)?,
             )?;
+            graph.protect_input(vertices, vertices.index >= first_resource)?;
+            graph.protect_input(indices, indices.index >= first_resource)?;
             resident
                 .last_use
                 .store(serial, std::sync::atomic::Ordering::Relaxed);
-            // The ready resident set is bounded by max_meshes; these arrays
-            // were reserved for that bound at Engine construction.
             frame_scratch
                 .resolved
-                .insert(index, (draw.mesh, (vertices, indices)));
+                .insert(index, (key, (vertices, indices)));
             frame_scratch.pins.push(Arc::clone(buffers));
+            Ok((vertices, indices))
+        })
+    }
+
+    /// Submit any selected exports/readbacks. FrameSubmission owns the metadata;
+    /// the caller releases each frame-created export registration with delete.
+    /// Imported outputs retain their original ownership. Runtime retains native
+    /// work independently through GPU completion and CPU result consumption.
+    pub fn submit_graph(
+        &mut self,
+        frame: CompiledEngineGraph,
+    ) -> Result<FrameSubmission, EngineRenderError> {
+        if !Arc::ptr_eq(&frame.owner, &self.owner) {
+            return Err(EngineError::new("compiled Graph belongs to another owner").into());
         }
-        let frame = snapshot.build_graph_with_meshes(
-            graph,
-            |mesh| {
-                frame_scratch
-                    .resolved
-                    .binary_search_by_key(&mesh, |(mesh, _)| *mesh)
-                    .ok()
-                    .map(|index| frame_scratch.resolved[index].1)
-            },
-            readback,
-            extension,
-        )?;
+        let submission = self.runtime.submit_frame(&frame.graph)?;
+        drop(frame.scratch);
+        Ok(submission)
+    }
+
+    /// Construct the current standard recipe using the same input connection.
+    pub fn build_snapshot(
+        &mut self,
+        snapshot: &FrameSnapshot,
+        readback: bool,
+        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
+    ) -> Result<PreparedEngineFrame, EngineRenderError> {
+        let mut prepared = self.begin_graph()?;
+        let inputs = self.connect_snapshot(&mut prepared, snapshot)?;
+        let frame =
+            snapshot.build_graph_with_inputs(prepared.graph, inputs, readback, extension)?;
         let output_ownership = frame.output_ownership();
         Ok(PreparedEngineFrame {
             source_graph: frame.graph.id,
@@ -400,9 +523,9 @@ impl VulkanEngine {
             graph: frame.graph,
             output: frame.output,
             readback: frame.readback,
-            owner: Arc::clone(&self.owner),
+            owner: prepared.owner,
             output_ownership,
-            scratch,
+            scratch: prepared.scratch,
         })
     }
     pub fn submit_frame(

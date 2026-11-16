@@ -16,7 +16,7 @@ use std::{
 use crate::graph::{BufferHandle, RasterParameters};
 
 mod graph;
-pub use graph::{FrameGraph, FrameOutputOwnership};
+pub use graph::{FrameGraph, FrameOutputOwnership, SnapshotInputs};
 
 /// Four columns, each containing four rows. Vectors are column vectors.
 /// `clip_from_world * world_from_model` transforms a local vertex to clip space.
@@ -488,7 +488,7 @@ impl Engine {
 pub struct FrameSnapshot {
     pub(crate) view: View,
     pub(crate) draws: Vec<SnapshotDraw>,
-    meshes: Mutex<Vec<SnapshotMesh>>,
+    meshes: Mutex<Option<Vec<SnapshotMesh>>>,
     pool: Arc<SnapshotPoolOwner>,
 }
 impl FrameSnapshot {
@@ -504,11 +504,12 @@ impl Drop for FrameSnapshot {
     fn drop(&mut self) {
         let mut draws = std::mem::take(&mut self.draws);
         draws.clear();
-        let mut meshes = std::mem::take(
-            self.meshes
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        let mut meshes = self
+            .meshes
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+            .unwrap_or_default();
         meshes.clear();
         self.pool
             .free
@@ -586,7 +587,7 @@ impl SnapshotPool {
         Ok(FrameSnapshot {
             view,
             draws: storage.draws,
-            meshes: Mutex::new(storage.meshes),
+            meshes: Mutex::new(Some(storage.meshes)),
             pool: Arc::clone(&self.owner),
         })
     }

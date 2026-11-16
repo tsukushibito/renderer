@@ -219,6 +219,7 @@ pub(crate) struct Resource {
     pub import: Option<ResourceKey>,
     pub import_revision: u64,
     pub initial: Range<usize>,
+    pub read_only_input: bool,
 }
 
 impl Graph {
@@ -260,6 +261,7 @@ impl Graph {
             import,
             import_revision: revision,
             initial: start..data.initial_ranges.len(),
+            read_only_input: false,
         });
         data.exported.push(false);
         Ok(index)
@@ -405,6 +407,13 @@ impl Graph {
     }
     pub fn export_buffer(&mut self, buffer: BufferHandle) -> Result<(), GraphError> {
         let id = self.buffer_id(buffer)?;
+        if self.resources[id].read_only_input {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "snapshot mesh inputs cannot be exported; copy to an independent buffer",
+                id,
+            ));
+        }
         self.export(id);
         Ok(())
     }
@@ -421,6 +430,34 @@ impl Graph {
             self.data_mut().exported[id] = true;
             self.data_mut().exports.push(id);
         }
+    }
+
+    /// Restrict a captured immutable mesh to reads. Only the private upload
+    /// connection may initialize its newly-created transient before protection.
+    pub(crate) fn protect_input(
+        &mut self,
+        buffer: BufferHandle,
+        created_here: bool,
+    ) -> Result<(), GraphError> {
+        let id = self.buffer_id(buffer)?;
+        if self.resources[id].read_only_input {
+            return Ok(());
+        }
+        if self.exported[id]
+            || (!created_here
+                && self
+                    .accesses
+                    .iter()
+                    .any(|access| access.resource == id && access.write))
+        {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "snapshot mesh input was already exported or written",
+                id,
+            ));
+        }
+        self.data_mut().resources[id].read_only_input = true;
+        Ok(())
     }
     pub(super) fn buffer_id(&self, handle: BufferHandle) -> Result<usize, GraphError> {
         if handle.graph != self.id {

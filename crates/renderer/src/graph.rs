@@ -175,6 +175,7 @@ impl Graph {
         Ok(start..end)
     }
     fn append_access(&mut self, access: ResourceAccess) -> Result<(), GraphError> {
+        self.check_input_access(&access)?;
         if self.accesses.len() == self.capacity.accesses {
             return Err(capacity_error(
                 GraphCapacityKind::Accesses,
@@ -190,6 +191,9 @@ impl Graph {
         accesses: [ResourceAccess; N],
     ) -> Result<Range<usize>, GraphError> {
         let start = self.accesses.len();
+        for access in &accesses {
+            self.check_input_access(access)?;
+        }
         if N > self.capacity.accesses.saturating_sub(start) {
             return Err(capacity_error(
                 GraphCapacityKind::Accesses,
@@ -199,6 +203,16 @@ impl Graph {
         }
         self.data_mut().accesses.extend(accesses);
         Ok(start..self.accesses.len())
+    }
+    fn check_input_access(&self, access: &ResourceAccess) -> Result<(), GraphError> {
+        if access.write && self.resources[access.resource].read_only_input {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "snapshot mesh input is read-only; copy to an independent buffer",
+                access.resource,
+            ));
+        }
+        Ok(())
     }
     fn append_upload(&mut self, bytes: &[u8]) -> Result<UploadSource, GraphError> {
         let start = self.uploads.len();

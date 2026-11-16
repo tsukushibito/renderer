@@ -2,11 +2,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use super::{EngineError, MeshHandle, MeshPreparationError, ResidentBuffers};
+use super::{EngineError, MeshPreparationError, MeshVersionKey, ResidentBuffers};
 use crate::graph::BufferHandle;
 
 pub(super) struct FrameScratch {
-    pub(super) resolved: Vec<(MeshHandle, (BufferHandle, BufferHandle))>,
+    pub(super) resolved: Vec<(MeshVersionKey, (BufferHandle, BufferHandle))>,
     pub(super) pins: Vec<Arc<ResidentBuffers>>,
 }
 
