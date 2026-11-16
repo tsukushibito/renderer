@@ -18,6 +18,7 @@ const LIGHT_COLOR: [f32; 3] = [1.0, 0.9, 0.8];
 const BACKGROUND: [f32; 3] = [0.18; 3];
 const ABSOLUTE: f64 = 1.0 / 1024.0;
 const RELATIVE: f64 = 1.0 / 1024.0;
+const DEPTH_ABSOLUTE: f64 = 1.0 / 1_048_576.0;
 
 type V3 = [f64; 3];
 
@@ -25,6 +26,7 @@ type V3 = [f64; 3];
 struct Case {
     name: &'static str,
     center: [f64; 2],
+    probe_offset: [f64; 2],
     half_size: f64,
     normal: V3,
     tangent: V3,
@@ -33,6 +35,7 @@ struct Case {
     normal_scale: f64,
     base: [f64; 4],
     base_map: [u8; 4],
+    base_pattern: Option<[[u8; 4]; 4]>,
     metallic: f64,
     roughness: f64,
     emissive: V3,
@@ -58,7 +61,9 @@ fn unit(v: V3) -> V3 {
     v.map(|x| x / length)
 }
 fn srgb_decode(byte: u8) -> f64 {
-    let value = f64::from(byte) / 255.;
+    srgb_linear(f64::from(byte) / 255.)
+}
+fn srgb_linear(value: f64) -> f64 {
     if value <= 0.04045 {
         value / 12.92
     } else {
@@ -99,6 +104,7 @@ fn cases() -> Vec<Case> {
         .map(|(i, name)| Case {
             name,
             center: [(i % 4) as f64 * 0.9 - 1.35, 1.35 - (i / 4) as f64 * 0.9],
+            probe_offset: [0.; 2],
             half_size: 0.34,
             normal: [0., 0., 1.],
             tangent: [1., 0., 0.],
@@ -107,6 +113,7 @@ fn cases() -> Vec<Case> {
             normal_scale: 1.,
             base: [0.8, 0.4, 0.2, 1.],
             base_map: [255; 4],
+            base_pattern: None,
             metallic: 0.,
             roughness: 0.6,
             emissive: [0.; 3],
@@ -136,6 +143,13 @@ fn cases() -> Vec<Case> {
     output[13].alpha_mode = 2;
     output[13].base = [0.1, 0.4, 0.8, 0.5];
     output[14].base_map = [128, 192, 64, 255];
+    output[14].base_pattern = Some([
+        [16, 32, 64, 255],
+        [224, 48, 96, 255],
+        [64, 192, 24, 255],
+        [160, 112, 240, 255],
+    ]);
+    output[14].probe_offset = [0.15, 0.1];
     output[15].emissive = [0.3, 0.2, 0.1];
     output[15].emissive_map = [128, 64, 200, 255];
     // A tiny disjoint panel in the central grid gap exercises the legitimate
@@ -166,7 +180,12 @@ fn probe(case: &Case) -> ([u32; 2], V3, f64) {
         .matrix(WIDTH as f32 / HEIGHT as f32, NEAR, FAR)
         .unwrap()
         .map(|col| col.map(f64::from));
-    let p = [case.center[0], case.center[1], 0., 1.];
+    let p = [
+        case.center[0] + case.probe_offset[0],
+        case.center[1] + case.probe_offset[1],
+        0.,
+        1.,
+    ];
     let clip: [f64; 4] = std::array::from_fn(|r| (0..4).map(|c| m[c][r] * p[c]).sum());
     let pixel = [
         ((clip[0] / clip[3] + 1.) * f64::from(WIDTH) * 0.5).floor() as u32,
@@ -200,6 +219,73 @@ fn image(images: &mut Vec<TextureImage>, bytes: [u8; 4], srgb: bool) -> usize {
     id
 }
 
+fn base_image(images: &mut Vec<TextureImage>, case: &Case) -> usize {
+    let Some(pattern) = case.base_pattern else {
+        return image(images, case.base_map, true);
+    };
+    let mut bytes: Vec<u8> = pattern.into_iter().flatten().collect();
+    for channel in 0..3 {
+        let mean = pattern
+            .iter()
+            .map(|pixel| srgb_decode(pixel[channel]))
+            .sum::<f64>()
+            / 4.;
+        bytes.push((srgb_encode(mean) * 255.).round() as u8);
+    }
+    bytes.push(255);
+    let id = images.len();
+    images.push(TextureImage {
+        width: 2,
+        height: 2,
+        srgb: true,
+        mips: vec![0..16, 16..20],
+        pixels: Pixels::Owned(bytes),
+    });
+    id
+}
+
+fn uv(case: &Case, position: V3) -> [f64; 2] {
+    [
+        0.5 + (position[0] - case.center[0]) / (2. * case.half_size),
+        0.5 - (position[1] - case.center[1]) / (2. * case.half_size),
+    ]
+}
+
+/// Magnified normalized 2x2 sampling: texel centers at .25/.75, repeat on both
+/// axes. Decode each source texel before interpolation, as a native sRGB View
+/// must do. This deliberately does not approximate decode-after-filter.
+fn sample_pattern(pattern: [[u8; 4]; 4], uv: [f64; 2], decode_first: bool) -> V3 {
+    let coordinate = uv.map(|v| v * 2. - 0.5);
+    let origin = coordinate.map(|v| v.floor() as i32);
+    let fraction: [f64; 2] = std::array::from_fn(|i| coordinate[i] - coordinate[i].floor());
+    std::array::from_fn(|channel| {
+        let mut sum = 0.;
+        for y in 0..2 {
+            for x in 0..2 {
+                let index = (origin[1] + y).rem_euclid(2) * 2 + (origin[0] + x).rem_euclid(2);
+                let encoded = f64::from(pattern[index as usize][channel]) / 255.;
+                let value = if decode_first {
+                    srgb_linear(encoded)
+                } else {
+                    encoded
+                };
+                sum += value
+                    * if x == 0 {
+                        1. - fraction[0]
+                    } else {
+                        fraction[0]
+                    }
+                    * if y == 0 {
+                        1. - fraction[1]
+                    } else {
+                        fraction[1]
+                    };
+            }
+        }
+        if decode_first { sum } else { srgb_linear(sum) }
+    })
+}
+
 fn scene(cases: &[Case], force_opaque: bool) -> Scene {
     let mut images = Vec::new();
     let defaults = fallback_images(&mut images);
@@ -208,7 +294,7 @@ fn scene(cases: &[Case], force_opaque: bool) -> Scene {
     let mut indices = Vec::new();
     let mut primitives = Vec::new();
     for (id, case) in cases.iter().enumerate() {
-        let base_image = image(&mut images, case.base_map, true);
+        let base_image = base_image(&mut images, case);
         let normal_image = image(
             &mut images,
             case.normal_map.unwrap_or([128, 128, 255, 255]),
@@ -289,6 +375,14 @@ fn scene(cases: &[Case], force_opaque: bool) -> Scene {
 /// Analytic outgoing linear RGB before blending/storage. Unlike the shader's
 /// optimized expression, Smith visibility is reconstructed from slope terms.
 fn surface(case: &Case, position: V3) -> V3 {
+    let sampled = case.base_pattern.map_or_else(
+        || std::array::from_fn(|i| srgb_decode(case.base_map[i])),
+        |pattern| sample_pattern(pattern, uv(case, position), true),
+    );
+    surface_with_base(case, position, sampled)
+}
+
+fn surface_with_base(case: &Case, position: V3, sampled_base: V3) -> V3 {
     let geometric = unit(case.normal);
     let t = unit(case.tangent);
     let b = cross(geometric, t).map(|x| x * case.sign);
@@ -324,7 +418,7 @@ fn surface(case: &Case, position: V3) -> V3 {
         0.
     };
     std::array::from_fn(|i| {
-        let base = case.base[i] * srgb_decode(case.base_map[i]);
+        let base = case.base[i] * sampled_base[i];
         let f0 = 0.04 * (1. - case.metallic) + base * case.metallic;
         let fresnel = f0 + (1. - f0) * (1. - vh).clamp(0., 1.).powi(5);
         let diffuse_color = base * (1. - case.metallic);
@@ -412,7 +506,7 @@ fn close(actual: f64, expected: f64) -> bool {
     actual.is_finite() && (actual - expected).abs() <= ABSOLUTE + RELATIVE * expected.abs()
 }
 
-pub(super) fn native_acceptance<B: Backend>() {
+pub(in crate::bistro) fn native_acceptance<B: Backend>() {
     let cases = cases();
     for force_opaque in [false, true] {
         let options = crate::bistro::Options::parse(
@@ -496,17 +590,20 @@ pub(super) fn native_acceptance<B: Backend>() {
                 } else {
                     expected.sdr[channel]
                 };
-                let actual = f64::from(sdr[index * 4 + channel]) / 255.;
-                let expected = f64::from(expected_sdr) / 255.;
-                assert!(
-                    close(actual, expected),
-                    "{} override={force_opaque} SDR[{channel}]: {actual} != {expected}",
-                    case.name
-                );
+                let actual = sdr[index * 4 + channel];
+                if channel == 3 {
+                    assert_eq!(actual, 255, "resolve alpha must be one");
+                } else {
+                    assert!(
+                        actual.abs_diff(expected_sdr) <= 1,
+                        "{} override={force_opaque} SDR[{channel}]: {actual} != {expected_sdr}",
+                        case.name
+                    );
+                }
             }
             let actual = f32::from_le_bytes(depth[index * 4..index * 4 + 4].try_into().unwrap());
             assert!(
-                (f64::from(actual) - expected.depth).abs() < 1e-6,
+                (f64::from(actual) - expected.depth).abs() <= DEPTH_ABSOLUTE,
                 "{} override={force_opaque} depth: {actual} != {}",
                 case.name,
                 expected.depth
@@ -521,7 +618,7 @@ pub(super) fn native_acceptance<B: Backend>() {
 
 /// The CLI alpha-only run contains no other geometry. Check the complete target,
 /// so zero color/depth coverage is not inferred from a single panel or digest.
-pub(super) fn alpha_background(report: &serde_json::Value) {
+pub(in crate::bistro) fn alpha_background(report: &serde_json::Value) {
     let read =
         |name: &str| std::fs::read(report["captures"][name]["path"].as_str().unwrap()).unwrap();
     let hdr = read("hdr");
@@ -534,18 +631,28 @@ pub(super) fn alpha_background(report: &serde_json::Value) {
             let actual = half(u16::from_le_bytes(
                 pixel[channel * 2..channel * 2 + 2].try_into().unwrap(),
             ));
-            assert!(
-                close(actual, if channel == 3 { 1. } else { linear[channel] }),
+            assert_eq!(
+                actual,
+                if channel == 3 { 1. } else { linear[channel] },
                 "alpha zero changed linear background"
             );
         }
     }
     for pixel in sdr.as_chunks::<4>().0 {
-        assert_eq!(
-            *pixel,
-            [encoded[0], encoded[1], encoded[2], 255],
-            "alpha zero changed SDR background"
-        );
+        for (channel, (actual, expected)) in pixel
+            .iter()
+            .zip([encoded[0], encoded[1], encoded[2], 255])
+            .enumerate()
+        {
+            if channel == 3 {
+                assert_eq!(*actual, 255, "resolve alpha must be one");
+            } else {
+                assert!(
+                    actual.abs_diff(expected) <= 1,
+                    "alpha zero changed SDR background"
+                );
+            }
+        }
     }
     for value in depth.as_chunks::<4>().0 {
         assert_eq!(f32::from_le_bytes(*value), 1., "alpha zero wrote depth");
@@ -581,7 +688,10 @@ fn analytic_probes_reject_shared_material_mutations() {
             "handedness" => wrong.sign = 1.,
             "rotation" => wrong.tangent = [1., 0., 0.],
             "emissive" => wrong.emissive = [0.; 3],
-            "base-srgb" => wrong.base_map = [255; 4],
+            "base-srgb" => {
+                wrong.base_map = [255; 4];
+                wrong.base_pattern = None;
+            }
             "emissive-map" => wrong.emissive_map = [255; 4],
             _ => unreachable!(),
         }
@@ -617,6 +727,49 @@ fn analytic_probes_reject_shared_material_mutations() {
             .any(|case| !close(expected(case, false).hdr[0], 0.2)),
         "constant output would fail"
     );
+}
+
+#[test]
+fn varying_srgb_probe_rejects_constant_swapped_and_flipped_uvs() {
+    let cases = cases();
+    let case = &cases[14];
+    let (_, position, _) = probe(case);
+    let coordinates = uv(case, position);
+    let pattern = case.base_pattern.unwrap();
+    let expected = expected(case, false);
+    for (name, sampled) in [
+        ("constant-zero", sample_pattern(pattern, [0., 0.], true)),
+        ("constant-center", sample_pattern(pattern, [0.5, 0.5], true)),
+        (
+            "swapped",
+            sample_pattern(pattern, [coordinates[1], coordinates[0]], true),
+        ),
+        (
+            "flipped-v",
+            sample_pattern(pattern, [coordinates[0], 1. - coordinates[1]], true),
+        ),
+        (
+            "decode-after-filter",
+            sample_pattern(pattern, coordinates, false),
+        ),
+    ] {
+        let wrong = surface_with_base(case, position, sampled).map(stored_half);
+        assert!(
+            (0..3).any(|channel| !close(wrong[channel], expected.hdr[channel])),
+            "UV/color probe cannot reject {name}"
+        );
+    }
+    let scene = scene(&cases, false);
+    let image = &scene.images[scene.materials[14].textures[0]];
+    assert_eq!((image.width, image.height), (2, 2));
+    assert_eq!(image.mips, [0..16, 16..20]);
+    assert_eq!(image.load_bytes().unwrap().len(), 20);
+    // The panel spans dozens of pixels while its base image has only two
+    // texels. The reference therefore exercises magnification/base mip, not
+    // an unmodeled trilinear blend with the generated 1x1 level.
+    let pixels_per_side =
+        2. * case.half_size / (8. * (30_f64.to_radians()).tan()) * f64::from(WIDTH);
+    assert!(pixels_per_side > 16.);
 }
 
 #[test]
