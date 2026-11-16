@@ -1775,8 +1775,13 @@ fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
     );
     let upload_result = upload.wait(WAIT).unwrap().unwrap();
     drop((upload_result, upload, plan));
+    let refreshed = runtime.refresh_image(exported.key()).unwrap();
+    assert_eq!(
+        refreshed, exported,
+        "refresh must preserve the complete initialized mip chain from the direct export"
+    );
     let mut graph = Graph::test_new();
-    let source = graph.import_image("immutable chain", &exported).unwrap();
+    let source = graph.import_image("immutable chain", &refreshed).unwrap();
     let views = [
         graph.sampled_image_view(source, 0, 3).unwrap(),
         graph.image_view(source, 1, 0).unwrap(),
