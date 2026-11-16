@@ -52,7 +52,7 @@ impl Graph {
         self.upload_buffer_slice_with_mesh(name, dst, offset, bytes, source, None)
     }
 
-    /// The engine bridge supplies a trusted immutable stream and its provenance;
+    /// Immutable geometry bridges supply an owned stream and its private proof;
     /// this Graph boundary owns handle/range checks and transactional insertion.
     pub(crate) fn upload_mesh_slice(
         &mut self,
@@ -69,7 +69,7 @@ impl Graph {
         {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
-                "managed mesh upload must preserve the stream size and aligned byte positions",
+                "immutable geometry upload must preserve stream size and aligned byte positions",
                 id,
             ));
         }
