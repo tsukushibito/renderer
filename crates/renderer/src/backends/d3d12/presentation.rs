@@ -34,6 +34,25 @@ use slots::Slot;
 
 const CLEANUP_BUDGET: Duration = Duration::from_secs(10);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PresentStatus {
+    Accepted,
+    NotReady,
+    RecreateRequired,
+    Failure,
+}
+fn classify_present(result: windows_core::HRESULT) -> PresentStatus {
+    if result.0 == 0 {
+        PresentStatus::Accepted
+    } else if result == DXGI_ERROR_WAS_STILL_DRAWING || result == DXGI_STATUS_OCCLUDED {
+        PresentStatus::NotReady
+    } else if result == DXGI_STATUS_MODE_CHANGED || result == DXGI_STATUS_MODE_CHANGE_IN_PROGRESS {
+        PresentStatus::RecreateRequired
+    } else {
+        PresentStatus::Failure
+    }
+}
+
 struct Chain {
     targets: Vec<ID3D12Resource>,
     rtv: DescriptorHeap,
@@ -408,6 +427,10 @@ impl D3D12Presenter {
             .as_ref()
             .is_some_and(|i| !i.closed && i.profiling)
     }
+    /// Completed GPU submission samples, in submission order. A display request
+    /// may later be rejected, superseded or canceled; its submitted GPU work is
+    /// still measured. Sample order is independent of accepted present requests
+    /// and cannot identify a source frame or establish display completion.
     pub fn take_profile(&mut self) -> Option<PresentationMetrics> {
         self.inner.as_mut()?.samples.pop_front()
     }
@@ -634,21 +657,22 @@ impl D3D12Runtime {
         let result = unsafe { chain.raw.Present(u32::from(inner.config.vsync), flags) };
         inner.slots[index]
             .add_present_time(present_started.map_or(Duration::ZERO, |s| s.elapsed()));
-        if result == DXGI_ERROR_WAS_STILL_DRAWING || result == DXGI_STATUS_OCCLUDED {
-            return Ok(PresentOutcome::NotReady);
-        }
-        if result == DXGI_STATUS_MODE_CHANGED || result == DXGI_STATUS_MODE_CHANGE_IN_PROGRESS {
-            inner.dirty = true;
-            inner.force_resize = true;
-            return Ok(PresentOutcome::RecreateRequired);
-        }
-        if let Err(error) = result.ok() {
-            // A rendering submit already happened. Keep the complete slot owner
-            // on every present failure; only its real Fence can release it.
-            return Err(owner.native("IDXGISwapChain::Present", error));
-        }
-        if result.0 != 0 {
-            return Err(Error::unsupported("unrecognized DXGI presentation status"));
+        match classify_present(result) {
+            PresentStatus::Accepted => {}
+            PresentStatus::NotReady => return Ok(PresentOutcome::NotReady),
+            PresentStatus::RecreateRequired => {
+                inner.dirty = true;
+                inner.force_resize = true;
+                return Ok(PresentOutcome::RecreateRequired);
+            }
+            PresentStatus::Failure => {
+                // A rendering submit already happened. Keep the complete slot
+                // owner on failure; only its real Fence can release it.
+                return Err(match result.ok() {
+                    Err(error) => owner.native("IDXGISwapChain::Present", error),
+                    Ok(()) => Error::unsupported("unrecognized DXGI presentation status"),
+                });
+            }
         }
         // A distinct marker follows DXGI's queue present operation. Its value
         // proves app queue use ended; DXGI owns any remaining display references.

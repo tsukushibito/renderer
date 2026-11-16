@@ -22,6 +22,30 @@ const EXTENTS: [(u32, u32); 5] = [(128, 96), (160, 112), (176, 120), (144, 104),
 const PIXELS: usize = 192 * 128 * 4;
 const IN_FLIGHT: usize = 3;
 
+#[test]
+fn dxgi_statuses_preserve_readiness_recreation_and_failure() {
+    assert_eq!(
+        classify_present(windows_core::HRESULT(0)),
+        PresentStatus::Accepted
+    );
+    for result in [DXGI_ERROR_WAS_STILL_DRAWING, DXGI_STATUS_OCCLUDED] {
+        assert_eq!(classify_present(result), PresentStatus::NotReady);
+    }
+    for result in [
+        DXGI_STATUS_MODE_CHANGED,
+        DXGI_STATUS_MODE_CHANGE_IN_PROGRESS,
+    ] {
+        assert_eq!(classify_present(result), PresentStatus::RecreateRequired);
+    }
+    for result in [
+        DXGI_ERROR_DEVICE_REMOVED,
+        windows_core::HRESULT(0x8007_000Eu32 as i32),
+        windows_core::HRESULT(1),
+    ] {
+        assert_eq!(classify_present(result), PresentStatus::Failure);
+    }
+}
+
 #[derive(Default)]
 struct Host {
     window: Option<Arc<Window>>,
