@@ -782,6 +782,27 @@ GPUの区間別時間、timestamp、個別転送のp95と内容照合は、明�
 CPU時間、GPU時間、完了までのlatency、throughputを区別し、描画FPSへ読み替えない。
 性能値とその揺れは最新の検証状況へ記録し、通常のCIに壁時計時間の固定合否閾値を設けない。
 
+### 外部CPUトレースとの対応
+
+CPUの実行箇所と待機の調査には、保存した最適化済みEXEとmatching PDBを使う任意のWPR収集を設ける。
+手順・artifact identity・CLIは[ツールガイド](../guides/tooling.md#cpu-profiling)、
+可変16-byte copy chainの同条件負荷は[開発手順](../guides/development.md#cpu-profile-workload)に従う。
+この経路はRendererの公開APIや通常submitへETW依存や毎frameの計測を追加しない。
+
+`profile_workload`の任意handshakeでは準備/warmup後に外部collectorが所有WPR sessionを開始し、
+二つのWPR markerで計測処理の外側を囲む。markerでworking setをflushしない。
+対象のQPC窓とmarker区間は同一ではなく、GO/DONEの配送やJSON処理・待機を含む差を記録する。
+初期化を含める収集、測定loopだけの窓、native teardown後の正しさ確認を区別する。
+
+SampledProfileのWeightは実行中CPU時間の標本推定で、呼び出し件数や関数一回の正確な時間ではない。
+CSwitch/ReadyThreadから得るRunning、実行可能なReady、イベント待ちのWaitingは別々に集計し、
+callerのbusy/yield/sleepによるpoll方針を測定条件に含める。
+これはqueueのGPU timestamp、GPU完了までのlatency、表示FPSを代替しない。
+実sampleのIP、対象PID/生存期間とImage_Loadの実baseからRVAを求め、
+matching EXE/PDBによるinline/source帰属を確認する。未知symbolや端点、lost eventsをゼロに置き換えない。
+既知RVAのoffline解決やCSV fixture試験と、実ETLのstack/source・欠落の受入は別の証拠である。
+確認済み範囲と未実行項目は[現在の検証状況](../verification/current.md)へ記録する。
+
 ### Graphの任意計測
 
 `set_profiling(true)`を明示した投入だけ、CPU prepare・record・submit・retireと
