@@ -16,6 +16,7 @@ mod image;
 mod sampler;
 pub use image::{VulkanImage, VulkanImageView};
 pub use sampler::VulkanSampler;
+pub(super) use sampler::sampler_info;
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
@@ -132,9 +133,9 @@ impl VulkanProgram {
                 let format = match format {
                     crate::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
                     crate::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
-                    crate::ImageFormat::Depth32Float => {
+                    crate::ImageFormat::Depth32Float | crate::ImageFormat::Rgba8Srgb => {
                         return Err(RuntimeError::unsupported(
-                            "depth storage images are unsupported",
+                            "depth and sRGB storage images are unsupported",
                         ));
                     }
                 };
@@ -484,6 +485,24 @@ impl VulkanBindings {
         }
         let resolved = resolve_bindings(program.0.bindings, input)
             .map_err(|e| RuntimeError::invalid(e.to_string()))?;
+        // A trusted shader may pair any image and sampler in its interface.
+        // Establish linear-filter validity once for this immutable collection.
+        if input.iter().any(|binding| {
+            matches!(
+                binding.resource,
+                BindingResource::Sampler(sampler)
+                    if sampler.desc() == crate::program::SamplerDescriptor::LinearRepeat
+            )
+        }) && input.iter().any(|binding| {
+            matches!(
+                binding.resource,
+                BindingResource::ImageView(view) if !view.0.image.0.supports_linear_filtering
+            )
+        }) {
+            return Err(RuntimeError::unsupported(
+                "linear sampler requires linear-filterable sampled image formats",
+            ));
+        }
         let limits = owner.device.limits();
         let mut resources = Vec::with_capacity(input.len());
         for entry in resolved {
