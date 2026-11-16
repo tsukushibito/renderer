@@ -857,7 +857,12 @@ mod demo {
                         backend.resize(size.width, size.height);
                     }
                 }
-                WindowEvent::Focused(false) => {
+                // The local smoke script owns its first five poses. Ambient
+                // desktop focus/input must not modify that deterministic input;
+                // the script exercises the same focus_lost operation itself.
+                WindowEvent::Focused(false)
+                    if !self.options.smoke || self.accepted >= REPLAY_STEPS =>
+                {
                     self.capture_mouse(false);
                     self.input.focus_lost();
                 }
@@ -865,8 +870,12 @@ mod demo {
                     state,
                     button: MouseButton::Right,
                     ..
-                } => self.capture_mouse(state == ElementState::Pressed),
-                WindowEvent::KeyboardInput { event, .. } => {
+                } if !self.options.smoke || self.accepted >= REPLAY_STEPS => {
+                    self.capture_mouse(state == ElementState::Pressed);
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if !self.options.smoke || self.accepted >= REPLAY_STEPS =>
+                {
                     if let PhysicalKey::Code(key) = event.physical_key {
                         let pressed = event.state == ElementState::Pressed;
                         match key {
