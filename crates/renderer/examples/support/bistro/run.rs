@@ -345,7 +345,11 @@ mod tests {
                 "source alpha coverage and opaque diagnostic sensitivity"
             );
             assert_eq!(report["validation"]["clean"], true);
+            if alpha_only && !force_opaque {
+                super::super::asset::material_tests::alpha_background(&report);
+            }
         }
+        super::super::asset::material_tests::native_acceptance::<B>();
     }
     #[cfg(feature = "vulkan")]
     #[test]
