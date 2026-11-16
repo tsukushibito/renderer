@@ -53,6 +53,9 @@ impl Conditions {
             camera.matrix(1.0, 0.02, 500.0)?;
             views.push((name, camera));
         }
+        if views.is_empty() {
+            return Err("at least one fixed camera view is required".into());
+        }
         let fps = value["route"]["fps"].as_u64().ok_or("missing route FPS")? as usize;
         let mut route = Vec::new();
         for key in value["route"]["keyframes"]
@@ -163,7 +166,8 @@ impl Camera {
             || near <= 0.0
             || far <= near
             || !self.fov.is_finite()
-            || !(0.0..179.0).contains(&self.fov)
+            || self.fov <= 0.0
+            || self.fov >= 179.0
         {
             return Err("invalid perspective camera".into());
         }
@@ -254,5 +258,24 @@ mod tests {
             conditions.camera("route", 0).unwrap().position
         );
         assert!(conditions.camera("missing", 0).is_err());
+    }
+
+    #[test]
+    fn empty_views_and_invalid_projection_fov_are_rejected() {
+        let mut data: Value =
+            serde_json::from_str(include_str!("../../../../../tools/bistro/conditions.json"))
+                .unwrap();
+        data["views"] = serde_json::json!([]);
+        assert!(Conditions::parse(&data).is_err());
+        for fov in [0.0, -1.0, 179.0, f32::NAN, f32::INFINITY] {
+            assert!(
+                Camera {
+                    fov,
+                    ..Camera::fixture()
+                }
+                .matrix(1.0, 0.02, 500.0)
+                .is_err()
+            );
+        }
     }
 }

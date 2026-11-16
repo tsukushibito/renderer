@@ -66,6 +66,22 @@ impl Budget {
             .map(|(size, _)| *size)
             .max()
             .ok_or("empty buffer set")?;
+        // Both streams are published by one Graph, so both upload reservations
+        // coexist until completion. Resolve uses the same paired-stream path.
+        let resolve_bytes =
+            size_of_val(&program::RESOLVE_VERTICES) + size_of_val(&program::RESOLVE_INDICES);
+        let geometry_upload_bytes =
+            scene
+                .primitives
+                .iter()
+                .try_fold(resolve_bytes, |maximum, primitive| {
+                    primitive
+                        .vertices
+                        .len()
+                        .checked_add(primitive.indices.len())
+                        .map(|bytes| maximum.max(bytes))
+                        .ok_or("geometry upload byte overflow")
+                })?;
         let mut images = Vec::<(ImageDesc, usize)>::new();
         let mut add_image = |desc: ImageDesc, count: usize| {
             if let Some((_, total)) = images.iter_mut().find(|(old, _)| *old == desc) {
@@ -123,6 +139,7 @@ impl Budget {
             })
             .max()
             .unwrap_or(0)
+            .max(geometry_upload_bytes)
             .max(max_buffer_bytes as usize)
             .max(4096)
             .checked_add(4096)
@@ -662,5 +679,74 @@ mod tests {
             one.readback_bytes > 101 * 73 * 16,
             "odd output rows need padding beyond packed texels"
         );
+    }
+
+    fn large_geometry_scene() -> Scene {
+        let mut scene = Scene::fixture(false);
+        let vertex = scene.vertices[..48].to_vec();
+        scene.vertices = vertex.repeat(1365);
+        scene.indices = (0u32..4095)
+            .flat_map(|index| (index % 1365).to_le_bytes())
+            .collect();
+        scene.primitives.truncate(1);
+        scene.primitives[0].vertices = 0..scene.vertices.len();
+        scene.primitives[0].indices = 0..scene.indices.len();
+        scene.primitives[0].index_count = 4095;
+        scene
+    }
+
+    fn tiny_output_options() -> Options {
+        Options::parse(
+            [
+                "--fixture",
+                "--width",
+                "1",
+                "--height",
+                "1",
+                "--inflight",
+                "1",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn upload_budget_covers_both_geometry_streams_in_the_same_graph() {
+        let scene = large_geometry_scene();
+        let indices = scene
+            .indices
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(u32::from_le_bytes)
+            .collect::<Vec<_>>();
+        renderer::geometry::GeometryData::new(48, &scene.vertices, &indices).unwrap();
+        let pair_bytes = scene.vertices.len() + scene.indices.len();
+        assert!(
+            pair_bytes > scene.vertices.len() + 4096,
+            "the second stream exceeds ordinary alignment slack"
+        );
+        assert!(
+            Budget::new(&scene, &tiny_output_options())
+                .unwrap()
+                .upload_bytes
+                >= pair_bytes
+        );
+    }
+
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires real D3D12 GPU; verifies prepared paired-stream upload capacity"]
+    fn d3d12_large_geometry_pair_fits_prepared_upload_capacity() {
+        let scene = large_geometry_scene();
+        let options = tiny_output_options();
+        let budget = Budget::new(&scene, &options).unwrap();
+        let mut backend = super::super::backend::D3d12::create(&options, &budget).unwrap();
+        let resident = Resident::upload(&mut backend, &scene, &budget, &[0; 128]).unwrap();
+        drop(resident);
+        assert_eq!(backend.close().unwrap()["clean"], true);
     }
 }
