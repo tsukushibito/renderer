@@ -33,6 +33,14 @@ impl Presenter {
         Ok(())
     }
 
+    /// Whether future presentation commands request timing. Closed presenters
+    /// report false; completed samples can still be consumed after close.
+    pub fn profiling_enabled(&self) -> bool {
+        self.inner
+            .as_ref()
+            .is_some_and(|inner| !inner.closed && inner.profiling_enabled)
+    }
+
     /// Consume the oldest completed presentation-command timing sample. Call
     /// `poll` to observe completion first. Every profiled GPU submission emits
     /// one sample, even if the subsequent display request was rejected; a sample

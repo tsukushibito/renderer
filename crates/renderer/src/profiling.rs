@@ -36,6 +36,9 @@ pub struct SubmissionMetrics {
 /// Optional presentation CPU phases and fullscreen GPU command interval.
 /// Acquire and present measure their CPU API calls, including any native pacing
 /// cost. GPU time excludes presentation-engine/VSync and display completion.
+/// Each sample describes a fullscreen GPU submission, including one whose
+/// display request was rejected. Failed acquire attempts have no GPU sample;
+/// callers should separately measure all API attempts and their outcomes.
 #[derive(Clone, Copy, Debug)]
 pub struct PresentationMetrics {
     pub cpu_acquire: Duration,
