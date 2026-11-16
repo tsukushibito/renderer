@@ -872,7 +872,7 @@ impl VulkanRuntime {
             revision: state.scheduled.revision,
             desc,
             initialized: state.scheduled.initialized.len() == 1
-                && state.scheduled.initialized[0] == (0..1),
+                && state.scheduled.initialized[0] == (0..u64::from(desc.mip_levels)),
         })
     }
 
