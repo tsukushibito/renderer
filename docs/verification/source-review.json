@@ -23534,6 +23534,19 @@
       "Linux real GPU, other GPUs/drivers, actual native OOM/loss and long-duration endurance.",
       "Bistro workload, complete-frame speedup and GPU/FPS improvement.",
       "Driver/OS internal allocations outside configured hooks."
-    ]
+    ],
+    "ci_followup": {
+      "initial_run_id": 43881128298,
+      "failure": "presentation-only reservation_error was compiled but unused in headless Vulkan configurations",
+      "fix": "cfg(all(feature = presentation, windows)) matches all callers; no lint suppression or runtime behavior change",
+      "local_verification": [
+        "all-target Clippy -D warnings: vulkan",
+        "all-target Clippy -D warnings: vulkan,development-validation,graph-diagnostics",
+        "all-target Clippy -D warnings: vulkan,d3d12",
+        "all-target Clippy -D warnings: vulkan,d3d12,development-validation,graph-diagnostics",
+        "Vulkan-only default-profile CPU tests and fmt passed"
+      ],
+      "vulkan_error_sha256_utf8_lf": "4feb68fbc8e1d258d0fea6f4eaf462fa05151b0d66dc891897f932a20f972c8a"
+    }
   }
 }

@@ -147,6 +147,7 @@ impl RuntimeError {
     pub(super) fn unsupported(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::Unsupported, message)
     }
+    #[cfg(all(feature = "presentation", windows))]
     pub(super) fn reservation_error(message: impl Into<Cow<'static, str>>) -> Self {
         Self::capacity_with(
             message,

@@ -60,6 +60,9 @@ native resetは別計上。最初のEngine画像fixtureは以前から通常forw
 setupの準備一覧へ追加して再実行した。baselineと統合前のfixture blobが同一であることも確認した。
 これは試験準備の修正であり、Programを通常submitで暗黙作成する回避策は追加していない。
 大画面verify拒否はCPU回帰で確認し、実desktopの3440×1440 resize操作は未実行である。
+最初のCIでは表示なしVulkan構成で表示専用の予約エラーhelperが未使用となり、Clippyが拒否した。
+helperへ呼出元と同じWindows／presentation条件を付け、表示なしVulkan単独／二APIの
+製品・開発4構成でも全target Clippyを確認した。広域のlint抑止や実行処理の変更は加えていない。
 
 ## 二APIのWindows表示・自由カメラ・通常frame計測
 
