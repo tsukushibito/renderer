@@ -3,6 +3,7 @@
 //! DXGI owns display-side references to accepted buffers. Our queue marker only
 //! establishes application GPU completion; it never proves scanout completion.
 
+use crate::ImageFormat;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     collections::VecDeque,
@@ -21,7 +22,7 @@ use super::{
     registry::PhysicalRef,
 };
 use crate::{
-    graph::{ImageFormat, ImportImage},
+    graph::ImportImage,
     presentation::{PresentOutcome, PresentationConfig},
     profiling::{GpuTiming, PresentationMetrics},
 };

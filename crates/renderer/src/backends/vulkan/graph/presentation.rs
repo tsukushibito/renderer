@@ -3,6 +3,7 @@
 
 use super::metrics::{TimestampLease, TimestampPool};
 use super::{MemoryOwner, PhysicalLease, RuntimeConfig, Snapshot, VulkanRuntime};
+use crate::ImageFormat;
 use crate::backends::vulkan::device::VulkanDevice;
 use crate::backends::vulkan::diagnostics::Diagnostics;
 use crate::backends::vulkan::error::RuntimeError;
@@ -13,7 +14,7 @@ use crate::backends::vulkan::presentation::{
     validate_config,
 };
 use crate::backends::vulkan::transfer::{PendingTransfer, TransferError, TransferPayload};
-use crate::graph::{ImageFormat, ImportImage, ResourceDesc};
+use crate::graph::{ImportImage, ResourceDesc};
 use crate::profiling::{GpuTiming, PresentationMetrics};
 use ash::vk;
 use std::sync::Arc;

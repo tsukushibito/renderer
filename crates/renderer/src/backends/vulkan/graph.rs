@@ -3,6 +3,7 @@
 //! The registry owns canonical physical identities. Payload leases retain every
 //! recorded reference, and accepted state is distinct from actual completion.
 
+use crate::ImageFormat;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -19,8 +20,8 @@ use super::program::{ShaderNeeds, ShaderPrograms};
 use super::transfer::staging::SharedStaging;
 use super::transfer::{ExecutionPool, PendingTransfer};
 use crate::graph::{
-    BufferHandle, CompiledGraph, GraphCapacity, ImageFormat, ImageHandle, ImportBuffer,
-    ImportImage, ImportRanges, ImportRangesPool, Operation, PassHandle, ResourceDesc, ResourceKey,
+    BufferHandle, CompiledGraph, GraphCapacity, ImageHandle, ImportBuffer, ImportImage,
+    ImportRanges, ImportRangesPool, Operation, PassHandle, ResourceDesc, ResourceKey,
 };
 
 mod cache;
@@ -980,11 +981,7 @@ impl VulkanRuntime {
                     Arc::clone(&self.owner),
                     desc.width,
                     desc.height,
-                    match desc.format {
-                        ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
-                        ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
-                        ImageFormat::Depth32Float => vk::Format::D32_SFLOAT,
-                    },
+                    super::resources::image_format(desc.format),
                     name,
                 )
                 .map_err(|error| error.context(format_args!("resource {name:?}")))?,

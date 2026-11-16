@@ -12,6 +12,8 @@
 
 pub mod engine;
 pub mod graph;
+mod image;
+pub use image::ImageFormat;
 pub mod profiling;
 pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};
 pub mod program;

@@ -11,8 +11,9 @@
 //! Creation retains uninitialized images; this example does not execute a dispatch.
 //!
 //! ```no_run
+//! use renderer::ImageFormat;
 //! use renderer::program::{Binding, BindingResource, BufferDescriptor, ManagedProgram,
-//!     ImageDescriptor, ImageFormat, ImageViewDescriptor, SamplerDescriptor};
+//!     ImageDescriptor, ImageViewDescriptor, SamplerDescriptor};
 //!
 //! #[cfg(feature = "vulkan")]
 //! fn create(runtime: &renderer::VulkanRuntime)
@@ -50,6 +51,8 @@
 //!     ])
 //! }
 //! ```
+
+use crate::ImageFormat;
 
 mod raster;
 
@@ -196,15 +199,6 @@ pub enum BindingResource<'a, B, V, S> {
     Sampler(&'a S),
 }
 
-/// Managed image formats. Sampling returns ordinary FP32 components;
-/// RGBA16F image storage does not require shader FP16 arithmetic support.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImageFormat {
-    Rgba8Unorm,
-    Rgba16Float,
-    D32Float,
-}
-
 /// An uninitialized sampled 2D image. Mip, layer and sample counts are one.
 /// Color images support sampling and transfer destination use; D32 images
 /// support sampling and depth attachment use.
@@ -224,7 +218,7 @@ pub struct ImageDescriptor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageViewUsage {
     Sampled,
-    /// A depth attachment View, supported only by [`ImageFormat::D32Float`].
+    /// A depth attachment View, supported only by [`ImageFormat::Depth32Float`].
     DepthAttachment,
 }
 
@@ -659,7 +653,7 @@ pub(crate) fn validate_image_descriptor(
         return Err(ProgramError::InvalidExtent);
     }
     if let Some(value) = desc.preferred_depth_clear {
-        if desc.format != ImageFormat::D32Float {
+        if desc.format != ImageFormat::Depth32Float {
             return Err(ProgramError::UsageMismatch);
         }
         if !(0.0..=1.0).contains(&value) || value.is_subnormal() {
@@ -681,7 +675,7 @@ pub(crate) fn validate_image_view_descriptor(
     {
         return Err(ProgramError::InvalidViewRange);
     }
-    if desc.usage == ImageViewUsage::DepthAttachment && format != ImageFormat::D32Float {
+    if desc.usage == ImageViewUsage::DepthAttachment && format != ImageFormat::Depth32Float {
         return Err(ProgramError::UsageMismatch);
     }
     Ok(())
@@ -1026,7 +1020,7 @@ mod tests {
         for format in [
             ImageFormat::Rgba8Unorm,
             ImageFormat::Rgba16Float,
-            ImageFormat::D32Float,
+            ImageFormat::Depth32Float,
         ] {
             assert_eq!(
                 validate_image_descriptor(ImageDescriptor { format, ..desc }, 2),
@@ -1041,7 +1035,7 @@ mod tests {
                     },
                     2
                 ),
-                if format == ImageFormat::D32Float {
+                if format == ImageFormat::Depth32Float {
                     Ok(())
                 } else {
                     Err(ProgramError::UsageMismatch)
@@ -1050,7 +1044,7 @@ mod tests {
             assert_eq!(validate_image_view_descriptor(format, sampled), Ok(()));
             assert_eq!(
                 validate_image_view_descriptor(format, depth),
-                if format == ImageFormat::D32Float {
+                if format == ImageFormat::Depth32Float {
                     Ok(())
                 } else {
                     Err(ProgramError::UsageMismatch)
@@ -1061,7 +1055,7 @@ mod tests {
             assert_eq!(
                 validate_image_descriptor(
                     ImageDescriptor {
-                        format: ImageFormat::D32Float,
+                        format: ImageFormat::Depth32Float,
                         preferred_depth_clear: Some(value),
                         ..desc
                     },
@@ -1074,7 +1068,7 @@ mod tests {
             assert_eq!(
                 validate_image_descriptor(
                     ImageDescriptor {
-                        format: ImageFormat::D32Float,
+                        format: ImageFormat::Depth32Float,
                         preferred_depth_clear: Some(value),
                         ..desc
                     },
@@ -1111,7 +1105,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                validate_image_view_descriptor(ImageFormat::D32Float, invalid),
+                validate_image_view_descriptor(ImageFormat::Depth32Float, invalid),
                 Err(ProgramError::InvalidViewRange)
             );
         }

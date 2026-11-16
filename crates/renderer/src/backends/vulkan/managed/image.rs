@@ -1,25 +1,18 @@
 //! Single-subresource sampled image and separately owned View creation.
 
 use super::{MemoryOwner, RuntimeError, native};
+use crate::ImageFormat;
 use crate::program::{
-    ImageDescriptor, ImageFormat, ImageViewDescriptor, ImageViewUsage, validate_image_descriptor,
+    ImageDescriptor, ImageViewDescriptor, ImageViewUsage, validate_image_descriptor,
     validate_image_view_descriptor,
 };
 use ash::vk;
 use std::sync::Arc;
 use vk_mem::Alloc;
 
-fn native_format(format: ImageFormat) -> vk::Format {
-    match format {
-        ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
-        ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
-        ImageFormat::D32Float => vk::Format::D32_SFLOAT,
-    }
-}
-
 fn native_aspect(format: ImageFormat) -> vk::ImageAspectFlags {
     match format {
-        ImageFormat::D32Float => vk::ImageAspectFlags::DEPTH,
+        ImageFormat::Depth32Float => vk::ImageAspectFlags::DEPTH,
         ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => vk::ImageAspectFlags::COLOR,
     }
 }
@@ -41,10 +34,10 @@ impl VulkanImage {
             .map_err(RuntimeError::device_unavailable)?;
         validate_image_descriptor(desc, owner.device.limits().max_image_dimension2_d)
             .map_err(|error| RuntimeError::invalid(error.to_string()))?;
-        let format = native_format(desc.format);
+        let format = super::super::resources::image_format(desc.format);
         let usage = vk::ImageUsageFlags::SAMPLED
             | match desc.format {
-                ImageFormat::D32Float => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                ImageFormat::Depth32Float => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
                 ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => {
                     vk::ImageUsageFlags::TRANSFER_DST
                 }
@@ -185,7 +178,7 @@ impl VulkanImageView {
         let info = vk::ImageViewCreateInfo::default()
             .image(image.0.handle)
             .view_type(vk::ImageViewType::TYPE_2D)
-            .format(native_format(image.desc().format))
+            .format(super::super::resources::image_format(image.desc().format))
             .subresource_range(range)
             .push_next(&mut usage);
         #[cfg(feature = "memory-profiling")]

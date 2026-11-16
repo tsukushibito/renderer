@@ -3,15 +3,16 @@
 
 use super::compute_fixture as compute;
 pub use compute::{Expected, HEIGHT, IMAGE_BYTES, PIXELS, Readback, WIDTH, hdr};
+use renderer::ImageFormat;
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity,
     GraphPool, ImageDesc, ImageHandle, LoadOp, RasterAttachments, RasterConstants, RasterDraw,
     RasterParameters, StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, CompareOp, DepthState, ImageFormat,
-    ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor, SamplerDescriptor,
-    ShaderStages, VertexAttribute, VertexFormat,
+    BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
+    RasterParameterLayout, RasterProgramDescriptor, SamplerDescriptor, ShaderStages,
+    VertexAttribute, VertexFormat,
 };
 use renderer::standard::{graphs, passes};
 

@@ -1,5 +1,6 @@
 //! Owned Compute recording into explicitly prepared execution-slot storage.
 
+use crate::ImageFormat;
 use std::{mem::ManuallyDrop, ops::Range};
 
 use super::{
@@ -7,7 +8,7 @@ use super::{
     program::D3D12Program,
 };
 use crate::{
-    graph::{AccessPurpose, BindingOperands, CompiledGraph, ImageFormat, ResourceDesc},
+    graph::{AccessPurpose, BindingOperands, CompiledGraph, ResourceDesc},
     program::{BindingType, ManagedProgram},
 };
 
@@ -76,15 +77,7 @@ pub(super) fn validate_program(
             BindingType::StorageImageWrite(format) => (format, false),
             _ => continue,
         };
-        require_storage_format(
-            owner,
-            match format {
-                crate::program::ImageFormat::Rgba8Unorm => ImageFormat::Rgba8Unorm,
-                crate::program::ImageFormat::Rgba16Float => ImageFormat::Rgba16Float,
-                crate::program::ImageFormat::D32Float => ImageFormat::Depth32Float,
-            },
-            read,
-        )?;
+        require_storage_format(owner, format, read)?;
     }
     Ok(())
 }
@@ -312,11 +305,7 @@ pub(super) fn record(
                 unsafe {
                     if layout.kind == BindingType::SampledImage {
                         let desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
-                            Format: match image.desc.format {
-                                ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-                                ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-                                ImageFormat::Depth32Float => DXGI_FORMAT_R32_FLOAT,
-                            },
+                            Format: super::resources::sampled_format(image.desc.format),
                             ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
                             Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
                                 as u32,

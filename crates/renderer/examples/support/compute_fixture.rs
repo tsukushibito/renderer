@@ -1,13 +1,14 @@
 //! Consumer-owned Compute assets and an exact, allocation-free HDR workload.
 //! This module is shared by public-API acceptance and the standalone memory probe.
 
+use renderer::ImageFormat;
 use renderer::graph::{
     Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity, GraphPool, ImageDesc,
-    ImageFormat, ImageHandle, PassHandle,
+    ImageHandle, PassHandle,
 };
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
-    ImageFormat as ProgramImageFormat, ManagedProgram, SamplerDescriptor, ShaderStages,
+    ManagedProgram, SamplerDescriptor, ShaderStages,
 };
 
 pub const WIDTH: u32 = 3;
@@ -27,7 +28,7 @@ static SAMPLED: ComputeProgramDescriptor = ComputeProgramDescriptor {
         slot(
             1,
             0,
-            BindingType::StorageImageWrite(ProgramImageFormat::Rgba16Float),
+            BindingType::StorageImageWrite(ImageFormat::Rgba16Float),
             0,
         ),
     ],
@@ -55,14 +56,14 @@ static STORAGE: ComputeProgramDescriptor = ComputeProgramDescriptor {
         slot(
             0,
             0,
-            BindingType::StorageImageRead(ProgramImageFormat::Rgba16Float),
+            BindingType::StorageImageRead(ImageFormat::Rgba16Float),
             0,
         ),
         slot(0, 1, BindingType::StorageRead, 16),
         slot(
             1,
             0,
-            BindingType::StorageImageWrite(ProgramImageFormat::Rgba16Float),
+            BindingType::StorageImageWrite(ImageFormat::Rgba16Float),
             0,
         ),
     ],

@@ -1,9 +1,10 @@
 //! Optional forward recipes assembled from public standard passes.
 
+use crate::ImageFormat;
 use std::borrow::Borrow;
 
 use crate::graph::{
-    Attachment, Graph, GraphError, ImageDesc, ImageFormat, ImageHandle, LoadOp, RasterDraw, StoreOp,
+    Attachment, Graph, GraphError, ImageDesc, ImageHandle, LoadOp, RasterDraw, StoreOp,
 };
 use crate::standard::passes::{self, OpaqueDepth};
 

@@ -1,9 +1,10 @@
+use renderer::ImageFormat;
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, BufferDesc, Graph, GraphCapacity,
     GraphCapacityKind, GraphErrorKind, GraphPool, ImageDesc, ImageView, LoadOp, PassKind,
     RasterAttachments, RasterConstants, RasterDraw, RasterParameters, StoreOp,
 };
-use renderer::program::ManagedRasterProgram;
+use renderer::program::{ImageDescriptor, ManagedRasterProgram};
 
 fn mesh(
     graph: &mut Graph,
@@ -46,7 +47,7 @@ fn color(graph: &mut Graph, name: &str) -> Attachment<[f32; 4]> {
 }
 
 #[test]
-fn hdr_output_format_is_checked_without_consuming_draw_or_attachment_capacity() {
+fn shared_image_format_keeps_output_checks_and_transactional_capacity() {
     let mut pool = GraphPool::new(
         GraphCapacity {
             draws: 1,
@@ -59,7 +60,23 @@ fn hdr_output_format_is_checked_without_consuming_draw_or_attachment_capacity() 
     let mut graph = pool.begin().unwrap();
     let draw = mesh(&mut graph, "mesh", true, true);
     let unorm = color(&mut graph, "unorm");
-    let hdr = graph.image("hdr", ImageDesc::rgba16_float(2, 2)).unwrap();
+    let program = ManagedRasterProgram::mesh_hdr();
+    // One format value flows from the shader contract through managed resource
+    // metadata into a logical image, without a conversion or a second enum.
+    let descriptor = ImageDescriptor {
+        width: 2,
+        height: 2,
+        format: program.color_outputs()[0],
+        preferred_depth_clear: None,
+    };
+    let hdr_desc = ImageDesc {
+        width: descriptor.width,
+        height: descriptor.height,
+        format: descriptor.format,
+        ..ImageDesc::rgba8(2, 2)
+    };
+    assert_eq!(hdr_desc.format, ImageFormat::Rgba16Float);
+    let hdr = graph.image("hdr", hdr_desc).unwrap();
     let hdr = Attachment {
         view: graph.image_view(hdr, 0, 0).unwrap(),
         ..unorm

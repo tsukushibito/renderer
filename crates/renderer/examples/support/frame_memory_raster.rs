@@ -3,10 +3,11 @@
 //! from the changing-input build/execute/readback/return measurement window.
 
 use super::frame_memory::{Report, counts, features, phase, semantics};
+use renderer::ImageFormat;
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, CompiledGraph, Graph, GraphCapacity,
-    GraphPool, ImageDesc, ImageFormat, LoadOp, PassHandle, RasterAttachments, RasterDraw,
-    RasterParameters, StoreOp,
+    GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterDraw, RasterParameters,
+    StoreOp,
 };
 use renderer::measurement::{NativeEvent, RustEvent, Snapshot};
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};

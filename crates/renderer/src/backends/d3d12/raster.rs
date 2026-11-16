@@ -1,10 +1,10 @@
 //! Immutable native graphics programs, created only at working-set preparation.
 
+use crate::ImageFormat;
 use std::mem::ManuallyDrop;
 
 use crate::program::{
-    BindingType, BlendState, CompareOp, ImageFormat, ManagedRasterProgram, ShaderStages,
-    VertexFormat,
+    BindingType, BlendState, CompareOp, ManagedRasterProgram, ShaderStages, VertexFormat,
 };
 
 use super::{
@@ -339,7 +339,7 @@ impl RasterPipeline {
             *destination = match format {
                 ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
                 ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-                ImageFormat::D32Float => {
+                ImageFormat::Depth32Float => {
                     return Err(D3D12RuntimeError::unsupported(
                         "Raster color output cannot use a depth format",
                     ));

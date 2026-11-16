@@ -2,15 +2,14 @@
 
 use super::tests::StorageLease;
 use super::*;
+use crate::ImageFormat;
 use crate::backends::vulkan::buffer::{BufferRole, VulkanBuffer as TransferBuffer};
 use crate::backends::vulkan::graph::{RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::memory::VulkanAllocator;
 use crate::backends::vulkan::transfer::{
     RecordedTransfer, TransferError, TransferPayload, record_host_read,
 };
-use crate::program::{
-    ImageDescriptor, ImageFormat, ImageViewDescriptor, ImageViewUsage, SamplerDescriptor,
-};
+use crate::program::{ImageDescriptor, ImageViewDescriptor, ImageViewUsage, SamplerDescriptor};
 use std::ffi::CStr;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -125,7 +124,7 @@ impl Work {
             (_, None, None) => initialized,
             (ImageFormat::Rgba8Unorm, Some(bytes), None) => bytes.len() == 16,
             (ImageFormat::Rgba16Float, Some(bytes), None) => bytes.len() == 32,
-            (ImageFormat::D32Float, None, Some(attachment)) => {
+            (ImageFormat::Depth32Float, None, Some(attachment)) => {
                 Arc::ptr_eq(&attachment.0.image.0, &image.image.0)
                     && attachment.desc().usage == ImageViewUsage::DepthAttachment
                     && desc.preferred_depth_clear.is_some()
@@ -500,7 +499,7 @@ fn vulkan_managed_sampled_depth_creation_and_versions() {
     let expected = crate::program::DEPTH_TEST_EXPECTED;
     run_sampled_versions(
         ManagedProgram::sampled_float_readback(),
-        ImageFormat::D32Float,
+        ImageFormat::Depth32Float,
         [SampleInput::Depth(values[0]), SampleInput::Depth(values[1])],
         [
             ExpectedOutput::DepthR(expected[0]),
@@ -510,7 +509,7 @@ fn vulkan_managed_sampled_depth_creation_and_versions() {
 }
 
 fn depth_attachment(runtime: &VulkanRuntime, image: &VulkanImage) -> Option<VulkanImageView> {
-    (image.desc().format == ImageFormat::D32Float).then(|| {
+    (image.desc().format == ImageFormat::Depth32Float).then(|| {
         runtime
             .create_image_view(
                 image,
@@ -651,7 +650,7 @@ fn run_sampled_versions(
         .unwrap();
         assert!(Work::new(bindings.clone(), Some(old.initialize(&attachment))).is_err());
         drop(canceled);
-        if format == ImageFormat::D32Float {
+        if format == ImageFormat::Depth32Float {
             assert!(Work::new(bindings.clone(), None).is_err());
         }
         let weak_image = Arc::downgrade(&image.0);
@@ -686,7 +685,7 @@ fn run_sampled_versions(
             &newer_output,
         )
         .unwrap();
-        if format == ImageFormat::D32Float {
+        if format == ImageFormat::Depth32Float {
             assert!(Work::new(newer_bindings.clone(), Some(new.initialize(&attachment))).is_err());
         }
         let newer_recorded = RecordedTransfer::new(

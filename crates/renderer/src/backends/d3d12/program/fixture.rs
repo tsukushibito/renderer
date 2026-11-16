@@ -151,9 +151,9 @@ fn upload_image(
     let owner = &image.0.owner;
     let desc = image.desc();
     let texel_bytes = match desc.format {
-        crate::program::ImageFormat::Rgba8Unorm => 4,
-        crate::program::ImageFormat::Rgba16Float => 8,
-        crate::program::ImageFormat::D32Float => {
+        crate::ImageFormat::Rgba8Unorm => 4,
+        crate::ImageFormat::Rgba16Float => 8,
+        crate::ImageFormat::Depth32Float => {
             return Err(D3D12RuntimeError::invalid(
                 "depth fixture initialization uses an attachment clear",
             ));
