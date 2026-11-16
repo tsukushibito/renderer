@@ -882,10 +882,16 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 `--verify`はsource画像のreadback、独立したpalette／geometry条件とframeごとのdigestを記録します。
 両APIへ同じextent・camera番号・Graph構成を渡して比較し、画面上のscanoutの全byte照合とは区別します。
 受入時だけreadbackを追加するため、通常利用や時間測定へ無条件のreadbackを強制しません。
+D3D12のこの例は1結果あたり16 MiBのreadback領域をRuntime作成時に準備します。
+resize後のRGBA8画像が生byte数だけでこの上限を超える場合は、GPU作業の準備前に
+要求byte／上限byte付きで失敗します。native row pitchの整列による超過も恒久的な上限不足として扱い、
+同じ要求の再試行を続けません。大きな検証画像を使う場合は明示した準備容量を変更します。
 終了後の`WINDOWED_ACCEPTANCE` JSONに設定、frame入力、内容digestとnative診断の実効状態を記録します。
 
 表示前は`prepare`を進め、readyな`extent`でGraphを構築します。
-`NotReady`や型付き容量不足ではpoll後に再試行し、通常経路にwait／増設を加えません。
+`NotReady`ではpoll後に再試行します。容量不足は[回復方法](#runtime-capacity)を確認し、
+この例がpoll・結果消費・owner返却で回復できるbackpressureだけを再試行します。
+未準備や固定上限超過は理由を出して失敗し、通常経路にwait／増設を加えません。
 `Suspended`はゼロextentからの復帰を待ちます。`RecreateRequired`は変更予約、`Recreated`は変更完了です。
 表示submit受理後はsource登録を解除でき、native側がGPU使用終了まで所有します。
 `NotReady`でも先のfullscreen submitがpendingの場合があり、未投入rollbackを推定しません。
