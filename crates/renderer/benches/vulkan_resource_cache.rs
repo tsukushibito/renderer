@@ -88,8 +88,11 @@ fn main() {
         for offset in 0..count {
             index.insert(prefix + offset, offset % classes, 7);
         }
-        for _ in 0..8 {
+        let warmup_started = Instant::now();
+        let mut warmup_cycles = 0;
+        while warmup_cycles < 8 || warmup_started.elapsed().as_millis() < 100 {
             cycle(&mut index, prefix, count, classes);
+            warmup_cycles += 1;
         }
         let mut samples = [0.0; 31];
         let before = counters();
@@ -109,12 +112,12 @@ fn main() {
         let mut sorted = samples;
         sorted.sort_by(f64::total_cmp);
         cases.push(format!(
-            "{{\"name\":\"{name}\",\"registered\":{prefix},\"transients\":{count},\"classes\":{classes},\"iterations_per_sample\":{iterations},\"median_ns\":{},\"p95_ns\":{},\"heap_alloc_zeroed_realloc_dealloc\":{events:?},\"samples_ns\":{samples:?}}}",
+            "{{\"name\":\"{name}\",\"registered\":{prefix},\"transients\":{count},\"classes\":{classes},\"warmup_cycles\":{warmup_cycles},\"iterations_per_sample\":{iterations},\"median_ns\":{},\"p95_ns\":{},\"heap_alloc_zeroed_realloc_dealloc\":{events:?},\"samples_ns\":{samples:?}}}",
             sorted[15], sorted[29],
         ));
     }
     println!(
-        "{{\"schema\":1,\"sample_count\":31,\"warmup_cycles\":8,\"measurement\":\"acquire all then reverse-order return; CPU only\",\"cases\":[{}]}}",
+        "{{\"schema\":1,\"sample_count\":31,\"minimum_warmup_cycles\":8,\"minimum_warmup_ms\":100,\"measurement\":\"acquire all then reverse-order return; CPU only\",\"cases\":[{}]}}",
         cases.join(",")
     );
 }

@@ -465,6 +465,8 @@ Graphの`GraphError::capacity()`は不足した項目と`limit`／`required`を�
 | `Poll` | 受理済みGPU／表示処理をpollし、完了した作業ownerを返してから再試行する |
 | `ReleaseResults` | 未読readbackや計測結果を消費・返却する。GPU完了だけではその領域は戻らない |
 | `ReleaseOwners` | 保持しているexport、snapshot、記録中資源等を返す。GPU側のownerは完了観測で退役させる |
+| `Recreate` | 採番等の継続できない状態を持つ該当資源／Runtimeを明示的に再作成する |
+| `RestartProcess` | process全体の採番を使い切ったため、処理を終了してprocessを再起動する |
 
 回復方法は次のpollの成功や、必要なownerが自動的に返ることを約束しません。
 特に`CapacityExhausted`を一律に再試行するloopは、未準備Programや固定byte上限超過で進行しなくなります。

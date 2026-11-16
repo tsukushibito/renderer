@@ -118,7 +118,8 @@ fn main() {
         "scope": "production CPU selector, eligibility and Arc lease acquire/return; no GPU/native calls",
             "selector": if reference { "pre-index production scan" } else { "prepared class index" },
         "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
-        "warmup_frames": 1024,
+        "minimum_warmup_frames": 1024,
+        "minimum_warmup_ms": 100,
         "samples": samples,
         "frames_per_sample": iterations,
         "cases": reports,
@@ -156,13 +157,16 @@ fn run<const REFERENCE: bool>(case: Case, samples: usize, iterations: usize) -> 
     let queries: Vec<_> = (0..case.transient)
         .map(|position| class_key(position % case.classes))
         .collect();
-    for _ in 0..1024 {
+    let warmup_started = Instant::now();
+    let mut warmup_frames = 0;
+    while warmup_frames < 1024 || warmup_started.elapsed().as_millis() < 100 {
         black_box(frame::<REFERENCE>(
             &mut index,
             &mut entries,
             &queries,
             &mut leases,
         ));
+        warmup_frames += 1;
     }
     let mut elapsed = Vec::with_capacity(samples);
     let mut allocation = Snapshot::default();
@@ -193,6 +197,7 @@ fn run<const REFERENCE: bool>(case: Case, samples: usize, iterations: usize) -> 
         "busy": case.busy,
         "transient": case.transient,
         "classes": case.classes,
+        "warmup_frames": warmup_frames,
         "median_frame_ns": sorted[sorted.len() / 2],
         "p95_frame_ns": sorted[(sorted.len() * 95).div_ceil(100).saturating_sub(1)],
         "raw_frame_ns": elapsed,
