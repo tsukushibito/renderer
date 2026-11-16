@@ -26,7 +26,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 分類 | 文書 | 内容 |
 |---|---|---|
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
-| 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、RenderDoc |
+| 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
 | 利用手順 | [HTML文書](guides/html-docs.md) | フレームワーク比較とmdBook選定、ビルド、閲覧、配布・更新 |
 | 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |

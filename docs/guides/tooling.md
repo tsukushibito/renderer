@@ -1,4 +1,4 @@
-# 依存・SPIR-V・GPU調査ツール
+# 依存・SPIR-V・CPU/GPU調査ツール
 
 通常のビルドと試験は[開発手順](development.md)を参照する。
 以下のコマンドはリポジトリのルートで実行する。
@@ -179,6 +179,183 @@ sampled fixtureの二API内容照合は同じ[検証状況](../verification/curr
 非identity MVP、非対称なgeometry、深度、Compute／合成の全画素比較はB1の
 `renderer-7ft.2.3`／`.2.4`で確認する。
 4／80 byteの論理定数ABIと、後続runtimeのroot constants／CBVの配置・range要件も区別する。
+
+<a id="cpu-profiling"></a>
+
+## WindowsのCPUプロファイル
+
+[CPU調査CLI](../../tools/cpu_profile/capture.py)は、保存したEXE/PDBの確認、
+WPRによる所有セッションの収集、WPA/xperfのCLI出力、PIDと計測窓による集計を分けて行う。
+GUI操作は必要ない。CPUサンプリング、schedulerのRunning／Ready／Waiting、
+Rendererのphase経過時間とGPU timestampは異なる指標である。
+手順とツールの準備だけでは実サンプルの帰属を確認したことにならず、
+実行済み範囲・権限による未実行項目は[最新の検証結果](../verification/current.md)へ記録する。
+
+### 環境とEXE/PDBの保存
+
+Windows x64/MSVCの通常ビルド環境、Python 3.11以降、Windows Performance Toolkitの
+WPR・WPA exporter・xperf、行解決にはLLVMの`llvm-symbolizer.exe`を用意する。
+収集には管理者としてのCPU/ETW記録権限が必要である。CLIはUAC昇格、権限の付与、
+sampling intervalやregistry設定の変更を行わない。
+通常のbuild・CPU試験にこの収集権限やWPTを要求しない。
+
+既定のWPRは`C:/Windows/System32/wpr.exe`、WPTは
+`C:/Program Files (x86)/Windows Kits/10/Windows Performance Toolkit/`、
+LLVMは`C:/Program Files/LLVM/bin/llvm-symbolizer.exe`を使う。
+異なる配置には各CLIの`--wpr`、`--wpt`、`--symbolizer`を明示する。
+WPRの`-help advanced`／`-help tracing`、WPA exporterとLLVMのhelpで、
+使用版のinstance指定、marker、CSVとJSON形式を確認する。
+
+```powershell
+python -B tools/cpu_profile/build.py --profile profiling --example profile_workload --features vulkan,d3d12 --output .tools/cpu-profile/builds/workload-profiling
+python -B tools/cpu_profile/build.py --profile release --example profile_workload --features vulkan,d3d12 --output .tools/cpu-profile/builds/workload-release
+```
+
+出力先は新規または空のディレクトリとする。`profiling`はreleaseの最適化を引き継ぎ、
+full debug情報とstripなしだけを変更する。`release`は通常構成との費用比較用で、
+PDBが存在しても行情報を得られるとは限らない。両構成を同条件で測り、debug情報を加えた差も記録する。
+helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
+manifestにはsource/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
+capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
+
+既定のexampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
+上のヘッドレス用指定を省略しない。変更中のsourceは既定で拒否し、
+調査上必要なときだけ`--allow-dirty`で実際のhashを記録する。
+profile/rustflags/compilerの環境・Cargo設定による上書き、
+`development-validation`、backend/Graph diagnostics、`memory-profiling`の混入は拒否する。
+正しさ・メモリの受入は[別構成の実GPU実行](development.md#cpu-profile-workload)を使う。
+
+### 計画と収集
+
+`plan`は対象を起動せず、再検証したartifact、引数、出力先、上限、一意なWPR instanceと実行予定コマンドをJSONで表示する。
+次は4資源のupload/copy/readback負荷である。256資源との比較では`--resources 256`とし、
+API、seed、poll方針、warmup、durationを揃える。各runに新しい`--run-id`を使う。
+
+```powershell
+python -B tools/cpu_profile/capture.py plan --manifest .tools/cpu-profile/builds/workload-profiling/manifest.json --run-id vulkan-4-yield --handshake --timeout-seconds 90 --max-output-mib 2048 -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
+python -B tools/cpu_profile/capture.py capture --manifest .tools/cpu-profile/builds/workload-profiling/manifest.json --run-id vulkan-4-yield --handshake --timeout-seconds 90 --max-output-mib 2048 -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
+```
+
+実収集のコマンドだけを、CPU記録権限のあるPowerShellで実行する。
+`--handshake`は対象へ`--capture-handshake`を追加し、次の順序で進める。
+
+1. 対象が準備・warmupを終え、PID/QPC情報付き`PROFILE_WORKLOAD_READY`を出す。
+2. helperが自分のWPR instanceを開始し、外部begin markerを送り、stdinへ`GO`を渡す。
+3. 対象が計測を終えて`PROFILE_WORKLOAD_DONE`を出したら、helperがend markerを送り、WPRを保存停止する。
+4. helperが`END`を渡し、対象がnative teardown後の`PROFILE_WORKLOAD_REPORT`を出して終了する。
+
+READY後のGO待ちは30秒、DONE後のEND待ちは180秒で失敗する。
+markerはこの窓の外側を囲むため、IPCやmarkerコマンド自体の時間を含み、
+DONEのQPC計測窓と同一ではない。markerへ`-flush`を付けない。
+markerコマンド失敗は収集成功にせず、実ETL内のmarker存在とQPC/ETL時刻の対応は別途確認する。
+
+表示例や既存の実行ファイルを起動から収集する場合は`--handshake`を省く。
+例えば`--example windowed --features vulkan,d3d12,presentation`で別archiveを作り、
+対象引数を`--api vulkan --measure --frames 4096 --warmup 24 --vsync off`へ置き換える。
+この場合はstartup/warmup/終了も含む。`--measure`のnative計測を有効にした費用と、
+headless負荷のnative metrics無効を区別する。
+
+既定は`CPU.Verbose`のfile modeで、SampledProfile・CSwitch・ReadyThreadのstackを収集する。
+追加providerが必要な調査だけ`--wpr-profile 'path/to/custom.wprp!Profile.Verbose'`を指定し、
+必要なkeyword/stackが維持されていることを確認する。独自marker providerや毎frameのspanは必須にしない。
+`--cwd`で対象の作業場所、`--output-root`で出力の親を変更できる。
+
+既定の出力は`.tools/cpu-profile/<run-id>/`にある`capture.etl`、`capture.json`、
+対象stdout/stderrと各WPRコマンドのログである。
+PID、起動/終了UTC、実行引数、上限、所有instance、成功したstartとcleanup結果を保持する。
+全session操作で`-instancename`を最後に置き、stop/cancelは自分のstartが成功した場合だけ実行する。
+start失敗後に別セッションの停止・一括cancelで復旧しない。
+cleanup失敗時は`capture.json`のinstanceとコマンドログを確認し、同じ所有instanceだけを調査する。
+
+`--timeout-seconds`は0超〜3600秒、`--max-output-mib`は16〜65536 MiB。
+対象/通常コマンドを残時間で監視し、通常WPRコマンドは各30秒、stop/cancelは各120秒までとする。
+容量上限は実行中のpolling guardで、OSのhard quotaではない。file modeのstop/merge中は一時的に上限を超え得るため、
+開始時に指定上限の2倍の空き容量を要求し、最終出力が上限を超えたrunも失敗にする。
+target・marker・status・quotaが正常でも、`capture_valid`はstack/symbolやイベント欠落の受入を意味しない。
+
+### CLIでの出力と集計
+
+```powershell
+python -B tools/cpu_profile/capture.py export --capture .tools/cpu-profile/vulkan-4-yield/capture.json
+Get-ChildItem .tools/cpu-profile/vulkan-4-yield/export -Filter *.csv
+```
+
+exportは保存したmanifest/EXE/PDB/ETLのhashを照合し、installed AppLaunch profileのCPU定義から
+重複metricを除きleaf-event出力を要求するprofileを生成してWPA exporterへ渡す。
+同時にxperfのtrace統計、sampling頻度、sampled関数、CSwitch、ReadyThread stackのraw出力を保存する。
+`export.json`にcommand、exit code、profile/CSV hash、観測できたloss fieldを残す。
+生成profile、CSVヘッダー・単位・stack表現は使用WPT版の最初のETLで確認する。
+未検証のprofileやfixture試験だけを実収集の受入にしない。
+`--wpa-profile`で入力となるvendor profile、`--output`で新規出力先、
+`--timeout-seconds`で各分析コマンドの上限（既定300秒、最大3600秒）を変更できる。
+
+symbol検索はmatching archiveとrun内のsymcacheを使う。`--microsoft-symbols`を明示したときだけ
+Microsoft symbol serverを追加する。raw ETLには対象以外のsystem/process情報、path、stack等が含まれ得る。
+ETL、PDB、cache、ログは`.tools/`にローカル保存し、自動uploadやGit追加は行わない。
+共有時は含まれる情報と共有範囲を確認する。
+
+CSVの実ファイル名を確認して`$sampledCsv`と`$preciseCsv`へ設定し、
+対象PIDの生存期間内で確かめたETL相対秒の窓を`$roiStartSeconds`と`$roiEndSeconds`へ設定する。
+QPCの絶対tick値を単に秒へ割ってETL相対時刻とみなさず、traceのclock/headerとmarkerから対応を確認する。
+
+```powershell
+python -B tools/cpu_profile/capture.py analyze --capture .tools/cpu-profile/vulkan-4-yield/capture.json --sampled $sampledCsv --precise $preciseCsv --start-s $roiStartSeconds --end-s $roiEndSeconds --output .tools/cpu-profile/vulkan-4-yield/summary.json
+```
+
+analyzerはtarget PIDを抽出し、Count=1のleafイベント、明示的な単位、0x付きの実IPを要求する。
+集約/subtotal、重複header/event、非有限数、逆転時刻、同じTIDの重複状態区間を拒否する。
+使用版のbare timestamp列の単位を確かめた場合だけ`--timestamp-unit s|ms|us|ns`で指定する。
+bare durationの単位を推測せず、sample weightは`Weight (ms)`または正規化した`weight_ms`を使う。
+stackは明示したroot-to-leafの`stack_json`、または確認済みの`--stack-separator`でのみinclusive frame集計を行う。
+vendor出力の表現がこの契約に合わなければ拒否原因とraw CSVを保持し、実出力を確認してadapterを更新する。
+
+正規化CSVで使う必須列は次のとおり。`*_s`は秒、`weight_ms`はms、`count`は1とする。
+
+| 表 | 正規化列 |
+|---|---|
+| sampled | `pid,tid,cpu,time_s,ip,module,function,count,weight_ms`。任意の`stack_json`はroot-to-leafの文字列配列 |
+| precise | `pid,tid,cpu,count,last_switch_out_s,ready_time_s,switch_in_s,next_switch_out_s,previous_state,wait_reason,wait_stack,ready_stack` |
+
+sampleのCountは関数呼び出し回数ではなく標本数、Weightは実行中CPU時間の推定である。
+selfはmoduleとfunctionを組にし、未知symbol/IPの費用も残す。
+inclusiveは入力frame文字列への帰属で、recursive frameは一標本につき一度だけ加算する。
+inclusive値の合計をCPU総時間にしない。標本timestampによる窓選択には境界の近似と短い処理の見落としがある。
+preciseはRunning、実行可能だが未割当のReady、イベント待ちのWaitingを別々に窓へclipする。
+待機理由/New Thread Stackと、起床させた側のReady Thread Stackを分ける。
+不足した端点/状態をゼロで埋めず、TID再利用はそのIDの合計として残す。
+複数threadの合計はwall timeを超え得る。通常のsleep/pacingもWaitingになり、長い待機だけでは欠陥と断定しない。
+
+### 実IPからソース行を確認する
+
+対象PIDと時刻に対応するImage_Loadの実ASLR baseを`$capturedImageBase`へ設定する。
+manifestのPE preferred baseや、decoded関数の先頭アドレスで置き換えない。
+
+```powershell
+python -B tools/cpu_profile/symbolize.py --manifest .tools/cpu-profile/builds/workload-profiling/manifest.json --image-base $capturedImageBase --summary .tools/cpu-profile/vulkan-4-yield/summary.json --top 50 --output .tools/cpu-profile/vulkan-4-yield/source.json
+```
+
+matching EXE/PDBを再検証し、実sample IPから実baseを引いたRVAをLLVMへ渡す。
+IP/RVA、sample weight、inline chain、filename/line、対象EXE外と未解決を分けて残す。
+このhelperは指定したEXEだけを解決し、driver/DLL等の行情報を同じbaseへ結び付けない。
+最適化やinlineにより行の意味は曖昧になり得る。既知RVAのoffline行解決はtoolの確認であり、
+実サンプルで同じsource帰属が成立した証拠は実ETLから別途得る。
+
+採用する測定では、status/trace統計のlost events/buffers、sample/stack数、symbol・行の解決率、
+対象PID/生存期間/ROI、WPRmarkerとQPC窓の差を確認する。欠落fieldは未確認のまま残す。
+`-tle`や`-tti`で欠落・時刻逆転を許可して正確な集計を主張しない。
+ETW付き/なし、profiling/release、二API、4/256資源、poll方針を変えた比較は逐次実行し、
+raw結果と測定条件、揺れ、未実行項目を[検証結果](../verification/current.md)へ記す。
+
+CLI契約のCPU試験は実ETW/GPUを起動しない。
+
+```powershell
+python -B -m unittest discover -s tools/cpu_profile -p "test_*.py"
+```
+
+一次資料は[WPR CLI](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options)、
+[CPU分析](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/cpu-analysis)、
+[WPA exporter](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/exporter)、
+[LLVM symbolizer](https://llvm.org/docs/CommandGuide/llvm-symbolizer.html)を参照する。
 
 ## RenderDoc
 

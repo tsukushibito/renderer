@@ -16,6 +16,7 @@
 | M4のD3D12準備試験 | Windows x64、D3D12対応実GPU、Windows Graphics ToolsのDebug Layer／GBV、Vulkan比較環境 |
 | 実行環境・シェーダーの調査 | Vulkan SDK 1.4.341.1のvulkaninfo、glslc、spirv-val |
 | 依存・GPU内容の調査 | cargo-deny 0.20.2、RenderDoc 1.47。[ツールガイド](tooling.md)を参照 |
+| WindowsのCPUサンプリング・待機分析 | Python 3.11以降、WPR/WPA exporter/xperf、行解決用LLVM、収集時の管理者権限。[CPUプロファイル手順](tooling.md#cpu-profiling)を参照 |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../../.beads/README.md)を参照 |
 | Bistro素材・比較画像の共有 | Git LFS。[素材一覧とライセンス](../../assets/bistro/README.md)を参照 |
 
@@ -786,6 +787,46 @@ cargo run --locked -p renderer --features vulkan,development-validation,graph-di
 別の最終画像へ合成します。中央が黄色、背景が白であることを確認してPPMへ保存します。
 PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、画面出力の色管理は含みません。
 資源の作成・投入は明示的で、CPUの完了待ちは最後のreadback境界にあります。
+
+<a id="cpu-profile-workload"></a>
+
+### CPUプロファイル用の固定負荷
+
+[`profile_workload`](../../crates/renderer/examples/profile_workload.rs)は、毎frameで変わる16 byteをuploadし、
+`resources - 1`回のbuffer copyとreadback後に全16 byteを照合するWindowsのheadless例である。
+1件のin-flightと準備済み容量を使い、build/compile/submit/poll/readback/返却を通す。
+描画、present/VSync、GPU timestamp、native metricsは含まず、大きな転送帯域を測る負荷でもない。
+`--api`は必須。`--resources`は1〜4096、`--warmup-ms`は0〜60000（0でも1 frame以上）、
+`--duration-ms`は1〜60000で、時間指定では最後に開始したframeの完了まで待つ。
+`--frames N`は指定件数すべてが期限内に完了しないと失敗する。
+
+正しさ受入は物理GPUで次を逐次実行し、同じ指定の`--api d3d12`も別processで実行する。
+Core/SyncValまたはDebug Layer/GBVの実効設定とwarning/errorゼロを、最終teardown後まで確認する。
+4/256資源やpoll方針を比較する場合は同じ条件のshipping実行も確認する。
+
+```powershell
+cargo run --locked --profile profiling -p renderer --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics --example profile_workload -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
+cargo run --locked --profile profiling -p renderer --no-default-features --features vulkan,d3d12 --example profile_workload -- --api vulkan --resources 4 --seed 1 --warmup-ms 500 --duration-ms 3000 --poll yield
+```
+
+受入には`PROFILE_WORKLOAD_REPORT`と終了code 0、内容照合、`retained_graph_slots=0`、
+最終native検証結果を使い、途中のDONEだけを成功としない。
+CPU契約試験は`cargo test --locked -p renderer --no-default-features --example profile_workload`でGPUなしに実行できる。
+`memory-profiling`を追加する場合は別runとし、通常窓のallocation/native判定とsetup/shutdownの正の対照を確認する。
+これらの正しさ・メモリ試験の時間をshipping性能へ流用しない。
+
+`--poll busy|yield|sleep`（既定yield）はcallerの待ち方であり、busyは即時再poll、
+yieldは`yield_now()`、sleepは未完了poll後に1 ms休止する。
+CPU時間、Ready/Waiting、poll回数とwall timeが変わるため、同じ方針同士で比較する。
+`elapsed_ns`と`phase_elapsed_ns`はwall time、process/main-threadの`*_100ns`はCPU時間である。
+後者をmsへ換算するときは10000で割り、process全threadとcaller threadを区別する。
+QPC経過秒は`qpc_elapsed_ticks / qpc_frequency`であり、boundaryはQPC→process CPU→thread CPUの順で読む。
+これらの窓は完全に同時ではない。phase合計はpayload生成やloop/timer周辺の全費用を含まず、frame別p95も保存しない。
+digest比較にはseedと測定frame数を揃える。時間指定で件数が違うrunではdigestの一致を期待しない。
+
+保存EXE/PDB、WPRの所有session、外部marker付きhandshake、CSV/ソース行の分析は
+[CPUプロファイル手順](tooling.md#cpu-profiling)に従う。
+実ETLの欠落、stack/symbol帰属、最適化構成の費用比較は実収集後の別受入とする。
 
 ### フレーム進行・エンジン入力
 
