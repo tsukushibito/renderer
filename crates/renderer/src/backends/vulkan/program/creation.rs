@@ -226,6 +226,11 @@ impl Program {
         managed: crate::program::ManagedRasterProgram,
         depth: bool,
     ) -> Result<Self, RuntimeError> {
+        if managed.requires_depth() && !depth {
+            return Err(RuntimeError::invalid(
+                "Raster Program requires a depth attachment",
+            ));
+        }
         let limits = owner.device.limits();
         if limits.max_push_constants_size < managed.parameter_size()
             || limits.max_vertex_input_attributes < 2
@@ -523,6 +528,7 @@ impl Program {
         let mesh = raster_program.is_some();
         let depth_enabled = raster_program.is_some_and(|(_, depth)| depth);
         let depth_only = raster_program.is_some_and(|(program, _)| program.is_depth_only());
+        let prepassed = raster_program.is_some_and(|(program, _)| program.is_prepassed());
         let vertex = ShaderModule::new(
             Arc::clone(&self.owner),
             if let Some((program, _)) = raster_program {
@@ -601,8 +607,12 @@ impl Program {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
         let depth = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(depth_enabled)
-            .depth_write_enable(depth_enabled)
-            .depth_compare_op(vk::CompareOp::LESS);
+            .depth_write_enable(depth_enabled && !prepassed)
+            .depth_compare_op(if prepassed {
+                vk::CompareOp::LESS_OR_EQUAL
+            } else {
+                vk::CompareOp::LESS
+            });
         let color_attachments = [vk::PipelineColorBlendAttachmentState::default()
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(if depth_only {

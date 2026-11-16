@@ -12,6 +12,7 @@ pub struct ManagedRasterProgram {
 
 struct Manifest {
     native_id: usize,
+    prepassed: bool,
     vertex_stride: u32,
     parameter_size: u32,
     color_outputs: &'static [ImageFormat],
@@ -29,6 +30,7 @@ struct Manifest {
 
 static MESH: Manifest = Manifest {
     native_id: 0,
+    prepassed: false,
     vertex_stride: 28,
     parameter_size: 80,
     color_outputs: &[ImageFormat::Rgba8Unorm],
@@ -46,6 +48,7 @@ static MESH: Manifest = Manifest {
 
 static TEXTURED_MESH: Manifest = Manifest {
     native_id: 1,
+    prepassed: false,
     vertex_stride: 28,
     parameter_size: 80,
     color_outputs: &[ImageFormat::Rgba8Unorm],
@@ -112,6 +115,20 @@ static DEPTH_ONLY: Manifest = Manifest {
     ..MESH
 };
 
+// Separate immutable identities keep these read-only-depth pipelines distinct
+// from the original LESS/write variants while sharing the exact shader ABI.
+static MESH_PREPASSED: Manifest = Manifest {
+    native_id: 5,
+    prepassed: true,
+    ..MESH
+};
+
+static MESH_HDR_PREPASSED: Manifest = Manifest {
+    native_id: 6,
+    prepassed: true,
+    ..MESH_HDR
+};
+
 impl std::fmt::Debug for ManagedRasterProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedRasterProgram")
@@ -124,6 +141,9 @@ impl std::fmt::Debug for ManagedRasterProgram {
 }
 
 impl ManagedRasterProgram {
+    #[cfg(any(test, feature = "vulkan"))]
+    pub(crate) const NATIVE_PROGRAM_COUNT: usize = 7;
+
     /// The existing mesh shaders: packed `xyz` and linear `rgba` f32 vertex
     /// attributes; one vertex-stage inline column-major matrix and tint block;
     /// one RGBA8 color output. There are no logical resource descriptor bindings
@@ -143,6 +163,25 @@ impl ManagedRasterProgram {
     pub const fn mesh_hdr() -> Self {
         Self {
             manifest: &MESH_HDR,
+        }
+    }
+
+    /// Mesh color after a depth prepass: normal-Z LESS_OR_EQUAL with depth
+    /// writes disabled. Requires an existing depth attachment with
+    /// `LoadOp::Load`, including when the draw sequence is empty. Use the same
+    /// geometry and transform as the prepass to accept its equal-depth samples.
+    /// Shader, vertex and inline parameter ABIs match [`Self::mesh`].
+    pub const fn mesh_prepassed() -> Self {
+        Self {
+            manifest: &MESH_PREPASSED,
+        }
+    }
+
+    /// The RGBA16F counterpart of [`Self::mesh_prepassed`], with the same
+    /// loaded, read-only depth contract and HDR output as [`Self::mesh_hdr`].
+    pub const fn mesh_hdr_prepassed() -> Self {
+        Self {
+            manifest: &MESH_HDR_PREPASSED,
         }
     }
 
@@ -223,6 +262,14 @@ impl ManagedRasterProgram {
         self.native_id() == 4
     }
 
+    pub(crate) const fn is_prepassed(&self) -> bool {
+        self.manifest.prepassed
+    }
+
+    pub(crate) fn requires_depth(&self) -> bool {
+        self.is_depth_only() || self.is_prepassed()
+    }
+
     #[cfg(feature = "vulkan")]
     pub(crate) fn vertex_spirv(&self) -> &'static [u8] {
         self.manifest.vertex_spirv
@@ -247,6 +294,57 @@ impl ManagedRasterProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prepassed_programs_keep_shader_abis_but_have_distinct_depth_contracts() {
+        let all = [
+            ManagedRasterProgram::mesh(),
+            ManagedRasterProgram::textured_mesh(),
+            ManagedRasterProgram::mesh_hdr(),
+            ManagedRasterProgram::textured_mesh_hdr(),
+            ManagedRasterProgram::depth_only(),
+            ManagedRasterProgram::mesh_prepassed(),
+            ManagedRasterProgram::mesh_hdr_prepassed(),
+        ];
+        let mut ids = all.map(|program| program.native_id());
+        ids.sort_unstable();
+        assert_eq!(all.len(), ManagedRasterProgram::NATIVE_PROGRAM_COUNT);
+        assert_eq!(
+            ids,
+            std::array::from_fn(|id| id),
+            "native pipeline identities must not alias"
+        );
+        for (program, original) in [
+            (
+                ManagedRasterProgram::mesh_prepassed(),
+                ManagedRasterProgram::mesh(),
+            ),
+            (
+                ManagedRasterProgram::mesh_hdr_prepassed(),
+                ManagedRasterProgram::mesh_hdr(),
+            ),
+        ] {
+            assert!(program.is_prepassed());
+            assert!(program.requires_depth());
+            assert!(!original.is_prepassed());
+            assert!(!original.requires_depth());
+            assert_eq!(program.color_outputs(), original.color_outputs());
+            assert_eq!(program.vertex_stride(), original.vertex_stride());
+            assert_eq!(program.parameter_size(), original.parameter_size());
+            assert_eq!(program.bindings(), original.bindings());
+            assert_eq!(program.binding_bytes(), original.binding_bytes());
+            #[cfg(feature = "vulkan")]
+            {
+                assert_eq!(program.vertex_spirv(), original.vertex_spirv());
+                assert_eq!(program.fragment_spirv(), original.fragment_spirv());
+            }
+            #[cfg(all(feature = "d3d12", windows))]
+            {
+                assert_eq!(program.vertex_dxil(), original.vertex_dxil());
+                assert_eq!(program.fragment_dxil(), original.fragment_dxil());
+            }
+        }
+    }
 
     #[test]
     fn hdr_and_depth_contracts_preserve_the_reviewed_shader_abis() {

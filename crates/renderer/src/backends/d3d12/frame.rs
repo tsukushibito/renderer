@@ -377,7 +377,7 @@ impl FramePool {
             })?;
         for program in programs {
             for depth in [false, true] {
-                if program.is_depth_only() && !depth {
+                if program.requires_depth() && !depth {
                     continue;
                 }
                 if !pool_mut

@@ -139,6 +139,109 @@ fn observe(graph: &mut Graph, image: ImageHandle, name: &'static str, bytes: Vec
     }
 }
 
+fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut Vec<Expected>) {
+    let depth = graph
+        .image("prepass depth", ImageDesc::depth32(4, 4))
+        .unwrap();
+    graph
+        .raster(
+            "prepass geometry",
+            &ManagedRasterProgram::depth_only(),
+            [
+                placed(quad, false, 0.5, [1.0; 4]),
+                placed(quad, true, 0.25, [1.0; 4]),
+            ],
+            RasterAttachments {
+                colors: &[],
+                depth: Some(depth_attachment(graph, depth, LoadOp::Clear(1.0))),
+            },
+        )
+        .unwrap();
+    for (program, desc, same_name, near_name, colors, near) in [
+        (
+            ManagedRasterProgram::mesh_prepassed(),
+            ImageDesc::rgba8(4, 4),
+            "prepassed RGBA8 equal geometry",
+            "prepassed RGBA8 nearer overlay",
+            pixels(|x, _| {
+                if x < 2 {
+                    [0, 255, 0, 255]
+                } else {
+                    [255, 0, 0, 255]
+                }
+            }),
+            pixels(|_, _| [0, 0, 255, 255]),
+        ),
+        (
+            ManagedRasterProgram::mesh_hdr_prepassed(),
+            hdr(4, 4),
+            "prepassed HDR equal geometry",
+            "prepassed HDR nearer overlay",
+            half_bytes(
+                pixels(|x, _| {
+                    if x < 2 {
+                        [0, 0x4400, 0, 0x3c00]
+                    } else {
+                        [0x4000, 0, 0, 0x3c00]
+                    }
+                })
+                .as_chunks::<4>()
+                .0,
+            ),
+            half_bytes(&[[0, 0, 0x3c00, 0x3c00]; 16]),
+        ),
+    ] {
+        let color = graph.image(same_name, desc).unwrap();
+        let hdr = desc.format == ImageFormat::Rgba16Float;
+        graph
+            .raster(
+                same_name,
+                &program,
+                [
+                    placed(
+                        quad,
+                        false,
+                        0.5,
+                        [if hdr { 2.0 } else { 1.0 }, 0.0, 0.0, 1.0],
+                    ),
+                    placed(
+                        quad,
+                        true,
+                        0.25,
+                        [0.0, if hdr { 4.0 } else { 1.0 }, 0.0, 1.0],
+                    ),
+                    // A disabled depth test would replace both equal-depth draws.
+                    placed(quad, false, 0.75, [1.0, 1.0, 0.0, 1.0]),
+                ],
+                RasterAttachments {
+                    colors: &[color_attachment(graph, color, LoadOp::Clear([0.0; 4]))],
+                    depth: Some(depth_attachment(graph, depth, LoadOp::Load)),
+                },
+            )
+            .unwrap();
+        expected.push(observe(graph, color, same_name, colors));
+        graph
+            .raster(
+                near_name,
+                &program,
+                [placed(quad, false, 0.125, [0.0, 0.0, 1.0, 1.0])],
+                RasterAttachments {
+                    colors: &[color_attachment(graph, color, LoadOp::Load)],
+                    depth: Some(depth_attachment(graph, depth, LoadOp::Load)),
+                },
+            )
+            .unwrap();
+        expected.push(observe(graph, color, near_name, near));
+    }
+    // The nearer fragments were shaded but must not replace the prepass depth.
+    expected.push(observe(
+        graph,
+        depth,
+        "prepassed readonly depth",
+        float_bytes(&pixels(|x, _| [if x < 2 { 0.25 } else { 0.5 }])),
+    ));
+}
+
 fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expected>) {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();
@@ -447,25 +550,28 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         half_bytes(&expanded),
     ));
 
+    prepass_continuations(&mut graph, quad, &mut expected);
     (pool, graph.compile().unwrap(), expected)
 }
 
-fn programs() -> [ManagedRasterProgram; 5] {
+fn programs() -> [ManagedRasterProgram; 7] {
     [
         ManagedRasterProgram::mesh(),
         ManagedRasterProgram::mesh_hdr(),
         ManagedRasterProgram::textured_mesh(),
         ManagedRasterProgram::textured_mesh_hdr(),
         ManagedRasterProgram::depth_only(),
+        ManagedRasterProgram::mesh_prepassed(),
+        ManagedRasterProgram::mesh_hdr_prepassed(),
     ]
 }
 
 fn image_classes() -> [(ImageDesc, usize); 5] {
     [
-        (ImageDesc::rgba8(4, 4), 3),
+        (ImageDesc::rgba8(4, 4), 4),
         (ImageDesc::rgba8(2, 2), 2),
-        (ImageDesc::depth32(4, 4), 2),
-        (hdr(4, 4), 2),
+        (ImageDesc::depth32(4, 4), 3),
+        (hdr(4, 4), 3),
         (hdr(2, 2), 1),
     ]
 }

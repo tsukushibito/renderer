@@ -203,9 +203,9 @@ impl RasterPipeline {
                 "Raster programs require Shader Model 6.0",
             ));
         }
-        if managed.is_depth_only() && !depth {
+        if managed.requires_depth() && !depth {
             return Err(D3D12RuntimeError::invalid(
-                "depth-only Raster requires a depth attachment",
+                "Raster Program requires a depth attachment",
             ));
         }
         require_format(
@@ -309,13 +309,15 @@ impl RasterPipeline {
             },
             DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
                 DepthEnable: depth.into(),
-                DepthWriteMask: if depth {
+                DepthWriteMask: if depth && (clear || !managed.is_prepassed()) {
                     D3D12_DEPTH_WRITE_MASK_ALL
                 } else {
                     D3D12_DEPTH_WRITE_MASK_ZERO
                 },
                 DepthFunc: if clear {
                     D3D12_COMPARISON_FUNC_ALWAYS
+                } else if managed.is_prepassed() {
+                    D3D12_COMPARISON_FUNC_LESS_EQUAL
                 } else {
                     D3D12_COMPARISON_FUNC_LESS
                 },
@@ -391,10 +393,12 @@ mod tests {
             ManagedRasterProgram::textured_mesh(),
             ManagedRasterProgram::mesh_hdr(),
             ManagedRasterProgram::textured_mesh_hdr(),
+            ManagedRasterProgram::mesh_prepassed(),
+            ManagedRasterProgram::mesh_hdr_prepassed(),
             depth_only,
         ] {
             for depth in [false, true] {
-                if program.is_depth_only() && !depth {
+                if program.requires_depth() && !depth {
                     continue;
                 }
                 let pipeline = RasterPipeline::new(&owner, &program, depth)

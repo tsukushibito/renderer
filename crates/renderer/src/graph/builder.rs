@@ -7,7 +7,7 @@ use std::{borrow::Borrow, ops::Range, sync::Arc};
 use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
-    GraphError, GraphErrorKind, ImageDesc, ImageFormat, ImageHandle, MeshUpload, Operation,
+    GraphError, GraphErrorKind, ImageDesc, ImageFormat, ImageHandle, LoadOp, MeshUpload, Operation,
     PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess,
     ResourceDesc, ResourceHandle, UploadSource, overlaps,
 };
@@ -279,15 +279,26 @@ impl Graph {
         I: IntoIterator<Item = D>,
         D: Borrow<RasterDraw<'a>>,
     {
+        if program.is_prepassed()
+            && !attachments
+                .depth
+                .is_some_and(|depth| matches!(depth.load, LoadOp::Load))
+        {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "prepassed Raster requires a depth attachment with Load",
+            )
+            .with_pass_name(name));
+        }
         let mut draws = draws.into_iter().peekable();
         if draws.peek().is_none() {
             return self.attachment_pass(name, attachments);
         }
         self.build_pass(name, |graph| {
-            if program.is_depth_only() && attachments.depth.is_none() {
+            if program.requires_depth() && attachments.depth.is_none() {
                 return Err(GraphError::new(
                     GraphErrorKind::InvalidInput,
-                    "depth-only Raster requires a depth attachment",
+                    "Raster Program requires a depth attachment",
                 ));
             }
             if attachments.colors.len() != program.color_outputs().len() {
@@ -651,6 +662,95 @@ mod tests {
             indices,
             index_count: 3,
             parameters: RasterParameters::default(),
+        }
+    }
+
+    #[test]
+    fn prepassed_raster_requires_loaded_depth_even_without_draws() {
+        for program in [
+            ManagedRasterProgram::mesh_prepassed(),
+            ManagedRasterProgram::mesh_hdr_prepassed(),
+        ] {
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            let mut graph = pool.begin().unwrap();
+            let draw = uploaded_draw(&mut graph, "mesh");
+            let color = graph
+                .image(
+                    "color",
+                    ImageDesc {
+                        format: if program.color_outputs()
+                            == [crate::program::ImageFormat::Rgba16Float]
+                        {
+                            ImageFormat::Rgba16Float
+                        } else {
+                            ImageFormat::Rgba8Unorm
+                        },
+                        ..ImageDesc::rgba8(4, 4)
+                    },
+                )
+                .unwrap();
+            let depth = graph.image("depth", ImageDesc::depth32(4, 4)).unwrap();
+            let colors = [Attachment {
+                view: graph.image_view(color, 0, 0).unwrap(),
+                load: LoadOp::Clear([0.0; 4]),
+                store: StoreOp::Store,
+            }];
+            let depth_view = graph.image_view(depth, 0, 0).unwrap();
+            for draws in [&[][..], &[draw][..]] {
+                for load in [None, Some(LoadOp::Clear(1.0)), Some(LoadOp::Discard)] {
+                    let before = graph.passes.len();
+                    let error = graph
+                        .raster(
+                            "invalid prepass continuation",
+                            &program,
+                            draws,
+                            RasterAttachments {
+                                colors: &colors,
+                                depth: load.map(|load| Attachment {
+                                    view: depth_view,
+                                    load,
+                                    store: StoreOp::Store,
+                                }),
+                            },
+                        )
+                        .unwrap_err();
+                    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+                    assert_eq!(error.pass_name(), Some("invalid prepass continuation"));
+                    assert_eq!(graph.passes.len(), before, "rejection appends no pass");
+                }
+            }
+            graph
+                .attachment_pass(
+                    "initial depth",
+                    RasterAttachments {
+                        colors: &[],
+                        depth: Some(Attachment {
+                            view: depth_view,
+                            load: LoadOp::Clear(1.0),
+                            store: StoreOp::Store,
+                        }),
+                    },
+                )
+                .unwrap();
+            for draws in [&[][..], &[draw][..]] {
+                graph
+                    .raster(
+                        "valid prepass continuation",
+                        &program,
+                        draws,
+                        RasterAttachments {
+                            colors: &colors,
+                            depth: Some(Attachment {
+                                view: depth_view,
+                                load: LoadOp::Load,
+                                store: StoreOp::Store,
+                            }),
+                        },
+                    )
+                    .unwrap();
+            }
+            graph.readback_image("color result", color).unwrap();
+            graph.compile().unwrap();
         }
     }
 

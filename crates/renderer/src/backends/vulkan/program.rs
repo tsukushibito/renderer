@@ -22,6 +22,8 @@ use bindings::BindingPool;
 pub(super) use bindings::ShaderBindings;
 use creation::{Program, ProgramKind};
 
+const RASTER_VARIANT_COUNT: usize = crate::program::ManagedRasterProgram::NATIVE_PROGRAM_COUNT * 2;
+
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
     RuntimeError::native(operation, owner.device.name(), result)
@@ -73,7 +75,7 @@ pub(super) struct ShaderPrograms {
     owner: Arc<MemoryOwner>,
     compute: OnceLock<Program>,
     raster: OnceLock<Program>,
-    rasters: [OnceLock<Program>; 10],
+    rasters: [OnceLock<Program>; RASTER_VARIANT_COUNT],
     composite: OnceLock<Program>,
     initialization: Mutex<()>,
     limits: vk::PhysicalDeviceLimits,
@@ -156,7 +158,7 @@ impl ShaderPrograms {
         )
     }
 
-    fn raster_layouts(&self) -> [Option<[vk::DescriptorSetLayout; 2]>; 10] {
+    fn raster_layouts(&self) -> [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT] {
         std::array::from_fn(|key| {
             self.rasters[key]
                 .get()
@@ -176,7 +178,7 @@ impl ShaderPrograms {
             .map_err(|_| RuntimeError::invalid("Graph program initialization lock poisoned"))?;
         for &managed in programs {
             for depth in [false, true] {
-                if (managed.is_depth_only() && !depth)
+                if (managed.requires_depth() && !depth)
                     || (depth && !depth_available && !managed.is_depth_only())
                 {
                     continue;

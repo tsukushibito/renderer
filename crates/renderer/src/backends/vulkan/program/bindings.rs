@@ -11,14 +11,14 @@ use super::super::memory::MemoryOwner;
 use super::super::resources::DeviceImage;
 #[cfg(feature = "vulkan-diagnostics")]
 use super::name_object;
-use super::{ShaderNeeds, ShaderPrograms, native};
+use super::{RASTER_VARIANT_COUNT, ShaderNeeds, ShaderPrograms, native};
 
 struct DescriptorArena {
     owner: Arc<MemoryOwner>,
     pool: vk::DescriptorPool,
     compute: Vec<vk::DescriptorSet>,
     composite: Vec<vk::DescriptorSet>,
-    raster: [Vec<[vk::DescriptorSet; 2]>; 10],
+    raster: [Vec<[vk::DescriptorSet; 2]>; RASTER_VARIANT_COUNT],
 }
 
 impl DescriptorArena {
@@ -27,7 +27,7 @@ impl DescriptorArena {
         max_bindings: u32,
         compute: Option<vk::DescriptorSetLayout>,
         composite: Option<vk::DescriptorSetLayout>,
-        raster: [Option<[vk::DescriptorSetLayout; 2]>; 10],
+        raster: [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT],
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] ordinal: usize,
     ) -> Result<Self, RuntimeError> {
         let raster_count = raster.iter().flatten().count() as u32;
@@ -184,7 +184,7 @@ struct DescriptorCache {
     layouts: (
         Option<vk::DescriptorSetLayout>,
         Option<vk::DescriptorSetLayout>,
-        [Option<[vk::DescriptorSetLayout; 2]>; 10],
+        [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT],
     ),
 }
 
@@ -198,7 +198,10 @@ pub(super) struct BindingPool {
 
 impl BindingPool {
     pub(super) fn new(slots: usize, max_bindings: u32) -> Result<Self, RuntimeError> {
-        if slots == 0 || max_bindings == 0 || max_bindings > u32::MAX / 22 {
+        if slots == 0
+            || max_bindings == 0
+            || max_bindings > u32::MAX / (2 + 2 * RASTER_VARIANT_COUNT as u32)
+        {
             return Err(RuntimeError::invalid(
                 "Graph shader capacities must be nonzero and descriptor counts representable",
             ));
@@ -224,7 +227,7 @@ impl BindingPool {
         owner: &Arc<MemoryOwner>,
         compute: Option<vk::DescriptorSetLayout>,
         composite: Option<vk::DescriptorSetLayout>,
-        raster: [Option<[vk::DescriptorSetLayout; 2]>; 10],
+        raster: [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT],
     ) -> Result<(), RuntimeError> {
         let mut cache = self
             .cache
@@ -298,7 +301,7 @@ impl ShaderPrograms {
             used: 0,
             compute_used: 0,
             composite_used: 0,
-            raster_used: [0; 10],
+            raster_used: [0; RASTER_VARIANT_COUNT],
         })
     }
 
@@ -319,7 +322,7 @@ pub(in crate::backends::vulkan) struct ShaderBindings {
     used: u32,
     compute_used: usize,
     composite_used: usize,
-    raster_used: [usize; 10],
+    raster_used: [usize; RASTER_VARIANT_COUNT],
 }
 
 impl ShaderBindings {
