@@ -198,7 +198,8 @@ impl Graph {
         })
     }
 
-    /// Copies a complete RGBA8 image into a distinct image of the same extent.
+    /// Copies a complete RGBA8 or RGBA16F image into a distinct image with the
+    /// same format and extent, without changing its native component bits.
     /// The source contents are selected by declaration order and must be initialized.
     pub fn copy_image(
         &mut self,
@@ -209,7 +210,7 @@ impl Graph {
         self.build_pass(name, |graph| {
             let src = graph.image_id(src)?;
             let dst = graph.image_id(dst)?;
-            graph.compatible_color_pair(src, dst)?;
+            graph.compatible_image_copy_pair(src, dst)?;
             Ok((
                 Operation::CopyImage { src, dst },
                 graph.append_accesses([

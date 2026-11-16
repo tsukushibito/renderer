@@ -4,9 +4,9 @@
 //! are copied once and stay immutable; storage is created without initialized
 //! contents and may be written by the GPU. Immutable bindings retain the actual
 //! Program and resource versions, not a promise of immutable storage contents.
-//! Managed buffer and sampled-image dispatches can be planned by Graph; native
-//! Graph dispatch execution and arbitrary shader import are subsequent work. Reflection alone
-//! cannot establish shader memory safety or synchronization.
+//! Managed dispatches are owned by Graph. Caller-defined trusted compute assets
+//! enter through an explicit unsafe descriptor boundary; reflection alone cannot
+//! establish shader memory safety or synchronization.
 //!
 //! Creation retains uninitialized images; this example does not execute a dispatch.
 //!
@@ -93,6 +93,11 @@ pub enum BindingType {
     StorageRead,
     StorageWrite,
     SampledImage,
+    /// Read-only typed storage image. The selected View must have this format.
+    StorageImageRead(ImageFormat),
+    /// Write-only typed storage image. An accepted dispatch initializes the
+    /// complete selected View under the trusted Program's execution contract.
+    StorageImageWrite(ImageFormat),
     Sampler,
 }
 
@@ -101,7 +106,10 @@ impl BindingType {
         match self {
             Self::Uniform => Some(BufferUsage::Uniform),
             Self::StorageRead | Self::StorageWrite => Some(BufferUsage::Storage),
-            Self::SampledImage | Self::Sampler => None,
+            Self::SampledImage
+            | Self::StorageImageRead(_)
+            | Self::StorageImageWrite(_)
+            | Self::Sampler => None,
         }
     }
 }
@@ -248,31 +256,44 @@ pub enum SamplerDescriptor {
 }
 
 /// A reviewed shader asset. Ordinary builds use checked-in artifacts and need
-/// no compiler. Arbitrary binary/source and self-declared manifests are not
-/// accepted through a safe constructor.
+/// no compiler. Caller-defined assets use [`Self::from_trusted_descriptor`].
 #[derive(Clone, Copy)]
 pub struct ManagedProgram {
-    manifest: &'static Manifest,
+    manifest: &'static ComputeProgramDescriptor,
 }
 
-struct Manifest {
-    entry: &'static str,
-    workgroup_size: [u32; 3],
-    bindings: &'static [BindingLayout],
-    dispatch: DispatchContract,
-    #[cfg(feature = "vulkan")]
-    spirv: &'static [u8],
-    #[cfg(all(feature = "d3d12", windows))]
-    dxil: &'static [u8],
+/// Immutable compute asset inputs. The constructor's safety contract establishes
+/// the relationship between these metadata and both native shader binaries.
+/// The slices must be static so frame plans retain them without allocating.
+pub struct ComputeProgramDescriptor {
+    pub entry: &'static str,
+    pub workgroup_size: [u32; 3],
+    pub bindings: &'static [BindingLayout],
+    pub dispatch: DispatchContract,
+    pub spirv: &'static [u8],
+    pub dxil: &'static [u8],
 }
 
 /// Reviewed execution footprint, separate from the ABI's minimum descriptor
 /// size. Entries follow manifest binding order: buffers access the byte prefix,
 /// images read their complete selected View, and samplers have no content access.
 /// Changing shader behavior requires reviewing this contract too.
-pub(crate) struct DispatchContract {
-    pub workgroups: [u32; 3],
+pub struct DispatchContract {
+    pub workgroups: DispatchWorkgroups,
     pub bytes: &'static [u64],
+}
+
+/// Reviewed dispatch domain. Image dispatches may vary their selected image
+/// extent while preserving the shader's full-view write and bounds guarantees.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatchWorkgroups {
+    Fixed([u32; 3]),
+    /// Ceil-divide this write-only storage image View's extent by the Program's
+    /// local size. Every storage image binding must have that same extent.
+    Image2d {
+        group: u32,
+        binding: u32,
+    },
 }
 
 impl std::fmt::Debug for ManagedProgram {
@@ -285,11 +306,11 @@ impl std::fmt::Debug for ManagedProgram {
     }
 }
 
-static UNIFORM_READBACK: Manifest = Manifest {
+static UNIFORM_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
     entry: "main",
     workgroup_size: [1, 1, 1],
     dispatch: DispatchContract {
-        workgroups: [1, 1, 1],
+        workgroups: DispatchWorkgroups::Fixed([1, 1, 1]),
         bytes: &[16, 16],
     },
     bindings: &[
@@ -308,17 +329,15 @@ static UNIFORM_READBACK: Manifest = Manifest {
             min_size: 16,
         },
     ],
-    #[cfg(feature = "vulkan")]
     spirv: include_bytes!("../shaders/uniform.comp.spv"),
-    #[cfg(all(feature = "d3d12", windows))]
     dxil: include_bytes!("../shaders/dxil/uniform.comp.dxil"),
 };
 
-static STORAGE_READBACK: Manifest = Manifest {
+static STORAGE_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
     entry: "main",
     workgroup_size: [1, 1, 1],
     dispatch: DispatchContract {
-        workgroups: [1, 1, 1],
+        workgroups: DispatchWorkgroups::Fixed([1, 1, 1]),
         bytes: &[16, 16],
     },
     bindings: &[
@@ -337,17 +356,15 @@ static STORAGE_READBACK: Manifest = Manifest {
             min_size: 16,
         },
     ],
-    #[cfg(feature = "vulkan")]
     spirv: include_bytes!("../shaders/storage_read.comp.spv"),
-    #[cfg(all(feature = "d3d12", windows))]
     dxil: include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
 };
 
-static SAMPLED_READBACK: Manifest = Manifest {
+static SAMPLED_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
     entry: "main",
     workgroup_size: [1, 1, 1],
     dispatch: DispatchContract {
-        workgroups: [1, 1, 1],
+        workgroups: DispatchWorkgroups::Fixed([1, 1, 1]),
         bytes: &[0, 0, 16],
     },
     bindings: &[
@@ -373,17 +390,15 @@ static SAMPLED_READBACK: Manifest = Manifest {
             min_size: 16,
         },
     ],
-    #[cfg(feature = "vulkan")]
     spirv: include_bytes!("../shaders/sampled.comp.spv"),
-    #[cfg(all(feature = "d3d12", windows))]
     dxil: include_bytes!("../shaders/dxil/sampled.comp.dxil"),
 };
 
-static SAMPLED_FLOAT_READBACK: Manifest = Manifest {
+static SAMPLED_FLOAT_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
     entry: "main",
     workgroup_size: [1, 1, 1],
     dispatch: DispatchContract {
-        workgroups: [1, 1, 1],
+        workgroups: DispatchWorkgroups::Fixed([1, 1, 1]),
         bytes: &[0, 0, 64],
     },
     bindings: &[
@@ -409,16 +424,52 @@ static SAMPLED_FLOAT_READBACK: Manifest = Manifest {
             min_size: 64,
         },
     ],
-    #[cfg(feature = "vulkan")]
     spirv: include_bytes!("../shaders/sampled_float.comp.spv"),
-    #[cfg(all(feature = "d3d12", windows))]
     dxil: include_bytes!("../shaders/dxil/sampled_float.comp.dxil"),
 };
 
 impl ManagedProgram {
+    /// Import a statically owned, trusted compute asset without adding a
+    /// Renderer operation or effect variant.
+    ///
+    /// # Safety
+    ///
+    /// Both binaries must be valid Vulkan 1.3/SPIR-V 1.3 and D3D12 SM6.0 compute
+    /// shaders, respectively, for `entry` and exactly the declared nonzero local
+    /// size. Their complete descriptor interfaces must match the unique,
+    /// manifest-ordered `bindings`; descriptor arrays, push constants and
+    /// undeclared resources or side effects are not permitted. Buffer minimum
+    /// sizes and `dispatch.bytes` must have one entry per binding, with a nonzero
+    /// byte prefix no larger than the minimum size for buffers and zero for
+    /// image/sampler bindings. All slots must have only `ShaderStages::COMPUTE`.
+    ///
+    /// For every accepted dispatch and every permitted resource content, the
+    /// shader may access only the declared buffer prefixes and selected image
+    /// Views. It must not perform out-of-bounds accesses, races, unsupported
+    /// feature-dependent operations, or omit required shader-internal
+    /// synchronization. Storage writes must initialize every declared byte or
+    /// image texel, and no other contents. Aliased read/write bindings are
+    /// rejected by Graph, but invocation-level race freedom remains a caller
+    /// obligation. Only the typed formats supported by the backend are allowed.
+    ///
+    /// `Image2d` must name a write-only storage image slot, use local Z = 1, and
+    /// safely guard rounded-up invocations. The shader must work for every
+    /// nonzero accepted image extent, with all storage images sharing that
+    /// extent. Sampled images may have different extents. `Fixed` counts must
+    /// be nonzero, and fixed-domain shaders must safely handle every selected
+    /// image extent. Changing source, compiler options, binaries or metadata
+    /// requires re-establishing these guarantees; reflection/hash validation
+    /// alone does not establish them.
+    pub const unsafe fn from_trusted_descriptor(
+        descriptor: &'static ComputeProgramDescriptor,
+    ) -> Self {
+        Self {
+            manifest: descriptor,
+        }
+    }
+
     /// Reviewed compute asset: one invocation copies exactly 16 bytes from the
     /// uniform slot into the storage slot. Extra descriptor bytes are untouched.
-    /// Dispatch is currently exercised only by private native acceptance tests.
     pub const fn uniform_readback() -> Self {
         Self {
             manifest: &UNIFORM_READBACK,
@@ -428,7 +479,6 @@ impl ManagedProgram {
     /// Reviewed compute asset: one invocation copies exactly 16 bytes from a
     /// read-only storage slot into a write-only storage slot. Extra descriptor
     /// bytes are untouched. The input must be initialized before execution.
-    /// Dispatch is currently exercised only by private native acceptance tests.
     pub const fn storage_readback() -> Self {
         Self {
             manifest: &STORAGE_READBACK,
@@ -436,7 +486,7 @@ impl ManagedProgram {
     }
 
     /// Reviewed compute asset: four nearest/clamp samples, packed as RGBA8
-    /// into exactly 16 storage bytes. Private acceptance dispatches one invocation.
+    /// into exactly 16 storage bytes. Dispatch executes one invocation.
     pub const fn sampled_readback() -> Self {
         Self {
             manifest: &SAMPLED_READBACK,
@@ -445,7 +495,7 @@ impl ManagedProgram {
 
     /// Reviewed compute asset: four nearest/clamp samples preserve all RGBA
     /// FP32 component bits in exactly 64 storage bytes. RGBA16F sampling needs
-    /// no shader FP16 feature. Private acceptance dispatches one invocation.
+    /// no shader FP16 feature. Dispatch executes one invocation.
     pub const fn sampled_float_readback() -> Self {
         Self {
             manifest: &SAMPLED_FLOAT_READBACK,
@@ -468,7 +518,7 @@ impl ManagedProgram {
         &self.manifest.dispatch
     }
 
-    #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn same_asset(&self, other: &Self) -> bool {
         std::ptr::eq(self.manifest, other.manifest)
     }

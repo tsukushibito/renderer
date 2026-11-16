@@ -4,7 +4,9 @@ use super::{
     AccessPurpose, BufferHandle, Graph, GraphCapacityKind, GraphError, GraphErrorKind, ImageView,
     Operation, PassHandle, ResourceAccess, storage::capacity_error,
 };
-use crate::program::{BindingLayout, BindingType, BufferRange, ManagedProgram, SamplerDescriptor};
+use crate::program::{
+    BindingLayout, BindingType, BufferRange, DispatchWorkgroups, ManagedProgram, SamplerDescriptor,
+};
 
 /// A graph-local descriptor borrowed only during pass construction. Programs
 /// derive resource uses; callers do not repeat a read/write or stage declaration.
@@ -30,13 +32,6 @@ pub enum BindingResource {
 
 /// Complete canonical descriptor operands, distinct from shader footprints.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "native managed binding execution is subsequent work"
-    )
-)]
 pub(crate) enum BindingOperands {
     Buffer { resource: usize, range: BufferRange },
     ImageView(ImageView),
@@ -45,11 +40,11 @@ pub(crate) enum BindingOperands {
 
 impl Graph {
     /// Own a managed Compute dispatch and derive accesses from its reviewed
-    /// shader contract. Current assets execute exactly `[1, 1, 1]` workgroups.
-    /// Buffer footprints are reviewed prefixes; sampled images conservatively
-    /// read the whole selected mip/layer. Extra descriptor bytes stay undefined.
-    /// Device alignment/usage/limit checks belong to native preparation. Native
-    /// execution remains unsupported; CPU plans retain the complete operands.
+    /// shader contract. Buffer footprints are reviewed prefixes; images access
+    /// the whole selected mip/layer. Extra descriptor bytes stay undefined.
+    /// Image-domain dispatches must cover their output exactly after ceil
+    /// division by the local size, with guarded fringe invocations. Native
+    /// preparation establishes Device alignment, usage and limit guarantees.
     pub fn dispatch(
         &mut self,
         name: &str,
@@ -58,15 +53,13 @@ impl Graph {
         workgroups: [u32; 3],
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
-            let contract = program.dispatch_contract();
-            if workgroups != contract.workgroups {
-                return Err(GraphError::new(
-                    GraphErrorKind::Unsupported,
-                    "workgroup counts differ from the reviewed Program dispatch contract",
-                ));
-            }
             let first_access = graph.accesses.len();
-            let owned = graph.append_bindings(program.bindings(), contract.bytes, bindings)?;
+            let owned = graph.append_bindings(
+                program.bindings(),
+                program.dispatch_contract().bytes,
+                bindings,
+            )?;
+            graph.validate_dispatch_domain(program, owned.clone(), workgroups)?;
             let accesses = first_access..graph.accesses.len();
             if let Some(left) = graph.conflicting_pass_access(accesses.clone())? {
                 let access = &graph.accesses[accesses.start + left];
@@ -97,6 +90,95 @@ impl Graph {
                 false,
             ))
         })
+    }
+
+    fn validate_dispatch_domain(
+        &self,
+        program: &ManagedProgram,
+        owned: std::ops::Range<usize>,
+        workgroups: [u32; 3],
+    ) -> Result<(), GraphError> {
+        // A sampled descriptor uses a read-only native image layout, while a
+        // storage descriptor uses GENERAL. Even two reads cannot give the same
+        // View those two layouts within one dispatch. Multiple storage reads
+        // remain valid; their descriptors share the GENERAL layout.
+        for (index, slot) in program.bindings().iter().enumerate() {
+            if slot.kind != BindingType::SampledImage {
+                continue;
+            }
+            let BindingOperands::ImageView(sampled) = self.bindings[owned.start + index] else {
+                unreachable!("canonical sampled image operand");
+            };
+            for (other_index, other_slot) in program.bindings().iter().enumerate() {
+                if matches!(
+                    other_slot.kind,
+                    BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
+                ) && matches!(self.bindings[owned.start + other_index], BindingOperands::ImageView(view) if view == sampled)
+                {
+                    return Err(self
+                        .resource_error(
+                            GraphErrorKind::InvalidInput,
+                            "one dispatch cannot sample and use storage for the same image View",
+                            sampled.image.index,
+                        )
+                        .with_binding(other_slot.group, other_slot.binding));
+                }
+            }
+        }
+        let expected = match program.dispatch_contract().workgroups {
+            DispatchWorkgroups::Fixed(expected) => expected,
+            DispatchWorkgroups::Image2d { group, binding } => {
+                // The trusted descriptor identifies one unique write-only image
+                // and a nonzero local size. Resolve already canonical operands,
+                // rather than searching the caller's binding list again.
+                let target = program
+                    .bindings()
+                    .iter()
+                    .position(|slot| slot.group == group && slot.binding == binding)
+                    .expect("trusted image dispatch target is a declared slot");
+                let BindingOperands::ImageView(view) = self.bindings[owned.start + target] else {
+                    unreachable!("trusted image dispatch target is a storage image");
+                };
+                let extent = self
+                    .image_desc_at(view.image.index)?
+                    .mip_extent(view.mip)
+                    .expect("immutable View has a valid mip extent");
+                for (slot, operand) in program.bindings().iter().zip(&self.bindings[owned]) {
+                    if matches!(
+                        slot.kind,
+                        BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
+                    ) {
+                        let BindingOperands::ImageView(other) = *operand else {
+                            unreachable!("canonical storage image operand");
+                        };
+                        let other_extent =
+                            self.image_desc_at(other.image.index)?.mip_extent(other.mip);
+                        if other_extent != Some(extent) {
+                            return Err(self
+                                .resource_error(
+                                    GraphErrorKind::InvalidInput,
+                                    "storage image extents differ from the dispatch domain",
+                                    other.image.index,
+                                )
+                                .with_binding(slot.group, slot.binding));
+                        }
+                    }
+                }
+                let local = program.workgroup_size();
+                [
+                    extent[0].div_ceil(local[0]),
+                    extent[1].div_ceil(local[1]),
+                    1,
+                ]
+            }
+        };
+        if workgroups != expected {
+            return Err(GraphError::new(
+                GraphErrorKind::Unsupported,
+                "workgroup counts differ from the reviewed Program dispatch contract",
+            ));
+        }
+        Ok(())
     }
 
     /// Append canonical owned descriptors and shader-derived accesses using only
@@ -183,9 +265,53 @@ impl Graph {
                             range: BufferRange { offset, size },
                         }
                     }
-                    (BindingType::SampledImage, BindingResource::ImageView(view)) => {
+                    (
+                        BindingType::SampledImage
+                        | BindingType::StorageImageRead(_)
+                        | BindingType::StorageImageWrite(_),
+                        BindingResource::ImageView(view),
+                    ) => {
                         let resource = self.image_id(view.image)?;
                         let desc = self.image_desc_at(resource)?;
+                        let (read, write, purpose) = match slot.kind {
+                            BindingType::SampledImage => (true, false, AccessPurpose::Sampled),
+                            BindingType::StorageImageRead(format)
+                            | BindingType::StorageImageWrite(format) => {
+                                let expected = match format {
+                                    crate::program::ImageFormat::Rgba8Unorm => {
+                                        super::ImageFormat::Rgba8Unorm
+                                    }
+                                    crate::program::ImageFormat::Rgba16Float => {
+                                        super::ImageFormat::Rgba16Float
+                                    }
+                                    crate::program::ImageFormat::D32Float => {
+                                        return Err(self.resource_error(
+                                            GraphErrorKind::Unsupported,
+                                            "depth storage image bindings are unsupported",
+                                            resource,
+                                        ));
+                                    }
+                                };
+                                if desc.format != expected {
+                                    return Err(self.resource_error(
+                                        GraphErrorKind::InvalidInput,
+                                        "storage image View format differs from the Program ABI",
+                                        resource,
+                                    ));
+                                }
+                                let write = matches!(slot.kind, BindingType::StorageImageWrite(_));
+                                (
+                                    !write,
+                                    write,
+                                    if write {
+                                        AccessPurpose::StorageWrite
+                                    } else {
+                                        AccessPurpose::StorageRead
+                                    },
+                                )
+                            }
+                            _ => unreachable!(),
+                        };
                         // The private immutable View already establishes its
                         // range and aspect. Sampling has no write side effect.
                         let unit = u64::from(view.layer) * u64::from(desc.mip_levels)
@@ -193,11 +319,11 @@ impl Graph {
                         self.append_access(ResourceAccess {
                             resource,
                             range: unit..unit + 1,
-                            read: true,
-                            write: false,
-                            initializes: false,
+                            read,
+                            write,
+                            initializes: write,
                             discard_after: false,
-                            purpose: AccessPurpose::Sampled,
+                            purpose,
                             stages: slot.stages,
                         })?;
                         BindingOperands::ImageView(view)
@@ -255,7 +381,7 @@ mod tests {
             ManagedProgram::sampled_float_readback(),
         ] {
             let contract = program.dispatch_contract();
-            assert_eq!(contract.workgroups, [1, 1, 1]);
+            assert_eq!(contract.workgroups, DispatchWorkgroups::Fixed([1, 1, 1]));
             assert_eq!(contract.bytes.len(), program.bindings().len());
             for (slot, &bytes) in program.bindings().iter().zip(contract.bytes) {
                 assert_eq!(slot.stages, crate::program::ShaderStages::COMPUTE);
@@ -263,7 +389,10 @@ mod tests {
                     BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => {
                         assert!(bytes > 0 && bytes <= slot.min_size)
                     }
-                    BindingType::SampledImage | BindingType::Sampler => assert_eq!(bytes, 0),
+                    BindingType::SampledImage
+                    | BindingType::StorageImageRead(_)
+                    | BindingType::StorageImageWrite(_)
+                    | BindingType::Sampler => assert_eq!(bytes, 0),
                 }
             }
         }
