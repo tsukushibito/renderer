@@ -650,6 +650,12 @@ postはこの一つの意味付き境界を交換する。identityは`scene.colo
 多段recipe全体の失敗はtransactionではないため、部分構築されたGraphは破棄するか残る容量を考慮して利用する。
 未使用の部品・中間画像は通常のcullingに従う。部品が隠れたexportや副作用rootを追加することはない。
 
+[標準構成fixture](../../crates/renderer/examples/support/standard_fixture.rs)は、同じframe入力について
+標準forward直接、identity post、利用側多段Computeのpost、標準パスからの直接合成を示す。
+postは`Graph::dispatch`で既存の利用側sampled乗算／storage加算Programを接続し、
+順序の交換・追加加算・無効化を選ぶ。postを一つのGraphノードや固定effect列挙へ制限しない。
+二API共通の独自Computeには、このProgram／dispatch経路を使う。
+
 定義・設定とframeのdraw／行列／材質を分け、毎frame必要なGraphを構築・compileする。
 callbackは保持せず、完成命令は入力を所有する。準備済み容量内でVec等の追加確保をせず、
 必要なProgramとnative working setは明示準備する。新しいprepassed Programも通常frame中の遅延pipeline作成を許さない。

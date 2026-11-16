@@ -718,14 +718,16 @@ CPU契約回帰と二APIの実GPU内容照合、製品/追加検証の別構成�
 
 Compute/copyの二API受入`.2.4`は完了した。公開APIの構成変更は、次の一般import・寿命管理`.2.5`に先行する。
 単一出力・固定opaqueを前提に資源接続を固める手戻りを避け、B2/B3の描画機能を公開部品として追加できる境界を作る。
-今回の文書化でAPI実装や実GPU受入を完了扱いにしない。課題の状態・進捗・依存の正本はBeadsとする。
+`.2.7`では入力接続・標準部品を公開し、代表consumerの移行と独自Computeを含む三経路の二API受入を実行した。
+具体的な構成・結果と未確認範囲は[検証記録](../verification/current.md#公開三経路のconsumer移行と混合compute受入)を参照する。
+課題の状態・進捗・依存の正本はBeadsとする。
 
 | 順序・Beads | 作業と完了の境界 |
 |---|---|
 | `.2.7.1` 方針・計画 | 本節と現行契約・導入文書を整合させ、実装課題と依存、受入条件を登録する。 |
 | `.2.7.2` 入力接続・出力所有 | `connect_graph`／`begin_graph`／`connect_snapshot`で固定描画を追加せず入力接続し、任意構成でも所有と生成時保証を引き継ぐ。出力は合成後に選び、詳細と実証範囲は[現行契約](rendergraph.md#利用側からの入力接続と出力選択)と[検証](../verification/current.md#利用側graphへの入力接続と出力選択)を参照する。 |
 | `.2.7.3` 標準部品 | `standard::passes`のopaque／depth prepass／color出力copyと、`standard::graphs`のforward／post境界を公開する。callerの描画先・Load/Storeと任意depthを扱い、Engineの便利経路も公開recipeを呼ぶ。初期版はunlit linear colorで、同geometry prepassの限定Programを含む。 |
-| `.2.7.4` consumer・基準受入 | 三経路の構成を既存Raster＋独自Computeで確認し、in-repo consumer/文書を移行する。旧描画の同等性、任意HDR出力、容量・所有・二API回帰を確認して`.2.7`を閉じる。 |
+| `.2.7.4` consumer・基準受入 | 標準forward・利用側多段Computeのpost交換／追加／無効化・標準パス直接合成を二APIで照合し、frame_loop／engine_workloadsと文書を移行した。旧描画の同等性、任意HDR出力、容量・所有・混合frameメモリを確認する。 |
 | `.2.5` 一般import・寿命 | `.2.7`の境界へcanonical identity/revision、更新・pending退役、履歴・失敗を接続する。既存受入を保持し、新課題へ重複実装しない。 |
 | `.2.8` 利用側Raster | `.2.7`と`.2.5`の後、独自graphics shader/ABIと必要なblend/depth設定を公開する。最小alpha fixtureで三経路を二API実証し、固定Program群の公開だけで自由なRaster対応を主張しない。 |
 | `.2.6` 表示・時間計測 | `.2.5`/`.2.8`後、新APIのconsumerとして二API表示、自由camera、resize、pending終了を統合する。合意済みの実windowed通常frame CPU/GPU時間計測はここに残す。 |

@@ -1,7 +1,8 @@
-//! Changing-input, consumer-owned Compute full-lifecycle memory probe.
+//! Changing-input Compute and standard Raster/Compute lifecycle memory probes.
 
 use super::compute_fixture::{self as fixture, Expected};
 use super::frame_memory::{Report, counts, features, phase, semantics};
+use super::standard_fixture;
 #[cfg(feature = "vulkan")]
 use renderer::graph::BufferDesc;
 use renderer::graph::{CompiledGraph, Graph, GraphPool, PassHandle};
@@ -13,6 +14,63 @@ const GRAPH_SLOTS: usize = IN_FLIGHT * 4;
 const WARMUP: usize = 24;
 const FRAMES: usize = 24;
 const WAIT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy)]
+enum Workload {
+    Compute,
+    Standard,
+}
+
+impl Workload {
+    fn capacity(self) -> renderer::graph::GraphCapacity {
+        match self {
+            Self::Compute => fixture::capacity(),
+            Self::Standard => standard_fixture::capacity(),
+        }
+    }
+
+    fn build(self, pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
+        match self {
+            Self::Compute => fixture::build(pool, frame),
+            Self::Standard => standard_fixture::build(pool, frame),
+        }
+    }
+
+    fn provenance_capacity(self) -> usize {
+        match self {
+            Self::Compute => 0,
+            Self::Standard => 16,
+        }
+    }
+
+    fn buffer_classes(self) -> &'static [(u64, usize)] {
+        match self {
+            Self::Compute => &[(512, 1), (64, 3)],
+            Self::Standard => &[
+                (standard_fixture::BUFFER_SIZES[0], 1),
+                (standard_fixture::BUFFER_SIZES[1], 1),
+                (standard_fixture::BUFFER_SIZES[2], 1),
+                (standard_fixture::BUFFER_SIZES[3], 1),
+            ],
+        }
+    }
+
+    fn image_classes(self) -> Vec<(renderer::graph::ImageDesc, usize)> {
+        match self {
+            Self::Compute => vec![(fixture::hdr(), 4)],
+            Self::Standard => vec![
+                (standard_fixture::hdr(), standard_fixture::HDR_IMAGES),
+                (
+                    renderer::graph::ImageDesc::depth32(
+                        standard_fixture::WIDTH,
+                        standard_fixture::HEIGHT,
+                    ),
+                    standard_fixture::DEPTH_IMAGES,
+                ),
+            ],
+        }
+    }
+}
 
 // Measurement-only adapters over each existing public API, not a new RHI.
 trait Backend {
@@ -37,7 +95,12 @@ fn consume<B: Backend>(mut result: B::Completed, expected: Expected) {
     drop(result);
 }
 
-fn frames<B: Backend>(runtime: &mut B, pool: &mut GraphPool, count: usize) -> Report<5> {
+fn frames<B: Backend>(
+    runtime: &mut B,
+    pool: &mut GraphPool,
+    count: usize,
+    workload: Workload,
+) -> Report<5> {
     let mut pending: [Option<(B::Pending, Expected)>; IN_FLIGHT] = std::array::from_fn(|_| None);
     let mut held: [Option<(B::Completed, Expected)>; IN_FLIGHT] = std::array::from_fn(|_| None);
     let mut phases = [Snapshot::default(); 5];
@@ -55,7 +118,7 @@ fn frames<B: Backend>(runtime: &mut B, pool: &mut GraphPool, count: usize) -> Re
                 drop(work);
             }
         });
-        let (graph, expected) = phase(&mut phases[0], || fixture::build(pool, frame));
+        let (graph, expected) = phase(&mut phases[0], || workload.build(pool, frame));
         let plan = phase(&mut phases[1], || graph.compile().unwrap());
         let work = phase(&mut phases[2], || {
             runtime.cancel(&plan);
@@ -124,7 +187,7 @@ fn controls(startup: Snapshot, measured: Snapshot, shutdown: Snapshot) {
 }
 
 fn report<B: Backend>(
-    baseline: bool,
+    (baseline, workload): (bool, Workload),
     startup: Snapshot,
     shutdown: Snapshot,
     measured: Report<5>,
@@ -132,8 +195,8 @@ fn report<B: Backend>(
     validation: serde_json::Value,
     native_capacity: serde_json::Value,
 ) {
-    let capacity = fixture::capacity();
-    let json = serde_json::json!({
+    let capacity = workload.capacity();
+    let mut json = serde_json::json!({
         "scenario": B::SCENARIO, "mode": if baseline { "baseline" } else { "require_zero" },
         "features": features(), "adapter": adapter, "validation_after_native_teardown": validation,
         "counter_semantics": semantics(), "warmup_frames": WARMUP, "measured_frames": FRAMES,
@@ -152,6 +215,41 @@ fn report<B: Backend>(
         "startup_positive_control": counts(startup), "shutdown_outside_normal_frames": counts(shutdown),
         "total": counts(measured.total), "phases_build_compile_submit_complete_return": measured.phases.map(counts),
     });
+    if matches!(workload, Workload::Standard) {
+        json["scenario"] = B::SCENARIO
+            .replace("owned_compute", "standard_composition")
+            .into();
+        json["draw_counts"] = serde_json::json!([0, 1, 4, 2]);
+        json["routes"] = serde_json::json!([
+            "standard forward directly",
+            "standard forward with identity post",
+            "standard forward with consumer post",
+            "standard passes with consumer post and output"
+        ]);
+        json["post_modes"] = serde_json::json!([
+            "disabled",
+            "multiply then add",
+            "add then multiply",
+            "multiply then add then add"
+        ]);
+        json["programs"] = serde_json::json!([
+            "mesh_hdr",
+            "depth_only",
+            "mesh_hdr_prepassed",
+            "consumer HDR sampled multiply",
+            "consumer HDR storage add",
+            "uniform_readback"
+        ]);
+        json["readback_bytes_per_frame"] = standard_fixture::READBACK_BYTES.into();
+        json["coverage"] = "continuous mixed Raster/consumer Compute Graph build/compile/native prepare-record-submit/GPU completion/poll-retire/CPU readback/full result and plan return; all four HDR outputs independently checked; varying draw count, parameters and post modes across all public composition routes; no presentation or asset update".into();
+        json["bindings"] = "immutable per-frame Raster parameters, sampled HDR/sampler/Uniform, typed storage HDR and GPU-produced readonly storage offsets".into();
+        json.as_object_mut()
+            .unwrap()
+            .remove("custom_storage_dispatch_counts");
+        json.as_object_mut()
+            .unwrap()
+            .remove("total_dispatch_counts");
+    }
     println!("FRAME_MEMORY_REPORT={json}");
     assert!(!measured.total.overflowed);
     if !baseline {
@@ -188,6 +286,16 @@ impl Backend for renderer::VulkanRuntime {
 
 #[cfg(feature = "vulkan")]
 pub fn vulkan(baseline: bool) {
+    vulkan_workload(baseline, Workload::Compute);
+}
+
+#[cfg(feature = "vulkan")]
+pub fn vulkan_standard(baseline: bool) {
+    vulkan_workload(baseline, Workload::Standard);
+}
+
+#[cfg(feature = "vulkan")]
+fn vulkan_workload(baseline: bool, workload: Workload) {
     if cfg!(debug_assertions) {
         panic!("memory acceptance requires --release");
     }
@@ -206,37 +314,49 @@ pub fn vulkan(baseline: bool) {
     runtime
         .prepare_working_set(
             renderer::FrameCapacity {
-                graph: fixture::capacity(),
+                graph: workload.capacity(),
                 work_slots: IN_FLIGHT,
                 result_slots: IN_FLIGHT * 2,
                 metadata_slots: 16,
                 range_snapshots: 64,
                 initialized_ranges_per_resource: 16,
-                provenance_segments_per_resource: 0,
+                provenance_segments_per_resource: workload.provenance_capacity(),
             },
-            &[
-                renderer::ResourceClass::Buffer {
-                    desc: BufferDesc { size: 512 },
-                    count: IN_FLIGHT,
-                },
-                renderer::ResourceClass::Buffer {
-                    desc: BufferDesc { size: 64 },
-                    count: IN_FLIGHT * 3,
-                },
-                renderer::ResourceClass::Image {
-                    desc: fixture::hdr(),
-                    count: IN_FLIGHT * 4,
-                },
-            ],
+            &workload
+                .buffer_classes()
+                .iter()
+                .map(|&(size, count)| renderer::ResourceClass::Buffer {
+                    desc: BufferDesc { size },
+                    count: count * IN_FLIGHT,
+                })
+                .chain(workload.image_classes().into_iter().map(|(desc, count)| {
+                    renderer::ResourceClass::Image {
+                        desc,
+                        count: count * IN_FLIGHT,
+                    }
+                }))
+                .collect::<Vec<_>>(),
         )
         .unwrap();
-    runtime
-        .prepare_compute_programs(&fixture::programs())
-        .unwrap();
-    let mut pool = GraphPool::new(fixture::capacity(), GRAPH_SLOTS).unwrap();
-    frames(&mut runtime, &mut pool, WARMUP);
+    match workload {
+        Workload::Compute => {
+            runtime
+                .prepare_compute_programs(&fixture::programs())
+                .unwrap();
+        }
+        Workload::Standard => {
+            runtime
+                .prepare_compute_programs(&standard_fixture::programs())
+                .unwrap();
+            runtime
+                .prepare_raster_programs(&standard_fixture::raster_programs())
+                .unwrap();
+        }
+    }
+    let mut pool = GraphPool::new(workload.capacity(), GRAPH_SLOTS).unwrap();
+    frames(&mut runtime, &mut pool, WARMUP, workload);
     let startup = Snapshot::now().since(start);
-    let measured = frames(&mut runtime, &mut pool, FRAMES);
+    let measured = frames(&mut runtime, &mut pool, FRAMES, workload);
     assert_eq!(pool.leased_slots(), 0);
     let before_shutdown = Snapshot::now();
     drop((runtime, pool));
@@ -259,13 +379,13 @@ pub fn vulkan(baseline: bool) {
         assert_eq!(validation.requested, renderer::ValidationMode::Disabled);
     }
     report::<renderer::VulkanRuntime>(
-        baseline,
+        (baseline, workload),
         startup,
         shutdown,
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "device_luid": info.device_luid, "driver_version_raw": info.driver_version_raw, "driver_name": info.driver_name, "driver_info": info.driver_info, "api_version": info.api_version }),
         serde_json::json!({ "requested": format!("{:?}", validation.requested), "core_validation": validation.core_validation, "synchronization_validation": validation.synchronization_validation, "warnings": validation.warnings, "errors": validation.errors, "callback_failures": validation.callback_failures, "dropped_problems": validation.dropped_problems }),
-        serde_json::json!({ "execution_slots": IN_FLIGHT, "work_slots": IN_FLIGHT, "result_slots": IN_FLIGHT * 2, "resource_capacity": 64, "staging_bytes": 16384, "staging_ranges": 64, "max_shader_bindings": 32, "metadata_slots": 16, "range_snapshots": 64, "initialized_ranges_per_resource": 16, "provenance_segments_per_resource": 0, "resource_classes": [ { "buffer_bytes": 512, "count": IN_FLIGHT }, { "buffer_bytes": 64, "count": IN_FLIGHT * 3 }, { "rgba16f_extent": [fixture::WIDTH, fixture::HEIGHT], "count": IN_FLIGHT * 4 } ] }),
+        serde_json::json!({ "execution_slots": IN_FLIGHT, "work_slots": IN_FLIGHT, "result_slots": IN_FLIGHT * 2, "resource_capacity": 64, "staging_bytes": 16384, "staging_ranges": 64, "max_shader_bindings": 32, "metadata_slots": 16, "range_snapshots": 64, "initialized_ranges_per_resource": 16, "provenance_segments_per_resource": workload.provenance_capacity(), "buffer_classes": workload.buffer_classes().iter().map(|&(size,count)| serde_json::json!({ "buffer_bytes": size, "count": count * IN_FLIGHT })).collect::<Vec<_>>(), "image_classes": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}", desc.format), "extent": [desc.width,desc.height], "count": count * IN_FLIGHT })).collect::<Vec<_>>() }),
     );
 }
 
@@ -295,6 +415,16 @@ impl Backend for renderer::D3D12Runtime {
 
 #[cfg(all(feature = "d3d12", windows))]
 pub fn d3d12(baseline: bool) {
+    d3d12_workload(baseline, Workload::Compute);
+}
+
+#[cfg(all(feature = "d3d12", windows))]
+pub fn d3d12_standard(baseline: bool) {
+    d3d12_workload(baseline, Workload::Standard);
+}
+
+#[cfg(all(feature = "d3d12", windows))]
+fn d3d12_workload(baseline: bool, workload: Workload) {
     if cfg!(debug_assertions) {
         panic!("memory acceptance requires --release");
     }
@@ -302,9 +432,9 @@ pub fn d3d12(baseline: bool) {
     let mut config = renderer::D3D12RuntimeConfig::default();
     config.capacity.executions = IN_FLIGHT;
     config.capacity.results = IN_FLIGHT * 2;
-    config.capacity.resources = 16;
+    config.capacity.resources = workload.capacity().resources;
     config.capacity.operations = 32;
-    config.capacity.provenance_segments_per_resource = 0;
+    config.capacity.provenance_segments_per_resource = workload.provenance_capacity();
     config.capacity.buffers = 4;
     config.capacity.buffer_bytes = 512;
     config.capacity.upload_bytes = 16 * 1024;
@@ -313,20 +443,28 @@ pub fn d3d12(baseline: bool) {
     let mut runtime = renderer::D3D12Runtime::new(config).unwrap();
     let info = runtime.device_info();
     let monitor = runtime.validation_monitor();
-    runtime
-        .prepare_graph_working_set(
-            &[renderer::D3D12ImageClass {
-                desc: fixture::hdr(),
-                count: 4,
-            }],
-            &[],
-            &fixture::programs(),
-        )
-        .unwrap();
-    let mut pool = GraphPool::new(fixture::capacity(), GRAPH_SLOTS).unwrap();
-    frames(&mut runtime, &mut pool, WARMUP);
+    let image_classes = workload
+        .image_classes()
+        .into_iter()
+        .map(|(desc, count)| renderer::D3D12ImageClass { desc, count })
+        .collect::<Vec<_>>();
+    match workload {
+        Workload::Compute => runtime
+            .prepare_graph_working_set(&image_classes, &[], &fixture::programs())
+            .unwrap(),
+        Workload::Standard => runtime
+            .prepare_graph_working_set(
+                &image_classes,
+                &standard_fixture::raster_programs(),
+                &standard_fixture::programs(),
+            )
+            .unwrap(),
+    }
+    drop(image_classes);
+    let mut pool = GraphPool::new(workload.capacity(), GRAPH_SLOTS).unwrap();
+    frames(&mut runtime, &mut pool, WARMUP, workload);
     let startup = Snapshot::now().since(start);
-    let measured = frames(&mut runtime, &mut pool, FRAMES);
+    let measured = frames(&mut runtime, &mut pool, FRAMES, workload);
     assert_eq!(pool.leased_slots(), 0);
     let before_shutdown = Snapshot::now();
     runtime.shutdown().unwrap();
@@ -347,12 +485,12 @@ pub fn d3d12(baseline: bool) {
         cfg!(feature = "development-validation")
     );
     report::<renderer::D3D12Runtime>(
-        baseline,
+        (baseline, workload),
         startup,
         shutdown,
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "luid": info.luid, "driver_version": info.driver_version, "shader_model": info.shader_model }),
         serde_json::json!({ "debug_layer_enabled": validation.debug_layer_enabled, "gpu_based_validation_enabled": validation.gpu_based_validation_enabled, "teardown_checked": validation.teardown_checked, "warnings": validation.warnings, "errors": validation.errors, "corruption": validation.corruption, "callback_failures": validation.callback_failures, "dropped_messages": validation.dropped_messages }),
-        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": 16, "operations": 32, "provenance_segments_per_resource": 0, "buffers": 4, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes_per_execution": [{ "rgba16f_extent": [fixture::WIDTH, fixture::HEIGHT], "count": 4 }] }),
+        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "buffers": 4, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes_per_execution": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count })).collect::<Vec<_>>() }),
     );
 }

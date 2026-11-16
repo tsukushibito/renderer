@@ -5,6 +5,46 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 公開三経路のconsumer移行と混合Compute受入
+
+`renderer-7ft.2.7.4`。`frame_loop`と`engine_workloads`の代表構築を
+`begin_graph`／`connect_snapshot`→公開`graphs::forward`→利用側post→`select_output`へ移行した。
+既存Engine便利APIも同じ公開recipeを使うため、用途のある便利入口は維持する。
+`frame_scaling`の古いexample CPU試験も現行の容量・pool・公開構成へ更新した。
+ライブラリの同期・寿命・検証配置やshader binaryは変更していない。
+
+[共有fixture](../../crates/renderer/examples/support/standard_fixture.rs)は、標準forward直接、
+identity post、利用側post、標準パスからの直接合成という4出力で三経路を比較する。
+既存trusted sampled乗算／storage加算shaderを`Graph::dispatch`で接続し、
+無効・乗算→加算・加算→乗算への交換・追加加算を選ぶ。3×7のRGBA16F全画素を独立期待値と照合する。
+draw数0／1／4／2、tint・行列・Uniform offsetを変え、使わない多段postは通常のcullingで除く。
+直接合成には同geometry depth prepassとLoad・等深度描画、標準outputを含める。
+
+Windows x64、Rust1.99.0、NVIDIA RTX3060／driver610.88。GPU作業は全て逐次実行した。
+
+| 確認 | 結果 |
+|---|---|
+| CPU公開API | 既存標準API10試験に加え、12変動frameで三経路の構築・post選択・不要枝除去・slot返却を確認 |
+| workspace・静的検査 | CPU160件、release全feature325件、release二API製品301件（各Rustdoc1件を含む）が成功。frame_loopのexample CPU9件、全feature／targetのcheck・Clippy、fmt、diffとwarnings拒否の全feature Rustdoc生成も成功 |
+| 二API実GPU | strict／shippingの別processが成功。旧RGBA8／HDRの17出力を保持し、4case×4出力を追加。各API各3回、33 readback・4096 byte／回を独立期待値とAPI間で照合 |
+| 所有・失敗・Engine回帰 | `engine_graph`のstrict／shipping各1試験、既存Engineのstrict8試験が成功。旧新mesh・複数View・短命入力・出力権限・pending保持・cancel・容量拒否を維持 |
+| 代表consumer | `frame_loop`はstrict／shipping各48測定frameと12 warm-upで描画・履歴・入力churnを確認。`engine_workloads`はstrict45画像、shipping519画像を全RGBA照合し、大mesh・2View・streaming・pending更新と退役を確認 |
+| 混合構成の通常frameメモリ | 両APIで24 warm-up＋24変動frame、4出力・672 byte／frame、3 pending＋3保持結果を確認。構築／compileからnative実行・完了・readback・全slot返却までRust alloc／alloc_zeroed／realloc／dealloc、VMA host alloc／realloc／free、native作成／破棄が全て0 |
+| 既存メモリ回帰 | CPU24frame・Vulkan Engine画像48frameと、両API Compute-only各24frameもゼロを維持。Engine画像ではdraw／pass変更、material・行列変更、prepared容量満杯とcancel、結果返却を再確認 |
+
+strictはCore＋SyncVal／Debug Layer＋GBVを実効確認し、最終native破棄後までwarning／error／corruptionゼロ。
+shippingはRenderer追加検証・専用診断を除外し、native Disabledを指定した別buildで内容を照合した。
+混合メモリの診断baselineも各API別processで同じ範囲がゼロだった。
+native resetはVulkan48回、D3D12は記録cancelも含む96回で、作成・破棄とは別計上する。
+最大20 draw、vertex/indexとprovenance、11 HDR＋2 D32／frameと両種のProgramを準備境界で予約し、
+通常frameの暗黙増設や待機を加えていない。
+
+実行コマンド、source hashとraw報告は[検証データの`standard_composition`](frame-memory.json)に記録する。
+一般import／履歴は`.2.5`、独自graphics shader・半透明／blend／depthは`.2.8`、
+表示と通常frame時間計測は`.2.6`、PBR／tone mappingはB2／B3に残る。
+consumer例の既存計時値を新たな時間性能比較として採用せず、外部Layer注入とdriver内部確保は未観測とする。
+Vulkan／VMA一般推奨からの新たな例外は設けていない。
+
 ## 公開標準パスと標準グラフ
 
 `renderer-7ft.2.7.3`。公開`standard::passes::{opaque, depth_prepass, output}`と
@@ -30,7 +70,7 @@ native strictは最終破棄後までVulkan warning／errorとD3D12 warning／er
 raw報告、実行コマンドとUTF-8 LFソースhashは[検証データの`standard_graph`](frame-memory.json)に記録する。
 色／depthの契約と利用例は[現行設計](../design/rendergraph.md#公開標準パスと標準グラフ)を参照する。
 
-今回のpost二APIfixtureは両API対応の画像copyを使う。既存consumer全体の移行と利用側Computeを含む正式な三経路受入は`.2.7.4`、
+この段階のpost二APIfixtureは両API対応の画像copyを使い、利用側Computeの三経路受入は上記`.2.7.4`で追加した。
 一般import／履歴は`.2.5`、独自半透明・shader／blend／depth設定は`.2.8`、PBR／tone mappingはB2／B3に残る。
 表示・通常frame時間性能、非観測の外部Layer注入やdriver内部確保は今回の保証に含めない。
 prepassedもGraphでは保守的depth read/writeを維持し、Vulkan／VMA一般推奨からの新たな例外や性能改善の主張はない。
@@ -41,7 +81,8 @@ prepassedもGraphでは保守的depth read/writeを維持し、Vulkan／VMA一�
 `begin_graph`／`connect_snapshot`／`submit_graph`を追加した。接続だけではRaster・画像・export・readbackを追加しない。
 複数snapshot/View、同mesh旧新版、任意の画像/buffer出力を扱い、一画像の便利経路も構成後に`select_output`する。
 `prepare_snapshot`の非mesh登録余裕も利用側指定とし、標準color/depth用の二枠を一律に要求しない。
-公開標準パス・標準グラフは上記`.2.7.3`で追加し、consumer全体の三経路受入は`.2.7.4`、一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
+公開標準パス・標準グラフは上記`.2.7.3`で追加し、三経路受入と代表consumer移行は`.2.7.4`で確認した。
+一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
 
 `RasterParameters::new`で有限値を保証する不変公開型へ統一し、snapshotと利用側が同じ`Graph::raster`を使う。
 保証済み定数の再走査とEngine専用のvalidated描画入口を除去し、公開iteratorの実要素ごとに容量を確認する。

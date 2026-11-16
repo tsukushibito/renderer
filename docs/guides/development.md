@@ -574,6 +574,11 @@ backend内の試験では未投入キャンセル・作成失敗の後始末、F
 depth付きcolor、depth-only、draw別Uniform/画像/samplerとRGBA16Fを二APIで逐次実行します。
 公開標準パスによる同geometry prepass後のLoad／等深度描画／depth非更新と、
 標準forwardの0 draw clear・二段画像copyのpost・HDR出力copyも同じfixtureで確認します。
+さらに[標準構成fixture](../../crates/renderer/examples/support/standard_fixture.rs)で、
+標準forward直接、identity post、利用側多段Computeのpost、標準パスと同じComputeの直接合成を比較します。
+3×7のRGBA16Fに既存の利用側sampled乗算／storage加算shaderを接続し、
+無効・乗算→加算・加算→乗算・追加加算、draw数0／1／4／2と定数を変えます。
+同じ入力のrecipeと直接合成は同じ全画素byteを要求し、使わないpost枝は通常のcullingへ任せます。
 vendor/device IDとLUIDを照合し、全readback byteを独立期待値とAPI間で比較します。
 Runtime/公開planの破棄後もcompletion/readbackの所有連鎖を維持し、D3D12のprepare/cancel、
 後半drawの不正index拒否後の再利用、保持中tokenによるbackpressureも確認します。
@@ -637,6 +642,16 @@ Graph構築から全readback消費・poll/retire・全plan/result/Graph slot返�
 ```powershell
 cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-compute
 cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-compute
+```
+
+標準構成の混合Raster／Computeを計測するときは、同じフレーム全体の計測基盤へ
+上記の標準構成fixtureを接続した次のmodeを使います。各APIの24 warm-up＋24 frameで、
+4出力・672 byte／frameを照合し、3 pendingと3保持結果、全slotの返却まで含めます。
+Raster用draw／attachment、vertex/index bufferとprovenance、画像classと両種のProgramは準備境界で予約します。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-standard
+cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-standard
 ```
 
 診断baselineは各backendのfeatureへ`development-validation,graph-diagnostics`を追加した別buildで、
@@ -725,6 +740,9 @@ cargo test --locked --release -p renderer --test engine_graph --no-default-featu
 ```
 
 次の例は標準描画、外部custom処理、1×1の履歴chainを同じGraphで動かします。
+`frame_loop`と`engine_workloads`の構築例は、`begin_graph`／`connect_snapshot`から
+公開`graphs::forward`を呼び、合成後の`select_output`へ接続します。
+入力leaseを構築後に返し、compile・submit・履歴・結果回収は同じ公開経路を使います。
 `--churn`はCPU入力の更新・削除も行い、各frameの画像と履歴を照合します。
 完了済みreadbackを一件遅らせて消費し、3件まで未回収frameを保持します。
 

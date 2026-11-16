@@ -285,6 +285,10 @@ D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同ex
 固定ComputeのRGBA8契約とは分ける。各実format/usage能力の作成時照会とnative失敗処理を維持する。
 
 公開`standard::passes`と`standard::graphs`は通常のGraph／Program／copy APIだけで構築する。
+利用側の多段Computeも同じ公開`dispatch`で接続し、標準専用のloweringやnative実行分岐を追加しない。
+三経路の混合構成ではRaster／Compute双方のProgram、画像class、vertex/indexとprovenanceを明示準備し、
+Graph由来のattachment→sampled／storage→copy依存、実Fence完了とCPU結果返却までの所有を維持する。
+実GPUのstrict／shippingと全frameメモリの実行範囲は[検証記録](../verification/current.md#公開三経路のconsumer移行と混合compute受入)に記す。
 Engineの便利経路も公開forward recipeを呼び、native側にopaque等の効果分岐を増やさない。
 prepassedのshader深度writeを止めてもGraphのattachment accessは保守的read/writeのままとし、
 通常のEARLY/LATE_FRAGMENT_TESTS依存とrendering scope外のbarrierを維持する。
