@@ -133,7 +133,7 @@ def make_plan(args):
             "build_manifest_sha256": digest(args.build_manifest), "binary": manifest["binary"],
             "source": manifest.get("git"), "frames": args.frames, "warmup": args.warmup,
             "inflight": args.inflight, "width": args.width, "height": args.height,
-            "view": args.view, "fixture": args.fixture,
+            "view": "fixture" if args.fixture else args.view, "fixture": args.fixture,
             "timeout_seconds": args.timeout_seconds, "runs": runs,
             "contract": "Serial independent normal-release processes; no build/cook/ETW in measurement; final capture outside target ROI; no global OS settings changed."}
 
