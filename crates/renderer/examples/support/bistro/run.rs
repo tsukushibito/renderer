@@ -143,6 +143,16 @@ fn identity(options: &Options, cook_hash: &str, conditions_hash: &str) -> Value 
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"})
 }
 
+fn loaded_cook_hash(scene: &Scene, fixture: bool) -> Result<String, Error> {
+    if fixture {
+        return Ok(super::digest(b"builtin-pbr-material-fixture-v1"));
+    }
+    scene.source["cooked_manifest_sha256"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| "loaded scene has no cooked manifest identity".into())
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "captures use the same prepared frame context outside measurement"
@@ -313,6 +323,24 @@ mod tests {
         assert!(measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).is_err());
         assert!(measurement(&[], &options, 100, Value::Null).is_err());
     }
+    #[test]
+    fn report_identity_uses_the_manifest_bytes_actually_loaded() {
+        let mut scene = Scene::fixture(false);
+        let loaded = "ab".repeat(32);
+        scene.source["cooked_manifest_sha256"] = json!(loaded);
+        let hash = loaded_cook_hash(&scene, false).unwrap();
+        assert_eq!(
+            identity(&fixture_options(), &hash, "conditions")["cook_manifest_sha256"],
+            loaded
+        );
+        scene
+            .source
+            .as_object_mut()
+            .unwrap()
+            .remove("cooked_manifest_sha256");
+        assert!(loaded_cook_hash(&scene, false).is_err());
+        assert!(loaded_cook_hash(&scene, true).is_ok());
+    }
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn native_fixture<B: Backend>() {
         let stamp = std::time::SystemTime::now()
@@ -376,38 +404,43 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "memory-profiling")]
     let setup_memory = renderer::measurement::Snapshot::now();
     let setup = Instant::now();
+    let stage = Instant::now();
     let condition_bytes = include_bytes!("../../../../../tools/bistro/conditions.json");
     let conditions_hash = super::digest(condition_bytes);
     let conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
-    let cook_hash = if let Some(path) = &options.manifest {
-        super::digest(&std::fs::read(path)?)
-    } else {
-        super::digest(b"builtin-pbr-material-fixture-v1")
-    };
     eprintln!("Bistro asset load boundary");
     let mut scene = if let Some(path) = &options.manifest {
         Scene::load(path, options.force_opaque)?
     } else {
         Scene::fixture(options.force_opaque)
     };
+    // Hash the same manifest bytes that Scene::load parsed. A separate read
+    // could otherwise identify a different revision from the loaded contents.
+    let cook_hash = loaded_cook_hash(&scene, options.fixture)?;
+    let asset_load_ns = stage.elapsed().as_nanos() as u64;
     let source = scene.source.clone();
     let counts = json!({"meshes":scene.mesh_count,"primitives":scene.primitives.len(),"materials":scene.materials.len(),
         "source":source,"resident_images_with_defaults":scene.images.len(),
         "alpha_zero_materials":scene.materials.iter().filter(|material|material.alpha_zero).count()});
+    let stage = Instant::now();
     let budget = Budget::new(&scene, options)?;
+    let budget_ns = stage.elapsed().as_nanos() as u64;
     let (first_camera, first_uniform) = uniform(&conditions, options, 0)?;
     let _ = first_camera;
     eprintln!(
         "Bistro explicit GPU preparation: {} resources",
         budget.physical_resources
     );
+    let stage = Instant::now();
     let mut backend = B::create(options, &budget)?;
+    let native_prepare_ns = stage.elapsed().as_nanos() as u64;
     let mut runtime = backend.info();
     runtime["process_id"] = json!(std::process::id());
     #[cfg(windows)]
     {
         runtime["main_thread_id"] = json!(super::clock::thread_id());
     }
+    let stage = Instant::now();
     let mut resident = Resident::upload(&mut backend, &scene, &budget, &first_uniform)?;
     let prepared = json!({"physical_resources":budget.physical_resources,"logical_buffers_per_graph":budget.buffer_count,
         "max_buffer_bytes":budget.max_buffer_bytes,"upload_capacity_bytes":budget.upload_bytes,"readback_capacity_bytes":budget.readback_bytes,
@@ -419,6 +452,8 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     // provenance. Both original loader bytes and upload owners are gone pre-ROI.
     scene.vertices = Vec::new();
     scene.indices = Vec::new();
+    let upload_ns = stage.elapsed().as_nanos() as u64;
+    let stage = Instant::now();
     backend.set_profiling(options.gpu_timing)?;
     // One additional Graph backing covers the latest mutable camera provenance
     // when all execution slots have otherwise completed (including inflight=1).
@@ -426,7 +461,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let mut workspace = Workspace::new(&scene);
     let mut queue = VecDeque::with_capacity(options.inflight);
     let mut samples = Vec::with_capacity(options.frames);
+    let frame_storage_and_profiling_prepare_ns = stage.elapsed().as_nanos() as u64;
     eprintln!("Bistro warmup: {} frames", options.warmup);
+    let stage = Instant::now();
     frames(
         &mut backend,
         &mut resident,
@@ -440,6 +477,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         options.warmup,
         false,
     )?;
+    let warmup_ns = stage.elapsed().as_nanos() as u64;
     let setup_ns = setup.elapsed().as_nanos() as u64;
     #[cfg(feature = "memory-profiling")]
     let setup_memory = renderer::measurement::Snapshot::now().since(setup_memory);
@@ -525,7 +563,11 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(not(feature = "memory-profiling"))]
     let memory_json = Value::Null;
     let report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash),"runtime":runtime,
-        "scene":counts,"prepared":prepared,"setup_ns":setup_ns,"measurement":measured,"memory":memory_json,"validation":validation,
+        "scene":counts,"prepared":prepared,"setup_ns":setup_ns,
+        "setup_phases_ns":{"asset_load":asset_load_ns,"budget":budget_ns,"native_prepare":native_prepare_ns,"upload":upload_ns,
+            "frame_storage_and_profiling_prepare":frame_storage_and_profiling_prepare_ns,"warmup":warmup_ns},
+        "setup_scope":"combined asset/conditions load, boundary validation, native resource/pipeline preparation, upload/CPU input release, frame storage and warmup; checkpoints exclude some reporting/bookkeeping; outside measured frame ROI",
+        "measurement":measured,"memory":memory_json,"validation":validation,
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
         "views":view_reports,"readback_outside_measurement":true,
         "limits":"B2 Forward PBR; headless, no frustum/occlusion culling, no IBL/shadows/tonemapper/Bloom/AA or display FPS claim; whole primitives sorted for transparency"});
