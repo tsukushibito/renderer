@@ -11,7 +11,8 @@ import copy
 import hashlib
 import json
 import math
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 
@@ -87,6 +88,53 @@ def _positive_integer(value, label):
     return value
 
 
+def _windows_containment_key(path):
+    """Canonical Win32 local/UNC names share a key with their long-path form.
+
+    This key is used only for containment. The actual resolved path, including
+    its extended prefix when present, is retained for file IO. Device/volume
+    namespaces are outside the supported capture-file contract.
+    """
+    value = str(path)
+    lower = value.lower()
+    if lower.startswith("\\\\?\\unc\\"):
+        value = "\\\\" + value[8:]
+    elif lower.startswith("\\\\?\\"):
+        value = value[4:]
+        if (len(value) < 3 or value[0] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                or value[1:3] != ":\\"):
+            raise ValueError("Capture device/volume paths are unsupported")
+    if value.startswith(("\\\\.\\", "\\??\\", "\\\\??\\")):
+        raise ValueError("Capture device paths are unsupported")
+    key = PureWindowsPath(value)
+    if not key.is_absolute():
+        raise ValueError("Resolved capture path must be an absolute local or UNC file path")
+    if key.drive.startswith("\\\\"):
+        parts = key.drive[2:].split("\\")
+        if len(parts) != 2 or any(part in ("", ".", "..", "?") for part in parts):
+            raise ValueError("Capture UNC path must identify a server and share")
+    elif (len(key.drive) != 2 or key.drive[0] not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+          or key.drive[1] != ":"):
+        raise ValueError("Capture device/volume paths are unsupported")
+    return key
+
+
+def _resolve_capture_path(path):
+    # Reject named-device namespaces before filesystem resolution can inspect
+    # them. Ordinary relative artifact paths are resolved against the report.
+    if os.name == "nt":
+        value = str(path)
+        if value.lower().startswith(("\\\\?\\", "\\\\.\\", "\\??\\", "\\\\??\\")):
+            _windows_containment_key(value)
+    return Path(path).resolve(strict=True)
+
+
+def _inside_directory(path, directory):
+    if os.name == "nt":
+        return _windows_containment_key(path).is_relative_to(_windows_containment_key(directory))
+    return path.is_relative_to(directory)
+
+
 def load_capture(report_path, report, plane):
     """Read an exact-sized raw artifact and verify all of its finite values."""
     if plane not in FORMATS:
@@ -99,12 +147,12 @@ def load_capture(report_path, report, plane):
     height = _positive_integer(capture["height"], f"{plane}.height")
     if width * height > 2 ** 28:
         raise ValueError("Capture exceeds the offline image-size limit")
-    root = Path(report_path).resolve().parent
+    root = _resolve_capture_path(report_path).parent
     name = capture["path"]
     if not isinstance(name, str) or not name:
         raise ValueError("Capture path must be a nonempty string")
-    path = (root / name).resolve()
-    if not path.is_relative_to(root):
+    path = _resolve_capture_path(root / name)
+    if not _inside_directory(path, root):
         raise ValueError("Capture path escapes the report directory")
     expected_size = width * height * channels * dtype.itemsize
     if path.stat().st_size != expected_size:
