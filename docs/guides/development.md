@@ -933,6 +933,7 @@ callbackに現れないdriver/OS/native内部確保は未観測。D3D12 bootstra
 
 `windowed --measure`は実際のWindowへ表示する同じworkloadを測ります。
 既定は24 accepted frameのwarm-upと96 accepted frameの計測で、`--warmup N`／`--frames N`で変更できます。
+`--measure`と`--smoke`は併用できません。通常の時間測定はreadbackなしで、明示的な`--verify`追加時だけ内容照合を含みます。
 VSync OFFの処理時間とONのpacingを別process・同じAPI／Graph／camera条件で実行します。
 strictの正しさ受入を別に行い、計装されたGPU実行を製品性能へ混ぜません。
 
@@ -964,7 +965,11 @@ VulkanのmarkerはTOP_OF_PIPE／BOTTOM_OF_PIPE、D3D12はDIRECT queueのBOP time
 同じworkload／設定／markerを生sampleと中央値・個別sampleのp95に併記し、
 小さいGPU区間の差だけから一般的なAPI性能の優劣を結論づけません。
 
-出力は固定容量で収集し、終了時のJSONへ生sampleと集計を記録します。
+出力は固定容量で収集し、終了時のJSONへ生sampleを記録します。
+`samples[].graph`はGraphごとの値、`presentation_samples`は表示用GPU submitごとの独立した完了列です。
+拒否されたPresentも後者へ含まれ得るため、両配列をframe番号で機械的に一対一対応させません。
+`present_attempts`／`present_api_total_ns`はbackpressureを含む全ての外側present呼出しを数えます。
+中央値・p95やrun間変動の集計は、この生sampleと測定窓を明示した比較記録に残します。
 例のevent loopはbackpressure時のbusy loopを避ける有限の再試行間隔を持ち、そのfloorを報告します。
 従ってaccepted Present間隔を、GPU単体の最大throughputや実画面のFPSとは説明しません。
 瞬間値`1/dt`の単純平均や、GPU区間の逆数も表示FPSの代用にしません。
