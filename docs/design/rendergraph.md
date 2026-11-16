@@ -622,7 +622,13 @@ Signal失敗ではDeviceを停止し、内容を公開せず、実行資源・pr
 登録済み資源はこの追加準備分と独立に維持する。`resource_capacity`（既定1024）は登録・未登録cacheを
 含むregistry entry総数の上限であり、各Graphの論理資源上限`resources`やbyte budgetとは別である。
 bufferのnative sizeは`buffer_bytes`、論理sizeは各Graphのdescriptorである。画像は完全一致するclassを使う。
-現在の空き候補選択はregistryの線形検索であり、時間性能の改善は主張しない。
+空き候補は準備済みのclass別indexで管理し、登録中のentryは候補から除外する。
+各bindのcursorが同classの未登録候補を最大一回確認し、登録済みprefixや別classを資源ごとに再走査しない。
+登録・delete・世代上限・working set再準備でindexを更新し、実際のArc参照数・世代・descriptorを
+最終的な貸出し条件として維持する。cursor通過後に参照が返った候補は次のrecordingから使えるため、
+現在のbindが一時的な容量不足を返す場合がある。内部waitや候補領域の増設は行わない。
+代償はregistry容量分のnode/class metadataで、同classのlease保持候補の線形確認は残る。
+CPU探索と所有取得・返却の比較は[現在の検証](../verification/current.md#runtime-review-improvements)へ記録する。
 通常のprepareは登録中・参照中の物理資源、実行枠、結果枠、export metadata、range tokenの不足を
 容量エラーとして返し、増設もGPU待機もしない。`initialized_ranges_per_resource`と`range_snapshots`は
 個別に指定でき、途中のtoken取得失敗でも既に取得した参照を全て返す。

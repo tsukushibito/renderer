@@ -561,13 +561,18 @@ workのresource-indexed配列とSnapshot backingは上限全体を事前準備�
 登録中、記録・pendingのleaseが残る資源、世代上限のentryは置換しない。候補がなければ
 内部で待機せず容量不足を返す。失敗した準備を受理済み利用として新しく扱わない。
 
-再利用候補はregistry容量分を準備したrecord配列と、利用可能なindexだけの整列配列で保持する。
+再利用候補はregistry容量分を準備したrecord配列、候補bitmapとdescriptor別cursorで保持する。
 登録中やlease保持中のentryを候補に残して全資源を毎回走査しない。
 nativeの外部参照はleaseを通し、解放通知を準備済みbitmapとindex queueでentryごとに集約する。
 取得時には通知indexだけを消費して候補へ戻し、bitmap全体の反復走査をしない。
 通知を消費した時点でも登録・世代・参照数を確認する。候補の選択だけでは旧entryを削除しない。
-木nodeの確保/解放を避ける代わりに、候補のdescriptor一致/oldest選択は利用可能候補数に比例する。
-通知queueを含むmetadata容量を初期化で予約し、時間性能の改善は未測定として扱う。
+同descriptorの最小indexを使い、返却時はcursorを必要な位置へ戻す。候補の取得・返却で
+整列Vecの後続要素を移動しない。descriptor表の直近lookupも再利用する。
+descriptor表は空classも保持し、変更で新しいdescriptorが入るときだけ空classを再利用する。
+class表とbitmapのmetadataは初期化で予約する。代償は常駐metadataの増加であり、
+多数classが交錯する場合のbitmap比較と、明示作成上限時のoldest探索は線形のまま残る。
+木nodeと回転規則を増やす案より小さな所有状態を選び、CPU比較の入力・結果と限界は
+[現在の検証](../verification/current.md#runtime-review-improvements)に記録する。GPU速度の改善は主張しない。
 
 再利用は旧内容の初期化状態とCPU provenanceを消す一方、実際のlayout・access・writer scopeは保持する。
 `delete`もkeyを直ちに失効させ、その内容の初期化/provenanceを解放する。既に記録した命令が必要な
@@ -761,8 +766,9 @@ Dropの保守的回収でも完了を証明できない場合は、Window・Surf
 転送の参照計画・比較用`ByteRanges`は半開区間を`BTreeMap`で保持し、隣接・重複を統合する。
 初期化追跡とcopyの競合判定で共用し、保持区間数Kに対する包含・重複検索をO(log K)、
 N件の挿入列を償却O(N log N)で扱う。独自の木構造や空きメモリ配置は実装しない。
-通常Graphの解析・予定状態・CPU provenanceは別に準備済みの区間配列を使い、木nodeを確保/解放しない。
-配列の挿入/削除は保持区間数に比例するため、確保ゼロからCPU時間の改善を推定しない。
+通常Graphの論理解析は準備済みAVL node arena、nativeの予定状態・CPU provenanceは
+準備済み区間配列を使い、通常frameで木nodeや配列を確保/解放しない。
+木の更新と配列の挿入/削除の費用は残るため、確保ゼロからCPU時間の改善を推定しない。
 
 競合判定はbufferごとにreadとwriteの集合を分ける。
 同一copyの全アクセスを先行copyと照合してから挿入し、RAW／WAR／WAWに依存を入れる。
