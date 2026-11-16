@@ -475,6 +475,7 @@ pub fn lifecycle(baseline: bool) {
     renderer
         .runtime_mut()
         .prepare_raster_programs(&[
+            ManagedRasterProgram::mesh(),
             ManagedRasterProgram::depth_only(),
             ManagedRasterProgram::mesh_prepassed(),
         ])
