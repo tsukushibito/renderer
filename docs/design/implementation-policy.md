@@ -957,6 +957,23 @@ FPSの平均だけで判断せず、フレーム時間の中央値・上位perce
 
 他エンジンとの比較は補助資料とし、解像度、描画機能、アセット、シェーダー条件等の差を記録する。異なる条件のFPSだけで優劣を断定しない。
 
+任意の`tracy` featureは、最適化済みBistroのhost処理を通常権限で区分するための明示zoneを加える。
+既定offのoptional `tracy-client 0.19.0`と、lockされたsys 0.30.1の同梱Tracy 0.14.1を用い、
+default featuresを外して`enable`・`ondemand`・`only-localhost`だけを選ぶ。
+native headerと対応するportable collector/exporterの版を照合し、版やfeatureの自動更新へ依存しない。
+sysの同梱BSD-3-Clauseはpackage/version限定で監査・許可し、通常の依存ライセンス許可を広げない。
+
+Renderer内はfeatureで囲んだprivateなzoneと`Client::running()`のguardだけを使い、Tracyの型を公開APIへ出さない。
+非計装構成から呼出し・専用metadata/文字列・依存をコンパイル除外する。
+計装構成ではclientの起動・background thread、初回location準備やzone送信等の費用と確保があり、
+on-demand切断中を無費用やゼロ確保とみなさない。通常・同じ計装EXEの切断中・接続収集中を同条件で別々に測る。
+追加検証、native query profiling、メモリ計測とは独立に選び、同期・所有・native呼出し順序や失敗処理を変えない。
+
+inclusive/selfは明示zoneのwall elapsedで、wait/deschedulingも含む。未計装の関数・driver内部のCPU実行箇所や
+scheduler状態を得るには別のsampling/tracingが必要であり、Tracyの長いzoneだけから原因を断定しない。
+今回の計装はhotspotの特定を目的とし、zoneを追加したことをコード最適化や速度改善と扱わない。
+手順と解釈は[Tracyガイド](../guides/tooling.md#tracy-profiling)、実際の対象・費用・所見は[現行検証](../verification/current.md)へ記録する。
+
 <a id="bistro-roadmap"></a>
 
 ## 15. Bistroを到達目標にした実装計画と完了条件

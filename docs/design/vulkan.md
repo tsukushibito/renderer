@@ -818,6 +818,18 @@ matching EXE/PDBによるinline/source帰属を確認する。未知symbolや端
 既知RVAのoffline解決やCSV fixture試験と、実ETLのstack/source・欠落の受入は別の証拠である。
 確認済み範囲と未実行項目は[現在の検証状況](../verification/current.md)へ記録する。
 
+`tracy` featureを明示した場合は、これと独立に非管理者の手動CPU zoneを採取できる。
+Graph begin/compile/解析、Vulkanのprepare・pass/draw準備・descriptor具体化、
+record・pass/barrier・draw batch等のhost範囲へprivateなzoneを置く。
+既定offでzone専用コード・metadata・依存を除外し、通常submitのnative呼出し・同期・寿命・検証は変えない。
+`Client::running()`のguardはcollectorの接続を意味せず、on-demand切断時のclient費用も別に確認する。
+
+Bistroはwarm-upと回収後に接続し、明示した測定zoneの完了後にcollectorをflush/停止してから画像captureへ進む。
+Tracy zoneのinclusive/selfはhostの経過時間であり、OS charged CPU、WPRのsampling weight、
+GraphのGPU timestampや表示latencyとは別である。長いnative wrapper zoneは呼出しを囲む費用で、
+driver内の関数帰属を確認したことにはならない。CPU/QPC/TracyとGPUの絶対時刻対応も新たに導入しない。
+固定client/toolと収集・費用比較は[Tracy手順](../guides/tooling.md#tracy-profiling)を参照する。
+
 ### Graphの任意計測
 
 `set_profiling(true)`を明示した投入だけ、CPU prepare・record・submit・retireと

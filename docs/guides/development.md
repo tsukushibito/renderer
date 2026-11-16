@@ -17,6 +17,7 @@
 | 実行環境・シェーダーの調査 | Vulkan SDK 1.4.341.1のvulkaninfo、glslc、spirv-val |
 | 依存・GPU内容の調査 | cargo-deny 0.20.2、RenderDoc 1.47。[ツールガイド](tooling.md)を参照 |
 | WindowsのCPUサンプリング・待機分析 | Python 3.11以降、WPR/WPA exporter/xperf、行解決用LLVM、収集時の管理者権限。[CPUプロファイル手順](tooling.md#cpu-profiling)を参照 |
+| 非管理者でのCPU zone調査 | optional `tracy` featureのビルド用C++コンパイラー、対応するTracy 0.14.1 portable tools、Python 3.11以降。[Tracy手順](tooling.md#tracy-profiling)を参照 |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../../.beads/README.md)を参照 |
 | Bistro素材・比較画像の共有 | Git LFS。[素材一覧とライセンス](../../assets/bistro/README.md)を参照 |
 | Bistroのruntime cook | Python/NumPy/Pillow、Clang。固定MikkTSpaceのoffline helperをビルドする。Rustの通常ビルド・描画にはClang不要 |
@@ -371,6 +372,37 @@ driverはAPIとnative profiling off/onを交互に独立3回ずつ実行し、�
 計測窓、終了結果を確認する。全process時間にはロード・capture・終了も含まれるため、
 測定窓のRenderer CPU/frame費用へ加算しない。raw画像はローカルに残し、共有する集計へ画像本体を埋め込まない。
 内容照合はROI後に別途描くroute frame 0のHDR／SDR／depthを対象とし、全測定frameの画像照合を意味しない。
+
+<a id="bistro-tracy"></a>
+
+### TracyでBistroのhost処理を区分する
+
+`tracy`は既定offのCPU zone計装で、通常権限でcollectorへ接続できる。
+[固定tool・artifactとCLI](tooling.md#tracy-profiling)に従い、同じsource/profileから通常EXEと計装EXEを別々に保存する。
+通常release、同じ計装EXEのdisconnected、connectedを、同じcook/conditions/shader・API・view・
+解像度・warm-up・frame数・in-flight数で比較する。例の全量条件はroute、1920×1080、
+2 in-flight、3,600 warm-up＋1,800測定frameであり、採用したmatrixと実行済み範囲は[現行検証](../verification/current.md)へ記録する。
+build/cook・他APIの負荷・別collectorの処理を測定中に並行させない。
+
+feature付きの`--capture-handshake`は、warm-upと全回収後のREADY→接続/GO→測定/DONE→
+collectorのtrace flush/停止→END→画像capture/終了という順序で進む。
+対象・runを結ぶnonceの`bistro.capture_identity`は測定前に出し、metadataコピーをROIへ入れない。
+`bistro.measurement`は指定frameの処理と最後の回収を含む一つのzoneである。
+`bistro.frame`とそのframe markはCPU iterationを示し、枠が埋まっていれば古いsubmissionの回収、
+camera生成、Graph構築/compile、submitとexport/deleteのbookkeepingを含む。
+別zoneの`bistro.final_drain`やiteration間のgapはframe zoneから外れる。
+既存`frame_wall_ns`の観測完了latencyや表示FPSへ読み替えず、per-callとper-frameのpercentileも分ける。
+
+Graph解析の段階、Vulkanのprepare/record・draw batch、D3D12のprepare/record・draw/binding等へ
+明示zoneがある。D3D12のdescriptor/bind区間はSRVの具体化とroot binding等を含み、
+CreateSRVだけの費用やdriver内部の実行箇所を分離したものではない。
+inclusive/selfはwaitやdeschedulingを含むwall elapsedで、長いzoneは次の調査対象を示す。
+未計装関数のsampling、scheduler解析、GPUの絶対時刻との対応はこの収集で得たものとして扱わない。
+
+`--gpu-timing`のnative CPU timer/GPU query、追加検証、memory counterはTracyとは独立である。
+Tracy導入だけでこれらを変更せず、通常のゼロ確保受入はTracyを除外した構成で行う。
+計装clientの専用確保・background処理とzoneの送信費用を別に記録し、切断中にもゼロ費用・ゼロ確保を主張しない。
+通常artifactへ計装EXEの時間を混ぜず、観測したhotspotと今後の最適化候補を区別する。
 
 ## ビルド・品質確認
 

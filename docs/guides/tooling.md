@@ -34,6 +34,9 @@ CIの`dependencies` jobも同じ設定を使い、公式Action v2.1.1を完全SH
 `licenses.private.ignore`は`publish = false`のworkspace crateを扱うための設定で、
 第三者依存の検査除外や、このプロジェクトの配布ライセンス指定ではない。
 advisoryの個別除外はない。設定の意味は[公式ライセンス設定](https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html)を参照する。
+任意のTracy計装に使う`tracy-client-sys 0.30.1`だけは、同梱Tracy/libbacktraceのBSD-3-Clauseを
+`deny.toml`のpackage/version限定例外で許可する。宣言は`(MIT OR Apache-2.0) AND BSD-3-Clause`であり、
+一般のBSD-3-Clause許可へ広げない。通常構成の依存へTracyを追加する理由にも使わない。
 
 重複版はwarningとして確認する。現在の`syn` 2と3は、Criterionの異なる間接依存が
 互換性の異なるmajor版を要求しているため併存する。新しい重複が出たら依存経路と必要性を確認する。
@@ -211,6 +214,116 @@ sampled fixtureの二API内容照合は同じ[検証状況](../verification/curr
 一般Graph画像、非identity camera、geometry／深度、Compute／合成の二API照合は、
 生成単独の確認と分けてB1の各受入と[B2の実GPU結果](../verification/current.md#bistro-pbr)へ記録する。
 4／80 byteの従来論理定数ABIや、B2のcamera／材質ABIと、runtimeのroot constants／CBVの配置・range要件を区別する。
+
+<a id="tracy-profiling"></a>
+
+## Tracyの非管理者CPU zone調査
+
+`tracy` featureは、Graph構築・解析と両backendのprepare/record等へ明示的なCPU zoneを追加する。
+既定offで、通常構成にはTracyの呼出し・専用zone名/source location・依存を含めない。
+手動で置いた区間の経過時間を調べる機能であり、WPRのCPU samplingやscheduler収集とは別である。
+[Bistroの計測境界と費用比較](development.md#bistro-tracy)も参照する。
+
+### 固定toolとbuild artifact
+
+Rust側は`tracy-client = 0.19.0`、lockfileの`tracy-client-sys = 0.30.1`に同梱されたTracy **0.14.1**を使う。
+default featuresを外し、`enable`・`ondemand`・`only-localhost`だけを選ぶ。
+system tracing、CSwitch、sampling/callstack、source code転送、broadcastを有効にしない。
+対応する[公式0.14.1 release](https://github.com/wolfpld/tracy/releases/tag/v0.14.1)のWindows ZIPを使い、
+実行ファイルのhashと実際のhelp/versionも記録する。
+feature有効時は同梱C++ clientをビルドするため、通常のRust toolchainに加えてC++コンパイラーが必要になる。
+`windows-0.14.1.zip`のSHA-256は`f7499d74914aa3ba94a2c1ce72f36477d7b61d9d0f7c9790e05274c258c97fb5`。
+portable版を`.tools/tracy-0.14.1/bin/`へ展開し、通常権限のPowerShellから実行する。
+OSのUAC・ETW・kernel設定やsampling intervalは変更しない。
+
+```powershell
+python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
+python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
+```
+
+`--instrumentation tracy`がfeatureを追加し、manifestの`artifact_class`を`tracy-instrumented`として、
+実際にビルドしたclient/sysの版・featureも記録する。通常artifactと同じsource・profileを使っても
+別のEXE/PDB/hashとして保存する。通常build、WPR capture、通常release計測driverはTracy混入を拒否する。
+defaultの`--instrumentation none`へ単に`--features tracy`を足す指定も拒否する。
+
+### 計画・収集・停止
+
+[専用CLI](../../tools/tracy/profile.py)は`plan`、`capture`、`export`、`analyze`を分ける。
+以下は全量cookの例であり、`--manifest`を`--fixture`へ置き換えると小fixtureを使える。
+各出力先は新規directoryを指定する。`plan`は対象を起動せず、予定コマンドとidentityを表示する。
+
+```powershell
+python -B tools/tracy/profile.py plan --build-manifest .tools/tracy/builds/instrumented/manifest.json --capture-exe .tools/tracy-0.14.1/bin/tracy-capture.exe --csvexport-exe .tools/tracy-0.14.1/bin/tracy-csvexport.exe --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --view route --frames 1800 --warmup 3600 --width 1920 --height 1080 --inflight 2 --output .tools/tracy/runs/vulkan-connected
+python -B tools/tracy/profile.py capture --build-manifest .tools/tracy/builds/instrumented/manifest.json --capture-exe .tools/tracy-0.14.1/bin/tracy-capture.exe --csvexport-exe .tools/tracy-0.14.1/bin/tracy-csvexport.exe --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --view route --frames 1800 --warmup 3600 --width 1920 --height 1080 --inflight 2 --output .tools/tracy/runs/vulkan-connected
+```
+
+D3D12では`--api d3d12`と新しい出力先を指定する。両APIを同時に負荷実行しない。
+build manifest、EXE/PDB、source commit/hash、cook manifest、埋込conditions、capture/export toolを再確認し、
+`--tool-provenance <JSON>`を指定した場合は、記録の版・非管理者token・実際のtool path/hashと取得ZIPのhashを照合し、
+provenanceとZIPもplanのinput identityへ含める。
+この環境の取得記録は`.tools/tracy-evidence/tool-provenance.json`で、公式ZIP・各EXEと同梱native headerの版を結び付ける。
+controller・対象・capture broker・collector/exporterがWindows `TokenElevation=0`であることを確認する。
+localhostのport 8086が既に使われている場合は開始せず、開始後もlistenerのPIDが自分の対象であることを確認する。
+
+connected収集は次の順序で進む。
+
+1. 対象がload・prepare・全warm-upと回収を終え、`BISTRO_READY`を出す。
+2. helperが専用collectorをlocalhostへ接続し、`GO`を渡す。対象も接続を確認し、run固有のidentity zoneを出してから測定を始める。
+3. 対象が測定と最後の回収を終え、`BISTRO_DONE`を出す。
+4. helperが所有collectorだけへSIGINTを送り、traceのflush完了と正常終了を確認してから`END`を渡す。
+5. 対象がHDR/SDR/depth captureとnative teardownを行い、最終reportを保存する。
+
+このhandshakeは`tracy` feature付きBistroだけで使う。GO/接続待ちは各30秒、END待ちは180秒で失敗する。
+CLIの既定は全体300秒、flush120秒、出力2,048 MiBの監視上限で、必要なら明示変更する。
+timeout・上限超過・切断・protocol不一致は成功にせず、失敗した出力とログを保持する。
+既存の別collectorや他processへ停止を送らず、OSの管理者実行を要求しない。
+helperのrunごとのnonceはREADY/DONE/reportと、測定窓の外に置く`bistro.capture_identity`へ対応付ける。
+解析では同じnonceのzoneを一つ確認し、別対象・別runのtraceを取り違えない。
+
+切断状態の費用は同じinstrumented EXEをcollectorなしで測る。
+
+```powershell
+python -B tools/tracy/profile.py capture --build-manifest .tools/tracy/builds/instrumented/manifest.json --mode disconnected --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --view route --frames 1800 --warmup 3600 --width 1920 --height 1080 --inflight 2 --output .tools/tracy/runs/vulkan-disconnected
+```
+
+disconnected runも測定開始/終了の未接続状態をreportで確認するが、traceは採取せずexport対象にはしない。
+この二境界の観測だけから、途中にも一度も接続がなかったと証明したことにはしない。
+on-demandは切断中のzone記録を避ける設定であり、clientの起動・background thread・初回location準備・
+呼出し等の費用がゼロになる保証ではない。Tracy有効時の専用確保は通常Rendererのゼロ確保受入と分ける。
+
+### exportと数値の意味
+
+```powershell
+python -B tools/tracy/profile.py export --capture .tools/tracy/runs/vulkan-connected/capture.json --output .tools/tracy/exports/vulkan-connected
+python -B tools/tracy/profile.py analyze --export .tools/tracy/exports/vulkan-connected/export.json --output .tools/tracy/analysis-vulkan.json
+```
+
+`capture_completed: true`は所有processのprotocolとflushが終わったことを表す。
+traceの内容受入は別であり、nonce・ROI・frame数・nesting等をexportで確認して初めて`trace_content_verified: true`となる。
+captureと各export stageのbyte上限はpolling監視で、書込みやflushにより一時的に超え得る。未検査のtraceを受入済みと扱わない。
+
+Tracy 0.14.1の[csvexport実装](https://github.com/wolfpld/tracy/blob/v0.14.1/csvexport/src/csvexport.cpp)に合わせ、
+raw CPU zoneを`-u`、selfを`-u -e`、区切りを`-s`のtabで出す。この版にframe exportの`-F`はない。
+zone名・source pathのcommaを区切りと誤認せず、header、列数、整数、inclusive/selfのinstance対応、
+親子区間とself算術を検査する。欠落・交差したzoneや不完全なROIをゼロで埋めない。
+csvexportに現れるのは完了した正の長さのzoneであり、出力されなかった区間の網羅性は確認できない。
+
+| 指標 | 解釈 |
+|---|---|
+| inclusive | nested child、wait、deschedulingを含むzoneのwall elapsed。親と子の合計を再加算しない |
+| self | inclusiveから直接のchild区間を除いたwall elapsed。OS charged CPUやsampling weightではない |
+| call数・calls/frame | 明示zoneの出現数と測定frame数あたりの比。未計装関数の呼出数は分からない |
+| per-call p50/p95 | 個々のzone instanceの分布。frameのpercentileとは別 |
+| per-frame集計 | main threadの各`bistro.frame`内に完全に入る呼出しの合計。該当呼出しがないframeも0で数える |
+| frame zone p50/p95 | `bistro.frame`のCPU iteration時間。最終drain、frame間gap、表示latencyを含まない |
+
+解析は一つの完全な`bistro.measurement`と指定数の`bistro.frame`を要求する。
+viewerのbootstrap/continuous frame mark数や未対応のframe CSVを根拠にframe数を補わない。
+同じ始終時刻で親子を一意にできない関係は曖昧なまま記録する。
+複数threadのzone時間の総和は、同時進行により測定窓のwall時間を超え得る。
+手動zoneが囲むhost処理のsource位置は得られるが、未計装のdriver/OS内部やschedulerのRunning/Ready/Waitingを帰属できない。
+GPU timestampは既存の別計測であり、CPU/QPC/Tracy/GPUの絶対時刻対応をこの導入では確立しない。
+通常・切断中・接続収集中の費用と、実際に観測したhotspotは[現在の検証](../verification/current.md)へ記録する。
 
 <a id="cpu-profiling"></a>
 
