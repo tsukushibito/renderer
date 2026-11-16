@@ -247,7 +247,7 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
         count: 2,
     });
     runtime
-        .prepare_graph_working_set(&classes, &[], &[])
+        .prepare_graph_working_set(None, &classes, &[], &[])
         .unwrap();
     let mut pool = GraphPool::new(
         GraphCapacity {

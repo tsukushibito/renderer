@@ -241,6 +241,7 @@ impl Backend {
             }
             #[cfg(feature = "d3d12")]
             Self::D3d12(value) => value.runtime.prepare_graph_working_set(
+                None,
                 &[
                     renderer::D3D12ImageClass {
                         desc: color,

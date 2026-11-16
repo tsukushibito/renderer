@@ -60,10 +60,11 @@ pub use backends::vulkan::{
 
 #[cfg(all(feature = "d3d12", windows))]
 pub use backends::d3d12::{
-    D3D12Bindings, D3D12Buffer, D3D12DeviceInfo, D3D12FrameCapacity, D3D12Image, D3D12ImageClass,
-    D3D12ImageView, D3D12PreparedGraph, D3D12Program, D3D12Runtime, D3D12RuntimeConfig,
-    D3D12RuntimeError, D3D12RuntimeErrorKind, D3D12Sampler, D3D12Submission, D3D12SubmissionResult,
-    D3D12ValidationMessage, D3D12ValidationMode, D3D12ValidationMonitor, D3D12ValidationReport,
+    D3D12Bindings, D3D12Buffer, D3D12BufferClass, D3D12DeviceInfo, D3D12FrameCapacity, D3D12Image,
+    D3D12ImageClass, D3D12ImageView, D3D12PreparedGraph, D3D12Program, D3D12Runtime,
+    D3D12RuntimeConfig, D3D12RuntimeError, D3D12RuntimeErrorKind, D3D12Sampler, D3D12Submission,
+    D3D12SubmissionResult, D3D12ValidationMessage, D3D12ValidationMode, D3D12ValidationMonitor,
+    D3D12ValidationReport,
 };
 
 #[cfg(all(feature = "d3d12", feature = "presentation", windows))]

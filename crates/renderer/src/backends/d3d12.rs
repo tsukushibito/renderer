@@ -22,7 +22,7 @@ mod resources;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
 pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12ValidationReport};
-pub use frame::D3D12FrameCapacity;
+pub use frame::{D3D12BufferClass, D3D12FrameCapacity};
 pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 pub use image::{D3D12Image, D3D12ImageView, D3D12Sampler};
 #[cfg(feature = "presentation")]
@@ -196,6 +196,29 @@ impl D3D12Runtime {
         let pool = frame::FramePool::new(Arc::clone(&device), config.capacity)?;
         Ok(Self { device, pool })
     }
+    /// Creates a runtime with exact global physical buffer/image classes and
+    /// prepared pipelines, without first allocating a uniform buffer pool.
+    /// `capacity.buffers` limits per-execution metadata, including imports;
+    /// class counts reserve physical instances once across all executions.
+    pub fn new_with_working_set(
+        config: D3D12RuntimeConfig,
+        buffers: &[D3D12BufferClass],
+        images: &[D3D12ImageClass],
+        programs: &[crate::program::ManagedRasterProgram],
+        compute_programs: &[crate::program::ManagedProgram],
+    ) -> Result<Self, D3D12RuntimeError> {
+        let device = DeviceOwner::new(config.validation)?;
+        let pool = frame::FramePool::with_graph(
+            Arc::clone(&device),
+            config.capacity,
+            buffers,
+            images,
+            &[],
+            programs,
+            compute_programs,
+        )?;
+        Ok(Self { device, pool })
+    }
     /// Reserves exact image classes, descriptor arenas and immutable Raster and
     /// Compute pipelines at an explicit change boundary. All execution and result
     /// leases, completed submissions with exports, and all exported/refreshed
@@ -203,11 +226,16 @@ impl D3D12Runtime {
     /// retain their keys and contents; `delete` is not required. Refresh buffer
     /// snapshots after changing the working set. Registered images get view slots
     /// even when omitted from `images`. Ordinary Graph preparation never grows storage.
+    /// `buffers: None` retains the current prepared buffer-class budget;
+    /// `Some(classes)` replaces it, including `Some(&[])` for no free buffers.
+    /// Registered resources remain in addition to this free working set.
+    /// Physical class counts are global, independent of execution-slot count.
     /// Empty image and Program lists are allowed. Image descriptors reserve
     /// `operations` Raster slots plus `operations * max_compute_image_bindings`
     /// Compute slots; the entire shader-visible heap must fit its native limit.
     pub fn prepare_graph_working_set(
         &mut self,
+        buffers: Option<&[D3D12BufferClass]>,
         images: &[D3D12ImageClass],
         programs: &[crate::program::ManagedRasterProgram],
         compute_programs: &[crate::program::ManagedProgram],
@@ -241,6 +269,7 @@ impl D3D12Runtime {
         let mut pool = frame::FramePool::with_graph(
             Arc::clone(&self.device),
             self.pool.capacity(),
+            buffers.unwrap_or_else(|| self.pool.buffer_classes()),
             images,
             &registered_images,
             programs,
