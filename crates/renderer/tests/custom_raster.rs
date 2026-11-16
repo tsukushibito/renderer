@@ -283,7 +283,7 @@ mod native {
     }
     fn prepare_dx(runtime: &mut D3D12Runtime) {
         runtime
-            .prepare_graph_working_set(&images(), &fixture::raster_programs(), &[])
+            .prepare_graph_working_set(None, &images(), &fixture::raster_programs(), &[])
             .unwrap();
     }
     fn compare(
@@ -453,7 +453,7 @@ mod native {
             RuntimeErrorKind::CapacityExhausted
         );
         assert_eq!(
-            dx.prepare_graph_working_set(&images(), &fixture::too_many_programs(), &[])
+            dx.prepare_graph_working_set(None, &images(), &fixture::too_many_programs(), &[])
                 .unwrap_err()
                 .kind(),
             D3D12RuntimeErrorKind::CapacityExhausted
@@ -493,7 +493,7 @@ mod native {
             D3D12RuntimeErrorKind::CapacityExhausted
         );
         assert_eq!(
-            dx.prepare_graph_working_set(&images(), &[ManagedRasterProgram::mesh_hdr()], &[])
+            dx.prepare_graph_working_set(None, &images(), &[ManagedRasterProgram::mesh_hdr()], &[])
                 .unwrap_err()
                 .kind(),
             D3D12RuntimeErrorKind::CapacityExhausted
@@ -519,7 +519,7 @@ mod native {
         drop((result, pending));
         let mut pending = dx.submit(&plan).unwrap();
         assert_eq!(
-            dx.prepare_graph_working_set(&images(), &[ManagedRasterProgram::mesh_hdr()], &[])
+            dx.prepare_graph_working_set(None, &images(), &[ManagedRasterProgram::mesh_hdr()], &[])
                 .unwrap_err()
                 .kind(),
             D3D12RuntimeErrorKind::CapacityExhausted
@@ -529,7 +529,7 @@ mod native {
             result.readback_into(pass, output).unwrap()
         });
         assert_eq!(
-            dx.prepare_graph_working_set(&images(), &[ManagedRasterProgram::mesh_hdr()], &[])
+            dx.prepare_graph_working_set(None, &images(), &[ManagedRasterProgram::mesh_hdr()], &[])
                 .unwrap_err()
                 .kind(),
             D3D12RuntimeErrorKind::CapacityExhausted
@@ -540,7 +540,7 @@ mod native {
         // then prove the old CPU plan cannot silently resolve to another asset.
         vk.prepare_raster_programs(&[ManagedRasterProgram::mesh_hdr()])
             .unwrap();
-        dx.prepare_graph_working_set(&images(), &[ManagedRasterProgram::mesh_hdr()], &[])
+        dx.prepare_graph_working_set(None, &images(), &[ManagedRasterProgram::mesh_hdr()], &[])
             .unwrap();
         assert!(
             vk.submit(&plan).is_err(),
@@ -553,7 +553,8 @@ mod native {
         // The first live Raster is the binding-free standard opaque Program.
         // Excluding it must return a capacity error before command recording.
         vk.prepare_raster_programs(&[]).unwrap();
-        dx.prepare_graph_working_set(&images(), &[], &[]).unwrap();
+        dx.prepare_graph_working_set(None, &images(), &[], &[])
+            .unwrap();
         assert_eq!(
             vk.submit(&plan).err().unwrap().kind(),
             RuntimeErrorKind::CapacityExhausted

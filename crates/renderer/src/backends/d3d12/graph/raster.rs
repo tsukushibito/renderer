@@ -55,7 +55,19 @@ pub(super) fn binding_requirements(
                     ));
                 }
             }
-            BindingOperands::ImageView(_) => descriptors += 1,
+            BindingOperands::ImageView(view) => {
+                let ResourceDesc::Image(desc) = graph.resources[view.image().index].desc else {
+                    unreachable!()
+                };
+                if view.mip_level_count() != 1
+                    && (view.mip_level() != 0 || view.mip_level_count() != desc.mip_levels)
+                {
+                    return Err(D3D12RuntimeError::unsupported(
+                        "Graph sampled Views require one mip or the complete chain",
+                    ));
+                }
+                descriptors += 1;
+            }
             BindingOperands::Sampler(_) => {}
         }
     }
@@ -91,9 +103,9 @@ pub(super) fn use_image(
     let ResourceDesc::Image(desc) = graph.resources[index].desc else {
         unreachable!()
     };
-    if !desc.is_single_subresource() {
+    if desc.array_layers != 1 {
         return Err(D3D12RuntimeError::unsupported(
-            "D3D12 Graph images currently require one mip and layer",
+            "D3D12 Graph images currently require one layer",
         ));
     }
     let (physical, image) = storage
@@ -209,12 +221,12 @@ pub(super) fn retain_provenance(graph: &CompiledGraph, needed: &mut [bool]) {
 /// Both locations are stack-owned COM references; release them on unwind too.
 struct TextureLocation(D3D12_TEXTURE_COPY_LOCATION);
 impl TextureLocation {
-    fn image(resource: &ID3D12Resource) -> Self {
+    fn image(resource: &ID3D12Resource, mip: u32) -> Self {
         Self(D3D12_TEXTURE_COPY_LOCATION {
             pResource: ManuallyDrop::new(Some(resource.clone())),
             Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
             Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
-                SubresourceIndex: 0,
+                SubresourceIndex: mip,
             },
         })
     }
@@ -246,34 +258,37 @@ pub(super) fn upload_image(
     let bytes = graph.upload_data(operation);
     let image = &mut slot.raster.as_mut().unwrap().images[slot.resource_map[dst]];
     let base = align_transfer(slot.upload_used)?;
-    let mut footprint = image.footprint;
-    footprint.Offset += base;
-    for row in 0..image.rows {
-        // SAFETY: Preflight bounded the cached native footprint in the leased
-        // upload arena. Graph creation established packed full-image bytes.
-        unsafe {
-            slot.upload.write_at(
-                owner,
-                footprint.Offset + row as u64 * u64::from(footprint.Footprint.RowPitch),
-                &bytes[row * image.row_bytes..(row + 1) * image.row_bytes],
-            )
-        }?;
-    }
     transition(
         &slot.list,
         image.native.raw(),
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
-    let source = TextureLocation::buffer(slot.upload.raw(), footprint);
-    let destination = TextureLocation::image(image.native.raw());
-    // SAFETY: Complete single-subresource copy uses cached native pitch/format,
-    // aligned bounded placement, COPY_DEST/GENERIC_READ states and retained
-    // owners. Depth copies use zero destination offsets and no source box.
-    unsafe {
-        slot.list
-            .CopyTextureRegion(&destination.0, 0, 0, 0, &source.0, None)
-    };
+    for (mip, layout) in image.mips.iter().enumerate() {
+        let mut footprint = layout.footprint;
+        footprint.Offset += base;
+        for row in 0..layout.rows {
+            let begin = layout.packed_offset + row * layout.row_bytes;
+            // SAFETY: Preflight bounded all cached footprints in the retained
+            // upload arena; immutable Graph guarantees packed mip0..N bytes.
+            unsafe {
+                slot.upload.write_at(
+                    owner,
+                    footprint.Offset + row as u64 * u64::from(footprint.Footprint.RowPitch),
+                    &bytes[begin..begin + layout.row_bytes],
+                )
+            }?;
+        }
+        let source = TextureLocation::buffer(slot.upload.raw(), footprint);
+        let destination = TextureLocation::image(image.native.raw(), mip as u32);
+        // SAFETY: Each complete mip copy uses its validated native footprint,
+        // bounded placement and whole-resource COPY_DEST state. Owners remain
+        // pinned until actual completion; no padding bytes are read as texels.
+        unsafe {
+            slot.list
+                .CopyTextureRegion(&destination.0, 0, 0, 0, &source.0, None)
+        };
+    }
     slot.upload_used = base + image.total_bytes;
     Ok(())
 }
@@ -289,7 +304,7 @@ pub(super) fn copy_image(slot: &mut ExecutionSlot, src: usize, dst: usize) {
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_SOURCE,
     );
-    let source = TextureLocation::image(image.native.raw());
+    let source = TextureLocation::image(image.native.raw(), 0);
     let image = &mut storage.images[destination];
     transition(
         &slot.list,
@@ -297,7 +312,7 @@ pub(super) fn copy_image(slot: &mut ExecutionSlot, src: usize, dst: usize) {
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_DEST,
     );
-    let destination = TextureLocation::image(image.native.raw());
+    let destination = TextureLocation::image(image.native.raw(), 0);
     // SAFETY: Graph construction guarantees distinct, equal-format/extent color
     // images and complete initialized source content. Both single-subresource
     // native images remain exclusively leased through actual GPU completion.
@@ -325,7 +340,7 @@ pub(super) fn readback_image(
         &mut image.state,
         D3D12_RESOURCE_STATE_COPY_SOURCE,
     );
-    let source = TextureLocation::image(image.native.raw());
+    let source = TextureLocation::image(image.native.raw(), 0);
     let destination = TextureLocation::buffer(&buffer, footprint);
     // SAFETY: Preflight bounded this cached footprint in the exclusively leased
     // result arena. The full initialized image is COPY_SOURCE; depth copies
@@ -596,8 +611,8 @@ pub(super) fn record(
                         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING as u32,
                         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
                             Texture2D: D3D12_TEX2D_SRV {
-                                MostDetailedMip: 0,
-                                MipLevels: 1,
+                                MostDetailedMip: view.mip_level(),
+                                MipLevels: view.mip_level_count(),
                                 PlaneSlice: 0,
                                 ResourceMinLODClamp: 0.0,
                             },
@@ -617,12 +632,12 @@ pub(super) fn record(
                     }
                     slot.raster_descriptors_used += 1;
                 }
-                BindingOperands::Sampler(_) => {
+                BindingOperands::Sampler(sampler) => {
                     // SAFETY: The supported immutable nearest/clamp sampler and
                     // its descriptor table match the trusted Program's layout.
                     unsafe {
                         slot.list
-                            .SetGraphicsRootDescriptorTable(root, storage.sampler_gpu());
+                            .SetGraphicsRootDescriptorTable(root, storage.sampler_gpu(*sampler));
                     }
                 }
             }
@@ -813,6 +828,7 @@ mod tests {
         let monitor = runtime.validation_monitor();
         runtime
             .prepare_graph_working_set(
+                None,
                 &[D3D12ImageClass {
                     desc: ImageDesc::rgba8(1, 1),
                     count: 2,

@@ -55,7 +55,7 @@ pub(super) fn metadata(strict: bool) {
     drop(<D3D12Runtime as Backend>::wait(&mut pending));
     // Completion alone does not return the submission's export metadata.
     assert_eq!(
-        dx.prepare_graph_working_set(&[], &[], &[])
+        dx.prepare_graph_working_set(None, &[], &[], &[])
             .unwrap_err()
             .kind(),
         CapacityExhausted
@@ -65,7 +65,7 @@ pub(super) fn metadata(strict: bool) {
     // the completed submission and each last snapshot remains allocation-free.
     for value in [exported, exported_clone, refreshed] {
         assert_eq!(
-            dx.prepare_graph_working_set(&[], &[], &[])
+            dx.prepare_graph_working_set(None, &[], &[], &[])
                 .unwrap_err()
                 .kind(),
             CapacityExhausted
@@ -75,7 +75,7 @@ pub(super) fn metadata(strict: bool) {
     return_without_allocating(pending);
     // Only an independently captured refresh token's final clone remains.
     assert_eq!(
-        dx.prepare_graph_working_set(&[], &[], &[])
+        dx.prepare_graph_working_set(None, &[], &[], &[])
             .unwrap_err()
             .kind(),
         CapacityExhausted
@@ -84,7 +84,8 @@ pub(super) fn metadata(strict: bool) {
 
     let desc = ImageDesc::rgba8(1, 1);
     let classes = [D3D12ImageClass { desc, count: 1 }];
-    dx.prepare_graph_working_set(&classes, &[], &[]).unwrap();
+    dx.prepare_graph_working_set(None, &classes, &[], &[])
+        .unwrap();
     let mut graph = pool.begin().unwrap();
     let image = graph.image("persistent image", desc).unwrap();
     graph.upload_image("pixel", image, &[7; 4]).unwrap();
@@ -96,7 +97,7 @@ pub(super) fn metadata(strict: bool) {
     // Image-only metadata has no ImportRanges token. Its completed submission
     // must independently prevent replacement of the export slot backing.
     assert_eq!(
-        dx.prepare_graph_working_set(&classes, &[], &[])
+        dx.prepare_graph_working_set(None, &classes, &[], &[])
             .unwrap_err()
             .kind(),
         CapacityExhausted
@@ -104,7 +105,8 @@ pub(super) fn metadata(strict: bool) {
     return_without_allocating(pending);
     // An ImportImage is scalar metadata, so it need not be returned. A failed
     // replacement preserves the owner, so its explicitly deleted key stays stale.
-    dx.prepare_graph_working_set(&classes, &[], &[]).unwrap();
+    dx.prepare_graph_working_set(None, &classes, &[], &[])
+        .unwrap();
     assert_eq!(
         dx.refresh_image(snapshot.key()).unwrap_err().kind(),
         renderer::D3D12RuntimeErrorKind::StaleResource
@@ -342,6 +344,7 @@ pub(super) fn reconfiguration(strict: bool) {
     )
     .unwrap();
     dx.prepare_graph_working_set(
+        None,
         &[D3D12ImageClass {
             desc: fixture::hdr(),
             count: 2,

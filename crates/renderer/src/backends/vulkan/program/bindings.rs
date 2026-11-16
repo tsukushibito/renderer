@@ -26,7 +26,7 @@ pub(in crate::backends::vulkan) enum RasterBinding {
         size: u64,
     },
     Image(vk::ImageView),
-    Sampler,
+    Sampler(vk::Sampler),
 }
 
 struct DescriptorArena {
@@ -496,7 +496,6 @@ impl ShaderBindings {
         &mut self,
         key: usize,
         operands: impl Iterator<Item = (BindingLayout, RasterBinding)>,
-        sampler: vk::Sampler,
     ) -> Result<[vk::DescriptorSet; RASTER_GROUP_COUNT], RuntimeError> {
         if self.used >= self.programs.bindings.max_bindings {
             return Err(RuntimeError::capacity_with(
@@ -566,7 +565,7 @@ impl ShaderBindings {
                         .image_view(view)
                         .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
                 }
-                RasterBinding::Sampler => {
+                RasterBinding::Sampler(sampler) => {
                     images[index] = vk::DescriptorImageInfo::default().sampler(sampler);
                 }
             }

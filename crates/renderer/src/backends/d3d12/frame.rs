@@ -42,11 +42,57 @@ pub struct D3D12FrameCapacity {
     /// Canonical initialized intervals and independently retained import tokens.
     pub initialized_ranges_per_resource: usize,
     pub range_snapshots: usize,
+    /// Buffer operands retained by one execution, including imported resources.
     pub buffers: usize,
+    /// Largest logical buffer accepted by one execution. Explicit working-set
+    /// classes allocate their actual sizes independently of this metadata limit.
     pub buffer_bytes: u64,
     pub upload_bytes: u64,
     pub readback_bytes: u64,
     pub scratch_bytes: u64,
+}
+
+/// Physical DEFAULT buffers reserved globally across execution slots. A class
+/// can satisfy a logical buffer no larger than `size`; no physical allocation
+/// is multiplied by the number of concurrent executions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct D3D12BufferClass {
+    pub size: u64,
+    pub count: usize,
+}
+
+fn validate_buffer_classes(
+    capacity: D3D12FrameCapacity,
+    classes: &[D3D12BufferClass],
+) -> Result<(), D3D12RuntimeError> {
+    let mut count = 0usize;
+    for class in classes {
+        if class.size == 0
+            || class.size > capacity.buffer_bytes
+            || class.size > MAX_BUFFER_BYTES
+            || class.size > isize::MAX as u64
+            || class.count == 0
+        {
+            return Err(D3D12RuntimeError::invalid(
+                "buffer class must have a nonzero count and fit the logical buffer byte limit",
+            ));
+        }
+        let required = count.checked_add(class.count);
+        count = required
+            .filter(|count| *count <= capacity.resource_capacity)
+            .ok_or_else(|| {
+                D3D12RuntimeError::capacity_with(
+                    "prepared buffer classes exceed physical registry capacity",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::Reconfigure,
+                        Some(capacity.resource_capacity as u64),
+                        required.and_then(|value| u64::try_from(value).ok()),
+                    ),
+                )
+            })?;
+    }
+    Ok(())
 }
 
 impl Default for D3D12FrameCapacity {
@@ -168,15 +214,10 @@ impl ExecutionSlot {
             object(owner, "ID3D12Device::CreateFence", || unsafe {
                 owner.raw.CreateFence(0, D3D12_FENCE_FLAG_NONE)
             })?;
+        // Physical buffers belong to the global canonical registry. A slot
+        // retains only its leased references, including imported resources.
         let mut buffers = reserved(capacity.buffers)?;
-        for _ in 0..capacity.buffers {
-            // Graph buffers may become shader storage without changing their
-            // immutable physical allocation during ordinary frames.
-            buffers.push(super::registry::PhysicalRef::buffer(DeviceBuffer::storage(
-                owner,
-                capacity.buffer_bytes,
-            )?));
-        }
+        buffers.resize_with(capacity.buffers, Default::default);
         let mut states = reserved(capacity.buffers)?;
         states.resize(capacity.buffers, D3D12_RESOURCE_STATE_COMMON);
         let mut resource_map = reserved(capacity.resources)?;
@@ -328,6 +369,7 @@ struct PoolState {
 pub(super) struct FramePool {
     pub(super) registry: Mutex<super::registry::Registry>,
     capacity: D3D12FrameCapacity,
+    buffer_classes: Vec<D3D12BufferClass>,
     pub(super) raster_programs: Vec<RasterPipeline>,
     pub(super) clear_programs: Option<ClearPrograms>,
     pub(super) compute_programs: Vec<super::program::D3D12Program>,
@@ -341,6 +383,24 @@ impl FramePool {
     pub(super) fn new(
         owner: Arc<DeviceOwner>,
         capacity: D3D12FrameCapacity,
+    ) -> Result<Arc<Self>, D3D12RuntimeError> {
+        let count = capacity
+            .buffers
+            .checked_mul(capacity.executions)
+            .ok_or_else(|| D3D12RuntimeError::invalid("uniform buffer class count overflow"))?;
+        Self::with_buffers(
+            owner,
+            capacity,
+            &[D3D12BufferClass {
+                size: capacity.buffer_bytes,
+                count,
+            }],
+        )
+    }
+    fn with_buffers(
+        owner: Arc<DeviceOwner>,
+        capacity: D3D12FrameCapacity,
+        classes: &[D3D12BufferClass],
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
         owner.ensure_active()?;
         if capacity.executions == 0
@@ -365,7 +425,9 @@ impl FramePool {
                 "frame buffer capacities must be within the supported nonzero range",
             ));
         }
+        validate_buffer_classes(capacity, classes)?;
         let mut registry = super::registry::Registry::new(capacity)?;
+        registry.prepare_buffers(&owner, classes)?;
         let mut executions = reserved(capacity.executions)?;
         for _ in 0..capacity.executions {
             executions.push(ExecutionEntry::Available(Box::new(ExecutionSlot::new(
@@ -385,6 +447,7 @@ impl FramePool {
         Ok(Arc::new(Self {
             registry: Mutex::new(registry),
             capacity,
+            buffer_classes: classes.to_vec(),
             raster_programs: Vec::new(),
             clear_programs: None,
             compute_programs: Vec::new(),
@@ -444,6 +507,7 @@ impl FramePool {
     pub(super) fn with_graph(
         owner: Arc<DeviceOwner>,
         capacity: D3D12FrameCapacity,
+        buffers: &[D3D12BufferClass],
         classes: &[D3D12ImageClass],
         registered_images: &[crate::graph::ImageDesc],
         programs: &[ManagedRasterProgram],
@@ -474,7 +538,7 @@ impl FramePool {
             unique_programs[program_count] = Some(*program);
             program_count += 1;
         }
-        let mut pool = Self::new(owner, capacity)?;
+        let mut pool = Self::with_buffers(owner, capacity, buffers)?;
         let pool_mut = Arc::get_mut(&mut pool).expect("new unshared pool");
         let class_count = classes
             .len()
@@ -613,11 +677,13 @@ impl FramePool {
                         ),
                     )
                 })?;
-        for entry in &mut pool_mut
+        for (slot_index, entry) in pool_mut
             .state
             .get_mut()
             .unwrap_or_else(|error| error.into_inner())
             .executions
+            .iter_mut()
+            .enumerate()
         {
             let ExecutionEntry::Available(slot) = entry else {
                 unreachable!()
@@ -628,6 +694,7 @@ impl FramePool {
                 registered_images,
                 raster_descriptors,
                 compute_descriptors,
+                slot_index == 0,
             )?);
             pool_mut
                 .registry
@@ -639,6 +706,9 @@ impl FramePool {
     }
     pub(super) fn capacity(&self) -> D3D12FrameCapacity {
         self.capacity
+    }
+    pub(super) fn buffer_classes(&self) -> &[D3D12BufferClass] {
+        &self.buffer_classes
     }
     pub(super) fn owner(&self) -> &Arc<DeviceOwner> {
         &self.owner
@@ -1242,7 +1312,164 @@ mod tests {
         panic::{AssertUnwindSafe, catch_unwind},
     };
 
-    use super::{Phase, execute_and_signal};
+    use super::{
+        D3D12BufferClass, D3D12FrameCapacity, Phase, execute_and_signal, validate_buffer_classes,
+    };
+
+    #[test]
+    fn explicit_buffer_classes_are_global_and_metadata_capacity_is_independent() {
+        let capacity = D3D12FrameCapacity {
+            executions: 4,
+            buffers: 4096,
+            resource_capacity: 3,
+            buffer_bytes: 4096,
+            ..Default::default()
+        };
+        assert!(
+            validate_buffer_classes(
+                capacity,
+                &[
+                    D3D12BufferClass { size: 8, count: 1 },
+                    D3D12BufferClass { size: 64, count: 1 },
+                    D3D12BufferClass {
+                        size: 4096,
+                        count: 1
+                    },
+                ]
+            )
+            .is_ok()
+        );
+        assert!(validate_buffer_classes(capacity, &[]).is_ok());
+        let failure = validate_buffer_classes(capacity, &[D3D12BufferClass { size: 8, count: 4 }])
+            .unwrap_err();
+        let payload = failure.capacity().unwrap();
+        assert_eq!(payload.limit, Some(3));
+        assert_eq!(payload.required, Some(4));
+    }
+
+    #[test]
+    fn invalid_buffer_classes_fail_before_native_creation() {
+        for class in [
+            D3D12BufferClass { size: 0, count: 1 },
+            D3D12BufferClass { size: 64, count: 0 },
+            D3D12BufferClass {
+                size: super::MAX_BUFFER_BYTES + 1,
+                count: 1,
+            },
+        ] {
+            assert!(validate_buffer_classes(D3D12FrameCapacity::default(), &[class]).is_err());
+        }
+        let capacity = D3D12FrameCapacity {
+            buffer_bytes: 64,
+            ..Default::default()
+        };
+        assert!(
+            validate_buffer_classes(capacity, &[D3D12BufferClass { size: 65, count: 1 }]).is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
+    fn d3d12_global_buffer_classes_preserve_capacity_after_smaller_reuse() {
+        use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+        use crate::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
+        use std::time::Duration;
+
+        let strict = cfg!(feature = "d3d12-diagnostics");
+        let mut runtime = D3D12Runtime::new_with_working_set(
+            D3D12RuntimeConfig {
+                validation: if strict {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                capacity: D3D12FrameCapacity {
+                    executions: 3,
+                    results: 3,
+                    resources: 8,
+                    operations: 8,
+                    buffers: 3,
+                    buffer_bytes: 8192,
+                    resource_capacity: 3,
+                    upload_bytes: 8192,
+                    readback_bytes: 8192,
+                    scratch_bytes: 4,
+                    ..Default::default()
+                },
+            },
+            &[
+                D3D12BufferClass { size: 8, count: 1 },
+                D3D12BufferClass { size: 64, count: 1 },
+                D3D12BufferClass {
+                    size: 4096,
+                    count: 1,
+                },
+            ],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        // Three physical buffers fit a three-entry registry despite three
+        // execution slots; uniform per-slot allocation would require nine.
+        let monitor = runtime.validation_monitor();
+        for (cycle, sizes) in [[4, 32, 512], [8, 64, 4096], [4, 32, 512], [8, 64, 4096]]
+            .into_iter()
+            .enumerate()
+        {
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            let mut graph = pool.begin().unwrap();
+            let mut expected = Vec::new();
+            for (ordinal, size) in sizes.into_iter().enumerate() {
+                let buffer = graph.buffer("class buffer", BufferDesc { size }).unwrap();
+                let bytes = vec![(cycle * 17 + ordinal + 1) as u8; size as usize];
+                graph
+                    .upload_buffer("initialize", buffer, 0, &bytes)
+                    .unwrap();
+                let readback = graph.readback_buffer("check", buffer, 0, size).unwrap();
+                expected.push((readback, bytes));
+            }
+            let plan = graph.compile().unwrap();
+            let mut submission = runtime.submit(&plan).unwrap();
+            let mut result = submission
+                .wait(Duration::from_secs(30))
+                .unwrap()
+                .expect("GPU completion");
+            for (readback, bytes) in expected {
+                let mut actual = vec![0; bytes.len()];
+                result.readback_into(readback, &mut actual).unwrap();
+                assert_eq!(actual, bytes);
+            }
+        }
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let buffer = graph
+            .buffer(
+                "larger than every prepared class",
+                BufferDesc { size: 8192 },
+            )
+            .unwrap();
+        graph
+            .upload_buffer("initialize", buffer, 0, &[1; 8192])
+            .unwrap();
+        graph.readback_buffer("observe", buffer, 0, 8192).unwrap();
+        let plan = graph.compile().unwrap();
+        let failure = runtime
+            .prepare(&plan)
+            .err()
+            .expect("physical class exhaustion");
+        assert!(failure.capacity().is_some());
+        drop((plan, pool));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:?}");
+        if strict {
+            assert!(
+                report.teardown_checked && report.gpu_based_validation_enabled,
+                "{report:?}"
+            );
+        }
+    }
 
     #[test]
     fn signal_failure_follows_execution_and_quarantines_published_pending_work() {
@@ -1414,6 +1641,7 @@ mod tests {
             }
             runtime
                 .prepare_graph_working_set(
+                    None,
                     &[D3D12ImageClass {
                         desc: ImageDesc::rgba8(1, 1),
                         count: 1,

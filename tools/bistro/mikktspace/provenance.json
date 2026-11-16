@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/mmikk/MikkTSpace",
+  "commit": "3e895b49d05ea07e4c2133156cfa94369e19e409",
+  "upstream_files_unmodified": {
+    "mikktspace.c": "de87e74107df766ce68108801262bd8d53899414236b59810509a8fc2a51e288",
+    "mikktspace.h": "17fc433894f24c73753d548086cc4d8c5c0379f4a6edfb98b5da243e4f0bc3d0"
+  },
+  "license": "Upstream zlib-style license is retained verbatim in each source header.",
+  "local_bridge": "bridge.c is consumer-owned adapter code, not an upstream modification.",
+  "purpose": "Offline-only genTangSpaceDefault with per-corner output; no Renderer runtime dependency.",
+  "primary_contracts": [
+    "https://github.com/mmikk/MikkTSpace/blob/3e895b49d05ea07e4c2133156cfa94369e19e409/mikktspace.h",
+    "https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes",
+    "https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#instantiation",
+    "https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dds-header",
+    "https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dx-graphics-dds-pguide",
+    "https://github.com/python-pillow/Pillow/blob/11.1.0/src/PIL/DdsImagePlugin.py"
+  ]
+}

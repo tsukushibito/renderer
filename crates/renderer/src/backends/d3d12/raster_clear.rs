@@ -33,6 +33,7 @@ fn format_index(format: ImageFormat) -> usize {
         ImageFormat::Rgba8Unorm => 0,
         ImageFormat::Rgba16Float => 1,
         ImageFormat::Depth32Float => 2,
+        ImageFormat::Rgba8Srgb => unreachable!("sRGB is sampled-only"),
     }
 }
 
@@ -43,12 +44,16 @@ impl ClearPrograms {
     ) -> Result<Self, D3D12RuntimeError> {
         let mut pipelines = std::array::from_fn(|_| None);
         for class in classes {
+            if class.desc.format == ImageFormat::Rgba8Srgb {
+                continue;
+            }
             let index = format_index(class.desc.format);
             if pipelines[index].is_none() {
                 let (program, depth) = match class.desc.format {
                     ImageFormat::Rgba8Unorm => (ManagedRasterProgram::mesh(), false),
                     ImageFormat::Rgba16Float => (ManagedRasterProgram::mesh_hdr(), false),
                     ImageFormat::Depth32Float => (ManagedRasterProgram::depth_only(), true),
+                    ImageFormat::Rgba8Srgb => unreachable!("sRGB is sampled-only"),
                 };
                 pipelines[index] = Some(RasterPipeline::clear(owner, &program, depth)?);
             }
@@ -187,6 +192,7 @@ mod tests {
         let depth_desc = ImageDesc::depth32(3, 5);
         runtime
             .prepare_graph_working_set(
+                None,
                 &[
                     D3D12ImageClass {
                         desc: color_desc,

@@ -8,6 +8,170 @@ fn buffer(graph: &mut Graph, name: &str, size: u64) -> BufferHandle {
     graph.buffer(name, BufferDesc { size }).unwrap()
 }
 
+#[test]
+fn sampled_mip_chain_requires_every_level_and_full_upload_initializes_it() {
+    use renderer::graph::{
+        Attachment, BindingResource, ImageDesc, LoadOp, RasterAttachments, StoreOp,
+    };
+    use renderer::program::SamplerDescriptor;
+
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    for complete in [false, true] {
+        let mut graph = pool.begin().unwrap();
+        let image = graph
+            .image(
+                "two mip levels",
+                ImageDesc {
+                    mip_levels: 2,
+                    ..ImageDesc::rgba8(2, 2)
+                },
+            )
+            .unwrap();
+        let view = graph.sampled_image_view(image, 0, 2).unwrap();
+        assert_eq!(view.mip_level_count(), 2);
+        if complete {
+            // Sixteen base-level bytes followed by the four-byte 1x1 level.
+            graph
+                .upload_image("complete chain", image, &[17; 20])
+                .unwrap();
+        } else {
+            graph
+                .attachment_pass(
+                    "base level only",
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: graph.image_view(image, 0, 0).unwrap(),
+                            load: LoadOp::Clear([0.0; 4]),
+                            store: StoreOp::Store,
+                        }],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+        }
+        let output = buffer(&mut graph, "sample output", 16);
+        graph
+            .dispatch(
+                "sample chain",
+                &ManagedProgram::sampled_readback(),
+                &[
+                    Binding {
+                        group: 0,
+                        binding: 0,
+                        resource: BindingResource::ImageView(view),
+                    },
+                    Binding {
+                        group: 0,
+                        binding: 1,
+                        resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+                    },
+                    Binding {
+                        group: 1,
+                        binding: 0,
+                        resource: BindingResource::Buffer {
+                            buffer: output,
+                            offset: 0,
+                            size: 16,
+                        },
+                    },
+                ],
+                [1; 3],
+            )
+            .unwrap();
+        graph.readback_buffer("result", output, 0, 16).unwrap();
+        if complete {
+            assert_eq!(graph.compile().unwrap().pass_count(), 3);
+        } else {
+            let error = graph.compile().unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::UninitializedRead);
+            assert_eq!(error.resource(), Some(image.into()));
+        }
+    }
+}
+
+#[test]
+fn sampled_view_range_checks_do_not_change_transfer_or_attachment_contracts() {
+    use renderer::graph::{Attachment, ImageDesc, LoadOp, RasterAttachments, StoreOp};
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let image = graph
+        .image(
+            "chain",
+            ImageDesc {
+                mip_levels: 3,
+                ..ImageDesc::rgba8(4, 2)
+            },
+        )
+        .unwrap();
+    for (base, count) in [(0, 0), (3, 1), (2, 2), (1, u32::MAX)] {
+        assert_eq!(
+            graph
+                .sampled_image_view(image, base, count)
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+    }
+    let view = graph.sampled_image_view(image, 1, 2).unwrap();
+    assert_eq!(view.mip_level(), 1);
+    assert_eq!(view.mip_level_count(), 2);
+    assert!(
+        graph
+            .attachment_pass(
+                "not an attachment view",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view,
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store
+                    }],
+                    depth: None,
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        graph
+            .upload_image("base bytes only", image, &[0; 32])
+            .is_err()
+    );
+    assert!(
+        graph
+            .readback_image("whole chain readback is unsupported", image)
+            .is_err()
+    );
+    let srgb = graph
+        .image(
+            "sRGB sampled color",
+            ImageDesc {
+                format: renderer::ImageFormat::Rgba8Srgb,
+                ..ImageDesc::rgba8(1, 1)
+            },
+        )
+        .unwrap();
+    let srgb_view = graph.image_view(srgb, 0, 0).unwrap();
+    assert!(
+        graph
+            .attachment_pass(
+                "sRGB is sampled-only",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: srgb_view,
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store
+                    }],
+                    depth: None,
+                }
+            )
+            .is_err()
+    );
+    graph
+        .upload_image("sRGB bytes are preserved", srgb, &[0, 128, 255, 17])
+        .unwrap();
+    graph.readback_image("sRGB component bits", srgb).unwrap();
+    graph.compile().unwrap();
+}
+
 fn bindings(input: BufferHandle, output: BufferHandle) -> [Binding; 2] {
     [
         Binding {

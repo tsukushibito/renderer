@@ -762,7 +762,7 @@ fn run(strict: bool) {
         .map(|(desc, count)| D3D12ImageClass { desc, count })
         .collect();
     d3d12
-        .prepare_graph_working_set(&images, &programs(), &standard_fixture::programs())
+        .prepare_graph_working_set(None, &images, &programs(), &standard_fixture::programs())
         .expect("D3D12 prepared graphics resources");
 
     let (invalid_pool, invalid, _) = shared_graph(true);

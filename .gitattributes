@@ -27,6 +27,11 @@
 # Preserve bytes hashed by the fixed-conditions render record on every OS.
 /tools/bistro/conditions.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 /tools/bistro/*conditions*.py text eol=lf
+/tools/bistro/cook.py text eol=lf
+/tools/bistro/mikk.py text eol=lf
+# Vendored upstream byte hashes and original license/whitespace are preserved.
+/tools/bistro/mikktspace/mikktspace.[ch] -text -whitespace linguist-vendored=true
+/tools/bistro/mikktspace/bridge.c text eol=lf
 /docs/verification/bistro-*.json text eol=lf
 
 # The documentation bundle, license and digest are reproduced byte-for-byte.

@@ -18,7 +18,7 @@ pub struct ImageHandle {
     pub(crate) graph: u64,
     pub(crate) index: usize,
 }
-/// One graph-local image subresource. Views retain the image's identity rather
+/// A graph-local contiguous mip range in one image layer. Views retain the image's identity rather
 /// than declaring another resource, so overlapping views share content/hazards.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageView {
@@ -93,6 +93,13 @@ impl ImageDesc {
             format: ImageFormat::Rgba8Unorm,
             mip_levels: 1,
             array_layers: 1,
+        }
+    }
+    /// Eight-bit sRGB color for sampling and transfer, with linear alpha.
+    pub fn rgba8_srgb(width: u32, height: u32) -> Self {
+        Self {
+            format: ImageFormat::Rgba8Srgb,
+            ..Self::rgba8(width, height)
         }
     }
     pub fn depth32(width: u32, height: u32) -> Self {
