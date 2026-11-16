@@ -5,7 +5,7 @@ flowchart TB
     input["利用側Binding：資源の指定"] --> canonical["照合・manifest順のBindingOperands"]
     layout --> canonical
     canonical --> buffer["Buffer：レビュー済みbyte範囲"]
-    canonical --> view["ImageView：選択mip/layer全域"]
+    canonical --> view["ImageView：typed format・選択mip/layer全域"]
     canonical --> sampler["Sampler：設定のみ・内容accessなし"]
     buffer --> access["ResourceAccess：範囲・用途・ShaderStages"]
     view --> access

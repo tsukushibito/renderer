@@ -14,7 +14,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 |---|---|
 | 全体像をつかみたい | [図で読むRenderGraph](design/rendergraph-overview.md)：短いコード例、依存関係の図、処理と資源の寿命 |
 | 型や処理の関係を図で追いたい | [設計図集](design/rendergraph-diagrams.md)：型の関係、owned命令、compile、producer/hazard、範囲、投入・完了、import、容量 |
-| APIの正確な動作を確認したい | [RenderGraphの契約](design/rendergraph.md)：宣言、初期化、不要パス除去、所有と容量 |
+| APIの正確な動作を確認したい | [RenderGraphの契約](design/rendergraph.md)：宣言、初期化、不要パス除去、owned Raster/Computeと画像copy、所有と容量 |
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 対応済みと計画を見分けたい | [現在の検証状況](verification/current.md)と[今後の計画](design/implementation-policy.md#bistro-roadmap) |
 

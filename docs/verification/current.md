@@ -5,6 +5,64 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 利用側Compute・多段HDRと画像copyの二API実行
+
+`renderer-7ft.2.4`、統合実装確認点`adb51d1`。利用側の静的なtrusted Compute descriptorを
+明示したunsafe境界で取り込み、owned dispatchをVulkan/D3D12の通常実行へ接続した。
+Uniform/Storage buffer、sampled画像/sampler、typed storage画像のbindingからアクセスを導出する。
+固定dispatchと出力extent由来の2D dispatch、buffer実byte footprintと全域画像writeの保証を分ける。
+Graph構築でslot/範囲/format/extent/dispatch/重複subresourceを保証し、不変operandを引き継ぐ。
+GPU書込は対象buffer範囲のCPU index provenanceを失効させる。
+
+Vulkanは`prepare_compute_programs`、D3D12は`prepare_graph_working_set`でpipeline/root layoutと
+descriptor/native画像の容量を明示準備する。通常frameの作成・増設・暗黙waitを追加しない。
+typed format/usage能力、実Device上限、pass間依存、descriptor排他、Device共通sampler上限、
+実Fence完了と不明完了時の保持、native失敗処理は製品構成にも残す。
+shader本体の範囲外アクセス・race・全域writeの安全性はunsafe取込のレビュー責務であり、
+reflection/hashだけの保証へ読み替えない。現行ABIと未対応事項は[設計](../design/vulkan.md#managed-uniform)を参照する。
+
+Windows x64、Rust1.99.0、`CARGO_INCREMENTAL=0`、NVIDIA RTX3060／Vulkan driver610.88。
+vendor/device IDとLUIDを照合し、全GPU作業を逐次実行した。
+[実行手順](../guides/development.md#owned-compute-acceptance)、入力・実容量・counter・全52 source hashと26実行コマンド、
+raw byteのlossless hex表現と4メモリ報告は[検証データの`owned_compute_native`](frame-memory.json)に記録する。
+
+| 確認 | 結果 |
+|---|---|
+| 共通CPU／二API release製品／release追加検証＋診断 | 143／292／305件＋Rustdoc各1件成功 |
+| all-target Clippy | CPU、presentation＋D3D12＋memory-profilingの製品／診断、およびD3D12単独で警告ゼロ |
+| 新CPU回帰 | 未初期化storage read、重複View、ABI不足、dispatch/format/extent不一致と容量付き構築のrollback成功 |
+| 同じ公開Graphのstrict／shipping | 各1件成功。各API3回、各回4 readback・416 byteを全て独立期待値とAPI間で照合 |
+| 既存native回帰 | Vulkan54件、D3D12 8件、共通Raster/bufferのstrict/shipping各1件、engine公開負荷1件成功 |
+| ABI・生成物 | SPIR-V/DXIL全13 assetとD3D12 bindings再生成一致、ABIの正例・意味的な改変拒否成功 |
+| 文書 | HTML17ページ・1932ローカル参照、Mermaid32表示とviewer/theme/mobile/print検査成功 |
+
+利用側shaderは4×4×1 local size、3×7入力に1×2×1 workgroupsを使う。
+sampled画像＋Uniformの乗算から、storage画像＋GPU生成StorageRead bufferの加算を1/2/3段で接続し、
+HDR画像copy、FP32 sampleとbuffer dispatch/copyを照合する。Rendererのeffect列挙は増やしていない。
+未準備Programと画像class容量不足の拒否を独立に確認し、明示準備/容量変更後のcancel・再試行も成功した。
+同じplanを2回使い、最後は同じ入力から別planを作り、公開plan/runtimeを完了観測前に破棄した。
+結果消費までの所有保持を確認する試験であり、破棄時にGPUが実行中だったとは強制・断定しない。
+
+strictはCore＋SyncVal／Debug Layer＋GBVの実効と最終native解放後までの診断ゼロを確認した。
+shippingは追加検証・専用診断をコンパイル除外し、native `Disabled`を要求して同じ内容を照合した。
+診断なしの件数0を、外部Layer注入がなかった証明には使わない。
+
+メモリ窓は各APIの製品／診断baselineを別processで実行した。24 warm-up＋24変動frame、
+3 in-flightと3保持結果、5 Program、dispatch総数5/6/7、入力値・Uniform offset・ping-pong bindingを変える。
+Graph構築/compile、prepare/record/submit、完了/poll/retire、全readback消費・全plan/result/Graph slot返却までを含め、
+全4窓でRust alloc/alloc_zeroed/realloc/deallocの回数と要求byte、native作成/破棄・memory/descriptor確保解放がゼロ。
+VulkanのVMA host callbackもゼロ。native reset48／96は準備済み枠の再利用であり、native全呼出しゼロの意味ではない。
+startup/shutdownの正の対照と全slot返却を確認した。driver/OS内部確保、時間性能や大規模sceneへ一般化しない。
+
+独立レビューでCompute samplerのDevice共通quota迂回を検出し、既存helperと容量回帰へ統一した。
+初回3×5入力ではHDR全画素は一致したが、既存sample shaderのUVがtexel境界へ当たるFP32 sample期待値が不一致だった。
+境界依存oracleという推論に留め、driver不具合とは断定しない。3×7へ変えて0.2 texel以上の内部marginを取り、
+許容差を広げず全byte照合を再受入した。初回ログも保持した。一般推奨からの新たな最適化例外はない。
+
+CPU/GPU時間計測の拡張は合意どおり`.2.6`の表示統合へ残す。実native OOM/Device loss、他GPU/driver、
+Linux実GPU、D3D12 import/export、二API表示、Bistro/Bloomアルゴリズムは今回未実行である。
+以下の過去のnative dispatch拒否・画像copy未対応記録は、各節に記した当時の確認点に従う。
+
 ## D3D12 Rasterの用途集約と追跡容量
 
 `renderer-68c`、実装確認点`33587ca`。`.2.3`レビューの3件を改善した。

@@ -1107,7 +1107,7 @@ native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換
 一般owned Graphの計画は`.2.2`、graphicsのstage/vertex/attachment/PSOと二API Raster実行は`.2.3`で接続する。
 `.2.2.2`では管理下buffer Computeのowned命令・論理bindingとshader実footprintを共通CPU計画へ接続した。
 現在はuniform/storage readbackの一workgroupだけを扱い、binding全descriptorと16-byte実アクセスを分ける。
-これは`.2.1`で作成したnative Program/Bindingsの実行ではなく、Device固有の保証と二APIの一般実行は`.2.4`へ残す。
+この段階のCPU計画と、`.2.4`で接続するDevice固有の保証・二APIのnative実行は区別する。
 prepared arena・所有・初期化・依存・cullingとnative未対応拒否の範囲は[Graph契約](rendergraph.md#program由来bindingとshader-stageのowned計画)に従う。
 `.2.2.3`は描画命令なしのattachment配列/optional depthと単一mip/layer ViewをCPU計画へ追加し、
 Load/Store、各subresourceの初期化・producer/hazard/culling、全域exportを実証する。
@@ -1115,7 +1115,7 @@ Load/Store、各subresourceの初期化・producer/hazard/culling、全域export
 owned一般Raster命令・graphics stage/vertex/PSOと実描画、複数subresource View/native実行をこの完了に含めない。
 `.2.2.4`は実在mesh assetの`ManagedRasterProgram`を明示するowned複数drawへ公開Raster/Engine batchを統合する。
 Program・定数・draw順・attachmentを同じ準備済み計画へ所有し、既存VulkanでLoad/Storeとindex provenanceを維持して実行する。
-このmeshはdescriptorを使わない。`.2.2.5`は別の実shader `textured_mesh()`でVS UniformとFS画像/samplerを導き、各drawのbindingをowned計画へ接続する。Computeのsampled assetも同じ型付きbindingを使い、ShaderStagesと実footprintを共通解析へ保持する。利用側の二段sampled RasterとCompute readbackで短命入力・画像依存・cullingを実証する。これは設計比較の構成パターンの接続であり、BloomアルゴリズムはB4、一般native Compute/copyは`.2.4`に残る。
+このmeshはdescriptorを使わない。`.2.2.5`は別の実shader `textured_mesh()`でVS UniformとFS画像/samplerを導き、各drawのbindingをowned計画へ接続する。Computeのsampled assetも同じ型付きbindingを使い、ShaderStagesと実footprintを共通解析へ保持する。利用側の二段sampled RasterとCompute readbackで短命入力・画像依存・cullingを実証する。BloomアルゴリズムはB4、一般native Compute/copyは`.2.4`で別に実装・受け入れる。
 
 `.2.3`は同じowned Rasterから複数draw順、color-only、depth-only、RGBA16Fとdraw別Uniform/画像/samplerを
 二APIへlowerする。Programのレビュー済みshader/ABIとattachment形式をpipeline keyへ含め、
@@ -1127,6 +1127,13 @@ GPU前のindex内容保証はprivateな`graph::provenance`へ共有し、変わ�
 他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、
 実行/未実行は[検証状況](../verification/current.md#managed-uniform)に記録する。
+
+`.2.4`は利用側のtrusted静的Compute descriptorとtyped storage画像をowned dispatchへ接続する。
+固定dispatchと出力extent由来の2D dispatch、bufferの実byte footprint、全域画像writeの保証を分け、
+Graph構築で範囲・ABI・重複subresource・dispatch/extentを保証する。shaderとbinaryの安全性は明示したunsafe取込でレビューする。
+両APIはProgramとdescriptor容量を事前準備し、通常frameでは作成・増設しない。
+同じ小HDR入力の複数Compute、画像/buffer copy/readbackと変動frameメモリを別processのstrict/shippingで受け入れる。
+常駐資源importと履歴は`.2.5`、表示と通常frameの二API時間計測の拡張は`.2.6`へ残す。
 
 **完了条件:** 効果専用操作をRenderer本体へ追加せず、同じ利用側パス定義と入力を二APIで実行できる。
 標準描画も独自処理も同じGraph経路を使い、未投入・未完了・更新・破棄・失敗・回収を区別する。
@@ -1386,10 +1393,10 @@ runtimeを終了しても、別runtimeや未完了処理がnative所有者を保
 終了確認の対象はRendererが所有するnative参照の解放までであり、外部ライブラリが保持する
 同じsingleton Deviceの最終破棄まで証明するものではない。
 
-`D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackと画像upload/readback・Rasterを
+`D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackと画像upload/copy/readback・Raster・Compute dispatchを
 準備済みnative資源への命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
 Graph構築で保証した内容を再走査せず、未対応操作、D3D12固有の上限と資源作成条件を準備境界で扱う。
-transient資源だけを受け入れ、export、liveなimport・一般dispatch・画像copy等は明示エラーとする。
+transient資源だけを受け入れ、exportとliveなimport等は明示エラーとする。
 不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
 bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
 
@@ -1410,11 +1417,16 @@ DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit pro
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
 Enhanced Barriers、外部suballocator、import／exportは未対応である。
 
-`prepare_raster_working_set(&[D3D12ImageClass], &[ManagedRasterProgram])`は全execution/result tokenが返った
-明示準備境界で画像classごとの個数、Programごとのgraphics PSO/root signatureとdescriptor heapを準備する。
+`prepare_graph_working_set(&[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result tokenが返った
+明示準備境界で画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
 各execution leaseが物理画像/View、RTV/DSVとdraw別SRVの枠、および一個の不変nearest/clamp sampler descriptorを所有する。
 RGBA8/RGBA16Fのcolor targetとoptional D32、またはdepth-onlyを扱い、MRTと複数mip/layerは拒否する。
 実formatのrender target/depth/sample能力、SM6.0、root signature、native作成失敗はこの境界で扱う。
+Computeのstorage画像はRGBA8/RGBA16Fのtyped UAV load/store能力を用途に応じて確認し、
+書込を許す資源とUAV descriptorを準備する。固定effect名の分岐ではなく、Programの不変binding ABIから
+root CBV/SRV/UAVとdescriptor tableを導く。依存dispatchは別passとし、同じUAV状態のままでも
+必要なread/write依存へUAV barrierを置く。descriptorはslotの命令記録・実GPU完了まで排他で保持する。
+画像copyは同extent/formatのRGBA8/RGBA16Fを全subresourceで転送し、COPY_SOURCE/DEST状態へ遷移する。
 一度準備した各drawのdescriptorは未投入cancelまたは実Fence完了まで再利用しない。
 D3D12は選択color Programごとのdepth有／無を準備する。Vulkanはprepared画像にD32がある場合だけ
 depth有のcolor Programも準備する。buffer-onlyの初期化ではどちらもgraphicsの能力を要求しない。

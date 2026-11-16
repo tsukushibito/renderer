@@ -22,14 +22,14 @@ CPUのテスト・benchmark用依存が要求するツールは開発手順で�
 固定shaderによるCompute、indexed meshと深度、sampled imageの最終合成を扱う。
 Graphの宣言・producer・範囲・culling・import/exportは[RenderGraphの契約](rendergraph.md)を参照する。
 Windows表示はoptionalな`presentation` featureで追加する。
-任意shader、一般的なPassEncoderは未実装である。
+利用側のレビュー済みCompute shaderは静的descriptorのunsafe取込で扱う。未信頼shaderのsandboxや一般的なPassEncoderは提供しない。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
 これは現行実装の境界であり、基盤の維持義務ではない。
 [B0の基盤比較](implementation-policy.md#foundation-selection)ではnativeの低レベル所有・同期・退役・WSIを再利用し、
 上位の固定Program/Operationを一般ownedパスへ置換する方針を採用した。
 B1で資源用途・format・bindingを拡張するときも、同期・GPU寿命・native失敗等の必要な保証と移行時の検証を明示する。
-以下は現在の実装済み契約である。レビュー済みRaster/HDR格納形式の対応と、未対応の任意shader/encoderを区別する。
+以下は現在の実装済み契約である。レビュー済みRaster/Computeと、未信頼shader/encoderを区別する。
 
 Graphのnative実行は次の責務に分ける。公開APIや汎用backend traitを増やす分割ではない。
 
@@ -195,7 +195,7 @@ upload-only、readback-only、複数copyの一括投入、同一バッチ内の�
 そのCOPY専用計画と、下記のGraphの予定／完了状態は別の実行契約である。
 
 GraphのRGBA8_UNORM画像はtransfer source／destination、storage、sampled、color attachmentの
-固定usage組を持つ。RGBA16Fはtransfer source／destination、sampled、color attachment、
+固定usage組を持つ。RGBA16Fはtransfer source／destination、storage、sampled、color attachment、
 D32_SFLOATはdepth attachment、sampled、transfer source／destinationを持つ。
 public GraphのD32 uploadは受け付けず、ここでのusageは実装した同期・転送と再利用の能力条件を表す。
 いずれも2D・optimal tiling・mip／layer／sample各1とし、実際のusage組の能力とextent、
@@ -278,8 +278,8 @@ drawごとの二groupのdescriptorを容量内で別slotへ設定し、記録済
 Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ含め、cancelまたは実GPU完了後だけ再利用する。
 
 RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignmentをatom sizeと8 byte以上にする。
-D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyや固定ComputeのRGBA8契約を
-RGBA16Fへ自動拡張せず、各実format/usage能力の作成時照会とnative失敗処理を維持する。
+D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
+固定ComputeのRGBA8契約とは分ける。各実format/usage能力の作成時照会とnative失敗処理を維持する。
 
 最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
 scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と
@@ -311,11 +311,13 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
 `.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
-owned dispatchのnative実行、他format/mip/layer/filter、任意shader取込は後続へ残す。
+他format/mip/layer/filterと未信頼shaderの取込は対応範囲へ含めない。
 `Graph::dispatch`は管理下buffer・sampled assetの論理CPU計画を接続する。各drawの型付きbindingと共に、manifest由来のVertex/Fragment/Compute stageと実footprintを保持する。`textured_mesh()`のVS UniformとFS sampled画像/samplerはowned Rasterのnative PSOへ接続する。
-`ManagedProgram`/Bindingsをowned dispatchから実行する経路は未実装で、live dispatchは物理資源の取得前に拒否する。
+owned dispatchは論理Graphの資源とbindingを、明示準備したCompute pipeline/descriptorへ具体化する。
+Graph外のnative Bindingsをimportする経路とは別であり、既存の実行枠・資源lease・Fence退役を使う。
 culledな未対応枝は除去できる。Uniform/storage/sampled用途は保持した実shader stageと対応するaccessへ具体化し、Vertex/Index fetchはそれぞれ入力stageを使うが、
-この対応表を一般dispatchのnative実行対応とみなさない。
+storage画像はCOMPUTE_SHADERとSHADER_STORAGE_READ/WRITE、GENERAL layoutを使い、
+sampled用途との遷移とpass間依存を保持する。
 
 safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`storage_readback()`、
 `sampled_readback()`、`sampled_float_readback()`である。
@@ -324,6 +326,16 @@ GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
 `std140 uvec4`（offset 0、16 byte）を読み、Storageのset 1/binding 0へ
 16 byteを書く。一つのinvocationだけを実行し、値依存の範囲外アクセスや競合を作らない。
 reflection・hashだけで任意source/binaryを信頼済みへ昇格させる機能は提供しない。
+利用側は`ComputeProgramDescriptor`をstaticに保持し、`ManagedProgram::from_trusted_descriptor`のunsafe境界で
+Compute shaderを追加できる。binary・entry・local size・binding ABIとformat、buffer footprint、
+全域writeとdispatch/extentの関係、宣言外アクセス・範囲外アクセス・race・shader内同期の安全性を
+取込側がレビューする。バイナリや宣言を変えるとその保証は失効し、新しい不変descriptorを使う。
+反射情報だけではデータ依存アクセスや全域writeを証明できないため、任意binaryを受けるsafe入口は採用しない。
+この責任分担はnativeの実Device能力・alignment・上限・容量・失敗処理を省く理由にはしない。
+現行descriptorはentry `main`、非配列・非MSのfloat 2D画像と通常FP32演算、D3D12のgroup=register space／
+binding=register番号を前提にする。bufferはroot descriptorで扱えるraw/structured ABIとし、
+typed buffer、push constant、descriptor配列、Workgroup/shared storageや未有効のoptional featureは扱わない。
+利用側fixtureのshaderと二API生成物も固定toolで管理し、Rendererのeffect列挙を増やさず実証する。
 生成時にSPIR-VとDXILのreflectionをABI契約へ照合する。CPU試験でRustのmanifest表も
 生成reflectionへ結び付け、kind/group/binding/minimum byte数を一致させる。
 
@@ -351,8 +363,14 @@ Uniform専用の作成API・型とconsumerは共通APIへ置換し、互換wrapp
 fixture専用の排他leaseで同一Storageへの重複記録を拒否し、cancelまたは実Fence完了で返す。
 reuse時のshader write/copy readから次のshader writeへの依存も記録する。
 leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早期に返さない。
-この試験用state/lease/入力は通常buildに含めない。一般Graph導入時には製品の
-計画・状態・所有を接続する必要があり、今回の作成APIだけで一般dispatchの同期を保証したとは扱わない。
+この試験用state/lease/入力は通常buildに含めない。一般Graphは別の製品用計画・状態・所有へ接続し、
+private fixtureの入力照合やCPU待機で同期を補わない。
+
+`prepare_compute_programs(&[ManagedProgram])`は明示準備境界でpipeline/layoutと容量付きdescriptorを準備する。
+通常frameのprepare/recordはその容量を借用し、未準備Programや枠不足を型付きエラーにする。
+記録済み未投入、pending、完了不明の処理が参照するpipeline/descriptor/Viewを早期に返却しない。
+RGBA16F storage画像は実format/type/usage組の能力を確認する。format qualifier付きのshaderを使い、
+read/write-without-formatのfeatureを暗黙に要求しない。SPIR-Vの能力条件を生成物と有効featureへ対応付ける。
 実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
 
 `.2.1.7`の`StorageRead`は既存Storage資源を読むbindingであり、別のbuffer用途を増やさない。

@@ -6,7 +6,7 @@
 Graphの宣言・解析はGPUとウィンドウに依存せず、通常のCPU構成で利用する。
 Vulkan実行は`vulkan` featureで追加し、公開APIへash・VMAの型を出さない。
 Windowsの`d3d12` featureは同じ`CompiledGraph`のbuffer upload・copy・readbackと、
-画像upload/readback・owned Rasterを実行する。
+画像upload/copy/readback・owned RasterとCompute dispatchを実行する。
 Graphの宣言・解析と、各backendが実行できる操作の範囲は区別する。
 全体方針は[実装方針](implementation-policy.md)、native資源と完了管理は
 [Vulkanの設計](vulkan.md)と[D3D12の設計](implementation-policy.md#d3d12-runtime)、
@@ -48,17 +48,18 @@ bufferは半開byte範囲を指定する。
 予定されたGPU状態と実際の完了を別々に管理する。
 
 通常のパスは、管理下のcopy・Compute・Attachment clear・indexed mesh・最終合成という限定した操作を宣言する。
-任意の生CommandBuffer、外部SPIR-V、ネイティブ外部ハンドルは受け入れない。
+任意の生CommandBuffer、未信頼shader、ネイティブ外部ハンドルは受け入れない。
+利用側のCompute shaderは、レビュー済みの静的descriptorを明示したunsafe境界で取り込む。
 これにより、実行する操作と宣言した用途・範囲・bindingを対応づける。
 汎用RHIや未信頼shaderのサンドボックスを提供する契約ではない。
 依存するCompute処理は別ノードとし、パス間の同期を実行基盤が記録する。
 
 | 実行基盤 | 現在の範囲 |
 |---|---|
-| Vulkan | buffer／RGBA8画像copy、固定Compute、attachment操作、owned Raster、合成、import／export、上限付き再利用 |
-| D3D12 | transient bufferのupload・copy・readback、画像upload/readback、attachment操作とowned Raster。単一DIRECT queue、committed resource、物理aliasingなし |
+| Vulkan | buffer／RGBA8・RGBA16F画像copy、owned Compute・Raster、固定Compute、attachment操作、合成、import／export、上限付き再利用 |
+| D3D12 | transient bufferとRGBA8・RGBA16F画像のupload・copy・readback、owned Compute・Rasterとattachment操作。単一DIRECT queue、committed resource、物理aliasingなし |
 
-D3D12のprepareはexportとliveなimport・一般dispatch・画像copy等の未対応操作を明示エラーにする。
+D3D12のprepareはexportとliveなimport等の未対応操作を明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
@@ -67,34 +68,42 @@ Viewはsampled用とD32のdepth attachment用を区別し、aspectはformatか�
 bindingはmanifest順に
 実Programと全資源の版/範囲を保持する。Storage本文はGPU可変で、作成を初期化とは扱わない。
 `StorageRead`と`StorageWrite`は同じStorage資源のbinding用途を表す。
-private受入のproducer→consumer同期を、公開Graphの一般dispatch対応とは扱わない。
+Graph外のbinding作成と、Graph内の論理bindingからnative命令へ具体化する経路は分ける。
 [管理下資源の契約](vulkan.md#managed-uniform)を参照する。
-この作成APIとprivate GPU受入を、公開Graphの一般draw/dispatch対応とは扱わない。
-一般owned pass・attachment/subresource由来の計画は`renderer-7ft.2.2`で進める。
+作成API単体はdispatchを実行せず、内容初期化も保証しない。
+一般owned pass・attachment/subresource由来の計画とnative実行は以下の契約に従う。
 その作成領域・解析workspace・不変planの所有は、以下の準備済みslotへ移行した。
 
 <a id="owned-shader-bindings"></a>
 
 ### Program由来bindingとshader stageのowned計画
 
-`Graph::dispatch(name, &program, &bindings, workgroups)`は管理下の四Compute assetを
-`[1, 1, 1]` workgroupsで計画する。`graph::Binding`はgroup/bindingと
+`Graph::dispatch(name, &program, &bindings, workgroups)`は不変の管理下Compute Programを計画する。
+既存の四readback assetは`[1, 1, 1]`、利用側のProgramはレビュー済みの固定dispatch数、
+または対象画像extentとlocal sizeから求める2D dispatch数を使う。`graph::Binding`はgroup/bindingと
 `BindingResource::{Buffer { buffer, offset, size }, ImageView, Sampler}`をまとめる。
 各drawも同じ型のbinding sliceを借用し、用途・shader stage・実アクセス範囲をProgramから導く。
 利用側に別のread/write一覧を要求せず、旧buffer専用入口は残さない。
 
 命令は不変な管理下Program identity、dispatch数、manifest順のbindingを所有する。
-Programのprivate static manifestと準備済みarenaへコピーしたbuffer descriptor・単一subresource View・
+Programの不変static descriptorと準備済みarenaへコピーしたbuffer descriptor・単一subresource View・
 sampler設定により、呼出元のProgram変数・binding/draw sliceが変更・破棄されてもplanは変わらない。
 同じRaster内のdrawごとに異なるmaterial bindingを指定できる。これは論理Graph資源の所有であり、
 `.2.1`のnative Program/Bindingsをimportした契約ではない。
 
 全slotの過不足・重複・種別・owner、非ゼロのbuffer範囲・ABI最小size・論理境界を構築時に確認する。
-解析にはABI最小sizeから推定した量ではなく、shaderと同時にレビューするprivate footprintを使う。
+解析にはABI最小sizeから推定した量ではなく、shaderと同時にレビューするfootprintを使う。
 uniform/storage readbackは先頭16 byteだけを読み書きし、sampled readbackの出力は16 byte、
 sampled float readbackは64 byteだけを初期化する。大きなdescriptorの未書込tailは有効にならない。
 sampled入力は選択したViewのmip/layer全域を読むものとして扱い、sampler自体は資源内容アクセスを作らない。
 shaderやdispatch条件を変える際はfootprintと初期化保証も改訂する。
+
+`StorageImageRead(format)`と`StorageImageWrite(format)`は型付きの単一subresource Viewを使う。
+Graph構築でformatと対象extent、dispatch数を結び、全域writeのレビュー済み保証を満たす出力だけを
+初期化済みとして扱う。読みながら同じsubresourceへ書くfeedbackは別passへ分割する。
+新しいeffect名をGraph命令やbackendの列挙へ追加せず、利用側がProgramとbindingを配線する。
+未信頼shaderの安全性をreflectionだけから推定しない。unsafeな取込の責務は
+[Programの契約](vulkan.md#managed-uniform)を参照する。
 
 `BindingLayout::stages`はVertex/Fragment/Computeを表し、用途と共に実行計画へ保持する。
 UniformをStorageReadで代用せず、vertex/index fetchはshader stageとは別の入力用途として扱う。
@@ -106,7 +115,7 @@ culling・循環は既存の共通解析へ接続する。
 途中のslot/range/access/attachment/name/capacity失敗は追加した全operandを戻し、通常frameでheapを増設しない。
 planとnative consumerのpinが全て返るまでslotを再利用しない。
 
-native dispatch実行は後続`.2.4`であり、両backendはliveなmanaged dispatchを取得前に拒否する。
+native dispatchは明示準備したProgramのpipelineと容量付きdescriptorを使い、通常frameで作成・増設しない。
 descriptor-bound Rasterは、明示準備したProgram・attachment構成のnative PSOとdraw別descriptorへ具体化する。
 culledな未対応枝は実行を妨げず、その枝専用のnative資源も取得しない。
 Device固有のalignment・usage・descriptor/dispatch上限、native Program/binding所有、
@@ -194,7 +203,8 @@ D3D12のprepareは既存execution枠の取得後に適合を検査する。未�
 culledな未対応枝は実行や物理資源取得を妨げない。
 whole-image uploadはRGBA8/RGBA16F、readbackはこれらとD32のpacked bytesを扱う。
 texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation sizeの代用にはしない。
-既存の画像copy/固定Compute/compositeはRGBA8のままとし、単一subresource画像だけを受け入れ、
+画像copyは同じextent/formatのRGBA8・RGBA16F、固定Compute/compositeはRGBA8を受け入れる。
+native実行は単一subresource画像に限定し、
 一部の操作を画像全体の初期化として扱わない。
 
 資源は可変で、readは宣言順で直前までに書かれた内容を使う。

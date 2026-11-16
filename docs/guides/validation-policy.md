@@ -47,7 +47,7 @@ VulkanのValid Usageは定義された動作を得る条件であり、同じ条
 | 他APIの検証・実行契約 | D3D12 GBVはshader・commandを計装する。Fenceの完了値はDevice removalも表す | 計装の時間を製品性能にしない。正常完了とDevice異常の判別は製品にも残す [GBV][d3d-gbv]・[Fence][d3d-fence] |
 | 他APIの診断事例 | Metal API ValidationはCPU費用があり、追加設定でattachment内容も変更できる | 検証はログ表示だけではない。実効設定・負荷・出力への影響を分ける [Metal API Validation][metal-validation] |
 
-上表は比較・根拠であり、本Rendererに未実装のcook、D3D12画像実行、Metal対応を追加したとは扱わない。
+上表は比較・根拠であり、本Rendererの機能の実装・受入状況は現行設計と検証記録で別に確認する。
 
 <a id="classification"></a>
 

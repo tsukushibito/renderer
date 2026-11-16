@@ -606,6 +606,42 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-raster
 ```
 
+<a id="owned-compute-acceptance"></a>
+
+### owned Compute・画像copyの二API受入
+
+[公開API試験](../../crates/renderer/tests/compute_graph.rs)は利用側のレビュー済みshaderを
+`ComputeProgramDescriptor`のunsafe境界で取り込み、同じowned Graphを二APIで逐次実行する。
+3×7のRGBA16F入力にsampled画像＋Uniformの乗算、storage画像＋GPU生成StorageRead bufferの加算を
+1/2/3段で接続し、画像copy、FP32 sample、buffer dispatchとcopyの計4出力・416 byteを
+独立期待値とAPI間で全byte照合する。4×4 local sizeの端数guardを含み、effect列挙は増やさない。
+固定sampleの座標がtexel境界に当たらない寸法を選び、画像の許容差を広げて通さない。
+
+```powershell
+cargo test --locked --release -p renderer --test compute_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::owned_compute_common_graph_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --test compute_graph --no-default-features --features vulkan,d3d12 native::owned_compute_common_graph_shipping -- --exact --ignored --nocapture --test-threads=1
+```
+
+`COMPUTE_GRAPH_REPORT`へ実adapter/LUID、入力条件、全readback byte、実効検証と最終native解放後の診断を出す。
+strictとshippingは別processで実行する。未準備Programと画像class不足を独立に拒否し、
+明示準備・容量変更後のcancel/再試行、公開plan/runtimeの先行破棄と結果消費までの保持も確認する。
+CPU試験は未初期化storage read、重複subresource、短いABI、不正dispatch/format/extentと構築失敗後の再試行を扱う。
+shader自体の安全性はunsafe取込のレビュー責務であり、reflectionだけで証明しない。
+
+定常メモリはlibtest外の独立processで測定する。明示準備後に24 warm-up＋24変動frame、
+3 in-flightと3保持結果、入力値・Uniform offset・storage dispatch数・ping-pong bindingを変える。
+Graph構築から全readback消費・poll/retire・全plan/result/Graph slot返却までを連続窓に含める。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-compute
+cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-compute
+```
+
+診断baselineは各backendのfeatureへ`development-validation,graph-diagnostics`を追加した別buildで、
+同じmodeへ`--baseline`を渡す。製品／診断の各API計4 processを逐次実行し、startup/shutdownの正の対照と
+`FRAME_MEMORY_REPORT`を保存する。確保回数とbyte、native作成/破棄・descriptor確保解放とresetを区別する。
+時間計測の拡張、import/export、表示、Bistro/Bloomアルゴリズムをこの受入へ含めない。
+
 ## 実Vulkan試験
 
 実Vulkan試験は`#[ignore]`で分離し、明示実行します。
@@ -782,6 +818,11 @@ callbackに現れないdriver/OS/native内部確保は未観測。D3D12 bootstra
 現行結果と測定範囲は[通常フレームのメモリ計測](../verification/frame-memory.json)を参照する。
 
 ### 表示FPSの計測方針
+
+通常frameの二API共通時間計測の拡張は`renderer-7ft.2.6`の表示統合で行う。
+CPUの構築からsubmit、poll/retireと結果返却、GPU Graph区間と表示用GPU処理、
+acquire/present API費用・明示待機・frame周期を分ける。既存headless計測は補助として維持し、
+小fixtureのupload/readback込み時間を実際の表示frameの代表値へ読み替えない。
 
 `windowed`には現在FPS集計を実装していません。追加する場合は、単調増加時計に対する
 `PresentOutcome::Presented`の成功件数を約1秒の窓で割り、**Present要求FPS**として表示します。

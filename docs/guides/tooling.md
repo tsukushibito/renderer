@@ -102,7 +102,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 
 ## D3D12の固定shader生成
 
-管理下9種類のGLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
+toolchain定義に列挙した管理下GLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
 入力のSPIR-Vは既存のVulkan基準を維持し、この手順では書き換えない。
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 
@@ -112,7 +112,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 ```
 
 `-Verify`は生成済みファイルを変更せず、不足・差分・tool不一致・変換失敗をエラーにする。
-先に既存の`regenerate.ps1 -Verify`で9種類のSPIR-V再生成一致と`spirv-val`を確認する。
+先に`regenerate.ps1 -Verify`で対象SPIR-Vの再生成一致と`spirv-val`を確認する。
 [toolchain定義](../../crates/renderer/shaders/dxil-toolchain.json)でWindows x64 SDKの
 glslc・spirv-val・SPIRV-Cross・DXC・dxcompiler.dllのSHA-256と、変換引数を固定する。
 SPIRV-Crossは`vulkan-sdk-1.4.341.0`、DXCは`1.9.0.5180 (e35541826)`である。
@@ -161,6 +161,15 @@ HLSL・reflection・manifestの改行は管理下の`.gitattributes`でLFへ固�
   block size 64で、DXILは`u0/space1`へoffset 0/16/32/48の`Store4`を行う。
   half格納のRGBA16FをFP32で読み、16-bit shader演算型を要求しない。
   `managed-abi.ps1`とSDK不要の改変回帰は4本のmanaged assetを確認する。
+
+利用側のCompute受入shaderは`crates/renderer/tests/support/shaders/`へ置く。
+`compute_hdr_sampled.comp`はsampled画像・samplerと16-byte UniformからRGBA16F storage画像へ書き、
+`compute_hdr_storage.comp`はreadonly storage画像と16-byte StorageRead bufferから別のRGBA16F storage画像へ書く。
+両方local sizeは4×4×1で、端数invocationをguardする。既存の再生成scriptはこれらの外部配置も列挙し、
+同じ固定tool・ABI照合・hash・全件成功後の公開を使う。通常のRendererビルドへfixtureやcompiler依存を加えない。
+SPIRV-Crossの既定変換ではreadonly storage画像もUAVであり、StorageRead bufferのSRVとは区別する。
+typed画像format、mutability、group/register、local sizeとuniform/storageのbyte範囲をreflectionへ照合する。
+利用側の不変descriptorからProgramを作るunsafe取込の保証は、生成物一致だけで代替できない。
 
 変換optionの意味は[採用版SPIRV-Cross CLI](https://github.com/KhronosGroup/SPIRV-Cross/blob/vulkan-sdk-1.4.341.0/main.cpp)を参照する。
 この生成確認は静的ABI・再現性の証拠であり、それ自体では実GPUの内容一致を証明しない。
