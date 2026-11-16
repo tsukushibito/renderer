@@ -5,6 +5,62 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="runtime-review-improvements"></a>
+
+## 容量エラー・資源探索・共通画像形式の改善
+
+`renderer-5xv`と子課題。比較元は`483e304`。
+両Runtimeの`capacity()`が不足資源・回復操作・判明した上限と必要数を返す。
+未準備や固定上限超過を通常backpressureと分け、同Graph内の累積staging／range／資源不足も
+失敗時に判定する。追加の診断走査を通常成功経路へ持ち込まない。
+D3D12表示例の3440×1440 verifyは19,814,400 byteを要求し、16 MiB上限を準備前に明示拒否する。
+Graph／Programの画像形式は単一の`renderer::ImageFormat`とし、用途別native formatと能力検査は維持した。
+READMEも二APIの現行対応範囲と三層の利用入口へ更新した。
+
+Windows x64、Intel Core i5-14600KF、Rust 1.99.0、最適化有効。
+ビルド完了後、他のビルド・GPU試験を並行させず、変更前後の順序を交互にした独立3 processを比較した。
+各入力を最低100ms warm-upし、31 sampleを採取。以下は各run中央値3個の中央値である。
+各sampleは反復batchの1cycle平均であり、個々のframeのlatencyやp95ではない。
+
+| CPU fixture | 変更前 | 変更後 | 削減率 |
+|---|---:|---:|---:|
+| Vulkan 64候補・同class、全取得＋逆順返却 | 1.756µs | 0.562µs | 68.0% |
+| Vulkan 64候補・8class | 1.961µs | 0.838µs | 57.3% |
+| Vulkan 1024候補・同class | 88.063µs | 8.750µs | 90.1% |
+| Vulkan 1024候補・16class | 191.119µs | 15.638µs | 91.8% |
+| D3D12 登録1024＋一時8、取得とArc返却 | 1.850µs | 0.080µs | 95.7% |
+| D3D12 一時512・同class | 56.384µs | 5.076µs | 91.0% |
+| D3D12 登録1024＋一時512・16class | 190.423µs | 7.282µs | 96.2% |
+
+両harnessの通常測定窓はalloc／alloc_zeroed／realloc／deallocが全0だった。
+D3D12の小入力8資源は82.8→79.3nsと差が小さく、広い負荷での速度優位の根拠にはしない。
+Vulkanの各候補が異なる64classは1.751→1.262µs、1024候補・512classは144.325→117.703µsで、
+class交錯時の比較走査が残ることも確認した。初期のsmall-case回帰をlast-hit cacheで調整してから再計測した。
+VulkanはGitの旧cacheを同一harnessで直接compileし、D3D12のreferenceは旧`entries.iter().position`の
+条件を同一の所有取得・返却窓で実行する。D3D12のnative所有境界だけを`Arc<()>`へ置き換え、
+Vulkanのdescriptor keyは整数で与える。native実行・frame全体・GPU速度の比較ではない。
+
+代償は準備済みclass／node／bitmap metadataの常駐量増加である。
+D3D12のlease保持候補の走査、Vulkanの多class比較と明示作成時のoldest走査は残る。
+clock・affinity・power設定は固定していない。別CPU／GPU／driver、Bistro全体の効果は未確認。
+全入力・各runのraw sample、p95、source hashと確認範囲は
+[ソースレビューの証拠](source-review.json)の`implementation_review_followup`へ記録する。
+再実行は[CPU資源探索の比較](../guides/development.md#resource-reuse-measurement)を参照する。
+
+統合版ではfmt、CPUのみ／二API表示のshipping／全featureの全target Clippy `-D warnings`と
+release通常試験167／333／346件、windowed CPU試験各11件、warnings拒否Rustdoc、READMEのCPU例が成功した。
+RTX 3060／driver 610.88上のstrict実GPU21件、shipping実GPU11件とCPU確保試験1件も成功。
+両API・両構成の表示smokeは各24frame・6遷移を受理し、入力・全画素digest・可視画素数が全て一致した。
+strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終owner解放後までの診断ゼロを確認した。
+shippingは追加診断なし・native Requested Disabledであり、外部注入の不存在を証明するものではない。
+
+shippingのCPU、両buffer、Vulkan Engine画像の全lifecycleに加え、両APIのWSI通常窓で
+Rust 4event、VMA host 3event、Renderer発行native作成・破棄8eventのゼロを再確認した。
+native resetは別計上。最初のEngine画像fixtureは以前から通常forward用`mesh()`の明示準備がなく失敗し、
+setupの準備一覧へ追加して再実行した。baselineと統合前のfixture blobが同一であることも確認した。
+これは試験準備の修正であり、Programを通常submitで暗黙作成する回避策は追加していない。
+大画面verify拒否はCPU回帰で確認し、実desktopの3440×1440 resize操作は未実行である。
+
 ## 二APIのWindows表示・自由カメラ・通常frame計測
 
 `renderer-7ft.2.6`。共通の`PresentationConfig`／`PresentOutcome`とアプリ所有のevent loopを使い、

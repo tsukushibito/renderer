@@ -1162,6 +1162,31 @@ CPU型のソフトウェア実装は通常の候補になれますが、実GPU�
 SyncValはhost memory accessを追跡しないため、CPUアクセスの寿命・失敗時の保持はCPU試験でも確認します。
 CPU境界での失敗注入を、実ドライバーのOOM・Device loss・non-coherentメモリの確認とは扱いません。
 
+<a id="resource-reuse-measurement"></a>
+
+## CPU資源探索の変更前後比較
+
+Python 3.11以降と固定Rust toolchainを使い、GPUなしで候補の取得・返却を比較できます。
+ビルド完了後に測定を始めるscriptで、測定中は他のビルド・性能試験を止めてください。
+
+```powershell
+python -B tools/measure_resource_reuse.py --baseline 483e304 --runs 3 --output .tools/resource-reuse/comparison.json
+```
+
+Vulkanは指定commitのprivate cacheをGitから取得し、現在と同じharnessを`rustc -O`でcompileします。
+D3D12はreleaseの`d3d12_reuse` benchmark内の旧scan referenceとproduction indexを使います。
+前後の順序を交互にし、各caseを最低100ms warm-upして31 sampleを保存します。
+各sampleは複数cycleの平均時間で、中央値やp95を個々のframeのlatencyと読み替えません。
+原本commit、実装commit、harness／helper hash、実際のwarm-up数、全sampleと
+alloc／alloc_zeroed／realloc／deallocを出力します。各通常測定窓の4eventはゼロを要求します。
+
+Vulkanのkeyは整数、D3D12のnative所有境界は`Arc<()>`であり、GPUやdriverを起動しません。
+したがって資源探索と所有取得・返却のCPU費用だけを比較し、native prepare全体、GPU時間、
+FPSの改善を主張しません。登録済みprefix、多数候補、多class、lease保持候補を別caseで確認します。
+単独で現在のharnessを試す場合は`cargo bench --locked -p renderer --no-default-features --bench vulkan_resource_cache`、
+`--bench d3d12_reuse`を使えます。後者の`-- --reference`は旧scanの比較専用です。
+通常CIへ固定の時間閾値は加えません。
+
 ## CPU転送計画の性能測定（Criterion）
 
 同じbufferへの多数の部分転送について、同期判定と初期化済み範囲の管理を測定します。
