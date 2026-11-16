@@ -1604,6 +1604,9 @@ export付きsubmission、export／refreshした`ImportBuffer`とそのcloneが�
 明示準備境界でbuffer/画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
 buffer指定の`None`は既存のfree class budgetを保持し、`Some`は置き換える。buffer/画像のclass countは
 globalな準備数で、execution数を自動で掛けない。登録済み資源の保持はこの追加budgetと分ける。
+`Some(&[])`はその準備境界で未登録free bufferをゼロにし、余剰allocationを退役させる。
+登録資源は保持するため、後の明示deleteでその物理storageがpoolへ返ることは別の変更境界として扱う。
+空のworking setを、登録資源の将来のdeleteまで含む恒久的なpool禁止としては扱わない。
 登録資源のdeleteは要求しない。key・内容revision・初期化範囲・provenanceとnative資源を保持し、
 再準備後は保持したkeyからbuffer snapshotをrefreshする。scalarな`ImportImage`はそのまま保持できる。
 各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠、

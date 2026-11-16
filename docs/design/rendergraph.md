@@ -53,6 +53,7 @@ engine側からGraphのpassを直接変更せず、任意のpublic byte upload�
 native provenanceはbyte長・既知の全stream範囲・最大indexを保持し、検査用CPU index byte列やproducer Graphを保持しない。
 この証明を任意prefix drawへ転用せず、実Programのstride・頂点数・Device上限はnative適合境界で確認する。
 任意のwrite/copyは既存のprovenance規則で失効・再確立する。
+同じ長さの全index streamをtyped uploadで置き換える場合は、新しいstreamの最大index要約へ置換する。
 setupのGraphPool/planはupload streamのArcを保持し得るため、GPU完了後の明示した準備・保守境界で
 GeometryDataとidle upload poolを解放する。次の通常frameのresetへ最後のCPU解放を持ち越さない。
 
@@ -667,7 +668,9 @@ buffer snapshotは保持したkeyから再取得でき、scalarな`ImportImage`�
 新classに含めなかった登録画像も各executionのview枠へ含め、native画像を余分に複製しない。
 準備に必要なnative資源・Program・descriptorを別poolに全て作成してから、旧registryの再利用可能な
 未登録indexへ新資源を移し、最後にregistryを新poolへ移す。登録entryは動かさず、未登録indexの世代を
-次の貸出しで進める。余ったidle cacheも件数上限内に保持する。容量不足・通常の準備失敗で旧登録を失わず、
+次の貸出しで進める。明示したfree class budgetへ縮小する場合は余剰の未登録idle allocationをこの準備境界で退役させ、
+`Some(&[])`は準備時点のfree buffer数をゼロにする。登録資源は保持し、後の明示deleteによるpool返却は別の変更操作である。
+native/CPU consumerの返却前に物理ownerを早期解放しない。容量不足・通常の準備失敗で旧登録を失わず、
 resizeの反復でregistryを追加し続けない。Device removal等による停止は従来どおり終端状態として扱う。
 
 registryを複数pool世代で共有する案より、返却済みの変更境界で値を移す方式を選ぶ。
