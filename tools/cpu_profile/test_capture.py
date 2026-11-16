@@ -238,6 +238,21 @@ class CsvContracts(unittest.TestCase):
         self.assertEqual(result["self"][0]["name"], "renderer!<unresolved@0x1011>")
         self.assertEqual(result["weight_ms"], 2)
 
+    def test_wpa_na_stack_sentinel_preserves_cpu_cost_without_inventing_slash_frames(self):
+        rows = [self.sampled(), self.sampled(time_s="0.012", weight_ms="3")]
+        for row, value in zip(rows, ("[Root]/renderer!B", "n/a")):
+            del row["stack_json"]
+            row["Stack"] = value
+        result = analyze_sampled(self.csv("wpa-stacks.csv", rows), 123, (0, 1), stack_separator="/")
+        self.assertEqual(result["sample_count"], 2)
+        self.assertEqual(result["weight_ms"], 5)
+        self.assertEqual(result["self"], [{"name": "renderer!B", "weight_ms": 5}])
+        self.assertEqual({entry["name"]: entry["weight_ms"] for entry in result["inclusive"]}, {"[Root]": 2, "renderer!B": 2})
+        self.assertEqual(result["stack_coverage"], {"available_samples": 1, "available_weight_ms": 2,
+                                                  "unavailable_samples": 1, "unavailable_weight_ms": 3})
+        with self.assertRaisesRegex(AnalysisError, "stack_json"):
+            analyze_sampled(self.csv("invalid-json-stack.csv", [self.sampled(stack_json="n/a")]), 123, (0, 1))
+
     def test_same_function_in_distinct_modules_remains_distinct(self):
         path = self.csv("sampled.csv", [self.sampled(), self.sampled(module="driver", time_s="0.012")])
         result = analyze_sampled(path, 123, (0, 1))
