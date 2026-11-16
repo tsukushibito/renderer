@@ -506,6 +506,7 @@ fn observe(
 #[test]
 #[ignore = "explicit real Win32 Surface/Swapchain/Graph acceptance; run strict and release shipping separately"]
 fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
+    eprintln!("WSI_PHASE start");
     let mut measurements = Measurements::new();
     let dispatch = measurements.caller(crate::backends::vulkan::real_vulkan_dispatch);
     let mut observations = Observations::default();
@@ -528,6 +529,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         pump(&mut event_loop, &mut host, &mut measurements);
         let window = measurements
             .caller(|| Arc::clone(host.window.as_ref().expect("resumed must create a window")));
+        eprintln!("WSI_PHASE native initialization");
         let (mut runtime, mut presenter) = measurements.renderer(Phase::Setup, || {
             VulkanRuntime::for_window(config, Arc::clone(&window), presentation)
                 .expect("real Surface/maintenance1 presentation support is required")
@@ -556,6 +558,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                 crate::backends::vulkan::ValidationMode::Disabled
             );
         });
+        eprintln!("WSI_PHASE working set preparation");
         let (mut mesh_graphs, mut frame_graphs) = measurements.renderer(Phase::Setup, || {
             prepare(&mut runtime);
             (
@@ -581,6 +584,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             assert!(presenter.take_profile().is_none());
             presenter.set_profiling(true).unwrap();
         });
+        eprintln!("WSI_PHASE profiled presentation");
         let mut first = setup_source(
             &mut runtime,
             &mut presenter,
@@ -756,6 +760,8 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
         let extent = presenter.extent().unwrap();
         observations.normal_extent = Some(extent);
         let mut held: [Option<HeldResult>; IN_FLIGHT] = std::array::from_fn(|_| None);
+        // Phase logs stay outside the complete normal memory epoch.
+        eprintln!("WSI_PHASE normal epoch");
         measurements.begin_normal();
         for batch in 0..NORMAL_SOURCES / IN_FLIGHT {
             let mut sources: [Option<Source>; IN_FLIGHT] = std::array::from_fn(|_| None);
@@ -836,6 +842,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
 
         // Keep pending-close coverage without moving any normal return to shutdown.
         measurements.end_normal();
+        eprintln!("WSI_PHASE normal complete");
         measurements.renderer(Phase::Setup, || {
             observations.collected_retired_swapchains = presenter.collect_retired_swapchains();
             assert_eq!(
@@ -845,6 +852,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             assert!(presenter.inner.as_ref().unwrap().retired.is_empty());
             assert_eq!(presenter.collect_retired_swapchains(), 0);
         });
+        eprintln!("WSI_PHASE pending shutdown");
         let mut final_source = measurements.renderer(Phase::Shutdown, || {
             image_frame(&mut runtime, &mut frame_graphs, mesh, extent, 20).unwrap()
         });
