@@ -580,8 +580,12 @@ impl std::fmt::Display for ProgramError {
             Self::InvalidAlignment => "buffer offset does not meet Device binding alignment",
             Self::InvalidRange => "buffer range is outside the shader or Device limits",
             Self::OutOfBounds => "binding range exceeds the logical buffer",
-            Self::InvalidExtent => "image extent must be nonzero and within Device limits",
-            Self::InvalidViewRange => "image View must cover mip zero and layer zero exactly once",
+            Self::InvalidExtent => {
+                "image extent and mip count must be nonzero and within Device limits"
+            }
+            Self::InvalidViewRange => {
+                "image View requires a nonempty in-bounds mip range in layer zero"
+            }
             Self::InvalidClearValue => {
                 "preferred depth clear must be finite, within [0, 1], and not subnormal"
             }
