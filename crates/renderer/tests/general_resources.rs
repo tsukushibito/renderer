@@ -610,6 +610,7 @@ fn cross_backend_owners(vk: &mut VulkanRuntime, dx: &mut D3D12Runtime) {
 }
 
 fn run(strict: bool) {
+    const EXECUTIONS: usize = 4;
     let mut vk = VulkanRuntime::new_with_validation(
         RuntimeConfig {
             execution_slots: 4,
@@ -629,7 +630,7 @@ fn run(strict: bool) {
             D3D12ValidationMode::Disabled
         },
         capacity: D3D12FrameCapacity {
-            executions: 4,
+            executions: EXECUTIONS,
             resources: 16,
             operations: 32,
             buffers: 2,
@@ -685,11 +686,11 @@ fn run(strict: bool) {
         &[
             D3D12ImageClass {
                 desc: fixture::hdr(),
-                count: 3,
+                count: 3 * EXECUTIONS,
             },
             D3D12ImageClass {
                 desc: ImageDesc::rgba16_float(2, 2),
-                count: 3,
+                count: 3 * EXECUTIONS,
             },
         ],
         &[renderer::program::ManagedRasterProgram::mesh_hdr()],

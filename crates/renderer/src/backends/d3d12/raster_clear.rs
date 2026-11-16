@@ -167,7 +167,9 @@ impl ClearPrograms {
 mod tests {
     use super::*;
     use crate::{
-        backends::d3d12::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode},
+        backends::d3d12::{
+            D3D12FrameCapacity, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
+        },
         graph::{
             Attachment, GraphCapacity, GraphPool, ImageDesc, LoadOp, RasterAttachments, StoreOp,
         },
@@ -178,13 +180,14 @@ mod tests {
     #[ignore = "requires real D3D12 hardware and requested native diagnostics"]
     fn d3d12_variable_clears_preserve_other_attachments_and_cover_uneven_extents() {
         let strict = cfg!(feature = "development-validation");
+        let capacity = D3D12FrameCapacity::default();
         let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
             validation: if strict {
                 D3D12ValidationMode::Required
             } else {
                 D3D12ValidationMode::Disabled
             },
-            ..Default::default()
+            capacity,
         })
         .unwrap();
         let monitor = runtime.validation_monitor();
@@ -196,11 +199,11 @@ mod tests {
                 &[
                     D3D12ImageClass {
                         desc: color_desc,
-                        count: 1,
+                        count: capacity.executions,
                     },
                     D3D12ImageClass {
                         desc: depth_desc,
-                        count: 1,
+                        count: capacity.executions,
                     },
                 ],
                 &[],
