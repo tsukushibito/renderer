@@ -3,6 +3,8 @@
 //! DXGI owns display-side references to accepted buffers. Our queue marker only
 //! establishes application GPU completion; it never proves scanout completion.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     collections::VecDeque,
@@ -161,7 +163,17 @@ impl Chain {
         let mut targets = Vec::new();
         targets
             .try_reserve_exact(config.desired_images as usize)
-            .map_err(|_| Error::capacity("presentation target capacity reservation failed"))?;
+            .map_err(|_| {
+                Error::capacity_with(
+                    "presentation target capacity reservation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::HostMemory,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let mut chain = Self {
             targets,
             rtv,
@@ -499,14 +511,34 @@ impl D3D12Runtime {
         let mut slots = Vec::new();
         slots
             .try_reserve_exact(presentation.max_frames)
-            .map_err(|_| Error::capacity("presentation slot reservation failed"))?;
+            .map_err(|_| {
+                Error::capacity_with(
+                    "presentation slot reservation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::PresentationSlots,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         for _ in 0..presentation.max_frames {
             slots.push(Slot::new(&owner)?);
         }
         let mut samples = VecDeque::new();
         samples
             .try_reserve_exact(presentation.max_frames)
-            .map_err(|_| Error::capacity("presentation sample reservation failed"))?;
+            .map_err(|_| {
+                Error::capacity_with(
+                    "presentation sample reservation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::HostMemory,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let mut inner = Inner {
             slots,
             chain: None,
@@ -594,8 +626,14 @@ impl D3D12Runtime {
                 && inner.samples.len() + inner.slots.iter().filter(|s| s.pending).count()
                     >= inner.config.max_frames
             {
-                return Err(Error::capacity(
+                return Err(Error::capacity_with(
                     "consume completed presentation timing samples",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::TimingSamples,
+                        CapacityRecovery::ReleaseResults,
+                        None,
+                        None,
+                    ),
                 ));
             }
             let Some(index) = inner.slots.iter().position(|slot| !slot.pending) else {
@@ -620,10 +658,17 @@ impl D3D12Runtime {
             if std::mem::take(&mut inner.cancel_next) {
                 return Ok(PresentOutcome::NotReady);
             }
-            let sequence = inner
-                .sequence
-                .checked_add(1)
-                .ok_or_else(|| Error::capacity("presentation sequence exhausted"))?;
+            let sequence = inner.sequence.checked_add(1).ok_or_else(|| {
+                Error::capacity_with(
+                    "presentation sequence exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Identity,
+                        CapacityRecovery::Recreate,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
             inner.slots[index].record(
                 &owner,
                 &inner.program,

@@ -1,5 +1,7 @@
 //! Re-record changing logical work into explicitly prepared native capacity.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::sync::Arc;
 
 use crate::graph::{CompiledGraph, Operation, ResourceDesc};
@@ -35,8 +37,14 @@ fn use_buffer(
         ));
     }
     if desc.size > maximum || *used == maximum_buffers {
-        return Err(D3D12RuntimeError::capacity(
+        return Err(D3D12RuntimeError::capacity_with(
             "prepared DEFAULT buffer capacity exhausted",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::Resources,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
         ));
     }
     resource_map[index] = *used;
@@ -44,11 +52,24 @@ fn use_buffer(
     Ok(())
 }
 
-fn add_bytes(total: &mut u64, bytes: u64, maximum: u64) -> Result<(), D3D12RuntimeError> {
-    *total = total
-        .checked_add(bytes)
-        .filter(|sum| *sum <= maximum)
-        .ok_or_else(|| D3D12RuntimeError::capacity("prepared transfer byte capacity exhausted"))?;
+fn add_bytes(
+    total: &mut u64,
+    bytes: u64,
+    maximum: u64,
+    resource: RuntimeCapacityKind,
+) -> Result<(), D3D12RuntimeError> {
+    let required = total.checked_add(bytes);
+    *total = required.filter(|sum| *sum <= maximum).ok_or_else(|| {
+        D3D12RuntimeError::capacity_with(
+            "prepared transfer byte capacity exhausted",
+            RuntimeCapacityError::new(
+                resource,
+                CapacityRecovery::Reconfigure,
+                Some(maximum),
+                required,
+            ),
+        )
+    })?;
     Ok(())
 }
 
@@ -73,8 +94,14 @@ fn requirements_inner(
         || graph.resources.len() > resource_map.len()
         || graph.order.len() > capacity.operations
     {
-        return Err(D3D12RuntimeError::capacity(
+        return Err(D3D12RuntimeError::capacity_with(
             "prepared Graph metadata capacity exhausted",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::GraphMetadata,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
         ));
     }
     // Each Graph uses only this prefix; later checkouts reinitialize their own
@@ -103,6 +130,7 @@ fn requirements_inner(
                     &mut upload_bytes,
                     graph.upload_data(&graph.passes[pass].operation).len() as u64,
                     capacity.upload_bytes,
+                    RuntimeCapacityKind::UploadBytes,
                 )?;
             }
             Operation::CopyBuffer { src, dst, size, .. } => {
@@ -123,8 +151,14 @@ fn requirements_inner(
                     capacity.buffers,
                 )?;
                 if src == dst && *size > capacity.scratch_bytes {
-                    return Err(D3D12RuntimeError::capacity(
+                    return Err(D3D12RuntimeError::capacity_with(
                         "prepared self-copy scratch capacity exhausted",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::TransferBytes,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
                     ));
                 }
             }
@@ -137,11 +171,24 @@ fn requirements_inner(
                     capacity.buffer_bytes,
                     capacity.buffers,
                 )?;
-                add_bytes(&mut readback_bytes, *size, capacity.readback_bytes)?;
+                add_bytes(
+                    &mut readback_bytes,
+                    *size,
+                    capacity.readback_bytes,
+                    RuntimeCapacityKind::ReadbackBytes,
+                )?;
             }
             Operation::UploadImage { dst, .. } | Operation::ReadbackImage { src: dst } => {
                 let storage = raster.as_deref_mut().ok_or_else(|| {
-                    D3D12RuntimeError::capacity("Raster image working set has not been prepared")
+                    D3D12RuntimeError::capacity_with(
+                        "Raster image working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
+                    )
                 })?;
                 super::raster::use_image(graph, *dst, resource_map, storage)?;
                 let image = &storage.images[resource_map[*dst]];
@@ -158,11 +205,25 @@ fn requirements_inner(
                         capacity.readback_bytes
                     };
                 *total = super::raster::align_transfer(*total)?;
-                add_bytes(total, image.total_bytes, maximum)?;
+                let resource =
+                    if matches!(graph.passes[pass].operation, Operation::UploadImage { .. }) {
+                        RuntimeCapacityKind::UploadBytes
+                    } else {
+                        RuntimeCapacityKind::ReadbackBytes
+                    };
+                add_bytes(total, image.total_bytes, maximum, resource)?;
             }
             Operation::CopyImage { src, dst } => {
                 let storage = raster.as_deref_mut().ok_or_else(|| {
-                    D3D12RuntimeError::capacity("Graph image working set has not been prepared")
+                    D3D12RuntimeError::capacity_with(
+                        "Graph image working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
+                    )
                 })?;
                 super::raster::use_image(graph, *src, resource_map, storage)?;
                 super::raster::use_image(graph, *dst, resource_map, storage)?;
@@ -176,12 +237,26 @@ fn requirements_inner(
                     .iter()
                     .any(|native| native.matches(program))
                 {
-                    return Err(D3D12RuntimeError::capacity(
+                    return Err(D3D12RuntimeError::capacity_with(
                         "Compute pipeline working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
                     ));
                 }
                 let storage = raster.as_deref_mut().ok_or_else(|| {
-                    D3D12RuntimeError::capacity("Graph working set has not been prepared")
+                    D3D12RuntimeError::capacity_with(
+                        "Graph working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
+                    )
                 })?;
                 for access in graph.accesses(pass) {
                     match graph.resources[access.resource].desc {
@@ -208,8 +283,14 @@ fn requirements_inner(
                     )?)
                     .filter(|count| *count <= storage.compute_descriptor_capacity)
                     .ok_or_else(|| {
-                        D3D12RuntimeError::capacity(
+                        D3D12RuntimeError::capacity_with(
                             "prepared Compute image descriptor capacity exhausted",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::Descriptors,
+                                CapacityRecovery::Reconfigure,
+                                None,
+                                None,
+                            ),
                         )
                     })?;
             }
@@ -224,20 +305,40 @@ fn requirements_inner(
                     .iter()
                     .any(|pipeline| pipeline.matches(program, depth.is_some()))
                 {
-                    return Err(D3D12RuntimeError::capacity(
+                    return Err(D3D12RuntimeError::capacity_with(
                         "Raster pipeline working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
                     ));
                 }
                 draws_total = draws_total
                     .checked_add(draws.len())
                     .filter(|count| *count <= capacity.operations)
                     .ok_or_else(|| {
-                        D3D12RuntimeError::capacity(
+                        D3D12RuntimeError::capacity_with(
                             "prepared Raster draw descriptor capacity exhausted",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::Descriptors,
+                                CapacityRecovery::Reconfigure,
+                                None,
+                                None,
+                            ),
                         )
                     })?;
                 let storage = raster.as_deref_mut().ok_or_else(|| {
-                    D3D12RuntimeError::capacity("Raster image working set has not been prepared")
+                    D3D12RuntimeError::capacity_with(
+                        "Raster image working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
+                    )
                 })?;
                 for access in graph.accesses(pass) {
                     match graph.resources[access.resource].desc {
@@ -263,8 +364,14 @@ fn requirements_inner(
                         )?)
                         .filter(|count| *count <= storage.raster_descriptor_capacity)
                         .ok_or_else(|| {
-                            D3D12RuntimeError::capacity(
+                            D3D12RuntimeError::capacity_with(
                                 "prepared Raster image descriptor capacity exhausted",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::Descriptors,
+                                    CapacityRecovery::Reconfigure,
+                                    None,
+                                    None,
+                                ),
                             )
                         })?;
                 }
@@ -272,7 +379,15 @@ fn requirements_inner(
             }
             Operation::AttachmentPass { colors, .. } => {
                 let storage = raster.as_deref_mut().ok_or_else(|| {
-                    D3D12RuntimeError::capacity("Raster image working set has not been prepared")
+                    D3D12RuntimeError::capacity_with(
+                        "Raster image working set has not been prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
+                    )
                 })?;
                 for access in graph.accesses(pass) {
                     super::raster::use_image(graph, access.resource, resource_map, storage)?;
@@ -301,7 +416,15 @@ fn requirements_inner(
                 index,
                 resource_map,
                 raster.as_deref_mut().ok_or_else(|| {
-                    D3D12RuntimeError::capacity("image working set is not prepared")
+                    D3D12RuntimeError::capacity_with(
+                        "image working set is not prepared",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::WorkingSet,
+                            CapacityRecovery::Prepare,
+                            None,
+                            None,
+                        ),
+                    )
                 })?,
             )?,
         }
@@ -395,8 +518,14 @@ pub(super) fn prepare(
                         _ => provenance
                             .write_graph_slice(target, graph, pass, 0..bytes.len())
                             .map_err(|_| {
-                                D3D12RuntimeError::capacity(
+                                D3D12RuntimeError::capacity_with(
                                     "prepared index provenance capacity exhausted",
+                                    RuntimeCapacityError::new(
+                                        RuntimeCapacityKind::GraphMetadata,
+                                        CapacityRecovery::Reconfigure,
+                                        None,
+                                        None,
+                                    ),
                                 )
                             })?,
                     }
@@ -486,15 +615,27 @@ pub(super) fn prepare(
                             &mut slot.provenance_scratch,
                         )
                         .map_err(|_| {
-                            D3D12RuntimeError::capacity(
+                            D3D12RuntimeError::capacity_with(
                                 "prepared index provenance copy capacity exhausted",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::GraphMetadata,
+                                    CapacityRecovery::Reconfigure,
+                                    None,
+                                    None,
+                                ),
                             )
                         })?;
                     slot.provenance[destination]
                         .replace(*dst_offset..*dst_offset + *size, &slot.provenance_scratch)
                         .map_err(|_| {
-                            D3D12RuntimeError::capacity(
+                            D3D12RuntimeError::capacity_with(
                                 "prepared index provenance replacement capacity exhausted",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::GraphMetadata,
+                                    CapacityRecovery::Reconfigure,
+                                    None,
+                                    None,
+                                ),
                             )
                         })?;
                 }
@@ -599,4 +740,66 @@ pub(super) fn prepare(
     work.plan = Some(graph.clone());
     work.finish_recording()?;
     Ok(work)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_transfer_limits_report_required_bytes_without_partial_accounting() {
+        let mut used = 512;
+        let error = add_bytes(
+            &mut used,
+            19_814_400,
+            16_777_216,
+            RuntimeCapacityKind::ReadbackBytes,
+        )
+        .unwrap_err();
+        assert_eq!(used, 512);
+        assert_eq!(
+            error.capacity(),
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::ReadbackBytes,
+                CapacityRecovery::Reconfigure,
+                Some(16_777_216),
+                Some(19_814_912)
+            ))
+        );
+        assert!(error.to_string().contains("19814912"));
+        add_bytes(&mut used, 16, 1024, RuntimeCapacityKind::ReadbackBytes).unwrap();
+        assert_eq!(used, 528);
+        let error = add_bytes(
+            &mut used,
+            u64::MAX,
+            u64::MAX,
+            RuntimeCapacityKind::UploadBytes,
+        )
+        .unwrap_err();
+        assert_eq!(error.capacity().unwrap().required, None);
+        assert_eq!(used, 528);
+    }
+
+    #[test]
+    fn missing_image_preparation_is_not_poll_backpressure() {
+        use crate::graph::{GraphCapacity, GraphPool, ImageDesc};
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let image = graph.image("input", ImageDesc::rgba8(1, 1)).unwrap();
+        graph
+            .upload_image("pixels", image, &[1, 2, 3, 255])
+            .unwrap();
+        graph.readback_image("result", image).unwrap();
+        let graph = graph.compile().unwrap();
+        let error =
+            requirements(&graph, &mut [usize::MAX], D3D12FrameCapacity::default()).unwrap_err();
+        assert_eq!(
+            error.capacity().unwrap().recovery,
+            CapacityRecovery::Prepare
+        );
+        assert_eq!(
+            error.capacity().unwrap().resource,
+            RuntimeCapacityKind::WorkingSet
+        );
+    }
 }

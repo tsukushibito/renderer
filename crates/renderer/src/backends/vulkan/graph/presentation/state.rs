@@ -1,5 +1,7 @@
 //! Graph-owned pending submissions and bounded Swapchain generation retirement.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::*;
 
 pub(super) struct Inner {
@@ -147,8 +149,14 @@ impl Inner {
         // next bounded retirement entry, including capacity-error retries.
         self.collect_retired_swapchains();
         if self.current.is_some() && self.retired.len() >= self.config.max_retired_swapchains {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "retired Swapchain capacity exhausted; poll/wait before retry",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::RetiredSwapchains,
+                    CapacityRecovery::Poll,
+                    None,
+                    None,
+                ),
             ));
         }
         // Retire the old owner before the native create: even a failed create

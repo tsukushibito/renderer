@@ -1,3 +1,5 @@
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::collections::BTreeMap;
 use std::ffi::{CStr, c_void};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -225,7 +227,15 @@ impl Session {
                 value.checked_add(1)
             })
             .map_err(|_| {
-                D3D12RuntimeError::capacity("D3D12 diagnostic callback identity exhausted")
+                D3D12RuntimeError::capacity_with(
+                    "D3D12 diagnostic callback identity exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Identity,
+                        CapacityRecovery::RestartProcess,
+                        None,
+                        None,
+                    ),
+                )
             })?;
         REGISTRY
             .lock()

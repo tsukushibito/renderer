@@ -4,6 +4,8 @@
 //! Executors retain this owner and binding leases until cancellation or proven
 //! retirement; publishing a new fixed program never replaces an existing one.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 #[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CStr;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -134,8 +136,14 @@ impl ShaderPrograms {
         {
             Ok(())
         } else {
-            Err(RuntimeError::capacity(
+            Err(RuntimeError::capacity_with(
                 "Graph program/binding working set is not prepared",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
             ))
         }
     }
@@ -238,8 +246,14 @@ impl ShaderPrograms {
             })
             .count();
         if distinct > crate::program::MAX_RASTER_PROGRAMS {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Raster Program working set exceeds the common capacity",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         let _initialization = self
@@ -265,7 +279,15 @@ impl ShaderPrograms {
                         .iter()
                         .find(|slot| slot.get().is_none())
                         .ok_or_else(|| {
-                            RuntimeError::capacity("Raster prepared Program capacity exhausted")
+                            RuntimeError::capacity_with(
+                                "Raster prepared Program capacity exhausted",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::Programs,
+                                    CapacityRecovery::Reconfigure,
+                                    None,
+                                    None,
+                                ),
+                            )
                         })?;
                     let program = Program::new_raster(Arc::clone(&self.owner), managed, depth)?;
                     slot.set(program)
@@ -294,7 +316,17 @@ impl ShaderPrograms {
         }
         self.raster_key(managed, depth)
             .and_then(|key| self.rasters[key].get())
-            .ok_or_else(|| RuntimeError::capacity("Raster Program variant is not prepared"))
+            .ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "Raster Program variant is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Programs,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
+            })
     }
 
     fn compute(&self) -> &Program {

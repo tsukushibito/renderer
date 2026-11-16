@@ -1,5 +1,7 @@
 //! Owned Compute recording into explicitly prepared execution-slot storage.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::{mem::ManuallyDrop, ops::Range};
 
 use super::{
@@ -252,8 +254,14 @@ pub(super) fn record(
             slot.provenance[slot.resource_map[access.resource]]
                 .clear_range(access.range.clone())
                 .map_err(|_| {
-                    D3D12RuntimeError::capacity(
+                    D3D12RuntimeError::capacity_with(
                         "prepared index provenance invalidation capacity exhausted",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::GraphMetadata,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
                     )
                 })?;
         }

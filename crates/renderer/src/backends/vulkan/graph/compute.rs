@@ -1,5 +1,7 @@
 //! Explicitly prepared managed Compute pipelines and exclusive descriptor arenas.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
@@ -49,7 +51,17 @@ impl Arena {
             let count = u32::try_from(count)
                 .ok()
                 .and_then(|count| count.checked_mul(capacity))
-                .ok_or_else(|| RuntimeError::capacity("Compute descriptor count overflow"))?;
+                .ok_or_else(|| {
+                    RuntimeError::capacity_with(
+                        "Compute descriptor count overflow",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::Descriptors,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
+                    )
+                })?;
             if count != 0 {
                 sizes.push(vk::DescriptorPoolSize {
                     ty,
@@ -62,7 +74,17 @@ impl Arena {
         });
         let max_sets = group_count
             .and_then(|count| count.checked_mul(capacity))
-            .ok_or_else(|| RuntimeError::capacity("Compute descriptor set count overflow"))?;
+            .ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "Compute descriptor set count overflow",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Descriptors,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let mut result = Self {
             owner,
             pool: vk::DescriptorPool::null(),
@@ -226,10 +248,17 @@ impl ComputePrograms {
             .cache
             .lock()
             .map_err(|_| RuntimeError::invalid("Compute descriptor cache lock poisoned"))?;
-        let arena = cache
-            .idle
-            .pop()
-            .ok_or_else(|| RuntimeError::capacity("Compute descriptor arenas exhausted"))?;
+        let arena = cache.idle.pop().ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "Compute descriptor arenas exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         cache.leased += 1;
         Ok(ComputeLease {
             programs: Arc::clone(self),
@@ -277,13 +306,29 @@ impl ComputeLease {
             .programs
             .iter()
             .position(|program| program.managed.same_asset(&managed))
-            .ok_or_else(|| RuntimeError::capacity("Compute Program is not prepared"))?;
+            .ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "Compute Program is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Programs,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let limits = self.programs.owner.device.limits();
         validate_workgroups(workgroups, limits.max_compute_work_group_count)?;
         let arena = self.arena.as_mut().unwrap();
         if arena.used >= self.programs.capacity {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Compute dispatch descriptor capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         let native_program = &self.programs.programs[index].native.0;

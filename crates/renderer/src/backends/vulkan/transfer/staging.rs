@@ -380,6 +380,9 @@ impl StagingRange {
     pub(in crate::backends::vulkan) fn size(&self) -> u64 {
         self.reservation.as_ref().unwrap().size
     }
+    pub(in crate::backends::vulkan) fn reserved_size(&self) -> u64 {
+        self.reservation.as_ref().unwrap().reserved
+    }
     #[cfg(test)]
     pub(in crate::backends::vulkan) fn initialized(&self) -> bool {
         self.initialized

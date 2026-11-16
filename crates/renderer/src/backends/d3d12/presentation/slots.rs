@@ -1,5 +1,7 @@
 //! Exclusive prepared command/descriptor/query slots and source GPU lifetime.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::super::metrics::TimestampPair;
 use super::*;
 
@@ -93,7 +95,15 @@ impl Slot {
     }
     fn begin_recording(&mut self, owner: &DeviceOwner) -> Result<(), Error> {
         if self.pending {
-            return Err(Error::capacity("presentation slot is pending"));
+            return Err(Error::capacity_with(
+                "presentation slot is pending",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::PresentationSlots,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
+            ));
         }
         // SAFETY: Real Fence completion preceded this reset; no recording or GPU
         // consumer remains, and the list is closed. Discard native buffer refs.
@@ -124,10 +134,17 @@ impl Slot {
         cpu_prepare: Duration,
         cpu_acquire: Duration,
     ) -> Result<(), Error> {
-        let next = self
-            .next
-            .checked_add(2)
-            .ok_or_else(|| Error::capacity("presentation Fence serial exhausted"))?;
+        let next = self.next.checked_add(2).ok_or_else(|| {
+            Error::capacity_with(
+                "presentation Fence serial exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Identity,
+                    CapacityRecovery::Recreate,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         let record_started = profiling.then(Instant::now);
         self.begin_recording(owner)?;
         let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {

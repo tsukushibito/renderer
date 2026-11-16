@@ -1,5 +1,7 @@
 //! Descriptor arena ownership, bounded reuse and immutable binding leases.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 #[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
@@ -281,14 +283,28 @@ impl BindingPool {
             return Ok(());
         }
         if cache.stats.descriptor_arenas_leased != 0 {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Graph descriptor preparation requires retired leases",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         let mut prepared = Vec::new();
-        prepared
-            .try_reserve_exact(self.slots)
-            .map_err(|_| RuntimeError::capacity("cannot reserve Graph descriptor arenas"))?;
+        prepared.try_reserve_exact(self.slots).map_err(|_| {
+            RuntimeError::capacity_with(
+                "cannot reserve Graph descriptor arenas",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         for ordinal in 0..self.slots {
             prepared.push(DescriptorArena::new(
                 Arc::clone(owner),
@@ -330,12 +346,26 @@ impl ShaderPrograms {
             .lock()
             .map_err(|_| RuntimeError::invalid("Graph descriptor cache lock poisoned"))?;
         if cache.stats.descriptor_arenas_leased == self.bindings.slots {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Graph descriptor arena capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         let arena = cache.idle.pop().ok_or_else(|| {
-            RuntimeError::capacity("Graph descriptor working set is not prepared or exhausted")
+            RuntimeError::capacity_with(
+                "Graph descriptor working set is not prepared or exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
+            )
         })?;
         cache.stats.descriptor_arenas_reused += 1;
         cache.stats.descriptor_arenas_leased += 1;
@@ -372,8 +402,14 @@ pub(in crate::backends::vulkan) struct ShaderBindings {
 impl ShaderBindings {
     fn prepared_set(&mut self, compute: bool) -> Result<vk::DescriptorSet, RuntimeError> {
         if self.used >= self.programs.bindings.max_bindings {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Graph descriptor binding capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         let arena = self.arena.as_ref().expect("live descriptor lease");
@@ -382,9 +418,17 @@ impl ShaderBindings {
         } else {
             (&arena.composite, &mut self.composite_used)
         };
-        let set = *sets
-            .get(*used)
-            .ok_or_else(|| RuntimeError::capacity("Graph descriptor layout is not prepared"))?;
+        let set = *sets.get(*used).ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "Graph descriptor layout is not prepared",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         *used += 1;
         self.used += 1;
         Ok(set)
@@ -455,14 +499,30 @@ impl ShaderBindings {
         sampler: vk::Sampler,
     ) -> Result<[vk::DescriptorSet; RASTER_GROUP_COUNT], RuntimeError> {
         if self.used >= self.programs.bindings.max_bindings {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Graph descriptor binding capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Descriptors,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         let arena = self.arena.as_ref().expect("live descriptor lease");
         let sets = *arena.raster[key]
             .get(self.raster_used[key])
-            .ok_or_else(|| RuntimeError::capacity("Raster descriptor layout is not prepared"))?;
+            .ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "Raster descriptor layout is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Descriptors,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         self.raster_used[key] += 1;
         self.used += 1;
         let mut slots = [None; crate::program::MAX_RASTER_BINDINGS];

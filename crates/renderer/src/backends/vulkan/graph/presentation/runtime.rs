@@ -1,5 +1,7 @@
 //! Connect canonical Graph source snapshots to native WSI submissions.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::*;
 
 impl VulkanRuntime {
@@ -24,17 +26,23 @@ impl VulkanRuntime {
         retired
             .try_reserve_exact(presentation.max_retired_swapchains)
             .map_err(|e| {
-                RuntimeError::capacity(format!("cannot reserve retired Swapchain records: {e}"))
+                RuntimeError::reservation_error(format!(
+                    "cannot reserve retired Swapchain records: {e}"
+                ))
             })?;
         slots
             .try_reserve_exact(presentation.max_frames)
             .map_err(|e| {
-                RuntimeError::capacity(format!("cannot reserve presentation Slot records: {e}"))
+                RuntimeError::reservation_error(format!(
+                    "cannot reserve presentation Slot records: {e}"
+                ))
             })?;
         pending
             .try_reserve_exact(presentation.max_frames)
             .map_err(|e| {
-                RuntimeError::capacity(format!("cannot reserve pending presentation records: {e}"))
+                RuntimeError::reservation_error(format!(
+                    "cannot reserve pending presentation records: {e}"
+                ))
             })?;
         let size = window.inner_size();
         let diagnostics = Diagnostics::new();
@@ -181,10 +189,17 @@ impl VulkanRuntime {
             acquired.cancel()?;
             return Ok(PresentOutcome::NotReady);
         }
-        let serial = self
-            .serial
-            .checked_add(1)
-            .ok_or_else(|| RuntimeError::capacity("submission serial exhausted"))?;
+        let serial = self.serial.checked_add(1).ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "submission serial exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Identity,
+                    CapacityRecovery::Recreate,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         let work = PresentWork {
             source,
             previous,

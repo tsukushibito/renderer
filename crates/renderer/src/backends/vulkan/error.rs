@@ -2,6 +2,7 @@
 
 use std::{borrow::Cow, fmt};
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use ash::vk;
 
 use super::buffer::BufferError;
@@ -33,6 +34,7 @@ pub struct RuntimeError {
     pub message: Cow<'static, str>,
     kind: RuntimeErrorKind,
     source: Option<RuntimeCause>,
+    capacity: Option<RuntimeCapacityError>,
 }
 
 #[derive(Debug)]
@@ -101,6 +103,27 @@ impl RuntimeError {
         self.kind
     }
 
+    /// Identifies the prepared resource and the action required before retrying.
+    /// These scalar details do not allocate or retain runtime resources.
+    pub fn capacity(&self) -> Option<RuntimeCapacityError> {
+        self.capacity
+    }
+    pub(super) fn capacity_context(
+        mut self,
+        resource: RuntimeCapacityKind,
+        recovery: CapacityRecovery,
+    ) -> Self {
+        if let Some(capacity) = &mut self.capacity {
+            capacity.resource = resource;
+            capacity.recovery = recovery;
+        }
+        self
+    }
+    pub(super) fn with_capacity_details(mut self, capacity: RuntimeCapacityError) -> Self {
+        self.capacity = Some(capacity);
+        self
+    }
+
     pub(super) fn context(mut self, context: impl fmt::Display) -> Self {
         // Expected backpressure stays scalar/static, including when a pass or
         // frame adds context. Formatting belongs to explicit error reporting.
@@ -115,6 +138,7 @@ impl RuntimeError {
             message: message.into(),
             kind,
             source: None,
+            capacity: None,
         }
     }
     pub(super) fn invalid(message: impl Into<Cow<'static, str>>) -> Self {
@@ -123,8 +147,25 @@ impl RuntimeError {
     pub(super) fn unsupported(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::Unsupported, message)
     }
-    pub(super) fn capacity(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::classified(RuntimeErrorKind::CapacityExhausted, message)
+    pub(super) fn reservation_error(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::capacity_with(
+            message,
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::HostMemory,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        )
+    }
+    pub(super) fn capacity_with(
+        message: impl Into<Cow<'static, str>>,
+        capacity: RuntimeCapacityError,
+    ) -> Self {
+        Self {
+            capacity: Some(capacity),
+            ..Self::classified(RuntimeErrorKind::CapacityExhausted, message)
+        }
     }
     pub(super) fn stale(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(RuntimeErrorKind::StaleResource, message)
@@ -140,6 +181,7 @@ impl RuntimeError {
             message: source.to_string().into(),
             kind,
             source: Some(RuntimeCause::Other(Box::new(source))),
+            capacity: None,
         }
     }
     pub(super) fn device_unavailable(state: DeviceState) -> Self {
@@ -168,7 +210,11 @@ impl fmt::Display for RuntimeError {
         match &self.source {
             Some(RuntimeCause::Other(_)) | None => f.write_str(&self.message),
             Some(capacity) => capacity.fmt(f),
+        }?;
+        if let Some(capacity) = self.capacity {
+            write!(f, " ({capacity})")?;
         }
+        Ok(())
     }
 }
 impl std::error::Error for RuntimeError {
@@ -230,6 +276,12 @@ impl From<TransferError> for RuntimeError {
                 message: "execution pool has no free slot".into(),
                 kind: RuntimeErrorKind::CapacityExhausted,
                 source: Some(RuntimeCause::TransferCapacity { capacity }),
+                capacity: Some(RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExecutionSlots,
+                    CapacityRecovery::ReleaseOwners,
+                    Some(capacity as u64),
+                    None,
+                )),
             };
         }
         let kind = match &error {
@@ -248,6 +300,7 @@ impl From<StagingError> for RuntimeError {
                 message: "staging range length mismatch".into(),
                 kind: RuntimeErrorKind::InvalidInput,
                 source: Some(RuntimeCause::StagingLength { expected, actual }),
+                capacity: None,
             };
         }
         if let StagingError::RangeCapacityExhausted { capacity } = error {
@@ -255,6 +308,12 @@ impl From<StagingError> for RuntimeError {
                 message: "staging has no free range metadata".into(),
                 kind: RuntimeErrorKind::CapacityExhausted,
                 source: Some(RuntimeCause::StagingRangeCapacity { capacity }),
+                capacity: Some(RuntimeCapacityError::new(
+                    RuntimeCapacityKind::StagingRanges,
+                    CapacityRecovery::ReleaseOwners,
+                    Some(capacity as u64),
+                    None,
+                )),
             };
         }
         if let StagingError::CapacityExhausted {
@@ -271,6 +330,16 @@ impl From<StagingError> for RuntimeError {
                     requested,
                     reserved,
                 }),
+                capacity: Some(RuntimeCapacityError::new(
+                    RuntimeCapacityKind::StagingBytes,
+                    if requested > capacity {
+                        CapacityRecovery::Reconfigure
+                    } else {
+                        CapacityRecovery::ReleaseOwners
+                    },
+                    Some(capacity),
+                    Some(requested),
+                )),
             };
         }
         let kind = match &error {
@@ -445,10 +514,39 @@ mod tests {
         let reported = error.to_string();
         assert!(reported.contains("128") && reported.contains("64") && reported.contains("96"));
         let execution = RuntimeError::from(TransferError::CapacityExhausted { capacity: 3 });
-        assert_eq!(
-            execution.to_string(),
-            "execution pool has no free slot (capacity 3)"
+        assert!(
+            execution
+                .to_string()
+                .contains("execution pool has no free slot (capacity 3)")
         );
+        assert_eq!(
+            execution.capacity(),
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::ExecutionSlots,
+                CapacityRecovery::ReleaseOwners,
+                Some(3),
+                None
+            ))
+        );
+        assert_eq!(
+            error.capacity(),
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::StagingBytes,
+                CapacityRecovery::ReleaseOwners,
+                Some(128),
+                Some(64)
+            ))
+        );
+        let oversized = RuntimeError::from(StagingError::CapacityExhausted {
+            capacity: 128,
+            requested: 129,
+            reserved: 0,
+        });
+        assert_eq!(
+            oversized.capacity().unwrap().recovery,
+            CapacityRecovery::Reconfigure
+        );
+        assert_eq!(oversized.capacity().unwrap().required, Some(129));
         assert!(!execution.is_staging_exhausted());
     }
 }

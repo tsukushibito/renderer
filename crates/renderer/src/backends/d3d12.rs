@@ -1,5 +1,6 @@
 //! D3D12 single-queue native ownership. Native types stay backend-private.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
@@ -73,11 +74,17 @@ pub struct D3D12RuntimeError {
     pub message: Cow<'static, str>,
     kind: D3D12RuntimeErrorKind,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    capacity: Option<RuntimeCapacityError>,
 }
 
 impl D3D12RuntimeError {
     pub fn kind(&self) -> D3D12RuntimeErrorKind {
         self.kind
+    }
+    /// Identifies the prepared resource and the action required before retrying.
+    /// These scalar details do not allocate or retain runtime resources.
+    pub fn capacity(&self) -> Option<RuntimeCapacityError> {
+        self.capacity
     }
     pub(super) fn classified(
         kind: D3D12RuntimeErrorKind,
@@ -87,6 +94,7 @@ impl D3D12RuntimeError {
             message: message.into(),
             kind,
             source: None,
+            capacity: None,
         }
     }
     pub(super) fn invalid(message: impl Into<Cow<'static, str>>) -> Self {
@@ -95,8 +103,14 @@ impl D3D12RuntimeError {
     pub(super) fn unsupported(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(D3D12RuntimeErrorKind::Unsupported, message)
     }
-    pub(super) fn capacity(message: impl Into<Cow<'static, str>>) -> Self {
-        Self::classified(D3D12RuntimeErrorKind::CapacityExhausted, message)
+    pub(super) fn capacity_with(
+        message: impl Into<Cow<'static, str>>,
+        capacity: RuntimeCapacityError,
+    ) -> Self {
+        Self {
+            capacity: Some(capacity),
+            ..Self::classified(D3D12RuntimeErrorKind::CapacityExhausted, message)
+        }
     }
     pub(super) fn wrong_owner(message: impl Into<Cow<'static, str>>) -> Self {
         Self::classified(D3D12RuntimeErrorKind::WrongOwner, message)
@@ -121,12 +135,17 @@ impl D3D12RuntimeError {
             message: cause.to_string().into(),
             kind,
             source: Some(Box::new(cause)),
+            capacity: None,
         }
     }
 }
 impl fmt::Display for D3D12RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)
+        f.write_str(&self.message)?;
+        if let Some(capacity) = self.capacity {
+            write!(f, " ({capacity})")?;
+        }
+        Ok(())
     }
 }
 impl std::error::Error for D3D12RuntimeError {
@@ -196,14 +215,26 @@ impl D3D12Runtime {
         self.device.ensure_active()?;
         self.pool.reap()?;
         if !self.pool.is_idle() {
-            return Err(D3D12RuntimeError::capacity(
+            return Err(D3D12RuntimeError::capacity_with(
                 "Graph working set cannot change while execution or result leases remain",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         let mut registry = self.pool.registry.lock().unwrap_or_else(|e| e.into_inner());
         if !registry.metadata_is_idle() {
-            return Err(D3D12RuntimeError::capacity(
+            return Err(D3D12RuntimeError::capacity_with(
                 "return submission exports and buffer snapshots before changing the working set",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExportMetadata,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         let registered_images = registry.registered_images()?;

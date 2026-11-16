@@ -1,6 +1,9 @@
 //! Committed buffer/image ownership and scoped or persistent CPU mapping.
 //! Managed owners and queue work retain the Device and release native resources first.
 
+#[cfg(test)]
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::{ffi::c_void, ptr};
 
 use windows_core::{Error, HRESULT};
@@ -243,9 +246,17 @@ impl DeviceBuffer {
         size: usize,
     ) -> Result<Vec<u8>, D3D12RuntimeError> {
         let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(size)
-            .map_err(|_| D3D12RuntimeError::capacity("CPU allocation for readback failed"))?;
+        bytes.try_reserve_exact(size).map_err(|_| {
+            D3D12RuntimeError::capacity_with(
+                "CPU allocation for readback failed",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::HostMemory,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         let read = D3D12_RANGE {
             Begin: 0,
             End: size,

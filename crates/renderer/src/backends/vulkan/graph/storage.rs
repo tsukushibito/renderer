@@ -1,6 +1,8 @@
 //! Prepared backing stays owned by the pool across checkout, retirement and
 //! CPU result return. A normal lease Drop resets elements, never the allocation.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::{
     ops::{Deref, DerefMut},
     sync::{Arc, Mutex},
@@ -51,7 +53,17 @@ impl<T> StoragePool<T> {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .pop()
-            .ok_or_else(|| RuntimeError::capacity("prepared frame storage exhausted"))?;
+            .ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "prepared frame storage exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::FrameStorage,
+                        CapacityRecovery::ReleaseOwners,
+                        Some(self.0.capacity as u64),
+                        None,
+                    ),
+                )
+            })?;
         Ok(StorageLease {
             data: Some(data),
             owner: Arc::clone(&self.0),
@@ -123,7 +135,16 @@ mod tests {
         let pointer = first.as_ptr();
         first.extend(0..16);
         let second = pool.acquire().unwrap();
-        assert!(pool.acquire().is_err());
+        let error = pool.acquire().err().unwrap();
+        assert_eq!(
+            error.capacity(),
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::FrameStorage,
+                CapacityRecovery::ReleaseOwners,
+                Some(2),
+                None
+            ))
+        );
         drop(first);
         let reused = pool.acquire().unwrap();
         assert_eq!(reused.as_ptr(), pointer);

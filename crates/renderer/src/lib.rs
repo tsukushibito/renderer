@@ -10,6 +10,7 @@
 //!
 //! Engine-facing and graph APIs remain independent of Vulkan and VMA types.
 
+pub mod capacity;
 pub mod engine;
 pub mod graph;
 pub mod profiling;
