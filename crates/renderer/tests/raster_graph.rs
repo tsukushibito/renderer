@@ -555,7 +555,7 @@ fn run(strict: bool) {
         .map(|(desc, count)| D3D12ImageClass { desc, count })
         .collect();
     d3d12
-        .prepare_raster_working_set(&images, &programs())
+        .prepare_graph_working_set(&images, &programs(), &[])
         .expect("D3D12 prepared graphics resources");
 
     let (invalid_pool, invalid, _) = shared_graph(true);

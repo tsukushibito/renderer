@@ -382,23 +382,17 @@ fn run_shared_graph(strict_validation: bool) {
             vulkan
                 .submit(&rejected)
                 .err()
-                .expect("live managed operation is unsupported")
+                .expect("Compute Program was not prepared in this buffer-only working set")
                 .kind(),
-            RuntimeErrorKind::Unsupported
+            RuntimeErrorKind::CapacityExhausted
         );
         assert_eq!(
             d3d12
                 .submit(&rejected)
                 .err()
-                .expect("the unsupported or unprepared plan must be rejected")
+                .expect("the unprepared Program or image working set must be rejected")
                 .kind(),
-            if mode == 0 {
-                D3D12RuntimeErrorKind::Unsupported
-            } else {
-                // Images are now supported. This buffer-only working set
-                // rejects the preceding image upload before reaching dispatch.
-                D3D12RuntimeErrorKind::CapacityExhausted
-            }
+            D3D12RuntimeErrorKind::CapacityExhausted
         );
         #[cfg(feature = "memory-profiling")]
         {
@@ -515,20 +509,20 @@ fn run_shared_graph(strict_validation: bool) {
             "compared_bytes_per_backend": compared_bytes,
             "readbacks": readbacks,
             "owned_dispatch": {
-                "live_rejected_by_both_backends": true,
+                "unprepared_program_rejected_by_both_backends": true,
                 "culled_branch_does_not_prevent_execution": true,
-                "native_dispatch_execution_supported": false,
+                "working_set": "buffer transfers only; no Compute Programs prepared",
             },
             "shader_bindings": {
-                "live_sampled_plan_rejected_by_both_backends": true,
+                "unprepared_sampled_plan_rejected_by_both_backends": true,
                 "vulkan_rejection_resource_create_reuse_unchanged": true,
                 "vulkan_culled_branches_no_new_resources": true,
                 "rejection_native_event_counters_checked": cfg!(feature = "memory-profiling"),
                 "rejection_order":["buffer_dispatch_plan","sampled_dispatch_plan_with_unprepared_image"],
-                "d3d12_rejection_kinds":["Unsupported","CapacityExhausted"],
+                "d3d12_rejection_kinds":["CapacityExhausted","CapacityExhausted"],
                 "rejection_native_events_object_create_destroy_resource_create_destroy_memory_alloc_free_descriptor_alloc_free_reset": rejection_native_events,
                 "culled_branches_do_not_prevent_common_execution": true,
-                "native_compute_execution_supported": false,
+                "working_set_has_prepared_compute_programs": false,
             },
         },
         "validation": {

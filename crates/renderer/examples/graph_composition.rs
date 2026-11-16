@@ -1,6 +1,6 @@
 //! Owned construction with consumer-defined intermediate passes, using real
-//! reviewed shader contracts. This example compiles a CPU plan; general native
-//! graphics and dispatch execution are separate backend work.
+//! reviewed shader contracts. This example compiles a CPU plan; the native
+//! backends execute supported plans using explicitly prepared working sets.
 
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, Graph, GraphCapacity, GraphError, GraphPool,

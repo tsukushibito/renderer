@@ -689,7 +689,7 @@ pub fn d3d12(baseline: bool) {
     let info = runtime.device_info();
     let monitor = runtime.validation_monitor();
     runtime
-        .prepare_raster_working_set(
+        .prepare_graph_working_set(
             &[
                 renderer::D3D12ImageClass {
                     desc: ImageDesc::rgba8(WIDTH, HEIGHT),
@@ -713,6 +713,7 @@ pub fn d3d12(baseline: bool) {
                 },
             ],
             &programs(),
+            &[],
         )
         .unwrap();
     let mut pool = GraphPool::new(capacity(), GRAPH_SLOTS).unwrap();
