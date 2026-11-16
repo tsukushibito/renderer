@@ -18,6 +18,23 @@ use crate::graph::{
     ImportRangesPool, ResourceDesc, ResourceKey, provenance::BufferProvenance,
 };
 
+mod reuse;
+use reuse::{ReuseClass, ReuseIndex};
+impl From<ResourceDesc> for ReuseClass {
+    fn from(desc: ResourceDesc) -> Self {
+        match desc {
+            ResourceDesc::Buffer(_) => Self::Buffer,
+            ResourceDesc::Image(desc) => Self::Image {
+                width: desc.width,
+                height: desc.height,
+                format: desc.format as u8,
+                mip_levels: desc.mip_levels,
+                array_layers: desc.array_layers,
+            },
+        }
+    }
+}
+
 enum Native {
     Buffer(DeviceBuffer),
     Image(DeviceImage),
@@ -128,6 +145,7 @@ impl Drop for ExportLease {
 pub(super) struct Registry {
     owner: u64,
     entries: Vec<Entry>,
+    reuse: ReuseIndex<ReuseClass>,
     ranges: ImportRangesPool,
     exports: Vec<Arc<ExportSlot>>,
     result_returns: Arc<()>,
@@ -183,6 +201,8 @@ impl Registry {
         Ok(Self {
             owner: crate::graph::next_id(),
             entries,
+            reuse: ReuseIndex::new(capacity.resource_capacity)
+                .map_err(|_| Error::capacity("resource selection preparation failed"))?,
             ranges: ImportRangesPool::new(
                 capacity.initialized_ranges_per_resource,
                 capacity.range_snapshots,
@@ -231,7 +251,17 @@ impl Registry {
                 }
             }
         }
+        self.rebuild_reuse_index();
         Ok(())
+    }
+    fn rebuild_reuse_index(&mut self) {
+        self.reuse.clear();
+        for (index, entry) in self.entries.iter().enumerate() {
+            self.reuse.install(index, entry.desc.into());
+            if entry.registered || entry.generation == u32::MAX {
+                self.reuse.remove(index);
+            }
+        }
     }
     /// Separate from the native readback lease: even a fully consumed result is
     /// a public change-boundary token until Drop, matching Vulkan. This anchor
@@ -293,6 +323,7 @@ impl Registry {
             }
         }
         self.entries.extend(incoming);
+        self.rebuild_reuse_index();
         Ok(())
     }
     fn entry(&self, key: ResourceKey) -> Result<&Entry, Error> {
@@ -340,6 +371,9 @@ impl Registry {
         entry.registered = false;
         entry.initialized.clear();
         entry.provenance.clear();
+        if entry.generation < u32::MAX {
+            self.reuse.restore(key.index as usize);
+        }
         Ok(())
     }
     pub(super) fn bind(
@@ -367,6 +401,7 @@ impl Registry {
         }
         slot.resource_uses[..graph.resources.len()].fill(None);
         slot.resource_count = graph.resources.len();
+        self.reuse.begin();
         for (logical, resource) in graph.resources.iter().enumerate() {
             let local = slot.resource_map[logical];
             if local == usize::MAX {
@@ -381,9 +416,9 @@ impl Registry {
                 key.index as usize
             } else {
                 let index = self
-                    .entries
-                    .iter()
-                    .position(|entry| {
+                    .reuse
+                    .select(resource.desc.into(), |index| {
+                        let entry = &self.entries[index];
                         !entry.registered
                             && Arc::strong_count(&entry.physical) == 1
                             && entry.generation < u32::MAX
@@ -398,6 +433,9 @@ impl Registry {
                     })?;
                 let entry = &mut self.entries[index];
                 entry.generation += 1;
+                if entry.generation == u32::MAX {
+                    self.reuse.remove(index);
+                }
                 entry.desc = resource.desc;
                 entry.initialized.clear();
                 entry.provenance.clear();
@@ -530,6 +568,7 @@ impl Registry {
             }
             if graph.has_export(logical) {
                 entry.registered = true;
+                self.reuse.remove(usage.key.index as usize);
             }
             if !entry.registered {
                 entry.provenance.clear();
