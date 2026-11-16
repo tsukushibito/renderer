@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Owns presentation state and the Arc<Window> that backs its native Surface.
+/// Owns presentation state and the `Arc<Window>` that backs its native Surface.
 /// Call `poll` regularly and `close` explicitly; event loops remain app-owned.
 pub struct Presenter {
     pub(super) inner: Option<Inner>,

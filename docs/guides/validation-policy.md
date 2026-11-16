@@ -235,6 +235,7 @@ native検証の要求設定と、Layer等から観測した実効状態は別に
 | D3D12のbuffer loweringは不変`CompiledGraph`から準備する | Graphが保証するbyte範囲を反復再走査しない。未対応操作の拒否、実Deviceへの適合、配置・命令記録・完了・CPU copyを成立させる処理は製品にも残す |
 | `MeshData::new`で入力を検査しimmutableな内容要約を生成 | privateな管理下uploadへ保証を引き継ぎ、mesh描画時のindex本文再走査・検査用CPU保持を省く。実Device上限は別に適合確認 |
 | `RasterParameters::new`で有限値を保証する不変公開型 | snapshotと利用側が同じ型を使い、Graph構築時の定数全量再走査を省く。値の変更は再生成する。owner・buffer範囲・binding・容量の検査は残す |
+| 公開標準パス・forward recipeは公開Graph操作を使う | 標準層専用のraw入力再検査や実行検証を設けず、構築時のattachment・Program・内容保証を共有する。prepassed Programは0 drawでもdepth Load必須。postによるGraph置換と別出力のdescription変更はcallback後の境界で拒否する |
 | snapshotのmesh接続を読み取り専用にする | 公開logical handleから常駐版の内容を書き換えない。Graph構築のwrite/直接export拒否と、構築から投入までの資源pinで保証を保持する |
 | 任意Graph upload／copyのCPU provenance | 部分byte更新や未知の穴からindex安全性を確立するために必要な経路は残す。開発用診断として一括削除しない |
 | Graph構築のowner・範囲・用途、producer／hazard、live循環、投入時のimport照合 | safe入力と変動状態を保証するために維持。公開されたimportの更新・削除は不変mesh保証では代替しない |

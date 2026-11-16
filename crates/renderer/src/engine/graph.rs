@@ -225,38 +225,36 @@ impl FrameSnapshot {
         extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
     ) -> Result<FrameGraph, GraphError> {
         let desc = ImageDesc::rgba8(self.view.width, self.view.height);
-        let color = graph.image("view color", desc)?;
-        let depth = graph.image("view depth", ImageDesc::depth32(desc.width, desc.height))?;
-        // The fixed opaque list shares one clear and rendering scope. An empty
-        // list retains the clear-only path without requiring a Raster program.
-        graph.raster(
+        let scene = crate::standard::graphs::forward(
+            &mut graph,
             if self.draws.is_empty() {
                 "view clear"
             } else {
                 "view opaque batch"
             },
-            &crate::program::ManagedRasterProgram::mesh(),
             inputs.draws(),
-            crate::graph::RasterAttachments {
-                colors: &[crate::graph::Attachment {
-                    view: graph.image_view(color, 0, 0)?,
-                    load: crate::graph::LoadOp::Clear(self.view.clear_color),
-                    store: crate::graph::StoreOp::Store,
-                }],
-                depth: Some(crate::graph::Attachment {
-                    view: graph.image_view(depth, 0, 0)?,
-                    load: crate::graph::LoadOp::Clear(1.0),
-                    store: crate::graph::StoreOp::Store,
-                }),
+            crate::standard::graphs::ForwardConfig {
+                color: desc,
+                clear_color: self.view.clear_color,
+                depth: true,
             },
         )?;
         // Mesh scratch belongs only to construction. Release it before running
         // user code, which may independently build another graph from this input.
         drop(inputs);
-        let output = extension(&mut graph, color)?;
-        let output_desc = graph
-            .image_desc(output)
+        let output = extension(&mut graph, scene.color)?;
+        // The callback may replace its mutable Graph. Preserve the recipe's
+        // original graph-local inputs rather than accepting another owner.
+        graph
+            .image_desc(scene.color)
             .map_err(|error| error.with_pass_name("view output"))?;
+        let output_desc = if output == scene.color {
+            desc
+        } else {
+            graph
+                .image_desc(output)
+                .map_err(|error| error.with_pass_name("view output"))?
+        };
         if output_desc != desc {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
@@ -499,6 +497,21 @@ mod tests {
         assert_eq!(error.pass_name(), Some("view output"));
         assert_eq!(error.resource(), Some(foreign.into()));
         assert_eq!(error.resource_name(), None);
+
+        let mut replacement_pool = self::graph_pool();
+        let mut replacement = replacement_pool.begin().unwrap();
+        let replacement_output = replacement
+            .image("replacement output", ImageDesc::rgba8(16, 16))
+            .unwrap();
+        let error = snapshot
+            .build_graph(&mut graph_pool, false, |graph, _| {
+                *graph = replacement;
+                Ok(replacement_output)
+            })
+            .err()
+            .expect("extension cannot replace the recipe's Graph");
+        assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
+        assert_eq!(error.pass_name(), Some("view output"));
 
         for (name, desc) in [
             ("wrong format", ImageDesc::depth32(16, 16)),

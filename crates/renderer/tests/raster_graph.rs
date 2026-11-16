@@ -24,6 +24,7 @@ use renderer::graph::{
     RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
+use renderer::standard::{graphs, passes};
 use renderer::{
     D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind,
     D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind,
@@ -143,23 +144,19 @@ fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut
     let depth = graph
         .image("prepass depth", ImageDesc::depth32(4, 4))
         .unwrap();
-    graph
-        .raster(
-            "prepass geometry",
-            &ManagedRasterProgram::depth_only(),
-            [
-                placed(quad, false, 0.5, [1.0; 4]),
-                placed(quad, true, 0.25, [1.0; 4]),
-            ],
-            RasterAttachments {
-                colors: &[],
-                depth: Some(depth_attachment(graph, depth, LoadOp::Clear(1.0))),
-            },
-        )
-        .unwrap();
-    for (program, desc, same_name, near_name, colors, near) in [
+    let depth_clear = depth_attachment(graph, depth, LoadOp::Clear(1.0));
+    passes::depth_prepass(
+        graph,
+        "prepass geometry",
+        [
+            placed(quad, false, 0.5, [1.0; 4]),
+            placed(quad, true, 0.25, [1.0; 4]),
+        ],
+        depth_clear,
+    )
+    .unwrap();
+    for (desc, same_name, near_name, colors, near) in [
         (
-            ManagedRasterProgram::mesh_prepassed(),
             ImageDesc::rgba8(4, 4),
             "prepassed RGBA8 equal geometry",
             "prepassed RGBA8 nearer overlay",
@@ -173,7 +170,6 @@ fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut
             pixels(|_, _| [0, 0, 255, 255]),
         ),
         (
-            ManagedRasterProgram::mesh_hdr_prepassed(),
             hdr(4, 4),
             "prepassed HDR equal geometry",
             "prepassed HDR nearer overlay",
@@ -193,44 +189,43 @@ fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut
     ] {
         let color = graph.image(same_name, desc).unwrap();
         let hdr = desc.format == ImageFormat::Rgba16Float;
-        graph
-            .raster(
-                same_name,
-                &program,
-                [
-                    placed(
-                        quad,
-                        false,
-                        0.5,
-                        [if hdr { 2.0 } else { 1.0 }, 0.0, 0.0, 1.0],
-                    ),
-                    placed(
-                        quad,
-                        true,
-                        0.25,
-                        [0.0, if hdr { 4.0 } else { 1.0 }, 0.0, 1.0],
-                    ),
-                    // A disabled depth test would replace both equal-depth draws.
-                    placed(quad, false, 0.75, [1.0, 1.0, 0.0, 1.0]),
-                ],
-                RasterAttachments {
-                    colors: &[color_attachment(graph, color, LoadOp::Clear([0.0; 4]))],
-                    depth: Some(depth_attachment(graph, depth, LoadOp::Load)),
-                },
-            )
-            .unwrap();
+        let color_clear = color_attachment(graph, color, LoadOp::Clear([0.0; 4]));
+        let depth_load = depth_attachment(graph, depth, LoadOp::Load);
+        passes::opaque(
+            graph,
+            same_name,
+            [
+                placed(
+                    quad,
+                    false,
+                    0.5,
+                    [if hdr { 2.0 } else { 1.0 }, 0.0, 0.0, 1.0],
+                ),
+                placed(
+                    quad,
+                    true,
+                    0.25,
+                    [0.0, if hdr { 4.0 } else { 1.0 }, 0.0, 1.0],
+                ),
+                // A disabled depth test would replace both equal-depth draws.
+                placed(quad, false, 0.75, [1.0, 1.0, 0.0, 1.0]),
+            ],
+            color_clear,
+            Some(depth_load),
+            passes::OpaqueDepth::Prepassed,
+        )
+        .unwrap();
         expected.push(observe(graph, color, same_name, colors));
-        graph
-            .raster(
-                near_name,
-                &program,
-                [placed(quad, false, 0.125, [0.0, 0.0, 1.0, 1.0])],
-                RasterAttachments {
-                    colors: &[color_attachment(graph, color, LoadOp::Load)],
-                    depth: Some(depth_attachment(graph, depth, LoadOp::Load)),
-                },
-            )
-            .unwrap();
+        let color_load = color_attachment(graph, color, LoadOp::Load);
+        passes::opaque(
+            graph,
+            near_name,
+            [placed(quad, false, 0.125, [0.0, 0.0, 1.0, 1.0])],
+            color_load,
+            Some(depth_load),
+            passes::OpaqueDepth::Prepassed,
+        )
+        .unwrap();
         expected.push(observe(graph, color, near_name, near));
     }
     // The nearer fragments were shaded but must not replace the prepass depth.
@@ -239,6 +234,68 @@ fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut
         depth,
         "prepassed readonly depth",
         float_bytes(&pixels(|x, _| [if x < 2 { 0.25 } else { 0.5 }])),
+    ));
+}
+
+fn standard_recipes(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut Vec<Expected>) {
+    let config = graphs::ForwardConfig {
+        color: ImageDesc::rgba8(4, 4),
+        clear_color: [1.0, 0.0, 0.0, 1.0],
+        depth: false,
+    };
+    let empty = graphs::forward(
+        graph,
+        "standard empty",
+        std::iter::empty::<RasterDraw<'_>>(),
+        config,
+    )
+    .unwrap();
+    assert_eq!(empty.depth, None);
+    expected.push(observe(
+        graph,
+        empty.color,
+        "standard empty clear",
+        pixels(|_, _| [255, 0, 0, 255]),
+    ));
+    let post = graphs::forward_with_post(
+        graph,
+        "standard forward",
+        [placed(quad, false, 0.5, [1.0, 0.0, 0.0, 1.0])],
+        config,
+        |graph, scene| {
+            let a = graph.image("standard post a", config.color)?;
+            let b = graph.image("standard post b", config.color)?;
+            graph.copy_image("standard post first", scene.color, a)?;
+            graph.copy_image("standard post second", a, b)?;
+            Ok(b)
+        },
+    )
+    .unwrap();
+    expected.push(observe(
+        graph,
+        post.color,
+        "standard two-node post",
+        pixels(|_, _| [255, 0, 0, 255]),
+    ));
+    let hdr = graphs::forward(
+        graph,
+        "standard HDR",
+        [placed(quad, false, 0.5, [2.0, -0.5, 0.25, 1.0])],
+        graphs::ForwardConfig {
+            color: ImageDesc::rgba16_float(4, 4),
+            ..config
+        },
+    )
+    .unwrap();
+    let target = graph
+        .image("standard HDR output", graph.image_desc(hdr.color).unwrap())
+        .unwrap();
+    passes::output(graph, "standard HDR copy", hdr.color, target).unwrap();
+    expected.push(observe(
+        graph,
+        target,
+        "standard HDR output",
+        half_bytes(&[[0x4000, 0xb800, 0x3400, 0x3c00]; 16]),
     ));
 }
 
@@ -551,6 +608,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     ));
 
     prepass_continuations(&mut graph, quad, &mut expected);
+    standard_recipes(&mut graph, quad, &mut expected);
     (pool, graph.compile().unwrap(), expected)
 }
 
@@ -568,10 +626,10 @@ fn programs() -> [ManagedRasterProgram; 7] {
 
 fn image_classes() -> [(ImageDesc, usize); 5] {
     [
-        (ImageDesc::rgba8(4, 4), 4),
+        (ImageDesc::rgba8(4, 4), 8),
         (ImageDesc::rgba8(2, 2), 2),
         (ImageDesc::depth32(4, 4), 3),
-        (hdr(4, 4), 3),
+        (hdr(4, 4), 5),
         (hdr(2, 2), 1),
     ]
 }

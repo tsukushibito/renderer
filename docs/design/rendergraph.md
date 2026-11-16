@@ -582,12 +582,84 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 基盤は[B0の比較](implementation-policy.md#foundation-selection)でnative上位置換＋低レベル再利用を選んだ。
 実装変更までは現行のproducer・import・寿命契約を維持する。
 
+## 公開標準パスと標準グラフ
+
+`standard::passes`は公開Graph操作だけを使う構築関数、`standard::graphs`はそれらを組み合わせる任意のrecipeである。
+Engineやsnapshotを必須にせず、`Graph::raster`と同じowned／borrowed `RasterDraw`のiteratorを受け取る。
+標準グラフもGraphを借用してその場で構築し、`SceneColor { color, depth }`というGraph内のhandleを返す。
+export、readback、compile、submit、presentと、その結果の所有は呼び出し側が選ぶ。
+
+| 部品 | 入出力と意味 |
+|---|---|
+| `passes::opaque` | callerのcolor attachmentと任意depthへ頂点色×tintを描く。RGBA8／RGBA16Fから公開mesh Programを選び、Clear／Load／Storeを引き継ぐ |
+| `passes::depth_prepass` | callerのD32 attachmentへ同じ頂点変換の深度だけを描く。colorを確保しない |
+| `passes::output` | callerの別画像へ同format・同extentのcolorをcopyする。露出・tone mapping・sRGB変換・拡縮を行わない |
+| `graphs::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
+| `graphs::forward_with_post` | opaque後の完成したlinear colorと任意depthを構築時の`FnOnce`へ渡す。返された同descriptionのcolorを後続出力とする |
+
+初期標準描画は照明を計算しない。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
+RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。
+現在のnative対象は2D・mip/layer各1・sample数1であり、MSAAやMRT、reversed-Zは提供しない。
+`opaque`単体はcolor-onlyも許す。recipeの`depth: false`ならdepthは作らず、post入力のdepthも`None`となる。
+必要なdepthがなければ利用側は明示的に拒否するか別の処理を選び、暗黙の代用画像を作らない。
+
+深度はclip 0〜W、通常Z、D32、clear 1を基準とする。`OpaqueDepth::Write`は既存のLESS＋depth write、
+`Prepassed`はLESS_OR_EQUAL＋depth writeなしの公開`mesh_prepassed`／`mesh_hdr_prepassed`を選ぶ。
+後者は0 drawでもdepth必須・Load必須であり、先行prepassと同じView、geometry、変換・描画範囲を利用側が与える。
+Graphのdepthアクセスは保守的なattachment read/writeのままであり、read-only同期の最適化を主張しない。
+Loadは初期化済み内容を保持し、Clearは0 drawでも初期化する。Discardや不十分な描画被覆を初期化済みにはしない。
+未初期化LoadとStore Discard後のreadは通常のGraph構築／compile契約で拒否する。
+
+現在の標準opaqueにはalpha blendと透明ソートがない。渡されたdraw順を維持し、alphaは出力へ格納するだけである。
+半透明を合成する場合の並べ替えとblend・depth設定は利用側の責務であり、その一般Raster APIは`.2.8`で追加する。
+独自graphics shaderや任意stateの提供を、固定Program群や標準部品の公開だけで完成扱いにしない。
+
+次のように標準グラフを直接選び、意味の定まったpost境界だけを複数ノードへ置き換えられる。
+ここで`graph`は利用側が準備したGraph、`inputs`は任意のsnapshot接続である。
+
+```rust,ignore
+use renderer::standard::{graphs, passes};
+use renderer::graph::ImageDesc;
+
+let config = graphs::ForwardConfig {
+    color: ImageDesc::rgba8(1280, 720),
+    clear_color: [0.0, 0.0, 0.0, 1.0],
+    depth: true,
+};
+let scene = graphs::forward_with_post(
+    &mut graph, "forward", inputs.draws(), config,
+    |graph, scene| {
+        let desc = graph.image_desc(scene.color)?;
+        let a = graph.image("post a", desc)?;
+        let b = graph.image("post b", desc)?;
+        graph.copy_image("post first", scene.color, a)?;
+        graph.copy_image("post second", a, b)?;
+        Ok(b)
+    },
+)?;
+// 必要なら標準outputへ渡す。不要ならscene.colorを直接使う。
+let target = graph.image("target", config.color)?;
+passes::output(&mut graph, "output", scene.color, target)?;
+graph.export_image(target)?;
+```
+
+postはこの一つの意味付き境界を交換する。identityは`scene.color`をそのまま返すだけで、
+完成Graphのnode名を検索・改変しない。出力format／extentを変える処理や別構造のrendererは、
+公開標準パスと独自Compute等から利用側が直接Graphを組み立てる。
+標準部品固有の設定誤りは公開`GraphError::custom`で説明し、owner・容量・内容等のGraphエラーはその分類を保つ。
+多段recipe全体の失敗はtransactionではないため、部分構築されたGraphは破棄するか残る容量を考慮して利用する。
+未使用の部品・中間画像は通常のcullingに従う。部品が隠れたexportや副作用rootを追加することはない。
+
+定義・設定とframeのdraw／行列／材質を分け、毎frame必要なGraphを構築・compileする。
+callbackは保持せず、完成命令は入力を所有する。準備済み容量内でVec等の追加確保をせず、
+必要なProgramとnative working setは明示準備する。新しいprepassed Programも通常frame中の遅延pipeline作成を許さない。
+
 ## エンジン入力と標準描画
 
 **現行実装:** 利用側がGraphから構築を始め、必要なsnapshotだけを接続できる。
 Engine層には標準opaque・出力・readbackを構築する便利経路も残る。
 そのRGBA8・View寸法・単一出力の契約は便利経路に限り、入力接続そのものには課さない。
-[公開標準パスと標準グラフ](implementation-policy.md#public-api-layers)への部品抽出は後続課題とする。
+[公開標準パスと標準グラフ](#公開標準パスと標準グラフ)を同じ入力接続から選択できる。
 
 GPU非依存の`engine::Engine`は`EngineCapacity { meshes, materials, retired_mesh_versions }`で
 mesh/materialと変更済み旧版の容量を準備する。`Engine::new`の資源登録容量と、

@@ -33,8 +33,9 @@ Graphのprivateな保証境界を通します。任意の生CommandBufferを受�
 利用側は`FrameSnapshot::connect_graph`、常駐入力では`VulkanEngine::begin_graph`／`connect_snapshot`から
 描画を強制せず構築を始められます。`SnapshotInputs::draws()`を公開の`Graph::raster`へ渡し、出力を利用側で選びます。
 現行Engine層には、標準opaqueや出力を構築する便利経路も残ります。
-採用した[三層の公開API方針](implementation-policy.md#public-api-layers)では、その構成を公開標準パスと標準グラフへ分離します。
-ユーザーは標準グラフの全体利用、一部の交換、公開部品を使う独自Graphを選べるようにします。これは今後の移行方針です。
+`standard::passes`と`standard::graphs`へ[標準部品を公開](rendergraph.md#公開標準パスと標準グラフ)しました。
+標準forward全体の利用、opaque後のlinear colorを渡すpost境界の交換、公開パスの直接合成を選べます。
+Engineの便利経路も同じ公開recipeを呼びます。独自半透明を含む一般Rasterは後続`.2.8`の範囲です。
 
 ## 2. 小さなGraphを作ってみる
 

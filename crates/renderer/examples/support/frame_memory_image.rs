@@ -3,17 +3,17 @@
 //! measured. This headless probe does not exercise presentation.
 
 use super::frame_memory::{
-    Report, capacity_report, counts, features, graph_capacity, phase, semantics,
+    Report, capacity_report, counts, features, graph_capacity as base_graph_capacity, phase,
+    semantics,
 };
 use renderer::engine::{
     Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MaterialHandle, MeshData,
     SnapshotPool, Vertex, View,
 };
-use renderer::graph::{
-    Attachment, ComputeTransform, ImageDesc, LoadOp, PassHandle, RasterAttachments, StoreOp,
-};
+use renderer::graph::{Attachment, ComputeTransform, ImageDesc, LoadOp, PassHandle, StoreOp};
 use renderer::measurement::{HostEvent, NativeEvent, RustEvent, Snapshot};
 use renderer::program::ManagedRasterProgram;
+use renderer::standard::{graphs, passes};
 use renderer::{
     EngineFrameCapacity, EngineRenderError, FrameCapacity, FrameCompletion, MeshCacheConfig,
     MeshPreparationError, MeshUploadState, PreparedEngineFrame, RenderedFrame, ResourceClass,
@@ -29,6 +29,14 @@ const WIDTH: u32 = 16;
 const HEIGHT: u32 = 16;
 const PIXEL_BYTES: usize = WIDTH as usize * HEIGHT as usize * 4;
 const WAIT: Duration = Duration::from_secs(30);
+
+fn graph_capacity() -> renderer::graph::GraphCapacity {
+    // Four objects need eight captured draws when depth and color are separate.
+    renderer::graph::GraphCapacity {
+        draws: 8,
+        ..base_graph_capacity()
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Expected {
@@ -57,52 +65,85 @@ fn build(
     let mut prepared = renderer.begin_graph().unwrap();
     let inputs = renderer.connect_snapshot(&mut prepared, snapshot).unwrap();
     let graph = &mut prepared.graph;
-    let mut color = graph
-        .image("memory color", ImageDesc::rgba8(WIDTH, HEIGHT))
-        .unwrap();
-    let depth = graph
-        .image("memory depth", ImageDesc::depth32(WIDTH, HEIGHT))
-        .unwrap();
-    graph
-        .raster(
-            "memory raster",
-            &ManagedRasterProgram::mesh(),
-            inputs.draws(),
-            RasterAttachments {
-                colors: &[Attachment {
-                    view: graph.image_view(color, 0, 0).unwrap(),
-                    load: LoadOp::Clear(snapshot.view().clear_color),
-                    store: StoreOp::Store,
-                }],
-                depth: Some(Attachment {
-                    view: graph.image_view(depth, 0, 0).unwrap(),
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-            },
-        )
-        .unwrap();
-    drop(inputs);
-    for _ in 0..invert_passes {
-        let output = graph
-            .image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))
-            .unwrap();
-        graph
-            .compute(
+    let post = |graph: &mut renderer::graph::Graph, scene: graphs::SceneColor| {
+        let mut color = scene.color;
+        for _ in 0..invert_passes {
+            let output = graph.image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))?;
+            graph.compute(
                 "memory image transform",
                 color,
                 output,
                 ComputeTransform::Invert,
-            )
+            )?;
+            color = output;
+        }
+        Ok(color)
+    };
+    let scene = if invert_passes == 1 {
+        // Exercise direct public composition as well as the optional recipe,
+        // including equal-depth shading and zero-draw clear/load frames.
+        let color = graph
+            .image("memory color", ImageDesc::rgba8(WIDTH, HEIGHT))
             .unwrap();
-        color = output;
-    }
+        let depth = graph
+            .image("memory depth", ImageDesc::depth32(WIDTH, HEIGHT))
+            .unwrap();
+        let depth_view = graph.image_view(depth, 0, 0).unwrap();
+        passes::depth_prepass(
+            graph,
+            "memory prepass",
+            inputs.draws(),
+            Attachment {
+                view: depth_view,
+                load: LoadOp::Clear(1.0),
+                store: StoreOp::Store,
+            },
+        )
+        .unwrap();
+        passes::opaque(
+            graph,
+            "memory opaque",
+            inputs.draws(),
+            Attachment {
+                view: graph.image_view(color, 0, 0).unwrap(),
+                load: LoadOp::Clear(snapshot.view().clear_color),
+                store: StoreOp::Store,
+            },
+            Some(Attachment {
+                view: depth_view,
+                load: LoadOp::Load,
+                store: StoreOp::Store,
+            }),
+            passes::OpaqueDepth::Prepassed,
+        )
+        .unwrap();
+        let scene = graphs::SceneColor {
+            color,
+            depth: Some(depth),
+        };
+        graphs::SceneColor {
+            color: post(graph, scene).unwrap(),
+            ..scene
+        }
+    } else {
+        graphs::forward_with_post(
+            graph,
+            "memory forward",
+            inputs.draws(),
+            graphs::ForwardConfig {
+                color: ImageDesc::rgba8(WIDTH, HEIGHT),
+                clear_color: snapshot.view().clear_color,
+                depth: true,
+            },
+            post,
+        )
+        .unwrap()
+    };
+    drop(inputs);
     let output = graph
         .image("memory standard output", ImageDesc::rgba8(WIDTH, HEIGHT))
         .unwrap();
-    graph
-        .composite("memory standard composite", color, output)
-        .unwrap();
+    passes::output(graph, "memory standard output", scene.color, output).unwrap();
     prepared.select_output(output, readback).unwrap()
 }
 
@@ -267,7 +308,10 @@ fn frames(
             build(renderer, &snapshot, invert_passes, true)
         });
         let compiled = phase(&mut phases[2], || prepared.compile().unwrap());
-        assert_eq!(compiled.graph.pass_count(), 3 + invert_passes);
+        assert_eq!(
+            compiled.graph.pass_count(),
+            3 + invert_passes + usize::from(invert_passes == 1)
+        );
         let rendered = phase(&mut phases[3], || renderer.submit_frame(compiled).unwrap());
         let target = pending.iter_mut().find(|entry| entry.is_none()).unwrap();
         *target = Some(Pending {
@@ -428,6 +472,13 @@ pub fn lifecycle(baseline: bool) {
             ],
         )
         .unwrap();
+    renderer
+        .runtime_mut()
+        .prepare_raster_programs(&[
+            ManagedRasterProgram::depth_only(),
+            ManagedRasterProgram::mesh_prepassed(),
+        ])
+        .unwrap();
     let resident = engine
         .snapshot(
             &snapshots,
@@ -479,6 +530,8 @@ pub fn lifecycle(baseline: bool) {
     } else {
         assert_eq!(validation.requested, ValidationMode::Disabled);
     }
+    let mut capacity = capacity_report();
+    capacity["draws"] = graph_capacity().draws.into();
     let json = serde_json::json!({
         "scenario": "vulkan_engine_image_full_lifecycle",
         "mode": if baseline { "baseline" } else { "require_zero" },
@@ -491,14 +544,16 @@ pub fn lifecycle(baseline: bool) {
         "completed_readbacks_held": IN_FLIGHT,
         "engine_prepared_frames": IN_FLIGHT,
         "engine_graph_slots": GRAPH_SLOTS,
-        "graph_capacity": capacity_report(),
+        "graph_capacity": capacity,
         "additional_working_set_images": { "rgba8": 12, "depth32": IN_FLIGHT },
         "draw_counts": [0, 1, 4, 2],
         "invert_passes": [0, 1, 2],
+        "composition_routes": ["forward_with_post", "depth_prepass then opaque Prepassed", "standard output copy"],
+        "prepass_when_invert_passes": 1,
         "x_translations": [-0.25, 0.25],
         "verified_pixels": { "left": [5, 8], "right": [10, 8], "background": "four corners" },
         "boundary_cases": ["compiled/uncompiled prepared cancel", "prepared frame capacity/busy rejection"],
-        "coverage": "ordinary public Engine snapshot/build/compile, resident mesh Raster, image Compute/Composite, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
+        "coverage": "ordinary public Engine snapshot/connection/build/compile, public standard forward/post and direct prepass/opaque, image Compute/output copy, runtime frame completion, caller readback_into and full result/output return; no WSI or asset churn",
         "caller": "fixed pending/result arrays and 1024-byte output; explicit per-frame fence waits only when pending array fills; report outside measurement",
         "unobserved": "driver/OS/native allocations outside the configured callbacks",
         "startup_positive_control": counts(startup),

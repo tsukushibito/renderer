@@ -251,10 +251,13 @@ pipeline作成に失敗した際も、部分的に作成できたhandleを解放
 実Deviceの上限を照会し、pipeline layoutと記録のstage・offset・sizeを一致させる。
 色と行列はGraphの不変operandとして保持し、後続frameのCPU入力変更に依存しない。
 深度範囲は0〜1の通常Z、
-clear depthは1、compareはLESS、viewportの高さは正、cullingは無効とする。
+clear depthは1、通常meshのcompareはLESS＋depth write、viewportの高さは正、cullingは無効とする。
+標準prepass後の`mesh_prepassed`／`mesh_hdr_prepassed`はLESS_OR_EQUAL＋depth writeなしであり、
+同じgeometry・View・変換で作ったD32をLoadする。Graphはdepth必須・Load必須を0 drawでも確認する。
+Program identityへこの固定stateを含め、両backendが同じ契約を使う。任意stateの公開は後続課題である。
 front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段階では向きも再検証する。
-汎用projection builder、HDR、tone mappingは提供しない。
-色はlinear RGBA8_UNORMで、alphaを保持し、blendingは無効とする。
+汎用projection builder、照明、tone mappingは提供しない。
+色はlinear RGBA8_UNORMまたはRGBA16Fで、alphaを保持し、blendingは無効とする。
 u32 indexは頂点bufferの範囲と、起動時に保持した実際の`maxDrawIndexedIndexValue`の両方を検査する。
 Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有効化だけで上限を推定しない。
 
@@ -269,7 +272,7 @@ color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を
 MRTやmulti-subresourceのlive計画は物理取得前に拒否する。
 
 `prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
-選択したレビュー済みProgramとcolor形式・depth有無をkeyとしてpipelineを保持し、
+選択したレビュー済みProgram（prepassedの固定深度stateも含む）とcolor形式・depth有無をkeyとしてpipelineを保持し、
 通常prepareで新しい種類を作成しない。既存meshのcolor＋depthは従来のworking-set準備で利用できる。
 HDRは同じfloat出力shaderをRGBA16Fへ書き、depth-onlyはfragment stageとcolor attachmentを省く。
 pipeline layoutはmeshのinline80 byteと、texturedのVS Uniform／FS sampled image・separate samplerを区別する。
@@ -280,6 +283,13 @@ Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ�
 RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignmentをatom sizeと8 byte以上にする。
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
 固定ComputeのRGBA8契約とは分ける。各実format/usage能力の作成時照会とnative失敗処理を維持する。
+
+公開`standard::passes`と`standard::graphs`は通常のGraph／Program／copy APIだけで構築する。
+Engineの便利経路も公開forward recipeを呼び、native側にopaque等の効果分岐を増やさない。
+prepassedのshader深度writeを止めてもGraphのattachment accessは保守的read/writeのままとし、
+通常のEARLY/LATE_FRAGMENT_TESTS依存とrendering scope外のbarrierを維持する。
+標準outputは画像copyであり、RGBA8／RGBA16Fの値を同descriptionの別画像へ保存する。
+部品やpost境界がexport/readback/submitを暗黙に追加することはない。
 
 最終depth storeの省略は帯域削減の候補だが、今回はcolor/depth両方をStoreする既存の宣言契約を保ち、
 scalarと同じ内容有効性のままbatch化の効果を比較した。代案の自動discardには最終consumer/exportの解析と

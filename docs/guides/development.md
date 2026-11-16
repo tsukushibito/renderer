@@ -572,6 +572,8 @@ backend内の試験では未投入キャンセル・作成失敗の後始末、F
 
 [公開API試験](../../crates/renderer/tests/raster_graph.rs)は同じowned Graphの複数draw、color-only、
 depth付きcolor、depth-only、draw別Uniform/画像/samplerとRGBA16Fを二APIで逐次実行します。
+公開標準パスによる同geometry prepass後のLoad／等深度描画／depth非更新と、
+標準forwardの0 draw clear・二段画像copyのpost・HDR出力copyも同じfixtureで確認します。
 vendor/device IDとLUIDを照合し、全readback byteを独立期待値とAPI間で比較します。
 Runtime/公開planの破棄後もcompletion/readbackの所有連鎖を維持し、D3D12のprepare/cancel、
 後半drawの不正index拒否後の再利用、保持中tokenによるbackpressureも確認します。
@@ -704,7 +706,11 @@ readback結果は`FrameCompletion::result`から消費でき、未読結果の�
 一画像の出力と解放をまとめる場合は構成後に`select_output(image, readback)`を選び、`submit_frame`へ渡します。
 `SnapshotInputs::draws()`は通常の`Graph::raster`で使い、接続leaseは構築後に返します。
 mesh inputは読み取り専用で直接exportできません。必要な変更・exportは独立bufferへのcopy後に行います。
-既存の`build_snapshot`の便利経路では、custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
+`standard::graphs::forward`／`forward_with_post`で標準構成を選び、`standard::passes`を直接組み合わせることもできます。
+opaque、depth prepass、同formatのcolor出力copyを公開Graph APIで構築し、出力handleから必要な消費方法を選びます。
+API例・Load/Store・任意depth・色／深度規約は[標準部品の契約](../design/rendergraph.md#公開標準パスと標準グラフ)を参照してください。
+同geometry prepass後には`OpaqueDepth::Prepassed`とdepth Loadを使い、`mesh_prepassed`／`mesh_hdr_prepassed`も明示準備します。
+既存の`build_snapshot`の便利経路も公開forwardを呼び、custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
 返した画像を直接exportし、無変換の全画面copyを追加しません。
 出力はconsumer投入後に`release_output`で解放します。callerがimportした出力の登録は維持します。
 任意shaderや生CommandBufferを受け取るAPIではありません。

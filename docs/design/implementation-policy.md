@@ -634,7 +634,7 @@ GPU同期・寿命・shader ABI・画像結果・Windows表示・性能の確認
 ### 7.6 汎用Graph・標準パス・標準グラフの公開方針
 
 **採用方針:** 次の三層を公開し、標準機能の利用と利用側によるパス定義を同じ基盤で成立させる。
-以下は移行後に満たす契約であり、現行APIの対応済み機能を示すものではない。
+以下は採用した契約であり、実装済みの範囲は[公開標準部品](rendergraph.md#公開標準パスと標準グラフ)と作業順序を参照する。
 現在のEngineによる固定構成は[現行契約](rendergraph.md#エンジン入力と標準描画)、移行は[作業順序](#public-api-migration)を参照する。
 
 | 公開する層 | 責務と利用方法 |
@@ -724,7 +724,7 @@ Compute/copyの二API受入`.2.4`は完了した。公開APIの構成変更は�
 |---|---|
 | `.2.7.1` 方針・計画 | 本節と現行契約・導入文書を整合させ、実装課題と依存、受入条件を登録する。 |
 | `.2.7.2` 入力接続・出力所有 | `connect_graph`／`begin_graph`／`connect_snapshot`で固定描画を追加せず入力接続し、任意構成でも所有と生成時保証を引き継ぐ。出力は合成後に選び、詳細と実証範囲は[現行契約](rendergraph.md#利用側からの入力接続と出力選択)と[検証](../verification/current.md#利用側graphへの入力接続と出力選択)を参照する。 |
-| `.2.7.3` 標準部品 | 公開標準パスと、それらを使う標準グラフを提供する。描画先・Load/Store・意味付き出力と限定した交換点を整える。 |
+| `.2.7.3` 標準部品 | `standard::passes`のopaque／depth prepass／color出力copyと、`standard::graphs`のforward／post境界を公開する。callerの描画先・Load/Storeと任意depthを扱い、Engineの便利経路も公開recipeを呼ぶ。初期版はunlit linear colorで、同geometry prepassの限定Programを含む。 |
 | `.2.7.4` consumer・基準受入 | 三経路の構成を既存Raster＋独自Computeで確認し、in-repo consumer/文書を移行する。旧描画の同等性、任意HDR出力、容量・所有・二API回帰を確認して`.2.7`を閉じる。 |
 | `.2.5` 一般import・寿命 | `.2.7`の境界へcanonical identity/revision、更新・pending退役、履歴・失敗を接続する。既存受入を保持し、新課題へ重複実装しない。 |
 | `.2.8` 利用側Raster | `.2.7`と`.2.5`の後、独自graphics shader/ABIと必要なblend/depth設定を公開する。最小alpha fixtureで三経路を二API実証し、固定Program群の公開だけで自由なRaster対応を主張しない。 |
@@ -1234,6 +1234,8 @@ Program・定数・draw順・attachmentを同じ準備済み計画へ所有し�
 HDRは既存float shader出力の格納形式であり、露出・tone mappingやBistroの影照明を実装した意味ではない。
 GPU前のindex内容保証はprivateな`graph::provenance`へ共有し、変わらないmesh本文の再走査を避ける。
 通常Z/LESS、u32 triangle index、stride28、inline80 byte、単一mip/layer/sample、最大一色とoptional D32が実行範囲である。
+`.2.7.3`の標準prepass継続用には、同じshader/ABIの限定ProgramでLESS_OR_EQUAL・depth writeなしを追加する。
+これは一般graphics state APIではなく、depth必須・Load必須と明示準備の契約を持つ。
 任意/MRT Program、first_index/base_vertex/多instance、複数subresourceを覆うViewをこの完了の保証にしない。
 他mip/layer/filter、比較samplerを含む将来機能を、`.2.1`の追加完了条件にはしない。
 保証境界は[管理下bufferの契約](vulkan.md#managed-uniform)、

@@ -5,13 +5,43 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 公開標準パスと標準グラフ
+
+`renderer-7ft.2.7.3`。公開`standard::passes::{opaque, depth_prepass, output}`と
+`standard::graphs::{forward, forward_with_post}`を追加した。標準層は公開Graph／Program／copy APIだけを使い、
+Engineの便利経路も公開forwardを呼ぶ。任意depthとcaller指定attachment・Clear／Load／Store、
+unlit scene-linear colorのpost境界を公開し、export／readback／submit／presentは部品から分離する。
+同geometry prepass後には限定ProgramのLESS_OR_EQUAL＋depth writeなしを使い、0 drawでもdepth Loadを必須にした。
+既存meshのLESS＋write、生成時の定数保証、資源pinとnative同期・寿命・容量・失敗処理は維持する。
+
+Windows x64、Rust1.99.0、NVIDIA RTX3060／driver610.88。GPU試験は逐次実行した。
+
+| 確認 | 結果 |
+|---|---|
+| CPU契約 | workspaceの通常CPU・release全feature・release二API製品構成が成功。公開標準APIの10試験で直接利用、多段post、直接合成、0 draw、未初期化Load／Discard、任意depth、culling、容量、post出力とGraph置換拒否を確認 |
+| 二API実GPU | Core＋SyncVal／Debug Layer＋GBVのstrictと、Renderer追加検証・専用診断なし＋native Disabledのshippingが成功。各API各3回、17 readback・1408 byte／回を独立期待値とAPI間で比較 |
+| 新規描画内容 | RGBA8／RGBA16Fの同geometry prepass後に色が描け、奥の形状を拒否し、手前のoverlayを描いても元のD32が変わらないことを確認。標準forwardの空描画clear、二段画像copyのpost、HDR出力copyも照合 |
+| Engine回帰 | 既存Vulkan EngineのCore＋SyncVal有効8試験が成功。公開recipeへの委譲後も既存描画・入力所有・cancel等を維持 |
+| 通常frameのメモリ | CPU24frameは任意depthのforward／post、Vulkan画像48frameはrecipeと直接prepass構成を切り替え、draw数0／1／4／2、複数pending、cancel、容量不足、結果返却を含めて成功。Rust alloc／alloc_zeroed／realloc／dealloc、VMA host alloc／realloc／free、native作成／破棄は全て0。native reset96回は別計上 |
+| 静的検査・文書 | 全feature／targetのcheck・Clippy、fmt、diff検査と独立レビューが成功。全feature Rustdocをwarnings拒否で生成。mdBook17ページ・2012ローカル参照、Mermaid32図とviewer／theme／mobile／printの検査も成功 |
+
+native strictは最終破棄後までVulkan warning／errorとD3D12 warning／error／corruptionゼロ。
+メモリprobeはprepass＋colorのため最大4物体に8 drawを準備境界で予約し、通常frameで増設しない。
+raw報告、実行コマンドとUTF-8 LFソースhashは[検証データの`standard_graph`](frame-memory.json)に記録する。
+色／depthの契約と利用例は[現行設計](../design/rendergraph.md#公開標準パスと標準グラフ)を参照する。
+
+今回のpost二APIfixtureは両API対応の画像copyを使う。既存consumer全体の移行と利用側Computeを含む正式な三経路受入は`.2.7.4`、
+一般import／履歴は`.2.5`、独自半透明・shader／blend／depth設定は`.2.8`、PBR／tone mappingはB2／B3に残る。
+表示・通常frame時間性能、非観測の外部Layer注入やdriver内部確保は今回の保証に含めない。
+prepassedもGraphでは保守的depth read/writeを維持し、Vulkan／VMA一般推奨からの新たな例外や性能改善の主張はない。
+
 ## 利用側Graphへの入力接続と出力選択
 
 `renderer-7ft.2.7.2`。`FrameSnapshot::connect_graph`と、Vulkan常駐入力向けの
 `begin_graph`／`connect_snapshot`／`submit_graph`を追加した。接続だけではRaster・画像・export・readbackを追加しない。
 複数snapshot/View、同mesh旧新版、任意の画像/buffer出力を扱い、一画像の便利経路も構成後に`select_output`する。
 `prepare_snapshot`の非mesh登録余裕も利用側指定とし、標準color/depth用の二枠を一律に要求しない。
-公開標準パス・標準グラフの抽出は後続`.2.7.3`、一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
+公開標準パス・標準グラフは上記`.2.7.3`で追加し、consumer全体の三経路受入は`.2.7.4`、一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
 
 `RasterParameters::new`で有限値を保証する不変公開型へ統一し、snapshotと利用側が同じ`Graph::raster`を使う。
 保証済み定数の再走査とEngine専用のvalidated描画入口を除去し、公開iteratorの実要素ごとに容量を確認する。

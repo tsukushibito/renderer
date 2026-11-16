@@ -11,6 +11,7 @@ use renderer::graph::{
 };
 use renderer::measurement::Snapshot;
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
+use renderer::standard::graphs;
 
 const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;
@@ -149,43 +150,36 @@ fn cpu_frames(
         let graph = phase(&mut phases[1], || {
             let mut graph = pool.begin().unwrap();
             let inputs = captured.connect_graph(&mut graph).unwrap();
-            let mut color = graph
-                .image("memory color", ImageDesc::rgba8(16, 16))
-                .unwrap();
-            let depth = graph
-                .image("memory depth", ImageDesc::depth32(16, 16))
-                .unwrap();
-            graph
-                .raster(
-                    "memory raster",
-                    &ManagedRasterProgram::mesh(),
-                    inputs.draws(),
-                    RasterAttachments {
-                        colors: &[Attachment {
-                            view: graph.image_view(color, 0, 0).unwrap(),
-                            load: LoadOp::Clear(view.clear_color),
-                            store: StoreOp::Store,
-                        }],
-                        depth: Some(Attachment {
-                            view: graph.image_view(depth, 0, 0).unwrap(),
-                            load: LoadOp::Clear(1.0),
-                            store: StoreOp::Store,
-                        }),
-                    },
-                )
-                .unwrap();
+            let scene = graphs::forward_with_post(
+                &mut graph,
+                "memory forward",
+                inputs.draws(),
+                graphs::ForwardConfig {
+                    color: ImageDesc::rgba8(16, 16),
+                    clear_color: view.clear_color,
+                    depth: frame.is_multiple_of(2),
+                },
+                |graph, scene| {
+                    let mut color = scene.color;
+                    for _ in 0..extra_passes {
+                        let output = graph.image("memory transform", ImageDesc::rgba8(16, 16))?;
+                        graph.compute(
+                            "memory transform",
+                            color,
+                            output,
+                            ComputeTransform::Invert,
+                        )?;
+                        color = output;
+                    }
+                    Ok(color)
+                },
+            )
+            .unwrap();
             drop(inputs);
-            for _ in 0..extra_passes {
-                let output = graph
-                    .image("memory transform", ImageDesc::rgba8(16, 16))
-                    .unwrap();
-                graph
-                    .compute("memory transform", color, output, ComputeTransform::Invert)
-                    .unwrap();
-                color = output;
-            }
-            graph.export_image(color).unwrap();
-            graph.readback_image("memory readback", color).unwrap();
+            graph.export_image(scene.color).unwrap();
+            graph
+                .readback_image("memory readback", scene.color)
+                .unwrap();
             graph
         });
         let plan = phase(&mut phases[2], || graph.compile().unwrap());
@@ -809,7 +803,7 @@ pub fn cpu_lifecycle(baseline: bool) {
         "draw_counts": [0, 1, 4, 2],
         "extra_compute_passes": [0, 1, 2],
         "boundary_cases": ["snapshot/graph busy", "draw/resource capacity", "unbuilt snapshot/uncompiled graph cancel"],
-        "coverage": "Rust snapshot/build/compile and all normal-frame owners dropped; no native execution or presentation",
+        "coverage": "Rust snapshot/connection/public standard forward_with_post build/compile with optional depth and all normal-frame owners dropped; no native execution or presentation",
         "startup_positive_control": counts(startup),
         "shutdown_outside_normal_frames": counts(shutdown),
         "total": counts(report.total),
