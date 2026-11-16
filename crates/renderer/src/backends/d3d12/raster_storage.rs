@@ -615,9 +615,12 @@ impl RasterStorage {
         &self,
         policy: crate::program::SamplerDescriptor,
     ) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        let index = usize::from(policy == crate::program::SamplerDescriptor::LinearRepeat);
+        let index = match policy {
+            crate::program::SamplerDescriptor::NearestClamp => 0u64,
+            crate::program::SamplerDescriptor::LinearRepeat => 1u64,
+        };
         D3D12_GPU_DESCRIPTOR_HANDLE {
-            ptr: self.sampler_gpu_start.ptr + index as u64 * u64::from(self.sampler_step),
+            ptr: self.sampler_gpu_start.ptr + index * u64::from(self.sampler_step),
         }
     }
 
