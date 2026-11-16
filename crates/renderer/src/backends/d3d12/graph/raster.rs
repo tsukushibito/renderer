@@ -375,6 +375,13 @@ pub(super) fn record(
     programs: &[RasterPipeline],
     clear_programs: &super::super::raster_clear::ClearPrograms,
 ) -> Result<(), D3D12RuntimeError> {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running().map(|client| {
+        client.span(
+            tracy_client::span_location!("renderer.d3d12.raster.record"),
+            0,
+        )
+    });
     let (program, draws, colors, depth) = match &graph.passes[pass].operation {
         Operation::Raster {
             program,
@@ -529,122 +536,167 @@ pub(super) fn record(
         }
     }
     for draw in graph.raster_draws(draws.unwrap()) {
-        let vertex = slot.resource_map[draw.vertices];
-        let index = slot.resource_map[draw.indices];
-        let vertex_bytes = graph.resources[draw.vertices].desc.units();
-        slot.provenance[index]
-            .validate_indices(
-                draw.index_count,
-                vertex_bytes / u64::from(program.vertex_stride()),
-                u32::MAX,
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.d3d12.raster.draw"),
+                0,
             )
-            .map_err(|error| {
-                use crate::graph::provenance::IndexError;
-                match error {
-                    IndexError::UnknownContents => D3D12RuntimeError::unsupported(
-                        "Raster indices require known initialized CPU contents",
+        });
+        {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!(
+                        "renderer.d3d12.raster.vertex_index_and_constants"
                     ),
-                    IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
-                        D3D12RuntimeError::invalid("Raster index exceeds the vertex buffer range")
-                    }
-                }
-            })?;
-        // SAFETY: The retained buffer capacities cover immutable Graph ranges;
-        // validated index contents fit the declared vertex stream. Inline words
-        // match this immutable Program's byte count and stage/register ABI.
-        unsafe {
-            let vertices = D3D12_VERTEX_BUFFER_VIEW {
-                BufferLocation: slot.buffers[vertex].raw().GetGPUVirtualAddress(),
-                SizeInBytes: vertex_bytes as u32,
-                StrideInBytes: program.vertex_stride(),
-            };
-            let indices = D3D12_INDEX_BUFFER_VIEW {
-                BufferLocation: slot.buffers[index].raw().GetGPUVirtualAddress(),
-                SizeInBytes: graph.resources[draw.indices].desc.units() as u32,
-                Format: DXGI_FORMAT_R32_UINT,
-            };
-            slot.list.IASetVertexBuffers(0, Some(&[vertices]));
-            slot.list.IASetIndexBuffer(Some(&indices));
-            if !draw.parameters.words().is_empty() {
-                slot.list.SetGraphicsRoot32BitConstants(
-                    INLINE_ROOT,
-                    draw.parameters.words().len() as u32,
-                    draw.parameters.words().as_ptr().cast(),
                     0,
-                );
+                )
+            });
+            let vertex = slot.resource_map[draw.vertices];
+            let index = slot.resource_map[draw.indices];
+            let vertex_bytes = graph.resources[draw.vertices].desc.units();
+            slot.provenance[index]
+                .validate_indices(
+                    draw.index_count,
+                    vertex_bytes / u64::from(program.vertex_stride()),
+                    u32::MAX,
+                )
+                .map_err(|error| {
+                    use crate::graph::provenance::IndexError;
+                    match error {
+                        IndexError::UnknownContents => D3D12RuntimeError::unsupported(
+                            "Raster indices require known initialized CPU contents",
+                        ),
+                        IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
+                            D3D12RuntimeError::invalid(
+                                "Raster index exceeds the vertex buffer range",
+                            )
+                        }
+                    }
+                })?;
+            // SAFETY: The retained buffer capacities cover immutable Graph ranges;
+            // validated index contents fit the declared vertex stream. Inline words
+            // match this immutable Program's byte count and stage/register ABI.
+            unsafe {
+                let vertices = D3D12_VERTEX_BUFFER_VIEW {
+                    BufferLocation: slot.buffers[vertex].raw().GetGPUVirtualAddress(),
+                    SizeInBytes: vertex_bytes as u32,
+                    StrideInBytes: program.vertex_stride(),
+                };
+                let indices = D3D12_INDEX_BUFFER_VIEW {
+                    BufferLocation: slot.buffers[index].raw().GetGPUVirtualAddress(),
+                    SizeInBytes: graph.resources[draw.indices].desc.units() as u32,
+                    Format: DXGI_FORMAT_R32_UINT,
+                };
+                slot.list.IASetVertexBuffers(0, Some(&[vertices]));
+                slot.list.IASetIndexBuffer(Some(&indices));
+                if !draw.parameters.words().is_empty() {
+                    slot.list.SetGraphicsRoot32BitConstants(
+                        INLINE_ROOT,
+                        draw.parameters.words().len() as u32,
+                        draw.parameters.words().as_ptr().cast(),
+                        0,
+                    );
+                }
             }
         }
-        let first_root = u32::from(program.parameter_size() != 0);
-        for (index, (layout, operand)) in program
-            .bindings()
-            .iter()
-            .zip(graph.raster_bindings(&draw.bindings))
-            .enumerate()
         {
-            let root = first_root + index as u32;
-            match operand {
-                BindingOperands::Buffer { resource, range } => {
-                    // SAFETY: Preparation established this root's ABI and the
-                    // preflight bounded address alignment and range. All native
-                    // resources remain pinned by the exclusive execution lease.
-                    unsafe {
-                        let address = D3D12_GPU_VIRTUAL_ADDRESS(
-                            slot.buffers[slot.resource_map[*resource]]
-                                .raw()
-                                .GetGPUVirtualAddress()
-                                .0
-                                + range.offset,
-                        );
-                        if layout.kind == BindingType::Uniform {
-                            slot.list.SetGraphicsRootConstantBufferView(root, address);
-                        } else {
-                            slot.list.SetGraphicsRootShaderResourceView(root, address);
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!(
+                        "renderer.d3d12.raster.materialize_descriptors_and_bind"
+                    ),
+                    0,
+                )
+            });
+            let first_root = u32::from(program.parameter_size() != 0);
+            for (index, (layout, operand)) in program
+                .bindings()
+                .iter()
+                .zip(graph.raster_bindings(&draw.bindings))
+                .enumerate()
+            {
+                let root = first_root + index as u32;
+                match operand {
+                    BindingOperands::Buffer { resource, range } => {
+                        // SAFETY: Preparation established this root's ABI and the
+                        // preflight bounded address alignment and range. All native
+                        // resources remain pinned by the exclusive execution lease.
+                        unsafe {
+                            let address = D3D12_GPU_VIRTUAL_ADDRESS(
+                                slot.buffers[slot.resource_map[*resource]]
+                                    .raw()
+                                    .GetGPUVirtualAddress()
+                                    .0
+                                    + range.offset,
+                            );
+                            if layout.kind == BindingType::Uniform {
+                                slot.list.SetGraphicsRootConstantBufferView(root, address);
+                            } else {
+                                slot.list.SetGraphicsRootShaderResourceView(root, address);
+                            }
+                        }
+                    }
+                    BindingOperands::ImageView(view) => {
+                        let image = &storage.images[slot.resource_map[view.image().index]];
+                        let descriptor = slot.raster_descriptors_used;
+                        let srv = D3D12_SHADER_RESOURCE_VIEW_DESC {
+                            Format: super::super::resources::sampled_format(image.desc.format),
+                            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+                            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
+                                as u32,
+                            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                                Texture2D: D3D12_TEX2D_SRV {
+                                    MostDetailedMip: view.mip_level(),
+                                    MipLevels: view.mip_level_count(),
+                                    PlaneSlice: 0,
+                                    ResourceMinLODClamp: 0.0,
+                                },
+                            },
+                        };
+                        // SAFETY: Each image binding owns a distinct prepared SRV
+                        // slot until actual GPU completion. Its format and single
+                        // subresource match the retained physical Graph image.
+                        unsafe {
+                            owner.raw.CreateShaderResourceView(
+                                image.native.raw(),
+                                Some(&srv),
+                                storage.texture_cpu(descriptor),
+                            );
+                            slot.list.SetGraphicsRootDescriptorTable(
+                                root,
+                                storage.texture_gpu(descriptor),
+                            );
+                        }
+                        slot.raster_descriptors_used += 1;
+                    }
+                    BindingOperands::Sampler(sampler) => {
+                        // SAFETY: The supported immutable nearest/clamp sampler and
+                        // its descriptor table match the trusted Program's layout.
+                        unsafe {
+                            slot.list.SetGraphicsRootDescriptorTable(
+                                root,
+                                storage.sampler_gpu(*sampler),
+                            );
                         }
                     }
                 }
-                BindingOperands::ImageView(view) => {
-                    let image = &storage.images[slot.resource_map[view.image().index]];
-                    let descriptor = slot.raster_descriptors_used;
-                    let srv = D3D12_SHADER_RESOURCE_VIEW_DESC {
-                        Format: super::super::resources::sampled_format(image.desc.format),
-                        ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
-                        Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING as u32,
-                        Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
-                            Texture2D: D3D12_TEX2D_SRV {
-                                MostDetailedMip: view.mip_level(),
-                                MipLevels: view.mip_level_count(),
-                                PlaneSlice: 0,
-                                ResourceMinLODClamp: 0.0,
-                            },
-                        },
-                    };
-                    // SAFETY: Each image binding owns a distinct prepared SRV
-                    // slot until actual GPU completion. Its format and single
-                    // subresource match the retained physical Graph image.
-                    unsafe {
-                        owner.raw.CreateShaderResourceView(
-                            image.native.raw(),
-                            Some(&srv),
-                            storage.texture_cpu(descriptor),
-                        );
-                        slot.list
-                            .SetGraphicsRootDescriptorTable(root, storage.texture_gpu(descriptor));
-                    }
-                    slot.raster_descriptors_used += 1;
-                }
-                BindingOperands::Sampler(sampler) => {
-                    // SAFETY: The supported immutable nearest/clamp sampler and
-                    // its descriptor table match the trusted Program's layout.
-                    unsafe {
-                        slot.list
-                            .SetGraphicsRootDescriptorTable(root, storage.sampler_gpu(*sampler));
-                    }
-                }
             }
         }
-        // SAFETY: Every vertex/index/binding operand is valid and retained, all
-        // required state is set, and native attachment order preserves draw order.
-        unsafe { slot.list.DrawIndexedInstanced(draw.index_count, 1, 0, 0, 0) };
+        {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.d3d12.raster.draw_indexed"),
+                    0,
+                )
+            });
+            // SAFETY: Every vertex/index/binding operand is valid and retained, all
+            // required state is set, and native attachment order preserves draw order.
+            unsafe { slot.list.DrawIndexedInstanced(draw.index_count, 1, 0, 0, 0) };
+        }
     }
     Ok(())
 }

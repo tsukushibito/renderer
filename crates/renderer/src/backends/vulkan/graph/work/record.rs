@@ -40,6 +40,13 @@ impl TransferPayload for GraphWork {
     }
 
     unsafe fn record(&self, command: vk::CommandBuffer) {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.vulkan.graph.record"),
+                0,
+            )
+        });
         let device = &self.owner.device;
         if let Some(lease) = self
             .profile
@@ -51,6 +58,13 @@ impl TransferPayload for GraphWork {
             unsafe { lease.begin(command) };
         }
         for pass in &self.passes {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.vulkan.graph.record_pass"),
+                    0,
+                )
+            });
             // SAFETY: Every command operand is validated and retained in this
             // payload. Pass boundaries lie outside all dynamic rendering scopes.
             unsafe {
@@ -64,6 +78,13 @@ impl TransferPayload for GraphWork {
                     ),
                 );
                 if !pass.buffers.is_empty() || !pass.images.is_empty() {
+                    #[cfg(feature = "tracy")]
+                    let _span = tracy_client::Client::running().map(|client| {
+                        client.span(
+                            tracy_client::span_location!("renderer.vulkan.graph.record_barriers"),
+                            0,
+                        )
+                    });
                     device.raw().cmd_pipeline_barrier2(
                         command,
                         &vk::DependencyInfo::default()
@@ -189,6 +210,13 @@ impl TransferPayload for GraphWork {
                         colors,
                         depth,
                     } => {
+                        #[cfg(feature = "tracy")]
+                        let _span = tracy_client::Client::running().map(|client| {
+                            client.span(
+                                tracy_client::span_location!("renderer.vulkan.raster.record"),
+                                0,
+                            )
+                        });
                         let plan = self.plan.as_ref().unwrap();
                         let programs = self.programs.as_ref().unwrap();
                         let native_program = programs

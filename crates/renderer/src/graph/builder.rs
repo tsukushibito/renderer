@@ -292,6 +292,9 @@ impl Graph {
         I: IntoIterator<Item = D>,
         D: Borrow<RasterDraw<'a>>,
     {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("renderer.graph.raster"), 0));
         if program.requires_depth_load()
             && !attachments
                 .depth
@@ -337,82 +340,106 @@ impl Graph {
             let first_draw = graph.draws.len();
             let first_access = graph.accesses.len();
             graph.data_mut().clear_raster_ranges();
-            for draw in draws {
-                let draw = draw.borrow();
-                let (vertices, indices, index_count, parameters, bindings) = (
-                    draw.vertices,
-                    draw.indices,
-                    draw.index_count,
-                    draw.parameters,
-                    draw.bindings,
-                );
-                if graph.draws.len() == graph.capacity.draws {
-                    return Err(super::storage::capacity_error(
-                        super::GraphCapacityKind::Draws,
-                        graph.capacity.draws,
-                        graph.draws.len().checked_add(1),
-                    ));
-                }
-                if parameters.words().len() * 4 != program.parameter_size() as usize {
-                    return Err(GraphError::new(
-                        GraphErrorKind::InvalidInput,
-                        "Raster inline constants do not match the Program ABI",
-                    ));
-                }
-                let bindings =
-                    graph.append_bindings(program.bindings(), program.binding_bytes(), bindings)?;
-                let (vertices, indices) = graph.raster_buffers(
-                    vertices,
-                    indices,
-                    index_count,
-                    u64::from(program.vertex_stride()),
-                )?;
-                let vs = graph.resources[vertices].desc.units();
-                let ix = u64::from(index_count) * 4;
-                let data = graph.data_mut();
-                for (resource, purpose, size) in [(vertices, 0, vs), (indices, 1, ix)] {
-                    if data.raster_ranges[resource] == [0; 2] {
-                        // A validated resource is registered once, so this list
-                        // fits the same prepared resource capacity as the ranges.
-                        data.raster_resources.push(resource);
-                    }
-                    let range = &mut data.raster_ranges[resource][purpose];
-                    *range = (*range).max(size);
-                }
-                data.draws.push(RasterDrawOperands {
-                    bindings,
-                    vertices,
-                    indices,
-                    index_count,
-                    parameters,
-                });
-            }
-            // Preserve resource-order accesses without scanning unused resources.
-            graph.data_mut().raster_resources.sort_unstable();
-            for index in 0..graph.raster_resources.len() {
-                let resource = graph.raster_resources[index];
-                let [vertices, indices] = graph.raster_ranges[resource];
-                if vertices != 0 {
-                    graph.append_access(read(resource, 0..vertices, AccessPurpose::Vertex))?;
-                }
-                if indices != 0 {
-                    graph.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
-                }
-            }
-            let plan = graph.append_attachments(attachments)?;
-            if !program.bindings().is_empty()
-                && let Some(left) =
-                    graph.conflicting_pass_access(first_access..graph.accesses.len())?
             {
-                let access = &graph.accesses[first_access + left];
-                return Err(graph
-                    .resource_error(
-                        GraphErrorKind::InvalidInput,
-                        "overlapping Raster shader and attachment footprints are unsupported",
-                        access.resource,
+                #[cfg(feature = "tracy")]
+                let _span = tracy_client::Client::running().map(|client| {
+                    client.span(
+                        tracy_client::span_location!("renderer.graph.raster.capture_draws"),
+                        0,
                     )
-                    .with_range(graph.access_range(access.resource, access.range.clone())));
+                });
+                for draw in draws {
+                    let draw = draw.borrow();
+                    let (vertices, indices, index_count, parameters, bindings) = (
+                        draw.vertices,
+                        draw.indices,
+                        draw.index_count,
+                        draw.parameters,
+                        draw.bindings,
+                    );
+                    if graph.draws.len() == graph.capacity.draws {
+                        return Err(super::storage::capacity_error(
+                            super::GraphCapacityKind::Draws,
+                            graph.capacity.draws,
+                            graph.draws.len().checked_add(1),
+                        ));
+                    }
+                    if parameters.words().len() * 4 != program.parameter_size() as usize {
+                        return Err(GraphError::new(
+                            GraphErrorKind::InvalidInput,
+                            "Raster inline constants do not match the Program ABI",
+                        ));
+                    }
+                    let bindings = graph.append_bindings(
+                        program.bindings(),
+                        program.binding_bytes(),
+                        bindings,
+                    )?;
+                    let (vertices, indices) = graph.raster_buffers(
+                        vertices,
+                        indices,
+                        index_count,
+                        u64::from(program.vertex_stride()),
+                    )?;
+                    let vs = graph.resources[vertices].desc.units();
+                    let ix = u64::from(index_count) * 4;
+                    let data = graph.data_mut();
+                    for (resource, purpose, size) in [(vertices, 0, vs), (indices, 1, ix)] {
+                        if data.raster_ranges[resource] == [0; 2] {
+                            // A validated resource is registered once, so this list
+                            // fits the same prepared resource capacity as the ranges.
+                            data.raster_resources.push(resource);
+                        }
+                        let range = &mut data.raster_ranges[resource][purpose];
+                        *range = (*range).max(size);
+                    }
+                    data.draws.push(RasterDrawOperands {
+                        bindings,
+                        vertices,
+                        indices,
+                        index_count,
+                        parameters,
+                    });
+                }
             }
+            let plan = {
+                #[cfg(feature = "tracy")]
+                let _span = tracy_client::Client::running().map(|client| {
+                    client.span(
+                        tracy_client::span_location!(
+                            "renderer.graph.raster.accesses_and_attachments"
+                        ),
+                        0,
+                    )
+                });
+                // Preserve resource-order accesses without scanning unused resources.
+                graph.data_mut().raster_resources.sort_unstable();
+                for index in 0..graph.raster_resources.len() {
+                    let resource = graph.raster_resources[index];
+                    let [vertices, indices] = graph.raster_ranges[resource];
+                    if vertices != 0 {
+                        graph.append_access(read(resource, 0..vertices, AccessPurpose::Vertex))?;
+                    }
+                    if indices != 0 {
+                        graph.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
+                    }
+                }
+                let plan = graph.append_attachments(attachments)?;
+                if !program.bindings().is_empty()
+                    && let Some(left) =
+                        graph.conflicting_pass_access(first_access..graph.accesses.len())?
+                {
+                    let access = &graph.accesses[first_access + left];
+                    return Err(graph
+                        .resource_error(
+                            GraphErrorKind::InvalidInput,
+                            "overlapping Raster shader and attachment footprints are unsupported",
+                            access.resource,
+                        )
+                        .with_range(graph.access_range(access.resource, access.range.clone())));
+                }
+                plan
+            };
             Ok((
                 Operation::Raster {
                     program: *program,
@@ -529,6 +556,10 @@ impl Graph {
         name: &str,
         build: impl FnOnce(&mut Self) -> Result<(Operation, Range<usize>, bool), GraphError>,
     ) -> Result<PassHandle, GraphError> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(tracy_client::span_location!("renderer.graph.build_pass"), 0)
+        });
         let checkpoint = (
             self.accesses.len(),
             self.draws.len(),

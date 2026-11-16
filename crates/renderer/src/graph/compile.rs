@@ -161,6 +161,9 @@ impl analysis::Input for Input<'_> {
     }
 }
 pub(super) fn compile(mut graph: Graph) -> Result<CompiledGraph, GraphError> {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running()
+        .map(|client| client.span(tracy_client::span_location!("renderer.graph.compile"), 0));
     let result = {
         let data = graph.data_mut();
         // The input borrows only immutable declaration fields; workspace/output

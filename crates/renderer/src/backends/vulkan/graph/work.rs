@@ -433,6 +433,13 @@ impl GraphWork {
         readback: &SharedStaging,
         #[cfg(feature = "graph-diagnostics")] mut diagnostic: Option<&mut String>,
     ) -> Result<Self, RuntimeError> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.vulkan.graph.prepare"),
+                0,
+            )
+        });
         let owner = Arc::clone(&self.owner);
         let serial = self.serial;
         let data = self.data.as_mut().unwrap().deref_mut();
@@ -465,6 +472,13 @@ impl GraphWork {
         }
         provenance_requirements(graph, provenance_needed, retain_provenance);
         for &index in &graph.order {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.vulkan.graph.prepare_pass"),
+                    0,
+                )
+            });
             let pass = &graph.passes[index];
             #[cfg(feature = "graph-diagnostics")]
             if let Some(output) = diagnostic.as_deref_mut() {
@@ -802,9 +816,25 @@ impl GraphWork {
                         depth,
                         ..
                     } => {
+                        #[cfg(feature = "tracy")]
+                        let _span = tracy_client::Client::running().map(|client| {
+                            client.span(
+                                tracy_client::span_location!("renderer.vulkan.raster.prepare"),
+                                0,
+                            )
+                        });
                         let programs = programs.as_ref().unwrap();
                         let native_program = programs.raster_program(*program, depth.is_some())?;
                         for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
+                            #[cfg(feature = "tracy")]
+                            let _span = tracy_client::Client::running().map(|client| {
+                                client.span(
+                                    tracy_client::span_location!(
+                                        "renderer.vulkan.raster.prepare_draw"
+                                    ),
+                                    0,
+                                )
+                            });
                             validate_sampled_operands(
                                 program.bindings(),
                                 graph.raster_bindings(&draw.bindings),
@@ -825,6 +855,15 @@ impl GraphWork {
                                     index_error(error).context(format_args!("draw {draw_index}"))
                                 })?;
                             let sets = if !program.bindings().is_empty() {
+                                #[cfg(feature = "tracy")]
+                                let _span = tracy_client::Client::running().map(|client| {
+                                    client.span(
+                                        tracy_client::span_location!(
+                                            "renderer.vulkan.raster.descriptors"
+                                        ),
+                                        0,
+                                    )
+                                });
                                 let operands = program
                                     .bindings()
                                     .iter()

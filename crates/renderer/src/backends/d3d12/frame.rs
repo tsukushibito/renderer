@@ -956,6 +956,13 @@ impl FrameWork {
         }
     }
     pub(super) fn finish_recording(&mut self) -> Result<(), D3D12RuntimeError> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.d3d12.frame.finish_recording"),
+                0,
+            )
+        });
         if self.phase != Phase::Recording {
             return Err(D3D12RuntimeError::invalid("frame recording is not open"));
         }
@@ -975,12 +982,21 @@ impl FrameWork {
         }
         // A failed Close makes this native command list permanently unresettable.
         self.phase = Phase::Poisoned;
-        // SAFETY: The sole leased list is recording and all operands are retained.
-        unsafe { self.slot().list.Close() }.ok().map_err(|error| {
-            self.pool
-                .owner
-                .native("ID3D12GraphicsCommandList::Close", error)
-        })?;
+        {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.d3d12.frame.close"),
+                    0,
+                )
+            });
+            // SAFETY: The sole leased list is recording and all operands are retained.
+            unsafe { self.slot().list.Close() }.ok().map_err(|error| {
+                self.pool
+                    .owner
+                    .native("ID3D12GraphicsCommandList::Close", error)
+            })?;
+        }
         self.phase = Phase::Recorded;
         if let Some(profile) = &mut self.profile {
             profile.metrics.cpu_record = profile.recording.take().unwrap().elapsed();

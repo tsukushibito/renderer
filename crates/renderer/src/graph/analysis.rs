@@ -513,6 +513,9 @@ impl Workspace {
     }
 
     fn ordering(&mut self, input: &impl Input, live: &[bool]) -> Result<(), Error> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("renderer.graph.hazards"), 0));
         self.hazards.clear(input.resource_count());
         self.readers.clear();
         self.edges.clear();
@@ -555,6 +558,9 @@ impl Workspace {
     }
 
     fn topological(&mut self, live: &[bool], out: &mut Output) -> Result<(), Error> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("renderer.graph.sort"), 0));
         out.order.clear();
         if self.edges.iter().all(|edge| edge.from < edge.to) {
             // Every edge follows declaration order, proving that order is a DAG
@@ -642,6 +648,9 @@ pub(crate) fn analyze(
     work: &mut Workspace,
     out: &mut Output,
 ) -> Result<(), Error> {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running()
+        .map(|client| client.span(tracy_client::span_location!("renderer.graph.analysis"), 0));
     let resources = input.resource_count();
     let passes = input.pass_count();
     if resources > work.limits.resources {
@@ -657,35 +666,40 @@ pub(crate) fn analyze(
     work.reset(passes);
     #[cfg(feature = "development-validation")]
     validate(input, work)?;
-    work.initialize_contents(input)?;
-    for pass in 0..passes {
-        let begin = work.data.len();
-        work.roots[pass] = input.pass_side_effect(pass);
-        for from in input.pass_dependencies(pass) {
-            work.add_data(from, pass)?;
-        }
-        for access in input.pass_accesses(pass) {
-            if access.read {
-                work.read_contents(access.resource, access.range, Some(pass))?;
+    {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("renderer.graph.producers"), 0));
+        work.initialize_contents(input)?;
+        for pass in 0..passes {
+            let begin = work.data.len();
+            work.roots[pass] = input.pass_side_effect(pass);
+            for from in input.pass_dependencies(pass) {
+                work.add_data(from, pass)?;
             }
-        }
-        for access in input.pass_accesses(pass) {
-            if access.write {
-                if input.resource_external(access.resource) {
-                    work.roots[pass] = true;
+            for access in input.pass_accesses(pass) {
+                if access.read {
+                    work.read_contents(access.resource, access.range, Some(pass))?;
                 }
-                work.write_contents(
-                    access.resource,
-                    access.range,
-                    access.valid_after,
-                    access.valid_after.then_some(pass),
-                )?;
             }
+            for access in input.pass_accesses(pass) {
+                if access.write {
+                    if input.resource_external(access.resource) {
+                        work.roots[pass] = true;
+                    }
+                    work.write_contents(
+                        access.resource,
+                        access.range,
+                        access.valid_after,
+                        access.valid_after.then_some(pass),
+                    )?;
+                }
+            }
+            work.data_offsets.push(begin..work.data.len());
         }
-        work.data_offsets.push(begin..work.data.len());
-    }
-    for (resource, range) in input.exports() {
-        work.read_contents(resource, range, None)?;
+        for (resource, range) in input.exports() {
+            work.read_contents(resource, range, None)?;
+        }
     }
     #[cfg(feature = "development-validation")]
     {
@@ -695,18 +709,23 @@ pub(crate) fn analyze(
         work.topological_live_output(out)?;
         out.live.fill(false);
     }
-    for pass in 0..passes {
-        if work.roots[pass] {
-            out.live[pass] = true;
-            work.pending.push(pass);
+    {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("renderer.graph.cull"), 0));
+        for pass in 0..passes {
+            if work.roots[pass] {
+                out.live[pass] = true;
+                work.pending.push(pass);
+            }
         }
-    }
-    while let Some(pass) = work.pending.pop() {
-        for index in work.data_offsets[pass].clone() {
-            let dependency = work.data[index].0;
-            if !out.live[dependency] {
-                out.live[dependency] = true;
-                work.pending.push(dependency);
+        while let Some(pass) = work.pending.pop() {
+            for index in work.data_offsets[pass].clone() {
+                let dependency = work.data[index].0;
+                if !out.live[dependency] {
+                    out.live[dependency] = true;
+                    work.pending.push(dependency);
+                }
             }
         }
     }

@@ -90,6 +90,13 @@ fn requirements_inner(
     programs: &[super::super::raster::RasterPipeline],
     compute_programs: &[super::super::program::D3D12Program],
 ) -> Result<usize, D3D12RuntimeError> {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running().map(|client| {
+        client.span(
+            tracy_client::span_location!("renderer.d3d12.graph.preflight"),
+            0,
+        )
+    });
     if graph.resources.len() > capacity.resources
         || graph.resources.len() > resource_map.len()
         || graph.order.len() > capacity.operations
@@ -450,6 +457,13 @@ pub(super) fn prepare(
     pool: &Arc<FramePool>,
     graph: &CompiledGraph,
 ) -> Result<FrameWork, D3D12RuntimeError> {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running().map(|client| {
+        client.span(
+            tracy_client::span_location!("renderer.d3d12.graph.prepare_record"),
+            0,
+        )
+    });
     let started = pool.profiling_enabled().then(std::time::Instant::now);
     let needs_result = graph.order.iter().any(|&pass| {
         matches!(
@@ -473,6 +487,13 @@ pub(super) fn prepare(
     super::raster::provenance_requirements(graph, &mut slot.provenance_needed);
     work.slot_mut().buffers_used = used;
     {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.d3d12.graph.registry_bind"),
+                0,
+            )
+        });
         let mut registry = pool.registry.lock().unwrap_or_else(|e| e.into_inner());
         registry.bind(graph, work.slot_mut())?;
     }
@@ -488,52 +509,157 @@ pub(super) fn prepare(
         result.used = 0;
         result.readbacks.clear();
     }
-    work.begin_recording_metrics();
-    for &pass in &graph.order {
-        match &graph.passes[pass].operation {
-            Operation::UploadBuffer { dst, offset, .. } => {
-                let bytes = graph.upload_data(&graph.passes[pass].operation);
-                let slot = work.slot_mut();
-                let destination = slot.resource_map[*dst];
-                let start = slot.upload_used;
-                // SAFETY: The preflight bounded this exact write within the
-                // exclusively leased UPLOAD buffer, before any GPU submission.
-                unsafe { slot.upload.write_at(&owner, start, bytes) }?;
-                transition(
-                    &list,
-                    slot.buffers[destination].raw(),
-                    &mut slot.states[destination],
-                    D3D12_RESOURCE_STATE_COPY_DEST,
-                );
-                // SAFETY: The immutable Graph establishes the destination range;
-                // preflight bounded the source and the leased owners stay live.
-                unsafe {
-                    list.CopyBufferRegion(
+    {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.d3d12.graph.record_operations"),
+                0,
+            )
+        });
+        work.begin_recording_metrics();
+        for &pass in &graph.order {
+            match &graph.passes[pass].operation {
+                Operation::UploadBuffer { dst, offset, .. } => {
+                    let bytes = graph.upload_data(&graph.passes[pass].operation);
+                    let slot = work.slot_mut();
+                    let destination = slot.resource_map[*dst];
+                    let start = slot.upload_used;
+                    // SAFETY: The preflight bounded this exact write within the
+                    // exclusively leased UPLOAD buffer, before any GPU submission.
+                    unsafe { slot.upload.write_at(&owner, start, bytes) }?;
+                    transition(
+                        &list,
                         slot.buffers[destination].raw(),
-                        *offset,
-                        slot.upload.raw(),
-                        start,
-                        bytes.len() as u64,
-                    )
-                };
-                slot.upload_used += bytes.len() as u64;
-                if slot.provenance_needed[*dst] {
-                    let provenance = &mut slot.provenance[destination];
-                    let target = *offset..*offset + bytes.len() as u64;
-                    match &graph.passes[pass].operation {
-                        Operation::UploadBuffer {
-                            mesh: Some(crate::graph::MeshUpload::Indices { byte_len, maximum }),
-                            ..
-                        } => provenance.write_mesh_indices(target, *byte_len, *maximum),
-                        Operation::UploadBuffer {
-                            mesh: Some(crate::graph::MeshUpload::Vertices),
-                            ..
-                        } => provenance.clear(),
-                        _ => provenance
-                            .write_graph_slice(target, graph, pass, 0..bytes.len())
+                        &mut slot.states[destination],
+                        D3D12_RESOURCE_STATE_COPY_DEST,
+                    );
+                    // SAFETY: The immutable Graph establishes the destination range;
+                    // preflight bounded the source and the leased owners stay live.
+                    unsafe {
+                        list.CopyBufferRegion(
+                            slot.buffers[destination].raw(),
+                            *offset,
+                            slot.upload.raw(),
+                            start,
+                            bytes.len() as u64,
+                        )
+                    };
+                    slot.upload_used += bytes.len() as u64;
+                    if slot.provenance_needed[*dst] {
+                        let provenance = &mut slot.provenance[destination];
+                        let target = *offset..*offset + bytes.len() as u64;
+                        match &graph.passes[pass].operation {
+                            Operation::UploadBuffer {
+                                mesh: Some(crate::graph::MeshUpload::Indices { byte_len, maximum }),
+                                ..
+                            } => provenance.write_mesh_indices(target, *byte_len, *maximum),
+                            Operation::UploadBuffer {
+                                mesh: Some(crate::graph::MeshUpload::Vertices),
+                                ..
+                            } => provenance.clear(),
+                            _ => provenance
+                                .write_graph_slice(target, graph, pass, 0..bytes.len())
+                                .map_err(|_| {
+                                    D3D12RuntimeError::capacity_with(
+                                        "prepared index provenance capacity exhausted",
+                                        RuntimeCapacityError::new(
+                                            RuntimeCapacityKind::GraphMetadata,
+                                            CapacityRecovery::Reconfigure,
+                                            None,
+                                            None,
+                                        ),
+                                    )
+                                })?,
+                        }
+                    }
+                }
+                Operation::CopyBuffer {
+                    src,
+                    dst,
+                    src_offset,
+                    dst_offset,
+                    size,
+                } => {
+                    let slot = work.slot_mut();
+                    let source = slot.resource_map[*src];
+                    let destination = slot.resource_map[*dst];
+                    transition(
+                        &list,
+                        slot.buffers[source].raw(),
+                        &mut slot.states[source],
+                        D3D12_RESOURCE_STATE_COPY_SOURCE,
+                    );
+                    if src == dst {
+                        transition(
+                            &list,
+                            slot.scratch.raw(),
+                            &mut slot.scratch_state,
+                            D3D12_RESOURCE_STATE_COPY_DEST,
+                        );
+                        // SAFETY: Separate scratch capacity and Graph source range
+                        // were established before recording; both are retained.
+                        unsafe {
+                            list.CopyBufferRegion(
+                                slot.scratch.raw(),
+                                0,
+                                slot.buffers[source].raw(),
+                                *src_offset,
+                                *size,
+                            )
+                        };
+                        transition(
+                            &list,
+                            slot.scratch.raw(),
+                            &mut slot.scratch_state,
+                            D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        );
+                        transition(
+                            &list,
+                            slot.buffers[destination].raw(),
+                            &mut slot.states[destination],
+                            D3D12_RESOURCE_STATE_COPY_DEST,
+                        );
+                        // SAFETY: The independent scratch holds the initialized copy
+                        // and the destination's checked nonoverlapping Graph range.
+                        unsafe {
+                            list.CopyBufferRegion(
+                                slot.buffers[destination].raw(),
+                                *dst_offset,
+                                slot.scratch.raw(),
+                                0,
+                                *size,
+                            )
+                        };
+                    } else {
+                        transition(
+                            &list,
+                            slot.buffers[destination].raw(),
+                            &mut slot.states[destination],
+                            D3D12_RESOURCE_STATE_COPY_DEST,
+                        );
+                        // SAFETY: Distinct prepared resources have matching states
+                        // and immutable Graph-guaranteed initialized copy ranges.
+                        unsafe {
+                            list.CopyBufferRegion(
+                                slot.buffers[destination].raw(),
+                                *dst_offset,
+                                slot.buffers[source].raw(),
+                                *src_offset,
+                                *size,
+                            )
+                        };
+                    }
+                    if slot.provenance_needed[*dst] {
+                        slot.provenance[source]
+                            .copy_into(
+                                *src_offset..*src_offset + *size,
+                                *dst_offset,
+                                &mut slot.provenance_scratch,
+                            )
                             .map_err(|_| {
                                 D3D12RuntimeError::capacity_with(
-                                    "prepared index provenance capacity exhausted",
+                                    "prepared index provenance copy capacity exhausted",
                                     RuntimeCapacityError::new(
                                         RuntimeCapacityKind::GraphMetadata,
                                         CapacityRecovery::Reconfigure,
@@ -541,217 +667,141 @@ pub(super) fn prepare(
                                         None,
                                     ),
                                 )
-                            })?,
+                            })?;
+                        slot.provenance[destination]
+                            .replace(*dst_offset..*dst_offset + *size, &slot.provenance_scratch)
+                            .map_err(|_| {
+                                D3D12RuntimeError::capacity_with(
+                                    "prepared index provenance replacement capacity exhausted",
+                                    RuntimeCapacityError::new(
+                                        RuntimeCapacityKind::GraphMetadata,
+                                        CapacityRecovery::Reconfigure,
+                                        None,
+                                        None,
+                                    ),
+                                )
+                            })?;
                     }
                 }
-            }
-            Operation::CopyBuffer {
-                src,
-                dst,
-                src_offset,
-                dst_offset,
-                size,
-            } => {
-                let slot = work.slot_mut();
-                let source = slot.resource_map[*src];
-                let destination = slot.resource_map[*dst];
-                transition(
-                    &list,
-                    slot.buffers[source].raw(),
-                    &mut slot.states[source],
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
-                );
-                if src == dst {
+                Operation::ReadbackBuffer { src, offset, size } => {
+                    let start = work.result().unwrap().used;
+                    let slot = work.slot_mut();
+                    let source = slot.resource_map[*src];
                     transition(
                         &list,
-                        slot.scratch.raw(),
-                        &mut slot.scratch_state,
-                        D3D12_RESOURCE_STATE_COPY_DEST,
-                    );
-                    // SAFETY: Separate scratch capacity and Graph source range
-                    // were established before recording; both are retained.
-                    unsafe {
-                        list.CopyBufferRegion(
-                            slot.scratch.raw(),
-                            0,
-                            slot.buffers[source].raw(),
-                            *src_offset,
-                            *size,
-                        )
-                    };
-                    transition(
-                        &list,
-                        slot.scratch.raw(),
-                        &mut slot.scratch_state,
+                        slot.buffers[source].raw(),
+                        &mut slot.states[source],
                         D3D12_RESOURCE_STATE_COPY_SOURCE,
                     );
-                    transition(
-                        &list,
-                        slot.buffers[destination].raw(),
-                        &mut slot.states[destination],
-                        D3D12_RESOURCE_STATE_COPY_DEST,
-                    );
-                    // SAFETY: The independent scratch holds the initialized copy
-                    // and the destination's checked nonoverlapping Graph range.
+                    // SAFETY: Only initialized Graph bytes are copied; preflight
+                    // bounded this exclusive result arena's destination range.
                     unsafe {
                         list.CopyBufferRegion(
-                            slot.buffers[destination].raw(),
-                            *dst_offset,
-                            slot.scratch.raw(),
-                            0,
-                            *size,
-                        )
-                    };
-                } else {
-                    transition(
-                        &list,
-                        slot.buffers[destination].raw(),
-                        &mut slot.states[destination],
-                        D3D12_RESOURCE_STATE_COPY_DEST,
-                    );
-                    // SAFETY: Distinct prepared resources have matching states
-                    // and immutable Graph-guaranteed initialized copy ranges.
-                    unsafe {
-                        list.CopyBufferRegion(
-                            slot.buffers[destination].raw(),
-                            *dst_offset,
+                            readback.as_ref().unwrap(),
+                            start,
                             slot.buffers[source].raw(),
-                            *src_offset,
+                            *offset,
                             *size,
                         )
                     };
+                    let result = work.result_mut().unwrap();
+                    result.readbacks.push(ReadbackMeta {
+                        pass,
+                        size: *size as usize,
+                        offset: start,
+                        consumed: false,
+                        image: None,
+                    });
+                    result.used += *size;
                 }
-                if slot.provenance_needed[*dst] {
-                    slot.provenance[source]
-                        .copy_into(
-                            *src_offset..*src_offset + *size,
-                            *dst_offset,
-                            &mut slot.provenance_scratch,
-                        )
-                        .map_err(|_| {
-                            D3D12RuntimeError::capacity_with(
-                                "prepared index provenance copy capacity exhausted",
-                                RuntimeCapacityError::new(
-                                    RuntimeCapacityKind::GraphMetadata,
-                                    CapacityRecovery::Reconfigure,
-                                    None,
-                                    None,
-                                ),
-                            )
-                        })?;
-                    slot.provenance[destination]
-                        .replace(*dst_offset..*dst_offset + *size, &slot.provenance_scratch)
-                        .map_err(|_| {
-                            D3D12RuntimeError::capacity_with(
-                                "prepared index provenance replacement capacity exhausted",
-                                RuntimeCapacityError::new(
-                                    RuntimeCapacityKind::GraphMetadata,
-                                    CapacityRecovery::Reconfigure,
-                                    None,
-                                    None,
-                                ),
-                            )
-                        })?;
+                Operation::UploadImage { dst, .. } => super::raster::upload_image(
+                    work.slot_mut(),
+                    &owner,
+                    graph,
+                    *dst,
+                    &graph.passes[pass].operation,
+                )?,
+                Operation::CopyImage { src, dst } => {
+                    super::raster::copy_image(work.slot_mut(), *src, *dst)
                 }
-            }
-            Operation::ReadbackBuffer { src, offset, size } => {
-                let start = work.result().unwrap().used;
-                let slot = work.slot_mut();
-                let source = slot.resource_map[*src];
-                transition(
-                    &list,
-                    slot.buffers[source].raw(),
-                    &mut slot.states[source],
-                    D3D12_RESOURCE_STATE_COPY_SOURCE,
-                );
-                // SAFETY: Only initialized Graph bytes are copied; preflight
-                // bounded this exclusive result arena's destination range.
-                unsafe {
-                    list.CopyBufferRegion(
-                        readback.as_ref().unwrap(),
-                        start,
-                        slot.buffers[source].raw(),
-                        *offset,
-                        *size,
-                    )
-                };
-                let result = work.result_mut().unwrap();
-                result.readbacks.push(ReadbackMeta {
+                Operation::Dispatch { .. } => super::super::compute::record(
+                    work.slot_mut(),
+                    &owner,
+                    graph,
                     pass,
-                    size: *size as usize,
-                    offset: start,
-                    consumed: false,
-                    image: None,
-                });
-                result.used += *size;
+                    &pool.compute_programs,
+                )?,
+                Operation::ReadbackImage { src } => {
+                    super::raster::readback_image(&mut work, &owner, pass, *src)?
+                }
+                Operation::Raster { .. } | Operation::AttachmentPass { .. } => {
+                    super::raster::record(
+                        work.slot_mut(),
+                        &owner,
+                        graph,
+                        pass,
+                        &pool.raster_programs,
+                        pool.clear_programs.as_ref().unwrap(),
+                    )?
+                }
+                _ => unreachable!("preflight established supported immutable operations"),
             }
-            Operation::UploadImage { dst, .. } => super::raster::upload_image(
-                work.slot_mut(),
-                &owner,
-                graph,
-                *dst,
-                &graph.passes[pass].operation,
-            )?,
-            Operation::CopyImage { src, dst } => {
-                super::raster::copy_image(work.slot_mut(), *src, *dst)
-            }
-            Operation::Dispatch { .. } => super::super::compute::record(
-                work.slot_mut(),
-                &owner,
-                graph,
-                pass,
-                &pool.compute_programs,
-            )?,
-            Operation::ReadbackImage { src } => {
-                super::raster::readback_image(&mut work, &owner, pass, *src)?
-            }
-            Operation::Raster { .. } | Operation::AttachmentPass { .. } => super::raster::record(
-                work.slot_mut(),
-                &owner,
-                graph,
-                pass,
-                &pool.raster_programs,
-                pool.clear_programs.as_ref().unwrap(),
-            )?,
-            _ => unreachable!("preflight established supported immutable operations"),
         }
     }
-    let slot = work.slot_mut();
-    for index in 0..slot.buffers_used {
+    {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.d3d12.graph.common_barriers"),
+                0,
+            )
+        });
+        let slot = work.slot_mut();
+        for index in 0..slot.buffers_used {
+            transition(
+                &list,
+                slot.buffers[index].raw(),
+                &mut slot.states[index],
+                D3D12_RESOURCE_STATE_COMMON,
+            );
+        }
         transition(
             &list,
-            slot.buffers[index].raw(),
-            &mut slot.states[index],
+            slot.scratch.raw(),
+            &mut slot.scratch_state,
             D3D12_RESOURCE_STATE_COMMON,
         );
-    }
-    transition(
-        &list,
-        slot.scratch.raw(),
-        &mut slot.scratch_state,
-        D3D12_RESOURCE_STATE_COMMON,
-    );
-    if let Some(storage) = &mut slot.raster {
-        for image in &mut storage.images {
-            if image.used {
-                transition(
-                    &list,
-                    image.native.raw(),
-                    &mut image.state,
-                    D3D12_RESOURCE_STATE_COMMON,
-                );
+        if let Some(storage) = &mut slot.raster {
+            for image in &mut storage.images {
+                if image.used {
+                    transition(
+                        &list,
+                        image.native.raw(),
+                        &mut image.state,
+                        D3D12_RESOURCE_STATE_COMMON,
+                    );
+                }
             }
         }
+        slot.provenance_scratch.clear();
     }
-    slot.provenance_scratch.clear();
-    // Reserve immutable export tokens before native acceptance. Contents and
-    // canonical registration are published only after successful Signal.
-    work.exports = pool
-        .registry
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .capture_exports(graph, work.slot())?;
-    work.plan = Some(graph.clone());
+    {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.d3d12.graph.exports"),
+                0,
+            )
+        });
+        // Reserve immutable export tokens before native acceptance. Contents and
+        // canonical registration are published only after successful Signal.
+        work.exports = pool
+            .registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .capture_exports(graph, work.slot())?;
+        work.plan = Some(graph.clone());
+    }
     work.finish_recording()?;
     Ok(work)
 }

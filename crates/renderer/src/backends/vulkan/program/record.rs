@@ -103,39 +103,48 @@ impl ShaderPrograms {
             device.cmd_begin_rendering(command, &info);
             device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, program.pipeline);
             self.viewport(command, extent);
-            for (vertices, indices, index_count, parameters, sets) in draws {
-                let managed = program
-                    .raster_asset
-                    .unwrap_or_else(crate::program::ManagedRasterProgram::mesh);
-                let size = managed.parameter_size() as usize;
-                if size != 0 {
-                    let mut bytes = [0_u8; 128];
-                    for (value, output) in
-                        parameters.words().iter().zip(bytes.as_chunks_mut::<4>().0)
-                    {
-                        output.copy_from_slice(&value.to_ne_bytes());
+            {
+                #[cfg(feature = "tracy")]
+                let _span = tracy_client::Client::running().map(|client| {
+                    client.span(
+                        tracy_client::span_location!("renderer.vulkan.raster.bind_and_draw_batch"),
+                        0,
+                    )
+                });
+                for (vertices, indices, index_count, parameters, sets) in draws {
+                    let managed = program
+                        .raster_asset
+                        .unwrap_or_else(crate::program::ManagedRasterProgram::mesh);
+                    let size = managed.parameter_size() as usize;
+                    if size != 0 {
+                        let mut bytes = [0_u8; 128];
+                        for (value, output) in
+                            parameters.words().iter().zip(bytes.as_chunks_mut::<4>().0)
+                        {
+                            output.copy_from_slice(&value.to_ne_bytes());
+                        }
+                        device.cmd_push_constants(
+                            command,
+                            program.layout,
+                            super::creation::shader_stages(managed.parameter_layout().stages),
+                            0,
+                            &bytes[..size],
+                        );
                     }
-                    device.cmd_push_constants(
-                        command,
-                        program.layout,
-                        super::creation::shader_stages(managed.parameter_layout().stages),
-                        0,
-                        &bytes[..size],
-                    );
+                    if program.raster_groups != 0 {
+                        device.cmd_bind_descriptor_sets(
+                            command,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            program.layout,
+                            0,
+                            &sets[..program.raster_groups],
+                            &[],
+                        );
+                    }
+                    device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
+                    device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
+                    device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
                 }
-                if program.raster_groups != 0 {
-                    device.cmd_bind_descriptor_sets(
-                        command,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        program.layout,
-                        0,
-                        &sets[..program.raster_groups],
-                        &[],
-                    );
-                }
-                device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
-                device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
-                device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
             }
             device.cmd_end_rendering(command);
         }

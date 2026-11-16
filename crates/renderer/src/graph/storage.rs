@@ -329,6 +329,9 @@ impl GraphPool {
         released
     }
     pub fn begin(&mut self) -> Result<Graph, GraphError> {
+        #[cfg(feature = "tracy")]
+        let _span = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("renderer.graph.begin"), 0));
         for slot in &mut self.slots {
             if let Some(unique) = Arc::get_mut(slot) {
                 unique.data_mut().reset(super::next_id());
