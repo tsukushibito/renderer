@@ -70,3 +70,7 @@ required-features = ["vulkan"]
 [[example]]
 name = "frame_memory"
 required-features = ["memory-profiling"]
+
+[[example]]
+name = "profile_workload"
+test = true
