@@ -77,9 +77,22 @@ try {
         $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $stage, '--output', $hlsl)
         if ($stage -ceq 'vert') { $crossArgs += '--flip-vert-y' }
         $null = Run $cross $crossArgs
+        # Hash and compile the same canonical text Git checks out on every OS.
+        Write-Text $hlsl ([IO.File]::ReadAllText($hlsl))
         $profile = if ($stage -ceq 'vert') { 'vs_6_0' } else { 'ps_6_0' }
         $null = Run $dxc (@($lock.dxc_arguments) + @('-T', $profile, $hlsl, '-Fo', $dxil))
         $dump = Run $dxc @('-dumpbin', $dxil)
+        if ($name -ceq 'pbr.vert') {
+            # Retain the shared vertex FP32 sequence through DXIL lowering.
+            # This deliberately restricts clip arithmetic, not global shader
+            # optimization. A compiler/toolchain change must re-establish it.
+            if ([regex]::Matches($dump, '(?m)^\s+%[0-9]+ = fmul float ').Count -ne 12 -or
+                [regex]::Matches($dump, '(?m)^\s+%[0-9]+ = fadd float ').Count -ne 12 -or
+                $dump -match '(?m)^\s+%[0-9]+ = f(?:mul|add) fast ' -or
+                $dump -match '@dx\.op\.(?:dot[234]|tertiary)\.f32') {
+                throw 'PBR clip transform lost separate, non-refactorable FP32 products/additions.'
+            }
+        }
         $end = $dump.IndexOf('target datalayout = ', [StringComparison]::Ordinal)
         if ($end -lt 0 -or $dump -notmatch '!dx\.valver = ' -or $dump -notmatch '; shader hash: [0-9a-f]{32}') {
             throw "DXIL validator/reflection metadata missing for $name"

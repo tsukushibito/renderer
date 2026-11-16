@@ -19,7 +19,17 @@ layout(set = 0, binding = 0, std140) uniform Camera {
 } camera;
 
 void main() {
-    gl_Position = camera.view_projection * vec4(position, 1.0);
+    // World-space geometry close to the camera can cancel large MVP terms.
+    // Use one shared FP32 operation order for both native compilers instead of
+    // permitting each matrix-dot lowering to reassociate/contract differently.
+    // This is a reproducibility boundary, not a higher-precision coordinate ABI.
+    precise vec4 x = camera.view_projection[0] * position.x;
+    precise vec4 y = camera.view_projection[1] * position.y;
+    precise vec4 z = camera.view_projection[2] * position.z;
+    precise vec4 xy = x + y;
+    precise vec4 xyz = xy + z;
+    precise vec4 clip = xyz + camera.view_projection[3];
+    gl_Position = clip;
     world_position = position;
     world_normal = normal;
     world_tangent = tangent;

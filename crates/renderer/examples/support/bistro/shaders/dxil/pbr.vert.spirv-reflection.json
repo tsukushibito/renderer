@@ -11,6 +11,37 @@
             "members" : [
                 {
                     "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "_m4",
+                    "type" : "vec4",
+                    "offset" : 112
+                }
+            ]
+        },
+        "_59" : {
+            "name" : "_59",
+            "members" : [
+                {
+                    "name" : "_m0",
                     "type" : "vec4"
                 },
                 {
@@ -38,87 +69,56 @@
                     ]
                 }
             ]
-        },
-        "_17" : {
-            "name" : "_17",
-            "members" : [
-                {
-                    "name" : "_m0",
-                    "type" : "mat4",
-                    "offset" : 0,
-                    "matrix_stride" : 16
-                },
-                {
-                    "name" : "_m1",
-                    "type" : "vec4",
-                    "offset" : 64
-                },
-                {
-                    "name" : "_m2",
-                    "type" : "vec4",
-                    "offset" : 80
-                },
-                {
-                    "name" : "_m3",
-                    "type" : "vec4",
-                    "offset" : 96
-                },
-                {
-                    "name" : "_m4",
-                    "type" : "vec4",
-                    "offset" : 112
-                }
-            ]
         }
     },
     "inputs" : [
         {
             "type" : "vec3",
-            "name" : "_25",
+            "name" : "_21",
             "location" : 0
         },
         {
             "type" : "vec3",
-            "name" : "_39",
+            "name" : "_69",
             "location" : 1
         },
         {
             "type" : "vec4",
-            "name" : "_43",
+            "name" : "_73",
             "location" : 2
         },
         {
             "type" : "vec2",
-            "name" : "_49",
+            "name" : "_79",
             "location" : 3
         }
     ],
     "outputs" : [
         {
             "type" : "vec3",
-            "name" : "_36",
+            "name" : "_66",
             "location" : 0
         },
         {
             "type" : "vec3",
-            "name" : "_38",
+            "name" : "_68",
             "location" : 1
         },
         {
             "type" : "vec4",
-            "name" : "_41",
+            "name" : "_71",
             "location" : 2
         },
         {
             "type" : "vec2",
-            "name" : "_47",
+            "name" : "_77",
             "location" : 3
         }
     ],
     "ubos" : [
         {
-            "type" : "_17",
-            "name" : "_17_19",
+            "type" : "_11",
+            "name" : "_11_13",
             "block_size" : 128,
             "set" : 0,
             "binding" : 0

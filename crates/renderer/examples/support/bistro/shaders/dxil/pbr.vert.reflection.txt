@@ -19,7 +19,7 @@
 ; TEXCOORD                 3   xy          3     NONE   float   xy
 ; SV_Position              0   xyzw        4      POS   float   xyzw
 ;
-; shader hash: 27dfcfab78fe179aca5adfc87acfc869
+; shader hash: 761ac3d1ef3baf7e8c97eff0277c523a
 ;
 ; Pipeline Runtime Information:
 ;
@@ -61,19 +61,19 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _17_19
+; cbuffer _11_13
 ; {
 ;
-;   struct hostlayout._17_19
+;   struct hostlayout._11_13
 ;   {
 ;
-;       row_major float4x4 _19_m0;                    ; Offset:    0
-;       float4 _19_m1;                                ; Offset:   64
-;       float4 _19_m2;                                ; Offset:   80
-;       float4 _19_m3;                                ; Offset:   96
-;       float4 _19_m4;                                ; Offset:  112
+;       row_major float4x4 _13_m0;                    ; Offset:    0
+;       float4 _13_m1;                                ; Offset:   64
+;       float4 _13_m2;                                ; Offset:   80
+;       float4 _13_m3;                                ; Offset:   96
+;       float4 _13_m4;                                ; Offset:  112
 ;
-;   } _17_19;                                         ; Offset:    0 Size:   128
+;   } _11_13;                                         ; Offset:    0 Size:   128
 ;
 ; }
 ;
@@ -82,7 +82,7 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _17_19                            cbuffer      NA          NA     CB0            cb0     1
+; _11_13                            cbuffer      NA          NA     CB0            cb0     1
 ;
 ;
 ; ViewId state:

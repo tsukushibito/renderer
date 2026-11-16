@@ -13,6 +13,11 @@
 //! environment IBL, shadows, exposure, tone mapping, Bloom or AA is implied.
 //! GGX uses alpha >= 1e-3 to regularize zero roughness; linear output saturates
 //! to binary16's finite range before storage. Cooked factors stay unchanged.
+//! Vertex clip coordinates use ordered `precise` FP32 products/additions.
+//! This prevents compiler-specific contraction/reassociation from amplifying
+//! world-space cancellation differently across APIs. It can cost fused-multiply-
+//! add opportunities; it does not introduce optional GPU precision features or
+//! change the camera ABI. Performance and real-GPU agreement remain measured.
 
 use renderer::ImageFormat;
 use renderer::program::{
@@ -209,6 +214,57 @@ pub const RESOLVE_INDICES: [u32; 3] = [0, 1, 2];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertex_clip_arithmetic_keeps_one_noncontracted_operation_tree() {
+        use std::collections::BTreeSet;
+        // SPIR-V's fixed binary grammar: Decorate=71, FAdd=129,
+        // VectorTimesScalar=142, MatrixTimesVector=145, NoContraction=42.
+        // Shader generation also validates the complete module with spirv-val.
+        let words: Vec<_> = include_bytes!("shaders/pbr.vert.spv")
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| u32::from_le_bytes(*bytes))
+            .collect();
+        let mut cursor = 5;
+        let mut decorated = BTreeSet::new();
+        let mut products = Vec::new();
+        let mut additions = Vec::new();
+        while cursor < words.len() {
+            let length = (words[cursor] >> 16) as usize;
+            assert!(length > 0 && cursor + length <= words.len());
+            let instruction = &words[cursor..cursor + length];
+            match instruction[0] & 0xffff {
+                71 if instruction[2] == 42 => {
+                    decorated.insert(instruction[1]);
+                }
+                129 => additions.push((instruction[2], [instruction[3], instruction[4]])),
+                142 => products.push(instruction[2]),
+                145 => panic!("implicit matrix-dot reassociation is outside the PBR clip contract"),
+                _ => {}
+            }
+            cursor += length;
+        }
+        assert_eq!(products.len(), 3);
+        assert_eq!(additions.len(), 3);
+        for id in products
+            .iter()
+            .copied()
+            .chain(additions.iter().map(|value| value.0))
+        {
+            assert!(
+                decorated.contains(&id),
+                "clip arithmetic lacks NoContraction"
+            );
+        }
+        assert_eq!(additions[0].1, [products[0], products[1]]);
+        assert_eq!(additions[1].1, [additions[0].0, products[2]]);
+        assert_eq!(additions[2].1[0], additions[1].0);
+        let hlsl = include_str!("shaders/dxil/pbr.vert.hlsl");
+        assert_eq!(hlsl.matches("precise float4 ").count(), 6);
+        assert!(!hlsl.contains("mul("));
+    }
 
     #[test]
     fn opacity_and_resolve_keep_depth_and_color_contracts_distinct() {
