@@ -23,6 +23,8 @@
     {"source": "uniform.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
     {"source": "sampled.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
     {"source": "sampled_float.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
-    {"source": "storage_read.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []}
+    {"source": "storage_read.comp", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
+    {"source": "../tests/support/shaders/compute_hdr_sampled.comp", "destination": "../tests/support/shaders/dxil", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []},
+    {"source": "../tests/support/shaders/compute_hdr_storage.comp", "destination": "../tests/support/shaders/dxil", "stage": "comp", "profile": "cs_6_0", "spirv_cross_arguments": []}
   ]
 }

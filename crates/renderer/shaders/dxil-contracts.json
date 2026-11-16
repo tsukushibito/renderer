@@ -13,6 +13,25 @@
     "color": "The older fixed fixtures use linear RGBA8_UNORM without filtering. sampled.comp uses nearest/clamp RGBA8 sampling and UNORM packing. sampled_float.comp uses nearest/clamp RGBA16F sampling and preserves all FP32 result bits. No sRGB conversion, tone mapping, or general HDR renderer is implemented by these fixtures."
   },
   "shaders": {
+    "../tests/support/shaders/compute_hdr_sampled.comp": {
+      "profile": "cs_6_0",
+      "local_size": [4, 4, 1],
+      "vulkan_bindings": ["set0/binding0 separate sampled texture2D", "set0/binding1 nearest/clamp sampler", "set0/binding2 std140 vec4, 16 bytes", "set1/binding0 writeonly rgba16f storage image"],
+      "d3d12_active_bindings": ["t0/space0 Texture2D<float4>", "s1/space0 sampler", "b2/space0 float4 cbuffer", "u0/space1 RWTexture2D<float4>"],
+      "behavior": "For each output pixel, sample normalized pixel-center coordinates at LOD0 and multiply by the four Uniform components. Rounded-up fringe invocations return. Every valid output texel is written once; no other resource contents are written.",
+      "bounds": "The Image2d dispatch contract uses the output extent, local4x4x1 and exact ceil-divided group counts. All storage Views must have the same extent. The sampled image may have a different nonzero extent. The Uniform footprint is exactly 16 bytes.",
+      "trust": "Caller-owned static descriptor is imported through the documented unsafe reviewed-shader boundary. ABI reflection and hashes do not prove shader bounds, races or full initialization."
+    },
+    "../tests/support/shaders/compute_hdr_storage.comp": {
+      "profile": "cs_6_0",
+      "local_size": [4, 4, 1],
+      "vulkan_bindings": ["set0/binding0 readonly rgba16f storage image", "set0/binding1 std430 readonly vec4 buffer, 16 bytes", "set1/binding0 writeonly rgba16f storage image"],
+      "d3d12_active_bindings": ["u0/space0 RWTexture2D<float4> input", "t1/space0 ByteAddressBuffer input", "u0/space1 RWTexture2D<float4> output"],
+      "behavior": "For each output pixel, imageLoad the equal-extent input and add the readonly buffer's vec4. Rounded-up fringe invocations return. Every valid output texel is written once; input/output storage images are separate subresources.",
+      "bounds": "The Image2d dispatch contract requires equal storage View extents and exact ceil-divided local4x4x1 group counts. Only the buffer's first 16 descriptor bytes are read. Graph orders the prior image producer before this consumer.",
+      "mapping": "Keep SPIRV-Cross default UAV mapping even for readonly storage images; no --hlsl-nonwritable-uav-texture-as-srv override.",
+      "trust": "Caller-owned static descriptor is imported through the documented unsafe reviewed-shader boundary. ABI reflection and hashes do not prove shader bounds, races or full initialization."
+    },
     "textured.vert": {
       "profile": "vs_6_0",
       "vertex_stride": 28,

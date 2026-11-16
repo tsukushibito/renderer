@@ -33,14 +33,17 @@ if ($LASTEXITCODE -ne 0 -or
 # Explicit SPIR-V 1.3 avoids LocalSizeId/maintenance4 requirements. The runtime
 # enables synchronization2/dynamicRendering, but does not enable maintenance4.
 # No macros, includes or debug info. Entry point main, GLSL 450 core, optimized.
-$sources = @('image.comp', 'mesh.vert', 'mesh.frag', 'textured.vert', 'textured.frag', 'composite.vert', 'composite.frag', 'uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp')
+$sources = @('image.comp', 'mesh.vert', 'mesh.frag', 'textured.vert', 'textured.frag', 'composite.vert', 'composite.frag', 'uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp',
+    '../tests/support/shaders/compute_hdr_sampled.comp', '../tests/support/shaders/compute_hdr_storage.comp')
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('renderer-spirv-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {
     foreach ($source in $sources) {
         $sourcePath = Join-Path $PSScriptRoot $source
         $outputPath = Join-Path $PSScriptRoot ($source + '.spv')
-        $temporaryPath = Join-Path $temporaryRoot ($source + '.spv')
+        # External caller-owned sources have relative path components. Only the
+        # basename is used inside the task-owned temporary directory.
+        $temporaryPath = Join-Path $temporaryRoot ([IO.Path]::GetFileName($source) + '.spv')
         & $compiler --target-env=vulkan1.3 --target-spv=spv1.3 -std=450core `
             -fentry-point=main -O -Werror $sourcePath -o $temporaryPath
         if ($LASTEXITCODE -ne 0) { throw "glslc failed for $source" }
@@ -62,7 +65,7 @@ try {
     # Publish only after every source has compiled and validated successfully.
     if (-not $Verify) {
         foreach ($source in $sources) {
-            Copy-Item -LiteralPath (Join-Path $temporaryRoot ($source + '.spv')) `
+            Copy-Item -LiteralPath (Join-Path $temporaryRoot ([IO.Path]::GetFileName($source) + '.spv')) `
                 -Destination (Join-Path $PSScriptRoot ($source + '.spv')) -Force
         }
     }

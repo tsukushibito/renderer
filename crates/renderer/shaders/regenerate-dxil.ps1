@@ -97,11 +97,19 @@ $null = New-Item -ItemType Directory -Path $temporaryRoot
 $destination = Join-Path $PSScriptRoot 'dxil'
 try {
     $artifacts = [ordered]@{}
+    $publish = [ordered]@{}
     foreach ($shader in $lock.shaders) {
         $source = $shader.source
+        $assetName = [IO.Path]::GetFileName($source)
+        $destinationProperty = $shader.PSObject.Properties['destination']
+        $assetDestination = if ($null -eq $destinationProperty) {
+            $destination
+        } else {
+            Join-Path $PSScriptRoot $destinationProperty.Value
+        }
         $spirv = Join-Path $PSScriptRoot ($source + '.spv')
-        $hlsl = Join-Path $temporaryRoot ($source + '.hlsl')
-        $dxil = Join-Path $temporaryRoot ($source + '.dxil')
+        $hlsl = Join-Path $temporaryRoot ($assetName + '.hlsl')
+        $dxil = Join-Path $temporaryRoot ($assetName + '.dxil')
         $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $shader.stage) +
             @($shader.spirv_cross_arguments) + @('--output', $hlsl)
         $null = Invoke-ShaderTool $cross $crossArgs
@@ -116,8 +124,9 @@ try {
             throw "DXIL validation/reflection metadata missing for $source"
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
-        Write-Utf8 (Join-Path $temporaryRoot ($source + '.reflection.txt')) $reflection
-        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'textured.vert', 'textured.frag')) {
+        Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.reflection.txt')) $reflection
+        $reflected = $assetName -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'textured.vert', 'textured.frag', 'compute_hdr_sampled.comp', 'compute_hdr_storage.comp')
+        if ($reflected) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
             if ($source -ceq 'uniform.comp') {
                 Assert-BufferCopyAbi ($spirvReflection | ConvertFrom-Json) $reflection
@@ -127,20 +136,29 @@ try {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection
             } elseif ($source -ceq 'sampled_float.comp') {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection -FloatOutput
+            } elseif ($assetName -cin @('compute_hdr_sampled.comp', 'compute_hdr_storage.comp')) {
+                Assert-HdrComputeAbi ($spirvReflection | ConvertFrom-Json) $reflection -StorageInput:($assetName -ceq 'compute_hdr_storage.comp')
             } else {
                 Assert-TexturedRasterAbi ($spirvReflection | ConvertFrom-Json) $reflection -Vertex:($source -ceq 'textured.vert')
             }
-            Write-Utf8 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json')) $spirvReflection
+            Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.spirv-reflection.json')) $spirvReflection
         }
         $hashes = [ordered]@{
             source_utf8_lf = Get-SourceSha256 (Join-Path $PSScriptRoot $source)
             spirv = Get-Sha256 $spirv
             hlsl = Get-Sha256 $hlsl
             dxil = Get-Sha256 $dxil
-            reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.reflection.txt'))
+            reflection = Get-Sha256 (Join-Path $temporaryRoot ($assetName + '.reflection.txt'))
         }
-        if ($source -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'textured.vert', 'textured.frag')) {
-            $hashes.spirv_reflection = Get-Sha256 (Join-Path $temporaryRoot ($source + '.spirv-reflection.json'))
+        if ($reflected) {
+            $hashes.spirv_reflection = Get-Sha256 (Join-Path $temporaryRoot ($assetName + '.spirv-reflection.json'))
+        }
+        $extensions = @('.hlsl', '.dxil', '.reflection.txt')
+        if ($reflected) { $extensions += '.spirv-reflection.json' }
+        foreach ($extension in $extensions) {
+            $temporary = Join-Path $temporaryRoot ($assetName + $extension)
+            if ($publish.Contains($temporary)) { throw "Duplicate shader artifact basename: $assetName" }
+            $publish[$temporary] = Join-Path $assetDestination ($assetName + $extension)
         }
         $artifacts[$source] = $hashes
     }
@@ -152,18 +170,19 @@ try {
         artifacts = $artifacts
     }
     Write-Utf8 (Join-Path $temporaryRoot 'manifest.json') (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
+    $publish[(Join-Path $temporaryRoot 'manifest.json')] = Join-Path $destination 'manifest.json'
     # Validate the whole set before publishing any changed fixture.
-    foreach ($artifact in Get-ChildItem -LiteralPath $temporaryRoot -File) {
-        $target = Join-Path $destination $artifact.Name
+    foreach ($artifact in $publish.GetEnumerator()) {
+        $target = $artifact.Value
         if ($Verify -and (-not (Test-Path -LiteralPath $target -PathType Leaf) -or
-            (Get-Sha256 $artifact.FullName) -cne (Get-Sha256 $target))) {
-            throw "DXIL fixture differs or is missing: $($artifact.Name)"
+            (Get-Sha256 $artifact.Key) -cne (Get-Sha256 $target))) {
+            throw "DXIL fixture differs or is missing: $target"
         }
     }
     if (-not $Verify) {
-        $null = New-Item -ItemType Directory -Path $destination -Force
-        foreach ($artifact in Get-ChildItem -LiteralPath $temporaryRoot -File) {
-            Copy-Item -LiteralPath $artifact.FullName -Destination (Join-Path $destination $artifact.Name) -Force
+        foreach ($artifact in $publish.GetEnumerator()) {
+            $null = New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($artifact.Value)) -Force
+            Copy-Item -LiteralPath $artifact.Key -Destination $artifact.Value -Force
         }
     }
     foreach ($entry in $artifacts.GetEnumerator()) {
