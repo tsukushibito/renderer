@@ -512,7 +512,12 @@ impl GraphWork {
                     touched.push(access.resource);
                 }
                 let target = &mut uses[access.resource];
-                if target.layout != vk::ImageLayout::UNDEFINED
+                // Transfer purposes also describe buffers. Their layout hints
+                // must not reject a legal disjoint same-buffer copy.
+                if matches!(
+                    graph.resources[access.resource].desc,
+                    ResourceDesc::Image(_)
+                ) && target.layout != vk::ImageLayout::UNDEFINED
                     && current.layout != vk::ImageLayout::UNDEFINED
                     && target.layout != current.layout
                 {
