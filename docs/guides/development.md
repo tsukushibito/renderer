@@ -289,7 +289,7 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 `--manifest`と`--fixture`は入力の選択である。`--view`には`conditions.json`の固定視点名、または`route`を使う。
 `route`は1,800 frame周期でcameraを補間し、測定窓はwarm-upと独立にroute frame0から始まる。
 `--frames`は測定frame数、`--warmup`はその前のframe数、`--inflight`は1〜4の同時投入上限であり、
-実効設定をreportへ残す。`--gpu-timing`は既定offのGPU timestampを有効にする。
+実効設定をreportへ残す。`--gpu-timing`は既定offのnative詳細CPU timerとGPU timestampを一緒に有効にする。
 `--alpha-only`は元alpha0材質のgeometryだけを診断し、`--alpha-override opaque`は
 そのcolor/depth被覆が非ゼロになることを確かめる感度確認に使う。
 上記の短いrunはB2の確認・計測例であり、前節のB5最終巡回受入を代替しない。
@@ -320,17 +320,36 @@ python -B tools/bistro/compare_runtime.py .tools/bistro-pbr/street-vulkan/report
 名前付き領域の追加検査には`--regions`、既知の誤りの検出には`--expect-different`を使う。
 診断で意図して変えるidentityは`--identity-changes`へ変更前後の値を明示する。
 全体の誤差画素率だけで、小さな材質やalphaの欠落を受け入れない。
+材質の実GPU回帰は17 panelのfixtureを使う。normal、回転したtangentとhandedness、metallic/roughness、
+emissive、front/back face、alphaのcolor/depthを、shaderと独立したf64の期待値と照合する。
+理想鏡面に近いpeak panelは丸めへの感度が高いため、通常panelの解析誤差と分けてRGBA16Fの有限性・
+SDR resolveとの整合を確認する。2×2画像のUV probeも使い、異なるtexelをsampleすることで、
+正しいbindingを使っていてもUVが固定・反転している誤りを検出する。
+実GPU試験は`#[ignore]`なので、CPU試験の成功から実行済みとは扱わず、両APIのstrict/shippingで明示実行する。
 
 通常性能はETW収集なしのreleaseで、同じEXE・入力・view・解像度・in-flight数を用い、
 各APIを交互の順序で独立3 process以上測る。測定中にcook・build・他のGPU負荷を並行させない。
 読込/hash照合、upload、Program/pipelineと容量の準備は初期化費用として定常描画から分ける。
+`setup_phases_ns`は次の準備区間を別々に記録する。
+
+| 区間 | 範囲 |
+|---|---|
+| `asset_load` | 固定条件・manifestの読込、assetの境界検証 |
+| `budget` | 必要な資源classと容量の算出 |
+| `native_prepare` | native資源・Program/pipelineの準備 |
+| `upload` | 画像の逐次読込/hash照合、copy・完了待ち、CPU geometry入力の解放 |
+| `frame_storage_and_profiling_prepare` | frame領域とoptional profilingの準備 |
+| `warmup` | 測定前frameの構築・投入・完了・返却 |
+
+`setup_ns`はこれらとreport用metadata/bookkeepingを含む準備全体の経過時間である。
+個別checkpointは全処理を完全には分割しないため、内訳の合計と`setup_ns`の一致は要求しない。
 定常窓にはGraph構築/compile、prepare/record/submit、poll/retireと結果返却を含める。
 process/main threadのOS charged CPU、各phaseのwall elapsed、GPU timestampとframe時間は別の量である。
 複数in-flightの測定窓wall/frameはthroughputの費用であり、一frameの投入から完了までのlatencyではない。
 p50/p95は範囲が明示されたframe sampleから算出し、run平均の分布と混同しない。
-GPU timestampの費用はoff/onで比較し、トレースや厳格native検証の計装付き時間を通常性能へ混ぜない。
-この例の`--gpu-timing`はnative詳細CPU timerも有効にするため、off/on差は両方を含む観測として扱う。
-off時の未収集native時間を、処理が無費用だったという意味の0へ解釈しない。
+`--gpu-timing`のoff/on差はnative詳細CPU timerとGPU timestampを合わせたprofiling費用の観測であり、
+GPU query単独のoverheadとはしない。トレースや厳格native検証の計装付き時間も通常性能へ混ぜない。
+off時の`native_phase_totals_ns`は未収集を表す`null`であり、処理が無費用だったという意味ではない。
 headless転送負荷で得たAPI差を、PBRのCPU/GPU費用や画面表示FPSへ換算しない。
 
 Windowsでは既存の[build archive](tooling.md#cpu-profiling)でcleanなreleaseのEXE/PDB/source identityを保存し、
@@ -342,7 +361,7 @@ python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pb
 python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 60 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
 ```
 
-driverはAPIとGPU query off/onを交互に独立3回ずつ実行し、各reportと内容一致、実効設定、
+driverはAPIとnative profiling off/onを交互に独立3回ずつ実行し、各reportと内容一致、実効設定、
 計測窓、終了結果を確認する。全process時間にはロード・capture・終了も含まれるため、
 測定窓のRenderer CPU/frame費用へ加算しない。raw画像はローカルに残し、共有する集計へ画像本体を埋め込まない。
 

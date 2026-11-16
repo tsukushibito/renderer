@@ -86,7 +86,10 @@ PBRと最終SDR resolveの利用側shaderは`examples/support/bistro/shaders/`�
 hash/reflectionの一致だけで未信頼shaderを安全とみなさない。
 
 `compare_runtime.py`はrunnerの`report.json`とHDR/SDR/depthを読み、固定profileと全画素・ROIの誤差を集計する。
-`measure_runtime.py`は通常releaseの保存済みEXEを逐次実行し、非収集runとGPU query off/onを分ける。
+captureは実体解決後もreport directory内にあることを要求する。Windowsの通常/拡張長pathは
+比較用表現を正規化し、実際の読込pathを保持したまま同じ包含条件で検査する。device/volume namespaceは受け付けない。
+`measure_runtime.py`は通常releaseの保存済みEXEを逐次実行し、native詳細CPU timerとGPU timestampを
+一緒に切り替えたoff/onを分ける。非収集の`native_phase_totals_ns`は`null`であり、query単独の費用を分離した計測とは扱わない。
 これらの計測にWPRや管理者実行は不要であり、ETWの収集手順とは独立する。
 実行したprofile/hash・レビュー修正・二APIの内容照合と計測値は[現行検証](../verification/current.md#bistro-pbr)へまとめる。
 
