@@ -338,6 +338,11 @@ mod native {
             BindingResource::ImageView(view) => view.image(),
             _ => unreachable!("fixture texture"),
         };
+        // Export consumes the complete buffer. Ordinary fixture frames only
+        // initialize the bound prefix; this lifetime case establishes the rest.
+        graph
+            .upload_buffer("initialize exported Uniform tail", uniform, 16, &[0; 496])
+            .unwrap();
         graph.export_buffer(uniform).unwrap();
         graph.export_image(texture).unwrap();
         let readback = graph
