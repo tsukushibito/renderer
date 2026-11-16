@@ -5,6 +5,44 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 利用側Raster shaderとblend・depthの二API実行
+
+`renderer-7ft.2.8`。staticなtrusted Raster descriptorから頂点属性・inline定数・
+読み取りbinding・blend／depthを具体化し、標準Programと利用側Programを同じGraph経路へ接続した。
+契約と選択理由は[RenderGraph](../design/rendergraph.md#program由来bindingとshader-stageのowned計画)、
+再実行は[開発手順](../guides/development.md#owned-raster-acceptance)、source hashと生reportは
+[メモリ検証データ](frame-memory.json)の`custom_raster`を参照する。
+
+Windows x64、Rust 1.99.0、RTX 3060／driver 610.88。同じLUIDの両APIを逐次実行した。
+
+| 確認 | 結果 |
+|---|---|
+| 利用側shaderと三構成経路 | 24-byte頂点、32-byte VS／FS定数、三groupの疎なUniform／StorageRead／画像／samplerを使用。標準forward直接、postの独自Raster交換、標準opaque＋独自半透明＋標準出力copyを同じ公開APIで実行 |
+| 内容・順序・depth | 8ケース×2周期、4出力・588 byte／frame、計9408 byte／API／runを独立期待値とAPI間で完全一致。straight／premultiplied alpha・加算・置換、逆draw順、depthで遮蔽されるdrawとdepth非更新、0／1／複数drawを確認 |
+| 変更・寿命・失敗 | 記録／pending／結果ハンドル保持中の再準備拒否、65個の異なる資産の容量拒否後も旧集合で描画、集合交換後の旧plan拒否（bindingなしも含む）と再準備による復帰、cancel／記録枠不足、pending中Uniform／画像の更新とdelete、公開plan／runtime破棄後の結果消費を確認 |
+| strict／shipping | 追加検証＋Core/SyncVal／Debug Layer＋GBVと、追加検証・専用診断を除外したnative Disabledを別processで各3回成功。strictは最終native解放後もwarning／error／corruption／callback失敗ゼロ |
+| 通常frameメモリ | 各API・各構成の独立processで24 warm-up＋24変動frame、3 pending＋3保持結果を測定。build／compile／prepare／record／submit／完了／readback／poll・退役／全slot返却まで、Rust alloc／alloc_zeroed／realloc／dealloc、VMA host alloc／realloc／free、native作成／破棄・descriptor確保解放は全0。resetはVulkan48／D3D12 96として別計上 |
+| 既存実GPU回帰 | 一般資源／履歴と既存混合Rasterのstrict／shippingが各成功。D3D12 native9件、Vulkan Raster native10件も厳格構成で成功 |
+| CPU・品質 | release CPU166件、全feature331件、二API製品＋memory-profiling310件、D3D12単独製品194件／追加検証＋graph診断195件が成功（Rustdocを含む）。全targetの全feature・製品・D3D12単独診断構成Clippy、warnings拒否Rustdoc、fmt、shader再生成・bindings再生成照合が成功。HTML17 page・2050 local linkとMermaid32図のviewer／theme／mobile／printを確認 |
+
+保証済みのABI・頂点属性・shader footprintはtrusted取込で確立し、実Device能力はpipeline準備で確認する。
+safe Graphでは定数byte数、binding／資源範囲、attachment／depth条件を空drawも含めて保証する。
+generic定数の任意word値を有限値保証と混同せず、D3D12 inlineの動的index禁止と
+resource descriptor配列の非対応を取込契約へ明記した。
+Vulkanの全Rasterで準備済みProgramを記録前に確認し、未準備のbindingなしProgramもpanicせず容量エラーにする。
+
+Program集合は生涯累積でなく現在の集合に64資産までとし、準備成功後に交換する。
+Vulkanのfresh owner／descriptor領域再作成は明示変更境界の費用であり、通常frameから移動した隠れた仕事ではない。
+D3D12の結果返却anchorはnative readback枠の早期返却と分け、全消費後も結果ハンドルのDropまで変更を拒否する。
+anchorはregistryに保持して通常の結果Dropで解放せず、idle公開前の取得で再準備との競合を防ぐ。
+shader／descriptor／資源の所有、GPU完了、native失敗処理を検証cfgへ移していない。
+
+新しいGPU時間比較、他GPU／driver、Linux実GPU、実OOM／Device loss、MRT／一般mip、
+Bistro PBR／影／tone mapping／Bloom、二API表示は未実行である。
+Vulkanの一般推奨に沿ってpipeline／descriptorを明示準備し、通常frameのnative作成を避けた。
+新たなvendor最適化や測定なしの性能優位は主張せず、必須の実GPU CIや時間閾値も追加していない。
+次の表示・自由camera・通常frame時間計測は`renderer-7ft.2.6`へ残す。
+
 ## 一般資源のimport・更新・履歴と退役
 
 `renderer-7ft.2.5`。D3D12のbuffer／画像を共有物理registryへ移し、一般Graphのimport/export、

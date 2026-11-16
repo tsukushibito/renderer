@@ -130,6 +130,7 @@ pub(super) struct Registry {
     entries: Vec<Entry>,
     ranges: ImportRangesPool,
     exports: Vec<Arc<ExportSlot>>,
+    result_returns: Arc<()>,
     capacity: D3D12FrameCapacity,
 }
 fn stale() -> Error {
@@ -168,6 +169,7 @@ impl Registry {
             )
             .map_err(|_| Error::capacity("import snapshot preparation failed"))?,
             exports,
+            result_returns: Arc::new(()),
             capacity,
         })
     }
@@ -211,9 +213,18 @@ impl Registry {
         }
         Ok(())
     }
+    /// Separate from the native readback lease: even a fully consumed result is
+    /// a public change-boundary token until Drop, matching Vulkan. This anchor
+    /// moves with the registry, so ordinary result return never frees backing.
+    pub(super) fn result_token(&self) -> Arc<()> {
+        Arc::clone(&self.result_returns)
+    }
     /// Change-boundary guarantee, including synchronization with the last
     /// external token return. No new token can be made after exclusive success.
     pub(super) fn metadata_is_idle(&mut self) -> bool {
+        if Arc::get_mut(&mut self.result_returns).is_none() {
+            return false;
+        }
         self.exports
             .iter_mut()
             .all(|slot| Arc::get_mut(slot).is_some())

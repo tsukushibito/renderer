@@ -274,20 +274,24 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 
 `Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`とdrawのiteratorを受け取る。
 配列・sliceと`SnapshotInputs::draws()`は同じ入口を使い、要素は値または`Borrow<RasterDraw>`とする。
-各`RasterDraw`はvertex／index buffer・index count・`RasterParameters`と借用binding sliceをまとめ、
+各`RasterDraw`はvertex／index buffer・index count・`RasterConstants`と借用binding sliceをまとめ、
 attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
 管理下の色Programは出力形式に一致する一個のcolorを要求し、depthを省略できる。
 `depth_only()`はcolorを持たず、depthを要求する。native実行は単一subresource画像を扱う。
 各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
 `Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
-描画引数は`RasterParameters::new(transform, tint)`で有限値を保証し、privateな不変値として保持する。
-変更時は新しい値を生成し、既定値は`RasterParameters::default()`とする。Graph構築では保証済みの値を再走査しない。
+標準mesh引数は`RasterParameters::new(transform, tint)`で有限値を保証し、
+`.into()`で80-byteの`RasterConstants`へ変換する。独自shaderの定数は
+`RasterConstants::new(&[u32])`で最大128 byteの不変なword列として所有する。
+Graph構築ではProgramの定数byte数と一致することを確認し、保証済みのmesh値を再走査しない。
 公開iteratorのsize_hintやExactSizeIteratorの長さを容量の保証には使わず、実際の要素ごとに準備済みdraw容量を確認する。
 
 `renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
-`ManagedRasterProgram::mesh()`は実在する両APIのmesh VS/FSに結び付き、private static manifestが
+`ManagedRasterProgram::mesh()`は実在する両APIのmesh VS/FSに結び付き、static descriptorが
 頂点stride 28、vertex段のcolumn-major行列＋tint 80 byte、fragment出力location 0を定める。
-これはnative PSO作成やDevice能力の保証ではなく、任意source/binaryや自己申告のmanifestを受け入れない。
+これはnative PSO作成やDevice能力の保証ではない。独自shaderはComputeと同じ
+`unsafe from_trusted_descriptor(&'static RasterProgramDescriptor)`で取り込む。
+通常のGraph構築・compile・submitはsafeなAPIであり、shader取込の安全性責任とは区別する。
 このshaderはdescriptor bindingとstorage副作用を持たない。DXILのb0は同じinline描画定数の表現であり、
 このmeshだけから一般graphicsのUniform bindingを推定しない。
 `textured_mesh()`は実際の別VS/FSに結び付き、`group 0/binding 0`のVS Uniform先頭16 byteを
@@ -299,7 +303,15 @@ meshのinline `b0`と同じnative layoutを流用できる契約ではない。
 `mesh_hdr()`/`textured_mesh_hdr()`は同じfloat出力shaderをRGBA16F attachmentへ書くレビュー済み契約である。
 `depth_only()`はmeshのvertex shaderと固定深度処理を使い、fragment shaderとcolor出力を持たない。
 これらのProgram identityとcolor/depthの有無・形式をnative pipelineの識別に含める。
-任意shader取込、MRT、可変vertex layout、比較sampler、影の照明処理、tone mappingはこの契約に含めない。
+独自descriptorは単一vertex streamのstrideと属性location／offset／Float32x2・x3・x4、
+inline定数のbyte数・VS／FS stageとDXIL register／space、読み取りbindingとそのbyte footprint、
+color形式、blend、depth状態、両APIのVS／FS binaryを定める。DXILの頂点semanticは
+`TEXCOORD`＋location番号とし、entryは`main`、sample数は1、cullingなしのu32 indexed triangleとする。
+Uniform／StorageRead／SampledImage／SamplerをVS・FSから利用でき、storage書き込みやattachment feedbackは扱わない。
+resource descriptorの配列は扱わず、各slotは一個とする。
+[D3D12 root constantsの契約](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#using-constants-directly-in-the-root-arguments)に従い
+inline定数の動的indexは使わない。動的indexが必要な配列はUniform／StorageReadへ置く。
+MRT、比較sampler、影の照明処理、tone mappingはこの契約に含めない。
 両backendの明示的なProgram/画像準備は通常frameの外で行い、capacity不足や未準備のProgramを
 通常prepare中のnative作成・内部waitで補わない。各drawのdescriptor内容は記録からcancelまたは実GPU完了まで保持し、
 同じpass内でも別drawのUniform/画像/samplerに上書きされない。
@@ -315,9 +327,36 @@ first index/base vertexは0、instance数は1だけを扱う。CPU計画だけ�
 準備領域を追加する交換条件であり、密な入力や実時間性能での優位は未計測である。
 構築失敗後も使用列を保持し、次の非空Rasterまたはslot resetでrangeとともに消す。
 後半drawの構築失敗でもdraw/binding/access/attachment/nameを戻し、途中のpassを公開しない。
-Engineと利用側は同じ不変`RasterParameters`と公開Raster構築APIを使い、描画引数を再走査しない。
-空draw iteratorはProgramを使わないattachment-onlyへ正規化するため、空の場合はattachment配列の一般形も扱える。
+Engineと利用側は同じ不変`RasterConstants`と公開Raster構築APIを使い、描画引数を再走査しない。
+空draw iteratorでもProgramの出力数・形式・必須depthとLoad条件を確認した後、
+native Programを使わないattachment-onlyへ正規化する。一般形のclear-onlyは`Graph::attachment_pass`を直接使う。
 旧single-draw/batch APIの互換入口は残さない。複数drawも同じLoad/Storeを共有し、Clear/Storeへ暗黙に置き換えない。
+
+Programのidentityはstatic descriptorの同一性であり、shader・ABI・固定状態を含む不変の版を表す。
+reloadは新しいdescriptorの版を明示準備する。既存Programを書き換えるAPIや、pendingの版を破棄するAPIは設けない。
+runtimeのpipeline／layoutとdescriptor leaseは記録・未投入cancel・実GPU完了まで保持する。
+Program集合を変更する前には、GPU完了だけでなく結果ハンドルをDropし、export／refreshした
+buffer snapshotも返却する。D3D12は最後のreadback消費時にnative readback枠を返すが、
+結果ハンドル自体の返却はregistryに保持する小さな共有anchorで追跡し、Vulkanと同じ変更境界にする。
+anchorは再準備でもregistryとともに保持し、通常frameの結果返却でheapを解放しない。
+共通上限は一つのworking set内の64 Program、4 binding group、16 binding、16 vertex属性、128 byteのinline定数であり、
+実Device上限とD3D12の64-DWORD root signature上限も準備時に適合確認する。
+Vulkanは共有Program参照を無効化せず通常読取にlockを増やさないため、
+明示的なRaster集合の準備時に新しい所有者と固定slotを構築し、成功後だけ切り替える。
+既に有効な固定Compute／Compositeも引き継ぎ、未返却consumerのある変更を拒否する。
+Rasterは渡した集合だけを有効にし、従来の暗黙meshへのfallbackで除外した資産を再び使える状態にしない。
+この準備境界のnative再作成と有限slotの費用を、可変Vecの差替・世代回収の複雑さと比較して選んだ。
+上限はruntime生涯の累積資産数ではなく、集合交換後に空きを回復できる。準備失敗は旧集合を保持する。
+未使用slotのnative pipelineやdescriptorは作らず、未準備・容量不足で通常frame中に増設しない。
+
+`BlendState::Replace`は置換、`Alpha`はstraight alpha、`PremultipliedAlpha`は乗算済みalphaの合成、
+`Additive`は加算を表す。描画順のソートは利用側が行い、Rendererはdraw列の順を保つ。
+`DepthState`は無効・任意depth・必須depthを区別し、compare／writeを明示する。
+既存prepassed Programは必須depth・LESS_EQUAL・writeなし・Load必須で表し、0 drawでもLoad条件を確認する。
+blend対応のformat能力、頂点format、定数stage／size、descriptorとroot layoutは準備境界で確立する。
+[Vulkanのblend能力](https://docs.vulkan.org/spec/latest/chapters/framebuffer.html)と
+[D3D12のroot visibility／register契約](https://learn.microsoft.com/en-us/windows/win32/direct3d12/creating-a-root-signature)を満たし、
+drawごとのABI再走査で代用しない。新しい性能上の優位は主張しない。
 
 Attachmentは選択mip/layer全域をrender areaとする。`Load`は既存内容を要求し、
 `Clear(value)`は全域を初期化する。loadの`Discard`は部分的なmesh描画だけで全域を
@@ -662,7 +701,8 @@ Loadは初期化済み内容を保持し、Clearは0 drawでも初期化する�
 未初期化LoadとStore Discard後のreadは通常のGraph構築／compile契約で拒否する。
 
 現在の標準opaqueにはalpha blendと透明ソートがない。渡されたdraw順を維持し、alphaは出力へ格納するだけである。
-半透明を合成する場合の並べ替えとblend・depth設定は利用側の責務であり、その一般Raster APIは`.2.8`で追加する。
+半透明を合成する場合の並べ替えとblend・depth設定は利用側の責務であり、
+trusted Raster descriptorと`Graph::raster`で独自の描画部品を定義する。
 独自graphics shaderや任意stateの提供を、固定Program群や標準部品の公開だけで完成扱いにしない。
 
 次のように標準グラフを直接選び、意味の定まったpost境界だけを複数ノードへ置き換えられる。

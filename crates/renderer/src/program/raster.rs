@@ -262,10 +262,14 @@ impl ManagedRasterProgram {
     /// offset zero, and are used only in the nonempty declared Vertex/Fragment
     /// stages (zero size requires EMPTY stages). DXIL represents this block as
     /// the specified CBV register/space, with no overlapping Uniform binding.
+    /// Inline members must not be dynamically indexed: D3D12 root constants
+    /// permit only static/literal indexing. Use Uniform/StorageRead for arrays
+    /// that require dynamic indexing.
     /// There are at most 16 bindings, with group indices below 4, unique
     /// group/binding coordinates and nonempty graphics
     /// stages only. Supported kinds are Uniform, StorageRead, SampledImage and
-    /// Sampler; read-only buffers are raw/structured root-descriptor compatible
+    /// Sampler; every slot has exactly one descriptor (no descriptor arrays).
+    /// Read-only buffers are raw/structured root-descriptor compatible
     /// in DXIL. Groups equal register spaces and bindings equal register numbers.
     /// `binding_bytes` has one entry per binding, a nonzero buffer prefix no
     /// larger than min_size, and zero for image/sampler slots (min_size zero).

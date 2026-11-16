@@ -2,7 +2,7 @@
 
 use super::compute_fixture::{self as fixture, Expected};
 use super::frame_memory::{Report, counts, features, phase, semantics};
-use super::standard_fixture;
+use super::{custom_raster_fixture, standard_fixture};
 #[cfg(feature = "vulkan")]
 use renderer::graph::BufferDesc;
 use renderer::graph::{CompiledGraph, Graph, GraphPool, PassHandle};
@@ -19,6 +19,7 @@ const WAIT: Duration = Duration::from_secs(30);
 enum Workload {
     Compute,
     Standard,
+    CustomRaster,
 }
 
 impl Workload {
@@ -26,6 +27,7 @@ impl Workload {
         match self {
             Self::Compute => fixture::capacity(),
             Self::Standard => standard_fixture::capacity(),
+            Self::CustomRaster => custom_raster_fixture::capacity(),
         }
     }
 
@@ -33,13 +35,14 @@ impl Workload {
         match self {
             Self::Compute => fixture::build(pool, frame),
             Self::Standard => standard_fixture::build(pool, frame),
+            Self::CustomRaster => custom_raster_fixture::build(pool, frame),
         }
     }
 
     fn provenance_capacity(self) -> usize {
         match self {
             Self::Compute => 0,
-            Self::Standard => 16,
+            Self::Standard | Self::CustomRaster => 16,
         }
     }
 
@@ -52,6 +55,7 @@ impl Workload {
                 (standard_fixture::BUFFER_SIZES[2], 1),
                 (standard_fixture::BUFFER_SIZES[3], 1),
             ],
+            Self::CustomRaster => custom_raster_fixture::buffer_classes(),
         }
     }
 
@@ -68,6 +72,7 @@ impl Workload {
                     standard_fixture::DEPTH_IMAGES,
                 ),
             ],
+            Self::CustomRaster => custom_raster_fixture::image_classes(),
         }
     }
 }
@@ -250,6 +255,32 @@ fn report<B: Backend>(
             .unwrap()
             .remove("total_dispatch_counts");
     }
+    if matches!(workload, Workload::CustomRaster) {
+        json["scenario"] = B::SCENARIO.replace("owned_compute", "custom_raster").into();
+        json["routes"] = serde_json::json!([
+            "standard forward directly",
+            "standard post replaced by consumer Raster",
+            "standard opaque plus consumer Raster plus standard output"
+        ]);
+        json["programs"] = serde_json::json!([
+            "mesh_hdr",
+            "consumer straight alpha",
+            "consumer premultiplied alpha",
+            "consumer additive",
+            "consumer replace"
+        ]);
+        json["bindings"] = "24-byte vertex stride; 32-byte VS/FS inline words; sparse Uniform/StorageRead/sampled image/sampler slots across three groups".into();
+        json["readback_bytes_per_frame"] = custom_raster_fixture::READBACK_BYTES.into();
+        json["coverage"] = "continuous Graph build/compile/native prepare-record-submit/GPU completion/poll-retire/CPU readback/full result and plan return; changing draw counts, constants, descriptor offsets, blend state and draw order; HDR content and unchanged read-only depth independently checked; no presentation or asset update".into();
+        for key in [
+            "custom_workgroup_size",
+            "custom_workgroups",
+            "custom_storage_dispatch_counts",
+            "total_dispatch_counts",
+        ] {
+            json.as_object_mut().unwrap().remove(key);
+        }
+    }
     println!("FRAME_MEMORY_REPORT={json}");
     assert!(!measured.total.overflowed);
     if !baseline {
@@ -292,6 +323,11 @@ pub fn vulkan(baseline: bool) {
 #[cfg(feature = "vulkan")]
 pub fn vulkan_standard(baseline: bool) {
     vulkan_workload(baseline, Workload::Standard);
+}
+
+#[cfg(feature = "vulkan")]
+pub fn vulkan_custom_raster(baseline: bool) {
+    vulkan_workload(baseline, Workload::CustomRaster);
 }
 
 #[cfg(feature = "vulkan")]
@@ -352,6 +388,9 @@ fn vulkan_workload(baseline: bool, workload: Workload) {
                 .prepare_raster_programs(&standard_fixture::raster_programs())
                 .unwrap();
         }
+        Workload::CustomRaster => runtime
+            .prepare_raster_programs(&custom_raster_fixture::raster_programs())
+            .unwrap(),
     }
     let mut pool = GraphPool::new(workload.capacity(), GRAPH_SLOTS).unwrap();
     frames(&mut runtime, &mut pool, WARMUP, workload);
@@ -424,6 +463,11 @@ pub fn d3d12_standard(baseline: bool) {
 }
 
 #[cfg(all(feature = "d3d12", windows))]
+pub fn d3d12_custom_raster(baseline: bool) {
+    d3d12_workload(baseline, Workload::CustomRaster);
+}
+
+#[cfg(all(feature = "d3d12", windows))]
 fn d3d12_workload(baseline: bool, workload: Workload) {
     if cfg!(debug_assertions) {
         panic!("memory acceptance requires --release");
@@ -435,7 +479,12 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
     config.capacity.resources = workload.capacity().resources;
     config.capacity.operations = 32;
     config.capacity.provenance_segments_per_resource = workload.provenance_capacity();
-    config.capacity.buffers = 4;
+    let buffers = workload
+        .buffer_classes()
+        .iter()
+        .map(|&(_, count)| count)
+        .sum();
+    config.capacity.buffers = buffers;
     config.capacity.buffer_bytes = 512;
     config.capacity.upload_bytes = 16 * 1024;
     config.capacity.readback_bytes = 16 * 1024;
@@ -457,6 +506,13 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
                 &image_classes,
                 &standard_fixture::raster_programs(),
                 &standard_fixture::programs(),
+            )
+            .unwrap(),
+        Workload::CustomRaster => runtime
+            .prepare_graph_working_set(
+                &image_classes,
+                &custom_raster_fixture::raster_programs(),
+                &[],
             )
             .unwrap(),
     }
@@ -491,6 +547,6 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "luid": info.luid, "driver_version": info.driver_version, "shader_model": info.shader_model }),
         serde_json::json!({ "debug_layer_enabled": validation.debug_layer_enabled, "gpu_based_validation_enabled": validation.gpu_based_validation_enabled, "teardown_checked": validation.teardown_checked, "warnings": validation.warnings, "errors": validation.errors, "corruption": validation.corruption, "callback_failures": validation.callback_failures, "dropped_messages": validation.dropped_messages }),
-        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "buffers": 4, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes_per_execution": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count })).collect::<Vec<_>>() }),
+        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "buffers": buffers, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes_per_execution": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count })).collect::<Vec<_>>() }),
     );
 }

@@ -705,7 +705,8 @@ Graph内の出力handleを返すことと、Graph外へ保持するexportは区�
 2. 標準グラフの意味付き挿入点へ、利用側の多段処理を追加・交換・無効化する。
 3. 標準グラフを使わず、標準opaque・独自半透明・標準出力処理を利用側Graphで組み合わせる。
 
-初回の部品抽出では既存Rasterと独自Computeで構成経路を確認し、独自半透明までの受入は`.2.8`で行う。
+初回の部品抽出では既存Rasterと独自Computeで構成経路を確認した。
+`.2.8`は同じ公開APIへtrusted Raster資産とblend／depthを接続し、独自半透明を含む三経路を受け入れる。
 標準トーンマッピングの追加はB3とし、それ以前の標準出力処理をtone mapping実装済みと扱わない。
 0/1/多数draw、depthのLoad、複数View、不要部品のculling、出力所有、未投入cancel、
 容量満杯、資源更新・pending保持を適切な段階で確認する。
@@ -1554,9 +1555,14 @@ root CBV/SRV/UAVとdescriptor tableを導く。依存dispatchは別passとし、
 D3D12は選択color Programごとのdepth有／無を準備する。Vulkanはprepared画像にD32がある場合だけ
 depth有のcolor Programも準備する。buffer-onlyの初期化ではどちらもgraphicsの能力を要求しない。
 
-mesh/depthのinlineはvertex b0、texturedのinlineはvertex b1であり、texturedのvertex b0を
+標準mesh/depthのinlineはvertex b0、texturedのinlineはvertex b1であり、texturedのvertex b0を
 16-byte Uniform用root CBVへ割り当てる。CBV addressの256-byte alignmentと論理descriptor範囲を
-native適合境界で保証し、root descriptor自体のboundsに依存しない。20DWORDのinline定数をdrawごとに設定する。
+native適合境界で保証し、root descriptor自体のboundsに依存しない。
+独自Rasterも同じ`RasterProgramDescriptor`からvertex属性、inlineのregister／space／stage、
+Uniform／StorageReadとimage／samplerのrootを導出する。inlineは最大32 DWORDで、
+buffer rootとtableを含む64-DWORD上限を準備時に確認する。定数の実byte数はGraph構築時に保証する。
+VS／FS双方で読むbindingは両shaderのread stateを合成し、同じbufferのVertex／Index／Uniform用途も保つ。
+colorのblend能力と頂点format対応を実Deviceで照会し、Programのblend／depthをPSOへ適用する。
 depth-only PSOはpixel shaderとRTVを持たず、color-only PSOは深度test/writeを無効にする。
 生成DXILのclip Y反転とpositive viewportを一組として維持する。
 
@@ -1576,7 +1582,7 @@ canonical registry entryの既知slice数を
 旧slot内資源だけの予約枠数や比率を現在の常駐量・時間性能へ読み替えない。
 
 各Rasterのbuffer用途は、そのpassの不変access列だけを二回列挙して合成・適用する。
-同じbufferのVertex/Index/Uniformのstateを合わせ、最初の適用でscratchをCOMMONへ戻すため、
+同じbufferのVertex/Index/Uniform/StorageReadのstateを合わせ、最初の適用でscratchをCOMMONへ戻すため、
 後段のindex拒否・cancelや次passへ用途を残さない。clear-onlyではbuffer slotへ触れない。
 全Graphのbuffer数に比例する初期化・走査と追加の使用列metadataを避ける代わりに、
 重複bindingを含むaccess列を二回歩く。密な入力の時間改善は測定なしに主張しない。

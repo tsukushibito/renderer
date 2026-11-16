@@ -602,6 +602,37 @@ cargo test --locked --release -p renderer --test raster_graph --no-default-featu
 strictはCore＋SyncVal／Debug Layer＋GBV、shippingはRenderer追加検証と専用診断を除外しnative `Disabled`を要求します。
 設定は別processで切り替え、前提不足をskipしません。診断なしの件数0は外部Layer注入不在の証明には使いません。
 
+独自Rasterの公開契約は[`custom_raster`](../../crates/renderer/tests/custom_raster.rs)と
+[利用側fixture](../../crates/renderer/tests/support/custom_raster_fixture.rs)で確認します。
+shaderはRenderer本体のeffect列挙へ追加せず、staticな`RasterProgramDescriptor`をtrusted取込します。
+24-byte頂点、32-byteのVS／FS inline定数、三groupの疎なUniform／StorageRead／画像／sampler bindingを使い、
+標準forward直接・postの独自Raster交換・標準opaque＋独自半透明＋標準出力copyを同じ入力で比較します。
+straight／premultiplied alpha・加算・置換、draw順、depth testとwriteなしを独立の全画素期待値で照合します。
+標準meshの定数は`RasterParameters::new(...).unwrap().into()`、独自定数は
+`RasterConstants::new(&words)`を使います。後者は有限値の意味検証を行わず、trusted shaderは全許容word値で範囲安全である必要があります。
+
+通常ビルドはチェックイン済みartifactを使い、shader compilerを要求しません。
+shader変更時は[固定SDKの生成手順](tooling.md)に加え、利用側fixtureの全artifactを再生成・照合します。
+
+```powershell
+./crates/renderer/tests/support/shaders/custom_raster-regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+```
+
+```powershell
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --test custom_raster -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12 --test custom_raster -- --ignored --nocapture --test-threads=1
+```
+
+同fixtureの変動frame全体を独立processで計測するときは、次のmodeを使います。
+24 warm-up＋24測定frame、3 pendingと3保持結果を使い、readback・poll／退役・全slotの返却まで測ります。
+診断ありbaselineはfeatureへ`development-validation,graph-diagnostics`を追加し、`--baseline`を渡した別processで実行します。
+初期化／明示Program集合の変更時のpipeline・descriptor準備は通常frameと分けます。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-custom-raster
+cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-custom-raster
+```
+
 通常フレームのヒープ/native作成・破棄はlibtest外の独立processで別に測定します。
 `frame_memory`の`vulkan-raster`/`d3d12-raster`は明示準備後に入力・draw数・Program・attachmentを変え、
 Graph構築からreadback消費・全token返却までを連続窓に含めます。診断ありは

@@ -807,6 +807,12 @@ impl FrameWork {
         }
     }
     fn complete(mut self) -> FrameResult {
+        let returned = self
+            .pool
+            .registry
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .result_token();
         let mut slot = self.slot.take().unwrap();
         slot.release_resources();
         self.pool.state().executions[self.index] = ExecutionEntry::Available(slot);
@@ -820,6 +826,7 @@ impl FrameWork {
             }
             FrameResult {
                 graph: self.graph,
+                _returned: returned,
                 pool: None,
                 result: None,
                 remaining: 0,
@@ -827,6 +834,7 @@ impl FrameWork {
         } else {
             FrameResult {
                 graph: self.graph,
+                _returned: returned,
                 pool: Some(Arc::clone(&self.pool)),
                 result,
                 remaining,
@@ -944,6 +952,7 @@ impl Drop for FrameSubmission {
 
 pub(super) struct FrameResult {
     graph: u64,
+    _returned: Arc<()>,
     pool: Option<Arc<FramePool>>,
     result: Option<ResultLease>,
     remaining: usize,

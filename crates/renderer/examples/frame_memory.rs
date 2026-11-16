@@ -23,6 +23,11 @@ mod compute_fixture;
 mod standard_fixture;
 
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[allow(dead_code)]
+#[path = "../tests/support/custom_raster_fixture.rs"]
+mod custom_raster_fixture;
+
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 #[path = "support/frame_memory_compute.rs"]
 mod frame_memory_compute;
 
@@ -50,6 +55,8 @@ fn main() {
         "vulkan-compute" => frame_memory_compute::vulkan(baseline),
         #[cfg(feature = "vulkan")]
         "vulkan-standard" => frame_memory_compute::vulkan_standard(baseline),
+        #[cfg(feature = "vulkan")]
+        "vulkan-custom-raster" => frame_memory_compute::vulkan_custom_raster(baseline),
         #[cfg(all(feature = "d3d12", windows))]
         "d3d12" => frame_memory::d3d12_buffer_lifecycle(baseline),
         #[cfg(all(feature = "d3d12", windows))]
@@ -58,8 +65,10 @@ fn main() {
         "d3d12-compute" => frame_memory_compute::d3d12(baseline),
         #[cfg(all(feature = "d3d12", windows))]
         "d3d12-standard" => frame_memory_compute::d3d12_standard(baseline),
+        #[cfg(all(feature = "d3d12", windows))]
+        "d3d12-custom-raster" => frame_memory_compute::d3d12_custom_raster(baseline),
         _ => panic!(
-            "supported modes: cpu/vulkan/vulkan-image/vulkan-raster/vulkan-compute/vulkan-standard/d3d12/d3d12-raster/d3d12-compute/d3d12-standard [--baseline] (backend feature required)"
+            "supported modes: cpu/vulkan/vulkan-image/vulkan-raster/vulkan-compute/vulkan-standard/vulkan-custom-raster/d3d12/d3d12-raster/d3d12-compute/d3d12-standard/d3d12-custom-raster [--baseline] (backend feature required)"
         ),
     }
 }

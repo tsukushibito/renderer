@@ -280,6 +280,18 @@ impl RasterPipeline {
         clear: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
+        for slot in managed.bindings() {
+            let maximum = match slot.kind {
+                BindingType::Uniform => 65_536,
+                BindingType::StorageRead => super::resources::MAX_BUFFER_BYTES,
+                _ => continue,
+            };
+            if slot.min_size > maximum {
+                return Err(D3D12RuntimeError::unsupported(
+                    "Raster buffer ABI exceeds D3D12 descriptor range limits",
+                ));
+            }
+        }
         if owner.info.shader_model < D3D_SHADER_MODEL_6_0 as u32 {
             return Err(D3D12RuntimeError::unsupported(
                 "Raster programs require Shader Model 6.0",

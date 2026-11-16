@@ -246,7 +246,7 @@ leaseは`Arc<ShaderPrograms>`を保持し、最後のownerのDropはcached descr
 pipeline作成に失敗した際も、部分的に作成できたhandleを解放する。
 
 頂点はmodel座標xyz（入力W=1）とlinear rgbaで、描画ごとのMVPでclip座標へ変換する。
-`RasterDraw.parameters`へ`RasterParameters::default()`を指定するとidentity MVPと白tintを使う。
+`RasterDraw.parameters`へ`RasterParameters::default().into()`を指定するとidentity MVPと白tintを使う。
 頂点shader用push constantはcolumn-major mat4がoffset 0、linear tint vec4がoffset 64の計80 byte。
 実Deviceの上限を照会し、pipeline layoutと記録のstage・offset・sizeを一致させる。
 色と行列はGraphの不変operandとして保持し、後続frameのCPU入力変更に依存しない。
@@ -254,15 +254,18 @@ pipeline作成に失敗した際も、部分的に作成できたhandleを解放
 clear depthは1、通常meshのcompareはLESS＋depth write、viewportの高さは正、cullingは無効とする。
 標準prepass後の`mesh_prepassed`／`mesh_hdr_prepassed`はLESS_OR_EQUAL＋depth writeなしであり、
 同じgeometry・View・変換で作ったD32をLoadする。Graphはdepth必須・Load必須を0 drawでも確認する。
-Program identityへこの固定stateを含め、両backendが同じ契約を使う。任意stateの公開は後続課題である。
+Program descriptorへこのstateを含め、両backendが同じ契約を使う。
 front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段階では向きも再検証する。
 汎用projection builder、照明、tone mappingは提供しない。
-色はlinear RGBA8_UNORMまたはRGBA16Fで、alphaを保持し、blendingは無効とする。
+色はlinear RGBA8_UNORMまたはRGBA16Fで、標準meshはalphaを保持してblendingを無効にする。
+独自Programは同じdescriptorでReplace／straight alpha／premultiplied alpha／加算と
+depth compare／write／attachment必須条件を指定できる。blendを使う形式は
+`COLOR_ATTACHMENT_BLEND`対応もpipeline準備時に確認する。
 u32 indexは頂点bufferの範囲と、起動時に保持した実際の`maxDrawIndexedIndexValue`の両方を検査する。
 Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有効化だけで上限を推定しない。
 
 明示した`ManagedRasterProgram::mesh()`のowned Raster列は一つのDynamic Rendering区間で宣言したcolor/depthのLoad/Storeを適用し、
-pipelineとviewportを設定してから、owned draw列の順にbuffer binding・80-byte引数・indexed drawを記録する。
+pipelineとviewportを設定してから、owned draw列の順にbuffer binding・inline引数・indexed drawを記録する。
 draw命令自体はdraw数分あり、instancingやmulti-drawへの変換、描画順の並べ替えは行わない。
 空listにはclear-onlyの既存経路を使い、Raster Programの作成を要求しない。
 単一drawも同じ列で記録する。Engineの標準opaqueは従来どおりClear/Storeを明示する。
@@ -272,13 +275,25 @@ color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を
 MRTやmulti-subresourceのlive計画は物理取得前に拒否する。
 
 `prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
-選択したレビュー済みProgram（prepassedの固定深度stateも含む）とcolor形式・depth有無をkeyとしてpipelineを保持し、
+選択したtrusted Program（prepassedの深度stateも含む）とcolor形式・depth有無をkeyとしてpipelineを保持し、
 通常prepareで新しい種類を作成しない。既存meshのcolor＋depthは従来のworking-set準備で利用できる。
 HDRは同じfloat出力shaderをRGBA16Fへ書き、depth-onlyはfragment stageとcolor attachmentを省く。
-pipeline layoutはmeshのinline80 byteと、texturedのVS Uniform／FS sampled image・separate samplerを区別する。
+pipeline layoutは各descriptorの頂点属性、最大128-byteのVS／FS inline定数、
+最大4 groupのUniform／StorageRead／sampled image・separate samplerを具体化する。
+standard meshの80-byte定数とtexturedのbindingも同じ経路を使う。
 Uniformの実Device alignment/range上限は記録前のnative適合境界で保証する。
-drawごとの二groupのdescriptorを容量内で別slotへ設定し、記録済み／pendingのsetを別drawで再更新しない。
+drawごとのdescriptorを容量内で別slotへ設定し、記録済み／pendingのsetを別drawで再更新しない。
 Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ含め、cancelまたは実GPU完了後だけ再利用する。
+
+static `RasterProgramDescriptor`の取込は明示したunsafe境界であり、binaryの有効性だけでなく
+全許容定数・入力に対する範囲安全、宣言外アクセス／storage副作用の不在を呼出側が保証する。
+通常Graphはdraw定数のbyte数と資源範囲・初期化を保証する。genericなword列にfiniteの制約は付けず、
+`RasterParameters`の有限値保証をその便利変換以外へ一般化しない。
+shaderのbytecode／metadata／固定状態を含む不変descriptor identityでlookupし、
+runtime生涯の追加回数ではなく、明示準備した現在の集合に対して64資産の上限を適用する。
+集合変更は新しいProgram所有者とdescriptor領域を準備してから切り替えるため、
+失敗時は旧集合を利用でき、通常frameのlookupに可変Vecの再確保やlockを加えない。
+この変更境界のpipeline再作成費用は通常frameメモリ保証と区別し、時間性能の改善を主張しない。
 
 RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignmentをatom sizeと8 byte以上にする。
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
@@ -620,7 +635,8 @@ pool所有者は通常処理中保持し、pool先終了後の最後のbacking�
 標準color/depth用の二枠を一律には要求しない。これは物理予約や全Graphの容量保証ではない。
 submit成功時は通常のRuntimeのWork/resource leaseへ所有を渡してscratchを返す。
 接続後のmesh入力はwriteと直接exportをGraph構築で拒否し、不変常駐版の保証を維持する。
-public Rasterも生成時に有限値を保証した`RasterParameters`を使い、Engine専用の描画能力に依存しない。
+標準meshのpublic Rasterも生成時に有限値を保証した`RasterParameters`からowned定数へ変換し、
+Engine専用の描画能力に依存しない。genericな独自shader定数の意味と値域はtrusted資産の契約で定める。
 一般import/履歴の拡張とは分け、既存のFence・同期・失敗時保持・物理資源再利用契約を変更しない。
 
 入場したupload集合はcursorと未投入byte数を持ち、chunkごとに完了prefixと全meshを再走査しない。

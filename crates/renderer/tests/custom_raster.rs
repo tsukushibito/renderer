@@ -550,6 +550,18 @@ mod native {
             dx.prepare(&plan).is_err(),
             "missing custom asset is unprepared"
         );
+        // The first live Raster is the binding-free standard opaque Program.
+        // Excluding it must return a capacity error before command recording.
+        vk.prepare_raster_programs(&[]).unwrap();
+        dx.prepare_graph_working_set(&images(), &[], &[]).unwrap();
+        assert_eq!(
+            vk.submit(&plan).err().unwrap().kind(),
+            RuntimeErrorKind::CapacityExhausted
+        );
+        assert_eq!(
+            dx.prepare(&plan).err().unwrap().kind(),
+            D3D12RuntimeErrorKind::CapacityExhausted
+        );
         prepare_vk(&mut vk);
         prepare_dx(&mut dx);
         drop(plan);

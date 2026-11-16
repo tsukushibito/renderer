@@ -616,6 +616,8 @@ impl GraphWork {
                         depth,
                         ..
                     } => {
+                        let programs = programs.as_ref().unwrap();
+                        let native_program = programs.raster_program(*program, depth.is_some())?;
                         for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
                             let vertex_count = graph.resources[draw.vertices].desc.units()
                                 / u64::from(program.vertex_stride());
@@ -632,9 +634,6 @@ impl GraphWork {
                                     index_error(error).context(format_args!("draw {draw_index}"))
                                 })?;
                             let sets = if !program.bindings().is_empty() {
-                                let programs = programs.as_ref().unwrap();
-                                let native_program =
-                                    programs.raster_program(*program, depth.is_some())?;
                                 let operands = program
                                     .bindings()
                                     .iter()

@@ -369,16 +369,7 @@ impl VulkanRuntime {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         self.collect_recycled();
-        if self.execution.stats().leased != 0
-            || self.workspaces.as_ref().is_some_and(|pool| !pool.is_idle())
-            || self.results.as_ref().is_some_and(|pool| !pool.is_idle())
-            || self.exports.as_mut().is_some_and(|pool| !pool.is_idle())
-            || !self
-                .import_ranges
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_idle()
-        {
+        if !self.frame_consumers_returned() {
             return Err(RuntimeError::capacity(
                 "working-set preparation requires returned frame/result/import tokens",
             ));
@@ -506,7 +497,8 @@ impl VulkanRuntime {
     /// Replace the complete Raster Program working set before ordinary frames.
     /// Color programs prepare color-only variants and depth-enabled variants
     /// when the prepared resource working set includes depth images.
-    /// All recorded/pending commands must retire before replacing descriptor layouts.
+    /// All recordings, pending commands, results and buffer export/refresh tokens
+    /// must be returned before replacing descriptor layouts, as for resource preparation.
     /// The selected set replaces previous explicit Raster selections only after
     /// all native preparation succeeds; failure preserves the previous set.
     pub fn prepare_raster_programs(
@@ -520,9 +512,10 @@ impl VulkanRuntime {
         if self.frame_capacity.is_none() {
             return Err(RuntimeError::capacity("frame working set is not prepared"));
         }
-        if self.execution.stats().leased != 0 {
+        self.collect_recycled();
+        if !self.frame_consumers_returned() {
             return Err(RuntimeError::capacity(
-                "Raster preparation requires retired execution slots",
+                "Raster preparation requires returned frame/result/import tokens",
             ));
         }
         let replacement = ShaderPrograms::new(
@@ -543,6 +536,18 @@ impl VulkanRuntime {
         replacement.prepare_rasters(programs, depth_available)?;
         self.programs = Some(replacement);
         Ok(())
+    }
+
+    fn frame_consumers_returned(&mut self) -> bool {
+        self.execution.stats().leased == 0
+            && self.workspaces.as_ref().is_none_or(|pool| pool.is_idle())
+            && self.results.as_ref().is_none_or(|pool| pool.is_idle())
+            && self.exports.as_mut().is_none_or(|pool| pool.is_idle())
+            && self
+                .import_ranges
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_idle()
     }
 
     /// Prepare the complete managed Compute working set before ordinary frames.

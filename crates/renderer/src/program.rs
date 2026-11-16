@@ -4,7 +4,7 @@
 //! are copied once and stay immutable; storage is created without initialized
 //! contents and may be written by the GPU. Immutable bindings retain the actual
 //! Program and resource versions, not a promise of immutable storage contents.
-//! Managed dispatches are owned by Graph. Caller-defined trusted compute assets
+//! Managed draws and dispatches are owned by Graph. Caller-defined trusted shader assets
 //! enter through an explicit unsafe descriptor boundary; reflection alone cannot
 //! establish shader memory safety or synchronization.
 //!
