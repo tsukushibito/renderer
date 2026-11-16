@@ -155,6 +155,17 @@ impl BufferProvenance {
     pub(crate) fn write_mesh_indices(&mut self, target: Range<u64>, byte_len: u64, maximum: u32) {
         self.segments.clear();
         self.validation = None;
+        if target == (0..byte_len) {
+            // A complete immutable replacement has no bytes from the previous
+            // stream. Its new maximum may legitimately be smaller; retaining
+            // the old maximum would reject valid replacement geometry.
+            self.mesh = Some(MeshIndexSummary {
+                byte_len,
+                known_prefix: byte_len,
+                maximum,
+            });
+            return;
+        }
         let previous = self.mesh.take().filter(|proof| proof.byte_len == byte_len);
         let mut proof = previous.unwrap_or(MeshIndexSummary {
             byte_len,
@@ -758,6 +769,34 @@ mod tests {
                 vertex_count: 3
             })
         );
+    }
+
+    #[test]
+    fn full_immutable_index_replacement_uses_new_bounds_without_retaining_payload() {
+        let mut contents = prepared();
+        contents.write_mesh_indices(0..12, 12, 2);
+        let mut old = snapshot(&contents);
+        contents.write_mesh_indices(0..12, 12, 0);
+        assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(contents.test_evidence(), (0, 0));
+        assert_eq!(
+            old.validate_indices(3, 1, 0),
+            Err(IndexError::VertexBounds {
+                index: 2,
+                vertex_count: 1
+            }),
+            "a replacement does not change already prepared snapshots"
+        );
+        contents.write_mesh_indices(0..12, 12, 3);
+        assert_eq!(
+            contents.validate_indices(3, 4, 2),
+            Err(IndexError::DeviceLimit {
+                index: 3,
+                maximum: 2
+            })
+        );
+        assert_eq!(contents.validate_indices(3, 4, 3), Ok(()));
+        assert_eq!(contents.test_evidence(), (0, 0));
     }
 
     #[test]
