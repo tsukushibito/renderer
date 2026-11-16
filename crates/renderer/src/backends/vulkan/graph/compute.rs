@@ -188,12 +188,11 @@ impl ComputePrograms {
                 .iter()
                 .any(|slot| slot.kind == BindingType::Sampler)
         }) {
-            #[cfg(feature = "memory-profiling")]
-            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-            // SAFETY: Core nearest/clamp sampler, no optional feature use. Owned
-            // immediately so any later arena failure releases it.
+            // SAFETY: Core nearest/clamp sampler uses no optional feature. The
+            // Device helper reserves its shared quota and rolls back failures;
+            // success is owned immediately so later arena failures release it.
             result.sampler = unsafe {
-                result.owner.device.raw().create_sampler(
+                result.owner.device.create_sampler(
                     &vk::SamplerCreateInfo::default()
                         .mag_filter(vk::Filter::NEAREST)
                         .min_filter(vk::Filter::NEAREST)
@@ -202,10 +201,8 @@ impl ComputePrograms {
                         .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                         .max_lod(0.0),
-                    None,
                 )
-            }
-            .map_err(|r| native(&result.owner, "vkCreateSampler(owned Compute)", r))?;
+            }?;
         }
         for _ in 0..slots {
             let arena = Arena::new(Arc::clone(&result.owner), &result.programs, capacity)?;
@@ -249,10 +246,9 @@ impl Drop for ComputePrograms {
             .idle
             .clear();
         if self.sampler != vk::Sampler::null() {
-            #[cfg(feature = "memory-profiling")]
-            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
             // SAFETY: All leases retain this owner until cancellation/retirement.
-            unsafe { self.owner.device.raw().destroy_sampler(self.sampler, None) };
+            // The matching Device helper releases native ownership and quota.
+            unsafe { self.owner.device.destroy_sampler(self.sampler) };
         }
     }
 }
