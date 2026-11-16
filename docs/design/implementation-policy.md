@@ -98,7 +98,7 @@ Rustのedition、MSRV、シェーダーコンパイラー、ウィンドウ接�
 Vulkanはash 0.38／vk-mem 0.5、D3D12は現行の生成bindingsとDevice/Fence所有を出発点にする。
 第7章のA（構築時owned命令＋binding/attachment由来アクセス）を両APIへ接続し、
 固定`ComputeTransform`やeffect別`ProgramKind`を一般パスの拡張手段にしない。
-これはB1以降の実装方針の決定であり、現行Rendererへの汎用パス追加の完了ではない。
+この選定比較単独は実装の証拠にせず、現行の一般パスとB2の接続・受入は[最新の検証結果](../verification/current.md#bistro-pbr)で確認する。
 
 判断の順序は、確定要件への適合、保証・製品費用を管理できる境界、Bistroまでの総作業、保守負担とする。
 既存コード量や過去の工数を採用理由にしない。再利用するのは、将来も必要な契約を実装し、
@@ -494,7 +494,7 @@ callbackでも型付きpass data／bindingから宣言を作れるため、callb
 |---|---|---|
 | A: 構築時に命令を所有 | 即時closureでframeのdraw slice等を借用し、終了後は命令・定数・資源参照をplanが所有する | 実際のbinding／attachmentから用途・範囲を導ける。除去される処理も命令生成する。命令列の格納とnative記録時の走査が必要 |
 | B: frame内の遅延callback | 宣言時に型付きpass dataを渡し、同じdataと制限されたencoderで後から記録する。`FnOnce + 'frame`で借用できる | 不要passのcallbackを呼ばずに済む。先に宣言したアクセス集合を実命令が越えない保証、captureの寿命、record時の失敗処理が必要 |
-| B0比較元の固定操作 | 当時の単一draw `Graph::raster`、固定`ComputeTransform`、build時custom closure | 比較元の正しい基準。現在のmesh Rasterは明示Program＋owned draw列へ統合済みだが、独自shader・depth-only・HDR等の代わりにはならない |
+| B0比較元の固定操作 | 当時の単一draw `Graph::raster`、固定`ComputeTransform`、build時custom closure | B0比較当時の制限を示す。現行の一般Program／独自Raster・HDRとB2の受入は[現在の検証結果](../verification/current.md#bistro-pbr)を参照する |
 
 **第一案はAと、binding／attachmentからアクセスを導く公開builderの組合せ**とする。
 通常作者が入出力とdraw／dispatchを同じ場所で書け、実命令が確定した境界で検査でき、
@@ -626,7 +626,7 @@ Rustのcode size・cache効率・native record時間の計測ではない。
 同じ資源を繰り返す場合と異なる資源、動的binding、解像度変更、検証on/offを比較し、
 pipeline初回作成と定常状態を分離する。現行共通領域の予約・再利用は
 [4.4節](#prepared-frame-storage)で定め、plan cacheや並列recordは別の測定後の選択とする。
-GPU同期・寿命・shader ABI・画像結果・Windows表示・性能の確認はB1以降の実機受入へ残す。
+このCPU比較単独からGPU同期・寿命・shader ABI・画像結果・Windows表示・性能の成功を推定せず、それぞれの実機受入で確認する。
 基盤の維持／改修／置換／外部利用と総工数の比較は[3.3節](#foundation-selection)に記す。
 
 <a id="public-api-layers"></a>
@@ -923,7 +923,8 @@ privateな不変データ・所有権・失効管理で保証できる照合も�
 決定的に比較できるグラフダンプと計画ダンプを用意する。Vulkanオブジェクト名とパスのdebug labelを対応づける。`VK_EXT_debug_utils`はオブジェクト名、ラベル、検証メッセージの受信に利用できる。[^debug]
 
 詳細dump・命名・label・profilingは検証と独立に選択し、製品に不要な構築・保持・文字列化を常設しない。
-診断拡張を製品の恒久的な必須条件にする方針ではない。現在のdebug_utils必須という実装状態は
+現行は`vulkan-diagnostics`有効時にdebug_utilsを要求し、同featureなし・native検証Disabledでは要求しない。
+明示Requiredには対応する診断featureが必要であり、診断を省いて成功扱いにはしない。詳細は
 [Vulkan設計](vulkan.md#検証と診断)と[検証方針の差分](../guides/validation-policy.md#current)を参照する。
 
 将来の最適化には、エイリアシング無効、複数キュー無効、並列記録無効などの切り分けスイッチを併設する。ただし、意味を誤ったアクセス宣言まで自動修正する仕組みにしない。
@@ -1233,12 +1234,12 @@ native layout/root slotはmanifestから導出し、旧Uniform専用APIを置換
 `.2.1.7`はreadonly StorageRead bindingと管理下shaderの16-byte copyを二APIへ加える。
 一般owned Graphの計画は`.2.2`、graphicsのstage/vertex/attachment/PSOと二API Raster実行は`.2.3`で接続する。
 `.2.2.2`では管理下buffer Computeのowned命令・論理bindingとshader実footprintを共通CPU計画へ接続した。
-現在はuniform/storage readbackの一workgroupだけを扱い、binding全descriptorと16-byte実アクセスを分ける。
+この`.2.2.2`のCPU契約受入ではuniform/storage readbackの一workgroupだけを扱い、binding全descriptorと16-byte実アクセスを分けた。
 この段階のCPU計画と、`.2.4`で接続するDevice固有の保証・二APIのnative実行は区別する。
 prepared arena・所有・初期化・依存・cullingとnative未対応拒否の範囲は[Graph契約](rendergraph.md#program由来bindingとshader-stageのowned計画)に従う。
 `.2.2.3`は描画命令なしのattachment配列/optional depthと単一mip/layer ViewをCPU計画へ追加し、
 Load/Store、各subresourceの初期化・producer/hazard/culling、全域exportを実証する。
-旧clear入口は置換し、nativeは従来の1color＋depth Clear/Storeだけをlowerする。
+このattachment CPU契約の受入点では旧clear入口を置換し、native loweringは1color＋depth Clear/Storeに限定していた。
 owned一般Raster命令・graphics stage/vertex/PSOと実描画、複数subresource View/native実行をこの完了に含めない。
 `.2.2.4`は実在mesh assetの`ManagedRasterProgram`を明示するowned複数drawへ公開Raster/Engine batchを統合する。
 Program・定数・draw順・attachmentを同じ準備済み計画へ所有し、既存VulkanでLoad/Storeとindex provenanceを維持して実行する。
@@ -1249,7 +1250,7 @@ Program・定数・draw順・attachmentを同じ準備済み計画へ所有し�
 選択したProgram、物理画像、descriptorの容量を明示準備境界で確保する。通常frameでは作成・増設・内部waitを行わない。
 HDRは既存float shader出力の格納形式であり、露出・tone mappingやBistroの影照明を実装した意味ではない。
 GPU前のindex内容保証はprivateな`graph::provenance`へ共有し、変わらないmesh本文の再走査を避ける。
-通常Z/LESS、u32 triangle index、stride28、inline80 byte、単一mip/layer/sample、最大一色とoptional D32が実行範囲である。
+この標準mesh Programの実行範囲は通常Z/LESS、u32 triangle index、stride28、inline80 byte、単一mip/layer/sample、最大一色とoptional D32である。
 `.2.7.3`の標準prepass継続用には、同じshader/ABIの限定ProgramでLESS_OR_EQUAL・depth writeなしを追加する。
 これは一般graphics state APIではなく、depth必須・Load必須と明示準備の契約を持つ。
 任意/MRT Program、first_index/base_vertex/多instance、複数subresourceを覆うViewをこの完了の保証にしない。
@@ -1452,7 +1453,10 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 
 準備は`renderer-we8.1`・`.2`、`renderer-6qc`（adapter・検証・shader経路）、
 `renderer-k51`（ローカル実GPU反復実行基盤）で実施した。
-現在の`d3d12` featureは、次のDeviceとbuffer実行までを提供する。
+現在の`d3d12` featureはDevice・buffer／画像資源・一般Graph／Programを提供し、
+`presentation` feature併用時はWindows表示も提供する。
+同じ一般経路へ接続したB2 PBRも[実GPU受入](../verification/current.md#bistro-pbr)で確認した。
+以下はそのうち管理下Program／bufferの保証境界を示す。
 
 <a id="d3d12-runtime"></a>
 
@@ -1488,7 +1492,7 @@ private受入だけがshaderの16-byte write保証を使う。Storage出力は�
 命令記録/readbackとStorageの排他leaseは`cfg(test)`に限定する。leaseは既存Work/Retainedへ保持し、
 未投入cancelまたは実Fence完了で返し、未完了/Signal失敗時は早期に返さない。
 fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのbusy拒否と再利用を確認する。
-一般Graph導入時の製品状態管理・同期・GPU lifetimeは後続であり、このtest-only leaseが代替するものではない。
+このnative境界fixture単独は、一般Graphの製品状態管理・同期・GPU lifetimeの受入を代替しない。
 二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
 
 `.2.1.7`の`StorageRead`は既存Storage資源をroot SRV `t0/space0`へlowerする。
@@ -1864,7 +1868,8 @@ CPUテスト、実GPUテスト、性能測定を分けて実行・報告する�
 目標はBistroのテクスチャ付きPBR・影・HDR/トーンマッピングと、
 利用側独自Bloomを、同じパス定義でVulkan/D3D12へ接続することです。
 
-B0で決定した素材・画質・API利用例と3.3節の採用基盤・移行範囲を入力に、B1の縦切り実装へ進んでください。
+B0で決定した素材・画質・API利用例と3.3節の採用基盤・移行範囲、現在の検証結果を入力にしてください。
+一般パスとB2 cook・二API PBRの接続は完了済みです。続く作業はBeadsの現行依存関係と依頼範囲から選んでください。
 既存基盤の維持や自前実装を目的にせず、進めやすさ・総工数・UX・品質で選んでください。
 公開APIを少数の成功例だけで決めず、実装は検証可能な縦切りに分けてください。
 

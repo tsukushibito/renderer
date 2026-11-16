@@ -67708,14 +67708,15 @@
       ],
       "documentation": {
         "html_pages": 17,
-        "local_links_resources_fragments": 2246,
+        "local_links_resources_fragments": 2270,
         "mermaid_instances": 32,
         "checked": "viewer, theme, mobile, print styles, print book and local-only assets",
         "browser_log": {
-          "path": ".tools/bistro-pbr-evidence/final-doc-browser.log",
+          "path": ".tools/bistro-pbr-evidence/final-doc-browser-consistent.log",
           "bytes": 164,
           "sha256": "52b5ca46811b0f74a2c04089fa86fa036fb10c8836e145645f773631772b25bd"
-        }
+        },
+        "independent_status_review": "Existing current verification, policy, Vulkan/Graph design and tooling statements reconciled with B2. Earlier fixed-source acceptance is explicitly scoped. Presentation requires the additional feature; shader behavioral safety remains the caller unsafe import obligation, distinct from declared ABI/binding/ownership checks."
       }
     },
     "limits": [

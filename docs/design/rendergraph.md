@@ -17,7 +17,8 @@ Graphの宣言・解析と、各backendが実行できる操作の範囲は区�
 
 次の開発は[実装方針のBistro計画](implementation-policy.md#bistro-roadmap)に従う。
 B0で実シーンの要求・公開API利用例と[基盤の採用・移行範囲](implementation-policy.md#foundation-selection)を設計した。
-B1では構築時owned命令とbinding/attachment由来アクセスを一般化し、nativeの低レベル所有を再利用して二APIで実証する。
+B1で構築時owned命令とbinding/attachment由来アクセスを一般化し、nativeの低レベル所有を再利用して二APIへ接続した。
+B2の利用側cook・PBRもこの経路で[実GPU受入と測定](../verification/current.md#bistro-pbr)を行った。
 [公開APIの採用方針](implementation-policy.md#public-api-layers)は、汎用Graph API・公開標準パス・それらで構成する標準グラフの三層とする。
 Engineの固定構成からの移行順序は[公開API変更計画](implementation-policy.md#public-api-migration)に従い、以下の現行契約と区別する。
 現行の固定操作、内部表現、構築順による意味論、runtimeの再利用は維持義務ではない。
@@ -761,18 +762,18 @@ Graph GPU区間と表示用GPU区間、CPU acquire／present費用を分け、di
 M3のエンジン入力は、scene/ECSの意味、Graph構築、native記録、GPU寿命を分けて接続する。
 custom passの挿入はGraph構築時に行い、標準描画と同じproducer解析・内容検査・同期を通す。
 現時点の実行操作は管理下のshaderに限定するが、依存解析に固有のshader実装を持ち込まない。
-任意shaderを導入するときはshader/pipelineの所有、binding metadata、宣言との照合、
-ABIと信頼境界の検証が追加で必要になる。現在の限定操作だけでそれらまで保証したとは扱わない。
-公開パスの形はB0で複数の利用コードから設計し、B1でVulkan/D3D12の実行結果を確認する。
+現行Programはshader/pipelineの所有と、宣言されたABI・binding metadata・Graph宣言の整合を作成／Graph構築／準備境界で確認する。
+shaderの全入力に対する動作安全性は利用側がunsafe取込契約で保証する。固定操作単独の検証を一般Programの保証へ流用しない。
+公開パスの形はB0で複数の利用コードから設計し、B1以降のVulkan/D3D12実行で確認した。
 独自の効果を追加するためにGraph本体やeffect列挙型を変更しないことを受入条件とする。
-構築時に所有された命令を蓄える方式、実行callback方式などは比較して選び、記録時期や型名を先に固定しない。
+構築時に所有された命令を蓄える方式と実行callback方式は、B0の利用コード比較から前者を選んだ。
 
 代表利用コードによる[公開API比較と第一案](implementation-policy.md#public-api-comparison)では、
 型付きbinding／attachmentからアクセスを導き、構築時に命令を所有する案をB1の出発点とした。
-frame内借用が可能な遅延callbackとも同じ利用例で比較する。CPU試作は将来の独自program、
+frame内借用が可能な遅延callbackとも同じ利用例で比較した。CPU試作は当時検討した独自program、
 depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、上記の現行対応範囲を拡張しない。
 基盤は[B0の比較](implementation-policy.md#foundation-selection)でnative上位置換＋低レベル再利用を選んだ。
-実装変更までは現行のproducer・import・寿命契約を維持する。
+今後の拡張でもproducer・import・寿命契約を維持し、変更時は理由と検証を記録する。
 
 ## 公開標準パスと標準グラフ
 

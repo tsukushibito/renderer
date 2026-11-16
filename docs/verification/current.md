@@ -139,7 +139,7 @@ Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phas
 先行したwarmup 60 frameの独立12 runも補助記録として保持した。通常process CPU中央値は18.950／33.524msで、API差の傾向は同じだった。
 主結果には固定の二周warmupを満たす表の値を使い、両batchを混ぜて集計しない。
 独立レビューでも全reportのhash・数値・ROI・同一EXE・画像hashを再照合し、不整合を認めなかった。
-ドキュメントは17 HTML page・2,246 local link/resource/fragment、32 diagram instanceを検査し、viewer・theme・mobile・printの表示を確認した。
+ドキュメントは17 HTML page・2,270 local link/resource/fragment、32 diagram instanceを検査し、viewer・theme・mobile・printの表示を確認した。
 これは新しいPBR負荷の基準測定であり、PBR未実装時との速度改善率ではない。
 
 素材全量の更新・実VRAM予算の`.3.3`、B3以降の画質、他機材・長時間soak・device lossはこの受入へ追加していない。
@@ -268,7 +268,7 @@ mdBook 17ページ・2,170 local link/resource/fragmentと、browserで32個のd
 既存preprocessorのmdBook版警告は残るが、生成・リンク・描画チェックは通過した。
 build manifest、各run、counterの全値、受理／拒否したtrace、実IP／ソース対応と確認範囲は
 [ソースレビューの証拠](source-review.json)の`cpu_profiling_environment`へ記録する。
-raw ETLとsystem-wide CSVは含めない。他機材／Linux GPU、長時間soak、OOM／Device loss、Bistro全体の速度は未確認である。
+このCPU調査の受入では、raw ETLとsystem-wide CSVは含めない。他機材／Linux GPU、長時間soak、OOM／Device loss、Bistro全体の速度は未確認である。
 
 <a id="runtime-review-improvements"></a>
 
@@ -382,7 +382,8 @@ Window受入はwinitの一process一event loop制約に従い、APIごとの独�
 
 OSからwinitへの実キー／マウス配送は未検証で、Computer Useによる追加確認はツールのアプリ利用が未承認のため未実施。
 present受理・maintenance fence・D3D12 queue markerを実画面の表示完了とせず、PresentMon等のscanout測定も行っていない。
-他GPU／driver、Linux実GPU、実OOM／Device loss、一般拡縮・HDR表示、Bistro PBR／影／tone mapping／Bloomは未実行。
+この小規模WSI受入では、他GPU／driver、Linux実GPU、実OOM／Device loss、一般拡縮・HDR表示、Bistro PBR／影／tone mapping／Bloomを実行していない。
+現行Bistro PBRの別受入は[本書冒頭](#bistro-pbr)を参照する。
 新しいvendor最適化、通常CIへの実GPU必須化や時間閾値は追加していない。
 
 ## 利用側Raster shaderとblend・depthの二API実行
@@ -514,7 +515,7 @@ native resetはVulkan48回、D3D12は記録cancelも含む96回で、作成・�
 
 実行コマンド、source hashとraw報告は[検証データの`standard_composition`](frame-memory.json)に記録する。
 一般import／履歴は`.2.5`、独自graphics shader・半透明／blend／depthは`.2.8`、
-表示と通常frame時間計測は`.2.6`、PBR／tone mappingはB2／B3に残る。
+表示と通常frame時間計測は`.2.6`の対応節、PBRは[現行B2受入](#bistro-pbr)を参照する。最終tone mappingはB3に残る。
 consumer例の既存計時値を新たな時間性能比較として採用せず、外部Layer注入とdriver内部確保は未観測とする。
 Vulkan／VMA一般推奨からの新たな例外は設けていない。
 
@@ -544,7 +545,7 @@ raw報告、実行コマンドとUTF-8 LFソースhashは[検証データの`sta
 色／depthの契約と利用例は[現行設計](../design/rendergraph.md#公開標準パスと標準グラフ)を参照する。
 
 この段階のpost二APIfixtureは両API対応の画像copyを使い、利用側Computeの三経路受入は上記`.2.7.4`で追加した。
-一般import／履歴は`.2.5`、独自半透明・shader／blend／depth設定は`.2.8`、PBR／tone mappingはB2／B3に残る。
+一般import／履歴は`.2.5`、独自半透明・shader／blend／depth設定は`.2.8`の対応節、PBRは[現行B2受入](#bistro-pbr)を参照する。最終tone mappingはB3に残る。
 表示・通常frame時間性能、非観測の外部Layer注入やdriver内部確保は今回の保証に含めない。
 prepassedもGraphでは保守的depth read/writeを維持し、Vulkan／VMA一般推奨からの新たな例外や性能改善の主張はない。
 
@@ -555,7 +556,7 @@ prepassedもGraphでは保守的depth read/writeを維持し、Vulkan／VMA一�
 複数snapshot/View、同mesh旧新版、任意の画像/buffer出力を扱い、一画像の便利経路も構成後に`select_output`する。
 `prepare_snapshot`の非mesh登録余裕も利用側指定とし、標準color/depth用の二枠を一律に要求しない。
 公開標準パス・標準グラフは上記`.2.7.3`で追加し、三経路受入と代表consumer移行は`.2.7.4`で確認した。
-一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
+この`.2.7.2`受入点の後続範囲として、一般D3D12 import/履歴は`.2.5`、独自Rasterは`.2.8`に残る。
 
 `RasterParameters::new`で有限値を保証する不変公開型へ統一し、snapshotと利用側が同じ`Graph::raster`を使う。
 保証済み定数の再走査とEngine専用のvalidated描画入口を除去し、公開iteratorの実要素ごとに容量を確認する。
@@ -651,7 +652,7 @@ startup/shutdownの正の対照と全slot返却を確認した。driver/OS内部
 境界依存oracleという推論に留め、driver不具合とは断定しない。3×7へ変えて0.2 texel以上の内部marginを取り、
 許容差を広げず全byte照合を再受入した。初回ログも保持した。一般推奨からの新たな最適化例外はない。
 
-CPU/GPU時間計測の拡張は合意どおり`.2.6`の表示統合へ残す。実native OOM/Device loss、他GPU/driver、
+この`.2.4`受入時点では、CPU/GPU時間計測の拡張は合意どおり`.2.6`の表示統合へ残す。実native OOM/Device loss、他GPU/driver、
 Linux実GPU、D3D12 import/export、二API表示、Bistro/Bloomアルゴリズムは今回未実行である。
 以下の過去のnative dispatch拒否・画像copy未対応記録は、各節に記した当時の確認点に従う。
 
@@ -689,7 +690,7 @@ native resetの198（buffer）／96（Raster）は準備済み枠の再利用で
 
 segment予約枠の減少を常駐byte・時間性能の実測へ読み替えない。
 access列の二回走査は追加の使用列metadataを避ける選択であり、密なbinding入力の時間改善は未計測である。
-CPU/GPU時間、可変clearの大解像度比較、他GPU/driver、実native OOM/Device lossは未実行。
+このclear受入では、CPU/GPU時間、可変clearの大解像度比較、他GPU/driver、実native OOM/Device lossは未実行。
 Vulkan実装は変更せず、共通Raster/buffer受入を再実行した。以下の`.2.3`実装時のD3D12容量・計測記録は当時の確認点に従う。
 
 ## owned Raster・画像転送の二API実行
@@ -794,11 +795,11 @@ RTX 3060 / driver 610.88でVulkan strictの正しさゲート53件（WSI込み�
 製品は追加診断除外/native Requested Disabledを確認し、外部layer注入の不存在証明とはしない。
 liveなbuffer dispatch・textured Raster・sampled dispatch計画は拒否し、拒否時のnative作成/解放8eventは全0だった。
 Vulkanの取得/再利用数は不変で、culled枝専用の資源も取得しない。
-D3D12の画像計画は先行する画像uploadの未対応判定で拒否するため、新shader命令のnative loweringを通した証拠にはしない。
+この`52a5d74`受入点では、D3D12の画像計画は先行する画像uploadの未対応判定で拒否するため、新shader命令のnative loweringを通した証拠にはしない。
 製品Engine48frame、WSI18source/36present・18readbackも再受入し、RendererのRust4event・VMA host3event・
 Resetを除くnative8eventは全0だった。WSIのcaller要求は別rowで記録する。
 
-これで`.2.2`のCPU計画・構成/所有の受入を満たす。一般graphicsのnative PSO/二API実行は`.2.3`、
+この`.2.2`受入点では、これで`.2.2`のCPU計画・構成/所有の受入を満たす。一般graphicsのnative PSO/二API実行は`.2.3`、
 一般native Compute/copyは`.2.4`、BloomアルゴリズムはB4に残る。HDR Graph形式、storage-image Compute、
 任意shader取込、複数subresourceを覆うViewは今回の実装範囲に含めない。
 Vulkan guidanceの用途別stage/access・descriptor/資源寿命と検証配置を維持し、新しい規約例外はない。
@@ -836,7 +837,7 @@ VMA host3event・Resetを除くnative作成/解放8eventは全0だった。WSI c
 二API共有buffer Graphはstrict/製品とも308 byte全一致。strictはCore/SyncValまたはDebug Layer/GBVの実効と
 最終native所有者解放後まで警告/error等ゼロを確認し、製品は追加診断除外/native Requested Disabledで確認した。
 
-このmeshはdescriptor bindingを持たない。`.2.2.5`で別Programのbinding/stage CPU計画を接続したが、他のshader/PSO、
+この`5d7fb6b`受入点では、このmeshはdescriptor bindingを持たない。`.2.2.5`で別Programのbinding/stage CPU計画を接続したが、他のshader/PSO、
 D3D12 Raster、depth-only/MRT描画、first_index/base_vertex/多instanceと一般native subresource実行は後続に残る。
 index本文の範囲・未知内容・Device上限とGPU寿命は既存native経路で維持し、CPU Programだけから安全を推定しない。
 新しい規約例外はない。Linux/別GPU・driver実GPU、長時間耐久、実native OOM/loss、時間性能と物理VRAM改善は未確認。
@@ -871,8 +872,9 @@ VMA host3event、Resetを除くnative作成/解放8eventは全0だった。WSI�
 strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終native所有者解放後まで警告/error等ゼロを要求した。
 製品は追加検証・専用診断を除外してnative Requested Disabledとし、外部layer注入の不存在証明にはしない。
 
-native画像は今も1mip/1layerのみで、新attachmentのloweringは従来の1 RGBA8＋D32・両方Clear/Storeだけである。
-一般owned Raster・graphics Program/PSO、複数subresourceを覆うViewとnative実行、Bistro描画は後続に残る。
+このattachment/subresource CPU契約の受入点では、native画像は1mip/1layer、新attachmentのloweringは1 RGBA8＋D32・両方Clear/Storeに限定していた。
+その受入単独を一般owned Raster・graphics Program/PSO・複数subresource View・Bistroのnative実行の証拠にしていない。
+現行の全2D mip chain・sRGB・二API PBRの対応と受入は[本書冒頭](#bistro-pbr)を参照する。
 同期/寿命/validation配置/shader信頼境界の新たな例外はない。Linux/別GPU・driverの実GPU、長時間耐久、
 実native OOM/loss、時間性能は未確認。shader/生成bindingsは無変更のため再生成Verifyは未実行とした。
 実行コマンド・生counter・native境界の結果は[機械可読記録](frame-memory.json)の`attachment_subresource_cpu`にある。
@@ -884,7 +886,8 @@ native画像は今も1mip/1layerのみで、新attachmentのloweringは従来の
 manifest順の論理buffer descriptorを準備済み領域へ所有する。
 shader実footprintを別契約として保持し、32-byte descriptorでも読書き・初期化は先頭16 byteだけに限定した。
 所有・保証境界・制限は[Graph契約](../design/rendergraph.md#owned-shader-bindings)に従う。
-一般Computeのnative実行、native Program/Bindingsのimport/保持、MRT/subresourceのnative実行、一般Rasterは未実装のままである。
+この`65893fa`のowned計画受入では、一般Computeのnative実行、native Program/Bindingsのimport/保持、MRT/subresourceのnative実行、一般Rasterを含めていなかった。
+後続の一般Compute／RasterとB2のnative受入はそれぞれの対応節と[本書冒頭](#bistro-pbr)を参照する。
 
 Windows x64 / Rust 1.99.0で、公開API8件と内部契約2件の新規回帰を含め、
 CPU default97件、`vulkan,d3d12`のrelease製品231件・追加検証/graph診断あり244件、各Rustdoc1件が成功した。
@@ -910,8 +913,8 @@ strictはCore/SyncValとD3D12 Debug Layer/GBVの実効、最終native所有者�
 これは既存private実行fixtureの回帰であり、新しいGraph dispatchの実GPU実行ではない。
 製品は追加検証・専用診断を除外しnative Requested Disabledで確認した。外部layer注入の不存在証明にはしない。
 同期・資源寿命・shader信頼境界・準備容量・validation配置の一般推奨から新たな例外はない。
-Linux/別GPU・driverの実GPU、長時間耐久、実native OOM/loss、一般dispatchの二API内容照合は未確認であり、
-親`.2.2`と後続`.2.3`/`.2.4`を完了したとは扱わない。時間性能・物理VRAMの改善も主張しない。
+このowned計画の受入単独ではLinux/別GPU・driverの実GPU、長時間耐久、実native OOM/loss、一般dispatchの二API内容照合を確認していない。
+後続のnative受入と分け、時間性能・物理VRAMの改善の根拠にもしていない。
 
 ## 通常フレームのメモリ規約と実装
 
@@ -967,7 +970,7 @@ VMA host rowはVulkanへ転送されたcallback要求も含み、VMA/driverの�
 Vulkan device memoryは成功通知、D3D12 committed resourceは暗黙heap要求、descriptorはset/要素数で、物理割当数として加算しない。
 callback外のdriver/OS/native内部、D3D12 bootstrap/CPU shader blobとtest専用旧factoryは未観測であり、
 後者を通常の準備済みframe経路で呼ばないことを別に監査した。
-別GPU/driver・Linux実GPU・長時間耐久・実native OOM/loss・時間性能/物理VRAM改善は未確認である。
+この所有・回収受入では、別GPU/driver・Linux実GPU・長時間耐久・実native OOM/loss・時間性能/物理VRAM改善は未確認である。
 準備容量による常駐量増加、木の更新とprovenance等の配列操作は代償として残り、ゼロからCPU/GPU高速化を推定しない。
 
 CPUの移行前基準値`117ae5b`は同じ24変動frameで2,502/24/62/2,526回だった。
@@ -997,7 +1000,7 @@ RTX 3060 / driver 610.88でVulkan batchの順序/深度/Compute内容、後半�
 D3D12は実buffer部分作成失敗/取消/pending寿命の厳格1件、保持した管理下shader fixtureの
 strict2件・製品2件が成功した。二API共通buffer Graphも別processのstrict/製品で各10pass・308 byte全一致。
 strictは最終native解放後まで警告/error・callback失敗ゼロ、製品は追加診断除外/native Requested Disabledを確認した。
-外部layer注入の不存在、実OOM/loss、別GPU/driver、時間性能・物理VRAM改善は未確認。
+この受入では、外部layer注入の不存在、実OOM/loss、別GPU/driver、時間性能・物理VRAM改善は未確認。
 同期・GPU/CPU寿命・容量/native失敗の保証とvalidation配置を維持し、新しい規約例外はない。
 shader/生成bindingsは無変更で再生成Verifyは実行していない。コマンド・counter・確認点は
 [機械可読記録](frame-memory.json)の`graph_review_cleanup`に記録した。
@@ -1057,7 +1060,7 @@ RTX 3060 / driver 610.88でstrict Vulkan52件（WSI込み）、D3D12寿命1件�
 共有bufferは各backend308 byte全一致。strictはCore/SyncValまたはDebug Layer/GBVの実効と、最終native解放後まで警告/error等ゼロを要求する。
 製品の同一reader、並べ替えreadback、mesh描画、旧mesh退役、5経路のメモリ・表示受入も成功した。
 適用した同期・所有・入力保証の一般推奨からの新しい例外やpolicy変更はない。
-Linux/別GPU・driver、Bistro全体、実OOM/loss、長時間耐久、GPU性能・物理VRAM改善は未確認である。
+この受入では、Linux/別GPU・driver、Bistro全体、実OOM/loss、長時間耐久、GPU性能・物理VRAM改善は未確認である。
 shader/生成bindingsは無変更で再生成Verifyは今回未実行。既知の未再現起動異常`renderer-0pb`の解決も主張しない。
 
 `renderer-agv`、比較元`413ff7d`。read/exportのproducerを最終依存集合へ直接追加し、
@@ -1092,7 +1095,7 @@ strictはCore/SyncValまたはDebug Layer/GBVの実効と最終native解放後�
 外部Layer注入の不存在を証明したとは扱わない。独立レビューに未解決指摘はない。
 正式ログは`.tools/agv/gates/`。実行filterは[開発ガイド](../guides/development.md)と機械可読の結果を参照する。
 shader/生成bindingsは無変更で今回再生成Verifyは実行していない。
-全Graph/transfer実GPUの再受入、Linux/別GPU/driver、Bistro全体、時間性能/長時間耐久、実native OOM/lossは未実行。
+この再編受入では、全Graph/transfer実GPUの再受入、Linux/別GPU/driver、Bistro全体、時間性能/長時間耐久、実native OOM/lossは未実行。
 既知の未再現native起動crash `renderer-0pb`の解決も主張しない。
 
 <a id="managed-uniform"></a>
@@ -1103,7 +1106,7 @@ shader/生成bindingsは無変更で今回再生成Verifyは実行していな�
 StorageRead bindingとreadonly storageの16-byte copyを両APIへ追加した。
 `Binding`/`BindingResource`がbuffer/View/samplerを一つのcomplete collectionで扱い、
 旧buffer専用binding APIを置換した。既存の固定ProgramKindは増やしていない。
-親`renderer-7ft.2.1`の作成契約はこの範囲で実証した。owned命令・初期化/hazard/subresource計画は
+この作成契約受入点では、親`renderer-7ft.2.1`の作成契約はこの範囲で実証した。owned命令・初期化/hazard/subresource計画は
 `.2.2`、graphicsのstage/vertex/attachment/PSOとRaster実行は`.2.3`へ残す。
 [作成保証とVulkan所有](../design/vulkan.md#managed-uniform)、
 [D3D12のroot/tableと保証](../design/implementation-policy.md#d3d12の管理下programとuniform)、
@@ -1129,7 +1132,7 @@ DXILは`4b249dc0d1728365f867e2219cc556ef1f57141ed1b99ae37d60cb3457a37c6a`。
 `fbb5d0a887223679910c3e2baa7d0abf7e3c82d52cacc298456d18a195d3564d`を確認した。
 
 作成境界で全slotの欠落/重複/余剰、resource kind/用途、owner、論理buffer範囲とDevice alignment、
-実format/usage/extent対応、View範囲を保証する。画像はmip/layer/sample各1、未初期化作成であり、
+実format/usage/extent対応、View範囲を保証する。この作成契約受入時点の画像はmip/layer/sample各1、未初期化作成であり、
 暗黙upload/submit/waitを持たない。Viewは画像を保持し、bindingはProgram、buffer/範囲、
 View/Image、samplerとdescriptor heap/setを強保持する。不変なslotと資源metadataを記録時に再走査しない。
 入力を直接参照するlazy slot解決を維持し、検査専用Vec、選択済みslotの再照合、別のslot再探索を増やしていない。
@@ -1205,7 +1208,7 @@ D3D12のstorage 1件はuniform単独とStorageRead chainの両case、sampled 1�
 workerではGPUを実行せず、rootが統合結果を逐次実行した。正式ログは`.tools/b1-storage-read/gates/`に保存した。
 変更範囲外のGraph/WSI全体の実GPU回帰は今回再実行していない。直近の全60件成功はGit履歴の`.2.1.4`の記録を参照する。
 
-Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、comparison sampler/PCF、
+この管理下Program受入では、Linux実GPU、別GPU/driver、一般shader/owned Graph画像実行、comparison sampler/PCF、
 性能・長時間耐久、実native OOM/Device lossは未実行である。性能優位や計算量の改善は主張しない。
 既知の未再現起動crash `renderer-0pb`の原因確定や解決も主張しない。
 
@@ -1247,7 +1250,7 @@ WSIの複数所有境界の同居は、下記`renderer-hyf`で機能追加前に
 [現在の境界](../design/implementation-policy.md#source-boundaries)を既存B1課題へ反映する。backendのprivate分離、生成bindingsの隔離、
 `foo.rs`と`foo/`、integration test/実GPUignoredの区分は維持する。
 現在のraw Graph作成境界のextent/clear検査、動的なowner/revision、同期・寿命・容量・native失敗は保持する。
-将来の一般Programではread scope省略の成立条件を再確認する。
+一般Programをさらに拡張する場合も、read scope省略の成立条件を再確認する。
 既知の未再現native起動crash `renderer-0pb`は未解決で、このレビューで解決したとは扱わない。
 
 統合したRustソースでfmt、製品/開発の全target Clippy（`-D warnings`）、CPU通常66件、
@@ -1327,7 +1330,7 @@ CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3
 
 [Rust試作](../../crates/renderer/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較する。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
-将来のMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
+このCPU試作で扱ったMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
 短命なdraw slice終了後のAの命令保持、Bのframe借用と不要callback非実行、
 owner／範囲／bindingの不一致と宣言外アクセスの拒否を対象にする。
 再現は[開発ガイド](../guides/development.md#public-api-comparison)を参照する。
@@ -1525,6 +1528,8 @@ Python 57件・Node 5件、文書5件のUTF-8/fence・相対link/anchor 124件�
 
 ## 環境と対応範囲
 
+以下の環境・品質ゲートは旧M4の`2b15cd0`で確認した保存範囲である。現行B2の環境・構成・結果は[本書冒頭](#bistro-pbr)を参照する。
+
 | 項目 | 確認値 |
 |---|---|
 | OS / target | Windows x64 / `x86_64-pc-windows-msvc` |
@@ -1684,9 +1689,11 @@ EXT maintenance1のpresent fenceと通常GPU参照の両方を回収根拠に使
 キャンセル等の例外回収には10秒のAPI待機予算があり、通常frameの待機とは分ける。
 完了やrelease結果を証明できなければ停止し、依存するnative所有連鎖を保持する。
 
-ViewのABIはcolumn-major MVP 64 byte＋linear tint 16 byte。従来rasterはidentityで互換を維持する。
-独自shaderの将来追加にはpipeline/binding metadata/ABI/信頼境界の検証が必要で、
-M3のGraph構築拡張をその完了として扱わない。一般の公開パスAPIは未実装であり、新計画のB0で設計しB1で二API実行を検証する。
+従来rasterのView ABIはcolumn-major MVP 64 byte＋linear tint 16 byteである。
+現行の一般公開パスは、利用側がunsafe取込契約でshader動作の安全性を保証したtrusted descriptorを引き継ぐ。
+pipeline所有、宣言されたABI／binding metadata／Graph宣言の整合を作成／Graph構築／準備境界で確認し、owned命令へ接続する。
+B2もこの経路で別ABIのcamera／材質を扱い、[二APIの実GPU受入](#bistro-pbr)を完了した。
+旧M3のGraph構築拡張単独と、後続のProgram／native実行の検証範囲は分けている。
 
 ## 計測経路と基準値
 
@@ -1889,7 +1896,7 @@ M4の第二APIはD3D12を選定した。既存Windows実機とshaderツールを
 準備4課題（`renderer-we8.1`・`.2`、`renderer-6qc`・`renderer-k51`）に続き、
 M4-03の公開`D3D12Runtime`とM4-04の共有Graph buffer実行を追加した。
 Windows限定の`d3d12` featureで、単一DIRECT queueのupload／copy／readbackを使える。
-画像、import/export、上限付き再利用と一般RHIの実装は後続課題へ残す。
+この旧M4-03/04受入点の後続範囲として、画像、import/export、上限付き再利用と一般RHIの実装は後続課題へ残す。
 
 bindingsは`windows-bindgen`／`windows-default`／`windows-core` 0.100.0、MSRV 1.95で固定した。
 入力`Windows.Win32.winmd`のSHA-256は`818706A4908FE51447EBFD88F1E54195CEDA5EC437F95FE17F1250471680811D`、
@@ -1955,7 +1962,7 @@ readbackなしの空Graphについて正常完了と最後のnative参照の解�
 
 製品構成の診断件数0は観測を組み込まない結果であり、外部からの検証注入がなかった証明には使わない。
 GBVを有効にしてbuffer copyを確認したが、shaderの計装を実行した証拠ではない。
-画像等価性と二APIの性能比較、長時間耐久、実VRAM飽和は未実行で、性能優位や閾値を受入条件にしていない。
+この旧M4-03/04受入では、画像等価性と二APIの性能比較、長時間耐久、実VRAM飽和は未実行で、性能優位や閾値を受入条件にしていない。
 旧M4-04までの6／22課題を確認した実績であり、旧M4全体や新Bistro計画の完了ではない。
 実GPU CIは追加せず、既存CIはCPU／buildと依存監査を担当する。
 

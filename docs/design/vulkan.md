@@ -235,10 +235,10 @@ VMAの配置は実測のbufferImageGranularityを満たしており、原因をa
 Deviceで有効にしていない`maintenance4`の`LocalSizeId`へ暗黙に依存しない。
 再生成とbinary一致確認は[開発手順](../guides/development.md)に従う。
 
-Computeは8×8のlocal size、set 0のbinding 0／1に各1個のRGBA8 storage imageを使う。
+固定の画像変換Computeは8×8のlocal size、set 0のbinding 0／1に各1個のRGBA8 storage imageを使う。
 push constantはoffset 0のu32 1個で変換を選ぶ。端数のinvocationはshader内で除外し、
 hostでもworkgroup size・invocation数・dispatch数・descriptor・push constantの上限を確認する。
-合成はset 0 binding 0のcombined image samplerから同じ座標を`texelFetch`し、
+固定の画像合成はset 0 binding 0のcombined image samplerから同じ座標を`texelFetch`し、
 別の同寸画像へfullscreen triangleで書く。filterやsRGB変換はしない。
 
 pipeline・layout・samplerは明示したworking setの準備でCompute／Raster／Compositeの必要な種類を作成し、
@@ -267,7 +267,7 @@ clear depthは1、通常meshのcompareはLESS＋depth write、viewportの高さ�
 同じgeometry・View・変換で作ったD32をLoadする。Graphはdepth必須・Load必須を0 drawでも確認する。
 Program descriptorへこのstateを含め、両backendが同じ契約を使う。
 front faceはCOUNTER_CLOCKWISEを設定するが、cullingで判定を使う段階では向きも再検証する。
-汎用projection builder、照明、tone mappingは提供しない。
+この標準mesh経路は汎用projection builder、照明、tone mappingを提供しない。
 色はlinear RGBA8_UNORMまたはRGBA16Fで、標準meshはalphaを保持してblendingを無効にする。
 独自Programは同じdescriptorでReplace／straight alpha／premultiplied alpha／加算と
 depth compare／write／attachment必須条件を指定できる。blendを使う形式は
@@ -283,7 +283,8 @@ draw命令自体はdraw数分あり、instancingやmulti-drawへの変換、描�
 ProgramのSPIR-Vは管理下manifestからfactoryへ渡し、native pipelineは準備済み`ShaderPrograms`が保持する。
 CPUのstatic Program identityだけでnative所有者を代替せず、WorkのProgram/資源保持とplan pinをGPU完了まで維持する。
 color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を使う。
-MRTやmulti-subresourceのlive計画は物理取得前に拒否する。
+MRT、複数subresourceを覆うattachment／storage View、array等の未対応live計画は物理取得前に拒否する。
+sampled Viewの単一mip／全2D mip chainは対応範囲に含む。
 
 `prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
 選択したtrusted Program（prepassedの深度stateも含む）とcolor形式・depth有無をkeyとしてpipelineを保持し、

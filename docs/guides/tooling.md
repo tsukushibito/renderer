@@ -208,10 +208,9 @@ typed画像format、mutability、group/register、local sizeとuniform/storage�
 この生成確認は静的ABI・再現性の証拠であり、それ自体では実GPUの内容一致を証明しない。
 uniformの二API buffer内容照合は[現在の検証状況](../verification/current.md#managed-uniform)へ分けて記録する。
 sampled fixtureの二API内容照合は同じ[検証状況](../verification/current.md#managed-uniform)へ記録する。
-既存の固定Graph画像shaderのD3D12実行や一般Graph画像等価性は未確認である。
-非identity MVP、非対称なgeometry、深度、Compute／合成の全画素比較はB1の
-`renderer-7ft.2.3`／`.2.4`で確認する。
-4／80 byteの論理定数ABIと、後続runtimeのroot constants／CBVの配置・range要件も区別する。
+一般Graph画像、非identity camera、geometry／深度、Compute／合成の二API照合は、
+生成単独の確認と分けてB1の各受入と[B2の実GPU結果](../verification/current.md#bistro-pbr)へ記録する。
+4／80 byteの従来論理定数ABIや、B2のcamera／材質ABIと、runtimeのroot constants／CBVの配置・range要件を区別する。
 
 <a id="cpu-profiling"></a>
 
@@ -475,10 +474,10 @@ RenderDocが対象プロセスへcapture有効化の環境変数を渡すため�
 管理者権限のアプリでは環境変数によるmanifest指定が無視される。
 この動作は[使用中のloaderの仕様](https://raw.githubusercontent.com/KhronosGroup/Vulkan-Loader/v1.4.341/docs/LoaderLayerInterface.md)を参照する。
 
-描画・Compute処理ができたら、qrenderdocから対象実行ファイルを起動して捕捉し、
+qrenderdocから対象の描画・Compute実行ファイルを起動して捕捉し、
 コマンド列、pipelineやbinding、buffer／imageの内容を確認する。
-現在のM1試験はPresentを行わないため、通常のPresent基準の捕捉トリガーでは範囲を決められない。
-offscreen試験の捕捉は、M2で必要な範囲へ`StartFrameCapture`／`EndFrameCapture`を接続する。
+Presentを行わないoffscreenプログラムは、通常のPresent基準の捕捉トリガーでは範囲を決められない。
+明示APIで捕捉する場合は`StartFrameCapture`／`EndFrameCapture`で対象区間を挟む。
 
 [公式APIの推奨](https://raw.githubusercontent.com/baldurk/renderdoc/v1.47/docs/in_application_api.rst)に従い、
 RenderDocから起動されたときに読み込まれたAPIを利用する。
