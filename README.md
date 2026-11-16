@@ -4,17 +4,20 @@ Bistroの原本・検証済み素材と比較画像はGit LFSで共有します�
 取得・ライセンス・容量は[素材ガイド](assets/bistro/README.md)を参照してください。
 
 ゲームエンジン向けの、RenderGraphを中心としたRust製3Dレンダラーです。
-初期バックエンドにはVulkan（ash / vk-mem）を使います。
-GPUに依存しないRenderGraphの宣言・解析と、Vulkan 1.3のオフスクリーン実行を扱います。
-indexed meshと深度、Computeによる画像変換、別画像への最終合成、export・readbackを
-単一キューで実行し、実行資源・画像・pipeline・descriptorと共有staging領域を再利用します。
-CPU範囲管理の性能比較にはCriterionを使います。
+GPUに依存しないRenderGraphの宣言・解析と、Vulkan 1.3（ash / vk-mem）および
+WindowsのD3D12による実行を提供します。両バックエンドでbuffer・RGBA8/RGBA16F画像の転送、
+indexed meshと深度、利用側shaderによるRaster/Compute、import/export・履歴、readback、
+上限付きの資源再利用とWindows表示を扱います。各バックエンドは単一キューで実行します。
 
-Windowsの`d3d12` featureでは、同じGPU非依存Graphのbuffer upload・copy・readbackを
-単一queueで実行します。Device・GPU完了・資源寿命を明示的に扱う最初の基準経路で、
-画像、描画、import／export、資源poolは後続の実装範囲です。
-[D3D12の設計と制約](docs/design/implementation-policy.md#d3d12-runtime)と
-[二APIの実GPU受入手順](docs/guides/development.md#d3d12-buffer-acceptance)を参照してください。
+標準構成は`standard::graphs`、部分交換は`standard::passes`、独自構成は`graph`を使います。
+いずれも同じGraphの同期・寿命・不要パス除去を通り、標準構成の使用は必須ではありません。
+現在の標準forwardはunlit描画で、BistroのPBR・影・tone mapping・Bloomは開発中です。
+native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
+実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
+
+既定featureではGPU・ウィンドウに依存しません。Graphの構築はGPU処理を開始せず、
+実行する場合はRuntimeの作成、working setとProgramの準備、submit、完了確認を明示します。
+通常frameでは準備済み容量を再利用し、不足時に暗黙の増設やGPU待機は行いません。
 
 - [ドキュメント一覧](docs/README.md)
 - [図で読むRenderGraph設計](docs/design/rendergraph-overview.md)・[HTML版の生成](docs/guides/html-docs.md)
@@ -27,6 +30,12 @@ Windowsの`d3d12` featureでは、同じGPU非依存Graphのbuffer upload・copy
 - [Vulkan基盤の設計判断](docs/design/vulkan.md)
 - [現在の検証状況](docs/verification/current.md)
 
+最初に、GPUなしで利用側のパス合成を確認できます。
+
+```powershell
+cargo run --locked -p renderer --no-default-features --example graph_composition
+```
+
 ヘッドレスの描画例は、Validation Layerを使えるVulkan環境で実行します。
 
 ```powershell
@@ -34,7 +43,14 @@ New-Item -ItemType Directory -Force .tools | Out-Null
 cargo run --locked -p renderer --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/m2.ppm
 ```
 
-引数は出力先PPMファイルです。CPUだけのGraph構築・解析は既定featureで利用できます。
+引数は出力先PPMファイルです。Windows表示は次の例を使います。
+
+```powershell
+cargo run --locked -p renderer --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
+cargo run --locked -p renderer --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
+```
+
+準備容量、検証の切替、操作・受入手順は[開発ガイド](docs/guides/development.md)を参照してください。
 
 課題管理には [Beads](https://github.com/gastownhall/beads) を使用します。
 導入・日常操作・同期の手順は [.beads/README.md](.beads/README.md) を参照してください。
