@@ -1,18 +1,110 @@
 # The managed fixtures have deliberately narrow, reviewed ABIs. This
 # checks reflected interfaces, not shader behavior or trust of arbitrary input.
 # Keep the checker usable by CPU tests without loading an SDK or native library.
-function Assert-ManagedComputeEntry([object]$Spirv, [string]$Dxil, [string]$Asset) {
+function Assert-ManagedComputeEntry([object]$Spirv, [string]$Dxil, [string]$Asset, [uint32[]]$LocalSize = @(1, 1, 1)) {
     $entries = @($Spirv.entryPoints)
     if ($entries.Count -ne 1 -or $entries[0].name -cne 'main' -or
         $entries[0].mode -cne 'comp' -or
-        (@($entries[0].workgroup_size) -join ',') -cne '1,1,1' -or
+        (@($entries[0].workgroup_size) -join ',') -cne ($LocalSize -join ',') -or
         @($entries[0].workgroup_size_is_spec_constant_id | Where-Object { $_ }).Count -ne 0) {
         throw "$Asset SPIR-V entry point or local size differs from the managed ABI."
     }
     if ($Dxil -cnotmatch '(?m)^; Compute Shader\s*$' -or
-        $Dxil -cnotmatch '(?m)^; NumThreads=\(1,1,1\)\s*$' -or
+        $Dxil -cnotmatch ('(?m)^; NumThreads=\(' + [regex]::Escape(($LocalSize -join ',')) + '\)\s*$') -or
         $Dxil -cnotmatch '(?m)^; EntryFunctionName: main\s*$') {
         throw "$Asset DXIL entry point or local size differs from the managed ABI."
+    }
+}
+
+# Caller-owned HDR fixtures exercise typed storage images in the ordinary Graph
+# path. This verifies the declared ABI; their sources and unsafe Program import
+# separately establish bounds, invocation ownership and full-view writes.
+function Assert-HdrComputeAbi([object]$Spirv, [string]$Dxil, [switch]$StorageInput) {
+    $asset = if ($StorageInput) { 'compute_hdr_storage.comp' } else { 'compute_hdr_sampled.comp' }
+    Assert-ManagedComputeEntry $Spirv $Dxil $asset @(4, 4, 1)
+    $categories = @('ubos', 'ssbos', 'separate_images', 'separate_samplers', 'images')
+    $expectedCounts = if ($StorageInput) { @(0, 1, 0, 0, 2) } else { @(1, 0, 1, 1, 1) }
+    for ($index = 0; $index -lt $categories.Count; $index++) {
+        $property = $Spirv.PSObject.Properties[$categories[$index]]
+        $resources = @(if ($null -ne $property) { $property.Value })
+        if ($resources.Count -ne $expectedCounts[$index]) {
+            throw "$asset resource count differs for $($categories[$index])."
+        }
+    }
+    foreach ($category in @('textures', 'sampled_images', 'subpass_inputs', 'acceleration_structures', 'push_constants')) {
+        $property = $Spirv.PSObject.Properties[$category]
+        if ($null -ne $property -and @($property.Value).Count -ne 0) {
+            throw "$asset has unexpected resource category $category."
+        }
+    }
+    foreach ($image in @($Spirv.images)) {
+        $expectedQualifier = if ($image.set -eq 0 -and $StorageInput) { 'readonly' } else { 'writeonly' }
+        $qualifier = $image.PSObject.Properties[$expectedQualifier]
+        if ($image.type -cne 'image2D' -or $image.format -cne 'rgba16f' -or $image.binding -ne 0 -or
+            $image.set -notin @(0, 1) -or ($image.set -eq 0 -and -not $StorageInput) -or
+            $null -eq $qualifier -or $qualifier.Value -ne $true -or
+            $null -ne $image.PSObject.Properties['array']) {
+            throw "$asset storage image slot, type, format, count or mutability differs."
+        }
+    }
+    if (@($Spirv.images | Where-Object { $_.set -eq 1 }).Count -ne 1 -or
+        ($StorageInput -and @($Spirv.images | Where-Object { $_.set -eq 0 }).Count -ne 1)) {
+        throw "$asset requires exactly one storage image at each declared slot."
+    }
+    $buffer = if ($StorageInput) { $Spirv.ssbos[0] } else { $Spirv.ubos[0] }
+    $bufferSlot = if ($StorageInput) { 1 } else { 2 }
+    if ($buffer.set -ne 0 -or $buffer.binding -ne $bufferSlot -or $buffer.block_size -ne 16 -or
+        $null -ne $buffer.PSObject.Properties['array']) {
+        throw "$asset buffer slot, byte size or array count differs."
+    }
+    if ($StorageInput -and ($null -eq $buffer.PSObject.Properties['readonly'] -or $buffer.readonly -ne $true)) {
+        throw "$asset buffer input must be read-only."
+    }
+    $members = @($Spirv.types.PSObject.Properties[$buffer.type].Value.members)
+    if ($members.Count -ne 1 -or $members[0].type -cne 'vec4' -or $members[0].offset -ne 0 -or
+        $null -ne $members[0].PSObject.Properties['array']) {
+        throw "$asset buffer must contain one vec4 at byte zero."
+    }
+    if (-not $StorageInput) {
+        foreach ($expected in @(@('separate_images', 'texture2D', 0), @('separate_samplers', 'sampler', 1))) {
+            $resource = @($Spirv.PSObject.Properties[$expected[0]].Value)[0]
+            if ($resource.type -cne $expected[1] -or $resource.set -ne 0 -or $resource.binding -ne $expected[2] -or
+                $null -ne $resource.PSObject.Properties['array']) {
+                throw "$asset sampled image or sampler ABI differs."
+            }
+        }
+    }
+    $sections = @($Dxil.Replace("`r`n", "`n") -split '; Resource Bindings:')
+    if ($sections.Count -ne 2) { throw "$asset DXIL resource reflection is missing." }
+    $rows = @(Get-DxilResourceRows $sections[1])
+    # Default SPIRV-Cross maps even readonly storage images to UAVs. Do not
+    # silently change a readonly image to the raw buffer/SRV binding path.
+    $expectedRows = if ($StorageInput) {
+        @(@('UAV', 'f32', '2d', '^u0(?:,space0)?$'), @('texture', 'byte', 'r/o', '^t1(?:,space0)?$'), @('UAV', 'f32', '2d', '^u0,space1$'))
+    } else {
+        @(@('texture', 'f32', '2d', '^t0(?:,space0)?$'), @('sampler', 'NA', 'NA', '^s1(?:,space0)?$'),
+            @('cbuffer', 'NA', 'NA', '^cb2(?:,space0)?$'), @('UAV', 'f32', '2d', '^u0,space1$'))
+    }
+    if ($rows.Count -ne $expectedRows.Count -or @($rows | Where-Object { $_.Groups['count'].Value -cne '1' }).Count -ne 0) {
+        throw "$asset DXIL resource count differs."
+    }
+    foreach ($expected in $expectedRows) {
+        $matching = @($rows | Where-Object {
+            $_.Groups['kind'].Value -ceq $expected[0] -and $_.Groups['format'].Value -ceq $expected[1] -and
+            $_.Groups['dimension'].Value -ceq $expected[2] -and $_.Groups['slot'].Value -cmatch $expected[3]
+        })
+        if ($matching.Count -ne 1) { throw "$asset DXIL resource type, register or space differs." }
+    }
+    if (-not $StorageInput) {
+        $uniform = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'cbuffer' })[0]
+        $name = [regex]::Escape($uniform.Groups['name'].Value)
+        $body = [regex]::Match($sections[0], ('(?s); cbuffer ' + $name + '\s*\n; \{(?<body>.*?)\n; \}'))
+        $members = @($body.Groups['body'].Value -split '\n' | Where-Object { $_ -match 'Offset:' -and $_ -notmatch 'Size:' })
+        if (-not $body.Success -or $members.Count -ne 1 -or
+            $members[0] -cnotmatch '^;\s+float4\s+\w+;\s*;\s*Offset:\s*0\s*$' -or
+            $body.Groups['body'].Value -cnotmatch ('(?m)^;\s+\}\s+' + $name + ';\s*;\s*Offset:\s*0\s+Size:\s*16\s*$')) {
+            throw "$asset DXIL Uniform layout differs."
+        }
     }
 }
 

@@ -435,13 +435,24 @@ impl ManagedProgram {
     /// # Safety
     ///
     /// Both binaries must be valid Vulkan 1.3/SPIR-V 1.3 and D3D12 SM6.0 compute
-    /// shaders, respectively, for `entry` and exactly the declared nonzero local
+    /// shaders, respectively, for `entry = "main"` and exactly the declared nonzero local
     /// size. Their complete descriptor interfaces must match the unique,
     /// manifest-ordered `bindings`; descriptor arrays, push constants and
     /// undeclared resources or side effects are not permitted. Buffer minimum
     /// sizes and `dispatch.bytes` must have one entry per binding, with a nonzero
     /// byte prefix no larger than the minimum size for buffers and zero for
     /// image/sampler bindings. All slots must have only `ShaderStages::COMPUTE`.
+    /// Non-buffer slots must have minimum size zero. Images must be non-array,
+    /// non-multisampled 2D float-component resources; shader arithmetic uses
+    /// ordinary FP32 values, not shader Float16 or optional narrow types. Storage
+    /// image format qualifiers must equal the slot's exact typed format.
+    /// D3D12 register spaces equal groups and register numbers equal bindings:
+    /// Uniform uses CBV, StorageRead/Write use root-descriptor-compatible raw or
+    /// structured SRV/UAV buffers (not typed `Buffer<T>`), sampled images use
+    /// SRVs, storage images use UAVs even when readonly, and samplers use sampler
+    /// descriptors. Only the features enabled by the backend may be required.
+    /// Workgroup/shared storage is not supported by this descriptor contract;
+    /// the shader must not declare or use it.
     ///
     /// For every accepted dispatch and every permitted resource content, the
     /// shader may access only the declared buffer prefixes and selected image

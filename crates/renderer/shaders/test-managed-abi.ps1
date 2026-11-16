@@ -190,4 +190,44 @@ Expect-Rejected 'DXIL fragment sampler removed' {
 }
 Expect-Rejected 'DXIL fragment varying components' { param($s, $d) $d.Replace('1   xy ', '1   xyz') }
 Expect-Rejected 'DXIL fragment color target semantic' { param($s, $d) $d.Replace('SV_Target                0', 'SV_Target                1') }
-Write-Output 'Managed compute and descriptor-bound Raster SPIR-V/DXIL ABI contracts and mismatch rejections passed.'
+# Caller-owned programs use the same pinned compiler outputs, while remaining
+# outside the Renderer Program registry. Exercise the new typed-image ABI and
+# readonly-image UAV mapping with independent semantic mismatch controls.
+$external = Join-Path $PSScriptRoot '../tests/support/shaders/dxil'
+$verify = { param($s, $d) Assert-HdrComputeAbi $s $d }
+$json = Get-Content -LiteralPath (Join-Path $external 'compute_hdr_sampled.comp.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $external 'compute_hdr_sampled.comp.reflection.txt') -Raw
+Assert-HdrComputeAbi ($json | ConvertFrom-Json) $reflection
+Assert-HdrComputeAbi ($json | ConvertFrom-Json) ($reflection.Replace("`r`n", "`n").Replace("`n", "`r`n"))
+Expect-Rejected 'HDR local workgroup size' { param($s) $s.entryPoints[0].workgroup_size[0] = 1 }
+Expect-Rejected 'HDR output typed format' { param($s) $s.images[0].format = 'rgba8' }
+Expect-Rejected 'HDR output not writeonly' { param($s) $s.images[0].writeonly = $false }
+Expect-Rejected 'HDR Uniform byte size' { param($s) $s.ubos[0].block_size = 32 }
+Expect-Rejected 'HDR Uniform scalar type' {
+    param($s) $s.types.PSObject.Properties[$s.ubos[0].type].Value.members[0].type = 'uvec4'
+}
+Expect-Rejected 'HDR unexpected storage buffer' {
+    param($s) $s | Add-Member -NotePropertyName ssbos -NotePropertyValue @([pscustomobject]@{ set = 0; binding = 4 })
+}
+Expect-Rejected 'DXIL HDR output space' { param($s, $d) $d.Replace('u0,space1', 'u0,space2') }
+Expect-Rejected 'DXIL HDR Uniform binding' { param($s, $d) $d.Replace('cb2', 'cb0') }
+Expect-Rejected 'DXIL HDR image type' {
+    param($s, $d) [regex]::Replace($d, '(?m)(^;[^\r\n]+\s+UAV\s+)f32', '${1}u32')
+}
+$verify = { param($s, $d) Assert-HdrComputeAbi $s $d -StorageInput }
+$json = Get-Content -LiteralPath (Join-Path $external 'compute_hdr_storage.comp.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $external 'compute_hdr_storage.comp.reflection.txt') -Raw
+Assert-HdrComputeAbi ($json | ConvertFrom-Json) $reflection -StorageInput
+Expect-Rejected 'HDR storage input image qualifier' {
+    param($s) ($s.images | Where-Object { $_.set -eq 0 }).readonly = $false
+}
+Expect-Rejected 'HDR storage input image slot' {
+    param($s) ($s.images | Where-Object { $_.set -eq 0 }).binding = 1
+}
+Expect-Rejected 'HDR storage input buffer byte size' { param($s) $s.ssbos[0].block_size = 32 }
+Expect-Rejected 'HDR storage input buffer mutability' { param($s) $s.ssbos[0].readonly = $false }
+Expect-Rejected 'DXIL readonly storage image treated as SRV' {
+    param($s, $d) [regex]::Replace($d, '(?m)(^;[^\r\n]+\s+)UAV(\s+f32\s+2d\s+\S+\s+u0\s+1\s*$)', '${1}texture${2}')
+}
+Expect-Rejected 'DXIL HDR storage input buffer register' { param($s, $d) $d.Replace('t1', 't0') }
+Write-Output 'Managed compute, caller-owned HDR compute and descriptor-bound Raster ABI contracts and mismatch rejections passed.'

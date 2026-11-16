@@ -32,6 +32,13 @@ pub enum BindingResource {
 
 /// Complete canonical descriptor operands, distinct from shader footprints.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),
+    allow(
+        dead_code,
+        reason = "native operands are retained but not consumed by the CPU-only library"
+    )
+)]
 pub(crate) enum BindingOperands {
     Buffer { resource: usize, range: BufferRange },
     ImageView(ImageView),
@@ -98,18 +105,27 @@ impl Graph {
         owned: std::ops::Range<usize>,
         workgroups: [u32; 3],
     ) -> Result<(), GraphError> {
+        self.validate_dispatch_image_layouts(program.bindings(), owned.clone())?;
+        self.validate_dispatch_workgroups(program, owned, workgroups)
+    }
+
+    fn validate_dispatch_image_layouts(
+        &self,
+        layout: &[BindingLayout],
+        owned: std::ops::Range<usize>,
+    ) -> Result<(), GraphError> {
         // A sampled descriptor uses a read-only native image layout, while a
         // storage descriptor uses GENERAL. Even two reads cannot give the same
         // View those two layouts within one dispatch. Multiple storage reads
         // remain valid; their descriptors share the GENERAL layout.
-        for (index, slot) in program.bindings().iter().enumerate() {
+        for (index, slot) in layout.iter().enumerate() {
             if slot.kind != BindingType::SampledImage {
                 continue;
             }
             let BindingOperands::ImageView(sampled) = self.bindings[owned.start + index] else {
                 unreachable!("canonical sampled image operand");
             };
-            for (other_index, other_slot) in program.bindings().iter().enumerate() {
+            for (other_index, other_slot) in layout.iter().enumerate() {
                 if matches!(
                     other_slot.kind,
                     BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
@@ -125,6 +141,15 @@ impl Graph {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_dispatch_workgroups(
+        &self,
+        program: &ManagedProgram,
+        owned: std::ops::Range<usize>,
+        workgroups: [u32; 3],
+    ) -> Result<(), GraphError> {
         let expected = match program.dispatch_contract().workgroups {
             DispatchWorkgroups::Fixed(expected) => expected,
             DispatchWorkgroups::Image2d { group, binding } => {
@@ -371,6 +396,67 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+
+    #[test]
+    fn sampled_and_storage_reads_share_only_disjoint_image_subresources() {
+        use crate::program::{ImageFormat, ShaderStages};
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let image = graph
+            .image(
+                "two layers",
+                super::super::ImageDesc {
+                    array_layers: 2,
+                    ..super::super::ImageDesc::rgba16_float(3, 5)
+                },
+            )
+            .unwrap();
+        let first = graph.image_view(image, 0, 0).unwrap();
+        let second = graph.image_view(image, 0, 1).unwrap();
+        let mut layout = [
+            BindingLayout {
+                group: 0,
+                binding: 0,
+                kind: BindingType::SampledImage,
+                stages: ShaderStages::COMPUTE,
+                min_size: 0,
+            },
+            BindingLayout {
+                group: 0,
+                binding: 1,
+                kind: BindingType::StorageImageRead(ImageFormat::Rgba16Float),
+                stages: ShaderStages::COMPUTE,
+                min_size: 0,
+            },
+        ];
+        for (other, accepted) in [(first, false), (second, true)] {
+            let operands = [first, other].map(BindingResource::ImageView);
+            let input = std::array::from_fn::<_, 2, _>(|index| Binding {
+                group: 0,
+                binding: index as u32,
+                resource: operands[index],
+            });
+            let owned = graph.append_bindings(&layout, &[0, 0], &input).unwrap();
+            let result = graph.validate_dispatch_image_layouts(&layout, owned);
+            if accepted {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().kind(), GraphErrorKind::InvalidInput);
+            }
+        }
+        // Read/read aliasing is allowed when both descriptors use the same
+        // storage image layout. Rejecting every duplicate image is too broad.
+        layout[0].kind = layout[1].kind;
+        let input = std::array::from_fn::<_, 2, _>(|index| Binding {
+            group: 0,
+            binding: index as u32,
+            resource: BindingResource::ImageView(first),
+        });
+        let owned = graph.append_bindings(&layout, &[0, 0], &input).unwrap();
+        graph
+            .validate_dispatch_image_layouts(&layout, owned)
+            .unwrap();
+    }
 
     #[test]
     fn reviewed_dispatch_footprints_cover_each_slot_and_fit_the_abi() {
