@@ -24,6 +24,7 @@ pub struct ImageHandle {
 pub struct ImageView {
     pub(crate) image: ImageHandle,
     pub(crate) mip: u32,
+    pub(crate) mip_count: u32,
     pub(crate) layer: u32,
     pub(crate) aspect: ImageAspect,
 }
@@ -33,6 +34,11 @@ impl ImageView {
     }
     pub fn mip_level(self) -> u32 {
         self.mip
+    }
+    /// Number of consecutive levels interpreted by this View. Transfer and
+    /// attachment operations require one level; sampled bindings may span more.
+    pub fn mip_level_count(self) -> u32 {
+        self.mip_count
     }
     pub fn array_layer(self) -> u32 {
         self.layer
@@ -64,7 +70,7 @@ pub struct BufferDesc {
 impl ImageFormat {
     pub(crate) const fn aspect(self) -> ImageAspect {
         match self {
-            Self::Rgba8Unorm | Self::Rgba16Float => ImageAspect::Color,
+            Self::Rgba8Unorm | Self::Rgba8Srgb | Self::Rgba16Float => ImageAspect::Color,
             Self::Depth32Float => ImageAspect::Depth,
         }
     }
@@ -308,8 +314,40 @@ impl Graph {
         Ok(ImageView {
             image,
             mip,
+            mip_count: 1,
             layer,
             aspect,
+        })
+    }
+    /// Select a contiguous range of mip levels for a sampled binding. The
+    /// complete range is declared as a read, so an uninitialized level cannot
+    /// be hidden behind an initialized base level. Array layers remain separate.
+    pub fn sampled_image_view(
+        &self,
+        image: ImageHandle,
+        base_mip_level: u32,
+        mip_level_count: u32,
+    ) -> Result<ImageView, GraphError> {
+        let id = self.image_id(image)?;
+        let desc = self.image_desc_at(id)?;
+        if mip_level_count == 0
+            || base_mip_level
+                .checked_add(mip_level_count)
+                .is_none_or(|end| end > desc.mip_levels)
+            || desc.array_layers != 1
+        {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "sampled View requires a nonempty mip range in one image layer",
+                id,
+            ));
+        }
+        Ok(ImageView {
+            image,
+            mip: base_mip_level,
+            mip_count: mip_level_count,
+            layer: 0,
+            aspect: desc.format.aspect(),
         })
     }
     pub fn import_buffer(
