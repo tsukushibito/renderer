@@ -33,6 +33,7 @@ impl Default for PresentationConfig {
     }
 }
 
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows), test))]
 impl PresentationConfig {
     pub(crate) fn has_valid_capacities(self) -> bool {
         self.max_frames != 0

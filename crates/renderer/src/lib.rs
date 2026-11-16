@@ -13,6 +13,7 @@
 pub mod engine;
 pub mod graph;
 pub mod profiling;
+pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};
 pub mod program;
 pub mod standard;
 
@@ -41,10 +42,9 @@ pub use backends::vulkan::engine::{
 
 #[cfg(feature = "vulkan")]
 pub use backends::vulkan::graph::{
-    DeviceInfo, FrameCapacity, FrameCompletion, FrameId, FrameSubmission, GpuTiming, MemoryStats,
+    DeviceInfo, FrameCapacity, FrameCompletion, FrameId, FrameSubmission, MemoryStats,
     ResourceClass, RuntimeConfig, RuntimeError, RuntimeErrorKind, RuntimeStats, StagingMemoryStats,
-    Submission, SubmissionMetrics, SubmissionResult, ValidationMonitor, ValidationReport,
-    VulkanRuntime,
+    Submission, SubmissionResult, ValidationMonitor, ValidationReport, VulkanRuntime,
 };
 
 #[cfg(feature = "vulkan")]

@@ -128,6 +128,12 @@ jobs:
           - os: windows-2022
             backend: presentation
           - os: windows-2022
+            backend: vulkan,presentation
+          - os: windows-2022
+            backend: d3d12,presentation
+          - os: windows-2022
+            backend: vulkan,d3d12,presentation
+          - os: windows-2022
             backend: d3d12
           - os: windows-2022
             backend: vulkan,d3d12
