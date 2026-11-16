@@ -1,0 +1,86 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; TEXCOORD                 1   xyzw        1     NONE   float   xyzw
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyzw        0     NONE   float   xyzw
+; SV_Position              0   xyzw        1      POS   float   xyzw
+;
+; shader hash: 5303b6cfe20da62b68289ae9eda45507
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 2
+; SigOutputElements: 2
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 2
+; SigOutputVectors[0]: 2
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 1
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer _20_22
+; {
+;
+;   struct _20_22
+;   {
+;
+;       float4 _22_m0;                                ; Offset:    0
+;       float4 _22_m1;                                ; Offset:   16
+;
+;   } _20_22;                                         ; Offset:    0 Size:    32
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _20_22                            cbuffer      NA          NA     CB0            cb7     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 8, outputs: 8
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4 }
+;   output 1 depends on inputs: { 5 }
+;   output 2 depends on inputs: { 6 }
+;   output 3 depends on inputs: { 7 }
+;   output 4 depends on inputs: { 0 }
+;   output 5 depends on inputs: { 1 }
+;

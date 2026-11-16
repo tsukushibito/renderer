@@ -1,0 +1,101 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_13" : {
+            "name" : "_13",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 16
+                }
+            ]
+        },
+        "_22" : {
+            "name" : "_22",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        },
+        "_30" : {
+            "name" : "_30",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_11",
+            "location" : 0
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_9",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "_39",
+            "set" : 2,
+            "binding" : 4
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "_43",
+            "set" : 2,
+            "binding" : 5
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_30",
+            "name" : "_30_32",
+            "readonly" : true,
+            "block_size" : 16,
+            "set" : 1,
+            "binding" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_22",
+            "name" : "_22_24",
+            "block_size" : 16,
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_13",
+            "name" : "_15",
+            "push_constant" : true
+        }
+    ]
+}

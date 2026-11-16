@@ -1,0 +1,84 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_11" : {
+            "name" : "_11",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4"
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "float"
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                }
+            ]
+        },
+        "_20" : {
+            "name" : "_20",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 16
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec2",
+            "name" : "_18",
+            "location" : 0
+        },
+        {
+            "type" : "vec4",
+            "name" : "_40",
+            "location" : 1
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_38",
+            "location" : 0
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_20",
+            "name" : "_22",
+            "push_constant" : true
+        }
+    ]
+}
