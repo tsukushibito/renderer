@@ -141,6 +141,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           lfs: false
+      - uses: actions/setup-python@v5
+        if: matrix.backend == 'cpu'
+        with:
+          python-version: "3.11"
+      - name: Test CPU profiling tools without ETW or GPU access
+        if: matrix.backend == 'cpu'
+        run: python -B -m unittest discover -s tools/cpu_profile -p 'test_*.py'
       - name: Install pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Install native C compiler for development dependencies (Linux)
