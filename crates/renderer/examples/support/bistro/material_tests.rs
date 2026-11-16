@@ -506,56 +506,66 @@ fn close(actual: f64, expected: f64) -> bool {
     actual.is_finite() && (actual - expected).abs() <= ABSOLUTE + RELATIVE * expected.abs()
 }
 
+fn capture_scene<B: Backend>(scene: &Scene, width: u32, height: u32) -> [Vec<u8>; 3] {
+    let mut options = crate::bistro::Options::parse(
+        [
+            "--fixture",
+            "--frames",
+            "1",
+            "--warmup",
+            "0",
+            "--inflight",
+            "1",
+        ]
+        .map(str::to_owned),
+    )
+    .unwrap();
+    options.width = width;
+    options.height = height;
+    let budget = pipeline::Budget::new(scene, &options).unwrap();
+    let camera = Camera::fixture();
+    let uniform = camera
+        .uniform(width as f32 / height as f32, NEAR, FAR, LIGHT, LIGHT_COLOR)
+        .unwrap();
+    let mut backend = B::create(&options, &budget).unwrap();
+    let resident = pipeline::Resident::upload(&mut backend, scene, &budget, &uniform).unwrap();
+    let mut pool = renderer::graph::GraphPool::new(budget.graph, 2).unwrap();
+    let mut workspace = pipeline::Workspace::new(scene);
+    let built = pipeline::build(
+        &mut pool,
+        &mut workspace,
+        &resident,
+        scene,
+        &options,
+        camera,
+        &uniform,
+        BACKGROUND,
+        true,
+    )
+    .unwrap();
+    assert_eq!(built.draws, scene.primitives.len());
+    let plan = built.graph.compile().unwrap();
+    let mut pending = backend.submit(&plan).unwrap();
+    let mut completed = B::wait(&mut pending, crate::bistro::WAIT).unwrap();
+    let captures = built.captures.unwrap();
+    let mut hdr = vec![0; width as usize * height as usize * 8];
+    let mut sdr = vec![0; width as usize * height as usize * 4];
+    let mut depth = vec![0; width as usize * height as usize * 4];
+    B::readback(&mut completed, captures[0], &mut hdr).unwrap();
+    B::readback(&mut completed, captures[1], &mut sdr).unwrap();
+    B::readback(&mut completed, captures[2], &mut depth).unwrap();
+    drop((completed, pending, plan, resident, workspace));
+    let validation = backend.close().unwrap();
+    assert_eq!(validation["clean"], true);
+    drop(pool);
+    [hdr, sdr, depth]
+}
+
 pub(in crate::bistro) fn native_acceptance<B: Backend>() {
     let cases = cases();
     for force_opaque in [false, true] {
-        let options = crate::bistro::Options::parse(
-            [
-                "--fixture",
-                "--width",
-                "256",
-                "--height",
-                "256",
-                "--frames",
-                "1",
-                "--warmup",
-                "0",
-                "--inflight",
-                "1",
-            ]
-            .map(str::to_owned),
-        )
-        .unwrap();
         let scene = scene(&cases, force_opaque);
-        let budget = pipeline::Budget::new(&scene, &options).unwrap();
-        let camera = Camera::fixture();
-        let uniform = camera.uniform(1., NEAR, FAR, LIGHT, LIGHT_COLOR).unwrap();
-        let mut backend = B::create(&options, &budget).unwrap();
-        let resident = pipeline::Resident::upload(&mut backend, &scene, &budget, &uniform).unwrap();
-        let mut pool = renderer::graph::GraphPool::new(budget.graph, 2).unwrap();
-        let mut workspace = pipeline::Workspace::new(&scene);
-        let built = pipeline::build(
-            &mut pool,
-            &mut workspace,
-            &resident,
-            &scene,
-            &options,
-            camera,
-            &uniform,
-            BACKGROUND,
-            true,
-        )
-        .unwrap();
-        let plan = built.graph.compile().unwrap();
-        let mut pending = backend.submit(&plan).unwrap();
-        let mut completed = B::wait(&mut pending, crate::bistro::WAIT).unwrap();
-        let captures = built.captures.unwrap();
-        let mut hdr = vec![0; WIDTH as usize * HEIGHT as usize * 8];
-        let mut sdr = vec![0; WIDTH as usize * HEIGHT as usize * 4];
-        let mut depth = vec![0; WIDTH as usize * HEIGHT as usize * 4];
-        B::readback(&mut completed, captures[0], &mut hdr).unwrap();
-        B::readback(&mut completed, captures[1], &mut sdr).unwrap();
-        B::readback(&mut completed, captures[2], &mut depth).unwrap();
+        let [hdr, sdr, depth] = capture_scene::<B>(&scene, WIDTH, HEIGHT);
         for bits in hdr.as_chunks::<2>().0 {
             let value = half(u16::from_le_bytes(*bits));
             assert!(
@@ -609,53 +619,130 @@ pub(in crate::bistro) fn native_acceptance<B: Backend>() {
                 expected.depth
             );
         }
-        drop((completed, pending, plan, resident, workspace));
-        let validation = backend.close().unwrap();
-        assert_eq!(validation["clean"], true);
-        drop(pool);
     }
 }
 
-/// The CLI alpha-only run contains no other geometry. Check the complete target,
-/// so zero color/depth coverage is not inferred from a single panel or digest.
-pub(in crate::bistro) fn alpha_background(report: &serde_json::Value) {
-    let read =
-        |name: &str| std::fs::read(report["captures"][name]["path"].as_str().unwrap()).unwrap();
-    let hdr = read("hdr");
-    let sdr = read("sdr");
-    let depth = read("depth");
-    let linear = BACKGROUND.map(|value| stored_half(f64::from(value)));
-    let encoded = linear.map(|value| (srgb_encode(value) * 255.).round() as u8);
-    for pixel in hdr.as_chunks::<8>().0 {
+/// Format conversion is distinct from shader arithmetic: Vulkan permits either
+/// adjacent finite half value (rounding mode unspecified), while Direct3D's
+/// published float-format narrowing rules specify round-to-zero. In particular
+/// .18f32 need not become the CPU round-to-nearest-even half value.
+/// https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fpconvert
+/// https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm#3.2.2
+fn clear_neighbors(value: f32) -> [f64; 2] {
+    let value = f64::from(value);
+    let step = if value < 2_f64.powi(-14) {
+        2_f64.powi(-24)
+    } else {
+        2_f64.powi(value.log2().floor() as i32 - 10)
+    };
+    [(value / step).floor() * step, (value / step).ceil() * step]
+}
+
+fn validate_clear_control(captures: &[Vec<u8>; 3], width: u32, height: u32) {
+    let pixels = width as usize * height as usize;
+    for (bytes, stride) in captures.iter().zip([8, 4, 4]) {
+        assert_eq!(bytes.len(), pixels * stride);
+    }
+    for (pixel, encoded) in captures[0]
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .zip(captures[1].as_chunks::<4>().0)
+    {
         for channel in 0..4 {
-            let actual = half(u16::from_le_bytes(
+            let value = half(u16::from_le_bytes(
                 pixel[channel * 2..channel * 2 + 2].try_into().unwrap(),
             ));
-            assert_eq!(
-                actual,
-                if channel == 3 { 1. } else { linear[channel] },
-                "alpha zero changed linear background"
-            );
-        }
-    }
-    for pixel in sdr.as_chunks::<4>().0 {
-        for (channel, (actual, expected)) in pixel
-            .iter()
-            .zip([encoded[0], encoded[1], encoded[2], 255])
-            .enumerate()
-        {
             if channel == 3 {
-                assert_eq!(*actual, 255, "resolve alpha must be one");
+                assert_eq!(value, 1., "clear-only alpha must be one");
+                assert_eq!(encoded[channel], 255);
             } else {
                 assert!(
-                    actual.abs_diff(expected) <= 1,
-                    "alpha zero changed SDR background"
+                    clear_neighbors(BACKGROUND[channel]).contains(&value),
+                    "clear-only conversion escaped adjacent representable values"
+                );
+                let expected = (srgb_encode(value) * 255.).round() as u8;
+                assert!(
+                    encoded[channel].abs_diff(expected) <= 1,
+                    "clear-only resolve differs from stored HDR"
                 );
             }
         }
     }
-    for value in depth.as_chunks::<4>().0 {
-        assert_eq!(f32::from_le_bytes(*value), 1., "alpha zero wrote depth");
+    for depth in captures[2].as_chunks::<4>().0 {
+        assert_eq!(
+            f32::from_le_bytes(*depth),
+            1.,
+            "clear-only depth must be one"
+        );
+    }
+}
+
+/// Compare with a separate zero-PBR-draw run using the same API, clear,
+/// attachments, resolve and readback. This preserves exact no-write checks
+/// without confusing a permitted clear conversion with alpha coverage.
+pub(in crate::bistro) fn alpha_background<B: Backend>(report: &serde_json::Value) {
+    assert_eq!(
+        report["draw_count"].as_u64(),
+        Some(2),
+        "both original alpha-zero materials must be submitted"
+    );
+    let width = u32::try_from(report["captures"]["hdr"]["width"].as_u64().unwrap()).unwrap();
+    let height = u32::try_from(report["captures"]["hdr"]["height"].as_u64().unwrap()).unwrap();
+    let names = ["hdr", "sdr", "depth"];
+    let actual: [Vec<u8>; 3] = names.map(|name| {
+        assert_eq!(
+            report["captures"][name]["width"].as_u64(),
+            Some(u64::from(width))
+        );
+        assert_eq!(
+            report["captures"][name]["height"].as_u64(),
+            Some(u64::from(height))
+        );
+        std::fs::read(report["captures"][name]["path"].as_str().unwrap()).unwrap()
+    });
+    let empty = Scene {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        primitives: Vec::new(),
+        images: Vec::new(),
+        materials: Vec::new(),
+        mesh_count: 0,
+        source: serde_json::json!({"fixture":"independent-clear-only-control"}),
+    };
+    assert!(empty.primitives.is_empty() && empty.materials.is_empty());
+    let control = capture_scene::<B>(&empty, width, height);
+    validate_clear_control(&control, width, height);
+    for ((actual, control), name) in actual.iter().zip(control.iter()).zip(names) {
+        assert_eq!(actual.len(), control.len());
+        if let Some(offset) = actual.iter().zip(control).position(|(a, b)| a != b) {
+            panic!(
+                "alpha-zero changed {name} at byte {offset}: {} != independent clear-only {}",
+                actual[offset], control[offset]
+            );
+        }
+    }
+}
+
+#[test]
+fn clear_control_accepts_only_adjacent_half_conversions() {
+    assert_eq!(clear_neighbors(0.18), [0.179931640625, 0.1800537109375]);
+    for bits in [0x31c2_u16, 0x31c3] {
+        let value = half(bits);
+        let mut pixel = Vec::new();
+        for word in [bits, bits, bits, 0x3c00] {
+            pixel.extend_from_slice(&word.to_le_bytes());
+        }
+        let encoded = (srgb_encode(value) * 255.).round() as u8;
+        let captures = [
+            pixel,
+            vec![encoded, encoded, encoded, 255],
+            1_f32.to_le_bytes().to_vec(),
+        ];
+        validate_clear_control(&captures, 1, 1);
+        let mut wrong = captures.clone();
+        wrong[0][..2].copy_from_slice(&0x31c1_u16.to_le_bytes());
+        assert!(std::panic::catch_unwind(|| validate_clear_control(&wrong, 1, 1)).is_err());
     }
 }
 

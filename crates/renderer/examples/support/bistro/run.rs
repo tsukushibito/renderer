@@ -535,6 +535,7 @@ mod tests {
     }
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     fn native_fixture<B: Backend>() {
+        super::super::asset::material_tests::native_acceptance::<B>();
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -566,10 +567,9 @@ mod tests {
             );
             assert_eq!(report["validation"]["clean"], true);
             if alpha_only && !force_opaque {
-                super::super::asset::material_tests::alpha_background(&report);
+                super::super::asset::material_tests::alpha_background::<B>(&report);
             }
         }
-        super::super::asset::material_tests::native_acceptance::<B>();
     }
     #[cfg(feature = "vulkan")]
     #[test]
