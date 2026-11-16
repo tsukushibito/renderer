@@ -629,9 +629,6 @@ mod demo {
                 }
                 window.set_cursor_visible(!enabled);
             }
-            if !enabled {
-                self.camera.clear_input();
-            }
         }
         fn shutdown(&mut self) -> Result<()> {
             if self.backend.is_none() {
@@ -759,7 +756,8 @@ mod demo {
                         "timing_scope":"real window; Graph GPU and fullscreen presentation GPU separately; frame interval includes event-loop scheduling and native pacing; not display completion",
                         "features":{"optimized":!cfg!(debug_assertions),"development_validation":cfg!(feature="development-validation"),
                             "vulkan_diagnostics":cfg!(feature="vulkan-diagnostics"),"d3d12_diagnostics":cfg!(feature="d3d12-diagnostics"),
-                            "graph_diagnostics":cfg!(feature="graph-diagnostics")},"samples":samples,
+                            "graph_diagnostics":cfg!(feature="graph-diagnostics"),
+                            "memory_profiling":cfg!(feature="memory-profiling")},"samples":samples,
                         "presentation_samples":presentation_samples,
                     })
                 );
@@ -833,7 +831,10 @@ mod demo {
                         backend.resize(size.width, size.height);
                     }
                 }
-                WindowEvent::Focused(false) => self.capture_mouse(false),
+                WindowEvent::Focused(false) => {
+                    self.capture_mouse(false);
+                    self.camera.clear_input();
+                }
                 WindowEvent::MouseInput {
                     state,
                     button: MouseButton::Right,
