@@ -513,9 +513,11 @@ impl ManagedProgram {
         }
     }
 
-    /// Reviewed compute asset: four nearest/clamp samples preserve all RGBA
-    /// FP32 component bits in exactly 64 storage bytes. RGBA16F sampling needs
-    /// no shader FP16 feature. Dispatch executes one invocation.
+    /// Reviewed compute asset: four normalized-coordinate samples at View LOD
+    /// zero preserve all RGBA FP32 component bits in exactly 64 storage bytes.
+    /// The selected immutable sampler supplies filtering and addressing; the
+    /// image format supplies sRGB decoding. RGBA16F needs no shader FP16 feature.
+    /// Dispatch executes one invocation.
     pub const fn sampled_float_readback() -> Self {
         Self {
             manifest: &SAMPLED_FLOAT_READBACK,

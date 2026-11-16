@@ -44,7 +44,7 @@ struct Case {
 
 fn class_key(ordinal: usize) -> ReuseClass {
     if ordinal == 0 {
-        ReuseClass::Buffer
+        ReuseClass::Buffer { size: 256 }
     } else {
         ReuseClass::Image {
             width: 64 + ordinal as u32,
