@@ -359,6 +359,7 @@ impl DeviceImage {
         crate::program::ImageDescriptor {
             width: desc.width,
             height: desc.height,
+            mip_levels: desc.mip_levels,
             format: desc.format,
             preferred_depth_clear: None,
         }
@@ -370,7 +371,10 @@ impl DeviceImage {
 
     fn resource_desc(desc: crate::program::ImageDescriptor, graph: bool) -> D3D12_RESOURCE_DESC {
         let mut native = image_desc(desc);
-        if graph && native.Flags == D3D12_RESOURCE_FLAG_NONE {
+        if graph
+            && desc.format != crate::ImageFormat::Rgba8Srgb
+            && native.Flags == D3D12_RESOURCE_FLAG_NONE
+        {
             native.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
                 | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         }
@@ -390,7 +394,7 @@ impl DeviceImage {
         };
         // A preferred clear value is an immutable creation hint, not an
         // initialization operation. The public boundary validated D32/range.
-        let clear = if graph {
+        let clear = if graph && desc.format != crate::ImageFormat::Rgba8Srgb {
             Some(D3D12_CLEAR_VALUE {
                 Format: if desc.format == crate::ImageFormat::Depth32Float {
                     DXGI_FORMAT_D32_FLOAT
@@ -423,8 +427,8 @@ impl DeviceImage {
         };
         let desc = Self::resource_desc(desc, graph);
         let mut raw = None;
-        // SAFETY: The managed creation boundary establishes this sampled single
-        // mip/layer/sample description and format support. COMMON has no valid
+        // SAFETY: The managed creation boundary establishes the sampled mip-chain
+        // single-layer/sample description and format support. COMMON has no valid
         // contents yet. The owned COM output is released on every failure path.
         unsafe {
             #[cfg(feature = "memory-profiling")]
@@ -462,6 +466,7 @@ impl DeviceImage {
 pub(super) fn image_format(format: crate::ImageFormat) -> DXGI_FORMAT {
     match format {
         crate::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        crate::ImageFormat::Rgba8Srgb => DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
         crate::ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
         crate::ImageFormat::Depth32Float => DXGI_FORMAT_R32_TYPELESS,
     }
@@ -480,7 +485,7 @@ pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURC
         Width: u64::from(desc.width),
         Height: desc.height,
         DepthOrArraySize: 1,
-        MipLevels: 1,
+        MipLevels: desc.mip_levels as u16,
         Format: image_format(desc.format),
         SampleDesc: DXGI_SAMPLE_DESC {
             Count: 1,
@@ -578,5 +583,23 @@ mod tests {
                 initial
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod image_description_tests {
+    use super::*;
+    #[test]
+    fn srgb_mip_chains_are_typed_sampled_resources_without_uav_flags() {
+        let native = DeviceImage::graph_resource_desc(crate::graph::ImageDesc {
+            width: 8,
+            height: 4,
+            format: crate::ImageFormat::Rgba8Srgb,
+            mip_levels: 4,
+            array_layers: 1,
+        });
+        assert_eq!(native.MipLevels, 4);
+        assert_eq!(native.Format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+        assert_eq!(native.Flags, D3D12_RESOURCE_FLAG_NONE);
     }
 }
