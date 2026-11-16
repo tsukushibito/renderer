@@ -275,7 +275,6 @@ impl BufferProvenance {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(crate) fn clear_range(
         &mut self,
         target: Range<u64>,

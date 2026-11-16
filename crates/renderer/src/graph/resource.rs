@@ -528,6 +528,27 @@ impl Graph {
         Ok(())
     }
 
+    pub(super) fn compatible_image_copy_pair(
+        &self,
+        src: usize,
+        dst: usize,
+    ) -> Result<(), GraphError> {
+        self.single_image(src)?;
+        self.single_image(dst)?;
+        let source = self.image_desc_at(src)?;
+        if src == dst
+            || source != self.image_desc_at(dst)?
+            || source.format == ImageFormat::Depth32Float
+        {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "image copy requires distinct color images with equal descriptions",
+                dst,
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn resource_error(
         &self,
         kind: GraphErrorKind,
