@@ -19,7 +19,8 @@ pub(crate) struct BufferProvenance {
     // one prefix summary; changing only those bounds never rescans the bytes.
     validation: Option<IndexValidation>,
     // Managed meshes need no CPU copy. This private proof is installed only by
-    // uploads carrying MeshData's immutable bound, at the same byte positions.
+    // uploads carrying GeometryData's or MeshData's immutable bound, at the same
+    // byte positions.
     mesh: Option<MeshIndexSummary>,
     #[cfg(test)]
     validation_scans: usize,
