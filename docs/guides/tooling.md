@@ -237,6 +237,8 @@ python -B tools/cpu_profile/capture.py capture --manifest .tools/cpu-profile/bui
 ```
 
 実収集のコマンドだけを、CPU記録権限のあるPowerShellで実行する。
+管理者PowerShellを一度開けば、そのprocessで複数のcaptureを続けて実行でき、各runで再昇格しない。
+新しい管理者processを作るときのUAC操作と、既存process内でのcaptureを区別する。
 `--handshake`は対象へ`--capture-handshake`を追加し、次の順序で進める。
 
 1. 対象が準備・warmupを終え、PID/QPC情報付き`PROFILE_WORKLOAD_READY`を出す。
@@ -281,22 +283,60 @@ Get-ChildItem .tools/cpu-profile/vulkan-4-yield/export -Filter *.csv
 ```
 
 exportは保存したmanifest/EXE/PDB/ETLのhashを照合し、installed AppLaunch profileのCPU定義から
-重複metricを除きleaf-event出力を要求するprofileを生成してWPA exporterへ渡す。
-同時にxperfのtrace統計、sampling頻度、sampled関数、CSwitch、ReadyThread stackのraw出力を保存する。
-`export.json`にcommand、exit code、profile/CSV hash、観測できたloss fieldを残す。
+重複metricを除き、`KeyColumnCount=0`でleaf-event出力を要求するprofileを生成する。
+対象の正確な`name (PID)`でSampled/Preciseをfilterし、preciseにはOld/Newの両process/thread identityを残す。
+installed WpaRuleMatchExporter profileのImages/Processesも同じ対象へ絞り、実load baseとimage/processの生存期間を出力する。
+Imagesの`Start Address`は実load addressであり、`Default Start Address`やmanifestのpreferred baseと区別する。
+filter後もanalyzerで対象PIDと窓を確認する。
+
+既定ではxperfのtrace統計、sampling頻度、sampled関数、CSwitch、nanosecond単位のmarksと
+raw-QPC/ETL時刻付きのheader限定dumpを保存する。marks/raw-headerの各コマンドはstdoutとstderrの合算を
+8 MiBまでに制限し、上限超過では保持したprefixとstage失敗を残す。CSVや他のraw分析全体のhard quotaではない。
+`export.json`に各stageの開始/終了、timeout/失敗、exit code、profile/CSV hash、観測できたloss fieldを残す。
 生成profile、CSVヘッダー・単位・stack表現は使用WPT版の最初のETLで確認する。
 未検証のprofileやfixture試験だけを実収集の受入にしない。
 `--wpa-profile`で入力となるvendor profile、`--output`で新規出力先、
 `--timeout-seconds`で各分析コマンドの上限（既定300秒、最大3600秒）を変更できる。
+
+Ready Thread StackはWPA preciseのCSVを使う。追加のxperf `readythread -stacks`は
+`--ready-stacks-fallback`を指定した場合だけ実行する。
+一部のWPT版で実際に`0xc0000005`終了と大量のstdoutが発生したため、通常exportには含めない。
+この追加分析の失敗を成功に置き換えず、rawログとstage結果を確認する。
 
 symbol検索はmatching archiveとrun内のsymcacheを使う。`--microsoft-symbols`を明示したときだけ
 Microsoft symbol serverを追加する。raw ETLには対象以外のsystem/process情報、path、stack等が含まれ得る。
 ETL、PDB、cache、ログは`.tools/`にローカル保存し、自動uploadやGit追加は行わない。
 共有時は含まれる情報と共有範囲を確認する。
 
-CSVの実ファイル名を確認して`$sampledCsv`と`$preciseCsv`へ設定し、
-対象PIDの生存期間内で確かめたETL相対秒の窓を`$roiStartSeconds`と`$roiEndSeconds`へ設定する。
-QPCの絶対tick値を単に秒へ割ってETL相対時刻とみなさず、traceのclock/headerとmarkerから対応を確認する。
+CSVの実ファイル名を確認して`$sampledCsv`と`$preciseCsv`へ設定する。
+handshakeを使った`profile_workload`では、[clock変換CLI](../../tools/cpu_profile/trace_clock.py)で
+測定QPC窓をETL相対秒へ変換する。次はexportが保存したtext証拠を使い、ETLのhashを再検証する。
+native分析コマンドは再実行しない。
+
+```powershell
+python -B tools/cpu_profile/trace_clock.py --capture .tools/cpu-profile/vulkan-4-yield/capture.json --header .tools/cpu-profile/vulkan-4-yield/export/raw-header.stdout.txt --statistics .tools/cpu-profile/vulkan-4-yield/export/trace-statistics.stdout.txt --marks .tools/cpu-profile/vulkan-4-yield/export/markers.stdout.txt --output .tools/cpu-profile/vulkan-4-yield/clock.json
+$traceClock = Get-Content .tools/cpu-profile/vulkan-4-yield/clock.json -Raw | ConvertFrom-Json
+$roiStartSeconds = $traceClock.roi.start_seconds
+$roiEndSeconds = $traceClock.roi.end_seconds
+```
+
+同じimmutable ETLから生成したtext証拠を渡す。helperはcaptureの所有/成功状態、PID/QPC frequency、ETL hash、
+header/statisticsのTrace Name、単一traceの明示的な`PerfCounter` clockを要求する。
+raw QPCとETL nanosecondのpairを2種類以上の時刻で照合し、全pairが同じ起点を正確に示すことと、
+QPC窓が観測したheader時刻の最小〜最大内にあることを確認する。
+全TraceLengthへの包含を代用せず、clockや丸めでpairが一致しない場合も許容誤差で吸収しない。
+起点と窓のexact rational fieldを正本にし、上の数値秒はanalyzerへ渡す近似値として扱う。
+
+`--marks`を渡すと、この所有instanceのBEGIN/ENDがETL内に各1件だけあり、順序とQPC窓の外囲を満たすことも確認する。
+省略時は実marker存在が未確認のままで、markerコマンドの終了codeから存在を推定しない。
+出力は親の存在する新規JSONファイルとし、入力textのhashとloss情報を保持する。
+欠けたloss fieldはunknownのままで、このclock変換だけではlossゼロやstack/symbolの網羅を受け入れない。
+textのhash/Trace Nameは渡した証拠のidentityを残すもので、同じETLから生成した来歴はrun記録でも保つ。
+
+このhelperはhandshake/QPC情報のある負荷だけを扱う。
+`windowed`等の通常captureはstartup/warmup/teardownを含むため、Processes/Imagesの生存期間を確認し、
+対象PIDの範囲内で選んだETL相対秒を`$roiStartSeconds`と`$roiEndSeconds`へ明示する。
+起動/終了UTCや、QPC絶対tickを単に秒へ割った値からROIを推定しない。
 
 ```powershell
 python -B tools/cpu_profile/capture.py analyze --capture .tools/cpu-profile/vulkan-4-yield/capture.json --sampled $sampledCsv --precise $preciseCsv --start-s $roiStartSeconds --end-s $roiEndSeconds --output .tools/cpu-profile/vulkan-4-yield/summary.json
@@ -314,15 +354,22 @@ vendor出力の表現がこの契約に合わなければ拒否原因とraw CSV�
 | 表 | 正規化列 |
 |---|---|
 | sampled | `pid,tid,cpu,time_s,ip,module,function,count,weight_ms`。任意の`stack_json`はroot-to-leafの文字列配列 |
-| precise | `pid,tid,cpu,count,last_switch_out_s,ready_time_s,switch_in_s,next_switch_out_s,previous_state,wait_reason,wait_stack,ready_stack` |
+| precise | `pid,tid,cpu,count,last_switch_out_s,ready_time_s,switch_in_s,next_switch_out_s,previous_state,wait_reason,wait_stack,ready_stack`。任意の`old_pid,old_tid`はself-switchの識別用 |
 
 sampleのCountは関数呼び出し回数ではなく標本数、Weightは実行中CPU時間の推定である。
 selfはmoduleとfunctionを組にし、未知symbol/IPの費用も残す。
 inclusiveは入力frame文字列への帰属で、recursive frameは一標本につき一度だけ加算する。
 inclusive値の合計をCPU総時間にしない。標本timestampによる窓選択には境界の近似と短い処理の見落としがある。
 preciseはRunning、実行可能だが未割当のReady、イベント待ちのWaitingを別々に窓へclipする。
-待機理由/New Thread Stackと、起床させた側のReady Thread Stackを分ける。
-不足した端点/状態をゼロで埋めず、TID再利用はそのIDの合計として残す。
+Waitingはlast switch-out→readyをblocked、ready→switch-inをreadyとする。
+Ready/Standby/DeferredReadyはlast switch-out→switch-inをreadyとし、過去のwakeに由来するReady Timeでblockedを作らない。
+Old/Newのprocessとthreadが同一と明示されたself-switchだけは、そのeventのoff-CPUを0とする。
+近接したtimestampだけから同一identityやself-switchを推定しない。
+Waitingの待機理由/New Thread Stack、起床させた側のReady Thread Stack、runnable側のNew Thread Stackを分ける。
+stackは状況の手掛かりであり、遅延原因を単独で証明しない。
+不足した端点/状態は`unclassified_off_cpu_ms`やmissing-startとして残し、ゼロで埋めない。
+coverage完了fieldは観測できた区間の分類であり、trace境界外や欠けた開始点まで計測済みとはしない。
+TID再利用はそのIDの合計として残す。
 複数threadの合計はwall timeを超え得る。通常のsleep/pacingもWaitingになり、長い待機だけでは欠陥と断定しない。
 
 ### 実IPからソース行を確認する
