@@ -826,6 +826,10 @@ digest比較にはseedと測定frame数を揃える。時間指定で件数が�
 
 保存EXE/PDB、WPRの所有session、外部marker付きhandshake、CSV/ソース行の分析は
 [CPUプロファイル手順](tooling.md#cpu-profiling)に従う。
+外部markerは測定QPC窓の外側を囲む。handshake負荷では`trace_clock.py`でheaderの実QPC/ETL時刻との厳密な対応を確認してから、
+Sampledの実行標本とPreciseのRunning/Ready/Waiting、および未分類coverageを分ける。
+Ready/Standby/DeferredReadyとWaitingを混同せず、Old/Newの同じprocess/thread identityで確認したself-switchだけはoff-CPU 0とする。
+通常のwindowed captureは生存期間表を基にETL相対ROIを明示し、UTCからQPC窓を推定しない。
 実ETLの欠落、stack/symbol帰属、最適化構成の費用比較は実収集後の別受入とする。
 
 ### フレーム進行・エンジン入力
