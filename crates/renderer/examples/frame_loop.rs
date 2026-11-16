@@ -20,6 +20,7 @@ use renderer::{
         Engine, EngineCapacity, FrameSnapshot, Material, MaterialHandle, MeshHandle, SnapshotPool,
     },
     graph::{ComputeTransform, GraphCapacity, ImageDesc, ImportImage, PassHandle},
+    standard::graphs::{self, ForwardConfig},
 };
 
 #[path = "support/frame_report.rs"]
@@ -629,9 +630,27 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let snapshot_ns = snapshot_start.elapsed().as_nanos();
         let upload = prepare_meshes(&mut engine, &snapshot, &mut collector, options)?;
         let build_start = Instant::now();
-        let mut prepared = engine.build_snapshot(&snapshot, true, |graph, color| {
-            scene::custom_pass(graph, color, options.custom)
-        })?;
+        let mut prepared = engine.begin_graph()?;
+        let inputs = engine.connect_snapshot(&mut prepared, &snapshot)?;
+        let scene_color = graphs::forward(
+            &mut prepared.graph,
+            if snapshot.draw_count() == 0 {
+                "view clear"
+            } else {
+                "view opaque batch"
+            },
+            inputs.draws(),
+            ForwardConfig {
+                color: ImageDesc::rgba8(view.width, view.height),
+                clear_color: view.clear_color,
+                depth: true,
+            },
+        )?;
+        // Inputs are only a construction lease. The Graph owns the draw
+        // operands before the caller adds its post stage and selects output.
+        drop(inputs);
+        let output = scene::custom_pass(&mut prepared.graph, scene_color.color, options.custom)?;
+        let mut prepared = prepared.select_output(output, true)?;
         let old_history = history.take();
         let (history_output, history_readback) = if options.history {
             let source = if let Some(previous) = old_history.as_ref() {

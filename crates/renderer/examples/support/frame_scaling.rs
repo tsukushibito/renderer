@@ -131,11 +131,20 @@ pub(super) fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer::engine::{Engine, Material};
+    use renderer::{
+        engine::{Engine, EngineCapacity, Material, SnapshotPool},
+        graph::{GraphCapacity, GraphPool, ImageDesc},
+        standard::graphs::{self, ForwardConfig},
+    };
 
     #[test]
     fn grid_draws_share_assets_and_samples_cover_every_draw_and_empty_cell() {
-        let mut assets = Engine::new(1, 1).unwrap();
+        let mut assets = Engine::new(EngineCapacity {
+            meshes: 1,
+            materials: 1,
+            retired_mesh_versions: 0,
+        })
+        .unwrap();
         let mesh = assets
             .create_mesh(super::super::scene::triangle([1.0, 0.0, 0.0, 1.0]).unwrap())
             .unwrap();
@@ -166,7 +175,14 @@ mod tests {
 
     #[test]
     fn distinct_meshes_keep_shared_geometry_placement_and_draw_order() {
-        let mut assets = Engine::new(5, 1).unwrap();
+        let mut assets = Engine::new(EngineCapacity {
+            meshes: 5,
+            materials: 1,
+            retired_mesh_versions: 0,
+        })
+        .unwrap();
+        let snapshots = SnapshotPool::new(5, 1).unwrap();
+        let mut graph_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let geometry = super::super::scene::triangle([1.0, 0.0, 0.0, 1.0]).unwrap();
         let meshes = (0..5)
             .map(|_| assets.create_mesh(geometry.clone()).unwrap())
@@ -188,16 +204,26 @@ mod tests {
                 assert_eq!(distinct.world_from_model, shared.world_from_model);
             }
             let view = super::super::scene::view(64, 64);
-            let frame = assets
-                .snapshot(&view, &distinct)
-                .unwrap()
-                .build_graph(false, |_, color| Ok(color))
-                .unwrap();
-            let plan = frame.graph.compile().unwrap();
+            let snapshot = assets.snapshot(&snapshots, &view, &distinct).unwrap();
+            let mut graph = graph_pool.begin().unwrap();
+            let inputs = snapshot.connect_graph(&mut graph).unwrap();
+            let scene = graphs::forward(
+                &mut graph,
+                "distinct mesh draw order",
+                inputs.draws(),
+                ForwardConfig {
+                    color: ImageDesc::rgba8(view.width, view.height),
+                    clear_color: view.clear_color,
+                    depth: true,
+                },
+            )
+            .unwrap();
+            graph.export_image(scene.color).unwrap();
+            drop(inputs);
+            let plan = graph.compile().unwrap();
             assert_eq!(
                 plan.ordered_pass_names()
-                    .iter()
-                    .filter(|name| **name == "mesh vertex upload")
+                    .filter(|name| *name == "mesh vertex upload")
                     .count(),
                 5,
                 "equal immutable geometry must retain distinct mesh resource identities"

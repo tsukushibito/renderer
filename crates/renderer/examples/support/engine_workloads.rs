@@ -8,13 +8,15 @@ use std::{
 };
 
 use renderer::{
-    FrameCapacity, FrameId, GpuTiming, MeshCacheConfig, MeshUploadState, RenderedFrame,
-    ResourceClass, RuntimeConfig, ValidationMode, ValidationReport, VulkanEngine, VulkanRuntime,
+    FrameCapacity, FrameId, GpuTiming, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
+    RenderedFrame, ResourceClass, RuntimeConfig, ValidationMode, ValidationReport, VulkanEngine,
+    VulkanRuntime,
     engine::{
         Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MeshHandle, SnapshotPool,
         View,
     },
     graph::{ComputeTransform, ImageDesc, PassHandle},
+    standard::graphs::{self, ForwardConfig},
 };
 
 use super::engine_geometry::{grid, rectangle};
@@ -193,6 +195,45 @@ impl Driver {
         Ok(report)
     }
 
+    fn build_view_graph(
+        &mut self,
+        snapshot: &FrameSnapshot,
+        compute: bool,
+    ) -> Result<PreparedEngineFrame> {
+        let mut prepared = self.renderer.begin_graph()?;
+        let inputs = self.renderer.connect_snapshot(&mut prepared, snapshot)?;
+        let view = inputs.view();
+        let scene = graphs::forward(
+            &mut prepared.graph,
+            if snapshot.draw_count() == 0 {
+                "view clear"
+            } else {
+                "view opaque batch"
+            },
+            inputs.draws(),
+            ForwardConfig {
+                color: ImageDesc::rgba8(view.width, view.height),
+                clear_color: view.clear_color,
+                depth: true,
+            },
+        )?;
+        drop(inputs);
+        let output = if compute {
+            let desc = prepared.graph.image_desc(scene.color)?;
+            let output = prepared.graph.image("workload Compute output", desc)?;
+            prepared.graph.compute(
+                "workload Compute",
+                scene.color,
+                output,
+                ComputeTransform::Invert,
+            )?;
+            output
+        } else {
+            scene.color
+        };
+        Ok(prepared.select_output(output, true)?)
+    }
+
     fn enqueue(
         &mut self,
         snapshot: &FrameSnapshot,
@@ -204,18 +245,7 @@ impl Driver {
             self.wait_one()?;
         }
         let started = Instant::now();
-        let prepared = self
-            .renderer
-            .build_snapshot(snapshot, true, |graph, color| {
-                if compute {
-                    let desc = graph.image_desc(color)?;
-                    let output = graph.image("workload Compute output", desc)?;
-                    graph.compute("workload Compute", color, output, ComputeTransform::Invert)?;
-                    Ok(output)
-                } else {
-                    Ok(color)
-                }
-            })?;
+        let prepared = self.build_view_graph(snapshot, compute)?;
         let built = Instant::now();
         let plan = prepared.compile()?;
         let compiled = Instant::now();
@@ -493,19 +523,8 @@ pub(super) fn run(mode: Mode) -> Result<String> {
             world_from_model: transform,
         }],
     )?;
-    let pa = driver
-        .renderer
-        .build_snapshot(&a, true, |_, image| Ok(image))?;
-    let pb = driver.renderer.build_snapshot(&b, true, |graph, image| {
-        let output = graph.image("second View Compute output", graph.image_desc(image)?)?;
-        graph.compute(
-            "second View invert",
-            image,
-            output,
-            ComputeTransform::Invert,
-        )?;
-        Ok(output)
-    })?;
+    let pa = driver.build_view_graph(&a, false)?;
+    let pb = driver.build_view_graph(&b, true)?;
     let plan_a = pa.compile()?;
     let plan_b = pb.compile()?;
     let fa = driver.renderer.submit_frame(plan_a)?;
