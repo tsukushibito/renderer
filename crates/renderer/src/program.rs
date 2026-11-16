@@ -256,6 +256,8 @@ impl Default for ImageViewDescriptor {
 /// or anisotropy. Native image/format capabilities are checked before use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SamplerDescriptor {
+    /// Nearest minification/magnification/mip selection, clamp-to-edge on all
+    /// axes, and LOD zero.
     NearestClamp,
     /// Linear minification/magnification and mip interpolation, repeat on all
     /// axes, and the complete selected View's LOD range.
@@ -1038,6 +1040,7 @@ mod tests {
         };
         for format in [
             ImageFormat::Rgba8Unorm,
+            ImageFormat::Rgba8Srgb,
             ImageFormat::Rgba16Float,
             ImageFormat::Depth32Float,
         ] {
@@ -1128,6 +1131,50 @@ mod tests {
         ] {
             assert_eq!(
                 validate_image_view_descriptor(ImageFormat::Depth32Float, 1, invalid),
+                Err(ProgramError::InvalidViewRange)
+            );
+        }
+    }
+
+    #[test]
+    fn mip_image_and_sampled_view_ranges_are_validated_at_creation() {
+        let desc = ImageDescriptor {
+            width: 4,
+            height: 2,
+            mip_levels: 3,
+            format: ImageFormat::Rgba8Srgb,
+            preferred_depth_clear: None,
+        };
+        validate_image_descriptor(desc, 4).unwrap();
+        for mip_levels in [0, 4, u32::MAX] {
+            assert_eq!(
+                validate_image_descriptor(ImageDescriptor { mip_levels, ..desc }, 4),
+                Err(ProgramError::InvalidExtent)
+            );
+        }
+        for (base_mip_level, mip_level_count) in [(0, 3), (1, 2), (2, 1)] {
+            validate_image_view_descriptor(
+                desc.format,
+                desc.mip_levels,
+                ImageViewDescriptor {
+                    base_mip_level,
+                    mip_level_count,
+                    ..ImageViewDescriptor::default()
+                },
+            )
+            .unwrap();
+        }
+        for (base_mip_level, mip_level_count) in [(0, 0), (3, 1), (1, 3), (1, u32::MAX)] {
+            assert_eq!(
+                validate_image_view_descriptor(
+                    desc.format,
+                    desc.mip_levels,
+                    ImageViewDescriptor {
+                        base_mip_level,
+                        mip_level_count,
+                        ..ImageViewDescriptor::default()
+                    }
+                ),
                 Err(ProgramError::InvalidViewRange)
             );
         }
