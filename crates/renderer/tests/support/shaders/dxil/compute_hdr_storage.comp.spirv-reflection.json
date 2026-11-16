@@ -1,0 +1,58 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "comp",
+            "workgroup_size" : [
+                4,
+                4,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_39" : {
+            "name" : "_39",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "images" : [
+        {
+            "type" : "image2D",
+            "name" : "_22",
+            "writeonly" : true,
+            "set" : 1,
+            "binding" : 0,
+            "format" : "rgba16f"
+        },
+        {
+            "type" : "image2D",
+            "name" : "_34",
+            "readonly" : true,
+            "set" : 0,
+            "binding" : 0,
+            "format" : "rgba16f"
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_39",
+            "name" : "_39_41",
+            "readonly" : true,
+            "block_size" : 16,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}
