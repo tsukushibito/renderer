@@ -8,6 +8,7 @@ use crate::program::{
     BufferUsage, ManagedProgram, resolve_bindings, validate_buffer_binding,
 };
 use ash::vk;
+use std::ffi::CString;
 use std::sync::Arc;
 use vk_mem::Alloc;
 
@@ -25,13 +26,16 @@ fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
         BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
         BindingType::StorageRead | BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
         BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+        BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) => {
+            vk::DescriptorType::STORAGE_IMAGE
+        }
         BindingType::Sampler => vk::DescriptorType::SAMPLER,
     }
 }
 
 /// An immutable managed compute pipeline and its complete layout ownership.
 #[derive(Clone)]
-pub struct VulkanProgram(Arc<Program>);
+pub struct VulkanProgram(pub(super) Arc<Program>);
 impl VulkanProgram {
     pub fn layout(&self) -> &'static [BindingLayout] {
         self.0.bindings
@@ -53,7 +57,14 @@ impl VulkanProgram {
             .iter()
             .filter(|b| matches!(b.kind, BindingType::StorageRead | BindingType::StorageWrite))
             .count() as u32;
-        let group_count = bindings.iter().map(|b| b.group + 1).max().unwrap_or(0);
+        let group_count = bindings
+            .iter()
+            .map(|b| b.group.checked_add(1))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| RuntimeError::unsupported("Compute descriptor group count overflow"))?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
         let image_count = bindings
             .iter()
             .filter(|b| b.kind == BindingType::SampledImage)
@@ -61,6 +72,15 @@ impl VulkanProgram {
         let sampler_count = bindings
             .iter()
             .filter(|b| b.kind == BindingType::Sampler)
+            .count() as u32;
+        let storage_image_count = bindings
+            .iter()
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
+                )
+            })
             .count() as u32;
         let local = managed.workgroup_size();
         let limits = owner.device.limits();
@@ -72,9 +92,12 @@ impl VulkanProgram {
             || limits.max_descriptor_set_storage_buffers < storage_count
             || limits.max_per_stage_descriptor_sampled_images < image_count
             || limits.max_descriptor_set_sampled_images < image_count
+            || limits.max_per_stage_descriptor_storage_images < storage_image_count
+            || limits.max_descriptor_set_storage_images < storage_image_count
             || limits.max_per_stage_descriptor_samplers < sampler_count
             || limits.max_descriptor_set_samplers < sampler_count
-            || limits.max_per_stage_resources < uniform_count + storage_count + image_count
+            || limits.max_per_stage_resources
+                < uniform_count + storage_count + image_count + storage_image_count
             || bindings.iter().any(|b| {
                 b.min_size
                     > match b.kind {
@@ -82,7 +105,10 @@ impl VulkanProgram {
                         BindingType::StorageRead | BindingType::StorageWrite => {
                             u64::from(limits.max_storage_buffer_range)
                         }
-                        BindingType::SampledImage | BindingType::Sampler => 0,
+                        BindingType::SampledImage
+                        | BindingType::Sampler
+                        | BindingType::StorageImageRead(_)
+                        | BindingType::StorageImageWrite(_) => 0,
                     }
             })
             || limits
@@ -99,6 +125,39 @@ impl VulkanProgram {
                 "Device does not support managed program ABI",
             ));
         }
+        for slot in bindings {
+            if let BindingType::StorageImageRead(format) | BindingType::StorageImageWrite(format) =
+                slot.kind
+            {
+                let format = match format {
+                    crate::program::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+                    crate::program::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+                    crate::program::ImageFormat::D32Float => {
+                        return Err(RuntimeError::unsupported(
+                            "depth storage images are unsupported",
+                        ));
+                    }
+                };
+                // SAFETY: Device retains this physical adapter and Instance.
+                let properties = unsafe {
+                    owner
+                        .device
+                        .instance_raw()
+                        .get_physical_device_format_properties(
+                            owner.device.physical_device(),
+                            format,
+                        )
+                };
+                if !properties
+                    .optimal_tiling_features
+                    .contains(vk::FormatFeatureFlags::STORAGE_IMAGE)
+                {
+                    return Err(RuntimeError::unsupported(
+                        "Compute storage image format is unsupported",
+                    ));
+                }
+            }
+        }
         let mut program = Program {
             owner,
             bindings,
@@ -108,18 +167,18 @@ impl VulkanProgram {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
         };
-        program.initialize(managed.spirv(), group_count)?;
+        program.initialize(managed.spirv(), group_count, managed.entry_point())?;
         Ok(Self(Arc::new(program)))
     }
 }
-struct Program {
+pub(super) struct Program {
     owner: Arc<MemoryOwner>,
     bindings: &'static [BindingLayout],
     #[cfg(test)]
     managed: ManagedProgram,
-    set_layouts: Vec<vk::DescriptorSetLayout>,
-    layout: vk::PipelineLayout,
-    pipeline: vk::Pipeline,
+    pub(super) set_layouts: Vec<vk::DescriptorSetLayout>,
+    pub(super) layout: vk::PipelineLayout,
+    pub(super) pipeline: vk::Pipeline,
 }
 struct ShaderModule<'a> {
     owner: &'a MemoryOwner,
@@ -139,7 +198,14 @@ impl Drop for ShaderModule<'_> {
     }
 }
 impl Program {
-    fn initialize(&mut self, bytes: &[u8], group_count: u32) -> Result<(), RuntimeError> {
+    fn initialize(
+        &mut self,
+        bytes: &[u8],
+        group_count: u32,
+        entry: &str,
+    ) -> Result<(), RuntimeError> {
+        let entry = CString::new(entry)
+            .map_err(|_| RuntimeError::invalid("Compute entry point contains NUL"))?;
         if bytes.len() < 20 || !bytes.len().is_multiple_of(4) {
             return Err(RuntimeError::invalid("invalid managed SPIR-V length"));
         }
@@ -204,7 +270,7 @@ impl Program {
                     vk::PipelineShaderStageCreateInfo::default()
                         .stage(vk::ShaderStageFlags::COMPUTE)
                         .module(module.handle)
-                        .name(c"main"),
+                        .name(&entry),
                 )];
             #[cfg(feature = "memory-profiling")]
             crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
@@ -437,7 +503,10 @@ impl VulkanBindings {
                             limits.min_storage_buffer_offset_alignment,
                             limits.max_storage_buffer_range,
                         ),
-                        BindingType::SampledImage | BindingType::Sampler => (1, 0),
+                        BindingType::SampledImage
+                        | BindingType::Sampler
+                        | BindingType::StorageImageRead(_)
+                        | BindingType::StorageImageWrite(_) => (1, 0),
                     };
                     let range = BufferRange {
                         offset: *offset,

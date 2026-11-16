@@ -11,6 +11,7 @@ use ash::vk;
 use super::super::memory::MemoryOwner;
 use super::super::program::{ShaderBindings, ShaderPrograms};
 use super::super::transfer::staging::SharedStaging;
+use super::compute::{ComputeDispatch, ComputeLease};
 use super::metrics;
 use super::provenance::IndexError;
 use super::storage::{StorageLease, StoragePool};
@@ -105,6 +106,9 @@ enum PreparedOperation {
         dst: usize,
         transform: ComputeTransform,
     },
+    Dispatch {
+        workgroups: [u32; 3],
+    },
     Raster {
         program: crate::program::ManagedRasterProgram,
         draws: Range<usize>,
@@ -148,6 +152,7 @@ impl PreparedOperation {
             }
             Operation::ReadbackImage { src } => Self::ReadbackImage { src },
             Operation::Compute { dst, transform, .. } => Self::Compute { dst, transform },
+            Operation::Dispatch { workgroups, .. } => Self::Dispatch { workgroups },
             Operation::Raster {
                 program,
                 ref draws,
@@ -167,7 +172,7 @@ impl PreparedOperation {
                 depth,
             },
             Operation::Composite { dst, .. } => Self::Composite { dst },
-            Operation::Dispatch { .. } | Operation::Declared(_) => {
+            Operation::Declared(_) => {
                 return Err(RuntimeError::unsupported(
                     "pass has no supported native operation",
                 ));
@@ -232,6 +237,7 @@ struct PreparedPass {
     images: Range<usize>,
     staging: Option<usize>,
     descriptor: Option<vk::DescriptorSet>,
+    compute: Option<ComputeDispatch>,
     raster_descriptors: Range<usize>,
 }
 
@@ -241,6 +247,7 @@ pub(super) struct GraphWork {
     serial: u64,
     programs: Option<Arc<ShaderPrograms>>,
     bindings: Option<ShaderBindings>,
+    compute: Option<ComputeLease>,
     plan: Option<CompiledGraph>,
     pub(super) profile: Option<metrics::WorkProfile>,
     // Return the result slot last: an idle result pool must also imply that
@@ -302,6 +309,7 @@ impl GraphWork {
             serial,
             programs: None,
             bindings: None,
+            compute: None,
             plan: None,
             profile: None,
         })
@@ -312,6 +320,7 @@ impl GraphWork {
         graph: &CompiledGraph,
         programs: Option<Arc<ShaderPrograms>>,
         mut bindings: Option<ShaderBindings>,
+        mut compute: Option<ComputeLease>,
         upload: &SharedStaging,
         readback: &SharedStaging,
         #[cfg(feature = "graph-diagnostics")] mut diagnostic: Option<&mut String>,
@@ -376,6 +385,7 @@ impl GraphWork {
                 images: images.len()..images.len(),
                 staging: None,
                 descriptor: None,
+                compute: None,
                 raster_descriptors: raster_descriptors.len()..raster_descriptors.len(),
             };
             // Aggregate one pass's uses before modifying previous-access state;
@@ -558,6 +568,40 @@ impl GraphWork {
                             physical[*dst].as_ref().unwrap().image(),
                         )?);
                     }
+                    Operation::Dispatch {
+                        program,
+                        bindings,
+                        workgroups,
+                    } => {
+                        prepared.compute = Some(compute.as_mut().unwrap().prepare(
+                            *program,
+                            graph.raster_bindings(bindings),
+                            physical,
+                            *workgroups,
+                        )?);
+                        // Shader writes invalidate any prior CPU index proof,
+                        // including proofs retained by imported/exported buffers.
+                        for access in graph.accesses(index) {
+                            if access.write
+                                && provenance_needed[access.resource]
+                                && matches!(
+                                    graph.resources[access.resource].desc,
+                                    ResourceDesc::Buffer(_)
+                                )
+                            {
+                                states[access.resource]
+                                    .as_mut()
+                                    .unwrap()
+                                    .provenance
+                                    .clear_range(access.range.clone())
+                                    .map_err(|_| {
+                                        RuntimeError::capacity(
+                                            "Compute provenance capacity exhausted",
+                                        )
+                                    })?;
+                            }
+                        }
+                    }
                     Operation::Composite { src, .. } => {
                         prepared.descriptor = Some(
                             bindings
@@ -619,7 +663,7 @@ impl GraphWork {
                         prepared.raster_descriptors.end = raster_descriptors.len();
                     }
                     Operation::CopyImage { .. } | Operation::AttachmentPass { .. } => {}
-                    Operation::Dispatch { .. } | Operation::Declared(_) => {
+                    Operation::Declared(_) => {
                         return Err(RuntimeError::unsupported(
                             "pass has no supported native operation",
                         ));
@@ -654,6 +698,7 @@ impl GraphWork {
         }
         self.programs = programs;
         self.bindings = bindings;
+        self.compute = compute;
         self.plan = Some(graph.clone());
         Ok(self)
     }
