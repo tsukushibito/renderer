@@ -2,7 +2,10 @@
 
 use std::{
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -117,6 +120,7 @@ pub(super) struct ExecutionSlot {
     pub(super) provenance: Vec<BufferProvenance>,
     pub(super) provenance_needed: Vec<bool>,
     pub(super) provenance_scratch: BufferProvenance,
+    pub(super) timestamps: Option<super::metrics::TimestampPair>,
 }
 // SAFETY: These free-threaded native objects move as one exclusive lease. Their
 // allocator and resources are never reset/reused before actual GPU completion.
@@ -192,6 +196,7 @@ impl ExecutionSlot {
                 v.resize(capacity.resources, false);
                 v
             },
+            timestamps: None,
             provenance_scratch: BufferProvenance::with_capacity(
                 capacity.provenance_segments_per_resource,
             ),
@@ -317,6 +322,8 @@ pub(super) struct FramePool {
     pub(super) clear_programs: Option<ClearPrograms>,
     pub(super) compute_programs: Vec<super::program::D3D12Program>,
     state: Mutex<PoolState>,
+    profiling: AtomicBool,
+    timestamps_prepared: AtomicBool,
     // Declared last so native fields are destroyed while the Device remains live.
     owner: Arc<DeviceOwner>,
 }
@@ -371,12 +378,44 @@ impl FramePool {
             raster_programs: Vec::new(),
             clear_programs: None,
             compute_programs: Vec::new(),
+            profiling: AtomicBool::new(false),
+            timestamps_prepared: AtomicBool::new(false),
             state: Mutex::new(PoolState {
                 executions,
                 results,
             }),
             owner,
         }))
+    }
+    pub(super) fn profiling_enabled(&self) -> bool {
+        self.profiling.load(Ordering::Relaxed)
+    }
+    pub(super) fn set_profiling(&self, enabled: bool) -> Result<(), D3D12RuntimeError> {
+        self.owner.ensure_active()?;
+        if enabled && !self.timestamps_prepared.load(Ordering::Relaxed) {
+            self.reap()?;
+            let mut state = self.state();
+            if !state
+                .executions
+                .iter()
+                .all(|entry| matches!(entry, ExecutionEntry::Available(_)))
+            {
+                return Err(D3D12RuntimeError::capacity(
+                    "return executions before preparing timestamp storage",
+                ));
+            }
+            for entry in &mut state.executions {
+                let ExecutionEntry::Available(slot) = entry else {
+                    unreachable!()
+                };
+                if slot.timestamps.is_none() {
+                    slot.timestamps = Some(super::metrics::TimestampPair::new(&self.owner)?);
+                }
+            }
+            self.timestamps_prepared.store(true, Ordering::Relaxed);
+        }
+        self.profiling.store(enabled, Ordering::Relaxed);
+        Ok(())
     }
     pub(super) fn is_idle(&self) -> bool {
         let state = self.state();
@@ -627,6 +666,7 @@ impl FramePool {
             phase: Phase::Poisoned,
             plan: None,
             exports: None,
+            profile: None,
         };
         if work.slot().next_value == u64::MAX {
             work.phase = Phase::Recorded;
@@ -704,8 +744,27 @@ pub(super) struct FrameWork {
     graph: u64,
     target: u64,
     phase: Phase,
+    profile: Option<super::metrics::WorkProfile>,
 }
 impl FrameWork {
+    pub(super) fn begin_profile(&mut self, started: Option<Instant>) {
+        self.profile = started.map(super::metrics::WorkProfile::new);
+    }
+    pub(super) fn begin_recording_metrics(&mut self) {
+        if let Some(profile) = &mut self.profile {
+            profile.metrics.cpu_prepare = profile.started.elapsed();
+            profile.recording = Some(Instant::now());
+            // SAFETY: This execution exclusively owns an open DIRECT list and
+            // its prepared pair, which returned only after prior completion.
+            unsafe {
+                self.slot()
+                    .timestamps
+                    .as_ref()
+                    .unwrap()
+                    .begin(&self.slot().list);
+            }
+        }
+    }
     pub(super) fn owner(&self) -> &Arc<DeviceOwner> {
         self.pool.owner()
     }
@@ -737,6 +796,17 @@ impl FrameWork {
         if let Some(result) = self.result_mut() {
             result.readbacks.sort_unstable_by_key(|meta| meta.pass);
         }
+        if self.profile.is_some() {
+            // SAFETY: The pair's matching begin precedes all Graph commands;
+            // pending FrameWork keeps the pair/readback alive through its Fence.
+            unsafe {
+                self.slot()
+                    .timestamps
+                    .as_ref()
+                    .unwrap()
+                    .end(&self.slot().list);
+            }
+        }
         // A failed Close makes this native command list permanently unresettable.
         self.phase = Phase::Poisoned;
         // SAFETY: The sole leased list is recording and all operands are retained.
@@ -746,9 +816,13 @@ impl FrameWork {
                 .native("ID3D12GraphicsCommandList::Close", error)
         })?;
         self.phase = Phase::Recorded;
+        if let Some(profile) = &mut self.profile {
+            profile.metrics.cpu_record = profile.recording.take().unwrap().elapsed();
+        }
         Ok(())
     }
     pub(super) fn submit(mut self) -> Result<FrameSubmission, D3D12RuntimeError> {
+        let started = self.profile.as_ref().map(|_| Instant::now());
         if self.phase != Phase::Recorded {
             return Err(D3D12RuntimeError::invalid("frame recording is not closed"));
         }
@@ -794,6 +868,9 @@ impl FrameWork {
             provenance.clear();
         }
         let exports = self.exports.take();
+        if let Some(profile) = &mut self.profile {
+            profile.metrics.cpu_submit = started.unwrap().elapsed();
+        }
         Ok(FrameSubmission {
             work: Some(self),
             exports,
@@ -806,7 +883,22 @@ impl FrameWork {
             target: self.target,
         }
     }
-    fn complete(mut self) -> FrameResult {
+    fn complete(mut self) -> Result<FrameResult, D3D12RuntimeError> {
+        let started = self.profile.as_ref().map(|_| Instant::now());
+        let mut metrics = if let Some(mut profile) = self.profile.take() {
+            // SAFETY: FrameSubmission observed the successful execution Fence;
+            // this slot cannot return/reuse until after query data is copied.
+            profile.metrics.gpu = unsafe {
+                self.slot()
+                    .timestamps
+                    .as_ref()
+                    .unwrap()
+                    .read(&self.pool.owner, profile.started.elapsed())
+            }?;
+            Some(profile.metrics)
+        } else {
+            None
+        };
         let returned = self
             .pool
             .registry
@@ -820,7 +912,7 @@ impl FrameWork {
         let remaining = result
             .as_ref()
             .map_or(0, |result| result.slot.readbacks.len());
-        if remaining == 0 {
+        let mut completed = if remaining == 0 {
             if let Some(result) = result {
                 FramePool::return_result(&mut self.pool.state(), result);
             }
@@ -830,6 +922,7 @@ impl FrameWork {
                 pool: None,
                 result: None,
                 remaining: 0,
+                metrics: None,
             }
         } else {
             FrameResult {
@@ -838,8 +931,14 @@ impl FrameWork {
                 pool: Some(Arc::clone(&self.pool)),
                 result,
                 remaining,
+                metrics: None,
             }
+        };
+        if let Some(metrics) = &mut metrics {
+            metrics.cpu_retire = started.unwrap().elapsed();
         }
+        completed.metrics = metrics;
+        Ok(completed)
     }
 }
 
@@ -936,7 +1035,7 @@ impl FrameSubmission {
         // operation stopped the Device; successful data still requires activity.
         work.phase = Phase::Complete;
         work.pool.owner.check_native_active()?;
-        Ok(Some(self.work.take().unwrap().complete()))
+        Ok(Some(self.work.take().unwrap().complete()?))
     }
 }
 impl Drop for FrameSubmission {
@@ -956,8 +1055,12 @@ pub(super) struct FrameResult {
     pool: Option<Arc<FramePool>>,
     result: Option<ResultLease>,
     remaining: usize,
+    metrics: Option<crate::profiling::SubmissionMetrics>,
 }
 impl FrameResult {
+    pub(super) fn metrics(&self) -> Option<&crate::profiling::SubmissionMetrics> {
+        self.metrics.as_ref()
+    }
     pub(super) fn graph(&self) -> u64 {
         self.graph
     }

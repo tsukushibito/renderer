@@ -500,6 +500,15 @@ enum ResultKind {
     Fixture(FixtureResult),
 }
 impl D3D12SubmissionResult {
+    /// Optional completed CPU phases and DIRECT-queue Graph GPU interval.
+    /// Present work and display/VSync completion are separate measurements.
+    pub fn metrics(&self) -> Option<&crate::profiling::SubmissionMetrics> {
+        match &self.kind {
+            ResultKind::Pooled(result) => result.metrics(),
+            #[cfg(test)]
+            ResultKind::Fixture(_) => None,
+        }
+    }
     fn check_graph(&self, pass: PassHandle) -> Result<(), D3D12RuntimeError> {
         let graph = match &self.kind {
             ResultKind::Pooled(result) => result.graph(),

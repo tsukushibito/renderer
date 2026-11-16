@@ -3,7 +3,8 @@
 
 use std::time::Duration;
 
-/// GPU elapsed time for the whole recorded Graph, not display latency or FPS.
+/// GPU elapsed time for a recorded native command interval, not display latency
+/// or FPS. The containing sample identifies Graph or presentation work.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum GpuTiming {

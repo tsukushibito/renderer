@@ -9,6 +9,7 @@ mod diagnostics;
 mod frame;
 mod graph;
 mod image;
+mod metrics;
 mod program;
 mod raster;
 mod raster_clear;
@@ -210,6 +211,9 @@ impl D3D12Runtime {
             programs,
             compute_programs,
         )?;
+        if self.pool.profiling_enabled() {
+            pool.set_profiling(true)?;
+        }
         let replacement = Arc::get_mut(&mut pool)
             .expect("new unshared pool")
             .registry

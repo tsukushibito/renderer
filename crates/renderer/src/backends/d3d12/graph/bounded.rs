@@ -313,6 +313,7 @@ pub(super) fn prepare(
     pool: &Arc<FramePool>,
     graph: &CompiledGraph,
 ) -> Result<FrameWork, D3D12RuntimeError> {
+    let started = pool.profiling_enabled().then(std::time::Instant::now);
     let needs_result = graph.order.iter().any(|&pass| {
         matches!(
             &graph.passes[pass].operation,
@@ -320,6 +321,7 @@ pub(super) fn prepare(
         )
     });
     let mut work = pool.acquire(needs_result)?;
+    work.begin_profile(started);
     work.set_graph(graph.id);
     let capacity = work.capacity();
     let slot = work.slot_mut();
@@ -349,6 +351,7 @@ pub(super) fn prepare(
         result.used = 0;
         result.readbacks.clear();
     }
+    work.begin_recording_metrics();
     for &pass in &graph.order {
         match &graph.passes[pass].operation {
             Operation::UploadBuffer { dst, offset, .. } => {
