@@ -10,7 +10,9 @@ pub(super) struct Inner {
     pub(super) slots: Vec<SlotRecord>,
     pub(super) programs: Vec<Arc<Program>>,
     pub(super) prepared_format: Option<vk::Format>,
-    pub(super) pending: Vec<PendingTransfer<PresentWork>>,
+    pub(super) pending: Vec<PendingPresent>,
+    pub(super) profiling_enabled: bool,
+    pub(super) profiles: Option<ProfileStorage>,
     pub(super) desired: (u32, u32),
     pub(super) dirty: bool,
     pub(super) closed: bool,
@@ -34,20 +36,54 @@ impl Inner {
         let mut first_error = None;
         let mut index = 0;
         while index < self.pending.len() {
-            match self.pending[index].wait(timeout.saturating_sub(start.elapsed())) {
-                Ok(Some(_)) => {
-                    drop(self.pending.swap_remove(index));
+            match self.pending[index]
+                .work
+                .wait(timeout.saturating_sub(start.elapsed()))
+            {
+                Ok(Some(work)) => {
+                    // Preserve submit order for the public FIFO samples. All
+                    // entries share this queue; Vec removal reuses its storage.
+                    let pending = self.pending.remove(index);
+                    let sample = (|| -> Result<Option<PresentationMetrics>, RuntimeError> {
+                        let Some(mut metrics) = pending.metrics else {
+                            return Ok(None);
+                        };
+                        let profile = work
+                            .profile
+                            .as_ref()
+                            .expect("profiled work retains queries");
+                        let retire_started = profile.retire_started.expect("Fence completed");
+                        // SAFETY: wait returned the payload only after its actual
+                        // successful Fence wait and active-Device check.
+                        metrics.gpu = unsafe { profile.finish() }?;
+                        drop(work);
+                        metrics.cpu_retire = retire_started.elapsed();
+                        Ok(Some(metrics))
+                    })();
+                    match sample {
+                        Ok(Some(sample)) => self
+                            .profiles
+                            .as_mut()
+                            .expect("profile storage retained")
+                            .push(sample),
+                        Ok(None) => {}
+                        Err(error) if first_error.is_none() => first_error = Some(error),
+                        Err(_) => {}
+                    }
                     retired += 1;
                 }
-                Ok(None) => index += 1,
+                // Completion may overlap on the queue. Retain a later finished
+                // sample until the oldest submission is observed, so callers
+                // always consume timings in accepted GPU-submission order.
+                Ok(None) => break,
                 Err(error) => {
                     // A successful/lost native wait may retire ownership while
                     // still refusing contents on a stopped/lost Device. Remove
                     // terminal entries, then observe every other real Fence.
-                    if self.pending[index].is_pending() {
+                    if self.pending[index].work.is_pending() {
                         index += 1;
                     } else {
-                        drop(self.pending.swap_remove(index));
+                        drop(self.pending.remove(index));
                     }
                     if first_error.is_none() {
                         first_error = Some(error.into());

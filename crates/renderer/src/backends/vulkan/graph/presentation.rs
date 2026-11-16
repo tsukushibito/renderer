@@ -1,6 +1,7 @@
 //! Graph-to-WSI adapter: canonical source state, leases and public orchestration.
 //! Native Window/Swapchain/slot/program owners live in the Vulkan WSI subtree.
 
+use super::metrics::{TimestampLease, TimestampPool};
 use super::{MemoryOwner, PhysicalLease, RuntimeConfig, Snapshot, VulkanRuntime};
 use crate::backends::vulkan::device::VulkanDevice;
 use crate::backends::vulkan::diagnostics::Diagnostics;
@@ -13,6 +14,7 @@ use crate::backends::vulkan::presentation::{
 };
 use crate::backends::vulkan::transfer::{PendingTransfer, TransferError, TransferPayload};
 use crate::graph::{ImageFormat, ImportImage, ResourceDesc};
+use crate::profiling::{GpuTiming, PresentationMetrics};
 use ash::vk;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,6 +28,8 @@ pub use presenter::Presenter;
 mod runtime;
 mod work;
 use work::{PresentWork, prepare_source};
+mod profiling;
+use profiling::{PendingPresent, PresentProfile, ProfileStorage};
 
 #[cfg(test)]
 mod tests;

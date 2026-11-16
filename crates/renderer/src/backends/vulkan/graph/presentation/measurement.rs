@@ -34,6 +34,7 @@ pub(super) struct Measurements {
 #[derive(Default)]
 pub(super) struct Observations {
     pub(super) setup_sources: usize,
+    pub(super) extra_profile_presents: usize,
     pub(super) normal_sources: usize,
     pub(super) normal_presents: usize,
     pub(super) normal_verified: usize,
@@ -196,7 +197,8 @@ impl Measurements {
                         "scope": "all Renderer preparation checks, build/compile, submission, GPU/present polling, CPU readback, metadata/result/output return and final present drain",
                     },
                     "setup_change_sources": observed.setup_sources,
-                    "setup_change_accepted_presents": observed.setup_sources * 2,
+                    "setup_change_accepted_presents": observed.setup_sources * 2 + observed.extra_profile_presents,
+                    "profiled_accepted_presents": 2 + observed.extra_profile_presents,
                     "explicitly_collected_old_swapchains_after_normal": observed.collected_retired_swapchains,
                     "extra_shutdown_accepted_presents": observed.shutdown_presents,
                     "prepared": {

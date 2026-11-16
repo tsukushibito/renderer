@@ -50,6 +50,8 @@ impl VulkanRuntime {
             programs: Vec::with_capacity(2),
             prepared_format: None,
             pending,
+            profiling_enabled: false,
+            profiles: None,
             desired: (size.width, size.height),
             dirty: true,
             closed: false,
@@ -77,6 +79,7 @@ impl VulkanRuntime {
             .inner
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("Presenter is closed"))?;
+        let profiling_started = inner.profiling_enabled.then(Instant::now);
         if !Arc::ptr_eq(&self.owner, &inner.owner) {
             return Err(RuntimeError::wrong_owner(
                 "Presenter belongs to another runtime",
@@ -124,6 +127,27 @@ impl VulkanRuntime {
             return Ok(PresentOutcome::NotReady);
         };
         let slot = Arc::clone(inner.slots[index].slot());
+        let profile_lease = if profiling_started.is_some() {
+            Some(
+                inner
+                    .profiles
+                    .as_ref()
+                    .expect("enabled profiling is prepared")
+                    .reserve(inner.pending.len())?,
+            )
+        } else {
+            None
+        };
+        let mut metrics = profiling_started.map(|started| PresentationMetrics {
+            cpu_prepare: started.elapsed(),
+            cpu_acquire: Duration::ZERO,
+            cpu_record: Duration::ZERO,
+            cpu_submit: Duration::ZERO,
+            cpu_present: Duration::ZERO,
+            cpu_retire: Duration::ZERO,
+            gpu: GpuTiming::NotReady,
+        });
+        let acquire_started = profiling_started.map(|_| Instant::now());
         // SAFETY: Idle Slot has no pending acquire/signal/wait. Finite zero
         // timeout also works for minimized/occluded surfaces without progress.
         let (image_index, suboptimal) = match unsafe {
@@ -145,6 +169,9 @@ impl VulkanRuntime {
             }
             Err(r) => return Err(native(&self.owner, "vkAcquireNextImageKHR", r)),
         };
+        if let (Some(metrics), Some(started)) = (&mut metrics, acquire_started) {
+            metrics.cpu_acquire = started.elapsed();
+        }
         // SAFETY: Successful acquire above returned this exact image using
         // the uniquely prepared idle Slot. Install its native guard immediately.
         let mut acquired =
@@ -168,8 +195,15 @@ impl VulkanRuntime {
                 Arc::clone(&slot),
                 image_index,
             ),
+            profile: profile_lease.map(|lease| {
+                PresentProfile::new(lease, profiling_started.expect("profiling enabled"))
+            }),
         };
+        let record_started = profiling_started.map(|_| Instant::now());
         let recorded = reservation.record(work)?;
+        if let (Some(metrics), Some(started)) = (&mut metrics, record_started) {
+            metrics.cpu_record = started.elapsed();
+        }
         let waits = [vk::SemaphoreSubmitInfo::default()
             .semaphore(slot.acquire())
             .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)];
@@ -177,12 +211,19 @@ impl VulkanRuntime {
             .semaphore(slot.finished())
             .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
         self.serial = serial;
+        let submit_started = profiling_started.map(|_| Instant::now());
         // SAFETY: Binary acquire signal belongs to this image acquisition;
         // finished is idle and is consumed exactly once by present or cancel.
         // PresentWork retains the Slot, Surface, source, views and native Device
         // throughout recorded/pending/uncertain work. Stages match the barriers.
         let pending = unsafe { recorded.submit_with_sync(&waits, &signals) }?;
-        inner.pending.push(pending);
+        if let (Some(metrics), Some(started)) = (&mut metrics, submit_started) {
+            metrics.cpu_submit = started.elapsed();
+        }
+        inner.pending.push(PendingPresent {
+            work: pending,
+            metrics,
+        });
         let swapchains = [chain.handle];
         let indices = [image_index];
         let wait = [slot.finished()];
@@ -193,6 +234,7 @@ impl VulkanRuntime {
             .swapchains(&swapchains)
             .image_indices(&indices)
             .push_next(&mut fence_info);
+        let present_started = profiling_started.map(|_| Instant::now());
         let result = {
             let _queue = self
                 .owner
@@ -208,6 +250,12 @@ impl VulkanRuntime {
                 Err(r) => r,
             }
         };
+        if let (Some(metrics), Some(started)) = (
+            &mut inner.pending.last_mut().expect("just submitted").metrics,
+            present_started,
+        ) {
+            metrics.cpu_present = started.elapsed();
+        }
         match classify_present(result) {
             PresentResult::Enqueued(outcome) => {
                 // OUT_OF_DATE and SURFACE_LOST reject the presentation request

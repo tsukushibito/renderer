@@ -7,6 +7,7 @@ pub(super) struct PresentWork {
     pub(super) previous: Option<SourceScope>,
     pub(super) serial: u64,
     pub(super) commands: PresentCommands,
+    pub(super) profile: Option<PresentProfile>,
 }
 
 pub(super) fn prepare_source(previous: &Snapshot) -> Option<SourceScope> {
@@ -57,8 +58,14 @@ impl TransferPayload for PresentWork {
         // commands throughout recorded/pending work. Canonical state was read
         // under the runtime transaction before this recording was prepared.
         unsafe {
+            if let Some(profile) = &self.profile {
+                profile.lease.begin(command);
+            }
             self.commands
                 .record(command, self.source.image().image, self.previous);
+            if let Some(profile) = &self.profile {
+                profile.lease.end(command);
+            }
         }
     }
     fn submitted(&mut self) {
@@ -66,6 +73,9 @@ impl TransferPayload for PresentWork {
         commit_source(&mut self.source.lock().scheduled, self.serial);
     }
     unsafe fn establish_contents(&mut self) {
+        if let Some(profile) = &mut self.profile {
+            profile.retire_started = Some(Instant::now());
+        }
         let mut state = self.source.lock();
         state.completed_serial = state.completed_serial.max(self.serial);
     }

@@ -8,6 +8,40 @@ pub struct Presenter {
     pub(super) inner: Option<Inner>,
 }
 impl Presenter {
+    /// Enable optional CPU/API phases and a separate fullscreen GPU interval.
+    /// Enabling reserves at most `max_frames` pending/completed samples at this
+    /// explicit preparation boundary. Disabling affects future submissions;
+    /// already submitted samples remain available and retain their queries.
+    pub fn set_profiling(&mut self, enabled: bool) -> Result<(), RuntimeError> {
+        let inner = self
+            .inner
+            .as_mut()
+            .filter(|inner| !inner.closed)
+            .ok_or_else(|| RuntimeError::invalid("Presenter is closed"))?;
+        inner
+            .owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        if enabled && inner.profiles.is_none() {
+            inner.profiles = Some(ProfileStorage::new(
+                Arc::clone(&inner.owner),
+                inner.config.max_frames,
+            )?);
+        }
+        inner.profiling_enabled = enabled;
+        Ok(())
+    }
+
+    /// Consume the oldest completed presentation-command timing sample. Call
+    /// `poll` to observe completion first. Every profiled GPU submission emits
+    /// one sample, even if the subsequent display request was rejected; a sample
+    /// is not proof that `present` returned `Presented` or reached the display.
+    /// Consume samples regularly to avoid bounded timing backpressure.
+    pub fn take_profile(&mut self) -> Option<PresentationMetrics> {
+        self.inner.as_mut()?.profiles.as_mut()?.take()
+    }
+
     /// Requested VSync setting, or None after close. A pending change takes
     /// effect on the next successful Swapchain recreation; old presents retain
     /// their original mode until their own completion.

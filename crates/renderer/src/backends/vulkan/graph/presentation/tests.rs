@@ -577,7 +577,11 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
 
         // Change/acquire-cancel work and all of its delayed retirement are
         // visible before the complete normal-frame accounting window.
-        let first = setup_source(
+        measurements.renderer(Phase::Setup, || {
+            assert!(presenter.take_profile().is_none());
+            presenter.set_profiling(true).unwrap();
+        });
+        let mut first = setup_source(
             &mut runtime,
             &mut presenter,
             &mut frame_graphs,
@@ -589,13 +593,65 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             &mut measurements,
             &mut observations,
         );
+        // Hold completed timing samples until their fixed capacity is full.
+        // This refusal must happen before another native image acquisition.
+        measurements.renderer(Phase::Setup, || assert!(presenter.wait_idle(WAIT).unwrap()));
+        let start = Instant::now();
+        while first.presented != IN_FLIGHT {
+            pump(&mut event_loop, &mut host, &mut measurements);
+            measurements.renderer(Phase::Setup, || {
+                present_source(&mut runtime, &mut presenter, &mut first, IN_FLIGHT)
+            });
+            assert!(
+                start.elapsed() < WAIT,
+                "profiled presentation must progress"
+            );
+        }
         measurements.renderer(Phase::Setup, || {
+            assert!(presenter.wait_idle(WAIT).unwrap());
+            assert_eq!(
+                runtime
+                    .present(&mut presenter, &first.image)
+                    .unwrap_err()
+                    .kind(),
+                RuntimeErrorKind::CapacityExhausted
+            );
+            let metrics = presenter.take_profile().expect("one timing slot returns");
+            assert!(matches!(
+                metrics.gpu,
+                crate::profiling::GpuTiming::Available { .. }
+            ));
+        });
+        let start = Instant::now();
+        while first.presented != IN_FLIGHT + 1 {
+            pump(&mut event_loop, &mut host, &mut measurements);
+            measurements.renderer(Phase::Setup, || {
+                present_source(&mut runtime, &mut presenter, &mut first, IN_FLIGHT + 1)
+            });
+            assert!(
+                start.elapsed() < WAIT,
+                "consuming timing permits another submission"
+            );
+        }
+        observations.extra_profile_presents = first.presented - 2;
+        measurements.renderer(Phase::Setup, || {
+            // Disabling while submitted work remains must retain its query
+            // owners and emit all completed samples without another GPU wait.
+            presenter.set_profiling(false).unwrap();
             set_vsync_pending(&mut presenter, false);
             assert_eq!(
                 presenter.prepare().unwrap(),
                 Some(PresentOutcome::Recreated)
             );
             finish_setup_source(&mut runtime, &mut presenter, first, &mut pixels);
+            for _ in 0..IN_FLIGHT {
+                let metrics = presenter.take_profile().expect("completed present timing");
+                assert!(matches!(
+                    metrics.gpu,
+                    crate::profiling::GpuTiming::Available { .. }
+                ));
+            }
+            assert!(presenter.take_profile().is_none());
         });
         configure(
             &mut event_loop,
@@ -815,6 +871,14 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
                 "pending presentation shutdown must complete"
             );
             assert_eq!(presenter.vsync(), None);
+            assert_eq!(
+                presenter.set_profiling(true).unwrap_err().kind(),
+                RuntimeErrorKind::InvalidInput
+            );
+            assert!(
+                presenter.take_profile().is_none(),
+                "disabled submits produce no timing samples"
+            );
             assert_eq!(
                 presenter.set_vsync(false).unwrap_err().kind(),
                 RuntimeErrorKind::InvalidInput
