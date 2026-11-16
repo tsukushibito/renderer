@@ -371,6 +371,14 @@ impl D3D12Runtime {
                     }
                 }
                 BindingResource::ImageView(view) => {
+                    if matches!(
+                        layout.kind,
+                        BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
+                    ) {
+                        return Err(D3D12RuntimeError::unsupported(
+                            "storage image bindings require owned Graph resources",
+                        ));
+                    }
                     if layout.kind != BindingType::SampledImage
                         || view.desc().usage != crate::program::ImageViewUsage::Sampled
                     {
