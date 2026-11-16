@@ -35,6 +35,7 @@ fn image_desc() -> ImageDescriptor {
     ImageDescriptor {
         width: 2,
         height: 2,
+        mip_levels: 1,
         format: ImageFormat::Rgba8Unorm,
         preferred_depth_clear: None,
     }

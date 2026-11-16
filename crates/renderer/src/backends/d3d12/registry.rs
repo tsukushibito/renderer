@@ -173,7 +173,9 @@ impl Registry {
         if entry.revision != image.revision {
             return Err(stale());
         }
-        if entry.desc != ResourceDesc::Image(image.desc) || entry.initialized.is_empty() {
+        if entry.desc != ResourceDesc::Image(image.desc)
+            || !fully_initialized(&entry.initialized, image.desc.mip_levels)
+        {
             return Err(Error::invalid(
                 "presentation source is not a fully initialized image",
             ));
@@ -435,7 +437,7 @@ impl Registry {
             key,
             revision: entry.revision,
             desc,
-            initialized: !entry.initialized.is_empty(),
+            initialized: fully_initialized(&entry.initialized, desc.mip_levels),
         })
     }
     pub(super) fn delete(&mut self, key: ResourceKey) -> Result<(), Error> {
@@ -695,7 +697,7 @@ impl Registry {
                         key: usage.key,
                         revision,
                         desc,
-                        initialized: !initialized.is_empty(),
+                        initialized: fully_initialized(initialized, desc.mip_levels),
                     }),
                 };
                 values.push((logical, export));
@@ -784,5 +786,32 @@ impl D3D12Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .delete(key)
+    }
+}
+
+fn fully_initialized(ranges: &[Range<u64>], mip_levels: u32) -> bool {
+    let mut end = 0;
+    for range in ranges {
+        if range.start > end {
+            return false;
+        }
+        end = end.max(range.end);
+        if end >= u64::from(mip_levels) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod mip_contents_tests {
+    use super::fully_initialized;
+    #[test]
+    fn a_partial_mip_chain_is_never_exported_as_fully_initialized() {
+        assert!(!fully_initialized(&[], 3));
+        assert!(!fully_initialized(&[0..1, 2..3], 3));
+        assert!(!fully_initialized(std::slice::from_ref(&(1..3)), 3));
+        assert!(fully_initialized(&[0..1, 1..3], 3));
+        assert!(fully_initialized(std::slice::from_ref(&(0..3)), 3));
     }
 }

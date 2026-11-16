@@ -32,7 +32,7 @@ unsafe impl Sync for ImageOwner {}
 #[derive(Clone)]
 pub struct D3D12Image(pub(super) Arc<ImageOwner>);
 
-/// A validated full-image SRV interpretation retaining its actual image.
+/// A validated mip-range SRV interpretation retaining its actual image.
 /// D3D12 descriptors are materialized into each immutable binding's own heap.
 #[derive(Clone)]
 pub struct D3D12ImageView {
@@ -40,7 +40,7 @@ pub struct D3D12ImageView {
     desc: ImageViewDescriptor,
 }
 
-/// An immutable nearest/clamp sampler definition retaining its Device.
+/// An immutable sampler definition retaining its Device.
 /// Its native descriptor is materialized when a binding owns a descriptor heap.
 #[derive(Clone)]
 pub struct D3D12Sampler {
@@ -78,20 +78,7 @@ impl D3D12Sampler {
         self.desc
     }
     pub(super) fn native_desc(&self) -> D3D12_SAMPLER_DESC {
-        match self.desc {
-            SamplerDescriptor::NearestClamp => D3D12_SAMPLER_DESC {
-                Filter: D3D12_FILTER_MIN_MAG_MIP_POINT,
-                AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-                AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-                AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-                MipLODBias: 0.0,
-                MaxAnisotropy: 1,
-                ComparisonFunc: D3D12_COMPARISON_FUNC_NEVER,
-                BorderColor: [0.0; 4],
-                MinLOD: 0.0,
-                MaxLOD: 0.0,
-            },
-        }
+        sampler_desc(self.desc)
     }
 }
 impl fmt::Debug for D3D12Image {
@@ -116,7 +103,7 @@ impl fmt::Debug for D3D12Sampler {
     }
 }
 impl D3D12Runtime {
-    /// Creates a single mip/layer/sample sampled image, without uploading
+    /// Creates a single-layer/sample sampled mip chain, without uploading
     /// pixels or submitting commands. Creation does not establish valid contents.
     pub fn create_managed_image(
         &self,
@@ -127,6 +114,7 @@ impl D3D12Runtime {
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
         let supported = match desc.format {
             crate::ImageFormat::Rgba8Unorm => self.device.rgba8_sampled,
+            crate::ImageFormat::Rgba8Srgb => self.device.rgba8_srgb_sampled,
             crate::ImageFormat::Rgba16Float => self.device.rgba16f_sampled,
             crate::ImageFormat::Depth32Float => self.device.d32_sampled,
         };
@@ -135,6 +123,13 @@ impl D3D12Runtime {
                 "{:?} sampled Texture2D is unsupported",
                 desc.format,
             )));
+        }
+        if desc.mip_levels > 1 {
+            super::raster_storage::require_format(
+                &self.device,
+                super::resources::sampled_format(desc.format),
+                D3D12_FORMAT_SUPPORT1_MIP,
+            )?;
         }
         let native = DeviceImage::new(&self.device, desc)?;
         Ok(D3D12Image(Arc::new(ImageOwner {
@@ -154,7 +149,7 @@ impl D3D12Runtime {
     ) -> Result<D3D12ImageView, D3D12RuntimeError> {
         self.device.ensure_active()?;
         super::program::require_same_owner(&self.device, &image.0.owner)?;
-        validate_image_view_descriptor(image.desc().format, desc)
+        validate_image_view_descriptor(image.desc().format, image.desc().mip_levels, desc)
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
         Ok(D3D12ImageView {
             image: image.clone(),
@@ -170,5 +165,56 @@ impl D3D12Runtime {
             owner: Arc::clone(&self.device),
             desc,
         })
+    }
+}
+
+/// Fixed sampler settings shared by immutable native bindings and prepared Graph heaps.
+pub(super) fn sampler_desc(desc: SamplerDescriptor) -> D3D12_SAMPLER_DESC {
+    let linear = desc == SamplerDescriptor::LinearRepeat;
+    D3D12_SAMPLER_DESC {
+        Filter: if linear {
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR
+        } else {
+            D3D12_FILTER_MIN_MAG_MIP_POINT
+        },
+        AddressU: if linear {
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP
+        } else {
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP
+        },
+        AddressV: if linear {
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP
+        } else {
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP
+        },
+        AddressW: if linear {
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP
+        } else {
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP
+        },
+        MipLODBias: 0.0,
+        MaxAnisotropy: 1,
+        ComparisonFunc: D3D12_COMPARISON_FUNC_NEVER,
+        BorderColor: [0.0; 4],
+        MinLOD: 0.0,
+        MaxLOD: if linear { f32::MAX } else { 0.0 },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn linear_repeat_preserves_mip_filtering_and_nearest_clamp_stays_lod_zero() {
+        let nearest = sampler_desc(SamplerDescriptor::NearestClamp);
+        assert_eq!(nearest.Filter, D3D12_FILTER_MIN_MAG_MIP_POINT);
+        assert_eq!(nearest.AddressU, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+        assert_eq!(nearest.MaxLOD, 0.0);
+        let linear = sampler_desc(SamplerDescriptor::LinearRepeat);
+        assert_eq!(linear.Filter, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
+        assert_eq!(linear.AddressU, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+        assert_eq!(linear.AddressV, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+        assert_eq!(linear.AddressW, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+        assert_eq!(linear.MaxLOD, f32::MAX);
     }
 }

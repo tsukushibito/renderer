@@ -20,6 +20,13 @@ pub struct D3D12ImageClass {
     pub count: usize,
 }
 
+pub(super) struct MipCopyLayout {
+    pub(super) footprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT,
+    pub(super) row_bytes: usize,
+    pub(super) rows: usize,
+    pub(super) packed_offset: usize,
+}
+
 pub(super) struct GraphImage {
     pub(super) desc: ImageDesc,
     pub(super) native: super::registry::PhysicalRef,
@@ -33,6 +40,7 @@ pub(super) struct GraphImage {
     pub(super) total_bytes: u64,
     pub(super) row_bytes: usize,
     pub(super) rows: usize,
+    pub(super) mips: Vec<MipCopyLayout>,
 }
 
 pub(super) struct DescriptorHeap {
@@ -104,6 +112,7 @@ pub(super) struct RasterStorage {
     texture_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     sampler_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     texture_step: u32,
+    sampler_step: u32,
     descriptor_capacity: usize,
     pub(super) raster_descriptor_capacity: usize,
     pub(super) compute_descriptor_start: usize,
@@ -116,18 +125,18 @@ fn validate_class(class: D3D12ImageClass) -> Result<(), D3D12RuntimeError> {
             "prepared image classes require a nonzero count and valid extent",
         ));
     }
-    if !class.desc.is_single_subresource()
+    if class.desc.array_layers != 1
         || class.desc.width > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION as u32
         || class.desc.height > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION as u32
     {
         return Err(D3D12RuntimeError::unsupported(
-            "D3D12 Graph images require a supported single mip/layer extent",
+            "D3D12 Graph images require a supported single-layer extent",
         ));
     }
     Ok(())
 }
 
-fn require_format(
+pub(super) fn require_format(
     owner: &DeviceOwner,
     format: DXGI_FORMAT,
     required: D3D12_FORMAT_SUPPORT1,
@@ -157,6 +166,13 @@ fn require_format(
 
 fn require_image_format(owner: &DeviceOwner, format: ImageFormat) -> Result<(), D3D12RuntimeError> {
     match format {
+        ImageFormat::Rgba8Srgb => require_format(
+            owner,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            D3D12_FORMAT_SUPPORT1_TEXTURE2D
+                | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
+                | D3D12_FORMAT_SUPPORT1_MIP,
+        ),
         ImageFormat::Depth32Float => {
             require_format(
                 owner,
@@ -179,7 +195,7 @@ fn require_image_format(owner: &DeviceOwner, format: ImageFormat) -> Result<(), 
             match format {
                 ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
                 ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-                ImageFormat::Depth32Float => unreachable!(),
+                ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb => unreachable!(),
             },
             D3D12_FORMAT_SUPPORT1_TEXTURE2D
                 | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
@@ -218,49 +234,69 @@ fn checked_handle_capacity(
 fn copy_layout(
     owner: &DeviceOwner,
     desc: ImageDesc,
-) -> Result<(D3D12_PLACED_SUBRESOURCE_FOOTPRINT, u64, usize, usize), D3D12RuntimeError> {
-    let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
-    let mut rows = 0u32;
-    let mut row_bytes = 0u64;
+) -> Result<(Vec<MipCopyLayout>, u64), D3D12RuntimeError> {
+    // A supported 2D extent has at most 15 mips. The fixed arrays accommodate
+    // every u32 2D extent and avoid temporary per-level native allocations.
+    let mut footprints = [D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(); 32];
+    let mut rows = [0u32; 32];
+    let mut row_bytes = [0u64; 32];
     let mut total_bytes = 0u64;
-    // SAFETY: This is the same validated single-subresource description used by
-    // native creation. Footprints need a description, not a resource instance;
-    // every output pointer matches the native parameter type.
+    // SAFETY: Creation validated the description and one layer. Each output
+    // array contains at least mip_levels entries, matching NumSubresources.
     unsafe {
         owner.raw.GetCopyableFootprints(
             &DeviceImage::graph_resource_desc(desc),
             0,
-            1,
+            desc.mip_levels,
             0,
-            Some(&mut footprint),
-            Some(&mut rows),
-            Some(&mut row_bytes),
+            Some(footprints.as_mut_ptr()),
+            Some(rows.as_mut_ptr()),
+            Some(row_bytes.as_mut_ptr()),
             Some(&mut total_bytes),
         );
     }
-    let texel_bytes = desc.format.texel_bytes();
-    let expected_row = u64::from(desc.width) * texel_bytes;
-    let accessed_end = u64::from(rows.saturating_sub(1))
-        .checked_mul(u64::from(footprint.Footprint.RowPitch))
-        .and_then(|stride| footprint.Offset.checked_add(stride))
-        .and_then(|start| start.checked_add(row_bytes));
-    if total_bytes == u64::MAX
-        || rows != desc.height
-        || row_bytes != expected_row
-        || u64::from(footprint.Footprint.RowPitch) < row_bytes
-        || footprint.Footprint.RowPitch % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u32 != 0
-        || footprint.Offset % D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT as u64 != 0
-        || footprint.Footprint.Width != desc.width
-        || footprint.Footprint.Height != desc.height
-        || footprint.Footprint.Depth != 1
-        || accessed_end.is_none_or(|end| end > total_bytes)
-        || total_bytes > isize::MAX as u64
-    {
+    if total_bytes == u64::MAX || total_bytes > isize::MAX as u64 {
         return Err(D3D12RuntimeError::unsupported(
-            "native Graph image copy footprint is outside the supported layout",
+            "invalid native image copy footprint",
         ));
     }
-    Ok((footprint, total_bytes, row_bytes as usize, rows as usize))
+    let mut layouts = Vec::with_capacity(desc.mip_levels as usize);
+    let mut packed_offset = 0usize;
+    let mut previous_end = 0u64;
+    for mip in 0..desc.mip_levels as usize {
+        let footprint = footprints[mip];
+        let width = (desc.width >> mip).max(1);
+        let height = (desc.height >> mip).max(1);
+        let expected_row = u64::from(width) * desc.format.texel_bytes();
+        let accessed_end = u64::from(rows[mip].saturating_sub(1))
+            .checked_mul(u64::from(footprint.Footprint.RowPitch))
+            .and_then(|stride| footprint.Offset.checked_add(stride))
+            .and_then(|start| start.checked_add(row_bytes[mip]));
+        if rows[mip] != height
+            || row_bytes[mip] != expected_row
+            || u64::from(footprint.Footprint.RowPitch) < expected_row
+            || footprint.Footprint.RowPitch % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT as u32 != 0
+            || footprint.Offset % D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT as u64 != 0
+            || footprint.Offset < previous_end
+            || footprint.Footprint.Width != width
+            || footprint.Footprint.Height != height
+            || footprint.Footprint.Depth != 1
+            || accessed_end.is_none_or(|end| end > total_bytes)
+        {
+            return Err(D3D12RuntimeError::unsupported(
+                "native Graph mip copy footprint is outside the supported layout",
+            ));
+        }
+        previous_end = accessed_end.unwrap();
+        layouts.push(MipCopyLayout {
+            footprint,
+            row_bytes: expected_row as usize,
+            rows: height as usize,
+            packed_offset,
+        });
+        packed_offset += expected_row as usize * height as usize;
+    }
+    Ok((layouts, total_bytes))
 }
 
 impl RasterStorage {
@@ -303,6 +339,7 @@ impl RasterStorage {
         registered_images: &[ImageDesc],
         raster_descriptor_capacity: usize,
         compute_descriptor_capacity: usize,
+        allocate_images: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
         let descriptor_capacity = raster_descriptor_capacity
@@ -337,6 +374,13 @@ impl RasterStorage {
         for (class, _) in classes.clone() {
             validate_class(class)?;
             require_image_format(owner, class.desc.format)?;
+            if class.desc.mip_levels > 1 {
+                require_format(
+                    owner,
+                    super::resources::sampled_format(class.desc.format),
+                    D3D12_FORMAT_SUPPORT1_MIP,
+                )?;
+            }
             total = total.checked_add(class.count).ok_or_else(|| {
                 D3D12RuntimeError::capacity_with(
                     "prepared image count overflows",
@@ -350,7 +394,7 @@ impl RasterStorage {
             })?;
             if class.desc.format == ImageFormat::Depth32Float {
                 depth_count += class.count;
-            } else {
+            } else if class.desc.format != ImageFormat::Rgba8Srgb {
                 color_count += class.count;
             }
         }
@@ -372,7 +416,7 @@ impl RasterStorage {
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
             true,
         )?;
-        let sampler = DescriptorHeap::new(owner, 1, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, true)?;
+        let sampler = DescriptorHeap::new(owner, 2, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, true)?;
         let rtv_heap = (color_count != 0)
             .then(|| DescriptorHeap::new(owner, color_count, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false))
             .transpose()?;
@@ -424,12 +468,15 @@ impl RasterStorage {
         let mut depth_index = 0usize;
         for (class, allocate) in classes {
             for _ in 0..class.count {
-                let native = if allocate {
+                let native = if allocate && allocate_images {
                     super::registry::PhysicalRef::image(DeviceImage::graph(owner, class.desc)?)
                 } else {
                     super::registry::PhysicalRef::default()
                 };
-                let (footprint, total_bytes, row_bytes, rows) = copy_layout(owner, class.desc)?;
+                let (mips, total_bytes) = copy_layout(owner, class.desc)?;
+                let footprint = mips[0].footprint;
+                let row_bytes = mips[0].row_bytes;
+                let rows = mips[0].rows;
                 let (rtv, dsv) = if class.desc.format == ImageFormat::Depth32Float {
                     let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                         ptr: dsv_start.unwrap().ptr + depth_index * dsv_step as usize,
@@ -442,7 +489,7 @@ impl RasterStorage {
                             Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
                         },
                     };
-                    if allocate {
+                    if allocate && allocate_images {
                         // SAFETY: The checked single-subresource typeless image
                         // is depth-capable. Its concrete D32 view occupies this
                         // slot's in-bounds CPU-only descriptor.
@@ -454,11 +501,13 @@ impl RasterStorage {
                     }
                     depth_index += 1;
                     (None, Some(handle))
+                } else if class.desc.format == ImageFormat::Rgba8Srgb {
+                    (None, None)
                 } else {
                     let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                         ptr: rtv_start.unwrap().ptr + color_index * rtv_step as usize,
                     };
-                    if allocate {
+                    if allocate && allocate_images {
                         // SAFETY: The checked color resource permits render
                         // targets. The sole mip/layer and this slot's in-bounds
                         // descriptor match the default view.
@@ -480,27 +529,37 @@ impl RasterStorage {
                     total_bytes,
                     row_bytes,
                     rows,
+                    mips,
                 });
             }
         }
-        let desc = D3D12_SAMPLER_DESC {
-            Filter: D3D12_FILTER_MIN_MAG_MIP_POINT,
-            AddressU: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            AddressV: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            AddressW: D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
-            MipLODBias: 0.0,
-            MaxAnisotropy: 1,
-            ComparisonFunc: D3D12_COMPARISON_FUNC_NEVER,
-            BorderColor: [0.0; 4],
-            MinLOD: 0.0,
-            MaxLOD: 0.0,
-        };
-        // SAFETY: The reviewed nearest/clamp sampler occupies the sole valid
-        // sampler slot. It is initialized before any execution can use this set.
-        unsafe {
-            owner
-                .raw
-                .CreateSampler(&desc, sampler.raw.GetCPUDescriptorHandleForHeapStart());
+        // Prepare both immutable policies once. A Graph binding selects its
+        // actual policy without editing a live descriptor or allocating.
+        // SAFETY: Live shader-visible heap holds both in-bounds descriptors.
+        let sampler_cpu = unsafe { sampler.raw.GetCPUDescriptorHandleForHeapStart() };
+        checked_handle_capacity(
+            sampler_cpu,
+            Some(sampler_gpu_start),
+            owner.descriptor_steps[1],
+            2,
+        )?;
+        for (index, policy) in [
+            crate::program::SamplerDescriptor::NearestClamp,
+            crate::program::SamplerDescriptor::LinearRepeat,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let desc = super::image::sampler_desc(policy);
+            // SAFETY: Each prepared descriptor has its own bounded heap slot.
+            unsafe {
+                owner.raw.CreateSampler(
+                    &desc,
+                    D3D12_CPU_DESCRIPTOR_HANDLE {
+                        ptr: sampler_cpu.ptr + index * owner.descriptor_steps[1] as usize,
+                    },
+                );
+            }
         }
         Ok(Self {
             _rtv_heap: rtv_heap,
@@ -512,6 +571,7 @@ impl RasterStorage {
             texture_gpu_start,
             sampler_gpu_start,
             texture_step: owner.descriptor_steps[0],
+            sampler_step: owner.descriptor_steps[1],
             descriptor_capacity,
             raster_descriptor_capacity,
             compute_descriptor_start: raster_descriptor_capacity,
@@ -551,8 +611,14 @@ impl RasterStorage {
         }
     }
 
-    pub(super) fn sampler_gpu(&self) -> D3D12_GPU_DESCRIPTOR_HANDLE {
-        self.sampler_gpu_start
+    pub(super) fn sampler_gpu(
+        &self,
+        policy: crate::program::SamplerDescriptor,
+    ) -> D3D12_GPU_DESCRIPTOR_HANDLE {
+        let index = usize::from(policy == crate::program::SamplerDescriptor::LinearRepeat);
+        D3D12_GPU_DESCRIPTOR_HANDLE {
+            ptr: self.sampler_gpu_start.ptr + index as u64 * u64::from(self.sampler_step),
+        }
     }
 
     pub(super) fn srv_heap(&self) -> &ID3D12DescriptorHeap {
@@ -593,6 +659,8 @@ mod tests {
         );
         let mut desc = ImageDesc::rgba8(2, 2);
         desc.mip_levels = 2;
+        assert!(validate_class(D3D12ImageClass { desc, count: 1 }).is_ok());
+        desc.array_layers = 2;
         assert!(validate_class(D3D12ImageClass { desc, count: 1 }).is_err());
     }
 }
