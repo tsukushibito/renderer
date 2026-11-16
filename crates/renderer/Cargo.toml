@@ -44,6 +44,10 @@ harness = false
 name = "d3d12_reuse"
 harness = false
 
+[[bench]]
+name = "vulkan_resource_cache"
+harness = false
+
 [[example]]
 name = "headless"
 required-features = ["vulkan"]
