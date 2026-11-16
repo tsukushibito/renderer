@@ -11,10 +11,11 @@ use renderer::program::{
 };
 
 pub const WIDTH: u32 = 3;
-pub const HEIGHT: u32 = 5;
+pub const HEIGHT: u32 = 7;
 pub const PIXELS: usize = WIDTH as usize * HEIGHT as usize;
 pub const IMAGE_BYTES: usize = PIXELS * 8;
 pub const READBACKS: usize = 4;
+pub const READBACK_BYTES: usize = IMAGE_BYTES * 2 + 64 + 16;
 
 static SAMPLED: ComputeProgramDescriptor = ComputeProgramDescriptor {
     entry: "main",
@@ -353,10 +354,13 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         .unwrap();
     let mut sample_bytes = [0; IMAGE_BYTES];
     // Independent nearest/clamp coordinates from the reviewed four-sample asset.
+    // Height seven keeps its 0.2/0.6 coordinates away from texel boundaries.
+    // Height five would place them exactly on rows one/three, making the oracle
+    // sensitive to permitted coordinate precision rather than Graph correctness.
     for (destination, pixel) in sample_bytes[..64].as_chunks_mut::<16>().0.iter_mut().zip([
         0,
         WIDTH as usize + 1,
-        WIDTH as usize * 3,
+        WIDTH as usize * 4,
         PIXELS - 1,
     ]) {
         destination.copy_from_slice(&vec4_bytes(pixels[pixel]));
