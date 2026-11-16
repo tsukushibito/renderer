@@ -7,35 +7,7 @@ use ash::vk;
 
 use super::{MemoryOwner, RuntimeError, VulkanRuntime};
 
-/// GPU elapsed time for the whole recorded Graph, not display latency or FPS.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum GpuTiming {
-    Available {
-        elapsed: Duration,
-        timestamp_period_ns: f64,
-        valid_bits: u32,
-    },
-    /// A completed query was unexpectedly unavailable; no duration is inferred.
-    NotReady,
-    /// The sample's host lifetime cannot exclude multiple counter wraps.
-    AmbiguousCounterWrap,
-}
-
-/// Optional CPU phases and the GPU Graph interval. Build/compile are caller work.
-#[derive(Clone, Copy, Debug)]
-pub struct SubmissionMetrics {
-    /// Resource and command planning within the explicitly prepared working set.
-    pub cpu_prepare: Duration,
-    /// Command recording, including its begin/end calls.
-    pub cpu_record: Duration,
-    /// Native submit and the Runtime's acceptance bookkeeping.
-    pub cpu_submit: Duration,
-    /// Completion bookkeeping, resource retirement and query result copying.
-    /// Excludes time blocked in a Fence wait and unsuccessful polling attempts.
-    pub cpu_retire: Duration,
-    pub gpu: GpuTiming,
-}
+pub use crate::profiling::{GpuTiming, SubmissionMetrics};
 
 /// Requested payload and aligned reservations have distinct capacities/lifetimes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -185,7 +157,7 @@ impl TimestampOwner {
 }
 
 impl TimestampPool {
-    fn new(owner: Arc<MemoryOwner>, capacity: usize) -> Result<Self, RuntimeError> {
+    pub(super) fn new(owner: Arc<MemoryOwner>, capacity: usize) -> Result<Self, RuntimeError> {
         let count = capacity
             .checked_mul(2)
             .and_then(|count| u32::try_from(count).ok())
@@ -309,7 +281,7 @@ impl TimestampLease {
 
     /// # Safety
     /// The whole recorded submit has completed with a successful Fence wait.
-    unsafe fn read(&self, host_lifetime: Duration) -> Result<GpuTiming, RuntimeError> {
+    pub(super) unsafe fn read(&self, host_lifetime: Duration) -> Result<GpuTiming, RuntimeError> {
         let device = &self.pool.owner.device;
         let mut values = [[0_u64; 2]; 2];
         // SAFETY: Actual Fence completion proves both reset and writes executed.

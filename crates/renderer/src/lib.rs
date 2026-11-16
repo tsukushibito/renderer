@@ -12,6 +12,7 @@
 
 pub mod engine;
 pub mod graph;
+pub mod profiling;
 pub mod program;
 pub mod standard;
 
