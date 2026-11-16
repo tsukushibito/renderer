@@ -457,6 +457,13 @@ mod demo {
             };
             let _ = backend;
             self.poll()?;
+            if self
+                .options
+                .target()
+                .is_some_and(|target| self.accepted >= target)
+            {
+                return Ok(());
+            }
             if self.restore_at.is_some() {
                 return Ok(());
             }
@@ -696,6 +703,15 @@ mod demo {
         fn finish(&self) -> Result<()> {
             if let Some(error) = &self.error {
                 return Err(error.clone().into());
+            }
+            if self
+                .options
+                .target()
+                .is_some_and(|target| self.accepted != target)
+            {
+                return Err(
+                    "bounded windowed run ended before its requested accepted-frame count".into(),
+                );
             }
             if self.options.smoke && self.transition != 6 {
                 return Err("smoke run did not finish every window transition".into());

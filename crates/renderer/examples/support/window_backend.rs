@@ -1,10 +1,13 @@
 //! Thin consumer dispatch; Graph construction and window input stay shared.
 
+#[cfg(feature = "vulkan")]
 use super::window_scene as scene;
+#[cfg(feature = "vulkan")]
+use renderer::graph::BufferDesc;
 use renderer::{
     graph::{
-        BufferDesc, BufferHandle, CompiledGraph, ImageDesc, ImageHandle, ImportBuffer, ImportImage,
-        PassHandle, ResourceKey,
+        BufferHandle, CompiledGraph, ImageDesc, ImageHandle, ImportBuffer, ImportImage, PassHandle,
+        ResourceKey,
     },
     presentation::{PresentOutcome, PresentationConfig},
     profiling::{PresentationMetrics, SubmissionMetrics},
