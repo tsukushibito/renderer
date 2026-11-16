@@ -48,6 +48,11 @@ mod demo {
     const RETRY_INTERVAL: Duration = Duration::from_millis(1);
     const IN_FLIGHT: usize = 3;
 
+    enum LoopAction {
+        Wait(ControlFlow),
+        Exit,
+    }
+
     #[derive(Clone, Debug, Eq, PartialEq)]
     struct Options {
         api: Api,
@@ -202,6 +207,7 @@ mod demo {
     }
     struct App {
         options: Options,
+        exiting: bool,
         window: Option<Arc<Window>>,
         backend: Option<Backend>,
         monitor: Option<Monitor>,
@@ -243,6 +249,7 @@ mod demo {
             let capacity = options.target().unwrap_or(0) + 64;
             Ok(Self {
                 options,
+                exiting: false,
                 window: None,
                 backend: None,
                 monitor: None,
@@ -280,7 +287,7 @@ mod demo {
             })
         }
         fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
-            if self.window.is_some() {
+            if self.exiting || self.window.is_some() {
                 return Ok(());
             }
             let window = Arc::new(
@@ -450,7 +457,11 @@ mod demo {
         }
         fn poll(&mut self) -> Result<()> {
             let started = self.options.measure.then(Instant::now);
-            let result = self.backend.as_mut().unwrap().poll();
+            let result = self
+                .backend
+                .as_mut()
+                .ok_or("windowed backend is not initialized")?
+                .poll();
             self.poll_api += elapsed(started);
             result?;
             let started = self.options.measure.then(Instant::now);
@@ -643,6 +654,9 @@ mod demo {
             }
         }
         fn shutdown(&mut self) -> Result<()> {
+            // winit can deliver a final AboutToWait after exit was requested.
+            // Stop application work before releasing any backend/window owners.
+            self.exiting = true;
             if self.backend.is_none() {
                 return Ok(());
             }
@@ -796,6 +810,108 @@ mod demo {
             }
             Ok(())
         }
+
+        fn next_loop_action(&mut self, now: Instant) -> Result<LoopAction> {
+            if self.exiting {
+                return Ok(LoopAction::Exit);
+            }
+            if self.options.target().is_some() && now.duration_since(self.started) >= RUN_BUDGET {
+                return Err("bounded windowed run timed out".into());
+            }
+            if self.options.smoke {
+                let trigger = [2, 4, 6, 8, 10, 12][self.transition.min(5)];
+                if self.transition < 6 && self.accepted >= trigger && self.restore_at.is_none() {
+                    match self.transition {
+                        0 | 5 => self.toggle_vsync()?,
+                        1..=3 => {
+                            let (width, height) =
+                                [(512, 384), (672, 448), (600, 400)][self.transition - 1];
+                            if let Some(window) = &self.window {
+                                let _ = window.request_inner_size(PhysicalSize::new(width, height));
+                            }
+                        }
+                        4 => {
+                            if let Some(window) = &self.window {
+                                window.set_minimized(true);
+                            }
+                            if let Some(backend) = &mut self.backend {
+                                backend.resize(0, 0);
+                            }
+                            self.redraw.resize(0, 0);
+                            self.restore_at = Some(now + Duration::from_millis(80));
+                        }
+                        _ => {}
+                    }
+                    self.transition += 1;
+                }
+            }
+            if self.restore_at.is_some_and(|deadline| now >= deadline) {
+                self.restore_at = None;
+                if let Some(window) = &self.window {
+                    window.set_minimized(false);
+                    let _ = window.request_inner_size(PhysicalSize::new(640, 480));
+                }
+                if let Some(backend) = &mut self.backend {
+                    backend.resize(640, 480);
+                }
+                self.redraw.resize(640, 480);
+            }
+            if self
+                .options
+                .target()
+                .is_some_and(|target| self.accepted >= target)
+            {
+                if self.options.measure {
+                    // Include the tail in ordinary nonblocking completion and
+                    // result return. Smoke deliberately enters close with live
+                    // accepted owners instead.
+                    let started = self.options.measure.then(Instant::now);
+                    let drained = (|| -> Result<bool> {
+                        self.poll()?;
+                        if self.frames.iter().any(Option::is_some) {
+                            return Ok(false);
+                        }
+                        let started = self.options.measure.then(Instant::now);
+                        let idle = self.backend.as_mut().unwrap().presentation_idle();
+                        self.poll_api += elapsed(started);
+                        let idle = idle?;
+                        self.drain_profiles()?;
+                        Ok(idle)
+                    })();
+                    self.draw_cpu += elapsed(started);
+                    if !drained? {
+                        return Ok(LoopAction::Wait(ControlFlow::WaitUntil(
+                            now + RETRY_INTERVAL,
+                        )));
+                    }
+                }
+                if let Err(error) = self.shutdown() {
+                    self.error = Some(error.to_string());
+                }
+                return Ok(LoopAction::Exit);
+            }
+            let next_redraw = if self.restore_at.is_none() {
+                if self.redraw.request_due(now)
+                    && let Some(window) = &self.window
+                {
+                    window.request_redraw();
+                }
+                self.redraw.next_wake()
+            } else {
+                None
+            };
+            let wake = [
+                next_redraw,
+                self.restore_at,
+                self.options.target().map(|_| self.started + RUN_BUDGET),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            Ok(LoopAction::Wait(
+                wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
+            ))
+        }
     }
     fn elapsed(started: Option<Instant>) -> Duration {
         started.map_or(Duration::ZERO, |started| started.elapsed())
@@ -831,13 +947,16 @@ mod demo {
             }
         }
         fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+            if self.exiting {
+                return;
+            }
             if let DeviceEvent::MouseMotion { delta } = event {
                 self.input
                     .relative_motion(delta.0, delta.1, !self.options.tour);
             }
         }
         fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-            if self.window.as_ref().is_none_or(|window| window.id() != id) {
+            if self.exiting || self.window.as_ref().is_none_or(|window| window.id() != id) {
                 return;
             }
             match event {
@@ -927,115 +1046,11 @@ mod demo {
             }
         }
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-            let now = Instant::now();
-            if self.options.target().is_some() && now.duration_since(self.started) >= RUN_BUDGET {
-                self.fail(event_loop, "bounded windowed run timed out");
-                return;
+            match self.next_loop_action(Instant::now()) {
+                Ok(LoopAction::Wait(control_flow)) => event_loop.set_control_flow(control_flow),
+                Ok(LoopAction::Exit) => event_loop.exit(),
+                Err(error) => self.fail(event_loop, error),
             }
-            if self.options.smoke {
-                let trigger = [2, 4, 6, 8, 10, 12][self.transition.min(5)];
-                if self.transition < 6 && self.accepted >= trigger && self.restore_at.is_none() {
-                    match self.transition {
-                        0 | 5 => {
-                            if let Err(error) = self.toggle_vsync() {
-                                self.fail(event_loop, error);
-                                return;
-                            }
-                        }
-                        1..=3 => {
-                            let (width, height) =
-                                [(512, 384), (672, 448), (600, 400)][self.transition - 1];
-                            if let Some(window) = &self.window {
-                                let _ = window.request_inner_size(PhysicalSize::new(width, height));
-                            }
-                        }
-                        4 => {
-                            if let Some(window) = &self.window {
-                                window.set_minimized(true);
-                            }
-                            if let Some(backend) = &mut self.backend {
-                                backend.resize(0, 0);
-                            }
-                            self.redraw.resize(0, 0);
-                            self.restore_at = Some(now + Duration::from_millis(80));
-                        }
-                        _ => {}
-                    }
-                    self.transition += 1;
-                }
-            }
-            if self.restore_at.is_some_and(|deadline| now >= deadline) {
-                self.restore_at = None;
-                if let Some(window) = &self.window {
-                    window.set_minimized(false);
-                    let _ = window.request_inner_size(PhysicalSize::new(640, 480));
-                }
-                if let Some(backend) = &mut self.backend {
-                    backend.resize(640, 480);
-                }
-                self.redraw.resize(640, 480);
-            }
-            if self
-                .options
-                .target()
-                .is_some_and(|target| self.accepted >= target)
-            {
-                if self.options.measure {
-                    // Include the tail in ordinary nonblocking completion and
-                    // result return. Smoke deliberately enters close with live
-                    // accepted owners instead.
-                    let started = self.options.measure.then(Instant::now);
-                    let drained = (|| -> Result<bool> {
-                        self.poll()?;
-                        if self.frames.iter().any(Option::is_some) {
-                            return Ok(false);
-                        }
-                        let started = self.options.measure.then(Instant::now);
-                        let idle = self.backend.as_mut().unwrap().presentation_idle();
-                        self.poll_api += elapsed(started);
-                        let idle = idle?;
-                        self.drain_profiles()?;
-                        Ok(idle)
-                    })();
-                    self.draw_cpu += elapsed(started);
-                    match drained {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            event_loop
-                                .set_control_flow(ControlFlow::WaitUntil(now + RETRY_INTERVAL));
-                            return;
-                        }
-                        Err(error) => {
-                            self.fail(event_loop, error);
-                            return;
-                        }
-                    }
-                }
-                if let Err(error) = self.shutdown() {
-                    self.error = Some(error.to_string());
-                }
-                event_loop.exit();
-                return;
-            }
-            let next_redraw = if self.restore_at.is_none() {
-                if self.redraw.request_due(now)
-                    && let Some(window) = &self.window
-                {
-                    window.request_redraw();
-                }
-                self.redraw.next_wake()
-            } else {
-                None
-            };
-            let wake = [
-                next_redraw,
-                self.restore_at,
-                self.options.target().map(|_| self.started + RUN_BUDGET),
-            ]
-            .into_iter()
-            .flatten()
-            .min();
-            event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
         }
     }
     pub fn run() -> Result<()> {
@@ -1104,6 +1119,37 @@ mod demo {
             assert_eq!(schedule.next_wake(), None);
             schedule.resize(640, 480);
             assert!(schedule.request_due(now + Duration::from_secs(1)));
+        }
+
+        #[test]
+        fn measured_shutdown_is_terminal_for_final_wait_callbacks() {
+            let options = Options::parse(
+                ["--measure", "--frames", "1", "--warmup", "0"]
+                    .into_iter()
+                    .map(str::to_owned),
+            )
+            .unwrap();
+            let mut app = App::new(options).unwrap();
+            app.accepted = 1;
+            let now = app.started;
+
+            // A missing backend in an active measured drain is an error, not
+            // evidence that shutdown has already completed.
+            let error = app.next_loop_action(now).err().unwrap();
+            assert_eq!(error.to_string(), "windowed backend is not initialized");
+
+            app.error = Some("original application failure".to_owned());
+            app.shutdown().unwrap();
+            // Windows winit dispatches AboutToWait again while terminating the
+            // loop. It must not poll the released backend or replace the error
+            // with a timeout, even if the original run deadline has passed.
+            for time in [now, now + RUN_BUDGET + Duration::from_secs(1)] {
+                assert!(matches!(
+                    app.next_loop_action(time).unwrap(),
+                    LoopAction::Exit
+                ));
+            }
+            assert_eq!(app.error.as_deref(), Some("original application failure"));
         }
     }
 }
