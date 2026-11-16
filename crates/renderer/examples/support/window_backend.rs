@@ -49,12 +49,18 @@ pub struct D3d12 {
     presenter: renderer::D3D12Presenter,
 }
 
+// Frame records are fixed-capacity application storage. Keep native ownership
+// inline: boxing the larger variant would allocate and free on every frame.
+#[allow(clippy::large_enum_variant)]
 pub enum Pending {
     #[cfg(feature = "vulkan")]
     Vulkan(renderer::Submission),
     #[cfg(feature = "d3d12")]
     D3d12(renderer::D3D12Submission),
 }
+// Completion is consumed immediately into caller-owned buffers; the same inline
+// ownership avoids a heap allocation solely for backend dispatch.
+#[allow(clippy::large_enum_variant)]
 pub enum Completed {
     #[cfg(feature = "vulkan")]
     Vulkan(renderer::SubmissionResult),
