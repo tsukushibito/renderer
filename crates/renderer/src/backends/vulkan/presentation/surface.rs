@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ash::vk;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
 use super::super::diagnostics::DiagnosticsHandle;
@@ -35,29 +35,27 @@ impl WindowSurface {
             validation,
             &extensions,
         )?);
-        let display = window.display_handle().map_err(|error| {
-            RuntimeError::invalid(format!("Windows display handle unavailable: {error}"))
-        })?;
         let handle = window.window_handle().map_err(|error| {
             RuntimeError::invalid(format!("Windows window handle unavailable: {error}"))
         })?;
-        // SAFETY: These paired handles come from one live winit Window. The
-        // returned owner keeps that Window, Instance and loader alive until the
-        // Surface is destroyed. All platform extensions were checked/enabled.
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return Err(RuntimeError::unsupported("Win32 window handle is required"));
+        };
+        let hinstance = handle
+            .hinstance
+            .ok_or_else(|| RuntimeError::invalid("Windows instance handle unavailable"))?;
+        let platform = ash::khr::win32_surface::Instance::new(instance.entry(), instance.raw());
+        let info = vk::Win32SurfaceCreateInfoKHR::default()
+            .hinstance(hinstance.get())
+            .hwnd(handle.hwnd.get());
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-        // SAFETY: The live paired Window handles and enabled platform extension
-        // satisfy Surface creation; the returned owner retains Window/Instance.
-        let surface = unsafe {
-            ash_window::create_surface(
-                instance.entry(),
-                instance.raw(),
-                display.as_raw(),
-                handle.as_raw(),
-                None,
-            )
-        }
-        .map_err(|result| RuntimeError::native("vkCreateWin32SurfaceKHR", "pre-device", result))?;
+        // SAFETY: winit supplied the live HWND and its HINSTANCE. The owning
+        // value retains the Window and Instance until after Surface destruction;
+        // the Win32 Surface extension was checked and enabled above.
+        let surface = unsafe { platform.create_win32_surface(&info, None) }.map_err(|result| {
+            RuntimeError::native("vkCreateWin32SurfaceKHR", "pre-device", result)
+        })?;
         let loader = ash::khr::surface::Instance::new(instance.entry(), instance.raw());
         Ok(Arc::new(Self {
             instance,

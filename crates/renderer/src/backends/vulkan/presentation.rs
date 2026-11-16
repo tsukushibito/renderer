@@ -30,56 +30,14 @@ pub(super) fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -
 pub(super) fn timeout_ns(timeout: Duration) -> u64 {
     timeout.as_nanos().min((u64::MAX - 1) as u128) as u64
 }
-/// Explicit bounds for WSI resources. They are independent of the actual
-/// Swapchain image count and the runtime's native execution-slot capacity.
-#[derive(Clone, Copy, Debug)]
-pub struct PresentationConfig {
-    pub max_frames: usize,
-    pub max_retired_swapchains: usize,
-    pub desired_images: u32,
-    /// FIFO when true; IMMEDIATE when false. Unsupported requests fail rather
-    /// than silently falling back to a synchronized presentation mode.
-    pub vsync: bool,
-}
-impl Default for PresentationConfig {
-    fn default() -> Self {
-        Self {
-            max_frames: 2,
-            max_retired_swapchains: 2,
-            desired_images: 3,
-            vsync: true,
-        }
-    }
-}
+pub use crate::presentation::{PresentOutcome, PresentationConfig};
 pub(super) fn validate_config(config: PresentationConfig) -> Result<(), RuntimeError> {
-    if config.max_frames == 0
-        || config.max_frames > u32::MAX as usize
-        || config.max_retired_swapchains == 0
-        || config.max_retired_swapchains > u32::MAX as usize
-        || config.desired_images == 0
-    {
+    if !config.has_valid_capacities() {
         return Err(RuntimeError::invalid(
-            "presentation capacities must be nonzero and fit u32",
+            "presentation capacities must be nonzero, fit u32, and request 2..=16 images",
         ));
     }
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PresentOutcome {
-    /// The presentation request was accepted. This does not prove that the
-    /// image has reached the display or that presentation resources retired.
-    Presented { suboptimal: bool },
-    /// No image or WSI slot is currently available; no CPU/GPU wait was added.
-    NotReady,
-    /// The Swapchain was recreated. Rebuild for `Presenter::extent()`.
-    Recreated,
-    /// Presentation was rejected because the Swapchain is out of date. Call
-    /// `Presenter::prepare` before rebuilding; `extent()` may still be old.
-    /// A rendering submit and presentation semaphore waits may remain pending.
-    RecreateRequired,
-    /// The requested window extent is zero; no acquire is attempted.
-    Suspended,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

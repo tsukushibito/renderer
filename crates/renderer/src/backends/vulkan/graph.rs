@@ -45,7 +45,7 @@ pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
 pub use metrics::{GpuTiming, MemoryStats, StagingMemoryStats, SubmissionMetrics};
 #[cfg(all(feature = "presentation", windows))]
-pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
+pub use presentation::Presenter;
 use storage::StoragePool;
 use work::GraphWork;
 use work::{ResultData, WorkData};

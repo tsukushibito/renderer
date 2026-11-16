@@ -15,6 +15,9 @@ pub mod graph;
 pub mod program;
 pub mod standard;
 
+#[cfg(feature = "presentation")]
+pub mod presentation;
+
 #[cfg(feature = "memory-profiling")]
 pub mod measurement;
 
@@ -59,5 +62,8 @@ pub use backends::d3d12::{
     D3D12ValidationMessage, D3D12ValidationMode, D3D12ValidationMonitor, D3D12ValidationReport,
 };
 
-#[cfg(all(feature = "presentation", windows))]
-pub use backends::vulkan::graph::{PresentOutcome, PresentationConfig, Presenter};
+#[cfg(feature = "presentation")]
+pub use presentation::{PresentOutcome, PresentationConfig};
+
+#[cfg(all(feature = "presentation", feature = "vulkan", windows))]
+pub use backends::vulkan::graph::Presenter;
