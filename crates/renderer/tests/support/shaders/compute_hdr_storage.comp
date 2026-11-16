@@ -1,0 +1,19 @@
+#version 450 core
+
+// Caller-owned second stage. Graph requires equal storage image View extents
+// and orders the prior producer before this read. Read/write images are distinct.
+// Only the first 16 descriptor bytes of the readonly buffer are accessed.
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba16f) uniform readonly image2D source_image;
+layout(set = 0, binding = 1, std430) readonly buffer Offsets {
+    vec4 value;
+} offsets;
+layout(set = 1, binding = 0, rgba16f) uniform writeonly image2D destination_image;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(destination_image)))) {
+        return;
+    }
+    imageStore(destination_image, pixel, imageLoad(source_image, pixel) + offsets.value);
+}
