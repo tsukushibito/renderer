@@ -5,6 +5,146 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="bistro-pbr"></a>
+
+## Bistroの実行用cookと二APIのForward PBR
+
+`renderer-7ft.3.1`／`.3.2`と、実装後レビュー・計測の`renderer-bj6`。
+利用側の`tools/bistro/cook.py`と`bistro` exampleを公開Graphへ接続した。
+Model／scene／材質recipeをRenderer本体へ追加せず、同じcook・camera・shader契約をVulkanとD3D12で実行する。
+実行方法は[開発ガイド](../guides/development.md#bistro-pbr)、
+現在の境界は[実装方針](../design/implementation-policy.md#bistro-runtime-cook)を参照する。
+
+### 素材・取込の保証
+
+固定Bistro入力の全1,296 mesh、1,591 primitive、132材質、405画像、2,832,120三角形を保持した。
+実行用は48 byteのworld-space position／normal／tangent／UVと、primitiveごとのu32 indexである。
+MikkTSpaceのper-corner結果を再indexし、非一様変換・反射のnormal／tangent／sign／windingを処理する。
+2,900,027頂点、139,201,296 byteの頂点と33,985,440 byteのindexになった。
+元の19退化面・27,956退化UV面も削除していない。
+有限のゼロ接線486 cornerには理由を記録したfallbackを使い、うち474件は実素材の投影角度重みの消失である。
+非有限値やMikk生成失敗をfallback成功に置き換えない。
+
+全405 DDSの供給済み3,529 mipを再サンプルせず復号し、baseは固定PNGと全画像で完全一致した。
+raw mip count 0のnormal 20件は全て1×1であり、欠落mipの補完ではない。
+色はnative sRGB sampling、normal／ORMはlinear dataとして扱い、BC5の正Z復元とgreen反転は全供給mipへ適用する。
+画像のpacked合計は5,011,178,404 byteで、native確保量やVRAM常駐量とは区別する。
+alpha分類120 opaque／7 mask／5 blend、glass 12段とlabel 5段の全ゼロalphaを保持した。
+
+独立した全量cook 2回は125.047秒／138.162秒で、manifestと全payload hashが完全一致した。
+manifest SHA-256は`d74e9863328c238ea4b2a8fc5b617fe28879acf904a46d6b59b4b6874488d4f5`。
+独立レビューでも全mesh／node／primitive／材質／画像／sampler対応に欠落・重複を認めなかった。
+Rust側も取込時に範囲・形式・index最大値・basis・hashを確立し、画像を一枚ずつ検査・uploadする。
+`GeometryData`の不変要約をGPUへ引き継ぎ、通常drawのためのindex本文保持・再走査を避ける。
+元のCPU geometryとupload ownerはGPU完了後、通常frame窓へ入る前に返す。
+
+### PBRと実装後レビュー
+
+B2はGGX metallic-roughness、normal、AO、emissive、両面、MASK／BLENDを実行する。
+照明は固定の太陽と明示した定数diffuse ambient 0.03、合成はlinear RGBA16F、
+SDRはclampと一度だけのsRGB OETFである。IBL・影・露出・PBR Neutral・Bloom・AAは後続B3／B4の範囲に残す。
+nativeはsRGB・全2D mip chain upload・単一mip／全chain sampling・LinearRepeatを明示準備する。
+D3D12の大小bufferと画像は全execution共通の物理class数を指定し、in-flight数で全assetを重複確保しない。
+登録資源、記録・GPU・CPU consumerが終わる前に再利用・破棄しない。
+
+レビューで、Vulkanの全mip refresh、D3D12の準備容量縮小、index全量更新の古い最大値、
+頂点＋index同時upload容量、実ロードmanifestとidentityの対応、camera入力境界、
+fixtureのview照合、Windows拡張pathの包含検査を修正した。
+旧D3D12 callerのglobal画像数も、従来の同時実行予算を維持する個数へ移行した。
+画像layout検査がbuffer self-copyを拒否する回帰は、既存全lifecycle試験で検出し画像だけへ限定した。
+
+材質のGPU gateは集計depthだけで済ませず、独立したf64参照を持つ17 panelで
+metallic・roughness・normal scale・接線回転／符号・UV・sRGB・emissive・正面／裏面・alphaを分けて照合する。
+2×2 sRGBのUV probeは、定数UV・swap・V反転・filter後decodeを検出する。
+alpha-zeroは同じAPIで独立に描いた空sceneのHDR／SDR／depthと全byteを一致確認する。
+float16 clearの変換をCPUの最近接丸めへ固定できないため、対照自体も許される隣接half値・SDR・depthを検査する。
+これによって通常材質の数値許容誤差を広げていない。
+
+### 1080pの画像・確保・native受入
+
+Windows 11 x64、Core i5-14600KF、RTX 3060／driver 610.88、Rust 1.99.0。
+1920×1080、2 in-flight、変化するroute入力24 frame＋warmup 8と、固定7視点のHDR／SDR／D32Fを確認した。
+strictはRenderer追加検証＋Vulkan Core／SyncVal、D3D12 Debug Layer／GBV、
+shippingは追加検証・専用診断をコンパイル除外しnative要求をDisabledとした。
+Vulkan shippingのcore／sync観測は`None`であり、falseへ補完していない。
+両構成で各API独立2 process、計8 runが成功し、最終native所有者破棄後まで警告・エラーはゼロだった。
+各runの通常窓はRust 4 event・VMA host 3 event・native作成／破棄8 eventが全て0、resetは別計上した。
+setup／shutdownのpositive controlsも確認した。driver内部の未観測確保はRendererの保証へ加えない。
+
+受入前に固定した画像profileは、fixture HDRの絶対＋相対誤差各1/1024・SDR 1 code・depth 2^-20、
+scene HDRの絶対0.005＋相対0.01・SDR 3 code・depth 2e-6、超過画素は全画素の0.1%以下である。
+全画素・全channelを集計し、輪郭等を除外しない。同API反復はbit一致とする。
+7視点×各構成の同API反復／二API比較、計56照合が全て成功した。
+
+実素材のalpha-zero 2材質・24 primitive・222三角形も、全sourceをロードしてから同じ選択で検査した。
+strict／shipping各4 runで元の7視点がHDR clear／SDR 118／depth 1を保つことを確認し、
+glass／label近景の指定領域ではopaque overrideによってHDR／SDR／depthの全てが変わった。
+各構成16件のzero-coverage検査と11件の画像照合が成功した。opaque overrideはこの検査専用で、通常描画は元のalphaを保つ。
+
+最初の1080p比較ではlabel近景のdepth 29,538画素が基準を超え、最大差は2.980232e-6だった。
+native viewport／depth／copy／UBOの不一致はなく、clip行列積の積和順序に敏感な近景だった。
+頂点のclip座標だけを明示した順序の`precise` FP32積・和へ固定し、生成SPIR-VのNoContractionとDXIL命令も検査した。
+camera／ABI／cook／固定条件・比較閾値は維持したまま、近景pilotのdepth差はbit単位で0になり、全視点の再受入も通過した。
+FMA機会を失う可能性は記録し、速度向上とは主張しない。
+
+材質／UV／alphaとgeometry容量のGPU gateはstrict／shipping各3件、
+既存Compute／custom Raster／汎用資源は各構成3件、WSIは各構成2件が成功した。
+shippingの既存全lifecycle確保試験4件も成功した。
+release workspace CPUは全feature391件／shipping375件、Bistro Python94件（Windows symlink権限のCPU試験1件skip）、
+CPU調査tools 56件、Clippy・fmt・warnings拒否Rustdocを確認した。
+
+### 通常releaseのPBR計測
+
+同じ機材・cookを使い、`9950282`の通常releaseを一度だけbuildし、両APIで同じEXEを使った。
+実効featureは`vulkan,d3d12`で、追加検証・Graph診断・memory countersはコンパイル除外し、native検証要求はDisabledとした。
+EXE SHA-256は`8fd2ba02c2f1771a6e2837f2c4a7df75e7b7d13c16648f53814b4355ec0119ac`。
+PE/PDBのGUID・age、埋込conditionsを含むsource hash、cook・shader identityを保存した。
+1920×1080、全1,591 primitive、cullingなし、2 in-flight、固定60Hz入力経路の1,800 frame、warmup 3,600 frame（二周）。
+API×内部CPUタイマー＋GPU timestampの無効／有効×独立3 process、計12 runを順番を入れ替えて直列実行した。
+build・cook・他のGPU試験・offline画像解析は計測と並行させなかった。ETW収集・管理者実行は使用していない。
+
+以下は各runのframe平均から求めた3 runの中央値、括弧はrun間の最小〜最大で、単位はms/frameである。
+
+| API | 通常process CPU | 通常main thread CPU | 通常wall/frame | GPU平均（計測有効時） |
+| --- | ---: | ---: | ---: | ---: |
+| Vulkan | 19.583（18.212〜20.148） | 19.462（18.125〜20.061） | 20.081（19.059〜21.214） | 4.906（4.488〜5.024） |
+| D3D12 | 32.674（31.241〜33.967） | 32.613（31.207〜33.915） | 33.785（33.014〜35.545） | 8.479（8.158〜8.958） |
+
+process／main CPUはOSのcharged timeである。wall/frameはROI全体のQPC時間をframe数で割り、最後のdrainとresult returnを含む。
+ロード・upload・prepare・warmup・最終capture・shutdownはROIへ含めない。
+frameごとのbuild開始〜完了観測にはqueue滞在と後続host処理を含むため、上のwall/frameや表示遅延とは異なる。
+headlessのyield pollでありVSync／present／表示FPSの測定ではない。GPU値はtimestampを有効にした別processの観測である。
+
+| API | Graph build | compile | submit | poll／retire | result return |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Vulkan | 11.759 | 1.680 | 5.807 | 0.825 | 0.005 |
+| D3D12 | 11.922 | 1.699 | 19.833 | 0.328 | 0.002 |
+
+この表は通常runの呼出側QPC区間の各中央値で、CPU占有時間や排他的なnative関数費用ではない。
+中央値を別々に求めるため合計はwall中央値と厳密一致しない。
+このPBR条件ではD3D12のsubmit区間が長く、VulkanのCPU／GPU時間が短い。
+driver内部の原因や全workloadでのAPI優劣をこの区間計測だけから断定しない。
+両APIでGraph構築も大きいので、後続の最適化はこの負荷で原因を特定してから比較する。
+D3D12の計測有効runではnative `record`が18.064〜19.018ms/frame、中央値18.068msだった。
+これは命令記録、descriptor設定、barrier、export取得、query終了、Closeまでのhost経過区間である。
+Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phaseを同じ仕事内容として単純比較しない。
+実スタックからの原因特定と最適化前後の比較は`renderer-4wl`へ記録した。
+
+内部CPUタイマーとGPU timestampをまとめて有効にしたprocess CPU中央値はVulkan 20.139ms、D3D12 33.568msだった。
+無効時に対する観測差は+2.84%／+2.74%、wallは+5.87%／+2.16%。
+独立3 runのばらつきを含む記述値であり、負の差を高速化と解釈したり、単独のquery費用へ帰属したりしない。
+無効時のnative phaseとGPU時間は欠測`null`とし、0で補完しない。
+全12 runのframe数・実行identity・終了状態が一致し、ROI後に別途描くroute frame 0は、API内で計測有無をまたいでもHDR／SDR／depthがbit一致した。
+全1,800 frameの画像を保存・比較したという意味ではない。
+先行したwarmup 60 frameの独立12 runも補助記録として保持した。通常process CPU中央値は18.950／33.524msで、API差の傾向は同じだった。
+主結果には固定の二周warmupを満たす表の値を使い、両batchを混ぜて集計しない。
+独立レビューでも全reportのhash・数値・ROI・同一EXE・画像hashを再照合し、不整合を認めなかった。
+ドキュメントは17 HTML page・2,236 local link/resource/fragment、32 diagram instanceを検査し、viewer・theme・mobile・printの表示を確認した。
+これは新しいPBR負荷の基準測定であり、PBR未実装時との速度改善率ではない。
+
+素材全量の更新・実VRAM予算の`.3.3`、B3以降の画質、他機材・長時間soak・device lossはこの受入へ追加していない。
+詳細と実行identityは[ソースレビューの証拠](source-review.json)の`bistro_pbr`へ記録する。
+
 <a id="cpu-stack-profiling"></a>
 
 ## 最適化済みCPUスタック・schedulerの調査環境

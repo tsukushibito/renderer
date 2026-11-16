@@ -356,7 +356,7 @@ def main():
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--frames", type=int, default=1800)
-    parser.add_argument("--warmup", type=int, default=60)
+    parser.add_argument("--warmup", type=int, default=3600)
     parser.add_argument("--inflight", type=int, default=2)
     parser.add_argument("--timeout-seconds", type=float, default=180)
     parser.add_argument("--cwd", type=Path, default=ROOT)

@@ -361,13 +361,16 @@ BistroがEXEへ埋め込む`tools/bistro/conditions.json`もsource hashへ含め
 
 ```powershell
 python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --output .tools/bistro-pbr/release-build
-python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 60 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
-python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 60 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
+python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
+python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
 ```
 
+既定のrouteは1,800 frameで一周し、`--warmup 3600`の二周後に一周を測る。独立3 processの各回で二周をwarmupする。
+短いwarmupは動作確認用に明示指定できるが、固定性能条件の結果とは分けて記録する。
 driverはAPIとnative profiling off/onを交互に独立3回ずつ実行し、各reportと内容一致、実効設定、
 計測窓、終了結果を確認する。全process時間にはロード・capture・終了も含まれるため、
 測定窓のRenderer CPU/frame費用へ加算しない。raw画像はローカルに残し、共有する集計へ画像本体を埋め込まない。
+内容照合はROI後に別途描くroute frame 0のHDR／SDR／depthを対象とし、全測定frameの画像照合を意味しない。
 
 ## ビルド・品質確認
 
