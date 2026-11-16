@@ -20,6 +20,7 @@ import time
 import uuid
 
 from analyze import analyze_precise, analyze_sampled
+from native_logs import run_bounded
 from wpa import prepare_profile
 
 
@@ -116,8 +117,10 @@ def loss_fields(path):
     return result
 
 
-def logged(command, output, name, timeout=120, env=None):
+def logged(command, output, name, timeout=120, env=None, max_output_bytes=None):
     with (output / (name + ".stdout.txt")).open("wb") as stdout, (output / (name + ".stderr.txt")).open("wb") as stderr:
+        if max_output_bytes is not None:
+            return run_bounded(command, stdout, stderr, timeout, max_output_bytes, env)
         completed = subprocess.run(command, stdout=stdout, stderr=stderr, timeout=timeout, env=env, check=False)
     return completed.returncode
 
@@ -380,26 +383,38 @@ def export_trace(args):
         env["_NT_SYMBOL_PATH"] += ";srv*" + str(output / "symbols") + "*https://msdl.microsoft.com/download/symbols"
     env["_NT_SYMCACHE_PATH"] = str(cache)
     source_profile = (args.wpa_profile or args.wpt / "Catalog/AppLaunch.wpaProfile").resolve()
-    profile = prepare_profile(source_profile, output / "cpu-events.wpaProfile")
+    identity_source = args.wpt / "Catalog/WpaRuleMatchExporter.wpaProfile"
+    profile = prepare_profile(source_profile, output / "cpu-events.wpaProfile",
+                              process=f'{binary.name} ({capture["target"]["pid"]})', identity_source=identity_source)
     commands = {"wpa": [str(args.wpt / "wpaexporter.exe"), "-i", str(etl), "-symbols", "-profile", str(profile),
                         "-outputfolder", str(output)],
                 "trace-statistics": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-a", "tracestats", "-timespan", "actual", "-detail", "stack"],
+                "markers": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-a", "marks", "-nanoseconds"],
+                "raw-header": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-a", "dumper", "-provider",
+                               "{68fdd900-4a3e-11d1-84f4-0000f80464e3}", "-add_rawdata", "-add_fieldnames"],
                 "sampled-functions": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-symbols", "-a", "profile", "-detail"],
                 "sampling-frequency": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-a", "profile", "-freq"],
-                "scheduler": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-a", "cswitch", "-process", "-thread"],
-                "ready-stacks": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-symbols", "-a", "readythread", "-stacks"]}
+                "scheduler": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-a", "cswitch", "-process", "-thread"]}
+    if args.ready_stacks_fallback:
+        commands["ready-stacks"] = [str(args.wpt / "xperf.exe"), "-i", str(etl), "-symbols", "-a", "readythread", "-stacks"]
     report = {"schema": 1, "capture": str(metadata_path), "etl_sha256": capture["etl"]["sha256"],
               "binary_sha256": manifest["binary"]["sha256"], "profile_source": str(source_profile),
+              "ready_stacks_fallback": args.ready_stacks_fallback,
+              "small_metadata_log_byte_limit": 8 * 1024 * 1024,
+              "export_valid": False,
               "profile_sha256": sha256(profile), "commands": commands, "exit_codes": {}, "stages": {},
               "acceptance": "pending real-ETL header/unit, lost-event, stack and symbol coverage verification"}
     report_path = output / "export.json"
     write_json(report_path, report)
     for name, command in commands.items():
         stage = {"status": "running", "started_utc": utc(), "timeout_seconds": args.timeout_seconds}
+        if name in ("markers", "raw-header"):
+            stage["max_output_bytes"] = report["small_metadata_log_byte_limit"]
         report["stages"][name] = stage
         write_json(report_path, report)
         try:
-            code = logged(command, output, name, timeout=args.timeout_seconds, env=env)
+            log_options = {"max_output_bytes": stage["max_output_bytes"]} if "max_output_bytes" in stage else {}
+            code = logged(command, output, name, timeout=args.timeout_seconds, env=env, **log_options)
             report["exit_codes"][name] = code
             stage.update(status="succeeded" if code == 0 else "failed", exit_code=code)
         except BaseException as error:
@@ -415,6 +430,7 @@ def export_trace(args):
         write_json(report_path, report)
     report["csv_files"] = [{"path": str(path), "sha256": sha256(path), "size_bytes": path.stat().st_size}
                            for path in output.glob("*.csv")]
+    report["export_valid"] = not any(report["exit_codes"].values())
     write_json(report_path, report)
     if any(code for code in report["exit_codes"].values()):
         raise RuntimeError(f"Export failed: {report['exit_codes']}; raw reports retained in {output}")
@@ -443,6 +459,8 @@ def main(argv=None):
     export.add_argument("--wpa-profile", type=Path)
     export.add_argument("--output", type=Path)
     export.add_argument("--microsoft-symbols", action="store_true", help="Allow Microsoft symbol server downloads")
+    export.add_argument("--ready-stacks-fallback", action="store_true",
+                        help="Also run optional xperf readythread -stacks (WPA precise already exports stacks; some WPT versions crash here)")
     export.add_argument("--timeout-seconds", type=float, default=300)
     analyze = commands.add_parser("analyze")
     analyze.add_argument("--capture", type=Path, required=True)
