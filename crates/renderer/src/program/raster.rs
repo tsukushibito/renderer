@@ -1,57 +1,170 @@
-//! Reviewed graphics shader contracts retained by owned Raster commands.
+//! Immutable graphics shader contracts retained by owned Raster commands.
 
 use super::{BindingLayout, BindingType, ImageFormat, ShaderStages};
 
-/// An immutable, reviewed vertex/fragment shader pair, independent of a native
-/// pipeline. This CPU contract does not establish Device limits or PSO creation.
-/// Arbitrary shader source, binaries and self-declared manifests are not accepted.
+/// Maximum distinct assets in one prepared Raster working set.
+pub const MAX_RASTER_PROGRAMS: usize = 64;
+/// Baseline descriptor-set/register-space limit shared by both backends.
+pub const MAX_RASTER_BIND_GROUPS: usize = 4;
+pub const MAX_RASTER_ATTRIBUTES: usize = 16;
+pub const MAX_RASTER_BINDINGS: usize = 16;
+
+/// Component layout for one attribute in the single per-vertex stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VertexFormat {
+    Float32x2,
+    Float32x3,
+    Float32x4,
+}
+impl VertexFormat {
+    pub const fn size(self) -> u32 {
+        match self {
+            Self::Float32x2 => 8,
+            Self::Float32x3 => 12,
+            Self::Float32x4 => 16,
+        }
+    }
+}
+
+/// `location` is both the SPIR-V location and DXIL `TEXCOORD` semantic index.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VertexAttribute {
+    pub location: u32,
+    pub offset: u32,
+    pub format: VertexFormat,
+}
+
+/// Inline words begin at byte offset zero in each selected shader stage.
+/// D3D12 maps this block to the specified CBV register and register space.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RasterParameterLayout {
+    pub size: u32,
+    pub stages: ShaderStages,
+    pub dxil_register: u32,
+    pub dxil_space: u32,
+}
+
+/// Fixed blending shared by Vulkan and D3D12, with all color channels writable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlendState {
+    Replace,
+    /// Straight alpha: rgb = src.rgb * src.a + dst.rgb * (1 - src.a).
+    /// Alpha = src.a + dst.a * (1 - src.a).
+    Alpha,
+    /// Premultiplied alpha: rgba = src.rgba + dst.rgba * (1 - src.a).
+    PremultipliedAlpha,
+    /// Add source and destination RGBA.
+    Additive,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CompareOp {
+    Never,
+    Less,
+    Equal,
+    LessEqual,
+    Greater,
+    NotEqual,
+    GreaterEqual,
+    Always,
+}
+
+/// The shader's depth contract. Optional testing is enabled exactly when an
+/// attachment is supplied; Disabled accepts an attachment but does not test/write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DepthState {
+    Disabled,
+    Optional {
+        compare: CompareOp,
+        write: bool,
+    },
+    Required {
+        compare: CompareOp,
+        write: bool,
+        require_load: bool,
+    },
+}
+impl DepthState {
+    pub const fn compare(self) -> Option<CompareOp> {
+        match self {
+            Self::Disabled => None,
+            Self::Optional { compare, .. } | Self::Required { compare, .. } => Some(compare),
+        }
+    }
+    pub const fn write_enabled(self) -> bool {
+        match self {
+            Self::Disabled => false,
+            Self::Optional { write, .. } | Self::Required { write, .. } => write,
+        }
+    }
+}
+
+/// Immutable graphics assets and their complete ABI. Slices are static so
+/// frame plans retain the contract without allocating or borrowing frame input.
+pub struct RasterProgramDescriptor {
+    pub entry: &'static str,
+    pub vertex_stride: u32,
+    pub vertex_attributes: &'static [VertexAttribute],
+    pub parameters: RasterParameterLayout,
+    pub color_outputs: &'static [ImageFormat],
+    pub bindings: &'static [BindingLayout],
+    /// Buffer-prefix footprints in binding order; zero for images/samplers.
+    pub binding_bytes: &'static [u64],
+    pub blend: BlendState,
+    pub depth: DepthState,
+    pub vertex_spirv: &'static [u8],
+    pub fragment_spirv: &'static [u8],
+    pub vertex_dxil: &'static [u8],
+    pub fragment_dxil: &'static [u8],
+}
+
+/// An immutable trusted vertex/fragment shader pair, independent of a native
+/// pipeline. Device limits and format capabilities are established at preparation.
 #[derive(Clone, Copy)]
 pub struct ManagedRasterProgram {
-    manifest: &'static Manifest,
+    manifest: &'static RasterProgramDescriptor,
 }
 
-struct Manifest {
-    native_id: usize,
-    prepassed: bool,
-    vertex_stride: u32,
-    parameter_size: u32,
-    color_outputs: &'static [ImageFormat],
-    bindings: &'static [BindingLayout],
-    binding_bytes: &'static [u64],
-    #[cfg(feature = "vulkan")]
-    vertex_spirv: &'static [u8],
-    #[cfg(feature = "vulkan")]
-    fragment_spirv: &'static [u8],
-    #[cfg(all(feature = "d3d12", windows))]
-    vertex_dxil: &'static [u8],
-    #[cfg(all(feature = "d3d12", windows))]
-    fragment_dxil: &'static [u8],
-}
-
-static MESH: Manifest = Manifest {
-    native_id: 0,
-    prepassed: false,
+const MESH_ATTRIBUTES: &[VertexAttribute] = &[
+    VertexAttribute {
+        location: 0,
+        offset: 0,
+        format: VertexFormat::Float32x3,
+    },
+    VertexAttribute {
+        location: 1,
+        offset: 12,
+        format: VertexFormat::Float32x4,
+    },
+];
+static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
+    entry: "main",
     vertex_stride: 28,
-    parameter_size: 80,
+    vertex_attributes: MESH_ATTRIBUTES,
+    parameters: RasterParameterLayout {
+        size: 80,
+        stages: ShaderStages::VERTEX,
+        dxil_register: 0,
+        dxil_space: 0,
+    },
     color_outputs: &[ImageFormat::Rgba8Unorm],
     bindings: &[],
     binding_bytes: &[],
-    #[cfg(feature = "vulkan")]
+    blend: BlendState::Replace,
+    depth: DepthState::Optional {
+        compare: CompareOp::Less,
+        write: true,
+    },
     vertex_spirv: include_bytes!("../../shaders/mesh.vert.spv"),
-    #[cfg(feature = "vulkan")]
     fragment_spirv: include_bytes!("../../shaders/mesh.frag.spv"),
-    #[cfg(all(feature = "d3d12", windows))]
     vertex_dxil: include_bytes!("../../shaders/dxil/mesh.vert.dxil"),
-    #[cfg(all(feature = "d3d12", windows))]
     fragment_dxil: include_bytes!("../../shaders/dxil/mesh.frag.dxil"),
 };
-
-static TEXTURED_MESH: Manifest = Manifest {
-    native_id: 1,
-    prepassed: false,
-    vertex_stride: 28,
-    parameter_size: 80,
-    color_outputs: &[ImageFormat::Rgba8Unorm],
+static TEXTURED_MESH: RasterProgramDescriptor = RasterProgramDescriptor {
+    parameters: RasterParameterLayout {
+        dxil_register: 1,
+        ..MESH.parameters
+    },
     bindings: &[
         BindingLayout {
             group: 0,
@@ -75,216 +188,218 @@ static TEXTURED_MESH: Manifest = Manifest {
             stages: ShaderStages::FRAGMENT,
         },
     ],
-    // Only the Uniform has a byte footprint. The image reads the complete
-    // selected mip/layer, while a sampler has no resource-content access.
     binding_bytes: &[16, 0, 0],
-    #[cfg(feature = "vulkan")]
     vertex_spirv: include_bytes!("../../shaders/textured.vert.spv"),
-    #[cfg(feature = "vulkan")]
     fragment_spirv: include_bytes!("../../shaders/textured.frag.spv"),
-    #[cfg(all(feature = "d3d12", windows))]
     vertex_dxil: include_bytes!("../../shaders/dxil/textured.vert.dxil"),
-    #[cfg(all(feature = "d3d12", windows))]
     fragment_dxil: include_bytes!("../../shaders/dxil/textured.frag.dxil"),
+    ..MESH
 };
-
-// Fragment float outputs use the attachment's native UNORM or float conversion.
-// These immutable manifests select the pipeline format without changing the
-// shader's resource access or inline/vertex ABI.
-static MESH_HDR: Manifest = Manifest {
-    native_id: 2,
+static MESH_HDR: RasterProgramDescriptor = RasterProgramDescriptor {
     color_outputs: &[ImageFormat::Rgba16Float],
     ..MESH
 };
-
-static TEXTURED_MESH_HDR: Manifest = Manifest {
-    native_id: 3,
+static TEXTURED_MESH_HDR: RasterProgramDescriptor = RasterProgramDescriptor {
     color_outputs: &[ImageFormat::Rgba16Float],
     ..TEXTURED_MESH
 };
-
-// No fragment shader or color output is needed for an opaque depth pass. The
-// same vertex transform establishes the depth; there are no shader side effects.
-static DEPTH_ONLY: Manifest = Manifest {
-    native_id: 4,
+static DEPTH_ONLY: RasterProgramDescriptor = RasterProgramDescriptor {
     color_outputs: &[],
-    #[cfg(feature = "vulkan")]
+    depth: DepthState::Required {
+        compare: CompareOp::Less,
+        write: true,
+        require_load: false,
+    },
     fragment_spirv: &[],
-    #[cfg(all(feature = "d3d12", windows))]
     fragment_dxil: &[],
     ..MESH
 };
-
-// Separate immutable identities keep these read-only-depth pipelines distinct
-// from the original LESS/write variants while sharing the exact shader ABI.
-static MESH_PREPASSED: Manifest = Manifest {
-    native_id: 5,
-    prepassed: true,
+static MESH_PREPASSED: RasterProgramDescriptor = RasterProgramDescriptor {
+    depth: DepthState::Required {
+        compare: CompareOp::LessEqual,
+        write: false,
+        require_load: true,
+    },
     ..MESH
 };
-
-static MESH_HDR_PREPASSED: Manifest = Manifest {
-    native_id: 6,
-    prepassed: true,
-    ..MESH_HDR
+static MESH_HDR_PREPASSED: RasterProgramDescriptor = RasterProgramDescriptor {
+    color_outputs: &[ImageFormat::Rgba16Float],
+    ..MESH_PREPASSED
 };
 
 impl std::fmt::Debug for ManagedRasterProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ManagedRasterProgram")
             .field("vertex_stride", &self.vertex_stride())
-            .field("parameter_size", &self.parameter_size())
+            .field("parameters", &self.parameter_layout())
             .field("color_outputs", &self.color_outputs())
             .field("bindings", &self.bindings())
+            .field("blend", &self.blend())
+            .field("depth", &self.depth())
             .finish()
     }
 }
-
 impl ManagedRasterProgram {
-    #[cfg(any(test, feature = "vulkan"))]
-    pub(crate) const NATIVE_PROGRAM_COUNT: usize = 7;
-
-    /// The existing mesh shaders: packed `xyz` and linear `rgba` f32 vertex
-    /// attributes; one vertex-stage inline column-major matrix and tint block;
-    /// one RGBA8 color output. There are no logical resource descriptor bindings
-    /// or storage side effects. The generated DXIL represents the same inline
-    /// parameters as its `b0` constant block; it is not a new Graph buffer binding.
+    /// Import a statically owned graphics asset without Renderer effect variants.
     ///
-    /// The command contract uses u32 triangle indices from first index
-    /// zero, base vertex zero and one instance. It admits one color output with
-    /// optional depth in CPU plans; native support remains backend-specific.
+    /// # Safety
+    /// Both shader pairs must be valid Vulkan 1.3/SPIR-V 1.3 and D3D12 SM6.0
+    /// vertex/fragment programs for `entry = "main"`, using only enabled backend
+    /// features. Their stage interfaces, descriptor slots, vertex attributes,
+    /// inline parameters and outputs must exactly match this complete descriptor.
+    /// There is one per-vertex stream, nonzero stride, at most 16 unique attribute locations below 16,
+    /// with four-byte aligned offsets and formats wholly within that stride.
+    /// DXIL uses TEXCOORD semantic indices equal to attribute locations. Indices
+    /// are u32 triangle lists, with first index/base vertex zero and one instance.
+    /// No undeclared vertex input, resources, push constants or side effects are
+    /// permitted. A fragment shader is required exactly when one color output is
+    /// present; the sole output is RGBA8_UNORM or RGBA16_FLOAT, never depth.
+    /// Fragment depth, stencil, sample-mask writes, sample shading, storage writes,
+    /// atomics, input attachments and attachment feedback are unsupported.
+    ///
+    /// Parameters have a four-byte multiple size at most 128 bytes, start at
+    /// offset zero, and are used only in the nonempty declared Vertex/Fragment
+    /// stages (zero size requires EMPTY stages). DXIL represents this block as
+    /// the specified CBV register/space, with no overlapping Uniform binding.
+    /// There are at most 16 bindings, with group indices below 4, unique
+    /// group/binding coordinates and nonempty graphics
+    /// stages only. Supported kinds are Uniform, StorageRead, SampledImage and
+    /// Sampler; read-only buffers are raw/structured root-descriptor compatible
+    /// in DXIL. Groups equal register spaces and bindings equal register numbers.
+    /// `binding_bytes` has one entry per binding, a nonzero buffer prefix no
+    /// larger than min_size, and zero for image/sampler slots (min_size zero).
+    /// Images are non-array, non-MS float 2D resources sampled at mip zero; no
+    /// optional narrow arithmetic types or unsupported capabilities are required.
+    ///
+    /// For every accepted draw, all permitted inline words and resource contents,
+    /// shaders may access only the declared buffer prefixes and selected image
+    /// Views. They must not perform out-of-bounds accesses, races or unsupported
+    /// operations. No inter-draw shader synchronization or storage side effects
+    /// may be required. Shader arithmetic must safely handle all accepted inputs;
+    /// reflection/hash validation does not establish these behavioral guarantees.
+    /// Replacing source, compiler options, binaries or metadata requires reviewing
+    /// the guarantees again and importing a new immutable descriptor.
+    pub const unsafe fn from_trusted_descriptor(
+        descriptor: &'static RasterProgramDescriptor,
+    ) -> Self {
+        Self {
+            manifest: descriptor,
+        }
+    }
+
     pub const fn mesh() -> Self {
         Self { manifest: &MESH }
     }
-
-    /// The mesh shader pair with one linear RGBA16F output. Values outside zero
-    /// to one remain floating-point color; no exposure or tone mapping is added.
-    /// Its vertex, inline parameter and resource binding ABIs match [`Self::mesh`].
     pub const fn mesh_hdr() -> Self {
         Self {
             manifest: &MESH_HDR,
         }
     }
-
-    /// Mesh color after a depth prepass: normal-Z LESS_OR_EQUAL with depth
-    /// writes disabled. Requires an existing depth attachment with
-    /// `LoadOp::Load`, including when the draw sequence is empty. Use the same
-    /// geometry and transform as the prepass to accept its equal-depth samples.
-    /// Shader, vertex and inline parameter ABIs match [`Self::mesh`].
+    /// Read-only LESS_EQUAL depth after the same geometry's depth prepass.
     pub const fn mesh_prepassed() -> Self {
         Self {
             manifest: &MESH_PREPASSED,
         }
     }
-
-    /// The RGBA16F counterpart of [`Self::mesh_prepassed`], with the same
-    /// loaded, read-only depth contract and HDR output as [`Self::mesh_hdr`].
     pub const fn mesh_hdr_prepassed() -> Self {
         Self {
             manifest: &MESH_HDR_PREPASSED,
         }
     }
-
-    /// The mesh vertex transform with no color output or fragment shader.
-    /// A Raster pass using this program requires a depth attachment and uses
-    /// the same normal-Z LESS test/write and inline matrix/tint ABI as the mesh.
     pub const fn depth_only() -> Self {
         Self {
             manifest: &DEPTH_ONLY,
         }
     }
-
-    /// A reviewed descriptor-bound mesh pair.
-    /// The vertex shader reads one 16-byte clip-space offset from Uniform
-    /// group 0/binding 0 in addition to the usual inline matrix/tint. The
-    /// fragment shader reads one float 2D sampled image at group 1/binding 0
-    /// using the separate nearest/clamp sampler at group 1/binding 1 and LOD 0.
-    /// UV coordinates derive from model position `xy * 0.5 + 0.5`; vertex color
-    /// and inline tint multiply the sampled result. No storage is written.
-    ///
-    /// The mesh vertex/index and inline parameter ABIs match [`Self::mesh`].
-    /// The complete selected mip/layer must be initialized; Raster does not
-    /// guarantee complete attachment coverage.
+    /// Mesh with a vertex Uniform offset and fragment image/sampler bindings.
     pub const fn textured_mesh() -> Self {
         Self {
             manifest: &TEXTURED_MESH,
         }
     }
-
-    /// The descriptor-bound mesh pair with one linear RGBA16F output. Shader
-    /// behavior and binding footprints match [`Self::textured_mesh`]; the output
-    /// keeps HDR values without tone mapping or UNORM clamping.
     pub const fn textured_mesh_hdr() -> Self {
         Self {
             manifest: &TEXTURED_MESH_HDR,
         }
     }
-
+    pub const fn descriptor(&self) -> &'static RasterProgramDescriptor {
+        self.manifest
+    }
+    /// Identity of this immutable asset, including all fixed pipeline states.
+    pub fn identity(&self) -> usize {
+        std::ptr::from_ref(self.manifest) as usize
+    }
+    pub fn same(&self, other: &Self) -> bool {
+        std::ptr::eq(self.manifest, other.manifest)
+    }
     pub const fn vertex_stride(&self) -> u32 {
         self.manifest.vertex_stride
     }
-
-    /// Size in bytes of the vertex-stage inline matrix and tint parameters.
-    pub const fn parameter_size(&self) -> u32 {
-        self.manifest.parameter_size
+    pub const fn vertex_attributes(&self) -> &'static [VertexAttribute] {
+        self.manifest.vertex_attributes
     }
-
+    pub const fn parameter_size(&self) -> u32 {
+        self.manifest.parameters.size
+    }
+    pub const fn parameter_layout(&self) -> RasterParameterLayout {
+        self.manifest.parameters
+    }
     pub const fn color_outputs(&self) -> &'static [ImageFormat] {
         self.manifest.color_outputs
     }
-
     pub const fn bindings(&self) -> &'static [BindingLayout] {
         self.manifest.bindings
     }
-
-    /// Reviewed buffer-prefix footprints, in manifest slot order. Image and
-    /// sampler slots use zero here and are handled by their resource kind.
-    pub(crate) const fn binding_bytes(&self) -> &'static [u64] {
+    pub const fn binding_bytes(&self) -> &'static [u64] {
         self.manifest.binding_bytes
     }
-
+    pub const fn blend(&self) -> BlendState {
+        self.manifest.blend
+    }
+    pub const fn depth(&self) -> DepthState {
+        self.manifest.depth
+    }
+    pub const fn requires_depth(&self) -> bool {
+        matches!(self.depth(), DepthState::Required { .. })
+    }
+    pub const fn requires_depth_load(&self) -> bool {
+        matches!(
+            self.depth(),
+            DepthState::Required {
+                require_load: true,
+                ..
+            }
+        )
+    }
+    pub fn is_depth_only(&self) -> bool {
+        self.color_outputs().is_empty()
+    }
     #[cfg(test)]
-    pub(crate) fn is_mesh(&self) -> bool {
-        self.native_id() == 0
+    fn is_mesh(&self) -> bool {
+        self.same(&Self::mesh())
     }
-
-    /// Stable key for this finite set of reviewed immutable native contracts.
-    pub(crate) fn native_id(&self) -> usize {
-        self.manifest.native_id
+    #[cfg(test)]
+    fn is_textured(&self) -> bool {
+        self.bindings()
+            .iter()
+            .any(|slot| slot.kind == BindingType::SampledImage)
     }
-
-    #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
-    pub(crate) fn is_textured(&self) -> bool {
-        matches!(self.native_id(), 1 | 3)
+    #[cfg(test)]
+    fn is_prepassed(&self) -> bool {
+        self.requires_depth_load()
     }
-
-    pub(crate) fn is_depth_only(&self) -> bool {
-        self.native_id() == 4
-    }
-
-    pub(crate) const fn is_prepassed(&self) -> bool {
-        self.manifest.prepassed
-    }
-
-    pub(crate) fn requires_depth(&self) -> bool {
-        self.is_depth_only() || self.is_prepassed()
-    }
-
     #[cfg(feature = "vulkan")]
     pub(crate) fn vertex_spirv(&self) -> &'static [u8] {
         self.manifest.vertex_spirv
     }
-
     #[cfg(feature = "vulkan")]
     pub(crate) fn fragment_spirv(&self) -> &'static [u8] {
         self.manifest.fragment_spirv
     }
-
     #[cfg(all(feature = "d3d12", windows))]
     pub(crate) fn vertex_dxil(&self) -> &'static [u8] {
         self.manifest.vertex_dxil
     }
-
     #[cfg(all(feature = "d3d12", windows))]
     pub(crate) fn fragment_dxil(&self) -> &'static [u8] {
         self.manifest.fragment_dxil
@@ -306,12 +421,10 @@ mod tests {
             ManagedRasterProgram::mesh_prepassed(),
             ManagedRasterProgram::mesh_hdr_prepassed(),
         ];
-        let mut ids = all.map(|program| program.native_id());
+        let mut ids = all.map(|program| program.identity());
         ids.sort_unstable();
-        assert_eq!(all.len(), ManagedRasterProgram::NATIVE_PROGRAM_COUNT);
-        assert_eq!(
-            ids,
-            std::array::from_fn(|id| id),
+        assert!(
+            ids.windows(2).all(|pair| pair[0] != pair[1]),
             "native pipeline identities must not alias"
         );
         for (program, original) in [

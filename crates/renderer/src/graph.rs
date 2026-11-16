@@ -28,7 +28,8 @@ pub use dispatch::{Binding, BindingResource};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,
-    LoadOp, PassKind, RasterAttachments, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
+    LoadOp, PassKind, RasterAttachments, RasterConstants, RasterDraw, RasterParameters,
+    ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
     AttachmentOperand, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,

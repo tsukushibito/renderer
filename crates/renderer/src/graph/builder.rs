@@ -279,14 +279,14 @@ impl Graph {
         I: IntoIterator<Item = D>,
         D: Borrow<RasterDraw<'a>>,
     {
-        if program.is_prepassed()
+        if program.requires_depth_load()
             && !attachments
                 .depth
                 .is_some_and(|depth| matches!(depth.load, LoadOp::Load))
         {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
-                "prepassed Raster requires a depth attachment with Load",
+                "Raster Program requires a depth attachment with Load",
             )
             .with_pass_name(name));
         }
@@ -339,6 +339,12 @@ impl Graph {
                         super::GraphCapacityKind::Draws,
                         graph.capacity.draws,
                         graph.draws.len().checked_add(1),
+                    ));
+                }
+                if parameters.words().len() * 4 != program.parameter_size() as usize {
+                    return Err(GraphError::new(
+                        GraphErrorKind::InvalidInput,
+                        "Raster inline constants do not match the Program ABI",
                     ));
                 }
                 let bindings =
@@ -552,7 +558,7 @@ impl Graph {
         {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
-                "raster requires seven-f32 vertices and nonzero triangle u32 indices within the index buffer",
+                "raster requires complete vertex strides and nonzero triangle u32 indices within the index buffer",
                 if vs < stride || !vs.is_multiple_of(stride) { vertices } else { indices },
             ));
         }

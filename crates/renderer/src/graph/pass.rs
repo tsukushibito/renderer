@@ -130,6 +130,56 @@ impl Default for RasterParameters {
     }
 }
 
+/// Owned per-draw inline words. Construction copies at most 128 bytes without
+/// allocating; Graph captures this immutable value into its prepared draw slot.
+/// Shader-specific values and their interpretation belong to the trusted Program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RasterConstants {
+    words: [u32; 32],
+    len: u8,
+}
+
+impl RasterConstants {
+    pub fn new(words: &[u32]) -> Result<Self, GraphError> {
+        if words.len() > 32 {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "Raster inline constants exceed 128 bytes",
+            ));
+        }
+        let mut result = Self::default();
+        result.words[..words.len()].copy_from_slice(words);
+        result.len = words.len() as u8;
+        Ok(result)
+    }
+    pub fn words(&self) -> &[u32] {
+        &self.words[..usize::from(self.len)]
+    }
+}
+impl Default for RasterConstants {
+    fn default() -> Self {
+        Self {
+            words: [0; 32],
+            len: 0,
+        }
+    }
+}
+impl From<RasterParameters> for RasterConstants {
+    fn from(parameters: RasterParameters) -> Self {
+        let mut words = [0; 32];
+        for (word, value) in words.iter_mut().zip(
+            parameters
+                .transform
+                .iter()
+                .flatten()
+                .chain(&parameters.tint),
+        ) {
+            *word = value.to_bits();
+        }
+        Self { words, len: 20 }
+    }
+}
+
 /// One indexed triangle draw. Its borrowed descriptors follow the selected
 /// Raster Program layout and are owned by the plan after construction.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -138,7 +188,7 @@ pub struct RasterDraw<'a> {
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
     pub index_count: u32,
-    pub parameters: RasterParameters,
+    pub parameters: RasterConstants,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -258,7 +308,7 @@ pub(crate) struct RasterDrawOperands {
     pub vertices: usize,
     pub indices: usize,
     pub index_count: u32,
-    pub parameters: RasterParameters,
+    pub parameters: RasterConstants,
 }
 /// Internal provenance for trusted immutable streams. Public byte uploads
 /// cannot establish this metadata.
