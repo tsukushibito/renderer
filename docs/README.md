@@ -30,7 +30,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
 | 実装指針 | [RenderGraphベストプラクティス](guides/rendergraph-best-practices.md) | 公開設計の比較、依存・内容・寿命、コンパイル、同期、資源配置、並列化、検証 |
 | 設計 | [実装方針](design/implementation-policy.md) | [通常フレームのメモリ規約](design/implementation-policy.md#steady-state-memory)、Bistro確定要件と素材検証、[三層の公開API方針](design/implementation-policy.md#public-api-layers)・[移行計画](design/implementation-policy.md#public-api-migration)、[公開API比較と第一案](design/implementation-policy.md#public-api-comparison)、[基盤比較と採用・移行範囲](design/implementation-policy.md#foundation-selection)、B0〜B5計画、現行D3D12の契約 |
-| 設計 | [RenderGraph](design/rendergraph.md) | 共通宣言・依存解析、二APIのbuffer・画像・owned Rasterとimport/export・履歴、エンジン入力と拡張 |
+| 設計 | [RenderGraph](design/rendergraph.md) | 共通宣言・依存解析、二APIのbuffer・画像・owned Rasterとimport/export・履歴、登録資源を保持する再準備、エンジン入力と拡張 |
 | 設計の導入 | [図で読むRenderGraph](design/rendergraph-overview.md) | 全体像、具体例、producerとhazard、GPU実行・CPU結果の寿命、現在の対応範囲 |
 | 設計図 | [型・依存・寿命の設計図集](design/rendergraph-diagrams.md) | Mermaid定義を正本にした構造図・型関係図・フロー・シーケンス・状態遷移 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |

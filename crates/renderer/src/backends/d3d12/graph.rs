@@ -405,6 +405,8 @@ impl D3D12Runtime {
 
 /// A prepared-capacity submission. Pending Drop detaches ownership for polling;
 /// it does not wait, destroy resources, or increase the prepared capacity.
+/// Export metadata remains retained after completion until this submission is
+/// dropped. Return it before changing the runtime's working set.
 pub struct D3D12Submission {
     kind: SubmissionKind,
 }
@@ -415,6 +417,9 @@ enum SubmissionKind {
 }
 impl D3D12Submission {
     /// Snapshot of accepted scheduled contents; completion is observed separately.
+    /// Dropping it does not unregister the resource; use [`D3D12Runtime::delete`].
+    /// Return this snapshot and all clones before changing the working set, then
+    /// use [`D3D12Runtime::refresh_buffer`] with its retained key.
     pub fn export_buffer(
         &self,
         handle: crate::graph::BufferHandle,
@@ -429,6 +434,9 @@ impl D3D12Submission {
             _ => Err(D3D12RuntimeError::invalid("fixture has no exports")),
         }
     }
+    /// Snapshot of accepted scheduled contents; completion is observed separately.
+    /// Dropping it does not unregister the resource; use [`D3D12Runtime::delete`].
+    /// Image snapshots contain no pooled backing and may survive working-set changes.
     pub fn export_image(
         &self,
         handle: crate::graph::ImageHandle,

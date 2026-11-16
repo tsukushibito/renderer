@@ -566,13 +566,32 @@ native実行前に容量とexport tokenを全て予約し、ExecuteとSignal成�
 Signal失敗ではDeviceを停止し、内容を公開せず、実行資源・program・Deviceを含む所有を隔離保持する。
 [Fenceの`UINT64_MAX`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-getcompletedvalue)を正常完了と扱わない。
 
-物理buffer数は`executions * buffers`、画像数は`executions * 各image classのcount`を準備時に確保する。
+新しい未登録物理bufferを`executions * buffers`、画像を`executions * 各image classのcount`準備する。
+登録済み資源はこの追加準備分と独立に維持する。`resource_capacity`（既定1024）は登録・未登録cacheを
+含むregistry entry総数の上限であり、各Graphの論理資源上限`resources`やbyte budgetとは別である。
 bufferのnative sizeは`buffer_bytes`、論理sizeは各Graphのdescriptorである。画像は完全一致するclassを使う。
 現在の空き候補選択はregistryの線形検索であり、時間性能の改善は主張しない。
 通常のprepareは登録中・参照中の物理資源、実行枠、結果枠、export metadata、range tokenの不足を
 容量エラーとして返し、増設もGPU待機もしない。`initialized_ranges_per_resource`と`range_snapshots`は
 個別に指定でき、途中のtoken取得失敗でも既に取得した参照を全て返す。
-working set変更は全実行・結果の返却と登録資源の明示deleteを必要とし、変更後の旧keyはowner不一致になる。
+working set変更はVulkanと同様に全実行・結果・export付きsubmissionとexport／refreshした
+`ImportBuffer`の全clone返却を必要とする。登録資源のdeleteは不要で、key・内容・初期化・provenanceを維持する。
+buffer snapshotは保持したkeyから再取得でき、scalarな`ImportImage`は変更前のものを利用できる。
+新classに含めなかった登録画像も各executionのview枠へ含め、native画像を余分に複製しない。
+準備に必要なnative資源・Program・descriptorを別poolに全て作成してから、旧registryの再利用可能な
+未登録indexへ新資源を移し、最後にregistryを新poolへ移す。登録entryは動かさず、未登録indexの世代を
+次の貸出しで進める。余ったidle cacheも件数上限内に保持する。容量不足・通常の準備失敗で旧登録を失わず、
+resizeの反復でregistryを追加し続けない。Device removal等による停止は従来どおり終端状態として扱う。
+
+registryを複数pool世代で共有する案より、返却済みの変更境界で値を移す方式を選ぶ。
+pending中の再準備を追加せず、共有寿命・退役世代・新しい回収APIを増やさないためである。
+Graph color画像はtransfer／sampled／RT／UAVの固定用途とし、初回Program集合に関わらず後のstorage利用を許す。
+Microsoftは[UAV flagによるlayout効率への影響](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_flags)も説明する。
+用途限定画像と必要時のcopyを使う代案より、Vulkanと同じ資源の再利用契約を優先した基準である。
+copyによる移行・新しいGPU transactionは導入せず、速度やmemory効率の優位は未測定とする。
+画像準備ではtyped UAV view、Program作成では実際のtyped load/store能力を確認する。depthはDS用途を維持する。
+登録画像専用slotの転送footprintは、native作成と同じdescriptionから
+[`GetCopyableFootprints`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints)で得る。
 strict／shippingの内容照合と変動frameの確保測定は[現在の検証](../verification/current.md)を参照する。
 
 ## 同期と一般推奨の適用

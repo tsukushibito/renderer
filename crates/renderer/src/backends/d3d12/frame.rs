@@ -24,10 +24,15 @@ pub struct D3D12FrameCapacity {
     pub executions: usize,
     pub results: usize,
     pub resources: usize,
+    /// Total physical registry entries, including registered resources and idle
+    /// prepared instances. Independent of the per-Graph `resources` limit.
+    pub resource_capacity: usize,
     pub operations: usize,
-    /// Known index-content segments reserved per physical buffer and copy scratch.
+    /// Known index-content segments per execution buffer, copy scratch and
+    /// canonical registry entry.
     /// Independent of operation/draw capacity; exhaustion returns a capacity error.
-    /// Zero is valid for buffer-only work and complete immutable mesh index proofs.
+    /// Zero is valid for transient buffer-only work without retained provenance,
+    /// and for complete immutable mesh index proofs.
     pub provenance_segments_per_resource: usize,
     /// Canonical initialized intervals and independently retained import tokens.
     pub initialized_ranges_per_resource: usize,
@@ -45,6 +50,7 @@ impl Default for D3D12FrameCapacity {
             executions: 3,
             results: 6,
             resources: 1024,
+            resource_capacity: 1024,
             operations: 4096,
             provenance_segments_per_resource: 64,
             initialized_ranges_per_resource: 64,
@@ -342,6 +348,7 @@ impl FramePool {
                 "frame buffer capacities must be within the supported nonzero range",
             ));
         }
+        let mut registry = super::registry::Registry::new(capacity)?;
         let mut executions = reserved(capacity.executions)?;
         for _ in 0..capacity.executions {
             executions.push(ExecutionEntry::Available(Box::new(ExecutionSlot::new(
@@ -352,7 +359,6 @@ impl FramePool {
         for _ in 0..capacity.results {
             results.push(Some(ResultSlot::new(&owner, capacity)?));
         }
-        let mut registry = super::registry::Registry::new(capacity)?;
         for entry in &mut executions {
             let ExecutionEntry::Available(slot) = entry else {
                 unreachable!()
@@ -384,12 +390,24 @@ impl FramePool {
         owner: Arc<DeviceOwner>,
         capacity: D3D12FrameCapacity,
         classes: &[D3D12ImageClass],
+        registered_images: &[crate::graph::ImageDesc],
         programs: &[ManagedRasterProgram],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
         let mut pool = Self::new(owner, capacity)?;
         let pool_mut = Arc::get_mut(&mut pool).expect("new unshared pool");
-        pool_mut.clear_programs = Some(ClearPrograms::new(&pool_mut.owner, classes)?);
+        let class_count = classes
+            .len()
+            .checked_add(registered_images.len())
+            .ok_or_else(|| D3D12RuntimeError::capacity("image class capacity overflow"))?;
+        let mut all_classes = reserved(class_count)?;
+        all_classes.extend_from_slice(classes);
+        all_classes.extend(
+            registered_images
+                .iter()
+                .map(|&desc| D3D12ImageClass { desc, count: 1 }),
+        );
+        pool_mut.clear_programs = Some(ClearPrograms::new(&pool_mut.owner, &all_classes)?);
         pool_mut
             .raster_programs
             .try_reserve_exact(programs.len().saturating_mul(2))
@@ -421,7 +439,6 @@ impl FramePool {
                 D3D12RuntimeError::capacity("Compute pipeline capacity reservation failed")
             })?;
         let mut compute_images = 0;
-        let mut storage_formats = [false; 2];
         for program in compute_programs {
             if !pool_mut
                 .compute_programs
@@ -436,23 +453,6 @@ impl FramePool {
                         #[cfg(test)]
                         false,
                     )?);
-            }
-            for slot in program.bindings() {
-                match slot.kind {
-                    crate::program::BindingType::StorageImageRead(format)
-                    | crate::program::BindingType::StorageImageWrite(format) => {
-                        // Program creation already checked typed UAV capability.
-                        // Only those formats need storage-capable physical images.
-                        match format {
-                            crate::program::ImageFormat::Rgba8Unorm => storage_formats[0] = true,
-                            crate::program::ImageFormat::Rgba16Float => storage_formats[1] = true,
-                            crate::program::ImageFormat::D32Float => {
-                                unreachable!("Program creation rejected depth storage")
-                            }
-                        }
-                    }
-                    _ => {}
-                }
             }
             compute_images = compute_images.max(
                 program
@@ -485,9 +485,9 @@ impl FramePool {
             slot.raster = Some(RasterStorage::new(
                 &pool_mut.owner,
                 classes,
+                registered_images,
                 capacity.operations,
                 compute_descriptors,
-                storage_formats,
             )?);
             pool_mut
                 .registry
@@ -1142,6 +1142,7 @@ mod tests {
                     executions: 1,
                     results: 1,
                     resources: 8,
+                    resource_capacity: 8,
                     operations: 32,
                     provenance_segments_per_resource: segments,
                     initialized_ranges_per_resource: 32,

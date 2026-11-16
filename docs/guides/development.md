@@ -622,6 +622,10 @@ cargo run --locked --release -p renderer --no-default-features --features d3d12,
 一般buffer・HDR画像の更新／delete、重複import、read-only snapshotの再利用、古いrevisionの拒否、
 importしたvertex/indexとattachment Loadを全画素照合する。D3D12はprepare後の更新拒否、未投入cancel、
 二つ目のexport range token取得失敗後の回復も確認する。
+`support/general_working_set.rs`は、返却済みの変更境界で登録buffer／画像をdeleteせず、
+resizeとProgram追加を同じ利用側処理で両APIへ実行する。新classから省いた登録画像のstorage read/write、
+以前compileしたread-only plan、index provenance、6-entry上限での反復変更と準備失敗後の内容を照合する。
+export付きsubmission・buffer snapshotの最後のcloneによる交換拒否と、通常返却時の確保／解放ゼロも確認する。
 
 ```powershell
 cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,memory-profiling --test general_resources general_resources_strict -- --exact --ignored --nocapture --test-threads=1

@@ -140,6 +140,15 @@ fn stale() -> Error {
 }
 impl Registry {
     pub(super) fn new(capacity: D3D12FrameCapacity) -> Result<Self, Error> {
+        if capacity.resource_capacity == 0 || capacity.resource_capacity > u32::MAX as usize {
+            return Err(Error::invalid(
+                "physical registry capacity must fit a nonzero u32",
+            ));
+        }
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(capacity.resource_capacity)
+            .map_err(|_| Error::capacity("registry preparation failed"))?;
         let export_count = capacity
             .executions
             .checked_add(capacity.results)
@@ -152,7 +161,7 @@ impl Registry {
         }
         Ok(Self {
             owner: crate::graph::next_id(),
-            entries: Vec::new(),
+            entries,
             ranges: ImportRangesPool::new(
                 capacity.initialized_ranges_per_resource,
                 capacity.range_snapshots,
@@ -163,19 +172,21 @@ impl Registry {
         })
     }
     pub(super) fn install(&mut self, slot: &mut ExecutionSlot) -> Result<(), Error> {
-        let images = slot.raster.as_ref().map_or(0, |r| r.images.len());
+        let images = slot.raster.as_ref().map_or(0, |r| {
+            r.images
+                .iter()
+                .filter(|image| image.native.0.is_some())
+                .count()
+        });
         let additional = slot.buffers.iter().filter(|b| b.0.is_some()).count() + images;
         if self
             .entries
             .len()
             .checked_add(additional)
-            .is_none_or(|n| n > u32::MAX as usize)
+            .is_none_or(|n| n > self.capacity.resource_capacity)
         {
             return Err(Error::capacity("registry identity capacity exhausted"));
         }
-        self.entries
-            .try_reserve_exact(additional)
-            .map_err(|_| Error::capacity("registry preparation failed"))?;
         for buffer in &mut slot.buffers {
             if let Some(native) = buffer.0.take() {
                 self.entries.push(Entry::new(
@@ -200,8 +211,58 @@ impl Registry {
         }
         Ok(())
     }
-    pub(super) fn has_registered(&self) -> bool {
-        self.entries.iter().any(|e| e.registered)
+    /// Change-boundary guarantee, including synchronization with the last
+    /// external token return. No new token can be made after exclusive success.
+    pub(super) fn metadata_is_idle(&mut self) -> bool {
+        self.exports
+            .iter_mut()
+            .all(|slot| Arc::get_mut(slot).is_some())
+            && self.ranges.is_idle()
+    }
+    pub(super) fn registered_images(&self) -> Result<Vec<crate::graph::ImageDesc>, Error> {
+        let mut images = Vec::new();
+        images
+            .try_reserve_exact(self.entries.iter().filter(|entry| entry.registered).count())
+            .map_err(|_| Error::capacity("registered image preparation failed"))?;
+        for entry in &self.entries {
+            if entry.registered
+                && let ResourceDesc::Image(desc) = entry.desc
+            {
+                images.push(desc);
+            }
+        }
+        Ok(images)
+    }
+    fn reusable(entry: &Entry) -> bool {
+        !entry.registered && entry.generation < u32::MAX && Arc::strong_count(&entry.physical) == 1
+    }
+    /// All allocation/native creation has completed in `prepared`. Check the
+    /// index budget before moving anything; the commit below cannot fail.
+    pub(super) fn replace_prepared(&mut self, prepared: &mut Self) -> Result<(), Error> {
+        let reusable = self
+            .entries
+            .iter()
+            .filter(|entry| Self::reusable(entry))
+            .count();
+        let additional = prepared.entries.len().saturating_sub(reusable);
+        if additional > self.capacity.resource_capacity - self.entries.len() {
+            return Err(Error::capacity(
+                "registered and prepared resources exceed registry capacity",
+            ));
+        }
+        let mut incoming = std::mem::take(&mut prepared.entries).into_iter();
+        for entry in &mut self.entries {
+            if Self::reusable(entry)
+                && let Some(mut next) = incoming.next()
+            {
+                // An unregistered index becomes externally visible only when
+                // bind advances this generation. Old deleted keys stay stale.
+                next.generation = entry.generation;
+                *entry = next;
+            }
+        }
+        self.entries.extend(incoming);
+        Ok(())
     }
     fn entry(&self, key: ResourceKey) -> Result<&Entry, Error> {
         if key.owner != self.owner {
@@ -467,6 +528,8 @@ impl ExecutionSlot {
 
 impl D3D12Runtime {
     /// Scheduled contents of accepted work; CPU completion is not implied.
+    /// Return this buffer snapshot and all clones before changing the working set;
+    /// its key and registered contents survive and can be refreshed afterwards.
     pub fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error> {
         self.device.ensure_active()?;
         self.pool
@@ -475,6 +538,8 @@ impl D3D12Runtime {
             .unwrap_or_else(|e| e.into_inner())
             .refresh_buffer(key)
     }
+    /// Scheduled image contents, retained across working-set changes. This scalar
+    /// snapshot has no pooled backing; CPU completion is observed separately.
     pub fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, Error> {
         self.device.ensure_active()?;
         self.pool

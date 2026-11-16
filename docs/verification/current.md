@@ -37,6 +37,29 @@ shippingのゼロ時間Fence待機はVulkan各57回、D3D12各55〜57回のtimeo
 D3D12は既存COMMON復帰を維持し、新たなvendor最適化・未計測の性能効果やVulkan/VMA推奨の例外は設けていない。
 一般Raster shader・blend/depthは`.2.8`、二API表示・通常frame時間は`.2.6`へ残す。
 
+レビュー修正`renderer-7ft.2.5.1`で、D3D12も登録資源をdeleteせずworking setを変更できるようにした。
+全実行・結果・export付きsubmission／buffer snapshotの返却を確認し、新poolの準備成功後に
+canonical registryを移す。登録buffer／画像のkey・内容・provenanceを維持し、新classにない登録画像のview枠も補う。
+Graph color画像は初回からRT／UAV対応とし、後から追加したStorage Programも同じ画像を使える。
+この固定用途の性能・memory効率は未比較で、理由と代案は[資源管理の契約](../design/rendergraph.md#d3d12-buffer-lifetime)に記す。
+
+修正後の最終ソースでは、strict／shippingの二API受入と既存混合Raster回帰をそれぞれ1回再実行した。
+登録3資源＋準備3資源の6-entry上限で2×2／3×2を6回交互に準備し、旧read-only plan、
+新Storage Programによる旧HDR画像の読み書き、登録indexの描画と全画素を両APIで確認した。
+既存D3D12 native回帰9件（pending寿命、部分作成失敗、provenance容量、graphics/compute/clear等）も成功した。
+過剰容量・不正classの準備失敗後にも旧資源・構成を利用できた。
+完了済みexport metadataと独立したrefresh bufferの最終cloneによる交換拒否、返却後の成功を確認した。
+修正前は交換後の通常返却でRust deallocが4回376 byte発生したが、修正後の6返却窓は
+alloc／alloc_zeroed／realloc／dealloc・VMA host・native作成破棄の全イベントが0だった。
+通常履歴の24測定frameも両APIで確保／解放0を維持した。resize／Program準備自体は明示変更境界であり、このゼロ計測に含めない。
+strictはCore／SyncValとDebug Layer／GBVを確認し、最終native解放後まで問題0。
+release CPUは全feature325件、二API製品301件、D3D12単独の製品188件／追加検証189件が成功した。
+全featureとD3D12単独enabled/disabled・二API製品のClippy、warnings拒否Rustdoc、HTMLの17page／2036linkと
+32 diagramのviewer／theme／mobile／print確認が成功した。
+最終ソース8件のhash・raw report・元の再現条件は
+[検証データの`general_resources_review_fix`](frame-memory.json)に記録する。従来の`general_resources`は修正前commitの記録として保持する。
+実GPUゲートは引き続き`#[ignore]`の明示実行で、CIへ実GPU依存や時間閾値の必須チェックは追加していない。
+
 ## 公開三経路のconsumer移行と混合Compute受入
 
 `renderer-7ft.2.7.4`。`frame_loop`と`engine_workloads`の代表構築を

@@ -174,7 +174,11 @@ impl D3D12Runtime {
     }
     /// Reserves exact image classes, descriptor arenas and immutable Raster and
     /// Compute pipelines at an explicit change boundary. All execution and result
-    /// leases must have returned; ordinary Graph preparation never grows storage.
+    /// leases, completed submissions with exports, and all exported/refreshed
+    /// `ImportBuffer` snapshots and clones must have returned. Registered resources
+    /// retain their keys and contents; `delete` is not required. Refresh buffer
+    /// snapshots after changing the working set. Registered images get view slots
+    /// even when omitted from `images`. Ordinary Graph preparation never grows storage.
     /// Empty image and Program lists are allowed. Image descriptors reserve
     /// `operations` Raster slots plus `operations * max_compute_image_bindings`
     /// Compute slots; the entire shader-visible heap must fit its native limit.
@@ -191,24 +195,31 @@ impl D3D12Runtime {
                 "Graph working set cannot change while execution or result leases remain",
             ));
         }
-        if self
-            .pool
-            .registry
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .has_registered()
-        {
+        let mut registry = self.pool.registry.lock().unwrap_or_else(|e| e.into_inner());
+        if !registry.metadata_is_idle() {
             return Err(D3D12RuntimeError::capacity(
-                "delete registered Graph resources before changing the working set",
+                "return submission exports and buffer snapshots before changing the working set",
             ));
         }
-        let pool = frame::FramePool::with_graph(
+        let registered_images = registry.registered_images()?;
+        let mut pool = frame::FramePool::with_graph(
             Arc::clone(&self.device),
             self.pool.capacity(),
             images,
+            &registered_images,
             programs,
             compute_programs,
         )?;
+        let replacement = Arc::get_mut(&mut pool)
+            .expect("new unshared pool")
+            .registry
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        registry.replace_prepared(replacement)?;
+        // Preserve the canonical registry, including its owner, registered native
+        // resources and prepared token anchors, only after all preparation succeeds.
+        std::mem::swap(&mut *registry, replacement);
+        drop(registry);
         self.pool = pool;
         Ok(())
     }

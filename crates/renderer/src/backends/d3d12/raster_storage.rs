@@ -10,7 +10,8 @@ use super::{
     resources::DeviceImage,
 };
 
-/// One exact image description and the number reserved per execution slot.
+/// One exact image description and the unregistered physical instances reserved
+/// per execution slot, in addition to retained registered images.
 #[derive(Clone, Copy, Debug)]
 pub struct D3D12ImageClass {
     pub desc: ImageDesc,
@@ -178,7 +179,8 @@ fn require_image_format(owner: &DeviceOwner, format: ImageFormat) -> Result<(), 
             },
             D3D12_FORMAT_SUPPORT1_TEXTURE2D
                 | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
-                | D3D12_FORMAT_SUPPORT1_RENDER_TARGET,
+                | D3D12_FORMAT_SUPPORT1_RENDER_TARGET
+                | D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW,
         ),
     }
 }
@@ -211,18 +213,18 @@ fn checked_handle_capacity(
 
 fn copy_layout(
     owner: &DeviceOwner,
-    image: &DeviceImage,
     desc: ImageDesc,
 ) -> Result<(D3D12_PLACED_SUBRESOURCE_FOOTPRINT, u64, usize, usize), D3D12RuntimeError> {
     let mut footprint = D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default();
     let mut rows = 0u32;
     let mut row_bytes = 0u64;
     let mut total_bytes = 0u64;
-    // SAFETY: This retained image has the exact validated single-subresource
-    // description. Every output pointer matches the native parameter type.
+    // SAFETY: This is the same validated single-subresource description used by
+    // native creation. Footprints need a description, not a resource instance;
+    // every output pointer matches the native parameter type.
     unsafe {
         owner.raw.GetCopyableFootprints(
-            &image.raw().GetDesc(),
+            &DeviceImage::graph_resource_desc(desc),
             0,
             1,
             0,
@@ -298,9 +300,9 @@ impl RasterStorage {
     pub(super) fn new(
         owner: &DeviceOwner,
         classes: &[D3D12ImageClass],
+        registered_images: &[ImageDesc],
         draw_capacity: usize,
         compute_descriptor_capacity: usize,
-        storage_formats: [bool; 2],
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
         let descriptor_capacity = draw_capacity
@@ -313,10 +315,15 @@ impl RasterStorage {
                 "prepared Graph descriptor capacity must be within 1..=1000000",
             ));
         }
+        let classes = classes.iter().copied().map(|class| (class, true)).chain(
+            registered_images
+                .iter()
+                .map(|&desc| (D3D12ImageClass { desc, count: 1 }, false)),
+        );
         let mut total = 0usize;
         let mut color_count = 0usize;
         let mut depth_count = 0usize;
-        for &class in classes {
+        for (class, _) in classes.clone() {
             validate_class(class)?;
             require_image_format(owner, class.desc.format)?;
             total = total
@@ -388,16 +395,14 @@ impl RasterStorage {
         }
         let mut color_index = 0usize;
         let mut depth_index = 0usize;
-        for &class in classes {
+        for (class, allocate) in classes {
             for _ in 0..class.count {
-                let storage_image = match class.desc.format {
-                    ImageFormat::Rgba8Unorm => storage_formats[0],
-                    ImageFormat::Rgba16Float => storage_formats[1],
-                    ImageFormat::Depth32Float => false,
+                let native = if allocate {
+                    super::registry::PhysicalRef::image(DeviceImage::graph(owner, class.desc)?)
+                } else {
+                    super::registry::PhysicalRef::default()
                 };
-                let native = DeviceImage::graph(owner, class.desc, storage_image)?;
-                let (footprint, total_bytes, row_bytes, rows) =
-                    copy_layout(owner, &native, class.desc)?;
+                let (footprint, total_bytes, row_bytes, rows) = copy_layout(owner, class.desc)?;
                 let (rtv, dsv) = if class.desc.format == ImageFormat::Depth32Float {
                     let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                         ptr: dsv_start.unwrap().ptr + depth_index * dsv_step as usize,
@@ -410,30 +415,34 @@ impl RasterStorage {
                             Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
                         },
                     };
-                    // SAFETY: The checked single-subresource typeless image is
-                    // depth-capable; this concrete D32 view occupies its own
-                    // in-bounds CPU-only DSV slot, retained with the image.
-                    unsafe {
-                        owner
-                            .raw
-                            .CreateDepthStencilView(native.raw(), Some(&view), handle)
-                    };
+                    if allocate {
+                        // SAFETY: The checked single-subresource typeless image
+                        // is depth-capable. Its concrete D32 view occupies this
+                        // slot's in-bounds CPU-only descriptor.
+                        unsafe {
+                            owner
+                                .raw
+                                .CreateDepthStencilView(native.raw(), Some(&view), handle)
+                        };
+                    }
                     depth_index += 1;
                     (None, Some(handle))
                 } else {
                     let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                         ptr: rtv_start.unwrap().ptr + color_index * rtv_step as usize,
                     };
-                    // SAFETY: The checked concrete color resource permits render
-                    // targets. Its default view covers the sole mip/layer, and
-                    // the independent CPU descriptor slot is in bounds.
-                    unsafe { owner.raw.CreateRenderTargetView(native.raw(), None, handle) };
+                    if allocate {
+                        // SAFETY: The checked color resource permits render
+                        // targets. The sole mip/layer and this slot's in-bounds
+                        // descriptor match the default view.
+                        unsafe { owner.raw.CreateRenderTargetView(native.raw(), None, handle) };
+                    }
                     color_index += 1;
                     (Some(handle), None)
                 };
                 images.push(GraphImage {
                     desc: class.desc,
-                    native: super::registry::PhysicalRef::image(native),
+                    native,
                     state: D3D12_RESOURCE_STATE_COMMON,
                     uav_write: false,
                     used: false,

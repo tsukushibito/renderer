@@ -26743,5 +26743,212 @@
     "guidance": "Maintain actual-use transitions, native resource/descriptor ownership through Fence completion, prepared capacities and native failure handling in shipping. D3D12 keeps existing COMMON transitions; no new Vulkan/VMA recommendation exceptions or unmeasured optimization claims.",
     "source_note": "Native/GPU acceptance code is unchanged after 03d37d9. Exposed existing unchanged provenance copy to D3D12-only builds and compiled existing initial_contents getter for development-validation with either backend. Shipping excludes the diagnostic getter. Initial CI 43824554460 detected the latter D3D12-only diagnostic cfg gap; the exact enabled/disabled check/Clippy/debug/release tests and independent diagnostic checks passed after correction.",
     "output_encoding": "Lossless packed RGBA16F little-endian bytes, lower-case hexadecimal per readback; each run compared to independent expected pixels and between Vulkan/D3D12."
+  },
+  "general_resources_review_fix": {
+    "issue": "renderer-7ft.2.5.1",
+    "date": "2026-11-16",
+    "review_base": "2ae684d0396c9ae1aa592b277c0e043f3cc6ae29",
+    "source_sha256_utf8_lf": {
+      "crates/renderer/src/backends/d3d12.rs": "2c61508e6d9f08089eeb6ad794d1714e683ae2e6be20cd605da606100710444b",
+      "crates/renderer/src/backends/d3d12/frame.rs": "f379fdb12ba77d5116694e51e1669ca0f37daaf81633667c0067789de28ed984",
+      "crates/renderer/src/backends/d3d12/graph.rs": "c54500195820296b7e7d9273e95e3f363ca09f0149ecbe0994d61fe631f65cf6",
+      "crates/renderer/src/backends/d3d12/raster_storage.rs": "4bf2d72f4fe99359c9c3414ae1e66b182a5fc6d500e2bc61788aa31fa4bf1336",
+      "crates/renderer/src/backends/d3d12/registry.rs": "66fc4d6db5019783743dcbdf4abc6af3c289e3832ce627b1838e5c292e79cc4c",
+      "crates/renderer/src/backends/d3d12/resources.rs": "8b061163505ceef56f53eaa12e0aca0a87c6e86368ceb6259e154aa342f89656",
+      "crates/renderer/tests/general_resources.rs": "bb963d87bad125a23eb613df6433edfcbb99c4824d3294701dfd636d4a3e65c0",
+      "crates/renderer/tests/support/general_working_set.rs": "3785147549163d1943628e104d2f1a264860c19e3f55fcc657f8f10bda0cd92c"
+    },
+    "original_reproduction": {
+      "rust_deallocations": 4,
+      "deallocated_bytes": 376,
+      "normal_return_without_replacement_deallocations": 0,
+      "configuration": "1 execution, 1 result, 4 logical resources, 2 buffers of 16 bytes, 4 range snapshots; native validation Disabled"
+    },
+    "new_public_api_regressions": [
+      "completed submission export metadata and independent refresh ImportBuffer final clone block replacement",
+      "image-only submission metadata blocks replacement; scalar ImportImage may survive",
+      "six metadata returns have zero Rust/VMA/native allocation and free events",
+      "registered keys/contents survive six alternating 2x2/3x2 preparations at six-entry capacity on both APIs",
+      "old registered HDR images omitted from new classes support newly added StorageRead/Write Program",
+      "pre-change readonly CompiledGraph remains usable",
+      "registry capacity and invalid-class failures preserve existing resources and configuration",
+      "registered vertex/index provenance and attachment Load survive reconfiguration"
+    ],
+    "expected_contents": {
+      "resident_source_rgba16f": [
+        2.0,
+        2.0,
+        2.0,
+        2.0
+      ],
+      "resident_storage_output_rgba16f": [
+        2.5,
+        2.5,
+        2.5,
+        2.5
+      ],
+      "resized_transient_byte": 9,
+      "raster_imports_rgba16f": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "quality": {
+      "all-features-cpu": {
+        "passed": 325,
+        "ignored": 74
+      },
+      "d3d12-cpu": {
+        "passed": 188,
+        "ignored": 8
+      },
+      "d3d12-development-validation-graph-diagnostics-cpu": {
+        "passed": 189,
+        "ignored": 9
+      },
+      "vulkan-d3d12-cpu": {
+        "passed": 301,
+        "ignored": 68
+      },
+      "d3d12_native_ignored": {
+        "passed": 9,
+        "failed": 0
+      },
+      "mixed_raster_strict_shipping": {
+        "passed": 1,
+        "failed": 0,
+        "runs_per_configuration": 1
+      }
+    },
+    "runs": {
+      "strict": {
+        "exit_code": 0,
+        "native_report": {
+          "adapter": {
+            "d3d12": "NVIDIA GeForce RTX 3060",
+            "driver_raw": 2559967232,
+            "luid": [
+              116,
+              226,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "vulkan": "NVIDIA GeForce RTX 3060"
+          },
+          "d3d12": {
+            "callback_failures": 0,
+            "corruption": 0,
+            "debug_layer": true,
+            "dropped_messages": 0,
+            "errors": 0,
+            "gbv": true,
+            "teardown": true,
+            "warnings": 0
+          },
+          "strict": true,
+          "vulkan": {
+            "callback_failures": 0,
+            "core": true,
+            "dropped_problems": 0,
+            "errors": 0,
+            "sync": true,
+            "warnings": 0
+          },
+          "outputs_hex": [
+            "003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e",
+            "004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040",
+            "004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041",
+            "004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041",
+            "004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042",
+            "004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043",
+            "0043004300430043004300430043004300430043004300430043004300430043",
+            "0044004400440044004400440044004400440044004400440044004400440044",
+            "8044804480448044804480448044804480448044804480448044804480448044"
+          ]
+        },
+        "metadata_return_measurements": [
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }"
+        ]
+      },
+      "shipping": {
+        "exit_code": 0,
+        "native_report": {
+          "adapter": {
+            "d3d12": "NVIDIA GeForce RTX 3060",
+            "driver_raw": 2559967232,
+            "luid": [
+              116,
+              226,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "vulkan": "NVIDIA GeForce RTX 3060"
+          },
+          "d3d12": {
+            "callback_failures": 0,
+            "corruption": 0,
+            "debug_layer": false,
+            "dropped_messages": 0,
+            "errors": 0,
+            "gbv": false,
+            "teardown": false,
+            "warnings": 0
+          },
+          "strict": false,
+          "vulkan": {
+            "callback_failures": 0,
+            "core": null,
+            "dropped_problems": 0,
+            "errors": 0,
+            "sync": null,
+            "warnings": 0
+          },
+          "outputs_hex": [
+            "003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e003e",
+            "004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040004000400040",
+            "004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041",
+            "004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041004100410041",
+            "004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042004200420042",
+            "004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043004300430043",
+            "0043004300430043004300430043004300430043004300430043004300430043",
+            "0044004400440044004400440044004400440044004400440044004400440044",
+            "8044804480448044804480448044804480448044804480448044804480448044"
+          ]
+        },
+        "metadata_return_measurements": [
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }",
+          "Snapshot { rust: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], vma_host: [EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }, EventCount { calls: 0, bytes: 0 }], native: [0, 0, 0, 0, 0, 0, 0, 0, 0], overflowed: false }"
+        ]
+      }
+    },
+    "guidance": "Vulkan-style returned metadata boundary with persistent registered identity. Fixed D3D12 Graph color RT/UAV usage, typed format capability checks, staged native preparation before infallible canonical registry transfer. Bounded idle cache; no new vendor-specific optimization or timing claim.",
+    "not_executed": [
+      "real native OOM",
+      "real Device loss/removal",
+      "other GPU/driver",
+      "Linux real GPU",
+      "new timing or UAV-layout performance comparison",
+      "two-API presentation"
+    ],
+    "ci_memory_policy": "No mandatory real-GPU CI gate or timing threshold added; existing ignored acceptance is explicitly executed."
   }
 }

@@ -5,6 +5,9 @@
 #[path = "../examples/support/compute_fixture.rs"]
 mod fixture;
 
+#[path = "support/general_working_set.rs"]
+mod working_set;
+
 use renderer::{
     D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
     FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime,
@@ -37,6 +40,7 @@ trait Backend {
     fn delete(&mut self, key: ResourceKey);
     fn fresh(&self, key: ResourceKey) -> ImportImage;
     fn fresh_buffer(&self, key: ResourceKey) -> ImportBuffer;
+    fn reconfigure(&mut self, classes: &[ResourceClass]) -> Result<(), String>;
 }
 impl Backend for VulkanRuntime {
     type Pending = renderer::Submission;
@@ -71,6 +75,25 @@ impl Backend for VulkanRuntime {
     fn fresh_buffer(&self, key: ResourceKey) -> ImportBuffer {
         self.refresh_buffer(key).unwrap()
     }
+    fn reconfigure(&mut self, classes: &[ResourceClass]) -> Result<(), String> {
+        self.prepare_working_set(
+            FrameCapacity {
+                graph: renderer::graph::GraphCapacity {
+                    draws: 1,
+                    attachments: 1,
+                    ..fixture::capacity()
+                },
+                ..Default::default()
+            },
+            classes,
+        )
+        .map_err(|error| format!("{:?}", error.kind()))?;
+        self.prepare_compute_programs(&[fixture::storage_program()])
+            .unwrap();
+        self.prepare_raster_programs(&[renderer::program::ManagedRasterProgram::mesh_hdr()])
+            .unwrap();
+        Ok(())
+    }
 }
 impl Backend for D3D12Runtime {
     type Pending = renderer::D3D12Submission;
@@ -104,6 +127,21 @@ impl Backend for D3D12Runtime {
     }
     fn fresh_buffer(&self, key: ResourceKey) -> ImportBuffer {
         self.refresh_buffer(key).unwrap()
+    }
+    fn reconfigure(&mut self, classes: &[ResourceClass]) -> Result<(), String> {
+        let images: Vec<_> = classes
+            .iter()
+            .filter_map(|class| match *class {
+                ResourceClass::Image { desc, count } => Some(D3D12ImageClass { desc, count }),
+                _ => None,
+            })
+            .collect();
+        self.prepare_graph_working_set(
+            &images,
+            &[renderer::program::ManagedRasterProgram::mesh_hdr()],
+            &[fixture::storage_program()],
+        )
+        .map_err(|error| format!("{:?}", error.kind()))
     }
 }
 
@@ -383,7 +421,7 @@ fn recording_transactions(dx: &mut D3D12Runtime) {
     drop(<D3D12Runtime as Backend>::wait(&mut update));
 }
 
-fn raster_imports<B: Backend>(backend: &mut B) {
+fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
     use renderer::graph::{
         Attachment, GraphCapacity, LoadOp, RasterDraw, RasterParameters, StoreOp,
     };
@@ -427,10 +465,31 @@ fn raster_imports<B: Backend>(backend: &mut B) {
     seed.export_buffer(vertices).unwrap();
     seed.export_buffer(indices).unwrap();
     seed.export_image(color).unwrap();
-    let mut producer = backend.submit(&seed.compile().unwrap()).unwrap();
-    let vertices = B::buffer(&producer, vertices);
-    let indices = B::buffer(&producer, indices);
+    let producer = backend.submit(&seed.compile().unwrap()).unwrap();
+    let mut vertices = B::buffer(&producer, vertices);
+    let mut indices = B::buffer(&producer, indices);
     let color = B::image(&producer, color);
+    let mut producer = Some(producer);
+    if reconfigure {
+        let keys = (vertices.key(), indices.key());
+        drop((vertices, indices));
+        drop(B::wait(producer.as_mut().unwrap()));
+        drop(producer.take());
+        backend
+            .reconfigure(&[
+                ResourceClass::Buffer {
+                    desc: BufferDesc { size: 512 },
+                    count: 2,
+                },
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba16_float(2, 2),
+                    count: 1,
+                },
+            ])
+            .unwrap();
+        vertices = backend.fresh_buffer(keys.0);
+        indices = backend.fresh_buffer(keys.1);
+    }
     let mut graph = pool.begin().unwrap();
     let v = graph.import_buffer("vertices", &vertices).unwrap();
     let i = graph.import_buffer("indices", &indices).unwrap();
@@ -465,7 +524,9 @@ fn raster_imports<B: Backend>(backend: &mut B) {
     let mut bytes = [0; fixture::IMAGE_BYTES];
     B::read(&mut result, pass, &mut bytes);
     assert_eq!(bytes, fixture::image_bytes(&[[1.0; 4]; fixture::PIXELS]));
-    drop(B::wait(&mut producer));
+    if let Some(producer) = &mut producer {
+        drop(B::wait(producer));
+    }
 }
 
 fn failed_export_capture(strict: bool) {
@@ -637,14 +698,16 @@ fn run(strict: bool) {
         .unwrap();
     vk.prepare_raster_programs(&[renderer::program::ManagedRasterProgram::mesh_hdr()])
         .unwrap();
-    raster_imports(&mut vk);
+    raster_imports(&mut vk, false);
     let a = history(&mut vk, !strict);
     stale_and_cancel(&mut vk);
     let b = history(&mut dx, !strict);
-    raster_imports(&mut dx);
+    raster_imports(&mut dx, false);
     stale_and_cancel(&mut dx);
     recording_transactions(&mut dx);
     failed_export_capture(strict);
+    working_set::metadata(strict);
+    working_set::reconfiguration(strict);
     cross_backend_owners(&mut vk, &mut dx);
     assert_eq!(a, b);
     // Unsubmitted recordings never publish contents or registration.

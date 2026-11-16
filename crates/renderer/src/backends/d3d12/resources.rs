@@ -334,37 +334,47 @@ impl DeviceImage {
         owner: &DeviceOwner,
         desc: crate::program::ImageDescriptor,
     ) -> Result<Self, D3D12RuntimeError> {
-        Self::with_description(owner, desc, false, false)
+        Self::with_description(owner, desc, false)
     }
 
     pub(super) fn graph(
         owner: &DeviceOwner,
         desc: crate::graph::ImageDesc,
-        storage: bool,
     ) -> Result<Self, D3D12RuntimeError> {
+        Self::with_description(owner, Self::graph_descriptor(desc), true)
+    }
+
+    fn graph_descriptor(desc: crate::graph::ImageDesc) -> crate::program::ImageDescriptor {
         let format = match desc.format {
             crate::graph::ImageFormat::Rgba8Unorm => crate::program::ImageFormat::Rgba8Unorm,
             crate::graph::ImageFormat::Rgba16Float => crate::program::ImageFormat::Rgba16Float,
             crate::graph::ImageFormat::Depth32Float => crate::program::ImageFormat::D32Float,
         };
-        Self::with_description(
-            owner,
-            crate::program::ImageDescriptor {
-                width: desc.width,
-                height: desc.height,
-                format,
-                preferred_depth_clear: None,
-            },
-            true,
-            storage,
-        )
+        crate::program::ImageDescriptor {
+            width: desc.width,
+            height: desc.height,
+            format,
+            preferred_depth_clear: None,
+        }
+    }
+
+    pub(super) fn graph_resource_desc(desc: crate::graph::ImageDesc) -> D3D12_RESOURCE_DESC {
+        Self::resource_desc(Self::graph_descriptor(desc), true)
+    }
+
+    fn resource_desc(desc: crate::program::ImageDescriptor, graph: bool) -> D3D12_RESOURCE_DESC {
+        let mut native = image_desc(desc);
+        if graph && native.Flags == D3D12_RESOURCE_FLAG_NONE {
+            native.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
+                | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        }
+        native
     }
 
     fn with_description(
         owner: &DeviceOwner,
         desc: crate::program::ImageDescriptor,
         graph: bool,
-        storage: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         let properties = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -405,13 +415,7 @@ impl DeviceImage {
                 },
             })
         };
-        let mut desc = image_desc(desc);
-        if graph && desc.Flags == D3D12_RESOURCE_FLAG_NONE {
-            desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-        }
-        if storage && desc.Flags == D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET {
-            desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        }
+        let desc = Self::resource_desc(desc, graph);
         let mut raw = None;
         // SAFETY: The managed creation boundary establishes this sampled single
         // mip/layer/sample description and format support. COMMON has no valid

@@ -1514,7 +1514,7 @@ runtimeを終了しても、別runtimeや未完了処理がnative所有者を保
 `D3D12Runtime::prepare`は共通の不変`CompiledGraph`から、liveなbuffer upload・copy・readbackと画像upload/copy/readback・Raster・Compute dispatchを
 準備済みnative資源への命令へ具体化する。Graphのproducer・範囲・culling解析を複製しない。
 Graph構築で保証した内容を再走査せず、未対応操作、D3D12固有の上限と資源作成条件を準備境界で扱う。
-transient資源だけを受け入れ、exportとliveなimport等は明示エラーとする。
+transientと登録済みbuffer／画像のimport/exportを受け入れ、内容revisionを投入境界で照合する。
 不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
 bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
 
@@ -1535,13 +1535,18 @@ DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit pro
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
 Enhanced Barriers、外部suballocatorは未対応である。import／exportは後述の共有registryを使う。
 
-`prepare_graph_working_set(&[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result tokenが返った
+`prepare_graph_working_set(&[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result、
+export付きsubmission、export／refreshした`ImportBuffer`とそのcloneが返った
 明示準備境界で画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
-各execution leaseが物理画像/View、RTV/DSVとdraw別SRVの枠、および一個の不変nearest/clamp sampler descriptorを所有する。
+登録資源のdeleteは要求しない。key・内容revision・初期化範囲・provenanceとnative資源を保持し、
+再準備後は保持したkeyからbuffer snapshotをrefreshする。scalarな`ImportImage`はそのまま保持できる。
+各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠、
+および一個の不変nearest/clamp sampler descriptorを所有する。新classにない登録画像のdescriptor枠も補う。
 RGBA8/RGBA16Fのcolor targetとoptional D32、またはdepth-onlyを扱い、MRTと複数mip/layerは拒否する。
 実formatのrender target/depth/sample能力、SM6.0、root signature、native作成失敗はこの境界で扱う。
-Computeのstorage画像はRGBA8/RGBA16Fのtyped UAV load/store能力を用途に応じて確認し、
-書込を許す資源とUAV descriptorを準備する。固定effect名の分岐ではなく、Programの不変binding ABIから
+Graphのcolor画像は初回からRT／UAVの固定用途で作成し、後から追加したProgramも同じ登録画像を使える。
+typed UAV view能力を画像準備で、load/store能力をProgramの用途に応じて確認する。
+depth画像へUAVを付けない。固定effect名の分岐ではなく、Programの不変binding ABIから
 root CBV/SRV/UAVとdescriptor tableを導く。依存dispatchは別passとし、同じUAV状態のままでも
 必要なread/write依存へUAV barrierを置く。descriptorはslotの命令記録・実GPU完了まで排他で保持する。
 画像copyは同extent/formatのRGBA8/RGBA16Fを全subresourceで転送し、COPY_SOURCE/DEST状態へ遷移する。
@@ -1558,15 +1563,17 @@ depth-only PSOはpixel shaderとRTVを持たず、color-only PSOは深度test/wr
 画像upload/readbackは`GetCopyableFootprints`のoffset512-byte・row pitch256-byte条件を扱い、
 packedな利用側byte列とnativeのpadded rowを行ごとに写す。最後の行のpaddingまで利用可能とは仮定しない。
 D32 copyは全subresource、source boxなし、destination XYZ0とし、RGBA16Fは4成分binary16の格納を保つ。
-全資源のlegacy state遷移と必要な依存はshippingにも残す。共有provenanceはindexとそのcopy元だけを追跡し、
+全資源のlegacy state遷移と必要な依存はshippingにも残す。共有provenanceはindex、そのcopy元と
+将来indexとして使えるimport/export bufferを追跡し、
 未知内容・頂点範囲外を記録前に拒否する。index本文のprefix要約は内容の更新で失効する。
 
-`D3D12FrameCapacity::provenance_segments_per_resource`は各物理bufferとcopy scratchの既知slice数を
+`D3D12FrameCapacity::provenance_segments_per_resource`はexecution側buffer、copy scratchと
+canonical registry entryの既知slice数を
 操作数・draw数から独立して予約する。既定は64で、操作数を増やしてもこの予約量は増えない。
-buffer-only、または完全な不変meshのindex要約だけを使う場合は0を指定できる。
+内容provenanceを保持しないtransient buffer-only、または完全な不変meshのindex要約だけを使う場合は0を指定できる。
 一般upload/copyの内容追跡に足りない場合は`CapacityExhausted`を返し、暗黙の拡張・待機はしない。
-必要な上限は明示した準備・変更境界で選ぶ。既定のsegment枠は3 execution×17 buffer/scratch×64であり、
-以前の操作数4096との結合に比べ64分の1になる。これは予約枠数の比較であり常駐byteや実行時間の測定ではない。
+必要な上限は明示した準備・変更境界で選ぶ。registry側の保持分も容量へ含め、
+旧slot内資源だけの予約枠数や比率を現在の常駐量・時間性能へ読み替えない。
 
 各Rasterのbuffer用途は、そのpassの不変access列だけを二回列挙して合成・適用する。
 同じbufferのVertex/Index/Uniformのstateを合わせ、最初の適用でscratchをCOMMONへ戻すため、
