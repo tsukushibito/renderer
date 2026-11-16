@@ -9,6 +9,9 @@
 pub enum ImageFormat {
     /// Four unsigned normalized eight-bit components in RGBA order.
     Rgba8Unorm,
+    /// Eight-bit RGBA with sRGB RGB components and linear alpha. Sampling
+    /// decodes RGB before filtering; storage-image use is unsupported.
+    Rgba8Srgb,
     /// Four IEEE 754 binary16 components in RGBA order.
     Rgba16Float,
     /// One IEEE 754 binary32 depth component.
@@ -18,7 +21,7 @@ pub enum ImageFormat {
 impl ImageFormat {
     pub(crate) const fn texel_bytes(self) -> u64 {
         match self {
-            Self::Rgba8Unorm | Self::Depth32Float => 4,
+            Self::Rgba8Unorm | Self::Rgba8Srgb | Self::Depth32Float => 4,
             Self::Rgba16Float => 8,
         }
     }

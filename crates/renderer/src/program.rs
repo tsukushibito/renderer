@@ -21,6 +21,7 @@
 //! {
 //!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
 //!     let image = runtime.create_managed_image(ImageDescriptor {
+//!         mip_levels: 1,
 //!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
 //!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
 //!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
@@ -39,6 +40,7 @@
 //! {
 //!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
 //!     let image = runtime.create_managed_image(ImageDescriptor {
+//!         mip_levels: 1,
 //!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
 //!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
 //!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
@@ -199,7 +201,7 @@ pub enum BindingResource<'a, B, V, S> {
     Sampler(&'a S),
 }
 
-/// An uninitialized sampled 2D image. Mip, layer and sample counts are one.
+/// An uninitialized sampled 2D image. Layer and sample counts are one.
 /// Color images support sampling and transfer destination use; D32 images
 /// support sampling and depth attachment use.
 /// Creation does not upload pixels or submit GPU work.
@@ -207,6 +209,10 @@ pub enum BindingResource<'a, B, V, S> {
 pub struct ImageDescriptor {
     pub width: u32,
     pub height: u32,
+    /// Number of mip levels, including the base level. Must be nonzero and
+    /// fit the complete chain of the specified extent. Every sampled level
+    /// must be initialized before use.
+    pub mip_levels: u32,
     pub format: ImageFormat,
     /// Preferred value for later depth attachment clears. D32 permits `None`
     /// or a finite, non-subnormal value in `[0, 1]`; color images require `None`.
@@ -222,8 +228,8 @@ pub enum ImageViewUsage {
     DepthAttachment,
 }
 
-/// The usage and subresources interpreted by a 2D View. Only the complete
-/// single mip/layer is supported; unsupported ranges fail at View creation.
+/// The usage and subresources interpreted by a 2D View. Sampled Views may
+/// select a contiguous mip range. Attachment Views select one mip.
 /// The color or depth aspect is determined by the image format.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageViewDescriptor {
@@ -246,11 +252,14 @@ impl Default for ImageViewDescriptor {
     }
 }
 
-/// Normalized coordinates, nearest min/mag/mip filtering, clamp-to-edge on all
-/// axes, LOD zero, no comparison or anisotropy.
+/// Reviewed normalized-coordinate sampler configurations, without comparison
+/// or anisotropy. Native image/format capabilities are checked before use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SamplerDescriptor {
     NearestClamp,
+    /// Linear minification/magnification and mip interpolation, repeat on all
+    /// axes, and the complete selected View's LOD range.
+    LinearRepeat,
 }
 
 /// A reviewed shader asset. Ordinary builds use checked-in artifacts and need
@@ -649,6 +658,8 @@ pub(crate) fn validate_image_descriptor(
         || desc.height == 0
         || desc.width > max_dimension
         || desc.height > max_dimension
+        || desc.mip_levels == 0
+        || desc.mip_levels > u32::BITS - desc.width.max(desc.height).leading_zeros()
     {
         return Err(ProgramError::InvalidExtent);
     }
@@ -666,10 +677,14 @@ pub(crate) fn validate_image_descriptor(
 #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
 pub(crate) fn validate_image_view_descriptor(
     format: ImageFormat,
+    image_mip_levels: u32,
     desc: ImageViewDescriptor,
 ) -> Result<(), ProgramError> {
-    if desc.base_mip_level != 0
-        || desc.mip_level_count != 1
+    if desc.mip_level_count == 0
+        || desc
+            .base_mip_level
+            .checked_add(desc.mip_level_count)
+            .is_none_or(|end| end > image_mip_levels)
         || desc.base_array_layer != 0
         || desc.array_layer_count != 1
     {
@@ -677,6 +692,9 @@ pub(crate) fn validate_image_view_descriptor(
     }
     if desc.usage == ImageViewUsage::DepthAttachment && format != ImageFormat::Depth32Float {
         return Err(ProgramError::UsageMismatch);
+    }
+    if desc.usage == ImageViewUsage::DepthAttachment && desc.mip_level_count != 1 {
+        return Err(ProgramError::InvalidViewRange);
     }
     Ok(())
 }
@@ -993,6 +1011,7 @@ mod tests {
     #[test]
     fn image_and_view_creation_enforce_the_supported_extent_and_subresources() {
         let desc = ImageDescriptor {
+            mip_levels: 1,
             width: 2,
             height: 2,
             format: ImageFormat::Rgba8Unorm,
@@ -1041,9 +1060,12 @@ mod tests {
                     Err(ProgramError::UsageMismatch)
                 }
             );
-            assert_eq!(validate_image_view_descriptor(format, sampled), Ok(()));
             assert_eq!(
-                validate_image_view_descriptor(format, depth),
+                validate_image_view_descriptor(format, desc.mip_levels, sampled),
+                Ok(())
+            );
+            assert_eq!(
+                validate_image_view_descriptor(format, desc.mip_levels, depth),
                 if format == ImageFormat::Depth32Float {
                     Ok(())
                 } else {
@@ -1105,7 +1127,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                validate_image_view_descriptor(ImageFormat::Depth32Float, invalid),
+                validate_image_view_descriptor(ImageFormat::Depth32Float, 1, invalid),
                 Err(ProgramError::InvalidViewRange)
             );
         }
