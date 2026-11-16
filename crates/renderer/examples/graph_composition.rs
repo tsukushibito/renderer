@@ -41,7 +41,7 @@ fn sampled_pass(
     graph.raster(
         name,
         &ManagedRasterProgram::textured_mesh(),
-        &[RasterDraw {
+        [RasterDraw {
             bindings: &bindings,
             ..draw
         }],

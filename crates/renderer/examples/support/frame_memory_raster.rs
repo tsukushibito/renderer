@@ -207,9 +207,9 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         ]
     });
     let draws: [RasterDraw<'_>; 3] = std::array::from_fn(|draw| {
-        let mut parameters = RasterParameters::default();
-        parameters.transform[3][2] = 0.75 - draw as f32 * 0.25;
-        parameters.tint = if textured {
+        let mut transform = *RasterParameters::default().transform();
+        transform[3][2] = 0.75 - draw as f32 * 0.25;
+        let tint = if textured {
             [
                 if !float_color || (frame / 6).is_multiple_of(2) {
                     1.0
@@ -228,7 +228,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             indices: index_buffer,
             index_count: 3,
             bindings: if textured { &bindings[draw] } else { &[] },
-            parameters,
+            parameters: RasterParameters::new(transform, tint).unwrap(),
         }
     });
     let program = if depth_only {
@@ -277,10 +277,13 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         } else if textured {
             texture_colors[(draw_count - 1 + frame / 12) % 2]
         } else {
-            draws[draw_count - 1].parameters.tint
+            *draws[draw_count - 1].parameters.tint()
         };
         if draw_count != 0 && textured {
-            for (component, tint) in value.iter_mut().zip(draws[draw_count - 1].parameters.tint) {
+            for (component, tint) in value
+                .iter_mut()
+                .zip(*draws[draw_count - 1].parameters.tint())
+            {
                 *component *= tint;
             }
         }
@@ -302,7 +305,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             &if draw_count == 0 {
                 clear_depth
             } else {
-                draws[draw_count - 1].parameters.transform[3][2]
+                draws[draw_count - 1].parameters.transform()[3][2]
             }
             .to_le_bytes(),
         );

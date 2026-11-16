@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     graph.raster(
         "indexed mesh and depth",
         &renderer::program::ManagedRasterProgram::mesh(),
-        &[RasterDraw {
+        [RasterDraw {
             bindings: &[],
             vertices: vertex_buffer,
             indices: index_buffer,

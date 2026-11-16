@@ -106,10 +106,10 @@ impl ShaderPrograms {
             for (vertices, indices, index_count, parameters, sets) in draws {
                 let mut bytes = [0_u8; 80];
                 for (value, output) in parameters
-                    .transform
+                    .transform()
                     .iter()
                     .flatten()
-                    .chain(&parameters.tint)
+                    .chain(parameters.tint())
                     .zip(bytes.as_chunks_mut::<4>().0)
                 {
                     output.copy_from_slice(&value.to_ne_bytes());

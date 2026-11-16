@@ -72,7 +72,7 @@ fn hdr_output_format_is_checked_without_consuming_draw_or_attachment_capacity() 
             .raster(
                 "mismatched color",
                 &program,
-                &[draw],
+                [draw],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,
@@ -86,7 +86,7 @@ fn hdr_output_format_is_checked_without_consuming_draw_or_attachment_capacity() 
         .raster(
             "hdr draw",
             &ManagedRasterProgram::mesh_hdr(),
-            &[draw],
+            [draw],
             RasterAttachments {
                 colors: &[hdr],
                 depth: None,
@@ -170,7 +170,7 @@ fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
                 .raster(
                     "missing depth",
                     &ManagedRasterProgram::depth_only(),
-                    &[draw],
+                    [draw],
                     RasterAttachments {
                         colors: &[],
                         depth: None
@@ -184,7 +184,7 @@ fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
             .raster(
                 "depth draw",
                 &ManagedRasterProgram::depth_only(),
-                &[draw],
+                [draw],
                 RasterAttachments {
                     colors: &[],
                     depth: Some(Attachment {
@@ -240,7 +240,7 @@ fn short_lived_draws_keep_both_meshes_alive_and_pin_the_completed_plan() {
             .raster(
                 "draws",
                 &ManagedRasterProgram::mesh(),
-                &draws,
+                draws,
                 RasterAttachments {
                     colors: &targets,
                     depth: None,
@@ -291,7 +291,7 @@ fn a_later_draw_cannot_hide_an_uninitialized_vertex_or_index_input() {
             .raster(
                 "draw sequence",
                 &ManagedRasterProgram::mesh(),
-                &[first, later],
+                [first, later],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,
@@ -339,7 +339,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
         .raster(
             "shared draws",
             &ManagedRasterProgram::mesh(),
-            &[
+            [
                 draw,
                 RasterDraw {
                     bindings: &[],
@@ -395,28 +395,11 @@ fn late_draw_and_attachment_capacity_failures_leave_room_for_a_valid_sequence() 
             load: LoadOp::Clear(1.0),
             store: StoreOp::Store,
         };
-        let mut invalid = b;
-        invalid.parameters.tint[2] = f32::NAN;
-        assert_eq!(
-            graph
-                .raster(
-                    "bad second draw",
-                    &ManagedRasterProgram::mesh(),
-                    &[a, invalid],
-                    RasterAttachments {
-                        colors: &[target],
-                        depth: None
-                    }
-                )
-                .unwrap_err()
-                .kind(),
-            GraphErrorKind::InvalidInput
-        );
         let error = graph
             .raster(
                 "too many operands",
                 &ManagedRasterProgram::mesh(),
-                &[a, b],
+                [a, b],
                 RasterAttachments {
                     colors: &[target],
                     depth: Some(depth),
@@ -429,7 +412,7 @@ fn late_draw_and_attachment_capacity_failures_leave_room_for_a_valid_sequence() 
             .raster(
                 "valid",
                 &ManagedRasterProgram::mesh(),
-                &[b],
+                [b],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,
@@ -465,7 +448,7 @@ fn later_raster_passes_and_recycled_slots_do_not_keep_previous_draw_inputs() {
                 .raster(
                     name,
                     &ManagedRasterProgram::mesh(),
-                    &[draw],
+                    [draw],
                     RasterAttachments {
                         colors: &[target],
                         depth: None,
@@ -512,7 +495,7 @@ fn unsupported_draw_outputs_can_still_be_used_by_an_empty_attachment_pass() {
                 .raster(
                     "unsupported draw outputs",
                     &ManagedRasterProgram::mesh(),
-                    &[draw],
+                    [draw],
                     targets
                 )
                 .unwrap_err()
@@ -523,7 +506,7 @@ fn unsupported_draw_outputs_can_still_be_used_by_an_empty_attachment_pass() {
             .raster(
                 "empty draw list",
                 &ManagedRasterProgram::mesh(),
-                &[],
+                std::iter::empty::<RasterDraw<'_>>(),
                 targets,
             )
             .unwrap();
@@ -568,7 +551,7 @@ fn color_only_drawing_initializes_only_its_selected_mip_and_layer() {
             .raster(
                 "selected target",
                 &ManagedRasterProgram::mesh(),
-                &[draw],
+                [draw],
                 RasterAttachments {
                     colors: &[Attachment {
                         view,
@@ -636,7 +619,7 @@ fn drawing_does_not_turn_discarded_or_missing_attachment_contents_into_full_init
             .raster(
                 "draw",
                 &ManagedRasterProgram::mesh(),
-                &[draw],
+                [draw],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,
@@ -655,7 +638,7 @@ fn drawing_does_not_turn_discarded_or_missing_attachment_contents_into_full_init
 }
 
 #[test]
-fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges() {
+fn public_draw_validation_rejects_invalid_buffer_ranges() {
     let mut pool = GraphPool::new(
         GraphCapacity {
             draws: 1,
@@ -668,11 +651,8 @@ fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges
     let mut graph = pool.begin().unwrap();
     let valid = mesh(&mut graph, "mesh", true, true);
     let target = color(&mut graph, "color");
-    let mut nan = valid;
-    nan.parameters.transform[1][2] = f32::INFINITY;
     let bad_stride = graph.buffer("bad stride", BufferDesc { size: 85 }).unwrap();
     for invalid in [
-        nan,
         RasterDraw {
             bindings: &[],
             index_count: 0,
@@ -693,7 +673,7 @@ fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges
             .raster(
                 "invalid draw",
                 &ManagedRasterProgram::mesh(),
-                &[invalid],
+                [invalid],
                 RasterAttachments {
                     colors: &[target],
                     depth: None,
@@ -711,7 +691,7 @@ fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges
             .raster(
                 "foreign draw",
                 &ManagedRasterProgram::mesh(),
-                &[foreign],
+                [foreign],
                 RasterAttachments {
                     colors: &[target],
                     depth: None
@@ -725,7 +705,7 @@ fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges
         .raster(
             "valid draw",
             &ManagedRasterProgram::mesh(),
-            &[valid],
+            [valid],
             RasterAttachments {
                 colors: &[target],
                 depth: None,
@@ -734,4 +714,110 @@ fn public_draw_validation_rejects_nonfinite_parameters_and_invalid_buffer_ranges
         .unwrap();
     observe(&mut graph, "pixels", target.view);
     assert_eq!(graph.compile().unwrap().pass_count(), 4);
+}
+
+#[test]
+fn raster_parameter_creation_rejects_nonfinite_values_and_owns_constants() {
+    let defaults = RasterParameters::default();
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut transform = *defaults.transform();
+        transform[1][2] = value;
+        assert_eq!(
+            RasterParameters::new(transform, *defaults.tint())
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput,
+        );
+        let mut tint = *defaults.tint();
+        tint[3] = value;
+        assert_eq!(
+            RasterParameters::new(*defaults.transform(), tint)
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput,
+        );
+    }
+    let mut transform = *defaults.transform();
+    transform[3][0] = 0.75;
+    let mut tint = [0.25, 0.5, 0.75, 1.0];
+    let parameters = RasterParameters::new(transform, tint).unwrap();
+    transform[3][0] = f32::NAN;
+    tint[3] = f32::INFINITY;
+    std::hint::black_box((transform, tint));
+    assert_eq!(parameters.transform()[3][0], 0.75);
+    assert_eq!(parameters.tint(), &[0.25, 0.5, 0.75, 1.0]);
+}
+
+struct MisreportedDraws<I> {
+    inner: I,
+    reported: usize,
+}
+
+impl<I: Iterator> Iterator for MisreportedDraws<I> {
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.reported, Some(self.reported))
+    }
+}
+
+impl<I: Iterator> ExactSizeIterator for MisreportedDraws<I> {
+    fn len(&self) -> usize {
+        self.reported
+    }
+}
+
+#[test]
+fn raster_uses_actual_iterator_items_for_empty_paths_and_capacity() {
+    for (count, reported) in [(0, usize::MAX), (1, 0), (1, usize::MAX), (2, 0)] {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                draws: 1,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let draw = mesh(&mut graph, "mesh", true, true);
+        let target = color(&mut graph, "color");
+        let attachments = RasterAttachments {
+            colors: &[target],
+            depth: None,
+        };
+        let result = graph.raster(
+            "iterator",
+            &ManagedRasterProgram::mesh(),
+            MisreportedDraws {
+                inner: std::iter::repeat_n(draw, count),
+                reported,
+            },
+            attachments,
+        );
+        if count > 1 {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
+            assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::Draws);
+            // A failed iterator capture returns its draw and attachment capacity.
+            graph
+                .raster(
+                    "retry",
+                    &ManagedRasterProgram::mesh(),
+                    std::iter::once(draw),
+                    attachments,
+                )
+                .unwrap();
+        } else {
+            result.unwrap();
+        }
+        observe(&mut graph, "pixels", target.view);
+        assert_eq!(
+            graph.compile().unwrap().pass_count(),
+            if count == 0 { 2 } else { 4 }
+        );
+    }
 }

@@ -148,7 +148,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
             .raster(
                 "CPU color-only plan",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &[RasterDraw {
+                [RasterDraw {
                     bindings: &[],
                     vertices,
                     indices,
@@ -202,7 +202,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
             .raster(
                 "loaded draw list",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &[
+                [
                     RasterDraw {
                         bindings: &[],
                         vertices,
@@ -564,12 +564,12 @@ fn opaque_batch_comparison(
     let far = upload_mesh("far", 0.75, invalid_last_indices);
     let color = graph.image("color", ImageDesc::rgba8(64, 64)).unwrap();
     let depth = graph.image("depth", ImageDesc::depth32(64, 64)).unwrap();
-    let parameters = |tint| RasterParameters {
-        tint,
-        ..RasterParameters::default()
-    };
+    let parameters =
+        |tint| RasterParameters::new(*RasterParameters::default().transform(), tint).unwrap();
     let mut shifted = parameters([1.0, 1.0, 0.0, 1.0]);
-    shifted.transform[3][0] = 0.75;
+    let mut transform = *shifted.transform();
+    transform[3][0] = 0.75;
+    shifted = RasterParameters::new(transform, *shifted.tint()).unwrap();
     let mut draws = vec![
         (near.0, near.1, 3, parameters([1.0, 0.0, 0.0, 1.0])),
         (far.0, far.1, 3, parameters([0.0, 1.0, 0.0, 1.0])),
@@ -587,7 +587,7 @@ fn opaque_batch_comparison(
             .raster(
                 "opaque batch",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &batch_draws(draws),
+                batch_draws(draws),
                 RasterAttachments {
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
@@ -625,7 +625,7 @@ fn opaque_batch_comparison(
                 .raster(
                     "scalar draw",
                     &crate::program::ManagedRasterProgram::mesh(),
-                    &[RasterDraw {
+                    [RasterDraw {
                         bindings: &[],
                         vertices,
                         indices,
@@ -785,7 +785,7 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
             .raster(
                 "bounds batch",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &batch_draws(vec![
+                batch_draws(vec![
                     (full, indices, 3, RasterParameters::default()),
                     (short, indices, 3, RasterParameters::default()),
                 ]),
@@ -856,7 +856,7 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
             .raster(
                 "shared input batch",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
+                batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
                 RasterAttachments {
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
@@ -1021,7 +1021,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 .raster(
                     "reject-invalid-index",
                     &crate::program::ManagedRasterProgram::mesh(),
-                    &[RasterDraw {
+                    [RasterDraw {
                         bindings: &[],
                         vertices,
                         indices,
@@ -1233,7 +1233,7 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
         mesh.raster(
             "lazy-mesh",
             &crate::program::ManagedRasterProgram::mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &[],
                 vertices,
                 indices,
@@ -1412,7 +1412,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                 .raster(
                     "mesh-clear",
                     &crate::program::ManagedRasterProgram::mesh(),
-                    &[RasterDraw {
+                    [RasterDraw {
                         bindings: &[],
                         vertices,
                         indices,
@@ -1466,7 +1466,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                 .raster(
                     "mesh-load",
                     &crate::program::ManagedRasterProgram::mesh(),
-                    &[RasterDraw {
+                    [RasterDraw {
                         bindings: &[],
                         vertices: blue_vertices,
                         indices: blue_indices,
@@ -1569,7 +1569,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                 .raster(
                     "scene-mesh-depth",
                     &crate::program::ManagedRasterProgram::mesh(),
-                    &[RasterDraw {
+                    [RasterDraw {
                         bindings: &[],
                         vertices,
                         indices,

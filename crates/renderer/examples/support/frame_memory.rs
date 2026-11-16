@@ -414,10 +414,11 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         vertices: vertices[draw % 2],
         indices: indices[draw % 2],
         index_count: 3,
-        parameters: RasterParameters {
-            tint: [frame as f32, draw as f32, 0.25, 1.0],
-            ..RasterParameters::default()
-        },
+        parameters: RasterParameters::new(
+            *RasterParameters::default().transform(),
+            [frame as f32, draw as f32, 0.25, 1.0],
+        )
+        .unwrap(),
     });
     graph
         .raster(
@@ -440,7 +441,7 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .unwrap();
     // The caller may reuse or discard this input immediately after construction.
     for draw in &mut draws {
-        draw.parameters.tint = [0.0; 4];
+        draw.parameters = RasterParameters::new(*draw.parameters.transform(), [0.0; 4]).unwrap();
     }
     graph.readback_image("raster output", color).unwrap();
     graph
@@ -571,17 +572,18 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
             vertices,
             indices,
             index_count: 3,
-            parameters: RasterParameters {
-                tint: [frame as f32, hop as f32, draw as f32, 1.0],
-                ..RasterParameters::default()
-            },
+            parameters: RasterParameters::new(
+                *RasterParameters::default().transform(),
+                [frame as f32, hop as f32, draw as f32, 1.0],
+            )
+            .unwrap(),
             bindings: &bindings[draw],
         });
         graph
             .raster(
                 "sampled hop",
                 &ManagedRasterProgram::textured_mesh(),
-                &draws,
+                draws,
                 RasterAttachments {
                     colors: &[target(views[1 - current])],
                     depth: None,

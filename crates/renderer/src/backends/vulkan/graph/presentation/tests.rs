@@ -199,19 +199,21 @@ fn image_frame(
     let depth = graph
         .image("wsi.mesh.depth", ImageDesc::depth32(width, height))
         .unwrap();
-    let mut parameters = RasterParameters::default();
-    parameters.transform[3][0] = if sequence.is_multiple_of(2) {
+    let mut transform = *RasterParameters::default().transform();
+    transform[3][0] = if sequence.is_multiple_of(2) {
         -0.125
     } else {
         0.125
     };
-    parameters.tint[0] = if sequence.is_multiple_of(2) { 1.0 } else { 0.0 };
+    let mut tint = [1.0; 4];
+    tint[0] = if sequence.is_multiple_of(2) { 1.0 } else { 0.0 };
+    let parameters = RasterParameters::new(transform, tint).unwrap();
     let blue = !sequence.is_multiple_of(2);
     graph
         .raster(
             "wsi.standard.mesh",
             &crate::program::ManagedRasterProgram::mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &[],
                 vertices,
                 indices,

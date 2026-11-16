@@ -220,7 +220,7 @@ fn append_owned_textured_raster(graph: &mut Graph) -> renderer::graph::ImageHand
         .raster(
             "textured Raster",
             &ManagedRasterProgram::textured_mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 vertices,
                 indices,
                 index_count: 3,

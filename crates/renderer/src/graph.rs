@@ -32,7 +32,7 @@ pub use pass::{
 };
 pub(crate) use pass::{
     AttachmentOperand, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,
-    RasterDrawOperands, ResourceAccess, UploadSource, ValidatedRasterParameters,
+    RasterDrawOperands, ResourceAccess, UploadSource,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};
 pub use resource::{

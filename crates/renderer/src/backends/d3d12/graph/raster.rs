@@ -442,10 +442,10 @@ pub(super) fn record(
         let mut parameters = [0u32; 20];
         for (word, value) in parameters.iter_mut().zip(
             draw.parameters
-                .transform
+                .transform()
                 .iter()
                 .flatten()
-                .chain(&draw.parameters.tint),
+                .chain(draw.parameters.tint()),
         ) {
             *word = value.to_bits();
         }
@@ -605,7 +605,7 @@ mod tests {
                     .raster(
                         "shared buffer scopes",
                         &ManagedRasterProgram::textured_mesh(),
-                        &[RasterDraw {
+                        [RasterDraw {
                             bindings: &bindings,
                             vertices,
                             indices: shared,

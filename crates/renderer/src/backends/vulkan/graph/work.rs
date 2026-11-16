@@ -955,7 +955,7 @@ mod tests {
             .raster(
                 "mesh",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &[RasterDraw {
+                [RasterDraw {
                     bindings: &[],
                     vertices,
                     indices,
@@ -1620,7 +1620,7 @@ mod tests {
             draw.raster(
                 "degenerate-mesh",
                 &crate::program::ManagedRasterProgram::mesh(),
-                &[RasterDraw {
+                [RasterDraw {
                     bindings: &[],
                     vertices,
                     indices,

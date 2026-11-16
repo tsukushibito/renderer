@@ -90,7 +90,7 @@ fn draw(
     graph.raster(
         name,
         &ManagedRasterProgram::textured_mesh(),
-        &[RasterDraw {
+        [RasterDraw {
             bindings,
             ..geometry
         }],
@@ -277,7 +277,7 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
         .raster(
             "bad later draw",
             &ManagedRasterProgram::textured_mesh(),
-            &[
+            [
                 RasterDraw {
                     bindings: &good,
                     ..mesh
@@ -298,7 +298,7 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
         .raster(
             "two valid draws",
             &ManagedRasterProgram::textured_mesh(),
-            &[
+            [
                 RasterDraw {
                     bindings: &good,
                     ..mesh
@@ -402,7 +402,7 @@ fn slot_kind_owner_and_late_binding_capacity_failures_allow_retry() {
         .raster(
             "too many",
             &ManagedRasterProgram::textured_mesh(),
-            &[
+            [
                 RasterDraw {
                     bindings: &valid,
                     ..mesh
@@ -451,7 +451,7 @@ fn distinct_materials_in_one_pass_keep_both_texture_producers() {
             .raster(
                 "different materials",
                 &ManagedRasterProgram::textured_mesh(),
-                &[
+                [
                     RasterDraw {
                         bindings: &a_bindings,
                         ..mesh

@@ -2,14 +2,14 @@
 //!
 //! Each builder validates raw inputs and appends only after all operands succeed.
 
-use std::{ops::Range, sync::Arc};
+use std::{borrow::Borrow, ops::Range, sync::Arc};
 
 use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
     GraphError, GraphErrorKind, ImageDesc, ImageFormat, ImageHandle, MeshUpload, Operation,
-    PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess,
-    ResourceDesc, ResourceHandle, UploadSource, ValidatedRasterParameters, overlaps,
+    PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, RasterParameters,
+    ResourceAccess, ResourceDesc, ResourceHandle, UploadSource, overlaps,
 };
 
 impl Graph {
@@ -265,45 +265,49 @@ impl Graph {
     }
     /// Own a draw sequence using an explicit reviewed Raster Program. Current
     /// mesh inputs are u32 triangles and tightly packed xyz/rgba vertices.
-    /// Constants and draws are copied into prepared storage in caller order.
-    pub fn raster(
+    /// Accepts borrowed slices or iterators of owned or borrowed draws. Constants
+    /// and draws are captured into prepared storage in caller order. Iterator
+    /// size hints are not trusted for capacity or empty-pass decisions.
+    pub fn raster<'a, I, D>(
         &mut self,
         name: &str,
         program: &crate::program::ManagedRasterProgram,
-        draws: &[RasterDraw<'_>],
+        draws: I,
         attachments: RasterAttachments<'_>,
-    ) -> Result<PassHandle, GraphError> {
+    ) -> Result<PassHandle, GraphError>
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<RasterDraw<'a>>,
+    {
         self.raster_validated(
             name,
             program,
-            draws.iter().map(|draw| {
-                ValidatedRasterParameters::new(draw.parameters).map(|parameters| {
-                    (
-                        draw.vertices,
-                        draw.indices,
-                        draw.index_count,
-                        parameters,
-                        draw.bindings,
-                    )
-                })
+            draws.into_iter().map(|draw| {
+                let draw = draw.borrow();
+                Ok((
+                    draw.vertices,
+                    draw.indices,
+                    draw.index_count,
+                    draw.parameters,
+                    draw.bindings,
+                ))
             }),
             attachments,
         )
     }
 
-    /// The Engine already guarantees finite immutable parameters at snapshot
-    /// creation. This adapter consumes that proof without scanning values again.
+    /// Capture immutable creation-validated parameters without rescanning them.
     pub(crate) fn raster_validated<'a>(
         &mut self,
         name: &str,
         program: &crate::program::ManagedRasterProgram,
-        draws: impl ExactSizeIterator<
+        draws: impl Iterator<
             Item = Result<
                 (
                     BufferHandle,
                     BufferHandle,
                     u32,
-                    ValidatedRasterParameters,
+                    RasterParameters,
                     &'a [super::Binding],
                 ),
                 GraphError,
@@ -311,7 +315,8 @@ impl Graph {
         >,
         attachments: RasterAttachments<'_>,
     ) -> Result<PassHandle, GraphError> {
-        if draws.len() == 0 {
+        let mut draws = draws.peekable();
+        if draws.peek().is_none() {
             return self.attachment_pass(name, attachments);
         }
         self.build_pass(name, |graph| {
@@ -343,17 +348,17 @@ impl Graph {
                 }
             }
             let first_draw = graph.draws.len();
-            if draws.len() > graph.capacity.draws.saturating_sub(first_draw) {
-                return Err(super::storage::capacity_error(
-                    super::GraphCapacityKind::Draws,
-                    graph.capacity.draws,
-                    first_draw.checked_add(draws.len()),
-                ));
-            }
             let first_access = graph.accesses.len();
             graph.data_mut().clear_raster_ranges();
             for draw in draws {
                 let (vertices, indices, index_count, parameters, bindings) = draw?;
+                if graph.draws.len() == graph.capacity.draws {
+                    return Err(super::storage::capacity_error(
+                        super::GraphCapacityKind::Draws,
+                        graph.capacity.draws,
+                        graph.draws.len().checked_add(1),
+                    ));
+                }
                 let bindings =
                     graph.append_bindings(program.bindings(), program.binding_bytes(), bindings)?;
                 let (vertices, indices) = graph.raster_buffers(
@@ -379,7 +384,7 @@ impl Graph {
                     vertices,
                     indices,
                     index_count,
-                    parameters: parameters.get(),
+                    parameters,
                 });
             }
             // Preserve resource-order accesses without scanning unused resources.
@@ -684,9 +689,12 @@ mod tests {
         let mut graph = pool.begin().unwrap();
         let mut first = uploaded_draw(&mut graph, "first");
         first.indices = first.vertices;
-        first.parameters.tint = [0.25, 0.5, 0.75, 1.0];
+        first.parameters =
+            RasterParameters::new(*first.parameters.transform(), [0.25, 0.5, 0.75, 1.0]).unwrap();
         let mut second = uploaded_draw(&mut graph, "second");
-        second.parameters.transform[3][0] = 0.5;
+        let mut transform = *second.parameters.transform();
+        transform[3][0] = 0.5;
+        second.parameters = RasterParameters::new(transform, *second.parameters.tint()).unwrap();
         let image = graph
             .image(
                 "array color",
@@ -711,7 +719,7 @@ mod tests {
                 .raster(
                     "owned",
                     &ManagedRasterProgram::mesh(),
-                    &draws,
+                    draws,
                     RasterAttachments {
                         colors: &colors,
                         depth: Some(Attachment {
@@ -723,7 +731,8 @@ mod tests {
                 )
                 .unwrap();
             draws.swap(0, 1);
-            draws[0].parameters.tint = [0.0; 4];
+            draws[0].parameters =
+                RasterParameters::new(*draws[0].parameters.transform(), [0.0; 4]).unwrap();
             colors[0].load = LoadOp::Discard;
             std::hint::black_box((draws, colors));
             pass
@@ -808,7 +817,7 @@ mod tests {
             load: LoadOp::Clear([0.0; 4]),
             store: StoreOp::Store,
         };
-        let validated = ValidatedRasterParameters::new(draw.parameters).unwrap();
+        let validated = draw.parameters;
         let tuple = (
             draw.vertices,
             draw.indices,
@@ -902,7 +911,7 @@ mod tests {
                 .raster(
                     "materials",
                     &ManagedRasterProgram::textured_mesh(),
-                    &draws,
+                    draws,
                     RasterAttachments {
                         colors: &[Attachment {
                             view: output_view,

@@ -83,28 +83,20 @@ pub enum ComputeTransform {
 /// Immutable per-draw values for the built-in mesh pipeline. Matrices are
 /// column-major and multiply a column vector: `clip = transform * position`.
 /// This parameter block is independent of asset handles and frame ownership.
+/// Construction establishes finite components; accessors cannot invalidate them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterParameters {
-    pub transform: [[f32; 4]; 4],
-    pub tint: [f32; 4],
+    transform: [[f32; 4]; 4],
+    tint: [f32; 4],
 }
 
-/// Finite, immutable per-draw values. The private field carries the creation
-/// guarantee from a captured engine frame into the internal batch builder.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct ValidatedRasterParameters(RasterParameters);
-
-impl ValidatedRasterParameters {
-    pub(crate) fn get(self) -> RasterParameters {
-        self.0
-    }
-
-    pub(crate) fn new(parameters: RasterParameters) -> Result<Self, GraphError> {
-        if parameters
-            .transform
+impl RasterParameters {
+    /// Establish finite, immutable draw constants once, before Graph capture.
+    pub fn new(transform: [[f32; 4]; 4], tint: [f32; 4]) -> Result<Self, GraphError> {
+        if transform
             .iter()
             .flatten()
-            .chain(&parameters.tint)
+            .chain(&tint)
             .any(|value| !value.is_finite())
         {
             return Err(GraphError::new(
@@ -112,7 +104,15 @@ impl ValidatedRasterParameters {
                 "non-finite raster transform or tint",
             ));
         }
-        Ok(Self(parameters))
+        Ok(Self { transform, tint })
+    }
+
+    pub fn transform(&self) -> &[[f32; 4]; 4] {
+        &self.transform
+    }
+
+    pub fn tint(&self) -> &[f32; 4] {
+        &self.tint
     }
 }
 

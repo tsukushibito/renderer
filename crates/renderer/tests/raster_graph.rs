@@ -100,13 +100,14 @@ fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw<'static> {
 }
 
 fn placed(mut draw: RasterDraw<'_>, left: bool, depth: f32, tint: [f32; 4]) -> RasterDraw<'_> {
-    draw.parameters.tint = tint;
-    draw.parameters.transform[2][2] = 0.0;
-    draw.parameters.transform[3][2] = depth;
+    let mut transform = *draw.parameters.transform();
+    transform[2][2] = 0.0;
+    transform[3][2] = depth;
     if left {
-        draw.parameters.transform[0][0] = 0.5;
-        draw.parameters.transform[3][0] = -0.5;
+        transform[0][0] = 0.5;
+        transform[3][0] = -0.5;
     }
+    draw.parameters = RasterParameters::new(transform, tint).unwrap();
     draw
 }
 
@@ -149,7 +150,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .raster(
             "ordered overlap without depth",
             &ManagedRasterProgram::mesh(),
-            &[
+            [
                 RasterDraw {
                     // The failure fixture reaches a valid first draw before
                     // discovering the bad sixth index of the second draw.
@@ -177,12 +178,15 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         }),
     ));
     let mut right_overlay = placed(quad, true, 0.5, [0.0, 0.0, 1.0, 1.0]);
-    right_overlay.parameters.transform[3][0] = 0.5;
+    let mut transform = *right_overlay.parameters.transform();
+    transform[3][0] = 0.5;
+    right_overlay.parameters =
+        RasterParameters::new(transform, *right_overlay.parameters.tint()).unwrap();
     graph
         .raster(
             "load existing color and replace right half",
             &ManagedRasterProgram::mesh(),
-            &[right_overlay],
+            [right_overlay],
             RasterAttachments {
                 colors: &[color_attachment(&graph, order, LoadOp::Load)],
                 depth: None,
@@ -212,7 +216,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .raster(
             "near far near sequence",
             &ManagedRasterProgram::mesh(),
-            &[
+            [
                 placed(quad, false, 0.25, [1.0, 0.0, 0.0, 1.0]),
                 placed(quad, false, 0.75, [0.0, 1.0, 0.0, 1.0]),
                 placed(quad, true, 0.125, [0.0, 0.0, 1.0, 1.0]),
@@ -249,7 +253,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .raster(
             "depth-only shadow",
             &ManagedRasterProgram::depth_only(),
-            &[
+            [
                 placed(quad, false, 0.5, [1.0; 4]),
                 placed(quad, true, 0.25, [1.0; 4]),
             ],
@@ -269,7 +273,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .raster(
             "load shadow and reject farther geometry",
             &ManagedRasterProgram::depth_only(),
-            &[placed(quad, false, 0.75, [1.0; 4])],
+            [placed(quad, false, 0.75, [1.0; 4])],
             RasterAttachments {
                 colors: &[],
                 depth: Some(depth_attachment(&graph, shadow, LoadOp::Load)),
@@ -341,12 +345,14 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .image("two textured panels", ImageDesc::rgba8(4, 4))
         .unwrap();
     let mut panel = quad;
-    panel.parameters.transform[0][0] = 0.5;
+    let mut transform = *panel.parameters.transform();
+    transform[0][0] = 0.5;
+    panel.parameters = RasterParameters::new(transform, *panel.parameters.tint()).unwrap();
     graph
         .raster(
             "per-draw descriptor ownership",
             &ManagedRasterProgram::textured_mesh(),
-            &[
+            [
                 RasterDraw {
                     bindings: &left,
                     ..panel
@@ -377,7 +383,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .raster(
             "signed HDR vertex color",
             &ManagedRasterProgram::mesh_hdr(),
-            &[
+            [
                 placed(quad, false, 0.5, [2.0, -0.5, 0.25, 1.0]),
                 placed(quad, true, 0.5, [0.5, 4.0, -1.0, 1.0]),
             ],
@@ -421,7 +427,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .raster(
             "HDR sampling",
             &ManagedRasterProgram::textured_mesh_hdr(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &hdr_bindings,
                 ..quad
             }],

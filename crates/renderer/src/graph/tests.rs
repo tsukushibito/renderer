@@ -560,7 +560,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
         let result = graph.raster(
             "attachment input",
             &crate::program::ManagedRasterProgram::mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &[],
                 vertices,
                 indices,
@@ -596,7 +596,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
         .raster(
             "undefined load",
             &crate::program::ManagedRasterProgram::mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &[],
                 vertices: v,
                 indices: i,
@@ -631,7 +631,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
         .raster(
             "discarded",
             &crate::program::ManagedRasterProgram::mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &[],
                 vertices: v,
                 indices: i,
@@ -670,7 +670,7 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
         .raster(
             "partial",
             &crate::program::ManagedRasterProgram::mesh(),
-            &[RasterDraw {
+            [RasterDraw {
                 bindings: &[],
                 vertices: v,
                 indices: i,
@@ -712,7 +712,7 @@ fn batch_requires_initialized_buffers_from_later_draws() {
         .raster(
             "opaque batch",
             &crate::program::ManagedRasterProgram::mesh(),
-            &batch_draws(vec![
+            batch_draws(vec![
                 (vertices, indices, 3, RasterParameters::default()),
                 (missing, indices, 3, RasterParameters::default()),
             ]),
@@ -746,7 +746,7 @@ fn batch_same_buffer_can_supply_vertex_and_index_reads() {
         .raster(
             "opaque batch",
             &crate::program::ManagedRasterProgram::mesh(),
-            &batch_draws(vec![
+            batch_draws(vec![
                 (vertices, vertices, 3, RasterParameters::default());
                 3
             ]),
@@ -783,7 +783,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
         .raster(
             "invalid opaque input",
             &crate::program::ManagedRasterProgram::mesh(),
-            &batch_draws(vec![
+            batch_draws(vec![
                 (vertices, indices, 3, RasterParameters::default()),
                 (vertices, indices, 6, RasterParameters::default()),
             ]),
@@ -816,7 +816,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
         .raster(
             "foreign opaque input",
             &crate::program::ManagedRasterProgram::mesh(),
-            &batch_draws(vec![(foreign, indices, 3, RasterParameters::default())]),
+            batch_draws(vec![(foreign, indices, 3, RasterParameters::default())]),
             RasterAttachments {
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
@@ -836,83 +836,6 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
     assert_eq!(error.resource(), Some(foreign.into()));
     assert_eq!(error.resource_name(), None);
     assert_eq!(graph.passes.len(), before);
-
-    let error = graph
-        .raster(
-            "invalid later parameters",
-            &crate::program::ManagedRasterProgram::mesh(),
-            &batch_draws(vec![
-                (vertices, indices, 3, RasterParameters::default()),
-                (
-                    vertices,
-                    indices,
-                    3,
-                    RasterParameters {
-                        tint: [f32::NAN, 0.0, 0.0, 1.0],
-                        ..RasterParameters::default()
-                    },
-                ),
-            ]),
-            RasterAttachments {
-                colors: &[Attachment {
-                    view: graph.image_view(color, 0, 0).unwrap(),
-                    load: LoadOp::Clear([0.0; 4]),
-                    store: StoreOp::Store,
-                }],
-                depth: Some(Attachment {
-                    view: graph.image_view(depth, 0, 0).unwrap(),
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-            },
-        )
-        .unwrap_err();
-    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
-    assert_eq!(error.pass_name(), Some("invalid later parameters"));
-    assert_eq!(error.pass(), None);
-    assert_eq!(graph.passes.len(), before);
-}
-
-#[test]
-fn public_raster_parameters_are_checked_before_creating_a_pass() {
-    let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
-    let (vertices, indices, color, depth) = mesh(&mut graph);
-    let before = graph.passes.len();
-    let mut transform = RasterParameters::default();
-    transform.transform[0][0] = f32::INFINITY;
-    let mut tint = RasterParameters::default();
-    tint.tint[3] = f32::NAN;
-    for parameters in [transform, tint] {
-        let error = graph
-            .raster(
-                "invalid public parameters",
-                &crate::program::ManagedRasterProgram::mesh(),
-                &[RasterDraw {
-                    bindings: &[],
-                    vertices,
-                    indices,
-                    index_count: 3,
-                    parameters,
-                }],
-                RasterAttachments {
-                    colors: &[Attachment {
-                        view: graph.image_view(color, 0, 0).unwrap(),
-                        load: LoadOp::Clear([0.0; 4]),
-                        store: StoreOp::Store,
-                    }],
-                    depth: Some(Attachment {
-                        view: graph.image_view(depth, 0, 0).unwrap(),
-                        load: LoadOp::Clear(1.0),
-                        store: StoreOp::Store,
-                    }),
-                },
-            )
-            .unwrap_err();
-        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
-        assert_eq!(error.pass_name(), Some("invalid public parameters"));
-        assert_eq!(error.pass(), None);
-        assert_eq!(graph.passes.len(), before);
-    }
 }
 
 #[test]
@@ -998,7 +921,7 @@ fn import_and_batch_limits_report_their_distinct_capacity_dimensions() {
         .raster(
             "batch",
             &crate::program::ManagedRasterProgram::mesh(),
-            &batch_draws(vec![(vertices, indices, 3, RasterParameters::default())]),
+            batch_draws(vec![(vertices, indices, 3, RasterParameters::default())]),
             RasterAttachments {
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),

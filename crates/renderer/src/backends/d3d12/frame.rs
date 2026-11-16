@@ -1044,15 +1044,16 @@ mod tests {
                 .raster(
                     "triangle",
                     &ManagedRasterProgram::mesh(),
-                    &[RasterDraw {
+                    [RasterDraw {
                         vertices,
                         indices,
                         index_count: 3,
                         bindings: &[],
-                        parameters: RasterParameters {
-                            tint: [1.0, 0.0, 0.0, 1.0],
-                            ..Default::default()
-                        },
+                        parameters: RasterParameters::new(
+                            *RasterParameters::default().transform(),
+                            [1.0, 0.0, 0.0, 1.0],
+                        )
+                        .unwrap(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {
