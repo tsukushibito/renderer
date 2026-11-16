@@ -267,7 +267,7 @@ impl RasterStorage {
         classes: &[D3D12ImageClass],
         draw_capacity: usize,
         compute_descriptor_capacity: usize,
-        storage_images: bool,
+        storage_formats: [bool; 2],
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
         let descriptor_capacity = draw_capacity
@@ -286,9 +286,6 @@ impl RasterStorage {
         for &class in classes {
             validate_class(class)?;
             require_image_format(owner, class.desc.format)?;
-            if storage_images && class.desc.format != ImageFormat::Depth32Float {
-                super::compute::require_storage_format(owner, class.desc.format, false)?;
-            }
             total = total
                 .checked_add(class.count)
                 .ok_or_else(|| D3D12RuntimeError::capacity("prepared image count overflows"))?;
@@ -360,7 +357,12 @@ impl RasterStorage {
         let mut depth_index = 0usize;
         for &class in classes {
             for _ in 0..class.count {
-                let native = DeviceImage::graph(owner, class.desc, storage_images)?;
+                let storage_image = match class.desc.format {
+                    ImageFormat::Rgba8Unorm => storage_formats[0],
+                    ImageFormat::Rgba16Float => storage_formats[1],
+                    ImageFormat::Depth32Float => false,
+                };
+                let native = DeviceImage::graph(owner, class.desc, storage_image)?;
                 let (footprint, total_bytes, row_bytes, rows) =
                     copy_layout(owner, &native, class.desc)?;
                 let (rtv, dsv) = if class.desc.format == ImageFormat::Depth32Float {

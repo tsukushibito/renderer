@@ -400,6 +400,7 @@ impl FramePool {
                 D3D12RuntimeError::capacity("Compute pipeline capacity reservation failed")
             })?;
         let mut compute_images = 0;
+        let mut storage_formats = [false; 2];
         for program in compute_programs {
             if !pool_mut
                 .compute_programs
@@ -414,6 +415,23 @@ impl FramePool {
                         #[cfg(test)]
                         false,
                     )?);
+            }
+            for slot in program.bindings() {
+                match slot.kind {
+                    crate::program::BindingType::StorageImageRead(format)
+                    | crate::program::BindingType::StorageImageWrite(format) => {
+                        // Program creation already checked typed UAV capability.
+                        // Only those formats need storage-capable physical images.
+                        match format {
+                            crate::program::ImageFormat::Rgba8Unorm => storage_formats[0] = true,
+                            crate::program::ImageFormat::Rgba16Float => storage_formats[1] = true,
+                            crate::program::ImageFormat::D32Float => {
+                                unreachable!("Program creation rejected depth storage")
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             compute_images = compute_images.max(
                 program
@@ -448,7 +466,7 @@ impl FramePool {
                 classes,
                 capacity.operations,
                 compute_descriptors,
-                !compute_programs.is_empty(),
+                storage_formats,
             )?);
         }
         Ok(pool)
