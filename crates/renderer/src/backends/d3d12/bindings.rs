@@ -1638,6 +1638,7 @@ pub const DXGI_FORMAT_D32_FLOAT: DXGI_FORMAT = 40;
 pub const DXGI_FORMAT_R16G16B16A16_FLOAT: DXGI_FORMAT = 10;
 pub const DXGI_FORMAT_R32G32B32A32_FLOAT: DXGI_FORMAT = 2;
 pub const DXGI_FORMAT_R32G32B32_FLOAT: DXGI_FORMAT = 6;
+pub const DXGI_FORMAT_R32G32_FLOAT: DXGI_FORMAT = 16;
 pub const DXGI_FORMAT_R32_FLOAT: DXGI_FORMAT = 41;
 pub const DXGI_FORMAT_R32_TYPELESS: DXGI_FORMAT = 39;
 pub const DXGI_FORMAT_R32_UINT: DXGI_FORMAT = 42;
@@ -2864,6 +2865,19 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn SetGraphicsRootShaderResourceView(
+        &self,
+        rootparameterindex: u32,
+        bufferlocation: D3D12_GPU_VIRTUAL_ADDRESS,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).SetGraphicsRootShaderResourceView)(
+                windows_core::Interface::as_raw(self),
+                rootparameterindex,
+                bufferlocation,
+            );
+        }
+    }
     pub unsafe fn SetComputeRootUnorderedAccessView(
         &self,
         rootparameterindex: u32,
@@ -3035,7 +3049,8 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     pub SetComputeRootShaderResourceView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
-    SetGraphicsRootShaderResourceView: usize,
+    pub SetGraphicsRootShaderResourceView:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     pub SetComputeRootUnorderedAccessView:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, D3D12_GPU_VIRTUAL_ADDRESS),
     SetGraphicsRootUnorderedAccessView: usize,

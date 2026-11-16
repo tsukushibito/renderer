@@ -117,6 +117,7 @@ D3D12_DSV_DIMENSION
 D3D12_DSV_FLAGS
 D3D12_CLEAR_FLAGS
 ID3D12GraphicsCommandList::SetComputeRootShaderResourceView
+ID3D12GraphicsCommandList::SetGraphicsRootShaderResourceView
 
 # Reviewed owned Raster graphics pipelines and direct command recording.
 ID3D12Device::{CreateGraphicsPipelineState,CreateRenderTargetView}
@@ -146,6 +147,7 @@ D3D12_VIEWPORT
 D3D12_VERTEX_BUFFER_VIEW
 D3D12_INDEX_BUFFER_VIEW
 DXGI_FORMAT_R32G32B32_FLOAT
+DXGI_FORMAT_R32G32_FLOAT
 DXGI_FORMAT_R32G32B32A32_FLOAT
 DXGI_FORMAT_R32_UINT
 

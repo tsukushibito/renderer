@@ -23,6 +23,7 @@ pub(super) struct GraphImage {
     pub(super) native: super::registry::PhysicalRef,
     pub(super) state: D3D12_RESOURCE_STATES,
     pub(super) uav_write: bool,
+    pub(super) raster_scope: D3D12_RESOURCE_STATES,
     pub(super) used: bool,
     pub(super) rtv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub(super) dsv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
@@ -102,6 +103,7 @@ pub(super) struct RasterStorage {
     sampler_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     texture_step: u32,
     descriptor_capacity: usize,
+    pub(super) raster_descriptor_capacity: usize,
     pub(super) compute_descriptor_start: usize,
     pub(super) compute_descriptor_capacity: usize,
 }
@@ -301,13 +303,14 @@ impl RasterStorage {
         owner: &DeviceOwner,
         classes: &[D3D12ImageClass],
         registered_images: &[ImageDesc],
-        draw_capacity: usize,
+        raster_descriptor_capacity: usize,
         compute_descriptor_capacity: usize,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
-        let descriptor_capacity = draw_capacity
+        let descriptor_capacity = raster_descriptor_capacity
             .checked_add(compute_descriptor_capacity)
-            .ok_or_else(|| D3D12RuntimeError::capacity("prepared descriptor capacity overflow"))?;
+            .ok_or_else(|| D3D12RuntimeError::capacity("prepared descriptor capacity overflow"))?
+            .max(1);
         // One million is the portable shader-visible CBV/SRV/UAV heap bound
         // at the supported baseline; samplers need only their single fixed slot.
         if !(1..=1_000_000).contains(&descriptor_capacity) {
@@ -445,6 +448,7 @@ impl RasterStorage {
                     native,
                     state: D3D12_RESOURCE_STATE_COMMON,
                     uav_write: false,
+                    raster_scope: D3D12_RESOURCE_STATE_COMMON,
                     used: false,
                     rtv,
                     dsv,
@@ -485,7 +489,8 @@ impl RasterStorage {
             sampler_gpu_start,
             texture_step: owner.descriptor_steps[0],
             descriptor_capacity,
-            compute_descriptor_start: draw_capacity,
+            raster_descriptor_capacity,
+            compute_descriptor_start: raster_descriptor_capacity,
             compute_descriptor_capacity,
         })
     }
@@ -498,6 +503,7 @@ impl RasterStorage {
             image.state = D3D12_RESOURCE_STATE_COMMON;
             image.used = false;
             image.uav_write = false;
+            image.raster_scope = D3D12_RESOURCE_STATE_COMMON;
         }
     }
 

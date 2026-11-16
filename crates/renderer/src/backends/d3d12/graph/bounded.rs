@@ -85,6 +85,7 @@ fn requirements_inner(
     let mut readback_bytes = 0;
     let mut draws_total = 0usize;
     let mut compute_descriptors = 0usize;
+    let mut raster_descriptors = 0usize;
     // Establish support and all variable capacity requirements before recording.
     // This scans changing work; it does not revalidate Graph byte-range contents.
     for &pass in &graph.order {
@@ -254,15 +255,18 @@ fn requirements_inner(
                     }
                 }
                 for draw in graph.raster_draws(draws) {
-                    for binding in graph.raster_bindings(&draw.bindings) {
-                        if let crate::graph::BindingOperands::Buffer { range, .. } = binding
-                            && range.offset % 256 != 0
-                        {
-                            return Err(D3D12RuntimeError::unsupported(
-                                "D3D12 Raster uniform GPU address must be 256-byte aligned",
-                            ));
-                        }
-                    }
+                    raster_descriptors = raster_descriptors
+                        .checked_add(super::raster::binding_requirements(
+                            graph,
+                            program,
+                            &draw.bindings,
+                        )?)
+                        .filter(|count| *count <= storage.raster_descriptor_capacity)
+                        .ok_or_else(|| {
+                            D3D12RuntimeError::capacity(
+                                "prepared Raster image descriptor capacity exhausted",
+                            )
+                        })?;
                 }
                 super::raster::validate_targets(colors)?;
             }

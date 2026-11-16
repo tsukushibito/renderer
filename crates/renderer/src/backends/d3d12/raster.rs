@@ -2,7 +2,10 @@
 
 use std::mem::ManuallyDrop;
 
-use crate::program::{ImageFormat, ManagedRasterProgram};
+use crate::program::{
+    BindingType, BlendState, CompareOp, ImageFormat, ManagedRasterProgram, ShaderStages,
+    VertexFormat,
+};
 
 use super::{
     D3D12RuntimeError,
@@ -12,9 +15,66 @@ use super::{
 };
 
 pub(super) const INLINE_ROOT: u32 = 0;
-pub(super) const UNIFORM_ROOT: u32 = 1;
-pub(super) const IMAGE_ROOT: u32 = 2;
-pub(super) const SAMPLER_ROOT: u32 = 3;
+
+fn visibility(stages: ShaderStages) -> D3D12_SHADER_VISIBILITY {
+    if stages == ShaderStages::VERTEX {
+        D3D12_SHADER_VISIBILITY_VERTEX
+    } else if stages == ShaderStages::FRAGMENT {
+        D3D12_SHADER_VISIBILITY_PIXEL
+    } else {
+        D3D12_SHADER_VISIBILITY_ALL
+    }
+}
+
+fn vertex_format(format: VertexFormat) -> DXGI_FORMAT {
+    match format {
+        VertexFormat::Float32x2 => DXGI_FORMAT_R32G32_FLOAT,
+        VertexFormat::Float32x3 => DXGI_FORMAT_R32G32B32_FLOAT,
+        VertexFormat::Float32x4 => DXGI_FORMAT_R32G32B32A32_FLOAT,
+    }
+}
+
+fn comparison(compare: CompareOp) -> D3D12_COMPARISON_FUNC {
+    match compare {
+        CompareOp::Never => D3D12_COMPARISON_FUNC_NEVER,
+        CompareOp::Less => D3D12_COMPARISON_FUNC_LESS,
+        CompareOp::Equal => D3D12_COMPARISON_FUNC_EQUAL,
+        CompareOp::LessEqual => D3D12_COMPARISON_FUNC_LESS_EQUAL,
+        CompareOp::Greater => D3D12_COMPARISON_FUNC_GREATER,
+        CompareOp::NotEqual => D3D12_COMPARISON_FUNC_NOT_EQUAL,
+        CompareOp::GreaterEqual => D3D12_COMPARISON_FUNC_GREATER_EQUAL,
+        CompareOp::Always => D3D12_COMPARISON_FUNC_ALWAYS,
+    }
+}
+
+fn blend(state: BlendState) -> D3D12_RENDER_TARGET_BLEND_DESC {
+    let (source, destination, alpha_destination) = match state {
+        BlendState::Replace => (D3D12_BLEND_ONE, D3D12_BLEND_ZERO, D3D12_BLEND_ZERO),
+        BlendState::Alpha => (
+            D3D12_BLEND_SRC_ALPHA,
+            D3D12_BLEND_INV_SRC_ALPHA,
+            D3D12_BLEND_INV_SRC_ALPHA,
+        ),
+        BlendState::PremultipliedAlpha => (
+            D3D12_BLEND_ONE,
+            D3D12_BLEND_INV_SRC_ALPHA,
+            D3D12_BLEND_INV_SRC_ALPHA,
+        ),
+        BlendState::Additive => (D3D12_BLEND_ONE, D3D12_BLEND_ONE, D3D12_BLEND_ONE),
+    };
+    D3D12_RENDER_TARGET_BLEND_DESC {
+        BlendEnable: (state != BlendState::Replace).into(),
+        LogicOpEnable: false.into(),
+        SrcBlend: source,
+        DestBlend: destination,
+        BlendOp: D3D12_BLEND_OP_ADD,
+        SrcBlendAlpha: D3D12_BLEND_ONE,
+        DestBlendAlpha: alpha_destination,
+        BlendOpAlpha: D3D12_BLEND_OP_ADD,
+        LogicOp: D3D12_LOGIC_OP_NOOP,
+        RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as u8,
+    }
+}
 
 /// FramePool retains the Device after all pipelines and slot leases. These
 /// immutable free-threaded COM objects remain live through recording and GPU use.
@@ -60,80 +120,102 @@ fn require_format(
 
 fn signature(
     owner: &DeviceOwner,
-    textured: bool,
+    managed: &ManagedRasterProgram,
 ) -> Result<NativeObject<ID3D12RootSignature>, D3D12RuntimeError> {
-    let ranges = [
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
-            NumDescriptors: 1,
-            BaseShaderRegister: 0,
-            RegisterSpace: 1,
-            OffsetInDescriptorsFromTableStart: 0,
-        },
-        D3D12_DESCRIPTOR_RANGE {
-            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
-            NumDescriptors: 1,
-            BaseShaderRegister: 1,
-            RegisterSpace: 1,
-            OffsetInDescriptorsFromTableStart: 0,
-        },
-    ];
-    // Generated DXIL reflection puts the inline block at cb0 for mesh and cb1
-    // for textured, whose cb0 is the logical Uniform. Root cost is 20 or 24
-    // DWORDs, within the API's 64-DWORD limit, with no overlapping registers.
-    let parameters = [
-        D3D12_ROOT_PARAMETER {
+    let inline = managed.parameter_layout();
+    let cost = managed
+        .bindings()
+        .iter()
+        .try_fold(inline.size / 4, |cost, slot| {
+            cost.checked_add(match slot.kind {
+                BindingType::Uniform | BindingType::StorageRead => 2,
+                BindingType::SampledImage | BindingType::Sampler => 1,
+                _ => unreachable!("trusted Raster only has read-only bindings"),
+            })
+        });
+    if cost.is_none_or(|cost| cost > 64) {
+        return Err(D3D12RuntimeError::unsupported(
+            "Raster layout exceeds D3D12 root signature DWORD capacity",
+        ));
+    }
+    // Build every range before taking pointers; the allocation stays immutable
+    // until synchronous root-signature serialization returns.
+    let ranges: Vec<_> = managed
+        .bindings()
+        .iter()
+        .filter_map(|slot| {
+            let kind = match slot.kind {
+                BindingType::SampledImage => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                BindingType::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+                _ => return None,
+            };
+            Some(D3D12_DESCRIPTOR_RANGE {
+                RangeType: kind,
+                NumDescriptors: 1,
+                BaseShaderRegister: slot.binding,
+                RegisterSpace: slot.group,
+                OffsetInDescriptorsFromTableStart: 0,
+            })
+        })
+        .collect();
+    let mut parameters =
+        Vec::with_capacity(managed.bindings().len() + usize::from(inline.size != 0));
+    if inline.size != 0 {
+        parameters.push(D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: u32::from(textured),
-                    RegisterSpace: 0,
-                    Num32BitValues: 20,
+                    ShaderRegister: inline.dxil_register,
+                    RegisterSpace: inline.dxil_space,
+                    Num32BitValues: inline.size / 4,
                 },
             },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_CBV,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                Descriptor: D3D12_ROOT_DESCRIPTOR {
-                    ShaderRegister: 0,
-                    RegisterSpace: 0,
+            ShaderVisibility: visibility(inline.stages),
+        });
+    }
+    let mut ranges = ranges.iter();
+    for slot in managed.bindings() {
+        let (kind, value) = match slot.kind {
+            BindingType::Uniform | BindingType::StorageRead => (
+                if slot.kind == BindingType::Uniform {
+                    D3D12_ROOT_PARAMETER_TYPE_CBV
+                } else {
+                    D3D12_ROOT_PARAMETER_TYPE_SRV
                 },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_VERTEX,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ranges[0],
+                D3D12_ROOT_PARAMETER_0 {
+                    Descriptor: D3D12_ROOT_DESCRIPTOR {
+                        ShaderRegister: slot.binding,
+                        RegisterSpace: slot.group,
+                    },
                 },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-        D3D12_ROOT_PARAMETER {
-            ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
-            Anonymous: D3D12_ROOT_PARAMETER_0 {
-                DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
-                    NumDescriptorRanges: 1,
-                    pDescriptorRanges: &ranges[1],
+            ),
+            BindingType::SampledImage | BindingType::Sampler => (
+                D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+                D3D12_ROOT_PARAMETER_0 {
+                    DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                        NumDescriptorRanges: 1,
+                        pDescriptorRanges: ranges.next().unwrap(),
+                    },
                 },
-            },
-            ShaderVisibility: D3D12_SHADER_VISIBILITY_PIXEL,
-        },
-    ];
+            ),
+            _ => unreachable!("trusted Raster only has read-only bindings"),
+        };
+        parameters.push(D3D12_ROOT_PARAMETER {
+            ParameterType: kind,
+            Anonymous: value,
+            ShaderVisibility: visibility(slot.stages),
+        });
+    }
     let desc = D3D12_ROOT_SIGNATURE_DESC {
-        NumParameters: if textured { 4 } else { 1 },
+        NumParameters: parameters.len() as u32,
         pParameters: parameters.as_ptr(),
         Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
         ..Default::default()
     };
     let mut blob = None;
     let mut errors = None;
-    // SAFETY: Tagged parameters agree with the reviewed DXIL ABI; all nested
-    // pointers refer into fixed stack arrays that outlive synchronous encoding.
+    // SAFETY: Tagged parameters agree with the trusted DXIL ABI; all nested
+    // pointers refer into stable preparation arrays that outlive synchronous encoding.
     unsafe {
         D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob, &mut errors)
     }
@@ -164,7 +246,7 @@ fn signature(
 
 impl RasterPipeline {
     pub(super) fn matches(&self, managed: &ManagedRasterProgram, depth: bool) -> bool {
-        !self.clear && self.depth == depth && self.managed.native_id() == managed.native_id()
+        !self.clear && self.depth == depth && self.managed.same(managed)
     }
 
     pub(super) fn new(
@@ -183,7 +265,7 @@ impl RasterPipeline {
         managed: &ManagedRasterProgram,
         depth: bool,
     ) -> Result<Self, D3D12RuntimeError> {
-        if managed.is_textured() {
+        if !managed.bindings().is_empty() {
             return Err(D3D12RuntimeError::invalid(
                 "fullscreen clear requires an untextured Raster program",
             ));
@@ -208,16 +290,31 @@ impl RasterPipeline {
                 "Raster Program requires a depth attachment",
             ));
         }
-        require_format(
-            owner,
-            DXGI_FORMAT_R32G32B32_FLOAT,
-            D3D12_FORMAT_SUPPORT1_IA_VERTEX_BUFFER,
-        )?;
-        require_format(
-            owner,
-            DXGI_FORMAT_R32G32B32A32_FLOAT,
-            D3D12_FORMAT_SUPPORT1_IA_VERTEX_BUFFER,
-        )?;
+        if managed.vertex_stride() > 2048 {
+            return Err(D3D12RuntimeError::unsupported(
+                "Raster vertex stride exceeds the D3D12 input-assembler limit",
+            ));
+        }
+        let attributes: Vec<_> = managed
+            .vertex_attributes()
+            .iter()
+            .map(|attribute| D3D12_INPUT_ELEMENT_DESC {
+                SemanticName: windows_core::s!("TEXCOORD"),
+                SemanticIndex: attribute.location,
+                Format: vertex_format(attribute.format),
+                InputSlot: 0,
+                AlignedByteOffset: attribute.offset,
+                InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
+                InstanceDataStepRate: 0,
+            })
+            .collect();
+        for attribute in &attributes {
+            require_format(
+                owner,
+                attribute.Format,
+                D3D12_FORMAT_SUPPORT1_IA_VERTEX_BUFFER,
+            )?;
+        }
         if depth {
             require_format(
                 owner,
@@ -236,41 +333,23 @@ impl RasterPipeline {
                     ));
                 }
             };
-            require_format(owner, *destination, D3D12_FORMAT_SUPPORT1_RENDER_TARGET)?;
+            require_format(
+                owner,
+                *destination,
+                D3D12_FORMAT_SUPPORT1_RENDER_TARGET
+                    | if managed.blend() != BlendState::Replace {
+                        D3D12_FORMAT_SUPPORT1_BLENDABLE
+                    } else {
+                        0
+                    },
+            )?;
         }
-        let signature = signature(owner, managed.is_textured())?;
-        let attributes = [
-            D3D12_INPUT_ELEMENT_DESC {
-                SemanticName: windows_core::s!("TEXCOORD"),
-                SemanticIndex: 0,
-                Format: DXGI_FORMAT_R32G32B32_FLOAT,
-                InputSlot: 0,
-                AlignedByteOffset: 0,
-                InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-                InstanceDataStepRate: 0,
-            },
-            D3D12_INPUT_ELEMENT_DESC {
-                SemanticName: windows_core::s!("TEXCOORD"),
-                SemanticIndex: 1,
-                Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
-                InputSlot: 0,
-                AlignedByteOffset: 12,
-                InputSlotClass: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,
-                InstanceDataStepRate: 0,
-            },
-        ];
-        let target_blend = D3D12_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: false.into(),
-            LogicOpEnable: false.into(),
-            SrcBlend: D3D12_BLEND_ONE,
-            DestBlend: D3D12_BLEND_ZERO,
-            BlendOp: D3D12_BLEND_OP_ADD,
-            SrcBlendAlpha: D3D12_BLEND_ONE,
-            DestBlendAlpha: D3D12_BLEND_ZERO,
-            BlendOpAlpha: D3D12_BLEND_OP_ADD,
-            LogicOp: D3D12_LOGIC_OP_NOOP,
-            RenderTargetWriteMask: D3D12_COLOR_WRITE_ENABLE_ALL as u8,
-        };
+        let signature = signature(owner, managed)?;
+        let target_blend = blend(if clear {
+            BlendState::Replace
+        } else {
+            managed.blend()
+        });
         let stencil = D3D12_DEPTH_STENCILOP_DESC {
             StencilFailOp: D3D12_STENCIL_OP_KEEP,
             StencilDepthFailOp: D3D12_STENCIL_OP_KEEP,
@@ -308,18 +387,16 @@ impl RasterPipeline {
                 ..Default::default()
             },
             DepthStencilState: D3D12_DEPTH_STENCIL_DESC {
-                DepthEnable: depth.into(),
-                DepthWriteMask: if depth && (clear || !managed.is_prepassed()) {
+                DepthEnable: (depth && (clear || managed.depth().compare().is_some())).into(),
+                DepthWriteMask: if depth && (clear || managed.depth().write_enabled()) {
                     D3D12_DEPTH_WRITE_MASK_ALL
                 } else {
                     D3D12_DEPTH_WRITE_MASK_ZERO
                 },
                 DepthFunc: if clear {
                     D3D12_COMPARISON_FUNC_ALWAYS
-                } else if managed.is_prepassed() {
-                    D3D12_COMPARISON_FUNC_LESS_EQUAL
                 } else {
-                    D3D12_COMPARISON_FUNC_LESS
+                    comparison(managed.depth().compare().unwrap_or(CompareOp::Always))
                 },
                 StencilEnable: false.into(),
                 StencilReadMask: u8::MAX,
@@ -405,7 +482,7 @@ mod tests {
                     .expect("reviewed graphics shader ABI and attachment capabilities");
                 assert!(pipeline.matches(&program, depth));
                 assert!(!pipeline.matches(&program, !depth));
-                if program.native_id() != 0 {
+                if !program.same(&ManagedRasterProgram::mesh()) {
                     assert!(!pipeline.matches(&ManagedRasterProgram::mesh(), depth));
                 }
                 drop(pipeline);

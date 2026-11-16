@@ -111,7 +111,7 @@ pub(super) struct ExecutionSlot {
     pub(super) upload_used: u64,
     pub(super) scratch_state: D3D12_RESOURCE_STATES,
     pub(super) raster: Option<RasterStorage>,
-    pub(super) raster_draws_used: usize,
+    pub(super) raster_descriptors_used: usize,
     pub(super) compute_descriptors_used: usize,
     pub(super) buffer_scopes: Vec<D3D12_RESOURCE_STATES>,
     pub(super) provenance: Vec<BufferProvenance>,
@@ -179,7 +179,7 @@ impl ExecutionSlot {
             resource_uses: vec![None; capacity.resources],
             resource_count: 0,
             raster: None,
-            raster_draws_used: 0,
+            raster_descriptors_used: 0,
             compute_descriptors_used: 0,
             buffer_scopes: {
                 let mut values = reserved(capacity.buffers)?;
@@ -235,7 +235,7 @@ impl ExecutionSlot {
         // Graph requirements initializes the active logical resource map once.
         self.buffers_used = 0;
         self.upload_used = 0;
-        self.raster_draws_used = 0;
+        self.raster_descriptors_used = 0;
         self.compute_descriptors_used = 0;
         self.scratch_state = D3D12_RESOURCE_STATE_COMMON;
         Ok(())
@@ -394,6 +394,25 @@ impl FramePool {
         programs: &[ManagedRasterProgram],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
+        let mut unique_programs =
+            [None::<ManagedRasterProgram>; crate::program::MAX_RASTER_PROGRAMS];
+        let mut program_count = 0;
+        for program in programs {
+            if unique_programs[..program_count]
+                .iter()
+                .flatten()
+                .any(|previous| previous.same(program))
+            {
+                continue;
+            }
+            if program_count == unique_programs.len() {
+                return Err(D3D12RuntimeError::capacity(
+                    "Raster Program working-set capacity exceeded",
+                ));
+            }
+            unique_programs[program_count] = Some(*program);
+            program_count += 1;
+        }
         let mut pool = Self::new(owner, capacity)?;
         let pool_mut = Arc::get_mut(&mut pool).expect("new unshared pool");
         let class_count = classes
@@ -410,11 +429,19 @@ impl FramePool {
         pool_mut.clear_programs = Some(ClearPrograms::new(&pool_mut.owner, &all_classes)?);
         pool_mut
             .raster_programs
-            .try_reserve_exact(programs.len().saturating_mul(2))
+            .try_reserve_exact(program_count * 2)
             .map_err(|_| {
                 D3D12RuntimeError::capacity("Raster pipeline capacity reservation failed")
             })?;
-        for program in programs {
+        let mut raster_images = 0;
+        for program in unique_programs[..program_count].iter().flatten() {
+            raster_images = raster_images.max(
+                program
+                    .bindings()
+                    .iter()
+                    .filter(|slot| slot.kind == crate::program::BindingType::SampledImage)
+                    .count(),
+            );
             for depth in [false, true] {
                 if program.requires_depth() && !depth {
                     continue;
@@ -469,6 +496,10 @@ impl FramePool {
                     .count(),
             );
         }
+        let raster_descriptors = capacity
+            .operations
+            .checked_mul(raster_images)
+            .ok_or_else(|| D3D12RuntimeError::capacity("Raster descriptor capacity overflow"))?;
         let compute_descriptors = capacity
             .operations
             .checked_mul(compute_images)
@@ -486,7 +517,7 @@ impl FramePool {
                 &pool_mut.owner,
                 classes,
                 registered_images,
-                capacity.operations,
+                raster_descriptors,
                 compute_descriptors,
             )?);
             pool_mut
@@ -1106,7 +1137,8 @@ mod tests {
                             *RasterParameters::default().transform(),
                             [1.0, 0.0, 0.0, 1.0],
                         )
-                        .unwrap(),
+                        .unwrap()
+                        .into(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {
