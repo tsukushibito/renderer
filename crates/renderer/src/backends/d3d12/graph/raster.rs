@@ -12,10 +12,7 @@ use super::super::{
 };
 use super::transition;
 use crate::{
-    graph::{
-        AccessPurpose, BindingOperands, CompiledGraph, ImageFormat, LoadAction, Operation,
-        ResourceDesc,
-    },
+    graph::{AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, ResourceDesc},
     program::{BindingType, ManagedRasterProgram, ShaderStages},
 };
 
@@ -572,11 +569,7 @@ pub(super) fn record(
                     let image = &storage.images[slot.resource_map[view.image().index]];
                     let descriptor = slot.raster_descriptors_used;
                     let srv = D3D12_SHADER_RESOURCE_VIEW_DESC {
-                        Format: match image.desc.format {
-                            ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-                            ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-                            ImageFormat::Depth32Float => DXGI_FORMAT_R32_FLOAT,
-                        },
+                        Format: super::super::resources::sampled_format(image.desc.format),
                         ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
                         Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING as u32,
                         Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {

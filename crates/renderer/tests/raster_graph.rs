@@ -16,6 +16,7 @@
     )
 ))]
 
+use renderer::ImageFormat;
 use std::time::Duration;
 
 #[allow(dead_code)]
@@ -27,8 +28,8 @@ mod standard_fixture;
 
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, CompiledGraph, Graph, GraphCapacity,
-    GraphPool, ImageDesc, ImageFormat, ImageHandle, LoadOp, PassHandle, RasterAttachments,
-    RasterDraw, RasterParameters, StoreOp,
+    GraphPool, ImageDesc, ImageHandle, LoadOp, PassHandle, RasterAttachments, RasterDraw,
+    RasterParameters, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
 use renderer::standard::{graphs, passes};

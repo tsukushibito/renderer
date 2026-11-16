@@ -2,14 +2,15 @@
 //!
 //! Each builder validates raw inputs and appends only after all operands succeed.
 
+use crate::ImageFormat;
 use std::{borrow::Borrow, ops::Range, sync::Arc};
 
 use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
-    GraphError, GraphErrorKind, ImageDesc, ImageFormat, ImageHandle, LoadOp, MeshUpload, Operation,
-    PassHandle, PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess,
-    ResourceDesc, ResourceHandle, UploadSource, overlaps,
+    GraphError, GraphErrorKind, ImageDesc, ImageHandle, LoadOp, MeshUpload, Operation, PassHandle,
+    PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess, ResourceDesc,
+    ResourceHandle, UploadSource, overlaps,
 };
 
 impl Graph {
@@ -305,12 +306,7 @@ impl Graph {
             }
             for (attachment, format) in attachments.colors.iter().zip(program.color_outputs()) {
                 let resource = self.image_id(attachment.view.image)?;
-                let expected = match format {
-                    crate::program::ImageFormat::Rgba8Unorm => ImageFormat::Rgba8Unorm,
-                    crate::program::ImageFormat::Rgba16Float => ImageFormat::Rgba16Float,
-                    crate::program::ImageFormat::D32Float => unreachable!("color output manifest"),
-                };
-                if self.image_desc_at(resource)?.format != expected {
+                if self.image_desc_at(resource)?.format != *format {
                     return Err(self.resource_error(
                         GraphErrorKind::InvalidInput,
                         "Raster attachment format differs from the Program output contract",
@@ -688,9 +684,7 @@ mod tests {
                 .image(
                     "color",
                     ImageDesc {
-                        format: if program.color_outputs()
-                            == [crate::program::ImageFormat::Rgba16Float]
-                        {
+                        format: if program.color_outputs() == [crate::ImageFormat::Rgba16Float] {
                             ImageFormat::Rgba16Float
                         } else {
                             ImageFormat::Rgba8Unorm

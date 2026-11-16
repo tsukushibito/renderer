@@ -126,9 +126,9 @@ impl D3D12Runtime {
         validate_image_descriptor(desc, D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION as u32)
             .map_err(|error| D3D12RuntimeError::invalid(error.to_string()))?;
         let supported = match desc.format {
-            crate::program::ImageFormat::Rgba8Unorm => self.device.rgba8_sampled,
-            crate::program::ImageFormat::Rgba16Float => self.device.rgba16f_sampled,
-            crate::program::ImageFormat::D32Float => self.device.d32_sampled,
+            crate::ImageFormat::Rgba8Unorm => self.device.rgba8_sampled,
+            crate::ImageFormat::Rgba16Float => self.device.rgba16f_sampled,
+            crate::ImageFormat::Depth32Float => self.device.d32_sampled,
         };
         if !supported {
             return Err(D3D12RuntimeError::unsupported(format!(

@@ -13,7 +13,8 @@ use super::{
     raster_storage::{D3D12ImageClass, GraphImage},
     resources::DeviceBuffer,
 };
-use crate::{graph::ImageFormat, program::ManagedRasterProgram};
+use crate::ImageFormat;
+use crate::program::ManagedRasterProgram;
 
 pub(super) struct ClearPrograms {
     pipelines: [Option<RasterPipeline>; 3],

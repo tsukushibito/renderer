@@ -130,9 +130,9 @@ impl VulkanProgram {
                 slot.kind
             {
                 let format = match format {
-                    crate::program::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
-                    crate::program::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
-                    crate::program::ImageFormat::D32Float => {
+                    crate::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+                    crate::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+                    crate::ImageFormat::Depth32Float => {
                         return Err(RuntimeError::unsupported(
                             "depth storage images are unsupported",
                         ));

@@ -1,10 +1,10 @@
 //! Reusable mesh drawing and linear color-copy declarations.
 
+use crate::ImageFormat;
 use std::borrow::Borrow;
 
 use crate::graph::{
-    Attachment, Graph, GraphError, ImageFormat, ImageHandle, PassHandle, RasterAttachments,
-    RasterDraw,
+    Attachment, Graph, GraphError, ImageHandle, PassHandle, RasterAttachments, RasterDraw,
 };
 use crate::program::ManagedRasterProgram;
 

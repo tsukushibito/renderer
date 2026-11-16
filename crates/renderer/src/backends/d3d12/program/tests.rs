@@ -1,8 +1,9 @@
 use super::super::{D3D12RuntimeConfig, D3D12RuntimeErrorKind, D3D12ValidationMode};
 use super::*;
+use crate::ImageFormat;
 use crate::{
     graph::PassHandle,
-    program::{ImageDescriptor, ImageFormat, ImageViewDescriptor, SamplerDescriptor},
+    program::{ImageDescriptor, ImageViewDescriptor, SamplerDescriptor},
 };
 use std::time::Duration;
 
@@ -135,14 +136,14 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
         BindingLayout {
             group: 12,
             binding: 13,
-            kind: BindingType::StorageImageRead(crate::program::ImageFormat::Rgba16Float),
+            kind: BindingType::StorageImageRead(crate::ImageFormat::Rgba16Float),
             stages: crate::program::ShaderStages::COMPUTE,
             min_size: 0,
         },
         BindingLayout {
             group: 14,
             binding: 15,
-            kind: BindingType::StorageImageWrite(crate::program::ImageFormat::Rgba16Float),
+            kind: BindingType::StorageImageWrite(crate::ImageFormat::Rgba16Float),
             stages: crate::program::ShaderStages::COMPUTE,
             min_size: 0,
         },
@@ -722,7 +723,7 @@ fn sampled_fixture(
     let new_view = runtime
         .create_image_view(&newer, ImageViewDescriptor::default())
         .unwrap();
-    let depth_views = if format == ImageFormat::D32Float {
+    let depth_views = if format == ImageFormat::Depth32Float {
         let descriptor = ImageViewDescriptor {
             usage: crate::program::ImageViewUsage::DepthAttachment,
             ..Default::default()
@@ -922,7 +923,7 @@ fn sampled_cases(strict: bool) {
     );
     sampled_fixture(
         strict,
-        ImageFormat::D32Float,
+        ImageFormat::Depth32Float,
         ManagedProgram::sampled_float_readback(),
         SampledInitialization::DepthClear(crate::program::DEPTH_TEST_VALUES),
         ExpectedSamples::DepthRed(crate::program::DEPTH_TEST_EXPECTED),

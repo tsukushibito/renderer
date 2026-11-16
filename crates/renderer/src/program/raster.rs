@@ -1,6 +1,7 @@
 //! Immutable graphics shader contracts retained by owned Raster commands.
 
-use super::{BindingLayout, BindingType, ImageFormat, ShaderStages};
+use super::{BindingLayout, BindingType, ShaderStages};
+use crate::ImageFormat;
 
 /// Maximum distinct assets in one prepared Raster working set.
 pub const MAX_RASTER_PROGRAMS: usize = 64;

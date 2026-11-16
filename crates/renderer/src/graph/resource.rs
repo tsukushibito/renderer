@@ -2,6 +2,8 @@
 
 use std::ops::Range;
 
+use crate::ImageFormat;
+
 use super::{AccessRange, Graph, GraphCapacityKind, GraphError, GraphErrorKind, ImageAspect};
 
 /// A graph-local buffer; handles cannot be moved between graph instances.
@@ -59,21 +61,7 @@ pub struct BufferDesc {
     pub size: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ImageFormat {
-    Rgba8Unorm,
-    Rgba16Float,
-    Depth32Float,
-}
-
 impl ImageFormat {
-    pub(crate) const fn texel_bytes(self) -> u64 {
-        match self {
-            Self::Rgba8Unorm | Self::Depth32Float => 4,
-            Self::Rgba16Float => 8,
-        }
-    }
-
     pub(crate) const fn aspect(self) -> ImageAspect {
         match self {
             Self::Rgba8Unorm | Self::Rgba16Float => ImageAspect::Color,

@@ -10,6 +10,7 @@
     )
 ))]
 
+use renderer::ImageFormat;
 use std::time::{Duration, Instant};
 
 use renderer::engine::{
@@ -18,7 +19,7 @@ use renderer::engine::{
 };
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, Graph, GraphCapacity, GraphErrorKind,
-    ImageDesc, ImageFormat, ImageHandle, LoadOp, PassHandle, RasterAttachments, StoreOp,
+    ImageDesc, ImageHandle, LoadOp, PassHandle, RasterAttachments, StoreOp,
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram};
 use renderer::{

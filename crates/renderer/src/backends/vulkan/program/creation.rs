@@ -220,8 +220,8 @@ fn validate_program(
 
 fn raster_format(program: crate::program::ManagedRasterProgram) -> vk::Format {
     match program.color_outputs().first() {
-        Some(crate::program::ImageFormat::Rgba8Unorm) => vk::Format::R8G8B8A8_UNORM,
-        Some(crate::program::ImageFormat::Rgba16Float) => vk::Format::R16G16B16A16_SFLOAT,
+        Some(crate::ImageFormat::Rgba8Unorm) => vk::Format::R8G8B8A8_UNORM,
+        Some(crate::ImageFormat::Rgba16Float) => vk::Format::R16G16B16A16_SFLOAT,
         _ => vk::Format::UNDEFINED,
     }
 }

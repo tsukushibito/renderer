@@ -302,22 +302,14 @@ impl Graph {
                             BindingType::SampledImage => (true, false, AccessPurpose::Sampled),
                             BindingType::StorageImageRead(format)
                             | BindingType::StorageImageWrite(format) => {
-                                let expected = match format {
-                                    crate::program::ImageFormat::Rgba8Unorm => {
-                                        super::ImageFormat::Rgba8Unorm
-                                    }
-                                    crate::program::ImageFormat::Rgba16Float => {
-                                        super::ImageFormat::Rgba16Float
-                                    }
-                                    crate::program::ImageFormat::D32Float => {
-                                        return Err(self.resource_error(
-                                            GraphErrorKind::Unsupported,
-                                            "depth storage image bindings are unsupported",
-                                            resource,
-                                        ));
-                                    }
-                                };
-                                if desc.format != expected {
+                                if format == crate::ImageFormat::Depth32Float {
+                                    return Err(self.resource_error(
+                                        GraphErrorKind::Unsupported,
+                                        "depth storage image bindings are unsupported",
+                                        resource,
+                                    ));
+                                }
+                                if desc.format != format {
                                     return Err(self.resource_error(
                                         GraphErrorKind::InvalidInput,
                                         "storage image View format differs from the Program ABI",
@@ -395,11 +387,12 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ImageFormat;
     use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
 
     #[test]
     fn sampled_and_storage_reads_share_only_disjoint_image_subresources() {
-        use crate::program::{ImageFormat, ShaderStages};
+        use crate::program::ShaderStages;
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let image = graph

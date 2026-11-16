@@ -345,15 +345,10 @@ impl DeviceImage {
     }
 
     fn graph_descriptor(desc: crate::graph::ImageDesc) -> crate::program::ImageDescriptor {
-        let format = match desc.format {
-            crate::graph::ImageFormat::Rgba8Unorm => crate::program::ImageFormat::Rgba8Unorm,
-            crate::graph::ImageFormat::Rgba16Float => crate::program::ImageFormat::Rgba16Float,
-            crate::graph::ImageFormat::Depth32Float => crate::program::ImageFormat::D32Float,
-        };
         crate::program::ImageDescriptor {
             width: desc.width,
             height: desc.height,
-            format,
+            format: desc.format,
             preferred_depth_clear: None,
         }
     }
@@ -386,12 +381,12 @@ impl DeviceImage {
         // initialization operation. The public boundary validated D32/range.
         let clear = if graph {
             Some(D3D12_CLEAR_VALUE {
-                Format: if desc.format == crate::program::ImageFormat::D32Float {
+                Format: if desc.format == crate::ImageFormat::Depth32Float {
                     DXGI_FORMAT_D32_FLOAT
                 } else {
                     image_format(desc.format)
                 },
-                Anonymous: if desc.format == crate::program::ImageFormat::D32Float {
+                Anonymous: if desc.format == crate::ImageFormat::Depth32Float {
                     D3D12_CLEAR_VALUE_0 {
                         DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
                             Depth: 1.0,
@@ -453,17 +448,17 @@ impl DeviceImage {
     }
 }
 
-pub(super) fn image_format(format: crate::program::ImageFormat) -> DXGI_FORMAT {
+pub(super) fn image_format(format: crate::ImageFormat) -> DXGI_FORMAT {
     match format {
-        crate::program::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-        crate::program::ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-        crate::program::ImageFormat::D32Float => DXGI_FORMAT_R32_TYPELESS,
+        crate::ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+        crate::ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
+        crate::ImageFormat::Depth32Float => DXGI_FORMAT_R32_TYPELESS,
     }
 }
 
-pub(super) fn sampled_format(format: crate::program::ImageFormat) -> DXGI_FORMAT {
+pub(super) fn sampled_format(format: crate::ImageFormat) -> DXGI_FORMAT {
     match format {
-        crate::program::ImageFormat::D32Float => DXGI_FORMAT_R32_FLOAT,
+        crate::ImageFormat::Depth32Float => DXGI_FORMAT_R32_FLOAT,
         _ => image_format(format),
     }
 }
@@ -481,7 +476,7 @@ pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURC
             Quality: 0,
         },
         Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-        Flags: if desc.format == crate::program::ImageFormat::D32Float {
+        Flags: if desc.format == crate::ImageFormat::Depth32Float {
             D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
         } else {
             D3D12_RESOURCE_FLAG_NONE

@@ -1,6 +1,7 @@
 //! Explicitly prepared Graph images and descriptor storage for one frame slot.
 
-use crate::graph::{ImageDesc, ImageFormat};
+use crate::ImageFormat;
+use crate::graph::ImageDesc;
 
 use super::{
     D3D12RuntimeError,
@@ -236,11 +237,7 @@ fn copy_layout(
             Some(&mut total_bytes),
         );
     }
-    let texel_bytes = if desc.format == ImageFormat::Rgba16Float {
-        8
-    } else {
-        4
-    };
+    let texel_bytes = desc.format.texel_bytes();
     let expected_row = u64::from(desc.width) * texel_bytes;
     let accessed_end = u64::from(rows.saturating_sub(1))
         .checked_mul(u64::from(footprint.Footprint.RowPitch))

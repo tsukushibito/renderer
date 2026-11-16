@@ -378,6 +378,15 @@ impl Drop for DeviceImage {
     }
 }
 
+/// Native image representation; support for each usage is checked separately.
+pub(super) fn image_format(format: crate::ImageFormat) -> vk::Format {
+    match format {
+        crate::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        crate::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
+        crate::ImageFormat::Depth32Float => vk::Format::D32_SFLOAT,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
