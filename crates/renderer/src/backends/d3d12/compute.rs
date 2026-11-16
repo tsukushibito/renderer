@@ -521,7 +521,7 @@ mod texture_tests {
         };
         let program = ManagedProgram::sampled_float_readback();
         runtime
-            .prepare_graph_working_set(&[D3D12ImageClass { desc, count: 1 }], &[], &[program])
+            .prepare_graph_working_set(None, &[D3D12ImageClass { desc, count: 1 }], &[], &[program])
             .unwrap();
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();

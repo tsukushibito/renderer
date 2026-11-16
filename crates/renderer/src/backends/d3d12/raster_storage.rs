@@ -13,7 +13,9 @@ use super::{
 };
 
 /// One exact image description and the unregistered physical instances reserved
-/// per execution slot, in addition to retained registered images.
+/// globally across execution slots, in addition to retained registered images.
+/// Each execution reserves its own reference/View metadata; native instances
+/// are not multiplied by the number of simultaneous executions.
 #[derive(Clone, Copy, Debug)]
 pub struct D3D12ImageClass {
     pub desc: ImageDesc,

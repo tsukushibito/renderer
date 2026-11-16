@@ -1369,6 +1369,109 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
+    fn d3d12_global_buffer_classes_preserve_capacity_after_smaller_reuse() {
+        use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+        use crate::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
+        use std::time::Duration;
+
+        let strict = cfg!(feature = "d3d12-diagnostics");
+        let mut runtime = D3D12Runtime::new_with_working_set(
+            D3D12RuntimeConfig {
+                validation: if strict {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                capacity: D3D12FrameCapacity {
+                    executions: 3,
+                    results: 3,
+                    resources: 8,
+                    operations: 8,
+                    buffers: 3,
+                    buffer_bytes: 8192,
+                    resource_capacity: 3,
+                    upload_bytes: 8192,
+                    readback_bytes: 8192,
+                    scratch_bytes: 4,
+                    ..Default::default()
+                },
+            },
+            &[
+                D3D12BufferClass { size: 8, count: 1 },
+                D3D12BufferClass { size: 64, count: 1 },
+                D3D12BufferClass {
+                    size: 4096,
+                    count: 1,
+                },
+            ],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        // Three physical buffers fit a three-entry registry despite three
+        // execution slots; uniform per-slot allocation would require nine.
+        let monitor = runtime.validation_monitor();
+        for (cycle, sizes) in [[4, 32, 512], [8, 64, 4096], [4, 32, 512], [8, 64, 4096]]
+            .into_iter()
+            .enumerate()
+        {
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            let mut graph = pool.begin().unwrap();
+            let mut expected = Vec::new();
+            for (ordinal, size) in sizes.into_iter().enumerate() {
+                let buffer = graph.buffer("class buffer", BufferDesc { size }).unwrap();
+                let bytes = vec![(cycle * 17 + ordinal + 1) as u8; size as usize];
+                graph
+                    .upload_buffer("initialize", buffer, 0, &bytes)
+                    .unwrap();
+                let readback = graph.readback_buffer("check", buffer, 0, size).unwrap();
+                expected.push((readback, bytes));
+            }
+            let plan = graph.compile().unwrap();
+            let mut submission = runtime.submit(&plan).unwrap();
+            let mut result = submission
+                .wait(Duration::from_secs(30))
+                .unwrap()
+                .expect("GPU completion");
+            for (readback, bytes) in expected {
+                let mut actual = vec![0; bytes.len()];
+                result.readback_into(readback, &mut actual).unwrap();
+                assert_eq!(actual, bytes);
+            }
+        }
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let buffer = graph
+            .buffer(
+                "larger than every prepared class",
+                BufferDesc { size: 8192 },
+            )
+            .unwrap();
+        graph
+            .upload_buffer("initialize", buffer, 0, &[1; 8192])
+            .unwrap();
+        graph.readback_buffer("observe", buffer, 0, 8192).unwrap();
+        let plan = graph.compile().unwrap();
+        let failure = runtime
+            .prepare(&plan)
+            .err()
+            .expect("physical class exhaustion");
+        assert!(failure.capacity().is_some());
+        drop((plan, pool));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:?}");
+        if strict {
+            assert!(
+                report.teardown_checked && report.gpu_based_validation_enabled,
+                "{report:?}"
+            );
+        }
+    }
+
+    #[test]
     fn signal_failure_follows_execution_and_quarantines_published_pending_work() {
         let mut phase = Phase::Recorded;
         let stage = Cell::new(0);
