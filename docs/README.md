@@ -20,6 +20,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |
+| 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、通常・切断・接続時の費用 |
 | 対応済みと計画を見分けたい | [現在の検証状況](verification/current.md)と[今後の計画](design/implementation-policy.md#bistro-roadmap) |
 
 ## 文書一覧
@@ -27,7 +28,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 分類 | 文書 | 内容 |
 |---|---|---|
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
-| 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
+| 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[Tracy zone](guides/tooling.md#tracy-profiling)・[WPR CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
 | 利用手順 | [HTML文書](guides/html-docs.md) | フレームワーク比較とmdBook選定、ビルド、閲覧、配布・更新 |
 | 実装規約 | [製品版と開発用の検証方針](guides/validation-policy.md) | 保証を置く境界、製品から外す検証、実行状態・失敗処理、ビルド構成と受入 |
 | 実装指針 | [Vulkanベストプラクティス](guides/vulkan-best-practices.md) | 一次資料に基づく能力照会、同期・寿命、メモリ、描画・Compute、WSI、検証・性能 |
