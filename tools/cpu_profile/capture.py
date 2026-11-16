@@ -49,6 +49,12 @@ def verified_build(path):
     # Shared helper rehashes both artifacts and checks the PE/PDB GUID+age.
     from identity import verify_manifest
     manifest = verify_manifest(Path(path).resolve())
+    build = manifest.get("build", {})
+    if ("tracy" in set(build.get("effective_features", build.get("features", [])))
+            or build.get("instrumentation", "none") != "none"
+            or build.get("artifact_class", "normal") != "normal"
+            or build.get("instrumentation_dependencies")):
+        raise ValueError("ETW normal-build capture rejects instrumented Tracy artifacts")
     return manifest, (Path(path).resolve().parent / manifest["binary"]["path"]).resolve()
 
 

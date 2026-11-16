@@ -73,6 +73,10 @@ def check_release_manifest(manifest):
         raise MeasurementError("Measurements require an archived bistro normal-release build")
     if features & DIAGNOSTICS:
         raise MeasurementError("Normal-release measurements must compile out diagnostic features")
+    if ("tracy" in features or build.get("instrumentation", "none") != "none"
+            or build.get("artifact_class", "normal") != "normal"
+            or build.get("instrumentation_dependencies")):
+        raise MeasurementError("Normal-release measurements reject instrumented Tracy artifacts")
     if not {"vulkan", "d3d12"}.issubset(features):
         raise MeasurementError("One archived executable must contain both measured APIs")
     git = manifest.get("git", {})
