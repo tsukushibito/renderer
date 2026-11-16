@@ -631,32 +631,54 @@ impl GraphWork {
                                 .map_err(|error| {
                                     index_error(error).context(format_args!("draw {draw_index}"))
                                 })?;
-                            let sets = if program.is_textured() {
-                                let operands = graph.raster_bindings(&draw.bindings);
-                                let [
-                                    crate::graph::BindingOperands::Buffer { resource, range },
-                                    crate::graph::BindingOperands::ImageView(view),
-                                    crate::graph::BindingOperands::Sampler(
-                                        crate::program::SamplerDescriptor::NearestClamp,
-                                    ),
-                                ] = operands
-                                else {
-                                    unreachable!("reviewed canonical Raster bindings")
-                                };
-                                let native_program = programs
-                                    .as_ref()
-                                    .unwrap()
-                                    .raster_program(*program, depth.is_some())?;
+                            let sets = if !program.bindings().is_empty() {
+                                let programs = programs.as_ref().unwrap();
+                                let native_program =
+                                    programs.raster_program(*program, depth.is_some())?;
+                                let operands = program
+                                    .bindings()
+                                    .iter()
+                                    .copied()
+                                    .zip(graph.raster_bindings(&draw.bindings))
+                                    .map(|(slot, operand)| {
+                                        use super::super::program::RasterBinding;
+                                        let native = match operand {
+                                            crate::graph::BindingOperands::Buffer {
+                                                resource,
+                                                range,
+                                            } => RasterBinding::Buffer {
+                                                buffer: physical[*resource]
+                                                    .as_ref()
+                                                    .unwrap()
+                                                    .buffer()
+                                                    .handle,
+                                                offset: range.offset,
+                                                size: range.size,
+                                            },
+                                            crate::graph::BindingOperands::ImageView(view) => {
+                                                RasterBinding::Image(
+                                                    physical[view.image().index]
+                                                        .as_ref()
+                                                        .unwrap()
+                                                        .image()
+                                                        .view,
+                                                )
+                                            }
+                                            crate::graph::BindingOperands::Sampler(_) => {
+                                                RasterBinding::Sampler
+                                            }
+                                        };
+                                        (slot, native)
+                                    });
                                 bindings.as_mut().unwrap().raster(
-                                    super::super::program::raster_key(*program, depth.is_some()),
-                                    physical[*resource].as_ref().unwrap().buffer().handle,
-                                    range.offset,
-                                    range.size,
-                                    physical[view.image().index].as_ref().unwrap().image(),
+                                    programs
+                                        .raster_key(*program, depth.is_some())
+                                        .expect("prepared Raster binding layout"),
+                                    operands,
                                     native_program.sampler,
                                 )?
                             } else {
-                                [vk::DescriptorSet::null(); 2]
+                                [vk::DescriptorSet::null(); crate::program::MAX_RASTER_BIND_GROUPS]
                             };
                             raster_descriptors.push(sets);
                         }
@@ -960,7 +982,7 @@ mod tests {
                     vertices,
                     indices,
                     index_count: 3,
-                    parameters: RasterParameters::default(),
+                    parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
                     colors: &[Attachment {
@@ -1625,7 +1647,7 @@ mod tests {
                     vertices,
                     indices,
                     index_count: 3,
-                    parameters: RasterParameters::default(),
+                    parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
                     colors: &[Attachment {

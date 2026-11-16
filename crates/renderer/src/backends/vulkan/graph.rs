@@ -484,6 +484,7 @@ impl VulkanRuntime {
                     Arc::clone(&self.owner),
                     self.config.execution_slots,
                     self.config.max_shader_bindings,
+                    true,
                 )?);
             }
             self.programs.as_ref().unwrap().prepare_bindings(needs)?;
@@ -502,10 +503,12 @@ impl VulkanRuntime {
         Ok(())
     }
 
-    /// Prepare the selected reviewed Raster programs before ordinary frames.
+    /// Replace the complete Raster Program working set before ordinary frames.
     /// Color programs prepare color-only variants and depth-enabled variants
     /// when the prepared resource working set includes depth images.
-    /// All recorded/pending commands must retire before extending descriptor layouts.
+    /// All recorded/pending commands must retire before replacing descriptor layouts.
+    /// The selected set replaces previous explicit Raster selections only after
+    /// all native preparation succeeds; failure preserves the previous set.
     pub fn prepare_raster_programs(
         &mut self,
         programs: &[crate::program::ManagedRasterProgram],
@@ -522,19 +525,24 @@ impl VulkanRuntime {
                 "Raster preparation requires retired execution slots",
             ));
         }
-        if self.programs.is_none() {
-            self.programs = Some(ShaderPrograms::new(
-                Arc::clone(&self.owner),
-                self.config.execution_slots,
-                self.config.max_shader_bindings,
-            )?);
+        let replacement = ShaderPrograms::new(
+            Arc::clone(&self.owner),
+            self.config.execution_slots,
+            self.config.max_shader_bindings,
+            false,
+        )?;
+        let needs = self
+            .programs
+            .as_ref()
+            .map_or(ShaderNeeds::default(), |programs| programs.prepared_needs());
+        if needs.any() {
+            replacement.prepare_fixed(needs)?;
         }
         let depth_available = self.entries.iter().any(|entry| entry.physical.as_ref()
             .is_some_and(|physical| matches!(physical.desc, ResourceDesc::Image(desc) if desc.format == ImageFormat::Depth32Float)));
-        self.programs
-            .as_ref()
-            .unwrap()
-            .prepare_rasters(programs, depth_available)
+        replacement.prepare_rasters(programs, depth_available)?;
+        self.programs = Some(replacement);
+        Ok(())
     }
 
     /// Prepare the complete managed Compute working set before ordinary frames.
@@ -1180,7 +1188,7 @@ impl VulkanRuntime {
                 }
                 Operation::Raster { program, draws, .. } => {
                     shader_needs.raster = true;
-                    if program.is_textured() {
+                    if !program.bindings().is_empty() {
                         draws.len()
                     } else {
                         0
@@ -1212,7 +1220,7 @@ impl VulkanRuntime {
         }
         let textured_raster = graph.order.iter().any(|&pass| {
             matches!(&graph.passes[pass].operation,
-            Operation::Raster { program, .. } if program.is_textured())
+            Operation::Raster { program, .. } if !program.bindings().is_empty())
         });
         let bindings = if shader_needs.compute || shader_needs.composite || textured_raster {
             Some(programs.as_ref().unwrap().acquire_bindings()?)

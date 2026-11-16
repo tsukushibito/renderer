@@ -7,7 +7,7 @@ use ash::vk;
 
 use super::super::resources::DeviceImage;
 use super::ShaderPrograms;
-use crate::graph::RasterParameters;
+use crate::graph::RasterConstants;
 
 impl ShaderPrograms {
     /// # Safety
@@ -70,8 +70,8 @@ impl ShaderPrograms {
                 vk::Buffer,
                 vk::Buffer,
                 u32,
-                &'a RasterParameters,
-                [vk::DescriptorSet; 2],
+                &'a RasterConstants,
+                [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
             ),
         >,
         color: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
@@ -104,30 +104,32 @@ impl ShaderPrograms {
             device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, program.pipeline);
             self.viewport(command, extent);
             for (vertices, indices, index_count, parameters, sets) in draws {
-                let mut bytes = [0_u8; 80];
-                for (value, output) in parameters
-                    .transform()
-                    .iter()
-                    .flatten()
-                    .chain(parameters.tint())
-                    .zip(bytes.as_chunks_mut::<4>().0)
-                {
-                    output.copy_from_slice(&value.to_ne_bytes());
+                let managed = program
+                    .raster_asset
+                    .unwrap_or_else(crate::program::ManagedRasterProgram::mesh);
+                let size = managed.parameter_size() as usize;
+                if size != 0 {
+                    let mut bytes = [0_u8; 128];
+                    for (value, output) in
+                        parameters.words().iter().zip(bytes.as_chunks_mut::<4>().0)
+                    {
+                        output.copy_from_slice(&value.to_ne_bytes());
+                    }
+                    device.cmd_push_constants(
+                        command,
+                        program.layout,
+                        super::creation::shader_stages(managed.parameter_layout().stages),
+                        0,
+                        &bytes[..size],
+                    );
                 }
-                device.cmd_push_constants(
-                    command,
-                    program.layout,
-                    vk::ShaderStageFlags::VERTEX,
-                    0,
-                    &bytes,
-                );
-                if sets[0] != vk::DescriptorSet::null() {
+                if program.raster_groups != 0 {
                     device.cmd_bind_descriptor_sets(
                         command,
                         vk::PipelineBindPoint::GRAPHICS,
                         program.layout,
                         0,
-                        &sets,
+                        &sets[..program.raster_groups],
                         &[],
                     );
                 }

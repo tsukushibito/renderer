@@ -9,16 +9,30 @@ use ash::vk;
 use super::super::error::RuntimeError;
 use super::super::memory::MemoryOwner;
 use super::super::resources::DeviceImage;
+use super::creation::descriptor_type;
 #[cfg(feature = "vulkan-diagnostics")]
 use super::name_object;
-use super::{RASTER_VARIANT_COUNT, ShaderNeeds, ShaderPrograms, native};
+use super::{
+    RASTER_GROUP_COUNT, RASTER_VARIANT_COUNT, RasterLayout, ShaderNeeds, ShaderPrograms, native,
+};
+use crate::program::{BindingLayout, BindingType};
+
+pub(in crate::backends::vulkan) enum RasterBinding {
+    Buffer {
+        buffer: vk::Buffer,
+        offset: u64,
+        size: u64,
+    },
+    Image(vk::ImageView),
+    Sampler,
+}
 
 struct DescriptorArena {
     owner: Arc<MemoryOwner>,
     pool: vk::DescriptorPool,
     compute: Vec<vk::DescriptorSet>,
     composite: Vec<vk::DescriptorSet>,
-    raster: [Vec<[vk::DescriptorSet; 2]>; RASTER_VARIANT_COUNT],
+    raster: [Vec<[vk::DescriptorSet; RASTER_GROUP_COUNT]>; RASTER_VARIANT_COUNT],
 }
 
 impl DescriptorArena {
@@ -27,42 +41,47 @@ impl DescriptorArena {
         max_bindings: u32,
         compute: Option<vk::DescriptorSetLayout>,
         composite: Option<vk::DescriptorSetLayout>,
-        raster: [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT],
+        raster: [Option<RasterLayout>; RASTER_VARIANT_COUNT],
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] ordinal: usize,
     ) -> Result<Self, RuntimeError> {
-        let raster_count = raster.iter().flatten().count() as u32;
-        let sizes = [
-            vk::DescriptorPoolSize {
+        let types = [
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::DescriptorType::SAMPLED_IMAGE,
+            vk::DescriptorType::SAMPLER,
+        ];
+        let mut sizes = Vec::new();
+        if compute.is_some() {
+            sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
                 descriptor_count: max_bindings * 2,
-            },
-            vk::DescriptorPoolSize {
+            });
+        }
+        if composite.is_some() {
+            sizes.push(vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 descriptor_count: max_bindings,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::UNIFORM_BUFFER,
-                descriptor_count: max_bindings * raster_count,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: max_bindings * raster_count,
-            },
-            vk::DescriptorPoolSize {
-                ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: max_bindings * raster_count,
-            },
-        ];
-        let sizes: Vec<_> = sizes
-            .into_iter()
-            .filter(|size| match size.ty {
-                vk::DescriptorType::STORAGE_IMAGE => compute.is_some(),
-                vk::DescriptorType::COMBINED_IMAGE_SAMPLER => composite.is_some(),
-                _ => raster_count != 0,
-            })
-            .collect();
-        let kinds =
-            u32::from(compute.is_some()) + u32::from(composite.is_some()) + 2 * raster_count;
+            });
+        }
+        for (index, ty) in types.into_iter().enumerate() {
+            let count: u32 = raster
+                .iter()
+                .flatten()
+                .map(|layout| layout.descriptors[index])
+                .sum();
+            if count != 0 {
+                sizes.push(vk::DescriptorPoolSize {
+                    ty,
+                    descriptor_count: count * max_bindings,
+                });
+            }
+        }
+        let raster_groups: u32 = raster
+            .iter()
+            .flatten()
+            .map(|layout| layout.groups as u32)
+            .sum();
+        let kinds = u32::from(compute.is_some()) + u32::from(composite.is_some()) + raster_groups;
         if kinds == 0 {
             return Err(RuntimeError::invalid(
                 "descriptor preparation requires a layout",
@@ -116,14 +135,16 @@ impl DescriptorArena {
             let Some(layouts) = layouts else {
                 continue;
             };
-            let prepared: Vec<_> = (0..max_bindings).flat_map(|_| layouts).collect();
+            let prepared: Vec<_> = (0..max_bindings)
+                .flat_map(|_| layouts.layouts[..layouts.groups].iter().copied())
+                .collect();
             let info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
                 .set_layouts(&prepared);
             #[cfg(feature = "memory-profiling")]
             crate::measurement::record_native(
                 crate::measurement::NativeEvent::DescriptorAllocate,
-                u64::from(max_bindings) * 2,
+                u64::from(max_bindings) * layouts.groups as u64,
             );
             // SAFETY: Fresh uniquely owned pool; sets survive through its exclusive lease.
             let sets = unsafe { result.owner.device.raw().allocate_descriptor_sets(&info) }
@@ -134,7 +155,14 @@ impl DescriptorArena {
                         r,
                     )
                 })?;
-            result.raster[index] = sets.as_chunks::<2>().0.to_vec();
+            result.raster[index] = sets
+                .chunks_exact(layouts.groups)
+                .map(|chunk| {
+                    let mut prepared = [vk::DescriptorSet::null(); RASTER_GROUP_COUNT];
+                    prepared[..chunk.len()].copy_from_slice(chunk);
+                    prepared
+                })
+                .collect();
         }
         #[cfg(feature = "vulkan-diagnostics")]
         {
@@ -154,8 +182,13 @@ impl Drop for DescriptorArena {
                 crate::measurement::NativeEvent::DescriptorFree,
                 (self.compute.len()
                     + self.composite.len()
-                    + self.raster.iter().map(|sets| sets.len() * 2).sum::<usize>())
-                    as u64,
+                    + self
+                        .raster
+                        .iter()
+                        .flat_map(|sets| sets.iter())
+                        .flatten()
+                        .filter(|&&set| set != vk::DescriptorSet::null())
+                        .count()) as u64,
             );
             crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
         }
@@ -177,15 +210,24 @@ pub(in crate::backends::vulkan) struct ShaderStats {
     pub(in crate::backends::vulkan) descriptor_arenas_leased: usize,
 }
 
-#[derive(Default)]
 struct DescriptorCache {
     idle: Vec<DescriptorArena>,
     stats: ShaderStats,
     layouts: (
         Option<vk::DescriptorSetLayout>,
         Option<vk::DescriptorSetLayout>,
-        [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT],
+        [Option<RasterLayout>; RASTER_VARIANT_COUNT],
     ),
+}
+
+impl Default for DescriptorCache {
+    fn default() -> Self {
+        Self {
+            idle: Vec::new(),
+            stats: ShaderStats::default(),
+            layouts: (None, None, [None; RASTER_VARIANT_COUNT]),
+        }
+    }
 }
 
 /// Bounded descriptor allocation state, independent of program publication.
@@ -200,7 +242,9 @@ impl BindingPool {
     pub(super) fn new(slots: usize, max_bindings: u32) -> Result<Self, RuntimeError> {
         if slots == 0
             || max_bindings == 0
-            || max_bindings > u32::MAX / (2 + 2 * RASTER_VARIANT_COUNT as u32)
+            || max_bindings
+                > u32::MAX
+                    / (2 + crate::program::MAX_RASTER_BINDINGS as u32 * RASTER_VARIANT_COUNT as u32)
         {
             return Err(RuntimeError::invalid(
                 "Graph shader capacities must be nonzero and descriptor counts representable",
@@ -227,7 +271,7 @@ impl BindingPool {
         owner: &Arc<MemoryOwner>,
         compute: Option<vk::DescriptorSetLayout>,
         composite: Option<vk::DescriptorSetLayout>,
-        raster: [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT],
+        raster: [Option<RasterLayout>; RASTER_VARIANT_COUNT],
     ) -> Result<(), RuntimeError> {
         let mut cache = self
             .cache
@@ -407,20 +451,9 @@ impl ShaderBindings {
     pub(in crate::backends::vulkan) fn raster(
         &mut self,
         key: usize,
-        uniform: vk::Buffer,
-        offset: u64,
-        size: u64,
-        image: &DeviceImage,
+        operands: impl Iterator<Item = (BindingLayout, RasterBinding)>,
         sampler: vk::Sampler,
-    ) -> Result<[vk::DescriptorSet; 2], RuntimeError> {
-        let limits = &self.programs.limits;
-        if !offset.is_multiple_of(limits.min_uniform_buffer_offset_alignment)
-            || size > u64::from(limits.max_uniform_buffer_range)
-        {
-            return Err(RuntimeError::unsupported(
-                "Raster Uniform range/alignment exceeds Device limits",
-            ));
-        }
+    ) -> Result<[vk::DescriptorSet; RASTER_GROUP_COUNT], RuntimeError> {
         if self.used >= self.programs.bindings.max_bindings {
             return Err(RuntimeError::capacity(
                 "Graph descriptor binding capacity exhausted",
@@ -432,39 +465,76 @@ impl ShaderBindings {
             .ok_or_else(|| RuntimeError::capacity("Raster descriptor layout is not prepared"))?;
         self.raster_used[key] += 1;
         self.used += 1;
-        let buffer = [vk::DescriptorBufferInfo::default()
-            .buffer(uniform)
-            .offset(offset)
-            .range(size)];
-        let sampled = [vk::DescriptorImageInfo::default()
-            .image_view(image.view)
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-        let sampler = [vk::DescriptorImageInfo::default().sampler(sampler)];
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(sets[0])
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .buffer_info(&buffer),
-            vk::WriteDescriptorSet::default()
-                .dst_set(sets[1])
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                .image_info(&sampled),
-            vk::WriteDescriptorSet::default()
-                .dst_set(sets[1])
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::SAMPLER)
-                .image_info(&sampler),
-        ];
-        // SAFETY: Exclusive prepared arena updates each pair once. GraphWork
-        // pins all resources and this lease until cancellation or real completion.
+        let mut slots = [None; crate::program::MAX_RASTER_BINDINGS];
+        let mut buffers =
+            [vk::DescriptorBufferInfo::default(); crate::program::MAX_RASTER_BINDINGS];
+        let mut images = [vk::DescriptorImageInfo::default(); crate::program::MAX_RASTER_BINDINGS];
+        let mut count = 0;
+        for (index, (slot, operand)) in operands.enumerate() {
+            slots[index] = Some(slot);
+            count += 1;
+            match operand {
+                RasterBinding::Buffer {
+                    buffer,
+                    offset,
+                    size,
+                } => {
+                    let limits = &self.programs.limits;
+                    let (alignment, maximum) = match slot.kind {
+                        BindingType::Uniform => (
+                            limits.min_uniform_buffer_offset_alignment,
+                            limits.max_uniform_buffer_range,
+                        ),
+                        BindingType::StorageRead => (
+                            limits.min_storage_buffer_offset_alignment,
+                            limits.max_storage_buffer_range,
+                        ),
+                        _ => unreachable!("canonical Raster buffer binding"),
+                    };
+                    if !offset.is_multiple_of(alignment) || size > u64::from(maximum) {
+                        return Err(RuntimeError::unsupported(
+                            "Raster buffer alignment/range exceeds Device limits",
+                        ));
+                    }
+                    buffers[index] = vk::DescriptorBufferInfo::default()
+                        .buffer(buffer)
+                        .offset(offset)
+                        .range(size);
+                }
+                RasterBinding::Image(view) => {
+                    images[index] = vk::DescriptorImageInfo::default()
+                        .image_view(view)
+                        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+                }
+                RasterBinding::Sampler => {
+                    images[index] = vk::DescriptorImageInfo::default().sampler(sampler);
+                }
+            }
+        }
+        let mut writes = [vk::WriteDescriptorSet::default(); crate::program::MAX_RASTER_BINDINGS];
+        for (index, slot) in slots[..count].iter().enumerate() {
+            let slot = slot.unwrap();
+            let write = vk::WriteDescriptorSet::default()
+                .dst_set(sets[slot.group as usize])
+                .dst_binding(slot.binding)
+                .descriptor_type(descriptor_type(slot.kind));
+            writes[index] = match slot.kind {
+                BindingType::Uniform | BindingType::StorageRead => {
+                    write.buffer_info(std::slice::from_ref(&buffers[index]))
+                }
+                _ => write.image_info(std::slice::from_ref(&images[index])),
+            };
+        }
+        // SAFETY: Canonical Graph operands established complete types/ranges.
+        // The fixed arrays are fully initialized before their addresses are used.
+        // This exclusive arena updates each set once before recording; GraphWork
+        // pins native resources and the lease through cancellation or retirement.
         unsafe {
             self.programs
                 .owner
                 .device
                 .raw()
-                .update_descriptor_sets(&writes, &[]);
+                .update_descriptor_sets(&writes[..count], &[]);
         }
         Ok(sets)
     }

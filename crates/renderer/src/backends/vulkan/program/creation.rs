@@ -10,7 +10,52 @@ use super::super::error::RuntimeError;
 use super::super::memory::MemoryOwner;
 #[cfg(feature = "vulkan-diagnostics")]
 use super::name_object;
-use super::native;
+use super::{RASTER_GROUP_COUNT, native};
+use crate::program::{
+    BindingType, BlendState, CompareOp, ManagedRasterProgram, ShaderStages, VertexFormat,
+};
+
+pub(super) fn shader_stages(stages: ShaderStages) -> vk::ShaderStageFlags {
+    let mut native = vk::ShaderStageFlags::empty();
+    if stages.contains(ShaderStages::VERTEX) {
+        native |= vk::ShaderStageFlags::VERTEX;
+    }
+    if stages.contains(ShaderStages::FRAGMENT) {
+        native |= vk::ShaderStageFlags::FRAGMENT;
+    }
+    native
+}
+
+fn vertex_format(format: VertexFormat) -> vk::Format {
+    match format {
+        VertexFormat::Float32x2 => vk::Format::R32G32_SFLOAT,
+        VertexFormat::Float32x3 => vk::Format::R32G32B32_SFLOAT,
+        VertexFormat::Float32x4 => vk::Format::R32G32B32A32_SFLOAT,
+    }
+}
+
+pub(super) fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
+    match kind {
+        BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
+        BindingType::StorageRead => vk::DescriptorType::STORAGE_BUFFER,
+        BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+        BindingType::Sampler => vk::DescriptorType::SAMPLER,
+        _ => unreachable!("trusted Raster read-only layout"),
+    }
+}
+
+fn compare_op(compare: CompareOp) -> vk::CompareOp {
+    match compare {
+        CompareOp::Never => vk::CompareOp::NEVER,
+        CompareOp::Less => vk::CompareOp::LESS,
+        CompareOp::Equal => vk::CompareOp::EQUAL,
+        CompareOp::LessEqual => vk::CompareOp::LESS_OR_EQUAL,
+        CompareOp::Greater => vk::CompareOp::GREATER,
+        CompareOp::NotEqual => vk::CompareOp::NOT_EQUAL,
+        CompareOp::GreaterEqual => vk::CompareOp::GREATER_OR_EQUAL,
+        CompareOp::Always => vk::CompareOp::ALWAYS,
+    }
+}
 
 struct ShaderModule {
     owner: Arc<MemoryOwner>,
@@ -22,7 +67,7 @@ impl ShaderModule {
         let words = spirv_words(bytes)?;
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-        // SAFETY: Only fixed, validated, repository-owned shaders enter here;
+        // SAFETY: Reviewed built-ins or caller-trusted shader assets enter here;
         // words are aligned and stay live through synchronous module creation.
         let module = unsafe {
             owner
@@ -189,7 +234,10 @@ pub(in crate::backends::vulkan) struct Program {
     pub(super) layout: vk::PipelineLayout,
     pub(super) pipeline: vk::Pipeline,
     pub(in crate::backends::vulkan) sampler: vk::Sampler,
-    pub(super) raster_layouts: [vk::DescriptorSetLayout; 2],
+    pub(super) raster_layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
+    pub(super) raster_groups: usize,
+    pub(super) raster_asset: Option<ManagedRasterProgram>,
+    pub(super) raster_depth: bool,
 }
 
 impl Program {
@@ -213,7 +261,10 @@ impl Program {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
-            raster_layouts: [vk::DescriptorSetLayout::null(); 2],
+            raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
+            raster_groups: 0,
+            raster_asset: None,
+            raster_depth: false,
         };
         result.initialize(kind)?;
         Ok(result)
@@ -232,57 +283,90 @@ impl Program {
             ));
         }
         let limits = owner.device.limits();
+        let groups = managed
+            .bindings()
+            .iter()
+            .map(|slot| slot.group as usize + 1)
+            .max()
+            .unwrap_or(0);
         if limits.max_push_constants_size < managed.parameter_size()
-            || limits.max_vertex_input_attributes < 2
+            || limits.max_vertex_input_attributes < managed.vertex_attributes().len() as u32
             || limits.max_vertex_input_bindings < 1
             || limits.max_vertex_input_binding_stride < managed.vertex_stride()
-            || limits.max_vertex_input_attribute_offset < 12
+            || managed.vertex_attributes().iter().any(|attribute| {
+                attribute.offset > limits.max_vertex_input_attribute_offset
+                    || attribute.location >= limits.max_vertex_input_attributes
+            })
             || (!managed.color_outputs().is_empty() && limits.max_color_attachments < 1)
-            || (managed.is_textured()
-                && (limits.max_bound_descriptor_sets < 2
-                    || limits.max_per_stage_descriptor_uniform_buffers < 1
-                    || limits.max_descriptor_set_uniform_buffers < 1
-                    || limits.max_uniform_buffer_range < 16
-                    || limits.max_per_stage_descriptor_sampled_images < 1
-                    || limits.max_descriptor_set_sampled_images < 1
-                    || limits.max_per_stage_descriptor_samplers < 1
-                    || limits.max_descriptor_set_samplers < 1
-                    || limits.max_per_stage_resources < 2))
+            || limits.max_bound_descriptor_sets < groups as u32
         {
             return Err(RuntimeError::unsupported(
-                "Device does not support reviewed Raster ABI",
+                "Device does not support Raster ABI limits",
             ));
         }
-        for (format, features, buffer) in [
-            (
-                vk::Format::R32G32B32_SFLOAT,
-                vk::FormatFeatureFlags::VERTEX_BUFFER,
-                true,
-            ),
-            (
-                vk::Format::R32G32B32A32_SFLOAT,
-                vk::FormatFeatureFlags::VERTEX_BUFFER,
-                true,
-            ),
-            (
-                raster_format(managed),
-                vk::FormatFeatureFlags::COLOR_ATTACHMENT,
-                false,
-            ),
-            (
-                if depth {
-                    vk::Format::D32_SFLOAT
-                } else {
-                    vk::Format::UNDEFINED
-                },
-                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
-                false,
-            ),
-        ] {
-            if format == vk::Format::UNDEFINED {
-                continue;
+        for stage in [ShaderStages::VERTEX, ShaderStages::FRAGMENT] {
+            let mut counts = [0; 4];
+            for slot in managed
+                .bindings()
+                .iter()
+                .filter(|slot| slot.stages.contains(stage))
+            {
+                counts[match slot.kind {
+                    BindingType::Uniform => 0,
+                    BindingType::StorageRead => 1,
+                    BindingType::SampledImage => 2,
+                    BindingType::Sampler => 3,
+                    _ => unreachable!("trusted Raster layout"),
+                }] += 1;
             }
-            // SAFETY: Retained Device owns this adapter and Instance.
+            if counts[0] > limits.max_per_stage_descriptor_uniform_buffers
+                || counts[1] > limits.max_per_stage_descriptor_storage_buffers
+                || counts[2] > limits.max_per_stage_descriptor_sampled_images
+                || counts[3] > limits.max_per_stage_descriptor_samplers
+                || counts[..3].iter().sum::<u32>() > limits.max_per_stage_resources
+            {
+                return Err(RuntimeError::unsupported(
+                    "Raster descriptors exceed Device per-stage limits",
+                ));
+            }
+        }
+        let mut totals = [0; 4];
+        for slot in managed.bindings() {
+            totals[match slot.kind {
+                BindingType::Uniform => 0,
+                BindingType::StorageRead => 1,
+                BindingType::SampledImage => 2,
+                BindingType::Sampler => 3,
+                _ => unreachable!("trusted Raster layout"),
+            }] += 1;
+            let maximum = match slot.kind {
+                BindingType::Uniform => u64::from(limits.max_uniform_buffer_range),
+                BindingType::StorageRead => u64::from(limits.max_storage_buffer_range),
+                _ => u64::MAX,
+            };
+            if slot.min_size > maximum {
+                return Err(RuntimeError::unsupported(
+                    "Raster buffer minimum exceeds Device range",
+                ));
+            }
+        }
+        if totals[0] > limits.max_descriptor_set_uniform_buffers
+            || totals[1] > limits.max_descriptor_set_storage_buffers
+            || totals[2] > limits.max_descriptor_set_sampled_images
+            || totals[3] > limits.max_descriptor_set_samplers
+        {
+            return Err(RuntimeError::unsupported(
+                "Raster descriptors exceed Device pipeline limits",
+            ));
+        }
+        let query = |format,
+                     features: vk::FormatFeatureFlags,
+                     buffer|
+         -> Result<(), RuntimeError> {
+            if format == vk::Format::UNDEFINED {
+                return Ok(());
+            }
+            // SAFETY: The retained Device owns this live physical device and Instance.
             let properties = unsafe {
                 owner
                     .device
@@ -296,9 +380,31 @@ impl Program {
             };
             if !available.contains(features) {
                 return Err(RuntimeError::unsupported(
-                    "Device lacks reviewed Raster format support",
+                    "Device lacks Raster format support",
                 ));
             }
+            Ok(())
+        };
+        for attribute in managed.vertex_attributes() {
+            query(
+                vertex_format(attribute.format),
+                vk::FormatFeatureFlags::VERTEX_BUFFER,
+                true,
+            )?;
+        }
+        let color_features = vk::FormatFeatureFlags::COLOR_ATTACHMENT
+            | if managed.blend() != BlendState::Replace {
+                vk::FormatFeatureFlags::COLOR_ATTACHMENT_BLEND
+            } else {
+                vk::FormatFeatureFlags::empty()
+            };
+        query(raster_format(managed), color_features, false)?;
+        if depth {
+            query(
+                vk::Format::D32_SFLOAT,
+                vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+                false,
+            )?;
         }
         let mut result = Self {
             owner,
@@ -306,43 +412,45 @@ impl Program {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
-            raster_layouts: [vk::DescriptorSetLayout::null(); 2],
+            raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
+            raster_groups: 0,
+            raster_asset: None,
+            raster_depth: false,
         };
-        if managed.is_textured() {
-            let uniform = [vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::VERTEX)];
-            let sampled = [
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(0)
-                    .descriptor_type(vk::DescriptorType::SAMPLED_IMAGE)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(1)
-                    .descriptor_type(vk::DescriptorType::SAMPLER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-            ];
-            for (slot, bindings) in result
-                .raster_layouts
-                .iter_mut()
-                .zip([&uniform[..], &sampled[..]])
-            {
-                #[cfg(feature = "memory-profiling")]
-                crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-                // SAFETY: Reviewed descriptors; each successful handle is owned before the next call.
-                *slot = unsafe {
-                    result.owner.device.raw().create_descriptor_set_layout(
-                        &vk::DescriptorSetLayoutCreateInfo::default().bindings(bindings),
-                        None,
-                    )
-                }
-                .map_err(|r| native(&result.owner, "vkCreateDescriptorSetLayout(Raster)", r))?;
+        result.raster_asset = Some(managed);
+        result.raster_depth = depth;
+        result.raster_groups = groups;
+        for group in 0..groups {
+            let bindings: Vec<_> = managed
+                .bindings()
+                .iter()
+                .filter(|slot| slot.group as usize == group)
+                .map(|slot| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(slot.binding)
+                        .descriptor_type(descriptor_type(slot.kind))
+                        .descriptor_count(1)
+                        .stage_flags(shader_stages(slot.stages))
+                })
+                .collect();
+            #[cfg(feature = "memory-profiling")]
+            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+            // SAFETY: Trusted manifest slots are unique and Device limits were checked;
+            // every created layout is owned before another native operation can fail.
+            result.raster_layouts[group] = unsafe {
+                result.owner.device.raw().create_descriptor_set_layout(
+                    &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+                    None,
+                )
             }
-            // SAFETY: Fixed nearest/clamp sampler requires no optional feature; result owns the handle.
+            .map_err(|r| native(&result.owner, "vkCreateDescriptorSetLayout(Raster)", r))?;
+        }
+        if managed
+            .bindings()
+            .iter()
+            .any(|slot| slot.kind == BindingType::Sampler)
+        {
+            // SAFETY: Fixed nearest/clamp sampler requires no optional feature; result owns it.
             result.sampler = unsafe {
                 result.owner.device.create_sampler(
                     &vk::SamplerCreateInfo::default()
@@ -357,13 +465,14 @@ impl Program {
             };
         }
         let pushes = [vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX,
+            stage_flags: shader_stages(managed.parameter_layout().stages),
             offset: 0,
             size: managed.parameter_size(),
         }];
-        let mut info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&pushes);
-        if managed.is_textured() {
-            info = info.set_layouts(&result.raster_layouts);
+        let mut info =
+            vk::PipelineLayoutCreateInfo::default().set_layouts(&result.raster_layouts[..groups]);
+        if managed.parameter_size() != 0 {
+            info = info.push_constant_ranges(&pushes);
         }
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
@@ -526,9 +635,11 @@ impl Program {
         raster_program: Option<(crate::program::ManagedRasterProgram, bool)>,
     ) -> Result<vk::Pipeline, RuntimeError> {
         let mesh = raster_program.is_some();
-        let depth_enabled = raster_program.is_some_and(|(_, depth)| depth);
+        let depth_attached = raster_program.is_some_and(|(_, depth)| depth);
+        let depth_state = raster_program.map(|(program, _)| program.depth());
+        let depth_enabled =
+            depth_attached && depth_state.is_some_and(|state| state.compare().is_some());
         let depth_only = raster_program.is_some_and(|(program, _)| program.is_depth_only());
-        let prepassed = raster_program.is_some_and(|(program, _)| program.is_prepassed());
         let vertex = ShaderModule::new(
             Arc::clone(&self.owner),
             if let Some((program, _)) = raster_program {
@@ -570,23 +681,19 @@ impl Program {
         };
         let bindings = [vk::VertexInputBindingDescription {
             binding: 0,
-            stride: 28,
+            stride: raster_program.map_or(0, |(program, _)| program.vertex_stride()),
             input_rate: vk::VertexInputRate::VERTEX,
         }];
-        let attributes = [
-            vk::VertexInputAttributeDescription {
-                location: 0,
+        let attributes: Vec<_> = raster_program
+            .into_iter()
+            .flat_map(|(program, _)| program.vertex_attributes())
+            .map(|attribute| vk::VertexInputAttributeDescription {
+                location: attribute.location,
                 binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: 0,
-            },
-            vk::VertexInputAttributeDescription {
-                location: 1,
-                binding: 0,
-                format: vk::Format::R32G32B32A32_SFLOAT,
-                offset: 12,
-            },
-        ];
+                format: vertex_format(attribute.format),
+                offset: attribute.offset,
+            })
+            .collect();
         let mut vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
         if mesh {
             vertex_input = vertex_input
@@ -607,13 +714,49 @@ impl Program {
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
         let depth = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(depth_enabled)
-            .depth_write_enable(depth_enabled && !prepassed)
-            .depth_compare_op(if prepassed {
-                vk::CompareOp::LESS_OR_EQUAL
-            } else {
-                vk::CompareOp::LESS
-            });
+            .depth_write_enable(
+                depth_enabled && depth_state.is_some_and(|state| state.write_enabled()),
+            )
+            .depth_compare_op(
+                depth_state
+                    .and_then(|state| state.compare())
+                    .map_or(vk::CompareOp::ALWAYS, compare_op),
+            );
+        let mode = raster_program.map_or(BlendState::Replace, |(program, _)| program.blend());
+        let (source, destination, source_alpha, destination_alpha) = match mode {
+            BlendState::Replace => (
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ZERO,
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ZERO,
+            ),
+            BlendState::Alpha => (
+                vk::BlendFactor::SRC_ALPHA,
+                vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+            ),
+            BlendState::PremultipliedAlpha => (
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+            ),
+            BlendState::Additive => (
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ONE,
+                vk::BlendFactor::ONE,
+            ),
+        };
         let color_attachments = [vk::PipelineColorBlendAttachmentState::default()
+            .blend_enable(mode != BlendState::Replace)
+            .src_color_blend_factor(source)
+            .dst_color_blend_factor(destination)
+            .color_blend_op(vk::BlendOp::ADD)
+            .src_alpha_blend_factor(source_alpha)
+            .dst_alpha_blend_factor(destination_alpha)
+            .alpha_blend_op(vk::BlendOp::ADD)
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(if depth_only {
             &[]
@@ -629,7 +772,7 @@ impl Program {
         ];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(if depth_only { &[] } else { &formats })
-            .depth_attachment_format(if depth_enabled {
+            .depth_attachment_format(if depth_attached {
                 vk::Format::D32_SFLOAT
             } else {
                 vk::Format::UNDEFINED

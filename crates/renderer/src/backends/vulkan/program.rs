@@ -19,10 +19,19 @@ mod record;
 pub(super) use record::attachment_info;
 
 use bindings::BindingPool;
-pub(super) use bindings::ShaderBindings;
+pub(super) use bindings::{RasterBinding, ShaderBindings};
 use creation::{Program, ProgramKind};
 
-const RASTER_VARIANT_COUNT: usize = crate::program::ManagedRasterProgram::NATIVE_PROGRAM_COUNT * 2;
+const RASTER_VARIANT_COUNT: usize = crate::program::MAX_RASTER_PROGRAMS * 2;
+const RASTER_GROUP_COUNT: usize = crate::program::MAX_RASTER_BIND_GROUPS;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RasterLayout {
+    layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
+    groups: usize,
+    // Uniform, StorageRead, SampledImage, Sampler totals for this pipeline.
+    descriptors: [u32; 4],
+}
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
@@ -47,10 +56,6 @@ fn name_object<H: vk::Handle>(
             .set_debug_utils_object_name(&info)
     }
     .map_err(|r| native(owner, "vkSetDebugUtilsObjectNameEXT(Graph)", r))
-}
-
-pub(super) fn raster_key(program: crate::program::ManagedRasterProgram, depth: bool) -> usize {
-    program.native_id() * 2 + usize::from(depth)
 }
 
 /// The live operations of one graph. Unused programs impose no capabilities or
@@ -80,6 +85,7 @@ pub(super) struct ShaderPrograms {
     initialization: Mutex<()>,
     limits: vk::PhysicalDeviceLimits,
     bindings: BindingPool,
+    implicit_raster: bool,
 }
 
 impl ShaderPrograms {
@@ -87,6 +93,7 @@ impl ShaderPrograms {
         owner: Arc<MemoryOwner>,
         concurrent_slots: usize,
         max_bindings: u32,
+        implicit_raster: bool,
     ) -> Result<Arc<Self>, RuntimeError> {
         owner
             .device
@@ -103,7 +110,16 @@ impl ShaderPrograms {
             initialization: Mutex::new(()),
             limits,
             bindings,
+            implicit_raster,
         }))
+    }
+
+    pub(super) fn prepared_needs(&self) -> ShaderNeeds {
+        ShaderNeeds {
+            compute: self.compute.get().is_some(),
+            raster: self.raster.get().is_some(),
+            composite: self.composite.get().is_some(),
+        }
     }
 
     /// Check the immutable prepared working set without creating native state.
@@ -126,7 +142,7 @@ impl ShaderPrograms {
 
     /// Explicit preparation/change boundary. Existing leases must retire before
     /// extending the descriptor working set; ordinary ensure/acquire never grow.
-    pub(super) fn prepare_bindings(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
+    pub(super) fn prepare_fixed(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
         self.owner
             .device
             .ensure_active()
@@ -137,7 +153,11 @@ impl ShaderPrograms {
             .map_err(|_| RuntimeError::invalid("Graph program initialization lock poisoned"))?;
         for (needed, slot, kind) in [
             (needs.compute, &self.compute, ProgramKind::Compute),
-            (needs.raster, &self.raster, ProgramKind::Raster),
+            (
+                needs.raster && self.implicit_raster,
+                &self.raster,
+                ProgramKind::Raster,
+            ),
             (needs.composite, &self.composite, ProgramKind::Composite),
         ] {
             if needed && slot.get().is_none() {
@@ -150,6 +170,11 @@ impl ShaderPrograms {
                 })?;
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn prepare_bindings(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
+        self.prepare_fixed(needs)?;
         self.bindings.prepare(
             &self.owner,
             self.compute.get().map(|program| program.set_layout),
@@ -158,12 +183,43 @@ impl ShaderPrograms {
         )
     }
 
-    fn raster_layouts(&self) -> [Option<[vk::DescriptorSetLayout; 2]>; RASTER_VARIANT_COUNT] {
+    fn raster_layouts(&self) -> [Option<RasterLayout>; RASTER_VARIANT_COUNT] {
         std::array::from_fn(|key| {
             self.rasters[key]
                 .get()
-                .filter(|program| program.raster_layouts[0] != vk::DescriptorSetLayout::null())
-                .map(|program| program.raster_layouts)
+                .filter(|program| program.raster_groups != 0)
+                .map(|program| {
+                    let mut descriptors = [0; 4];
+                    for slot in program.raster_asset.unwrap().bindings() {
+                        descriptors[match slot.kind {
+                            crate::program::BindingType::Uniform => 0,
+                            crate::program::BindingType::StorageRead => 1,
+                            crate::program::BindingType::SampledImage => 2,
+                            crate::program::BindingType::Sampler => 3,
+                            _ => unreachable!("trusted Raster read-only layout"),
+                        }] += 1;
+                    }
+                    RasterLayout {
+                        layouts: program.raster_layouts,
+                        groups: program.raster_groups,
+                        descriptors,
+                    }
+                })
+        })
+    }
+
+    pub(in crate::backends::vulkan) fn raster_key(
+        &self,
+        managed: crate::program::ManagedRasterProgram,
+        depth: bool,
+    ) -> Option<usize> {
+        self.rasters.iter().position(|slot| {
+            slot.get().is_some_and(|program| {
+                program
+                    .raster_asset
+                    .is_some_and(|asset| asset.same(&managed))
+                    && program.raster_depth == depth
+            })
         })
     }
 
@@ -172,6 +228,20 @@ impl ShaderPrograms {
         programs: &[crate::program::ManagedRasterProgram],
         depth_available: bool,
     ) -> Result<(), RuntimeError> {
+        let distinct = programs
+            .iter()
+            .enumerate()
+            .filter(|(index, program)| {
+                !programs[..*index]
+                    .iter()
+                    .any(|earlier| earlier.same(program))
+            })
+            .count();
+        if distinct > crate::program::MAX_RASTER_PROGRAMS {
+            return Err(RuntimeError::capacity(
+                "Raster Program working set exceeds the common capacity",
+            ));
+        }
         let _initialization = self
             .initialization
             .lock()
@@ -183,11 +253,20 @@ impl ShaderPrograms {
                 {
                     continue;
                 }
-                if managed.native_id() == 0 && depth && self.raster.get().is_some() {
+                if managed.same(&crate::program::ManagedRasterProgram::mesh())
+                    && depth
+                    && self.raster.get().is_some()
+                {
                     continue;
                 }
-                let slot = &self.rasters[raster_key(managed, depth)];
-                if slot.get().is_none() {
+                if self.raster_key(managed, depth).is_none() {
+                    let slot = self
+                        .rasters
+                        .iter()
+                        .find(|slot| slot.get().is_none())
+                        .ok_or_else(|| {
+                            RuntimeError::capacity("Raster prepared Program capacity exhausted")
+                        })?;
                     let program = Program::new_raster(Arc::clone(&self.owner), managed, depth)?;
                     slot.set(program)
                         .map_err(|_| RuntimeError::invalid("Raster unexpectedly published"))?;
@@ -207,14 +286,14 @@ impl ShaderPrograms {
         managed: crate::program::ManagedRasterProgram,
         depth: bool,
     ) -> Result<&Program, RuntimeError> {
-        if managed.native_id() == 0
+        if managed.same(&crate::program::ManagedRasterProgram::mesh())
             && depth
             && let Some(program) = self.raster.get()
         {
             return Ok(program);
         }
-        self.rasters[raster_key(managed, depth)]
-            .get()
+        self.raster_key(managed, depth)
+            .and_then(|key| self.rasters[key].get())
             .ok_or_else(|| RuntimeError::capacity("Raster Program variant is not prepared"))
     }
 

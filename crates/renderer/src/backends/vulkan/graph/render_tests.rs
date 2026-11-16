@@ -153,7 +153,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                     vertices,
                     indices,
                     index_count: 12,
-                    parameters: RasterParameters::default(),
+                    parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
                     colors: &[Attachment {
@@ -208,14 +208,14 @@ fn vulkan_attachment_subresource_native_boundaries() {
                         vertices,
                         indices,
                         index_count: 12,
-                        parameters: RasterParameters::default(),
+                        parameters: RasterParameters::default().into(),
                     },
                     RasterDraw {
                         bindings: &[],
                         vertices,
                         indices,
                         index_count: 12,
-                        parameters: RasterParameters::default(),
+                        parameters: RasterParameters::default().into(),
                     },
                 ],
                 RasterAttachments {
@@ -374,7 +374,7 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
             vertices,
             indices,
             index_count: 6,
-            parameters: RasterParameters::default(),
+            parameters: RasterParameters::default().into(),
         }; 2];
         graph
             .raster(
@@ -480,7 +480,7 @@ fn batch_draws(
             vertices,
             indices,
             index_count,
-            parameters,
+            parameters: parameters.into(),
         })
         .collect()
 }
@@ -630,7 +630,7 @@ fn opaque_batch_comparison(
                         vertices,
                         indices,
                         index_count: count,
-                        parameters,
+                        parameters: parameters.into(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {
@@ -1026,7 +1026,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                         vertices,
                         indices,
                         index_count: 12,
-                        parameters: RasterParameters::default(),
+                        parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {
@@ -1238,7 +1238,7 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
                 vertices,
                 indices,
                 index_count: 12,
-                parameters: RasterParameters::default(),
+                parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {
@@ -1417,7 +1417,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         vertices,
                         indices,
                         index_count: 12,
-                        parameters: RasterParameters::default(),
+                        parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {
@@ -1471,7 +1471,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         vertices: blue_vertices,
                         indices: blue_indices,
                         index_count: 6,
-                        parameters: RasterParameters::default(),
+                        parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {
@@ -1574,7 +1574,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                         vertices,
                         indices,
                         index_count: 12,
-                        parameters: RasterParameters::default(),
+                        parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
                         colors: &[Attachment {

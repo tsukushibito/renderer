@@ -218,7 +218,7 @@ fn image_frame(
                 vertices,
                 indices,
                 index_count: 3,
-                parameters,
+                parameters: parameters.into(),
             }],
             RasterAttachments {
                 colors: &[Attachment {

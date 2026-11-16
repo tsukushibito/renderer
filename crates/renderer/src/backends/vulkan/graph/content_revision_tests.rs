@@ -293,7 +293,7 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                     vertices,
                     indices,
                     index_count: 3,
-                    parameters: RasterParameters::default(),
+                    parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
                     colors: &[Attachment {

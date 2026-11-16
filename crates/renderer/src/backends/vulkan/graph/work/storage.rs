@@ -20,7 +20,7 @@ pub(in crate::backends::vulkan::graph) struct WorkData {
     pub(in crate::backends::vulkan::graph) needed: Vec<bool>,
     pub(in crate::backends::vulkan::graph) final_states: Vec<Option<Snapshot>>,
     pub(super) passes: Vec<PreparedPass>,
-    pub(super) raster_descriptors: Vec<[vk::DescriptorSet; 2]>,
+    pub(super) raster_descriptors: Vec<[vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS]>,
     #[cfg(feature = "vulkan-diagnostics")]
     pub(super) labels: Vec<u8>,
     pub(super) buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
