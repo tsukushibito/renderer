@@ -21,7 +21,7 @@ CPUのテスト・benchmark用依存が要求するツールは開発手順で�
 公開Graph APIはGPU非依存で、Vulkanの実行は`VulkanRuntime`から明示的に開始する。
 固定shaderによるCompute、indexed meshと深度、sampled imageの最終合成を扱う。
 Graphの宣言・producer・範囲・culling・import/exportは[RenderGraphの契約](rendergraph.md)を参照する。
-Windows表示はoptionalな`presentation` featureで追加する。
+Windows表示は`vulkan,presentation`で追加する。`presentation`単独ではbackendを選ばない。
 利用側のレビュー済みCompute shaderは静的descriptorのunsafe取込で扱う。未信頼shaderのsandboxや一般的なPassEncoderは提供しない。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
@@ -656,6 +656,10 @@ engineのupload jobは固定staging容量・cache atom整列・未回収submissi
 
 ## Windows Presentation
 
+設定・outcomeと利用手順は[二API共通の表示契約](rendergraph.md#windows-presentation)に従う。
+`PresentationConfig`／`PresentOutcome`はVulkan内部の型ではなく、`crate::presentation`に置く。
+backend選択のためにGraph、camera、入力処理を分岐させない。
+
 native `presentation/`はGraph型・Snapshot・PhysicalLeaseを参照しない。
 `swapchain`は能力選択と世代RAII、`slots`は再利用条件・present退役・acquire guard/取消を所有する。
 `program`/`commands`はdescriptorとnative fullscreen記録を担当する。
@@ -670,6 +674,8 @@ slotとguardの状態はprivateに保ち、状態遷移を所有者の操作へ�
 
 `for_window`は`Arc<winit::window::Window>`を受け取り、Runtimeと`Presenter`を返す。
 Surface所有者がWindowとInstanceを保持し、Deviceと同じInstanceに由来することを保証する。
+対象をWin32に限定し、winitの`HWND`／`HINSTANCE`からashのWin32 Surface作成を直接呼ぶ。
+別Window libraryや別OSのadapterを含む`ash-window`依存は持たず、D3D12だけの表示構成へashを追加しない。
 イベントループは利用側に置く。M3では確実なWindow寿命を優先した限定adapterとし、
 他のwindow libraryへの接続はPresentation内の境界で追加できるよう、Graph・engine入力から分離する。
 CPUのみの構築とheadless Vulkanはwindow依存を持たず、表示依存はWindows targetのoptional依存に限定する。
@@ -711,6 +717,7 @@ Swapchainの破棄には、その世代への全presentと通常GPU参照の終�
 容量不足、`NotReady`、ゼロextentの`Suspended`で通常frameに暗黙waitを加えない。
 実行枠はGraphと表示で共有するため、両submitの使用数を見た明示的なbackpressureが必要である。
 `PresentationConfig::vsync`は既定trueでFIFO、falseでIMMEDIATEを要求する。
+希望画像数は二API共通の2〜16とし、実Surfaceのmin／max制限へ合わせた実画像数を取得する。
 実Surfaceの対応モードを照会し、未対応は`Unsupported`として拒否する。
 MAILBOXも垂直同期を待つため、OFF要求のfallbackには使わない。
 これは最適化済みという判断ではなく、同期する／しないという利用者の選択を明示する契約である。
@@ -789,6 +796,28 @@ availability不足も時間ゼロとして扱わない。GPU時間はGraphの記
 表示用submit・present/VSync待ち・画面への表示完了を含まない。
 CPU retireはpayload整理、query取得、native実行枠のreset・返却を含み、Fenceでblockした時間を除く。
 失敗したpollの反復費用はそのsampleに含めず、利用側のpoll全体時間と区別する。
+
+Graph結果の`SubmissionMetrics`／`GpuTiming`は`crate::profiling`の二API共通型を使う。
+表示側は独立した`Presenter::set_profiling(bool)`で有効にし、`profiling_enabled()`で要求を確認する。
+有効化はtimestamp能力と固定容量を確認する準備境界であり、Graph計測を暗黙に有効にしない。
+`take_profile()`は完了済みの`PresentationMetrics`をFIFOで一件ずつ返す。
+pendingと未消費sampleの合計は`max_frames`以内とし、満杯ならacquire前に容量不足を返す。
+利用側はpollとともにsampleを消費し、暗黙に計測結果を捨てたり領域を増やしたりしない。
+
+表示sampleはsource準備、acquire、record、submit、present API、退役のCPU区間と、
+表示用fullscreen命令だけのGPU timestamp区間を持つ。
+表示submitが受理されれば、その後の表示要求が拒否されてもsampleを回収する。
+したがってsample件数は`Presented`件数や画面へ到達したframe数の保証ではない。
+acquire／presentのCPU時間にはnative呼出しのpacing費用を含め、GPU区間へ加算しない。
+退役時間は成功した回収のquery取得・所有返却を含み、失敗したpollや明示waitのblock時間は含めない。
+
+profilingを一度も有効にしなければ、専用query poolを作らず、通常frameに各phaseのtimerを加えない。
+無効化は将来の記録だけへ適用し、既に受理したsampleの回収・所有は維持する。
+準備済みquery領域は無効化のたびに破棄せず、明示変更／終了まで保持する。
+query取得のために通常frameで待機せず、Graph計測と同じ実Fence・availability・有効bit幅の条件を使う。
+これは計測の費用を有効時へ分ける設計であり、profiling有効時の無費用や性能優位を主張しない。
+VulkanはTOP_OF_PIPE／BOTTOM_OF_PIPE、D3D12はDIRECT queueのBOP timestampで命令区間を囲む。
+native markerの意味と同じworkload／設定を併記し、短い区間の差をshader専有時間や普遍的なAPI速度差へ読み替えない。
 
 `memory_stats()`は要求時にVMA統計を取得する。登録済み、pending等で保持中、再利用可能なcacheの
 論理byte数、stagingの要求byte・整列予約byte・high-water、VMA Allocationとblockの件数・byte数を分ける。

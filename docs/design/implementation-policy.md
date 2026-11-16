@@ -731,7 +731,7 @@ Compute/copyの二API受入`.2.4`は完了した。公開APIの構成変更は�
 | `.2.7.4` consumer・基準受入 | 標準forward・利用側多段Computeのpost交換／追加／無効化・標準パス直接合成を二APIで照合し、frame_loop／engine_workloadsと文書を移行した。旧描画の同等性、任意HDR出力、容量・所有・混合frameメモリを確認する。 |
 | `.2.5` 一般import・寿命 | `.2.7`の境界へcanonical identity/revision、更新・pending退役、履歴・失敗を接続する。既存受入を保持し、新課題へ重複実装しない。 |
 | `.2.8` 利用側Raster | `.2.7`と`.2.5`の後、独自graphics shader/ABIと必要なblend/depth設定を公開する。最小alpha fixtureで三経路を二API実証し、固定Program群の公開だけで自由なRaster対応を主張しない。 |
-| `.2.6` 表示・時間計測 | `.2.5`/`.2.8`後、新APIのconsumerとして二API表示、自由camera、resize、pending終了を統合する。合意済みの実windowed通常frame CPU/GPU時間計測はここに残す。 |
+| `.2.6` 表示・時間計測 | `.2.5`/`.2.8`の公開Graph・importを使う同じconsumerで、二API表示、自由camera／固定巡回、resize、pending終了を接続する。共通表示契約と任意の実windowed CPU／GPU／present計測は[表示設計](#d3d12-presentation)に従う。 |
 
 `.2.7.1`〜`.2.7.4`の親は`renderer-7ft.2.7`、`.2.8`はB1直下とする。上表の省略IDには`renderer-7ft`を前置する。
 新APIと旧APIの互換wrapperや並行経路を互換性だけのために残さず、実装範囲のconsumerと文書を一緒に更新する。
@@ -872,11 +872,23 @@ pending参照の保持を契約にする。大きなuploadは固定容量のstag
 
 Surface・Swapchainの作成、acquire、present、リサイズ、最小化、終了処理はPresentationの責務にする。ただし、必要なDevice・キュー選択や同期情報はランタイムと共有し、互いに同じGPUオブジェクトを独立所有しない。
 
-Vulkanのpresent待機Semaphoreは、単なる描画submitの完了と同じ条件で再利用できると仮定しない。初期は公式ガイドにある画像ごとのpresent待機Semaphoreの方式を参考にし、acquire用・frame slot用の同期と区別する。[^wsi]
+Vulkanのpresent待機Semaphoreは、単なる描画submitの完了と同じ条件で再利用できると仮定しない。現行はEXT swapchain maintenance1を要求し、各slotのpresent fenceと通常GPU参照の両方を回収する。拡張なしの画像ごとのSemaphore方式へ暗黙にfallbackしない。[^wsi]
 
 Swapchain再作成・破棄時は、旧画像とpresent操作の完了条件も確認する。通常のGPU作業の完了トークンだけで表示側の寿命まで証明したと扱わない。対応拡張の利用や明示的な完了追跡を含め、採用する手順を検証する。[^wsirecreate]
 
 frame slot indexとSwapchain image indexは別概念とする。ゼロサイズ、`OUT_OF_DATE`、`SUBOPTIMAL`、surface loss等を、再試行・再作成・停止のどれに分類するか明示する。
+
+`presentation` featureはbackendを選ばない。共通の`PresentationConfig`／`PresentOutcome`と
+`for_window → prepare → extent → present → poll → close`の意味を揃え、nativeの寿命差は各Presenter内部で扱う。
+Vulkanは旧世代を上限内で保持し、DXGIは同じHWNDの一つのflip swapchainをready確認後にresizeする。
+どちらも普通の枠不足で暗黙wait／増設をせず、利用側は同じcameraと公開Graphを使える。
+共通の詳細は[表示のGraph接続](rendergraph.md#windows-presentation)に従う。
+
+時間計測は明示opt-inとし、Graph全体と表示用fullscreenのGPU区間を分ける。
+CPUのbuild／compile、native prepare／record／submit、poll／退役、結果返却、acquire／present APIと
+frame間隔を分け、VSync OFFの処理時間とONのpacingを別runで記録する。
+query／readback領域は有効化時の準備境界で確保し、通常frameにquery作成や結果取得待機を追加しない。
+追加診断・profilingなしの通常経路でも容量・同期・native失敗と未完了所有は維持する。
 
 ## 13. Rustとunsafeの実装規則
 
@@ -1251,7 +1263,9 @@ Graph構築で範囲・ABI・重複subresource・dispatch/extentを保証する�
 同じ小HDR入力の複数Compute、画像/buffer copy/readbackと変動frameメモリを別processのstrict/shippingで受け入れる。
 `.2.4`の受入後は[公開API移行](#public-api-migration)の`.2.7`で、入力接続と公開標準パス・標準グラフを先行する。
 常駐資源importと履歴は新しい境界を使う`.2.5`へ、利用側Raster shaderとblend/depth設定は`.2.8`へ分ける。
-表示と通常frameの二API時間計測の拡張は、これらの後の`.2.6`へ残す。
+`.2.6`は同じ公開Graph・登録資源を使う二APIのWindows表示、自由camera／固定巡回と通常frame時間計測を接続する。
+共通outcomeとnonblocking backpressureを保ち、resize／最小化復帰／取得後cancel／pending終了を扱う。
+接続と計測の契約は[共通Graph](rendergraph.md#windows-presentation)と[D3D12表示](#d3d12-presentation)へまとめる。
 
 **完了条件:** 効果専用操作をRenderer本体へ追加せず、同じ利用側パス定義と入力を二APIで実行できる。
 標準描画も独自処理も同じGraph経路を使い、未投入・未完了・更新・破棄・失敗・回収を区別する。
@@ -1631,6 +1645,82 @@ canonical import/exportは`.2.5`で一般buffer／画像の共有registryへ接�
 slotごとのCOMMON復帰を維持し、同じqueueでのGraph間受け渡しにCPU待機を要求しない。
 旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
 一般RHIや将来の描画・binding契約をこのbuffer実行だけで確定したとは扱わない。
+
+<a id="d3d12-presentation"></a>
+
+### D3D12のWindows表示と任意時間計測
+
+`d3d12,presentation`は`D3D12Runtime::for_window`／`D3D12Presenter`を公開する。
+表示設定・outcome・再試行手順は[二API共通契約](rendergraph.md#windows-presentation)と同じであり、
+D3D12だけの構成へVulkanのruntimeやash／VMAを追加しない。
+利用側は同じ公開Graph・標準recipe・登録meshを使い、cameraとevent loopも共有する。
+内部を一つのRHI traitへ先に統合する代わりに、既にあるnative所有を維持して観測可能な意味を揃える選択である。
+
+Win32の`HWND`について一つのflip-discard swapchainを作り、作成APIにはDeviceではなくDIRECT queueを渡す。
+backbufferはRGBA8_UNORM、RTVはRGBA8_SRGBとし、既存fullscreen shaderで同寸法のlinear RGBA8 sourceをsampleする。
+sRGB変換を無変換copyで代用せず、現在の単一sample／不透明Window契約を保つ。
+sourceはCOMMON→PIXEL_SHADER_RESOURCE→COMMON、backbufferはPRESENT→RENDER_TARGET→PRESENTと遷移する。
+Graphも同queueでCOMMONへ戻すため、pendingなGraph出力から表示へのCPU waitは不要である。
+[Swap Chains](https://learn.microsoft.com/en-us/windows/win32/direct3d12/swap-chains)の作成queue・状態・buffer寿命条件に従う。
+
+VSync ONはsync interval 1、OFFは0とALLOW_TEARINGを使う。
+OFFは`DXGI_FEATURE_PRESENT_ALLOW_TEARING`を照会し、対応がなければ要求を拒否して設定を保つ。
+swapchain作成にも同じtearing flagを設定し、automatic Alt+Enterを無効にしてWindowの変更を利用側event loopへ揃える。
+[DXGI_PRESENT](https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/dxgi-present)の条件を守り、
+通常の`Present`にはDO_NOT_WAITを指定する。`WAS_STILL_DRAWING`を成功へ潰さず、
+受理されていない表示は`NotReady`とし、既に提出したfullscreen命令とsource所有は実Fenceまで保持する。
+再試行で同じ描画を無条件に重ねて投入しない。Device removal、Signal失敗など完了不明の状態では停止して所有を保持する。
+
+各表示slotは固定のcommand allocator／list、Fence、source descriptorと強いsource leaseを持つ。
+描画後のFenceと、受理されたPresentの後へ同queue上で置くmarkerを区別する。
+slotの再利用は実Fence値で確認し、`UINT64_MAX`を正常完了としない。
+このmarkerはアプリが提出したGPU処理の再利用根拠であり、Vulkan maintenance1のpresent fenceや
+画面への表示完了時刻と同じ機能ではない。DXGIは受理したbackbufferの表示側参照を自身で管理する。
+アプリのsource・descriptor・command所有と、DXGIの表示参照を別々に扱う。
+
+resizeは同じswapchainへ`ResizeBuffers`を行う明示変更境界である。
+`prepare`はこのPresenterの未完了slotがあれば`NotReady`を返し、通常経路にwaitを追加しない。
+完了後に古いcommand listの記録をresetし、backbufferの直接参照を解放してからresizeする。
+新しい同HWNDのswapchainを並行作成する案は採用しない。
+[ResizeBuffers](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiswapchain-resizebuffers)
+はbuffer／view／commandからの直接・間接参照の解放を要求するため、Vulkanの旧世代保持をそのまま移植できない。
+希望extentゼロはnativeへ渡す前に`Suspended`へ変換する。DXGIの寸法0はclient areaを意味し、最小化の契約の代用にしない。
+VSync変更もreadyになるまで新しい設定の適用を保留し、成功した`prepare`を変更完了として報告する。
+このbackendは退役swapchain世代を保持せず、共通の`collect_retired_swapchains()`は0を返す。
+その代わりresize時の新規描画を一時停止する費用があり、無停止resizeや時間性能の優位は主張しない。
+
+`wait_idle`／`close`はこのPresenterのmarkerだけを明示timeout内で待ち、Queue／Device全体のidleを呼ばない。
+正常なcloseはアプリのGPU参照を回収してswapchainを解放し、その後も診断monitorで最終native解放を確認できる。
+timeoutやnative失敗からscanout完了を推定せず、Dropの保守的回収でも証明できない所有連鎖はWindowごと保持する。
+通常pollでsourceのleaseを返すときもprepared registryにanchorが残り、毎frameの最後のheap／native解放を発生させない。
+
+任意計測は`crate::profiling::{GpuTiming, SubmissionMetrics, PresentationMetrics}`を二APIで共有する。
+`D3D12Runtime::set_profiling(true)`の初回は実行leaseを返した明示準備境界で、各executionに二つのtimestamp queryと
+16-byteの常時map済みREADBACK領域を用意し、DIRECT queueのtimestamp frequencyを照会する。
+記録する命令の前後へqueryを置き、resolve済みtickを実Fence完了後に読み、queueのHzから時間へ変換する。
+64-bit modulo差とhost上の経過時間から複数wrapを排除できないsampleは未測定とする。
+使用中のqueryを上書きせず、結果取得のwaitや通常frameのquery／readback作成を加えない。
+[Direct3D 12 Timing](https://learn.microsoft.com/en-us/windows/win32/direct3d12/timing)に従い、
+CPU時計とGPU tickを直接引き算したり、複数queueの共通時刻域を仮定したりしない。
+D3D12のtimestampはDIRECT queueの先行処理が終わった位置で採るBOPの値である。
+VulkanのTOP_OF_PIPE／BOTTOM_OF_PIPEとはnativeのmarker意味が異なるため、
+同じ記録命令の区間を囲む値であってもshaderだけの占有時間や普遍的なAPI速度差を示すとは扱わない。
+
+Graph結果の`metrics()`はprepare／record／submit／退役のCPU時間とGraph GPU区間を返す。
+Presenterは独立した`set_profiling`と`take_profile`を持ち、表示用GPU区間と
+acquire／source準備／record／submit／present／退役のCPU区間を返す。
+pending＋未消費sampleは`max_frames`内に制限し、満杯ならacquire前に容量不足を返す。
+GPU submit済みのsampleは表示要求が拒否されても回収し、sample数を表示成功数と同一視しない。
+失敗pollの反復費用と明示waitのblock時間はsampleの退役時間へ含めず、利用側のpoll全体・待機時間として測る。
+一度も有効にしなければ専用queryを作らずphase timerも呼ばない。
+無効化は将来の記録に適用し、準備済み領域は明示変更／終了まで保持して通常frameで破棄しない。
+
+受入はstrictとshippingを別processで実行し、同じcamera／Graph出力の内容照合、
+resize／最小化復帰／取得後cancel／pending終了と最終native解放まで確認する。
+通常frameのメモリ窓にはbuild／compile／記録／投入から、表示、実完了、readback消費・全owner返却までを含める。
+VSync OFFの処理時間とONのpacingは別runにし、native診断による計装費用を製品性能へ混ぜない。
+実行手順は[開発ガイド](../guides/development.md#windows-presentation)、
+実行済み・未実行の環境と結果は[現在の検証状況](../verification/current.md)に記録する。
 
 ## 17. Codexの作業手順
 

@@ -261,7 +261,7 @@ cargo test --locked --workspace --no-default-features --features vulkan
 
 [CI](../../.github/workflows/ci.yml)はWindows／LinuxとCPU／Vulkan featureを確認し、
 別jobで[cargo-deny](tooling.md#cargo-deny)の依存検査を実行します。
-Windowsには`presentation` featureの全target check・Clippy・CPU試験も追加しています。
+Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentation`／`d3d12,presentation`／二API表示の全target check・Clippy・CPU試験も実行します。
 各backendは製品／開発検証＋dumpの両構成を確認し、Vulkanはrelease両構成と独立診断featureも確認します。
 これは表示の実GPU受入をCIで実行するという意味ではありません。
 依存更新ではlockfile差分と両feature構成を確認します。
@@ -318,7 +318,7 @@ flags空と`--native-validation`（DEBUG＋VALIDATION要求）を区別し、
 この要求はnative検証の実効や破棄後の診断ゼロを証明しない。結果の該当値は未観測のnullであり、
 既存のCore/SyncVal・D3D12 Debug Layer/GBVの厳格受入を代替しない。
 CPUの全`Study::scenario`は従来の比較試作で確認し、この実機fixtureでは多段Bloom/MRT/mip/履歴等を実行しない。
-Windows表示・自由camera・resize/最小化・pending終了とnative失敗注入もB1以降の受入へ残す。
+Windows表示・自由camera・resize／最小化・pending終了は[二API表示の受入](#windows-presentation)へ接続する。実OOM／Device lossなどの未実行範囲は検証記録で区別する。
 source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/foundation-comparison.json)を参照する。
 試作の計時・性能比較・全Bistro常駐の合否は取得しない。
 
@@ -810,54 +810,71 @@ cargo run --locked -p renderer --no-default-features --features vulkan,developme
 JSONには終了後のValidation件数とCore／SyncValの実効設定を含めます。
 情報が認識できない場合も成功扱いにしません。PPMはlinear RGBです。
 
+<a id="windows-presentation"></a>
+
 ### Windows表示
 
-Windowsでは`presentation` featureを使います。winitのイベントループは例側が所有し、
-ライブラリは`Arc<Window>`をSurfaceとともに保持します。
-Vulkan 1.3基盤に加え、同一Graphics＋Compute＋present queue、swapchainと
-EXT swapchain maintenance1等の依存拡張・feature、SRGB_NONLINEARのRGBA8/BGRA8_SRGB、
-OPAQUE合成への対応が必要です。不足は診断して停止し、別queueや拡張なしのfallbackは提供しません。
+`presentation`はWindow依存だけを追加します。Vulkan／D3D12も明示的に選び、両方をビルドした場合は
+`--api vulkan|d3d12`で選択します。既定はコンパイル済みのVulkan、VulkanがなければD3D12です。
+指定したAPIが未コンパイルなら失敗し、別APIへ黙ってfallbackしません。
+winitのevent loop・camera・入力は例側が所有し、ライブラリは`Arc<Window>`をnative表示所有者とともに保持します。
 
 ```powershell
-cargo run --locked -p renderer --no-default-features --features presentation --example windowed
-cargo run --locked -p renderer --no-default-features --features presentation --example windowed -- --vsync off
-cargo run --locked -p renderer --no-default-features --features presentation,development-validation --example windowed -- --smoke
+cargo run --locked -p renderer --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
+cargo run --locked -p renderer --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
+cargo run --locked -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --vsync off --graph custom
 ```
 
-表示例もCargo featureに従います。製品構成はLayerを要求せず、`development-validation`構成は
-Core＋SyncValの実効を起動時に確認し、native所有者の破棄後まで診断を確認します。
+Vulkanには同一Graphics＋Compute＋present queue、EXT swapchain maintenance1等の依存extension／feature、
+SRGB_NONLINEARのRGBA8／BGRA8_SRGBとOPAQUE合成が必要です。D3D12はDIRECT queueとDXGIのflip-discardを使い、
+RGBA8_UNORMのbackbufferへSRGB RTVを作成します。両方とも完全なlinear RGBA8の同寸法出力をsampleします。
+不足は診断して停止し、別queue、拡張なしのWSI、無変換copyへfallbackしません。
+VSyncは既定ON。`--vsync on|off`で起動時に選び、Vキーで変更します。
+OFFにはVulkanのIMMEDIATE、DXGIのtearing capabilityが必要で、未対応要求は既存設定を維持して失敗します。
+タイトルの要求設定と、prepare後に反映されるnative状態、実際のcompositor／driverの表示挙動は区別します。
 
-既定はVSync ON（FIFO）、`--vsync on|off`で起動時に選択し、Vキーで実行中に切り替えます。
-OFFはIMMEDIATE対応が必要で、未対応の起動要求は失敗します。Vキーの未対応要求は診断して設定を維持します。
-タイトルは要求設定を表示し、実際の切り替えは次のSwapchain再作成で反映します。
-`--smoke`は12回のPresent要求、VSync往復切り替え、resize、最小化・復帰、処理未完了時の終了を有限回で実行します。
-両モードの対応が必要です。描画Fenceとpresent fenceを回収し、終了後までCore/SyncValの警告・エラーゼロを要求します。
-headless例と共通のScene、mesh/material/Viewとcustom処理を使います。
-自動受入には、次のignored実ウィンドウ試験も明示実行します。
+同じ常駐cube meshと入力行列から、`--graph standard`は公開`standard::graphs::forward`、
+`--graph custom`は利用側のRasterと明示的な出力copyを使います。backendごとにGraphを実装し直しません。
+操作はWASDで前後左右、Q／Eで上下、Shiftで加速、右mouseで視点操作、Tで固定巡回、Escで終了です。
+focusを失うと押下状態とmouse操作を解除し、復帰直後の長いdeltaを移動へそのまま適用しません。
+`--tour`は受理frame番号を基準に固定巡回します。CPU実行速度やVSyncが違っても同じ番号に同じcameraを渡せます。
 
 ```powershell
-cargo test --locked -p renderer --no-default-features --features presentation,development-validation,graph-diagnostics ::vulkan_ -- --ignored --nocapture --test-threads=1
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --example windowed -- --api vulkan --smoke
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation,graph-diagnostics --example windowed -- --api d3d12 --smoke
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --verify --frames 24
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --verify --frames 24
 ```
 
-同じsource画像の再presentを含む表示の受入は、次の同一scenarioをstrictと製品構成で別々に実行できます。
-strictではCore/SyncValの実効を確認し、製品構成ではreleaseとnative Requested Disabledを要求します。
-少なくとも18出力をそれぞれ2回presentし、明示的なGPU待機を間に追加せず、
-内容照合、resize/VSync/取得後取消、pending終了と最終native所有者の解放を確認します。
+`--smoke`は固定巡回、連続resize、VSync往復、最小化・復帰、pending所有を残した終了を有限回で実行します。
+`--verify`はsource画像のreadback、独立したpalette／geometry条件とframeごとのdigestを記録します。
+両APIへ同じextent・camera番号・Graph構成を渡して比較し、画面上のscanoutの全byte照合とは区別します。
+受入時だけreadbackを追加するため、通常利用や時間測定へ無条件のreadbackを強制しません。
+終了後の`WINDOWED_ACCEPTANCE` JSONに設定、frame入力、内容digestとnative診断の実効状態を記録します。
+
+表示前は`prepare`を進め、readyな`extent`でGraphを構築します。
+`NotReady`や型付き容量不足ではpoll後に再試行し、通常経路にwait／増設を加えません。
+`Suspended`はゼロextentからの復帰を待ちます。`RecreateRequired`は変更予約、`Recreated`は変更完了です。
+表示submit受理後はsource登録を解除でき、native側がGPU使用終了まで所有します。
+`NotReady`でも先のfullscreen submitがpendingの場合があり、未投入rollbackを推定しません。
+
+Vulkanの旧世代はGPUとpresent fenceの両方で退役させ、明示した保守境界で回収します。
+DXGIは同じHWNDの一つのchainを、GPU完了とbackbuffer参照解放後にresizeします。
+DXGIのqueue markerやVulkanのpresent fenceを画面への表示完了とは数えません。
+正常終了ではGraph結果・exportを返し、Presenterを明示closeし、最終native所有者を破棄してからmonitorを確認します。
+strictはCore＋SyncVal／Debug Layer＋GBVの実効とwarning／error／corruption／callback失敗ゼロを要求します。
+製品相当は追加診断をコンパイル除外し、native Disabledのreleaseを別processで実行します。
+
+既存のVulkan WSI受入も保持します。同じsourceの再present、取得後取消、旧世代の保持、
+複数pendingと保持readback、全owner返却を通常frameのメモリ窓まで確認する試験です。
 
 ```powershell
-cargo test --locked --release -p renderer --lib --no-default-features --features presentation,development-validation,graph-diagnostics vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features presentation vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation,development-validation,graph-diagnostics vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
 ```
 
-表示前に`Presenter::prepare`を呼び、現在の`extent`で出力Graphを構築します。
-`NotReady`はpoll後に再試行、`Suspended`はゼロextentの復帰を待ちます。
-`RecreateRequired`は再作成の予約であり、`prepare`を進めるまでextentは更新されません。
-`Recreated`は再作成完了を表し、寸法を取得し直します。
-出力は表示用submitへ渡した後に登録解除できます。
-表示用submit受理後はpresent失敗でもsourceの予定同期状態が進み得ます。
-読み取りだけでは内容revisionを変えず、後続consumerの同期は投入時の状態から計画します。
-正常終了はframeの回収とPresenterの明示closeを行い、最後に保持したValidationMonitorで
-native所有者の破棄後までwarning／error／callback失敗ゼロを確認します。
+共通の契約は[Graphの表示接続](../design/rendergraph.md#windows-presentation)、nativeの根拠は
+[Vulkan](../design/vulkan.md#windows-presentation)と[D3D12](../design/implementation-policy.md#d3d12-presentation)を参照します。
 
 ### 通常フレームのメモリ計測
 
@@ -874,7 +891,7 @@ cargo run --locked --release -p renderer --no-default-features --features memory
 cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12
 cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan
 cargo run --locked --release -p renderer --no-default-features --features vulkan,memory-profiling --example frame_memory -- vulkan-image
-cargo test --locked --release -p renderer --lib --no-default-features --features presentation,memory-profiling vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation,memory-profiling vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
 ```
 
 末尾の`--baseline`は値を記録しゼロassertを省く観測モードで、ゼロ目標の受入には使わない。
@@ -912,31 +929,54 @@ callbackに現れないdriver/OS/native内部確保は未観測。D3D12 bootstra
 通常の準備済みframe経路で呼ばないことを別に監査する。時間性能や物理VRAMの改善率はこのevent計測から推定しない。
 現行結果と測定範囲は[通常フレームのメモリ計測](../verification/frame-memory.json)を参照する。
 
-### 表示FPSの計測方針
+### 表示frameのCPU／GPU時間計測
 
-通常frameの二API共通時間計測の拡張は`renderer-7ft.2.6`の表示統合で行う。
-CPUの構築からsubmit、poll/retireと結果返却、GPU Graph区間と表示用GPU処理、
-acquire/present API費用・明示待機・frame周期を分ける。既存headless計測は補助として維持し、
-小fixtureのupload/readback込み時間を実際の表示frameの代表値へ読み替えない。
+`windowed --measure`は実際のWindowへ表示する同じworkloadを測ります。
+既定は24 accepted frameのwarm-upと96 accepted frameの計測で、`--warmup N`／`--frames N`で変更できます。
+VSync OFFの処理時間とONのpacingを別process・同じAPI／Graph／camera条件で実行します。
+strictの正しさ受入を別に行い、計装されたGPU実行を製品性能へ混ぜません。
 
-`windowed`には現在FPS集計を実装していません。追加する場合は、単調増加時計に対する
-`PresentOutcome::Presented`の成功件数を約1秒の窓で割り、**Present要求FPS**として表示します。
-`NotReady`／`Suspended`／`RecreateRequired`／`Recreated`を成功件数に数えず、
-VSync変更・resize・最小化からの復帰で窓をリセットします。
-窓内の待ち時間は経過時間へ含め、成功Present間隔の中央値・p95・p99も併記します。
-瞬間値`1/dt`の単純平均や、GPU timestamp区間の逆数で表示FPSを算出しません。
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --measure --vsync off
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --measure --vsync off
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api vulkan --tour --measure --vsync on
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --measure --vsync on
+```
+
+| 区間 | 測る対象 |
+|---|---|
+| CPU build／compile | 同じ公開Graphを可変camera定数で構築し、必要な依存・計画を生成する利用側の時間 |
+| Graph CPU prepare／record／submit／retire | `SubmissionMetrics`。native具体化、命令記録、投入・受理処理、成功した完了回収を分ける |
+| Graph GPU | Graph命令のtimestamp区間。表示用submitとpresentation engine／VSync／scanoutを含まない |
+| 表示CPU acquire／prepare／record／submit／present／retire | `PresentationMetrics`。native acquire／present呼出しに含まれる費用を別値で記録する |
+| 表示GPU | fullscreen sample・必要な資源遷移のtimestamp区間。画面への到達時間ではない |
+| poll／結果返却／明示待機 | 利用側の反復poll、CPU消費・owner返却、capacity backpressureによる再試行や明示した待機の費用 |
+| accepted Present間隔 | `Presented`を受理したCPU時刻の差。event loopとOS scheduling、VSync、待ちを含む |
+
+runtimeとPresenterのprofilingは独立した`set_profiling(true)`で準備します。
+Graph結果の`metrics()`とPresenterの`take_profile()`から値を受け取ります。
+表示のpending＋未消費sample上限は`max_frames`で、未消費のまま埋めるとacquire前に容量不足になります。
+表示submit済みsampleには、後続presentが拒否されたものも含まれます。sample数を成功Present数へ読み替えません。
+queryは準備済み容量内で再利用し、実Fence完了後に結果を読むための毎frame waitを追加しません。
+profilingなしでは専用query作成とphase timerを避けます。初期化・明示有効化・終了の費用は通常窓と分けます。
+VulkanのmarkerはTOP_OF_PIPE／BOTTOM_OF_PIPE、D3D12はDIRECT queueのBOP timestampです。
+いずれも記録命令の区間を測り、shaderだけの専有時間ではありません。
+同じworkload／設定／markerを生sampleと中央値・個別sampleのp95に併記し、
+小さいGPU区間の差だけから一般的なAPI性能の優劣を結論づけません。
+
+出力は固定容量で収集し、終了時のJSONへ生sampleと集計を記録します。
+例のevent loopはbackpressure時のbusy loopを避ける有限の再試行間隔を持ち、そのfloorを報告します。
+従ってaccepted Present間隔を、GPU単体の最大throughputや実画面のFPSとは説明しません。
+瞬間値`1/dt`の単純平均や、GPU区間の逆数も表示FPSの代用にしません。
+比較では解像度、warm-up／sample数、camera、構成、capacity、validation、driver、monitor条件とrun間変動を揃えます。
+実行済みの値・未実行範囲は[検証状況](../verification/current.md)を参照します。
 
 WindowsでOSが観測する表示まで調べる場合は[PresentMon](https://github.com/GameTechDev/PresentMon)を併用します。
 [公式CSV定義](https://github.com/GameTechDev/PresentMon/blob/main/README-ConsoleApplication.md)の
 `MsBetweenPresents`と`MsBetweenDisplayChange`／`DisplayedTime`を区別し、未表示frameも記録します。
-present maintenance fenceのsignalを実画面の表示完了と数えることはできません。
-GPU Graph区間とCPU build/compile/record/submitは既存の計測で別に調べます。
-
-最大throughputの比較ではrelease・明示Validation無効・固定解像度・warm-up後の一定時間を複数run測り、
-VSync・実行枠・画像数・driver・モニターの条件を揃えます。正しさは別runでCore/SyncValを有効にして確認します。
-現exampleの`WaitUntil(now + 4ms)`は意図的なイベントループ待機なので、上限を調べる計測モードでは外す必要があります。
-現在のexampleをそのまま最大FPSのbenchmarkとは扱いません。表示FPSやPresentMonの実測値は未取得です。
-詳細な同期・寿命の根拠は[Vulkan設計](../design/vulkan.md#windows-presentation)を参照してください。
+RendererのGPU Fence／present fenceからscanout完了を推定せず、PresentMon未取得ならそのまま未確認とします。
+headless測定は補助として維持し、upload／readback込みの小fixtureを実windowed通常frameの代表値へ読み替えません。
+詳細は[Vulkan計測](../design/vulkan.md#graphの任意計測)と[D3D12表示・計測](../design/implementation-policy.md#d3d12-presentation)を参照します。
 
 ### 再現可能なフレーム基準測定
 

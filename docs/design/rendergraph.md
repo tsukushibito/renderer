@@ -646,6 +646,56 @@ vendor依存の高速化や高度なパス統合は採用しておらず、性�
 利用側独自shader/pipelineとパスAPIはB0/B1で優先して設計・実証する。
 複数キューと物理aliasingはBistro実測から採否を決める後続候補であり、同じ優先度へまとめない。
 
+<a id="windows-presentation"></a>
+
+## Windows表示との接続
+
+`presentation`はWindow adapterを追加し、backendを暗黙に選ばない。
+`vulkan,presentation`または`d3d12,presentation`を有効にする。
+両APIは同じGraph構築、入力行列、出力を使い、runtimeとPresenterだけを選択する。
+表示専用のGraph操作や別のscene登録を要求せず、swapchain画像を公開しない。
+
+`VulkanRuntime::for_window`と`D3D12Runtime::for_window`は`Arc<winit::window::Window>`と
+共通の`PresentationConfig`を受け取り、runtimeと`Presenter`／`D3D12Presenter`を返す。
+event loop、camera、入力は利用側が所有し、Presenterは必要なWindow寿命を強く保持する。
+configは同時表示枠`max_frames`、退役世代上限`max_retired_swapchains`、
+2〜16の希望画像数`desired_images`とVSync要求を持つ。
+実Surfaceの制限に合わせた画像数と、Graph実行枠・表示slot・image indexは別概念である。
+
+両Presenterは`prepare`、`extent`、`resize`、`set_vsync`／`vsync`、`poll`、
+`wait_idle(timeout)`、`close(timeout)`と明示的な旧世代回収を同じ意味で提供する。
+`prepare`で変更を進め、readyなextentと同寸法の完全なlinear RGBA8画像をGraphでexportして
+runtimeの`present`へ渡す。同queueへの別submitでsRGB出力へ変換し、Graph完了のCPU waitは挟まない。
+HDR表示、拡大縮小、tone mapping、transparent Windowはこの入口に含めない。
+
+| 共通の`PresentOutcome` | 利用側の扱い |
+|---|---|
+| `Presented { suboptimal }` | 表示要求の受理。source登録を解除できるが、画面への到達やnative資源の退役を意味しない |
+| `NotReady` | poll後に再試行する。暗黙wait／容量増設を加えない。先に受理した描画submitが残る場合がある |
+| `Recreated` | 変更完了。extentを取得し直し、旧出力を新寸法のGraphへ置換する |
+| `RecreateRequired` | 変更が必要。prepareを進めるまで旧extentを新しい保証として使わない |
+| `Suspended` | 希望extentがゼロ。acquireせず、resizeによる復帰を待つ |
+
+VSync ON／OFFは同期する／しないという要求であり、未対応のモードへ黙ってfallbackしない。
+OFFはVulkanのIMMEDIATE、D3D12のtearing対応を要求する。OS compositorやdriverの実表示は別に扱う。
+枠不足は型付き`CapacityExhausted`、nativeの一時的な非readyは`NotReady`として返す。
+closeのtimeoutを完了扱いにせず、未完了のsource・command・Window所有を保持する。
+
+sourceのowner・内容revision・全域初期化・format・extentは表示へ接続する境界で確認する。
+読み取りだけでは内容revisionを変えない。内容write／deleteやextent変更は古い入力の保証を失効させる。
+表示submit受理後はsourceの強いnative所有を実GPU完了まで保持し、表示拒否から未投入rollbackを推定しない。
+Vulkanはcanonicalな予定scope/layoutを更新し、D3D12はCOMMON復帰を共有registryへ引き継ぐ。
+Vulkanのpresent fence、DXGIが保持する表示参照、アプリのGPU Fence、画面への到達は異なる条件である。
+API固有の証明は[VulkanのWSI設計](vulkan.md#windows-presentation)と
+[D3D12表示](implementation-policy.md#d3d12-presentation)へ閉じ込める。
+
+標準recipeと独自Graphを`windowed`の同じcamera・event loopへ接続する。
+通常frameは固定容量のGraph／native／結果slotを再利用する。
+resize／VSync変更／profiling有効化は明示変更境界であり、古いconsumerが残る間はpoll・再試行する。
+メモリ規約にはbuild／compileから表示、poll／退役、readback結果消費・全slot返却までを含める。
+Graph GPU区間と表示用GPU区間、CPU acquire／present費用を分け、display latencyへ読み替えない。
+操作・再実行は[開発手順](../guides/development.md#windows-presentation)を参照する。
+
 ## 履歴と段階的な拡張
 
 履歴は永続keyからfreshなsnapshotを取得し、前のGraphの予定状態を次のGraphへimportする。
