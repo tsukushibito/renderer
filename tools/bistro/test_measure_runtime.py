@@ -91,6 +91,15 @@ class RuntimeMeasurementTests(unittest.TestCase):
         metrics = measure.validate_report(value, {"api": "vulkan", "gpu_timing": "off"}, input_plan())
         self.assertIsNone(metrics["individual_frame_wall_ns"])
 
+    def test_fixture_uses_its_effective_view_and_does_not_weaken_scene_identity(self):
+        fixture = report()
+        fixture["identity"]["view"] = "fixture"
+        condition = {"api": "vulkan", "gpu_timing": "off"}
+        metrics = measure.validate_report(fixture, condition, {**input_plan(), "view": "fixture"})
+        self.assertEqual(metrics["throughput_frames_per_second"], 10)
+        with self.assertRaisesRegex(ValueError, "identity view"):
+            measure.validate_report(fixture, condition, input_plan())
+
     def test_normal_release_manifest_rejects_diagnostics_wrong_profile_and_dirty_tree(self):
         value = {"build": {"profile": "release", "example": "bistro",
                             "effective_features": ["vulkan", "d3d12"]},
@@ -148,6 +157,7 @@ class RuntimeMeasurementTests(unittest.TestCase):
             with patch("measure_runtime.verified_release", return_value=(build, Path(sys.executable))):
                 plan = measure.make_plan(args)
                 self.assertEqual(len(plan["runs"]), 12)
+                self.assertEqual(plan["view"], "fixture")
                 self.assertEqual(plan["runs"][0]["command"][0], sys.executable)
                 self.assertNotIn("--gpu-timing", plan["runs"][0]["command"])
                 self.assertIn("--gpu-timing", plan["runs"][2]["command"])
