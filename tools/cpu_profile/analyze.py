@@ -109,6 +109,7 @@ def analyze_sampled(path, pid, roi, timestamp_unit=None, stack_separator=None):
     stack = column(headers, "stack_json", "Stack", required=False)
     totals, self_time, inclusive, stacks = defaultdict(float), defaultdict(float), defaultdict(float), defaultdict(float)
     seen, samples, total, ips = set(), 0, 0.0, defaultdict(float)
+    stack_samples, stack_weight, missing_stack_samples, missing_stack_weight = 0, 0.0, 0, 0.0
     for row in rows:
         if process_id(row[process]) != pid:
             continue
@@ -138,7 +139,16 @@ def analyze_sampled(path, pid, roi, timestamp_unit=None, stack_separator=None):
         totals[str(thread)] += value
         self_time[name] += value
         ips[f"0x{ip:x}"] += value
-        if stack and row[stack]:
+        # WPA serializes an unavailable stack as n/a. Its slash is not a frame
+        # separator; retain the sample's self/CPU cost without inventing n/a
+        # frames. The explicit stack_json input must still be valid JSON.
+        unavailable_stack = not stack or not row[stack] or (stack == "Stack" and row[stack].strip().lower() == "n/a")
+        if unavailable_stack:
+            missing_stack_samples += 1
+            missing_stack_weight += value
+        else:
+            stack_samples += 1
+            stack_weight += value
             raw = row[stack]
             stacks[raw] += value
             if stack == "stack_json":
@@ -162,12 +172,15 @@ def analyze_sampled(path, pid, roi, timestamp_unit=None, stack_separator=None):
     return {"sample_count": samples, "weight_ms": total, "threads": ranking(totals),
             "self": ranking(self_time), "inclusive": ranking(inclusive), "stacks": ranking(stacks),
             "instruction_pointers": ranking(ips),
+            "stack_coverage": {"available_samples": stack_samples, "available_weight_ms": stack_weight,
+                               "unavailable_samples": missing_stack_samples, "unavailable_weight_ms": missing_stack_weight},
             "inclusive_available": bool(inclusive),
             "inclusive_identity": "provided frame strings; cross-module canonicalization is not inferred",
             "limits": ["Count is samples, never function invocation count.",
                        "Weight estimates executing CPU time; short activity can be absent.",
                        "ROI selects sample timestamps; weight at ROI boundaries is approximate.",
                        "Inclusive attribution requires stack_json or an explicitly verified stack separator.",
+                       "Unavailable WPA n/a stacks retain self time and sample weight, but add no inclusive frames.",
                        "Function/source lines may be unresolved or ambiguous under optimization."]}
 
 
