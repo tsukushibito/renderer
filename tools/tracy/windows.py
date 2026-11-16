@@ -14,6 +14,7 @@ import socket
 import struct
 import subprocess
 import sys
+import time
 
 
 def token_elevation(pid=None, *, handle=None):
@@ -135,6 +136,39 @@ def own_process_job():
     return job  # Intentionally not closed by Python: the OS closes it at exit.
 
 
+def console_snapshot(console):
+    """Read only this broker's hidden console, never an unrelated terminal."""
+    import msvcrt
+    class Coord(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_short), ("y", ctypes.c_short)]
+    class Rect(ctypes.Structure):
+        _fields_ = [("left", ctypes.c_short), ("top", ctypes.c_short),
+                    ("right", ctypes.c_short), ("bottom", ctypes.c_short)]
+    class Info(ctypes.Structure):
+        _fields_ = [("size", Coord), ("cursor", Coord), ("attributes", wintypes.WORD),
+                    ("window", Rect), ("maximum_size", Coord)]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetConsoleScreenBufferInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Info)]
+    kernel.ReadConsoleOutputCharacterW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD,
+                                                  Coord, ctypes.POINTER(wintypes.DWORD)]
+    handle = msvcrt.get_osfhandle(console.fileno())
+    info = Info()
+    if not kernel.GetConsoleScreenBufferInfo(handle, ctypes.byref(info)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    width = info.size.x
+    if width <= 0:
+        raise ValueError("Private capture console has no readable columns")
+    rows = min(200, max(1, 32768 // width), info.cursor.y + 1)
+    start = Coord(0, info.cursor.y - rows + 1)
+    buffer = ctypes.create_unicode_buffer(width * rows)
+    read = wintypes.DWORD()
+    if not kernel.ReadConsoleOutputCharacterW(handle, buffer, len(buffer), start, ctypes.byref(read)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    raw = buffer[:read.value]
+    rendered = "\n".join(raw[index:index + width].rstrip() for index in range(0, len(raw), width)).rstrip()
+    return raw, rendered
+
+
 def console_broker(specification):
     """Internal subprocess entry point; STOP means flush, EOF means abort."""
     if sys.platform != "win32":
@@ -146,7 +180,11 @@ def console_broker(specification):
     signal.signal(signal.SIGINT, lambda _signal, _frame: None)
     process = None
     try:
-        with Path(spec["stdout"]).open("wb") as stdout, Path(spec["stderr"]).open("wb") as stderr:
+        # Real CONOUT$ is intentional: redirected stdout makes Tracy 0.14.1
+        # PrintCaptureProgress return without printing/flushing. The first
+        # terminal-only 'query backlog' progress message is observable evidence
+        # that main() passed signal(SIGINT, SigInt), not merely TCP connection.
+        with Path(spec["stdout"]).open("w", encoding="utf-8") as log, Path(spec["stderr"]).open("wb") as stderr, open("CONOUT$", "w") as stdout:
             process = subprocess.Popen(spec["command"], stdin=subprocess.DEVNULL,
                                        stdout=stdout, stderr=stderr, cwd=spec["cwd"])
             evidence = require_nonadmin(process.pid, handle=process._handle)
@@ -154,6 +192,18 @@ def console_broker(specification):
                                                "broker": require_nonadmin(), "kill_on_job_close": bool(job)}), flush=True)
             if sys.stdin.readline().strip() != "STOP":
                 raise ValueError("Capture broker requires STOP; controller closed or aborted")
+            deadline = time.monotonic() + spec.get("readiness_timeout_seconds", 30)
+            while True:
+                raw, rendered = console_snapshot(stdout)
+                if "query backlog" in raw:
+                    log.write("SIGINT_READY_CONSOLE_SNAPSHOT\n" + rendered + "\n")
+                    log.flush()
+                    break
+                if process.poll() is not None or time.monotonic() > deadline:
+                    log.write("FAILED_READINESS_CONSOLE_SNAPSHOT\n" + rendered + "\n")
+                    log.flush()
+                    raise RuntimeError("Capture did not establish its post-SIGINT-handler progress marker")
+                time.sleep(0.02)
             if process.poll() is not None:
                 raise RuntimeError("Capture exited before its owned stop request")
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -162,7 +212,11 @@ def console_broker(specification):
             if not kernel.GenerateConsoleCtrlEvent(0, 0):
                 raise ctypes.WinError(ctypes.get_last_error())
             code = process.wait(timeout=spec["flush_timeout_seconds"])
-            print("BROKER_DONE " + json.dumps({"pid": os.getpid(), "returncode": code}), flush=True)
+            _raw, rendered = console_snapshot(stdout)
+            log.write("FINAL_CONSOLE_SNAPSHOT\n" + rendered + "\n")
+            log.flush()
+            print("BROKER_DONE " + json.dumps({"pid": os.getpid(), "returncode": code,
+                                               "sigint_handler_ready_observed": True}), flush=True)
             return code
     finally:
         if process is not None and process.poll() is None:

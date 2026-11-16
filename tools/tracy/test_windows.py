@@ -20,8 +20,12 @@ class WindowsBrokerTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
 
-    def broker(self, flush_code):
-        code = "import signal,time,sys\nsignal.signal(signal.SIGINT," + flush_code + ")\nprint('FAKE_READY',flush=True)\nwhile True: time.sleep(.1)"
+    def broker(self, flush_code, *, wait_ready=True, delay_handler=False):
+        ready_path = self.directory / "fake.ready"
+        code = ("import signal,time,sys\nfrom pathlib import Path\n" + ("time.sleep(.25)\n" if delay_handler else "")
+                + "signal.signal(signal.SIGINT," + flush_code
+                + ")\nprint('FAKE_READY query backlog',flush=True)\nPath(" + repr(str(ready_path))
+                + ").write_text('ready')\nwhile True: time.sleep(.1)")
         specification = {"command": [sys.executable, "-c", code], "cwd": str(self.directory),
                          "stdout": str(self.directory / "collector.stdout.txt"), "stderr": str(self.directory / "collector.stderr.txt"),
                          "flush_timeout_seconds": 30}
@@ -43,7 +47,7 @@ class WindowsBrokerTests(unittest.TestCase):
         ready = json.loads(line.removeprefix("BROKER_READY "))
         self.assertTrue(ready["kill_on_job_close"])
         deadline = time.monotonic() + 10
-        while "FAKE_READY" not in (self.directory / "collector.stdout.txt").read_text(encoding="utf-8"):
+        while wait_ready and not ready_path.exists():
             self.assertLess(time.monotonic(), deadline, "Fake collector did not establish its signal handler")
             time.sleep(.02)
         return process, ready
@@ -58,8 +62,21 @@ class WindowsBrokerTests(unittest.TestCase):
         self.assertEqual(ready["capture"]["token_elevation"], 0)
         self.assertEqual(ready["broker"]["token_elevation"], 0)
 
+    def test_early_stop_waits_for_observable_post_handler_progress(self):
+        process, _ready = self.broker("lambda *args: sys.exit(0)", wait_ready=False, delay_handler=True)
+        # STOP arrives before the fake has installed SIGINT. The broker must
+        # observe later progress, rather than forwarding this signal immediately.
+        process.stdin.write("STOP\n")
+        process.stdin.flush()
+        done = json.loads(process.stdout.readline().removeprefix("BROKER_DONE "))
+        self.assertEqual(done["returncode"], 0)
+        self.assertTrue(done["sigint_handler_ready_observed"])
+        self.assertEqual(process.wait(timeout=10), 0)
+        self.assertIn("SIGINT_READY_CONSOLE_SNAPSHOT", (self.directory / "collector.stdout.txt").read_text())
+
     def test_abrupt_broker_kill_during_flush_reaps_owned_collector(self):
-        process, ready = self.broker("lambda *args: print('FLUSHING',flush=True)")
+        flushing = self.directory / "flushing.marker"
+        process, ready = self.broker("lambda *args: Path(" + repr(str(flushing)) + ").write_text('flushing')")
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel.OpenProcess.restype = wintypes.HANDLE
@@ -71,7 +88,7 @@ class WindowsBrokerTests(unittest.TestCase):
             process.stdin.write("STOP\n")
             process.stdin.flush()
             deadline = time.monotonic() + 10
-            while "FLUSHING" not in (self.directory / "collector.stdout.txt").read_text(encoding="utf-8"):
+            while not flushing.exists():
                 self.assertLess(time.monotonic(), deadline, "Owned collector did not enter slow flush")
                 time.sleep(.02)
             process.kill()

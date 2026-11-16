@@ -281,6 +281,7 @@ def capture(plan):
                 result["listener"] = owned_listener(target.pid)
                 specification = {"command": plan["capture_command"], "cwd": plan["cwd"],
                                  "stdout": str(output / "collector.stdout.txt"), "stderr": str(output / "collector.stderr.txt"),
+                                 "readiness_timeout_seconds": 30,
                                  "flush_timeout_seconds": plan["flush_timeout_seconds"]}
                 write_json(output / "broker-spec.json", specification)
                 with (output / "broker.stderr.txt").open("wb") as broker_stderr:
@@ -295,7 +296,8 @@ def capture(plan):
                     result["events"]["done"] = done
                     send(broker, "STOP")
                     stopped = wait_event(broker, broker_events, "BROKER_DONE", guard)
-                    if stopped.get("returncode") != 0 or broker.wait(timeout=10) != 0:
+                    if (stopped.get("returncode") != 0 or stopped.get("sigint_handler_ready_observed") is not True
+                            or broker.wait(timeout=10) != 0):
                         raise RuntimeError("Capture failed to stop and flush")
                     broker.stdin.close()
                     broker = None
@@ -304,6 +306,8 @@ def capture(plan):
                         raise ValueError("Capture did not produce a complete nonempty trace")
                     result["trace"] = trace
                     result["events"]["capture_flushed_utc"] = utc()
+                    result["events"]["capture_sigint_handler_ready_observed"] = True
+                    result["collector_stdout_scope"] = "Rendered snapshots of the owned hidden console; real console stdout exposes Tracy's post-SIGINT-handler progress marker. No unrelated console is read."
                     send(target, "END")
             while target.poll() is None:
                 guard()
