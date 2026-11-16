@@ -11,6 +11,9 @@ mod window_backend;
 #[path = "support/window_camera.rs"]
 mod window_camera;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
+#[path = "support/window_input.rs"]
+mod window_input;
+#[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 #[path = "support/window_scene.rs"]
 mod window_scene;
 
@@ -18,7 +21,8 @@ mod window_scene;
 mod demo {
     use super::{
         window_backend::{self as backend, Api, Backend, Monitor, Pending, Result},
-        window_camera::{Camera, Motion},
+        window_camera::Motion,
+        window_input::{CameraInput, InputReplay, REPLAY_DT, REPLAY_STEPS},
         window_scene::{self as scene, Composition},
     };
     use renderer::{
@@ -211,8 +215,8 @@ mod demo {
         presentation_samples: Vec<PresentationMetrics>,
         prepared_extent: Option<(u32, u32)>,
         accepted: usize,
-        camera: Camera,
-        looking: bool,
+        input: CameraInput,
+        replay: InputReplay,
         last_step: Instant,
         last_present: Option<Instant>,
         redraw: RedrawSchedule,
@@ -252,8 +256,8 @@ mod demo {
                 presentation_samples: Vec::with_capacity(capacity * 4),
                 prepared_extent: None,
                 accepted: 0,
-                camera: Camera::default(),
-                looking: false,
+                input: CameraInput::default(),
+                replay: InputReplay::default(),
                 last_step: now,
                 last_present: None,
                 redraw: RedrawSchedule::new(now),
@@ -504,10 +508,14 @@ mod demo {
                     return Ok(());
                 };
                 let now = Instant::now();
-                if self.options.tour {
-                    self.camera.tour(self.accepted as u64);
+                if self.options.smoke && self.accepted < REPLAY_STEPS {
+                    self.replay
+                        .advance(&mut self.input, self.accepted as u64)
+                        .map_err(str::to_owned)?;
+                } else if self.options.tour {
+                    self.input.tour(self.accepted as u64);
                 } else {
-                    self.camera.step(now.duration_since(self.last_step));
+                    self.input.step(now.duration_since(self.last_step));
                 }
                 self.last_step = now;
                 let started = self.options.measure.then(Instant::now);
@@ -515,7 +523,7 @@ mod demo {
                 let image = scene::build(
                     &mut graph,
                     self.buffers.as_ref().unwrap(),
-                    self.camera.clip_from_world(extent.0, extent.1),
+                    self.input.clip_from_world(extent.0, extent.1),
                     extent,
                     self.options.composition,
                 )?;
@@ -547,7 +555,7 @@ mod demo {
                     self.samples.push(Sample {
                         ordinal: self.accepted as u64,
                         extent,
-                        camera: self.camera.position(),
+                        camera: self.input.position(),
                         build,
                         compile,
                         submit_api,
@@ -618,7 +626,7 @@ mod demo {
             Ok(())
         }
         fn capture_mouse(&mut self, enabled: bool) {
-            self.looking = enabled;
+            self.input.capture(enabled);
             if let Some(window) = &self.window {
                 if enabled {
                     if window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
@@ -724,6 +732,17 @@ mod demo {
             if self.options.verify && self.samples.iter().any(|sample| sample.digest.is_none()) {
                 return Err("a submitted verification frame has no completed readback".into());
             }
+            let replay_digests: [Option<u64>; REPLAY_STEPS - 1] = std::array::from_fn(|ordinal| {
+                self.samples
+                    .iter()
+                    .find(|sample| sample.accepted && sample.ordinal == ordinal as u64)
+                    .and_then(|sample| sample.digest)
+            });
+            let replay_rendered_changes = replay_digests.iter().all(Option::is_some)
+                && replay_digests.windows(2).all(|pair| pair[0] != pair[1]);
+            if self.options.smoke && (!self.replay.complete() || !replay_rendered_changes) {
+                return Err("application input replay did not change the rendered movement/look frames or preserve mouse-release/focus behavior".into());
+            }
             if self.options.smoke || self.options.verify || self.options.measure {
                 let samples:Vec<_>=self.samples.iter().map(|sample|serde_json::json!({
                     "ordinal":sample.ordinal,"extent":sample.extent,"camera":sample.camera,
@@ -745,6 +764,15 @@ mod demo {
                         "api":self.options.api.name(),"composition":format!("{:?}",self.options.composition),
                         "device":self.device,"validation":self.validation,"accepted_frames":self.accepted,
                         "smoke":self.options.smoke,"transitions":self.transition,"pending_graph_owners_at_shutdown":self.pending_at_shutdown,
+                        "input_replay":self.options.smoke.then(||serde_json::json!({
+                            "steps":self.replay.steps,"movement":self.replay.movement,
+                            "fixed_step_ns":ns(REPLAY_DT),
+                            "mouse_look":self.replay.mouse_look,
+                            "release_preserves_movement":self.replay.release_preserves_movement,
+                            "focus_stops_movement":self.replay.focus_stops_movement,
+                            "rendered_digest_changes":replay_rendered_changes,
+                            "scope":"application-local control replay through the same handlers as window events; no OS input injection",
+                        })),
                         "verify":self.options.verify,"profiling":self.options.measure,"vsync_final":self.options.vsync,
                         "retry_interval_ns":ns(RETRY_INTERVAL),"backpressure_retries":self.retries,
                         "backpressure_wall_ns":ns(self.backpressure_time),"explicit_capacity_blocking_wait_ns":0,
@@ -799,11 +827,9 @@ mod demo {
             }
         }
         fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-            if self.looking
-                && !self.options.tour
-                && let DeviceEvent::MouseMotion { delta } = event
-            {
-                self.camera.look(delta.0, delta.1);
+            if let DeviceEvent::MouseMotion { delta } = event {
+                self.input
+                    .relative_motion(delta.0, delta.1, !self.options.tour);
             }
         }
         fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
@@ -833,7 +859,7 @@ mod demo {
                 }
                 WindowEvent::Focused(false) => {
                     self.capture_mouse(false);
-                    self.camera.clear_input();
+                    self.input.focus_lost();
                 }
                 WindowEvent::MouseInput {
                     state,
@@ -844,22 +870,20 @@ mod demo {
                     if let PhysicalKey::Code(key) = event.physical_key {
                         let pressed = event.state == ElementState::Pressed;
                         match key {
-                            KeyCode::KeyW => self.camera.set_motion(Motion::Forward, pressed),
-                            KeyCode::KeyS => self.camera.set_motion(Motion::Backward, pressed),
-                            KeyCode::KeyA => self.camera.set_motion(Motion::Left, pressed),
-                            KeyCode::KeyD => self.camera.set_motion(Motion::Right, pressed),
-                            KeyCode::KeyQ => self.camera.set_motion(Motion::Down, pressed),
-                            KeyCode::KeyE => self.camera.set_motion(Motion::Up, pressed),
-                            KeyCode::ShiftLeft | KeyCode::ShiftRight => {
-                                self.camera.set_fast(pressed)
-                            }
+                            KeyCode::KeyW => self.input.motion(Motion::Forward, pressed),
+                            KeyCode::KeyS => self.input.motion(Motion::Backward, pressed),
+                            KeyCode::KeyA => self.input.motion(Motion::Left, pressed),
+                            KeyCode::KeyD => self.input.motion(Motion::Right, pressed),
+                            KeyCode::KeyQ => self.input.motion(Motion::Down, pressed),
+                            KeyCode::KeyE => self.input.motion(Motion::Up, pressed),
+                            KeyCode::ShiftLeft | KeyCode::ShiftRight => self.input.fast(pressed),
                             KeyCode::KeyT if pressed && !event.repeat => {
                                 if self.options.measure {
                                     self.fail(event_loop, "camera mode changed during a fixed-workload measurement; restart the run");
                                     return;
                                 }
                                 self.options.tour = !self.options.tour;
-                                self.camera.clear_input();
+                                self.input.clear_motion();
                                 self.update_title();
                             }
                             KeyCode::KeyV if pressed && !event.repeat => {
