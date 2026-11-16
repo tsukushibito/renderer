@@ -13,6 +13,7 @@
 pub mod engine;
 pub mod graph;
 pub mod program;
+pub mod standard;
 
 #[cfg(feature = "memory-profiling")]
 pub mod measurement;
