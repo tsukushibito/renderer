@@ -39,7 +39,8 @@ fn create_buffer<T>(
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::INDEX_BUFFER
-                | vk::BufferUsageFlags::UNIFORM_BUFFER,
+                | vk::BufferUsageFlags::UNIFORM_BUFFER
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
     let allocation = vk_mem::AllocationCreateInfo {
@@ -179,6 +180,7 @@ impl DeviceImage {
             vk::Format::R16G16B16A16_SFLOAT => (
                 vk::ImageUsageFlags::TRANSFER_SRC
                     | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::STORAGE
                     | vk::ImageUsageFlags::SAMPLED
                     | vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 vk::ImageAspectFlags::COLOR,
@@ -406,6 +408,7 @@ mod tests {
                     | vk::BufferUsageFlags::VERTEX_BUFFER
                     | vk::BufferUsageFlags::INDEX_BUFFER
                     | vk::BufferUsageFlags::UNIFORM_BUFFER
+                    | vk::BufferUsageFlags::STORAGE_BUFFER
             );
             assert_eq!(allocation.usage, vk_mem::MemoryUsage::AutoPreferDevice);
             assert!(allocation.flags.is_empty());

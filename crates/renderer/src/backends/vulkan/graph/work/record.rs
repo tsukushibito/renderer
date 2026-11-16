@@ -230,6 +230,13 @@ impl TransferPayload for GraphWork {
                         });
                         record_clear_attachments(device.raw(), command, color, depth);
                     }
+                    PreparedOperation::Dispatch { workgroups } => {
+                        self.compute.as_ref().unwrap().record(
+                            command,
+                            pass.compute.unwrap(),
+                            *workgroups,
+                        );
+                    }
                     PreparedOperation::Composite { dst, .. } => {
                         self.programs.as_ref().unwrap().record_composite(
                             command,
@@ -291,6 +298,7 @@ impl TransferPayload for GraphWork {
             }
         }
         self.bindings.take();
+        self.compute.take();
         self.programs.take();
         self.plan.take();
         self.data.take();

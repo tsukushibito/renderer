@@ -25,6 +25,7 @@ use crate::graph::{
 };
 
 mod cache;
+mod compute;
 #[cfg(feature = "graph-diagnostics")]
 use work::diagnostics;
 mod environment;
@@ -64,6 +65,8 @@ pub struct RuntimeConfig {
     pub resource_capacity: usize,
     pub staging_bytes: u64,
     pub staging_ranges: usize,
+    /// Maximum descriptor-bearing operations per Graph: each fixed Compute,
+    /// Composite, textured draw or managed dispatch consumes one slot.
     pub max_shader_bindings: u32,
 }
 
@@ -313,6 +316,7 @@ pub struct VulkanRuntime {
     upload: SharedStaging,
     readback: SharedStaging,
     programs: Option<Arc<ShaderPrograms>>,
+    compute_programs: Option<Arc<compute::ComputePrograms>>,
     workspaces: Option<StoragePool<WorkData>>,
     results: Option<StoragePool<ResultData>>,
     frame_capacity: Option<FrameCapacity>,
@@ -536,6 +540,40 @@ impl VulkanRuntime {
             .prepare_rasters(programs, depth_available)
     }
 
+    /// Prepare the complete managed Compute working set before ordinary frames.
+    /// Pipelines and descriptor sets are retained and reused; changing this set
+    /// requires cancellation or actual retirement of all execution leases.
+    pub fn prepare_compute_programs(
+        &mut self,
+        programs: &[crate::program::ManagedProgram],
+    ) -> Result<(), RuntimeError> {
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        if self.frame_capacity.is_none() {
+            return Err(RuntimeError::capacity("frame working set is not prepared"));
+        }
+        if self.execution.stats().leased != 0
+            || self
+                .compute_programs
+                .as_ref()
+                .is_some_and(|programs| !programs.is_idle())
+        {
+            return Err(RuntimeError::capacity(
+                "Compute preparation requires retired execution slots",
+            ));
+        }
+        let prepared = compute::ComputePrograms::new(
+            Arc::clone(&self.owner),
+            programs,
+            self.config.execution_slots,
+            self.config.max_shader_bindings,
+        )?;
+        self.compute_programs = Some(prepared);
+        Ok(())
+    }
+
     /// Create an immutable managed pipeline independently of any Graph.
     pub fn create_program(
         &self,
@@ -670,6 +708,7 @@ impl VulkanRuntime {
             upload,
             readback,
             programs: None,
+            compute_programs: None,
             workspaces: None,
             results: None,
             frame_capacity: None,
@@ -1073,11 +1112,13 @@ impl VulkanRuntime {
                 }
                 _ => {}
             }
-            if let Operation::Dispatch { .. } = &graph.passes[pass].operation {
-                return Err(RuntimeError::unsupported(format!(
-                    "pass {} uses managed dispatch; native execution unsupported",
-                    graph.pass_name(pass)
-                )));
+            if let Operation::Dispatch { program, .. } = &graph.passes[pass].operation
+                && !self
+                    .compute_programs
+                    .as_ref()
+                    .is_some_and(|programs| programs.supports(*program))
+            {
+                return Err(RuntimeError::capacity("Compute Program is not prepared"));
             }
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
@@ -1135,13 +1176,34 @@ impl VulkanRuntime {
             work.physical[index] = Some(value);
         }
         let mut shader_needs = ShaderNeeds::default();
+        let mut binding_count = 0usize;
         for &pass in &graph.order {
-            match graph.passes[pass].operation {
-                Operation::Compute { .. } => shader_needs.compute = true,
-                Operation::Raster { .. } => shader_needs.raster = true,
-                Operation::Composite { .. } => shader_needs.composite = true,
-                _ => {}
-            }
+            let count = match &graph.passes[pass].operation {
+                Operation::Compute { .. } => {
+                    shader_needs.compute = true;
+                    1
+                }
+                Operation::Raster { program, draws, .. } => {
+                    shader_needs.raster = true;
+                    if program.is_textured() {
+                        draws.len()
+                    } else {
+                        0
+                    }
+                }
+                Operation::Composite { .. } => {
+                    shader_needs.composite = true;
+                    1
+                }
+                Operation::Dispatch { .. } => 1,
+                _ => 0,
+            };
+            binding_count = binding_count
+                .checked_add(count)
+                .filter(|&count| count <= self.config.max_shader_bindings as usize)
+                .ok_or_else(|| {
+                    RuntimeError::capacity("Graph descriptor binding capacity exhausted")
+                })?;
         }
         let programs = if shader_needs.any() {
             Some(Arc::clone(self.programs.as_ref().ok_or_else(|| {
@@ -1162,6 +1224,15 @@ impl VulkanRuntime {
         } else {
             None
         };
+        let compute = if graph
+            .order
+            .iter()
+            .any(|&pass| matches!(graph.passes[pass].operation, Operation::Dispatch { .. }))
+        {
+            Some(self.compute_programs.as_ref().unwrap().acquire()?)
+        } else {
+            None
+        };
         #[cfg(feature = "graph-diagnostics")]
         let mut diagnostic = capture_diagnostics.then(|| {
             diagnostics::begin(
@@ -1178,6 +1249,7 @@ impl VulkanRuntime {
             graph,
             programs,
             bindings,
+            compute,
             &self.upload,
             &self.readback,
             #[cfg(feature = "graph-diagnostics")]
