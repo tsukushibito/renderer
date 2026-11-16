@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -129,6 +130,7 @@ class RuntimeComparisonTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "byte length"):
                     compare.load_capture(path, report, "hdr")
             report["captures"]["hdr"]["path"] = "../private.bin"
+            (root / "private.bin").write_bytes(b"private")
             with self.assertRaisesRegex(ValueError, "escapes"):
                 compare.load_capture(path, report, "hdr")
             report["captures"]["hdr"]["path"] = "hdr.bin"
@@ -174,6 +176,51 @@ class RuntimeComparisonTests(unittest.TestCase):
                 path.write_text(text, encoding="utf-8")
                 with self.assertRaises(ValueError):
                     compare.load_json(path)
+
+    def test_windows_local_and_unc_extended_names_have_equivalent_keys(self):
+        normal = compare._windows_containment_key(r"C:\Users\example\captures\hdr.bin")
+        extended = compare._windows_containment_key(r"\\?\C:\Users\example\captures\hdr.bin")
+        self.assertEqual(normal, extended)
+        normal_unc = compare._windows_containment_key(r"\\server\share\captures\hdr.bin")
+        extended_unc = compare._windows_containment_key(r"\\?\UNC\server\share\captures\hdr.bin")
+        self.assertEqual(normal_unc, extended_unc)
+        for device in (r"\\.\PhysicalDrive0", r"\\?\GLOBALROOT\Device\HarddiskVolume1\data",
+                       r"\\?\Volume{guid}\data", r"\??\C:\data", r"\\?\UNC\.\pipe\data"):
+            with self.subTest(device=device), self.assertRaises(ValueError):
+                compare._windows_containment_key(device)
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended capture paths")
+    def test_actual_windows_extended_capture_path_and_outside_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path, report, _ = self.make_report(root / "capture", pixels=2)
+            raw = (path.parent / "hdr.bin").resolve(strict=True)
+            report["captures"]["hdr"]["path"] = "\\\\?\\" + str(raw)
+            pixels, info = compare.load_capture(path, report, "hdr")
+            self.assertEqual(pixels.shape, (1, 2, 4))
+            self.assertEqual(info["sha256"], compare.digest(raw))
+            outside = root / "outside.bin"
+            outside.write_bytes(raw.read_bytes())
+            report["captures"]["hdr"]["path"] = "\\\\?\\" + str(outside.resolve(strict=True))
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                compare.load_capture(path, report, "hdr")
+
+    def test_resolved_symlink_cannot_escape_the_report_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path, report, _ = self.make_report(root / "capture", pixels=2)
+            outside = root / "outside.bin"
+            outside.write_bytes((path.parent / "hdr.bin").read_bytes())
+            link = path.parent / "hdr-link.bin"
+            try:
+                link.symlink_to(outside)
+            except OSError as error:
+                if os.name == "nt":
+                    self.skipTest(f"Windows symlink privilege unavailable: {error}")
+                raise
+            report["captures"]["hdr"]["path"] = link.name
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                compare.load_capture(path, report, "hdr")
 
 
 if __name__ == "__main__":
