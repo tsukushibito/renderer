@@ -18,6 +18,13 @@
 
 use std::time::Duration;
 
+#[allow(dead_code)]
+#[path = "../examples/support/compute_fixture.rs"]
+mod compute_fixture;
+#[allow(dead_code)]
+#[path = "../examples/support/standard_fixture.rs"]
+mod standard_fixture;
+
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, CompiledGraph, Graph, GraphCapacity,
     GraphPool, ImageDesc, ImageFormat, ImageHandle, LoadOp, PassHandle, RasterAttachments,
@@ -609,6 +616,16 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
 
     prepass_continuations(&mut graph, quad, &mut expected);
     standard_recipes(&mut graph, quad, &mut expected);
+    // Keep the existing RGBA8/HDR fixtures and add all four post selections to
+    // the same plan, adapter checks, sequential runs and teardown diagnostics.
+    for frame in 0..standard_fixture::CASES {
+        let added = standard_fixture::append(&mut graph, frame);
+        expected.extend(added.readbacks.map(|entry| Expected {
+            pass: entry.pass,
+            name: entry.name,
+            bytes: entry.bytes[..entry.len].to_vec(),
+        }));
+    }
     (pool, graph.compile().unwrap(), expected)
 }
 
@@ -624,13 +641,21 @@ fn programs() -> [ManagedRasterProgram; 7] {
     ]
 }
 
-fn image_classes() -> [(ImageDesc, usize); 5] {
+fn image_classes() -> [(ImageDesc, usize); 7] {
     [
         (ImageDesc::rgba8(4, 4), 8),
         (ImageDesc::rgba8(2, 2), 2),
         (ImageDesc::depth32(4, 4), 3),
         (hdr(4, 4), 5),
         (hdr(2, 2), 1),
+        (
+            standard_fixture::hdr(),
+            standard_fixture::HDR_IMAGES * standard_fixture::CASES,
+        ),
+        (
+            ImageDesc::depth32(standard_fixture::WIDTH, standard_fixture::HEIGHT),
+            standard_fixture::DEPTH_IMAGES * standard_fixture::CASES,
+        ),
     ]
 }
 
@@ -663,6 +688,8 @@ fn run(strict: bool) {
     let mut vulkan = VulkanRuntime::new_with_validation(
         RuntimeConfig {
             execution_slots: 1,
+            resource_capacity: 128,
+            max_shader_bindings: 256,
             ..Default::default()
         },
         if strict {
@@ -680,6 +707,7 @@ fn run(strict: bool) {
         },
         capacity: D3D12FrameCapacity {
             executions: 1,
+            buffers: 3 + standard_fixture::BUFFER_SIZES.len() * standard_fixture::CASES,
             ..Default::default()
         },
     })
@@ -708,6 +736,12 @@ fn run(strict: bool) {
             .into_iter()
             .map(|(desc, count)| ResourceClass::Image { desc, count }),
     );
+    resources.extend(
+        standard_fixture::BUFFER_SIZES.map(|size| ResourceClass::Buffer {
+            desc: BufferDesc { size },
+            count: standard_fixture::CASES,
+        }),
+    );
     vulkan
         .prepare_working_set(
             FrameCapacity {
@@ -720,12 +754,15 @@ fn run(strict: bool) {
     vulkan
         .prepare_raster_programs(&programs())
         .expect("Vulkan prepared graphics pipelines");
+    vulkan
+        .prepare_compute_programs(&standard_fixture::programs())
+        .expect("Vulkan prepared consumer Compute pipelines");
     let images: Vec<_> = image_classes()
         .into_iter()
         .map(|(desc, count)| D3D12ImageClass { desc, count })
         .collect();
     d3d12
-        .prepare_graph_working_set(&images, &programs(), &[])
+        .prepare_graph_working_set(&images, &programs(), &standard_fixture::programs())
         .expect("D3D12 prepared graphics resources");
 
     let (invalid_pool, invalid, _) = shared_graph(true);
@@ -834,6 +871,17 @@ fn run(strict: bool) {
         "configuration": {"development_validation":cfg!(feature="development-validation"),"graph_diagnostics":cfg!(feature="graph-diagnostics"),"vulkan_diagnostics":cfg!(feature="vulkan-diagnostics"),"d3d12_diagnostics":cfg!(feature="d3d12-diagnostics"),"debug_assertions":cfg!(debug_assertions),"external_layer_injection_checked":false},
         "adapter":{"name":vk_info.name,"luid":dx_info.luid,"vendor_id":dx_info.vendor_id,"device_id":dx_info.device_id,"vulkan_driver":vk_info.driver_info,"d3d12_driver":dx_info.driver_version},
         "compared_bytes_per_backend_per_run":expected.iter().map(|entry|entry.bytes.len()).sum::<usize>(),
+        "preserved_raster_readbacks":17,
+        "standard_composition":{
+            "routes":["standard forward direct","identity post","consumer post selection","standard passes plus the same consumer post"],
+            "post_selections":["disabled","multiply then add","replacement: add then multiply","addition: multiply then add then add"],
+            "draw_counts":[0,1,4,2],"hdr_extent":[standard_fixture::WIDTH,standard_fixture::HEIGHT],
+            "consumer_programs":["reviewed sampled HDR multiply","reviewed storage HDR add","GPU offset producer"],
+            "custom_workgroup_size":[4,4,1],"custom_workgroups":[1,2,1],
+            "readbacks_per_case":standard_fixture::READBACKS,"cases":standard_fixture::CASES,
+            "bytes_per_case":standard_fixture::READBACK_BYTES,
+            "unused_branch_per_case":"unconsumed multiply then add module"
+        },
         "successful_runs_per_backend":3,"same_compiled_graph_runs_per_backend":2,"lifetime_plan_rebuilt_from_same_inputs":true,"native_runs_sequential":true,"invalid_index_rejected":true,"d3d12_record_cancel_reuse":true,"runtime_and_all_public_plan_handles_dropped_before_completion_observation":true,
         "vulkan_readbacks":vk_pixels,"d3d12_readbacks":dx_pixels,
         "validation":{
