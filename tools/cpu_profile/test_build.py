@@ -8,7 +8,7 @@ import unittest
 
 from build import (BuildError, RELEASE_DEFAULTS, check_artifact, check_configuration,
                    check_environment, parse_features, profile_settings, select_artifact,
-                   source_snapshot, ROOT)
+                   source_snapshot, instrumentation_dependencies, ROOT)
 
 
 class BuildTests(unittest.TestCase):
@@ -23,10 +23,15 @@ class BuildTests(unittest.TestCase):
                          ["d3d12", "presentation", "vulkan"])
         with self.assertRaisesRegex(BuildError, "diagnostics"):
             parse_features("vulkan,development-validation")
+        with self.assertRaisesRegex(BuildError, "explicit"):
+            parse_features("vulkan,tracy")
+        self.assertEqual(parse_features("vulkan", "tracy"), ["tracy", "vulkan"])
 
     def test_profile_and_flag_overrides_are_rejected_by_name_without_leaking_values(self):
         for key in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_PROFILE_RELEASE_LTO",
-                    "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS", "RUSTC_WRAPPER"):
+                    "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS", "RUSTC_WRAPPER",
+                    "TRACY_CLIENT_LIB", "TRACY_CLIENT_SYS_CXXFLAGS", "CXXFLAGS",
+                    "CXXFLAGS_x86_64_pc_windows_msvc", "CL", "HOST_CXX"):
             with self.subTest(key=key), self.assertRaises(BuildError) as caught:
                 check_environment({key: "private-value"})
             self.assertNotIn("private-value", str(caught.exception))
@@ -68,6 +73,16 @@ class BuildTests(unittest.TestCase):
         artifact["profile"]["debuginfo"] = 0
         with self.assertRaisesRegex(BuildError, "debug information"):
             check_artifact(artifact, {**RELEASE_DEFAULTS, "debug": 2})
+
+    def test_instrumented_dependency_proof_uses_actual_compiled_artifacts(self):
+        messages = "\n".join(json.dumps({"reason": "compiler-artifact", "package_id": "registry#" + name,
+            "target": {"name": name}, "features": ["enable", "ondemand", "only-localhost"]})
+            for name in ("tracy_client", "tracy_client_sys"))
+        self.assertEqual(len(instrumentation_dependencies(messages, "tracy")), 2)
+        with self.assertRaisesRegex(BuildError, "unexpectedly compiled"):
+            instrumentation_dependencies(messages, "none")
+        with self.assertRaisesRegex(BuildError, "missing actual"):
+            instrumentation_dependencies("", "tracy")
 
 
 if __name__ == "__main__":

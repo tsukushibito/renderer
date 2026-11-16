@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -42,11 +43,17 @@ def git(*args):
     return run(["git", *args], capture_output=True).stdout.rstrip("\n")
 
 
-def parse_features(value):
+def parse_features(value, instrumentation="none"):
     features = sorted(set(value.replace(",", " ").split()))
     forbidden = DIAGNOSTICS.intersection(features)
     if forbidden:
         raise BuildError("Shipping profiling excludes diagnostics: " + ", ".join(sorted(forbidden)))
+    if instrumentation not in ("none", "tracy"):
+        raise BuildError("Unknown instrumentation mode")
+    if instrumentation == "none" and "tracy" in features:
+        raise BuildError("Tracy requires explicit --instrumentation tracy")
+    if instrumentation == "tracy":
+        features = sorted(set(features) | {"tracy"})
     return features
 
 
@@ -59,6 +66,9 @@ def check_environment(environment):
              "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER"}
     overrides = [name for name, value in environment.items() if value and
                  (name in exact or name.startswith("CARGO_PROFILE_") or
+                  name.startswith("TRACY_CLIENT_") or name == "CRATE_CC_NO_DEFAULTS" or
+                  name in ("CL", "_CL_") or
+                  re.search(r"(^|_)(CC|CXX|CFLAGS|CPPFLAGS|CXXFLAGS)(_|$)", name, re.I) or
                   (name.startswith("CARGO_TARGET_") and name.endswith("_RUSTFLAGS")))]
     if overrides:
         raise BuildError("Unset build/profile overrides before archiving: " + ", ".join(sorted(overrides)))
@@ -118,7 +128,7 @@ def profile_settings(root, name):
 def source_snapshot():
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
                 "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "crates/renderer",
-                "tools/cpu_profile", "tools/bistro/conditions.json").split("\0")
+                "tools/cpu_profile", "tools/tracy", "tools/bistro/conditions.json").split("\0")
     result = {}
     for name in sorted(set(filter(None, names))):
         path = ROOT / name
@@ -173,7 +183,7 @@ def cargo_build(command, environment):
     return result.stdout
 
 
-def check_artifact(artifact, settings):
+def check_artifact(artifact, settings, instrumentation="none"):
     observed = artifact["profile"]
     for cargo_key, profile_key in (("opt_level", "opt-level"), ("debug_assertions", "debug-assertions"),
                                    ("overflow_checks", "overflow-checks")):
@@ -184,6 +194,29 @@ def check_artifact(artifact, settings):
     forbidden = DIAGNOSTICS.intersection(artifact.get("features", []))
     if forbidden:
         raise BuildError("Cargo enabled diagnostics transitively: " + ", ".join(sorted(forbidden)))
+    if ("tracy" in artifact.get("features", [])) != (instrumentation == "tracy"):
+        raise BuildError("Cargo Tracy features differ from the explicit instrumentation mode")
+
+
+def instrumentation_dependencies(messages, instrumentation):
+    """Record features actually compiled, rather than Cargo's dev-unified graph."""
+    result = []
+    for line in messages.splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (item.get("reason") == "compiler-artifact"
+                and item.get("target", {}).get("name") in ("tracy_client", "tracy_client_sys")):
+            record = {"package_id": item["package_id"], "target": item["target"]["name"],
+                      "features": sorted(item.get("features", []))}
+            if record not in result:
+                result.append(record)
+    if instrumentation == "none" and result:
+        raise BuildError("Normal build unexpectedly compiled Tracy instrumentation")
+    if instrumentation == "tracy" and {item["target"] for item in result} != {"tracy_client", "tracy_client_sys"}:
+        raise BuildError("Tracy build is missing actual client dependency feature proof")
+    return result
 
 
 def find_pdb(binary):
@@ -215,7 +248,8 @@ def build(args):
     output.mkdir(parents=True, exist_ok=True)
     sources = source_snapshot()
     commit = git("rev-parse", "HEAD")
-    features = parse_features(args.features)
+    instrumentation = getattr(args, "instrumentation", "none")
+    features = parse_features(args.features, instrumentation)
     command = ["cargo", "build", "--locked", "-p", "renderer", "--no-default-features",
                "--profile", args.profile, "--example", args.example,
                "--features", ",".join(features), "--message-format=json"]
@@ -230,8 +264,10 @@ def build(args):
     target = target_base / ("build-" + uuid.uuid4().hex)
     target.mkdir(parents=True, exist_ok=False)
     environment = dict(os.environ, CARGO_INCREMENTAL="0", CARGO_TARGET_DIR=str(target))
-    artifact = select_artifact(cargo_build(command, environment), args.example)
-    check_artifact(artifact, settings)
+    messages = cargo_build(command, environment)
+    artifact = select_artifact(messages, args.example)
+    check_artifact(artifact, settings, instrumentation)
+    dependencies = instrumentation_dependencies(messages, instrumentation)
     if sources != source_snapshot() or config != configuration_snapshot(ROOT, os.environ):
         raise BuildError("Source or Cargo configuration changed during the build; no manifest was written")
     binary = Path(artifact["executable"])
@@ -248,6 +284,9 @@ def build(args):
     pair["binary"]["path"], pair["pdb"]["path"] = binary_copy.name, pdb_copy.name
     manifest = {"schema": 1, **pair,
                 "build": {"profile": args.profile, "features": features,
+                          "instrumentation": instrumentation,
+                          "artifact_class": "normal" if instrumentation == "none" else "tracy-instrumented",
+                          "instrumentation_dependencies": dependencies,
                           "effective_features": artifact.get("features", []), "example": args.example,
                           "command": command, "rustc": run(["rustc", "-vV"], capture_output=True).stdout.strip(),
                           "cargo": run(["cargo", "-V"], capture_output=True).stdout.strip(),
@@ -267,6 +306,8 @@ def main():
     parser.add_argument("--profile", choices=("profiling", "release"), default="profiling")
     parser.add_argument("--example", default="windowed")
     parser.add_argument("--features", default="vulkan,d3d12,presentation")
+    parser.add_argument("--instrumentation", choices=("none", "tracy"), default="none",
+                        help="Explicit opt-in; Tracy archives are never normal measurement artifacts")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--allow-dirty", action="store_true", help="Record actual dirty source hashes explicitly")
     args = parser.parse_args()

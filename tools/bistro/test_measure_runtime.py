@@ -107,6 +107,10 @@ class RuntimeMeasurementTests(unittest.TestCase):
                          "source_hashes": {"source.rs": {"sha256": "2" * 64}}}}
         measure.check_release_manifest(value)
         for change in (lambda v: v["build"].update(profile="profiling"),
+                       lambda v: v["build"].update(effective_features=["vulkan", "d3d12", "tracy"]),
+                       lambda v: v["build"].update(instrumentation="tracy"),
+                       lambda v: v["build"].update(artifact_class="tracy-instrumented"),
+                       lambda v: v["build"].update(instrumentation_dependencies=[{"target": "tracy_client"}]),
                        lambda v: v["build"].update(example="profile_workload"),
                        lambda v: v["build"].update(effective_features=["vulkan"]),
                        lambda v: v["build"]["effective_features"].append("vulkan-diagnostics"),

@@ -11,12 +11,19 @@ import unittest
 from unittest.mock import patch
 
 from analyze import AnalysisError, analyze_precise, analyze_sampled
-from capture import export_trace, loss_fields, record_owned, sha256
+from capture import export_trace, loss_fields, record_owned, sha256, verified_build
 from symbolize import resolve_addresses
 from wpa import PRECISE, PRECISE_KEYS, SAMPLED, SAMPLE_KEYS, prepare_profile
 
 
 class CaptureContracts(unittest.TestCase):
+    def test_normal_etw_build_rejects_any_tracy_identity_proof(self):
+        for build in ({"effective_features": ["tracy"]}, {"instrumentation": "tracy"},
+                      {"artifact_class": "tracy-instrumented"}, {"instrumentation_dependencies": [{}]}):
+            with self.subTest(build=build), patch("identity.verify_manifest", return_value={"build": build}):
+                with self.assertRaisesRegex(ValueError, "rejects instrumented Tracy"):
+                    verified_build("manifest.json")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
