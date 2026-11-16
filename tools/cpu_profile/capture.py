@@ -236,7 +236,14 @@ def record_owned(plan, runner=logged, launcher=subprocess.Popen, monotonic=time.
         if plan.get("handshake"):
             launch()
             state["handshake_ready"] = wait_event(process, events, "READY", guard, sleeper)
-        code = control("start", "wpr-start")
+        try:
+            code = control("start", "wpr-start")
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            state["session_state"] = "start_outcome_unknown_no_cleanup_attempted"
+            state["inspection_required"] = {"instance": plan["instance"],
+                                            "status_command": plan["commands"]["status"],
+                                            "reason": "WPR start did not return an outcome; inspect this unique instance before cleanup."}
+            raise
         state["start_exit_code"] = code
         if code:
             # Failed start may leave partial system state. Never infer ownership
@@ -320,18 +327,33 @@ def record_owned(plan, runner=logged, launcher=subprocess.Popen, monotonic=time.
                 state["cleanup_error"] = str(cleanup_error)
         raise
     finally:
+        cleanup_errors = []
+        active_error = sys.exc_info()[0] is not None
+
+        def close_stream(name, stream):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception as error:
+                    cleanup_errors.append({"resource": name, "error": f"{type(error).__name__}: {error}"})
+
         if process is not None:
-            if process.stdin:
-                process.stdin.close()
+            close_stream("target_stdin", process.stdin)
             if reader:
-                reader.join(timeout=5)
-            if process.stdout:
-                process.stdout.close()
-        if stdout:
-            stdout.close()
-        stderr.close()
+                try:
+                    reader.join(timeout=5)
+                except Exception as error:
+                    cleanup_errors.append({"resource": "stdout_reader", "error": f"{type(error).__name__}: {error}"})
+            close_stream("target_stdout", process.stdout)
+        close_stream("target_stdout_log", stdout)
+        close_stream("target_stderr_log", stderr)
+        if cleanup_errors:
+            state["stream_cleanup_errors"] = cleanup_errors
+            state["capture_valid"] = False
         state["finished_utc"] = utc()
         write_json(metadata, state)
+        if cleanup_errors and not active_error:
+            raise RuntimeError("Target stream cleanup failed; inspect capture.json")
 
 
 def export_trace(args):
@@ -368,16 +390,32 @@ def export_trace(args):
                 "ready-stacks": [str(args.wpt / "xperf.exe"), "-i", str(etl), "-symbols", "-a", "readythread", "-stacks"]}
     report = {"schema": 1, "capture": str(metadata_path), "etl_sha256": capture["etl"]["sha256"],
               "binary_sha256": manifest["binary"]["sha256"], "profile_source": str(source_profile),
-              "profile_sha256": sha256(profile), "commands": commands, "exit_codes": {},
+              "profile_sha256": sha256(profile), "commands": commands, "exit_codes": {}, "stages": {},
               "acceptance": "pending real-ETL header/unit, lost-event, stack and symbol coverage verification"}
+    report_path = output / "export.json"
+    write_json(report_path, report)
     for name, command in commands.items():
-        report["exit_codes"][name] = logged(command, output, name, timeout=args.timeout_seconds, env=env)
+        stage = {"status": "running", "started_utc": utc(), "timeout_seconds": args.timeout_seconds}
+        report["stages"][name] = stage
+        write_json(report_path, report)
+        try:
+            code = logged(command, output, name, timeout=args.timeout_seconds, env=env)
+            report["exit_codes"][name] = code
+            stage.update(status="succeeded" if code == 0 else "failed", exit_code=code)
+        except BaseException as error:
+            stage.update(status="timeout" if isinstance(error, subprocess.TimeoutExpired) else "interrupted"
+                         if isinstance(error, KeyboardInterrupt) else "failed",
+                         error=f"{type(error).__name__}: {error}")
+            raise
+        finally:
+            stage["finished_utc"] = utc()
+            write_json(report_path, report)
         if name == "trace-statistics":
             report["loss_fields"] = loss_fields(output / "trace-statistics.stdout.txt")
-        write_json(output / "export.json", report)
+        write_json(report_path, report)
     report["csv_files"] = [{"path": str(path), "sha256": sha256(path), "size_bytes": path.stat().st_size}
                            for path in output.glob("*.csv")]
-    write_json(output / "export.json", report)
+    write_json(report_path, report)
     if any(code for code in report["exit_codes"].values()):
         raise RuntimeError(f"Export failed: {report['exit_codes']}; raw reports retained in {output}")
     return report
