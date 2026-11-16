@@ -3,7 +3,8 @@
 Build/cook/review/validation are separate prerequisites. Each fresh process
 reports its own steady-state QPC and OS CPU boundaries; controller duration is
 retained separately and includes load, final capture and shutdown. GPU queries
-are opt-in and their CPU/frame overhead is measured against queries disabled.
+and native CPU timers are enabled together by the opt-in profiling switch. The
+combined CPU/frame cost is compared with that profiling disabled.
 """
 import argparse
 from datetime import datetime, timezone
@@ -251,7 +252,7 @@ def query_cost_observations(summaries):
             observed = on["metrics"][metric]["median_of_runs"]
             ratios[metric] = {"off_median": baseline, "on_median": observed,
                              "on_over_off_percent_change": (observed / baseline - 1) * 100 if baseline else None}
-        result[api] = {"scope": "Descriptive ratios of independent-run medians; variability is retained; not a guaranteed or isolated causal query overhead.",
+        result[api] = {"scope": "Descriptive ratios of independent-run medians for native CPU timers plus GPU timestamp queries; variability is retained; not a guaranteed or isolated causal query overhead.",
                        "metrics": ratios}
     return result
 

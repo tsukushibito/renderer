@@ -276,8 +276,9 @@ fn measurement(
     }
     Ok(
         json!({"frames":samples.len(),"warmup_frames":options.warmup,"inflight":options.inflight,"wall_ns":wall,"cpu":cpu,
-        "phase_totals_ns":phases,"native_phase_totals_ns":{"prepare":native[0],"record":native[1],"submit":native[2],"retire":native[3]},
-        "phase_scope":"caller elapsed phases; native phases are nested and must not be added to caller phases",
+        "phase_totals_ns":phases,"native_profiling_enabled":options.gpu_timing,
+        "native_phase_totals_ns":options.gpu_timing.then(||json!({"prepare":native[0],"record":native[1],"submit":native[2],"retire":native[3]})),
+        "phase_scope":"caller elapsed phases; enabled native CPU timers are nested and must not be added; GPU-timing switch controls native timers and timestamp queries; disabled native totals are null",
         "gpu":{"enabled":options.gpu_timing,"samples":gpu_samples,"total_ns":gpu_total,
             "min_ns":if gpu_samples==0{None}else{Some(gpu_min)},"max_ns":if gpu_samples==0{None}else{Some(gpu_max)}},
         "frame_wall_ns":samples.iter().map(|sample|sample.latency).collect::<Vec<_>>(),
@@ -505,11 +506,11 @@ mod tests {
             latency: 30,
             native: None,
         };
-        assert_eq!(
-            measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).unwrap()["gpu"]
-                ["samples"],
-            0
-        );
+        let measured =
+            measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).unwrap();
+        assert_eq!(measured["gpu"]["samples"], 0);
+        assert_eq!(measured["native_profiling_enabled"], false);
+        assert!(measured["native_phase_totals_ns"].is_null());
         options.gpu_timing = true;
         assert!(measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).is_err());
         assert!(measurement(&[], &options, 100, Value::Null).is_err());
