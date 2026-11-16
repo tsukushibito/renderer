@@ -14,6 +14,14 @@ mod frame_memory_image;
 #[path = "support/frame_memory_raster.rs"]
 mod frame_memory_raster;
 
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[path = "support/compute_fixture.rs"]
+mod compute_fixture;
+
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+#[path = "support/frame_memory_compute.rs"]
+mod frame_memory_compute;
+
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
 
@@ -34,12 +42,16 @@ fn main() {
         "vulkan-image" => frame_memory_image::lifecycle(baseline),
         #[cfg(feature = "vulkan")]
         "vulkan-raster" => frame_memory_raster::vulkan(baseline),
+        #[cfg(feature = "vulkan")]
+        "vulkan-compute" => frame_memory_compute::vulkan(baseline),
         #[cfg(all(feature = "d3d12", windows))]
         "d3d12" => frame_memory::d3d12_buffer_lifecycle(baseline),
         #[cfg(all(feature = "d3d12", windows))]
         "d3d12-raster" => frame_memory_raster::d3d12(baseline),
+        #[cfg(all(feature = "d3d12", windows))]
+        "d3d12-compute" => frame_memory_compute::d3d12(baseline),
         _ => panic!(
-            "supported modes: cpu/vulkan/vulkan-image/vulkan-raster/d3d12/d3d12-raster [--baseline] (backend feature required)"
+            "supported modes: cpu/vulkan/vulkan-image/vulkan-raster/vulkan-compute/d3d12/d3d12-raster/d3d12-compute [--baseline] (backend feature required)"
         ),
     }
 }
