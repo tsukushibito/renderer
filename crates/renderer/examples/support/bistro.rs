@@ -20,6 +20,9 @@ mod pipeline;
 mod program;
 #[path = "bistro/run.rs"]
 mod run;
+#[cfg(feature = "tracy")]
+#[path = "bistro/trace.rs"]
+mod trace;
 
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, time::Duration};
@@ -41,6 +44,8 @@ struct Options {
     alpha_only: bool,
     force_opaque: bool,
     capture_all_views: bool,
+    #[cfg(feature = "tracy")]
+    capture_handshake: bool,
     output: PathBuf,
 }
 
@@ -60,6 +65,8 @@ impl Options {
             alpha_only: false,
             force_opaque: false,
             capture_all_views: false,
+            #[cfg(feature = "tracy")]
+            capture_handshake: false,
             output: PathBuf::from(".tools/bistro-runtime"),
         };
         let mut args = arguments.into_iter();
@@ -70,20 +77,40 @@ impl Options {
                 "--gpu-timing" => result.gpu_timing = true,
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
+                #[cfg(feature = "tracy")]
+                "--capture-handshake" => result.capture_handshake = true,
                 "--api" => result.api = args.next().ok_or("--api needs vulkan or d3d12")?,
-                "--manifest" => result.manifest = Some(args.next().ok_or("--manifest needs a path")?.into()),
-                "--view" => result.view = args.next().ok_or("--view needs a fixed name or route")?,
-                "--width" => { result.width = args.next().ok_or("missing width")?.parse()?; specified_size=true; }
-                "--height" => { result.height = args.next().ok_or("missing height")?.parse()?; specified_size=true; }
+                "--manifest" => {
+                    result.manifest = Some(args.next().ok_or("--manifest needs a path")?.into())
+                }
+                "--view" => {
+                    result.view = args.next().ok_or("--view needs a fixed name or route")?
+                }
+                "--width" => {
+                    result.width = args.next().ok_or("missing width")?.parse()?;
+                    specified_size = true;
+                }
+                "--height" => {
+                    result.height = args.next().ok_or("missing height")?.parse()?;
+                    specified_size = true;
+                }
                 "--frames" => result.frames = args.next().ok_or("missing frames")?.parse()?,
                 "--warmup" => result.warmup = args.next().ok_or("missing warmup")?.parse()?,
                 "--inflight" => result.inflight = args.next().ok_or("missing inflight")?.parse()?,
                 "--output" => result.output = args.next().ok_or("missing output directory")?.into(),
                 "--alpha-override" => {
-                    if args.next().as_deref()!=Some("opaque") {return Err("only --alpha-override opaque is supported".into());}
-                    result.force_opaque=true;
+                    if args.next().as_deref() != Some("opaque") {
+                        return Err("only --alpha-override opaque is supported".into());
+                    }
+                    result.force_opaque = true;
                 }
-                "--help" | "-h" => return Err("usage: bistro --api vulkan|d3d12 (--manifest manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--alpha-only --alpha-override opaque] --output DIR".into()),
+                "--help" | "-h" => {
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--alpha-only --alpha-override opaque] --output DIR";
+                    #[cfg(feature = "tracy")]
+                    return Err(format!("{usage} [--capture-handshake]").into());
+                    #[cfg(not(feature = "tracy"))]
+                    return Err(usage.into());
+                }
                 _ => return Err(format!("unknown option: {argument}").into()),
             }
         }
@@ -119,6 +146,10 @@ const WAIT: Duration = Duration::from_secs(60);
 
 pub fn main() -> Result<(), Error> {
     let options = Options::parse(std::env::args().skip(1))?;
+    #[cfg(feature = "tracy")]
+    let _client = tracy_client::Client::start();
+    #[cfg(feature = "tracy")]
+    tracy_client::set_thread_name!("Bistro main");
     match options.api.as_str() {
         #[cfg(feature = "vulkan")]
         "vulkan" => run::execute::<backend::Vulkan>(&options),
@@ -147,5 +178,14 @@ mod tests {
             (128, 96, 2)
         );
         assert!(fixture.gpu_timing);
+    }
+
+    #[test]
+    fn capture_handshake_is_only_available_with_tracy() {
+        let parsed = options(&["--fixture", "--capture-handshake"]);
+        #[cfg(feature = "tracy")]
+        assert!(parsed.unwrap().capture_handshake);
+        #[cfg(not(feature = "tracy"))]
+        assert!(parsed.is_err());
     }
 }

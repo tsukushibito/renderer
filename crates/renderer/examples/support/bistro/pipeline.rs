@@ -424,120 +424,138 @@ pub(super) fn build(
     capture: bool,
 ) -> Result<Built, Error> {
     let mut graph = pool.begin()?;
-    workspace.vertices.clear();
-    workspace.indices.clear();
-    workspace.materials.clear();
-    workspace.images.clear();
-    workspace.bindings.clear();
-    workspace.blended.clear();
-    for value in &resident.vertices {
-        workspace
-            .vertices
-            .push(graph.import_buffer("mesh vertices", value)?);
-    }
-    for value in &resident.indices {
-        workspace
-            .indices
-            .push(graph.import_buffer("mesh indices", value)?);
-    }
-    for value in &resident.materials {
-        workspace
-            .materials
-            .push(graph.import_buffer("material factors", value)?);
-    }
-    for value in &resident.images {
-        workspace
-            .images
-            .push(graph.import_image("material image", value)?);
-    }
-    let uniform = graph.import_buffer("camera", &resident.camera)?;
-    graph.upload_buffer("camera update boundary", uniform, 0, camera_bytes)?;
-    graph.export_buffer(uniform)?;
-    let resolve_vertices = graph.import_buffer("resolve vertices", &resident.resolve_vertices)?;
-    let resolve_indices = graph.import_buffer("resolve indices", &resident.resolve_indices)?;
-    for (index, material) in scene.materials.iter().enumerate() {
-        let image = |slot: usize| -> Result<BindingResource, Error> {
-            let handle = workspace.images[material.textures[slot]];
-            let mip_count = scene.images[material.textures[slot]].mips.len() as u32;
-            Ok(BindingResource::ImageView(
-                graph.sampled_image_view(handle, 0, mip_count)?,
-            ))
-        };
-        workspace.bindings.push([
-            Binding {
-                group: 0,
-                binding: 0,
-                resource: BindingResource::Buffer {
-                    buffer: uniform,
-                    offset: 0,
-                    size: 128,
+    let (uniform, resolve_vertices, resolve_indices) = {
+        #[cfg(feature = "tracy")]
+        let _imports = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("bistro.build.imports"), 0));
+        workspace.vertices.clear();
+        workspace.indices.clear();
+        workspace.materials.clear();
+        workspace.images.clear();
+        workspace.bindings.clear();
+        workspace.blended.clear();
+        for value in &resident.vertices {
+            workspace
+                .vertices
+                .push(graph.import_buffer("mesh vertices", value)?);
+        }
+        for value in &resident.indices {
+            workspace
+                .indices
+                .push(graph.import_buffer("mesh indices", value)?);
+        }
+        for value in &resident.materials {
+            workspace
+                .materials
+                .push(graph.import_buffer("material factors", value)?);
+        }
+        for value in &resident.images {
+            workspace
+                .images
+                .push(graph.import_image("material image", value)?);
+        }
+        let uniform = graph.import_buffer("camera", &resident.camera)?;
+        graph.upload_buffer("camera update boundary", uniform, 0, camera_bytes)?;
+        graph.export_buffer(uniform)?;
+        let resolve_vertices =
+            graph.import_buffer("resolve vertices", &resident.resolve_vertices)?;
+        let resolve_indices = graph.import_buffer("resolve indices", &resident.resolve_indices)?;
+        (uniform, resolve_vertices, resolve_indices)
+    };
+    {
+        #[cfg(feature = "tracy")]
+        let _bindings = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("bistro.build.bindings"), 0));
+        for (index, material) in scene.materials.iter().enumerate() {
+            let image = |slot: usize| -> Result<BindingResource, Error> {
+                let handle = workspace.images[material.textures[slot]];
+                let mip_count = scene.images[material.textures[slot]].mips.len() as u32;
+                Ok(BindingResource::ImageView(
+                    graph.sampled_image_view(handle, 0, mip_count)?,
+                ))
+            };
+            workspace.bindings.push([
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: uniform,
+                        offset: 0,
+                        size: 128,
+                    },
                 },
-            },
-            Binding {
-                group: 0,
-                binding: 1,
-                resource: BindingResource::Buffer {
-                    buffer: workspace.materials[index],
-                    offset: 0,
-                    size: 64,
+                Binding {
+                    group: 0,
+                    binding: 1,
+                    resource: BindingResource::Buffer {
+                        buffer: workspace.materials[index],
+                        offset: 0,
+                        size: 64,
+                    },
                 },
-            },
-            Binding {
-                group: 1,
-                binding: 0,
-                resource: image(0)?,
-            },
-            Binding {
-                group: 1,
-                binding: 1,
-                resource: image(1)?,
-            },
-            Binding {
-                group: 1,
-                binding: 2,
-                resource: image(2)?,
-            },
-            Binding {
-                group: 1,
-                binding: 3,
-                resource: image(3)?,
-            },
-            Binding {
-                group: 1,
-                binding: 4,
-                resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
-            },
-        ]);
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: image(0)?,
+                },
+                Binding {
+                    group: 1,
+                    binding: 1,
+                    resource: image(1)?,
+                },
+                Binding {
+                    group: 1,
+                    binding: 2,
+                    resource: image(2)?,
+                },
+                Binding {
+                    group: 1,
+                    binding: 3,
+                    resource: image(3)?,
+                },
+                Binding {
+                    group: 1,
+                    binding: 4,
+                    resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+                },
+            ]);
+        }
     }
-    let color = graph.image(
-        "scene linear HDR",
-        ImageDesc::rgba16_float(options.width, options.height),
-    )?;
-    let depth = graph.image(
-        "scene depth",
-        ImageDesc::depth32(options.width, options.height),
-    )?;
-    let output = graph.image(
-        "B2 sRGB output",
-        ImageDesc::rgba8(options.width, options.height),
-    )?;
-    let color_view = graph.image_view(color, 0, 0)?;
-    let depth_view = graph.image_view(depth, 0, 0)?;
-    graph.attachment_pass(
-        "scene clears",
-        RasterAttachments {
-            colors: &[Attachment {
-                view: color_view,
-                load: LoadOp::Clear([background[0], background[1], background[2], 1.0]),
-                store: StoreOp::Store,
-            }],
-            depth: Some(Attachment {
-                view: depth_view,
-                load: LoadOp::Clear(1.0),
-                store: StoreOp::Store,
-            }),
-        },
-    )?;
+    let (color, depth, output, color_view, depth_view) = {
+        #[cfg(feature = "tracy")]
+        let _targets = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("bistro.build.targets"), 0));
+        let color = graph.image(
+            "scene linear HDR",
+            ImageDesc::rgba16_float(options.width, options.height),
+        )?;
+        let depth = graph.image(
+            "scene depth",
+            ImageDesc::depth32(options.width, options.height),
+        )?;
+        let output = graph.image(
+            "B2 sRGB output",
+            ImageDesc::rgba8(options.width, options.height),
+        )?;
+        let color_view = graph.image_view(color, 0, 0)?;
+        let depth_view = graph.image_view(depth, 0, 0)?;
+        graph.attachment_pass(
+            "scene clears",
+            RasterAttachments {
+                colors: &[Attachment {
+                    view: color_view,
+                    load: LoadOp::Clear([background[0], background[1], background[2], 1.0]),
+                    store: StoreOp::Store,
+                }],
+                depth: Some(Attachment {
+                    view: depth_view,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+        )?;
+        (color, depth, output, color_view, depth_view)
+    };
     let eligible = |index: usize| {
         !options.alpha_only || scene.materials[scene.primitives[index].material].alpha_zero
     };
@@ -551,44 +569,18 @@ pub(super) fn build(
             parameters: RasterConstants::default(),
         }
     };
-    let opaque = (0..scene.primitives.len()).filter(|&index| {
-        eligible(index) && !scene.materials[scene.primitives[index].material].blend
-    });
-    graph.raster(
-        "Forward PBR opaque and mask",
-        &program::opaque_program(),
-        opaque.map(draw),
-        RasterAttachments {
-            colors: &[Attachment {
-                view: color_view,
-                load: LoadOp::Load,
-                store: StoreOp::Store,
-            }],
-            depth: Some(Attachment {
-                view: depth_view,
-                load: LoadOp::Load,
-                store: StoreOp::Store,
-            }),
-        },
-    )?;
-    for index in 0..scene.primitives.len() {
-        if eligible(index) && scene.materials[scene.primitives[index].material].blend {
-            workspace.blended.push(index);
-        }
-    }
-    // A deterministic far-to-near primitive order. This is ordinary alpha
-    // blending, not order-independent transparency or per-triangle sorting.
-    workspace.blended.sort_unstable_by(|&a, &b| {
-        camera
-            .distance_squared(scene.primitives[b].center)
-            .total_cmp(&camera.distance_squared(scene.primitives[a].center))
-            .then(a.cmp(&b))
-    });
-    if !workspace.blended.is_empty() {
+    {
+        #[cfg(feature = "tracy")]
+        let _opaque = tracy_client::Client::running().map(|client| {
+            client.span(tracy_client::span_location!("bistro.build.opaque_draws"), 0)
+        });
+        let opaque = (0..scene.primitives.len()).filter(|&index| {
+            eligible(index) && !scene.materials[scene.primitives[index].material].blend
+        });
         graph.raster(
-            "Forward PBR alpha blend",
-            &program::blend_program(),
-            workspace.blended.iter().copied().map(draw),
+            "Forward PBR opaque and mask",
+            &program::opaque_program(),
+            opaque.map(draw),
             RasterAttachments {
                 colors: &[Attachment {
                     view: color_view,
@@ -603,6 +595,60 @@ pub(super) fn build(
             },
         )?;
     }
+    {
+        #[cfg(feature = "tracy")]
+        let _sort = tracy_client::Client::running().map(|client| {
+            client.span(tracy_client::span_location!("bistro.build.blended_sort"), 0)
+        });
+        for index in 0..scene.primitives.len() {
+            if eligible(index) && scene.materials[scene.primitives[index].material].blend {
+                workspace.blended.push(index);
+            }
+        }
+        // A deterministic far-to-near primitive order. This is ordinary alpha
+        // blending, not order-independent transparency or per-triangle sorting.
+        workspace.blended.sort_unstable_by(|&a, &b| {
+            camera
+                .distance_squared(scene.primitives[b].center)
+                .total_cmp(&camera.distance_squared(scene.primitives[a].center))
+                .then(a.cmp(&b))
+        });
+    }
+    {
+        #[cfg(feature = "tracy")]
+        let _blended = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("bistro.build.blended_draws"),
+                0,
+            )
+        });
+        if !workspace.blended.is_empty() {
+            graph.raster(
+                "Forward PBR alpha blend",
+                &program::blend_program(),
+                workspace.blended.iter().copied().map(draw),
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: color_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    }),
+                },
+            )?;
+        }
+    }
+    #[cfg(feature = "tracy")]
+    let _resolve = tracy_client::Client::running().map(|client| {
+        client.span(
+            tracy_client::span_location!("bistro.build.resolve_and_exports"),
+            0,
+        )
+    });
     let resolve_bindings = [
         Binding {
             group: 0,

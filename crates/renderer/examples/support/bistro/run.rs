@@ -73,13 +73,27 @@ fn frames<B: Backend>(
         samples: &mut Vec<Sample>,
         record: bool,
     ) -> Result<(), Error> {
+        #[cfg(feature = "tracy")]
+        let _retire = tracy_client::Client::running()
+            .map(|client| client.span(tracy_client::span_location!("bistro.retire"), 0));
         let started = Instant::now();
-        let completed = B::wait(&mut entry.work, super::WAIT)?;
+        let completed = {
+            #[cfg(feature = "tracy")]
+            let _poll = tracy_client::Client::running().map(|client| {
+                client.span(tracy_client::span_location!("bistro.poll_and_retire"), 0)
+            });
+            B::wait(&mut entry.work, super::WAIT)?
+        };
         entry.sample.phases[3] = started.elapsed().as_nanos() as u64;
         entry.sample.native = B::metrics(&completed);
         entry.sample.latency = entry.started.elapsed().as_nanos() as u64;
         let started = Instant::now();
-        drop((completed, entry.work, entry.plan));
+        {
+            #[cfg(feature = "tracy")]
+            let _return = tracy_client::Client::running()
+                .map(|client| client.span(tracy_client::span_location!("bistro.result_return"), 0));
+            drop((completed, entry.work, entry.plan));
+        }
         entry.sample.phases[4] = started.elapsed().as_nanos() as u64;
         if record {
             samples.push(entry.sample);
@@ -87,34 +101,69 @@ fn frames<B: Backend>(
         Ok(())
     }
     for frame in 0..count {
+        // This zone is a contiguous CPU iteration. Pending.started continues
+        // to measure build-to-observed-completion latency across iterations.
+        #[cfg(feature = "tracy")]
+        let frame_zone = if record {
+            tracy_client::Client::running()
+                .map(|client| client.span(super::trace::frame_location(), 0))
+        } else {
+            None
+        };
         if queue.len() == options.inflight {
             retire(queue.pop_front().unwrap(), samples, record)?;
         }
         let started = Instant::now();
         let stage = Instant::now();
-        let (camera, bytes) = uniform(conditions, options, frame)?;
-        let built = pipeline::build(
-            pool,
-            workspace,
-            resident,
-            scene,
-            options,
-            camera,
-            &bytes,
-            conditions.background,
-            false,
-        )?;
+        let (camera, bytes) = {
+            #[cfg(feature = "tracy")]
+            let _uniform = tracy_client::Client::running()
+                .map(|client| client.span(tracy_client::span_location!("bistro.uniform"), 0));
+            uniform(conditions, options, frame)?
+        };
+        let built = {
+            #[cfg(feature = "tracy")]
+            let _build = tracy_client::Client::running()
+                .map(|client| client.span(tracy_client::span_location!("bistro.build"), 0));
+            pipeline::build(
+                pool,
+                workspace,
+                resident,
+                scene,
+                options,
+                camera,
+                &bytes,
+                conditions.background,
+                false,
+            )?
+        };
         let build = stage.elapsed().as_nanos() as u64;
         let stage = Instant::now();
-        let plan = built.graph.compile()?;
+        let plan = {
+            #[cfg(feature = "tracy")]
+            let _compile = tracy_client::Client::running()
+                .map(|client| client.span(tracy_client::span_location!("bistro.compile"), 0));
+            built.graph.compile()?
+        };
         let compile = stage.elapsed().as_nanos() as u64;
         let stage = Instant::now();
-        let work = backend.submit(&plan)?;
-        resident.camera = B::export_buffer(&work, built.camera)?;
-        let output = B::export_image(&work, built.output)?;
-        // Keep the Graph live without a mandatory readback. Deleting a registry
-        // name is not early GPU release: pending work owns its prepared lease.
-        backend.delete(output.key())?;
+        let work = {
+            #[cfg(feature = "tracy")]
+            let _submit = tracy_client::Client::running()
+                .map(|client| client.span(tracy_client::span_location!("bistro.submit"), 0));
+            backend.submit(&plan)?
+        };
+        {
+            #[cfg(feature = "tracy")]
+            let _export = tracy_client::Client::running().map(|client| {
+                client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
+            });
+            resident.camera = B::export_buffer(&work, built.camera)?;
+            let output = B::export_image(&work, built.output)?;
+            // Keep the Graph live without a mandatory readback. Deleting a registry
+            // name is not early GPU release: pending work owns its prepared lease.
+            backend.delete(output.key())?;
+        }
         let submit = stage.elapsed().as_nanos() as u64;
         queue.push_back(Pending {
             work,
@@ -126,7 +175,20 @@ fn frames<B: Backend>(
             },
             started,
         });
+        #[cfg(feature = "tracy")]
+        {
+            drop(frame_zone);
+            if record && let Some(client) = tracy_client::Client::running() {
+                client.frame_mark();
+            }
+        }
     }
+    #[cfg(feature = "tracy")]
+    let _drain = if record {
+        tracy_client::Client::running().map(|client| client.span(super::trace::drain_location(), 0))
+    } else {
+        None
+    };
     while let Some(entry) = queue.pop_front() {
         retire(entry, samples, record)?;
     }
@@ -308,6 +370,10 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     if options.output.join("report.json").exists() {
         return Err("output report already exists; choose a new output directory".into());
     }
+    #[cfg(feature = "tracy")]
+    super::trace::prepare_locations();
+    #[cfg(feature = "tracy")]
+    let tracy_capture_id = super::trace::capture_id()?;
     #[cfg(feature = "memory-profiling")]
     let setup_memory = renderer::measurement::Snapshot::now();
     let setup = Instant::now();
@@ -392,6 +458,16 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "Bistro measured frames: {} (capture is outside ROI)",
         options.frames
     );
+    #[cfg(feature = "tracy")]
+    if options.capture_handshake {
+        super::trace::ready(
+            options,
+            &identity(options, &cook_hash, &conditions_hash),
+            tracy_capture_id.as_deref(),
+        )?;
+    }
+    #[cfg(feature = "tracy")]
+    let tracy_connected_start = tracy_client::Client::is_connected();
     #[cfg(windows)]
     let frequency = super::clock::frequency()?;
     #[cfg(windows)]
@@ -399,19 +475,24 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "memory-profiling")]
     let memory_start = renderer::measurement::Snapshot::now();
     let started = Instant::now();
-    frames(
-        &mut backend,
-        &mut resident,
-        &scene,
-        options,
-        &conditions,
-        &mut pool,
-        &mut workspace,
-        &mut queue,
-        &mut samples,
-        options.frames,
-        true,
-    )?;
+    {
+        #[cfg(feature = "tracy")]
+        let _measurement = tracy_client::Client::running()
+            .map(|client| client.span(super::trace::measurement_location(), 0));
+        frames(
+            &mut backend,
+            &mut resident,
+            &scene,
+            options,
+            &conditions,
+            &mut pool,
+            &mut workspace,
+            &mut queue,
+            &mut samples,
+            options.frames,
+            true,
+        )?;
+    }
     let wall = started.elapsed().as_nanos() as u64;
     #[cfg(feature = "memory-profiling")]
     let memory = renderer::measurement::Snapshot::now().since(memory_start);
@@ -419,7 +500,20 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let cpu = super::clock::Boundary::capture()?.difference(cpu_start, frequency)?;
     #[cfg(not(windows))]
     let cpu = Value::Null;
+    #[cfg(feature = "tracy")]
+    let tracy_connected_end = tracy_client::Client::is_connected();
     let measured = measurement(&samples, options, wall, cpu)?;
+    #[cfg(feature = "tracy")]
+    let tracy = json!({
+        "enabled": true, "capture_handshake": options.capture_handshake,
+        "capture_id": tracy_capture_id,
+        "connected_at_measurement_start": tracy_connected_start,
+        "connected_at_measurement_end": tracy_connected_end,
+    });
+    #[cfg(feature = "tracy")]
+    if options.capture_handshake {
+        super::trace::done(options, &measured, &tracy)?;
+    }
     let captured = capture(
         &mut backend,
         &mut resident,
@@ -478,6 +572,12 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
         "views":view_reports,"readback_outside_measurement":true,
         "limits":"B2 Forward PBR; headless, no frustum/occlusion culling, no IBL/shadows/tonemapper/Bloom/AA or display FPS claim; whole primitives sorted for transparency"});
+    #[cfg(feature = "tracy")]
+    let report = {
+        let mut report = report;
+        report["tracy"] = tracy;
+        report
+    };
     write_report(&options.output, &report)?;
     println!("REPORT {}", serde_json::to_string(&report)?);
     #[cfg(feature = "memory-profiling")]
