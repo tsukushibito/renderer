@@ -873,6 +873,15 @@ cargo test --locked --release -p renderer --lib --no-default-features --features
 cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,presentation vulkan_presentation_graph_resize_cancel_and_pending_shutdown -- --ignored --nocapture --test-threads=1
 ```
 
+D3D12の独立した実Window試験も、同じstrict／shippingの区別で実行します。
+resize／VSync／最小化復帰／取得後cancel／pending終了と、18 source・36 presentの全lifecycleを扱います。
+`memory-profiling`付きでは通常窓のRust確保・再確保・解放とnative作成・破棄を検査します。
+
+```powershell
+cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,presentation,development-validation,graph-diagnostics,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,presentation,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1
+```
+
 共通の契約は[Graphの表示接続](../design/rendergraph.md#windows-presentation)、nativeの根拠は
 [Vulkan](../design/vulkan.md#windows-presentation)と[D3D12](../design/implementation-policy.md#d3d12-presentation)を参照します。
 
@@ -915,6 +924,7 @@ image caseは通常の公開Engine APIでRaster→0/1/2段のInvert→Composite�
 3pending/3held結果とprepared/compiled取消から全出力・結果返却まで測る。固定のplan再生専用経路ではない。
 
 WSIは18sourceを毎回build/compileし、36present・18readbackと最終GPU/present退役を一つの通常epochに含める。
+D3D12のWindow試験も18source・36present、三つのpending Graphと保持結果、sourceの返却までを連続窓に含める。
 プロセス全体、同期的なwinit/Window呼出し、Rendererのsetup/normal/shutdownを別rowへ記録する。
 shipping RendererにRust workerがないこの独立fixtureでは、通常epoch全体からcallerのRust要求だけを除く。
 native/host callbackはcaller呼出し中も含むepoch全体を数え、rowの合計が重複する場合がある。
