@@ -40,6 +40,10 @@ serde_json = "1.0"
 name = "transfer_planning"
 harness = false
 
+[[bench]]
+name = "d3d12_reuse"
+harness = false
+
 [[example]]
 name = "headless"
 required-features = ["vulkan"]
