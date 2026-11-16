@@ -24586,7 +24586,8 @@
       "crates/renderer/src/backends/vulkan/graph.rs": "6e7c254071b3d8c896af646515efc85dfb2d41dc9c95fda1e6f2acb0cab5a4a3",
       "crates/renderer/src/graph.rs": "360c4528dfe063033f34a8c9fb1f01a2af158a7c870455c9f4be0eaa5c49e02f",
       "crates/renderer/tests/general_resources.rs": "ada576dc72350592c8ca382a4acce4b346e3ce9d2b4dc9bb155cf2b49e6a7363",
-      "crates/renderer/src/graph/provenance.rs": "fe081110304776c390961c97bdb049fe0ca5a189e6e112fee94d35802612341f"
+      "crates/renderer/src/graph/provenance.rs": "fe081110304776c390961c97bdb049fe0ca5a189e6e112fee94d35802612341f",
+      "crates/renderer/src/graph/storage.rs": "ae5ec7cf0fbf9f4f69887ffa9f7922b0eac51d5c1124c0cda424cebe89cb1d37"
     },
     "commands": [
       "cargo test --locked --release --no-default-features --features vulkan,d3d12,development-validation,memory-profiling --test general_resources general_resources_strict -- --exact --ignored --nocapture --test-threads=1",
@@ -24606,7 +24607,11 @@
       "cargo check --locked --no-default-features --features d3d12 --all-targets",
       "cargo clippy --locked --no-default-features --features d3d12 --all-targets -- -D warnings",
       "cargo check --locked --no-default-features --features vulkan --all-targets",
-      "RUSTDOCFLAGS=\"-D warnings\" cargo doc --locked --no-deps --workspace --all-features"
+      "RUSTDOCFLAGS=\"-D warnings\" cargo doc --locked --no-deps --workspace --all-features",
+      "cargo check --locked --workspace --all-targets --no-default-features --features d3d12,development-validation,graph-diagnostics",
+      "cargo clippy --locked --workspace --all-targets --no-default-features --features d3d12,development-validation,graph-diagnostics -- -D warnings",
+      "cargo test --locked --workspace --no-default-features --features d3d12,development-validation,graph-diagnostics",
+      "cargo test --locked --release --workspace --no-default-features --features d3d12,development-validation,graph-diagnostics"
     ],
     "runs": [
       {
@@ -24946,6 +24951,18 @@
       },
       "cpu-all": {
         "passed_including_rustdoc": 325
+      },
+      "d3d12-only-shipping-debug": {
+        "passed_including_rustdoc": 188
+      },
+      "d3d12-only-shipping-release": {
+        "passed_including_rustdoc": 188
+      },
+      "d3d12-only-strict-debug": {
+        "passed_including_rustdoc": 189
+      },
+      "d3d12-only-strict-release": {
+        "passed_including_rustdoc": 189
       }
     },
     "existing_memory_regression": {
@@ -26724,7 +26741,7 @@
       "new timing/performance comparison"
     ],
     "guidance": "Maintain actual-use transitions, native resource/descriptor ownership through Fence completion, prepared capacities and native failure handling in shipping. D3D12 keeps existing COMMON transitions; no new Vulkan/VMA recommendation exceptions or unmeasured optimization claims.",
-    "source_note": "After GPU acceptance, removed the Vulkan-only cfg on the existing unchanged BufferProvenance::copy_from body so D3D12-only builds can use it; independent D3D12 check/Clippy and Vulkan check passed. No native execution change.",
+    "source_note": "Native/GPU acceptance code is unchanged after 03d37d9. Exposed existing unchanged provenance copy to D3D12-only builds and compiled existing initial_contents getter for development-validation with either backend. Shipping excludes the diagnostic getter. Initial CI 43824554460 detected the latter D3D12-only diagnostic cfg gap; the exact enabled/disabled check/Clippy/debug/release tests and independent diagnostic checks passed after correction.",
     "output_encoding": "Lossless packed RGBA16F little-endian bytes, lower-case hexadecimal per readback; each run compared to independent expected pixels and between Vulkan/D3D12."
   }
 }

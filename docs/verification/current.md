@@ -24,7 +24,7 @@ Windows x64、Rust 1.99.0、RTX 3060／driver 610.88。同一LUIDを確認し、
 | strict／shipping | Renderer追加検証＋Core/SyncVal／Debug Layer＋GBVと、追加検証・専用native診断を除外したnative Disabled構成を別processで各3回成功。strictは最終native解放後までwarning／error／corruption／callback失敗ゼロ |
 | 一般履歴メモリ | 各APIの24 warm-up＋24変動frame。構築／compile／prepare／record／submitからFence完了、readback、旧履歴deleteと全plan/result/metadata返却までRust alloc／alloc_zeroed／realloc／dealloc、VMA host alloc／realloc／free、native作成／破棄は全て0。reset各48回は別計上 |
 | 既存回帰 | 二APIの混合Raster／Compute strict/shipping、独立processの両API Compute-only／標準混合メモリが成功。既存厳格nativeライブラリ回帰62件も成功 |
-| CPU・品質 | 通常CPU160件、release全feature325件、release二API製品301件（各Rustdoc1件を含む）が成功。全feature／targetと二API製品構成のClippyがwarnings拒否で成功 |
+| CPU・品質 | 通常CPU160件、release全feature325件、release二API製品301件（各Rustdoc1件を含む）が成功。全feature／targetと二API製品構成のClippyがwarnings拒否で成功。D3D12単独も診断enabled/disabledのcheck・Clippy・debug/release CPUと独立診断featureを確認 |
 
 一般履歴のメモリ窓はlibtest内で逐次測定し、既存の独立processメモリゲートと併用した。
 実行コマンド・UTF-8 LF source hash・raw byteと診断・メモリ結果は
