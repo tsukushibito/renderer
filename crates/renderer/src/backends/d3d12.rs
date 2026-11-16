@@ -13,6 +13,7 @@ mod program;
 mod raster;
 mod raster_clear;
 mod raster_storage;
+mod registry;
 mod resources;
 pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
@@ -55,6 +56,7 @@ pub enum D3D12RuntimeErrorKind {
     Unsupported,
     CapacityExhausted,
     WrongOwner,
+    StaleResource,
     DeviceRemoved,
     DeviceUnavailable,
     Native,
@@ -187,6 +189,17 @@ impl D3D12Runtime {
         if !self.pool.is_idle() {
             return Err(D3D12RuntimeError::capacity(
                 "Graph working set cannot change while execution or result leases remain",
+            ));
+        }
+        if self
+            .pool
+            .registry
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .has_registered()
+        {
+            return Err(D3D12RuntimeError::capacity(
+                "delete registered Graph resources before changing the working set",
             ));
         }
         let pool = frame::FramePool::with_graph(

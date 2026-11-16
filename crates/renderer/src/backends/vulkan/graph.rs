@@ -4,7 +4,6 @@
 //! recorded reference, and accepted state is distinct from actual completion.
 
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use std::time::Instant;
@@ -50,8 +49,6 @@ pub use presentation::{PresentOutcome, PresentationConfig, Presenter};
 use storage::StoragePool;
 use work::GraphWork;
 use work::{ResultData, WorkData};
-
-static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(feature = "graph-diagnostics")]
 type LoweringCapture = Option<String>;
@@ -679,9 +676,7 @@ impl VulkanRuntime {
             config.staging_bytes,
             config.staging_ranges,
         )?;
-        let id = NEXT_RUNTIME
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| RuntimeError::capacity("runtime identity exhausted"))?;
+        let id = crate::graph::next_id();
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(config.resource_capacity)

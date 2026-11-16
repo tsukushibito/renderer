@@ -19,7 +19,7 @@ pub struct D3D12ImageClass {
 
 pub(super) struct GraphImage {
     pub(super) desc: ImageDesc,
-    pub(super) native: DeviceImage,
+    pub(super) native: super::registry::PhysicalRef,
     pub(super) state: D3D12_RESOURCE_STATES,
     pub(super) uav_write: bool,
     pub(super) used: bool,
@@ -262,6 +262,39 @@ fn copy_layout(
 }
 
 impl RasterStorage {
+    pub(super) fn bind_views(&self, owner: &DeviceOwner) {
+        for image in &self.images {
+            if !image.used {
+                continue;
+            }
+            if let Some(handle) = image.rtv {
+                // SAFETY: This exclusive execution slot owns the CPU descriptor;
+                // the leased native image matches its prepared color class.
+                unsafe {
+                    owner
+                        .raw
+                        .CreateRenderTargetView(image.native.raw(), None, handle)
+                };
+            }
+            if let Some(handle) = image.dsv {
+                let view = D3D12_DEPTH_STENCIL_VIEW_DESC {
+                    Format: DXGI_FORMAT_D32_FLOAT,
+                    ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
+                    Flags: D3D12_DSV_FLAG_NONE,
+                    Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+                        Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
+                    },
+                };
+                // SAFETY: The exclusive descriptor and retained single-mip/layer
+                // typeless depth resource match the concrete D32 view.
+                unsafe {
+                    owner
+                        .raw
+                        .CreateDepthStencilView(image.native.raw(), Some(&view), handle)
+                };
+            }
+        }
+    }
     pub(super) fn new(
         owner: &DeviceOwner,
         classes: &[D3D12ImageClass],
@@ -400,7 +433,7 @@ impl RasterStorage {
                 };
                 images.push(GraphImage {
                     desc: class.desc,
-                    native,
+                    native: super::registry::PhysicalRef::image(native),
                     state: D3D12_RESOURCE_STATE_COMMON,
                     uav_write: false,
                     used: false,

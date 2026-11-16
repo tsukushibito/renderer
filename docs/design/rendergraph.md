@@ -59,9 +59,9 @@ bufferは半開byte範囲を指定する。
 | 実行基盤 | 現在の範囲 |
 |---|---|
 | Vulkan | buffer／RGBA8・RGBA16F画像copy、owned Compute・Raster、固定Compute、attachment操作、合成、import／export、上限付き再利用 |
-| D3D12 | transient bufferとRGBA8・RGBA16F画像のupload・copy・readback、owned Compute・Rasterとattachment操作。単一DIRECT queue、committed resource、物理aliasingなし |
+| D3D12 | bufferとRGBA8・RGBA16F画像のupload・copy・readback、owned Compute・Rasterとattachment操作、canonical import／export・履歴と上限付き再利用。単一DIRECT queue、committed resource、物理aliasingなし |
 
-D3D12のprepareはexportとliveなimport等の未対応操作を明示エラーにする。
+両APIともnative未対応の操作や準備済み容量の不足をprepareで明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
 B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
@@ -429,8 +429,9 @@ producer・初期化・culling・live hazard／topological計画・最終内容�
 
 ## GPU状態と所有
 
-この節のcanonical state、import／export、cacheとframe APIは現在のVulkan実行の契約である。
-D3D12の限定したbuffer実行の所有と完了は[次節](#d3d12-buffer-lifetime)に記す。
+この節のcanonical identity、内容revision、import／exportの所有は両APIで共有する。
+native状態の引継ぎ、cacheとframe APIの詳細はVulkanの契約であり、
+D3D12の状態境界と準備済みregistryは[次節](#d3d12-buffer-lifetime)に記す。
 
 同じruntime資源のimportは、物理資源と状態の同一性を維持する。
 exportハンドルの取得はCPUで内容を読めることを意味しない。
@@ -519,7 +520,7 @@ native OOMと、設定済みpoolの空き不足は別の分類とする。
 
 <a id="d3d12-buffer-lifetime"></a>
 
-## D3D12のbuffer状態と所有
+## D3D12の資源状態と所有
 
 `D3D12Runtime::prepare`は、共有`CompiledGraph`のculling後の順序を使ってnative命令を準備する。
 producerや範囲の解析をD3D12用に作り直さず、Graph構築で確立した不変の保証を引き継ぐ。
@@ -540,8 +541,39 @@ runtimeを先に終了しても、prepared／submission／未読結果が必要�
 Device removalや投入後のsignal失敗を有効な内容として返さない。
 完了不明の処理は停止と所有保持へ進め、未投入の作成・記録失敗と区別する。
 Drop時の対象Fence待機と保持の規則は[D3D12 runtimeの設計](implementation-policy.md#d3d12-runtime)を参照する。
-この段階にはcanonical import／exportと永続keyを追加していない。
 実行・資源・CPU結果は準備済みpoolへ分け、未完了submissionの通常Dropは上限付きpendingへ引き継ぐ。
+
+`renderer-7ft.2.5`でbuffer／画像をslot内の専用品から共有物理registryへ移した。
+`D3D12Submission::export_buffer`／`export_image`で受理済み内容のsnapshotを取得し、
+通常の`Graph::import_buffer`／`import_image`から次のGraphへ接続できる。
+同じkeyの重複importは論理資源を増やさず、writer／readerの依存と初期化情報を共有する。
+keyのownerはVulkanも含むprocess共通のidentity空間から取得し、別runtime／backendの偶然の数値一致を防ぐ。
+`refresh_buffer`／`refresh_image`は新しい予定内容を返し、`delete`は登録とprovenanceを直ちに失効させる。
+CPUハンドルのDropは登録解除ではない。記録中・pendingの強い参照が残る物理資源は再利用しない。
+再利用は世代を進め、初期化情報とindex provenanceを消す。native資源は同じ準備済みallocationを使う。
+
+内容・範囲・ABIの保証はGraph構築／compileから引き継ぐ。変更可能なowner／世代／revisionはprepareと
+submitの境界で照合し、記録後の更新・削除も投入前に拒否する。descriptorと初期化範囲の独立再照合は
+`development-validation`でのみ行う。read-onlyのGraphはrevisionを変えず、先に構築・記録した複数consumerを
+順に投入できる。liveなwrite／discardは内容revisionを進め、古いsnapshotの再投入を拒否する。
+一般bufferが将来indexになる場合のCPU-known provenanceも保持し、shader writeで該当範囲を失効させる。
+
+既存のlegacy barrierによる記録末尾の`COMMON`復帰を維持する。後続Graphは同じDIRECT queueの順序と
+明示transitionを使い、producerのCPU完了待機を挟まない。これは[Microsoftの状態遷移契約](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12)
+に従う保守的な基準で、Vulkanのstage/access/layoutをD3D12へ移植せず、barrier削減の性能主張もしない。
+RTV／DSVは実行slotの専用descriptorへ借りた画像を設定し、GPU完了前に書き換えない。
+native実行前に容量とexport tokenを全て予約し、ExecuteとSignal成功後にのみ予定内容と新規登録を公開する。
+Signal失敗ではDeviceを停止し、内容を公開せず、実行資源・program・Deviceを含む所有を隔離保持する。
+[Fenceの`UINT64_MAX`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-getcompletedvalue)を正常完了と扱わない。
+
+物理buffer数は`executions * buffers`、画像数は`executions * 各image classのcount`を準備時に確保する。
+bufferのnative sizeは`buffer_bytes`、論理sizeは各Graphのdescriptorである。画像は完全一致するclassを使う。
+現在の空き候補選択はregistryの線形検索であり、時間性能の改善は主張しない。
+通常のprepareは登録中・参照中の物理資源、実行枠、結果枠、export metadata、range tokenの不足を
+容量エラーとして返し、増設もGPU待機もしない。`initialized_ranges_per_resource`と`range_snapshots`は
+個別に指定でき、途中のtoken取得失敗でも既に取得した参照を全て返す。
+working set変更は全実行・結果の返却と登録資源の明示deleteを必要とし、変更後の旧keyはowner不一致になる。
+strict／shippingの内容照合と変動frameの確保測定は[現在の検証](../verification/current.md)を参照する。
 
 ## 同期と一般推奨の適用
 
@@ -722,7 +754,7 @@ importした出力の登録は元の所有者が管理する。中間資源の�
 形式や寸法をViewへ合わせる制約はなく、初期化・handleはGraphの通常の契約で検査する。
 元のGraph・選択出力・Frame/Callerの解放権限を確定して、既存の`submit_frame`／`release_output`へ接続する。
 GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame metadataのDropを完了とはしない。
-一般D3D12 import/履歴は後続の`.2.5`とし、この接続追加だけで実証済みとは扱わない。
+一般D3D12 import/履歴は`.2.5`で別途受け入れた。このEngine接続だけを二APIのEngine完成とは扱わない。
 
 ### 現行の標準描画便利経路
 

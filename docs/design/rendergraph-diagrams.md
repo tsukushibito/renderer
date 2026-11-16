@@ -273,9 +273,10 @@ D3D12の公開`prepare`は未投入command・資源を所有し、投入後の�
 {{#include rendergraph-diagrams/import-revision.mmd}}
 ```
 
-Vulkanのimport snapshotはowner・世代・内容revision・desc・初期化情報を表します。
+両APIのimport snapshotはowner・世代・内容revision・desc・初期化情報を表します。
 snapshotが古いstage/access/layoutを固定して再生する構造ではありません。
-投入時にruntimeのcanonical予定状態から依存を計画し、別runtimeや古い内容revisionを拒否します。
+投入時に別runtimeや古い内容revisionを拒否します。Vulkanはcanonical予定状態から依存を計画し、
+D3D12は記録末尾のCOMMON復帰と後続の明示transitionを使います。
 write・clear・discardでrevisionを進め、readやlayout変更だけでは進めません。
 
 A受理後のfresh snapshotからBを構築すれば、同じqueueへAのCPU待機なしで投入できます。

@@ -29,6 +29,9 @@ pub struct D3D12FrameCapacity {
     /// Independent of operation/draw capacity; exhaustion returns a capacity error.
     /// Zero is valid for buffer-only work and complete immutable mesh index proofs.
     pub provenance_segments_per_resource: usize,
+    /// Canonical initialized intervals and independently retained import tokens.
+    pub initialized_ranges_per_resource: usize,
+    pub range_snapshots: usize,
     pub buffers: usize,
     pub buffer_bytes: u64,
     pub upload_bytes: u64,
@@ -44,6 +47,8 @@ impl Default for D3D12FrameCapacity {
             resources: 1024,
             operations: 4096,
             provenance_segments_per_resource: 64,
+            initialized_ranges_per_resource: 64,
+            range_snapshots: 1024,
             buffers: 16,
             buffer_bytes: 1024 * 1024,
             upload_bytes: 1024 * 1024,
@@ -89,7 +94,9 @@ pub(super) struct ExecutionSlot {
     pub(super) list: NativeObject<ID3D12GraphicsCommandList>,
     fence: NativeObject<ID3D12Fence>,
     next_value: u64,
-    pub(super) buffers: Vec<DeviceBuffer>,
+    pub(super) buffers: Vec<super::registry::PhysicalRef>,
+    pub(super) resource_uses: Vec<Option<super::registry::ResourceUse>>,
+    pub(super) resource_count: usize,
     pub(super) upload: DeviceBuffer,
     pub(super) scratch: DeviceBuffer,
     pub(super) states: Vec<D3D12_RESOURCE_STATES>,
@@ -145,7 +152,10 @@ impl ExecutionSlot {
         for _ in 0..capacity.buffers {
             // Graph buffers may become shader storage without changing their
             // immutable physical allocation during ordinary frames.
-            buffers.push(DeviceBuffer::storage(owner, capacity.buffer_bytes)?);
+            buffers.push(super::registry::PhysicalRef::buffer(DeviceBuffer::storage(
+                owner,
+                capacity.buffer_bytes,
+            )?));
         }
         let mut states = reserved(capacity.buffers)?;
         states.resize(capacity.buffers, D3D12_RESOURCE_STATE_COMMON);
@@ -160,6 +170,8 @@ impl ExecutionSlot {
             ));
         }
         Ok(Self {
+            resource_uses: vec![None; capacity.resources],
+            resource_count: 0,
             raster: None,
             raster_draws_used: 0,
             compute_descriptors_used: 0,
@@ -293,6 +305,7 @@ struct PoolState {
     results: Vec<Option<ResultSlot>>,
 }
 pub(super) struct FramePool {
+    pub(super) registry: Mutex<super::registry::Registry>,
     capacity: D3D12FrameCapacity,
     pub(super) raster_programs: Vec<RasterPipeline>,
     pub(super) clear_programs: Option<ClearPrograms>,
@@ -339,7 +352,15 @@ impl FramePool {
         for _ in 0..capacity.results {
             results.push(Some(ResultSlot::new(&owner, capacity)?));
         }
+        let mut registry = super::registry::Registry::new(capacity)?;
+        for entry in &mut executions {
+            let ExecutionEntry::Available(slot) = entry else {
+                unreachable!()
+            };
+            registry.install(slot)?;
+        }
         Ok(Arc::new(Self {
+            registry: Mutex::new(registry),
             capacity,
             raster_programs: Vec::new(),
             clear_programs: None,
@@ -468,6 +489,11 @@ impl FramePool {
                 compute_descriptors,
                 storage_formats,
             )?);
+            pool_mut
+                .registry
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .install(slot)?;
         }
         Ok(pool)
     }
@@ -498,11 +524,12 @@ impl FramePool {
             match completed {
                 Ok(false) => continue,
                 Ok(true) => {
-                    let ExecutionEntry::Detached(work) =
+                    let ExecutionEntry::Detached(mut work) =
                         std::mem::replace(&mut state.executions[index], ExecutionEntry::Leased)
                     else {
                         unreachable!()
                     };
+                    work.slot.release_resources();
                     if let Some(result) = work.result {
                         Self::return_result(&mut state, result);
                     }
@@ -567,6 +594,8 @@ impl FramePool {
             graph: 0,
             target: 0,
             phase: Phase::Poisoned,
+            plan: None,
+            exports: None,
         };
         if work.slot().next_value == u64::MAX {
             work.phase = Phase::Recorded;
@@ -635,6 +664,8 @@ enum Phase {
     Quarantined,
 }
 pub(super) struct FrameWork {
+    pub(super) plan: Option<crate::graph::CompiledGraph>,
+    pub(super) exports: Option<super::registry::ExportLease>,
     pool: Arc<FramePool>,
     index: usize,
     slot: Option<Box<ExecutionSlot>>,
@@ -696,6 +727,11 @@ impl FrameWork {
             D3D12RuntimeError::invalid("D3D12 queue transaction lock was poisoned")
         })?;
         owner.ensure_active()?;
+        let pool = Arc::clone(&self.pool);
+        let mut registry = pool.registry.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(graph) = &self.plan {
+            registry.validate(graph)?;
+        }
         let list: ID3D12CommandList = self.slot().list.0.clone().into();
         let fence = self.slot().fence.0.clone();
         let target = self.target;
@@ -718,7 +754,19 @@ impl FrameWork {
             owner.mark_stopped();
             return Err(owner.native("ID3D12CommandQueue::Signal", error));
         }
-        Ok(FrameSubmission { work: Some(self) })
+        if let Some(graph) = self.plan.take() {
+            registry.commit(&graph, self.slot_mut());
+        }
+        // Canonical provenance has moved into the registry. Release the old
+        // backing's content pins while retaining prepared arrays and GPU leases.
+        for provenance in &mut self.slot_mut().provenance {
+            provenance.clear();
+        }
+        let exports = self.exports.take();
+        Ok(FrameSubmission {
+            work: Some(self),
+            exports,
+        })
     }
     fn detached(&mut self) -> DetachedWork {
         DetachedWork {
@@ -728,7 +776,8 @@ impl FrameWork {
         }
     }
     fn complete(mut self) -> FrameResult {
-        let slot = self.slot.take().unwrap();
+        let mut slot = self.slot.take().unwrap();
+        slot.release_resources();
         self.pool.state().executions[self.index] = ExecutionEntry::Available(slot);
         let result = self.result.take();
         let remaining = result
@@ -791,6 +840,9 @@ impl Drop for FrameWork {
             provenance.clear();
         }
         self.slot.as_mut().unwrap().provenance_scratch.clear();
+        if matches!(self.phase, Phase::Recorded | Phase::Complete) {
+            self.slot_mut().release_resources();
+        }
         let work = self.detached();
         let mut state = self.pool.state();
         match self.phase {
@@ -815,6 +867,7 @@ impl Drop for FrameWork {
 }
 
 pub(super) struct FrameSubmission {
+    pub(super) exports: Option<super::registry::ExportLease>,
     work: Option<FrameWork>,
 }
 impl FrameSubmission {
@@ -1091,6 +1144,8 @@ mod tests {
                     resources: 8,
                     operations: 32,
                     provenance_segments_per_resource: segments,
+                    initialized_ranges_per_resource: 32,
+                    range_snapshots: 8,
                     buffers: 2,
                     buffer_bytes: 128,
                     upload_bytes: 512,

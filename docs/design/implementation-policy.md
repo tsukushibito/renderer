@@ -1533,7 +1533,7 @@ DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit pro
 現段階では採用しない。状態と命令の対応を確認しやすい基準を優先する選択であり、余分なbarrier費用は残る。[^d3dbarriers]
 同じbufferの非重複copyは、別のscratch bufferを介した二段copyで共通Graphの意味を保つ。
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
-Enhanced Barriers、外部suballocator、import／exportは未対応である。
+Enhanced Barriers、外部suballocatorは未対応である。import／exportは後述の共有registryを使う。
 
 `prepare_graph_working_set(&[D3D12ImageClass], &[ManagedRasterProgram], &[ManagedProgram])`は全execution/result tokenが返った
 明示準備境界で画像classごとの個数、Programごとのgraphics/compute PSOとroot signature、descriptor heapを準備する。
@@ -1612,7 +1612,11 @@ Fenceの`UINT64_MAX`やDevice removalを正常完了とみなさない。[^d3dfe
 共通Graphの全byte一致、終了後までの厳格診断、最適化された診断なし経路の内容を別runで確認する。
 実行方法は[開発手順](../guides/development.md#d3d12-buffer-acceptance)、
 実行済み・未実行の範囲は[現在の検証状況](../verification/current.md)に記す。
-canonical import/exportは現行D3D12で未実装であり、`.2.5`で扱う。旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
+canonical import/exportは`.2.5`で一般buffer／画像の共有registryへ接続した。
+予定内容とGPU完了、更新revision、pending参照と再利用、容量上限の現行契約は
+[RenderGraphのD3D12資源管理](rendergraph.md#d3d12-buffer-lifetime)を参照する。
+slotごとのCOMMON復帰を維持し、同じqueueでのGraph間受け渡しにCPU待機を要求しない。
+旧M4-05〜07の順序を必須にせず、B0の選定を受けてB1以降へ組み直す。
 一般RHIや将来の描画・binding契約をこのbuffer実行だけで確定したとは扱わない。
 
 ## 17. Codexの作業手順

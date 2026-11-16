@@ -24,11 +24,6 @@ fn use_buffer(
         return Ok(());
     }
     let resource = &graph.resources[index];
-    if resource.import.is_some() {
-        return Err(D3D12RuntimeError::unsupported(
-            "D3D12 Graph import is not implemented",
-        ));
-    }
     let ResourceDesc::Buffer(desc) = resource.desc else {
         return Err(D3D12RuntimeError::unsupported(
             "D3D12 Graph image execution is not implemented",
@@ -74,11 +69,6 @@ fn requirements_inner(
     programs: &[super::super::raster::RasterPipeline],
     compute_programs: &[super::super::program::D3D12Program],
 ) -> Result<usize, D3D12RuntimeError> {
-    if !graph.exports.is_empty() {
-        return Err(D3D12RuntimeError::unsupported(
-            "D3D12 Graph export is not implemented",
-        ));
-    }
     if graph.resources.len() > capacity.resources
         || graph.resources.len() > resource_map.len()
         || graph.order.len() > capacity.operations
@@ -292,6 +282,26 @@ fn requirements_inner(
             }
         }
     }
+    for &index in &graph.exports {
+        match graph.resources[index].desc {
+            ResourceDesc::Buffer(_) => use_buffer(
+                graph,
+                index,
+                resource_map,
+                &mut used,
+                capacity.buffer_bytes,
+                capacity.buffers,
+            )?,
+            ResourceDesc::Image(_) => super::raster::use_image(
+                graph,
+                index,
+                resource_map,
+                raster.as_deref_mut().ok_or_else(|| {
+                    D3D12RuntimeError::capacity("image working set is not prepared")
+                })?,
+            )?,
+        }
+    }
     Ok(used)
 }
 
@@ -319,7 +329,15 @@ pub(super) fn prepare(
     )?;
     super::raster::provenance_requirements(graph, &mut slot.provenance_needed);
     work.slot_mut().buffers_used = used;
+    {
+        let mut registry = pool.registry.lock().unwrap_or_else(|e| e.into_inner());
+        registry.bind(graph, work.slot_mut())?;
+    }
+    super::raster::retain_provenance(graph, &mut work.slot_mut().provenance_needed);
     let owner = Arc::clone(work.owner());
+    if let Some(storage) = &mut work.slot_mut().raster {
+        storage.bind_views(&owner);
+    }
     let list = work.slot().list.clone();
     let readback = work.result().map(|result| result.buffer.raw().clone());
     if let Some(result) = work.result_mut() {
@@ -563,12 +581,15 @@ pub(super) fn prepare(
             }
         }
     }
-    // Recording no longer needs CPU provenance. Native operands remain in the
-    // execution lease; release Graph pins before returning the prepared work.
-    for provenance in &mut slot.provenance {
-        provenance.clear();
-    }
     slot.provenance_scratch.clear();
+    // Reserve immutable export tokens before native acceptance. Contents and
+    // canonical registration are published only after successful Signal.
+    work.exports = pool
+        .registry
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .capture_exports(graph, work.slot())?;
+    work.plan = Some(graph.clone());
     work.finish_recording()?;
     Ok(work)
 }

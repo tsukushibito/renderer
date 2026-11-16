@@ -31,11 +31,6 @@ pub(super) fn use_image(
     if map[index] != usize::MAX {
         return Ok(());
     }
-    if graph.resources[index].import.is_some() {
-        return Err(D3D12RuntimeError::unsupported(
-            "D3D12 Graph image import is not implemented",
-        ));
-    }
     let ResourceDesc::Image(desc) = graph.resources[index].desc else {
         unreachable!()
     };
@@ -112,6 +107,26 @@ pub(super) fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool]
             for draw in graph.raster_draws(draws) {
                 needed[draw.indices] = true;
             }
+        }
+    }
+    for &pass in graph.order.iter().rev() {
+        if let Operation::CopyBuffer { src, dst, .. } = graph.passes[pass].operation
+            && needed[dst]
+        {
+            needed[src] = true;
+        }
+    }
+}
+
+pub(super) fn retain_provenance(graph: &CompiledGraph, needed: &mut [bool]) {
+    for (index, resource) in graph.resources.iter().enumerate() {
+        if resource.import.is_some() && matches!(resource.desc, ResourceDesc::Buffer(_)) {
+            needed[index] = true;
+        }
+    }
+    for &index in &graph.exports {
+        if matches!(graph.resources[index].desc, ResourceDesc::Buffer(_)) {
+            needed[index] = true;
         }
     }
     for &pass in graph.order.iter().rev() {

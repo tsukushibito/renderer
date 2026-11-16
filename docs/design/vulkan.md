@@ -468,6 +468,14 @@ cancel、受理済み予定状態、実Fence退役、最終解放は既存fixtur
 
 ## 投入・完了・異常時の保持
 
+`.2.5`では既存のcanonical資源・内容revision・native状態計画を一般owned Compute bindingの
+Graph間受け渡しにも適用した。HDR StorageRead／Writeと任意buffer bindingを使う履歴chainを、
+producerのCPU完了待機なしに投入する。初回／reset／resize、pending中の更新・削除と古いsnapshot拒否を
+D3D12と同じ利用側定義で確認する。実GPU完了までのPhysical/View/descriptor保持を維持し、
+今回新しい資源寿命経路やVMA設定は追加していない。runtimeのowner identityだけをGraphと共有する
+process共通採番へ移し、backend間のkey衝突を防いだ。通常frameのメモリ測定と未実行範囲は
+[現在の検証](../verification/current.md)を参照する。
+
 同じqueueでwriterをreadへ可視化した後、write/layout変更がなく、直近に確立したreadの
 stage/access pairが完全に同じならwriter→reader barrierを重複記録しない。bufferと画像の両方へ適用する。
 このexact pairを最後のwriterと累積reader scopeから分け、Snapshotごとに16 byte追加する。

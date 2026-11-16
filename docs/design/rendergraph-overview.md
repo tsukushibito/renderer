@@ -168,7 +168,7 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 | `Graph::dispatch` | 管理下Programとbuffer・sampled/storage画像のbinding、固定または画像extent由来dispatch | 明示準備したpipeline/descriptorで対応 | 同じ契約のtransient資源で対応 |
 | `attachment_pass` | color-only・depth-only・MRT、単一mip/layer View | 最大一色＋任意depth、各1 subresource | 同じnative形状で対応 |
 | 複数mip/layerの画像 | subresource単位に解析 | native画像は各1のみ | native画像は各1のみ |
-| import/export・履歴 | 宣言・解析に対応 | canonical状態と連携 | 未対応 |
+| import/export・履歴 | 宣言・解析に対応 | canonical状態と連携 | canonical identity/revision、COMMON境界と連携 |
 | 複数queue・物理aliasing | 一般実装なし | 単一Graphics＋Compute queue、aliasingなし | 単一DIRECT queue、aliasingなし |
 
 `Graph::dispatch`は`graph::Binding`配列を受け取り、Programのmanifest順に

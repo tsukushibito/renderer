@@ -5,6 +5,38 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 一般資源のimport・更新・履歴と退役
+
+`renderer-7ft.2.5`。D3D12のbuffer／画像を共有物理registryへ移し、一般Graphのimport/export、
+owner・世代・内容revision、refresh/deleteと実GPU完了までの保持を接続した。
+Vulkanの既存canonical状態・一般binding・provenanceを同じ利用側fixtureで受け入れた。
+二APIのkeyが偶然一致しないよう、runtime ownerはGraphと共通のprocess内採番を使う。
+現行契約は[RenderGraph](../design/rendergraph.md#d3d12-buffer-lifetime)、
+再実行は[一般資源の受入](../guides/development.md#general-resource-acceptance)を参照する。
+
+Windows x64、Rust 1.99.0、RTX 3060／driver 610.88。同一LUIDを確認し、GPU作業は逐次実行した。
+
+| 確認 | 結果 |
+|---|---|
+| 共通履歴fixture | 初回／reset／3×7→2×2 resize、CPU待機なしの3段Storage画像＋buffer加算を実行。履歴9出力・1104 byte／API／回を独立期待値と二API間で完全一致。各APIの48変動frameも全画素一致 |
+| importと更新 | 画像／bufferの重複import、read-only consumerの複数投入、pending中の両資源更新とdelete、古いsnapshot拒否とrefresh、別backendのkey拒否を確認。importしたvertex/indexとattachment Loadを標準opaqueで描き、両APIで全21 pixelが白 |
+| D3D12記録境界 | prepare後の内容更新をsubmitで拒否。未投入cancel、二つ目のexport token取得失敗後の参照・token返却と再投入成功、最終readbackを確認 |
+| strict／shipping | Renderer追加検証＋Core/SyncVal／Debug Layer＋GBVと、追加検証・専用native診断を除外したnative Disabled構成を別processで各3回成功。strictは最終native解放後までwarning／error／corruption／callback失敗ゼロ |
+| 一般履歴メモリ | 各APIの24 warm-up＋24変動frame。構築／compile／prepare／record／submitからFence完了、readback、旧履歴deleteと全plan/result/metadata返却までRust alloc／alloc_zeroed／realloc／dealloc、VMA host alloc／realloc／free、native作成／破棄は全て0。reset各48回は別計上 |
+| 既存回帰 | 二APIの混合Raster／Compute strict/shipping、独立processの両API Compute-only／標準混合メモリが成功。既存厳格nativeライブラリ回帰62件も成功 |
+| CPU・品質 | 通常CPU160件、release全feature325件、release二API製品301件（各Rustdoc1件を含む）が成功。全feature／targetと二API製品構成のClippyがwarnings拒否で成功 |
+
+一般履歴のメモリ窓はlibtest内で逐次測定し、既存の独立processメモリゲートと併用した。
+実行コマンド・UTF-8 LF source hash・raw byteと診断・メモリ結果は
+[検証データの`general_resources`](frame-memory.json)に記録する。
+strict native回帰の一括指定には明示opt-in必須の性能専用試験も含まれ、環境変数未指定でその1件が拒否された。
+正しさ回帰62件は成功しており、この課題で性能専用試験や新しい時間性能比較は行わない。
+shippingのゼロ時間Fence待機はVulkan各57回、D3D12各55〜57回のtimeoutを実観測し、再wait後に内容を照合した。
+待機失敗／Signal失敗の所有は既存CPU注入、部分native作成失敗とpending退役は既存実GPU回帰を併用する。
+実OOM／Device loss/removalは発生させていない。shippingの診断件数0は外部Layer注入の不存在を証明しない。
+D3D12は既存COMMON復帰を維持し、新たなvendor最適化・未計測の性能効果やVulkan/VMA推奨の例外は設けていない。
+一般Raster shader・blend/depthは`.2.8`、二API表示・通常frame時間は`.2.6`へ残す。
+
 ## 公開三経路のconsumer移行と混合Compute受入
 
 `renderer-7ft.2.7.4`。`frame_loop`と`engine_workloads`の代表構築を

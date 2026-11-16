@@ -44,7 +44,7 @@ pub use storage::{GraphCapacity, GraphPool, GraphStorage};
 use storage::{Slot, capacity_error};
 
 static NEXT_GRAPH: AtomicU64 = AtomicU64::new(1);
-fn next_id() -> u64 {
+pub(crate) fn next_id() -> u64 {
     NEXT_GRAPH
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("graph identity exhausted")

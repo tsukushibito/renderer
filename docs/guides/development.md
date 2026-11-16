@@ -613,6 +613,28 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 cargo run --locked --release -p renderer --no-default-features --features d3d12,memory-profiling --example frame_memory -- d3d12-raster
 ```
 
+<a id="general-resource-acceptance"></a>
+
+### 一般資源・履歴の二API受入
+
+[`general_resources`](../../crates/renderer/tests/general_resources.rs)は、同じ利用側のowned Computeと
+標準opaqueパスをVulkan／D3D12で逐次実行する。初回／reset／resize、3未完了Graphの履歴chain、
+一般buffer・HDR画像の更新／delete、重複import、read-only snapshotの再利用、古いrevisionの拒否、
+importしたvertex/indexとattachment Loadを全画素照合する。D3D12はprepare後の更新拒否、未投入cancel、
+二つ目のexport range token取得失敗後の回復も確認する。
+
+```powershell
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,memory-profiling --test general_resources general_resources_strict -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,memory-profiling --test general_resources general_resources_shipping -- --exact --ignored --nocapture --test-threads=1
+```
+
+`GENERAL_RESOURCE_REPORT`はadapter/LUID、履歴9出力の全byteと最終native解放後の診断をJSONで出す。
+shippingの`GENERAL_RESOURCE_MEMORY`は各APIの24 warm-up＋24変動frameで、build/compile/prepare/record/submit、
+Fence完了、readback、delete、plan/result/metadata返却を測る。履歴値と不要枝を変更し、固定plan再生を条件にしない。
+libtest内の専用逐次窓で測るため、下記の独立processによる混合描画／Computeメモリゲートも保持する。
+timeout／Signal失敗と部分native作成失敗は既存CPU注入／実GPU寿命回帰を併用し、
+実OOM・Device removalを意図的に発生させた証拠とは区別する。
+
 <a id="owned-compute-acceptance"></a>
 
 ### owned Compute・画像copyの二API受入

@@ -414,6 +414,35 @@ enum SubmissionKind {
     Fixture(FixtureSubmission),
 }
 impl D3D12Submission {
+    /// Snapshot of accepted scheduled contents; completion is observed separately.
+    pub fn export_buffer(
+        &self,
+        handle: crate::graph::BufferHandle,
+    ) -> Result<crate::graph::ImportBuffer, D3D12RuntimeError> {
+        match &self.kind {
+            SubmissionKind::Pooled(submission) => submission
+                .exports
+                .as_ref()
+                .ok_or_else(|| D3D12RuntimeError::invalid("Graph has no exports"))?
+                .buffer(handle),
+            #[cfg(test)]
+            _ => Err(D3D12RuntimeError::invalid("fixture has no exports")),
+        }
+    }
+    pub fn export_image(
+        &self,
+        handle: crate::graph::ImageHandle,
+    ) -> Result<crate::graph::ImportImage, D3D12RuntimeError> {
+        match &self.kind {
+            SubmissionKind::Pooled(submission) => submission
+                .exports
+                .as_ref()
+                .ok_or_else(|| D3D12RuntimeError::invalid("Graph has no exports"))?
+                .image(handle),
+            #[cfg(test)]
+            _ => Err(D3D12RuntimeError::invalid("fixture has no exports")),
+        }
+    }
     pub fn poll(&mut self) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
         match &mut self.kind {
             SubmissionKind::Pooled(submission) => {
@@ -820,12 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn plan_rejects_exports_and_backend_capacity_before_native_allocation() {
+    fn plan_accepts_exports_and_rejects_backend_capacity_before_native_allocation() {
         let (_graph_pool, mut graph) = prepared_graph();
         let buffer = graph.buffer("export", BufferDesc { size: 4 }).unwrap();
         graph.upload_buffer("upload", buffer, 0, &[1; 4]).unwrap();
         graph.export_buffer(buffer).unwrap();
-        assert!(requirements(&graph.compile().unwrap()).is_err());
+        assert!(requirements(&graph.compile().unwrap()).is_ok());
 
         let (_graph_pool, mut graph) = prepared_graph();
         let buffer = graph
@@ -864,7 +893,9 @@ mod tests {
         graph
             .readback_buffer("readback external", imported, 0, 4)
             .unwrap();
-        assert!(requirements(&graph.compile().unwrap()).is_err());
+        // Native-independent preflight admits imports. The mutable registry
+        // checks their owner/generation/revision at preparation and submission.
+        assert!(requirements(&graph.compile().unwrap()).is_ok());
     }
 
     #[test]
