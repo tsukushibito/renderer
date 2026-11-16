@@ -29,6 +29,9 @@ VulkanやD3D12のruntimeが、その中の生き残った処理をnative命令�
 GraphからEngineの型には依存しません。Engineは不変mesh入力をGraphへ渡し、
 Graphのprivateな保証境界を通します。任意の生CommandBufferを受け取るAPIも現在はありません。
 操作と宣言した用途・範囲を対応させることで、解析した計画と実際の処理を結び付けます。
+現行Engine層はassetとframe入力に加え、標準opaqueや出力のGraph構築も担当します。
+採用した[三層の公開API方針](implementation-policy.md#public-api-layers)では、その構成を公開標準パスと標準グラフへ分離します。
+ユーザーは標準グラフの全体利用、一部の交換、公開部品を使う独自Graphを選べるようにします。これは今後の移行方針です。
 
 ## 2. 小さなGraphを作ってみる
 
@@ -311,5 +314,8 @@ CPUだけの試験はnative dispatch対応やnative allocationゼロの証拠に
 B1では、実装済みの管理下owned命令とbinding/attachment由来のアクセスを出発点として、
 利用側の独自Program/PSO、一般binding、Raster・Computeの二API実行を段階的に実証します。
 現在の限定操作を互換性のために固定する方針ではありません。
+公開構成への移行は[作業順序](implementation-policy.md#public-api-migration)に従い、Compute/copyの受入後、一般import・寿命管理の前に進めます。
+標準グラフの定義を再利用してもframeごとの描画対象は変更できます。基本は入力から各frameのGraphを構築・compileし、
+不変のCompiledGraphへdraw列を後から差し込む機能の実装とは区別します。
 一般shader、native MRT/mip/layer、Bistro描画や複数queue・物理aliasingの対応状況は、
 [公開API比較](implementation-policy.md#public-api-comparison)と[Bistro計画](implementation-policy.md#bistro-roadmap)で確認してください。

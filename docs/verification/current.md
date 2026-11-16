@@ -5,6 +5,21 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 公開APIの三層方針と移行計画
+
+`renderer-7ft.2.7.1`。[公開API方針](../design/implementation-policy.md#public-api-layers)として、
+汎用Graph API、同じ公開APIで定義する標準パス、それらから構成する標準グラフを採用した。
+Engineによる現行固定構成と移行後の契約を区別し、入力接続・出力所有・標準部品・consumer受入を`.2.7`、
+一般import/履歴/退役を既存`.2.5`、独自Raster/blend/depthを新`.2.8`、表示と時間計測を既存`.2.6`へ分けた。
+[着手順序](../design/implementation-policy.md#public-api-migration)をBeadsの依存へ反映し、小HDR外部Bloom`.5.1`を`.2.7`後へ前倒しした。
+
+文書と課題計画のみの変更であり、公開API・native実行・shader・検証配置・メモリ保証の実装は変更していない。
+独立した設計・作業計画レビューで重大な指摘なし。0 draw時のLoad保持、構築時からの資源pin、課題の親の表記を明確化した。
+`bd dep cycles`は循環なし。mdBook 0.5.4でHTML17ページを生成し、ローカルリンク・fragment・資源の検査、
+Mermaid 12.3.0 bundle一致、32図の実描画・viewer・theme・mobile・print・外部asset非依存の検査が成功した。
+Rust試験・実GPU受入・時間/メモリの再計測は今回実行していない。新APIの対応や性能を今回の文書検査の成果としない。
+同期・寿命・Load/Storeと検証済み入力の保証は既存方針を維持し、一般推奨からの新たな例外は設けていない。
+
 ## 利用側Compute・多段HDRと画像copyの二API実行
 
 `renderer-7ft.2.4`、統合実装確認点`adb51d1`。利用側の静的なtrusted Compute descriptorを

@@ -18,6 +18,8 @@ Graphの宣言・解析と、各backendが実行できる操作の範囲は区�
 次の開発は[実装方針のBistro計画](implementation-policy.md#bistro-roadmap)に従う。
 B0で実シーンの要求・公開API利用例と[基盤の採用・移行範囲](implementation-policy.md#foundation-selection)を設計した。
 B1では構築時owned命令とbinding/attachment由来アクセスを一般化し、nativeの低レベル所有を再利用して二APIで実証する。
+[公開APIの採用方針](implementation-policy.md#public-api-layers)は、汎用Graph API・公開標準パス・それらで構成する標準グラフの三層とする。
+Engineの固定構成からの移行順序は[公開API変更計画](implementation-policy.md#public-api-migration)に従い、以下の現行契約と区別する。
 現行の固定操作、内部表現、構築順による意味論、runtimeの再利用は維持義務ではない。
 以下の現行契約は、変更を実装・検証するまで有効であり、計画だけで対応済みとは扱わない。
 
@@ -578,6 +580,11 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 実装変更までは現行のproducer・import・寿命契約を維持する。
 
 ## エンジン入力と標準描画
+
+**現行実装:** Engine層はassetとframe入力だけでなく、以下の標準opaque・出力・readbackのGraph構築も行う。
+移行後は[公開標準パスと標準グラフ](implementation-policy.md#public-api-layers)へ構成を分離し、
+標準機能の全体利用・部分交換・利用側の独自Graphを同じ実行経路へ接続する。
+この方針の文書化だけで、現行のRGBA8拡張点や単一出力の制約を解除したとは扱わない。
 
 GPU非依存の`engine::Engine`は`EngineCapacity { meshes, materials, retired_mesh_versions }`で
 mesh/materialと変更済み旧版の容量を準備する。`Engine::new`の資源登録容量と、

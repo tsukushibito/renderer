@@ -2,7 +2,7 @@
 
 **対象:** Codexおよび実装担当者  
 **作成日:** 2026-11-12  
-**文書バージョン:** 2.1
+**文書バージョン:** 2.2
 
 **実装言語・対象API:** Rust / Vulkan / D3D12（native基盤を改修、上位の固定操作を置換）
 **設計の中心:** RenderGraphによる描画処理の宣言・解析・実行
@@ -26,6 +26,7 @@
 | 初期の実行経路 | 単一の描画・Compute用キュー、エイリアシングなし、保守的で正しい同期を基準とする。 |
 | 二APIの実証 | VulkanとWindows上のD3D12を対象とする。同じ論理Graph・パス定義・入力で実証し、描画機能をbackendごとに二重実装する公開設計にしない。 |
 | 公開API | エンジン向けAPIとGraph APIへ、`ash::vk`や`vk_mem`の型を露出させない。 |
+| 標準機能の提供 | [汎用Graph・標準パス・標準グラフ](#public-api-layers)を公開する。標準グラフは公開標準パスから構成し、利用側が全体利用・部分交換・独自構成を選べる。 |
 | 最適化の判断 | 出力の正しさとCPU時間・GPU時間・メモリ使用量の計測で判断する。薄い抽象化だけで高速化を保証しない。 |
 
 `wgpu`もB0で再評価した。二APIをまとめて委譲する利点と、製品経路の保証・検査の配置を比較した採用理由を下記へ記す。物理aliasingや複数queueの直接制御を、Bistro初期描画の一律要件にしない。
@@ -249,6 +250,7 @@ backendのnative型は既にprivateで、D3D12本番実装からVulkanへの依�
 |---|---|
 | Engine-facing API | メッシュ・マテリアル・View・描画入力・出力など、エンジンが利用する契約。 |
 | Graph API | パス、リソースアクセス、依存、出力、副作用、カスタム処理の宣言。 |
+| 標準パス・標準グラフ | 公開Graph APIを使う再利用部品と、その組合せによる任意の描画構成。Engineの必須処理にせず、[三層方針](#public-api-layers)に従う。 |
 | 共通解析 | 依存解析、不要パス除去、使用範囲・論理寿命の解析、宣言の検証。 |
 | バックエンドを考慮する計画 | キュー、同期、一時メモリ、記録単位を対象APIの制約に合わせて決める。 |
 | パス内の命令記録 | パイプライン・バインディング・draw・dispatch・copyなどを扱う。 |
@@ -595,7 +597,7 @@ Bistroでは1920×1080、sample 1、RGBA16Fを出発形式とし、Bloom後に�
 法線を提供する場合はworld-spaceの正規化xyzと表現形式を明示し、未提供なら要求時にエラーか明示fallbackにする。
 Bloomだけのために深度・法線を常設しない。挿入の時点と色の意味を安定契約とし、Graph内部のpass番号へ依存させない。
 effect moduleはGraphと入力・設定を受け取り出力handleを返す。新effectは利用側moduleとshaderを追加し、
-登録した挿入点へ渡すだけで接続できる。Graph／backendのeffect分岐の追加を通常手順にしない。
+標準グラフの該当する挿入点へ渡すだけで接続できる。Graph／backendのeffect分岐の追加を通常手順にしない。
 
 ### 7.5 根拠・CPU費用と未実証の範囲
 
@@ -626,6 +628,115 @@ pipeline初回作成と定常状態を分離する。現行共通領域の予約
 [4.4節](#prepared-frame-storage)で定め、plan cacheや並列recordは別の測定後の選択とする。
 GPU同期・寿命・shader ABI・画像結果・Windows表示・性能の確認はB1以降の実機受入へ残す。
 基盤の維持／改修／置換／外部利用と総工数の比較は[3.3節](#foundation-selection)に記す。
+
+<a id="public-api-layers"></a>
+
+### 7.6 汎用Graph・標準パス・標準グラフの公開方針
+
+**採用方針:** 次の三層を公開し、標準機能の利用と利用側によるパス定義を同じ基盤で成立させる。
+以下は移行後に満たす契約であり、現行APIの対応済み機能を示すものではない。
+現在のEngineによる固定構成は[現行契約](rendergraph.md#エンジン入力と標準描画)、移行は[作業順序](#public-api-migration)を参照する。
+
+| 公開する層 | 責務と利用方法 |
+|---|---|
+| 汎用Graph API | 利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。標準機能を使わないGraphも構築・実行できる。 |
+| 標準パス | 同じ公開APIで定義した再利用部品。不透明描画、半透明描画、ポスト処理等を機能の実装に合わせて追加し、利用側が必要な部品を直接組み合わせられる。 |
+| 標準グラフ | 公開標準パスを組み合わせる任意の構築レシピ。標準機能だけを使う場合の入口とし、意味を定めた箇所では利用側の処理へ交換・追加できる。 |
+
+依存は標準グラフから標準パスへ、標準パスから汎用Graph APIへ向ける。
+Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加することを通常の拡張手順にしない。
+三層は責務の区分であり、三つのcrate、新しい共通Pass trait、plugin registryの導入を要求しない。
+最初は通常の構築関数と必要な型付き入出力を使い、module名・型名は実利用例から決める。
+
+Engineはasset管理や不変なframe入力のcaptureを提供できる。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
+入力のGraph接続自体が標準opaqueを追加する設計にはしない。
+Engineの便利APIが公開標準グラフを呼ぶことは許容するが、利用側は同じ資源接続・実行経路で別のGraphを選べる。
+snapshotを使わないCompute-only、複数View、必要な数の画像・buffer出力も基本APIの設計対象とし、
+単一RGBA8画像やView寸法をすべてのGraphへ強制しない。nativeの対応範囲とPresentation固有の形式条件は別に維持する。
+
+#### 共通の機能経路と部品の契約
+
+標準パスと利用側パスは、同じ公開Program/pipeline/bindingとowned命令構築APIを使う。
+標準だけが描画機能をprivateに利用できる状態を、カスタム対応の完成と扱わない。
+現行の固定Raster Program群の公開・移動だけでは、独自shaderやblend/depth制御の提供は完成しない。
+一方、検証済み入力の保証を保持するprivateな実装最適化までraw入力へ戻す必要はない。
+安全な公開入力型等を通じて保証を引き継ぎ、[検証方針](../guides/validation-policy.md)に従って再走査を避ける。
+shaderのtrusted取込境界と通常のsafeなパス定義は[7.3節](#73-pipelinebindingshaderの保証境界)に従って分ける。
+
+標準パスはGraphと必要な入力・描画先・設定を受け取り、後続へ渡せる出力を返す。
+描画先color/depthやClear/Load/Storeを合成側で制御でき、depth prepass後のopaqueが必ず再clearする等の制約を持ち込まない。
+0 drawでも、Loadによる既存内容の保持や必要なclear等により出力の有効性を維持する。
+多段処理の中間資源は部品内部へ隠してよく、公開部品とGraphの1ノードを一対一に対応させる必要はない。
+透明物の並び順・blend・depth write、色空間、format、extent、sample数、深度表現、入力が有効な時点を契約に記す。
+必要なdepth等を提供できない構成は診断可能なエラーか明示的な代替経路にし、不要な入力を常設しない。
+
+標準グラフもGraphへ処理を追加し、意味の明確な出力を返す構築部品とする。
+Graph内の出力handleを返すことと、Graph外へ保持するexportは区別する。
+中間画像すべてのexportや、readback/submit/presentを各部品へ強制せず、必要な出力と消費方法を合成側で選ぶ。
+標準利用向けの便利入口が最終出力を確定する場合も、部品の合成経路を同じ公開APIで利用可能にする。
+
+部分交換は「露出・tone mapping前のscene-linear HDR」等の意味を持つ境界で行う。
+一つの処理を複数ノードのmoduleへ置き換えられる一方、ForwardからDeferredへの変更等では、
+公開標準パスと独自パスを使って利用側がGraphを構築する。
+完成Graphのnode名・番号を検索して差し替える方式や、あらゆる構造変更を受け持つhook群を標準契約の前提にしない。
+7.4節の標準HDR挿入点は移行後の契約であり、現行Engineのopaque後・同寸RGBA8拡張点とは区別する。
+
+#### 定義の再利用と毎フレームの入力
+
+標準グラフの定義・設定を再利用しても、描画するオブジェクト、mesh/material、行列等のframe入力は変更できる。
+基本経路は入力の不変版をcaptureし、そのframeのGraphを構築・compileする方式とする。
+構築closureはその場で消費し、完成planは必要な命令・定数と資源版を所有する既決の方式を維持する。
+現行CompiledGraphのdraw列を後から差し替える機能や、永続templateへのlate bindingを今回の必須条件にしない。
+計画cacheは計測と依存・失効契約を伴う別の最適化として判断する。
+
+定義・設定、Deviceに対応するpipeline/容量の準備、frame入力、Viewごとの履歴は責務を分ける。
+この区分だけを理由に新しい型を増やさない。frame固有のGraph handleを次frameの定義へ保存しない。
+資源pinは入力接続・構築からcompile、記録・投入・cancel・実GPU完了の必要な所有へ引き継ぎ、
+呼出側へ手動の寿命token管理を通常手順として要求しない。
+履歴は7.4節のとおり初回/reset/resize等で失効し、submit受理前に次frame用の状態を進めない。
+可変draw数・構成も[通常frameのメモリ規約](#steady-state-memory)の対象とし、
+準備済み容量を再利用する。容量不足で暗黙grow、native作成、GPU waitへfallbackしない。
+
+#### 公開方針の受入例
+
+次の三経路をRenderer本体の変更なしで実証する。
+
+1. 標準グラフをそのまま使い、毎frameの描画対象・材質・行列を変える。
+2. 標準グラフの意味付き挿入点へ、利用側の多段処理を追加・交換・無効化する。
+3. 標準グラフを使わず、標準opaque・独自半透明・標準出力処理を利用側Graphで組み合わせる。
+
+初回の部品抽出では既存Rasterと独自Computeで構成経路を確認し、独自半透明までの受入は`.2.8`で行う。
+標準トーンマッピングの追加はB3とし、それ以前の標準出力処理をtone mapping実装済みと扱わない。
+0/1/多数draw、depthのLoad、複数View、不要部品のculling、出力所有、未投入cancel、
+容量満杯、資源更新・pending保持を適切な段階で確認する。
+CPU契約回帰と二APIの実GPU内容照合、製品/追加検証の別構成、最終解放後までのnative診断、
+変動frameのalloc/realloc/deallocとnative作成/破棄の計測を維持する。
+
+<a id="public-api-migration"></a>
+
+### 7.7 公開API変更の着手時期と作業順序
+
+Compute/copyの二API受入`.2.4`は完了した。公開APIの構成変更は、次の一般import・寿命管理`.2.5`に先行する。
+単一出力・固定opaqueを前提に資源接続を固める手戻りを避け、B2/B3の描画機能を公開部品として追加できる境界を作る。
+今回の文書化でAPI実装や実GPU受入を完了扱いにしない。課題の状態・進捗・依存の正本はBeadsとする。
+
+| 順序・Beads | 作業と完了の境界 |
+|---|---|
+| `.2.7.1` 方針・計画 | 本節と現行契約・導入文書を整合させ、実装課題と依存、受入条件を登録する。 |
+| `.2.7.2` 入力接続・出力所有 | 固定描画を追加せずsnapshot等をGraphへ接続し、任意構成でも所有と検証済み入力保証を引き継ぐ。既存Graph/runtimeを優先して拡張する。 |
+| `.2.7.3` 標準部品 | 公開標準パスと、それらを使う標準グラフを提供する。描画先・Load/Store・意味付き出力と限定した交換点を整える。 |
+| `.2.7.4` consumer・基準受入 | 三経路の構成を既存Raster＋独自Computeで確認し、in-repo consumer/文書を移行する。旧描画の同等性、任意HDR出力、容量・所有・二API回帰を確認して`.2.7`を閉じる。 |
+| `.2.5` 一般import・寿命 | `.2.7`の境界へcanonical identity/revision、更新・pending退役、履歴・失敗を接続する。既存受入を保持し、新課題へ重複実装しない。 |
+| `.2.8` 利用側Raster | `.2.7`と`.2.5`の後、独自graphics shader/ABIと必要なblend/depth設定を公開する。最小alpha fixtureで三経路を二API実証し、固定Program群の公開だけで自由なRaster対応を主張しない。 |
+| `.2.6` 表示・時間計測 | `.2.5`/`.2.8`後、新APIのconsumerとして二API表示、自由camera、resize、pending終了を統合する。合意済みの実windowed通常frame CPU/GPU時間計測はここに残す。 |
+
+`.2.7.1`〜`.2.7.4`の親は`renderer-7ft.2.7`、`.2.8`はB1直下とする。上表の省略IDには`renderer-7ft`を前置する。
+新APIと旧APIの互換wrapperや並行経路を互換性だけのために残さず、実装範囲のconsumerと文書を一緒に更新する。
+B2のPBR、B3の影・HDR・tone mappingは標準パスと標準グラフへ段階追加し、既存B2/B3の到達要件は変えない。
+
+外部小HDR Bloom`.5.1`は`.2.7`の後に前倒しし、`.2.5`以降と並行して公開APIのUXを検証する。
+親`.5`と子`.5.1`のB1全体依存を`.2.7`へ変更する。早期fixtureは一時画像と完了済み`.2.4`のCompute/copyを使い、
+一般import・履歴・表示の完成を主張しない。Bistro統合`.5.2`は引き続き`.5.1`とB3共通出力`.4.3`を待つ。
 
 ## 8. リソース所有権とGPU寿命
 
@@ -1133,7 +1244,9 @@ GPU前のindex内容保証はprivateな`graph::provenance`へ共有し、変わ�
 Graph構築で範囲・ABI・重複subresource・dispatch/extentを保証する。shaderとbinaryの安全性は明示したunsafe取込でレビューする。
 両APIはProgramとdescriptor容量を事前準備し、通常frameでは作成・増設しない。
 同じ小HDR入力の複数Compute、画像/buffer copy/readbackと変動frameメモリを別processのstrict/shippingで受け入れる。
-常駐資源importと履歴は`.2.5`、表示と通常frameの二API時間計測の拡張は`.2.6`へ残す。
+`.2.4`の受入後は[公開API移行](#public-api-migration)の`.2.7`で、入力接続と公開標準パス・標準グラフを先行する。
+常駐資源importと履歴は新しい境界を使う`.2.5`へ、利用側Raster shaderとblend/depth設定は`.2.8`へ分ける。
+表示と通常frameの二API時間計測の拡張は、これらの後の`.2.6`へ残す。
 
 **完了条件:** 効果専用操作をRenderer本体へ追加せず、同じ利用側パス定義と入力を二APIで実行できる。
 標準描画も独自処理も同じGraph経路を使い、未投入・未完了・更新・破棄・失敗・回収を区別する。
@@ -1159,7 +1272,8 @@ ModelをRendererへ持ち込まず、取込/作成/更新境界の保証を保�
 
 `renderer-7ft.5`。Renderer外のmodule/crateで独自shaderの多段Bloomを定義し、標準HDR出力へ接続する。
 中間資源はモジュール内部へ隠し、出力handleで他の処理と組み合わせる。
-B1の公開パスが動いた時点で小さなHDR入力を使う試作を始め、B2/B3と並行してUXを確認する。
+完了済み`.2.4`のCompute/copyと公開構成`.2.7`が揃った時点で、`.5.1`の小HDR入力試作を始める。
+B1全体や二API表示の完成を待たず、`.2.5`以降と並行してUXを確認する。
 Bistroへの最終接続はB3のHDR出力を使い、拡張性の問題発見を実シーン全体の完成待ちにしない。
 
 **完了条件:** Renderer本体を編集せずBloomを追加・無効化・別実装へ交換できる。
@@ -1188,7 +1302,7 @@ B0〜B5の一律blockerにはせず、採用時は能力・正しさ・利益と
 | 事項 | 決定時期・判断材料 |
 |---|---|
 | Bistroの版・対象・変換・camera/lights・品質 | B0の最初に棚卸しして固定する。部分実証と最終対象を区別する。 |
-| APIの形、Graph意味論、資源範囲、所有・error | B0の代表利用コードで設計し、B1の二API実行とB2以降の実シーンから改訂する。 |
+| APIの形、Graph意味論、資源範囲、所有・error | [三層の公開方針](#public-api-layers)を採用。構成境界は`.2.4`後・`.2.5`前の`.2.7`で移行し、独自Rasterは`.2.8`で実証する。具体的な型・契約はB1の二API実行とB2以降の実シーンから改訂する。 |
 | 採用基盤、依存、内部RHI、crate配置 | B0でnative上位置換＋低レベル再利用を採用。B1の二API縦切りで見積もりと内部契約を改訂。独立RHI/crate分割は先行しない。 |
 | 対象OS/GPU、最低能力、shader言語・compiler | 初回Windows/RTX3060、Vulkan1.3/D3D12、固定GLSL/SPIR-V→HLSL/DXILを採用。新format/binding能力はB1で照会・実証。Linux CPU/Vulkan buildを維持。 |
 | 座標・色、texture/material、pipeline/binding/ABI | B0で要求を定め、B1で実証しB2/B3の素材・画質で確認する。 |
