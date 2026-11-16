@@ -147,6 +147,12 @@ pub(super) struct DeviceImage {
     allocation: vk_mem::Allocation,
     pub(super) image: vk::Image,
     pub(super) view: vk::ImageView,
+    /// Full-chain sampled View; aliases `view` only for single-mip images.
+    pub(super) sampled_view: vk::ImageView,
+    /// Single-mip Views for levels 1..mip_levels, prepared with the resource.
+    mip_views: Vec<vk::ImageView>,
+    pub(super) mip_levels: u32,
+    pub(super) supports_linear_filtering: bool,
     pub(super) extent: vk::Extent2D,
     pub(super) format: vk::Format,
     pub(super) aspect: vk::ImageAspectFlags,
@@ -161,6 +167,7 @@ impl DeviceImage {
         owner: Arc<MemoryOwner>,
         width: u32,
         height: u32,
+        mip_levels: u32,
         format: vk::Format,
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] name: &str,
     ) -> Result<Self, RuntimeError> {
@@ -185,6 +192,12 @@ impl DeviceImage {
                     | vk::ImageUsageFlags::COLOR_ATTACHMENT,
                 vk::ImageAspectFlags::COLOR,
             ),
+            vk::Format::R8G8B8A8_SRGB => (
+                vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED,
+                vk::ImageAspectFlags::COLOR,
+            ),
             vk::Format::D32_SFLOAT => (
                 vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
                     | vk::ImageUsageFlags::TRANSFER_SRC
@@ -198,11 +211,16 @@ impl DeviceImage {
                 )));
             }
         };
-        if width == 0 || height == 0 {
+        if width == 0
+            || height == 0
+            || mip_levels == 0
+            || mip_levels > u32::BITS - width.max(height).leading_zeros()
+        {
             return Err(RuntimeError::invalid(
-                "Graph image dimensions must be nonzero",
+                "Graph image dimensions and mip count must describe a nonempty 2D chain",
             ));
         }
+        let supports_linear_filtering = sampled_linear_support(&owner, format)?;
         let query = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(format)
             .ty(vk::ImageType::TYPE_2D)
@@ -232,7 +250,7 @@ impl DeviceImage {
         if width > limits.max_extent.width
             || height > limits.max_extent.height
             || limits.max_extent.depth < 1
-            || limits.max_mip_levels < 1
+            || limits.max_mip_levels < mip_levels
             || limits.max_array_layers < 1
             || !limits.sample_counts.contains(vk::SampleCountFlags::TYPE_1)
         {
@@ -241,13 +259,15 @@ impl DeviceImage {
             )));
         }
         let limits = owner.device.limits();
-        if width > limits.max_framebuffer_width
+        if usage.intersects(
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        ) && (width > limits.max_framebuffer_width
             || height > limits.max_framebuffer_height
             || width > limits.max_viewport_dimensions[0]
             || height > limits.max_viewport_dimensions[1]
             || width as f32 > limits.viewport_bounds_range[1]
             || height as f32 > limits.viewport_bounds_range[1]
-            || limits.viewport_bounds_range[0] > 0.0
+            || limits.viewport_bounds_range[0] > 0.0)
         {
             return Err(RuntimeError::unsupported(
                 "Graph image exceeds framebuffer/viewport dimensions",
@@ -262,7 +282,7 @@ impl DeviceImage {
                 height,
                 depth: 1,
             })
-            .mip_levels(1)
+            .mip_levels(mip_levels)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
@@ -273,6 +293,7 @@ impl DeviceImage {
             usage: vk_mem::MemoryUsage::AutoPreferDevice,
             ..Default::default()
         };
+        let mip_views = Vec::with_capacity((mip_levels - 1) as usize);
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
         // SAFETY: VMA retains this Device, internally synchronizes allocation,
@@ -284,31 +305,24 @@ impl DeviceImage {
             allocation,
             image,
             view: vk::ImageView::null(),
+            sampled_view: vk::ImageView::null(),
+            mip_views,
+            mip_levels,
+            supports_linear_filtering,
             extent,
             format,
             aspect,
         };
-        let range = vk::ImageSubresourceRange::default()
-            .aspect_mask(aspect)
-            .level_count(1)
-            .layer_count(1);
-        let view_info = vk::ImageViewCreateInfo::default()
-            .image(image)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(format)
-            .subresource_range(range);
-        #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-        // SAFETY: Image and allocation are immediately owned by result. A failed
-        // view creation releases the image through Drop; no GPU use exists yet.
-        result.view = unsafe {
-            result
-                .owner
-                .device
-                .raw()
-                .create_image_view(&view_info, None)
+        result.view = result.create_view(0, 1, usage)?;
+        for mip in 1..mip_levels {
+            let view = result.create_view(mip, 1, usage)?;
+            result.mip_views.push(view);
         }
-        .map_err(|error| native(&result.owner, "vkCreateImageView(Graph)", error))?;
+        result.sampled_view = if mip_levels == 1 {
+            result.view
+        } else {
+            result.create_view(0, mip_levels, vk::ImageUsageFlags::SAMPLED)?
+        };
         #[cfg(feature = "vulkan-diagnostics")]
         {
             let name = CString::new(name)
@@ -354,6 +368,46 @@ impl DeviceImage {
         }
         Ok(result)
     }
+
+    /// Native Graph descriptors support a single level or the complete chain.
+    /// Every View is created at preparation, never while recording a frame.
+    pub(super) fn view_for_mips(&self, base: u32, count: u32) -> Option<vk::ImageView> {
+        if count == 1 && base < self.mip_levels {
+            return Some(if base == 0 {
+                self.view
+            } else {
+                self.mip_views[(base - 1) as usize]
+            });
+        }
+        (base == 0 && count == self.mip_levels).then_some(self.sampled_view)
+    }
+
+    fn create_view(
+        &self,
+        base: u32,
+        count: u32,
+        usage: vk::ImageUsageFlags,
+    ) -> Result<vk::ImageView, RuntimeError> {
+        let range = vk::ImageSubresourceRange::default()
+            .aspect_mask(self.aspect)
+            .base_mip_level(base)
+            .level_count(count)
+            .layer_count(1);
+        let mut view_usage = vk::ImageViewUsageCreateInfo::default().usage(usage);
+        let info = vk::ImageViewCreateInfo::default()
+            .image(self.image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(self.format)
+            .subresource_range(range)
+            .push_next(&mut view_usage);
+        #[cfg(feature = "memory-profiling")]
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
+        // SAFETY: The live owner holds the exact-format image; this checked
+        // level range and usage are subsets of its immutable creation contract.
+        // The caller immediately retains every successful View for Drop.
+        unsafe { self.owner.device.raw().create_image_view(&info, None) }
+            .map_err(|error| native(&self.owner, "vkCreateImageView(Graph)", error))
+    }
 }
 
 impl Drop for DeviceImage {
@@ -361,6 +415,25 @@ impl Drop for DeviceImage {
         // SAFETY: Runtime leases retain storage through recording and GPU use.
         // The view is destroyed before its image, then the retained VMA/Device.
         unsafe {
+            if self.sampled_view != vk::ImageView::null() && self.sampled_view != self.view {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                self.owner
+                    .device
+                    .raw()
+                    .destroy_image_view(self.sampled_view, None);
+            }
+            for view in self.mip_views.drain(..) {
+                #[cfg(feature = "memory-profiling")]
+                crate::measurement::record_native(
+                    crate::measurement::NativeEvent::ObjectDestroy,
+                    1,
+                );
+                self.owner.device.raw().destroy_image_view(view, None);
+            }
             if self.view != vk::ImageView::null() {
                 #[cfg(feature = "memory-profiling")]
                 crate::measurement::record_native(
@@ -382,9 +455,33 @@ impl Drop for DeviceImage {
 pub(super) fn image_format(format: crate::ImageFormat) -> vk::Format {
     match format {
         crate::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+        crate::ImageFormat::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
         crate::ImageFormat::Rgba16Float => vk::Format::R16G16B16A16_SFLOAT,
         crate::ImageFormat::Depth32Float => vk::Format::D32_SFLOAT,
     }
+}
+
+/// Cache format filtering support at creation; descriptor construction checks
+/// it only when the chosen immutable sampler requires linear filtering.
+pub(super) fn sampled_linear_support(
+    owner: &MemoryOwner,
+    format: vk::Format,
+) -> Result<bool, RuntimeError> {
+    // SAFETY: The retained Device owns this live adapter and Instance. This is
+    // an immutable capability query at the resource creation boundary.
+    let properties = unsafe {
+        owner
+            .device
+            .instance_raw()
+            .get_physical_device_format_properties(owner.device.physical_device(), format)
+    };
+    let features = properties.optimal_tiling_features;
+    if !features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE) {
+        return Err(RuntimeError::unsupported(
+            "image format does not support optimal sampled images",
+        ));
+    }
+    Ok(features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR))
 }
 
 #[cfg(test)]

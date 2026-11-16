@@ -234,6 +234,7 @@ pub(in crate::backends::vulkan) struct Program {
     pub(super) layout: vk::PipelineLayout,
     pub(super) pipeline: vk::Pipeline,
     pub(in crate::backends::vulkan) sampler: vk::Sampler,
+    linear_sampler: vk::Sampler,
     pub(super) raster_layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
     pub(super) raster_groups: usize,
     pub(super) raster_asset: Option<ManagedRasterProgram>,
@@ -241,6 +242,16 @@ pub(in crate::backends::vulkan) struct Program {
 }
 
 impl Program {
+    pub(in crate::backends::vulkan) fn sampler_for(
+        &self,
+        desc: crate::program::SamplerDescriptor,
+    ) -> vk::Sampler {
+        match desc {
+            crate::program::SamplerDescriptor::NearestClamp => self.sampler,
+            crate::program::SamplerDescriptor::LinearRepeat => self.linear_sampler,
+        }
+    }
+
     pub(super) fn new(
         owner: Arc<MemoryOwner>,
         kind: ProgramKind,
@@ -261,6 +272,7 @@ impl Program {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
+            linear_sampler: vk::Sampler::null(),
             raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
             raster_groups: 0,
             raster_asset: None,
@@ -412,6 +424,7 @@ impl Program {
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
+            linear_sampler: vk::Sampler::null(),
             raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
             raster_groups: 0,
             raster_asset: None,
@@ -462,6 +475,16 @@ impl Program {
                         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                         .max_lod(0.0),
                 )?
+            };
+            // SAFETY: Linear repeat requires no optional features. Images paired
+            // with it are checked for linear-filter format support at preparation.
+            result.linear_sampler = unsafe {
+                result
+                    .owner
+                    .device
+                    .create_sampler(&super::super::managed::sampler_info(
+                        crate::program::SamplerDescriptor::LinearRepeat,
+                    ))?
             };
         }
         let pushes = [vk::PushConstantRange {
@@ -865,6 +888,7 @@ impl Drop for Program {
                 }
             }
             self.owner.device.destroy_sampler(self.sampler);
+            self.owner.device.destroy_sampler(self.linear_sampler);
         }
     }
 }

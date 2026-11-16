@@ -28,6 +28,50 @@ mod record;
 mod storage;
 pub(super) use storage::{ResultData, WorkData};
 
+pub(super) fn validate_sampled_operands(
+    layout: &[crate::program::BindingLayout],
+    operands: &[crate::graph::BindingOperands],
+    physical: &[Option<super::PhysicalLease>],
+) -> Result<(), RuntimeError> {
+    use crate::graph::BindingOperands;
+    use crate::program::{BindingType, SamplerDescriptor};
+    let linear = operands.iter().any(|operand| {
+        matches!(
+            operand,
+            BindingOperands::Sampler(SamplerDescriptor::LinearRepeat)
+        )
+    });
+    for (slot, operand) in layout.iter().zip(operands) {
+        if let BindingOperands::ImageView(view) = operand {
+            let image = physical[view.image().index].as_ref().unwrap().image();
+            if matches!(
+                slot.kind,
+                BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
+            ) && image.mip_levels != 1
+            {
+                return Err(RuntimeError::unsupported(
+                    "native storage image bindings require a single-mip image",
+                ));
+            }
+            if image
+                .view_for_mips(view.mip_level(), view.mip_level_count())
+                .is_none()
+            {
+                return Err(RuntimeError::unsupported(
+                    "native image bindings support one mip or the complete mip chain",
+                ));
+            }
+            if linear && slot.kind == BindingType::SampledImage && !image.supports_linear_filtering
+            {
+                return Err(RuntimeError::unsupported(
+                    "sampled image format does not support linear filtering",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn staging_capacity_context(
     error: StagingError,
     alignment: u64,
@@ -468,6 +512,14 @@ impl GraphWork {
                     touched.push(access.resource);
                 }
                 let target = &mut uses[access.resource];
+                if target.layout != vk::ImageLayout::UNDEFINED
+                    && current.layout != vk::ImageLayout::UNDEFINED
+                    && target.layout != current.layout
+                {
+                    return Err(RuntimeError::unsupported(
+                        "one native pass cannot use different layouts of the same image",
+                    ));
+                }
                 target.stage |= current.stage;
                 target.access |= current.access;
                 target.writes |= access.write;
@@ -516,7 +568,7 @@ impl GraphWork {
                                 .subresource_range(
                                     vk::ImageSubresourceRange::default()
                                         .aspect_mask(image.aspect)
-                                        .level_count(1)
+                                        .level_count(image.mip_levels)
                                         .layer_count(1),
                                 ),
                         );
@@ -748,6 +800,11 @@ impl GraphWork {
                         let programs = programs.as_ref().unwrap();
                         let native_program = programs.raster_program(*program, depth.is_some())?;
                         for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
+                            validate_sampled_operands(
+                                program.bindings(),
+                                graph.raster_bindings(&draw.bindings),
+                                physical,
+                            )?;
                             let vertex_count = graph.resources[draw.vertices].desc.units()
                                 / u64::from(program.vertex_stride());
                             states[draw.indices]
@@ -789,11 +846,19 @@ impl GraphWork {
                                                         .as_ref()
                                                         .unwrap()
                                                         .image()
-                                                        .view,
+                                                        .view_for_mips(
+                                                            view.mip_level(),
+                                                            view.mip_level_count(),
+                                                        )
+                                                        .expect(
+                                                            "validated prepared sampled view range",
+                                                        ),
                                                 )
                                             }
-                                            crate::graph::BindingOperands::Sampler(_) => {
-                                                RasterBinding::Sampler
+                                            crate::graph::BindingOperands::Sampler(desc) => {
+                                                RasterBinding::Sampler(
+                                                    native_program.sampler_for(*desc),
+                                                )
                                             }
                                         };
                                         (slot, native)
@@ -803,7 +868,6 @@ impl GraphWork {
                                         .raster_key(*program, depth.is_some())
                                         .expect("prepared Raster binding layout"),
                                     operands,
-                                    native_program.sampler,
                                 )?
                             } else {
                                 [vk::DescriptorSet::null(); crate::program::MAX_RASTER_BIND_GROUPS]

@@ -260,18 +260,22 @@ impl Entry {
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum CacheDescriptor {
     Buffer(u64),
-    Rgba8(u32, u32),
-    Rgba16(u32, u32),
-    Depth32(u32, u32),
+    Rgba8(u32, u32, u32),
+    Rgba8Srgb(u32, u32, u32),
+    Rgba16(u32, u32, u32),
+    Depth32(u32, u32, u32),
 }
 impl From<ResourceDesc> for CacheDescriptor {
     fn from(desc: ResourceDesc) -> Self {
         match desc {
             ResourceDesc::Buffer(desc) => Self::Buffer(desc.size),
             ResourceDesc::Image(desc) => match desc.format {
-                ImageFormat::Rgba8Unorm => Self::Rgba8(desc.width, desc.height),
-                ImageFormat::Rgba16Float => Self::Rgba16(desc.width, desc.height),
-                ImageFormat::Depth32Float => Self::Depth32(desc.width, desc.height),
+                ImageFormat::Rgba8Unorm => Self::Rgba8(desc.width, desc.height, desc.mip_levels),
+                ImageFormat::Rgba8Srgb => Self::Rgba8Srgb(desc.width, desc.height, desc.mip_levels),
+                ImageFormat::Rgba16Float => Self::Rgba16(desc.width, desc.height, desc.mip_levels),
+                ImageFormat::Depth32Float => {
+                    Self::Depth32(desc.width, desc.height, desc.mip_levels)
+                }
             },
         }
     }
@@ -365,10 +369,10 @@ impl VulkanRuntime {
     ) -> Result<(), RuntimeError> {
         if resources.iter().any(|class| {
             matches!(class,
-            ResourceClass::Image {desc,..} if !desc.is_single_subresource())
+            ResourceClass::Image {desc,..} if desc.array_layers != 1)
         }) {
             return Err(RuntimeError::unsupported(
-                "native images require one mip and one layer",
+                "native images require one array layer",
             ));
         }
         self.owner
@@ -494,7 +498,7 @@ impl VulkanRuntime {
                 match physical.desc {
                     ResourceDesc::Image(desc) => match desc.format {
                         ImageFormat::Rgba8Unorm => color = true,
-                        ImageFormat::Rgba16Float => {}
+                        ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
                         ImageFormat::Depth32Float => depth = true,
                     },
                     ResourceDesc::Buffer(_) => {}
@@ -1046,9 +1050,9 @@ impl VulkanRuntime {
         name: &str,
         allow_create: bool,
     ) -> Result<(ResourceKey, PhysicalLease), RuntimeError> {
-        if matches!(desc, ResourceDesc::Image(desc) if !desc.is_single_subresource()) {
+        if matches!(desc, ResourceDesc::Image(desc) if desc.array_layers != 1) {
             return Err(RuntimeError::unsupported(
-                "native images require one mip and one layer",
+                "native images require one array layer",
             ));
         }
         self.collect_recycled();
@@ -1123,6 +1127,7 @@ impl VulkanRuntime {
                     Arc::clone(&self.owner),
                     desc.width,
                     desc.height,
+                    desc.mip_levels,
                     super::resources::image_format(desc.format),
                     name,
                 )
@@ -1315,10 +1320,21 @@ impl VulkanRuntime {
                 )));
             }
             for access in graph.accesses(pass) {
-                if matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if !desc.is_single_subresource())
+                if matches!(
+                    access.purpose,
+                    crate::graph::AccessPurpose::ColorAttachment
+                        | crate::graph::AccessPurpose::DepthAttachment
+                ) && (access.range != (0..1)
+                    || matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.mip_levels != 1))
                 {
                     return Err(RuntimeError::unsupported(
-                        "native images require one mip and one layer",
+                        "native attachments require a single-mip single-layer image",
+                    ));
+                }
+                if matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.array_layers != 1)
+                {
+                    return Err(RuntimeError::unsupported(
+                        "native images require one array layer",
                     ));
                 }
                 work.needed[access.resource] = true;
@@ -1594,7 +1610,8 @@ fn export_snapshot(
             key,
             revision: snapshot.revision,
             desc,
-            initialized: snapshot.initialized.len() == 1 && snapshot.initialized[0] == (0..1),
+            initialized: snapshot.initialized.len() == 1
+                && snapshot.initialized[0] == (0..u64::from(desc.mip_levels)),
         }),
     })
 }
