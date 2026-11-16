@@ -473,7 +473,14 @@ fn material(
     if emissive.iter().any(|v| *v < 0.) {
         return Err(invalid("negative emissive coefficient"));
     }
-    let normal_scale = float(&record["normal_scale"])?;
+    let declared_normal_scale = float(&record["normal_scale"])?;
+    // RGBA8's nearest encoding of tangent-space (0,0,1) is slightly tilted.
+    // No normal map means the unperturbed geometric normal, not that tilt.
+    let normal_scale = if record["normal_texture"].is_null() {
+        0.
+    } else {
+        declared_normal_scale
+    };
     let metallic = unit(float(&record["metallic"])?)?;
     let roughness = unit(float(&record["roughness"])?)?;
     let declared_ao = unit(float(&record["occlusion_strength"])?)?;
@@ -484,7 +491,10 @@ fn material(
     } else {
         declared_ao
     };
-    let cutoff = unit(float(&record["alpha_cutoff"])?)?;
+    let cutoff = float(&record["alpha_cutoff"])?;
+    if cutoff < 0. {
+        return Err(invalid("negative alpha cutoff"));
+    }
     let alpha_mode = match text(&record["alpha_mode"])? {
         "OPAQUE" => 0,
         "MASK" => 1,
@@ -881,6 +891,36 @@ mod tests {
         material_doc["occlusion_texture"] = Value::Null;
         material_doc["base_color_texture"] = Value::from(0);
         assert!(material(&material_doc, 0, &[defaults[2]], &images, defaults, false).is_err());
+    }
+
+    #[test]
+    fn absent_maps_are_identity_and_cutoff_above_one_is_fully_masked() {
+        let mut images = Vec::new();
+        let defaults = fallback_images(&mut images);
+        let doc = serde_json::json!({"id":0,"base_factor":[1.,1.,1.,1.],"emissive":[0.5,0.25,0.125],
+            "normal_scale":1.,"metallic":0.5,"roughness":0.5,"occlusion_strength":1.,"alpha_cutoff":2.,
+            "alpha_mode":"MASK","double_sided":false,"base_color_texture":null,"normal_texture":null,
+            "orm_texture":0,"occlusion_texture":null,"emissive_texture":null});
+        let material = material(&doc, 0, &[defaults[2]], &images, defaults, false).unwrap();
+        assert_eq!(
+            f32::from_le_bytes(material.uniform[28..32].try_into().unwrap()),
+            0.,
+            "no normal perturbation"
+        );
+        assert_eq!(
+            f32::from_le_bytes(material.uniform[40..44].try_into().unwrap()),
+            0.,
+            "no occlusion"
+        );
+        assert_eq!(
+            images[material.textures[3]].load_bytes().unwrap(),
+            [255; 4],
+            "emissive factor remains authoritative"
+        );
+        assert!(
+            material.alpha_zero,
+            "a legal cutoff greater than one masks the complete surface"
+        );
     }
 
     #[test]
