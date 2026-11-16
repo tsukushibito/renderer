@@ -1,9 +1,131 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-16。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日: 2026-11-17。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+<a id="cpu-stack-profiling"></a>
+
+## 最適化済みCPUスタック・schedulerの調査環境
+
+`renderer-jat`。容量エラー・資源探索・共通形式の改善を公開した`607bdf9`を基準に、
+[CPU調査CLI](../guides/tooling.md#cpu-profiling)と、二API共通の`profile_workload`を追加した。
+`profiling`はreleaseを継承し、full debug情報とstripなしだけを変更する。
+最適化・assert・overflow・LTO・codegen設定を調査用に変えず、追加検証とnative metricsも独立させた。
+保存したEXE/PDBをhash・GUID/ageで再確認し、source hash・toolchain・実効featureと結び付ける。
+専用UUIDのWPR instanceだけを操作し、開始失敗や結果不明時には所有を推測してcancelしない。
+UAC昇格やOS設定変更はCLIへ組み込まず、収集だけを管理者プロセスから実行する。
+一度起動した管理者プロセスで複数runを収集でき、build・通常試験・保存済みETL解析は管理者権限を要しない。
+
+Windows x64、Intel Core i5-14600KF、RTX 3060／driver 610.88、Rust 1.99.0。
+WPR 10.0.26100.9818、WPA exporter 11.7.383.39833、xperf 10.0.26100.4654、
+行解決にはLLVM 18.1.4を使用した。`CPU.Verbose`でSampledProfile・CSwitch・ReadyThreadのstackを収集した。
+最初の通常権限での開始は`0xc5585011`で失敗し、OSのUAC確認後に実収集した。
+raw ETL・system-wide CSV・symbolsはローカルに保持し、共有する証拠は対象processの集計に限定する。
+
+### 実サンプルからソースまでの対応
+
+Vulkan・256資源・8,192 frameの最終runでは、QPCの16組の実値が同じETL時刻原点に一致した。
+測定窓は`0.3785166..3.4578062 s`、main TIDのrunningは3,071.8978ms、readyは7.2695ms、
+未分類off-CPUは0.1223msだった。未分類をblockedやゼロへ置き換えていない。
+3,061個のleaf sampleは全てCount=1で、weightは3,040.2765ms。sample数は関数の呼出回数ではない。
+Events/Buffers lostはともに0。実ETLの専用BEGIN/END markerもQPC窓を囲むことを確認した。
+全threadのrunning/ready/blocked合計はwallを超え得るため、main threadと分ける。
+schedulerのrunningはCPUへ割り当てられた区間であり、割込み等も関わるため、
+OSのcharged CPU時間やsample weightと同値とはしない。
+
+Images表の実ロードアドレス`0x7FF668840000`は、PEのpreferred base `0x140000000`と異なる。
+採取した命令アドレスから実baseを引いたRVAを対応PDBで解決し、12アドレス全てでソース行を得た。
+Renderer由来の16スタックフレームでは、manifestの正規化source hashと行の存在も全て一致した。
+例えば実IP `0x7FF66889E779`は`GraphWork::submitted`の`work/record.rs:280`、
+`0x7FF66887C04B`は`RecycleQueue::drain_into`の`graph/cache.rs:39`へ対応する。
+関数entryの代理アドレスを採取IPとして使っていない。caller stack・inline・未解決native frameも保持する。
+D3D12の256資源runでも、26,461 sampleから実IP 12個を解決し、全てでソース行を確認した。
+repository由来の20 inline frameもhashと行が一致し、`FrameSubmission::wait`、
+`Registry::bind`／`commit`、`bounded::prepare`、Graph構築・解析・submitへ対応した。
+同runの`n/a` stack 204件はCPU/selfの費用を保持してinclusiveのframeへ分割せず、欠損として記録した。
+最適化による行位置の曖昧さ、driverやOSの未解決symbol、短い処理のsampling漏れは残る。
+
+実CSVの確認で、WPAの既定groupingがprocess小計だけを出すことが分かり、leaf出力へ修正した。
+また同一Old/New PID・TIDのself-switchでは過去のLastOut/Readyが残る実例があり、
+このidentityを明示確認した行だけoff-CPUを0として扱う。近接時刻から推定しない。
+Ready/Standby/DeferredReady、Waiting、未分類状態を分け、staleな起床時刻による二重計上を拒否する。
+readying側stackとnew thread stackは列の意味を保持し、後者を待機原因と断定しない。
+
+### ビルドと収集の費用
+
+cleanな同一sourceのrelease／profiling archiveを使い、全条件を同じ管理者contextとした。
+16 byteの可変入力を4／256資源のcopy chainへ流し、1 in-flight・yield poll・seed 42、
+500ms warmup後に65,536／8,192 frameを実行した。
+API×規模×通常release／非収集profiling／収集中profiling×独立3 processの計36回が成功し、
+同じframe数のcontent digestと最終native validation結果も一致した。
+順序を入れ替え、測定中にbuild・GPU試験・offline ETL解析を並行させなかった。
+12本のヘッドレスETLのうち11本はlossゼロで、各条件に2〜3本、3,061〜26,461 sampleの有効なrunがある。
+Vulkan・4資源の3回目は36,095 eventの欠落でWPA/xperfが拒否し、stack/scheduler受入から除外した。
+保存停止前のWPR statusは0だったため、statusだけでlossゼロとはしない。
+raw失敗記録を保持し、`-tle`／`-tti`で通したり欠落をゼロで埋めたりしなかった。
+表のOS CPU counter・内容照合とETLの品質は独立した観測である。
+
+以下はprocess累積CPU時間をframe数で割った値の、独立3 runの中央値である。
+main thread CPU、QPC wall、各runのmin/maxと個別値も証拠へ残す。
+
+| API／資源数 | 通常release | 非収集profiling | 収集中profiling | 収集中／非収集の中央値比 |
+|---|---:|---:|---:|---:|
+| Vulkan／4 | 51.737µs | 50.545µs | 52.929µs | 4.7% |
+| Vulkan／256 | 373.840µs | 375.748µs | 379.562µs | 1.0% |
+| D3D12／4 | 152.349µs | 140.429µs | 200.748µs | 43.0% |
+| D3D12／256 | 957.489µs | 1,001.358µs | 1,668.930µs | 66.7% |
+
+これらは人工的な1 in-flight転送負荷の値であり、API全般の優劣や表示FPSを示さない。
+debug情報を加えた差にもrun変動があり、無費用とは主張しない。
+特にD3D12は変動が大きい。4資源の非収集profilingは68.4〜170.5µs、収集中は78.4〜263.2µs、
+256資源はそれぞれ988.0〜1,020.4µs／1,102.4〜3,229.1µsだった。
+表の比は3 runの記述統計であり、一定の計測overheadや因果効果を保証しない。
+収集中の遅さだけをRendererの不要処理と判定しない。
+通常性能の比較は非収集runを使う。clock・affinity・powerと他のdesktop負荷は固定していない。
+外部markerのCLI開始を含む経過時間中央値はbegin 77.6ms／end 76.8msで、QPC測定窓の外にある。
+停止・ETL mergeのwall時間もRendererのCPU処理へ加算しない。
+ライブラリへETW依存や毎draw/frameのmarkerは追加せず、専用文字列・collector処理はPython側だけにある。
+caller exampleのphase timerと既存runtime/GPU計測、native検証、memory counterは区別した。
+
+### 表示の処理とpacing、品質確認
+
+修正後の`windowed`を両API・VSync ON/OFF・各独立2 process、24 warmup＋1,024 frameで収集した。
+8本全てでlossゼロ、実process start/endとmain＋App loopのsample stackによるmain TIDを確認した。
+ETLのROIはstartup/warmup/teardownを含む実process寿命であり、
+非warmupのframe間隔・native phase統計とは別の母集団である。
+
+| API／VSync | 定常frame間隔中央値の2 run範囲 | process全寿命のmain scheduled-running | 同blocked |
+|---|---:|---:|---:|
+| Vulkan／OFF | 1.548〜1.570ms | 0.933〜0.969s | 0.941〜0.984s |
+| Vulkan／ON | 16.654〜16.703ms | 8.507〜9.181s | 7.782〜8.428s |
+| D3D12／OFF | 1.524〜1.553ms | 1.103〜1.169s | 0.856〜0.899s |
+| D3D12／ON | 16.659〜16.675ms | 7.914〜9.006s | 7.911〜8.922s |
+
+ONでは9,203〜10,245回のbackpressure retry、OFFでは0回を記録した。
+configured 1ms retryと`winit::wait_for_messages_impl`を含む待機stackを対応づけ、
+event-loop待機に属するblocked区間はOFFで0.700〜0.778s、ONで6.733〜7.989sだった。
+ONでもscheduled-runningが残り、全経過時間をVSync待ちへ分類していない。
+driver/OS内の未解決処理、収集の影響、native呼出しのelapsedも含むため、
+retry件数やstackの長さだけから不要処理とは断定しない。
+ready・未分類区間・process境界の未観測残差も保存し、全寿命の時間を1,024で割って定常CPU費用にしない。
+
+最初の表示captureでは、完了後のwinit最終`AboutToWait`が解放済みbackendをpollしてpanicする不具合を検出した。
+終了状態をshutdown開始時に確定し、終了後callbackへ再入しないよう修正した。
+CPU回帰と、修正後の全8計測runでpanicなしを確認。既存の起動native crash／WSI stall課題とは別である。
+製品／strictの表示smoke各APIは24 frame・6遷移・入力／全画素digest／geometryが一致し、最終診断もゼロだった。
+ヘッドレスの両API・4／256資源・両構成で可変入力8 frameを確認し、
+通常窓のRust 4event、VMA host 3event、native作成・破棄8eventが全0だった。resetは別計上する。
+shippingの両WSI全lifecycle確保試験も再確認した。winit同期callerの確保とRendererの確保を分け、native/VMAは全窓を含める。
+
+統合版はPython 55試験、release workspace製品337／全feature350試験、windowed CPU各12試験、
+全target Clippy、fmt、warnings拒否Rustdocが成功した。
+mdBook 17ページ・2,170 local link/resource/fragmentと、browserで32個のdiagram／theme／mobile／printを確認した。
+既存preprocessorのmdBook版警告は残るが、生成・リンク・描画チェックは通過した。
+build manifest、各run、counterの全値、受理／拒否したtrace、実IP／ソース対応と確認範囲は
+[ソースレビューの証拠](source-review.json)の`cpu_profiling_environment`へ記録する。
+raw ETLとsystem-wide CSVは含めない。他機材／Linux GPU、長時間soak、OOM／Device loss、Bistro全体の速度は未確認である。
 
 <a id="runtime-review-improvements"></a>
 
