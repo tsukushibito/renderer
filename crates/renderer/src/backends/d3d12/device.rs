@@ -41,6 +41,7 @@ pub(super) struct DeviceOwner {
     pub(super) queue_gate: Mutex<()>,
     pub(super) info: D3D12DeviceInfo,
     pub(super) rgba8_sampled: bool,
+    pub(super) rgba8_srgb_sampled: bool,
     pub(super) rgba16f_sampled: bool,
     pub(super) d32_sampled: bool,
     pub(super) descriptor_steps: [u32; 2],
@@ -196,6 +197,11 @@ impl DeviceOwner {
             ..Default::default()
         };
         feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut rgba16f)?;
+        let mut rgba8_srgb = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            ..Default::default()
+        };
+        feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut rgba8_srgb)?;
         let mut depth_formats = [
             DXGI_FORMAT_R32_TYPELESS,
             DXGI_FORMAT_D32_FLOAT,
@@ -254,6 +260,13 @@ impl DeviceOwner {
             rgba16f_sampled: rgba16f.Support1
                 & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
                 == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),
+            rgba8_srgb_sampled: rgba8_srgb.Support1
+                & (D3D12_FORMAT_SUPPORT1_TEXTURE2D
+                    | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
+                    | D3D12_FORMAT_SUPPORT1_MIP)
+                == (D3D12_FORMAT_SUPPORT1_TEXTURE2D
+                    | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
+                    | D3D12_FORMAT_SUPPORT1_MIP),
             rgba8_sampled: format.Support1
                 & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
                 == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),

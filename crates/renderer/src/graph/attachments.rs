@@ -160,6 +160,13 @@ impl Graph {
     ) -> Result<(), GraphError> {
         let resource = self.image_id(operand.view.image)?;
         let desc = self.image_desc_at(resource)?;
+        if operand.view.mip_count != 1 || desc.format == crate::ImageFormat::Rgba8Srgb {
+            return Err(self.resource_error(
+                GraphErrorKind::Unsupported,
+                "attachments require one mip and a supported attachment format",
+                resource,
+            ));
+        }
         if desc.format.aspect() != aspect {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,

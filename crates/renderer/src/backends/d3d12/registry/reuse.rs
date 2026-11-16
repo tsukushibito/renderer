@@ -11,7 +11,9 @@ const NONE: usize = usize::MAX;
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum ReuseClass {
-    Buffer,
+    Buffer {
+        size: u64,
+    },
     Image {
         width: u32,
         height: u32,
@@ -50,6 +52,7 @@ struct Class<K> {
 pub(super) struct ReuseIndex<K> {
     nodes: Vec<Node>,
     classes: Vec<Class<K>>,
+    available: Vec<u64>,
     epoch: u64,
 }
 
@@ -63,6 +66,7 @@ impl<K: Copy + Ord> ReuseIndex<K> {
         Ok(Self {
             nodes,
             classes,
+            available: vec![0; capacity.div_ceil(64)],
             epoch: 0,
         })
     }
@@ -171,12 +175,19 @@ impl<K: Copy + Ord> ReuseIndex<K> {
             }
             self.epoch = 1;
         }
+        self.available.fill(0);
+        for (index, class) in self.classes.iter().enumerate() {
+            if class.head != NONE {
+                self.available[index / 64] |= 1 << (index % 64);
+            }
+        }
     }
 
     /// Explicit preparation only. Retain both backing arrays for rebuilding.
     pub(super) fn clear(&mut self) {
         self.nodes.fill(Node::default());
         self.classes.clear();
+        self.available.fill(0);
         self.epoch = 0;
     }
 
@@ -189,7 +200,43 @@ impl<K: Copy + Ord> ReuseIndex<K> {
             .classes
             .binary_search_by_key(&key, |class| class.key)
             .ok()?;
-        let class = &mut self.classes[class];
+        self.select_class(class, &mut eligible)
+    }
+
+    /// Select a smallest fitting class without repeatedly scanning exhausted
+    /// classes or unrelated entries. The bitmap and all nodes are prepared.
+    pub(super) fn select_from(
+        &mut self,
+        minimum: K,
+        mut compatible: impl FnMut(K) -> bool,
+        mut eligible: impl FnMut(usize) -> bool,
+    ) -> Option<usize> {
+        let mut start = self.classes.partition_point(|class| class.key < minimum);
+        while start < self.classes.len() {
+            let mut word = start / 64;
+            let mut bits = self.available[word] & (u64::MAX << (start % 64));
+            while bits == 0 {
+                word += 1;
+                bits = *self.available.get(word)?;
+            }
+            let class = word * 64 + bits.trailing_zeros() as usize;
+            if class >= self.classes.len() || !compatible(self.classes[class].key) {
+                return None;
+            }
+            if let Some(index) = self.select_class(class, &mut eligible) {
+                return Some(index);
+            }
+            start = class + 1;
+        }
+        None
+    }
+
+    fn select_class(
+        &mut self,
+        class_index: usize,
+        eligible: &mut impl FnMut(usize) -> bool,
+    ) -> Option<usize> {
+        let class = &mut self.classes[class_index];
         if class.epoch != self.epoch {
             class.cursor = class.head;
             class.epoch = self.epoch;
@@ -201,6 +248,7 @@ impl<K: Copy + Ord> ReuseIndex<K> {
                 return Some(index);
             }
         }
+        self.available[class_index / 64] &= !(1 << (class_index % 64));
         None
     }
 }
@@ -208,6 +256,102 @@ impl<K: Copy + Ord> ReuseIndex<K> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heterogeneous_buffers_use_smallest_fitting_capacity_and_skip_exhausted_classes() {
+        let mut index = ReuseIndex::new(132).unwrap();
+        for position in 0..130 {
+            index.install(
+                position,
+                ReuseClass::Buffer {
+                    size: (position as u64 + 1) * 4,
+                },
+            );
+        }
+        index.install(130, ReuseClass::Buffer { size: 1024 });
+        index.install(
+            131,
+            ReuseClass::Image {
+                width: 1,
+                height: 1,
+                format: 0,
+                mip_levels: 1,
+                array_layers: 1,
+            },
+        );
+        // Registered classes must not turn a failed small-buffer search into a
+        // repeated walk across their physical entries.
+        for position in 0..129 {
+            index.remove(position);
+        }
+        index.begin();
+        let mut checks = 0;
+        for expected in [129, 130] {
+            assert_eq!(
+                index.select_from(
+                    ReuseClass::Buffer { size: 5 },
+                    |class| matches!(class, ReuseClass::Buffer { .. }),
+                    |_| {
+                        checks += 1;
+                        true
+                    },
+                ),
+                Some(expected)
+            );
+        }
+        assert_eq!(checks, 2);
+        assert_eq!(
+            index.select_from(
+                ReuseClass::Buffer { size: 5 },
+                |class| matches!(class, ReuseClass::Buffer { .. }),
+                |_| panic!("exhausted physical buffer classes"),
+            ),
+            None
+        );
+        index.begin();
+        assert_eq!(
+            index.select_from(
+                ReuseClass::Buffer { size: 600 },
+                |class| matches!(class, ReuseClass::Buffer { .. }),
+                |_| true,
+            ),
+            Some(130)
+        );
+    }
+
+    #[test]
+    fn leased_fitting_classes_do_not_select_smaller_buffers_and_return_next_recording() {
+        let mut index = ReuseIndex::new(3).unwrap();
+        for (position, size) in [8, 64, 1024].into_iter().enumerate() {
+            index.install(position, ReuseClass::Buffer { size });
+        }
+        index.begin();
+        assert_eq!(
+            index.select_from(
+                ReuseClass::Buffer { size: 65 },
+                |class| matches!(class, ReuseClass::Buffer { .. }),
+                |_| false
+            ),
+            None
+        );
+        assert_eq!(
+            index.select_from(
+                ReuseClass::Buffer { size: 8 },
+                |class| matches!(class, ReuseClass::Buffer { .. }),
+                |_| true
+            ),
+            Some(0)
+        );
+        index.begin();
+        assert_eq!(
+            index.select_from(
+                ReuseClass::Buffer { size: 65 },
+                |class| matches!(class, ReuseClass::Buffer { .. }),
+                |_| true
+            ),
+            Some(2)
+        );
+    }
 
     #[test]
     fn registered_prefix_and_other_classes_are_not_inspected() {

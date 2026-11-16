@@ -143,7 +143,7 @@ impl Work {
             }
             _ => false,
         };
-        if desc.width != 2 || desc.height != 2 || !valid_initial {
+        if desc.width != 2 || desc.height != 2 || desc.mip_levels != 1 || !valid_initial {
             return Err(RuntimeError::invalid(
                 "sampling fixture requires exact 2x2 pixels or a valid same-image depth clear",
             ));
@@ -419,6 +419,7 @@ fn image_desc(format: ImageFormat) -> ImageDescriptor {
     ImageDescriptor {
         width: 2,
         height: 2,
+        mip_levels: 1,
         format,
         preferred_depth_clear: None,
     }

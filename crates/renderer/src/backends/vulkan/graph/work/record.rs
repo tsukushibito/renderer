@@ -123,8 +123,21 @@ impl TransferPayload for GraphWork {
                             range.transfer_handle(),
                             image.image,
                             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                            &[image_copy(image, range.offset())],
+                            // Packed upload data contains every mip in order.
+                            // Record each region directly without frame allocation.
+                            &[image_copy(image, range.offset(), 0)],
                         );
+                        let mut offset = range.offset() + mip_bytes(image, 0);
+                        for mip in 1..image.mip_levels {
+                            device.raw().cmd_copy_buffer_to_image(
+                                command,
+                                range.transfer_handle(),
+                                image.image,
+                                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                                &[image_copy(image, offset, mip)],
+                            );
+                            offset += mip_bytes(image, mip);
+                        }
                     }
                     PreparedOperation::CopyImage { src, dst } => {
                         let source = self.resource(*src).image();
@@ -156,7 +169,7 @@ impl TransferPayload for GraphWork {
                             image.image,
                             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                             range.transfer_handle(),
-                            &[image_copy(image, range.offset())],
+                            &[image_copy(image, range.offset(), 0)],
                         );
                     }
                     PreparedOperation::Compute { dst, transform, .. } => {
@@ -353,13 +366,23 @@ fn layers(image: &DeviceImage) -> vk::ImageSubresourceLayers {
         .aspect_mask(image.aspect)
         .layer_count(1)
 }
-fn image_copy(image: &DeviceImage, offset: u64) -> vk::BufferImageCopy {
+fn mip_bytes(image: &DeviceImage, mip: u32) -> u64 {
+    let texel_bytes = if image.format == vk::Format::R16G16B16A16_SFLOAT {
+        8
+    } else {
+        4
+    };
+    u64::from((image.extent.width >> mip).max(1))
+        * u64::from((image.extent.height >> mip).max(1))
+        * texel_bytes
+}
+fn image_copy(image: &DeviceImage, offset: u64, mip: u32) -> vk::BufferImageCopy {
     vk::BufferImageCopy::default()
         .buffer_offset(offset)
-        .image_subresource(layers(image))
+        .image_subresource(layers(image).mip_level(mip))
         .image_extent(vk::Extent3D {
-            width: image.extent.width,
-            height: image.extent.height,
+            width: (image.extent.width >> mip).max(1),
+            height: (image.extent.height >> mip).max(1),
             depth: 1,
         })
 }

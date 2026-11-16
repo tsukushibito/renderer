@@ -12,7 +12,7 @@ use std::{
 use super::{
     D3D12Runtime, D3D12RuntimeError as Error, D3D12RuntimeErrorKind,
     bindings::*,
-    frame::{D3D12FrameCapacity, ExecutionSlot},
+    frame::{D3D12BufferClass, D3D12FrameCapacity, ExecutionSlot},
     resources::{DeviceBuffer, DeviceImage},
 };
 use crate::graph::{
@@ -25,7 +25,7 @@ use reuse::{ReuseClass, ReuseIndex};
 impl From<ResourceDesc> for ReuseClass {
     fn from(desc: ResourceDesc) -> Self {
         match desc {
-            ResourceDesc::Buffer(_) => Self::Buffer,
+            ResourceDesc::Buffer(desc) => Self::Buffer { size: desc.size },
             ResourceDesc::Image(desc) => Self::Image {
                 width: desc.width,
                 height: desc.height,
@@ -53,9 +53,6 @@ unsafe impl Sync for Physical {}
 #[derive(Default)]
 pub(super) struct PhysicalRef(Option<Arc<Physical>>);
 impl PhysicalRef {
-    pub(super) fn buffer(value: DeviceBuffer) -> Self {
-        Self(Some(Arc::new(Physical(Native::Buffer(value)))))
-    }
     pub(super) fn image(value: DeviceImage) -> Self {
         Self(Some(Arc::new(Physical(Native::Image(value)))))
     }
@@ -73,6 +70,9 @@ impl PhysicalRef {
 struct Entry {
     physical: Arc<Physical>,
     desc: ResourceDesc,
+    /// Native capacity remains immutable when a smaller logical resource uses
+    /// this entry; changing logical contents must not shrink its reuse class.
+    class: ReuseClass,
     generation: u32,
     registered: bool,
     revision: u64,
@@ -84,11 +84,19 @@ impl Entry {
         Self {
             physical,
             desc,
+            class: desc.into(),
             generation: 0,
             registered: false,
             revision: 0,
             initialized: Vec::with_capacity(capacity.initialized_ranges_per_resource),
             provenance: BufferProvenance::with_capacity(capacity.provenance_segments_per_resource),
+        }
+    }
+    fn fits(&self, desc: ResourceDesc) -> bool {
+        match (self.class, desc) {
+            (ReuseClass::Buffer { size }, ResourceDesc::Buffer(desc)) => size >= desc.size,
+            (_, ResourceDesc::Image(_)) => self.class == desc.into(),
+            _ => false,
         }
     }
 }
@@ -173,7 +181,9 @@ impl Registry {
         if entry.revision != image.revision {
             return Err(stale());
         }
-        if entry.desc != ResourceDesc::Image(image.desc) || entry.initialized.is_empty() {
+        if entry.desc != ResourceDesc::Image(image.desc)
+            || !fully_initialized(&entry.initialized, image.desc.mip_levels)
+        {
             return Err(Error::invalid(
                 "presentation source is not a fully initialized image",
             ));
@@ -254,6 +264,25 @@ impl Registry {
             capacity,
         })
     }
+    pub(super) fn prepare_buffers(
+        &mut self,
+        owner: &super::device::DeviceOwner,
+        classes: &[D3D12BufferClass],
+    ) -> Result<(), Error> {
+        // The complete class/count budget was checked before any native work.
+        for class in classes {
+            for _ in 0..class.count {
+                let buffer = DeviceBuffer::storage(owner, class.size)?;
+                self.entries.push(Entry::new(
+                    Arc::new(Physical(Native::Buffer(buffer))),
+                    ResourceDesc::Buffer(BufferDesc { size: class.size }),
+                    self.capacity,
+                ));
+            }
+        }
+        self.rebuild_reuse_index();
+        Ok(())
+    }
     pub(super) fn install(&mut self, slot: &mut ExecutionSlot) -> Result<(), Error> {
         let images = slot.raster.as_ref().map_or(0, |r| {
             r.images
@@ -261,7 +290,7 @@ impl Registry {
                 .filter(|image| image.native.0.is_some())
                 .count()
         });
-        let additional = slot.buffers.iter().filter(|b| b.0.is_some()).count() + images;
+        let additional = images;
         if self
             .entries
             .len()
@@ -281,17 +310,6 @@ impl Registry {
                 ),
             ));
         }
-        for buffer in &mut slot.buffers {
-            if let Some(native) = buffer.0.take() {
-                self.entries.push(Entry::new(
-                    native,
-                    ResourceDesc::Buffer(BufferDesc {
-                        size: self.capacity.buffer_bytes,
-                    }),
-                    self.capacity,
-                ));
-            }
-        }
         if let Some(storage) = &mut slot.raster {
             for image in &mut storage.images {
                 if let Some(native) = image.native.0.take() {
@@ -309,7 +327,7 @@ impl Registry {
     fn rebuild_reuse_index(&mut self) {
         self.reuse.clear();
         for (index, entry) in self.entries.iter().enumerate() {
-            self.reuse.install(index, entry.desc.into());
+            self.reuse.install(index, entry.class);
             if entry.registered || entry.generation == u32::MAX {
                 self.reuse.remove(index);
             }
@@ -435,7 +453,7 @@ impl Registry {
             key,
             revision: entry.revision,
             desc,
-            initialized: !entry.initialized.is_empty(),
+            initialized: fully_initialized(&entry.initialized, desc.mip_levels),
         })
     }
     pub(super) fn delete(&mut self, key: ResourceKey) -> Result<(), Error> {
@@ -494,60 +512,59 @@ impl Registry {
             let index = if let Some(key) = resource.import {
                 key.index as usize
             } else {
-                let index = self
-                    .reuse
-                    .select(resource.desc.into(), |index| {
-                        let entry = &self.entries[index];
-                        !entry.registered
-                            && Arc::strong_count(&entry.physical) == 1
-                            && entry.generation < u32::MAX
-                            && match (entry.desc, resource.desc) {
-                                (ResourceDesc::Buffer(_), ResourceDesc::Buffer(_)) => true,
-                                (ResourceDesc::Image(a), ResourceDesc::Image(b)) => a == b,
-                                _ => false,
-                            }
-                    })
-                    .ok_or_else(|| {
-                        // Diagnose only the failed request: instances retained
-                        // by another frame can return, while instances already
-                        // borrowed by this Graph cannot satisfy another operand.
-                        let mut limit = 0u64;
-                        let mut used = 0u64;
-                        let mut retained_elsewhere = false;
-                        for (index, entry) in self.entries.iter().enumerate() {
-                            let matches = match (entry.desc, resource.desc) {
-                                (ResourceDesc::Buffer(_), ResourceDesc::Buffer(_)) => true,
-                                (ResourceDesc::Image(a), ResourceDesc::Image(b)) => a == b,
-                                _ => false,
-                            };
-                            if entry.registered || entry.generation == u32::MAX || !matches {
-                                continue;
-                            }
-                            limit += 1;
-                            if slot.resource_uses[..logical]
-                                .iter()
-                                .flatten()
-                                .any(|use_| use_.key.index as usize == index)
-                            {
-                                used += 1;
-                            } else if Arc::strong_count(&entry.physical) > 1 {
-                                retained_elsewhere = true;
-                            }
+                let entries = &self.entries;
+                let eligible = |index: usize| {
+                    let entry = &entries[index];
+                    !entry.registered
+                        && Arc::strong_count(&entry.physical) == 1
+                        && entry.generation < u32::MAX
+                        && entry.fits(resource.desc)
+                };
+                let selected = match resource.desc {
+                    ResourceDesc::Buffer(_) => self.reuse.select_from(
+                        resource.desc.into(),
+                        |class| matches!(class, ReuseClass::Buffer { .. }),
+                        eligible,
+                    ),
+                    ResourceDesc::Image(_) => self.reuse.select(resource.desc.into(), eligible),
+                };
+                let index = selected.ok_or_else(|| {
+                    // Diagnose only the failed request: instances retained
+                    // by another frame can return, while instances already
+                    // borrowed by this Graph cannot satisfy another operand.
+                    let mut limit = 0u64;
+                    let mut used = 0u64;
+                    let mut retained_elsewhere = false;
+                    for (index, entry) in self.entries.iter().enumerate() {
+                        let matches = entry.fits(resource.desc);
+                        if entry.registered || entry.generation == u32::MAX || !matches {
+                            continue;
                         }
-                        Error::capacity_with(
-                            "prepared physical resources are registered or leased",
-                            RuntimeCapacityError::new(
-                                RuntimeCapacityKind::Resources,
-                                if retained_elsewhere {
-                                    CapacityRecovery::ReleaseOwners
-                                } else {
-                                    CapacityRecovery::Reconfigure
-                                },
-                                Some(limit),
-                                Some(used + 1),
-                            ),
-                        )
-                    })?;
+                        limit += 1;
+                        if slot.resource_uses[..logical]
+                            .iter()
+                            .flatten()
+                            .any(|use_| use_.key.index as usize == index)
+                        {
+                            used += 1;
+                        } else if Arc::strong_count(&entry.physical) > 1 {
+                            retained_elsewhere = true;
+                        }
+                    }
+                    Error::capacity_with(
+                        "prepared physical resources are registered or leased",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::Resources,
+                            if retained_elsewhere {
+                                CapacityRecovery::ReleaseOwners
+                            } else {
+                                CapacityRecovery::Reconfigure
+                            },
+                            Some(limit),
+                            Some(used + 1),
+                        ),
+                    )
+                })?;
                 let entry = &mut self.entries[index];
                 entry.generation += 1;
                 if entry.generation == u32::MAX {
@@ -695,7 +712,7 @@ impl Registry {
                         key: usage.key,
                         revision,
                         desc,
-                        initialized: !initialized.is_empty(),
+                        initialized: fully_initialized(initialized, desc.mip_levels),
                     }),
                 };
                 values.push((logical, export));
@@ -784,5 +801,32 @@ impl D3D12Runtime {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .delete(key)
+    }
+}
+
+fn fully_initialized(ranges: &[Range<u64>], mip_levels: u32) -> bool {
+    let mut end = 0;
+    for range in ranges {
+        if range.start > end {
+            return false;
+        }
+        end = end.max(range.end);
+        if end >= u64::from(mip_levels) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod mip_contents_tests {
+    use super::fully_initialized;
+    #[test]
+    fn a_partial_mip_chain_is_never_exported_as_fully_initialized() {
+        assert!(!fully_initialized(&[], 3));
+        assert!(!fully_initialized(&[0..1, 2..3], 3));
+        assert!(!fully_initialized(std::slice::from_ref(&(1..3)), 3));
+        assert!(fully_initialized(&[0..1, 1..3], 3));
+        assert!(fully_initialized(std::slice::from_ref(&(0..3)), 3));
     }
 }

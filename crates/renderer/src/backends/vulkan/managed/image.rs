@@ -1,4 +1,4 @@
-//! Single-subresource sampled image and separately owned View creation.
+//! Mipmapped sampled image and separately owned View creation.
 
 use super::{MemoryOwner, RuntimeError, native};
 use crate::ImageFormat;
@@ -13,11 +13,13 @@ use vk_mem::Alloc;
 fn native_aspect(format: ImageFormat) -> vk::ImageAspectFlags {
     match format {
         ImageFormat::Depth32Float => vk::ImageAspectFlags::DEPTH,
-        ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => vk::ImageAspectFlags::COLOR,
+        ImageFormat::Rgba8Unorm | ImageFormat::Rgba8Srgb | ImageFormat::Rgba16Float => {
+            vk::ImageAspectFlags::COLOR
+        }
     }
 }
 
-/// An uninitialized sampled image with one mip, layer and sample.
+/// An uninitialized sampled 2D image with one layer and sample.
 #[derive(Clone)]
 pub struct VulkanImage(pub(super) Arc<Image>);
 impl VulkanImage {
@@ -35,10 +37,12 @@ impl VulkanImage {
         validate_image_descriptor(desc, owner.device.limits().max_image_dimension2_d)
             .map_err(|error| RuntimeError::invalid(error.to_string()))?;
         let format = super::super::resources::image_format(desc.format);
+        let supports_linear_filtering =
+            super::super::resources::sampled_linear_support(&owner, format)?;
         let usage = vk::ImageUsageFlags::SAMPLED
             | match desc.format {
                 ImageFormat::Depth32Float => vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-                ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => {
+                ImageFormat::Rgba8Unorm | ImageFormat::Rgba8Srgb | ImageFormat::Rgba16Float => {
                     vk::ImageUsageFlags::TRANSFER_DST
                 }
             };
@@ -71,7 +75,7 @@ impl VulkanImage {
         if desc.width > limits.max_extent.width
             || desc.height > limits.max_extent.height
             || limits.max_extent.depth < 1
-            || limits.max_mip_levels < 1
+            || limits.max_mip_levels < desc.mip_levels
             || limits.max_array_layers < 1
             || !limits.sample_counts.contains(vk::SampleCountFlags::TYPE_1)
         {
@@ -87,7 +91,7 @@ impl VulkanImage {
                 height: desc.height,
                 depth: 1,
             })
-            .mip_levels(1)
+            .mip_levels(desc.mip_levels)
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
@@ -109,6 +113,7 @@ impl VulkanImage {
             handle,
             allocation,
             desc,
+            supports_linear_filtering,
             #[cfg(test)]
             state: ImageState::default(),
         })))
@@ -119,6 +124,7 @@ pub(super) struct Image {
     pub(super) handle: vk::Image,
     allocation: vk_mem::Allocation,
     pub(super) desc: ImageDescriptor,
+    pub(super) supports_linear_filtering: bool,
     #[cfg(test)]
     pub(super) state: ImageState,
 }
@@ -163,7 +169,7 @@ impl VulkanImageView {
                 "image View belongs to another Device",
             ));
         }
-        validate_image_view_descriptor(image.desc().format, desc)
+        validate_image_view_descriptor(image.desc().format, image.desc().mip_levels, desc)
             .map_err(|e| RuntimeError::invalid(e.to_string()))?;
         let range = vk::ImageSubresourceRange::default()
             .aspect_mask(native_aspect(image.desc().format))

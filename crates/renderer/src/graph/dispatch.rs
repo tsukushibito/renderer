@@ -129,7 +129,10 @@ impl Graph {
                 if matches!(
                     other_slot.kind,
                     BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_)
-                ) && matches!(self.bindings[owned.start + other_index], BindingOperands::ImageView(view) if view == sampled)
+                ) && matches!(self.bindings[owned.start + other_index], BindingOperands::ImageView(view)
+                    if view.image == sampled.image && view.layer == sampled.layer
+                        && view.mip < sampled.mip + sampled.mip_count
+                        && sampled.mip < view.mip + view.mip_count)
                 {
                     return Err(self
                         .resource_error(
@@ -302,10 +305,14 @@ impl Graph {
                             BindingType::SampledImage => (true, false, AccessPurpose::Sampled),
                             BindingType::StorageImageRead(format)
                             | BindingType::StorageImageWrite(format) => {
-                                if format == crate::ImageFormat::Depth32Float {
+                                if matches!(
+                                    format,
+                                    crate::ImageFormat::Depth32Float
+                                        | crate::ImageFormat::Rgba8Srgb
+                                ) {
                                     return Err(self.resource_error(
                                         GraphErrorKind::Unsupported,
-                                        "depth storage image bindings are unsupported",
+                                        "depth and sRGB storage image bindings are unsupported",
                                         resource,
                                     ));
                                 }
@@ -313,6 +320,13 @@ impl Graph {
                                     return Err(self.resource_error(
                                         GraphErrorKind::InvalidInput,
                                         "storage image View format differs from the Program ABI",
+                                        resource,
+                                    ));
+                                }
+                                if view.mip_count != 1 {
+                                    return Err(self.resource_error(
+                                        GraphErrorKind::InvalidInput,
+                                        "storage image bindings select exactly one mip level",
                                         resource,
                                     ));
                                 }
@@ -335,7 +349,7 @@ impl Graph {
                             + u64::from(view.mip);
                         self.append_access(ResourceAccess {
                             resource,
-                            range: unit..unit + 1,
+                            range: unit..unit + u64::from(view.mip_count),
                             read,
                             write,
                             initializes: write,

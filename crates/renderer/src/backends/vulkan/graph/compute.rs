@@ -172,6 +172,7 @@ pub(super) struct ComputePrograms {
     cache: Mutex<Cache>,
     programs: Vec<PreparedProgram>,
     sampler: vk::Sampler,
+    linear_sampler: vk::Sampler,
     capacity: usize,
 }
 
@@ -190,6 +191,7 @@ impl ComputePrograms {
             }),
             programs: Vec::with_capacity(programs.len()),
             sampler: vk::Sampler::null(),
+            linear_sampler: vk::Sampler::null(),
             capacity: capacity as usize,
         };
         for &managed in programs {
@@ -224,6 +226,16 @@ impl ComputePrograms {
                         .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                         .max_lod(0.0),
                 )
+            }?;
+            // SAFETY: Fixed linear repeat sampler has no optional feature.
+            // Operand preparation checks each sampled format's filtering support.
+            result.linear_sampler = unsafe {
+                result
+                    .owner
+                    .device
+                    .create_sampler(&super::super::managed::sampler_info(
+                        crate::program::SamplerDescriptor::LinearRepeat,
+                    ))
             }?;
         }
         for _ in 0..slots {
@@ -274,6 +286,10 @@ impl Drop for ComputePrograms {
             .unwrap_or_else(|e| e.into_inner())
             .idle
             .clear();
+        if self.linear_sampler != vk::Sampler::null() {
+            // SAFETY: Every pending/recorded descriptor lease retains this owner.
+            unsafe { self.owner.device.destroy_sampler(self.linear_sampler) };
+        }
         if self.sampler != vk::Sampler::null() {
             // SAFETY: All leases retain this owner until cancellation/retirement.
             // The matching Device helper releases native ownership and quota.
@@ -331,6 +347,7 @@ impl ComputeLease {
                 ),
             ));
         }
+        super::work::validate_sampled_operands(managed.bindings(), operands, physical)?;
         let native_program = &self.programs.programs[index].native.0;
         let groups = native_program.set_layouts.len();
         let sets = &arena.sets[index][arena.used * groups..(arena.used + 1) * groups];
@@ -364,16 +381,25 @@ impl ComputeLease {
                     write = write.buffer_info(std::slice::from_ref(&buffer_info));
                 }
                 BindingOperands::ImageView(view) => {
-                    image_info.image_view =
-                        physical[view.image().index].as_ref().unwrap().image().view;
+                    image_info.image_view = physical[view.image().index]
+                        .as_ref()
+                        .unwrap()
+                        .image()
+                        .view_for_mips(view.mip_level(), view.mip_level_count())
+                        .expect("validated prepared image view range");
                     image_info.image_layout = match slot.kind {
                         BindingType::SampledImage => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                         _ => vk::ImageLayout::GENERAL,
                     };
                     write = write.image_info(std::slice::from_ref(&image_info));
                 }
-                BindingOperands::Sampler(_) => {
-                    image_info.sampler = self.programs.sampler;
+                BindingOperands::Sampler(desc) => {
+                    image_info.sampler = match desc {
+                        crate::program::SamplerDescriptor::NearestClamp => self.programs.sampler,
+                        crate::program::SamplerDescriptor::LinearRepeat => {
+                            self.programs.linear_sampler
+                        }
+                    };
                     write = write.image_info(std::slice::from_ref(&image_info));
                 }
             }

@@ -642,3 +642,20 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
         );
     });
 }
+
+#[test]
+fn image_reuse_keys_preserve_mip_count_and_srgb_identity() {
+    let desc = ImageDesc::rgba8(4, 4);
+    let key = CacheDescriptor::from(ResourceDesc::Image(desc));
+    let mipped = CacheDescriptor::from(ResourceDesc::Image(ImageDesc {
+        mip_levels: 3,
+        ..desc
+    }));
+    let srgb = CacheDescriptor::from(ResourceDesc::Image(ImageDesc {
+        format: ImageFormat::Rgba8Srgb,
+        ..desc
+    }));
+    assert!(key != mipped);
+    assert!(key != srgb);
+    assert!(mipped != srgb);
+}
