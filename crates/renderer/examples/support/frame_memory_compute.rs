@@ -495,7 +495,10 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
     let image_classes = workload
         .image_classes()
         .into_iter()
-        .map(|(desc, count)| renderer::D3D12ImageClass { desc, count })
+        .map(|(desc, count)| renderer::D3D12ImageClass {
+            desc,
+            count: count * IN_FLIGHT,
+        })
         .collect::<Vec<_>>();
     match workload {
         Workload::Compute => runtime
@@ -549,6 +552,6 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "luid": info.luid, "driver_version": info.driver_version, "shader_model": info.shader_model }),
         serde_json::json!({ "debug_layer_enabled": validation.debug_layer_enabled, "gpu_based_validation_enabled": validation.gpu_based_validation_enabled, "teardown_checked": validation.teardown_checked, "warnings": validation.warnings, "errors": validation.errors, "corruption": validation.corruption, "callback_failures": validation.callback_failures, "dropped_messages": validation.dropped_messages }),
-        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "buffers": buffers, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes_per_execution": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count })).collect::<Vec<_>>() }),
+        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "buffers": buffers, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count * IN_FLIGHT })).collect::<Vec<_>>() }),
     );
 }

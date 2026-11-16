@@ -240,20 +240,21 @@ mod native {
     use std::time::Duration;
 
     const WAIT: Duration = Duration::from_secs(30);
+    const EXECUTIONS: usize = 2;
 
     fn resources() -> Vec<ResourceClass> {
         fixture::buffer_classes()
             .iter()
             .map(|&(size, count)| ResourceClass::Buffer {
                 desc: BufferDesc { size },
-                count: count * 2,
+                count: count * EXECUTIONS,
             })
             .chain(
                 fixture::image_classes()
                     .into_iter()
                     .map(|(desc, count)| ResourceClass::Image {
                         desc,
-                        count: count * 2,
+                        count: count * EXECUTIONS,
                     }),
             )
             .collect()
@@ -261,7 +262,11 @@ mod native {
     fn images() -> Vec<D3D12ImageClass> {
         fixture::image_classes()
             .into_iter()
-            .map(|(desc, count)| D3D12ImageClass { desc, count })
+            // Two concurrent recordings consume independent global instances.
+            .map(|(desc, count)| D3D12ImageClass {
+                desc,
+                count: count * EXECUTIONS,
+            })
             .collect()
     }
     fn prepare_vk(runtime: &mut VulkanRuntime) {
@@ -269,7 +274,7 @@ mod native {
             .prepare_working_set(
                 FrameCapacity {
                     graph: fixture::capacity(),
-                    work_slots: 2,
+                    work_slots: EXECUTIONS,
                     result_slots: 4,
                     provenance_segments_per_resource: 16,
                     ..Default::default()
@@ -408,7 +413,7 @@ mod native {
     fn run(strict: bool) {
         let mut vk = VulkanRuntime::new_with_validation(
             RuntimeConfig {
-                execution_slots: 2,
+                execution_slots: EXECUTIONS,
                 resource_capacity: 128,
                 max_shader_bindings: 64,
                 ..Default::default()
@@ -427,7 +432,7 @@ mod native {
                 D3D12ValidationMode::Disabled
             },
             capacity: D3D12FrameCapacity {
-                executions: 2,
+                executions: EXECUTIONS,
                 buffers: 5,
                 provenance_segments_per_resource: 16,
                 ..Default::default()

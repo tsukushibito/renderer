@@ -662,12 +662,12 @@ impl Backend for renderer::D3D12Runtime {
             "resources": 16, "operations_and_draws": 32, "provenance_segments_per_resource": 16,
             "buffers": 4, "buffer_bytes": 512,
             "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512,
-            "image_classes_per_execution": [
-                { "kind": "rgba8", "extent": [WIDTH, HEIGHT], "count": 1 },
-                { "kind": "rgba16f", "extent": [WIDTH, HEIGHT], "count": 1 },
-                { "kind": "d32", "extent": [WIDTH, HEIGHT], "count": 1 },
-                { "kind": "rgba8", "extent": [1, 1], "count": 2 },
-                { "kind": "rgba16f", "extent": [1, 1], "count": 2 },
+            "image_classes": [
+                { "kind": "rgba8", "extent": [WIDTH, HEIGHT], "count": IN_FLIGHT },
+                { "kind": "rgba16f", "extent": [WIDTH, HEIGHT], "count": IN_FLIGHT },
+                { "kind": "d32", "extent": [WIDTH, HEIGHT], "count": IN_FLIGHT },
+                { "kind": "rgba8", "extent": [1, 1], "count": 2 * IN_FLIGHT },
+                { "kind": "rgba16f", "extent": [1, 1], "count": 2 * IN_FLIGHT },
             ],
         })
     }
@@ -699,23 +699,23 @@ pub fn d3d12(baseline: bool) {
             &[
                 renderer::D3D12ImageClass {
                     desc: ImageDesc::rgba8(WIDTH, HEIGHT),
-                    count: 1,
+                    count: IN_FLIGHT,
                 },
                 renderer::D3D12ImageClass {
                     desc: hdr(WIDTH, HEIGHT),
-                    count: 1,
+                    count: IN_FLIGHT,
                 },
                 renderer::D3D12ImageClass {
                     desc: ImageDesc::depth32(WIDTH, HEIGHT),
-                    count: 1,
+                    count: IN_FLIGHT,
                 },
                 renderer::D3D12ImageClass {
                     desc: ImageDesc::rgba8(1, 1),
-                    count: 2,
+                    count: 2 * IN_FLIGHT,
                 },
                 renderer::D3D12ImageClass {
                     desc: hdr(1, 1),
-                    count: 2,
+                    count: 2 * IN_FLIGHT,
                 },
             ],
             &programs(),

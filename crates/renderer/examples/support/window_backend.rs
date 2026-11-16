@@ -20,6 +20,8 @@ use winit::window::Window;
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const D3D12_READBACK_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(feature = "d3d12")]
+const D3D12_EXECUTIONS: usize = 3;
 
 /// Reject a request that cannot fit even before native row-pitch padding.
 /// The exact native footprint is still checked by the runtime before recording.
@@ -126,7 +128,7 @@ impl Backend {
                 let (runtime, presenter) = renderer::D3D12Runtime::for_window(
                     renderer::D3D12RuntimeConfig {
                         capacity: renderer::D3D12FrameCapacity {
-                            executions: 3,
+                            executions: D3D12_EXECUTIONS,
                             results: 3,
                             resources: 16,
                             resource_capacity: 64,
@@ -245,11 +247,11 @@ impl Backend {
                 &[
                     renderer::D3D12ImageClass {
                         desc: color,
-                        count: 3,
+                        count: 3 * D3D12_EXECUTIONS,
                     },
                     renderer::D3D12ImageClass {
                         desc: depth,
-                        count: 1,
+                        count: D3D12_EXECUTIONS,
                     },
                 ],
                 &programs,

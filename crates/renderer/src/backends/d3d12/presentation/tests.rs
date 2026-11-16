@@ -204,7 +204,7 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
     #[cfg(feature = "memory-profiling")]
     let setup_started = crate::measurement::Snapshot::now();
     let capacity = D3D12FrameCapacity {
-        executions: 3,
+        executions: IN_FLIGHT,
         results: 6,
         resources: 8,
         resource_capacity: 64,
@@ -244,7 +244,7 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
     }
     let classes = EXTENTS.map(|(width, height)| D3D12ImageClass {
         desc: ImageDesc::rgba8(width, height),
-        count: 2,
+        count: 2 * capacity.executions,
     });
     runtime
         .prepare_graph_working_set(None, &classes, &[], &[])
