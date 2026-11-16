@@ -63,6 +63,8 @@ pub use backends::d3d12::{
     D3D12ValidationMessage, D3D12ValidationMode, D3D12ValidationMonitor, D3D12ValidationReport,
 };
 
+#[cfg(all(feature = "d3d12", feature = "presentation", windows))]
+pub use backends::d3d12::D3D12Presenter;
 #[cfg(feature = "presentation")]
 pub use presentation::{PresentOutcome, PresentationConfig};
 

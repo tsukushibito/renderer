@@ -140,6 +140,26 @@ fn stale() -> Error {
     )
 }
 impl Registry {
+    #[cfg(feature = "presentation")]
+    pub(super) fn owner_id(&self) -> u64 {
+        self.owner
+    }
+    /// Validate mutable import identity/revision under the queue transaction and
+    /// retain its native source until presentation's sampling commands retire.
+    /// Every Graph and presentation recording returns the resource to COMMON.
+    #[cfg(feature = "presentation")]
+    pub(super) fn presentation_source(&self, image: &ImportImage) -> Result<PhysicalRef, Error> {
+        let entry = self.entry(image.key)?;
+        if entry.revision != image.revision {
+            return Err(stale());
+        }
+        if entry.desc != ResourceDesc::Image(image.desc) || entry.initialized.is_empty() {
+            return Err(Error::invalid(
+                "presentation source is not a fully initialized image",
+            ));
+        }
+        Ok(PhysicalRef(Some(Arc::clone(&entry.physical))))
+    }
     pub(super) fn new(capacity: D3D12FrameCapacity) -> Result<Self, Error> {
         if capacity.resource_capacity == 0 || capacity.resource_capacity > u32::MAX as usize {
             return Err(Error::invalid(

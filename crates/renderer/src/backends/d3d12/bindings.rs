@@ -798,6 +798,32 @@ pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE: D3D12_PRIMITIVE_TOPOLOGY_TYPE 
 pub const D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED: D3D12_PRIMITIVE_TOPOLOGY_TYPE = 0;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_QUERY_HEAP_DESC {
+    pub Type: D3D12_QUERY_HEAP_TYPE,
+    pub Count: u32,
+    pub NodeMask: u32,
+}
+pub type D3D12_QUERY_HEAP_TYPE = i32;
+pub const D3D12_QUERY_HEAP_TYPE_COPY_QUEUE_TIMESTAMP: D3D12_QUERY_HEAP_TYPE = 5;
+pub const D3D12_QUERY_HEAP_TYPE_OCCLUSION: D3D12_QUERY_HEAP_TYPE = 0;
+pub const D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS: D3D12_QUERY_HEAP_TYPE = 2;
+pub const D3D12_QUERY_HEAP_TYPE_PIPELINE_STATISTICS1: D3D12_QUERY_HEAP_TYPE = 7;
+pub const D3D12_QUERY_HEAP_TYPE_SO_STATISTICS: D3D12_QUERY_HEAP_TYPE = 3;
+pub const D3D12_QUERY_HEAP_TYPE_TIMESTAMP: D3D12_QUERY_HEAP_TYPE = 1;
+pub const D3D12_QUERY_HEAP_TYPE_VIDEO_DECODE_STATISTICS: D3D12_QUERY_HEAP_TYPE = 4;
+pub type D3D12_QUERY_TYPE = i32;
+pub const D3D12_QUERY_TYPE_BINARY_OCCLUSION: D3D12_QUERY_TYPE = 1;
+pub const D3D12_QUERY_TYPE_OCCLUSION: D3D12_QUERY_TYPE = 0;
+pub const D3D12_QUERY_TYPE_PIPELINE_STATISTICS: D3D12_QUERY_TYPE = 3;
+pub const D3D12_QUERY_TYPE_PIPELINE_STATISTICS1: D3D12_QUERY_TYPE = 10;
+pub const D3D12_QUERY_TYPE_SO_STATISTICS_STREAM0: D3D12_QUERY_TYPE = 4;
+pub const D3D12_QUERY_TYPE_SO_STATISTICS_STREAM1: D3D12_QUERY_TYPE = 5;
+pub const D3D12_QUERY_TYPE_SO_STATISTICS_STREAM2: D3D12_QUERY_TYPE = 6;
+pub const D3D12_QUERY_TYPE_SO_STATISTICS_STREAM3: D3D12_QUERY_TYPE = 7;
+pub const D3D12_QUERY_TYPE_TIMESTAMP: D3D12_QUERY_TYPE = 2;
+pub const D3D12_QUERY_TYPE_VIDEO_DECODE_STATISTICS: D3D12_QUERY_TYPE = 8;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_RANGE {
     pub Begin: usize,
     pub End: usize,
@@ -1618,6 +1644,12 @@ impl Default for DXGI_ADAPTER_DESC1 {
 }
 pub type DXGI_ADAPTER_FLAG = i32;
 pub const DXGI_ADAPTER_FLAG_SOFTWARE: DXGI_ADAPTER_FLAG = 2;
+pub type DXGI_ALPHA_MODE = i32;
+pub const DXGI_ALPHA_MODE_FORCE_DWORD: DXGI_ALPHA_MODE = -1;
+pub const DXGI_ALPHA_MODE_IGNORE: DXGI_ALPHA_MODE = 3;
+pub const DXGI_ALPHA_MODE_PREMULTIPLIED: DXGI_ALPHA_MODE = 1;
+pub const DXGI_ALPHA_MODE_STRAIGHT: DXGI_ALPHA_MODE = 2;
+pub const DXGI_ALPHA_MODE_UNSPECIFIED: DXGI_ALPHA_MODE = 0;
 pub const DXGI_CREATE_FACTORY_DEBUG: i32 = 1;
 pub const DXGI_DEBUG_ALL: windows_core::GUID =
     windows_core::GUID::from_u128(0xe48ae283_da80_490b_87e6_43e9a9cfda08);
@@ -1633,6 +1665,10 @@ pub const DXGI_ERROR_DRIVER_INTERNAL_ERROR: windows_core::HRESULT =
 pub const DXGI_ERROR_NOT_FOUND: windows_core::HRESULT = windows_core::HRESULT(0x887A0002_u32 as _);
 pub const DXGI_ERROR_UNSUPPORTED: windows_core::HRESULT =
     windows_core::HRESULT(0x887A0004_u32 as _);
+pub const DXGI_ERROR_WAS_STILL_DRAWING: windows_core::HRESULT =
+    windows_core::HRESULT(0x887A000A_u32 as _);
+pub type DXGI_FEATURE = i32;
+pub const DXGI_FEATURE_PRESENT_ALLOW_TEARING: DXGI_FEATURE = 0;
 pub type DXGI_FORMAT = i32;
 pub const DXGI_FORMAT_D32_FLOAT: DXGI_FORMAT = 40;
 pub const DXGI_FORMAT_R16G16B16A16_FLOAT: DXGI_FORMAT = 10;
@@ -1643,6 +1679,7 @@ pub const DXGI_FORMAT_R32_FLOAT: DXGI_FORMAT = 41;
 pub const DXGI_FORMAT_R32_TYPELESS: DXGI_FORMAT = 39;
 pub const DXGI_FORMAT_R32_UINT: DXGI_FORMAT = 42;
 pub const DXGI_FORMAT_R8G8B8A8_UNORM: DXGI_FORMAT = 28;
+pub const DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: DXGI_FORMAT = 29;
 pub const DXGI_FORMAT_UNKNOWN: DXGI_FORMAT = 0;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1664,12 +1701,82 @@ pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR: DXGI_INFO_QUEUE_MESSAGE_SEVERI
 pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_INFO: DXGI_INFO_QUEUE_MESSAGE_SEVERITY = 3;
 pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_MESSAGE: DXGI_INFO_QUEUE_MESSAGE_SEVERITY = 4;
 pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING: DXGI_INFO_QUEUE_MESSAGE_SEVERITY = 2;
+pub type DXGI_MODE_SCALING = i32;
+pub type DXGI_MODE_SCANLINE_ORDER = i32;
+pub const DXGI_MWA_NO_ALT_ENTER: i32 = 2;
+pub const DXGI_PRESENT_ALLOW_TEARING: u32 = 512;
+pub const DXGI_PRESENT_DO_NOT_WAIT: u32 = 8;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DXGI_RATIONAL {
+    pub Numerator: u32,
+    pub Denominator: u32,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DXGI_SAMPLE_DESC {
     pub Count: u32,
     pub Quality: u32,
 }
+pub type DXGI_SCALING = i32;
+pub const DXGI_SCALING_ASPECT_RATIO_STRETCH: DXGI_SCALING = 2;
+pub const DXGI_SCALING_NONE: DXGI_SCALING = 1;
+pub const DXGI_SCALING_STRETCH: DXGI_SCALING = 0;
+pub const DXGI_STATUS_MODE_CHANGED: windows_core::HRESULT =
+    windows_core::HRESULT(0x87A0007_u32 as _);
+pub const DXGI_STATUS_MODE_CHANGE_IN_PROGRESS: windows_core::HRESULT =
+    windows_core::HRESULT(0x87A0008_u32 as _);
+pub const DXGI_STATUS_OCCLUDED: windows_core::HRESULT = windows_core::HRESULT(0x87A0001_u32 as _);
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DXGI_SWAP_CHAIN_DESC1 {
+    pub Width: u32,
+    pub Height: u32,
+    pub Format: DXGI_FORMAT,
+    pub Stereo: windows_core::BOOL,
+    pub SampleDesc: DXGI_SAMPLE_DESC,
+    pub BufferUsage: DXGI_USAGE,
+    pub BufferCount: u32,
+    pub Scaling: DXGI_SCALING,
+    pub SwapEffect: DXGI_SWAP_EFFECT,
+    pub AlphaMode: DXGI_ALPHA_MODE,
+    pub Flags: u32,
+}
+pub type DXGI_SWAP_CHAIN_FLAG = i32;
+pub const DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH: DXGI_SWAP_CHAIN_FLAG = 2;
+pub const DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING: DXGI_SWAP_CHAIN_FLAG = 2048;
+pub const DXGI_SWAP_CHAIN_FLAG_DISPLAY_ONLY: DXGI_SWAP_CHAIN_FLAG = 32;
+pub const DXGI_SWAP_CHAIN_FLAG_FOREGROUND_LAYER: DXGI_SWAP_CHAIN_FLAG = 128;
+pub const DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT: DXGI_SWAP_CHAIN_FLAG = 64;
+pub const DXGI_SWAP_CHAIN_FLAG_FULLSCREEN_VIDEO: DXGI_SWAP_CHAIN_FLAG = 256;
+pub const DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE: DXGI_SWAP_CHAIN_FLAG = 4;
+pub const DXGI_SWAP_CHAIN_FLAG_HW_PROTECTED: DXGI_SWAP_CHAIN_FLAG = 1024;
+pub const DXGI_SWAP_CHAIN_FLAG_NONPREROTATED: DXGI_SWAP_CHAIN_FLAG = 1;
+pub const DXGI_SWAP_CHAIN_FLAG_RESTRICTED_CONTENT: DXGI_SWAP_CHAIN_FLAG = 8;
+pub const DXGI_SWAP_CHAIN_FLAG_RESTRICTED_TO_ALL_HOLOGRAPHIC_DISPLAYS: DXGI_SWAP_CHAIN_FLAG = 4096;
+pub const DXGI_SWAP_CHAIN_FLAG_RESTRICT_SHARED_RESOURCE_DRIVER: DXGI_SWAP_CHAIN_FLAG = 16;
+pub const DXGI_SWAP_CHAIN_FLAG_USE_DEFAULT_COLOR_SPACE: DXGI_SWAP_CHAIN_FLAG = 32768;
+pub const DXGI_SWAP_CHAIN_FLAG_YUV_VIDEO: DXGI_SWAP_CHAIN_FLAG = 512;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DXGI_SWAP_CHAIN_FULLSCREEN_DESC {
+    pub RefreshRate: DXGI_RATIONAL,
+    pub ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER,
+    pub Scaling: DXGI_MODE_SCALING,
+    pub Windowed: windows_core::BOOL,
+}
+pub type DXGI_SWAP_EFFECT = i32;
+pub const DXGI_SWAP_EFFECT_DISCARD: DXGI_SWAP_EFFECT = 0;
+pub const DXGI_SWAP_EFFECT_FLIP_DISCARD: DXGI_SWAP_EFFECT = 4;
+pub const DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL: DXGI_SWAP_EFFECT = 3;
+pub const DXGI_SWAP_EFFECT_SEQUENTIAL: DXGI_SWAP_EFFECT = 1;
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct DXGI_USAGE(pub u32);
+pub const DXGI_USAGE_RENDER_TARGET_OUTPUT: u32 = 32;
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct HWND(pub *mut core::ffi::c_void);
 windows_core::imp::define_interface!(
     ID3D10Blob,
     ID3D10Blob_Vtbl,
@@ -1831,6 +1938,16 @@ impl ID3D12CommandQueue {
             )
         }
     }
+    pub unsafe fn GetTimestampFrequency(&self) -> windows_core::Result<u64> {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).GetTimestampFrequency)(
+                windows_core::Interface::as_raw(self),
+                &mut result__,
+            )
+            .map(|| result__)
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12CommandQueue_Vtbl {
@@ -1848,7 +1965,8 @@ pub struct ID3D12CommandQueue_Vtbl {
         u64,
     ) -> windows_core::HRESULT,
     Wait: usize,
-    GetTimestampFrequency: usize,
+    pub GetTimestampFrequency:
+        unsafe extern "system" fn(*mut core::ffi::c_void, *mut u64) -> windows_core::HRESULT,
     GetClockCalibration: usize,
     GetDesc: usize,
 }
@@ -2393,6 +2511,24 @@ impl ID3D12Device {
             );
         }
     }
+    pub unsafe fn CreateQueryHeap<T>(
+        &self,
+        pdesc: *const D3D12_QUERY_HEAP_DESC,
+        result__: *mut Option<T>,
+    ) -> windows_core::Result<()>
+    where
+        T: windows_core::Interface,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateQueryHeap)(
+                windows_core::Interface::as_raw(self),
+                pdesc,
+                &T::IID,
+                result__ as *mut _ as *mut _,
+            )
+            .ok()
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12Device_Vtbl {
@@ -2532,7 +2668,12 @@ pub struct ID3D12Device_Vtbl {
         *mut u64,
         *mut u64,
     ),
-    CreateQueryHeap: usize,
+    pub CreateQueryHeap: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_QUERY_HEAP_DESC,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     SetStablePowerState: usize,
     CreateCommandSignature: usize,
     GetResourceTiling: usize,
@@ -2627,6 +2768,23 @@ impl ID3D12GraphicsCommandList {
                 pallocator.param().abi(),
                 pinitialstate.param().abi(),
             )
+        }
+    }
+    pub unsafe fn DrawInstanced(
+        &self,
+        vertexcountperinstance: u32,
+        instancecount: u32,
+        startvertexlocation: u32,
+        startinstancelocation: u32,
+    ) {
+        unsafe {
+            (windows_core::Interface::vtable(self).DrawInstanced)(
+                windows_core::Interface::as_raw(self),
+                vertexcountperinstance,
+                instancecount,
+                startvertexlocation,
+                startinstancelocation,
+            );
         }
     }
     pub unsafe fn DrawIndexedInstanced(
@@ -2981,6 +3139,43 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn EndQuery<P0>(&self, pqueryheap: P0, r#type: D3D12_QUERY_TYPE, index: u32)
+    where
+        P0: windows_core::Param<ID3D12QueryHeap>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).EndQuery)(
+                windows_core::Interface::as_raw(self),
+                pqueryheap.param().abi(),
+                r#type,
+                index,
+            );
+        }
+    }
+    pub unsafe fn ResolveQueryData<P0, P4>(
+        &self,
+        pqueryheap: P0,
+        r#type: D3D12_QUERY_TYPE,
+        startindex: u32,
+        numqueries: u32,
+        pdestinationbuffer: P4,
+        aligneddestinationbufferoffset: u64,
+    ) where
+        P0: windows_core::Param<ID3D12QueryHeap>,
+        P4: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).ResolveQueryData)(
+                windows_core::Interface::as_raw(self),
+                pqueryheap.param().abi(),
+                r#type,
+                startindex,
+                numqueries,
+                pdestinationbuffer.param().abi(),
+                aligneddestinationbufferoffset,
+            );
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12GraphicsCommandList_Vtbl {
@@ -2992,7 +3187,7 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
         *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
     ClearState: usize,
-    DrawInstanced: usize,
+    pub DrawInstanced: unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32, u32, u32),
     pub DrawIndexedInstanced:
         unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32, u32, i32, u32),
     pub Dispatch: unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32, u32),
@@ -3094,8 +3289,21 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
         *const D3D12_DISCARD_REGION,
     ),
     BeginQuery: usize,
-    EndQuery: usize,
-    ResolveQueryData: usize,
+    pub EndQuery: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        D3D12_QUERY_TYPE,
+        u32,
+    ),
+    pub ResolveQueryData: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        D3D12_QUERY_TYPE,
+        u32,
+        u32,
+        *mut core::ffi::c_void,
+        u64,
+    ),
     SetPredication: usize,
     SetMarker: usize,
     BeginEvent: usize,
@@ -3349,6 +3557,29 @@ pub struct ID3D12PipelineState_Vtbl {
 }
 impl windows_core::RuntimeName for ID3D12PipelineState {}
 windows_core::imp::define_interface!(
+    ID3D12QueryHeap,
+    ID3D12QueryHeap_Vtbl,
+    0x0d9658ae_ed45_469e_a61d_970ec583cab4
+);
+impl core::ops::Deref for ID3D12QueryHeap {
+    type Target = ID3D12Pageable;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    ID3D12QueryHeap,
+    windows_core::IUnknown,
+    ID3D12Object,
+    ID3D12DeviceChild,
+    ID3D12Pageable
+);
+#[repr(C)]
+pub struct ID3D12QueryHeap_Vtbl {
+    pub base__: ID3D12Pageable_Vtbl,
+}
+impl windows_core::RuntimeName for ID3D12QueryHeap {}
+windows_core::imp::define_interface!(
     ID3D12Resource,
     ID3D12Resource_Vtbl,
     0x696442be_a72e_4059_bc79_5b5c98040fad
@@ -3565,6 +3796,24 @@ pub struct IDXGIDevice_Vtbl {
 }
 impl windows_core::RuntimeName for IDXGIDevice {}
 windows_core::imp::define_interface!(
+    IDXGIDeviceSubObject,
+    IDXGIDeviceSubObject_Vtbl,
+    0x3d3e0379_f9de_4d58_bb6c_18d62992f1a6
+);
+impl core::ops::Deref for IDXGIDeviceSubObject {
+    type Target = IDXGIObject;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(IDXGIDeviceSubObject, windows_core::IUnknown, IDXGIObject);
+#[repr(C)]
+pub struct IDXGIDeviceSubObject_Vtbl {
+    pub base__: IDXGIObject_Vtbl,
+    GetDevice: usize,
+}
+impl windows_core::RuntimeName for IDXGIDeviceSubObject {}
+windows_core::imp::define_interface!(
     IDXGIFactory,
     IDXGIFactory_Vtbl,
     0x7b7166ec_21c7_44ae_b21a_c9ae321ae369
@@ -3576,11 +3825,27 @@ impl core::ops::Deref for IDXGIFactory {
     }
 }
 windows_core::imp::interface_hierarchy!(IDXGIFactory, windows_core::IUnknown, IDXGIObject);
+impl IDXGIFactory {
+    pub unsafe fn MakeWindowAssociation(
+        &self,
+        windowhandle: HWND,
+        flags: u32,
+    ) -> windows_core::HRESULT {
+        unsafe {
+            (windows_core::Interface::vtable(self).MakeWindowAssociation)(
+                windows_core::Interface::as_raw(self),
+                windowhandle,
+                flags,
+            )
+        }
+    }
+}
 #[repr(C)]
 pub struct IDXGIFactory_Vtbl {
     pub base__: IDXGIObject_Vtbl,
     EnumAdapters: usize,
-    MakeWindowAssociation: usize,
+    pub MakeWindowAssociation:
+        unsafe extern "system" fn(*mut core::ffi::c_void, HWND, u32) -> windows_core::HRESULT,
     GetWindowAssociation: usize,
     CreateSwapChain: usize,
     CreateSoftwareAdapter: usize,
@@ -3627,6 +3892,177 @@ pub struct IDXGIFactory1_Vtbl {
     IsCurrent: usize,
 }
 impl windows_core::RuntimeName for IDXGIFactory1 {}
+windows_core::imp::define_interface!(
+    IDXGIFactory2,
+    IDXGIFactory2_Vtbl,
+    0x50c83a1c_e072_4c48_87b0_3630fa36a6d0
+);
+impl core::ops::Deref for IDXGIFactory2 {
+    type Target = IDXGIFactory1;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGIFactory2,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIFactory,
+    IDXGIFactory1
+);
+impl IDXGIFactory2 {
+    pub unsafe fn CreateSwapChainForHwnd<P0, P4>(
+        &self,
+        pdevice: P0,
+        hwnd: HWND,
+        pdesc: *const DXGI_SWAP_CHAIN_DESC1,
+        pfullscreendesc: Option<*const DXGI_SWAP_CHAIN_FULLSCREEN_DESC>,
+        prestricttooutput: P4,
+    ) -> windows_core::Result<IDXGISwapChain1>
+    where
+        P0: windows_core::Param<windows_core::IUnknown>,
+        P4: windows_core::Param<IDXGIOutput>,
+    {
+        unsafe {
+            let mut result__ = core::mem::zeroed();
+            (windows_core::Interface::vtable(self).CreateSwapChainForHwnd)(
+                windows_core::Interface::as_raw(self),
+                pdevice.param().abi(),
+                hwnd,
+                pdesc,
+                pfullscreendesc.unwrap_or(core::mem::zeroed()) as _,
+                prestricttooutput.param().abi(),
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
+}
+#[repr(C)]
+pub struct IDXGIFactory2_Vtbl {
+    pub base__: IDXGIFactory1_Vtbl,
+    IsWindowedStereoEnabled: usize,
+    pub CreateSwapChainForHwnd: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        HWND,
+        *const DXGI_SWAP_CHAIN_DESC1,
+        *const DXGI_SWAP_CHAIN_FULLSCREEN_DESC,
+        *mut core::ffi::c_void,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    CreateSwapChainForCoreWindow: usize,
+    GetSharedResourceAdapterLuid: usize,
+    RegisterStereoStatusWindow: usize,
+    RegisterStereoStatusEvent: usize,
+    UnregisterStereoStatus: usize,
+    RegisterOcclusionStatusWindow: usize,
+    RegisterOcclusionStatusEvent: usize,
+    UnregisterOcclusionStatus: usize,
+    CreateSwapChainForComposition: usize,
+}
+impl windows_core::RuntimeName for IDXGIFactory2 {}
+windows_core::imp::define_interface!(
+    IDXGIFactory3,
+    IDXGIFactory3_Vtbl,
+    0x25483823_cd46_4c7d_86ca_47aa95b837bd
+);
+impl core::ops::Deref for IDXGIFactory3 {
+    type Target = IDXGIFactory2;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGIFactory3,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIFactory,
+    IDXGIFactory1,
+    IDXGIFactory2
+);
+#[repr(C)]
+pub struct IDXGIFactory3_Vtbl {
+    pub base__: IDXGIFactory2_Vtbl,
+    GetCreationFlags: usize,
+}
+impl windows_core::RuntimeName for IDXGIFactory3 {}
+windows_core::imp::define_interface!(
+    IDXGIFactory4,
+    IDXGIFactory4_Vtbl,
+    0x1bc6ea02_ef36_464f_bf0c_21ca39e5168a
+);
+impl core::ops::Deref for IDXGIFactory4 {
+    type Target = IDXGIFactory3;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGIFactory4,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIFactory,
+    IDXGIFactory1,
+    IDXGIFactory2,
+    IDXGIFactory3
+);
+#[repr(C)]
+pub struct IDXGIFactory4_Vtbl {
+    pub base__: IDXGIFactory3_Vtbl,
+    EnumAdapterByLuid: usize,
+    EnumWarpAdapter: usize,
+}
+impl windows_core::RuntimeName for IDXGIFactory4 {}
+windows_core::imp::define_interface!(
+    IDXGIFactory5,
+    IDXGIFactory5_Vtbl,
+    0x7632e1f5_ee65_4dca_87fd_84cd75f8838d
+);
+impl core::ops::Deref for IDXGIFactory5 {
+    type Target = IDXGIFactory4;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGIFactory5,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIFactory,
+    IDXGIFactory1,
+    IDXGIFactory2,
+    IDXGIFactory3,
+    IDXGIFactory4
+);
+impl IDXGIFactory5 {
+    pub unsafe fn CheckFeatureSupport(
+        &self,
+        feature: DXGI_FEATURE,
+        pfeaturesupportdata: *mut core::ffi::c_void,
+        featuresupportdatasize: u32,
+    ) -> windows_core::HRESULT {
+        unsafe {
+            (windows_core::Interface::vtable(self).CheckFeatureSupport)(
+                windows_core::Interface::as_raw(self),
+                feature,
+                pfeaturesupportdata as _,
+                featuresupportdatasize,
+            )
+        }
+    }
+}
+#[repr(C)]
+pub struct IDXGIFactory5_Vtbl {
+    pub base__: IDXGIFactory4_Vtbl,
+    pub CheckFeatureSupport: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        DXGI_FEATURE,
+        *mut core::ffi::c_void,
+        u32,
+    ) -> windows_core::HRESULT,
+}
+impl windows_core::RuntimeName for IDXGIFactory5 {}
 windows_core::imp::define_interface!(
     IDXGIInfoQueue,
     IDXGIInfoQueue_Vtbl,
@@ -3762,6 +4198,228 @@ pub struct IDXGIObject_Vtbl {
     GetParent: usize,
 }
 impl windows_core::RuntimeName for IDXGIObject {}
+windows_core::imp::define_interface!(
+    IDXGIOutput,
+    IDXGIOutput_Vtbl,
+    0xae02eedb_c735_4690_8d52_5a8dc20213aa
+);
+impl core::ops::Deref for IDXGIOutput {
+    type Target = IDXGIObject;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(IDXGIOutput, windows_core::IUnknown, IDXGIObject);
+#[repr(C)]
+pub struct IDXGIOutput_Vtbl {
+    pub base__: IDXGIObject_Vtbl,
+    GetDesc: usize,
+    GetDisplayModeList: usize,
+    FindClosestMatchingMode: usize,
+    WaitForVBlank: usize,
+    TakeOwnership: usize,
+    ReleaseOwnership: usize,
+    GetGammaControlCapabilities: usize,
+    SetGammaControl: usize,
+    GetGammaControl: usize,
+    SetDisplaySurface: usize,
+    GetDisplaySurfaceData: usize,
+    GetFrameStatistics: usize,
+}
+impl windows_core::RuntimeName for IDXGIOutput {}
+windows_core::imp::define_interface!(
+    IDXGISwapChain,
+    IDXGISwapChain_Vtbl,
+    0x310d36a0_d2e7_4c0a_aa04_6a9d23b8886a
+);
+impl core::ops::Deref for IDXGISwapChain {
+    type Target = IDXGIDeviceSubObject;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGISwapChain,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIDeviceSubObject
+);
+impl IDXGISwapChain {
+    pub unsafe fn Present(&self, syncinterval: u32, flags: u32) -> windows_core::HRESULT {
+        unsafe {
+            (windows_core::Interface::vtable(self).Present)(
+                windows_core::Interface::as_raw(self),
+                syncinterval,
+                flags,
+            )
+        }
+    }
+    pub unsafe fn GetBuffer<T>(&self, buffer: u32) -> windows_core::Result<T>
+    where
+        T: windows_core::Interface,
+    {
+        let mut result__ = core::ptr::null_mut();
+        unsafe {
+            (windows_core::Interface::vtable(self).GetBuffer)(
+                windows_core::Interface::as_raw(self),
+                buffer,
+                &T::IID,
+                &mut result__,
+            )
+            .and_then(|| windows_core::imp::Type::from_abi(result__))
+        }
+    }
+    pub unsafe fn ResizeBuffers(
+        &self,
+        buffercount: u32,
+        width: u32,
+        height: u32,
+        newformat: DXGI_FORMAT,
+        swapchainflags: u32,
+    ) -> windows_core::HRESULT {
+        unsafe {
+            (windows_core::Interface::vtable(self).ResizeBuffers)(
+                windows_core::Interface::as_raw(self),
+                buffercount,
+                width,
+                height,
+                newformat,
+                swapchainflags,
+            )
+        }
+    }
+}
+#[repr(C)]
+pub struct IDXGISwapChain_Vtbl {
+    pub base__: IDXGIDeviceSubObject_Vtbl,
+    pub Present:
+        unsafe extern "system" fn(*mut core::ffi::c_void, u32, u32) -> windows_core::HRESULT,
+    pub GetBuffer: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
+    SetFullscreenState: usize,
+    GetFullscreenState: usize,
+    GetDesc: usize,
+    pub ResizeBuffers: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        u32,
+        u32,
+        DXGI_FORMAT,
+        u32,
+    ) -> windows_core::HRESULT,
+    ResizeTarget: usize,
+    GetContainingOutput: usize,
+    GetFrameStatistics: usize,
+    GetLastPresentCount: usize,
+}
+impl windows_core::RuntimeName for IDXGISwapChain {}
+windows_core::imp::define_interface!(
+    IDXGISwapChain1,
+    IDXGISwapChain1_Vtbl,
+    0x790a45f7_0d42_4876_983a_0a55cfe6f4aa
+);
+impl core::ops::Deref for IDXGISwapChain1 {
+    type Target = IDXGISwapChain;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGISwapChain1,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIDeviceSubObject,
+    IDXGISwapChain
+);
+#[repr(C)]
+pub struct IDXGISwapChain1_Vtbl {
+    pub base__: IDXGISwapChain_Vtbl,
+    GetDesc1: usize,
+    GetFullscreenDesc: usize,
+    GetHwnd: usize,
+    GetCoreWindow: usize,
+    Present1: usize,
+    IsTemporaryMonoSupported: usize,
+    GetRestrictToOutput: usize,
+    SetBackgroundColor: usize,
+    GetBackgroundColor: usize,
+    SetRotation: usize,
+    GetRotation: usize,
+}
+impl windows_core::RuntimeName for IDXGISwapChain1 {}
+windows_core::imp::define_interface!(
+    IDXGISwapChain2,
+    IDXGISwapChain2_Vtbl,
+    0xa8be2ac4_199f_4946_b331_79599fb98de7
+);
+impl core::ops::Deref for IDXGISwapChain2 {
+    type Target = IDXGISwapChain1;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGISwapChain2,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIDeviceSubObject,
+    IDXGISwapChain,
+    IDXGISwapChain1
+);
+#[repr(C)]
+pub struct IDXGISwapChain2_Vtbl {
+    pub base__: IDXGISwapChain1_Vtbl,
+    SetSourceSize: usize,
+    GetSourceSize: usize,
+    SetMaximumFrameLatency: usize,
+    GetMaximumFrameLatency: usize,
+    GetFrameLatencyWaitableObject: usize,
+    SetMatrixTransform: usize,
+    GetMatrixTransform: usize,
+}
+impl windows_core::RuntimeName for IDXGISwapChain2 {}
+windows_core::imp::define_interface!(
+    IDXGISwapChain3,
+    IDXGISwapChain3_Vtbl,
+    0x94d99bdb_f1f8_4ab0_b236_7da0170edab1
+);
+impl core::ops::Deref for IDXGISwapChain3 {
+    type Target = IDXGISwapChain2;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGISwapChain3,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIDeviceSubObject,
+    IDXGISwapChain,
+    IDXGISwapChain1,
+    IDXGISwapChain2
+);
+impl IDXGISwapChain3 {
+    pub unsafe fn GetCurrentBackBufferIndex(&self) -> u32 {
+        unsafe {
+            (windows_core::Interface::vtable(self).GetCurrentBackBufferIndex)(
+                windows_core::Interface::as_raw(self),
+            )
+        }
+    }
+}
+#[repr(C)]
+pub struct IDXGISwapChain3_Vtbl {
+    pub base__: IDXGISwapChain2_Vtbl,
+    pub GetCurrentBackBufferIndex: unsafe extern "system" fn(*mut core::ffi::c_void) -> u32,
+    CheckColorSpaceSupport: usize,
+    SetColorSpace1: usize,
+    ResizeBuffers1: usize,
+}
+impl windows_core::RuntimeName for IDXGISwapChain3 {}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LUID {

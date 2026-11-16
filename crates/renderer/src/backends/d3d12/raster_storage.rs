@@ -33,14 +33,14 @@ pub(super) struct GraphImage {
     pub(super) rows: usize,
 }
 
-struct DescriptorHeap {
-    raw: NativeObject<ID3D12DescriptorHeap>,
+pub(super) struct DescriptorHeap {
+    pub(super) raw: NativeObject<ID3D12DescriptorHeap>,
     #[cfg(feature = "memory-profiling")]
     count: u64,
 }
 
 impl DescriptorHeap {
-    fn new(
+    pub(super) fn new(
         owner: &DeviceOwner,
         count: usize,
         kind: D3D12_DESCRIPTOR_HEAP_TYPE,
