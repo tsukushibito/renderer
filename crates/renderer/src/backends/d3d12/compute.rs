@@ -21,9 +21,9 @@ pub(super) fn require_storage_format(
     let format = match format {
         ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
         ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-        ImageFormat::Depth32Float => {
+        ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb => {
             return Err(D3D12RuntimeError::unsupported(
-                "depth storage images are unsupported",
+                "depth and sRGB storage images are unsupported",
             ));
         }
     };
@@ -116,7 +116,28 @@ pub(super) fn requirements(
                     ));
                 }
             }
-            BindingOperands::ImageView(_) => descriptors += 1,
+            BindingOperands::ImageView(view) => {
+                let ResourceDesc::Image(desc) = graph.resources[view.image().index].desc else {
+                    unreachable!()
+                };
+                if view.mip_level_count() != 1
+                    && (view.mip_level() != 0 || view.mip_level_count() != desc.mip_levels)
+                {
+                    return Err(D3D12RuntimeError::unsupported(
+                        "Graph sampled Views require one mip or the complete chain",
+                    ));
+                }
+                if layout.kind != BindingType::SampledImage
+                    && (view.mip_level() != 0
+                        || view.mip_level_count() != 1
+                        || !matches!(graph.resources[view.image().index].desc, ResourceDesc::Image(desc) if desc.is_single_subresource()))
+                {
+                    return Err(D3D12RuntimeError::unsupported(
+                        "D3D12 storage Views currently require mip zero",
+                    ));
+                }
+                descriptors += 1;
+            }
             BindingOperands::Sampler(_) => {}
         }
     }
@@ -134,6 +155,20 @@ pub(super) fn requirements(
         {
             return Err(D3D12RuntimeError::unsupported(
                 "D3D12 Compute cannot bind one buffer as both UAV and CBV/SRV",
+            ));
+        }
+    }
+    for access in graph.accesses(pass) {
+        if matches!(
+            graph.resources[access.resource].desc,
+            ResourceDesc::Image(_)
+        ) && graph.accesses(pass).iter().any(|other| {
+            other.resource == access.resource
+                && (other.purpose == AccessPurpose::Sampled)
+                    != (access.purpose == AccessPurpose::Sampled)
+        }) {
+            return Err(D3D12RuntimeError::unsupported(
+                "D3D12 cannot mix sampled and storage states for one image in a dispatch",
             ));
         }
     }
@@ -318,8 +353,8 @@ pub(super) fn record(
                                 as u32,
                             Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
                                 Texture2D: D3D12_TEX2D_SRV {
-                                    MostDetailedMip: 0,
-                                    MipLevels: 1,
+                                    MostDetailedMip: view.mip_level(),
+                                    MipLevels: view.mip_level_count(),
                                     PlaneSlice: 0,
                                     ResourceMinLODClamp: 0.0,
                                 },
@@ -341,12 +376,12 @@ pub(super) fn record(
                 }
                 slot.compute_descriptors_used += 1;
             }
-            BindingOperands::Sampler(_) => {
+            BindingOperands::Sampler(sampler) => {
                 // SAFETY: This immutable nearest/clamp sampler and table layout
                 // were fixed at working-set preparation and Program creation.
                 unsafe {
                     slot.list
-                        .SetComputeRootDescriptorTable(root as u32, storage.sampler_gpu())
+                        .SetComputeRootDescriptorTable(root as u32, storage.sampler_gpu(*sampler))
                 };
             }
         }
@@ -440,6 +475,148 @@ mod tests {
             let (pass, program, bindings) = dispatch(&graph);
             let error = requirements(&graph, pass, program, bindings, [1, 1, 1]).unwrap_err();
             assert!(error.to_string().contains("both UAV and CBV/SRV"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod texture_tests {
+    use super::*;
+    use crate::{
+        backends::d3d12::{
+            D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+            D3D12ValidationMode,
+        },
+        graph::{Binding, BindingResource, BufferDesc, GraphCapacity, GraphPool, ImageDesc},
+        program::SamplerDescriptor,
+    };
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware and requested native diagnostics"]
+    fn d3d12_srgb_mip_views_filter_in_linear_space_and_select_sampler_policy() {
+        let strict = cfg!(feature = "development-validation");
+        let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
+            validation: if strict {
+                D3D12ValidationMode::Required
+            } else {
+                D3D12ValidationMode::Disabled
+            },
+            capacity: D3D12FrameCapacity {
+                executions: 1,
+                buffers: 1,
+                buffer_bytes: 64,
+                upload_bytes: 4096,
+                readback_bytes: 256,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        let monitor = runtime.validation_monitor();
+        let desc = ImageDesc {
+            width: 4,
+            height: 4,
+            format: ImageFormat::Rgba8Srgb,
+            mip_levels: 3,
+            array_layers: 1,
+        };
+        let program = ManagedProgram::sampled_float_readback();
+        runtime
+            .prepare_graph_working_set(&[D3D12ImageClass { desc, count: 1 }], &[], &[program])
+            .unwrap();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let image = graph.image("sRGB mip chain", desc).unwrap();
+        let mut pixels = [255, 0, 0, 255].repeat(16);
+        pixels.extend_from_slice(&[
+            0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255,
+        ]);
+        pixels.extend_from_slice(&[0, 0, 255, 255]);
+        graph
+            .upload_image("all mip levels", image, &pixels)
+            .unwrap();
+        let output = graph
+            .buffer("sampled float output", BufferDesc { size: 64 })
+            .unwrap();
+        let mut readbacks = Vec::new();
+        for (base, count, sampler) in [
+            (1, 1, SamplerDescriptor::LinearRepeat),
+            (2, 1, SamplerDescriptor::NearestClamp),
+            (0, 3, SamplerDescriptor::NearestClamp),
+        ] {
+            let view = graph.sampled_image_view(image, base, count).unwrap();
+            graph
+                .dispatch(
+                    "sample selected mip",
+                    &program,
+                    &[
+                        Binding {
+                            group: 0,
+                            binding: 0,
+                            resource: BindingResource::ImageView(view),
+                        },
+                        Binding {
+                            group: 0,
+                            binding: 1,
+                            resource: BindingResource::Sampler(sampler),
+                        },
+                        Binding {
+                            group: 1,
+                            binding: 0,
+                            resource: BindingResource::Buffer {
+                                buffer: output,
+                                offset: 0,
+                                size: 64,
+                            },
+                        },
+                    ],
+                    [1, 1, 1],
+                )
+                .unwrap();
+            readbacks.push(
+                graph
+                    .readback_buffer("sample values", output, 0, 64)
+                    .unwrap(),
+            );
+        }
+        let plan = graph.compile().unwrap();
+        let mut submission = runtime.submit(&plan).unwrap();
+        let mut result = submission
+            .wait(std::time::Duration::from_secs(30))
+            .unwrap()
+            .unwrap();
+        for (case, readback) in readbacks.into_iter().enumerate() {
+            let mut actual = [0u8; 64];
+            result.readback_into(readback, &mut actual).unwrap();
+            for (sample, value) in actual.as_chunks::<16>().0.iter().enumerate() {
+                let values: [f32; 4] = std::array::from_fn(|component| {
+                    f32::from_le_bytes(value[component * 4..component * 4 + 4].try_into().unwrap())
+                });
+                let expected = match case {
+                    0 => {
+                        let gray = [1.0, 0.7, 0.1, 0.0][sample];
+                        [gray, gray, gray, 1.0]
+                    }
+                    1 => [0.0, 0.0, 1.0, 1.0],
+                    _ => [1.0, 0.0, 0.0, 1.0],
+                };
+                for component in 0..4 {
+                    assert!(
+                        (values[component] - expected[component]).abs() < 0.01,
+                        "case {case} sample {sample}: {values:?} expected {expected:?}"
+                    );
+                }
+            }
+        }
+        drop((result, submission, plan, pool));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:#?}");
+        if strict {
+            assert!(
+                report.teardown_checked
+                    && report.debug_layer_enabled
+                    && report.gpu_based_validation_enabled
+            );
         }
     }
 }

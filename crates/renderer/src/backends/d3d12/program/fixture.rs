@@ -153,7 +153,7 @@ fn upload_image(
     let owner = &image.0.owner;
     let desc = image.desc();
     let texel_bytes = match desc.format {
-        crate::ImageFormat::Rgba8Unorm => 4,
+        crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba8Srgb => 4,
         crate::ImageFormat::Rgba16Float => 8,
         crate::ImageFormat::Depth32Float => {
             return Err(D3D12RuntimeError::invalid(

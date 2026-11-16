@@ -116,6 +116,20 @@ fn requirements_inner(
     // Establish support and all variable capacity requirements before recording.
     // This scans changing work; it does not revalidate Graph byte-range contents.
     for &pass in &graph.order {
+        for access in graph.accesses(pass) {
+            if let ResourceDesc::Image(desc) = graph.resources[access.resource].desc
+                && matches!(
+                    access.purpose,
+                    crate::graph::AccessPurpose::ColorAttachment
+                        | crate::graph::AccessPurpose::DepthAttachment
+                )
+                && !desc.is_single_subresource()
+            {
+                return Err(D3D12RuntimeError::unsupported(
+                    "D3D12 attachments currently require a single-mip image",
+                ));
+            }
+        }
         match &graph.passes[pass].operation {
             Operation::UploadBuffer { dst, .. } => {
                 use_buffer(
