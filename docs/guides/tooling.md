@@ -259,7 +259,8 @@ python -B tools/tracy/profile.py capture --build-manifest .tools/tracy/builds/in
 
 D3D12では`--api d3d12`と新しい出力先を指定する。両APIを同時に負荷実行しない。
 build manifest、EXE/PDB、source commit/hash、cook manifest、埋込conditions、capture/export toolを再確認し、
-`--tool-provenance <JSON>`を指定した場合はそのファイルのhashも保存する。
+`--tool-provenance <JSON>`を指定した場合は、記録の版・非管理者token・実際のtool path/hashと取得ZIPのhashを照合し、
+provenanceとZIPもplanのinput identityへ含める。
 この環境の取得記録は`.tools/tracy-evidence/tool-provenance.json`で、公式ZIP・各EXEと同梱native headerの版を結び付ける。
 controller・対象・capture broker・collector/exporterがWindows `TokenElevation=0`であることを確認する。
 localhostのport 8086が既に使われている場合は開始せず、開始後もlistenerのPIDが自分の対象であることを確認する。
@@ -285,7 +286,8 @@ helperのrunごとのnonceはREADY/DONE/reportと、測定窓の外に置く`bis
 python -B tools/tracy/profile.py capture --build-manifest .tools/tracy/builds/instrumented/manifest.json --mode disconnected --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --view route --frames 1800 --warmup 3600 --width 1920 --height 1080 --inflight 2 --output .tools/tracy/runs/vulkan-disconnected
 ```
 
-disconnected runも接続開始/終了状態をreportで確認するが、traceは採取せずexport対象にはしない。
+disconnected runも測定開始/終了の未接続状態をreportで確認するが、traceは採取せずexport対象にはしない。
+この二境界の観測だけから、途中にも一度も接続がなかったと証明したことにはしない。
 on-demandは切断中のzone記録を避ける設定であり、clientの起動・background thread・初回location準備・
 呼出し等の費用がゼロになる保証ではない。Tracy有効時の専用確保は通常Rendererのゼロ確保受入と分ける。
 
@@ -295,6 +297,10 @@ on-demandは切断中のzone記録を避ける設定であり、clientの起動�
 python -B tools/tracy/profile.py export --capture .tools/tracy/runs/vulkan-connected/capture.json --output .tools/tracy/exports/vulkan-connected
 python -B tools/tracy/profile.py analyze --export .tools/tracy/exports/vulkan-connected/export.json --output .tools/tracy/analysis-vulkan.json
 ```
+
+`capture_completed: true`は所有processのprotocolとflushが終わったことを表す。
+traceの内容受入は別であり、nonce・ROI・frame数・nesting等をexportで確認して初めて`trace_content_verified: true`となる。
+captureと各export stageのbyte上限はpolling監視で、書込みやflushにより一時的に超え得る。未検査のtraceを受入済みと扱わない。
 
 Tracy 0.14.1の[csvexport実装](https://github.com/wolfpld/tracy/blob/v0.14.1/csvexport/src/csvexport.cpp)に合わせ、
 raw CPU zoneを`-u`、selfを`-u -e`、区切りを`-s`のtabで出す。この版にframe exportの`-F`はない。
