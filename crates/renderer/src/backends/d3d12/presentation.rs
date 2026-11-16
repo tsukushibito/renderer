@@ -553,10 +553,10 @@ impl D3D12Runtime {
         {
             return Err(Error::wrong_owner("presenter belongs to another runtime"));
         }
-        let prepare_started = inner.profiling.then(Instant::now);
         if let Some(outcome) = inner.prepare()? {
             return Ok(outcome);
         }
+        let prepare_started = inner.profiling.then(Instant::now);
         let extent = inner.chain.as_ref().expect("ready chain").extent;
         if image.desc.format != ImageFormat::Rgba8Unorm
             || !image.desc.is_single_subresource()

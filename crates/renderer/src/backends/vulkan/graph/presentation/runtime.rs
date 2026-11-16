@@ -79,7 +79,6 @@ impl VulkanRuntime {
             .inner
             .as_mut()
             .ok_or_else(|| RuntimeError::invalid("Presenter is closed"))?;
-        let profiling_started = inner.profiling_enabled.then(Instant::now);
         if !Arc::ptr_eq(&self.owner, &inner.owner) {
             return Err(RuntimeError::wrong_owner(
                 "Presenter belongs to another runtime",
@@ -93,6 +92,7 @@ impl VulkanRuntime {
         if let Some(outcome) = inner.ensure_swapchain()? {
             return Ok(outcome);
         }
+        let profiling_started = inner.profiling_enabled.then(Instant::now);
         let source = self.lease(image.key)?;
         let ResourceDesc::Image(desc) = source.desc else {
             return Err(RuntimeError::invalid("presentation source is not an image"));
