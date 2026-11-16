@@ -45,7 +45,7 @@ where
         (ImageFormat::Rgba16Float, OpaqueDepth::Prepassed) => {
             ManagedRasterProgram::mesh_hdr_prepassed()
         }
-        (ImageFormat::Depth32Float, _) => {
+        (ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb, _) => {
             return Err(GraphError::custom(format!(
                 "standard opaque '{name}': color target must use RGBA8 or RGBA16F"
             )));

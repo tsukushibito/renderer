@@ -64,6 +64,7 @@ fn shared_image_format_keeps_output_checks_and_transactional_capacity() {
     // One format value flows from the shader contract through managed resource
     // metadata into a logical image, without a conversion or a second enum.
     let descriptor = ImageDescriptor {
+        mip_levels: 1,
         width: 2,
         height: 2,
         format: program.color_outputs()[0],

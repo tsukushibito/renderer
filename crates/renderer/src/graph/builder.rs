@@ -165,8 +165,9 @@ impl Graph {
             ))
         })
     }
-    /// Upload every texel of a single-mip, single-layer RGBA8 or RGBA16F image.
-    /// Bytes use tightly packed rows and components in the format's order.
+    /// Upload every texel of a single-layer color image, including every mip.
+    /// Bytes use tightly packed rows in the format's component order, with
+    /// consecutive mip levels from zero to the smallest selected level.
     pub fn upload_image(
         &mut self,
         name: &str,
@@ -175,7 +176,13 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let dst = graph.image_id(dst)?;
-            graph.single_image(dst)?;
+            if graph.image_desc_at(dst)?.array_layers != 1 {
+                return Err(graph.resource_error(
+                    GraphErrorKind::Unsupported,
+                    "image upload requires one array layer",
+                    dst,
+                ));
+            }
             if graph.image_desc_at(dst)?.format.aspect() != super::ImageAspect::Color {
                 return Err(graph.resource_error(
                     GraphErrorKind::InvalidInput,
@@ -191,9 +198,14 @@ impl Graph {
                 ));
             }
             let data = graph.append_upload(bytes)?;
+            let mip_levels = u64::from(graph.image_desc_at(dst)?.mip_levels);
             Ok((
                 Operation::UploadImage { dst, data },
-                graph.append_accesses([write(dst, 0..1, AccessPurpose::CopyDestination)])?,
+                graph.append_accesses([write(
+                    dst,
+                    0..mip_levels,
+                    AccessPurpose::CopyDestination,
+                )])?,
                 false,
             ))
         })

@@ -274,7 +274,8 @@ impl ManagedRasterProgram {
     /// in DXIL. Groups equal register spaces and bindings equal register numbers.
     /// `binding_bytes` has one entry per binding, a nonzero buffer prefix no
     /// larger than min_size, and zero for image/sampler slots (min_size zero).
-    /// Images are non-array, non-MS float 2D resources sampled at mip zero; no
+    /// Images are non-array, non-MS float 2D resources. Sampling may read any
+    /// mip of the selected View; its complete range is declared as a read. No
     /// optional narrow arithmetic types or unsupported capabilities are required.
     ///
     /// For every accepted draw, all permitted inline words and resource contents,
