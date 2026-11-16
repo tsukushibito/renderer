@@ -21,6 +21,7 @@ pub(super) struct GraphImage {
     pub(super) desc: ImageDesc,
     pub(super) native: DeviceImage,
     pub(super) state: D3D12_RESOURCE_STATES,
+    pub(super) uav_write: bool,
     pub(super) used: bool,
     pub(super) rtv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub(super) dsv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
@@ -99,7 +100,9 @@ pub(super) struct RasterStorage {
     texture_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     sampler_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     texture_step: u32,
-    draw_capacity: usize,
+    descriptor_capacity: usize,
+    pub(super) compute_descriptor_start: usize,
+    pub(super) compute_descriptor_capacity: usize,
 }
 
 fn validate_class(class: D3D12ImageClass) -> Result<(), D3D12RuntimeError> {
@@ -263,13 +266,18 @@ impl RasterStorage {
         owner: &DeviceOwner,
         classes: &[D3D12ImageClass],
         draw_capacity: usize,
+        compute_descriptor_capacity: usize,
+        storage_images: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
+        let descriptor_capacity = draw_capacity
+            .checked_add(compute_descriptor_capacity)
+            .ok_or_else(|| D3D12RuntimeError::capacity("prepared descriptor capacity overflow"))?;
         // One million is the portable shader-visible CBV/SRV/UAV heap bound
         // at the supported baseline; samplers need only their single fixed slot.
-        if !(1..=1_000_000).contains(&draw_capacity) {
+        if !(1..=1_000_000).contains(&descriptor_capacity) {
             return Err(D3D12RuntimeError::invalid(
-                "prepared Raster descriptor capacity must be within 1..=1000000",
+                "prepared Graph descriptor capacity must be within 1..=1000000",
             ));
         }
         let mut total = 0usize;
@@ -278,6 +286,9 @@ impl RasterStorage {
         for &class in classes {
             validate_class(class)?;
             require_image_format(owner, class.desc.format)?;
+            if storage_images && class.desc.format != ImageFormat::Depth32Float {
+                super::compute::require_storage_format(owner, class.desc.format, false)?;
+            }
             total = total
                 .checked_add(class.count)
                 .ok_or_else(|| D3D12RuntimeError::capacity("prepared image count overflows"))?;
@@ -293,7 +304,7 @@ impl RasterStorage {
         })?;
         let srv = DescriptorHeap::new(
             owner,
-            draw_capacity,
+            descriptor_capacity,
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
             true,
         )?;
@@ -337,7 +348,7 @@ impl RasterStorage {
             texture_cpu_start,
             Some(texture_gpu_start),
             owner.descriptor_steps[0],
-            draw_capacity,
+            descriptor_capacity,
         )?;
         if let Some(start) = rtv_start {
             checked_handle_capacity(start, None, rtv_step, color_count)?;
@@ -349,7 +360,7 @@ impl RasterStorage {
         let mut depth_index = 0usize;
         for &class in classes {
             for _ in 0..class.count {
-                let native = DeviceImage::graph(owner, class.desc)?;
+                let native = DeviceImage::graph(owner, class.desc, storage_images)?;
                 let (footprint, total_bytes, row_bytes, rows) =
                     copy_layout(owner, &native, class.desc)?;
                 let (rtv, dsv) = if class.desc.format == ImageFormat::Depth32Float {
@@ -389,6 +400,7 @@ impl RasterStorage {
                     desc: class.desc,
                     native,
                     state: D3D12_RESOURCE_STATE_COMMON,
+                    uav_write: false,
                     used: false,
                     rtv,
                     dsv,
@@ -428,7 +440,9 @@ impl RasterStorage {
             texture_gpu_start,
             sampler_gpu_start,
             texture_step: owner.descriptor_steps[0],
-            draw_capacity,
+            descriptor_capacity,
+            compute_descriptor_start: draw_capacity,
+            compute_descriptor_capacity,
         })
     }
 
@@ -439,12 +453,13 @@ impl RasterStorage {
         for image in &mut self.images {
             image.state = D3D12_RESOURCE_STATE_COMMON;
             image.used = false;
+            image.uav_write = false;
         }
     }
 
     pub(super) fn texture_cpu(&self, index: usize) -> D3D12_CPU_DESCRIPTOR_HANDLE {
         assert!(
-            index < self.draw_capacity,
+            index < self.descriptor_capacity,
             "prepared Raster descriptor index"
         );
         D3D12_CPU_DESCRIPTOR_HANDLE {
@@ -454,7 +469,7 @@ impl RasterStorage {
 
     pub(super) fn texture_gpu(&self, index: usize) -> D3D12_GPU_DESCRIPTOR_HANDLE {
         assert!(
-            index < self.draw_capacity,
+            index < self.descriptor_capacity,
             "prepared Raster descriptor index"
         );
         D3D12_GPU_DESCRIPTOR_HANDLE {

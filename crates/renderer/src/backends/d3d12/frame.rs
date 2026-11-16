@@ -99,6 +99,7 @@ pub(super) struct ExecutionSlot {
     pub(super) scratch_state: D3D12_RESOURCE_STATES,
     pub(super) raster: Option<RasterStorage>,
     pub(super) raster_draws_used: usize,
+    pub(super) compute_descriptors_used: usize,
     pub(super) buffer_scopes: Vec<D3D12_RESOURCE_STATES>,
     pub(super) provenance: Vec<BufferProvenance>,
     pub(super) provenance_needed: Vec<bool>,
@@ -142,11 +143,9 @@ impl ExecutionSlot {
             })?;
         let mut buffers = reserved(capacity.buffers)?;
         for _ in 0..capacity.buffers {
-            buffers.push(DeviceBuffer::new(
-                owner,
-                capacity.buffer_bytes,
-                D3D12_HEAP_TYPE_DEFAULT,
-            )?);
+            // Graph buffers may become shader storage without changing their
+            // immutable physical allocation during ordinary frames.
+            buffers.push(DeviceBuffer::storage(owner, capacity.buffer_bytes)?);
         }
         let mut states = reserved(capacity.buffers)?;
         states.resize(capacity.buffers, D3D12_RESOURCE_STATE_COMMON);
@@ -163,6 +162,7 @@ impl ExecutionSlot {
         Ok(Self {
             raster: None,
             raster_draws_used: 0,
+            compute_descriptors_used: 0,
             buffer_scopes: {
                 let mut values = reserved(capacity.buffers)?;
                 values.resize(capacity.buffers, D3D12_RESOURCE_STATE_COMMON);
@@ -218,6 +218,7 @@ impl ExecutionSlot {
         self.buffers_used = 0;
         self.upload_used = 0;
         self.raster_draws_used = 0;
+        self.compute_descriptors_used = 0;
         self.scratch_state = D3D12_RESOURCE_STATE_COMMON;
         Ok(())
     }
@@ -295,6 +296,7 @@ pub(super) struct FramePool {
     capacity: D3D12FrameCapacity,
     pub(super) raster_programs: Vec<RasterPipeline>,
     pub(super) clear_programs: Option<ClearPrograms>,
+    pub(super) compute_programs: Vec<super::program::D3D12Program>,
     state: Mutex<PoolState>,
     // Declared last so native fields are destroyed while the Device remains live.
     owner: Arc<DeviceOwner>,
@@ -341,6 +343,7 @@ impl FramePool {
             capacity,
             raster_programs: Vec::new(),
             clear_programs: None,
+            compute_programs: Vec::new(),
             state: Mutex::new(PoolState {
                 executions,
                 results,
@@ -356,11 +359,12 @@ impl FramePool {
             .all(|entry| matches!(entry, ExecutionEntry::Available(_)))
             && state.results.iter().all(Option::is_some)
     }
-    pub(super) fn with_raster(
+    pub(super) fn with_graph(
         owner: Arc<DeviceOwner>,
         capacity: D3D12FrameCapacity,
         classes: &[D3D12ImageClass],
         programs: &[ManagedRasterProgram],
+        compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
         let mut pool = Self::new(owner, capacity)?;
         let pool_mut = Arc::get_mut(&mut pool).expect("new unshared pool");
@@ -389,6 +393,47 @@ impl FramePool {
                 }
             }
         }
+        pool_mut
+            .compute_programs
+            .try_reserve_exact(compute_programs.len())
+            .map_err(|_| {
+                D3D12RuntimeError::capacity("Compute pipeline capacity reservation failed")
+            })?;
+        let mut compute_images = 0;
+        for program in compute_programs {
+            if !pool_mut
+                .compute_programs
+                .iter()
+                .any(|native| native.matches(program))
+            {
+                pool_mut
+                    .compute_programs
+                    .push(super::program::D3D12Program::new(
+                        &pool_mut.owner,
+                        program,
+                        #[cfg(test)]
+                        false,
+                    )?);
+            }
+            compute_images = compute_images.max(
+                program
+                    .bindings()
+                    .iter()
+                    .filter(|slot| {
+                        matches!(
+                            slot.kind,
+                            crate::program::BindingType::SampledImage
+                                | crate::program::BindingType::StorageImageRead(_)
+                                | crate::program::BindingType::StorageImageWrite(_)
+                        )
+                    })
+                    .count(),
+            );
+        }
+        let compute_descriptors = capacity
+            .operations
+            .checked_mul(compute_images)
+            .ok_or_else(|| D3D12RuntimeError::capacity("Compute descriptor capacity overflow"))?;
         for entry in &mut pool_mut
             .state
             .get_mut()
@@ -402,6 +447,8 @@ impl FramePool {
                 &pool_mut.owner,
                 classes,
                 capacity.operations,
+                compute_descriptors,
+                !compute_programs.is_empty(),
             )?);
         }
         Ok(pool)
@@ -554,6 +601,7 @@ impl Drop for FramePool {
             // owners must survive the same unproven-completion teardown.
             std::mem::forget(std::mem::take(&mut self.raster_programs));
             std::mem::forget(self.clear_programs.take());
+            std::mem::forget(std::mem::take(&mut self.compute_programs));
             std::mem::forget(Arc::clone(&self.owner));
         }
     }
@@ -1050,12 +1098,13 @@ mod tests {
                 drop((result, submission, graph));
             }
             runtime
-                .prepare_raster_working_set(
+                .prepare_graph_working_set(
                     &[D3D12ImageClass {
                         desc: ImageDesc::rgba8(1, 1),
                         count: 1,
                     }],
                     &[ManagedRasterProgram::mesh()],
+                    &[],
                 )
                 .unwrap();
             let (invalid, _) = raster(&mut pool, &mesh, Some(true));

@@ -63,7 +63,7 @@ pub(super) fn requirements(
     resource_map: &mut [usize],
     capacity: D3D12FrameCapacity,
 ) -> Result<usize, D3D12RuntimeError> {
-    requirements_inner(graph, resource_map, capacity, None, &[])
+    requirements_inner(graph, resource_map, capacity, None, &[], &[])
 }
 
 fn requirements_inner(
@@ -72,6 +72,7 @@ fn requirements_inner(
     capacity: D3D12FrameCapacity,
     mut raster: Option<&mut super::super::raster_storage::RasterStorage>,
     programs: &[super::super::raster::RasterPipeline],
+    compute_programs: &[super::super::program::D3D12Program],
 ) -> Result<usize, D3D12RuntimeError> {
     if !graph.exports.is_empty() {
         return Err(D3D12RuntimeError::unsupported(
@@ -93,6 +94,7 @@ fn requirements_inner(
     let mut upload_bytes = 0;
     let mut readback_bytes = 0;
     let mut draws_total = 0usize;
+    let mut compute_descriptors = 0usize;
     // Establish support and all variable capacity requirements before recording.
     // This scans changing work; it does not revalidate Graph byte-range contents.
     for &pass in &graph.order {
@@ -167,6 +169,59 @@ fn requirements_inner(
                 *total = super::raster::align_transfer(*total)?;
                 add_bytes(total, image.total_bytes, maximum)?;
             }
+            Operation::CopyImage { src, dst } => {
+                let storage = raster.as_deref_mut().ok_or_else(|| {
+                    D3D12RuntimeError::capacity("Graph image working set has not been prepared")
+                })?;
+                super::raster::use_image(graph, *src, resource_map, storage)?;
+                super::raster::use_image(graph, *dst, resource_map, storage)?;
+            }
+            Operation::Dispatch {
+                program,
+                bindings,
+                workgroups,
+            } => {
+                if !compute_programs
+                    .iter()
+                    .any(|native| native.matches(program))
+                {
+                    return Err(D3D12RuntimeError::capacity(
+                        "Compute pipeline working set has not been prepared",
+                    ));
+                }
+                let storage = raster.as_deref_mut().ok_or_else(|| {
+                    D3D12RuntimeError::capacity("Graph working set has not been prepared")
+                })?;
+                for access in graph.accesses(pass) {
+                    match graph.resources[access.resource].desc {
+                        ResourceDesc::Buffer(_) => use_buffer(
+                            graph,
+                            access.resource,
+                            resource_map,
+                            &mut used,
+                            capacity.buffer_bytes,
+                            capacity.buffers,
+                        )?,
+                        ResourceDesc::Image(_) => {
+                            super::raster::use_image(graph, access.resource, resource_map, storage)?
+                        }
+                    }
+                }
+                compute_descriptors = compute_descriptors
+                    .checked_add(super::super::compute::requirements(
+                        graph,
+                        pass,
+                        program,
+                        bindings,
+                        *workgroups,
+                    )?)
+                    .filter(|count| *count <= storage.compute_descriptor_capacity)
+                    .ok_or_else(|| {
+                        D3D12RuntimeError::capacity(
+                            "prepared Compute image descriptor capacity exhausted",
+                        )
+                    })?;
+            }
             Operation::Raster {
                 program,
                 draws,
@@ -232,7 +287,7 @@ fn requirements_inner(
             }
             _ => {
                 return Err(D3D12RuntimeError::unsupported(
-                    "D3D12 supports live buffer transfers, image transfers and owned Raster",
+                    "D3D12 supports live transfers and owned Raster/Compute",
                 ));
             }
         }
@@ -260,6 +315,7 @@ pub(super) fn prepare(
         capacity,
         slot.raster.as_mut(),
         &pool.raster_programs,
+        &pool.compute_programs,
     )?;
     super::raster::provenance_requirements(graph, &mut slot.provenance_needed);
     work.slot_mut().buffers_used = used;
@@ -455,6 +511,16 @@ pub(super) fn prepare(
                 graph,
                 *dst,
                 &graph.passes[pass].operation,
+            )?,
+            Operation::CopyImage { src, dst } => {
+                super::raster::copy_image(work.slot_mut(), *src, *dst)
+            }
+            Operation::Dispatch { .. } => super::super::compute::record(
+                work.slot_mut(),
+                &owner,
+                graph,
+                pass,
+                &pool.compute_programs,
             )?,
             Operation::ReadbackImage { src } => {
                 super::raster::readback_image(&mut work, &owner, pass, *src)?
