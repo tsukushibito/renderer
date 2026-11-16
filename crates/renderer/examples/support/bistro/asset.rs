@@ -763,6 +763,10 @@ impl Scene {
 }
 
 #[cfg(test)]
+#[path = "material_tests.rs"]
+pub(super) mod material_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
