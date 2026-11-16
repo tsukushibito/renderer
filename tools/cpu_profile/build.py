@@ -118,7 +118,7 @@ def profile_settings(root, name):
 def source_snapshot():
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
                 "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "crates/renderer",
-                "tools/cpu_profile").split("\0")
+                "tools/cpu_profile", "tools/bistro/conditions.json").split("\0")
     result = {}
     for name in sorted(set(filter(None, names))):
         path = ROOT / name

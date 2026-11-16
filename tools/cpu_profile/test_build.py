@@ -1,15 +1,23 @@
 """Build boundary guards; Cargo itself is not emulated."""
 
+import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from build import (BuildError, RELEASE_DEFAULTS, check_artifact, check_configuration,
-                   check_environment, parse_features, profile_settings, select_artifact)
+                   check_environment, parse_features, profile_settings, select_artifact,
+                   source_snapshot, ROOT)
 
 
 class BuildTests(unittest.TestCase):
+    def test_bistro_embedded_conditions_are_bound_to_the_build_source(self):
+        name = "tools/bistro/conditions.json"
+        snapshot = source_snapshot()
+        self.assertEqual(snapshot[name]["raw_sha256"],
+                         hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
+
     def test_shipping_features_reject_direct_diagnostics(self):
         self.assertEqual(parse_features("vulkan,d3d12 vulkan,presentation"),
                          ["d3d12", "presentation", "vulkan"])
