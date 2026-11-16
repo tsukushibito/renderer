@@ -462,7 +462,7 @@ shaderの16-bit演算型や追加の`shaderFloat16` featureは使わない。
 private受入は32 byteの2x2 half入力と64 byteの出力を区別し、負値・小数・1超の値と行/成分順を照合する。
 shader ABI・画像format・参照範囲は作成時に保証し、upload byte列とreadback範囲の変更は試験専用経路に限定する。
 
-`.2.1.6`の`ImageFormat::D32Float`は`D32_SFLOAT`へ対応する。attachmentとsampledの組合せを
+共通の`renderer::ImageFormat::Depth32Float`は`D32_SFLOAT`へ対応する。attachmentとsampledの組合せを
 実Deviceへ照会し、depth-only aspectのattachment用・sampled用Viewが同じImageを保持する。
 private受入は全2x2領域のdepth attachmentをDynamic Renderingのload `CLEAR`/store `STORE`で
 0.25または0.75へ初期化する。clearの前後でlayoutを明示し、rendering scopeの外に

@@ -346,7 +346,7 @@ cargo test --locked -p renderer --example graph_composition
 Viewはfull color範囲、Samplerは`NearestClamp`に限定する。
 `.2.1.5`は`ImageFormat::Rgba16Float`と`ManagedProgram::sampled_float_readback()`を加える。
 同じ2D/full View/nearest samplerでRGBA16FをFP32としてsampleし、全RGBAをbit列で返す。
-`.2.1.6`は`ImageFormat::D32Float`と`ImageViewDescriptor.usage`を加える。
+深度画像には共通の`renderer::ImageFormat::Depth32Float`と`ImageViewDescriptor.usage`を使います。
 Viewの用途は既定の`ImageViewUsage::Sampled`と、D32専用の`DepthAttachment`を区別する。
 D32はattachment/sample両用途を持ち、aspectはformatから導出する。
 `ImageDescriptor::preferred_depth_clear`はD32の予定clear値を指定できる。色は`None`とし、
@@ -442,6 +442,34 @@ feature統合後の実構成を確認し、
 コード・依存関係・生成物や走査／allocation／保持byte等から、除去を主張する費用を確認します。
 実GPUの正しさ受入はCore＋SyncVal等を維持し、GPU-AV／GBVによる追加診断と製品相当の性能測定を分けます。
 変更に応じた確認範囲は[検証方針の受入基準](validation-policy.md#verification)を参照してください。
+
+<a id="runtime-capacity"></a>
+
+## 準備容量と不足時の回復
+
+通常frameでは準備済み容量を再利用します。Graphの上限は`GraphCapacity`、
+Vulkanのnative資源・実行枠・stagingは`RuntimeConfig`と`FrameCapacity`、
+D3D12はRuntime作成時の`D3D12FrameCapacity`と明示した画像／Program working setで指定します。
+同時保持数には記録中・GPU実行中だけでなく、未読CPU結果、export、import snapshotも含めます。
+余裕を増やす操作は初期化・ロード・resize等の変更境界で行い、通常のsubmitに増設やwaitを隠しません。
+
+Graphの`GraphError::capacity()`は不足した項目と`limit`／`required`を返します。
+両native runtimeのエラーも`capacity()`で共通の`capacity::RuntimeCapacityError`を返し、
+`resource`と`recovery`を文字列照合なしで確認できます。byte容量の値はbyte、slot類は個数です。
+値が判明しない場合や必要数がoverflowする場合は`None`であり、ゼロや確保成功の保証ではありません。
+
+| `CapacityRecovery` | 次に行う操作 |
+|---|---|
+| `Prepare` | 不足しているworking setやProgramを、対応する明示準備APIで用意する |
+| `Reconfigure` | 要求または設定上限を見直して再準備する。同じ要求のpollだけでは回復しない |
+| `Poll` | 受理済みGPU／表示処理をpollし、完了した作業ownerを返してから再試行する |
+| `ReleaseResults` | 未読readbackや計測結果を消費・返却する。GPU完了だけではその領域は戻らない |
+| `ReleaseOwners` | 保持しているexport、snapshot、記録中資源等を返す。GPU側のownerは完了観測で退役させる |
+
+回復方法は次のpollの成功や、必要なownerが自動的に返ることを約束しません。
+特に`CapacityExhausted`を一律に再試行するloopは、未準備Programや固定byte上限超過で進行しなくなります。
+必要な内容を消費してからownerを返し、同じ要求が上限を超える場合は明確なエラーとして扱います。
+D3D12のbuffer／transfer byte上限はRuntime作成時の設定なので、画像working setだけの再準備では変わりません。
 
 ## M4のD3D12準備と実GPU受入経路
 

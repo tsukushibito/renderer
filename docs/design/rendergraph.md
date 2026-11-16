@@ -35,6 +35,12 @@ upload/copyによる保証の確立・失効、未知の穴の拒否、容量と
 既存builder回帰群は`graph/tests.rs`へまとめる。
 公開型はfacadeから直接reexportし、並行する互換APIを作らない。
 
+画像形式はGraphとProgramで共通の`renderer::ImageFormat`を使う。
+`Rgba8Unorm`、`Rgba16Float`、`Depth32Float`の意味を一つの型で定め、
+論理資源とshaderのformat契約を別enum間の変換で対応づけない。
+nativeのresource／sampled view／depth viewの形式は用途ごとに導出し、
+共通format型の採用を未対応の用途やformatを許可する理由にはしない。
+
 Graphから`engine`の型を参照しない。`MeshData::upload_graph_slice`は不変なstreamと
 既存のindex要約を選び、Graphの狭いprivate builderがowner/全stream長/alignment/範囲を検査して追加する。
 engine側からGraphのpassを直接変更せず、任意のpublic byte uploadからmesh provenanceを作らない。
@@ -244,6 +250,13 @@ Graphの各容量、Graph slot、import範囲とそのslotを区別する。`lim
 slot不足なら既存consumerの返却、metadata不足なら明示準備境界で該当容量の見直しを選べる。
 予約自体の失敗でも同じ種別を返すため、上限を増やせば必ず確保できる保証ではない。
 不正入力の詳細診断はこの通常backpressure経路と区別して計測する。
+
+native実行の`RuntimeError`／`D3D12RuntimeError`にも`capacity()`を用意し、
+共通の`capacity::RuntimeCapacityError`で不足資源、回復方法、判明した上限と必要数を返す。
+`CapacityExhausted`だけを見てGPU待機を繰り返さない。未準備、要求自体の上限超過、
+GPU進行で戻る枠、未読CPU結果、callerが保持するexport／snapshotは回復操作が異なる。
+payloadと通常backpressureのmessageは確保せず、同期・容量検査・失敗時所有を省略しない。
+具体的な対処は[容量不足の回復](../guides/development.md#runtime-capacity)に従う。
 
 宣言の範囲・用途・初期化は不要パス除去の前に検査する。
 deadなreadも未初期化ならエラーになり、不要な処理で入力ミスを隠さない。
