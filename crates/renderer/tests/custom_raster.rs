@@ -321,7 +321,7 @@ mod native {
         let scene = renderer::standard::graphs::forward(
             &mut graph,
             "pending input base",
-            &inputs.opaque,
+            inputs.opaque,
             renderer::standard::graphs::ForwardConfig {
                 color: fixture::hdr(),
                 clear_color: [0.25, 0.5, 0.75, 1.0],
@@ -617,10 +617,9 @@ mod native {
     #[test]
     #[ignore = "requires same-adapter Vulkan/D3D12 hardware with diagnostics excluded"]
     fn custom_raster_common_graph_shipping() {
-        assert!(
-            !cfg!(debug_assertions),
-            "shipping acceptance requires --release"
-        );
+        if cfg!(debug_assertions) {
+            panic!("shipping acceptance requires --release");
+        }
         run(false);
     }
 }
