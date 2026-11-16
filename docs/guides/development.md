@@ -326,6 +326,9 @@ emissive、front/back face、alphaのcolor/depthを、shaderと独立したf64�
 SDR resolveとの整合を確認する。2×2画像のUV probeも使い、異なるtexelをsampleすることで、
 正しいbindingを使っていてもUVが固定・反転している誤りを検出する。
 実GPU試験は`#[ignore]`なので、CPU試験の成功から実行済みとは扱わず、両APIのstrict/shippingで明示実行する。
+alpha0のHDR/SDR/depthは、同じAPI/GPUで独立に実行したPBR drawなしのclear/resolve Sceneと全byteで照合する。
+RGBA16F clearの許されるformat変換とalpha被覆を混同せず、CPUの最近接丸めだけを厳密な背景値とはしない。
+対照の変換範囲も別途検査し、通常の画像比較profileは維持する。
 
 通常性能はETW収集なしのreleaseで、同じEXE・入力・view・解像度・in-flight数を用い、
 各APIを交互の順序で独立3 process以上測る。測定中にcook・build・他のGPU負荷を並行させない。
@@ -354,6 +357,7 @@ headless転送負荷で得たAPI差を、PBRのCPU/GPU費用や画面表示FPS�
 
 Windowsでは既存の[build archive](tooling.md#cpu-profiling)でcleanなreleaseのEXE/PDB/source identityを保存し、
 計測driverへ渡せる。buildは測定開始前に完了させ、出力先は新規directoryとする。
+BistroがEXEへ埋め込む`tools/bistro/conditions.json`もsource hashへ含め、cook入力のidentityはrunner reportで別に記録する。
 
 ```powershell
 python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --output .tools/bistro-pbr/release-build

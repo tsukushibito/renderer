@@ -1321,6 +1321,23 @@ B2の照明はsunと明示した一定ambientであり、B3のIBL・影・固定
 SDR確認用のclampとsRGB OETFは利用側の別passで一度だけ行う。
 標準forwardのunlit recipeへPBR固有のeffect列挙やasset読込を追加しない。
 
+clip座標の計算は、world-space positionと同じFP32のview-projectionから、各列の積を
+`((x + y) + z) + translation`の順に加える。固定1080pのlabel近景では、compilerごとの
+matrix積の再結合・縮約によりdepth差が最大約`2.98e-6`となり、既定の`2e-6`閾値を超えた。
+native/ABIの切り分け後、この演算順序をvertexの`precise`とSPIR-V `NoContraction`、
+DXILの非fastな積・加算へ明示し、生成物でも維持を確認する方針とした。
+camera/cook・固定条件・頂点/UBO ABIは変えず、fragmentの材質計算は最適化を維持する。
+比較閾値の緩和、全shaderの最適化停止、camera-relativeやFP64への入力変更は採用せず、
+再現性の問題をclip演算の範囲で扱う。vertexのFMA機会を減らす可能性があり、速度改善の主張ではない。
+他GPU/driver/compilerのbit一致を保証するものでもなく、toolchain変更時は生成物と実機を再受入する。
+
+alpha0の無被覆は、同じAPI/GPUで別に描くPBR drawなしのSceneのclear/resolveを対照にし、
+HDR・SDR・depthの全byte一致で確認する。RGBA16F clearの基準をCPUの最近接丸めへ固定しない。
+[Vulkanのformat conversion規則](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-fpconvert)は、
+表現可能な二値の間の有限値について、どちらへ丸めるかを一意に定めないためである。
+対照自体もclearの隣接有限値とresolve結果・depthを検査し、任意の出力を正解にしない。
+これはalpha無被覆の独立対照を正す変更であり、通常のfixture/scene比較profileと閾値は変更しない。
+
 手順は[開発ガイド](../guides/development.md#bistro-pbr)、実行した内容照合・レビュー修正・
 CPU/GPU計測と未確認範囲は[現行検証](../verification/current.md#bistro-pbr)へ集約する。
 `.3.3`の常駐・更新とallocation予算、B3/B4/B5の品質・表示の最終受入は各課題で扱う。

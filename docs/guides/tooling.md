@@ -82,6 +82,10 @@ PBRと最終SDR resolveの利用側shaderは`examples/support/bistro/shaders/`�
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
+Windowsでも生成HLSLをUTF-8/BOMなし・LFへ揃えてからDXCへ渡し、同じcanonical textをhashへ使う。
+PBR vertexのclip変換は明示したFP32演算順序と`NoContraction`を保ち、DXILのfast演算やFMA等への
+縮約・再結合を生成時に拒否する。camera/ABIやfragment最適化を変えず、対象をclip演算へ限定した
+[採用理由とリスク](../design/implementation-policy.md#bistro-runtime-cook)に従う。
 更新を意図する場合は`-Verify`を外し、shaderとRust descriptorのABI、footprintと安全性契約をレビューする。
 hash/reflectionの一致だけで未信頼shaderを安全とみなさない。
 
@@ -245,6 +249,7 @@ full debug情報とstripなしだけを変更する。`release`は通常構成�
 PDBが存在しても行情報を得られるとは限らない。両構成を同条件で測り、debug情報を加えた差も記録する。
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
 manifestにはsource/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
+Bistroの埋込固定条件`tools/bistro/conditions.json`もsource hashに含め、camera/描画条件をEXEのidentityへ結び付ける。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 
 既定のexampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
