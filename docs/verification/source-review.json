@@ -57908,6 +57908,56 @@
       "Blocked/pacing time and context stacks do not alone establish redundant Renderer work.",
       "Observed unclassified intervals, process-edge residuals, unavailable stacks and unresolved OS/driver symbols remain explicit.",
       "No independent other-hardware/Linux-GPU, long-soak, OOM/device-loss or full-Bistro/FPS performance acceptance is claimed."
-    ]
+    ],
+    "ci_followup": {
+      "initial_commit": "57b3f99c9542514a32873b98d15e5e7da0dc99ae",
+      "initial_run": "https://github.com/tsukushibito/renderer/actions/runs/43903922125",
+      "failure": "D3D12-only sample backend imported capacity/Duration used only by Vulkan; Clippy rejected unused imports.",
+      "fix": "Qualify Vulkan helpers at their call sites, with no runtime behavior change or lint suppression.",
+      "measurement_identity": "Captured archives remain tied to their clean source commits; recorded measurements are not relabeled as a rebuilt import-fix executable.",
+      "local_clippy_configurations": [
+        {
+          "configuration": "d3d12",
+          "sha256": "d56926b1e036b1536c3ade09dae67164cb3c816dd10cda495f74a643b0d45c45",
+          "path": ".tools\\cpu-profile-evidence\\clippy-ci-fix-d3d12.log",
+          "result": "passed"
+        },
+        {
+          "configuration": "d3d12-presentation",
+          "sha256": "e023ce630f3f6eba69b07ca5dd4b6270e507337d03d31f8c169a1bb4b9dcc8b6",
+          "path": ".tools\\cpu-profile-evidence\\clippy-ci-fix-d3d12-presentation.log",
+          "result": "passed"
+        },
+        {
+          "configuration": "d3d12-development-validation-graph-diagnostics",
+          "sha256": "e9a3ac36886eec38dba2552b4281fd37ad049ece0318a3c63077623f1bdd9f0e",
+          "path": ".tools\\cpu-profile-evidence\\clippy-ci-fix-d3d12-development-validation-graph-diagnostics.log",
+          "result": "passed"
+        },
+        {
+          "configuration": "d3d12-presentation-development-validation-graph-diagnostics",
+          "sha256": "3c9b3d442157be4455c160656b6fa436efe8f6edf12f2824526dbd0545b69927",
+          "path": ".tools\\cpu-profile-evidence\\clippy-ci-fix-d3d12-presentation-development-validation-graph-diagnostics.log",
+          "result": "passed"
+        },
+        {
+          "configuration": "vulkan",
+          "sha256": "5d75db9ebaf7d6044f36c2d6468a0a524dc8ba9a6277a5e0df8dca8966ea0490",
+          "path": ".tools\\cpu-profile-evidence\\clippy-ci-fix-vulkan.log",
+          "result": "passed"
+        },
+        {
+          "configuration": "vulkan-development-validation-graph-diagnostics",
+          "sha256": "f99e77f1218394e75367dcc700f2a946b64d7f4a32e2ff0ab093c82ae2ac42a0",
+          "path": ".tools\\cpu-profile-evidence\\clippy-ci-fix-vulkan-development-validation-graph-diagnostics.log",
+          "result": "passed"
+        }
+      ],
+      "local_example_cpu_tests": {
+        "d3d12": 4,
+        "vulkan": 4
+      },
+      "native_gpu_reexecution": "Not repeated for name resolution only; previous strict/shipping native and frame-memory gates preserved."
+    }
   }
 }

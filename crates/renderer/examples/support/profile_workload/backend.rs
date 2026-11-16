@@ -1,5 +1,4 @@
-use super::{BYTES, CompiledGraph, Error, Options, PassHandle, capacity};
-use std::time::Duration;
+use super::{BYTES, CompiledGraph, Error, Options, PassHandle};
 
 pub(super) trait Backend: Sized {
     type Pending;
@@ -37,7 +36,7 @@ impl Backend for Vulkan {
         }
         runtime.prepare_working_set(
             renderer::FrameCapacity {
-                graph: capacity(options.resources)?,
+                graph: super::capacity(options.resources)?,
                 work_slots: 1,
                 result_slots: 1,
                 metadata_slots: 1,
@@ -64,7 +63,7 @@ impl Backend for Vulkan {
         Ok(self.runtime.submit(plan)?)
     }
     fn poll(pending: &mut Self::Pending) -> Result<Option<Self::Completed>, Error> {
-        Ok(pending.wait(Duration::ZERO)?)
+        Ok(pending.wait(std::time::Duration::ZERO)?)
     }
     fn readback(
         result: &mut Self::Completed,

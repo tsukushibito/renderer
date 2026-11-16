@@ -121,6 +121,9 @@ shippingの両WSI全lifecycle確保試験も再確認した。winit同期caller�
 
 統合版はPython 55試験、release workspace製品337／全feature350試験、windowed CPU各12試験、
 全target Clippy、fmt、warnings拒否Rustdocが成功した。
+最初のCIはD3D12単独構成で、測定サンプルのVulkan専用importが未使用となりClippyが拒否した。
+専用helperをVulkanの使用箇所で参照する形へ直し、単独APIの製品／開発構成も確認した。
+計測済みEXE/PDB/sourceは保存したcommitへ結び付けたままで、import整理後の再計測として扱っていない。
 mdBook 17ページ・2,170 local link/resource/fragmentと、browserで32個のdiagram／theme／mobile／printを確認した。
 既存preprocessorのmdBook版警告は残るが、生成・リンク・描画チェックは通過した。
 build manifest、各run、counterの全値、受理／拒否したtrace、実IP／ソース対応と確認範囲は
