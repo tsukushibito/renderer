@@ -195,6 +195,35 @@ pub(super) fn upload_image(
     Ok(())
 }
 
+pub(super) fn copy_image(slot: &mut ExecutionSlot, src: usize, dst: usize) {
+    let storage = slot.raster.as_mut().unwrap();
+    let source = slot.resource_map[src];
+    let destination = slot.resource_map[dst];
+    let image = &mut storage.images[source];
+    transition(
+        &slot.list,
+        image.native.raw(),
+        &mut image.state,
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+    );
+    let source = TextureLocation::image(image.native.raw());
+    let image = &mut storage.images[destination];
+    transition(
+        &slot.list,
+        image.native.raw(),
+        &mut image.state,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+    );
+    let destination = TextureLocation::image(image.native.raw());
+    // SAFETY: Graph construction guarantees distinct, equal-format/extent color
+    // images and complete initialized source content. Both single-subresource
+    // native images remain exclusively leased through actual GPU completion.
+    unsafe {
+        slot.list
+            .CopyTextureRegion(&destination.0, 0, 0, 0, &source.0, None)
+    };
+}
+
 pub(super) fn readback_image(
     work: &mut FrameWork,
     _owner: &DeviceOwner,
@@ -678,12 +707,13 @@ mod tests {
         .unwrap();
         let monitor = runtime.validation_monitor();
         runtime
-            .prepare_raster_working_set(
+            .prepare_graph_working_set(
                 &[D3D12ImageClass {
                     desc: ImageDesc::rgba8(1, 1),
                     count: 2,
                 }],
                 &[ManagedRasterProgram::textured_mesh()],
+                &[],
             )
             .unwrap();
         let fixture = scope_fixture();

@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::{borrow::Cow, fmt};
 
+mod compute;
 mod device;
 mod diagnostics;
 mod frame;
@@ -169,26 +170,31 @@ impl D3D12Runtime {
         let pool = frame::FramePool::new(Arc::clone(&device), config.capacity)?;
         Ok(Self { device, pool })
     }
-    /// Reserves exact image classes, descriptor arenas and immutable graphics
-    /// pipelines at an explicit change boundary. All execution and result leases
-    /// must have returned; ordinary Graph preparation never grows this storage.
-    pub fn prepare_raster_working_set(
+    /// Reserves exact image classes, descriptor arenas and immutable Raster and
+    /// Compute pipelines at an explicit change boundary. All execution and result
+    /// leases must have returned; ordinary Graph preparation never grows storage.
+    /// Empty image and Program lists are allowed. Image descriptors reserve
+    /// `operations` Raster slots plus `operations * max_compute_image_bindings`
+    /// Compute slots; the entire shader-visible heap must fit its native limit.
+    pub fn prepare_graph_working_set(
         &mut self,
         images: &[D3D12ImageClass],
         programs: &[crate::program::ManagedRasterProgram],
+        compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<(), D3D12RuntimeError> {
         self.device.ensure_active()?;
         self.pool.reap()?;
         if !self.pool.is_idle() {
             return Err(D3D12RuntimeError::capacity(
-                "Raster working set cannot change while execution or result leases remain",
+                "Graph working set cannot change while execution or result leases remain",
             ));
         }
-        let pool = frame::FramePool::with_raster(
+        let pool = frame::FramePool::with_graph(
             Arc::clone(&self.device),
             self.pool.capacity(),
             images,
             programs,
+            compute_programs,
         )?;
         self.pool = pool;
         Ok(())

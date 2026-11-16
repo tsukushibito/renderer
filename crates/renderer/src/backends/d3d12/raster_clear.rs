@@ -185,7 +185,7 @@ mod tests {
         let color_desc = ImageDesc::rgba8(3, 5);
         let depth_desc = ImageDesc::depth32(3, 5);
         runtime
-            .prepare_raster_working_set(
+            .prepare_graph_working_set(
                 &[
                     D3D12ImageClass {
                         desc: color_desc,
@@ -196,6 +196,7 @@ mod tests {
                         count: 1,
                     },
                 ],
+                &[],
                 &[],
             )
             .unwrap();

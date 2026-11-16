@@ -132,6 +132,20 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
             stages: crate::program::ShaderStages::COMPUTE,
             min_size: 16,
         },
+        BindingLayout {
+            group: 12,
+            binding: 13,
+            kind: BindingType::StorageImageRead(crate::program::ImageFormat::Rgba16Float),
+            stages: crate::program::ShaderStages::COMPUTE,
+            min_size: 0,
+        },
+        BindingLayout {
+            group: 14,
+            binding: 15,
+            kind: BindingType::StorageImageWrite(crate::program::ImageFormat::Rgba16Float),
+            stages: crate::program::ShaderStages::COMPUTE,
+            min_size: 0,
+        },
     ];
     let params = root_parameters(&layout).unwrap();
     assert_eq!(params.parameters.len(), layout.len());
@@ -171,10 +185,12 @@ fn root_descriptors_and_tables_follow_manifest_registers_and_weighted_budget() {
                 );
                 assert_eq!(
                     desc.RangeType,
-                    if slot.kind == BindingType::SampledImage {
-                        D3D12_DESCRIPTOR_RANGE_TYPE_SRV
-                    } else {
-                        D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
+                    match slot.kind {
+                        BindingType::SampledImage => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                        BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) =>
+                            D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+                        BindingType::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+                        _ => unreachable!(),
                     }
                 );
             }

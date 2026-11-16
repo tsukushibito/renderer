@@ -334,12 +334,13 @@ impl DeviceImage {
         owner: &DeviceOwner,
         desc: crate::program::ImageDescriptor,
     ) -> Result<Self, D3D12RuntimeError> {
-        Self::with_description(owner, desc, false)
+        Self::with_description(owner, desc, false, false)
     }
 
     pub(super) fn graph(
         owner: &DeviceOwner,
         desc: crate::graph::ImageDesc,
+        storage: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         let format = match desc.format {
             crate::graph::ImageFormat::Rgba8Unorm => crate::program::ImageFormat::Rgba8Unorm,
@@ -355,6 +356,7 @@ impl DeviceImage {
                 preferred_depth_clear: None,
             },
             true,
+            storage,
         )
     }
 
@@ -362,6 +364,7 @@ impl DeviceImage {
         owner: &DeviceOwner,
         desc: crate::program::ImageDescriptor,
         graph: bool,
+        storage: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         let properties = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -405,6 +408,9 @@ impl DeviceImage {
         let mut desc = image_desc(desc);
         if graph && desc.Flags == D3D12_RESOURCE_FLAG_NONE {
             desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        }
+        if storage && desc.Flags == D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET {
+            desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         }
         let mut raw = None;
         // SAFETY: The managed creation boundary establishes this sampled single

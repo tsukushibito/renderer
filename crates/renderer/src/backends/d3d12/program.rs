@@ -96,6 +96,98 @@ impl D3D12Program {
         self.0.managed.bindings()
     }
 }
+impl D3D12Program {
+    pub(super) fn matches(&self, managed: &ManagedProgram) -> bool {
+        self.0.managed.same_asset(managed)
+    }
+    pub(super) fn pipeline(&self) -> &ID3D12PipelineState {
+        &self.0._pipeline
+    }
+    pub(super) fn signature(&self) -> &ID3D12RootSignature {
+        &self.0._signature
+    }
+    pub(super) fn new(
+        owner: &Arc<DeviceOwner>,
+        managed: &ManagedProgram,
+        #[cfg(test)] fail_after_signature: bool,
+    ) -> Result<Self, D3D12RuntimeError> {
+        owner.ensure_active()?;
+        if owner.info.shader_model < D3D_SHADER_MODEL_6_0 as u32 {
+            return Err(D3D12RuntimeError::unsupported(
+                "managed compute Program requires Shader Model 6.0",
+            ));
+        }
+        super::compute::validate_program(owner, managed)?;
+        let parameters = root_parameters(managed.bindings())?;
+        let desc = D3D12_ROOT_SIGNATURE_DESC {
+            NumParameters: parameters.parameters.len() as u32,
+            pParameters: parameters.parameters.as_ptr(),
+            ..Default::default()
+        };
+        let mut blob = None;
+        let mut errors = None;
+        // SAFETY: The tagged root descriptors match the managed reflected
+        // manifest ABI. Local arrays outlive serialization.
+        unsafe {
+            D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob, &mut errors)
+        }
+        .ok()
+        .map_err(|error| owner.native("D3D12SerializeRootSignature", error))?;
+        let blob = blob.ok_or_else(|| {
+            D3D12RuntimeError::invalid("root signature serialization returned no blob")
+        })?;
+        // SAFETY: A successful owned serialization blob supplies exactly this
+        // readable buffer until the synchronous CreateRootSignature returns.
+        let bytes = unsafe {
+            let pointer = blob.GetBufferPointer();
+            let size = blob.GetBufferSize();
+            if pointer.is_null() || size == 0 || size > isize::MAX as usize {
+                return Err(D3D12RuntimeError::invalid(
+                    "invalid serialized root signature blob",
+                ));
+            }
+            std::slice::from_raw_parts(pointer.cast::<u8>(), size)
+        };
+        // SAFETY: The serialized v1.0 signature is valid on the retained Device.
+        let signature: NativeObject<ID3D12RootSignature> =
+            object(owner, "ID3D12Device::CreateRootSignature", || unsafe {
+                owner.raw.CreateRootSignature(0, bytes)
+            })?;
+        #[cfg(test)]
+        if fail_after_signature {
+            return Err(owner.native(
+                "injected compute PSO creation after root signature",
+                windows_core::Error::from_hresult(windows_core::HRESULT(0x8007_000eu32 as i32)),
+            ));
+        }
+        let shader = managed.dxil();
+        let mut pipeline_desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
+            pRootSignature: ManuallyDrop::new(Some(signature.clone())),
+            CS: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: shader.as_ptr().cast(),
+                BytecodeLength: shader.len(),
+            },
+            ..Default::default()
+        };
+        // SAFETY: The registry supplies validated SM6.0 DXIL and its matching
+        // signature. Both bytecode and COM reference outlive this native call.
+        let pipeline = object(
+            owner,
+            "ID3D12Device::CreateComputePipelineState",
+            || unsafe { owner.raw.CreateComputePipelineState(&pipeline_desc) },
+        );
+        // SAFETY: The generated field suppresses Drop; balance our clone after
+        // the synchronous call, including its failure path.
+        unsafe { ManuallyDrop::drop(&mut pipeline_desc.pRootSignature) };
+        let pipeline = pipeline?;
+        Ok(D3D12Program(Arc::new(ProgramOwner {
+            _pipeline: pipeline,
+            _signature: signature,
+            managed: *managed,
+            owner: Arc::clone(owner),
+        })))
+    }
+}
 impl D3D12Buffer {
     pub fn usage(&self) -> BufferUsage {
         self.0.usage
@@ -184,81 +276,12 @@ impl D3D12Runtime {
         managed: &ManagedProgram,
         #[cfg(test)] fail_after_signature: bool,
     ) -> Result<D3D12Program, D3D12RuntimeError> {
-        self.device.ensure_active()?;
-        if self.device.info.shader_model < D3D_SHADER_MODEL_6_0 as u32 {
-            return Err(D3D12RuntimeError::unsupported(
-                "managed compute Program requires Shader Model 6.0",
-            ));
-        }
-        let parameters = root_parameters(managed.bindings())?;
-        let desc = D3D12_ROOT_SIGNATURE_DESC {
-            NumParameters: parameters.parameters.len() as u32,
-            pParameters: parameters.parameters.as_ptr(),
-            ..Default::default()
-        };
-        let mut blob = None;
-        let mut errors = None;
-        // SAFETY: The tagged root descriptors match the managed reflected
-        // manifest ABI. Local arrays outlive serialization.
-        unsafe {
-            D3D12SerializeRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1, &mut blob, &mut errors)
-        }
-        .ok()
-        .map_err(|error| self.device.native("D3D12SerializeRootSignature", error))?;
-        let blob = blob.ok_or_else(|| {
-            D3D12RuntimeError::invalid("root signature serialization returned no blob")
-        })?;
-        // SAFETY: A successful owned serialization blob supplies exactly this
-        // readable buffer until the synchronous CreateRootSignature returns.
-        let bytes = unsafe {
-            let pointer = blob.GetBufferPointer();
-            let size = blob.GetBufferSize();
-            if pointer.is_null() || size == 0 || size > isize::MAX as usize {
-                return Err(D3D12RuntimeError::invalid(
-                    "invalid serialized root signature blob",
-                ));
-            }
-            std::slice::from_raw_parts(pointer.cast::<u8>(), size)
-        };
-        // SAFETY: The serialized v1.0 signature is valid on the retained Device.
-        let signature: NativeObject<ID3D12RootSignature> = object(
+        D3D12Program::new(
             &self.device,
-            "ID3D12Device::CreateRootSignature",
-            || unsafe { self.device.raw.CreateRootSignature(0, bytes) },
-        )?;
-        #[cfg(test)]
-        if fail_after_signature {
-            return Err(self.device.native(
-                "injected compute PSO creation after root signature",
-                windows_core::Error::from_hresult(windows_core::HRESULT(0x8007_000eu32 as i32)),
-            ));
-        }
-        let shader = managed.dxil();
-        let mut pipeline_desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
-            pRootSignature: ManuallyDrop::new(Some(signature.clone())),
-            CS: D3D12_SHADER_BYTECODE {
-                pShaderBytecode: shader.as_ptr().cast(),
-                BytecodeLength: shader.len(),
-            },
-            ..Default::default()
-        };
-        // SAFETY: The registry supplies validated SM6.0 DXIL and its matching
-        // signature. Both bytecode and COM reference outlive this native call.
-        let pipeline = object(
-            &self.device,
-            "ID3D12Device::CreateComputePipelineState",
-            || unsafe { self.device.raw.CreateComputePipelineState(&pipeline_desc) },
-        );
-        // SAFETY: The generated field suppresses Drop; balance our clone after
-        // the synchronous call, including its failure path.
-        unsafe { ManuallyDrop::drop(&mut pipeline_desc.pRootSignature) };
-        let pipeline = pipeline?;
-        Ok(D3D12Program(Arc::new(ProgramOwner {
-            _pipeline: pipeline,
-            _signature: signature,
-            managed: *managed,
-            owner: Arc::clone(&self.device),
-        })))
+            managed,
+            #[cfg(test)]
+            fail_after_signature,
+        )
     }
 
     /// Creates immutable uploaded uniform bytes or an uninitialized storage

@@ -197,6 +197,16 @@ pub struct D3D12_BUFFER_SRV {
 pub type D3D12_BUFFER_SRV_FLAGS = u32;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_BUFFER_UAV {
+    pub FirstElement: u64,
+    pub NumElements: u32,
+    pub StructureByteStride: u32,
+    pub CounterOffsetInBytes: u64,
+    pub Flags: D3D12_BUFFER_UAV_FLAGS,
+}
+pub type D3D12_BUFFER_UAV_FLAGS = u32;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_CACHED_PIPELINE_STATE {
     pub pCachedBlob: *const core::ffi::c_void,
     pub CachedBlobSizeInBytes: usize,
@@ -1245,6 +1255,13 @@ pub struct D3D12_TEX1D_ARRAY_SRV {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX1D_ARRAY_UAV {
+    pub MipSlice: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX1D_DSV {
     pub MipSlice: u32,
 }
@@ -1259,6 +1276,11 @@ pub struct D3D12_TEX1D_SRV {
     pub MostDetailedMip: u32,
     pub MipLevels: u32,
     pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX1D_UAV {
+    pub MipSlice: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1280,6 +1302,12 @@ pub struct D3D12_TEX2DMS_ARRAY_SRV {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_ARRAY_UAV {
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2DMS_DSV {
     pub UnusedField_NothingToDefine: u32,
 }
@@ -1291,6 +1319,11 @@ pub struct D3D12_TEX2DMS_RTV {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2DMS_SRV {
+    pub UnusedField_NothingToDefine: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2DMS_UAV {
     pub UnusedField_NothingToDefine: u32,
 }
 #[repr(C)]
@@ -1320,6 +1353,14 @@ pub struct D3D12_TEX2D_ARRAY_SRV {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2D_ARRAY_UAV {
+    pub MipSlice: u32,
+    pub FirstArraySlice: u32,
+    pub ArraySize: u32,
+    pub PlaneSlice: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX2D_DSV {
     pub MipSlice: u32,
 }
@@ -1339,6 +1380,12 @@ pub struct D3D12_TEX2D_SRV {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX2D_UAV {
+    pub MipSlice: u32,
+    pub PlaneSlice: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_TEX3D_RTV {
     pub MipSlice: u32,
     pub FirstWSlice: u32,
@@ -1350,6 +1397,13 @@ pub struct D3D12_TEX3D_SRV {
     pub MostDetailedMip: u32,
     pub MipLevels: u32,
     pub ResourceMinLODClamp: f32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_TEX3D_UAV {
+    pub MipSlice: u32,
+    pub FirstWSlice: u32,
+    pub WSize: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1411,6 +1465,45 @@ pub const D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE: D3D12_TEXTURE_LAYOUT = 2;
 pub const D3D12_TEXTURE_LAYOUT_ROW_MAJOR: D3D12_TEXTURE_LAYOUT = 1;
 pub const D3D12_TEXTURE_LAYOUT_UNKNOWN: D3D12_TEXTURE_LAYOUT = 0;
 pub type D3D12_TILED_RESOURCES_TIER = i32;
+pub type D3D12_UAV_DIMENSION = i32;
+pub const D3D12_UAV_DIMENSION_BUFFER: D3D12_UAV_DIMENSION = 1;
+pub const D3D12_UAV_DIMENSION_TEXTURE1D: D3D12_UAV_DIMENSION = 2;
+pub const D3D12_UAV_DIMENSION_TEXTURE1DARRAY: D3D12_UAV_DIMENSION = 3;
+pub const D3D12_UAV_DIMENSION_TEXTURE2D: D3D12_UAV_DIMENSION = 4;
+pub const D3D12_UAV_DIMENSION_TEXTURE2DARRAY: D3D12_UAV_DIMENSION = 5;
+pub const D3D12_UAV_DIMENSION_TEXTURE2DMS: D3D12_UAV_DIMENSION = 6;
+pub const D3D12_UAV_DIMENSION_TEXTURE2DMSARRAY: D3D12_UAV_DIMENSION = 7;
+pub const D3D12_UAV_DIMENSION_TEXTURE3D: D3D12_UAV_DIMENSION = 8;
+pub const D3D12_UAV_DIMENSION_UNKNOWN: D3D12_UAV_DIMENSION = 0;
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct D3D12_UNORDERED_ACCESS_VIEW_DESC {
+    pub Format: DXGI_FORMAT,
+    pub ViewDimension: D3D12_UAV_DIMENSION,
+    pub Anonymous: D3D12_UNORDERED_ACCESS_VIEW_DESC_0,
+}
+impl Default for D3D12_UNORDERED_ACCESS_VIEW_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+    pub Buffer: D3D12_BUFFER_UAV,
+    pub Texture1D: D3D12_TEX1D_UAV,
+    pub Texture1DArray: D3D12_TEX1D_ARRAY_UAV,
+    pub Texture2D: D3D12_TEX2D_UAV,
+    pub Texture2DArray: D3D12_TEX2D_ARRAY_UAV,
+    pub Texture2DMS: D3D12_TEX2DMS_UAV,
+    pub Texture2DMSArray: D3D12_TEX2DMS_ARRAY_UAV,
+    pub Texture3D: D3D12_TEX3D_UAV,
+}
+impl Default for D3D12_UNORDERED_ACCESS_VIEW_DESC_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_VERTEX_BUFFER_VIEW {
@@ -2137,6 +2230,26 @@ impl ID3D12Device {
             );
         }
     }
+    pub unsafe fn CreateUnorderedAccessView<P0, P1>(
+        &self,
+        presource: P0,
+        pcounterresource: P1,
+        pdesc: Option<*const D3D12_UNORDERED_ACCESS_VIEW_DESC>,
+        destdescriptor: D3D12_CPU_DESCRIPTOR_HANDLE,
+    ) where
+        P0: windows_core::Param<ID3D12Resource>,
+        P1: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateUnorderedAccessView)(
+                windows_core::Interface::as_raw(self),
+                presource.param().abi(),
+                pcounterresource.param().abi(),
+                pdesc.unwrap_or(core::mem::zeroed()) as _,
+                destdescriptor,
+            );
+        }
+    }
     pub unsafe fn CreateRenderTargetView<P0>(
         &self,
         presource: P0,
@@ -2346,7 +2459,13 @@ pub struct ID3D12Device_Vtbl {
         *const D3D12_SHADER_RESOURCE_VIEW_DESC,
         D3D12_CPU_DESCRIPTOR_HANDLE,
     ),
-    CreateUnorderedAccessView: usize,
+    pub CreateUnorderedAccessView: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        *const D3D12_UNORDERED_ACCESS_VIEW_DESC,
+        D3D12_CPU_DESCRIPTOR_HANDLE,
+    ),
     pub CreateRenderTargetView: unsafe extern "system" fn(
         *mut core::ffi::c_void,
         *mut core::ffi::c_void,

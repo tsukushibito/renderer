@@ -14,7 +14,10 @@ pub(super) fn root_parameters(
         .iter()
         .map(|slot| match slot.kind {
             BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite => 2,
-            BindingType::SampledImage | BindingType::Sampler => 1,
+            BindingType::SampledImage
+            | BindingType::StorageImageRead(_)
+            | BindingType::StorageImageWrite(_)
+            | BindingType::Sampler => 1,
         })
         .sum();
     if cost > 64 {
@@ -24,12 +27,23 @@ pub(super) fn root_parameters(
     }
     let ranges: Vec<_> = layout
         .iter()
-        .filter(|slot| matches!(slot.kind, BindingType::SampledImage | BindingType::Sampler))
+        .filter(|slot| {
+            matches!(
+                slot.kind,
+                BindingType::SampledImage
+                    | BindingType::StorageImageRead(_)
+                    | BindingType::StorageImageWrite(_)
+                    | BindingType::Sampler
+            )
+        })
         .map(|slot| D3D12_DESCRIPTOR_RANGE {
-            RangeType: if slot.kind == BindingType::Sampler {
-                D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER
-            } else {
-                D3D12_DESCRIPTOR_RANGE_TYPE_SRV
+            RangeType: match slot.kind {
+                BindingType::Sampler => D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER,
+                BindingType::SampledImage => D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+                BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) => {
+                    D3D12_DESCRIPTOR_RANGE_TYPE_UAV
+                }
+                _ => unreachable!(),
             },
             NumDescriptors: 1,
             BaseShaderRegister: slot.binding,
@@ -58,7 +72,10 @@ pub(super) fn root_parameters(
                         },
                     },
                 ),
-                BindingType::SampledImage | BindingType::Sampler => (
+                BindingType::SampledImage
+                | BindingType::StorageImageRead(_)
+                | BindingType::StorageImageWrite(_)
+                | BindingType::Sampler => (
                     D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                     D3D12_ROOT_PARAMETER_0 {
                         DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
