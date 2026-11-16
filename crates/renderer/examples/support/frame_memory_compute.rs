@@ -499,10 +499,11 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
         .collect::<Vec<_>>();
     match workload {
         Workload::Compute => runtime
-            .prepare_graph_working_set(&image_classes, &[], &fixture::programs())
+            .prepare_graph_working_set(None, &image_classes, &[], &fixture::programs())
             .unwrap(),
         Workload::Standard => runtime
             .prepare_graph_working_set(
+                None,
                 &image_classes,
                 &standard_fixture::raster_programs(),
                 &standard_fixture::programs(),
@@ -510,6 +511,7 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
             .unwrap(),
         Workload::CustomRaster => runtime
             .prepare_graph_working_set(
+                None,
                 &image_classes,
                 &custom_raster_fixture::raster_programs(),
                 &[],

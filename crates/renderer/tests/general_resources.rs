@@ -137,6 +137,7 @@ impl Backend for D3D12Runtime {
             })
             .collect();
         self.prepare_graph_working_set(
+            None,
             &images,
             &[renderer::program::ManagedRasterProgram::mesh_hdr()],
             &[fixture::storage_program()],
@@ -680,6 +681,7 @@ fn run(strict: bool) {
     )
     .unwrap();
     dx.prepare_graph_working_set(
+        None,
         &[
             D3D12ImageClass {
                 desc: fixture::hdr(),

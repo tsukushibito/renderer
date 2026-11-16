@@ -192,6 +192,7 @@ mod tests {
         let depth_desc = ImageDesc::depth32(3, 5);
         runtime
             .prepare_graph_working_set(
+                None,
                 &[
                     D3D12ImageClass {
                         desc: color_desc,

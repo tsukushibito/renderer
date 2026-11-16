@@ -371,7 +371,7 @@ mod native {
             count: 3,
         }];
         d3d12
-            .prepare_graph_working_set(&image_classes, &[], &[])
+            .prepare_graph_working_set(None, &image_classes, &[], &[])
             .unwrap();
         let (unprepared_pool, unprepared) = unprepared_buffer_plan();
         assert_eq!(
@@ -395,7 +395,7 @@ mod native {
             .prepare_compute_programs(&fixture::programs())
             .unwrap();
         d3d12
-            .prepare_graph_working_set(&image_classes, &[], &fixture::programs())
+            .prepare_graph_working_set(None, &image_classes, &[], &fixture::programs())
             .unwrap();
         let (_pool, shared, expected) = plan();
         assert_eq!(
@@ -426,6 +426,7 @@ mod native {
             .unwrap();
         d3d12
             .prepare_graph_working_set(
+                None,
                 &[D3D12ImageClass {
                     desc: fixture::hdr(),
                     count: 4,

@@ -828,6 +828,7 @@ mod tests {
         let monitor = runtime.validation_monitor();
         runtime
             .prepare_graph_working_set(
+                None,
                 &[D3D12ImageClass {
                     desc: ImageDesc::rgba8(1, 1),
                     count: 2,

@@ -695,6 +695,7 @@ pub fn d3d12(baseline: bool) {
     let monitor = runtime.validation_monitor();
     runtime
         .prepare_graph_working_set(
+            None,
             &[
                 renderer::D3D12ImageClass {
                     desc: ImageDesc::rgba8(WIDTH, HEIGHT),

@@ -252,7 +252,9 @@ mod tests {
         assert_eq!(bytes, [37; 16]);
         drop((first_result, second_result, first, second));
         runtime.set_profiling(true).unwrap();
-        runtime.prepare_graph_working_set(&[], &[], &[]).unwrap();
+        runtime
+            .prepare_graph_working_set(None, &[], &[], &[])
+            .unwrap();
         assert!(
             runtime.profiling_enabled(),
             "explicit working-set change preserves profiling request"
