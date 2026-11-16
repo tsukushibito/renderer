@@ -67,8 +67,11 @@ impl PhysicalRef {
     }
 }
 
-struct Entry {
-    physical: Arc<Physical>,
+struct Entry<P = Physical> {
+    // A retired free slot keeps its generation/index even after native storage
+    // is released at an explicit preparation boundary.
+    physical: Option<Arc<P>>,
+    prepared: bool,
     desc: ResourceDesc,
     /// Native capacity remains immutable when a smaller logical resource uses
     /// this entry; changing logical contents must not shrink its reuse class.
@@ -79,10 +82,11 @@ struct Entry {
     initialized: Vec<Range<u64>>,
     provenance: BufferProvenance,
 }
-impl Entry {
-    fn new(physical: Arc<Physical>, desc: ResourceDesc, capacity: D3D12FrameCapacity) -> Self {
+impl<P> Entry<P> {
+    fn new(physical: Arc<P>, desc: ResourceDesc, capacity: D3D12FrameCapacity) -> Self {
         Self {
-            physical,
+            physical: Some(physical),
+            prepared: true,
             desc,
             class: desc.into(),
             generation: 0,
@@ -93,12 +97,82 @@ impl Entry {
         }
     }
     fn fits(&self, desc: ResourceDesc) -> bool {
+        if !self.prepared || self.physical.is_none() {
+            return false;
+        }
         match (self.class, desc) {
             (ReuseClass::Buffer { size }, ResourceDesc::Buffer(desc)) => size >= desc.size,
             (_, ResourceDesc::Image(_)) => self.class == desc.into(),
             _ => false,
         }
     }
+    fn physical(&self) -> &Arc<P> {
+        self.physical.as_ref().expect("live native resource")
+    }
+    fn replaceable(&self) -> bool {
+        !self.registered
+            && self.generation < u32::MAX
+            && self
+                .physical
+                .as_ref()
+                .is_none_or(|value| Arc::strong_count(value) == 1)
+    }
+    fn retire(&mut self) {
+        self.prepared = false;
+        self.initialized.clear();
+        self.provenance.clear();
+        // An escaped native consumer can retain a deleted resource. Keep this
+        // anchor until a later explicit boundary observes sole ownership, so
+        // its eventual lease return cannot perform the last native destruction
+        // in an ordinary frame. Inactive entries never rejoin candidate lists.
+        if self
+            .physical
+            .as_ref()
+            .is_none_or(|value| Arc::strong_count(value) == 1)
+        {
+            self.physical = None;
+        }
+    }
+}
+
+fn replace_entries<P>(
+    entries: &mut Vec<Entry<P>>,
+    prepared: &mut Vec<Entry<P>>,
+    capacity: usize,
+) -> Result<(), Error> {
+    let replaceable = entries.iter().filter(|entry| entry.replaceable()).count();
+    let additional = prepared.len().saturating_sub(replaceable);
+    if entries
+        .len()
+        .checked_add(additional)
+        .is_none_or(|count| count > capacity)
+    {
+        return Err(Error::capacity_with(
+            "registered and prepared resources exceed registry capacity",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::Resources,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        ));
+    }
+    // All allocation/native creation and the whole index-budget check precede
+    // mutation. Registered indices are never shifted or replaced.
+    let mut incoming = std::mem::take(prepared).into_iter();
+    for entry in entries.iter_mut().filter(|entry| !entry.registered) {
+        if entry.replaceable()
+            && let Some(mut next) = incoming.next()
+        {
+            // bind advances this generation before exposing a new resource.
+            next.generation = entry.generation;
+            *entry = next;
+        } else {
+            entry.retire();
+        }
+    }
+    entries.extend(incoming);
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -188,7 +262,7 @@ impl Registry {
                 "presentation source is not a fully initialized image",
             ));
         }
-        Ok(PhysicalRef(Some(Arc::clone(&entry.physical))))
+        Ok(PhysicalRef(Some(Arc::clone(entry.physical()))))
     }
     pub(super) fn new(capacity: D3D12FrameCapacity) -> Result<Self, Error> {
         if capacity.resource_capacity == 0 || capacity.resource_capacity > u32::MAX as usize {
@@ -327,6 +401,9 @@ impl Registry {
     fn rebuild_reuse_index(&mut self) {
         self.reuse.clear();
         for (index, entry) in self.entries.iter().enumerate() {
+            if !entry.prepared || entry.physical.is_none() {
+                continue;
+            }
             self.reuse.install(index, entry.class);
             if entry.registered || entry.generation == u32::MAX {
                 self.reuse.remove(index);
@@ -374,41 +451,14 @@ impl Registry {
         }
         Ok(images)
     }
-    fn reusable(entry: &Entry) -> bool {
-        !entry.registered && entry.generation < u32::MAX && Arc::strong_count(&entry.physical) == 1
-    }
     /// All allocation/native creation has completed in `prepared`. Check the
     /// index budget before moving anything; the commit below cannot fail.
     pub(super) fn replace_prepared(&mut self, prepared: &mut Self) -> Result<(), Error> {
-        let reusable = self
-            .entries
-            .iter()
-            .filter(|entry| Self::reusable(entry))
-            .count();
-        let additional = prepared.entries.len().saturating_sub(reusable);
-        if additional > self.capacity.resource_capacity - self.entries.len() {
-            return Err(Error::capacity_with(
-                "registered and prepared resources exceed registry capacity",
-                RuntimeCapacityError::new(
-                    RuntimeCapacityKind::Resources,
-                    CapacityRecovery::Reconfigure,
-                    None,
-                    None,
-                ),
-            ));
-        }
-        let mut incoming = std::mem::take(&mut prepared.entries).into_iter();
-        for entry in &mut self.entries {
-            if Self::reusable(entry)
-                && let Some(mut next) = incoming.next()
-            {
-                // An unregistered index becomes externally visible only when
-                // bind advances this generation. Old deleted keys stay stale.
-                next.generation = entry.generation;
-                *entry = next;
-            }
-        }
-        self.entries.extend(incoming);
+        replace_entries(
+            &mut self.entries,
+            &mut prepared.entries,
+            self.capacity.resource_capacity,
+        )?;
         self.rebuild_reuse_index();
         Ok(())
     }
@@ -516,7 +566,10 @@ impl Registry {
                 let eligible = |index: usize| {
                     let entry = &entries[index];
                     !entry.registered
-                        && Arc::strong_count(&entry.physical) == 1
+                        && entry
+                            .physical
+                            .as_ref()
+                            .is_some_and(|value| Arc::strong_count(value) == 1)
                         && entry.generation < u32::MAX
                         && entry.fits(resource.desc)
                 };
@@ -547,7 +600,7 @@ impl Registry {
                             .any(|use_| use_.key.index as usize == index)
                         {
                             used += 1;
-                        } else if Arc::strong_count(&entry.physical) > 1 {
+                        } else if Arc::strong_count(entry.physical()) > 1 {
                             retained_elsewhere = true;
                         }
                     }
@@ -586,7 +639,7 @@ impl Registry {
                 revision: entry.revision,
                 changed: false,
             });
-            let native = PhysicalRef(Some(Arc::clone(&entry.physical)));
+            let native = PhysicalRef(Some(Arc::clone(entry.physical())));
             match resource.desc {
                 ResourceDesc::Buffer(_) => {
                     slot.buffers[local] = native;
@@ -819,8 +872,303 @@ fn fully_initialized(ranges: &[Range<u64>], mip_levels: u32) -> bool {
 }
 
 #[cfg(test)]
-mod mip_contents_tests {
-    use super::fully_initialized;
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Substitute only the external native owner. Production Entry metadata,
+    // Arc lease checks and the complete replacement algorithm are exercised.
+    struct NativeDrop(Arc<AtomicUsize>);
+    impl Drop for NativeDrop {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    fn entry(desc: ResourceDesc, drops: &Arc<AtomicUsize>) -> Entry<NativeDrop> {
+        Entry::new(
+            Arc::new(NativeDrop(Arc::clone(drops))),
+            desc,
+            D3D12FrameCapacity::default(),
+        )
+    }
+    fn buffer(size: u64) -> ResourceDesc {
+        ResourceDesc::Buffer(BufferDesc { size })
+    }
+
+    #[test]
+    fn preparation_shrink_retires_surplus_native_storage_and_preserves_registered_identity() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut entries = vec![
+            entry(buffer(512), &drops),
+            entry(buffer(64), &drops),
+            entry(buffer(128), &drops),
+        ];
+        entries[0].generation = 7;
+        entries[1].generation = 9;
+        entries[2].generation = 11;
+        entries[2].registered = true;
+        entries[2].revision = 23;
+        entries[2].initialized.push(0..128);
+        let registered = Arc::as_ptr(entries[2].physical());
+        let mut prepared = vec![entry(buffer(8), &drops)];
+        replace_entries(&mut entries, &mut prepared, 3).unwrap();
+        assert!(prepared.is_empty());
+        assert!(entries[0].fits(buffer(8)));
+        assert!(!entries[0].fits(buffer(64)));
+        assert_eq!(entries[0].generation, 7);
+        assert!(!entries[1].fits(buffer(8)));
+        assert!(entries[1].physical.is_none());
+        assert_eq!(entries[1].generation, 9);
+        assert_eq!(Arc::as_ptr(entries[2].physical()), registered);
+        assert_eq!((entries[2].generation, entries[2].revision), (11, 23));
+        assert_eq!(
+            entries[2].initialized.as_slice(),
+            std::slice::from_ref(&(0..128))
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+
+        replace_entries(&mut entries, &mut vec![], 3).unwrap();
+        assert!(!entries[0].fits(buffer(1)));
+        assert!(entries[0].physical.is_none());
+        assert_eq!(drops.load(Ordering::Relaxed), 3);
+        assert_eq!(Arc::as_ptr(entries[2].physical()), registered);
+        let mut prepared = vec![
+            entry(buffer(16), &drops),
+            entry(
+                ResourceDesc::Image(crate::graph::ImageDesc::rgba8(2, 2)),
+                &drops,
+            ),
+        ];
+        replace_entries(&mut entries, &mut prepared, 3).unwrap();
+        assert_eq!((entries[0].generation, entries[1].generation), (7, 9));
+        assert!(entries[0].fits(buffer(16)));
+        assert!(entries[1].fits(ResourceDesc::Image(crate::graph::ImageDesc::rgba8(2, 2))));
+        assert_eq!(Arc::as_ptr(entries[2].physical()), registered);
+    }
+
+    #[test]
+    fn retired_lease_cannot_reenter_selection_or_release_its_last_anchor_in_a_frame() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut entries = vec![entry(buffer(512), &drops)];
+        let escaped = Arc::clone(entries[0].physical());
+        let mut prepared = vec![entry(buffer(8), &drops)];
+        assert!(replace_entries(&mut entries, &mut prepared, 1).is_err());
+        assert!(entries[0].prepared);
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+
+        replace_entries(&mut entries, &mut vec![], 1).unwrap();
+        assert!(!entries[0].fits(buffer(1)));
+        assert!(entries[0].physical.is_some());
+        drop(escaped);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        replace_entries(&mut entries, &mut vec![], 1).unwrap();
+        assert!(entries[0].physical.is_none());
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        replace_entries(&mut entries, &mut prepared, 1).unwrap();
+        assert!(entries[0].fits(buffer(8)));
+    }
+
+    #[test]
+    fn terminal_generation_can_retire_storage_but_cannot_recycle_its_identity() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut entries = vec![entry(buffer(8), &drops)];
+        entries[0].generation = u32::MAX;
+        replace_entries(&mut entries, &mut vec![], 1).unwrap();
+        assert!(entries[0].physical.is_none());
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let mut prepared = vec![entry(buffer(8), &drops)];
+        assert!(replace_entries(&mut entries, &mut prepared, 1).is_err());
+        assert_eq!(entries[0].generation, u32::MAX);
+        assert_eq!(prepared.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
+    fn d3d12_working_set_shrink_removes_old_classes_and_preserves_registered_contents() {
+        use crate::graph::{GraphCapacity, GraphPool};
+        use crate::{D3D12RuntimeConfig, D3D12ValidationMode};
+        use std::time::Duration;
+
+        let strict = cfg!(feature = "d3d12-diagnostics");
+        let mut runtime = D3D12Runtime::new_with_working_set(
+            D3D12RuntimeConfig {
+                validation: if strict {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                capacity: D3D12FrameCapacity {
+                    executions: 1,
+                    results: 1,
+                    resources: 8,
+                    operations: 8,
+                    buffers: 3,
+                    buffer_bytes: 512,
+                    resource_capacity: 8,
+                    upload_bytes: 512,
+                    readback_bytes: 512,
+                    scratch_bytes: 4,
+                    ..Default::default()
+                },
+            },
+            &[D3D12BufferClass { size: 64, count: 3 }],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let monitor = runtime.validation_monitor();
+        let key = {
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            let mut graph = pool.begin().unwrap();
+            let buffer = graph
+                .buffer("registered contents", BufferDesc { size: 16 })
+                .unwrap();
+            graph.upload_buffer("seed", buffer, 0, &[73; 16]).unwrap();
+            graph.export_buffer(buffer).unwrap();
+            let plan = graph.compile().unwrap();
+            let mut pending = runtime.submit(&plan).unwrap();
+            let key = pending.export_buffer(buffer).unwrap().key();
+            drop(
+                pending
+                    .wait(Duration::from_secs(30))
+                    .unwrap()
+                    .expect("GPU completion"),
+            );
+            key
+        };
+        runtime
+            .prepare_graph_working_set(
+                Some(&[D3D12BufferClass { size: 8, count: 1 }]),
+                &[],
+                &[],
+                &[],
+            )
+            .unwrap();
+        {
+            let registry = runtime
+                .pool
+                .registry
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(
+                registry
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.physical.is_some())
+                    .count(),
+                2
+            );
+            assert_eq!(
+                registry
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.registered && entry.fits(buffer(8)))
+                    .count(),
+                1
+            );
+            assert!(
+                !registry
+                    .entries
+                    .iter()
+                    .any(|entry| !entry.registered && entry.fits(buffer(16)))
+            );
+        }
+        // The old two free 64B instances cannot cover either the old size or
+        // a second 8B operand after the exact count/size replacement.
+        for sizes in [&[16][..], &[8, 8][..]] {
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            let mut graph = pool.begin().unwrap();
+            for &size in sizes {
+                let buffer = graph
+                    .buffer("absent class/count", BufferDesc { size })
+                    .unwrap();
+                graph
+                    .upload_buffer("seed", buffer, 0, &vec![1; size as usize])
+                    .unwrap();
+                graph.readback_buffer("observe", buffer, 0, size).unwrap();
+            }
+            let plan = graph.compile().unwrap();
+            assert!(
+                runtime
+                    .prepare(&plan)
+                    .err()
+                    .expect("exact class exhaustion")
+                    .capacity()
+                    .is_some()
+            );
+        }
+        runtime
+            .prepare_graph_working_set(Some(&[]), &[], &[], &[])
+            .unwrap();
+        {
+            let registry = runtime
+                .pool
+                .registry
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(
+                registry
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.physical.is_some())
+                    .count(),
+                1
+            );
+            assert!(
+                registry
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.registered)
+                    .all(|entry| !entry.prepared && entry.physical.is_none())
+            );
+        }
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let buffer = graph
+            .buffer("no free storage", BufferDesc { size: 1 })
+            .unwrap();
+        graph.upload_buffer("seed", buffer, 0, &[1]).unwrap();
+        graph.readback_buffer("observe", buffer, 0, 1).unwrap();
+        let plan = graph.compile().unwrap();
+        assert!(
+            runtime
+                .prepare(&plan)
+                .err()
+                .expect("zero free class capacity")
+                .capacity()
+                .is_some()
+        );
+        drop((plan, pool));
+
+        let snapshot = runtime.refresh_buffer(key).unwrap();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let buffer = graph
+            .import_buffer("preserved registered contents", &snapshot)
+            .unwrap();
+        let readback = graph.readback_buffer("check", buffer, 0, 16).unwrap();
+        let plan = graph.compile().unwrap();
+        let mut pending = runtime.submit(&plan).unwrap();
+        let mut result = pending
+            .wait(Duration::from_secs(30))
+            .unwrap()
+            .expect("GPU completion");
+        let mut bytes = [0; 16];
+        result.readback_into(readback, &mut bytes).unwrap();
+        assert_eq!(bytes, [73; 16]);
+        drop((result, pending, plan, pool, snapshot));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:?}");
+        if strict {
+            assert!(
+                report.teardown_checked && report.gpu_based_validation_enabled,
+                "{report:?}"
+            );
+        }
+    }
     #[test]
     fn a_partial_mip_chain_is_never_exported_as_fully_initialized() {
         assert!(!fully_initialized(&[], 3));
