@@ -123,11 +123,24 @@ pub(super) enum CacheTarget {
     Replace(usize),
 }
 
+struct CandidateClass<K> {
+    descriptor: K,
+    count: usize,
+    // Lower bound for the next matching index. Returning a lower index moves
+    // this cursor back; taking candidates only advances it.
+    next: usize,
+}
+
 pub(super) struct CacheIndex<K> {
     records: Vec<Option<(K, u64)>>,
-    // Stable registry indices in ascending order. Only indexed candidates are
-    // visited; large registered/leased prefixes are absent from this list.
-    candidates: Vec<usize>,
+    // A bit per available registry index; removal never shifts other entries.
+    available: Vec<u64>,
+    // Descriptor classes persist while empty, so ordinary release/reacquire
+    // cycles only update scalars. Publishing a previously unindexed descriptor
+    // may move this small table; it never grows beyond prepared capacity.
+    classes: Vec<CandidateClass<K>>,
+    last_class: usize,
+    count: usize,
 }
 
 impl<K: Copy + Ord> CacheIndex<K> {
@@ -135,31 +148,133 @@ impl<K: Copy + Ord> CacheIndex<K> {
         let mut records = Vec::new();
         records.try_reserve_exact(capacity)?;
         records.resize(capacity, None);
-        let mut candidates = Vec::new();
-        candidates.try_reserve_exact(capacity)?;
+        let mut available = Vec::new();
+        available.try_reserve_exact(capacity.div_ceil(64))?;
+        available.resize(capacity.div_ceil(64), 0);
+        let mut classes = Vec::new();
+        classes.try_reserve_exact(capacity)?;
         Ok(Self {
             records,
-            candidates,
+            available,
+            classes,
+            last_class: usize::MAX,
+            count: 0,
         })
     }
 
-    pub(super) fn insert(&mut self, index: usize, descriptor: K, serial: u64) {
-        self.records[index] = Some((descriptor, serial));
-        if let Err(position) = self.candidates.binary_search(&index) {
-            // At most one candidate per fixed registry index. Preparation
-            // reserved every possible entry, so insert only moves elements.
-            self.candidates.insert(position, index);
+    fn class(&mut self, descriptor: K) -> Result<usize, usize> {
+        if self
+            .classes
+            .get(self.last_class)
+            .is_some_and(|class| class.descriptor == descriptor)
+        {
+            return Ok(self.last_class);
         }
+        let result = self
+            .classes
+            .binary_search_by_key(&descriptor, |class| class.descriptor);
+        if let Ok(class) = result {
+            self.last_class = class;
+        }
+        result
+    }
+
+    pub(super) fn insert(&mut self, index: usize, descriptor: K, serial: u64) {
+        self.remove(index);
+        let class = match self.class(descriptor) {
+            Ok(class) => class,
+            Err(_) => {
+                if self.classes.len() == self.records.len() {
+                    // At least one class is empty: each nonempty class owns a
+                    // different candidate, and this index is not inserted yet.
+                    let empty = self
+                        .classes
+                        .iter()
+                        .position(|class| class.count == 0)
+                        .expect("prepared descriptor class capacity");
+                    self.classes.remove(empty);
+                }
+                let position = self
+                    .classes
+                    .binary_search_by_key(&descriptor, |class| class.descriptor)
+                    .unwrap_err();
+                self.classes.insert(
+                    position,
+                    CandidateClass {
+                        descriptor,
+                        count: 0,
+                        next: self.records.len(),
+                    },
+                );
+                self.last_class = position;
+                position
+            }
+        };
+        let class = &mut self.classes[class];
+        class.next = class.next.min(index);
+        class.count += 1;
+        self.count += 1;
+        self.records[index] = Some((descriptor, serial));
+        self.available[index / 64] |= 1 << (index % 64);
     }
 
     pub(super) fn remove(&mut self, index: usize) {
-        if self.records[index].take().is_some() {
-            let position = self
-                .candidates
-                .binary_search(&index)
-                .expect("indexed candidate");
-            self.candidates.remove(position);
+        if let Some((descriptor, _)) = self.records[index].take() {
+            self.available[index / 64] &= !(1 << (index % 64));
+            let class = self.class(descriptor).expect("indexed descriptor class");
+            let class = &mut self.classes[class];
+            class.count -= 1;
+            self.count -= 1;
+            if class.count == 0 {
+                class.next = self.records.len();
+            } else if class.next == index {
+                class.next = index + 1;
+            }
         }
+    }
+
+    fn matching(&mut self, descriptor: K) -> Option<usize> {
+        let class = self.class(descriptor).ok()?;
+        if self.classes[class].count == 0 {
+            return None;
+        }
+        let start = self.classes[class].next;
+        for word_index in start / 64..self.available.len() {
+            let mut word = self.available[word_index];
+            if word_index == start / 64 {
+                word &= u64::MAX << (start % 64);
+            }
+            while word != 0 {
+                let index = word_index * 64 + word.trailing_zeros() as usize;
+                word &= word - 1;
+                if self.records[index].unwrap().0 == descriptor {
+                    self.classes[class].next = index;
+                    return Some(index);
+                }
+            }
+        }
+        unreachable!("nonempty descriptor class has an available candidate")
+    }
+
+    fn oldest(&self) -> Option<usize> {
+        if self.count == 0 {
+            return None;
+        }
+        self.available
+            .iter()
+            .copied()
+            .enumerate()
+            .flat_map(|(word_index, mut word)| {
+                std::iter::from_fn(move || {
+                    if word == 0 {
+                        return None;
+                    }
+                    let index = word_index * 64 + word.trailing_zeros() as usize;
+                    word &= word - 1;
+                    Some(index)
+                })
+            })
+            .min_by_key(|&index| (self.records[index].unwrap().1, index))
     }
 
     /// Inspect only indexed candidates. Invalidated candidates are removed once;
@@ -174,12 +289,7 @@ impl<K: Copy + Ord> CacheIndex<K> {
         vacant: Option<usize>,
         mut eligible: impl FnMut(usize) -> bool,
     ) -> Result<CacheTarget, ()> {
-        while let Some(index) = self
-            .candidates
-            .iter()
-            .copied()
-            .find(|&index| self.records[index].unwrap().0 == descriptor)
-        {
+        while let Some(index) = self.matching(descriptor) {
             if eligible(index) {
                 return Ok(CacheTarget::Reuse(index));
             }
@@ -193,12 +303,10 @@ impl<K: Copy + Ord> CacheIndex<K> {
         if entry_count < capacity {
             return Ok(CacheTarget::Create);
         }
-        while let Some(index) = self
-            .candidates
-            .iter()
-            .copied()
-            .min_by_key(|&index| (self.records[index].unwrap().1, index))
-        {
+        // Return an eviction candidate only after matching reuse and available
+        // registry capacity have been exhausted. The owner still decides
+        // whether creation/replacement is allowed at this boundary.
+        while let Some(index) = self.oldest() {
             if eligible(index) {
                 return Ok(CacheTarget::Replace(index));
             }
@@ -443,5 +551,68 @@ mod tests {
             index.select(1, 2, 2, None, |_| true),
             Ok(CacheTarget::Reuse(1))
         );
+    }
+
+    #[test]
+    fn returned_lower_indices_reset_cursors_across_bitmap_words() {
+        let mut index = CacheIndex::new(193).unwrap();
+        for position in [192, 130, 64, 63, 0] {
+            index.insert(position, 7, 2);
+        }
+        for position in [0, 63, 64] {
+            assert_eq!(
+                index.select(7, 193, 193, None, |_| true),
+                Ok(CacheTarget::Reuse(position))
+            );
+            index.remove(position);
+        }
+        // Returning a lower index must invalidate the advanced cursor, without
+        // making any of the other still-leased entries available again.
+        index.insert(63, 7, 3);
+        assert_eq!(
+            index.select(7, 193, 193, None, |_| true),
+            Ok(CacheTarget::Reuse(63))
+        );
+        index.remove(63);
+        assert_eq!(
+            index.select(7, 193, 193, None, |position| position != 130),
+            Ok(CacheTarget::Reuse(192))
+        );
+        index.remove(192);
+        assert_eq!(index.select(7, 193, 193, None, |_| true), Err(()));
+    }
+
+    #[test]
+    fn descriptor_and_serial_replacement_reuse_bounded_class_metadata() {
+        let mut index = CacheIndex::new(4).unwrap();
+        for position in 0..4 {
+            index.insert(position, position, 1);
+        }
+        // Updating an existing available entry removes its previous class and
+        // eviction metadata before publishing the replacement.
+        index.insert(0, 3, 9);
+        assert_eq!(
+            index.select(3, 4, 4, None, |_| true),
+            Ok(CacheTarget::Reuse(0))
+        );
+        assert_eq!(
+            index.select(100, 4, 4, None, |_| true),
+            Ok(CacheTarget::Replace(1))
+        );
+        for round in 0..100 {
+            for position in 0..4 {
+                index.remove(position);
+            }
+            for position in (0..4).rev() {
+                index.insert(position, 10 + round * 4 + position, round as u64);
+            }
+            for position in 0..4 {
+                assert_eq!(
+                    index.select(10 + round * 4 + position, 4, 4, None, |_| true),
+                    Ok(CacheTarget::Reuse(position))
+                );
+            }
+        }
+        assert_eq!(index.classes.len(), 4);
     }
 }
