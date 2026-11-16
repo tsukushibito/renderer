@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from analyze import AnalysisError, analyze_precise, analyze_sampled
-from capture import loss_fields, record_owned
+from capture import export_trace, loss_fields, record_owned, sha256
 from symbolize import resolve_addresses
 from wpa import PRECISE, PRECISE_KEYS, SAMPLED, SAMPLE_KEYS, prepare_profile
 
@@ -53,6 +53,20 @@ class CaptureContracts(unittest.TestCase):
             self.record(self.plan(), denied)
         self.assertEqual(self.commands, ["wpr-start"])
         self.assertFalse(self.metadata()["own_start_succeeded"])
+
+    def test_start_timeout_preserves_unknown_outcome_without_claiming_ownership(self):
+        def timeout(command, output, name, **kwargs):
+            self.commands.append(name)
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.record(self.plan(), timeout)
+        state = self.metadata()
+        self.assertEqual(self.commands, ["wpr-start"])
+        self.assertFalse(state["own_start_succeeded"])
+        self.assertEqual(state["session_state"], "start_outcome_unknown_no_cleanup_attempted")
+        self.assertEqual(state["inspection_required"]["instance"], "Owned_Test_Instance")
+        self.assertEqual(state["inspection_required"]["status_command"][-1], "Owned_Test_Instance")
+        self.assertIn("finished_utc", state)
 
     def test_successful_capture_retains_pid_lifetime_and_etl_hash(self):
         result = self.record(self.plan())
@@ -130,6 +144,42 @@ class CaptureContracts(unittest.TestCase):
         self.assertEqual(self.metadata()["session_state"], "stopped")
         self.assertFalse(self.metadata()["quality"]["marker_commands_succeeded"])
         self.assertNotIn("wpr-cancel-owned", self.commands)
+
+    def test_stdin_failure_preserves_original_error_and_final_owned_cleanup_metadata(self):
+        program = "import os,json; print('PROFILE_WORKLOAD_READY '+json.dumps({'pid':os.getpid()}),flush=True); input()"
+        launched = []
+        class FailingClose:
+            def __init__(self, stream):
+                self.stream = stream
+            def write(self, value):
+                return self.stream.write(value)
+            def flush(self):
+                return self.stream.flush()
+            def close(self):
+                try:
+                    self.stream.close()
+                finally:
+                    raise OSError("fixture stdin close failure")
+        def launcher(*args, **kwargs):
+            process = subprocess.Popen(*args, **kwargs)
+            process.stdin = FailingClose(process.stdin)
+            launched.append(process)
+            return process
+        def runner(command, output, name, **kwargs):
+            if name == "wpr-marker-begin":
+                launched[0].terminate()
+                launched[0].wait(timeout=5)
+            return self.runner(command, output, name, **kwargs)
+        with self.assertRaises(OSError) as caught:
+            self.record(self.plan(program, True), runner, launcher=launcher)
+        self.assertNotIn("fixture stdin close failure", str(caught.exception))
+        state = self.metadata()
+        self.assertEqual(state["session_state"], "cancelled")
+        self.assertEqual(state["cancel_exit_code"], 0)
+        self.assertIn("error", state)
+        self.assertIn("finished_utc", state)
+        self.assertEqual(state["stream_cleanup_errors"][0]["resource"], "target_stdin")
+        self.assertIn("fixture stdin close failure", state["stream_cleanup_errors"][0]["error"])
 
     def test_loss_fields_never_fill_missing_evidence_with_zero(self):
         missing = loss_fields(self.directory / "missing.txt")
@@ -212,6 +262,26 @@ class CsvContracts(unittest.TestCase):
         self.assertEqual(result["readying_stacks"][0]["name"], "Timer")
         self.assertIn("Sleep", result["wait_reason_and_stack"][0]["name"])
 
+    def test_precise_requires_scheduler_evidence_inside_roi(self):
+        path = self.csv("precise.csv", [self.precise()])
+        with self.assertRaisesRegex(AnalysisError, "inside.*ROI"):
+            analyze_precise(path, 123, (1, 2))
+        path = self.csv("mixed.csv", [self.precise(tid="99", last_switch_out_s="2.008",
+                        ready_time_s="2.011", switch_in_s="2.013", next_switch_out_s="2.016"), self.precise()])
+        result = analyze_precise(path, 123, (0.010, 0.020))
+        self.assertEqual(result["event_count"], 1)
+        self.assertEqual(set(result["threads"]), {"1"})
+
+    def test_precise_keeps_off_cpu_intersection_before_a_later_switch_in(self):
+        result = analyze_precise(self.csv("precise.csv", [self.precise()]), 123, (0.009, 0.010))
+        self.assertEqual(result["event_count"], 1)
+        self.assertAlmostEqual(result["totals"]["blocked_ms"], 1)
+        self.assertEqual(result["totals"]["running_ms"], 0)
+        result = analyze_precise(self.csv("incomplete.csv", [self.precise(ready_time_s="")]), 123, (0.009, 0.010))
+        self.assertEqual(result["event_count"], 1)
+        self.assertEqual(result["incomplete_off_cpu_events"], 1)
+        self.assertEqual(result["totals"]["blocked_ms"], 0)
+
     def test_preempted_ready_state_is_never_called_blocking(self):
         result = analyze_precise(self.csv("precise.csv", [self.precise(previous_state="Ready")]), 123, (0, 1))
         self.assertAlmostEqual(result["totals"]["ready_ms"], 5)
@@ -247,6 +317,51 @@ class SymbolContracts(unittest.TestCase):
         self.assertEqual(result["addresses"][0]["status"], "line_available")
         self.assertEqual(result["addresses"][1]["status"], "outside_verified_executable")
         self.assertEqual(len(calls), 1)
+
+
+class ExportContracts(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        manifest = self.directory / "manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        etl = self.directory / "capture.etl"
+        etl.write_bytes(b"fixture trace is never processed")
+        capture = self.directory / "capture.json"
+        capture.write_text(json.dumps({"session_state": "stopped", "capture_valid": True,
+            "plan": {"manifest": str(manifest), "manifest_sha256": sha256(manifest)},
+            "etl": {"path": str(etl), "sha256": sha256(etl)}}), encoding="utf-8")
+        profile = self.directory / "fixture.wpaProfile"
+        profile.write_text("fixture profile is never processed", encoding="utf-8")
+        self.args = SimpleNamespace(capture=capture, timeout_seconds=1, output=self.directory / "export",
+            microsoft_symbols=False, wpa_profile=profile, wpt=self.directory / "wpt")
+        self.addCleanup(patch.stopall)
+        patch("capture.verified_build", return_value=({"binary": {"sha256": "fixture"}}, self.directory / "fixture.exe")).start()
+        patch("capture.prepare_profile", return_value=profile).start()
+
+    def report(self):
+        return json.loads((self.args.output / "export.json").read_text(encoding="utf-8"))
+
+    def test_first_export_timeout_retains_failed_stage_metadata(self):
+        with patch("capture.logged", side_effect=subprocess.TimeoutExpired(["fixture exporter"], 1)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                export_trace(self.args)
+        report = self.report()
+        self.assertEqual(report["stages"]["wpa"]["status"], "timeout")
+        self.assertIn("TimeoutExpired", report["stages"]["wpa"]["error"])
+        self.assertIn("finished_utc", report["stages"]["wpa"])
+        self.assertNotIn("wpa", report["exit_codes"])
+
+    def test_later_export_launch_failure_retains_prior_success_and_error(self):
+        with patch("capture.logged", side_effect=[0, OSError("fixture exporter missing")]):
+            with self.assertRaisesRegex(OSError, "fixture exporter missing"):
+                export_trace(self.args)
+        report = self.report()
+        self.assertEqual(report["stages"]["wpa"]["status"], "succeeded")
+        self.assertEqual(report["exit_codes"]["wpa"], 0)
+        self.assertEqual(report["stages"]["trace-statistics"]["status"], "failed")
+        self.assertIn("fixture exporter missing", report["stages"]["trace-statistics"]["error"])
 
 
 class ProfileContracts(unittest.TestCase):

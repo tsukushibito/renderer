@@ -197,21 +197,31 @@ def analyze_precise(path, pid, roi, timestamp_unit=None):
             raise AnalysisError("Scheduler rows must be leaf events with Count=1")
         thread, processor = integer(row[tid], tid), integer(row[cpu], cpu)
         switch_in, switch_out = time_value(row, times["in"]), time_value(row, times["out"])
+        running_ms = overlap(switch_in, switch_out, roi)
+        last_raw, ready_raw = row[times["last"][0]], row[times["ready"][0]]
+        last = time_value(row, times["last"]) if last_raw else None
+        ready = time_value(row, times["ready"]) if ready_raw else None
+        if ((last is not None and last > switch_in) or (ready is not None and ready > switch_in)
+                or (last is not None and ready is not None and last > ready)):
+            raise AnalysisError("Scheduler timestamps must satisfy last_out <= ready <= switch_in")
+        # A switch-in after the ROI can still describe a blocked/ready interval
+        # inside it. A known partial endpoint also establishes relevant, but
+        # explicitly incomplete, evidence without inventing missing durations.
+        off_cpu_start = last if last is not None else ready
+        off_cpu_ms = overlap(off_cpu_start, switch_in, roi) if off_cpu_start is not None else 0
+        if not running_ms and not off_cpu_ms:
+            continue
         key = (thread, processor, switch_in)
         if key in seen:
             raise AnalysisError("Duplicate scheduler event; refusing to double-count")
         seen.add(key)
         values = threads.setdefault(str(thread), {"running_ms": 0.0, "ready_ms": 0.0, "blocked_ms": 0.0})
-        values["running_ms"] += overlap(switch_in, switch_out, roi)
+        values["running_ms"] += running_ms
         remember(thread, switch_in, switch_out, "running")
         events += 1
-        last_raw, ready_raw = row[times["last"][0]], row[times["ready"][0]]
-        if not last_raw or not ready_raw:
+        if last is None or ready is None:
             incomplete += 1
             continue
-        last, ready = time_value(row, times["last"]), time_value(row, times["ready"])
-        if not last <= ready <= switch_in:
-            raise AnalysisError("Scheduler timestamps must satisfy last_out <= ready <= switch_in")
         previous_state = row[state].strip().lower()
         if previous_state in ("ready", "1", "deferredready", "deferred ready", "7"):
             # A preempted runnable thread is ready for the entire off-CPU span.
@@ -233,7 +243,7 @@ def analyze_precise(path, pid, roi, timestamp_unit=None):
         if ready_ms:
             readying[row[ready_stack] or "<unavailable>"] += ready_ms
     if not events:
-        raise AnalysisError("No target scheduler events")
+        raise AnalysisError("No target scheduler interval evidence inside the requested lifetime/ROI")
     for thread, spans in intervals.items():
         spans.sort()
         for previous, following in zip(spans, spans[1:]):
@@ -246,6 +256,7 @@ def analyze_precise(path, pid, roi, timestamp_unit=None):
             "readying_stacks": ranking(readying, "ready_ms"),
             "incomplete_off_cpu_events": incomplete,
             "limits": ["Times are per-thread; their sum can exceed elapsed wall time.",
+                       "Event count includes only running or known off-CPU intervals intersecting the ROI.",
                        "Blocked time may be normal pacing or synchronization, not necessarily a defect.",
                        "Ready stack belongs to the thread that made the target runnable.",
                        "Missing off-CPU endpoints/states remain unclassified, never zero-filled.",
