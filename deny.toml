@@ -19,6 +19,13 @@ allow = ["Apache-2.0", "ISC", "MIT", "Unicode-3.0"]
 # This does not exempt any third-party dependency or assign the project a license.
 ignore = true
 
+# The optional pinned Tracy client bundles the upstream BSD-3-Clause native
+# client/libbacktrace. Keep this allowance scoped to that reviewed package.
+[[licenses.exceptions]]
+name = "tracy-client-sys"
+version = "=0.30.1"
+allow = ["BSD-3-Clause"]
+
 [bans]
 # Incompatible transitive major versions (currently syn 2 and 3) may coexist.
 # Review these warnings rather than forcing unsupported dependency upgrades.
