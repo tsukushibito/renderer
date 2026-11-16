@@ -29865,5 +29865,504 @@
       "Two-API presentation",
       "Bistro PBR/shadows/tone mapping/Bloom"
     ]
-  }
+  },
+"windowed_presentation": {
+  "issue": "renderer-7ft.2.6",
+  "date_jst": "2026-11-16",
+  "source_commit": "a786508ae156af3863dde8697658c36a6b759c93",
+  "source_hashes": "current-metrics.json#windowed_presentation.source_hashes_sha256",
+  "scope": "native WSI lifecycle fixtures; Graph build/compile/native prepare/record/submit/poll/retire/readback/resultreturn/present/drain; 18changing sources/36presents eachAPI; prepared capacities in raw reports",
+  "diagnostic_cost": "strict is baseline; asynchronous D3D12 InfoQueue String retention can allocate (16calls/1249B initially observed), so shipping is the heap-zero gate; native create/destroy zero is asserted in both",
+  "reports": {
+    "strict": {
+      "vulkan": {
+        "caller": {
+          "native": [0,0,0,0,0,0,0,0,0],
+          "overflowed": false,
+          "rust": [
+            [884,387080],
+            [0,0],
+            [9,1500],
+            [852,43010]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "caller_scope": "synchronous winit/Window Rust work on the isolated fixture thread, with no Renderer Rust workers; native/VMA events are never excluded from the complete normal epoch",
+        "counter_order": {
+          "native": ["object_create","object_destroy","resource_create","resource_destroy","memory_allocate","memory_free","descriptor_allocate","descriptor_free","reset"],
+          "rust": ["allocate","allocate_zeroed","reallocate","deallocate"],
+          "vma_host": ["allocate","reallocate","deallocate"]
+        },
+        "explicitly_collected_old_swapchains_after_normal": 1,
+        "extra_shutdown_accepted_presents": 1,
+        "features": {
+          "development_validation": true,
+          "gpu_profiling": false,
+          "graph_diagnostics": true,
+          "memory_profiling": true,
+          "optimized": true,
+          "vulkan_diagnostics": true
+        },
+        "host_callback_scope": "VMA and driver host requests routed through installed allocation callbacks; request origin is not distinguished",
+        "mode": "diagnostic_baseline",
+        "normal": {
+          "accepted_presents": 36,
+          "changing_inputs": "transform, tint, clear and zero/one/two Invert passes; every source is built and compiled",
+          "extent": [160,112],
+          "max_held_cpu_results": 3,
+          "max_live_readbacks": 6,
+          "max_pending_graphs": 3,
+          "retained_eligible_old_swapchains": 1,
+          "scope": "all Renderer preparation checks, build/compile, submission, GPU/present polling, CPU readback, metadata/result/output return and final present drain",
+          "sources": 18,
+          "verified_readbacks": 18
+        },
+        "normal_caller": {
+          "native": [0,0,0,0,0,0,0,0,0],
+          "overflowed": false,
+          "rust": [
+            [248,5952],
+            [0,0],
+            [0,0],
+            [248,5952]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "normal_process": {
+          "native": [0,0,0,0,0,0,0,0,492],
+          "overflowed": false,
+          "rust": [
+            [248,5952],
+            [0,0],
+            [0,0],
+            [248,5952]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "overall_process": {
+          "native": [174,174,94,94,3,3,771,771,539],
+          "overflowed": false,
+          "rust": [
+            [3681,1560635],
+            [3,1447],
+            [211,16449],
+            [3653,1222410]
+          ],
+          "vma_host": [
+            [224,650386],
+            [0,0],
+            [428,0]
+          ]
+        },
+        "prepared": {
+          "depth_instances_per_extent": 3,
+          "frame_pools": {
+            "initialized_ranges_per_resource": 16,
+            "metadata_slots": 12,
+            "provenance_segments_per_resource": 32,
+            "range_snapshots": 256,
+            "result_slots": 8,
+            "work_slots": 6
+          },
+          "graph": {
+            "accesses": 32,
+            "attachments": 16,
+            "bindings": 0,
+            "dependencies": 16,
+            "draws": 4,
+            "edges": 64,
+            "initial_ranges": 16,
+            "name_bytes": 1024,
+            "passes": 8,
+            "readers": 128,
+            "resources": 8,
+            "segments": 64,
+            "upload_bytes": 256
+          },
+          "graph_slots": 12,
+          "image_extents": [
+            [128,96],
+            [160,112],
+            [176,120],
+            [144,104],
+            [192,128]
+          ],
+          "mesh_graph_slots": 1,
+          "presentation": {
+            "desired_images": 3,
+            "max_frames": 3,
+            "max_retired_swapchains": 2,
+            "vsync_normal": true
+          },
+          "rgba8_instances_per_extent": 15,
+          "runtime": {
+            "execution_slots": 6,
+            "max_shader_bindings": 64,
+            "resource_capacity": 128,
+            "staging_bytes_each": 4194304,
+            "staging_ranges": 256
+          }
+        },
+        "profiled_accepted_presents": 4,
+        "renderer_normal": {
+          "native": [0,0,0,0,0,0,0,0,492],
+          "overflowed": false,
+          "rust": [
+            [0,0],
+            [0,0],
+            [0,0],
+            [0,0]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "renderer_normal_actions": {
+          "native": [0,0,0,0,0,0,0,0,492],
+          "overflowed": false,
+          "rust": [
+            [0,0],
+            [0,0],
+            [0,0],
+            [0,0]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "renderer_setup_change": {
+          "native": [174,23,94,0,3,0,771,0,42],
+          "overflowed": false,
+          "rust": [
+            [2654,1163831],
+            [3,1447],
+            [202,14949],
+            [862,157707]
+          ],
+          "vma_host": [
+            [224,650386],
+            [0,0],
+            [101,0]
+          ]
+        },
+        "renderer_shutdown": {
+          "native": [0,151,0,94,0,3,0,771,5],
+          "overflowed": false,
+          "rust": [
+            [143,9724],
+            [0,0],
+            [0,0],
+            [1939,1021693]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [327,0]
+          ]
+        },
+        "renderer_total": {
+          "native": [174,174,94,94,3,3,771,771,539],
+          "overflowed": false,
+          "rust": [
+            [2797,1173555],
+            [3,1447],
+            [202,14949],
+            [2801,1179400]
+          ],
+          "vma_host": [
+            [224,650386],
+            [0,0],
+            [428,0]
+          ]
+        },
+        "row_semantics": "normal Rust excludes synchronous caller work; normal native/VMA cover the entire epoch, so caller and renderer rows are not disjoint native/VMA totals",
+        "setup_change_accepted_presents": 8,
+        "setup_change_scope": "explicit pools and native working set, residency, warm-up, resize/VSync/suspend/acquire-cancel and their completed owner retirement",
+        "setup_change_sources": 3,
+        "shutdown_scope": "one additional ordinary-builder source retains pending presentation ownership for close; complete native owner teardown",
+        "tracing_filter": "warn",
+        "unobserved": "driver-internal allocation outside installed callbacks; Renderer native requests are counted separately"
+      },
+      "d3d12": {
+        "sources": 18,
+        "presents": 36,
+        "diagnostic_baseline": true,
+        "rust_calls": [6,0,0,0],
+        "rust_bytes": [494,0,0,0],
+        "native": [0,0,0,0,0,0,0,0,114],
+        "vma_calls": [0,0,0],
+        "overflowed": false
+      },
+      "d3d12_final_native": {
+        "warnings": 0,
+        "errors": 0,
+        "corruption": 0,
+        "callback_failures": 0,
+        "teardown_checked": true
+      },
+      "log_sha256": "d2f5e8f11f02eaaf6609c6520268085391cb62feb6441e40d87f14f91fb6f940"
+    },
+    "shipping": {
+      "vulkan": {
+        "caller": {
+          "native": [0,0,0,0,0,0,0,0,0],
+          "overflowed": false,
+          "rust": [
+            [915,387824],
+            [0,0],
+            [9,1500],
+            [883,43754]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "caller_scope": "synchronous winit/Window Rust work on the isolated fixture thread, with no Renderer Rust workers; native/VMA events are never excluded from the complete normal epoch",
+        "counter_order": {
+          "native": ["object_create","object_destroy","resource_create","resource_destroy","memory_allocate","memory_free","descriptor_allocate","descriptor_free","reset"],
+          "rust": ["allocate","allocate_zeroed","reallocate","deallocate"],
+          "vma_host": ["allocate","reallocate","deallocate"]
+        },
+        "explicitly_collected_old_swapchains_after_normal": 1,
+        "extra_shutdown_accepted_presents": 1,
+        "features": {
+          "development_validation": false,
+          "gpu_profiling": false,
+          "graph_diagnostics": false,
+          "memory_profiling": true,
+          "optimized": true,
+          "vulkan_diagnostics": false
+        },
+        "host_callback_scope": "VMA and driver host requests routed through installed allocation callbacks; request origin is not distinguished",
+        "mode": "require_zero",
+        "normal": {
+          "accepted_presents": 36,
+          "changing_inputs": "transform, tint, clear and zero/one/two Invert passes; every source is built and compiled",
+          "extent": [160,112],
+          "max_held_cpu_results": 3,
+          "max_live_readbacks": 6,
+          "max_pending_graphs": 3,
+          "retained_eligible_old_swapchains": 1,
+          "scope": "all Renderer preparation checks, build/compile, submission, GPU/present polling, CPU readback, metadata/result/output return and final present drain",
+          "sources": 18,
+          "verified_readbacks": 18
+        },
+        "normal_caller": {
+          "native": [0,0,0,0,0,0,0,0,0],
+          "overflowed": false,
+          "rust": [
+            [279,6696],
+            [0,0],
+            [0,0],
+            [279,6696]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "normal_process": {
+          "native": [0,0,0,0,0,0,0,0,600],
+          "overflowed": false,
+          "rust": [
+            [279,6696],
+            [0,0],
+            [0,0],
+            [279,6696]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "overall_process": {
+          "native": [173,173,94,94,3,3,771,771,647],
+          "overflowed": false,
+          "rust": [
+            [2789,1453812],
+            [3,1447],
+            [11,1560],
+            [2761,1111267]
+          ],
+          "vma_host": [
+            [130,648144],
+            [0,0],
+            [334,0]
+          ]
+        },
+        "prepared": {
+          "depth_instances_per_extent": 3,
+          "frame_pools": {
+            "initialized_ranges_per_resource": 16,
+            "metadata_slots": 12,
+            "provenance_segments_per_resource": 32,
+            "range_snapshots": 256,
+            "result_slots": 8,
+            "work_slots": 6
+          },
+          "graph": {
+            "accesses": 32,
+            "attachments": 16,
+            "bindings": 0,
+            "dependencies": 16,
+            "draws": 4,
+            "edges": 64,
+            "initial_ranges": 16,
+            "name_bytes": 1024,
+            "passes": 8,
+            "readers": 128,
+            "resources": 8,
+            "segments": 64,
+            "upload_bytes": 256
+          },
+          "graph_slots": 12,
+          "image_extents": [
+            [128,96],
+            [160,112],
+            [176,120],
+            [144,104],
+            [192,128]
+          ],
+          "mesh_graph_slots": 1,
+          "presentation": {
+            "desired_images": 3,
+            "max_frames": 3,
+            "max_retired_swapchains": 2,
+            "vsync_normal": true
+          },
+          "rgba8_instances_per_extent": 15,
+          "runtime": {
+            "execution_slots": 6,
+            "max_shader_bindings": 64,
+            "resource_capacity": 128,
+            "staging_bytes_each": 4194304,
+            "staging_ranges": 256
+          }
+        },
+        "profiled_accepted_presents": 4,
+        "renderer_normal": {
+          "native": [0,0,0,0,0,0,0,0,600],
+          "overflowed": false,
+          "rust": [
+            [0,0],
+            [0,0],
+            [0,0],
+            [0,0]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "renderer_normal_actions": {
+          "native": [0,0,0,0,0,0,0,0,600],
+          "overflowed": false,
+          "rust": [
+            [0,0],
+            [0,0],
+            [0,0],
+            [0,0]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [0,0]
+          ]
+        },
+        "renderer_setup_change": {
+          "native": [173,23,94,0,3,0,771,0,42],
+          "overflowed": false,
+          "rust": [
+            [1874,1065988],
+            [3,1447],
+            [2,60],
+            [233,119419]
+          ],
+          "vma_host": [
+            [130,648144],
+            [0,0],
+            [7,0]
+          ]
+        },
+        "renderer_shutdown": {
+          "native": [0,150,0,94,0,3,0,771,5],
+          "overflowed": false,
+          "rust": [
+            [0,0],
+            [0,0],
+            [0,0],
+            [1645,948094]
+          ],
+          "vma_host": [
+            [0,0],
+            [0,0],
+            [327,0]
+          ]
+        },
+        "renderer_total": {
+          "native": [173,173,94,94,3,3,771,771,647],
+          "overflowed": false,
+          "rust": [
+            [1874,1065988],
+            [3,1447],
+            [2,60],
+            [1878,1067513]
+          ],
+          "vma_host": [
+            [130,648144],
+            [0,0],
+            [334,0]
+          ]
+        },
+        "row_semantics": "normal Rust excludes synchronous caller work; normal native/VMA cover the entire epoch, so caller and renderer rows are not disjoint native/VMA totals",
+        "setup_change_accepted_presents": 8,
+        "setup_change_scope": "explicit pools and native working set, residency, warm-up, resize/VSync/suspend/acquire-cancel and their completed owner retirement",
+        "setup_change_sources": 3,
+        "shutdown_scope": "one additional ordinary-builder source retains pending presentation ownership for close; complete native owner teardown",
+        "tracing_filter": "warn",
+        "unobserved": "driver-internal allocation outside installed callbacks; Renderer native requests are counted separately"
+      },
+      "d3d12": {
+        "sources": 18,
+        "presents": 36,
+        "diagnostic_baseline": false,
+        "rust_calls": [0,0,0,0],
+        "rust_bytes": [0,0,0,0],
+        "native": [0,0,0,0,0,0,0,0,182],
+        "vma_calls": [0,0,0],
+        "overflowed": false
+      },
+      "d3d12_final_native": {
+        "warnings": 0,
+        "errors": 0,
+        "corruption": 0,
+        "callback_failures": 0,
+        "teardown_checked": false
+      },
+      "log_sha256": "e6d7e61bdaab897f6edbb46eed951ee98d5187a930ca8c32901cd04a2426b9c5"
+    }
+  },
+  "limits": ["Real OS key/mouse delivery to winit was not exercised. Computer Use app access was not approved; only application-local input/controller verification is available.","Presentation acceptance, Vulkan maintenance fence and D3D12 queue marker do not establish physical display completion. PresentMon/scanout latency not measured.","1ms explicit event-loop retry scheduling remains active; this is a small real-window baseline, not a maximum-FPS or Bistro benchmark.","No fixed clock/affinity/power plan, other GPU/driver, Linux real GPU, actual OOM/device loss, HDR output, general scaling, Bistro PBR/shadows/tone mapping/Bloom.","Native shipping Disabled is a request; external layer/driver injection absence not proven. Driver/OS allocations outside Renderer hooks are unobserved.","Vulkan TOP_OF_PIPE/BOTTOM_OF_PIPE and D3D12 BOP timestamps retain their native interval semantics; no shader occupancy or universal API ranking claim."]
+}
 }

@@ -846,7 +846,11 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed -- --api d3d12 --tour --verify --frames 24
 ```
 
-`--smoke`は固定巡回、連続resize、VSync往復、最小化・復帰、pending所有を残した終了を有限回で実行します。
+`--smoke`は最初の5 frameで共通入力controllerへ移動・相対mouse・右ボタン解放・focus lossを再生し、
+そのcameraを実際のGraphへ渡します。移動／視点変更によるreadback digest変化と、
+右ボタン解放後の移動継続・focus loss後の停止を`input_replay`欄で確認します。
+続いて固定巡回、連続resize、VSync往復、最小化・復帰、pending所有を残した終了を有限回で実行します。
+入力再生中は周囲のdesktop入力をcontrollerへ混在させません。OSへの入力注入やWindowsからwinitへの配送を検証する試験ではありません。
 `--verify`はsource画像のreadback、独立したpalette／geometry条件とframeごとのdigestを記録します。
 両APIへ同じextent・camera番号・Graph構成を渡して比較し、画面上のscanoutの全byte照合とは区別します。
 受入時だけreadbackを追加するため、通常利用や時間測定へ無条件のreadbackを強制しません。
@@ -876,6 +880,7 @@ cargo test --locked --release -p renderer --lib --no-default-features --features
 D3D12の独立した実Window試験も、同じstrict／shippingの区別で実行します。
 resize／VSync／最小化復帰／取得後cancel／pending終了と、18 source・36 presentの全lifecycleを扱います。
 `memory-profiling`付きでは通常窓のRust確保・再確保・解放とnative作成・破棄を検査します。
+各Window試験は独立processで起動します。winitは一processで複数event loopを作成できないため、両APIの試験を一つのfilterへまとめません。
 
 ```powershell
 cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,presentation,development-validation,graph-diagnostics,memory-profiling d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory -- --ignored --nocapture --test-threads=1

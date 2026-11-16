@@ -42,7 +42,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 検証データ | [Bistro描画条件](../tools/bistro/conditions.json)・[設定検証と実行記録](verification/bistro-conditions.json)・[CPUプレビュー](verification/bistro-conditions-preview.png) | 固定7視点・巡回・sun/IBL/露出、照明候補、二API比較と性能校正の条件 |
 | 検証データ | [基盤比較の実機小試作](verification/foundation-comparison.json) | 固定wgpu、二APIのowned Raster/Compute、期待byte、検証flagsの負の対照、source hashと未確認範囲 |
 | 素材 | [Bistro LFS素材](../assets/bistro/README.md)・[manifest](../assets/bistro/manifest.json) | 公式原本・検証済み屋外glTF・環境HDR、取得・ライセンスと全ファイルhash |
-| 検証データ | [現在のフレーム計測](verification/current-metrics.json) | 固定ソースの環境、各runの統計と生sample |
+| 検証データ | [現在のフレーム計測](verification/current-metrics.json) | headless／二API Windows表示の環境、CPU／GPU・VSync別統計と生sample |
 | 検証データ | [通常フレームのメモリ計測](verification/frame-memory.json) | CPU確保/再確保/解放とnativeイベントの観測範囲、変動フレームの基準値、ゼロ目標の未達状況 |
 | 検証データ | [RenderGraph比較計測](verification/rendergraph-metrics.json) | 資源cache、標準draw batchの共有／異なるmesh比較、統計・生sample、RGBA照合 |
 | 検証データ | [エンジン負荷の計測](verification/engine-workloads-metrics.json) | 大メッシュ・複数Viewの受入、製品／検証構成の比較、CPU保持量probe・生sample |

@@ -5,6 +5,62 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 二APIのWindows表示・自由カメラ・通常frame計測
+
+`renderer-7ft.2.6`。共通の`PresentationConfig`／`PresentOutcome`とアプリ所有のevent loopを使い、
+同じ公開標準forwardまたは独自GraphをVulkan WSI／D3D12 DXGIへ接続した。
+`presentation`はAPI選択と独立し、D3D12単独の表示にもVulkanを要求しない。
+契約と選択理由は[表示の独立性](../design/implementation-policy.md#122-presentationの独立性)、
+再実行は[Windows表示](../guides/development.md#windows表示)を参照する。
+
+Windows x64、Rust 1.99.0、RTX 3060／driver 610.88、同一LUID。
+GPU作業は逐次実行し、時間計測の最終runはビルド・他の検証を並行させずに実行した。
+
+| 確認 | 結果 |
+|---|---|
+| 同じ入力・二構成 | 標準forward／独自Raster＋標準outputを、両API・strict／shippingで各24 frame実行。全画素のdigest、既知palette、左上clear画素、可視geometryを照合し、8経路が完全一致 |
+| 自由camera入力 | 共通controllerへ5段の移動・相対mouse・右ボタン解放・focus lossを再生し、変更したcameraで実GPU描画。両API・両構成で移動／視点変更のdigest変化、mouse解放後の移動継続、focus loss後の停止を確認 |
+| Window寿命 | 両API・両構成の24 frame smokeで3回resize、VSync往復、最小化・復帰、最終present直後の終了を実行。native fixtureでは取得後cancel、再present、未回収のpresent所有、runtime先行破棄と最終closeを確認 |
+| strict／shipping | release＋Core/SyncVal／Debug Layer＋GBVと、追加検証・専用診断をコンパイル除外したnative Disabledを独立processで実行。strictは最終native解放後もwarning／error／corruption／callback失敗ゼロ |
+| 通常frameメモリ | 各API・各構成の独立WSI fixtureで18変動source・36 present。shippingはbuild／compileからGPU・present退役、readback、結果・slot返却までRust alloc／alloc_zeroed／realloc／dealloc、VMA host、native作成／破棄が全0。resetは別計上 |
+| 時間計測 | 640×480・3 draw、API×VSync ON/OFF×各3 process。24 warm-up＋96計測frameを各runで実行。CPU build／compile／prepare／record／submit／poll／retire／結果返却、Graph GPU、表示用GPU、acquire／present API、retryとframe間隔を別記録。計測runにreadbackとmemory counterを含めない |
+| 既存回帰・品質 | 独自Raster／一般資源履歴／混合Graphのstrict・shipping各3件、D3D12 query寿命のstrict・shipping各1件が成功。release CPU全feature334件、二API表示＋memory製品321件、CPUのみ166件、windowed例10件が成功。全target Clippy、warnings拒否Rustdoc、fmt、固定bindings／既存shader再生成照合も成功 |
+
+D3D12は一つのflip-model Swapchainを維持し、当該PresenterのGPU使用とcommand参照が戻った後、
+明示変更境界で`ResizeBuffers`を行う。Vulkanはmaintenance1 present fenceと通常GPU参照の両方を待つ。
+両APIともゼロextentを保留し、通常の不足・未準備時は暗黙waitや増設を行わない。
+表示拒否後も受理済みGPUのsource・命令・descriptorを保持し、別出力への切替を利用側へ制限しない。
+内容revisionは読み取り表示で変更せず、実資源とsnapshotを投入境界で照合する。
+
+計測は明示opt-inとし、query・結果領域を固定容量で準備する。
+無効化は以後の投入だけに適用し、pending sampleは完了・消費まで保持する。
+表示sampleはGPU投入ごとに一件で、表示要求が拒否された投入も含む。accepted frameとの一対一対応は主張しない。
+外側CPU合計とnative phaseは重複するため加算しない。測定末尾も通常の非blocking poll・結果返却を完了してからcloseする。
+明示capacity blocking waitは各runで0、event loopのretry間隔1msはframe間隔へ含まれる。
+
+最終3 runの中央値は、VSync OFFの要求間隔がVulkan **1.531–1.543ms**、D3D12 **1.531–1.553ms**、
+ONはそれぞれ **15.146–16.725ms**／**16.634–16.802ms**。
+Graph GPU区間はOFFで **6.400–6.464µs**／**9.216µs**、ONで **7.360–7.424µs**／**9.216µs**。
+小さい表示負荷と明示retryの基準値であり、最大FPS、shader占有時間、Bistro性能、APIの普遍的な優劣には読み替えない。
+VulkanのTOP_OF_PIPE／BOTTOM_OF_PIPEとD3D12のBOPというnative timestampの違いも保持する。
+raw sample・中央値・nearest-rank p95・source hashは[current-metrics.jsonの`windowed_presentation`](current-metrics.json)、
+メモリの全epochと境界は[frame-memory.jsonの同名欄](frame-memory.json)に記録する。
+
+strictではD3D12 InfoQueueのinfo文字列保持が通常epochへ非同期に到着する場合があり、
+初回は16 alloc／1249 byteを観測した。診断baselineとして別記録し、製品のゼロ保証を診断費用で代替しない。
+時間の初期試行では他の検証との並行実行によるばらつきもあったため、上表は逐次測定した最終3 runを用いた。
+Window受入はwinitの一process一event loop制約に従い、APIごとの独立processで実行する。
+
+一回のVulkan shipping WSI試験は3分以上停滞して停止した。段階ログを加えた直後の試験と、
+最終の独立3 processは各約1秒で成功し、原因と停滞箇所は特定できていない。
+追加した計測の有限性・lock範囲は監査したが、native／winit内部の停止かどうかも未確定である。
+未再現の留保として`renderer-1ji`に記録し、既存のstartup crash課題と同一原因とは扱わない。
+
+OSからwinitへの実キー／マウス配送は未検証で、Computer Useによる追加確認はツールのアプリ利用が未承認のため未実施。
+present受理・maintenance fence・D3D12 queue markerを実画面の表示完了とせず、PresentMon等のscanout測定も行っていない。
+他GPU／driver、Linux実GPU、実OOM／Device loss、一般拡縮・HDR表示、Bistro PBR／影／tone mapping／Bloomは未実行。
+新しいvendor最適化、通常CIへの実GPU必須化や時間閾値は追加していない。
+
 ## 利用側Raster shaderとblend・depthの二API実行
 
 `renderer-7ft.2.8`。staticなtrusted Raster descriptorから頂点属性・inline定数・
@@ -38,10 +94,10 @@ anchorはregistryに保持して通常の結果Dropで解放せず、idle公開�
 shader／descriptor／資源の所有、GPU完了、native失敗処理を検証cfgへ移していない。
 
 新しいGPU時間比較、他GPU／driver、Linux実GPU、実OOM／Device loss、MRT／一般mip、
-Bistro PBR／影／tone mapping／Bloom、二API表示は未実行である。
+Bistro PBR／影／tone mapping／Bloomは、このRaster単体の受入では未実行である。
 Vulkanの一般推奨に沿ってpipeline／descriptorを明示準備し、通常frameのnative作成を避けた。
 新たなvendor最適化や測定なしの性能優位は主張せず、必須の実GPU CIや時間閾値も追加していない。
-次の表示・自由camera・通常frame時間計測は`renderer-7ft.2.6`へ残す。
+表示・自由camera・通常frame時間計測の現在の結果は、冒頭の`renderer-7ft.2.6`を参照する。
 
 ## 一般資源のimport・更新・履歴と退役
 
@@ -73,7 +129,7 @@ shippingのゼロ時間Fence待機はVulkan各57回、D3D12各55〜57回のtimeo
 待機失敗／Signal失敗の所有は既存CPU注入、部分native作成失敗とpending退役は既存実GPU回帰を併用する。
 実OOM／Device loss/removalは発生させていない。shippingの診断件数0は外部Layer注入の不存在を証明しない。
 D3D12は既存COMMON復帰を維持し、新たなvendor最適化・未計測の性能効果やVulkan/VMA推奨の例外は設けていない。
-一般Raster shader・blend/depthは`.2.8`、二API表示・通常frame時間は`.2.6`へ残す。
+一般Raster shader・blend/depthの`.2.8`と二API表示・通常frame時間の`.2.6`は、それぞれの現在の受入記録を参照する。
 
 レビュー修正`renderer-7ft.2.5.1`で、D3D12も登録資源をdeleteせずworking setを変更できるようにした。
 全実行・結果・export付きsubmission／buffer snapshotの返却を確認し、新poolの準備成功後に
