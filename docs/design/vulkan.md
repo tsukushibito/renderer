@@ -171,13 +171,13 @@ VMAのmap／unmap呼び出しを、毎回必ずnative mappingを作り直す処�
 
 ## 画像とcopyの範囲
 
-論理Graphは`ImageDesc::mip_levels`/`array_layers`と単一subresource ViewをCPUで計画できるが、
-このbackendのnative画像は各1だけを扱う。owned attachment passとRasterは、
+論理Graphは`ImageDesc::mip_levels`/`array_layers`とsubresource ViewをCPUで計画する。
+nativeは2D・layer/sample各1を扱い、B2のsampled入力とwhole-chain uploadは複数mipを許可する。
+owned attachment passとRasterはmip数1の画像で、
 color一個（RGBA8/RGBA16F）とoptional D32、またはdepth-onlyをDynamic Renderingへlowerする。
-Load/Clear/DiscardとStore/Discardを保持する。MRT等の未対応なlive構成は物理取得前、
-multi-subresource資源はworking-set準備入口とcache lookup前にも拒否する。
-cache keyがbase extent/formatである現実装で、multi画像を既存1mip画像へ誤再利用しないための能力境界である。
-culledな未対応枝は取得しない。任意shaderやnative mip/layer実行は未対応である。
+Load/Clear/DiscardとStore/Discardを保持する。MRT、複数layer、multi-mip画像のattachment/storage等、
+未対応なlive構成は記録・投入前に拒否する。cache keyはbase extent/formatとmip数を区別する。
+culledな未対応枝は取得しない。未信頼shaderや一般的なarray/MSAA実行は扱わない。
 
 既存の転送試験用`VulkanImage`はRGBA8_UNORM、2D、optimal tiling、mip・layer・sample各1、
 transfer source／destination、EXCLUSIVE共有、初期layout UNDEFINEDに限定する。
@@ -198,10 +198,21 @@ GraphのRGBA8_UNORM画像はtransfer source／destination、storage、sampled、
 固定usage組を持つ。RGBA16Fはtransfer source／destination、storage、sampled、color attachment、
 D32_SFLOATはdepth attachment、sampled、transfer source／destinationを持つ。
 public GraphのD32 uploadは受け付けず、ここでのusageは実装した同期・転送と再利用の能力条件を表す。
-いずれも2D・optimal tiling・mip／layer／sample各1とし、実際のusage組の能力とextent、
+`Rgba8Srgb`は`R8G8B8A8_SRGB`のsampledとtransfer source／destinationを使い、
+storage/color attachment用途へは受け付けない。色のdecodeはfilterの前にnativeで行い、alphaは変換しない。
+いずれも2D・optimal tiling・layer／sample各1とし、実際のusage組の能力とextent/mip数、
 framebuffer／viewport上限を照会する。Graph画像はallocationとImageViewを一緒に保持する。
 固定usageはexport後に対応操作へ再importできるようにするためであり、
 usage削減による最適化や、未確認GPUでの対応を主張しない。
+
+B2のmip chain uploadはmip0から順のpacked texel列を受け、各levelのextent・byte offsetを
+`VkBufferImageCopy`へ写像する。全chainのbyte数を照合し、copyした全mipを初期化する。
+画像copy/readbackはmip数1に限定する。画像単位のstate/layoutを保持し、barrierの範囲も全chainとする。
+部分native更新やsubresourceごとの独立状態を実装したという意味ではない。
+sampled Viewは準備時に全chainと各単一mipを作成し、任意のbaseのcount1、またはbase0の全chainを選べる。
+一部だけの複数mip範囲は未対応として拒否し、Viewを作るnative呼出しを通常frameへ遅延しない。
+Graphは選択範囲の全mipをread footprintへ含め、未初期化levelをfilter設定で隠さない。
+linear filteringに必要な実format featureも確認する。
 
 初回のnative画像layout遷移には、先行COPYを待つexecution依存を置く。
 未使用画像のUNDEFINEDからの遷移に、Vulkan仕様がこの依存を一律要求するわけではない。
@@ -340,7 +351,8 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
 moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
 `.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
-他format/mip/layer/filterと未信頼shaderの取込は対応範囲へ含めない。
+そのB1 fixtureの初期範囲に、他format/mip/layer/filterと未信頼shaderの取込は含めない。
+B2で加えたsRGB・mip chain・linear repeatの現行契約は[画像とcopyの範囲](#画像とcopyの範囲)に従う。
 `Graph::dispatch`は管理下buffer・sampled assetの論理CPU計画を接続する。各drawの型付きbindingと共に、manifest由来のVertex/Fragment/Compute stageと実footprintを保持する。`textured_mesh()`のVS UniformとFS sampled画像/samplerはowned Rasterのnative PSOへ接続する。
 owned dispatchは論理Graphの資源とbindingを、明示準備したCompute pipeline/descriptorへ具体化する。
 Graph外のnative Bindingsをimportする経路とは別であり、既存の実行枠・資源lease・Fence退役を使う。
@@ -420,7 +432,7 @@ consumer出力だけを最後にcopy/readbackする。間のCPU待機やreadback
 asset identity確認とproducer/canonical slotの試験用metadataは`cfg(test)`に限定し、
 製品のcreation契約と一般Graphの実行計画を混同しない。
 
-`create_managed_image(ImageDescriptor)`はRGBA8_UNORM、RGBA16FまたはD32_FLOATの2D、mip/layer/sample各1、
+`create_managed_image(ImageDescriptor)`はRGBA8_UNORM/sRGB、RGBA16FまたはD32_FLOATの2D、layer/sample各1、
 optimal tilingで作る。色は`SAMPLED|TRANSFER_DST`、D32は`DEPTH_STENCIL_ATTACHMENT|SAMPLED`に固定する。Graph画像のstorage/color attachment等の
 固定usageやframebuffer/viewport上限を持ち込まず、実際のformat/type/tiling/usage/flagsと
 extent/mip/layer/sample対応を作成境界で照会する。packed pixel量をVMA allocation sizeへ代用しない。
@@ -428,11 +440,13 @@ extent/mip/layer/sample対応を作成境界で照会する。packed pixel量を
 `preferred_depth_clear: Option<f32>`はD32の後続attachment clearに予定する値であり、
 内容初期化や後続clear値の制限を意味しない。`None`も許可し、色への`Some`、非有限値、
 [0,1]外、subnormalは作成境界で拒否する。この不変metadataをView/Imageの所有とともに保持する。
-`create_image_view`はfull mip0/layer0範囲、ownerと`ImageViewUsage`を検査し、ViewがImageを保持する。
+`ImageDescriptor::mip_levels`は非ゼロでextentから許される段数以下とする。
+`create_image_view`は選択する連続mip範囲、ownerと`ImageViewUsage`を検査し、ViewがImageを保持する。
 `Sampled`が既定で、`DepthAttachment`はD32だけに許可する。aspectはImageのformatからcolor/depthへ導出し、
-呼出し側に別のaspect指定を要求しない。sampled bindingには`Sampled` Viewだけを受け付ける。
+呼出し側に別のaspect指定を要求しない。depth attachment Viewのmip countは1、sampled bindingには`Sampled` Viewだけを受け付ける。
 `create_sampler(NearestClamp)`はnormalized coordinate、nearest min/mag/mip、clamp-to-edge、
-LOD0、compare/anisotropyなしで作る。Device全体の生存sampler数をnative作成前に予約し、
+LOD0、`LinearRepeat`はlinear min/mag/mip、repeat、選択View内のLOD範囲を使い、いずれもcompare/anisotropyなしで作る。
+Graphのsampler operandも実際のnative samplerへ対応させる。Device全体の生存sampler数をnative作成前に予約し、
 失敗時またはnative破棄後に返す。既存固定Graph/表示samplerも同じ上限契約を使う。
 
 `Binding`のslotと`BindingResource`のbuffer/View/sampler参照へ入力をまとめ、旧buffer専用

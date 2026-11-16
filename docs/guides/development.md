@@ -19,6 +19,7 @@
 | WindowsのCPUサンプリング・待機分析 | Python 3.11以降、WPR/WPA exporter/xperf、行解決用LLVM、収集時の管理者権限。[CPUプロファイル手順](tooling.md#cpu-profiling)を参照 |
 | 課題管理 | Beads v1.3.4。[導入・同期手順](../../.beads/README.md)を参照 |
 | Bistro素材・比較画像の共有 | Git LFS。[素材一覧とライセンス](../../assets/bistro/README.md)を参照 |
+| Bistroのruntime cook | Python/NumPy/Pillow、Clang。固定MikkTSpaceのoffline helperをビルドする。Rustの通常ビルド・描画にはClang不要 |
 
 [rust-toolchain.toml](../../rust-toolchain.toml)がRust・rustfmt・clippyを固定します。
 初回のrustupやCargoによる取得にはネットワーク接続が必要です。
@@ -230,6 +231,121 @@ Renderer追加検証・専用診断をコンパイル除外しnative検証を無
 画像閾値は既知の誤りを検出できる条件から受入前に固定し、性能予算は同条件の実測から決める。
 記録先は[現在の検証状況](../verification/current.md)、実GPUの未完了追跡はB2/B3/B4/B5の各実装課題を使う。
 
+<a id="bistro-pbr"></a>
+
+## Bistroのruntime cook・Forward PBR・計測
+
+`renderer-7ft.3.1`／`.3.2`は、利用側で素材をcookして読み込み、同じ公開Graphとtrusted Rasterを
+Vulkan/D3D12へ接続する。Renderer本体へModelの読込やPBR固有のeffect列挙を追加しない。
+[形式・保証・対応範囲](../design/implementation-policy.md#bistro-runtime-cook)、
+[実行済みの検証と計測](../verification/current.md#bistro-pbr)も参照する。
+
+### 実行用データのcook
+
+前節のLFS素材を取得し、Python依存を導入してから実行する。
+`mikk.py`はvendored MikkTSpace commit `3e895b49d05ea07e4c2133156cfa94369e19e409`と小さなC bridgeを
+Clangで共有ライブラリへビルドし、source/libraryのhashとcompiler版・flagsを`build.json`へ残す。
+WindowsでClangがPATHにない場合は`--compiler`で実行ファイルを明示できる。
+
+```powershell
+python -m pip install -r tools/bistro/requirements.txt
+python -B tools/bistro/mikk.py .tools/bistro-pbr/mikk
+python -B tools/bistro/cook.py assets/bistro/converted/BistroExterior.gltf .tools/bistro-pbr/cooked --mikk-library .tools/bistro-pbr/mikk/bistro_mikk.dll --source-zip assets/bistro/source/Bistro_v5_2.zip
+```
+
+Linuxのhelper名は`libbistro_mikk.so`である。出力先は新規または空directoryを指定する。
+失敗したcookの部分出力を成功として再利用せず、原本・検証済みglTF/PNGを上書きしない。
+生成物は`manifest.json`、`vertices.bin`、`indices.bin`と画像ごとのpacked mip streamで、`.tools/`に保持する。
+manifestはsource、変換recipe、Mikk source、全mesh/node/primitive/material/texture対応、transform、
+各streamの長さ/hashと接線fallback等の件数を記録する。
+
+全1,296 mesh・132材質・405画像を保持する。元DDSの全3,529 mipを復号し、baseを既存PNGと照合する。
+normalは各mipでBC5の正Z復元と緑成分反転を行い、色画像とdata画像を区別する。
+1×1 normalのDDS headerにあるmip数0は有効1段として扱う。
+供給済みmipを使い、PNG baseからのmip生成とは扱わない。
+RGBA8画像streamの合計は5,011,178,404 byteで、cook再現性比較には別の出力先も必要になる。
+packed byte量、native allocation量、CPU保持量は別々に確認する。
+
+接線は正しいnormalとUVからMikkTSpaceで生成する。退化UV/geometryとfloat32角度重みのcollapseを
+別に数え、接線が得られないcornerでは有効なhandednessを保って決定的な直交fallbackを使う。
+world transformを反映したposition/normal/tangent、handednessと反射時のwindingを照合する。
+2つのalpha0材質も元値・画像・geometryを保持する。不透明化をcookへ埋め込まない。
+同じコマンドを別directoryへ実行し、manifestと全streamのhashを比較して再生成の一致を確認する。
+小fixtureの契約回帰は`python -B -m unittest discover -s tools/bistro -p 'test_*.py'`で実行する。
+
+### 同じ描画例を二APIで実行する
+
+小fixtureはLFS素材やcook生成物を要求しない。Vulkan実行にはVulkan 1.3 runtime、D3D12にはWindowsの実GPUを使う。
+native検証を要求する受入では`development-validation`を付け、対応するLayer／Graphics Toolsを用意する。
+通常releaseの測定では追加検証・専用診断を含めず、別runで内容を照合する。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-vulkan-strict
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api d3d12 --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-d3d12-strict
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example bistro -- --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-vulkan
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example bistro -- --api d3d12 --manifest .tools/bistro-pbr/cooked/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-d3d12
+```
+
+`--manifest`と`--fixture`は入力の選択である。`--view`には`conditions.json`の固定視点名、または`route`を使う。
+`route`は1,800 frame周期でcameraを補間し、測定窓はwarm-upと独立にroute frame0から始まる。
+`--frames`は測定frame数、`--warmup`はその前のframe数、`--inflight`は1〜4の同時投入上限であり、
+実効設定をreportへ残す。`--gpu-timing`は既定offのGPU timestampを有効にする。
+`--alpha-only`は元alpha0材質のgeometryだけを診断し、`--alpha-override opaque`は
+そのcolor/depth被覆が非ゼロになることを確かめる感度確認に使う。
+上記の短いrunはB2の確認・計測例であり、前節のB5最終巡回受入を代替しない。
+
+各runは`report.json`と、測定後に別途描いた診断frameのHDR／SDR／depthを保存する。
+診断は指定したviewを使い、`route`ではframe0を描く。最終測定frameそのもののreadbackではない。
+HDRはlittle-endian RGBA16F、SDRはRGBA8、depthはlittle-endian FP32で、
+寸法・format・pathはreportの`captures`にある。capture/readbackは測定窓の外に置く。
+`--capture-all-views`は同じ常駐assetを使い、追加で全7固定視点を`views/<view>/report.json`へ出力する。
+これらは`capture_only: true`／`measurement: null`の診断であり、巡回全frameのcaptureではない。
+この例はoffscreenの材質描画であり、Windows表示・VSync待ちや操作の受入とは区別する。
+B2はGGXのsun＋明示した一定ambientを使い、線形RGBA16FでblendしてからclampとsRGB OETFを一度適用する。
+IBL、影、固定EV/PBR Neutral、Bloom、AAは後続B3/B4の対象である。
+
+### 画像比較と性能値の読み方
+
+同API反復と二API差は別に比較する。比較profileとそのhashを受入前に固定し、
+NaN/Inf・寸法違い・欠損出力を拒否する。輪郭を一括除外せず全画素を数え、
+全量の数値比較に加えて材質fixtureと実alpha0のcolor/depth被覆、強制不透明化への感度を確認する。
+比較profile、実行コマンドと結果は[現行検証](../verification/current.md#bistro-pbr)へ記録する。
+
+```powershell
+python -B tools/bistro/compare_runtime.py .tools/bistro-pbr/fixture-vulkan-strict/report.json .tools/bistro-pbr/fixture-d3d12-strict/report.json --profile fixture --output .tools/bistro-pbr/fixture-comparison.json
+python -B tools/bistro/compare_runtime.py .tools/bistro-pbr/street-vulkan/report.json .tools/bistro-pbr/street-d3d12/report.json --profile scene --output .tools/bistro-pbr/street-comparison.json
+```
+
+`repeat`は同API反復のbit一致、`fixture`は小材質、`scene`は全景用の数値許容差を使う。
+名前付き領域の追加検査には`--regions`、既知の誤りの検出には`--expect-different`を使う。
+診断で意図して変えるidentityは`--identity-changes`へ変更前後の値を明示する。
+全体の誤差画素率だけで、小さな材質やalphaの欠落を受け入れない。
+
+通常性能はETW収集なしのreleaseで、同じEXE・入力・view・解像度・in-flight数を用い、
+各APIを交互の順序で独立3 process以上測る。測定中にcook・build・他のGPU負荷を並行させない。
+読込/hash照合、upload、Program/pipelineと容量の準備は初期化費用として定常描画から分ける。
+定常窓にはGraph構築/compile、prepare/record/submit、poll/retireと結果返却を含める。
+process/main threadのOS charged CPU、各phaseのwall elapsed、GPU timestampとframe時間は別の量である。
+複数in-flightの測定窓wall/frameはthroughputの費用であり、一frameの投入から完了までのlatencyではない。
+p50/p95は範囲が明示されたframe sampleから算出し、run平均の分布と混同しない。
+GPU timestampの費用はoff/onで比較し、トレースや厳格native検証の計装付き時間を通常性能へ混ぜない。
+この例の`--gpu-timing`はnative詳細CPU timerも有効にするため、off/on差は両方を含む観測として扱う。
+off時の未収集native時間を、処理が無費用だったという意味の0へ解釈しない。
+headless転送負荷で得たAPI差を、PBRのCPU/GPU費用や画面表示FPSへ換算しない。
+
+Windowsでは既存の[build archive](tooling.md#cpu-profiling)でcleanなreleaseのEXE/PDB/source identityを保存し、
+計測driverへ渡せる。buildは測定開始前に完了させ、出力先は新規directoryとする。
+
+```powershell
+python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --output .tools/bistro-pbr/release-build
+python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 60 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
+python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 60 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
+```
+
+driverはAPIとGPU query off/onを交互に独立3回ずつ実行し、各reportと内容一致、実効設定、
+計測窓、終了結果を確認する。全process時間にはロード・capture・終了も含まれるため、
+測定窓のRenderer CPU/frame費用へ加算しない。raw画像はローカルに残し、共有する集計へ画像本体を埋め込まない。
+
 ## ビルド・品質確認
 
 Vulkanの同期・寿命・資源更新・機能導入のレビューには
@@ -343,8 +459,8 @@ cargo test --locked -p renderer --example graph_composition
 `renderer-7ft.2.1.2`の公開入口は`program::ManagedProgram::uniform_readback()`と
 両runtimeの`create_program`、`create_managed_buffer`、`create_bindings`である。
 `.2.1.4`は`ManagedProgram::sampled_readback()`と、`create_managed_image`、
-`create_image_view`、`create_sampler`を加える。RGBA8_UNORM 2Dのmip/layer/sampleは各1、
-Viewはfull color範囲、Samplerは`NearestClamp`に限定する。
+`create_image_view`、`create_sampler`を加える。このB1 fixtureはRGBA8_UNORM 2Dのmip/layer/sample各1、
+full color View、`NearestClamp`で確認する。
 `.2.1.5`は`ImageFormat::Rgba16Float`と`ManagedProgram::sampled_float_readback()`を加える。
 同じ2D/full View/nearest samplerでRGBA16FをFP32としてsampleし、全RGBAをbit列で返す。
 深度画像には共通の`renderer::ImageFormat::Depth32Float`と`ImageViewDescriptor.usage`を使います。
@@ -360,7 +476,9 @@ Storageの版/範囲は保持するが本文はGPU更新可能で、作成直後
 binding集合は全slotを満たす必要があり、入力順は自由で、成功後はProgram/資源/範囲を所有する。
 `Binding`はslotと`BindingResource::{Buffer, ImageView, Sampler}`を持つ。
 画像の作成/参照保持は内容初期化を意味せず、作成時の暗黙upload/submit/waitはない。
-一般Graph dispatch/画像uploadと他format/mip/layer/filter、comparison sampler/PCFは後続へ残す。
+このfixtureの範囲と、一般Graphの実行・B2のsRGB/mip chain/linear repeat対応は区別する。
+現行の[画像契約](../design/rendergraph.md#画像subresourceとowned-attachment配列)と
+[Bistro手順](#bistro-pbr)を参照する。comparison sampler/PCFは後続へ残す。
 
 SDKなしのABI契約回帰は次を使う。生成条件を更新した場合は[shader再生成](tooling.md)も実行する。
 
@@ -450,7 +568,10 @@ feature統合後の実構成を確認し、
 
 通常frameでは準備済み容量を再利用します。Graphの上限は`GraphCapacity`、
 Vulkanのnative資源・実行枠・stagingは`RuntimeConfig`と`FrameCapacity`、
-D3D12はRuntime作成時の`D3D12FrameCapacity`と明示した画像／Program working setで指定します。
+D3D12は`D3D12FrameCapacity`とbuffer／画像／Program working setで指定します。
+大きさの異なる常駐bufferには`D3D12Runtime::new_with_working_set`と`D3D12BufferClass { size, count }`を使います。
+buffer/画像classのcountはglobalな物理準備数で、execution数による自動乗算はありません。
+`capacity.buffers`は各executionのlogical buffer operand数、`buffer_bytes`は最大logical sizeです。
 同時保持数には記録中・GPU実行中だけでなく、未読CPU結果、export、import snapshotも含めます。
 余裕を増やす操作は初期化・ロード・resize等の変更境界で行い、通常のsubmitに増設やwaitを隠しません。
 

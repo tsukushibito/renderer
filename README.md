@@ -11,7 +11,9 @@ indexed meshと深度、利用側shaderによるRaster/Compute、import/export�
 
 標準構成は`standard::graphs`、部分交換は`standard::passes`、独自構成は`graph`を使います。
 いずれも同じGraphの同期・寿命・不要パス除去を通り、標準構成の使用は必須ではありません。
-現在の標準forwardはunlit描画で、BistroのPBR・影・tone mapping・Bloomは開発中です。
+現在の標準forwardはunlit描画です。利用側の`bistro`例はcook済みのBistroを
+テクスチャ付きForward PBRで描画し、同じ公開Graphを二APIへ接続します。
+IBL・影・最終tone mapping・Bloomは後続段階です。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 
@@ -51,6 +53,13 @@ cargo run --locked -p renderer --no-default-features --features d3d12,presentati
 ```
 
 準備容量、検証の切替、操作・受入手順は[開発ガイド](docs/guides/development.md)を参照してください。
+
+Bistroのcookと材質描画は[専用の手順](docs/guides/development.md#bistro-pbr)へ進んでください。
+原本素材を使わない小fixtureも同じ例で実行できます。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro -- --api vulkan --fixture --output .tools/bistro-pbr/fixture-vulkan
+```
 
 課題管理には [Beads](https://github.com/gastownhall/beads) を使用します。
 導入・日常操作・同期の手順は [.beads/README.md](.beads/README.md) を参照してください。
