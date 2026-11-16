@@ -23,49 +23,6 @@ mod reuse;
 use measurement::{CountingAllocator, Snapshot};
 use reuse::{ReuseClass, ReuseIndex};
 
-trait Selector {
-    fn new(capacity: usize) -> Self;
-    fn install(&mut self, index: usize, key: ReuseClass);
-    fn remove(&mut self, _index: usize) {}
-    fn begin(&mut self) {}
-    fn select(&mut self, key: ReuseClass, eligible: impl FnMut(usize) -> bool) -> Option<usize>;
-}
-impl Selector for ReuseIndex<ReuseClass> {
-    fn new(capacity: usize) -> Self {
-        ReuseIndex::new(capacity).unwrap()
-    }
-    fn install(&mut self, index: usize, key: ReuseClass) {
-        self.install(index, key);
-    }
-    fn remove(&mut self, index: usize) {
-        self.remove(index);
-    }
-    fn begin(&mut self) {
-        self.begin();
-    }
-    fn select(&mut self, key: ReuseClass, eligible: impl FnMut(usize) -> bool) -> Option<usize> {
-        self.select(key, eligible)
-    }
-}
-
-/// The pre-index production scan. The eligibility closure below retains the
-/// original registration, Arc ownership, generation and descriptor predicate.
-/// This comparison implementation is compiled only into this CPU benchmark.
-struct LinearReference {
-    count: usize,
-}
-impl Selector for LinearReference {
-    fn new(_capacity: usize) -> Self {
-        Self { count: 0 }
-    }
-    fn install(&mut self, index: usize, _key: ReuseClass) {
-        self.count = self.count.max(index + 1);
-    }
-    fn select(&mut self, _key: ReuseClass, eligible: impl FnMut(usize) -> bool) -> Option<usize> {
-        (0..self.count).position(eligible)
-    }
-}
-
 #[global_allocator]
 static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
 
@@ -151,9 +108,9 @@ fn main() {
         .into_iter()
         .map(|case| {
             if reference {
-                run::<LinearReference>(case, samples, iterations)
+                run::<true>(case, samples, iterations)
             } else {
-                run::<ReuseIndex<ReuseClass>>(case, samples, iterations)
+                run::<false>(case, samples, iterations)
             }
         })
         .collect();
@@ -168,7 +125,7 @@ fn main() {
     })).unwrap());
 }
 
-fn run<I: Selector>(case: Case, samples: usize, iterations: usize) -> serde_json::Value {
+fn run<const REFERENCE: bool>(case: Case, samples: usize, iterations: usize) -> serde_json::Value {
     let count = case.registered + case.busy + case.transient;
     let mut entries: Vec<_> = (0..count)
         .map(|index| Entry {
@@ -182,11 +139,17 @@ fn run<I: Selector>(case: Case, samples: usize, iterations: usize) -> serde_json
         .iter()
         .map(|entry| Arc::clone(&entry.physical))
         .collect();
-    let mut index = I::new(count);
-    for (position, entry) in entries.iter().enumerate() {
-        index.install(position, entry.class);
-        if entry.registered {
-            index.remove(position);
+    let mut index = if REFERENCE {
+        None
+    } else {
+        Some(ReuseIndex::new(count).unwrap())
+    };
+    if let Some(index) = &mut index {
+        for (position, entry) in entries.iter().enumerate() {
+            index.install(position, entry.class);
+            if entry.registered {
+                index.remove(position);
+            }
         }
     }
     let mut leases = vec![None; case.transient];
@@ -194,7 +157,12 @@ fn run<I: Selector>(case: Case, samples: usize, iterations: usize) -> serde_json
         .map(|position| class_key(position % case.classes))
         .collect();
     for _ in 0..1024 {
-        black_box(frame(&mut index, &mut entries, &queries, &mut leases));
+        black_box(frame::<REFERENCE>(
+            &mut index,
+            &mut entries,
+            &queries,
+            &mut leases,
+        ));
     }
     let mut elapsed = Vec::with_capacity(samples);
     let mut allocation = Snapshot::default();
@@ -202,7 +170,12 @@ fn run<I: Selector>(case: Case, samples: usize, iterations: usize) -> serde_json
         let before = Snapshot::now();
         let started = Instant::now();
         for _ in 0..iterations {
-            black_box(frame(&mut index, &mut entries, &queries, &mut leases));
+            black_box(frame::<REFERENCE>(
+                &mut index,
+                &mut entries,
+                &queries,
+                &mut leases,
+            ));
         }
         let duration = started.elapsed();
         allocation.accumulate(Snapshot::now().since(before));
@@ -228,24 +201,36 @@ fn run<I: Selector>(case: Case, samples: usize, iterations: usize) -> serde_json
     })
 }
 
-fn frame<I: Selector>(
-    index: &mut I,
+fn frame<const REFERENCE: bool>(
+    index: &mut Option<ReuseIndex<ReuseClass>>,
     entries: &mut [Entry],
     queries: &[ReuseClass],
     leases: &mut [Option<Arc<()>>],
 ) -> usize {
-    index.begin();
+    if let Some(index) = index {
+        index.begin();
+    }
     let mut checksum = 0;
     for (&class, lease) in queries.iter().zip(leases.iter_mut()) {
-        let position = index
-            .select(class, |position| {
+        let position = if REFERENCE {
+            // Preserve the former production iterator and predicate order,
+            // including its direct entry reference rather than indexed reads.
+            entries.iter().position(|entry| {
+                !entry.registered
+                    && Arc::strong_count(&entry.physical) == 1
+                    && entry.generation < u32::MAX
+                    && entry.class == class
+            })
+        } else {
+            index.as_mut().unwrap().select(class, |position| {
                 let entry = &entries[position];
                 !entry.registered
                     && Arc::strong_count(&entry.physical) == 1
                     && entry.generation < u32::MAX
                     && entry.class == class
             })
-            .expect("prepared unregistered resources");
+        }
+        .expect("prepared unregistered resources");
         let entry = &mut entries[position];
         entry.generation += 1;
         *lease = Some(Arc::clone(&entry.physical));
