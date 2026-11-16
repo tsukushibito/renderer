@@ -12,6 +12,7 @@
 
 pub mod capacity;
 pub mod engine;
+pub mod geometry;
 pub mod graph;
 mod image;
 pub use image::ImageFormat;
