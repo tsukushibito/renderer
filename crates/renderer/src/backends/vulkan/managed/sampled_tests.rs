@@ -1,5 +1,7 @@
 //! Actual nearest/clamp sampling with public image, View and sampler owners.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::tests::StorageLease;
 use super::*;
 use crate::ImageFormat;
@@ -24,7 +26,17 @@ impl ImageLease {
             .state
             .busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| RuntimeError::capacity("sampled image is already recorded or pending"))?;
+            .map_err(|_| {
+                RuntimeError::capacity_with(
+                    "sampled image is already recorded or pending",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::ReleaseOwners,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         Ok(Self { image })
     }
 }

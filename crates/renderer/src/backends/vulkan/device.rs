@@ -1,5 +1,7 @@
 //! Single-queue Device bootstrap. Command submission is a later ownership step.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
@@ -429,7 +431,15 @@ impl VulkanDevice {
             .samplers
             .reserve(self.limits.max_sampler_allocation_count)
             .map_err(|()| {
-                super::error::RuntimeError::capacity("Device sampler allocation limit exhausted")
+                super::error::RuntimeError::capacity_with(
+                    "Device sampler allocation limit exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Samplers,
+                        CapacityRecovery::ReleaseOwners,
+                        Some(u64::from(self.limits.max_sampler_allocation_count)),
+                        Some(u64::from(self.limits.max_sampler_allocation_count) + 1),
+                    ),
+                )
             })?;
         #[cfg(feature = "memory-profiling")]
         crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);

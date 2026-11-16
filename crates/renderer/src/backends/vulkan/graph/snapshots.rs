@@ -1,6 +1,8 @@
 //! Reusable canonical and per-workspace content state. Publishing swaps prepared
 //! snapshots; copying and resetting never replace their backing allocations.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::ops::Range;
 
 use ash::vk;
@@ -31,7 +33,15 @@ impl Snapshot {
         // This check-and-copy is transactional. After it succeeds no remaining
         // operation can fail or require a larger backing allocation.
         self.provenance.copy_from(&source.provenance).map_err(|_| {
-            RuntimeError::capacity("snapshot provenance segment capacity exhausted")
+            RuntimeError::capacity_with(
+                "snapshot provenance segment capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::GraphMetadata,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
         })?;
         self.initialized.clear();
         self.initialized.extend_from_slice(&source.initialized);
@@ -58,8 +68,14 @@ impl Snapshot {
 
     fn require_initialized_capacity(&self, required: usize) -> Result<(), RuntimeError> {
         if required > self.initialized.capacity() {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "snapshot initialized range capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::GraphMetadata,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         Ok(())

@@ -1,6 +1,7 @@
 //! Explicitly prepared Graph images and descriptor storage for one frame slot.
 
 use crate::ImageFormat;
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use crate::graph::ImageDesc;
 
 use super::{
@@ -306,7 +307,17 @@ impl RasterStorage {
         owner.ensure_active()?;
         let descriptor_capacity = raster_descriptor_capacity
             .checked_add(compute_descriptor_capacity)
-            .ok_or_else(|| D3D12RuntimeError::capacity("prepared descriptor capacity overflow"))?
+            .ok_or_else(|| {
+                D3D12RuntimeError::capacity_with(
+                    "prepared descriptor capacity overflow",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Descriptors,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?
             .max(1);
         // One million is the portable shader-visible CBV/SRV/UAV heap bound
         // at the supported baseline; samplers need only their single fixed slot.
@@ -326,9 +337,17 @@ impl RasterStorage {
         for (class, _) in classes.clone() {
             validate_class(class)?;
             require_image_format(owner, class.desc.format)?;
-            total = total
-                .checked_add(class.count)
-                .ok_or_else(|| D3D12RuntimeError::capacity("prepared image count overflows"))?;
+            total = total.checked_add(class.count).ok_or_else(|| {
+                D3D12RuntimeError::capacity_with(
+                    "prepared image count overflows",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
             if class.desc.format == ImageFormat::Depth32Float {
                 depth_count += class.count;
             } else {
@@ -337,7 +356,15 @@ impl RasterStorage {
         }
         let mut images = Vec::new();
         images.try_reserve_exact(total).map_err(|_| {
-            D3D12RuntimeError::capacity("prepared image metadata allocation failed")
+            D3D12RuntimeError::capacity_with(
+                "prepared image metadata allocation failed",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Resources,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
         })?;
         let srv = DescriptorHeap::new(
             owner,

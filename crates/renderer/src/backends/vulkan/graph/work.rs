@@ -1,6 +1,8 @@
 //! Prepared Graph operands, staging leases and native dependency planning.
 //! Recording and completion are implemented by the private `record` child.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::ops::{Deref, DerefMut, Range};
 use std::sync::Arc;
 
@@ -10,7 +12,7 @@ use ash::vk;
 
 use super::super::memory::MemoryOwner;
 use super::super::program::{ShaderBindings, ShaderPrograms};
-use super::super::transfer::staging::SharedStaging;
+use super::super::transfer::staging::{SharedStaging, StagingError};
 use super::compute::{ComputeDispatch, ComputeLease};
 use super::metrics;
 use super::provenance::IndexError;
@@ -25,6 +27,57 @@ pub(super) mod diagnostics;
 mod record;
 mod storage;
 pub(super) use storage::{ResultData, WorkData};
+
+fn staging_capacity_context(
+    error: StagingError,
+    alignment: u64,
+    mut own_reservations: impl Iterator<Item = u64>,
+) -> RuntimeError {
+    // Only run after a failed allocation. Every range held by this Graph must
+    // coexist until submission/retirement; retrying cannot release those ranges.
+    let capacity = match &error {
+        StagingError::CapacityExhausted {
+            capacity,
+            requested,
+            ..
+        } => {
+            let own = own_reservations.try_fold(0u64, u64::checked_add);
+            let padded = requested
+                .checked_add(alignment - 1)
+                .map(|value| value / alignment * alignment);
+            let required = own.and_then(|own| padded.and_then(|padded| own.checked_add(padded)));
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::StagingBytes,
+                if required.is_none_or(|required| required > *capacity) {
+                    CapacityRecovery::Reconfigure
+                } else {
+                    CapacityRecovery::ReleaseOwners
+                },
+                Some(*capacity),
+                required,
+            ))
+        }
+        StagingError::RangeCapacityExhausted { capacity } => {
+            let required = (own_reservations.count() as u64).checked_add(1);
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::StagingRanges,
+                if required.is_none_or(|required| required > *capacity as u64) {
+                    CapacityRecovery::Reconfigure
+                } else {
+                    CapacityRecovery::ReleaseOwners
+                },
+                Some(*capacity as u64),
+                required,
+            ))
+        }
+        _ => None,
+    };
+    let error = RuntimeError::from(error);
+    match capacity {
+        Some(capacity) => error.with_capacity_details(capacity),
+        None => error,
+    }
+}
 
 impl Snapshot {
     // Only read-only consumers without a layout transition may reuse this
@@ -294,11 +347,22 @@ impl GraphWork {
                 .sum::<usize>()
                 > limit.accesses
         {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "prepared Graph work capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::GraphMetadata,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
-        let result = results.acquire()?;
+        let result = results.acquire().map_err(|error| {
+            error.capacity_context(
+                RuntimeCapacityKind::ResultSlots,
+                CapacityRecovery::ReleaseResults,
+            )
+        })?;
         // Set before any logical resource or partial preparation can retain a
         // lease/state. Every failure then resets precisely this active prefix.
         data.active_resources = graph.resources.len();
@@ -371,8 +435,14 @@ impl GraphWork {
                     }
                     if name.len().saturating_add(1) > labels.capacity().saturating_sub(labels.len())
                     {
-                        return Err(RuntimeError::capacity(
+                        return Err(RuntimeError::capacity_with(
                             "prepared debug label capacity exhausted",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::DiagnosticStorage,
+                                CapacityRecovery::Reconfigure,
+                                None,
+                                None,
+                            ),
                         ));
                     }
                     let start = labels.len();
@@ -488,7 +558,13 @@ impl GraphWork {
                         dst, offset, mesh, ..
                     } => {
                         let slice = graph.upload_data(&pass.operation);
-                        let mut range = upload.allocate(slice.len() as u64)?;
+                        let mut range = upload.allocate(slice.len() as u64).map_err(|error| {
+                            staging_capacity_context(
+                                error,
+                                upload.stats().alignment,
+                                uploads.iter().map(|range| range.reserved_size()),
+                            )
+                        })?;
                         range.write(slice)?;
                         prepared.staging = Some(uploads.len());
                         uploads.push(range);
@@ -503,8 +579,14 @@ impl GraphWork {
                                 None => provenance
                                     .write_graph_slice(target, graph, index, 0..slice.len())
                                     .map_err(|_| {
-                                        RuntimeError::capacity(
+                                        RuntimeError::capacity_with(
                                             "prepared provenance capacity exhausted",
+                                            RuntimeCapacityError::new(
+                                                RuntimeCapacityKind::GraphMetadata,
+                                                CapacityRecovery::Reconfigure,
+                                                None,
+                                                None,
+                                            ),
                                         )
                                     })?,
                             }
@@ -528,8 +610,14 @@ impl GraphWork {
                                     copy_scratch,
                                 )
                                 .map_err(|_| {
-                                    RuntimeError::capacity(
+                                    RuntimeError::capacity_with(
                                         "prepared provenance copy capacity exhausted",
+                                        RuntimeCapacityError::new(
+                                            RuntimeCapacityKind::GraphMetadata,
+                                            CapacityRecovery::Reconfigure,
+                                            None,
+                                            None,
+                                        ),
                                     )
                                 })?;
                             states[*dst]
@@ -538,29 +626,64 @@ impl GraphWork {
                                 .provenance
                                 .replace(*dst_offset..*dst_offset + *size, copy_scratch)
                                 .map_err(|_| {
-                                    RuntimeError::capacity(
+                                    RuntimeError::capacity_with(
                                         "prepared provenance replacement capacity exhausted",
+                                        RuntimeCapacityError::new(
+                                            RuntimeCapacityKind::GraphMetadata,
+                                            CapacityRecovery::Reconfigure,
+                                            None,
+                                            None,
+                                        ),
                                     )
                                 })?;
                         }
                     }
                     Operation::UploadImage { .. } => {
                         let bytes = graph.upload_data(&pass.operation);
-                        let mut range = upload.allocate(bytes.len() as u64)?;
+                        let mut range = upload.allocate(bytes.len() as u64).map_err(|error| {
+                            staging_capacity_context(
+                                error,
+                                upload.stats().alignment,
+                                uploads.iter().map(|range| range.reserved_size()),
+                            )
+                        })?;
                         range.write(bytes)?;
                         prepared.staging = Some(uploads.len());
                         uploads.push(range);
                     }
                     Operation::ReadbackBuffer { size, .. } => {
                         prepared.staging = Some(readbacks.len());
-                        readbacks.push((index, Some(readback.allocate(*size)?)));
+                        let range = readback.allocate(*size).map_err(|error| {
+                            staging_capacity_context(
+                                error,
+                                readback.stats().alignment,
+                                readbacks
+                                    .iter()
+                                    .filter_map(|(_, range)| range.as_ref())
+                                    .map(|range| range.reserved_size()),
+                            )
+                        })?;
+                        readbacks.push((index, Some(range)));
                     }
                     Operation::ReadbackImage { src } => {
                         let ResourceDesc::Image(desc) = graph.resources[*src].desc else {
                             unreachable!()
                         };
                         prepared.staging = Some(readbacks.len());
-                        readbacks.push((index, Some(readback.allocate(desc.byte_len().unwrap())?)));
+                        let range =
+                            readback
+                                .allocate(desc.byte_len().unwrap())
+                                .map_err(|error| {
+                                    staging_capacity_context(
+                                        error,
+                                        readback.stats().alignment,
+                                        readbacks
+                                            .iter()
+                                            .filter_map(|(_, range)| range.as_ref())
+                                            .map(|range| range.reserved_size()),
+                                    )
+                                })?;
+                        readbacks.push((index, Some(range)));
                     }
                     Operation::Compute { src, dst, .. } => {
                         prepared.descriptor = Some(bindings.as_mut().unwrap().compute(
@@ -595,8 +718,14 @@ impl GraphWork {
                                     .provenance
                                     .clear_range(access.range.clone())
                                     .map_err(|_| {
-                                        RuntimeError::capacity(
+                                        RuntimeError::capacity_with(
                                             "Compute provenance capacity exhausted",
+                                            RuntimeCapacityError::new(
+                                                RuntimeCapacityKind::GraphMetadata,
+                                                CapacityRecovery::Reconfigure,
+                                                None,
+                                                None,
+                                            ),
                                         )
                                     })?;
                             }
@@ -883,6 +1012,121 @@ mod tests {
         RasterDraw, ResourceKey, StoreOp,
     };
     use std::time::Duration;
+    #[test]
+    fn cumulative_staging_requests_cannot_be_recovered_by_polling_other_frames() {
+        let byte_error = || StagingError::CapacityExhausted {
+            capacity: 4096,
+            requested: 3072,
+            reserved: 3072,
+        };
+        let own = staging_capacity_context(byte_error(), 256, [3072].into_iter());
+        assert_eq!(
+            own.capacity(),
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::StagingBytes,
+                CapacityRecovery::Reconfigure,
+                Some(4096),
+                Some(6144)
+            ))
+        );
+        let external = staging_capacity_context(byte_error(), 256, [].into_iter());
+        assert_eq!(
+            external.capacity(),
+            Some(RuntimeCapacityError::new(
+                RuntimeCapacityKind::StagingBytes,
+                CapacityRecovery::ReleaseOwners,
+                Some(4096),
+                Some(3072)
+            ))
+        );
+        let own = staging_capacity_context(
+            StagingError::RangeCapacityExhausted { capacity: 1 },
+            256,
+            [512].into_iter(),
+        );
+        assert_eq!(
+            own.capacity().unwrap().recovery,
+            CapacityRecovery::Reconfigure
+        );
+        assert_eq!(own.capacity().unwrap().required, Some(2));
+        let external = staging_capacity_context(
+            StagingError::RangeCapacityExhausted { capacity: 1 },
+            256,
+            [].into_iter(),
+        );
+        assert_eq!(
+            external.capacity().unwrap().recovery,
+            CapacityRecovery::ReleaseOwners
+        );
+        let padded = staging_capacity_context(
+            StagingError::CapacityExhausted {
+                capacity: 1024,
+                requested: 513,
+                reserved: 512,
+            },
+            256,
+            [512].into_iter(),
+        );
+        assert_eq!(padded.capacity().unwrap().required, Some(1280));
+        assert_eq!(
+            padded.capacity().unwrap().recovery,
+            CapacityRecovery::Reconfigure
+        );
+    }
+
+    #[test]
+    #[ignore = "explicit real GPU Graph staging-capacity regression; run shipping and strict separately"]
+    fn vulkan_graph_cumulative_staging_capacity_is_not_owner_backpressure() {
+        use super::super::ResourceClass;
+        for (bytes, ranges, size, resource) in [
+            (4096, 4, 3072, RuntimeCapacityKind::StagingBytes),
+            (8192, 1, 512, RuntimeCapacityKind::StagingRanges),
+        ] {
+            let mut runtime = VulkanRuntime::new(RuntimeConfig {
+                execution_slots: 1,
+                resource_capacity: 2,
+                staging_bytes: bytes,
+                staging_ranges: ranges,
+                max_shader_bindings: 1,
+            })
+            .unwrap();
+            assert_ne!(
+                runtime.owner.device.device_type(),
+                vk::PhysicalDeviceType::CPU,
+                "real GPU required"
+            );
+            let monitor = runtime.validation_monitor();
+            #[cfg(feature = "development-validation")]
+            crate::backends::vulkan::assert_real_validation(&runtime.diagnostics);
+            #[cfg(not(feature = "development-validation"))]
+            assert_eq!(monitor.report().requested, crate::ValidationMode::Disabled);
+            super::super::tests::prepare_scenario(
+                &mut runtime,
+                2,
+                2,
+                &[ResourceClass::Buffer {
+                    desc: BufferDesc { size },
+                    count: 2,
+                }],
+            );
+            let mut graph = Graph::test_new();
+            let payload = vec![7; size as usize];
+            for name in ["first", "second"] {
+                let buffer = graph.buffer(name, BufferDesc { size }).unwrap();
+                graph.upload_buffer(name, buffer, 0, &payload).unwrap();
+                graph.export_buffer(buffer).unwrap();
+            }
+            let plan = graph.compile().unwrap();
+            let error = runtime.submit(&plan).err().unwrap();
+            let capacity = error.capacity().unwrap();
+            assert_eq!(capacity.resource, resource);
+            assert_eq!(capacity.recovery, CapacityRecovery::Reconfigure);
+            assert!(capacity.required.unwrap() > capacity.limit.unwrap());
+            assert_eq!(runtime.stats().upload_live_ranges, 0);
+            drop((plan, runtime));
+            assert!(monitor.report().is_clean(), "{:?}", monitor.report());
+        }
+    }
     #[test]
     fn shader_resource_scopes_follow_the_program_and_fixed_function_fetch_is_separate() {
         use crate::program::ShaderStages;

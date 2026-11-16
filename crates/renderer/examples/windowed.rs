@@ -394,6 +394,11 @@ mod demo {
             if self.prepared_extent == Some(extent) {
                 return Ok(true);
             }
+            let readback_bytes = if self.options.verify {
+                Some(backend::verify_readback_len(self.options.api, extent)?)
+            } else {
+                None
+            };
             self.discard_outputs()?;
             if self.frames.iter().any(Option::is_some) {
                 return Ok(false);
@@ -405,7 +410,7 @@ mod demo {
             self.buffers = None;
             match backend.prepare_resources(extent) {
                 Ok(()) => {}
-                Err(error) if backend::is_capacity(error.as_ref()) => return Ok(false),
+                Err(error) if backend::is_backpressure(error.as_ref()) => return Ok(false),
                 Err(error) => return Err(error),
             }
             if let Some(keys) = self.keys {
@@ -431,8 +436,7 @@ mod demo {
                 self.keys = Some(buffers.each_ref().map(|buffer| buffer.key()));
                 self.buffers = Some(buffers);
             }
-            if self.options.verify {
-                let bytes = usize::try_from(u64::from(extent.0) * u64::from(extent.1) * 4)?;
+            if let Some(bytes) = readback_bytes {
                 self.readback.resize(bytes, 0);
             }
             self.prepared_extent = Some(extent);
@@ -476,7 +480,7 @@ mod demo {
             self.prepare_api += elapsed(started);
             let prepared = match prepared {
                 Ok(value) => value,
-                Err(error) if backend::is_capacity(error.as_ref()) => {
+                Err(error) if backend::is_backpressure(error.as_ref()) => {
                     self.retry();
                     return Ok(());
                 }
@@ -539,7 +543,7 @@ mod demo {
                 let started = self.options.measure.then(Instant::now);
                 let pending = match self.backend.as_mut().unwrap().submit(&plan) {
                     Ok(value) => value,
-                    Err(error) if backend::is_capacity(error.as_ref()) => {
+                    Err(error) if backend::is_backpressure(error.as_ref()) => {
                         self.retry();
                         return Ok(());
                     }
@@ -583,7 +587,7 @@ mod demo {
             self.present_api += elapsed(started);
             let outcome = match outcome {
                 Ok(value) => value,
-                Err(error) if backend::is_capacity(error.as_ref()) => {
+                Err(error) if backend::is_backpressure(error.as_ref()) => {
                     self.retry();
                     return Ok(());
                 }

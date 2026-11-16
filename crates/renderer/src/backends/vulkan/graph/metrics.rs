@@ -1,5 +1,7 @@
 //! Optional, bounded timestamp ownership and explicitly named memory snapshots.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -215,10 +217,17 @@ impl TimestampPool {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         let mut slots = self.0.lock();
-        let index = slots
-            .iter()
-            .position(|leased| !leased)
-            .ok_or_else(|| RuntimeError::capacity("timestamp query capacity exhausted"))?;
+        let index = slots.iter().position(|leased| !leased).ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "timestamp query capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::TimingSamples,
+                    CapacityRecovery::ReleaseOwners,
+                    Some(slots.len() as u64),
+                    (slots.len() as u64).checked_add(1),
+                ),
+            )
+        })?;
         slots[index] = true;
         Ok(TimestampLease {
             pool: Arc::clone(&self.0),

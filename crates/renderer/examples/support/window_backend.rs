@@ -5,6 +5,7 @@ use super::window_scene as scene;
 #[cfg(feature = "vulkan")]
 use renderer::graph::BufferDesc;
 use renderer::{
+    capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind},
     graph::{
         BufferHandle, CompiledGraph, ImageDesc, ImageHandle, ImportBuffer, ImportImage, PassHandle,
         ResourceKey,
@@ -17,6 +18,28 @@ use std::{error::Error, sync::Arc, time::Duration};
 use winit::window::Window;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+const D3D12_READBACK_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Reject a request that cannot fit even before native row-pitch padding.
+/// The exact native footprint is still checked by the runtime before recording.
+pub fn verify_readback_len(api: Api, extent: (u32, u32)) -> Result<usize> {
+    let bytes = u64::from(extent.0)
+        .checked_mul(u64::from(extent.1))
+        .and_then(|pixels| pixels.checked_mul(4));
+    if api == Api::D3d12 && bytes.is_none_or(|bytes| bytes > D3D12_READBACK_BYTES) {
+        return Err(RuntimeCapacityError::new(
+            RuntimeCapacityKind::ReadbackBytes,
+            CapacityRecovery::Reconfigure,
+            Some(D3D12_READBACK_BYTES),
+            bytes,
+        )
+        .into());
+    }
+    Ok(usize::try_from(
+        bytes.ok_or("verification image byte size overflow")?,
+    )?)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Api {
@@ -114,7 +137,7 @@ impl Backend {
                             buffers: 2,
                             buffer_bytes: 512,
                             upload_bytes: 512,
-                            readback_bytes: 16 * 1024 * 1024,
+                            readback_bytes: D3D12_READBACK_BYTES,
                             scratch_bytes: 512,
                         },
                         ..Default::default()
@@ -433,16 +456,82 @@ impl Monitor {
     }
 }
 
-pub fn is_capacity(error: &(dyn Error + 'static)) -> bool {
+pub fn capacity_recovery(error: &(dyn Error + 'static)) -> Option<CapacityRecovery> {
     #[cfg(feature = "vulkan")]
     if let Some(value) = error.downcast_ref::<renderer::RuntimeError>() {
-        return value.kind() == renderer::RuntimeErrorKind::CapacityExhausted;
+        return value.capacity().map(|capacity| capacity.recovery);
     }
     #[cfg(feature = "d3d12")]
     if let Some(value) = error.downcast_ref::<renderer::D3D12RuntimeError>() {
-        return value.kind() == renderer::D3D12RuntimeErrorKind::CapacityExhausted;
+        return value.capacity().map(|capacity| capacity.recovery);
+    }
+    if let Some(value) = error.downcast_ref::<renderer::graph::GraphError>() {
+        use renderer::graph::GraphCapacityKind;
+        return value.capacity().map(|capacity| match capacity.kind {
+            GraphCapacityKind::Slots
+            | GraphCapacityKind::SnapshotInputs
+            | GraphCapacityKind::ImportRangeSlots => CapacityRecovery::ReleaseOwners,
+            _ => CapacityRecovery::Reconfigure,
+        });
     }
     error
-        .downcast_ref::<renderer::graph::GraphError>()
-        .is_some_and(|value| value.kind() == renderer::graph::GraphErrorKind::CapacityExhausted)
+        .downcast_ref::<RuntimeCapacityError>()
+        .map(|capacity| capacity.recovery)
+}
+
+/// The sample polls and consumes all of its frame/result owners each redraw.
+/// It may therefore retry backpressure, but never missing preparation or a
+/// request that exceeds a configured bound.
+pub fn is_backpressure(error: &(dyn Error + 'static)) -> bool {
+    matches!(
+        capacity_recovery(error),
+        Some(
+            CapacityRecovery::Poll
+                | CapacityRecovery::ReleaseResults
+                | CapacityRecovery::ReleaseOwners
+        )
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_verification_is_a_permanent_capacity_failure_before_gpu_work() {
+        let error = verify_readback_len(Api::D3d12, (3440, 1440)).unwrap_err();
+        let capacity = error.downcast_ref::<RuntimeCapacityError>().unwrap();
+        assert_eq!(capacity.resource, RuntimeCapacityKind::ReadbackBytes);
+        assert_eq!(capacity.limit, Some(16_777_216));
+        assert_eq!(capacity.required, Some(19_814_400));
+        assert!(!is_backpressure(error.as_ref()));
+        assert_eq!(
+            verify_readback_len(Api::D3d12, (1920, 1080)).unwrap(),
+            8_294_400
+        );
+        assert_eq!(
+            verify_readback_len(Api::Vulkan, (3440, 1440)).unwrap(),
+            19_814_400
+        );
+        for recovery in [
+            CapacityRecovery::Poll,
+            CapacityRecovery::ReleaseResults,
+            CapacityRecovery::ReleaseOwners,
+        ] {
+            let error = RuntimeCapacityError::new(
+                RuntimeCapacityKind::ResultSlots,
+                recovery,
+                Some(3),
+                None,
+            );
+            assert!(is_backpressure(&error));
+        }
+        let unprepared = RuntimeCapacityError::new(
+            RuntimeCapacityKind::Programs,
+            CapacityRecovery::Prepare,
+            None,
+            None,
+        );
+        assert!(!is_backpressure(&unprepared));
+    }
 }

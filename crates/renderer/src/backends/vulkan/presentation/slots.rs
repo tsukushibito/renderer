@@ -1,5 +1,7 @@
 //! Acquire/present synchronization slots and exceptional cancellation owners.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::*;
 #[cfg(feature = "memory-profiling")]
 use crate::measurement::{NativeEvent, record_native};
@@ -300,11 +302,25 @@ impl SlotRecord {
         let slot = Arc::get_mut(&mut self.slot).expect("idle Slot has one owner");
         if slot.binding.program.format != program.format {
             let binding = self.spare_binding.as_mut().ok_or_else(|| {
-                RuntimeError::capacity("presentation format bindings were not prepared")
+                RuntimeError::capacity_with(
+                    "presentation format bindings were not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Descriptors,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
             })?;
             if binding.program.format != program.format {
-                return Err(RuntimeError::capacity(
+                return Err(RuntimeError::capacity_with(
                     "presentation format bindings were not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Descriptors,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
                 ));
             }
             std::mem::swap(&mut slot.binding, binding);

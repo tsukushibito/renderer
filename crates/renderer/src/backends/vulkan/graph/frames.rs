@@ -1,5 +1,7 @@
 //! Bounded runtime ownership of in-flight frames, separate from CPU results.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::time::Instant;
 
 use super::exports::ExportLease;
@@ -216,8 +218,14 @@ impl VulkanRuntime {
 
     pub(super) fn ensure_frame_capacity(&self) -> Result<(), RuntimeError> {
         if self.frames.is_full() {
-            Err(RuntimeError::capacity(
+            Err(RuntimeError::capacity_with(
                 "in-flight frame capacity exhausted; poll or explicitly wait before retrying",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExecutionSlots,
+                    CapacityRecovery::Poll,
+                    Some(self.config.execution_slots as u64),
+                    None,
+                ),
             ))
         } else {
             Ok(())

@@ -2,6 +2,8 @@
 //! Every accepted recording ends in COMMON. Queue ordering therefore permits
 //! pending producers/consumers without inventing CPU completion or state copies.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::{
     ops::Range,
     sync::{Arc, Mutex},
@@ -187,11 +189,31 @@ impl Registry {
         let mut entries = Vec::new();
         entries
             .try_reserve_exact(capacity.resource_capacity)
-            .map_err(|_| Error::capacity("registry preparation failed"))?;
+            .map_err(|_| {
+                Error::capacity_with(
+                    "registry preparation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::HostMemory,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let export_count = capacity
             .executions
             .checked_add(capacity.results)
-            .ok_or_else(|| Error::capacity("export metadata capacity overflow"))?;
+            .ok_or_else(|| {
+                Error::capacity_with(
+                    "export metadata capacity overflow",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::ExportMetadata,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let mut exports = Vec::with_capacity(export_count);
         for _ in 0..export_count {
             exports.push(Arc::new(ExportSlot(Mutex::new(Vec::with_capacity(
@@ -201,13 +223,32 @@ impl Registry {
         Ok(Self {
             owner: crate::graph::next_id(),
             entries,
-            reuse: ReuseIndex::new(capacity.resource_capacity)
-                .map_err(|_| Error::capacity("resource selection preparation failed"))?,
+            reuse: ReuseIndex::new(capacity.resource_capacity).map_err(|_| {
+                Error::capacity_with(
+                    "resource selection preparation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::HostMemory,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?,
             ranges: ImportRangesPool::new(
                 capacity.initialized_ranges_per_resource,
                 capacity.range_snapshots,
             )
-            .map_err(|_| Error::capacity("import snapshot preparation failed"))?,
+            .map_err(|_| {
+                Error::capacity_with(
+                    "import snapshot preparation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::GraphMetadata,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?,
             exports,
             result_returns: Arc::new(()),
             capacity,
@@ -227,7 +268,18 @@ impl Registry {
             .checked_add(additional)
             .is_none_or(|n| n > self.capacity.resource_capacity)
         {
-            return Err(Error::capacity("registry identity capacity exhausted"));
+            return Err(Error::capacity_with(
+                "registry identity capacity exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Resources,
+                    CapacityRecovery::Reconfigure,
+                    Some(self.capacity.resource_capacity as u64),
+                    self.entries
+                        .len()
+                        .checked_add(additional)
+                        .map(|required| required as u64),
+                ),
+            ));
         }
         for buffer in &mut slot.buffers {
             if let Some(native) = buffer.0.take() {
@@ -284,7 +336,17 @@ impl Registry {
         let mut images = Vec::new();
         images
             .try_reserve_exact(self.entries.iter().filter(|entry| entry.registered).count())
-            .map_err(|_| Error::capacity("registered image preparation failed"))?;
+            .map_err(|_| {
+                Error::capacity_with(
+                    "registered image preparation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         for entry in &self.entries {
             if entry.registered
                 && let ResourceDesc::Image(desc) = entry.desc
@@ -307,8 +369,14 @@ impl Registry {
             .count();
         let additional = prepared.entries.len().saturating_sub(reusable);
         if additional > self.capacity.resource_capacity - self.entries.len() {
-            return Err(Error::capacity(
+            return Err(Error::capacity_with(
                 "registered and prepared resources exceed registry capacity",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Resources,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         let mut incoming = std::mem::take(&mut prepared.entries).into_iter();
@@ -345,7 +413,12 @@ impl Registry {
         let initialized = self
             .ranges
             .capture(&self.entries[key.index as usize].initialized)
-            .map_err(|_| Error::capacity("prepared import range snapshots exhausted"))?;
+            .map_err(|error| {
+                Error::capacity_with(
+                    "prepared import range snapshots exhausted",
+                    crate::capacity::import_ranges_capacity(&error),
+                )
+            })?;
         Ok(ImportBuffer {
             key,
             revision,
@@ -408,8 +481,14 @@ impl Registry {
                 continue;
             }
             if graph.final_contents(logical).len() > self.capacity.initialized_ranges_per_resource {
-                return Err(Error::capacity(
+                return Err(Error::capacity_with(
                     "canonical initialized range capacity exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::GraphMetadata,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
                 ));
             }
             let index = if let Some(key) = resource.import {
@@ -429,7 +508,45 @@ impl Registry {
                             }
                     })
                     .ok_or_else(|| {
-                        Error::capacity("prepared physical resources are registered or leased")
+                        // Diagnose only the failed request: instances retained
+                        // by another frame can return, while instances already
+                        // borrowed by this Graph cannot satisfy another operand.
+                        let mut limit = 0u64;
+                        let mut used = 0u64;
+                        let mut retained_elsewhere = false;
+                        for (index, entry) in self.entries.iter().enumerate() {
+                            let matches = match (entry.desc, resource.desc) {
+                                (ResourceDesc::Buffer(_), ResourceDesc::Buffer(_)) => true,
+                                (ResourceDesc::Image(a), ResourceDesc::Image(b)) => a == b,
+                                _ => false,
+                            };
+                            if entry.registered || entry.generation == u32::MAX || !matches {
+                                continue;
+                            }
+                            limit += 1;
+                            if slot.resource_uses[..logical]
+                                .iter()
+                                .flatten()
+                                .any(|use_| use_.key.index as usize == index)
+                            {
+                                used += 1;
+                            } else if Arc::strong_count(&entry.physical) > 1 {
+                                retained_elsewhere = true;
+                            }
+                        }
+                        Error::capacity_with(
+                            "prepared physical resources are registered or leased",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::Resources,
+                                if retained_elsewhere {
+                                    CapacityRecovery::ReleaseOwners
+                                } else {
+                                    CapacityRecovery::Reconfigure
+                                },
+                                Some(limit),
+                                Some(used + 1),
+                            ),
+                        )
                     })?;
                 let entry = &mut self.entries[index];
                 entry.generation += 1;
@@ -459,7 +576,15 @@ impl Registry {
                     slot.provenance[local]
                         .copy_from(&entry.provenance)
                         .map_err(|_| {
-                            Error::capacity("canonical index provenance capacity exhausted")
+                            Error::capacity_with(
+                                "canonical index provenance capacity exhausted",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::GraphMetadata,
+                                    CapacityRecovery::Reconfigure,
+                                    None,
+                                    None,
+                                ),
+                            )
                         })?;
                 }
                 ResourceDesc::Image(_) => {
@@ -479,7 +604,15 @@ impl Registry {
         }
         for value in slot.resource_uses[..slot.resource_count].iter().flatten() {
             if value.changed && value.revision == u64::MAX {
-                return Err(Error::capacity("content revision exhausted"));
+                return Err(Error::capacity_with(
+                    "content revision exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Identity,
+                        CapacityRecovery::Recreate,
+                        None,
+                        None,
+                    ),
+                ));
             }
         }
         Ok(())
@@ -502,6 +635,7 @@ impl Registry {
         if graph.exports.is_empty() {
             return Ok(None);
         }
+        let export_slots = self.exports.len() as u64;
         let available = self
             .exports
             .iter_mut()
@@ -512,7 +646,17 @@ impl Registry {
                     None
                 }
             })
-            .ok_or_else(|| Error::capacity("prepared export metadata slots exhausted"))?;
+            .ok_or_else(|| {
+                Error::capacity_with(
+                    "prepared export metadata slots exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::ExportMetadata,
+                        CapacityRecovery::ReleaseOwners,
+                        Some(export_slots),
+                        export_slots.checked_add(1),
+                    ),
+                )
+            })?;
         let lease = ExportLease {
             slot: Arc::clone(available),
             graph: graph.id,
@@ -529,8 +673,22 @@ impl Registry {
                         key: usage.key,
                         revision,
                         desc,
-                        initialized: self.ranges.capture(initialized).map_err(|_| {
-                            Error::capacity("prepared export range snapshots exhausted")
+                        initialized: self.ranges.capture(initialized).map_err(|error| {
+                            Error::capacity_with(
+                                "prepared export range snapshots exhausted",
+                                crate::capacity::import_ranges_capacity(&error).simultaneous_slots(
+                                    graph
+                                        .exports
+                                        .iter()
+                                        .filter(|&&resource| {
+                                            matches!(
+                                                graph.resources[resource].desc,
+                                                ResourceDesc::Buffer(_)
+                                            )
+                                        })
+                                        .count() as u64,
+                                ),
+                            )
                         })?,
                     }),
                     ResourceDesc::Image(desc) => Export::Image(ImportImage {

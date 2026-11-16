@@ -1,5 +1,7 @@
 //! Optional timestamps retained by the same owner as the presentation commands.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::*;
 use std::collections::VecDeque;
 
@@ -13,7 +15,15 @@ impl ProfileStorage {
     pub(super) fn new(owner: Arc<MemoryOwner>, capacity: usize) -> Result<Self, RuntimeError> {
         let mut completed = VecDeque::new();
         completed.try_reserve_exact(capacity).map_err(|_| {
-            RuntimeError::capacity("cannot reserve completed presentation timing samples")
+            RuntimeError::capacity_with(
+                "cannot reserve completed presentation timing samples",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::TimingSamples,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
         })?;
         Ok(Self {
             timestamps: TimestampPool::new(owner, capacity)?,
@@ -26,8 +36,14 @@ impl ProfileStorage {
         // Pending records and copied results share one bound. Query acquisition
         // cannot grow the completed queue after an accepted native submission.
         if self.completed.len() + pending >= self.capacity {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "presentation timing capacity exhausted; consume completed samples",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::TimingSamples,
+                    CapacityRecovery::ReleaseResults,
+                    None,
+                    None,
+                ),
             ));
         }
         self.timestamps.acquire()

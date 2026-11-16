@@ -1,5 +1,7 @@
 //! Owned graphics recording into exclusively leased, prepared native storage.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::{mem::ManuallyDrop, ops::Range};
 
 use super::super::{
@@ -64,7 +66,17 @@ pub(super) fn align_transfer(value: u64) -> Result<u64, D3D12RuntimeError> {
     value
         .checked_add(511)
         .map(|value| value & !511)
-        .ok_or_else(|| D3D12RuntimeError::capacity("texture transfer offset overflow"))
+        .ok_or_else(|| {
+            D3D12RuntimeError::capacity_with(
+                "texture transfer offset overflow",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::TransferBytes,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })
 }
 
 pub(super) fn use_image(
@@ -89,7 +101,17 @@ pub(super) fn use_image(
         .iter_mut()
         .enumerate()
         .find(|(_, image)| !image.used && image.desc == desc)
-        .ok_or_else(|| D3D12RuntimeError::capacity("prepared Raster image class exhausted"))?;
+        .ok_or_else(|| {
+            D3D12RuntimeError::capacity_with(
+                "prepared Raster image class exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Resources,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })?;
     image.used = true;
     map[index] = physical;
     Ok(())

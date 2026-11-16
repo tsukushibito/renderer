@@ -1,5 +1,7 @@
 //! Prepared frame-export metadata, retained by cheap submission clones.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -35,14 +37,30 @@ impl ExportPool {
             return Err(RuntimeError::invalid("export pool needs at least one slot"));
         }
         let mut prepared = Vec::new();
-        prepared
-            .try_reserve_exact(slots)
-            .map_err(|_| RuntimeError::capacity("cannot reserve export slots"))?;
+        prepared.try_reserve_exact(slots).map_err(|_| {
+            RuntimeError::capacity_with(
+                "cannot reserve export slots",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExportMetadata,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         for _ in 0..slots {
             let mut entries = Vec::new();
-            entries
-                .try_reserve_exact(max_exports)
-                .map_err(|_| RuntimeError::capacity("cannot reserve frame export metadata"))?;
+            entries.try_reserve_exact(max_exports).map_err(|_| {
+                RuntimeError::capacity_with(
+                    "cannot reserve frame export metadata",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::ExportMetadata,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
             prepared.push(Arc::new(Slot {
                 entries: Mutex::new(Entries {
                     values: entries,
@@ -68,8 +86,14 @@ impl ExportPool {
                 });
             }
         }
-        Err(RuntimeError::capacity(
+        Err(RuntimeError::capacity_with(
             "all prepared export slots are retained",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::ExportMetadata,
+                CapacityRecovery::ReleaseOwners,
+                Some(self.slots.len() as u64),
+                (self.slots.len() as u64).checked_add(1),
+            ),
         ))
     }
 
@@ -115,8 +139,14 @@ impl ExportLease {
             Ok(position) => entries.values[position].1 = export,
             Err(position) => {
                 if entries.values.len() == slot.max_exports {
-                    return Err(RuntimeError::capacity(
+                    return Err(RuntimeError::capacity_with(
                         "frame exports exceed prepared capacity",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::ExportMetadata,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
                     ));
                 }
                 entries.values.insert(position, (index, export));

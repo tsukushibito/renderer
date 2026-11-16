@@ -1,5 +1,7 @@
 //! Bounded native frame storage. Leases move ownership without allocating.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use std::{
     ops::Deref,
     sync::{
@@ -128,9 +130,17 @@ unsafe impl Send for ExecutionSlot {}
 
 fn reserved<T>(capacity: usize) -> Result<Vec<T>, D3D12RuntimeError> {
     let mut values = Vec::new();
-    values
-        .try_reserve_exact(capacity)
-        .map_err(|_| D3D12RuntimeError::capacity("frame capacity reservation failed"))?;
+    values.try_reserve_exact(capacity).map_err(|_| {
+        D3D12RuntimeError::capacity_with(
+            "frame capacity reservation failed",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::HostMemory,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        )
+    })?;
     Ok(values)
 }
 impl ExecutionSlot {
@@ -400,8 +410,14 @@ impl FramePool {
                 .iter()
                 .all(|entry| matches!(entry, ExecutionEntry::Available(_)))
             {
-                return Err(D3D12RuntimeError::capacity(
+                return Err(D3D12RuntimeError::capacity_with(
                     "return executions before preparing timestamp storage",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::ExecutionSlots,
+                        CapacityRecovery::ReleaseOwners,
+                        None,
+                        None,
+                    ),
                 ));
             }
             for entry in &mut state.executions {
@@ -445,8 +461,14 @@ impl FramePool {
                 continue;
             }
             if program_count == unique_programs.len() {
-                return Err(D3D12RuntimeError::capacity(
+                return Err(D3D12RuntimeError::capacity_with(
                     "Raster Program working-set capacity exceeded",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
                 ));
             }
             unique_programs[program_count] = Some(*program);
@@ -457,7 +479,17 @@ impl FramePool {
         let class_count = classes
             .len()
             .checked_add(registered_images.len())
-            .ok_or_else(|| D3D12RuntimeError::capacity("image class capacity overflow"))?;
+            .ok_or_else(|| {
+                D3D12RuntimeError::capacity_with(
+                    "image class capacity overflow",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let mut all_classes = reserved(class_count)?;
         all_classes.extend_from_slice(classes);
         all_classes.extend(
@@ -470,7 +502,15 @@ impl FramePool {
             .raster_programs
             .try_reserve_exact(program_count * 2)
             .map_err(|_| {
-                D3D12RuntimeError::capacity("Raster pipeline capacity reservation failed")
+                D3D12RuntimeError::capacity_with(
+                    "Raster pipeline capacity reservation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::HostMemory,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
             })?;
         let mut raster_images = 0;
         for program in unique_programs[..program_count].iter().flatten() {
@@ -502,7 +542,15 @@ impl FramePool {
             .compute_programs
             .try_reserve_exact(compute_programs.len())
             .map_err(|_| {
-                D3D12RuntimeError::capacity("Compute pipeline capacity reservation failed")
+                D3D12RuntimeError::capacity_with(
+                    "Compute pipeline capacity reservation failed",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::HostMemory,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
             })?;
         let mut compute_images = 0;
         for program in compute_programs {
@@ -535,14 +583,36 @@ impl FramePool {
                     .count(),
             );
         }
-        let raster_descriptors = capacity
-            .operations
-            .checked_mul(raster_images)
-            .ok_or_else(|| D3D12RuntimeError::capacity("Raster descriptor capacity overflow"))?;
-        let compute_descriptors = capacity
-            .operations
-            .checked_mul(compute_images)
-            .ok_or_else(|| D3D12RuntimeError::capacity("Compute descriptor capacity overflow"))?;
+        let raster_descriptors =
+            capacity
+                .operations
+                .checked_mul(raster_images)
+                .ok_or_else(|| {
+                    D3D12RuntimeError::capacity_with(
+                        "Raster descriptor capacity overflow",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::Descriptors,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
+                    )
+                })?;
+        let compute_descriptors =
+            capacity
+                .operations
+                .checked_mul(compute_images)
+                .ok_or_else(|| {
+                    D3D12RuntimeError::capacity_with(
+                        "Compute descriptor capacity overflow",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::Descriptors,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
+                    )
+                })?;
         for entry in &mut pool_mut
             .state
             .get_mut()
@@ -631,7 +701,15 @@ impl FramePool {
             .iter()
             .position(|entry| matches!(entry, ExecutionEntry::Available(_)))
             .ok_or_else(|| {
-                D3D12RuntimeError::capacity("all prepared execution slots are occupied")
+                D3D12RuntimeError::capacity_with(
+                    "all prepared execution slots are occupied",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::ExecutionSlots,
+                        CapacityRecovery::ReleaseOwners,
+                        Some(self.capacity.executions as u64),
+                        None,
+                    ),
+                )
             })?;
         let result_index = if needs_result {
             Some(
@@ -640,7 +718,19 @@ impl FramePool {
                     .iter()
                     .position(Option::is_some)
                     .ok_or_else(|| {
-                        D3D12RuntimeError::capacity("all prepared readback slots are occupied")
+                        D3D12RuntimeError::capacity_with(
+                            "all prepared readback slots are occupied",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::ResultSlots,
+                                if self.capacity.results == 0 {
+                                    CapacityRecovery::Reconfigure
+                                } else {
+                                    CapacityRecovery::ReleaseResults
+                                },
+                                Some(self.capacity.results as u64),
+                                Some(1),
+                            ),
+                        )
                     })?,
             )
         } else {
@@ -670,8 +760,14 @@ impl FramePool {
         };
         if work.slot().next_value == u64::MAX {
             work.phase = Phase::Recorded;
-            return Err(D3D12RuntimeError::capacity(
+            return Err(D3D12RuntimeError::capacity_with(
                 "frame fence timeline requires explicit renewal",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExecutionSlots,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         work.slot.as_mut().unwrap().reset(&self.owner)?;

@@ -1,5 +1,8 @@
 //! Independent prepared command/planning and CPU-result backings.
 
+#[cfg(feature = "vulkan-diagnostics")]
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use ash::vk;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -77,7 +80,17 @@ impl WorkData {
                     .graph
                     .name_bytes
                     .checked_add(limit.graph.passes)
-                    .ok_or_else(|| RuntimeError::capacity("debug label capacity overflow"))?,
+                    .ok_or_else(|| {
+                        RuntimeError::capacity_with(
+                            "debug label capacity overflow",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::DiagnosticStorage,
+                                CapacityRecovery::Reconfigure,
+                                None,
+                                None,
+                            ),
+                        )
+                    })?,
             )?,
             passes: reserved(limit.graph.passes)?,
             raster_descriptors: reserved(limit.graph.draws)?,

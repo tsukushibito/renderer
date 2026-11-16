@@ -1,5 +1,7 @@
 //! Acceptance uses public buffer/binding creation and a private exclusive executor.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::*;
 use crate::backends::vulkan::buffer::{BufferRole, VulkanBuffer as TransferBuffer};
 use crate::backends::vulkan::graph::{RuntimeConfig, VulkanRuntime};
@@ -22,7 +24,17 @@ impl StorageLease {
             .storage
             .busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| RuntimeError::capacity("storage buffer is already recorded or pending"))?;
+            .map_err(|_| {
+                RuntimeError::capacity_with(
+                    "storage buffer is already recorded or pending",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::ReleaseOwners,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         let reused = buffer.0.storage.used.load(Ordering::Acquire);
         Ok(Self { buffer, reused })
     }

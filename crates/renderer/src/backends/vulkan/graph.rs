@@ -4,6 +4,7 @@
 //! recorded reference, and accepted state is distinct from actual completion.
 
 use crate::ImageFormat;
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -341,7 +342,12 @@ impl VulkanRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .capture(ranges)
-            .map_err(|_| RuntimeError::capacity("prepared import range snapshots exhausted"))
+            .map_err(|error| {
+                RuntimeError::capacity_with(
+                    "prepared import range snapshots exhausted",
+                    crate::capacity::import_ranges_capacity(&error),
+                )
+            })
     }
 
     /// Prepare native resources and all variable-length frame backing. Normal
@@ -371,8 +377,14 @@ impl VulkanRuntime {
             .map_err(RuntimeError::device_unavailable)?;
         self.collect_recycled();
         if !self.frame_consumers_returned() {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "working-set preparation requires returned frame/result/import tokens",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         if capacity.graph.resources == 0
@@ -401,7 +413,17 @@ impl VulkanRuntime {
             capacity.initialized_ranges_per_resource,
             capacity.range_snapshots,
         )
-        .map_err(|_| RuntimeError::capacity("import range preparation failed"))?;
+        .map_err(|_| {
+            RuntimeError::capacity_with(
+                "import range preparation failed",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ImportRanges,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         let instances = resources.iter().try_fold(0usize, |total, class| {
             let count = match class {
                 ResourceClass::Buffer { count, .. } | ResourceClass::Image { count, .. } => *count,
@@ -411,9 +433,17 @@ impl VulkanRuntime {
                     "resource class count must be nonzero",
                 ));
             }
-            total
-                .checked_add(count)
-                .ok_or_else(|| RuntimeError::capacity("resource working-set count overflow"))
+            total.checked_add(count).ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "resource working-set count overflow",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })
         })?;
         if instances
             > self
@@ -421,8 +451,14 @@ impl VulkanRuntime {
                 .resource_capacity
                 .saturating_sub(self.entries.iter().filter(|entry| entry.registered).count())
         {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "resource working set exceeds registry capacity",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         let mut retained = storage::reserved(instances)?;
@@ -511,12 +547,26 @@ impl VulkanRuntime {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         if self.frame_capacity.is_none() {
-            return Err(RuntimeError::capacity("frame working set is not prepared"));
+            return Err(RuntimeError::capacity_with(
+                "frame working set is not prepared",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
+            ));
         }
         self.collect_recycled();
         if !self.frame_consumers_returned() {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Raster preparation requires returned frame/result/import tokens",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         let replacement = ShaderPrograms::new(
@@ -563,7 +613,15 @@ impl VulkanRuntime {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         if self.frame_capacity.is_none() {
-            return Err(RuntimeError::capacity("frame working set is not prepared"));
+            return Err(RuntimeError::capacity_with(
+                "frame working set is not prepared",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
+            ));
         }
         if self.execution.stats().leased != 0
             || self
@@ -571,8 +629,14 @@ impl VulkanRuntime {
                 .as_ref()
                 .is_some_and(|programs| !programs.is_idle())
         {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "Compute preparation requires retired execution slots",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::ExecutionSlots,
+                    CapacityRecovery::ReleaseOwners,
+                    None,
+                    None,
+                ),
             ));
         }
         let prepared = compute::ComputePrograms::new(
@@ -722,10 +786,19 @@ impl VulkanRuntime {
             results: None,
             frame_capacity: None,
             exports: None,
-            import_ranges: Mutex::new(
-                ImportRangesPool::new(0, config.resource_capacity)
-                    .map_err(|_| RuntimeError::capacity("import range preparation failed"))?,
-            ),
+            import_ranges: Mutex::new(ImportRangesPool::new(0, config.resource_capacity).map_err(
+                |_| {
+                    RuntimeError::capacity_with(
+                        "import range preparation failed",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::ImportRanges,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
+                    )
+                },
+            )?),
             entries,
             vacant,
             available,
@@ -906,6 +979,59 @@ impl VulkanRuntime {
             .ok_or_else(|| RuntimeError::stale("deleted or stale resource generation"))
     }
 
+    fn resource_capacity_context(
+        &self,
+        error: RuntimeError,
+        desc: ResourceDesc,
+        acquired: &[Option<ResourceKey>],
+    ) -> RuntimeError {
+        if error
+            .capacity()
+            .is_none_or(|capacity| capacity.resource != RuntimeCapacityKind::Resources)
+        {
+            return error;
+        }
+        // Failure-only diagnosis. The success path uses the prepared candidate
+        // index; do not scan every registry entry on normal acquisition.
+        let mut limit = 0u64;
+        let mut used = 0u64;
+        let mut retained_elsewhere = false;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.registered || entry.generation == u32::MAX {
+                continue;
+            }
+            let Some(physical) = &entry.physical else {
+                continue;
+            };
+            if physical.desc != desc {
+                continue;
+            }
+            limit += 1;
+            if acquired
+                .iter()
+                .flatten()
+                .any(|key| key.index as usize == index)
+            {
+                used += 1;
+            } else if Arc::strong_count(physical) > 1 {
+                retained_elsewhere = true;
+            }
+        }
+        RuntimeError::capacity_with(
+            error.message,
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::Resources,
+                if retained_elsewhere {
+                    CapacityRecovery::ReleaseOwners
+                } else {
+                    CapacityRecovery::Reconfigure
+                },
+                Some(limit),
+                Some(used + 1),
+            ),
+        )
+    }
+
     fn acquire(
         &mut self,
         desc: ResourceDesc,
@@ -935,10 +1061,26 @@ impl VulkanRuntime {
                 self.vacant.first().copied(),
                 |index| self.entries.get(index).is_some_and(Entry::reusable),
             )
-            .map_err(|()| RuntimeError::capacity("graph physical resource capacity exhausted"))?;
+            .map_err(|()| {
+                RuntimeError::capacity_with(
+                    "graph physical resource capacity exhausted",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Resources,
+                        CapacityRecovery::Reconfigure,
+                        None,
+                        None,
+                    ),
+                )
+            })?;
         if !allow_create && !matches!(target, CacheTarget::Reuse(_)) {
-            return Err(RuntimeError::capacity(
+            return Err(RuntimeError::capacity_with(
                 "resource class has no prepared free instance",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Resources,
+                    CapacityRecovery::Reconfigure,
+                    None,
+                    None,
+                ),
             ));
         }
         if let CacheTarget::Reuse(index) = target {
@@ -1070,10 +1212,17 @@ impl VulkanRuntime {
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        let serial = self
-            .serial
-            .checked_add(1)
-            .ok_or_else(|| RuntimeError::capacity("submission serial exhausted"))?;
+        let serial = self.serial.checked_add(1).ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "submission serial exhausted",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Identity,
+                    CapacityRecovery::Recreate,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         // Reserve native capacity before accepting any other bounded resources.
         let reservation = self.execution.reserve()?;
         let timestamp = if self.profiling_enabled {
@@ -1083,11 +1232,27 @@ impl VulkanRuntime {
         };
         let mut work = GraphWork::acquire(
             Arc::clone(&self.owner),
-            self.workspaces
-                .as_ref()
-                .ok_or_else(|| RuntimeError::capacity("frame working set is not prepared"))?,
+            self.workspaces.as_ref().ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "frame working set is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
+            })?,
             self.results.as_ref().ok_or_else(|| {
-                RuntimeError::capacity("frame result working set is not prepared")
+                RuntimeError::capacity_with(
+                    "frame result working set is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
             })?,
             graph,
             serial,
@@ -1107,7 +1272,17 @@ impl VulkanRuntime {
                     }
                     self.programs
                         .as_ref()
-                        .ok_or_else(|| RuntimeError::capacity("Raster programs are not prepared"))?
+                        .ok_or_else(|| {
+                            RuntimeError::capacity_with(
+                                "Raster programs are not prepared",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::Programs,
+                                    CapacityRecovery::Prepare,
+                                    None,
+                                    None,
+                                ),
+                            )
+                        })?
                         .raster_program(*program, depth.is_some())?;
                 }
                 Operation::AttachmentPass { colors, .. } if colors.len() > 1 => {
@@ -1123,7 +1298,15 @@ impl VulkanRuntime {
                     .as_ref()
                     .is_some_and(|programs| programs.supports(*program))
             {
-                return Err(RuntimeError::capacity("Compute Program is not prepared"));
+                return Err(RuntimeError::capacity_with(
+                    "Compute Program is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::Programs,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                ));
             }
             if let Operation::Declared(kind) = &graph.passes[pass].operation {
                 return Err(RuntimeError::unsupported(format!(
@@ -1175,7 +1358,10 @@ impl VulkanRuntime {
             let (key, value) = if let Some(key) = resource.import {
                 (key, self.lease(key)?)
             } else {
-                self.acquire(resource.desc, graph.resource_name(index))?
+                self.acquire(resource.desc, graph.resource_name(index))
+                    .map_err(|error| {
+                        self.resource_capacity_context(error, resource.desc, &work.keys[..index])
+                    })?
             };
             work.keys[index] = Some(key);
             work.physical[index] = Some(value);
@@ -1207,12 +1393,28 @@ impl VulkanRuntime {
                 .checked_add(count)
                 .filter(|&count| count <= self.config.max_shader_bindings as usize)
                 .ok_or_else(|| {
-                    RuntimeError::capacity("Graph descriptor binding capacity exhausted")
+                    RuntimeError::capacity_with(
+                        "Graph descriptor binding capacity exhausted",
+                        RuntimeCapacityError::new(
+                            RuntimeCapacityKind::Descriptors,
+                            CapacityRecovery::Reconfigure,
+                            None,
+                            None,
+                        ),
+                    )
                 })?;
         }
         let programs = if shader_needs.any() {
             Some(Arc::clone(self.programs.as_ref().ok_or_else(|| {
-                RuntimeError::capacity("shader working set is not prepared")
+                RuntimeError::capacity_with(
+                    "shader working set is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
             })?))
         } else {
             None
@@ -1274,14 +1476,44 @@ impl VulkanRuntime {
         let mut exports = self
             .exports
             .as_mut()
-            .ok_or_else(|| RuntimeError::capacity("frame metadata working set is not prepared"))?
+            .ok_or_else(|| {
+                RuntimeError::capacity_with(
+                    "frame metadata working set is not prepared",
+                    RuntimeCapacityError::new(
+                        RuntimeCapacityKind::WorkingSet,
+                        CapacityRecovery::Prepare,
+                        None,
+                        None,
+                    ),
+                )
+            })?
             .acquire()?;
         for &index in &graph.exports {
             let key = work.keys[index].unwrap();
             let snapshot = work.final_states[index].as_ref().unwrap();
             exports.insert(
                 index,
-                export_snapshot(self, key, graph.resources[index].desc, snapshot)?,
+                export_snapshot(self, key, graph.resources[index].desc, snapshot).map_err(
+                    |error| {
+                        if let Some(capacity) = error.capacity().filter(|capacity| {
+                            capacity.resource == RuntimeCapacityKind::ImportRanges
+                        }) {
+                            let required = graph
+                                .exports
+                                .iter()
+                                .filter(|&&resource| {
+                                    matches!(
+                                        graph.resources[resource].desc,
+                                        ResourceDesc::Buffer(_)
+                                    )
+                                })
+                                .count() as u64;
+                            error.with_capacity_details(capacity.simultaneous_slots(required))
+                        } else {
+                            error
+                        }
+                    },
+                )?,
             )?;
         }
         // Slots become externally named only for an actual export. The local

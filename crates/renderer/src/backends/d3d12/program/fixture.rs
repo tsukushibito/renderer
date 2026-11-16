@@ -1,5 +1,7 @@
 //! Test-only native recording and scoped ownership for managed acceptance.
 
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+
 use super::super::{image::D3D12Image, resources::image_desc};
 use super::*;
 use std::sync::atomic::Ordering;
@@ -190,9 +192,17 @@ fn upload_image(
         D3D12RuntimeError::unsupported("texture footprint exceeds CPU address space")
     })?;
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(total)
-        .map_err(|_| D3D12RuntimeError::capacity("texture staging CPU allocation failed"))?;
+    bytes.try_reserve_exact(total).map_err(|_| {
+        D3D12RuntimeError::capacity_with(
+            "texture staging CPU allocation failed",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::HostMemory,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        )
+    })?;
     bytes.resize(total, 0);
     for row in 0..desc.height as usize {
         let offset = footprint.Offset as usize + row * footprint.Footprint.RowPitch as usize;
