@@ -62,19 +62,13 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 },
             ],
         );
-        // Both descriptors would hit an existing base-extent cache key without
-        // the capability guard. Rejection must precede selection/reuse.
+        // Unsupported array descriptions must be rejected before cache lookup.
         let before = runtime.stats();
-        for desc in [
-            ImageDesc {
-                mip_levels: 2,
-                ..color_desc
-            },
-            ImageDesc {
+        {
+            let desc = ImageDesc {
                 array_layers: 2,
                 ..color_desc
-            },
-        ] {
+            };
             assert_eq!(
                 runtime
                     .acquire_inner(ResourceDesc::Image(desc), "unsupported cache lookup", true)
@@ -1715,4 +1709,158 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             (0, 0)
         );
     });
+}
+
+#[test]
+#[ignore = "real GPU sRGB filtering and packed mip-chain upload/import; run strict and shipping separately"]
+fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
+    use crate::graph::{Binding, BindingResource};
+    use crate::program::{ManagedProgram, SamplerDescriptor};
+    let strict = cfg!(feature = "vulkan-diagnostics");
+    let mut runtime = VulkanRuntime::new_with_validation(
+        RuntimeConfig {
+            execution_slots: 1,
+            resource_capacity: 4,
+            staging_bytes: 4096,
+            max_shader_bindings: 3,
+            staging_ranges: 32,
+        },
+        if strict {
+            super::super::ValidationMode::Required
+        } else {
+            super::super::ValidationMode::Disabled
+        },
+    )
+    .unwrap();
+    assert_ne!(
+        runtime.owner.device.device_type(),
+        vk::PhysicalDeviceType::CPU
+    );
+    let monitor = runtime.validation_monitor();
+    let desc = ImageDesc {
+        mip_levels: 3,
+        format: ImageFormat::Rgba8Srgb,
+        ..ImageDesc::rgba8(4, 4)
+    };
+    prepare_scenario(
+        &mut runtime,
+        4,
+        8,
+        &[
+            ResourceClass::Image { desc, count: 1 },
+            ResourceClass::Buffer {
+                desc: BufferDesc { size: 64 },
+                count: 3,
+            },
+        ],
+    );
+    runtime
+        .prepare_compute_programs(&[ManagedProgram::sampled_float_readback()])
+        .unwrap();
+    let mut graph = Graph::test_new();
+    let source = graph.image("all mips", desc).unwrap();
+    let mut bytes = [255, 0, 0, 255].repeat(16);
+    bytes.extend_from_slice(&[
+        0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255,
+    ]);
+    bytes.extend_from_slice(&[0, 0, 255, 255]);
+    graph.upload_image("packed levels", source, &bytes).unwrap();
+    graph.export_image(source).unwrap();
+    let plan = graph.compile().unwrap();
+    let mut upload = runtime.submit(&plan).unwrap();
+    let exported = upload.export_image(source).unwrap();
+    assert!(
+        exported.initialized,
+        "all mip subresources must be initialized"
+    );
+    let upload_result = upload.wait(WAIT).unwrap().unwrap();
+    drop((upload_result, upload, plan));
+    let mut graph = Graph::test_new();
+    let source = graph.import_image("immutable chain", &exported).unwrap();
+    let views = [
+        graph.sampled_image_view(source, 0, 3).unwrap(),
+        graph.image_view(source, 1, 0).unwrap(),
+        graph.image_view(source, 2, 0).unwrap(),
+    ];
+    let mut reads = Vec::new();
+    for (index, view) in views.into_iter().enumerate() {
+        let output = graph
+            .buffer("sample bits", BufferDesc { size: 64 })
+            .unwrap();
+        graph
+            .dispatch(
+                "sample",
+                &ManagedProgram::sampled_float_readback(),
+                &[
+                    Binding {
+                        group: 0,
+                        binding: 0,
+                        resource: BindingResource::ImageView(view),
+                    },
+                    Binding {
+                        group: 0,
+                        binding: 1,
+                        resource: BindingResource::Sampler(if index == 1 {
+                            SamplerDescriptor::LinearRepeat
+                        } else {
+                            SamplerDescriptor::NearestClamp
+                        }),
+                    },
+                    Binding {
+                        group: 1,
+                        binding: 0,
+                        resource: BindingResource::Buffer {
+                            buffer: output,
+                            offset: 0,
+                            size: 64,
+                        },
+                    },
+                ],
+                [1, 1, 1],
+            )
+            .unwrap();
+        reads.push(graph.readback_buffer("bits", output, 0, 64).unwrap());
+    }
+    let mut submitted = runtime.submit(&graph.compile().unwrap()).unwrap();
+    let mut result = submitted.wait(WAIT).unwrap().unwrap();
+    for (index, read) in reads.into_iter().enumerate() {
+        let bytes = result.test_readback(read).unwrap();
+        let values: Vec<_> = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|value| f32::from_le_bytes(*value))
+            .collect();
+        for (sample, pixel) in values.as_chunks::<4>().0.iter().enumerate() {
+            let expected = match index {
+                0 => [1.0, 0.0, 0.0, 1.0],
+                1 => {
+                    let value = [1.0, 0.7, 0.1, 0.0][sample];
+                    [value, value, value, 1.0]
+                }
+                _ => [0.0, 0.0, 1.0, 1.0],
+            };
+            // Vulkan filtering precision is implementation dependent. 0.005
+            // covers 8-bit interpolation precision but separates a wrong sRGB
+            // decode-after-filter (approximately .448 at .7) by a wide margin.
+            for (value, expected) in pixel.iter().zip(expected) {
+                assert!(
+                    (value - expected).abs() < 0.005,
+                    "level {index} sample {sample}: {pixel:?} vs {expected:?}"
+                );
+            }
+        }
+    }
+    drop((result, submitted));
+    runtime.delete(exported.key()).unwrap();
+    drop(runtime);
+    let report = monitor.report();
+    assert!(
+        report.is_clean(),
+        "diagnostics through destruction: {report:#?}"
+    );
+    if strict {
+        assert_eq!(report.core_validation, Some(true));
+        assert_eq!(report.synchronization_validation, Some(true));
+    }
 }

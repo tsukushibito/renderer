@@ -170,7 +170,10 @@ impl D3D12Runtime {
 
 /// Fixed sampler settings shared by immutable native bindings and prepared Graph heaps.
 pub(super) fn sampler_desc(desc: SamplerDescriptor) -> D3D12_SAMPLER_DESC {
-    let linear = desc == SamplerDescriptor::LinearRepeat;
+    let linear = match desc {
+        SamplerDescriptor::NearestClamp => false,
+        SamplerDescriptor::LinearRepeat => true,
+    };
     D3D12_SAMPLER_DESC {
         Filter: if linear {
             D3D12_FILTER_MIN_MAG_MIP_LINEAR

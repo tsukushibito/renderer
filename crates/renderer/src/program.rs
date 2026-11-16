@@ -256,6 +256,8 @@ impl Default for ImageViewDescriptor {
 /// or anisotropy. Native image/format capabilities are checked before use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SamplerDescriptor {
+    /// Nearest minification/magnification/mip selection, clamp-to-edge on all
+    /// axes, and LOD zero.
     NearestClamp,
     /// Linear minification/magnification and mip interpolation, repeat on all
     /// axes, and the complete selected View's LOD range.
@@ -511,9 +513,11 @@ impl ManagedProgram {
         }
     }
 
-    /// Reviewed compute asset: four nearest/clamp samples preserve all RGBA
-    /// FP32 component bits in exactly 64 storage bytes. RGBA16F sampling needs
-    /// no shader FP16 feature. Dispatch executes one invocation.
+    /// Reviewed compute asset: four normalized-coordinate samples at View LOD
+    /// zero preserve all RGBA FP32 component bits in exactly 64 storage bytes.
+    /// The selected immutable sampler supplies filtering and addressing; the
+    /// image format supplies sRGB decoding. RGBA16F needs no shader FP16 feature.
+    /// Dispatch executes one invocation.
     pub const fn sampled_float_readback() -> Self {
         Self {
             manifest: &SAMPLED_FLOAT_READBACK,
@@ -578,8 +582,12 @@ impl std::fmt::Display for ProgramError {
             Self::InvalidAlignment => "buffer offset does not meet Device binding alignment",
             Self::InvalidRange => "buffer range is outside the shader or Device limits",
             Self::OutOfBounds => "binding range exceeds the logical buffer",
-            Self::InvalidExtent => "image extent must be nonzero and within Device limits",
-            Self::InvalidViewRange => "image View must cover mip zero and layer zero exactly once",
+            Self::InvalidExtent => {
+                "image extent and mip count must be nonzero and within Device limits"
+            }
+            Self::InvalidViewRange => {
+                "image View requires a nonempty in-bounds mip range in layer zero"
+            }
             Self::InvalidClearValue => {
                 "preferred depth clear must be finite, within [0, 1], and not subnormal"
             }
@@ -1038,6 +1046,7 @@ mod tests {
         };
         for format in [
             ImageFormat::Rgba8Unorm,
+            ImageFormat::Rgba8Srgb,
             ImageFormat::Rgba16Float,
             ImageFormat::Depth32Float,
         ] {
@@ -1128,6 +1137,50 @@ mod tests {
         ] {
             assert_eq!(
                 validate_image_view_descriptor(ImageFormat::Depth32Float, 1, invalid),
+                Err(ProgramError::InvalidViewRange)
+            );
+        }
+    }
+
+    #[test]
+    fn mip_image_and_sampled_view_ranges_are_validated_at_creation() {
+        let desc = ImageDescriptor {
+            width: 4,
+            height: 2,
+            mip_levels: 3,
+            format: ImageFormat::Rgba8Srgb,
+            preferred_depth_clear: None,
+        };
+        validate_image_descriptor(desc, 4).unwrap();
+        for mip_levels in [0, 4, u32::MAX] {
+            assert_eq!(
+                validate_image_descriptor(ImageDescriptor { mip_levels, ..desc }, 4),
+                Err(ProgramError::InvalidExtent)
+            );
+        }
+        for (base_mip_level, mip_level_count) in [(0, 3), (1, 2), (2, 1)] {
+            validate_image_view_descriptor(
+                desc.format,
+                desc.mip_levels,
+                ImageViewDescriptor {
+                    base_mip_level,
+                    mip_level_count,
+                    ..ImageViewDescriptor::default()
+                },
+            )
+            .unwrap();
+        }
+        for (base_mip_level, mip_level_count) in [(0, 0), (3, 1), (1, 3), (1, u32::MAX)] {
+            assert_eq!(
+                validate_image_view_descriptor(
+                    desc.format,
+                    desc.mip_levels,
+                    ImageViewDescriptor {
+                        base_mip_level,
+                        mip_level_count,
+                        ..ImageViewDescriptor::default()
+                    }
+                ),
                 Err(ProgramError::InvalidViewRange)
             );
         }
