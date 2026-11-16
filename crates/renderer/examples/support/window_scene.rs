@@ -171,6 +171,11 @@ pub fn build(
 }
 
 pub fn verify(bytes: &[u8]) -> Result<(u64, usize), &'static str> {
+    if bytes.first_chunk::<4>() != Some(&COLORS[0]) {
+        return Err(
+            "fixed-camera source corner does not contain the independent expected clear color",
+        );
+    }
     let mut digest = 0xcbf2_9ce4_8422_2325_u64;
     let mut geometry = 0;
     for pixel in bytes.as_chunks::<4>().0 {
@@ -197,6 +202,7 @@ mod tests {
     fn readback_acceptance_checks_palette_and_visible_geometry() {
         assert!(verify(&COLORS[0]).is_err());
         assert!(verify(&[0, 0, 0, 255]).is_err());
-        assert_eq!(verify(&COLORS[1]).unwrap().1, 1);
+        assert!(verify(&COLORS[1]).is_err());
+        assert_eq!(verify(&[COLORS[0], COLORS[1]].concat()).unwrap().1, 1);
     }
 }
