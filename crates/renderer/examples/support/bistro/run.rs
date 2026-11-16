@@ -295,104 +295,6 @@ fn write_report(directory: &Path, report: &Value) -> Result<(), Error> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn fixture_options() -> Options {
-        Options::parse(
-            ["--fixture", "--frames", "1", "--warmup", "0"]
-                .into_iter()
-                .map(str::to_owned),
-        )
-        .unwrap()
-    }
-    #[test]
-    fn missing_requested_gpu_samples_are_not_reported_as_zero_time() {
-        let mut options = fixture_options();
-        let sample = Sample {
-            phases: [1, 2, 3, 4, 5],
-            latency: 30,
-            native: None,
-        };
-        assert_eq!(
-            measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).unwrap()["gpu"]
-                ["samples"],
-            0
-        );
-        options.gpu_timing = true;
-        assert!(measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).is_err());
-        assert!(measurement(&[], &options, 100, Value::Null).is_err());
-    }
-    #[test]
-    fn report_identity_uses_the_manifest_bytes_actually_loaded() {
-        let mut scene = Scene::fixture(false);
-        let loaded = "ab".repeat(32);
-        scene.source["cooked_manifest_sha256"] = json!(loaded);
-        let hash = loaded_cook_hash(&scene, false).unwrap();
-        assert_eq!(
-            identity(&fixture_options(), &hash, "conditions")["cook_manifest_sha256"],
-            loaded
-        );
-        scene
-            .source
-            .as_object_mut()
-            .unwrap()
-            .remove("cooked_manifest_sha256");
-        assert!(loaded_cook_hash(&scene, false).is_err());
-        assert!(loaded_cook_hash(&scene, true).is_ok());
-    }
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    fn native_fixture<B: Backend>() {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "renderer-bistro-fixture-{}-{stamp}",
-            std::process::id()
-        ));
-        for (label, alpha_only, force_opaque) in [
-            ("materials", false, false),
-            ("alpha-zero", true, false),
-            ("opaque-override", true, true),
-        ] {
-            let mut options = fixture_options();
-            options.frames = 8;
-            options.warmup = 8;
-            options.alpha_only = alpha_only;
-            options.force_opaque = force_opaque;
-            options.output = root.join(label);
-            execute::<B>(&options).unwrap();
-            let report: Value =
-                serde_json::from_slice(&std::fs::read(options.output.join("report.json")).unwrap())
-                    .unwrap();
-            let coverage = report["depth_coverage_pixels"].as_u64().unwrap();
-            assert_eq!(
-                coverage == 0,
-                alpha_only && !force_opaque,
-                "source alpha coverage and opaque diagnostic sensitivity"
-            );
-            assert_eq!(report["validation"]["clean"], true);
-            if alpha_only && !force_opaque {
-                super::super::asset::material_tests::alpha_background(&report);
-            }
-        }
-        super::super::asset::material_tests::native_acceptance::<B>();
-    }
-    #[cfg(feature = "vulkan")]
-    #[test]
-    #[ignore = "requires real Vulkan GPU; execute explicitly in shipping and strict configurations"]
-    fn vulkan_materials_and_alpha_coverage() {
-        native_fixture::<super::super::backend::Vulkan>();
-    }
-    #[cfg(all(windows, feature = "d3d12"))]
-    #[test]
-    #[ignore = "requires real D3D12 GPU; execute explicitly in shipping and strict configurations"]
-    fn d3d12_materials_and_alpha_coverage() {
-        native_fixture::<super::super::backend::D3d12>();
-    }
-}
-
 #[cfg(feature = "memory-profiling")]
 fn memory_report(snapshot: renderer::measurement::Snapshot) -> Value {
     json!({"rust":snapshot.rust.map(|event|json!({"calls":event.calls,"bytes":event.bytes})),
@@ -582,4 +484,102 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         return Err("steady-state allocation/native event gate failed; inspect report.json".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture_options() -> Options {
+        Options::parse(
+            ["--fixture", "--frames", "1", "--warmup", "0"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn missing_requested_gpu_samples_are_not_reported_as_zero_time() {
+        let mut options = fixture_options();
+        let sample = Sample {
+            phases: [1, 2, 3, 4, 5],
+            latency: 30,
+            native: None,
+        };
+        assert_eq!(
+            measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).unwrap()["gpu"]
+                ["samples"],
+            0
+        );
+        options.gpu_timing = true;
+        assert!(measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).is_err());
+        assert!(measurement(&[], &options, 100, Value::Null).is_err());
+    }
+    #[test]
+    fn report_identity_uses_the_manifest_bytes_actually_loaded() {
+        let mut scene = Scene::fixture(false);
+        let loaded = "ab".repeat(32);
+        scene.source["cooked_manifest_sha256"] = json!(loaded);
+        let hash = loaded_cook_hash(&scene, false).unwrap();
+        assert_eq!(
+            identity(&fixture_options(), &hash, "conditions")["cook_manifest_sha256"],
+            loaded
+        );
+        scene
+            .source
+            .as_object_mut()
+            .unwrap()
+            .remove("cooked_manifest_sha256");
+        assert!(loaded_cook_hash(&scene, false).is_err());
+        assert!(loaded_cook_hash(&scene, true).is_ok());
+    }
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn native_fixture<B: Backend>() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "renderer-bistro-fixture-{}-{stamp}",
+            std::process::id()
+        ));
+        for (label, alpha_only, force_opaque) in [
+            ("materials", false, false),
+            ("alpha-zero", true, false),
+            ("opaque-override", true, true),
+        ] {
+            let mut options = fixture_options();
+            options.frames = 8;
+            options.warmup = 8;
+            options.alpha_only = alpha_only;
+            options.force_opaque = force_opaque;
+            options.output = root.join(label);
+            execute::<B>(&options).unwrap();
+            let report: Value =
+                serde_json::from_slice(&std::fs::read(options.output.join("report.json")).unwrap())
+                    .unwrap();
+            let coverage = report["depth_coverage_pixels"].as_u64().unwrap();
+            assert_eq!(
+                coverage == 0,
+                alpha_only && !force_opaque,
+                "source alpha coverage and opaque diagnostic sensitivity"
+            );
+            assert_eq!(report["validation"]["clean"], true);
+            if alpha_only && !force_opaque {
+                super::super::asset::material_tests::alpha_background(&report);
+            }
+        }
+        super::super::asset::material_tests::native_acceptance::<B>();
+    }
+    #[cfg(feature = "vulkan")]
+    #[test]
+    #[ignore = "requires real Vulkan GPU; execute explicitly in shipping and strict configurations"]
+    fn vulkan_materials_and_alpha_coverage() {
+        native_fixture::<super::super::backend::Vulkan>();
+    }
+    #[cfg(all(windows, feature = "d3d12"))]
+    #[test]
+    #[ignore = "requires real D3D12 GPU; execute explicitly in shipping and strict configurations"]
+    fn d3d12_materials_and_alpha_coverage() {
+        native_fixture::<super::super::backend::D3d12>();
+    }
 }
