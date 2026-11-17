@@ -110,6 +110,8 @@ pub(super) struct RasterStorage {
     srv: DescriptorHeap,
     sampler: DescriptorHeap,
     pub(super) images: Vec<GraphImage>,
+    image_slots: ImageSlots,
+    target_views: TargetViews,
     texture_cpu_start: D3D12_CPU_DESCRIPTOR_HANDLE,
     texture_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
     sampler_gpu_start: D3D12_GPU_DESCRIPTOR_HANDLE,
@@ -123,6 +125,141 @@ pub(super) struct RasterStorage {
     raster_srvs: RasterSrvCache,
     #[cfg(test)]
     pub(super) srv_creations: usize,
+    #[cfg(test)]
+    pub(super) target_view_creations: [usize; 2],
+}
+
+type ImageClassKey = (u32, u32, u32, u32, u32);
+
+fn image_class_key(desc: ImageDesc) -> ImageClassKey {
+    (
+        desc.width,
+        desc.height,
+        desc.format as u32,
+        desc.mip_levels,
+        desc.array_layers,
+    )
+}
+
+struct ImageSlotClass {
+    key: ImageClassKey,
+    slots: std::ops::Range<usize>,
+    next: usize,
+}
+
+/// Immutable description classes and their available local slots. Native
+/// resources are still selected separately by the canonical registry. A class
+/// lookup is O(log C), and taking its next slot is O(1), even when many logical
+/// images have the same description or prepared classes repeat that description.
+struct ImageSlots {
+    classes: Vec<ImageSlotClass>,
+    candidates: Vec<usize>,
+    touched_classes: Vec<usize>,
+}
+
+impl ImageSlots {
+    fn new(
+        descriptions: impl ExactSizeIterator<Item = ImageDesc>,
+    ) -> Result<Self, D3D12RuntimeError> {
+        let total = descriptions.len();
+        let mut sorted = reserved(total)?;
+        sorted.extend(
+            descriptions
+                .enumerate()
+                .map(|(index, desc)| (image_class_key(desc), index)),
+        );
+        sorted.sort_unstable();
+        let class_count = usize::from(!sorted.is_empty())
+            + sorted
+                .windows(2)
+                .filter(|pair| pair[0].0 != pair[1].0)
+                .count();
+        let mut classes: Vec<ImageSlotClass> = reserved(class_count)?;
+        let mut candidates = reserved(total)?;
+        for (key, index) in sorted {
+            let position = candidates.len();
+            if classes.last().is_none_or(|class| class.key != key) {
+                classes.push(ImageSlotClass {
+                    key,
+                    slots: position..position,
+                    next: position,
+                });
+            }
+            candidates.push(index);
+            classes.last_mut().unwrap().slots.end += 1;
+        }
+        Ok(Self {
+            classes,
+            candidates,
+            touched_classes: reserved(class_count)?,
+        })
+    }
+
+    fn take(&mut self, desc: ImageDesc) -> Result<usize, D3D12RuntimeError> {
+        let class = self
+            .classes
+            .binary_search_by_key(&image_class_key(desc), |class| class.key);
+        if let Ok(index) = class {
+            let class = &mut self.classes[index];
+            if class.next < class.slots.end {
+                if class.next == class.slots.start {
+                    // A class is appended once per exclusive lease, so its
+                    // prepared count also bounds this reset list exactly.
+                    self.touched_classes.push(index);
+                }
+                let image = self.candidates[class.next];
+                class.next += 1;
+                return Ok(image);
+            }
+        }
+        Err(D3D12RuntimeError::capacity_with(
+            "prepared Raster image class exhausted",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::Resources,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        ))
+    }
+
+    fn reset(&mut self) {
+        for index in self.touched_classes.drain(..) {
+            let class = &mut self.classes[index];
+            class.next = class.slots.start;
+        }
+    }
+}
+
+/// Only attachment accesses require CPU target descriptors. Deduplicate their
+/// local slots so sampled/copy/storage-only images never receive unused views.
+struct TargetViews {
+    marked: Vec<bool>,
+    indices: Vec<usize>,
+}
+
+impl TargetViews {
+    fn new(images: usize) -> Result<Self, D3D12RuntimeError> {
+        let mut marked = reserved(images)?;
+        marked.resize(images, false);
+        Ok(Self {
+            marked,
+            indices: reserved(images)?,
+        })
+    }
+
+    fn require(&mut self, image: usize) {
+        if !self.marked[image] {
+            self.marked[image] = true;
+            self.indices.push(image);
+        }
+    }
+
+    fn reset(&mut self) {
+        for image in self.indices.drain(..) {
+            self.marked[image] = false;
+        }
+    }
 }
 
 /// Prepared per-pass state aggregation. The two native index namespaces remain
@@ -535,11 +672,19 @@ impl RasterStorage {
         Ok(descriptor)
     }
 
-    pub(super) fn bind_views(&self, owner: &DeviceOwner) {
-        for image in &self.images {
-            if !image.used {
-                continue;
-            }
+    pub(super) fn use_image(&mut self, desc: ImageDesc) -> Result<usize, D3D12RuntimeError> {
+        let index = self.image_slots.take(desc)?;
+        self.images[index].used = true;
+        Ok(index)
+    }
+
+    pub(super) fn require_target_view(&mut self, image: usize) {
+        self.target_views.require(image);
+    }
+
+    pub(super) fn bind_views(&mut self, owner: &DeviceOwner) {
+        for &index in &self.target_views.indices {
+            let image = &self.images[index];
             if let Some(handle) = image.rtv {
                 // SAFETY: This exclusive execution slot owns the CPU descriptor;
                 // the leased native image matches its prepared color class.
@@ -548,6 +693,10 @@ impl RasterStorage {
                         .raw
                         .CreateRenderTargetView(image.native.raw(), None, handle)
                 };
+                #[cfg(test)]
+                {
+                    self.target_view_creations[0] += 1;
+                }
             }
             if let Some(handle) = image.dsv {
                 let view = D3D12_DEPTH_STENCIL_VIEW_DESC {
@@ -565,6 +714,10 @@ impl RasterStorage {
                         .raw
                         .CreateDepthStencilView(image.native.raw(), Some(&view), handle)
                 };
+                #[cfg(test)]
+                {
+                    self.target_view_creations[1] += 1;
+                }
             }
         }
     }
@@ -798,12 +951,15 @@ impl RasterStorage {
                 );
             }
         }
+        let image_slots = ImageSlots::new(images.iter().map(|image| image.desc))?;
         Ok(Self {
             _rtv_heap: rtv_heap,
             _dsv_heap: dsv_heap,
             srv,
             sampler,
             images,
+            image_slots,
+            target_views: TargetViews::new(total)?,
             texture_cpu_start,
             texture_gpu_start,
             sampler_gpu_start,
@@ -817,6 +973,8 @@ impl RasterStorage {
             raster_srvs: RasterSrvCache::new(raster_descriptor_capacity)?,
             #[cfg(test)]
             srv_creations: 0,
+            #[cfg(test)]
+            target_view_creations: [0; 2],
         })
     }
 
@@ -826,9 +984,12 @@ impl RasterStorage {
         // cancelled recording was never executed and cannot change their state.
         self.scopes.reset();
         self.raster_srvs.reset();
+        self.image_slots.reset();
+        self.target_views.reset();
         #[cfg(test)]
         {
             self.srv_creations = 0;
+            self.target_view_creations = [0; 2];
         }
         for image in &mut self.images {
             image.state = D3D12_RESOURCE_STATE_COMMON;
@@ -884,6 +1045,100 @@ impl RasterStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_slots_preserve_lowest_index_across_repeated_classes_and_reset() {
+        let small = ImageDesc::rgba8(1, 1);
+        let large = ImageDesc::rgba8(128, 64);
+        let depth = ImageDesc::depth32(1, 1);
+        let mut mipped = small;
+        mipped.mip_levels = 2;
+        // Registered images may repeat any earlier working-set class, and the
+        // caller's preparation order need not be sorted by description.
+        let descriptions = [large, small, depth, small, mipped, large, small];
+        let mut slots = ImageSlots::new(descriptions.into_iter()).unwrap();
+        let capacity = (slots.classes.capacity(), slots.candidates.capacity());
+        for _ in 0..3 {
+            assert_eq!(slots.take(small).unwrap(), 1);
+            assert_eq!(slots.take(large).unwrap(), 0);
+            assert_eq!(slots.take(small).unwrap(), 3);
+            assert_eq!(slots.take(depth).unwrap(), 2);
+            assert_eq!(slots.take(mipped).unwrap(), 4);
+            assert_eq!(slots.take(large).unwrap(), 5);
+            assert!(slots.take(large).is_err());
+            // A failed request must not consume a different class's last slot.
+            assert_eq!(slots.take(small).unwrap(), 6);
+            assert!(slots.take(small).is_err());
+            assert!(slots.take(ImageDesc::rgba16_float(1, 1)).is_err());
+            slots.reset();
+        }
+        assert_eq!(
+            capacity,
+            (slots.classes.capacity(), slots.candidates.capacity())
+        );
+        let mut empty = ImageSlots::new(std::iter::empty()).unwrap();
+        assert!(empty.take(small).is_err());
+        empty.reset();
+    }
+
+    #[test]
+    fn image_slots_consume_large_classes_once_without_metadata_growth() {
+        let desc = ImageDesc::rgba8(1, 1);
+        let mut slots = ImageSlots::new(std::iter::repeat_n(desc, 4096)).unwrap();
+        let capacity = (slots.classes.capacity(), slots.candidates.capacity());
+        for _ in 0..2 {
+            for expected in 0..4096 {
+                assert_eq!(slots.take(desc).unwrap(), expected);
+            }
+            assert!(slots.take(desc).is_err());
+            slots.reset();
+        }
+        assert_eq!(
+            capacity,
+            (slots.classes.capacity(), slots.candidates.capacity())
+        );
+    }
+
+    #[test]
+    fn image_slots_reset_only_classes_used_by_the_current_lease() {
+        let descriptions = (1..1025).map(|width| ImageDesc::rgba8(width, 1));
+        let mut slots = ImageSlots::new(descriptions).unwrap();
+        let capacity = slots.touched_classes.capacity();
+        for _ in 0..3 {
+            assert_eq!(slots.take(ImageDesc::rgba8(900, 1)).unwrap(), 899);
+            assert!(slots.take(ImageDesc::rgba8(900, 1)).is_err());
+            assert_eq!(slots.take(ImageDesc::rgba8(2, 1)).unwrap(), 1);
+            assert!(slots.take(ImageDesc::rgba8(2048, 1)).is_err());
+            assert_eq!(slots.touched_classes, [899, 1]);
+            slots.reset();
+            assert!(slots.touched_classes.is_empty());
+        }
+        assert_eq!(capacity, slots.touched_classes.capacity());
+    }
+
+    #[test]
+    fn target_views_keep_only_unique_attachments_and_reset_cancelled_requirements() {
+        let mut views = TargetViews::new(4).unwrap();
+        let capacity = (views.marked.capacity(), views.indices.capacity());
+        // Slots 0 and 2 represent live sampled/storage-only images: merely
+        // assigning a local slot does not require an RTV or DSV for them.
+        views.require(3);
+        views.require(1);
+        views.require(3);
+        assert_eq!(views.indices, [3, 1]);
+        views.reset();
+        assert!(views.marked.iter().all(|&marked| !marked));
+        // The next exclusive lease may use a former sampled slot as a target.
+        views.require(0);
+        views.require(0);
+        assert_eq!(views.indices, [0]);
+        assert_eq!(
+            capacity,
+            (views.marked.capacity(), views.indices.capacity())
+        );
+        views.reset();
+        TargetViews::new(0).unwrap().reset();
+    }
 
     #[test]
     fn pass_scopes_keep_unique_first_use_order_and_recover_from_partial_drain() {

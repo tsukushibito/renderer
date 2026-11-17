@@ -108,23 +108,7 @@ pub(super) fn use_image(
             "D3D12 Graph images currently require one layer",
         ));
     }
-    let (physical, image) = storage
-        .images
-        .iter_mut()
-        .enumerate()
-        .find(|(_, image)| !image.used && image.desc == desc)
-        .ok_or_else(|| {
-            D3D12RuntimeError::capacity_with(
-                "prepared Raster image class exhausted",
-                RuntimeCapacityError::new(
-                    RuntimeCapacityKind::Resources,
-                    CapacityRecovery::Reconfigure,
-                    None,
-                    None,
-                ),
-            )
-        })?;
-    image.used = true;
+    let physical = storage.use_image(desc)?;
     map[index] = physical;
     Ok(())
 }
@@ -953,6 +937,13 @@ mod tests {
         work.slot().raster.as_ref().unwrap().srv_creations
     }
 
+    fn target_view_creations(prepared: &super::super::D3D12PreparedGraph) -> [usize; 2] {
+        let super::super::PreparedWork::Pooled(work) = &prepared.kind else {
+            panic!("pooled Graph expected")
+        };
+        work.slot().raster.as_ref().unwrap().target_view_creations
+    }
+
     #[test]
     #[ignore = "requires real D3D12 hardware and requested native diagnostics"]
     fn d3d12_raster_srv_reuse_preserves_views_cancel_and_pending_ownership() {
@@ -1002,6 +993,9 @@ mod tests {
         let cancelled = runtime.prepare(&graph).unwrap();
         // Eight binding occurrences across four passes create only three views.
         assert_eq!(srv_creations(&cancelled), 3);
+        // All four passes share one target. The two sampled-only color images
+        // must not receive unused RTVs (including the multi-mip texture).
+        assert_eq!(target_view_creations(&cancelled), [1, 0]);
         assert!(
             runtime.prepare(&graph).is_err(),
             "recorded descriptors remain exclusively leased"
@@ -1012,6 +1006,7 @@ mod tests {
             // Reset invalidates every prior key, even if the native resources
             // happen to keep the same address after cancel/retirement.
             assert_eq!(srv_creations(&prepared), 3);
+            assert_eq!(target_view_creations(&prepared), [1, 0]);
             let mut submission = runtime.submit_prepared(prepared).unwrap();
             assert!(
                 runtime.prepare(&graph).is_err(),
@@ -1026,6 +1021,67 @@ mod tests {
             drop((result, submission));
         }
         drop((bad_graph, bad_pool, graph, pool));
+        // Exercise the attachment-only path after a working-set change. A live
+        // transfer-only color image still requires no target view, while the
+        // depth attachment requires one DSV even though there are no draws.
+        runtime
+            .prepare_graph_working_set(
+                None,
+                &[
+                    D3D12ImageClass {
+                        desc: ImageDesc::depth32(1, 1),
+                        count: 1,
+                    },
+                    D3D12ImageClass {
+                        desc: ImageDesc::rgba8(1, 1),
+                        count: 1,
+                    },
+                ],
+                &[],
+                &[],
+            )
+            .unwrap();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let depth = graph.image("depth", ImageDesc::depth32(1, 1)).unwrap();
+        let color = graph
+            .image("transfer only", ImageDesc::rgba8(1, 1))
+            .unwrap();
+        graph
+            .upload_image("transfer", color, &[1, 2, 3, 4])
+            .unwrap();
+        graph
+            .attachment_pass(
+                "depth only",
+                RasterAttachments {
+                    colors: &[],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+        let depth_result = graph.readback_image("depth result", depth).unwrap();
+        let color_result = graph.readback_image("transfer result", color).unwrap();
+        let graph = graph.compile().unwrap();
+        let cancelled = runtime.prepare(&graph).unwrap();
+        assert_eq!(target_view_creations(&cancelled), [0, 1]);
+        drop(cancelled);
+        let prepared = runtime.prepare(&graph).unwrap();
+        assert_eq!(target_view_creations(&prepared), [0, 1]);
+        let mut submission = runtime.submit_prepared(prepared).unwrap();
+        let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
+        for (pass, expected) in [
+            (depth_result, 1.0_f32.to_le_bytes()),
+            (color_result, [1, 2, 3, 4]),
+        ] {
+            let mut actual = [0; 4];
+            result.readback_into(pass, &mut actual).unwrap();
+            assert_eq!(actual, expected);
+        }
+        drop((result, submission, graph, pool));
         runtime.shutdown().unwrap();
         let report = monitor.snapshot();
         assert!(report.is_clean(), "{report:#?}");
