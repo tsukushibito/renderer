@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import json
+import os
 import struct
 
 import b3_benchmark as b3
@@ -159,6 +160,39 @@ class B3ComparisonTests(unittest.TestCase):
             (directory / "sdr.bin").write_bytes(bytes([1, 0, 0, 255]))
             with self.assertRaisesRegex(ValueError, "raw capture changed"):
                 b3.verify_renderer_outputs(record)
+
+    def test_fixed_view_paths_accept_canonical_forms_and_reject_escapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary).resolve() / "run"
+            directory.mkdir()
+            root = directory / "report.json"
+            report_value = {"identity": {"view": "route"}, "views": [], "captures": {}}
+            root.write_text(json.dumps(report_value), encoding="utf-8")
+            paths = []
+            for view in sorted(b3.VIEWS):
+                path = directory / "views" / view / "report.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({"identity": {"view": view}, "captures": {}}), encoding="utf-8")
+                paths.append((view, path))
+            styles = ("relative", "absolute", "extended") if os.name == "nt" else ("relative", "absolute")
+            # Plane decoding has independent real-byte tests. This regression
+            # exercises actual report I/O and directory containment only.
+            with patch.object(b3, "load_capture", return_value=(None, {"width": 1920, "height": 1080})):
+                for style in styles:
+                    report_value["views"] = [{"view": view, "report":
+                        str(path.relative_to(directory)) if style == "relative" else
+                        ("\\\\?\\" if style == "extended" else "") + str(path)} for view, path in paths]
+                    with self.subTest(style=style):
+                        self.assertEqual(set(b3.captures(root, report_value)), {"route0", *b3.VIEWS})
+                outside = directory.parent / "b3-outside-report.json"
+                outside.write_text(json.dumps({"identity": {"view": paths[0][0]}, "captures": {}}), encoding="utf-8")
+                try:
+                    for prefix in (("", "\\\\?\\") if os.name == "nt" else ("",)):
+                        report_value["views"][0]["report"] = prefix + str(outside)
+                        with self.subTest(outside_prefix=prefix), self.assertRaisesRegex(ValueError, "escapes"):
+                            b3.captures(root, report_value)
+                finally:
+                    outside.unlink()
 
 
 if __name__ == "__main__":

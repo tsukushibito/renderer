@@ -17,7 +17,8 @@ import subprocess
 import sys
 import time
 
-from compare_runtime import digest, load_capture, load_json, compare_reports
+from compare_runtime import (digest, load_capture, load_json, compare_reports,
+                             _resolve_capture_path, _inside_directory)
 import measure_runtime as renderer_measure
 
 
@@ -283,11 +284,13 @@ def reference_ratios(renderer_groups, godot_groups):
 
 def captures(path, report):
     result = {"route0": (Path(path), report)}
+    directory = _resolve_capture_path(path).parent
     require({entry["view"] for entry in report["views"]} == VIEWS and len(report["views"]) == 7,
             "All seven Renderer fixed-view captures are required")
     for entry in report["views"]:
-        view_path = Path(entry["report"]).resolve()
-        require(view_path.is_relative_to(Path(path).resolve().parent), "Fixed-view report escapes its run directory")
+        candidate = Path(entry["report"])
+        view_path = _resolve_capture_path(candidate if candidate.is_absolute() else directory / candidate)
+        require(_inside_directory(view_path, directory), "Fixed-view report escapes its run directory")
         result[entry["view"]] = (view_path, load_json(view_path))
     identity = {}
     for name, (capture_path, capture_report) in result.items():
