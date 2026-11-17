@@ -170,6 +170,10 @@ resourceの最初のreadと、その全属性が完全一致する反復はhash�
 以後の異なるreadは既存のhash索引を使い、多数rangeをresourceごとの線形列へ変えない。
 保持位置は圧縮中も後続要素に上書きされず、各passの開始とslot resetで使用resource/bucketだけを消す。
 代償は準備時のmetadata増加であり、追加容量・通常frameの確保・失敗時の再走査へ移さない。
+昇格後も最初のreadとの完全一致比較を先に行い、そのreadの反復をhashへ戻さない。
+代案の昇格後hash直行はこの比較を省けるが、最初のreadが反復する場合の費用を戻す。
+現在はBistroの実測効果と完全一致readの再利用を選び、単一resourceの多数の異なるrange等で残る
+追加定数費用を[前後比較の交換条件](../verification/current.md#rendergraph-hotspot-optimization)へ記録する。
 templateは最大`bindings × size_of::<ResourceAccess>()`、setの使用markと
 列は最大`bindings × (size_of::<bool>() + size_of::<usize>())`を各Graph slotに準備する。
 access容量は圧縮前の構築作業領域も覆う。通常frameでheapを増設せず、容量不足は明示エラーとする。
