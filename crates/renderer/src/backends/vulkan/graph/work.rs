@@ -32,16 +32,11 @@ pub(super) fn validate_sampled_operands(
     layout: &[crate::program::BindingLayout],
     operands: &[crate::graph::BindingOperands],
     physical: &[Option<super::PhysicalLease>],
+    raster_pairs: Option<&[crate::program::SampledImageSamplerPair]>,
 ) -> Result<(), RuntimeError> {
     use crate::graph::BindingOperands;
-    use crate::program::{BindingType, SamplerDescriptor};
-    let linear = operands.iter().any(|operand| {
-        matches!(
-            operand,
-            BindingOperands::Sampler(SamplerDescriptor::LinearRepeat)
-        )
-    });
-    for (slot, operand) in layout.iter().zip(operands) {
+    use crate::program::BindingType;
+    for (index, (slot, operand)) in layout.iter().zip(operands).enumerate() {
         if let BindingOperands::ImageView(view) = operand {
             let image = physical[view.image().index].as_ref().unwrap().image();
             if matches!(
@@ -61,7 +56,9 @@ pub(super) fn validate_sampled_operands(
                     "native image bindings support one mip or the complete mip chain",
                 ));
             }
-            if linear && slot.kind == BindingType::SampledImage && !image.supports_linear_filtering
+            if slot.kind == BindingType::SampledImage
+                && image_requires_linear_filtering(layout, operands, raster_pairs, index)
+                && !image.supports_linear_filtering
             {
                 return Err(RuntimeError::unsupported(
                     "sampled image format does not support linear filtering",
@@ -70,6 +67,42 @@ pub(super) fn validate_sampled_operands(
         }
     }
     Ok(())
+}
+
+/// Raster declares every actual pair at the trusted asset boundary. Compute
+/// keeps its existing conservative contract: any linear sampler requires every
+/// sampled image to support linear filtering.
+fn image_requires_linear_filtering(
+    layout: &[crate::program::BindingLayout],
+    operands: &[crate::graph::BindingOperands],
+    raster_pairs: Option<&[crate::program::SampledImageSamplerPair]>,
+    image_index: usize,
+) -> bool {
+    use crate::graph::BindingOperands;
+    let Some(pairs) = raster_pairs else {
+        return operands.iter().any(
+            |operand| matches!(operand, BindingOperands::Sampler(policy) if policy.is_linear()),
+        );
+    };
+    let image = layout[image_index];
+    pairs.iter().any(|pair| {
+        if pair.image_group != image.group || pair.image_binding != image.binding {
+            return false;
+        }
+        // The unsafe immutable Program contract guarantees valid kinds and
+        // complete pairs. Graph construction canonicalizes these operands in
+        // the same layout order and prevents reusing them with another Program.
+        let sampler_index = layout
+            .iter()
+            .position(|slot| {
+                slot.group == pair.sampler_group && slot.binding == pair.sampler_binding
+            })
+            .expect("trusted Raster sampling pair references a sampler slot");
+        match operands[sampler_index] {
+            BindingOperands::Sampler(policy) => policy.is_linear(),
+            _ => unreachable!("trusted Raster sampling pair kind"),
+        }
+    })
 }
 
 fn staging_capacity_context(
@@ -383,6 +416,7 @@ impl GraphWork {
             .try_fold(0usize, usize::checked_add);
         if draws.is_none_or(|draws| draws > limit.draws)
             || graph.resources.len() > limit.resources
+            || graph.binding_count() > limit.bindings
             || graph.order.len() > limit.passes
             || graph
                 .order
@@ -457,6 +491,8 @@ impl GraphWork {
             retain_provenance,
             copy_scratch,
             raster_descriptors,
+            validated_raster_bindings,
+            active_raster_bindings,
             ..
         } = data;
         #[cfg(feature = "vulkan-diagnostics")]
@@ -835,11 +871,23 @@ impl GraphWork {
                                     0,
                                 )
                             });
-                            validate_sampled_operands(
-                                program.bindings(),
-                                graph.raster_bindings(&draw.bindings),
-                                physical,
-                            )?;
+                            if !draw.bindings.is_empty()
+                                && !validated_raster_bindings[draw.bindings.start]
+                            {
+                                validate_sampled_operands(
+                                    program.bindings(),
+                                    graph.raster_bindings(&draw.bindings),
+                                    physical,
+                                    Some(program.sampling_pairs()),
+                                )?;
+                                // A private Graph binding range belongs to one
+                                // exact Program and immutable operand set. The
+                                // physical table also stays fixed for this work.
+                                // Publish the guarantee only after validation.
+                                validated_raster_bindings[draw.bindings.start] = true;
+                                *active_raster_bindings =
+                                    (*active_raster_bindings).max(draw.bindings.end);
+                            }
                             let vertex_count = graph.resources[draw.vertices].desc.units()
                                 / u64::from(program.vertex_stride());
                             states[draw.indices]
@@ -1113,6 +1161,94 @@ fn source_scope(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn raster_filter_requirements_follow_only_declared_sampling_pairs() {
+        use crate::graph::{BindingOperands, Graph, ImageDesc};
+        use crate::program::{
+            BindingLayout, BindingType, SampledImageSamplerPair, SamplerDescriptor, ShaderStages,
+        };
+        let slot = |binding, kind| BindingLayout {
+            group: 0,
+            binding,
+            kind,
+            min_size: 0,
+            stages: ShaderStages::FRAGMENT,
+        };
+        let layout = [
+            slot(0, BindingType::SampledImage),
+            slot(1, BindingType::SampledImage),
+            slot(2, BindingType::Sampler),
+            slot(3, BindingType::Sampler),
+        ];
+        let mut graph = Graph::test_new();
+        let color = graph.image("color", ImageDesc::rgba8(1, 1)).unwrap();
+        let depth = graph.image("depth", ImageDesc::depth32(1, 1)).unwrap();
+        let operands = [
+            BindingOperands::ImageView(graph.image_view(color, 0, 0).unwrap()),
+            BindingOperands::ImageView(graph.image_view(depth, 0, 0).unwrap()),
+            BindingOperands::Sampler(SamplerDescriptor::LinearClamp),
+            BindingOperands::Sampler(SamplerDescriptor::NearestClamp),
+        ];
+        let pair = |image_binding, sampler_binding| SampledImageSamplerPair {
+            image_group: 0,
+            image_binding,
+            sampler_group: 0,
+            sampler_binding,
+        };
+        // D32 sampled through nearest is legal even if its format cannot filter.
+        let pairs = [pair(0, 2), pair(1, 3)];
+        assert!(image_requires_linear_filtering(
+            &layout,
+            &operands,
+            Some(&pairs),
+            0
+        ));
+        assert!(!image_requires_linear_filtering(
+            &layout,
+            &operands,
+            Some(&pairs),
+            1
+        ));
+        // The same depth image needs support when its actual sampler changes.
+        let pairs = [pair(0, 2), pair(1, 2)];
+        assert!(image_requires_linear_filtering(
+            &layout,
+            &operands,
+            Some(&pairs),
+            1
+        ));
+        // One image can use multiple samplers; a linear pair cannot be hidden.
+        let pairs = [pair(1, 3), pair(1, 2)];
+        assert!(image_requires_linear_filtering(
+            &layout,
+            &operands,
+            Some(&pairs),
+            1
+        ));
+        // Load/texelFetch-only Raster images need no filtering capability.
+        assert!(!image_requires_linear_filtering(
+            &layout,
+            &operands,
+            Some(&[]),
+            1
+        ));
+        // Compute deliberately keeps the prior conservative contract.
+        assert!(image_requires_linear_filtering(&layout, &operands, None, 1));
+        for policy in [
+            SamplerDescriptor::LinearRepeat,
+            SamplerDescriptor::LinearRepeatUClampV,
+        ] {
+            let mut operands = operands;
+            operands[2] = BindingOperands::Sampler(policy);
+            assert!(image_requires_linear_filtering(
+                &layout,
+                &operands,
+                Some(&pairs),
+                1
+            ));
+        }
+    }
+
     use super::super::{RuntimeConfig, VulkanRuntime};
     use super::*;
     use crate::graph::{
