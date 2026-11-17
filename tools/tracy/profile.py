@@ -399,11 +399,12 @@ def run_logged(command, output, name, timeout, expected_codes=(0,), *, stage=Non
             "stdout": file_identity(stdout), "stderr": file_identity(stderr)}
 
 
-def export_stage(result, command, output, name, timeout):
-    stage = {"command": command, "status": "running", "started_utc": utc()}
+def export_stage(result, command, output, name, timeout, max_output_bytes=2 * 1024 * 1024 * 1024):
+    stage = {"command": command, "status": "running", "started_utc": utc(), "max_output_bytes": max_output_bytes}
     result["stages"][name] = stage
     try:
-        stage.update(run_logged(command, output, name, timeout, stage=stage), status="passed")
+        stage.update(run_logged(command, output, name, timeout, stage=stage,
+                                max_output_bytes=max_output_bytes), status="passed")
     except BaseException as error:
         stage.update(status="failed", error=f"{type(error).__name__}: {error}")
         for role in ("stdout", "stderr"):
@@ -420,6 +421,9 @@ def export(args):
         raise ValueError("Portable Windows export requires Windows")
     if not 0 < args.timeout_seconds <= 3600:
         raise ValueError("Export timeout must be (0,3600]")
+    max_output_mib = getattr(args, "max_output_mib", 2048)
+    if not 16 <= max_output_mib <= 65536:
+        raise ValueError("Export max-output-mib must be [16,65536]")
     record = load(args.capture)
     if record.get("status") != "passed" or record.get("capture_completed") is not True:
         raise ValueError("Export requires a completed valid connected capture")
@@ -430,16 +434,19 @@ def export(args):
     output.mkdir(parents=True, exist_ok=False)
     result = {"schema_version": 1, "status": "running", "capture": file_identity(args.capture),
               "trace": record["trace"], "plan": plan, "stages": {}, "started_utc": utc(), "export_valid": False,
+              "max_output_bytes_per_stage": max_output_mib * 1024 * 1024,
+              "quota_scope": "Polling guard for each native export's stdout+stderr; individual writes may transiently exceed it. Temporary disk-backed analysis storage is separate and is removed after analysis.",
               "source_contract": "https://github.com/wolfpld/tracy/blob/v0.14.1/csvexport/src/csvexport.cpp"}
     try:
         result["controller_token"] = require_nonadmin()
         exe = plan["tools"]["csvexport"]["path"]
-        export_stage(result, [exe, "--help"], output, "help", args.timeout_seconds)
+        export_stage(result, [exe, "--help"], output, "help", args.timeout_seconds, max_output_mib * 1024 * 1024)
         help_text = (output / "help.stdout.txt").read_text(encoding="utf-8", errors="replace") + (output / "help.stderr.txt").read_text(encoding="utf-8", errors="replace")
         if "tracy-csvexport " + TRACY_VERSION not in help_text or "--self" not in help_text or "--unwrap" not in help_text:
             raise ValueError("Actual csvexport help differs from matched pinned tool semantics")
         for name, flags in (("inclusive", []), ("self", ["-e"])):
-            export_stage(result, [exe, "-u", "-s", "\t", *flags, record["trace"]["path"]], output, name, args.timeout_seconds)
+            export_stage(result, [exe, "-u", "-s", "\t", *flags, record["trace"]["path"]], output, name,
+                         args.timeout_seconds, max_output_mib * 1024 * 1024)
         result["analysis"] = analyze_zones(output / "inclusive.stdout.txt", output / "self.stdout.txt", plan["frames"],
                                           plan["target_environment"]["RENDERER_TRACY_CAPTURE_ID"])
         result.update(status="passed", export_valid=True, trace_content_verified=True)
@@ -478,6 +485,8 @@ def main():
     command.add_argument("--capture", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--timeout-seconds", type=float, default=120)
+    command.add_argument("--max-output-mib", type=int, default=2048,
+                         help="Polling quota per native export, 16..65536 MiB; analysis temporary storage is separate")
     command = subparsers.add_parser("analyze")
     command.add_argument("--export", dest="export_path", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
