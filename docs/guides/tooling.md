@@ -261,6 +261,7 @@ D3D12では`--api d3d12`と新しい出力先を指定する。両APIを同時�
 build manifest、EXE/PDB、source commit/hash、cook manifest、埋込conditions、capture/export toolを再確認し、
 `--tool-provenance <JSON>`を指定した場合は、記録の版・非管理者token・実際のtool path/hashと取得ZIPのhashを照合し、
 provenanceとZIPもplanのinput identityへ含める。
+controller/broker scriptのidentityと完了protocolも記録し、収集手順の更新をRust artifactの変更と分ける。
 この環境の取得記録は`.tools/tracy-evidence/tool-provenance.json`で、公式ZIP・各EXEと同梱native headerの版を結び付ける。
 controller・対象・capture broker・collector/exporterがWindows `TokenElevation=0`であることを確認する。
 localhostのport 8086が既に使われている場合は開始せず、開始後もlistenerのPIDが自分の対象であることを確認する。
@@ -270,16 +271,22 @@ connected収集は次の順序で進む。
 1. 対象がload・prepare・全warm-upと回収を終え、`BISTRO_READY`を出す。
 2. helperが専用collectorをlocalhostへ接続し、`GO`を渡す。対象も接続を確認し、run固有のidentity zoneを出してから測定を始める。
 3. 対象が測定と最後の回収を終え、`BISTRO_DONE`を出す。
-4. helperが非表示の専用consoleでcollectorの停止handler準備完了を確認し、所有collectorだけへSIGINTを送る。traceのflush完了と正常終了を確認してから`END`を渡す。
-5. 対象がHDR/SDR/depth captureとnative teardownを行い、最終reportを保存する。
+4. helperが`END`を渡す。対象はHDR/SDR/depth captureとnative teardown・report保存を終え、通常returnする。
+5. native Tracy clientの終了処理で両送信queueを排出し、collectorが自然終了してtraceを保存する。helperは対象・collectorの正常終了とDONE/reportの一致を確認する。
 
 このhandshakeは`tracy` feature付きBistroだけで使う。GO/接続待ちは各30秒、END待ちは180秒で失敗する。
-CLIの既定は全体300秒、flush120秒、出力2,048 MiBの監視上限で、必要なら明示変更する。
-停止前の準備確認は最大30秒とし、TCP接続だけでSIGINTを処理できる状態だとは判断しない。
+CLIの既定は全体300秒、END後のcollector自然終了・保存待ち120秒、出力2,048 MiBの監視上限である。
+自然終了待ちの指定名は`--flush-timeout-seconds`のままで、上限120秒とする。
+helperは通常の完了手順でcollectorのSIGINT/Disconnect停止を要求しない。対象の環境には`TRACY_NO_EXIT=0`を明示する。
+Tracy 0.14.1の[Disconnect実装](https://github.com/wolfpld/tracy/blob/v0.14.1/public/client/TracyProfiler.cpp)は
+未送信tailを捨て得るため、frame markやcollectorのquery backlog 0をqueue排出の根拠にしない。
+frame markはzoneと異なるqueueを使い、全zoneが届いたことを証明するbarrierではない。
 timeout・上限超過・切断・protocol不一致は成功にせず、失敗した出力とログを保持する。
 既存の別collectorや他processへ停止を送らず、OSの管理者実行を要求しない。
+内部のSTOP/SIGINT経路は中止・専用試験用であり、成功したcaptureの通常終了には使わない。
 helperのrunごとのnonceはREADY/DONE/reportと、測定窓の外に置く`bistro.capture_identity`へ対応付ける。
 解析では同じnonceのzoneを一つ確認し、別対象・別runのtraceを取り違えない。
+保存traceはROI後の画像readback・teardownも含む。解析は完全なmeasurement root内のzoneだけを選び、これらを定常費用へ混ぜない。
 
 切断状態の費用は同じinstrumented EXEをcollectorなしで測る。
 
@@ -299,7 +306,8 @@ python -B tools/tracy/profile.py export --capture .tools/tracy/runs/vulkan-conne
 python -B tools/tracy/profile.py analyze --export .tools/tracy/exports/vulkan-connected/export.json --output .tools/tracy/analysis-vulkan.json
 ```
 
-`capture_completed: true`は所有processのprotocolとflushが終わったことを表す。
+`capture_completed: true`は所有processのprotocol、通常終了とtrace保存が終わったことを表す。
+collectorの`natural_client_termination: true`／`collector_stop_requested: false`と対象exit 0を要求する。
 traceの内容受入は別であり、nonce・ROI・frame数・nesting等をexportで確認して初めて`trace_content_verified: true`となる。
 captureと各export stageのbyte上限はpolling監視で、書込みやflushにより一時的に超え得る。未検査のtraceを受入済みと扱わない。
 exportの`--max-output-mib`は16〜65,536 MiB、既定2,048 MiBで、各native stageのstdout＋stderrに適用する。

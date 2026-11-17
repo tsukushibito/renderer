@@ -385,12 +385,14 @@ driverはAPIとnative profiling off/onを交互に独立3回ずつ実行し、�
 build/cook・他APIの負荷・別collectorの処理を測定中に並行させない。
 
 feature付きの`--capture-handshake`は、warm-upと全回収後のREADY→接続/GO→測定/DONE→
-collectorのtrace flush/停止→END→画像capture/終了という順序で進む。
+END→画像capture/native teardown・対象の通常return→client送信queueの排出→collector自然終了・保存という順序で進む。
+通常完了でcollectorへSIGINT/Disconnectを要求せず、traceに含まれるROI後の画像/終了処理は解析対象から外す。
 対象・runを結ぶnonceの`bistro.capture_identity`は測定前に出し、metadataコピーをROIへ入れない。
 `bistro.measurement`は指定frameの処理と最後の回収を含む一つのzoneである。
 `bistro.frame`とそのframe markはCPU iterationを示し、枠が埋まっていれば古いsubmissionの回収、
 camera生成、Graph構築/compile、submitとexport/deleteのbookkeepingを含む。
 別zoneの`bistro.final_drain`やiteration間のgapはframe zoneから外れる。
+frame markの到着はzoneの全送信完了を保証せず、解析には完全なmeasurement rootと指定数のframe zoneを要求する。
 既存`frame_wall_ns`の観測完了latencyや表示FPSへ読み替えず、per-callとper-frameのpercentileも分ける。
 
 Graph解析の段階、Vulkanのprepare/record・draw batch、D3D12のprepare/record・draw/binding等へ

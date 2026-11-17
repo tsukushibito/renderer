@@ -824,7 +824,9 @@ record・pass/barrier・draw batch等のhost範囲へprivateなzoneを置く。
 既定offでzone専用コード・metadata・依存を除外し、通常submitのnative呼出し・同期・寿命・検証は変えない。
 `Client::running()`のguardはcollectorの接続を意味せず、on-demand切断時のclient費用も別に確認する。
 
-Bistroはwarm-upと回収後に接続し、明示した測定zoneの完了後にcollectorをflush/停止してから画像captureへ進む。
+Bistroはwarm-upと回収後に接続し、明示した測定zoneの完了後にENDを受けて画像captureと通常終了へ進む。
+native clientの終了処理が送信queueを排出し、collectorの自然終了・保存を待つ。helperは通常完了でDisconnect停止を要求しない。
+traceに含まれるROI後のreadback/teardownは解析で除外し、frame markをzone送信完了のbarrierへ流用しない。
 Tracy zoneのinclusive/selfはhostの経過時間であり、OS charged CPU、WPRのsampling weight、
 GraphのGPU timestampや表示latencyとは別である。長いnative wrapper zoneは呼出しを囲む費用で、
 driver内の関数帰属を確認したことにはならない。CPU/QPC/TracyとGPUの絶対時刻対応も新たに導入しない。

@@ -972,6 +972,10 @@ on-demand切断中を無費用やゼロ確保とみなさない。通常・同�
 inclusive/selfは明示zoneのwall elapsedで、wait/deschedulingも含む。未計装の関数・driver内部のCPU実行箇所や
 scheduler状態を得るには別のsampling/tracingが必要であり、Tracyの長いzoneだけから原因を断定しない。
 今回の計装はhotspotの特定を目的とし、zoneを追加したことをコード最適化や速度改善と扱わない。
+正常captureはDONE後にENDを渡して対象を通常終了させ、native clientの両queue排出とcollectorの自然終了を通す。
+Tracy 0.14.1のcollector側Disconnectで未送信tailを捨てる経路を、完了の証明には使わない。
+frame markやquery backlog表示だけで送信完了を推測せず、完全なnonce付きROI/frame zoneを独立に受け入れる。
+ROI後の画像capture/teardownはtraceへ含まれても、定常費用の集計から外す。
 手順と解釈は[Tracyガイド](../guides/tooling.md#tracy-profiling)、実際の対象・費用・所見は[現行検証](../verification/current.md)へ記録する。
 
 <a id="bistro-roadmap"></a>
