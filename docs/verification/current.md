@@ -369,6 +369,50 @@ PCF・caster判定・depth prepass・batching・表示の差、素材mip画素�
 AgX追加、Lumberyardの見え方変更、Bloom/B4、B5の表示・操作・temporal最終受入は今回へ含めない。
 長時間soak、他機材、物理VRAM常駐、実OOM/device loss注入は未実行である。
 
+<a id="bistro-120-performance"></a>
+
+## Bistro B3の120 FPS目標と高速化
+
+`renderer-7ft.12`。固定B3の全Bistro、1920×1080、巡回route、2 in-flight、Core i5-14600KF／RTX 3060
+（driver 610.88）で、各通常release runのフレーム間隔p99が8.33 ms以下を目標とする。
+素材cook、IBL、影、FXAA、定常CPU測定境界を[正式比較](#bistro-b3-performance)から引き継ぐ。
+通常性能では詳細timer/queryと追加検証、memory計装を無効にし、Pコア論理CPU 0〜11とHighQoSの
+native読戻し後に開始する。3,600 warmup／1,800測定frameを使い、負荷のある収集・buildを直列化する。
+
+### ベースラインと診断
+
+`3d8369d`から通常releaseを再ビルドし、各APIの初回p99はVulkan 8.860 ms、D3D12 9.175 msだった。
+同じ実行物の別processで詳細timer/queryを有効にし、600 warmup／600測定frameで影とAAを独立に切り替えた。
+
+| GPU p95（ms、各1 run） | 通常の影・AA | 影のみoff | AAのみoff |
+|---|---:|---:|---:|
+| Vulkan | 7.414 | 3.012 | 7.350 |
+| D3D12 | 7.095 | 2.562 | 6.982 |
+
+影を無効にした診断の差は、CSM描画とPBR内のPCFなどを含むGPU区間全体の差である。
+影とAAを有効にした診断のnative record平均はVulkan 0.671 ms、D3D12 3.199 ms、
+利用側のpoll呼出しelapsed平均はそれぞれ4.118 ms、0.807 msだった。
+GPU完了前のpoll反復も区間に含まれ、CPUのwait・native record・GPU時間を合算しない。
+診断の画像条件とタイマー状態は通常性能の合否判定から外す。
+
+### 個別候補の比較
+
+画質設定を揃えた詳細計測の別process（600 warmup／600測定frame）で、2種類の変更を独立に比較した。
+CSMの影マップ外のcasterを除外した`8ea44c2`では、GPU p95がVulkan 7.405→6.999 ms、
+D3D12 7.072→6.629 msだった。D3D12のRaster読み取り専用入力を暗黙昇格・減衰させた`5f54143`では、
+native record平均が3.062→1.203 ms、GPU p95が7.072→7.107 msだった。この条件のD3D12プロセスCPU平均は
+7.031 msで、record短縮後もGPU完了までのpollを含む。各候補・APIで、route先頭＋7固定視点のHDR・SDR・
+depthと4枚の影を含む56 planeを同APIの変更前と照合し、すべてbyte一致した。
+
+主カメラの視錐台外にあるPBR描画も除外した`14430eb`では、route先頭の描画が1,591→1,189件となった。
+CSM変更後との比較でGPU p95はVulkan 6.999→6.938 ms、D3D12 6.629→6.477 msだった。
+両APIの各56 planeはbyte一致し、Vulkanの単回frame間隔p99は8.567→9.500 msと変動した。
+GPU p95や描画数と、通常版でのフレーム間隔の判定は別に確認する。
+
+回収前にGraphを構築・compileする実験`8b352d2`は、計測器off、600 warmup／600 frameの同一実行物で比較した。
+p99はVulkan 10.321→9.138 ms、D3D12 8.650→8.947 msだった。D3D12が悪化し、CPU時間の改善も小さいため、
+回収順の変更は統合候補から外した。
+
 <a id="bistro-residency"></a>
 
 ## Bistro全素材のメモリ・差し替え受入（B2）

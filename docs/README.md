@@ -20,7 +20,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |
-| IBL・影・HDRを含むBistroを比較したい | [B3の再現手順](guides/development.md#bistro-b3)と[最新の受入・Godot比較](verification/current.md#bistro-lighting)：静的IBL、CSM/PCF、Neutral/FXAA、CPU/GPUと通常frameメモリ |
+| IBL・影・HDRを含むBistroを比較したい | [B3の再現手順](guides/development.md#bistro-b3)、[受入・Godot比較](verification/current.md#bistro-lighting)、[120 FPS目標の実測](verification/current.md#bistro-120-performance) |
 | 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、[実トレースと費用・hotspot](verification/current.md#bistro-tracy) |
 | Graph・D3D12のCPU処理削減を確認したい | [変更前後の通常版計測・実発行数・描画とメモリ受入](verification/current.md#bistro-cpu-optimization)：共有binding、不変snapshot、import検索表、SRV再利用とbarrier集約 |
 | 現行Graph構築のhotspotと改善を確認したい | [通常releaseの独立前後比較](verification/current.md#rendergraph-hotspot-optimization)：小writer判定、read索引、Vulkan prepareの分解と交換条件 |
