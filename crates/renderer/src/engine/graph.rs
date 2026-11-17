@@ -557,16 +557,15 @@ mod tests {
         })
         .unwrap();
         let snapshot = assets.snapshot(&pool, &view(), &[]).unwrap();
-        let imported = ImportImage {
-            key: ResourceKey {
+        let imported = ImportImage::test_initialized(
+            ResourceKey {
                 owner: 9,
                 index: 3,
                 generation: 2,
             },
-            revision: 4,
-            desc: ImageDesc::rgba8(16, 16),
-            initialized: true,
-        };
+            4,
+            ImageDesc::rgba8(16, 16),
+        );
         let mut returned = None;
         let frame = snapshot
             .build_graph(&mut graph_pool, false, |graph, _| {

@@ -145,12 +145,12 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
         );
         {
             let latest = runtime.entry(source_image.key()).unwrap().physical().lock();
-            assert_eq!(latest.scheduled.revision, source_image.revision);
+            assert_eq!(latest.scheduled.revision, source_image.revision());
             assert_eq!(
                 latest.scheduled.layout,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
             );
-            assert!(latest.scheduled.serial > source_image.revision);
+            assert!(latest.scheduled.serial > source_image.revision());
         }
         // This writer must order against the latest readers, even though its
         // compiled imports predate them and its content version remains valid.
@@ -267,9 +267,10 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         );
         let new_color = runtime.refresh_image(color.key()).unwrap();
         let new_depth = runtime.refresh_image(depth.key()).unwrap();
-        assert!(new_color.initialized && new_depth.initialized);
+        assert!(new_color.initialized() && new_depth.initialized());
         assert_ne!(
-            new_color.revision, color.revision,
+            new_color.revision(),
+            color.revision(),
             "clear is a write even for identical values"
         );
 
@@ -311,8 +312,8 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
             .unwrap();
         let mut discarded = runtime.submit(&discard.compile().unwrap()).unwrap();
         let undefined = runtime.refresh_image(color.key()).unwrap();
-        assert!(!undefined.initialized);
-        assert_ne!(undefined.revision, new_color.revision);
+        assert!(!undefined.initialized());
+        assert_ne!(undefined.revision(), new_color.revision());
         let mut undefined_reader = Graph::test_new();
         let image = undefined_reader
             .import_image("undefined color", &undefined)

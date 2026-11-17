@@ -506,6 +506,13 @@ D3D12と同じ利用側定義で確認する。実GPU完了までのPhysical/Vie
 process共通採番へ移し、backend間のkey衝突を防いだ。通常frameのメモリ測定と未実行範囲は
 [現在の検証](../verification/current.md)を参照する。
 
+公開import snapshotの発行は共通のprivate-field型とchecked constructorへ集約する。
+新規buffer登録、canonical予定内容のrefresh、受理予定exportでdescriptor／初期化範囲を保証し、
+安定snapshotのcloneとGraphへの反復importでは同じ内部内容を再点検しない。
+画像全体の初期化はcanonical範囲から全mip×layerの被覆として導出し、boolの自己申告を受けない。
+詳細な保証と失効は[Graphのsnapshot契約](rendergraph.md#runtime-import-snapshots)に従い、
+投入境界のowner・世代・revision、可視化・所有・実GPU完了の扱いは維持する。
+
 同じqueueでwriterをreadへ可視化した後、write/layout変更がなく、直近に確立したreadの
 stage/access pairが完全に同じならwriter→reader barrierを重複記録しない。bufferと画像の両方へ適用する。
 このexact pairを最後のwriterと累積reader scopeから分け、Snapshotごとに16 byte追加する。

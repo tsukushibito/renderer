@@ -1668,7 +1668,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             #[cfg(feature = "graph-diagnostics")]
             assert!(lowering.contains(&format!(
                 "imported=true import_revision={}",
-                exported.revision
+                exported.revision()
             )));
             #[cfg(feature = "graph-diagnostics")]
             assert!(lowering.contains("pending-final"));
@@ -1770,7 +1770,7 @@ fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
     let mut upload = runtime.submit(&plan).unwrap();
     let exported = upload.export_image(source).unwrap();
     assert!(
-        exported.initialized,
+        exported.initialized(),
         "all mip subresources must be initialized"
     );
     let upload_result = upload.wait(WAIT).unwrap().unwrap();

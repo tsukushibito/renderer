@@ -251,12 +251,12 @@ impl Registry {
     /// Every Graph and presentation recording returns the resource to COMMON.
     #[cfg(feature = "presentation")]
     pub(super) fn presentation_source(&self, image: &ImportImage) -> Result<PhysicalRef, Error> {
-        let entry = self.entry(image.key)?;
-        if entry.revision != image.revision {
+        let entry = self.entry(image.key())?;
+        if entry.revision != image.revision() {
             return Err(stale());
         }
-        if entry.desc != ResourceDesc::Image(image.desc)
-            || !fully_initialized(&entry.initialized, image.desc.mip_levels)
+        if entry.desc != ResourceDesc::Image(image.desc())
+            || !fully_initialized(&entry.initialized, image.desc().mip_levels)
         {
             return Err(Error::invalid(
                 "presentation source is not a fully initialized image",
@@ -487,24 +487,16 @@ impl Registry {
                     crate::capacity::import_ranges_capacity(&error),
                 )
             })?;
-        Ok(ImportBuffer {
-            key,
-            revision,
-            desc,
-            initialized,
-        })
+        ImportBuffer::new(key, revision, desc, initialized)
+            .map_err(|error| Error::invalid(error.to_string()))
     }
     pub(super) fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, Error> {
         let entry = self.entry(key)?;
         let ResourceDesc::Image(desc) = entry.desc else {
             return Err(Error::invalid("resource is not an image"));
         };
-        Ok(ImportImage {
-            key,
-            revision: entry.revision,
-            desc,
-            initialized: fully_initialized(&entry.initialized, desc.mip_levels),
-        })
+        ImportImage::new(key, entry.revision, desc, &entry.initialized)
+            .map_err(|error| Error::invalid(error.to_string()))
     }
     pub(super) fn delete(&mut self, key: ResourceKey) -> Result<(), Error> {
         self.entry(key)?;
@@ -739,34 +731,37 @@ impl Registry {
                 let initialized = graph.final_contents(logical);
                 let revision = usage.revision + u64::from(usage.changed);
                 let export = match graph.resources[logical].desc {
-                    ResourceDesc::Buffer(desc) => Export::Buffer(ImportBuffer {
-                        key: usage.key,
-                        revision,
-                        desc,
-                        initialized: self.ranges.capture(initialized).map_err(|error| {
-                            Error::capacity_with(
-                                "prepared export range snapshots exhausted",
-                                crate::capacity::import_ranges_capacity(&error).simultaneous_slots(
-                                    graph
-                                        .exports
-                                        .iter()
-                                        .filter(|&&resource| {
-                                            matches!(
-                                                graph.resources[resource].desc,
-                                                ResourceDesc::Buffer(_)
-                                            )
-                                        })
-                                        .count() as u64,
-                                ),
-                            )
-                        })?,
-                    }),
-                    ResourceDesc::Image(desc) => Export::Image(ImportImage {
-                        key: usage.key,
-                        revision,
-                        desc,
-                        initialized: fully_initialized(initialized, desc.mip_levels),
-                    }),
+                    ResourceDesc::Buffer(desc) => Export::Buffer(
+                        ImportBuffer::new(
+                            usage.key,
+                            revision,
+                            desc,
+                            self.ranges.capture(initialized).map_err(|error| {
+                                Error::capacity_with(
+                                    "prepared export range snapshots exhausted",
+                                    crate::capacity::import_ranges_capacity(&error)
+                                        .simultaneous_slots(
+                                            graph
+                                                .exports
+                                                .iter()
+                                                .filter(|&&resource| {
+                                                    matches!(
+                                                        graph.resources[resource].desc,
+                                                        ResourceDesc::Buffer(_)
+                                                    )
+                                                })
+                                                .count()
+                                                as u64,
+                                        ),
+                                )
+                            })?,
+                        )
+                        .map_err(|error| Error::invalid(error.to_string()))?,
+                    ),
+                    ResourceDesc::Image(desc) => Export::Image(
+                        ImportImage::new(usage.key, revision, desc, initialized)
+                            .map_err(|error| Error::invalid(error.to_string()))?,
+                    ),
                 };
                 values.push((logical, export));
             }

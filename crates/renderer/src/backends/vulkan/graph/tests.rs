@@ -242,19 +242,19 @@ fn vulkan_graph_copy_async_identity_and_bounded_reuse() {
         assert_eq!(result.test_readback(buffer_read).unwrap(), buffer_bytes);
         assert_eq!(result.test_readback(image_read).unwrap(), image_bytes);
         assert!(result.test_readback(image_read).is_err());
-        let accepted = runtime.entries[image_export.key.index as usize]
+        let accepted = runtime.entries[image_export.key().index as usize]
             .physical()
             .lock()
             .scheduled
             .serial;
         assert_eq!(accepted, 2);
-        let completed = runtime.entries[image_export.key.index as usize]
+        let completed = runtime.entries[image_export.key().index as usize]
             .physical()
             .lock()
             .completed_serial;
         assert_eq!(completed, 2);
         first.wait(Duration::from_secs(10)).unwrap().unwrap();
-        let state = runtime.entries[image_export.key.index as usize]
+        let state = runtime.entries[image_export.key().index as usize]
             .physical()
             .lock();
         assert_eq!(
@@ -603,8 +603,13 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
         {
             // This diagnostic deliberately violates a private invariant. Public
             // callers cannot forge initialized ranges for an unchanged revision.
-            let mut forged = first_export.clone();
-            forged.initialized = ImportRanges::test_capture(std::slice::from_ref(&(0..8)));
+            let forged = ImportBuffer::new(
+                first_export.key(),
+                first_export.revision(),
+                first_export.desc(),
+                ImportRanges::test_capture(std::slice::from_ref(&(0..8))),
+            )
+            .unwrap();
             let mut malformed = Graph::test_new();
             let input = malformed.import_buffer("forged", &forged).unwrap();
             malformed.readback_buffer("read", input, 0, 8).unwrap();

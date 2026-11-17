@@ -1353,18 +1353,17 @@ mod tests {
         let imported = graph
             .import_buffer(
                 "persistent",
-                &ImportBuffer {
-                    key: ResourceKey {
+                &ImportBuffer::new(
+                    ResourceKey {
                         owner: 1,
                         index: 0,
                         generation: 1,
                     },
-                    revision: 1,
-                    desc: BufferDesc { size: 12 },
-                    initialized: crate::graph::ImportRanges::test_capture(std::slice::from_ref(
-                        &(0..12),
-                    )),
-                },
+                    1,
+                    BufferDesc { size: 12 },
+                    crate::graph::ImportRanges::test_capture(std::slice::from_ref(&(0..12))),
+                )
+                .unwrap(),
             )
             .unwrap();
         graph

@@ -210,29 +210,31 @@ mod tests {
     };
 
     fn image(revision: u64) -> Export {
-        Export::Image(ImportImage {
-            key: ResourceKey {
+        Export::Image(ImportImage::test_initialized(
+            ResourceKey {
                 owner: 1,
                 index: 1,
                 generation: 1,
             },
             revision,
-            desc: ImageDesc::rgba8(1, 1),
-            initialized: true,
-        })
+            ImageDesc::rgba8(1, 1),
+        ))
     }
 
     fn buffer(initialized: ImportRanges) -> Export {
-        Export::Buffer(ImportBuffer {
-            key: ResourceKey {
-                owner: 1,
-                index: 2,
-                generation: 1,
-            },
-            revision: 1,
-            desc: BufferDesc { size: 16 },
-            initialized,
-        })
+        Export::Buffer(
+            ImportBuffer::new(
+                ResourceKey {
+                    owner: 1,
+                    index: 2,
+                    generation: 1,
+                },
+                1,
+                BufferDesc { size: 16 },
+                initialized,
+            )
+            .unwrap(),
+        )
     }
 
     #[test]
@@ -252,13 +254,13 @@ mod tests {
         first.insert(2, image(2)).unwrap();
         first.insert(2, image(3)).unwrap();
         assert_eq!(first.len(), 2);
-        assert!(matches!(first.get(2), Some(Export::Image(value)) if value.revision == 3));
+        assert!(matches!(first.get(2), Some(Export::Image(value)) if value.revision() == 3));
         assert!(first.get(4).is_none());
         assert_eq!(
             first.insert(3, image(4)).unwrap_err().kind(),
             RuntimeErrorKind::CapacityExhausted
         );
-        assert!(matches!(first.get(7), Some(Export::Image(value)) if value.revision == 1));
+        assert!(matches!(first.get(7), Some(Export::Image(value)) if value.revision() == 1));
         assert_eq!(
             pool.acquire().unwrap_err().kind(),
             RuntimeErrorKind::CapacityExhausted
@@ -268,7 +270,7 @@ mod tests {
         assert!(!pool.is_idle());
         let reclaimed = pool.acquire().unwrap();
         assert!(reclaimed.is_empty());
-        assert!(matches!(retained.get(2), Some(Export::Image(value)) if value.revision == 3));
+        assert!(matches!(retained.get(2), Some(Export::Image(value)) if value.revision() == 3));
         drop((retained, reclaimed));
         assert!(pool.is_idle());
     }
@@ -355,6 +357,6 @@ mod tests {
         let retained = first.clone();
         drop(pool);
         drop(first);
-        assert!(matches!(retained.get(3), Some(Export::Image(value)) if value.revision == 42));
+        assert!(matches!(retained.get(3), Some(Export::Image(value)) if value.revision() == 42));
     }
 }

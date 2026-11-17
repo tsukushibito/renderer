@@ -949,16 +949,17 @@ mod tests {
         graph.readback_image("readback image", image).unwrap();
         assert!(requirements(&graph.compile().unwrap()).is_err());
 
-        let source = crate::graph::ImportBuffer {
-            key: crate::graph::ResourceKey {
+        let source = crate::graph::ImportBuffer::new(
+            crate::graph::ResourceKey {
                 owner: 1,
                 index: 0,
                 generation: 0,
             },
-            revision: 0,
-            desc: BufferDesc { size: 4 },
-            initialized: crate::graph::ImportRanges::test_capture(std::slice::from_ref(&(0..4))),
-        };
+            0,
+            BufferDesc { size: 4 },
+            crate::graph::ImportRanges::test_capture(std::slice::from_ref(&(0..4))),
+        )
+        .unwrap();
         let (_graph_pool, mut graph) = prepared_graph();
         let imported = graph.import_buffer("external buffer", &source).unwrap();
         graph

@@ -590,9 +590,9 @@ impl D3D12Runtime {
         }
         let prepare_started = inner.profiling.then(Instant::now);
         let extent = inner.chain.as_ref().expect("ready chain").extent;
-        if image.desc.format != ImageFormat::Rgba8Unorm
-            || !image.desc.is_single_subresource()
-            || (image.desc.width, image.desc.height) != extent
+        if image.desc().format != ImageFormat::Rgba8Unorm
+            || !image.desc().is_single_subresource()
+            || (image.desc().width, image.desc().height) != extent
         {
             return Err(Error::invalid(
                 "presentation requires matching single-subresource linear RGBA8 extent",

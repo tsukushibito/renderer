@@ -511,6 +511,20 @@ producer・初期化・culling・live hazard／topological計画・最終内容�
 native状態の引継ぎ、cacheとframe APIの詳細はVulkanの契約であり、
 D3D12の状態境界と準備済みregistryは[次節](#d3d12-buffer-lifetime)に記す。
 
+<a id="runtime-import-snapshots"></a>
+
+`ImportBuffer`／`ImportImage`のdescriptor・内容revision・初期化状態はprivateで、
+runtimeの作成・refresh・exportは共通のchecked constructorから新しい不変snapshotを発行する。
+bufferの非ゼロbyte数、画像のextent／mip／layerとbyte数、初期化範囲の境界・順序・非重複を
+この発行境界で保証し、画像全体の初期化は全mip×layerの被覆から導出する。
+buffer範囲tokenは貸出中に`Arc::get_mut`で書換え不能な`ImportRanges`を保持する。
+cloneと通常のGraph importでは保証済みdescriptor／範囲を再走査せず、必要な予約領域へのcaptureを行う。
+同じkeyの繰返しimportで異なるdescriptor／revision／内容を渡した場合の拒否は維持する。
+これらはsnapshot内部の形式・範囲の保証であり、runtimeのowner／世代／revisionによる
+鮮度照合、native容量・実完了・失敗処理を省略するものではない。
+write・clear・discard・deleteや世代の再利用はcanonical状態を更新・失効し、
+古いsnapshotを書換えず、新しいsnapshotを取得してGraphを構築し直す。
+
 同じruntime資源のimportは、物理資源と状態の同一性を維持する。
 exportハンドルの取得はCPUで内容を読めることを意味しない。
 単一キューへproducer Graph Aとconsumer Graph Bを投入する場合、

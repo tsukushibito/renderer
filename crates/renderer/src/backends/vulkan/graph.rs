@@ -850,12 +850,13 @@ impl VulkanRuntime {
             return Err(RuntimeError::invalid("resource is not a buffer"));
         };
         let state = physical.lock();
-        Ok(ImportBuffer {
+        ImportBuffer::new(
             key,
-            revision: state.scheduled.revision,
+            state.scheduled.revision,
             desc,
-            initialized: self.capture_ranges(&state.scheduled.initialized)?,
-        })
+            self.capture_ranges(&state.scheduled.initialized)?,
+        )
+        .map_err(|error| RuntimeError::invalid(error.to_string()))
     }
     pub fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, RuntimeError> {
         self.owner
@@ -867,13 +868,13 @@ impl VulkanRuntime {
             return Err(RuntimeError::invalid("resource is not an image"));
         };
         let state = physical.lock();
-        Ok(ImportImage {
+        ImportImage::new(
             key,
-            revision: state.scheduled.revision,
+            state.scheduled.revision,
             desc,
-            initialized: state.scheduled.initialized.len() == 1
-                && state.scheduled.initialized[0] == (0..u64::from(desc.mip_levels)),
-        })
+            &state.scheduled.initialized,
+        )
+        .map_err(|error| RuntimeError::invalid(error.to_string()))
     }
 
     /// Invalidate the logical handle immediately. Recorded/pending references
@@ -1588,8 +1589,8 @@ enum Export {
 impl Export {
     fn key(&self) -> ResourceKey {
         match self {
-            Self::Buffer(value) => value.key,
-            Self::Image(value) => value.key,
+            Self::Buffer(value) => value.key(),
+            Self::Image(value) => value.key(),
         }
     }
 }
@@ -1600,19 +1601,19 @@ fn export_snapshot(
     snapshot: &Snapshot,
 ) -> Result<Export, RuntimeError> {
     Ok(match desc {
-        ResourceDesc::Buffer(desc) => Export::Buffer(ImportBuffer {
-            key,
-            revision: snapshot.revision,
-            desc,
-            initialized: runtime.capture_ranges(&snapshot.initialized)?,
-        }),
-        ResourceDesc::Image(desc) => Export::Image(ImportImage {
-            key,
-            revision: snapshot.revision,
-            desc,
-            initialized: snapshot.initialized.len() == 1
-                && snapshot.initialized[0] == (0..u64::from(desc.mip_levels)),
-        }),
+        ResourceDesc::Buffer(desc) => Export::Buffer(
+            ImportBuffer::new(
+                key,
+                snapshot.revision,
+                desc,
+                runtime.capture_ranges(&snapshot.initialized)?,
+            )
+            .map_err(|error| RuntimeError::invalid(error.to_string()))?,
+        ),
+        ResourceDesc::Image(desc) => Export::Image(
+            ImportImage::new(key, snapshot.revision, desc, &snapshot.initialized)
+                .map_err(|error| RuntimeError::invalid(error.to_string()))?,
+        ),
     })
 }
 
@@ -1751,16 +1752,15 @@ mod registration_tests {
             exports
                 .insert(
                     index,
-                    Export::Image(ImportImage {
-                        key: ResourceKey {
+                    Export::Image(ImportImage::test_initialized(
+                        ResourceKey {
                             owner: 1,
                             index: index as u32,
                             generation: 1,
                         },
-                        revision: 41,
-                        desc: crate::graph::ImageDesc::rgba8(1, 1),
-                        initialized: true,
-                    }),
+                        41,
+                        crate::graph::ImageDesc::rgba8(1, 1),
+                    )),
                 )
                 .unwrap();
         }
