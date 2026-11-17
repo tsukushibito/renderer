@@ -372,7 +372,19 @@ fn requirements_inner(
                             capacity.buffers,
                         )?,
                         ResourceDesc::Image(_) => {
-                            super::raster::use_image(graph, access.resource, resource_map, storage)?
+                            super::raster::use_image(
+                                graph,
+                                access.resource,
+                                resource_map,
+                                storage,
+                            )?;
+                            if matches!(
+                                access.purpose,
+                                crate::graph::AccessPurpose::ColorAttachment
+                                    | crate::graph::AccessPurpose::DepthAttachment
+                            ) {
+                                storage.require_target_view(resource_map[access.resource]);
+                            }
                         }
                     }
                 }
@@ -412,6 +424,7 @@ fn requirements_inner(
                 })?;
                 for access in graph.accesses(pass) {
                     super::raster::use_image(graph, access.resource, resource_map, storage)?;
+                    storage.require_target_view(resource_map[access.resource]);
                 }
                 super::raster::validate_targets(colors)?;
             }
