@@ -852,6 +852,7 @@ impl D3D12Runtime {
     }
 }
 
+#[cfg(any(test, feature = "presentation"))]
 fn fully_initialized(ranges: &[Range<u64>], mip_levels: u32) -> bool {
     let mut end = 0;
     for range in ranges {
