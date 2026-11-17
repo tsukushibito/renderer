@@ -8,9 +8,11 @@ import statistics
 if __package__:
     from .benchmark import digest, read, validate_report
     from .profiles import compare_settings, orientation_fixture, settings
+    from .repeat import PROFILE as REPEAT_PROFILE, compare_files
 else:
     from benchmark import digest, read, validate_report
     from profiles import compare_settings, orientation_fixture, settings
+    from repeat import PROFILE as REPEAT_PROFILE, compare_files
 
 
 def aggregate(runs):
@@ -92,7 +94,19 @@ def assemble(path):
         runs.append({**entry, "report": report, "engine_log_sha256": digest(folder / "engine.log"),
                      "stdout_log_sha256": digest(folder / "stdout.log")})
     groups, budgets = aggregate(runs)
+    comparisons = []
+    if identity["profile"] == "b3":
+        reference = directory / runs[0]["run_id"]
+        for entry in runs[1:]:
+            for view in entry["captures_sha256"]:
+                first, second = reference / f"{view}.png", directory / entry["run_id"] / f"{view}.png"
+                result = compare_files(first, second)
+                comparisons.append({"view": view, "first_run": runs[0]["run_id"], "second_run": entry["run_id"], **result})
+                if not result["passed"]:
+                    raise ValueError(f"Godot B3 repeat tolerance failed: {entry['run_id']} {view}")
     return {"schema_version": 2, "identity": identity, "conditions": conditions, "groups": groups,
+            "capture_reproducibility": {"profile": REPEAT_PROFILE if identity["profile"] == "b3" else "B2 archived byte-exact reference; hashes retained",
+                                        "comparisons": comparisons},
             "reference_p95_budgets_ms": budgets,
             "capture_distinct_hashes": {name: sorted(values) for name, values in capture_sets.items()},
             "scope": "Godot renderer reference for the explicitly archived B2/B3 profile, not isolated RenderGraph overhead or pixel parity with Renderer. B3 retains native Godot AgX, pre-tonemap FXAA, BRDF/prefilter/shadow-filter differences versus Renderer Neutral/post-tonemap FXAA. CPU = setup + viewport, excludes scripts/physics/process-wide CPU; GPU = viewport observed query. Frame intervals = post-draw callback gaps, not scanout. Query observations may lag route frame numbers. Timers off/on are independent processes; differences include run variability. Godot memory monitors are not residency or allocation event counts; static_memory_bytes=0 is an unavailable release counter, not zero memory use.",
