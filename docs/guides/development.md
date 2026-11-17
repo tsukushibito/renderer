@@ -543,6 +543,9 @@ python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3
 
 `plan`は実行予定を表示し、`run`だけが新規outputへ実行する。
 Renderer二APIとGodotのall/frustum、timer off/onを各3独立process、計24 processで順序を回して直列実行する。
+`all`は主cameraのfrustum cullingを無効にする条件であり、Godotの影のcascade／caster判定は残る。
+Godotのdraw／primitive値はエンジン内のbatch等の統計で、RendererのGraph draw数やnative API呼出数と同じ指標ではない。
+影の絞り込み・depth prepass・batchingを含む描画構成の差を保持した、レンダラー全体の参考比較とする。
 3600 frameのwarmup後に1800 frameを測り、CPUの各phase・poll/yield・OS charged CPU・GPUを分ける。
 `active_host_elapsed_ns`は重複しないcaller処理の経過時間で、yieldを除くがOS deschedulingを含み得る。
 native CPU timerは内包されるので加算せず、観測完了latencyやCPU/GPUの和から表示FPSを計算しない。
