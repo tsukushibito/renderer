@@ -4,6 +4,7 @@
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 
 use ash::vk;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +14,76 @@ use crate::backends::vulkan::graph::{
     provenance::BufferProvenance, storage::reserved,
 };
 use crate::backends::vulkan::transfer::staging::StagingRange;
+
+type RasterSets = [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS];
+
+#[derive(Clone, Copy, Default)]
+struct RasterBindingEntry {
+    required: [bool; 2],
+    descriptors: [Option<(usize, RasterSets)>; 2],
+}
+
+/// One Graph binding range belongs to one immutable Program. Its only native
+/// layout variants are the color-only and depth-enabled pipelines. Both the
+/// physical table and Program owner stay fixed throughout this work checkout.
+pub(in crate::backends::vulkan::graph) struct RasterBindingCache {
+    entries: Vec<RasterBindingEntry>,
+    active: usize,
+}
+
+impl RasterBindingCache {
+    fn new(bindings: usize) -> Result<Self, RuntimeError> {
+        let mut entries = reserved(bindings)?;
+        entries.resize(bindings, RasterBindingEntry::default());
+        Ok(Self { entries, active: 0 })
+    }
+
+    /// Count native descriptor reservations once per range and depth variant.
+    /// Empty binding ranges consume no descriptors and need no cache entry.
+    pub(in crate::backends::vulkan::graph) fn require(
+        &mut self,
+        bindings: &Range<usize>,
+        depth: bool,
+    ) -> bool {
+        if bindings.is_empty() {
+            return false;
+        }
+        self.active = self.active.max(bindings.end);
+        let required = &mut self.entries[bindings.start].required[usize::from(depth)];
+        let first = !*required;
+        *required = true;
+        first
+    }
+
+    pub(super) fn resolve(
+        &mut self,
+        bindings: &Range<usize>,
+        depth: bool,
+        layout: usize,
+        create: impl FnOnce(bool) -> Result<RasterSets, RuntimeError>,
+    ) -> Result<RasterSets, RuntimeError> {
+        let entry = &mut self.entries[bindings.start];
+        let variant = usize::from(depth);
+        if let Some((cached_layout, sets)) = entry.descriptors[variant]
+            && cached_layout == layout
+        {
+            return Ok(sets);
+        }
+        // Sampled operand suitability is independent of the depth variant.
+        // Publish it together with successful native descriptor preparation;
+        // failures must leave the range unvalidated for a later checkout.
+        let validate_sampled = entry.descriptors.iter().all(Option::is_none);
+        let sets = create(validate_sampled)?;
+        entry.descriptors[variant] = Some((layout, sets));
+        self.active = self.active.max(bindings.end);
+        Ok(sets)
+    }
+
+    fn clear(&mut self) {
+        self.entries[..self.active].fill(RasterBindingEntry::default());
+        self.active = 0;
+    }
+}
 
 pub(in crate::backends::vulkan::graph) struct WorkData {
     // All resource-indexed arrays are prepared once. Only this prefix may be
@@ -24,8 +95,7 @@ pub(in crate::backends::vulkan::graph) struct WorkData {
     pub(in crate::backends::vulkan::graph) final_states: Vec<Option<Snapshot>>,
     pub(super) passes: Vec<PreparedPass>,
     pub(super) raster_descriptors: Vec<[vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS]>,
-    pub(super) validated_raster_bindings: Vec<bool>,
-    pub(super) active_raster_bindings: usize,
+    pub(in crate::backends::vulkan::graph) raster_bindings: RasterBindingCache,
     #[cfg(feature = "vulkan-diagnostics")]
     pub(super) labels: Vec<u8>,
     pub(super) buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
@@ -65,12 +135,9 @@ impl WorkData {
                 limit.provenance_segments_per_resource,
             )?));
         }
-        let mut validated_raster_bindings = reserved(limit.graph.bindings)?;
-        validated_raster_bindings.resize(limit.graph.bindings, false);
         Ok(Self {
             active_resources: 0,
-            validated_raster_bindings,
-            active_raster_bindings: 0,
+            raster_bindings: RasterBindingCache::new(limit.graph.bindings)?,
             physical,
             keys,
             needed,
@@ -125,8 +192,7 @@ impl WorkData {
         self.labels.clear();
         self.passes.clear();
         self.raster_descriptors.clear();
-        self.validated_raster_bindings[..self.active_raster_bindings].fill(false);
-        self.active_raster_bindings = 0;
+        self.raster_bindings.clear();
         self.buffers.clear();
         self.images.clear();
         self.uploads.clear();
@@ -164,6 +230,102 @@ mod tests {
     use crate::graph::GraphCapacity;
 
     #[test]
+    fn raster_bindings_reuse_native_results_per_layout_and_reset_after_failure_or_return() {
+        use ash::vk::Handle;
+        let mut cache = RasterBindingCache::new(8).unwrap();
+        let range = 2..5;
+        let first = [vk::DescriptorSet::from_raw(11); crate::program::MAX_RASTER_BIND_GROUPS];
+        let second = [vk::DescriptorSet::from_raw(12); crate::program::MAX_RASTER_BIND_GROUPS];
+        let backing = cache.entries.as_ptr();
+        assert!(!cache.require(&(0..0), false));
+        assert_eq!(cache.active, 0);
+        assert!(cache.require(&range, false));
+        assert!(!cache.require(&range, false));
+        assert!(cache.require(&range, true));
+        assert!(!cache.require(&range, true));
+        assert!(cache.require(&(5..8), false));
+        assert!(
+            cache
+                .resolve(&range, false, 7, |validate| {
+                    assert!(validate);
+                    Err(RuntimeError::unsupported("rejected Device binding"))
+                })
+                .is_err()
+        );
+        assert_eq!(
+            cache
+                .resolve(&range, false, 7, |validate| {
+                    assert!(validate, "failed preparation cannot publish a guarantee");
+                    Ok(first)
+                })
+                .unwrap(),
+            first
+        );
+        for _ in 0..100 {
+            assert_eq!(
+                cache
+                    .resolve(&range, false, 7, |_| {
+                        panic!("shared immutable bindings must not repeat native preparation")
+                    })
+                    .unwrap(),
+                first
+            );
+        }
+        assert_eq!(
+            cache
+                .resolve(&range, true, 8, |validate| {
+                    assert!(!validate, "sampled suitability is shared by depth variants");
+                    Ok(second)
+                })
+                .unwrap(),
+            second
+        );
+        cache.clear();
+        assert_eq!(cache.entries.as_ptr(), backing);
+        assert_eq!(cache.active, 0);
+        assert!(cache.require(&range, false));
+        assert_eq!(
+            cache
+                .resolve(&range, false, 7, |validate| {
+                    assert!(
+                        validate,
+                        "a new work must establish new physical guarantees"
+                    );
+                    Ok(second)
+                })
+                .unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn simultaneous_work_checkouts_do_not_share_raster_guarantees() {
+        use ash::vk::Handle;
+        let pool = StoragePool::new(
+            2,
+            || WorkData::new(FrameCapacity::default()),
+            WorkData::reset,
+        )
+        .unwrap();
+        let mut first = pool.acquire().unwrap();
+        let mut second = pool.acquire().unwrap();
+        for (work, handle) in [(&mut first, 1), (&mut second, 2)] {
+            let sets =
+                [vk::DescriptorSet::from_raw(handle); crate::program::MAX_RASTER_BIND_GROUPS];
+            assert!(work.raster_bindings.require(&(0..1), false));
+            assert_eq!(
+                work.raster_bindings
+                    .resolve(&(0..1), false, 0, |validate| {
+                        assert!(validate);
+                        Ok(sets)
+                    })
+                    .unwrap(),
+                sets
+            );
+        }
+    }
+
+    #[test]
     fn cancelled_work_returns_active_metadata_across_shrinking_and_growing_graphs() {
         let capacity = FrameCapacity {
             graph: GraphCapacity {
@@ -187,14 +349,11 @@ mod tests {
         for resources in [6, 2, 8, 0, 3] {
             let mut work = pool.acquire().unwrap();
             assert_eq!(work.active_resources, 0);
-            assert_eq!(work.active_raster_bindings, 0);
+            assert_eq!(work.raster_bindings.active, 0);
             assert!(
-                work.validated_raster_bindings
-                    .iter()
-                    .all(|&validated| !validated)
+                work.raster_bindings
+                    .require(&(resources..resources + 1), false)
             );
-            work.validated_raster_bindings[resources] = true;
-            work.active_raster_bindings = resources + 1;
             assert_eq!(work.final_states.as_ptr(), backing);
             assert_eq!(
                 work.final_states[0].as_ref().unwrap().initialized.as_ptr(),
