@@ -407,6 +407,10 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let stage = Instant::now();
     let mut backend = B::create(options, &budget)?;
     let native_prepare_ns = stage.elapsed().as_nanos() as u64;
+    let mut resource_stages = json!({});
+    if options.resource_checks {
+        resource_stages["prepared"] = backend.memory_snapshot()?;
+    }
     let mut runtime = backend.info();
     runtime["process_id"] = json!(std::process::id());
     #[cfg(windows)]
@@ -415,6 +419,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     }
     let stage = Instant::now();
     let mut resident = Resident::upload(&mut backend, &scene, &budget, &first_uniform)?;
+    if options.resource_checks {
+        resource_stages["uploaded"] = backend.memory_snapshot()?;
+    }
     let prepared = json!({"physical_resources":budget.physical_resources,"logical_buffers_per_graph":budget.buffer_count,
         "max_buffer_bytes":budget.max_buffer_bytes,"upload_capacity_bytes":budget.upload_bytes,"readback_capacity_bytes":budget.readback_bytes,
         "buffer_logical_bytes":budget.buffers.iter().map(|(bytes,count)|*bytes*(*count as u64)).sum::<u64>(),
@@ -451,6 +458,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         false,
     )?;
     let warmup_ns = stage.elapsed().as_nanos() as u64;
+    if options.resource_checks {
+        resource_stages["warmed"] = backend.memory_snapshot()?;
+    }
     let setup_ns = setup.elapsed().as_nanos() as u64;
     #[cfg(feature = "memory-profiling")]
     let setup_memory = renderer::measurement::Snapshot::now().since(setup_memory);
@@ -503,6 +513,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "tracy")]
     let tracy_connected_end = tracy_client::Client::is_connected();
     let measured = measurement(&samples, options, wall, cpu)?;
+    if options.resource_checks {
+        resource_stages["after_frames"] = backend.memory_snapshot()?;
+    }
     #[cfg(feature = "tracy")]
     let tracy = json!({
         "enabled": true, "capture_handshake": options.capture_handshake,
@@ -545,6 +558,20 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             captured_views.push((name.clone(), view.output, report));
         }
     }
+    let resource_checks = if options.resource_checks {
+        eprintln!("Bistro resource lifetime, capacity and memory checks (outside ROI)");
+        super::lifecycle::execute(
+            &mut backend,
+            &mut resident,
+            &scene,
+            options,
+            &conditions,
+            &budget,
+            resource_stages,
+        )?
+    } else {
+        Value::Null
+    };
     #[cfg(feature = "memory-profiling")]
     let shutdown_memory = renderer::measurement::Snapshot::now();
     drop((resident, queue, samples, workspace));
@@ -568,7 +595,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "setup_phases_ns":{"asset_load":asset_load_ns,"budget":budget_ns,"native_prepare":native_prepare_ns,"upload":upload_ns,
             "frame_storage_and_profiling_prepare":frame_storage_and_profiling_prepare_ns,"warmup":warmup_ns},
         "setup_scope":"combined asset/conditions load, boundary validation, native resource/pipeline preparation, upload/CPU input release, frame storage and warmup; checkpoints exclude some reporting/bookkeeping; outside measured frame ROI",
-        "measurement":measured,"memory":memory_json,"validation":validation,
+        "measurement":measured,"memory":memory_json,"validation":validation,"resource_checks":resource_checks,
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
         "views":view_reports,"readback_outside_measurement":true,
         "limits":"B2 Forward PBR; headless, no frustum/occlusion culling, no IBL/shadows/tonemapper/Bloom/AA or display FPS claim; whole primitives sorted for transparency"});

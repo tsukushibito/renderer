@@ -14,6 +14,10 @@ mod camera;
 #[cfg(windows)]
 #[path = "profile_workload/clock.rs"]
 mod clock;
+#[path = "bistro/lifecycle.rs"]
+mod lifecycle;
+#[path = "bistro/memory.rs"]
+mod memory;
 #[path = "bistro/pipeline.rs"]
 mod pipeline;
 #[path = "bistro/program.rs"]
@@ -44,6 +48,7 @@ struct Options {
     alpha_only: bool,
     force_opaque: bool,
     capture_all_views: bool,
+    resource_checks: bool,
     #[cfg(feature = "tracy")]
     capture_handshake: bool,
     output: PathBuf,
@@ -65,6 +70,7 @@ impl Options {
             alpha_only: false,
             force_opaque: false,
             capture_all_views: false,
+            resource_checks: false,
             #[cfg(feature = "tracy")]
             capture_handshake: false,
             output: PathBuf::from(".tools/bistro-runtime"),
@@ -77,6 +83,7 @@ impl Options {
                 "--gpu-timing" => result.gpu_timing = true,
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
+                "--resource-checks" => result.resource_checks = true,
                 #[cfg(feature = "tracy")]
                 "--capture-handshake" => result.capture_handshake = true,
                 "--api" => result.api = args.next().ok_or("--api needs vulkan or d3d12")?,
@@ -105,7 +112,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--capture-all-views] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -134,6 +141,14 @@ impl Options {
             || !(1..=4).contains(&result.inflight)
         {
             return Err("invalid extent/frame/in-flight limits".into());
+        }
+        if result.resource_checks
+            && (!cfg!(feature = "memory-profiling")
+                || result.inflight < 2
+                || result.alpha_only
+                || result.force_opaque)
+        {
+            return Err("resource checks require memory-profiling, at least two in-flight slots and original full-scene alpha".into());
         }
         Ok(result)
     }
@@ -187,5 +202,22 @@ mod tests {
         assert!(parsed.unwrap().capture_handshake);
         #[cfg(not(feature = "tracy"))]
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn resource_checks_require_counting_overlap_and_unmodified_alpha() {
+        let parsed = options(&["--fixture", "--resource-checks"]);
+        assert_eq!(parsed.is_ok(), cfg!(feature = "memory-profiling"));
+        assert!(options(&["--fixture", "--resource-checks", "--inflight", "1"]).is_err());
+        assert!(options(&["--fixture", "--resource-checks", "--alpha-only"]).is_err());
+        assert!(
+            options(&[
+                "--fixture",
+                "--resource-checks",
+                "--alpha-override",
+                "opaque"
+            ])
+            .is_err()
+        );
     }
 }
