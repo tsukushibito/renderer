@@ -227,6 +227,55 @@ where
 mod tests {
     use super::*;
 
+    #[test]
+    fn exact_read_index_preserves_stage_purpose_and_range_and_reuses_its_storage() {
+        use crate::{
+            graph::{AccessPurpose, ResourceAccess},
+            program::ShaderStages,
+        };
+        let original = ResourceAccess {
+            resource: 0,
+            range: 0..16,
+            read: true,
+            write: false,
+            initializes: false,
+            discard_after: false,
+            purpose: AccessPurpose::Uniform,
+            stages: ShaderStages::VERTEX,
+        };
+        let accesses = [
+            original.clone(),
+            ResourceAccess {
+                purpose: AccessPurpose::StorageRead,
+                ..original.clone()
+            },
+            ResourceAccess {
+                stages: ShaderStages::FRAGMENT,
+                ..original.clone()
+            },
+            ResourceAccess {
+                range: 4..16,
+                ..original.clone()
+            },
+        ];
+        let mut index = ReadAccessSet::new(accesses.len()).unwrap();
+        let slots = index.slots.as_ptr();
+        let touched = index.touched.as_ptr();
+        for _ in 0..3 {
+            index.clear();
+            for (at, access) in accesses.iter().enumerate() {
+                assert!(index.insert(access, at, &accesses));
+                assert!(
+                    !index.insert(access, at, &accesses),
+                    "only identical read declarations share a record"
+                );
+            }
+            assert_eq!(index.touched.len(), accesses.len());
+        }
+        assert_eq!(index.slots.as_ptr(), slots);
+        assert_eq!(index.touched.as_ptr(), touched);
+    }
+
     #[derive(Clone)]
     struct Access {
         resource: usize,

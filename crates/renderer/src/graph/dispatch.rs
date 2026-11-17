@@ -117,24 +117,17 @@ impl Graph {
                 "Raster binding set belongs to a different Program",
             ));
         }
-        // Fields are private and immutable, and successful creation is the
-        // only publisher. Keep range checks at this safe public handle boundary.
-        let end = bindings.first.checked_add(bindings.len);
-        let access_end = bindings.first_access.checked_add(bindings.access_len);
-        if end.is_none_or(|end| end > self.bindings.len())
-            || access_end.is_none_or(|end| end > self.binding_accesses.len())
-        {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidHandle,
-                "undefined Raster binding set",
-            ));
-        }
-        let end = end.unwrap();
+        // Successful creation is the only publisher of these private ranges.
+        // Both arenas are append-only for this Graph identity, and rollback
+        // removes only unpublished additions after all existing handles. There
+        // is no public invalidation operation within the same Graph.
+        let end = bindings.first + bindings.len;
+        let access_end = bindings.first_access + bindings.access_len;
         if bindings.len != 0 && !self.raster_binding_seen[bindings.first] {
             // The trusted Raster contract allows only read-only descriptors
             // and forbids shader side effects/inter-draw synchronization.
             // Compute write footprints keep the separate dispatch path.
-            for index in bindings.first_access..access_end.unwrap() {
+            for index in bindings.first_access..access_end {
                 self.append_access(self.binding_accesses[index].clone())?;
             }
             let data = self.data_mut();
@@ -538,6 +531,182 @@ mod tests {
     use super::*;
     use crate::ImageFormat;
     use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+
+    #[test]
+    fn binding_set_creation_rolls_back_partial_operands_and_keeps_published_sets() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                bindings: 3,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let uniform = graph.buffer("uniform", BufferDesc { size: 16 }).unwrap();
+        let image = graph
+            .image("texture", super::super::ImageDesc::rgba8(2, 2))
+            .unwrap();
+        let view = graph.image_view(image, 0, 0).unwrap();
+        let mut inputs = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    offset: 0,
+                    size: 16,
+                },
+            },
+            Binding {
+                group: 1,
+                binding: 0,
+                resource: BindingResource::ImageView(view),
+            },
+            Binding {
+                group: 1,
+                binding: 1,
+                resource: BindingResource::ImageView(view),
+            },
+        ];
+        let program = ManagedRasterProgram::textured_mesh();
+        assert_eq!(
+            graph.raster_bindings(&program, &inputs).unwrap_err().kind(),
+            GraphErrorKind::InvalidInput
+        );
+        assert!(graph.bindings.is_empty());
+        assert!(graph.binding_accesses.is_empty());
+        assert!(
+            graph.accesses.is_empty(),
+            "set creation must not select resource contents"
+        );
+        inputs[2].resource = BindingResource::Sampler(SamplerDescriptor::NearestClamp);
+        let published = graph.raster_bindings(&program, &inputs).unwrap();
+        assert_eq!(graph.bindings.len(), 3);
+        assert_eq!(graph.binding_accesses.len(), 2);
+        assert_eq!(
+            graph.raster_bindings(&program, &inputs).unwrap_err().kind(),
+            GraphErrorKind::CapacityExhausted
+        );
+        assert_eq!(
+            graph
+                .use_raster_bindings(&program, Some(published))
+                .unwrap(),
+            0..3
+        );
+        assert_eq!(graph.accesses.len(), 2);
+        assert_eq!(
+            graph
+                .use_raster_bindings(&program, Some(published))
+                .unwrap(),
+            0..3
+        );
+        assert_eq!(
+            graph.accesses.len(),
+            2,
+            "each pass consumes a set only once"
+        );
+    }
+
+    #[test]
+    fn empty_sets_are_bounded_program_local_and_expire_with_the_graph() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                bindings: 0,
+                ..GraphCapacity::default()
+            },
+            2,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let program = ManagedRasterProgram::mesh();
+        let published = graph.raster_bindings(&program, &[]).unwrap();
+        for _ in 0..128 {
+            assert_eq!(graph.raster_bindings(&program, &[]).unwrap(), published);
+        }
+        assert!(graph.bindings.is_empty());
+        assert!(graph.binding_accesses.is_empty());
+        assert!(graph.raster_binding_sets.is_empty());
+        assert_eq!(
+            graph
+                .use_raster_bindings(&ManagedRasterProgram::mesh_hdr(), Some(published))
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        assert_eq!(
+            graph
+                .use_raster_bindings(&ManagedRasterProgram::textured_mesh(), None)
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        assert!(
+            graph
+                .use_raster_bindings(&program, None)
+                .unwrap()
+                .is_empty()
+        );
+        let mut other = pool.begin().unwrap();
+        assert_eq!(
+            other
+                .use_raster_bindings(&program, Some(published))
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::WrongOwner
+        );
+        drop(other);
+        drop(graph);
+        let mut recycled = pool.begin().unwrap();
+        assert_eq!(
+            recycled
+                .use_raster_bindings(&program, Some(published))
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::WrongOwner
+        );
+    }
+
+    #[test]
+    fn unused_sets_do_not_create_reads_or_require_initialized_contents() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let uniform = graph
+            .buffer("uninitialized uniform", BufferDesc { size: 16 })
+            .unwrap();
+        let image = graph
+            .image(
+                "uninitialized texture",
+                super::super::ImageDesc::rgba8(2, 2),
+            )
+            .unwrap();
+        let view = graph.image_view(image, 0, 0).unwrap();
+        let inputs = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    offset: 0,
+                    size: 16,
+                },
+            },
+            Binding {
+                group: 1,
+                binding: 0,
+                resource: BindingResource::ImageView(view),
+            },
+            Binding {
+                group: 1,
+                binding: 1,
+                resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+            },
+        ];
+        graph
+            .raster_bindings(&ManagedRasterProgram::textured_mesh(), &inputs)
+            .unwrap();
+        assert_eq!(graph.compile().unwrap().pass_count(), 0);
+    }
 
     #[test]
     fn sampled_and_storage_reads_share_only_disjoint_image_subresources() {

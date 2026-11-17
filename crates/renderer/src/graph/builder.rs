@@ -421,10 +421,16 @@ impl Graph {
                     }
                 }
                 let plan = graph.append_attachments(attachments)?;
-                if let Some(left) =
-                    graph.conflicting_pass_access(first_access..graph.accesses.len())?
-                {
-                    let access = &graph.accesses[first_access + left];
+                // Binding-free Raster has only read-only buffer inputs and
+                // image attachments, so only attachment pairs can conflict.
+                // Shader-bound Raster needs one check over the complete pass.
+                let checked = if program.bindings().is_empty() {
+                    plan.accesses.clone()
+                } else {
+                    first_access..graph.accesses.len()
+                };
+                if let Some(left) = graph.conflicting_pass_access(checked.clone())? {
+                    let access = &graph.accesses[checked.start + left];
                     return Err(graph
                         .resource_error(
                             GraphErrorKind::InvalidInput,
@@ -725,6 +731,183 @@ mod tests {
             index_count: 3,
             parameters: RasterParameters::default().into(),
         }
+    }
+
+    fn textured_bindings(graph: &mut Graph) -> (super::super::RasterBindings, ImageHandle) {
+        use crate::graph::{Binding, BindingResource};
+        use crate::program::SamplerDescriptor;
+        let uniform = graph.buffer("uniform", BufferDesc { size: 16 }).unwrap();
+        graph
+            .upload_buffer("uniform contents", uniform, 0, &[0; 16])
+            .unwrap();
+        let texture = graph.image("texture", ImageDesc::rgba8(2, 2)).unwrap();
+        let view = graph.image_view(texture, 0, 0).unwrap();
+        let bindings = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    offset: 0,
+                    size: 16,
+                },
+            },
+            Binding {
+                group: 1,
+                binding: 0,
+                resource: BindingResource::ImageView(view),
+            },
+            Binding {
+                group: 1,
+                binding: 1,
+                resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+            },
+        ];
+        (
+            graph
+                .raster_bindings(&ManagedRasterProgram::textured_mesh(), &bindings)
+                .unwrap(),
+            texture,
+        )
+    }
+
+    #[test]
+    fn shared_set_preserves_draws_after_failed_pass_without_per_draw_operand_capacity() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                bindings: 3,
+                draws: 24,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mut mesh = uploaded_draw(&mut graph, "geometry");
+        let (bindings, texture) = textured_bindings(&mut graph);
+        graph
+            .upload_image("texture contents", texture, &[0; 16])
+            .unwrap();
+        mesh.bindings = Some(bindings);
+        let output = graph.image("output", ImageDesc::rgba8(2, 2)).unwrap();
+        let colors = [Attachment {
+            view: graph.image_view(output, 0, 0).unwrap(),
+            load: LoadOp::Clear([0.0; 4]),
+            store: StoreOp::Store,
+        }];
+        let invalid = RasterDraw {
+            parameters: super::super::RasterConstants::default(),
+            ..mesh
+        };
+        let before = (
+            graph.accesses.len(),
+            graph.draws.len(),
+            graph.attachments.len(),
+        );
+        assert_eq!(
+            graph
+                .raster(
+                    "failed after first draw",
+                    &ManagedRasterProgram::textured_mesh(),
+                    [mesh, invalid],
+                    RasterAttachments {
+                        colors: &colors,
+                        depth: None
+                    }
+                )
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        assert_eq!(
+            (
+                graph.accesses.len(),
+                graph.draws.len(),
+                graph.attachments.len()
+            ),
+            before
+        );
+        let draws = std::array::from_fn::<_, 24, _>(|index| RasterDraw {
+            parameters: super::super::RasterConstants::new(&[index as u32; 20]).unwrap(),
+            ..mesh
+        });
+        let pass = graph
+            .raster(
+                "shared descriptors",
+                &ManagedRasterProgram::textured_mesh(),
+                draws,
+                RasterAttachments {
+                    colors: &colors,
+                    depth: None,
+                },
+            )
+            .unwrap();
+        graph.readback_image("read output", output).unwrap();
+        let plan = graph.compile().unwrap();
+        let Operation::Raster { draws: owned, .. } = &plan.passes[pass.index].operation else {
+            panic!()
+        };
+        assert_eq!(plan.bindings.len(), 3);
+        for (actual, expected) in plan.draws[owned.clone()].iter().zip(draws) {
+            assert_eq!(actual.bindings, 0..3);
+            assert_eq!(actual.parameters, expected.parameters);
+            assert_eq!(actual.index_count, expected.index_count);
+        }
+        assert_eq!(
+            plan.accesses(pass.index).len(),
+            5,
+            "one uniform, texture, vertex, index and attachment footprint"
+        );
+    }
+
+    #[test]
+    fn reused_set_selects_each_pass_producer_and_does_not_keep_culled_reads() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mut mesh = uploaded_draw(&mut graph, "geometry");
+        // Creation precedes either texture writer: it must not select contents.
+        let (bindings, texture) = textured_bindings(&mut graph);
+        mesh.bindings = Some(bindings);
+        graph
+            .upload_image("old texture", texture, &[0; 16])
+            .unwrap();
+        let discarded = graph
+            .image("culled output", ImageDesc::rgba8(2, 2))
+            .unwrap();
+        let output = graph.image("live output", ImageDesc::rgba8(2, 2)).unwrap();
+        for (index, target) in [discarded, output].into_iter().enumerate() {
+            if index == 1 {
+                graph
+                    .upload_image("new texture", texture, &[1; 16])
+                    .unwrap();
+            }
+            graph
+                .raster(
+                    if index == 0 {
+                        "culled draw"
+                    } else {
+                        "live draw"
+                    },
+                    &ManagedRasterProgram::textured_mesh(),
+                    [mesh],
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: graph.image_view(target, 0, 0).unwrap(),
+                            load: LoadOp::Clear([0.0; 4]),
+                            store: StoreOp::Store,
+                        }],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+        }
+        graph.readback_image("result", output).unwrap();
+        let plan = graph.compile().unwrap();
+        let live = plan.ordered_pass_names().collect::<Vec<_>>();
+        assert!(live.contains(&"new texture"));
+        assert!(live.contains(&"live draw"));
+        assert!(!live.contains(&"old texture"));
+        assert!(!live.contains(&"culled draw"));
     }
 
     #[test]
@@ -1116,7 +1299,10 @@ mod tests {
         }
         let accesses = plan.accesses(pass.index);
         assert_eq!(
-            accesses.iter().filter(|access| access.purpose == AccessPurpose::Uniform).count(),
+            accesses
+                .iter()
+                .filter(|access| access.purpose == AccessPurpose::Uniform)
+                .count(),
             1,
             "identical camera footprints shared across material sets are emitted once"
         );

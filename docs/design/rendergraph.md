@@ -104,13 +104,14 @@ Graph外のbinding作成と、Graph内の論理bindingからnative命令へ具�
 既存の四readback assetは`[1, 1, 1]`、利用側のProgramはレビュー済みの固定dispatch数、
 または対象画像extentとlocal sizeから求める2D dispatch数を使う。`graph::Binding`はgroup/bindingと
 `BindingResource::{Buffer { buffer, offset, size }, ImageView, Sampler}`をまとめる。
-各drawも同じ型のbinding sliceを借用し、用途・shader stage・実アクセス範囲をProgramから導く。
+Rasterは`Graph::raster_bindings(&program, &bindings)`で同じ型のsliceを一度検査・所有し、
+各drawが不変な`RasterBindings` handleを共有する。用途・shader stage・実アクセス範囲をProgramから導く。
 利用側に別のread/write一覧を要求せず、旧buffer専用入口は残さない。
 
 命令は不変な管理下Program identity、dispatch数、manifest順のbindingを所有する。
 Programの不変static descriptorと準備済みarenaへコピーしたbuffer descriptor・subresource View・
 sampler設定により、呼出元のProgram変数・binding/draw sliceが変更・破棄されてもplanは変わらない。
-同じRaster内のdrawごとに異なるmaterial bindingを指定できる。これは論理Graph資源の所有であり、
+同じRaster内のdrawごとに異なるmaterialのhandleを指定できる。これは論理Graph資源の所有であり、
 `.2.1`のnative Program/Bindingsをimportした契約ではない。
 
 全slotの過不足・重複・種別・owner、非ゼロのbuffer範囲・ABI最小size・論理境界を構築時に確認する。
@@ -134,8 +135,31 @@ UniformをStorageReadで代用せず、vertex/index fetchはshader stageとは�
 read/read重複と同じ画像の異なるmip/layerは区別する。初期化・宣言順producer・RAW/WAR/WAW・
 culling・循環は既存の共通解析へ接続する。
 
-`GraphCapacity::bindings`はdispatchと全drawで共有する上限である。
-途中のslot/range/access/attachment/name/capacity失敗は追加した全operandを戻し、通常frameでheapを増設しない。
+`RasterBindings`はGraph identityと正確なProgram identityに結び付く。layoutが同じでも
+review済みfootprintが異なり得るため、別Programへ流用しない。handleのprivateな範囲は成功した
+作成処理だけが公開し、Graph内のarenaはappend-onlyで、失敗時は未公開の追加分だけを戻す。
+この不変条件によりdrawではownerとProgramだけを再照合し、slot・descriptor・View範囲を再走査しない。
+poolの次のcheckoutは新Graph identityとなり、旧handleを拒否する。
+`RasterDraw::bindings`の`None`はbinding slotのないProgramに限る。
+
+set作成はdescriptorとread footprintのtemplateだけを保存し、その時点ではpass accessを作らない。
+各使用passでtemplateを一度追加するため、同じsetを複数passで使っても宣言順producer・cullingを保つ。
+信頼済みRaster契約は読み取りbindingだけを許し、shader副作用とdraw間同期を禁止する。
+全drawの順序・定数・native descriptor operandは保持し、既存のflat arena上の範囲を共有する。
+pass内の重複readは範囲・purpose・shader stage・全access属性が完全一致する場合だけ一件にする。
+write、異なる用途・stage、部分的に重なる範囲は統合しない。binding slotに依存する拒否と
+pass内overlap検査を終えてから圧縮し、Computeのwrite hazardやimage layoutの拒否を維持する。
+Rasterはbindingがあればpass全体を一度検査し、bindingがなければbuffer入力とimage出力が異なるため
+attachmentだけを一度検査する。attachment-onlyでも重複Viewを拒否する。
+
+`GraphCapacity::bindings`はdispatchのoperandと、各Raster setのoperandで共有する上限である。
+同じsetを使うdrawごとの追加消費はない。空setはhandleの値以外のmetadataを保存しない。
+templateと使用済みsetの作業領域はbinding上限以内に準備する。exact-read indexはaccess上限をAとして
+`(2A + 1) × size_of::<usize>()`のbucketと`A × size_of::<usize>()`の使用bucket列を追加し、
+前回触れたbucketだけを消す。templateは最大`bindings × size_of::<ResourceAccess>()`、setの使用markと
+列は最大`bindings × (size_of::<bool>() + size_of::<usize>())`を各Graph slotに準備する。
+access容量は圧縮前の構築作業領域も覆う。通常frameでheapを増設せず、容量不足は明示エラーとする。
+set作成失敗はoperandとtemplateの追加を戻し、後続pass失敗は既存setを維持してdraw/access/attachment/nameを戻す。
 planとnative consumerのpinが全て返るまでslotを再利用しない。
 
 native dispatchは明示準備したProgramのpipelineと容量付きdescriptorを使い、通常frameで作成・増設しない。
@@ -313,7 +337,7 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 
 `Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`とdrawのiteratorを受け取る。
 配列・sliceと`SnapshotInputs::draws()`は同じ入口を使い、要素は値または`Borrow<RasterDraw>`とする。
-各`RasterDraw`はvertex／index buffer・index count・`RasterConstants`と借用binding sliceをまとめ、
+各`RasterDraw`はvertex／index buffer・index count・`RasterConstants`と`Option<RasterBindings>`をまとめ、
 attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
 管理下の色Programは出力形式に一致する一個のcolorを要求し、depthを省略できる。
 `depth_only()`はcolorを持たず、depthを要求する。native実行は単一subresource画像を扱う。
@@ -365,7 +389,8 @@ first index/base vertexは0、instance数は1だけを扱う。CPU計画だけ�
 集約・列挙はO(D + U log U)、片付けは前回のUに比例する。slotごとに`usize × resource上限`の
 準備領域を追加する交換条件であり、密な入力や実時間性能での優位は未計測である。
 構築失敗後も使用列を保持し、次の非空Rasterまたはslot resetでrangeとともに消す。
-後半drawの構築失敗でもdraw/binding/access/attachment/nameを戻し、途中のpassを公開しない。
+後半drawの構築失敗でもdraw/access/attachment/nameを戻し、途中のpassを公開しない。
+事前に作成したbinding setは維持し、次の非空Rasterで使用markをresetして再利用する。
 Engineと利用側は同じ不変`RasterConstants`と公開Raster構築APIを使い、描画引数を再走査しない。
 空draw iteratorでもProgramの出力数・形式・必須depthとLoad条件を確認した後、
 native Programを使わないattachment-onlyへ正規化する。一般形のclear-onlyは`Graph::attachment_pass`を直接使う。

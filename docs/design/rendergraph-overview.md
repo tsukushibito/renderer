@@ -190,7 +190,10 @@ Samplerは`NearestClamp`または`LinearRepeat`の不変設定を保持し、別
 これらに加え、利用側のレビュー済みCompute descriptorを明示したunsafe境界で取り込めます。
 型付きstorage画像の全域writeは対象extentとdispatchの契約に結び付け、両backendのowned命令へ接続します。
 
-`Graph::raster(name, &program, draws, attachments)`は、借用draw sliceと各drawのbindingをcaptureします。
+`Graph::raster_bindings(&program, &bindings)`はdescriptorを一度検査・所有し、GraphとProgramに固有の
+不変handleを返します。`Graph::raster(name, &program, draws, attachments)`は、そのhandleを共有するdraw列をcaptureします。
+bindingなしのProgramは`RasterDraw::bindings: None`を使います。使用passごとにreadを宣言し、
+同じpassの完全一致readだけを一件にまとめるため、draw順と実descriptor、producerの意味を保ちます。
 `ManagedRasterProgram::mesh()`はbindingなし、`textured_mesh()`はCPU計画でUniform・sampled View・Samplerを扱います。
 後者はVERTEX段のUniform16 byte、FRAGMENT段のsampled Viewとnearest/clampを要求します。
 両者とも頂点stride28、inline行列＋tint80 byte、1 RGBA8＋任意depthというCPU契約です。
