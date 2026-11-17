@@ -26,7 +26,7 @@ pub enum OpaqueDepth {
 /// Prepassed depth is required to load existing contents even for empty input.
 /// Standard-specific contract failures use [`GraphError::custom`]; Graph handle,
 /// attachment and capacity errors keep the ordinary Graph error categories.
-pub fn opaque<'a, I, D>(
+pub fn opaque<I, D>(
     graph: &mut Graph,
     name: &str,
     draws: I,
@@ -36,7 +36,7 @@ pub fn opaque<'a, I, D>(
 ) -> Result<PassHandle, GraphError>
 where
     I: IntoIterator<Item = D>,
-    D: Borrow<RasterDraw<'a>>,
+    D: Borrow<RasterDraw>,
 {
     let program = match (graph.image_desc(color.view.image())?.format, depth_mode) {
         (ImageFormat::Rgba8Unorm, OpaqueDepth::Write) => ManagedRasterProgram::mesh(),
@@ -66,7 +66,7 @@ where
 /// and depth writes. The caller chooses Clear/Load/Discard and Store/Discard.
 /// Use matching transforms and compatible depth contents for subsequent opaque
 /// drawing with [`OpaqueDepth::Prepassed`].
-pub fn depth_prepass<'a, I, D>(
+pub fn depth_prepass<I, D>(
     graph: &mut Graph,
     name: &str,
     draws: I,
@@ -74,7 +74,7 @@ pub fn depth_prepass<'a, I, D>(
 ) -> Result<PassHandle, GraphError>
 where
     I: IntoIterator<Item = D>,
-    D: Borrow<RasterDraw<'a>>,
+    D: Borrow<RasterDraw>,
 {
     graph.raster(
         name,

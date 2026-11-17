@@ -5,8 +5,22 @@ use super::{
     Operation, PassHandle, ResourceAccess, storage::capacity_error,
 };
 use crate::program::{
-    BindingLayout, BindingType, BufferRange, DispatchWorkgroups, ManagedProgram, SamplerDescriptor,
+    BindingLayout, BindingType, BufferRange, DispatchWorkgroups, ManagedProgram,
+    ManagedRasterProgram, SamplerDescriptor,
 };
+
+/// Immutable descriptors validated for one Graph and one Raster Program.
+/// Reusing the handle shares owned operands without borrowing caller data.
+/// A new Graph checkout or a different Program requires a new set.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RasterBindings {
+    graph: u64,
+    program: usize,
+    first: usize,
+    len: usize,
+    first_access: usize,
+    access_len: usize,
+}
 
 /// A graph-local descriptor borrowed only during pass construction. Programs
 /// derive resource uses; callers do not repeat a read/write or stage declaration.
@@ -46,6 +60,88 @@ pub(crate) enum BindingOperands {
 }
 
 impl Graph {
+    /// Validate and capture the complete Program binding layout once into
+    /// prepared Graph storage. This does not declare a resource read: each
+    /// Raster pass using the set selects its contents at that pass's position.
+    pub fn raster_bindings(
+        &mut self,
+        program: &ManagedRasterProgram,
+        bindings: &[Binding],
+    ) -> Result<RasterBindings, GraphError> {
+        let first = self.bindings.len();
+        let first_access = self.binding_accesses.len();
+        let result =
+            self.append_bindings_into(program.bindings(), program.binding_bytes(), bindings, true);
+        match result {
+            Ok(owned) => Ok(RasterBindings {
+                graph: self.id,
+                program: program.identity(),
+                first,
+                len: owned.len(),
+                first_access,
+                access_len: self.binding_accesses.len() - first_access,
+            }),
+            Err(error) => {
+                let data = self.data_mut();
+                data.bindings.truncate(first);
+                data.binding_accesses.truncate(first_access);
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) fn use_raster_bindings(
+        &mut self,
+        program: &ManagedRasterProgram,
+        bindings: Option<RasterBindings>,
+    ) -> Result<std::ops::Range<usize>, GraphError> {
+        let Some(bindings) = bindings else {
+            return if program.bindings().is_empty() {
+                Ok(0..0)
+            } else {
+                Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "Raster Program requires a validated binding set",
+                ))
+            };
+        };
+        if bindings.graph != self.id {
+            return Err(GraphError::new(
+                GraphErrorKind::WrongOwner,
+                "foreign Graph Raster binding set",
+            ));
+        }
+        if bindings.program != program.identity() {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "Raster binding set belongs to a different Program",
+            ));
+        }
+        // Fields are private and immutable, and successful creation is the
+        // only publisher. Keep range checks at this safe public handle boundary.
+        let end = bindings.first.checked_add(bindings.len);
+        let access_end = bindings.first_access.checked_add(bindings.access_len);
+        if end.is_none_or(|end| end > self.bindings.len())
+            || access_end.is_none_or(|end| end > self.binding_accesses.len())
+        {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidHandle,
+                "undefined Raster binding set",
+            ));
+        }
+        let end = end.unwrap();
+        if bindings.len != 0 && !self.raster_binding_seen[bindings.first] {
+            for index in bindings.first_access..access_end.unwrap() {
+                self.append_access(self.binding_accesses[index].clone())?;
+            }
+            let data = self.data_mut();
+            data.raster_binding_seen[bindings.first] = true;
+            // Every nonempty set owns at least one unique binding slot.
+            data.raster_binding_sets.push(bindings.first);
+        }
+        Ok(bindings.first..end)
+    }
+
     /// Own a managed Compute dispatch and derive accesses from its reviewed
     /// shader contract. Buffer footprints are reviewed prefixes; images access
     /// the whole selected mip/layer. Extra descriptor bytes stay undefined.
@@ -217,6 +313,36 @@ impl Graph {
         bytes: &[u64],
         bindings: &[Binding],
     ) -> Result<std::ops::Range<usize>, GraphError> {
+        self.append_bindings_into(layout, bytes, bindings, false)
+    }
+
+    fn append_binding_access(
+        &mut self,
+        access: ResourceAccess,
+        template: bool,
+    ) -> Result<(), GraphError> {
+        if !template {
+            return self.append_access(access);
+        }
+        self.check_input_access(&access)?;
+        if self.binding_accesses.len() == self.capacity.bindings {
+            return Err(capacity_error(
+                GraphCapacityKind::Bindings,
+                self.capacity.bindings,
+                self.binding_accesses.len().checked_add(1),
+            ));
+        }
+        self.data_mut().binding_accesses.push(access);
+        Ok(())
+    }
+
+    fn append_bindings_into(
+        &mut self,
+        layout: &[BindingLayout],
+        bytes: &[u64],
+        bindings: &[Binding],
+        template: bool,
+    ) -> Result<std::ops::Range<usize>, GraphError> {
         if bindings.len() != layout.len() {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
@@ -278,16 +404,19 @@ impl Graph {
                             BindingType::StorageWrite => (false, true, AccessPurpose::StorageWrite),
                             _ => unreachable!(),
                         };
-                        self.append_access(ResourceAccess {
-                            resource,
-                            range: offset..end,
-                            read,
-                            write,
-                            initializes: write,
-                            discard_after: false,
-                            purpose,
-                            stages: slot.stages,
-                        })?;
+                        self.append_binding_access(
+                            ResourceAccess {
+                                resource,
+                                range: offset..end,
+                                read,
+                                write,
+                                initializes: write,
+                                discard_after: false,
+                                purpose,
+                                stages: slot.stages,
+                            },
+                            template,
+                        )?;
                         BindingOperands::Buffer {
                             resource,
                             range: BufferRange { offset, size },
@@ -347,16 +476,19 @@ impl Graph {
                         // range and aspect. Sampling has no write side effect.
                         let unit = u64::from(view.layer) * u64::from(desc.mip_levels)
                             + u64::from(view.mip);
-                        self.append_access(ResourceAccess {
-                            resource,
-                            range: unit..unit + u64::from(view.mip_count),
-                            read,
-                            write,
-                            initializes: write,
-                            discard_after: false,
-                            purpose,
-                            stages: slot.stages,
-                        })?;
+                        self.append_binding_access(
+                            ResourceAccess {
+                                resource,
+                                range: unit..unit + u64::from(view.mip_count),
+                                read,
+                                write,
+                                initializes: write,
+                                discard_after: false,
+                                purpose,
+                                stages: slot.stages,
+                            },
+                            template,
+                        )?;
                         BindingOperands::ImageView(view)
                     }
                     (BindingType::Sampler, BindingResource::Sampler(sampler)) => {

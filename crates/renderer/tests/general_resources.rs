@@ -503,7 +503,7 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
             vertices: v,
             indices: i,
             index_count: 3,
-            bindings: &[],
+            bindings: None,
             parameters: RasterParameters::default().into(),
         }],
         Attachment {

@@ -207,7 +207,7 @@ fn bytes<const N: usize>(values: &[f32]) -> [u8; N] {
 }
 
 pub struct Inputs {
-    pub opaque: [RasterDraw<'static>; 4],
+    pub opaque: [RasterDraw; 4],
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
     pub bindings: [Binding; 4],
@@ -326,7 +326,7 @@ pub fn inputs(graph: &mut Graph, frame: usize) -> Inputs {
         )
         .unwrap()
         .into(),
-        bindings: &[],
+        bindings: None,
     };
     Inputs {
         opaque: [opaque; 4],
@@ -378,7 +378,7 @@ fn overlay_values(frame: usize, draw: usize) -> (f32, [f32; 4]) {
     ([0.5, 0.25, 0.875][draw], tint)
 }
 
-pub fn overlay_draws<'a>(inputs: &'a Inputs, frame: usize) -> [RasterDraw<'a>; 3] {
+pub fn overlay_draws<'a>(inputs: &'a Inputs, frame: usize) -> [RasterDraw; 3] {
     std::array::from_fn(|draw| {
         let (depth, tint) = overlay_values(frame, draw);
         RasterDraw {

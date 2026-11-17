@@ -109,10 +109,14 @@ pub struct GraphStorage {
     pub(super) uploads: Vec<u8>,
     pub(super) draws: Vec<RasterDrawOperands>,
     pub(super) bindings: Vec<BindingOperands>,
+    pub(super) binding_accesses: Vec<ResourceAccess>,
+    pub(super) raster_binding_seen: Vec<bool>,
+    pub(super) raster_binding_sets: Vec<usize>,
     pub(super) attachments: Vec<AttachmentOperand>,
     pub(super) raster_ranges: Vec<[u64; 2]>,
     pub(super) raster_resources: Vec<usize>,
     pub(super) overlap: Vec<super::accesses::IndexedAccess>,
+    pub(super) read_accesses: super::accesses::ReadAccessSet,
     pub(super) workspace: analysis::Workspace,
     pub(super) output: analysis::Output,
     pub(super) capacity: GraphCapacity,
@@ -133,6 +137,8 @@ impl GraphStorage {
     fn new(capacity: GraphCapacity) -> Result<Self, GraphError> {
         let mut raster_ranges = buffer(capacity.resources, GraphCapacityKind::Resources)?;
         raster_ranges.resize(capacity.resources, [0; 2]);
+        let mut raster_binding_seen = buffer(capacity.bindings, GraphCapacityKind::Bindings)?;
+        raster_binding_seen.resize(capacity.bindings, false);
         Ok(Self {
             id: 0,
             resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
@@ -147,10 +153,16 @@ impl GraphStorage {
             uploads: buffer(capacity.upload_bytes, GraphCapacityKind::UploadBytes)?,
             draws: buffer(capacity.draws, GraphCapacityKind::Draws)?,
             bindings: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
+            binding_accesses: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
+            raster_binding_seen,
+            raster_binding_sets: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             attachments: buffer(capacity.attachments, GraphCapacityKind::Attachments)?,
             raster_ranges,
             raster_resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             overlap: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
+            read_accesses: super::accesses::ReadAccessSet::new(capacity.accesses).map_err(
+                |_| capacity_error(GraphCapacityKind::Accesses, capacity.accesses, None),
+            )?,
             workspace: analysis::Workspace::new(capacity.analysis())
                 .map_err(|error| capacity.analysis_error(error))?,
             output: analysis::Output::new(capacity.analysis())
@@ -175,11 +187,16 @@ impl GraphStorage {
         self.uploads.clear();
         self.draws.clear();
         self.bindings.clear();
+        self.binding_accesses.clear();
+        self.read_accesses.clear();
         self.attachments.clear();
         #[cfg(feature = "graph-diagnostics")]
         self.dump.take();
     }
     pub(super) fn clear_raster_ranges(&mut self) {
+        for index in self.raster_binding_sets.drain(..) {
+            self.raster_binding_seen[index] = false;
+        }
         for &resource in &self.raster_resources {
             self.raster_ranges[resource] = [0; 2];
         }

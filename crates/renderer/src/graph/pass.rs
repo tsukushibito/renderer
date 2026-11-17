@@ -172,11 +172,11 @@ impl From<RasterParameters> for RasterConstants {
     }
 }
 
-/// One indexed triangle draw. Its borrowed descriptors follow the selected
-/// Raster Program layout and are owned by the plan after construction.
+/// One indexed triangle draw. A validated binding set follows the selected
+/// Raster Program; `None` is accepted only for Programs with no binding slots.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RasterDraw<'a> {
-    pub bindings: &'a [super::Binding],
+pub struct RasterDraw {
+    pub bindings: Option<super::RasterBindings>,
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
     pub index_count: u32,
@@ -261,7 +261,7 @@ pub struct Access {
     pub purpose: AccessPurpose,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(
     not(feature = "vulkan"),
     allow(

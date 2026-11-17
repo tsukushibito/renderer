@@ -1595,7 +1595,7 @@ mod tests {
                         vertices,
                         indices,
                         index_count: 3,
-                        bindings: &[],
+                        bindings: None,
                         parameters: RasterParameters::new(
                             *RasterParameters::default().transform(),
                             [1.0, 0.0, 0.0, 1.0],

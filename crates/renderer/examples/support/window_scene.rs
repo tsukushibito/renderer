@@ -98,7 +98,7 @@ pub fn build(
 ) -> Result<ImageHandle, GraphError> {
     let vertices = graph.import_buffer("scene vertices", &buffers[0])?;
     let indices = graph.import_buffer("scene indices", &buffers[1])?;
-    let draws: [RasterDraw<'_>; 3] = std::array::from_fn(|index| {
+    let draws: [RasterDraw; 3] = std::array::from_fn(|index| {
         let (scale, position) = [
             ([1.2, 1.5, 1.2], [-1.1, 0.0, 0.0]),
             ([1.0, 1.0, 1.0], [1.0, -0.25, 0.75]),
@@ -114,7 +114,7 @@ pub fn build(
             vertices,
             indices,
             index_count: 36,
-            bindings: &[],
+            bindings: None,
             parameters: RasterParameters::new(
                 multiply(clip_from_world, world_from_model),
                 COLORS[index + 1].map(|value| value as f32 / 255.0),

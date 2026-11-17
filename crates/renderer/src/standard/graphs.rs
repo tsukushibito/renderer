@@ -34,7 +34,7 @@ pub struct SceneColor {
 /// Add standard opaque drawing and return its color/depth without a post stage.
 /// The name identifies the Raster/clear pass. No export, readback, submission or
 /// redundant final copy is added.
-pub fn forward<'a, I, D>(
+pub fn forward<I, D>(
     graph: &mut Graph,
     name: &str,
     draws: I,
@@ -42,7 +42,7 @@ pub fn forward<'a, I, D>(
 ) -> Result<SceneColor, GraphError>
 where
     I: IntoIterator<Item = D>,
-    D: Borrow<RasterDraw<'a>>,
+    D: Borrow<RasterDraw>,
 {
     forward_with_post(graph, name, draws, config, |_, scene| Ok(scene.color))
 }
@@ -57,7 +57,7 @@ where
 /// the pass structure, compose public passes directly. Failed composition may
 /// leave earlier successful declarations in the Graph; drop/rebuild as needed.
 /// Standard-specific contract failures use [`GraphError::custom`].
-pub fn forward_with_post<'a, I, D>(
+pub fn forward_with_post<I, D>(
     graph: &mut Graph,
     name: &str,
     draws: I,
@@ -66,7 +66,7 @@ pub fn forward_with_post<'a, I, D>(
 ) -> Result<SceneColor, GraphError>
 where
     I: IntoIterator<Item = D>,
-    D: Borrow<RasterDraw<'a>>,
+    D: Borrow<RasterDraw>,
 {
     if !matches!(
         config.color.format,

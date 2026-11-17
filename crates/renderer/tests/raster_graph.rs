@@ -80,7 +80,7 @@ fn pixels<T: Copy, const N: usize>(mut pixel: impl FnMut(usize, usize) -> [T; N]
     output
 }
 
-fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw<'static> {
+fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw {
     let vertices = graph
         .buffer("quad vertices", BufferDesc { size: 112 })
         .unwrap();
@@ -100,7 +100,7 @@ fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw<'static> {
         .upload_buffer("index contents", indices, 0, &bytes)
         .unwrap();
     RasterDraw {
-        bindings: &[],
+        bindings: None,
         vertices,
         indices,
         index_count: 6,
@@ -108,7 +108,7 @@ fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw<'static> {
     }
 }
 
-fn placed(mut draw: RasterDraw<'_>, left: bool, depth: f32, tint: [f32; 4]) -> RasterDraw<'_> {
+fn placed(mut draw: RasterDraw, left: bool, depth: f32, tint: [f32; 4]) -> RasterDraw {
     let mut transform = *RasterParameters::default().transform();
     transform[2][2] = 0.0;
     transform[3][2] = depth;
@@ -148,7 +148,7 @@ fn observe(graph: &mut Graph, image: ImageHandle, name: &'static str, bytes: Vec
     }
 }
 
-fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut Vec<Expected>) {
+fn prepass_continuations(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expected>) {
     let depth = graph
         .image("prepass depth", ImageDesc::depth32(4, 4))
         .unwrap();
@@ -245,7 +245,7 @@ fn prepass_continuations(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut
     ));
 }
 
-fn standard_recipes(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut Vec<Expected>) {
+fn standard_recipes(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expected>) {
     let config = graphs::ForwardConfig {
         color: ImageDesc::rgba8(4, 4),
         clear_color: [1.0, 0.0, 0.0, 1.0],
@@ -254,7 +254,7 @@ fn standard_recipes(graph: &mut Graph, quad: RasterDraw<'_>, expected: &mut Vec<
     let empty = graphs::forward(
         graph,
         "standard empty",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         config,
     )
     .unwrap();

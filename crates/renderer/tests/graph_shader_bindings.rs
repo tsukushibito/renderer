@@ -5,7 +5,7 @@ use renderer::graph::{
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
 
-fn geometry(graph: &mut Graph) -> RasterDraw<'static> {
+fn geometry(graph: &mut Graph) -> RasterDraw {
     let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
     let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
     graph
@@ -19,7 +19,7 @@ fn geometry(graph: &mut Graph) -> RasterDraw<'static> {
         indices,
         index_count: 3,
         parameters: RasterParameters::default().into(),
-        bindings: &[],
+        bindings: None,
     }
 }
 
@@ -83,7 +83,7 @@ fn seed(graph: &mut Graph, name: &str, view: ImageView) {
 fn draw(
     graph: &mut Graph,
     name: &str,
-    geometry: RasterDraw<'_>,
+    geometry: RasterDraw,
     bindings: &[Binding],
     output: ImageView,
 ) -> Result<renderer::graph::PassHandle, renderer::graph::GraphError> {

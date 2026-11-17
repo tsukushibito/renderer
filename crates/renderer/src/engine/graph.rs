@@ -78,7 +78,7 @@ impl SnapshotInputs<'_> {
     /// Immutable indexed operands for the ordinary public Raster builder.
     /// Their mesh buffers are read-only Graph inputs. Copy to another buffer
     /// when mutable contents or a persistent export are needed.
-    pub fn draws(&self) -> impl ExactSizeIterator<Item = crate::graph::RasterDraw<'static>> + '_ {
+    pub fn draws(&self) -> impl ExactSizeIterator<Item = crate::graph::RasterDraw> + '_ {
         self.snapshot.draws.iter().map(|draw| {
             let index = self
                 .meshes
@@ -90,7 +90,7 @@ impl SnapshotInputs<'_> {
                 indices,
                 index_count: draw.data.index_count,
                 parameters: draw.parameters.into(),
-                bindings: &[],
+                bindings: None,
             }
         })
     }

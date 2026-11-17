@@ -11,7 +11,7 @@ use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
 fn sampled_pass(
     graph: &mut Graph,
     name: &str,
-    draw: RasterDraw<'_>,
+    draw: RasterDraw,
     uniform: renderer::graph::BufferHandle,
     source: ImageHandle,
     destination: ImageHandle,
@@ -59,7 +59,7 @@ fn sampled_pass(
 
 fn sampled_chain(
     graph: &mut Graph,
-    draw: RasterDraw<'_>,
+    draw: RasterDraw,
     uniform: renderer::graph::BufferHandle,
     input: ImageHandle,
     enabled: bool,
@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             indices,
             index_count: 3,
             parameters: RasterParameters::default().into(),
-            bindings: &[],
+            bindings: None,
         },
         uniform,
         input,
@@ -154,7 +154,7 @@ mod tests {
                 indices,
                 index_count: 3,
                 parameters: RasterParameters::default().into(),
-                bindings: &[],
+                bindings: None,
             },
             uniform,
             input,

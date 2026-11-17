@@ -27,6 +27,7 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let plan = graph.append_attachments(attachments)?;
+            graph.check_attachment_overlap(plan.accesses.clone())?;
             Ok((
                 Operation::AttachmentPass {
                     colors: plan.colors,
@@ -119,6 +120,17 @@ impl Graph {
             None
         };
         let accesses = first_access..self.accesses.len();
+        Ok(AttachmentPlan {
+            colors,
+            depth,
+            accesses,
+        })
+    }
+
+    fn check_attachment_overlap(
+        &mut self,
+        accesses: std::ops::Range<usize>,
+    ) -> Result<(), GraphError> {
         let conflict = {
             let data = self.data_mut();
             super::accesses::conflicting_accesses_in(
@@ -145,11 +157,7 @@ impl Graph {
                 .with_range(self.access_range(access.resource, access.range.clone())));
         }
 
-        Ok(AttachmentPlan {
-            colors,
-            depth,
-            accesses,
-        })
+        Ok(())
     }
 
     fn append_attachment(

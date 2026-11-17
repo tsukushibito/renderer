@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "indexed mesh and depth",
         &renderer::program::ManagedRasterProgram::mesh(),
         [RasterDraw {
-            bindings: &[],
+            bindings: None,
             vertices: vertex_buffer,
             indices: index_buffer,
             index_count: 6,

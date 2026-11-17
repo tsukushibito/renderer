@@ -214,7 +214,7 @@ fn image_frame(
             "wsi.standard.mesh",
             &crate::program::ManagedRasterProgram::mesh(),
             [RasterDraw {
-                bindings: &[],
+                bindings: None,
                 vertices,
                 indices,
                 index_count: 3,

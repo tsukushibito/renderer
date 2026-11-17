@@ -24,7 +24,7 @@ mod storage;
 
 pub use compile::CompiledGraph;
 pub(crate) use dispatch::BindingOperands;
-pub use dispatch::{Binding, BindingResource};
+pub use dispatch::{Binding, BindingResource, RasterBindings};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use pass::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,

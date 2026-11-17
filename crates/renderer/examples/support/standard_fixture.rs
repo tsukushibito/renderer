@@ -82,7 +82,7 @@ fn tint(frame: usize, draw: usize) -> [f32; 4] {
     ][(frame / CASES + draw) % 4]
 }
 
-fn draws(graph: &mut Graph, frame: usize) -> [RasterDraw<'static>; 4] {
+fn draws(graph: &mut Graph, frame: usize) -> [RasterDraw; 4] {
     let vertices = graph
         .buffer("standard triangle vertices", BufferDesc { size: 84 })
         .unwrap();
@@ -122,7 +122,7 @@ fn draws(graph: &mut Graph, frame: usize) -> [RasterDraw<'static>; 4] {
             vertices,
             indices,
             index_count: 3,
-            bindings: &[],
+            bindings: None,
             parameters: RasterParameters::new(transform, tint(frame, draw))
                 .unwrap()
                 .into(),

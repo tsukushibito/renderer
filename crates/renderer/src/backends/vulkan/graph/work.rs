@@ -1329,7 +1329,7 @@ mod tests {
                 "mesh",
                 &crate::program::ManagedRasterProgram::mesh(),
                 [RasterDraw {
-                    bindings: &[],
+                    bindings: None,
                     vertices,
                     indices,
                     index_count: 3,
@@ -1993,7 +1993,7 @@ mod tests {
                 "degenerate-mesh",
                 &crate::program::ManagedRasterProgram::mesh(),
                 [RasterDraw {
-                    bindings: &[],
+                    bindings: None,
                     vertices,
                     indices,
                     index_count: 3,

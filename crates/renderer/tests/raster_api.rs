@@ -6,12 +6,7 @@ use renderer::graph::{
 };
 use renderer::program::{ImageDescriptor, ManagedRasterProgram};
 
-fn mesh(
-    graph: &mut Graph,
-    name: &str,
-    seed_vertices: bool,
-    seed_indices: bool,
-) -> RasterDraw<'static> {
+fn mesh(graph: &mut Graph, name: &str, seed_vertices: bool, seed_indices: bool) -> RasterDraw {
     let vertices = graph
         .buffer(&format!("{name} vertices"), BufferDesc { size: 84 })
         .unwrap();
@@ -29,7 +24,7 @@ fn mesh(
             .unwrap();
     }
     RasterDraw {
-        bindings: &[],
+        bindings: None,
         vertices,
         indices,
         index_count: 3,
@@ -266,7 +261,7 @@ fn short_lived_draws_keep_both_meshes_alive_and_pin_the_completed_plan() {
             )
             .unwrap();
         draws.fill(RasterDraw {
-            bindings: &[],
+            bindings: None,
             index_count: 0,
             ..a
         });
@@ -346,7 +341,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
         .unwrap();
     graph.upload_buffer("current", shared, 0, &[0; 84]).unwrap();
     let draw = RasterDraw {
-        bindings: &[],
+        bindings: None,
         vertices: shared,
         indices: shared,
         index_count: 3,
@@ -360,7 +355,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
             [
                 draw,
                 RasterDraw {
-                    bindings: &[],
+                    bindings: None,
                     index_count: 6,
                     ..draw
                 },
@@ -525,7 +520,7 @@ fn empty_raster_checks_program_outputs_and_clear_only_uses_attachment_pass() {
                 .raster(
                     "empty draw list",
                     &ManagedRasterProgram::mesh(),
-                    std::iter::empty::<RasterDraw<'_>>(),
+                    std::iter::empty::<RasterDraw>(),
                     targets,
                 )
                 .unwrap_err()
@@ -677,17 +672,17 @@ fn public_draw_validation_rejects_invalid_buffer_ranges() {
     let bad_stride = graph.buffer("bad stride", BufferDesc { size: 85 }).unwrap();
     for invalid in [
         RasterDraw {
-            bindings: &[],
+            bindings: None,
             index_count: 0,
             ..valid
         },
         RasterDraw {
-            bindings: &[],
+            bindings: None,
             index_count: 6,
             ..valid
         },
         RasterDraw {
-            bindings: &[],
+            bindings: None,
             vertices: bad_stride,
             ..valid
         },
@@ -932,7 +927,7 @@ fn empty_draws_enforce_custom_depth_and_output_contracts() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();
     let target = color(&mut graph, "color");
-    let empty = std::iter::empty::<RasterDraw<'_>>;
+    let empty = std::iter::empty::<RasterDraw>;
     assert_eq!(
         graph
             .raster(

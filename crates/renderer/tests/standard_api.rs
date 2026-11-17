@@ -17,7 +17,7 @@ fn config(color: ImageDesc, depth: bool) -> ForwardConfig {
     }
 }
 
-fn mesh(graph: &mut Graph) -> RasterDraw<'static> {
+fn mesh(graph: &mut Graph) -> RasterDraw {
     let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
     let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
     graph
@@ -31,7 +31,7 @@ fn mesh(graph: &mut Graph) -> RasterDraw<'static> {
         indices,
         index_count: 3,
         parameters: RasterParameters::default().into(),
-        bindings: &[],
+        bindings: None,
     }
 }
 
@@ -65,7 +65,7 @@ fn forward_can_be_used_directly_without_implicit_consumers_or_a_depth_target() {
         let result = graphs::forward(
             &mut graph,
             "empty forward",
-            std::iter::empty::<RasterDraw<'_>>(),
+            std::iter::empty::<RasterDraw>(),
             settings,
         )
         .unwrap();
@@ -278,7 +278,7 @@ fn load_and_discard_keep_the_ordinary_graph_initialization_contract() {
         let result = graphs::forward_with_post(
             &mut graph,
             "scene",
-            std::iter::empty::<RasterDraw<'_>>(),
+            std::iter::empty::<RasterDraw>(),
             settings,
             |graph, scene| {
                 if discard {
@@ -315,7 +315,7 @@ fn post_output_contract_rejects_wrong_description_and_foreign_handles() {
         let error = graphs::forward_with_post(
             &mut graph,
             "scene",
-            std::iter::empty::<RasterDraw<'_>>(),
+            std::iter::empty::<RasterDraw>(),
             settings,
             |graph, _| graph.image("wrong output", wrong),
         )
@@ -330,7 +330,7 @@ fn post_output_contract_rejects_wrong_description_and_foreign_handles() {
     let error = graphs::forward_with_post(
         &mut graph,
         "scene",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         settings,
         |_, _| Ok(foreign),
     )
@@ -349,7 +349,7 @@ fn post_cannot_replace_the_graph_and_return_a_matching_foreign_target() {
     let error = graphs::forward_with_post(
         &mut graph,
         "scene",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         settings,
         |graph, _| {
             drop(std::mem::replace(graph, other));
@@ -368,14 +368,14 @@ fn unused_standard_graph_and_post_branches_are_culled_normally() {
     graphs::forward(
         &mut graph,
         "unused recipe",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         settings,
     )
     .unwrap();
     let output = graphs::forward_with_post(
         &mut graph,
         "selected recipe",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         settings,
         |graph, scene| {
             let unused = graph.image("unused branch", settings.color)?;
@@ -443,7 +443,7 @@ fn standard_parts_keep_capacity_errors_and_return_failed_draw_capacity() {
     let error = graphs::forward(
         &mut graph,
         "capacity",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         config(ImageDesc::rgba8(4, 3), true),
     )
     .unwrap_err();
@@ -470,7 +470,7 @@ fn recipe_configuration_and_callback_errors_remain_explicit() {
             graphs::forward(
                 &mut graph,
                 "bad config",
-                std::iter::empty::<RasterDraw<'_>>(),
+                std::iter::empty::<RasterDraw>(),
                 config(desc, false)
             )
             .unwrap_err()
@@ -483,7 +483,7 @@ fn recipe_configuration_and_callback_errors_remain_explicit() {
     let error = graphs::forward_with_post(
         &mut graph,
         "failed post",
-        std::iter::empty::<RasterDraw<'_>>(),
+        std::iter::empty::<RasterDraw>(),
         config(ImageDesc::rgba8(4, 3), false),
         |_, _| Err(GraphError::custom("post construction failed")),
     )

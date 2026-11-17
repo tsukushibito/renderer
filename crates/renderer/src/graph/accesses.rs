@@ -1,6 +1,76 @@
 //! Pass-local overlap detection, independent of the access representation.
 
-use std::ops::Range;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    ops::Range,
+};
+
+/// Bounded exact-read index. Slots point at the compacted pass accesses; only
+/// touched buckets are reset, independent of the prepared upper bound.
+pub(super) struct ReadAccessSet {
+    slots: Vec<usize>,
+    touched: Vec<usize>,
+}
+
+impl ReadAccessSet {
+    pub fn new(capacity: usize) -> Result<Self, ()> {
+        let count = capacity
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(1))
+            .ok_or(())?;
+        let mut slots = Vec::new();
+        slots.try_reserve_exact(count).map_err(|_| ())?;
+        slots.resize(count, usize::MAX);
+        let mut touched = Vec::new();
+        touched.try_reserve_exact(capacity).map_err(|_| ())?;
+        Ok(Self { slots, touched })
+    }
+
+    pub fn clear(&mut self) {
+        for bucket in self.touched.drain(..) {
+            self.slots[bucket] = usize::MAX;
+        }
+    }
+
+    pub fn insert(
+        &mut self,
+        access: &super::ResourceAccess,
+        destination: usize,
+        accesses: &[super::ResourceAccess],
+    ) -> bool {
+        let mut hash = DefaultHasher::new();
+        access.resource.hash(&mut hash);
+        access.range.hash(&mut hash);
+        access.read.hash(&mut hash);
+        access.write.hash(&mut hash);
+        access.initializes.hash(&mut hash);
+        access.discard_after.hash(&mut hash);
+        (access.purpose as u8).hash(&mut hash);
+        for stage in [
+            crate::program::ShaderStages::VERTEX,
+            crate::program::ShaderStages::FRAGMENT,
+            crate::program::ShaderStages::COMPUTE,
+        ] {
+            access.stages.contains(stage).hash(&mut hash);
+        }
+        let mut bucket = hash.finish() as usize % self.slots.len();
+        loop {
+            let previous = self.slots[bucket];
+            if previous == usize::MAX {
+                // At most capacity.accesses input records exist. The table is
+                // larger than twice that bound and touched has that capacity.
+                self.slots[bucket] = destination;
+                self.touched.push(bucket);
+                return true;
+            }
+            if accesses[previous] == *access {
+                return false;
+            }
+            bucket = (bucket + 1) % self.slots.len();
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct End {

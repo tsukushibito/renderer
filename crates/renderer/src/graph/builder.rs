@@ -281,7 +281,7 @@ impl Graph {
     /// Accepts borrowed slices or iterators of owned or borrowed draws. Constants
     /// and draws are captured into prepared storage in caller order. Iterator
     /// size hints are not trusted for capacity or empty-pass decisions.
-    pub fn raster<'a, I, D>(
+    pub fn raster<I, D>(
         &mut self,
         name: &str,
         program: &crate::program::ManagedRasterProgram,
@@ -290,7 +290,7 @@ impl Graph {
     ) -> Result<PassHandle, GraphError>
     where
         I: IntoIterator<Item = D>,
-        D: Borrow<RasterDraw<'a>>,
+        D: Borrow<RasterDraw>,
     {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running()
@@ -370,11 +370,7 @@ impl Graph {
                             "Raster inline constants do not match the Program ABI",
                         ));
                     }
-                    let bindings = graph.append_bindings(
-                        program.bindings(),
-                        program.binding_bytes(),
-                        bindings,
-                    )?;
+                    let bindings = graph.use_raster_bindings(program, bindings)?;
                     let (vertices, indices) = graph.raster_buffers(
                         vertices,
                         indices,
@@ -425,9 +421,8 @@ impl Graph {
                     }
                 }
                 let plan = graph.append_attachments(attachments)?;
-                if !program.bindings().is_empty()
-                    && let Some(left) =
-                        graph.conflicting_pass_access(first_access..graph.accesses.len())?
+                if let Some(left) =
+                    graph.conflicting_pass_access(first_access..graph.accesses.len())?
                 {
                     let access = &graph.accesses[first_access + left];
                     return Err(graph
@@ -569,7 +564,25 @@ impl Graph {
             self.attachments.len(),
         );
         let result = build(self).and_then(|(operation, accesses, side_effect)| {
-            self.push(name, operation, accesses, side_effect)
+            // All access-sensitive validation has completed. Compact exact
+            // readers only now, preserving binding-slot error attribution and
+            // every write, purpose, stage and original first occurrence.
+            let data = self.data_mut();
+            data.read_accesses.clear();
+            let mut end = accesses.start;
+            for index in accesses.clone() {
+                let access = data.accesses[index].clone();
+                if access.read
+                    && !access.write
+                    && !data.read_accesses.insert(&access, end, &data.accesses)
+                {
+                    continue;
+                }
+                data.accesses[end] = access;
+                end += 1;
+            }
+            data.accesses.truncate(end);
+            self.push(name, operation, accesses.start..end, side_effect)
         });
         if result.is_err() {
             let data = self.data_mut();
@@ -700,13 +713,13 @@ mod tests {
     };
     use crate::program::ManagedRasterProgram;
 
-    fn uploaded_draw(graph: &mut Graph, name: &str) -> RasterDraw<'static> {
+    fn uploaded_draw(graph: &mut Graph, name: &str) -> RasterDraw {
         let vertices = graph.buffer(name, BufferDesc { size: 84 }).unwrap();
         let indices = graph.buffer(name, BufferDesc { size: 12 }).unwrap();
         graph.upload_buffer(name, vertices, 0, &[0; 84]).unwrap();
         graph.upload_buffer(name, indices, 0, &[0; 12]).unwrap();
         RasterDraw {
-            bindings: &[],
+            bindings: None,
             vertices,
             indices,
             index_count: 3,

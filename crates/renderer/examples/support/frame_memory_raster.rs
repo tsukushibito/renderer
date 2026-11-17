@@ -207,7 +207,7 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             },
         ]
     });
-    let draws: [RasterDraw<'_>; 3] = std::array::from_fn(|draw| {
+    let draws: [RasterDraw; 3] = std::array::from_fn(|draw| {
         let mut transform = *RasterParameters::default().transform();
         transform[3][2] = 0.75 - draw as f32 * 0.25;
         let tint = if textured {

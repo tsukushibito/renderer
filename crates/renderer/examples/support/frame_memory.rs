@@ -429,7 +429,7 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .unwrap();
     let count = [0, 1, 4, 2][frame % 4];
     let mut draws = std::array::from_fn::<_, 4, _>(|draw| RasterDraw {
-        bindings: &[],
+        bindings: None,
         vertices: vertices[draw % 2],
         indices: indices[draw % 2],
         index_count: 3,
@@ -614,7 +614,7 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
             )
             .unwrap();
         let discarded_input = RasterDraw {
-            bindings: &[],
+            bindings: None,
             ..draws[0]
         };
         draws.fill(discarded_input);
