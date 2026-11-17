@@ -165,6 +165,7 @@ pub(super) struct ExecutionSlot {
     pub(super) states: Vec<D3D12_RESOURCE_STATES>,
     pub(super) common_barriers: super::graph::TransitionBatch,
     pub(super) resource_map: Vec<usize>,
+    pub(super) raster_read_promotions: Vec<bool>,
     pub(super) buffers_used: usize,
     pub(super) upload_used: u64,
     pub(super) scratch_state: D3D12_RESOURCE_STATES,
@@ -271,6 +272,11 @@ impl ExecutionSlot {
                 0,
             )?)?,
             resource_map,
+            raster_read_promotions: {
+                let mut values = reserved(capacity.resources)?;
+                values.resize(capacity.resources, false);
+                values
+            },
             buffers_used: 0,
             upload_used: 0,
             scratch_state: D3D12_RESOURCE_STATE_COMMON,
@@ -1044,6 +1050,8 @@ impl FrameWork {
             |_| {
                 // SAFETY: The closed list, allocator and all operands remain
                 // owned by this pending lease; the gate serializes Execute/Signal.
+                // Keep one list per ExecuteCommandLists: Raster's implicit
+                // COMMON reads rely on decay at this execution boundary.
                 unsafe {
                     owner.queue.ExecuteCommandLists(&[Some(list)]);
                 }

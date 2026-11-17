@@ -979,9 +979,9 @@ impl RasterStorage {
     }
 
     pub(super) fn reset(&mut self) {
-        // Only an exclusive available frame lease may reset this storage. The
-        // recorder restored actual resources to COMMON before successful Close;
-        // cancelled recording was never executed and cannot change their state.
+        // Only an exclusive available frame lease may reset this storage.
+        // Completed lists left images in COMMON through explicit transitions
+        // or read-only decay; cancelled recordings never changed GPU state.
         self.scopes.reset();
         self.raster_srvs.reset();
         self.image_slots.reset();
