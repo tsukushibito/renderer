@@ -11,11 +11,13 @@ from summarize import aggregate, assemble
 
 
 CONDITIONS = read(ROOT / "tools/bistro/conditions.json")
+B3_CONDITIONS = copy.deepcopy(CONDITIONS)
+B3_CONDITIONS["lighting"]["ambient_occlusion"] = {"enabled": False}
 
 
 def fixture(timing=True, profile="b2"):
     config = {"frames": 2, "timing": timing, "profile": profile,
-              "quality": settings(profile, CONDITIONS)}
+              "quality": settings(profile, B3_CONDITIONS if profile == "b3" else CONDITIONS)}
     samples = [{"frame": frame, "frame_interval_ms": 10.0} for frame in range(2)]
     if timing:
         for sample in samples:
@@ -31,6 +33,8 @@ def fixture(timing=True, profile="b2"):
     if profile == "b3":
         config["ibl"] = {"sha256": "a" * 64, "width": 4096, "height": 2048}
         report["ibl"] = dict(config["ibl"])
+        report["material_overrides"] = {"policy": "bistro-source-ao-disabled", "inspected_materials": 132,
+                                        "ao_enabled_before": 132, "ao_enabled_after": 0}
     return config, report
 
 
@@ -100,6 +104,7 @@ class EvidenceTests(unittest.TestCase):
                            ("shadow_enabled", False), ("tonemap_mode", 0),
                            ("screen_space_aa", 0), ("glow", True),
                            ("ambient_source", 2), ("physical_light_units", True),
+                           ("ambient_occlusion_enabled_materials", 1),
                            ("exposure", float("nan")), ("taa", 0)):
             with self.subTest(setting=key):
                 altered = copy.deepcopy(report)
@@ -115,11 +120,24 @@ class EvidenceTests(unittest.TestCase):
                 validate_report(altered, config)
 
     def test_b2_and_b3_are_distinct_reference_profiles(self):
-        b2, b3 = (settings(profile, CONDITIONS) for profile in ("b2", "b3"))
+        b2, b3 = settings("b2", CONDITIONS), settings("b3", B3_CONDITIONS)
         self.assertEqual((b2["exposure"], b2["ambient_energy"], b2["shadow_enabled"]), (1, .03, False))
         self.assertEqual((b3["exposure"], b3["ibl_energy"], b3["shadow_enabled"]), (2, 3, True))
         with self.assertRaises(ValueError):
             compare_settings(b3, b2)
+
+    def test_b3_requires_explicit_source_ao_policy_and_real_material_override(self):
+        missing = copy.deepcopy(B3_CONDITIONS)
+        missing["lighting"].pop("ambient_occlusion")
+        with self.assertRaises(ValueError):
+            settings("b3", missing)
+        config, report = fixture(profile="b3")
+        for key, invalid in (("ao_enabled_after", 1), ("ao_enabled_before", 0),
+                             ("inspected_materials", 131), ("policy", "authored")):
+            altered = copy.deepcopy(report)
+            altered["material_overrides"][key] = invalid
+            with self.subTest(field=key), self.assertRaises(ValueError):
+                validate_report(altered, config)
 
     def test_split_offsets_and_cardinal_fixture_establish_native_mapping(self):
         offsets = split_offsets(.02)

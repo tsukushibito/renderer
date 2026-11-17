@@ -33,6 +33,8 @@ def settings(profile, conditions):
         "physical_light_units": False, "mesh_shadow_casting": 0,
     }
     if profile == "b3":
+        if conditions["lighting"].get("ambient_occlusion", {}).get("enabled") is not False:
+            raise ValueError("B3 requires the explicit disabled Bistro source-AO policy")
         result.update({
             "ambient_source": 3, "ambient_energy": 1.0,
             "ambient_sky_contribution": 1.0, "reflection_source": 2,
@@ -49,6 +51,7 @@ def settings(profile, conditions):
             "tonemap_mode": 4, "exposure": 2.0,
             "agx_white": 16.29, "agx_contrast": 1.25,
             "screen_space_aa": 1, "mesh_shadow_casting": 1,
+            "ambient_occlusion_enabled_materials": 0,
         })
     return result
 

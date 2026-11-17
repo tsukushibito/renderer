@@ -18,6 +18,8 @@ var panorama: PanoramaSkyMaterial
 var sky: Sky
 var ibl_identity: Dictionary = {}
 var mesh_shadow_modes: Dictionary = {}
+var b3_materials: Array[Material] = []
+var ao_enabled_before := 0
 
 func fail(message: String) -> void:
 	push_error(message)
@@ -60,7 +62,12 @@ func quality_settings() -> Dictionary:
 		"mesh_shadow_casting": mesh_shadow_modes.keys()[0] if mesh_shadow_modes.size() == 1 else -1,
 	}
 	if config.profile == "b3":
+		var ao_enabled := 0
+		for material in b3_materials:
+			if (material as StandardMaterial3D).ao_enabled:
+				ao_enabled += 1
 		result.merge({
+			"ambient_occlusion_enabled_materials": ao_enabled,
 			"ibl_energy": panorama.energy_multiplier,
 			"sky_process_mode": sky.process_mode, "sky_radiance_size": sky.radiance_size,
 			"shadow_mode": sun.directional_shadow_mode,
@@ -118,6 +125,18 @@ func _ready() -> void:
 	if import_inventory != {"materials": 132, "images": 405}:
 		fail("Bistro material/image inventory differs: %s" % import_inventory)
 		return
+	if config.profile == "b3":
+		# Fixed Bistro source policy: the packed ORM R channel is disabled as in
+		# the original material configuration; metallic/roughness/source bytes stay.
+		b3_materials = state.get_materials()
+		for material in b3_materials:
+			if not material is StandardMaterial3D:
+				fail("B3 source-AO override requires StandardMaterial3D imports")
+				return
+			var standard := material as StandardMaterial3D
+			if standard.ao_enabled:
+				ao_enabled_before += 1
+			standard.ao_enabled = false
 	inspect_scene(scene)
 	if inventory != {"mesh_instances": 1296, "surfaces": 1591, "triangles": 2832120}:
 		fail("Bistro inventory differs: %s" % inventory)
@@ -149,8 +168,11 @@ func _ready() -> void:
 			fail("Cannot load the cooked B3 IBL panorama")
 			return
 		ibl_identity = {"sha256": FileAccess.get_sha256(config.ibl_path), "width": image.get_width(), "height": image.get_height()}
-		if ibl_identity != config.ibl:
-			fail("B3 IBL panorama identity differs from its cook")
+		# JSON numbers are float Variants; Dictionary equality is type-strict even
+		# though scalar int/float equality preserves the required numeric value.
+		if (ibl_identity.sha256 != config.ibl.sha256
+				or ibl_identity.width != config.ibl.width or ibl_identity.height != config.ibl.height):
+			fail("B3 IBL panorama identity differs from its cook: actual %s expected %s" % [ibl_identity, config.ibl])
 			return
 		panorama = PanoramaSkyMaterial.new()
 		panorama.panorama = ImageTexture.create_from_image(image)
@@ -288,11 +310,15 @@ func after_draw() -> void:
 			"video_memory_bytes": Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED),
 			"texture_memory_bytes": Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED),
 			"buffer_memory_bytes": Performance.get_monitor(Performance.RENDER_BUFFER_MEM_USED)}
+		if config.profile == "b3":
+			report.material_overrides = {"policy": "bistro-source-ao-disabled", "inspected_materials": b3_materials.size(),
+				"ao_enabled_before": ao_enabled_before, "ao_enabled_after": report.quality.ambient_occlusion_enabled_materials}
 		var output := FileAccess.open(config.output, FileAccess.WRITE)
 		if output == null:
 			fail("Cannot write report")
 			return
-		output.store_string(JSON.stringify(report))
+		# Preserve the original parsed double-valued configuration exactly.
+		output.store_string(JSON.stringify(report, "", true, true))
 		output.close()
 		capture.call_deferred()
 

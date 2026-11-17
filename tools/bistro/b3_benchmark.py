@@ -32,6 +32,7 @@ VIEWS = {"overview", "street", "material-detail", "glass-detail", "label-detail"
 WINDOW = {"frames": 1800, "warmup": 3600, "inflight": 2, "width": 1920, "height": 1080, "view": "route"}
 SCOPE = (
     "B3 whole-renderer reference on one machine, not isolated RenderGraph overhead or pixel parity. "
+    "Both B3 profiles explicitly disable the packed source AO channel while preserving source bytes/materials. "
     "Renderer: Neutral, post-tonemap FXAA, consumer IBL cook, offscreen. Godot: native AgX, "
     "pre-tonemap FXAA, RGBE-quantized panorama and native BRDF/prefilter/PCF/depth-prepass/batching/presentation. "
     "Godot all-culling-disabled is the primary reference; frustum culling is supplementary. "
