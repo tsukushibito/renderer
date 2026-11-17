@@ -156,7 +156,7 @@ class RuntimeMeasurementTests(unittest.TestCase):
             build = {"binary": {"sha256": digest(sys.executable)}, "git": {}}
             args = SimpleNamespace(frames=10, warmup=2, inflight=2, width=4, height=2,
                 timeout_seconds=10, build_manifest=build_path, output=root / "new",
-                fixture=True, manifest=None, apis=["vulkan", "d3d12"], gpu_modes=["off", "on"],
+                fixture=True, manifest=None, ibl_manifest=None, apis=["vulkan", "d3d12"], gpu_modes=["off", "on"],
                 repeats=3, view="street", cwd=root)
             with patch("measure_runtime.verified_release", return_value=(build, Path(sys.executable))):
                 plan = measure.make_plan(args)
@@ -165,6 +165,14 @@ class RuntimeMeasurementTests(unittest.TestCase):
                 self.assertEqual(plan["runs"][0]["command"][0], sys.executable)
                 self.assertNotIn("--gpu-timing", plan["runs"][0]["command"])
                 self.assertIn("--gpu-timing", plan["runs"][2]["command"])
+                args.fixture = False
+                args.manifest = root / "cook.json"
+                with self.assertRaisesRegex(ValueError, "ibl-manifest"):
+                    measure.make_plan(args)
+                args.ibl_manifest = root / "ibl.json"
+                full = measure.make_plan(args)
+                command = full["runs"][0]["command"]
+                self.assertEqual(command[command.index("--ibl-manifest") + 1], str(args.ibl_manifest.resolve()))
                 args.output.mkdir()
                 with self.assertRaisesRegex(ValueError, "new directory"):
                     measure.make_plan(args)

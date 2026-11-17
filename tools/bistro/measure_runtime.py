@@ -123,6 +123,8 @@ def make_plan(args):
         raise MeasurementError("Output must be a new directory; stale run artifacts are not reused")
     if not args.fixture and not args.manifest:
         raise MeasurementError("Select a cooked manifest or the fixture")
+    if not args.fixture and not args.ibl_manifest:
+        raise MeasurementError("Full B3 measurements require --ibl-manifest")
     runs = schedule(args.apis, args.gpu_modes, args.repeats)
     for run in runs:
         command = [str(binary), "--api", run["api"], "--view", args.view,
@@ -130,6 +132,8 @@ def make_plan(args):
                    "--frames", str(args.frames), "--warmup", str(args.warmup),
                    "--inflight", str(args.inflight), "--output", str(output / run["run_id"])]
         command += ["--fixture"] if args.fixture else ["--manifest", str(Path(args.manifest).resolve())]
+        if not args.fixture:
+            command += ["--ibl-manifest", str(Path(args.ibl_manifest).resolve())]
         if run["gpu_timing"] == "on":
             command.append("--gpu-timing")
         run["command"] = command
@@ -353,6 +357,7 @@ def main():
     asset = parser.add_mutually_exclusive_group(required=True)
     asset.add_argument("--manifest", type=Path)
     asset.add_argument("--fixture", action="store_true")
+    parser.add_argument("--ibl-manifest", type=Path)
     parser.add_argument("--apis", nargs="+", default=["vulkan", "d3d12"])
     parser.add_argument("--gpu-modes", nargs="+", choices=("off", "on"), default=["off", "on"])
     parser.add_argument("--repeats", type=int, default=3)
