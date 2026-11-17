@@ -594,7 +594,9 @@ Godotのqueryには公開producer IDがなく、sample frameはcallback/routeの
 caller thread CPU、QPC wall/N、throughput、Rendererの全loop/最終drainと各submissionの観測完了latencyも独立して残す。
 平均CPUをper-frame p95へ読み替えず、wallから全thread CPUを引いてwait時間としない。
 native時計のQPC窓は呼出し前後の単調時計で囲んで整合を検査し、境界のdeschedulingを架空の精度で消さない。
-Godotはthread_model=1を明示し起動verbose logのworker数を保存する。affinity論理CPU数をworker数とはみなさない。
+Godotはthread_model=1を明示しworker設定を保存する。実worker数はscriptへ非公開なので、別のverbose metadata probeと固定ソースで調べ、formal runごとの観測値とは区別する。
+verboseは固定Godotの既存RGB8→RGBA8変換通知を追加表示するため正式測定には使わず、警告拒否も緩めない。
+affinity論理CPU数をworker数とはみなさない。
 Godotにはscript/mainloop/表示が含まれ、Rendererはoffscreenである。BRDF/影/AA等の違いと計装費用も残す。
 正式CPU参照予算はGodot all・timer/query無効の最悪run平均を0.5ms単位で切り上げ、旧3ms p95は流用しない。
 画像・strict/shipping・寿命・ゼロframe割当はstationary経路でも別artifactで確認する。表示完了・操作の最終受入はB5で行う。

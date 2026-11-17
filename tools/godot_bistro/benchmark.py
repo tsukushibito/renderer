@@ -406,7 +406,7 @@ def run_case(prepared, identity, folder, *, culling, timing, repetition,
         config["ibl"] = {"sha256": identity["ibl"]["panorama"]["sha256"],
                          "width": 4096, "height": 2048}
     write(folder / "config.json", config)
-    command = [prepared / "bistro-reference.exe", "--verbose", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
+    command = [prepared / "bistro-reference.exe", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
                "--resolution", "1920x1080", "--position", "0,0", "--disable-vsync", "--audio-driver", "Dummy",
                "--log-file", folder / "engine.log"]
     if validation:
