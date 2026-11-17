@@ -20,6 +20,7 @@ import time
 from compare_runtime import (digest, load_capture, load_json, compare_reports,
                              _resolve_capture_path, _inside_directory)
 import measure_runtime as renderer_measure
+import host_policy
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +46,7 @@ SCOPE = (
     "Iteration intervals include pipeline backpressure from an earlier submitted frame; per-frame "
     "build-to-observed-completion latency is never converted to FPS. Neither engine measures scanout/input latency. "
     "GPU correctness, final resource release, zero allocation and B5 window/interaction acceptance are separate."
+    " CPU affinity/QoS is declared in cpu_policy; a controlled CPU subset is distinct from the default scheduler."
 )
 
 
@@ -161,6 +163,7 @@ def make_plan(args):
         prepared / "bistro-reference.pck", prepared / "godot-panorama.hdr",
         prepared / "orientation-fixture.json", Path(__file__).resolve(),
         ROOT / "tools/bistro/measure_runtime.py", ROOT / "tools/bistro/compare_runtime.py",
+        ROOT / "tools/bistro/host_policy.py",
         ROOT / "tools/cpu_profile/identity.py",
         ROOT / "tools/godot_bistro/benchmark.py", ROOT / "tools/godot_bistro/profiles.py",
         ROOT / "tools/godot_bistro/summarize.py")]
@@ -185,6 +188,7 @@ def make_plan(args):
             "renderer_build": build, "binary": str(binary), "inputs": inputs,
             "cook_manifest_sha256": digest(args.manifest), "ibl_manifest_sha256": digest(args.ibl_manifest),
             "conditions_sha256": godot_identity["conditions_sha256"], "window": WINDOW,
+            "cpu_policy": host_policy.plan(args.cpu_policy),
             "timeout_seconds": args.timeout, "runs": runs, "scope": SCOPE}
 
 
@@ -324,9 +328,10 @@ def run_renderer(plan, condition, output):
     started = time.monotonic_ns()
     with stdout.open("wb") as out, stderr.open("wb") as err:
         process = subprocess.Popen(condition["command"], cwd=plan["cwd"], stdout=out, stderr=err,
-                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) |
+                                       (4 if plan["cpu_policy"]["mode"] == "performance-cores" else 0))
         try:
-            token = ordinary_host_token(process.pid)
+            token = observe_target(process.pid, plan["cpu_policy"])
             code = process.wait(timeout=plan["timeout_seconds"])
         except BaseException:
             if process.poll() is None:
@@ -365,6 +370,12 @@ def validate_renderer_scene(report):
             "Renderer comparison requires the original material alpha inputs")
 
 
+def observe_target(pid, cpu_policy):
+    token = ordinary_host_token(pid)
+    token["cpu_policy"] = host_policy.apply(pid, cpu_policy)
+    return token
+
+
 def run_plan(plan):
     controller = ordinary_host_token()
     verify_inputs(plan["inputs"])
@@ -376,7 +387,8 @@ def run_plan(plan):
     for name in ("conditions.json", "ibl-manifest.json", "orientation-fixture.json"):
         shutil.copyfile(Path(plan["godot_prepared"]) / name, output / "godot" / name)
     summary = {"schema_version": 1, "status": "running", "started_utc": now(), "controller_token": controller,
-               "plan_sha256": digest(output / "plan.json"), "scope": SCOPE, "runs": [], "active_condition": None}
+               "plan_sha256": digest(output / "plan.json"), "scope": SCOPE, "cpu_policy": plan["cpu_policy"],
+               "runs": [], "active_condition": None}
     godot_runs = []
     try:
         for condition in plan["runs"]:
@@ -386,7 +398,9 @@ def run_plan(plan):
             if condition["engine"] == "godot":
                 record = godot.run_case(plan["godot_prepared"], plan["godot_identity"], folder,
                     culling=condition["variant"], timing=condition["timing"], repetition=condition["repetition"],
-                    timeout=plan["timeout_seconds"], process_observer=ordinary_host_token)
+                    timeout=plan["timeout_seconds"],
+                    process_observer=lambda pid: observe_target(pid, plan["cpu_policy"]),
+                    start_suspended=plan["cpu_policy"]["mode"] == "performance-cores")
                 godot_runs.append(record)
                 write(output / "godot/runs.json", {"identity": plan["godot_identity"], "smoke": False,
                                                     "validation": False, "runs": godot_runs})
@@ -440,6 +454,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cwd", type=Path, default=ROOT)
     parser.add_argument("--timeout", type=float, default=600)
+    parser.add_argument("--cpu-policy", choices=("system", "performance-cores"), default="system")
     args = parser.parse_args()
     try:
         plan = make_plan(args)
