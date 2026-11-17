@@ -204,7 +204,7 @@ fn frames<B: Backend>(
         }
     }
     #[cfg(feature = "tracy")]
-    let _drain = if record {
+    let _drain = if record && drain {
         tracy_client::Client::running().map(|client| client.span(super::trace::drain_location(), 0))
     } else {
         None
