@@ -517,6 +517,20 @@ pub(super) fn execute<B: Backend>(
         require_stale(backend, &stale_buffer)?;
         resident.materials[material_index] =
             backend.refresh_buffer(resident.materials[material_index].key())?;
+        let pending_memory = backend.memory_snapshot()?;
+        let expected_retained_bytes = desc
+            .byte_len()
+            .and_then(|bytes| bytes.checked_add(program::MATERIAL_BYTES as u64))
+            .ok_or("pending replacement logical byte count overflow")?;
+        if pending_memory["logical"]["retained_bytes"]
+            .as_u64()
+            .is_none_or(|bytes| bytes < expected_retained_bytes)
+        {
+            return Err(
+                "old pending texture/material owners are missing from retained memory accounting"
+                    .into(),
+            );
+        }
         let old_capture = finish_frame(old_frame, options)?;
         if !old_capture.matches(&references[1]) {
             return Err("pending old View did not retain the old material and texture".into());
@@ -588,6 +602,7 @@ pub(super) fn execute<B: Backend>(
             "changed_pixels":{"hdr":hdr_changed,"sdr":sdr_changed},"depth_unchanged":true,"restored_matches":true,
             "texture_changed_pixels":{"hdr":texture_hdr_changed,"sdr":texture_sdr_changed},
             "material_changed_pixels":{"hdr":material_hdr_changed,"sdr":material_sdr_changed},
+            "pending_memory":pending_memory,"expected_retained_bytes":expected_retained_bytes,
             "texture_only_captures":texture_only_report,"changed_captures":changed_report,
             "restored_captures":restored_report,"mip_probes":probes,"memory":memory}));
     }
