@@ -1,0 +1,8 @@
+[configuration]
+entry_symbol = "b3_cpu_clock_init"
+compatibility_minimum = "4.7.2"
+compatibility_maximum = "4.7.2"
+reloadable = false
+
+[libraries]
+windows.x86_64 = "./b3_cpu_clock.dll"

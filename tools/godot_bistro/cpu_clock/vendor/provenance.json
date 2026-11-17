@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "godot_version": "4.7.2",
+  "godot_commit": "ed1daf0bf001b61586d9930840f2f1394092c079",
+  "upstream_url": "https://github.com/godotengine/godot/tree/ed1daf0bf001b61586d9930840f2f1394092c079/core/extension",
+  "license": "MIT",
+  "header_generation_command": [
+    "--headless",
+    "--dump-gdextension-interface"
+  ],
+  "editor": {
+    "path": "C:\\Users\\tsuku\\Documents\\GitHub\\renderer\\.tools\\godot-baseline\\editor\\Godot_v4.7.2-stable_win64_console.exe",
+    "sha256": "c8f0a6bc45a19b33541501e57f6f7cd972ab18453743266339d495cbbe846643",
+    "byte_length": 198152
+  },
+  "extension_api_sha256": "d0e4c08c03b165156dabe6bfb6a906baf0069189f62035341230a246c86d6986",
+  "extension_api_header": {
+    "version_major": 4,
+    "version_minor": 7,
+    "version_patch": 2,
+    "version_status": "stable",
+    "version_build": "official",
+    "version_full_name": "Godot Engine v4.7.2.stable.official",
+    "precision": "single"
+  },
+  "builtin_configuration": "float_64",
+  "builtin_sizes": {
+    "String": 8,
+    "StringName": 8,
+    "Variant": 24
+  },
+  "files": [
+    {
+      "path": "gdextension_interface.h",
+      "sha256": "640b48188708ba0016f8d7ace9e0e1d3279a41fa1226c59ff3193b15538bd254",
+      "byte_length": 142425
+    },
+    {
+      "path": "gdextension_interface.json",
+      "sha256": "7d8c0a039d9743eb8ebf88681ae0c641d8d3aa5ffca11081745a84da803e09a1",
+      "byte_length": 328021
+    },
+    {
+      "path": "gdextension_interface_header_generator.cpp",
+      "sha256": "f1128392e549865731b06336829872c0fdf8169bcceea927bcadfe84508189d2",
+      "byte_length": 11249
+    },
+    {
+      "path": "LICENSE.txt",
+      "sha256": "b0435e3b3e4e55238f05f4b306f30524a1b2e20147810d436eaa554fa6855c80",
+      "byte_length": 1149
+    }
+  ]
+}
