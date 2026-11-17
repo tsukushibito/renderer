@@ -270,11 +270,12 @@ connected収集は次の順序で進む。
 1. 対象がload・prepare・全warm-upと回収を終え、`BISTRO_READY`を出す。
 2. helperが専用collectorをlocalhostへ接続し、`GO`を渡す。対象も接続を確認し、run固有のidentity zoneを出してから測定を始める。
 3. 対象が測定と最後の回収を終え、`BISTRO_DONE`を出す。
-4. helperが所有collectorだけへSIGINTを送り、traceのflush完了と正常終了を確認してから`END`を渡す。
+4. helperが非表示の専用consoleでcollectorの停止handler準備完了を確認し、所有collectorだけへSIGINTを送る。traceのflush完了と正常終了を確認してから`END`を渡す。
 5. 対象がHDR/SDR/depth captureとnative teardownを行い、最終reportを保存する。
 
 このhandshakeは`tracy` feature付きBistroだけで使う。GO/接続待ちは各30秒、END待ちは180秒で失敗する。
 CLIの既定は全体300秒、flush120秒、出力2,048 MiBの監視上限で、必要なら明示変更する。
+停止前の準備確認は最大30秒とし、TCP接続だけでSIGINTを処理できる状態だとは判断しない。
 timeout・上限超過・切断・protocol不一致は成功にせず、失敗した出力とログを保持する。
 既存の別collectorや他processへ停止を送らず、OSの管理者実行を要求しない。
 helperのrunごとのnonceはREADY/DONE/reportと、測定窓の外に置く`bistro.capture_identity`へ対応付ける。
@@ -294,19 +295,25 @@ on-demandは切断中のzone記録を避ける設定であり、clientの起動�
 ### exportと数値の意味
 
 ```powershell
-python -B tools/tracy/profile.py export --capture .tools/tracy/runs/vulkan-connected/capture.json --output .tools/tracy/exports/vulkan-connected
+python -B tools/tracy/profile.py export --capture .tools/tracy/runs/vulkan-connected/capture.json --output .tools/tracy/exports/vulkan-connected --max-output-mib 2048
 python -B tools/tracy/profile.py analyze --export .tools/tracy/exports/vulkan-connected/export.json --output .tools/tracy/analysis-vulkan.json
 ```
 
 `capture_completed: true`は所有processのprotocolとflushが終わったことを表す。
 traceの内容受入は別であり、nonce・ROI・frame数・nesting等をexportで確認して初めて`trace_content_verified: true`となる。
 captureと各export stageのbyte上限はpolling監視で、書込みやflushにより一時的に超え得る。未検査のtraceを受入済みと扱わない。
+exportの`--max-output-mib`は16〜65,536 MiB、既定2,048 MiBで、各native stageのstdout＋stderrに適用する。
+全export合計や、続く解析の一時disk容量に対する上限ではない。
 
 Tracy 0.14.1の[csvexport実装](https://github.com/wolfpld/tracy/blob/v0.14.1/csvexport/src/csvexport.cpp)に合わせ、
 raw CPU zoneを`-u`、selfを`-u -e`、区切りを`-s`のtabで出す。この版にframe exportの`-F`はない。
 zone名・source pathのcommaを区切りと誤認せず、header、列数、整数、inclusive/selfのinstance対応、
 親子区間とself算術を検査する。欠落・交差したzoneや不完全なROIをゼロで埋めない。
 csvexportに現れるのは完了した正の長さのzoneであり、出力されなかった区間の網羅性は確認できない。
+raw eventの照合・sort・percentile算出は、Python標準SQLiteのdisk-backed workspaceで行う。
+一時DBはexport先と同じdirectoryに作り、正常終了・例外時の後片付けで削除するため、解析用の空きdiskも必要になる。
+SQLite cacheの設定8 MiBとevent batch等の上限は、process全体のRSS上限ではない。
+SQLiteの一時bookkeeping、返すsource/edge/thread集計とOS file cacheは分けて扱う。
 
 | 指標 | 解釈 |
 |---|---|
