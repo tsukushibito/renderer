@@ -32,14 +32,14 @@ def mip_inventory():
     for material in range(132):
         for role, image in (("normal", material), ("albedo", 132 + material)):
             references.append({"material": material, "role": role, "image": image,
-                               "resource_id": image + 1, "rid": image + 1})
+                               "resource_id": -(image + 1), "rid": image + 1})
     for material in range(131):
         for role in ("metallic", "roughness", "ao"):
             references.append({"material": material, "role": role, "image": 264 + material,
-                               "resource_id": 265 + material, "rid": 265 + material})
+                               "resource_id": -(265 + material), "rid": 265 + material})
     for material in range(10):
         references.append({"material": material, "role": "emission", "image": 395 + material,
-                           "resource_id": 396 + material, "rid": 396 + material})
+                           "resource_id": -(396 + material), "rid": 396 + material})
     return {"policy": "b3-explicit-png-full-mips-v1", "outside_roi": True, "verified": True,
             "image_count": 405, "material_count": 132, "material_reference_count": 667,
             "normal_images": 132, "total_levels_including_base": 3529,
@@ -85,6 +85,7 @@ class EvidenceTests(unittest.TestCase):
             lambda r: r["material_mips"]["images"][0].update(native_data_bytes=0),
             lambda r: r["material_mips"]["images"].pop(),
             lambda r: r["material_mips"]["references"].pop(),
+            lambda r: r["material_mips"]["references"][0].update(resource_id=0),
             lambda r: r["material_mips"]["references"][1].update(image=0),
             lambda r: r["material_mips"].update(outside_roi=False),
         ]

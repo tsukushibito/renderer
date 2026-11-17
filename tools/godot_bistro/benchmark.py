@@ -200,8 +200,10 @@ def validate_material_mips(inventory):
                 and role in ("albedo", "normal", "metallic", "roughness", "emission", "ao")
                 and type(image) is int and image in by_index, "invalid material/image slot")
         require((material, role) not in slots, "duplicated material slot")
-        require(type(reference.get("resource_id")) is int and reference["resource_id"] > 0
-                and type(reference.get("rid")) is int and reference["rid"] > 0, "missing live resource identities")
+        # ObjectID/RID are opaque 64-bit identities. RefCounted ObjectIDs can
+        # set the high bit and therefore appear negative in GDScript/JSON.
+        require(type(reference.get("resource_id")) is int and reference["resource_id"] != 0
+                and type(reference.get("rid")) is int and reference["rid"] != 0, "missing live resource identities")
         slots.add((material, role))
         roles[image].add(role)
     require(levels == 3529 and normal_images == 132, "full chain or normal image count changed")
