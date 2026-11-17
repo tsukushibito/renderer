@@ -1421,6 +1421,8 @@ B3/B4の機能や画質を追加したときは比較側にも同じ機能を与
 native API方針の変更・vendor最適化の採用や、一般推奨からの逸脱は行わない。
 [手順](../guides/development.md#godot-bistro)と[実測・未確認範囲](../verification/current.md#godot-bistro)を参照する。
 
+<a id="bistro-b3"></a>
+
 ### B3: 影・線形HDR・トーンマッピング
 
 `renderer-7ft.4`。B0で選ぶ照明・描画方式に従い、depth-only shadow、PBR照明、浮動小数点HDR中間画像、出力変換を組み合わせる。
@@ -1460,8 +1462,10 @@ native readbackの形式・非圧縮・完全なmip数、全667材質参照とfi
 [画像置換](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/scene/resources/image_texture.cpp#L63)である。
 
 出力は露出前HDR→EV+1→Khronos PBR Neutral→FXAA→sRGB一回で、AAなしも保存する。
-Godotはnative AgX/FXAAの位置/IBL/PCFと表示処理の差を残す。B3完成後に機能・画質を合わせて正式比較し、
-CPU/GPU/待機とメモリから改善優先度を決める。AgX追加と再比較は速度改善後の別課題`renderer-5io`で扱う。
+Godotはnative AgX/FXAAの位置/IBL/PCF、影のcaster判定、depth prepass/batchingと表示処理の差を残す。
+[B3の描画・メモリ受入](../verification/current.md#bistro-lighting)は成功した。
+初回比較はCPU変動とGodotのmip不足があったため目標へ採用せず、mip修正とPコア群・HighQoSを揃えた再計測を準備した。
+CPU/GPU予算と改善優先度は再計測後に確定する。AgX追加と再比較は速度改善後の別課題`renderer-5io`で扱う。
 
 ### B4: 利用側の独自Bloomとパスの合成・交換
 

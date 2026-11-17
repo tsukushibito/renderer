@@ -20,6 +20,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |
+| IBL・影・HDRを含むBistroを比較したい | [B3の再現手順](guides/development.md#bistro-b3)と[最新の受入・Godot比較](verification/current.md#bistro-lighting)：静的IBL、CSM/PCF、Neutral/FXAA、CPU/GPUと通常frameメモリ |
 | 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、[実トレースと費用・hotspot](verification/current.md#bistro-tracy) |
 | Graph・D3D12のCPU処理削減を確認したい | [変更前後の通常版計測・実発行数・描画とメモリ受入](verification/current.md#bistro-cpu-optimization)：共有binding、不変snapshot、import検索表、SRV再利用とbarrier集約 |
 | 対応済みと計画を見分けたい | [現在の検証状況](verification/current.md)と[今後の計画](design/implementation-policy.md#bistro-roadmap) |
@@ -41,6 +42,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
 | 性能目標 | [Godot Bistro比較](verification/current.md#godot-bistro)・[生sample](verification/godot-bistro.json)・[再現手順](guides/development.md#godot-bistro) | B2相当のCPU/GPU予算、60 FPS基本/120 FPS追加目標、全量/culling/計測有無の独立反復と比較条件の差 |
+| 照明・性能比較 | [BistroのIBL・影・HDR受入](verification/current.md#bistro-lighting)・[共有データ](verification/bistro-lighting.json)・[比較画像](verification/bistro-lighting-preview.png) | B3の二API画像・資源受入、Godotのmip修正、CPU条件を固定する再計測の準備と未確定の性能予算 |
 | メモリ・更新受入 | [Bistroの常駐・差し替え](verification/current.md#bistro-residency)・[共有データ](verification/bistro-residency.json)・[再現手順](guides/development.md#bistro-residency) | 全素材、同時View、pending差し替え、容量不足と再試行、native必要量とOSの使用量・予算の区別 |
 | 検証データ | [ソースレビューと効率整理の証拠](verification/source-review.json) | Graph依存・区間解析と資源探索の前後CPU比較・生sample、Graph／Runtime容量API、通常frameメモリ、表示/descriptorの整理、native再受入、shader故障/改行再現、Blender全量同等性。所見は[検証状況](verification/current.md) |
 | 検証データ | [Bistro素材検証](verification/bistro-assets.json)・[比較画像](verification/bistro-assets-preview.png) | 公式入力hash、全mesh/材質/画像の対応、変換・再生成・CPU画像QA |

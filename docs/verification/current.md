@@ -5,6 +5,125 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="bistro-lighting"></a>
+
+## BistroのIBL・影・HDRとGodot比較（B3）
+
+`renderer-7ft.4`／`.4.1`〜`.4.4`。共通の公開Graphへ、利用側で静的IBL、4分割CSM/PCF、
+RGBA16F、EV+1、PBR Neutral、FXAAを接続した。効果名によるbackend専用命令は追加していない。
+[再現手順](../guides/development.md#bistro-b3)、[設計と採用理由](../design/implementation-policy.md#bistro-b3)、
+[共有データ](bistro-lighting.json)、[同じ視点の比較画像](bistro-lighting-preview.png)を参照する。
+
+画像・メモリ受入の実行物は`bdc413c5d90e57ff422b1eb8aeaef21e7355afe6`。
+独立したstrict＋メモリ観測／Disabled＋メモリ観測のEXE/PDB・有効feature・入力hashを保存した。
+再計測用の通常releaseとGodotは同じclean commit `ae9659a6c69d94cc7ac786e75514cf6fd09abc93`から準備した。
+Rendererのbuild入力402ファイルとcompiler／feature／profileは先の受入点と一致する。
+カメラとCSMを通常窓でも更新する受入controllerは`c303035`であり、実行物のsourceと区別してhashを保存する。
+比較controllerは`42d94c4`。**描画機能の受入は完了したが、B3のCPU/GPU目標は再計測待ちで未確定**である。
+Windows 11、Core i5-14600KF、RTX 3060 12 GiB、driver 610.88、Rust 1.99.0。
+全BistroのcookはB2と同じ`d74e9863328c238ea4b2a8fc5b617fe28879acf904a46d6b59b4b6874488d4f5`。
+1,296 mesh／1,591 primitive／132材質／405原画像＋4 default画像、3,529 mip、2,832,120三角形を保持する。
+
+### 照明・出力と独立した検査
+
+IBLは固定Blender 4.5.16／NumPy 1.26.4で原本4K HDRを復号し、原画素で輝度cap 4を適用する。
+diffuse irradiance 128×64、specular 1024×512の11 mip、BRDF LUT 256×256をRGBA16Fで保存した。
+強度3とyaw 0は実行時に一度だけ適用する。最も粗い反射に使うLODは4に固定し、
+それより小さいmipをroughness 1へ割り当てて方向依存を失う初期案は採用しなかった。
+最終IBL manifestは`4ad3a2943d51981edda5a7172f663e1baf68b6b55389b46f2ff9c7e26c4b049e`。
+独立2 process・chunk 64／37で全5出力のhashが一致した。
+別の積分による143反射probeと42 LUT probe、runtimeの補間・half量子化を含む最大正規化誤差は
+0.009864未満で、事前の上限1/32を満たした。方向・roughness・強度等の7故障も検出した。
+Godotへ渡すRGBE panoramaは方向を合わせた別出力であり、半精度のIBLと同じbyteや積分器ではない。
+全25,165,824 RGB成分の再復号誤差はRGBE量子化の上限内だった。
+
+元の131 ORM画像のRは全て0だった。固定Falcor版の既定はAO無効で、元sceneにも有効化指定がないため、
+B3照明profileは両実装でAOを無効にする。Rendererは素材作成時のAO強度、Godotはnative材質のgetterで
+適用結果を検査する。元画像・glTF・材質参照は保持する。AO有効の小fixtureは別に残し、
+汎用shaderでR=0を特別扱いしない。初期のAO有効pilotは暗さの原因調査であり、最終画質の証拠には含めない。
+
+影は2 in-flightそれぞれに2048² D32を4枚、距離120 m、分割λ=0.6、10%の境界blend、最終fade、
+texelに合わせた投影、9 tap PCFを使う。biasはconstant／slope／normalを0.75／1.5／1.0 texelで固定した。
+MASKのdiscard・両面指定と、BLENDのshadow非投影を保持する。主depthとshadowは通常Zであり、
+near 0.02／far 500 mのまま。reversed-Zへ変更した結果とは扱わない。
+線形HDR→露出×2→Neutral→FXAA→sRGBを各一回通す。AAなしの診断出力も別に保存する。
+
+最適化workspace CPUはstrict 423件／shipping 409件、Bistro Python 125件成功
+（既存のWindows symlink権限試験1件skip）、Godot Python 17件、build helper 7件が成功した。
+controller修正後の回帰と、Windowsの所有子processへのCPU設定も含む。両構成のClippy、fmt、shader生成照合も成功。
+Bistroの実GPU試験はstrict／shippingそれぞれ5件成功し、材質、alpha、IBL、HDR出力、影と大geometryを検査した。
+共通APIのdepth-only discard／linear sampler pairも両API・両構成で別に確認している。
+
+### 二APIの画像・資源・通常frameメモリ
+
+小fixtureと1080p全Bistroをそれぞれ、二API×strict／Disabled×独立3 processの12 runで直列受入した。
+通常窓24 frame＋warmup 8、2 in-flightで、全Bistroの通常窓ではカメラとCSM入力を更新する。
+ROI外に主画像・7固定視点のHDR／SDR／depth、影4枚、AAなしを保存し、
+差し替え4 cycle、textureと材質の変更・textureだけの変更、旧pending結果、同時View、容量不足と再試行も確認した。
+同API反復・strict/Disabledはbit一致、二APIは既存のfixture／scene数値profileを変更せず、
+fixture 300件／全量1,360件の比較が全て成功した。境界画素やalphaを比較対象から除外していない。
+strictのVulkan Core／SyncVal、D3D12 Debug Layer／GBVは最終native解放後まで警告・エラー・callback失敗0だった。
+
+全runの通常窓でRust 4種とVMA host 3種の確保／再確保／解放、native作成／破棄8種が全て0。
+resetは別計上であり、setup/shutdownの正の対照も確認した。
+範囲はGraph build/compile、prepare/record/submit、poll/retire、結果返却で、capture/file I/Oや変更検査は窓の外にある。
+driver内部の確保、実表示、物理page常駐を保証した観測ではない。
+
+以下は影のreadbackと変更検査も準備した受入構成の、4 cycle排出後に一定へ戻った値。
+最小限の通常描画に必要な量や、通常releaseのメモリ費用とは区別する。
+
+| 観測 | Vulkan | D3D12 |
+|---|---:|---:|
+| 登録資源の論理byte（packed image等） | 5,190,556,336 | 5,190,556,336 |
+| cached論理byte | 278,489,832 | 278,489,832 |
+| native allocation／committed resource件数 | 3,761 | 3,768 |
+| VMA allocation／committed確保要件byte | 5,877,617,472 | 6,322,585,600 |
+| VMA block／暗黙heap件数 | 149 | 3,768 |
+| VMA block／committed確保要件byte | 6,160,084,992 | 6,322,585,600 |
+
+OS usage/budget、heap別値、upload/readback、各変更段階の値も共有JSONへ残した。
+VMA block、D3D12確保要件、OS process会計の差を、そのままdriver overheadやallocator性能差にはしない。
+
+### Godotの材質mipと比較条件の修正
+
+同じ公式release EXEによるROI外probeで、実行時glTF読込の405画像は全て非圧縮`ImageTexture`、
+mip数0だった。従来の「PNG mipを生成」という説明は実態と違っていた。
+B2の過去データは**元の解像度だけを持つPNG画像**の条件として保持する。
+B3では読込時に全3,529段を明示生成し、132 normal画像の縮小段だけ法線を再正規化する。
+復号後の元解像度の画素hash、667材質参照、Resource/RIDの保持と、native読戻しの実mip数・filterを確認する。
+Rendererは原本DDSのmip画素を保持し、GodotはPNGから生成するので、縮小段の画素が一致する保証にはしない。
+
+通常4条件（主camera cullingなし／あり×timer off/on）とSDK Core付き1条件の短い全Bistro検査が成功し、
+固定8視点の32比較は全画素bit一致した。CoreはSDK 1.4.341.1のlayerがアプリから有効化され、
+最終unload後まで警告・エラー・VUIDは0。SyncValを明示有効化した試験とは扱わない。
+native `Image.get_data()`の合計4,356,779,663 byteはRGB8/RGBA8の読戻し表現であり、GPU確保byteではない。
+
+Godotの`all`は主cameraのfrustum cullingを無効にする条件で、方向光のcascade/caster判定は残る。
+Godotのdraw/primitive値はbatch等のエンジン統計で、RendererのGraph drawやnative命令の件数とは別の指標である。
+Native BRDF・IBL・影のfilter／絞り込み・depth prepass・batching、AgXとNeutral、FXAAの位置、表示処理に差がある。
+この比較を、同じraster命令量によるRenderGraph単体の費用や画素等価性の証明にはしない。
+
+### 性能目標の確定状況
+
+最初の通常release比較は3,600 warmup＋1,800 frame、各条件3 processの計24 processを完走したが、
+**性能目標には採用していない**。Godotは上記のmipなし条件で、CPUにも大きな変動があった。
+例えばVulkanの計測有効時のactive host p95は13.50→49.21→50.60 ms、
+Godot主条件のCPU描画p95は3.50→5.69→12.03 msだった。
+Rendererのbuild/compile自体も増え、OS charged CPUも増加しており、単なるyield待ち増加とは説明できない。
+当時の実行コアやQoS履歴は未観測なので、温度・電源・schedulingや別アプリの影響へ原因を断定しない。
+全生sample、実行物、画像hashと初期の自動集計値は「未採用」と区別して共有JSONへ保存した。
+
+修正後の再計測は両対象processを停止状態で作成し、同じPコア群（論理CPU 0〜11、mask 4095）と
+HighQoSの設定・読戻し後に再開する。両Renderer APIとGodotの実GPU起動で、非管理者・非AppContainer、
+同じmask/QoS、初期threadの停止数1からの再開を確認した。Godotのmip/画像も正常で、固定8視点は完全一致した。
+これはclock固定やshippingコードの高速化ではなく、比較のCPU条件の固定である。
+既定schedulerの結果とは同じ群へ混ぜず、CPU経過時間、charged CPU、GPU、待機、offscreen throughputを分ける。
+
+現在は新しい同一sourceのEXE/PCKと24 processの計画を準備済みで、
+ゲーム等の別の描画負荷を待機させる再計測の実施可否を確認中である（`renderer-7ft.4.4`）。
+B3のCPU/GPU予算や改善の優先度は、その結果から決める。下のB2予算をそのままB3へ適用しない。
+Bloom/B4、B5の実表示・操作・temporalなちらつきの最終受入、長時間soak、他機材、OOM/device loss注入は残る。
+
 <a id="bistro-residency"></a>
 
 ## Bistro全素材のメモリ・差し替え受入（B2）
@@ -161,7 +280,7 @@ frame間隔の暫定基本目標は**60 FPS（各runのp99 ≤16.67ms）**、追
 固定7視点＋route先頭の8画像は全12 run、計96画像で、各視点のPNG hashが条件・反復をまたいで完全一致した。
 Godot内の再現性とculling/query設定による画像不変を確認した範囲であり、
 Rendererとのpixel一致や全1,800 route frameの画像比較は行っていない。
-Godotのmesh圧縮・生成mip・材質BRDF/depth prepass・表示は、Rendererのworld-space stream/
+Godotのmesh形式・base-only材質画像・材質BRDF/depth prepass・表示は、Rendererのworld-space stream/
 元DDS mip/clip精度契約とは異なる。GPU差をGraph単体の費用へ帰属しない。
 
 別の短いrelease runは`--gpu-validation`を有効にし、4条件とも120 warmup＋60 frameで成功した。
@@ -172,7 +291,8 @@ CPU証拠受入6試験、固定条件検査、実行後のhash・全sample再集
 再生成した基本証拠JSONもbyte一致した。最新main取込後のHTMLは17 page・2,369 local link/resource/fragmentを確認した。
 既存mdbook-mermaidのmdBook版警告は残るが、生成とリンク確認は成功した。
 他GPU/OS、長時間soak、OOM/device loss、GPU利用率・clock・schedulerによる外れ値原因、
-Godotのallocation event観測、B3/B4相当の描画と最終表示の受入は未実行である。
+Godotのallocation event観測、B4相当の描画と最終表示の受入は未実行である。
+このB2校正に含めなかったIBL・影・HDRの確認は[上のB3受入](#bistro-lighting)を参照する。
 
 <a id="bistro-pbr"></a>
 
@@ -211,7 +331,8 @@ Rust側も取込時に範囲・形式・index最大値・basis・hashを確立�
 
 B2はGGX metallic-roughness、normal、AO、emissive、両面、MASK／BLENDを実行する。
 照明は固定の太陽と明示した定数diffuse ambient 0.03、合成はlinear RGBA16F、
-SDRはclampと一度だけのsRGB OETFである。IBL・影・露出・PBR Neutral・Bloom・AAは後続B3／B4の範囲に残す。
+このB2受入のSDRはclampと一度だけのsRGB OETFである。
+IBL・影・露出・PBR Neutral・AAは[上のB3受入](#bistro-lighting)、BloomはB4の範囲で扱う。
 nativeはsRGB・全2D mip chain upload・単一mip／全chain sampling・LinearRepeatを明示準備する。
 D3D12の大小bufferと画像は全execution共通の物理class数を指定し、in-flight数で全assetを重複確保しない。
 登録資源、記録・GPU・CPU consumerが終わる前に再利用・破棄しない。
