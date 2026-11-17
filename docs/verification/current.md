@@ -5,6 +5,99 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="godot-bistro"></a>
+
+## GodotによるBistroの性能目標の校正
+
+`renderer-yxz`。Godot 4.7.2 Standardの公式Windows x86_64 release templateを用い、
+既存の全量Bistroと固定camera routeを描画する比較用プロジェクトを追加した。
+Windows 11 Home 10.0.26200、Core i5-14600KF、RTX 3060 12 GiB、driver 610.88。
+Godotの実行version/hashは`4.7.2.stable.official.ed1daf0bf`、実Vulkan APIは1.4.341である。
+RendererのVulkan 1.3 baselineと同一のnative機能集合を意味しない。
+[再現手順](../guides/development.md#godot-bistro)、[生sampleと集計](godot-bistro.json)、
+[予算の適用範囲](../design/implementation-policy.md#godot-performance-target)を参照する。
+
+### 固定条件と実行identity
+
+計測用sourceは専用ブランチの`36a7a99bde49cf724e4924071cb3bbddb8a05967`。
+SHA512確認済みの公式配布物から`--export-release`でEXE/PCKを作成し、全runで同じ組を使った。
+EXE SHA256は`d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`、
+PCKは`67595e3d5cbbf0ea92c3d92c418a300d593dc0f60142698450cbeea109b7f744`。
+editor・template・project source・conditions・全407 glTF/buffer/PNGのhashもJSONへ残した。
+
+1920×1080固定内部viewport、Forward+、明示Vulkan、VSync/FPS上限なし、
+LOD/occlusionなし、太陽＋diffuse ambient 0.03、影/IBL/AA/Bloomなし、linear tone mapping/exposure 1とした。
+元のalpha、normal/ORM/emissive、両面材質はGodotのglTF取込を使用した。
+全1,296 mesh instance、1,591 surface、2,832,120 triangle、132材質、405画像がロードされた。
+glTF authoring lightは無効にして固定太陽だけを作成する。
+
+`all`はfrustumを含む全geometry cullingを無効にし、Rendererの現行全primitive描画に近い負荷を与える。
+`frustum`はGodotのfrustum cullingを使う。scene資源は両条件とも全量ロードする。
+固定60Hzの入力routeをframe番号で進め、warmup 3,600 frame（二周）後に1,800 frameを計測した。
+各culling条件×viewport timer/queryの無効/有効×独立3 process、計12 runを順序を回して直列実行した。
+他セッションのbuild/GPU試験はユーザーと待機を調整し、計測中にcook/build/画像解析を並行しなかった。
+clock/affinity/power設定や一般desktop負荷は固定せず、OS全体のscheduler/stack traceは取得していない。
+
+### CPU・GPU・frame間隔
+
+単位はms/frame。平均列は各runのframe平均を取った後の3 run中央値であり、
+p95/p99列は各runの個別frameのpercentileの最小〜最大である。
+run平均のpercentileや、CPU/GPU時間を合計したframe時間ではない。
+
+| 条件 | 平均のrun中央値 | 各runのp95範囲 | 各runのp99範囲 |
+|---|---:|---:|---:|
+| 全量・通常frame間隔 | 4.185 | 4.918〜8.884 | 6.386〜10.630 |
+| frustum・通常frame間隔 | 3.870 | 4.567〜6.593 | 5.337〜8.525 |
+| 全量・CPU描画（計測有効） | 1.808 | 2.314〜3.130 | 3.350〜4.727 |
+| 全量・GPU（計測有効） | 4.020 | 4.718〜4.749 | 4.797〜4.874 |
+| frustum・CPU描画（計測有効） | 1.318 | 1.964〜2.107 | 2.748〜3.136 |
+| frustum・GPU（計測有効） | 3.767 | 4.449〜4.502 | 4.531〜4.613 |
+
+CPU描画はGodotのglobal setup＋単一viewportのCPU描画時間であり、script/physicsやprocess全体のCPU占有時間を含まない。
+GPUは遅れて観測され得るviewport queryで、sample frame番号を厳密なGPU命令のframe番号と解釈しない。
+frame間隔は`frame_post_draw`間の単調時計差で、CPU scheduling/pacing等も含む。
+実scanoutやinput latencyではなく、headlessのRenderer wall/frameとも直接同一視しない。
+
+全量では全frameが1,706 draw call/2,832,120 primitive、frustumではframe平均1,173.626 draw call/
+1,795,236.640 primitiveで、3 runとも同じ分布だった。Godotの統計値とnative call数は区別する。
+通常frame間隔の平均を逆数にした値は全量約239、frustum約258 frame/sだが、
+全量の3回目はp95 8.884/p99 10.630msであり、安定240 FPSや安定120 FPSの証拠ではない。
+このrunは不都合な値として除外せず、原因は未特定のまま保持した。
+
+計測有効/無効のframe平均のrun中央値比は全量+0.87%、frustum -0.35%だった。
+独立process間の変動を含む記述値であり、負の差は高速化でなく、query単独の費用や上限を保証しない。
+無効runのCPU/GPU値は収録しない。releaseの`static_memory_bytes=0`は利用不能なcounterで、
+CPU使用量ゼロを意味しない。Godotのvideo monitorは3,948,388,912 byte、texture 3,804,301,824 byte、
+buffer 124,799,072 byteだったが、実VRAM常駐やnative確保event数として扱わない。
+
+### 暫定目標と確認範囲
+
+Godot相当の描画予算の目安は、**CPU描画p95 3.5ms、GPU p95 5.0ms**とする。
+全量・計測有効の最も遅いrunのp95を、それぞれ0.5ms単位で切り上げた値である。
+Rendererではbuild/compile/prepare/record/submit/retireを含むCPU描画経路全体を対象にするが、
+Godotの同名phaseとの一対一比較や、必須同期/寿命/容量/安全性の処理を除く根拠にしない。
+
+frame間隔の暫定基本目標は**60 FPS（各runのp99 ≤16.67ms）**、追加目標は
+**120 FPS（同p99 ≤8.33ms）**とする。通常runの最悪p99 10.630msは前者に約6.04msの余裕を残すが、後者を超える。
+このため平均約239 FPSをそのまま目標に採用せず、120 FPSの安定維持は追加調査の対象とする。
+これはB2条件の描画基準であり、影・IBL等の追加後、ゲーム処理込み、別機材、実表示の保証ではない。
+
+固定7視点＋route先頭の8画像は全12 run、計96画像で、各視点のPNG hashが条件・反復をまたいで完全一致した。
+Godot内の再現性とculling/query設定による画像不変を確認した範囲であり、
+Rendererとのpixel一致や全1,800 route frameの画像比較は行っていない。
+Godotのmesh圧縮・生成mip・材質BRDF/depth prepass・表示は、Rendererのworld-space stream/
+元DDS mip/clip精度契約とは異なる。GPU差をGraph単体の費用へ帰属しない。
+
+別の短いrelease runは`--gpu-validation`を有効にし、4条件とも120 warmup＋60 frameで成功した。
+各logでSDK 1.4.341.1の`VK_LAYER_KHRONOS_validation`がアプリケーションから有効になったことを確認し、
+warning/error/VUIDは0。正式版とproject sourceのhashは同じだが、PCK hashは異なるため同一artifact試験とは呼ばない。
+SyncValの明示有効化は行っていない。Renderer側の既存Core/SyncVal受入を代替しない。
+CPU証拠受入6試験、固定条件検査、実行後のhash・全sample再集計が成功し、
+再生成した基本証拠JSONもbyte一致した。HTMLは17 page・2,350 local link/resource/fragmentを確認した。
+既存mdbook-mermaidのmdBook版警告は残るが、生成とリンク確認は成功した。
+他GPU/OS、長時間soak、OOM/device loss、GPU利用率・clock・schedulerによる外れ値原因、
+Godotのallocation event観測、B3/B4相当の描画と最終表示の受入は未実行である。
+
 <a id="bistro-pbr"></a>
 
 ## Bistroの実行用cookと二APIのForward PBR

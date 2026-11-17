@@ -3,6 +3,7 @@ import copy
 import unittest
 
 from benchmark import percentile, validate_report
+from summarize import aggregate
 
 
 def fixture(timing=True):
@@ -62,6 +63,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertAlmostEqual(percentile([1, 2, 3, 100], .95), 85.45)
         config, report = fixture()
         self.assertEqual(validate_report(report, config)["gpu_ms"]["mean"], 2.)
+
+    def test_budget_rounds_slowest_run_p95_up_and_rejects_incomplete_batches(self):
+        runs = []
+        for culling in ("all", "frustum"):
+            for timing in (False, True):
+                for repetition in (1, 2, 3):
+                    metrics = ["frame_interval_ms"] + (["cpu_render_ms", "gpu_ms"] if timing else [])
+                    runs.append({"run_id": f"{culling}-timing-{int(timing)}-{repetition}",
+                                 "culling": culling, "timing": timing,
+                                 "summary": {m: {s: 1.1 * repetition for s in ("mean", "p50", "p95", "p99")} for m in metrics}})
+        _, budgets = aggregate(runs)
+        self.assertEqual(budgets, {"cpu_render_ms": 3.5, "gpu_ms": 3.5})
+        for invalid in (runs[:-1], runs[:-1] + [runs[0]]):
+            with self.assertRaises(ValueError):
+                aggregate(invalid)
 
 
 if __name__ == "__main__":

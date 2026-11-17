@@ -39,6 +39,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | 設計図 | [型・依存・寿命の設計図集](design/rendergraph-diagrams.md) | Mermaid定義を正本にした構造図・型関係図・フロー・シーケンス・状態遷移 |
 | 設計 | [Vulkan基盤](design/vulkan.md) | 現在有効な契約、Windows表示、任意計測と採用理由 |
 | 検証 | [現在の検証状況](verification/current.md) | 実行済みの確認、測定条件、未確認範囲 |
+| 性能目標 | [Godot Bistro比較](verification/current.md#godot-bistro)・[生sample](verification/godot-bistro.json)・[再現手順](guides/development.md#godot-bistro) | B2相当のCPU/GPU予算、60 FPS基本/120 FPS追加目標、全量/culling/計測有無の独立反復と比較条件の差 |
 | 検証データ | [ソースレビューと効率整理の証拠](verification/source-review.json) | Graph依存・区間解析と資源探索の前後CPU比較・生sample、Graph／Runtime容量API、通常frameメモリ、表示/descriptorの整理、native再受入、shader故障/改行再現、Blender全量同等性。所見は[検証状況](verification/current.md) |
 | 検証データ | [Bistro素材検証](verification/bistro-assets.json)・[比較画像](verification/bistro-assets-preview.png) | 公式入力hash、全mesh/材質/画像の対応、変換・再生成・CPU画像QA |
 | 検証データ | [Bistro alpha解釈](verification/bistro-alpha.json)・[近景比較画像](verification/bistro-alpha-preview.png) | 2材質の元値・全mip、Falcor一次ソース、alpha保持と不透明化の比較・確定方針 |

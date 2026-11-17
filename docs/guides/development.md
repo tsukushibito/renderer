@@ -373,6 +373,79 @@ driverはAPIとnative profiling off/onを交互に独立3回ずつ実行し、�
 測定窓のRenderer CPU/frame費用へ加算しない。raw画像はローカルに残し、共有する集計へ画像本体を埋め込まない。
 内容照合はROI後に別途描くroute frame 0のHDR／SDR／depthを対象とし、全測定frameの画像照合を意味しない。
 
+<a id="godot-bistro"></a>
+
+### Godotを使ってBistroの性能目標を校正する
+
+`tools/godot_bistro/`はGodotの描画系全体を比較基準にする利用側のプロジェクトである。
+Renderer本体や既存のcookを変更しない。対象は影・IBL・AA・BloomなしのB2相当であり、
+将来のB3/B4の画質を含む目標はその機能を揃えて再校正する。
+実測と暫定予算は[現在の検証状況](../verification/current.md#godot-bistro)を参照する。
+
+[公式Godot 4.7.2](https://godotengine.org/download/archive/4.7.2-stable/)のStandard Windows x86_64版、
+Standard export templates、同releaseの`SHA512-SUMS.txt`を取得する。
+[配布元](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable)と固定値は次のとおり。
+ZIP/TPZをSHA512一覧と照合してから展開する。全OS用TPZは約1.28 GBだが、必要な実行用templateは
+`templates/windows_release_x86_64.exe`だけであり、既存Godotの設定・templateを変更しない。
+
+| 配布物 | SHA512 |
+|---|---|
+| `Godot_v4.7.2-stable_win64.exe.zip` | `83decd58fdf67b9d657958a1ae6bf1929c20785315a81effe245874cdc57acb709bf868e00778a96984338c1b29dafdb453c6847747694621c6ecf5da2259993` |
+| `Godot_v4.7.2-stable_export_templates.tpz` | `ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079` |
+
+editorは`.tools/godot-baseline/editor/`、Windows release templateは
+`.tools/godot-baseline/templates/`へ展開した例を示す。
+最初に[Bistro LFS素材](../../assets/bistro/README.md)を取得する。worktreeでは素材のある元checkoutを
+`--asset-root`へ指定でき、全407 glTF/buffer/PNGをmanifestのsize/SHA256と照合する。
+
+```powershell
+python -B tools/godot_bistro/benchmark.py prepare --editor .tools/godot-baseline/editor/Godot_v4.7.2-stable_win64_console.exe --template .tools/godot-baseline/templates/windows_release_x86_64.exe --asset-root . --output .tools/godot-baseline/prepared
+python -B tools/godot_bistro/benchmark.py run --prepared .tools/godot-baseline/prepared --output .tools/godot-baseline/smoke --smoke --warmup 120 --frames 60 --repeats 1 --validation
+python -B tools/godot_bistro/benchmark.py run --prepared .tools/godot-baseline/prepared --output .tools/godot-baseline/formal
+python -B tools/godot_bistro/summarize.py .tools/godot-baseline/formal .tools/godot-baseline/evidence.json
+```
+
+各outputは新しいdirectoryを要求する。`prepare`だけはheadless editorで小さなrelease packを作る。
+計測は実GPUへ接続したrelease exportであり、headlessやeditor実行を使わない。
+APPDATA/LOCALAPPDATAはchild processだけoutput配下へ向け、editor設定・shader cacheも隔離する。
+Godot本体は[MIT license](https://godotengine.org/license/)、Bistroは既存のCC-BY帰属を維持する。
+EXE/PCK、shader cache、入力原本、画像はGitへ追加しない。
+
+正式条件は1920×1080、Forward+、明示Vulkan、VSync/FPS上限なし、固定60Hz入力routeである。
+cameraはwall時間で進めずframe番号で進める。3,600 frameの二周warmup後、1,800 frameを収集する。
+全geometryのcullingを無効にする`all`と、frustum cullingを使う`frustum`のそれぞれで、
+viewport timingの無効/有効を独立3 processずつ、計12 run直列実行する。周回ごとに順序を回す。
+Godotの全1,296 mesh/1,591 surface/2,832,120 triangleと132材質/405画像を確認し、LOD/occlusionは無効にする。
+内部viewportを固定するのでWindowsのwindow枠による小さい描画領域を1080pと誤認しない。
+
+CPUは[`get_frame_setup_time_cpu()`とviewport CPU時間の和](https://docs.godotengine.org/en/4.7/classes/class_renderingserver.html#class-renderingserver-method-viewport-get-measured-render-time-cpu)、
+GPUはviewport GPU時間、frame間隔は`frame_post_draw`の単調時計差を使う。
+CPU描画値はscript/physics等を含むprocess全体のCPU占有時間ではない。
+GPU queryは遅れて観測され得るので、sampleのframe番号をGPU命令の厳密なframe対応に使わず、
+同じ周期routeの分布として比較する。表示完了時刻・input latency・実scanout FPSは計測していない。
+通常実行のframe間隔とtiming有効時のCPU/GPU値を区別する。
+
+生sample、各runの平均/p50/p95/p99、実行引数、EXE/PCK/source/conditions/入力/画像のhashを保存する。
+`summarize.py`は12 runの集合・hash・生sampleからの再集計を照合し、
+最も遅い全量runのCPU/GPU p95を0.5ms単位で切り上げた予算の目安を出力する。
+欠落や0/非有限の有効時GPU時間、debug build、誤backend、異なる解像度・pacing、
+不完全なframe窓は拒否し、未計測値を0へ補完しない。
+固定7視点とroute先頭のPNGはROI後に取得する。画像の形式・寸法を検査しただけで、
+Rendererとのpixel同等性を主張しない。必要な画質照合は別に行う。
+
+runtime glTF importはGodotのMikkTSpace・mesh圧縮・StandardMaterial3Dを使い、
+PNGからmipを生成する。Rendererの元DDS全mipを保持したcookとは異なる。
+Godot固有のBRDF、depth prepass、drawのまとめ方、表示処理も残す。
+これらは描画系全体の基準であって、Graph単体の追加費用や二実装の同一仕事量の証明ではない。
+Godotのmemory monitor値を実VRAM常駐量やRendererのzero-allocation保証として扱わない。
+計測中は他のbuild/GPU試験/cook/画像解析を並行させず、native validationは別runで実施する。
+
+CPUだけの証拠受入試験は以下で実行できる。通常CIにも含める。
+
+```powershell
+python -B -m unittest discover -s tools/godot_bistro -p 'test_*.py'
+```
+
 <a id="bistro-tracy"></a>
 
 ### TracyでBistroのhost処理を区分する

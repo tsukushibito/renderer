@@ -1364,6 +1364,30 @@ HDR・SDR・depthの全byte一致で確認する。RGBA16F clearの基準をCPU�
 CPU/GPU計測と未確認範囲は[現行検証](../verification/current.md#bistro-pbr)へ集約する。
 `.3.3`の常駐・更新とallocation予算、B3/B4/B5の品質・表示の最終受入は各課題で扱う。
 
+<a id="godot-performance-target"></a>
+
+#### Godotを基準にしたB2の暫定性能予算
+
+`renderer-yxz`でGodot 4.7.2 Forward+/Vulkanの全量Bistroを基準にする。
+同じ機材・1080p・固定route・影/IBL/AA/Bloomなしの範囲で、CPU描画p95 3.5ms、GPU p95 5.0msを
+Godot相当の予算の目安とする。独立3 runのうち最も遅いp95を0.5ms単位で切り上げた値であり、
+将来の機能込み、他機材、異なるshader品質、Graph単体のoverheadに共通の固定上限ではない。
+CPUでは利用側のbuild/compileとruntimeのprepare/record/submit/retireを含む描画経路全体を評価し、
+GPU待機は別計上する。並列phaseを重複加算せず、CPU/GPUの和からFPSを計算しない。
+
+frame間隔の基本目標は60 FPSのp99予算16.67ms、追加目標は120 FPSのp99予算8.33msとする。
+Godotの通常全量runの最悪p99は10.630msであり、平均約239 frame/sを安定動作の目標へ転用しない。
+CPU/GPU描画費用と、OS scheduling/pacingを含むframe間隔の両方を調べる。
+Rendererの現在の達成を宣言したものではなく、実表示・ゲーム処理込みの目標は別に検証する。
+
+Godotの生成mip/mesh圧縮/材質/depth prepass/表示とRendererのcook/shaderには差があるため、
+予算超過時はCPU phase・GPU workload・画像品質の差を説明し、同じ条件で改善前後を測る。
+基本目標を満たすだけでGodot相当の効率を達成したとは扱わず、CPU/GPUの比較も残す。
+B3/B4の機能や画質を追加したときは比較側にも同じ機能を与えて再校正する。
+既存のvalidation、同期、GPU/CPU consumerの寿命、容量・失敗処理、steady-state memoryの規約は維持する。
+native API方針の変更・vendor最適化の採用や、一般推奨からの逸脱は行わない。
+[手順](../guides/development.md#godot-bistro)と[実測・未確認範囲](../verification/current.md#godot-bistro)を参照する。
+
 ### B3: 影・線形HDR・トーンマッピング
 
 `renderer-7ft.4`。B0で選ぶ照明・描画方式に従い、depth-only shadow、PBR照明、浮動小数点HDR中間画像、出力変換を組み合わせる。
