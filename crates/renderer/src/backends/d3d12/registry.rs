@@ -242,6 +242,29 @@ fn stale() -> Error {
     )
 }
 impl Registry {
+    /// On-demand logical accounting; native requirements and transfer arenas
+    /// are deliberately reported through their separate owners.
+    pub(super) fn logical_memory_bytes(&self) -> [u64; 3] {
+        let mut bytes = [0u64; 3];
+        for entry in &self.entries {
+            let Some(physical) = &entry.physical else {
+                continue;
+            };
+            let size = match entry.desc {
+                ResourceDesc::Buffer(desc) => desc.size,
+                ResourceDesc::Image(desc) => desc.byte_len().unwrap_or(u64::MAX),
+            };
+            let kind = if entry.registered {
+                0
+            } else if Arc::strong_count(physical) > 1 {
+                1
+            } else {
+                2
+            };
+            bytes[kind] = bytes[kind].saturating_add(size);
+        }
+        bytes
+    }
     #[cfg(feature = "presentation")]
     pub(super) fn owner_id(&self) -> u64 {
         self.owner

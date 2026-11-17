@@ -36,6 +36,8 @@ static PROCESS: Mutex<ProcessState> = Mutex::new(ProcessState {
 });
 
 pub(super) struct DeviceOwner {
+    #[cfg(feature = "memory-profiling")]
+    pub(super) committed_memory: Arc<Mutex<super::memory::D3D12CommittedMemoryStats>>,
     pub(super) queue: ManuallyDrop<ID3D12CommandQueue>,
     pub(super) raw: ManuallyDrop<ID3D12Device>,
     pub(super) queue_gate: Mutex<()>,
@@ -234,6 +236,8 @@ impl DeviceOwner {
             ]
         };
         let owner = Arc::new(Self {
+            #[cfg(feature = "memory-profiling")]
+            committed_memory: Arc::new(Mutex::new(Default::default())),
             queue: ManuallyDrop::new(queue),
             raw: ManuallyDrop::new(raw),
             queue_gate: Mutex::new(()),
