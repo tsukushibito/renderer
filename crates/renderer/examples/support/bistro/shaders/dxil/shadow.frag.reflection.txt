@@ -1,0 +1,76 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; SV_IsFrontFace           0   x           1    FFACE    uint   x
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+; shader hash: d558455e4d41d3ffb9af163c914b52e1
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Pixel Shader
+; DepthOutput=0
+; SampleFrequency=0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 2
+; SigOutputElements: 0
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 2
+; SigOutputVectors[0]: 0
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; SV_IsFrontFace           0        nointerpolation
+;
+; Buffer Definitions:
+;
+; cbuffer _21_23
+; {
+;
+;   struct _21_23
+;   {
+;
+;       float4 _23_m0;                                ; Offset:    0
+;       float4 _23_m1;                                ; Offset:   16
+;       float4 _23_m2;                                ; Offset:   32
+;       uint4 _23_m3;                                 ; Offset:   48
+;
+;   } _21_23;                                         ; Offset:    0 Size:    64
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _21_23                            cbuffer      NA          NA     CB0            cb1     1
+; _63                               sampler      NA          NA      S0      s4,space1     1
+; _59                               texture     f32          2d      T0      t0,space1     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 5, outputs: 0
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;

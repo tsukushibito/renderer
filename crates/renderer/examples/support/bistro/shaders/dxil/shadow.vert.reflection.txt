@@ -1,0 +1,108 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 3   xy          1     NONE   float   xy
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; SV_Position              0   xyzw        1      POS   float   xyzw
+;
+; shader hash: f34dfc6eb7016f092055a1ee41b4e72f
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 2
+; SigOutputElements: 2
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 2
+; SigOutputVectors[0]: 2
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 3
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer _26_28
+; {
+;
+;   struct hostlayout._26_28
+;   {
+;
+;       row_major float4x4 _28_m0;                    ; Offset:    0
+;       float4 _28_m1;                                ; Offset:   64
+;       float4 _28_m2;                                ; Offset:   80
+;       float4 _28_m3;                                ; Offset:   96
+;       float4 _28_m4;                                ; Offset:  112
+;       row_major float4x4 _28_m5[4];                 ; Offset:  128
+;       float4 _28_m6;                                ; Offset:  384
+;       float4 _28_m7;                                ; Offset:  400
+;       float4 _28_m8;                                ; Offset:  416
+;       float4 _28_m9;                                ; Offset:  432
+;       float4 _28_m10;                               ; Offset:  448
+;
+;   } _26_28;                                         ; Offset:    0 Size:   464
+;
+; }
+;
+; cbuffer _9_11
+; {
+;
+;   struct _9_11
+;   {
+;
+;       uint _11_m0;                                  ; Offset:    0
+;
+;   } _9_11;                                          ; Offset:    0 Size:     4
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _26_28                            cbuffer      NA          NA     CB0            cb0     1
+; _9_11                             cbuffer      NA          NA     CB1            cb7     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 6, outputs: 8
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4 }
+;   output 1 depends on inputs: { 5 }
+;   output 4 depends on inputs: { 0, 1, 2 }
+;   output 5 depends on inputs: { 0, 1, 2 }
+;   output 6 depends on inputs: { 0, 1, 2 }
+;   output 7 depends on inputs: { 0, 1, 2 }
+;

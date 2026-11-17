@@ -1,0 +1,31 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_138",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "_112",
+            "set" : 0,
+            "binding" : 0
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "_116",
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

@@ -66,7 +66,7 @@ $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {
     $publish = [ordered]@{}
     $artifacts = [ordered]@{}
-    foreach ($name in @('pbr.vert', 'pbr.frag', 'resolve.vert', 'resolve.frag')) {
+    foreach ($name in @('pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'resolve.vert', 'tone.frag', 'resolve.frag', 'resolve_aa.frag')) {
         $stage = $name.Split('.')[-1]
         $source = Join-Path $PSScriptRoot $name
         $spirv = Join-Path $temporaryRoot ($name + '.spv')
@@ -77,8 +77,16 @@ try {
         $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $stage, '--output', $hlsl)
         if ($stage -ceq 'vert') { $crossArgs += '--flip-vert-y' }
         $null = Run $cross $crossArgs
+        # SPIRV-Cross leaves the sole push-constant cbuffer unbound. Reserve
+        # b7,space0 for the four-byte shadow cascade index only.
+        $text = [IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n")
+        $pattern = '(?m)^cbuffer ([A-Za-z_][A-Za-z_0-9]*)$'
+        if ($name -ceq 'shadow.vert') {
+            if ([regex]::Matches($text, $pattern).Count -ne 1) { throw 'Shadow inline cbuffer missing' }
+            $text = [regex]::Replace($text, $pattern, 'cbuffer $1 : register(b7, space0)')
+        } elseif ([regex]::IsMatch($text, $pattern)) { throw "Unexpected inline cbuffer in $name" }
         # Hash and compile the same canonical text Git checks out on every OS.
-        Write-Text $hlsl ([IO.File]::ReadAllText($hlsl))
+        Write-Text $hlsl $text
         $profile = if ($stage -ceq 'vert') { 'vs_6_0' } else { 'ps_6_0' }
         $null = Run $dxc (@($lock.dxc_arguments) + @('-T', $profile, $hlsl, '-Fo', $dxil))
         $dump = Run $dxc @('-dumpbin', $dxil)
@@ -100,7 +108,9 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        if ($reflection -match '\bcb7\b') { throw "Unexpected inline cbuffer in $name reflection" }
+        if (($reflection -match '\bcb7\b') -ne ($name -ceq 'shadow.vert')) {
+            throw "Unexpected inline cbuffer contract in $name reflection"
+        }
         $spirvReflection = Run $cross @($spirv, '--reflect')
         $jsonPath = Join-Path $temporaryRoot ($name + '.spirv-reflection.json')
         Write-Text $jsonPath $spirvReflection
@@ -119,7 +129,11 @@ try {
         }
         $artifacts[$name] = $hashes
     }
-    $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_bytes = 0; artifacts = $artifacts }
+    $licenses = [ordered]@{}
+    foreach ($license in @('FXAA-notices.txt', 'Godot-MIT.txt', 'Khronos-ToneMapping-Apache-2.0.txt')) {
+        $licenses[$license] = Hash (Join-Path $PSScriptRoot ('licenses/' + $license))
+    }
+    $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_bytes = 4; artifacts = $artifacts; licenses = $licenses }
     $manifestPath = Join-Path $temporaryRoot 'manifest.json'
     Write-Text $manifestPath (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
     $publish[$manifestPath] = Join-Path $PSScriptRoot 'manifest.json'
