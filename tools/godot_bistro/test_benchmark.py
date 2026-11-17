@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
-from benchmark import CAPTURE_VIEWS, ROOT, digest, percentile, read, validate_report
+from benchmark import CAPTURE_VIEWS, ROOT, digest, percentile, read, run_logged, validate_report
 from profiles import compare_settings, orientation_fixture, settings, split_offsets, verify_ibl_manifest
 from summarize import aggregate, assemble
 
@@ -13,6 +14,34 @@ from summarize import aggregate, assemble
 CONDITIONS = read(ROOT / "tools/bistro/conditions.json")
 B3_CONDITIONS = copy.deepcopy(CONDITIONS)
 B3_CONDITIONS["lighting"]["ambient_occlusion"] = {"enabled": False}
+
+
+def mip_inventory():
+    images = []
+    for index in range(405):
+        width = 256 if index < 289 else 128
+        count = width.bit_length() - 1
+        channels = 3 if index < 273 else 4
+        images.append({"index": index, "class": "ImageTexture", "width": width, "height": width,
+            "format": 4 if channels == 3 else 5, "compressed": False, "mipmaps_before": 0,
+            "mipmap_count": count, "has_mipmaps": True, "normal_renormalized": index < 131,
+            "base_bytes": width * width * channels,
+            "native_data_bytes": sum((width >> level) ** 2 * channels for level in range(count + 1)),
+            "base_sha256": "a" * 64, "native_base_sha256": "a" * 64, "resource_identity_preserved": True})
+    references = []
+    for material in range(131):
+        for role, image in (("normal", material), ("albedo", 131 + material),
+                            ("metallic", 262 + material), ("roughness", 262 + material),
+                            ("ao", 262 + material)):
+            references.append({"material": material, "role": role, "image": image,
+                               "resource_id": image + 1, "rid": image + 1})
+    for material in range(12):
+        references.append({"material": material, "role": "emission", "image": 393 + material,
+                           "resource_id": 394 + material, "rid": 394 + material})
+    return {"policy": "b3-explicit-png-full-mips-v1", "outside_roi": True, "verified": True,
+            "image_count": 405, "material_count": 132, "material_reference_count": 667,
+            "normal_images": 131, "total_levels_including_base": 3529,
+            "images": images, "references": references}
 
 
 def fixture(timing=True, profile="b2"):
@@ -31,6 +60,7 @@ def fixture(timing=True, profile="b2"):
                     "viewport_size": [1920, 1080], "vsync": 0, "max_fps": 0,
                     "roi_wall_ms": 20., "samples": samples}
     if profile == "b3":
+        report["material_mips"] = mip_inventory()
         config["ibl"] = {"sha256": "a" * 64, "width": 4096, "height": 2048}
         report["ibl"] = dict(config["ibl"])
         report["material_overrides"] = {"policy": "bistro-source-ao-disabled", "inspected_materials": 132,
@@ -42,6 +72,42 @@ def fixture(timing=True, profile="b2"):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_b3_requires_complete_native_mips_base_pixels_and_material_references(self):
+        config, report = fixture(profile="b3")
+        validate_report(report, config)
+        mutations = [
+            lambda r: r.pop("material_mips"),
+            lambda r: r["material_mips"]["images"][0].update(mipmap_count=0, has_mipmaps=False),
+            lambda r: r["material_mips"]["images"][0].update(native_base_sha256="b" * 64),
+            lambda r: r["material_mips"]["images"][0].update(resource_identity_preserved=False),
+            lambda r: r["material_mips"]["images"][0].update(native_data_bytes=0),
+            lambda r: r["material_mips"]["images"].pop(),
+            lambda r: r["material_mips"]["references"].pop(),
+            lambda r: r["material_mips"]["references"][1].update(image=0),
+            lambda r: r["material_mips"].update(outside_roi=False),
+        ]
+        for change in mutations:
+            altered = copy.deepcopy(report)
+            change(altered)
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "material mip"):
+                validate_report(altered, config)
+
+    def test_suspended_launch_requires_configuration_and_resume_observer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "stdout.log"
+            with patch("benchmark.subprocess.Popen") as launch:
+                with self.assertRaisesRegex(ValueError, "observer"):
+                    run_logged(["target"], log, start_suspended=True)
+                launch.assert_not_called()
+                events = []
+                process = launch.return_value
+                process.pid = 123
+                process.wait.side_effect = lambda timeout: events.append("wait") or 0
+                run_logged(["target"], log, process_observer=lambda pid: events.append("configure-and-resume"),
+                           start_suspended=True)
+                self.assertEqual(events, ["configure-and-resume", "wait"])
+                self.assertEqual(launch.call_args.kwargs["creationflags"] & 0x4, 0x4)
+
     def test_b3_requires_complete_bounded_capture_stability_outside_roi(self):
         config, report = fixture(profile="b3")
         validate_report(report, config)

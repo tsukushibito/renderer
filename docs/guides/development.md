@@ -492,8 +492,14 @@ GPU queryは遅れて観測され得るので、sampleのframe番号をGPU命令
 固定7視点とroute先頭のPNGはROI後に取得する。画像の形式・寸法を検査しただけで、
 Rendererとのpixel同等性を主張しない。必要な画質照合は別に行う。
 
-runtime glTF importはGodotのMikkTSpace・mesh圧縮・StandardMaterial3Dを使い、
-PNGからmipを生成する。Rendererの元DDS全mipを保持したcookとは異なる。
+runtime glTF importはGodotのMikkTSpace・StandardMaterial3Dを使う。
+B2のrelease実行時読込は非圧縮ImageTextureのPNG baseだけを保持する。以前の「自動でmipを生成する」という説明は誤りだった。
+B3では`material_mips.gd`が読込境界で全405画像から完全なmip列を明示生成する。
+normal画像だけは縮小段を正規化し、色・ORM・emissiveはGodotの通常のチャンネル平均を使う。
+元のbase画素・材質参照とResource/RIDを保持し、準備時のnative readbackで形式・非圧縮・全3,529段・
+base hashを確認する。材質のlinear/mipmap filterとtrilinear設定もgetterで検査する。
+1×1画像の縮小段数は0と扱う。これらの画像走査・生成・読戻しはwarmup/ROIの前であり、毎frameには行わない。
+元DDSから供給済みの全mipを保持するRendererとは、縮小段の画素が異なる。
 Godot固有のBRDF、depth prepass、drawのまとめ方、表示処理も残す。
 これらは描画系全体の基準であって、Graph単体の追加費用や二実装の同一仕事量の証明ではない。
 Godotのmemory monitor値を実VRAM常駐量やRendererのzero-allocation保証として扱わない。

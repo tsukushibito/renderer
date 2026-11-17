@@ -19,11 +19,13 @@ var sky: Sky
 var ibl_identity: Dictionary = {}
 var mesh_shadow_modes: Dictionary = {}
 var b3_materials: Array[Material] = []
+var material_mip_inventory: Dictionary = {}
 var ao_enabled_before := 0
 var completed_report: Dictionary
 var capture_frames: Dictionary = {}
 const CAPTURE_SETTLING_FRAMES := 8
 const CAPTURE_MAX_FRAMES := 16
+const MaterialMips = preload("res://material_mips.gd")
 
 func fail(message: String) -> void:
 	push_error(message)
@@ -67,11 +69,16 @@ func quality_settings() -> Dictionary:
 	}
 	if config.profile == "b3":
 		var ao_enabled := 0
+		var texture_filters: Dictionary = {}
 		for material in b3_materials:
 			if (material as StandardMaterial3D).ao_enabled:
 				ao_enabled += 1
+			texture_filters[(material as StandardMaterial3D).texture_filter] = true
 		result.merge({
 			"ambient_occlusion_enabled_materials": ao_enabled,
+			"material_full_mipmaps": material_mip_inventory.get("verified", false),
+			"material_texture_filter": texture_filters.keys()[0] if texture_filters.size() == 1 else -1,
+			"nearest_mipmap_filter": ProjectSettings.get_setting("rendering/textures/default_filters/use_nearest_mipmap_filter"),
 			"ibl_energy": panorama.energy_multiplier,
 			"sky_process_mode": sky.process_mode, "sky_radiance_size": sky.radiance_size,
 			"shadow_mode": sun.directional_shadow_mode,
@@ -141,6 +148,10 @@ func _ready() -> void:
 			if standard.ao_enabled:
 				ao_enabled_before += 1
 			standard.ao_enabled = false
+		material_mip_inventory = MaterialMips.prepare(state.get_images(), b3_materials)
+		if material_mip_inventory.has("error"):
+			fail(material_mip_inventory.error)
+			return
 	inspect_scene(scene)
 	if inventory != {"mesh_instances": 1296, "surfaces": 1591, "triangles": 2832120}:
 		fail("Bistro inventory differs: %s" % inventory)
@@ -315,6 +326,10 @@ func after_draw() -> void:
 			"texture_memory_bytes": Performance.get_monitor(Performance.RENDER_TEXTURE_MEM_USED),
 			"buffer_memory_bytes": Performance.get_monitor(Performance.RENDER_BUFFER_MEM_USED)}
 		if config.profile == "b3":
+			if not MaterialMips.references_match(b3_materials, material_mip_inventory):
+				fail("B3 material references changed after preparation")
+				return
+			report.material_mips = material_mip_inventory
 			report.material_overrides = {"policy": "bistro-source-ao-disabled", "inspected_materials": b3_materials.size(),
 				"ao_enabled_before": ao_enabled_before, "ao_enabled_after": report.quality.ambient_occlusion_enabled_materials}
 		completed_report = report
