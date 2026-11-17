@@ -240,6 +240,9 @@ Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phas
 
 ### Tracyによる非管理者のCPU区間計測
 
+以下は最適化前の導入・hotspot調査である。削減実装後の同条件比較と現在の受入は
+[Graph・D3D12のCPU処理削減](#bistro-cpu-optimization)を参照する。
+
 `renderer-4wl`で任意の`tracy` featureを追加し、Graph構築・Bistro利用側・二backendのhost処理を計装した。
 通常構成は依存・区間名・計装処理をコンパイル除外する。最適化と追加検証の選択は独立のままである。
 `tracy-client 0.19.0`／`tracy-client-sys 0.30.1`に同梱されたTracyは0.14.1で、portableの収集・exportも同版へ固定した。
@@ -310,7 +313,7 @@ D3D12の`raster.record` selfはdraw childを除いた4 call/frameで、pass acce
 descriptor区間は1,592 call/frameで、buffer GPUVA／root descriptor・image SRV構築／CreateSRV・table設定をまとめて含む。
 COMMON区間はbuffer／scratch／imageの走査と必要なtransitionの記録で、GPUでのbarrier実行時間ではない。
 個別native callやdriver内部のCPU費用は未分離であり、細分化・発行数の観測と削減候補の検証を`renderer-9v5`へ登録した。
-この負荷では共通Graph構築とD3D12のhost記録を先に調べる根拠が得られたが、最適化の速度改善はまだ主張しない。
+この導入時の計測は共通Graph構築とD3D12のhost記録を先に調べる根拠であり、削減実装の速度比較とは分ける。
 
 CPU workspaceは`--all-features`計396 testと`--no-default-features --features vulkan,d3d12`計366 testが成功した。
 Tracy有効のstrict／shipping実GPU材質・alpha・geometry容量は各3件、警告・エラー0で成功した。
@@ -324,6 +327,135 @@ GPU timestamp・sampled stack・scheduler／driver内部の原因・他機材・
 
 素材全量の更新・実VRAM予算の`.3.3`、B3以降の画質、他機材・長時間soak・device lossはこの受入へ追加していない。
 詳細と実行identityは[ソースレビューの証拠](source-review.json)の`bistro_pbr`へ記録する。
+
+<a id="bistro-cpu-optimization"></a>
+
+### Graph・D3D12のCPU処理削減
+
+`renderer-ic1`／`renderer-9v5`で、Tracy調査から指摘した六点を改善した。
+`Graph::raster_bindings`がGraph・Programごとの不変bindingを一度検査・所有し、複数drawで再利用する。
+同じpassの完全に同一なreadonly footprintだけを集約し、attachmentの競合検査も全体検査で覆う経路では一回にした。
+空draw・bindingなし・attachment専用の必要な検査、write hazard、draw順と失敗時rollbackは保つ。
+snapshotはprivateなchecked生成境界でdescriptor・初期化範囲を保証し、importでの同じ内容の再走査を除いた。
+owner・generation・revisionと重複importの整合性は引き続き検査する。
+import登録表も準備済みHashMapへ変え、ソート済みVec挿入によるsuffix移動を除いた。
+resource IDは引き続きcallerの登録順であり、表の反復順には依存しない。
+
+D3D12はpass accessを一回走査して用途を合成し、buffer→imageの初出順で適用する。
+同じnative画像・typed format・mip範囲のSRVは排他的execution内で共有し、pending中や別frameへ再利用しない。
+末尾のCOMMON復帰は必要なtransitionと順序を保った一配列・一native呼出しへ集約した。
+いずれも明示準備した容量内で動作し、暗黙の増設・待機へfallbackしない。
+同期、GPU／CPU consumerの寿命、COM参照の回収、native失敗処理はshippingにも残す。
+詳細な保証・失効・容量は[RenderGraph](../design/rendergraph.md)と[D3D12実装方針](../design/implementation-policy.md)へ反映した。
+
+#### 通常版の変更前後
+
+比較元はclean `62dcec627edd21ccdf4f54016eac8b08dfee9446`、変更後の実行archiveはclean
+`d41178d2f985e052697145be216770c03c61398c`である。後続`0248bfc`は検証無効時のtest期待値二箇所だけを修正し、実行binaryを変えない。
+同じRust 1.99／release最適化、feature `vulkan,d3d12`、EXE/PDB照合済みの通常版を使った。
+RTX 3060／610.88、i5-14600KF、全量cook・shader・条件は変更していない。
+1920×1080、2 in-flight、固定route、warmup 3,600＋測定1,800 frameで、
+前後×二API×内部計時off/on×独立3 processの計24 runを完了した。
+最後のD3D12通常版一回はQPC／wall窓が約3.9%異なり、既定の1%ゲートで拒否した。
+元データを保持し、成功済み22 runを再照合した上で最後の前後一組だけを同条件で再取得し、採用24 runとした。
+閾値の緩和や、性能値を理由としたrunの除外は行っていない。
+前後の隣接pairは反復ごとに順序を替え、API・計時条件の順序も回転した。
+主結果は通常Windows hostであり、controllerと全targetの`TokenElevation=0`・`TokenIsAppContainer=0`を実測した。
+machineのaffinity・power設定は変えていない。
+測定中にbuild・他のGPU受入・画像／CSV解析を並行実行していない。
+先に完了したAppContainer内の24 runは別cohortとしてJSONへ保持し、主結果へ混ぜない。
+同環境ではTracyのTCP所有確認がaccess deniedとなったため、通常hostで短い二API取得・完全ROI exportを確認後、
+主結果の24 runと全量source traceを取得し直した。UAC・管理者実行・OS設定変更は使っていない。
+
+以下は内部CPU timer・GPU queryともoffの通常版。各値は独立3 run中央値（最小〜最大）、ms/frame。
+process CPUはWindows charged CPU、wallは最終drain込みROIの経過時間÷1,800である。
+
+| API | CPU 変更前 | CPU 変更後 | 中央値差 | wall 変更前 | wall 変更後 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Vulkan | 15.929（6.693〜16.710） | 10.122（4.184〜11.736） | -36.5% | 16.465（6.886〜17.365） | 10.498（4.265〜12.215） |
+| D3D12 | 25.382（20.599〜34.957） | 16.970（8.116〜18.142） | -33.1% | 26.488（21.262〜36.470） | 17.848（8.426〜18.958） |
+
+run間の変動をそのまま範囲へ含めた。この機材・負荷・実行条件の観測値であり、schedulerやCPU配置による変動の内訳は測定していない。
+
+次はnative CPU timer＋GPU timestamp queryを有効にした別条件で、同じく3 run中央値（最小〜最大）、ms/frameである。
+native recordはcaller phaseの内部にも含まれるhost経過時間であり、CPUやwallと加算しない。
+offとonを混ぜず、queryの純粋な因果的費用とも扱わない。
+
+| API | process CPU 前→後 | native record 前→後 | GPU timestamp 前→後 |
+| --- | ---: | ---: | ---: |
+| Vulkan | 15.547（12.222〜21.701） → 5.469（4.210〜9.722） | 1.306（1.078〜1.829） → 0.787（0.637〜1.354） | 4.223（3.389〜5.472） → 1.800（1.787〜2.792） |
+| D3D12 | 18.707（12.179〜35.477） → 11.693（8.620〜19.410） | 10.654（7.422〜19.722） → 7.412（6.068〜12.261） | 5.353（4.388〜9.238） → 3.234（3.065〜5.102） |
+
+各runのmain-thread CPU・caller phase・native prepare/record/submit/retire・個別frame wall分位点、
+全値・範囲・observed差・device/driver・input/helper/EXE/PDB hashを
+[機械可読データ](source-review.json)の`cpu_hotspot_optimization`へ保持した。
+採用24 reportは各ファイルの単一byte snapshotからhash・長さ・全metric・identity・runtimeを再計算し、保存recordとの完全一致を公開前gateにした。
+全24 runの描画identityが一致し、ROI後のroute frame 0のHDR／SDR／depthはAPI内で前後・計時条件・反復を通してbit一致した。
+API間も既定scene閾値で成功した。この値はheadless throughputの条件であり、表示FPSや全測定frameの画像一致を示すものではない。
+
+#### ソース区間とnative発行数
+
+変更後は同じ計装条件の全量traceを各API一processずつ取得した。旧表の独立3 trace中央値と新しい単一traceの観察を分ける。
+旧traceのRust sourceは`ccb20b0`、新traceは`d41178d`であり、通常版の24 runとは別cohortである。
+新traceも各1,800 frame、nonce・閉じたROI・frame数・入れ子・raw inclusive/self対応を検証した。
+追加したnative-call子区間により親selfの意味が変わるため、次表は前後とも同じ親のinclusive、ms/frameで揃える。
+host経過時間にはdeschedulingやdriver内部待機、未計装処理も含み、sampled CPU stackや純粋なnative CPU費用ではない。
+
+| 区間 | 旧3 trace中央値（最小〜最大） | 新1 trace |
+| --- | ---: | ---: |
+| Vulkan Graph構築全体 | 11.564（10.872〜11.741） | 1.695 |
+| D3D12 Graph構築全体 | 10.651（9.692〜11.754） | 1.728 |
+| Vulkan Rasterアクセス・attachment | 5.664（5.312〜5.741） | 0.403 |
+| D3D12 Rasterアクセス・attachment | 5.204（4.695〜5.712） | 0.414 |
+| Vulkan Graph import・camera更新 | 4.699（4.432〜4.798） | 0.616 |
+| D3D12 Graph import・camera更新 | 4.333（3.977〜4.832） | 0.635 |
+| D3D12 pass記録全体 | 12.817（12.102〜14.461） | 4.088 |
+| D3D12 descriptor・root binding | 5.166（4.790〜5.716） | 0.530 |
+| D3D12 COMMON復帰 | 4.255（4.078〜5.012） | 1.809 |
+
+bindingの一回登録へ移した費用もGraph構築全体と通常版CPUには含む。
+アクセス整理の子区間の減少だけを総削減時間とせず、inclusive親子も重複加算しない。
+D3D12の実`CreateShaderResourceView`子区間はROI内734,400回、
+**408回/frame**だった。旧sourceの6,365回/frame（1,591 draw×画像4枚＋resolve一枚）に対し、
+新しいunique view 408件（source 405＋使用fallback 2＋HDR resolve 1）という事前計算と照合した。
+旧native回数はsource計算であり、旧traceで個別FFIを計数したという意味ではない。
+COMMONのnative子区間は1,800回、**1回/frame**。
+必要なtransition数の削減やGPU上のbarrier時間の計測ではない。
+改善後にもD3D12のpass記録selfが2.837 ms/frame、COMMONのnative呼出しを囲む子区間が1.598 ms/frame残る。
+前者はpass開始時のtransition・clear・PSO/state設定などを含み、後者にもdeschedulingや待機が入り得る。
+各一traceのhost経過時間として、Native呼出し回数と細分化、COMMON方針を保つ追加batchの検討を`renderer-c4y`へ記録した。
+pureなdriver CPU時間や原因を確定した値とは扱わない。
+
+#### 回帰・メモリ・描画の受入
+
+最適化済みCPU workspaceはdevelopment `--all-features` 413件、shipping 396件が成功した。
+全target Clippy、headlessの診断無効Clippy、fmt、warnings拒否Rustdocも成功した。
+新GPU regression三件はstrict／shippingで、view/mipの数値内容、実SRV三回への集約、
+COMMON呼出し一回、容量不足後の回復、COM回収、cancelとpending descriptor所有を確認した。
+既存Raster／Compute／一般資源／D3D12共有Graph／engineの五gate、材質・alpha・大geometryの三gate、
+両APIのresize／cancel／pending shutdownも両構成で成功し、strictのnative警告・エラーは0だった。
+検証無効のD3D12 reportでは`teardown_checked=false`が正しいため、新testの期待値をfeatureと一致させた。
+最初にtest filterが一致せず0件だったshipping五回は証拠から除き、正しいshipping名で各一件を実行し直した。
+
+全量Bistroもstrict／shipping各4 processで受入し、固定7視点は同API反復・構成間でbit一致、
+API間は凍結済みscene閾値のまま、strict 28・shipping 42比較が成功した。
+従来の受入済み`92d41de4`画像との28比較も同APIでbit一致した。
+全pixel・edge・alphaを含め、閾値を緩和したりidentityを削除して比較したりしていない。
+source-alphaは各構成4 processで、元材質二件の24 primitive／222 triangleを保持し、
+route＋7視点×二APIのゼロ被覆16件、不透明対照の整合16件、glass／labelの感度を含む11比較が成功した。
+
+CPU、両backend buffer、Vulkan engine imageのfull lifecycle四gateに加え、
+全量Bistroの両構成・両APIで通常frameのRust／VMA allocation・reallocation・deallocationは各0、
+Renderer発行のnative create／destroy・memory alloc／free・descriptor alloc／freeも各0を確認した。
+resetは別counterとし、setup／shutdownの正の対照も保持する。driver内部確保はこの保証へ含めない。
+`CreateShaderResourceView`は準備済みheapへのdescriptor書込みであり、ここで0と確認したdescriptor heap等のalloc／freeとは別である。
+新しいread index・template・scope配列・SRV cacheには明示準備するmetadataが必要であり、
+総RSS・VRAMや準備memory全体の削減を主張しない。HashMap clearと保守的なdescriptor容量preflightも残る。
+
+独立レビューでAPI契約、容量、rollback、寿命、COM解放、計測harnessを確認した。
+strict／shippingの実GPU正しさ・確保gateは既定のAppContainer実行環境で行い、通常hostの性能値とは区別する。
+Vulkan／検証／frame memory方針を適用し、vendor依存最適化やAPI契約からの例外は採用していない。
+他機材、長時間soak、device loss注入、sampled stack／scheduler／driver内部原因、B3／B4は未実施範囲に残す。
 
 <a id="cpu-stack-profiling"></a>
 
