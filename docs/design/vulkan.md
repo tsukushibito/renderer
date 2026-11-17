@@ -886,7 +886,14 @@ native markerの意味と同じworkload／設定を併記し、短い区間の�
 論理byte数、stagingの要求byte・整列予約byte・high-water、VMA Allocationとblockの件数・byte数を分ける。
 画像の論理byte数はpacked texel量であり、optimal imageのAllocation sizeでもprocess VRAM使用量でもない。
 このVMA統計はdriverやSwapchainの確保を含まない。
-`EXT_memory_budget`は有効にしておらず、process budgetは未取得とする。
+対応Deviceでは`VK_EXT_memory_budget`を有効にし、同じ照会でheap別のcapacity、
+VMA Allocation/block統計とnative process usage/budgetを記録する。memory typeが共有するheapを重複集計しない。
+usageはdriverの推定、budgetは変動する目安であり、物理pageの常駐や次の確保成功を保証しない。
+非対応ではusage/budgetを`None`とし、heap容量やVMAのfallback推定で補完しない。
+`vkGetPhysicalDeviceMemoryProperties2`への直接照会とし、VMAの`EXT_MEMORY_BUDGET` flagは使わない。
+統計のためにallocatorのbudget方針や通常frameの更新処理を変更しない選択である。
+`bufferImageGranularity`と`nonCoherentAtomSize`も記録するが、両者を同じalignmentとして扱わない。
+[Bistroの常駐・更新受入](implementation-policy.md#bistro-residency)で実測結果を扱う。
 製品・性能用のLayer設定は`new_with_validation`で明示でき、既定値は`development-validation`の有無で選ぶ。
 要求したmodeとLayerから実際に観測した設定、未確認の情報を区別して記録する。
 

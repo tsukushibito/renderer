@@ -373,6 +373,40 @@ driverはAPIとnative profiling off/onを交互に独立3回ずつ実行し、�
 測定窓のRenderer CPU/frame費用へ加算しない。raw画像はローカルに残し、共有する集計へ画像本体を埋め込まない。
 内容照合はROI後に別途描くroute frame 0のHDR／SDR／depthを対象とし、全測定frameの画像照合を意味しない。
 
+<a id="bistro-residency"></a>
+
+### Bistroの常駐・差し替え・メモリ受入
+
+`bistro --resource-checks`は通常frame窓の外で資源の変更を検査する。
+`memory-profiling`と2以上のin-flight枠を要求し、準備・upload・warmup・通常frame後・検査後の
+native必要量、論理byte、staging容量、プロセス使用量・budgetを`report.json`へ保存する。
+メモリ観測のscanとDXGI照会、診断画像のreadbackを通常frame時間へ混ぜない。
+差し替え用の予備classも含む検証用予算であり、最小の通常描画予算とは区別する。
+[設計上の境界](../design/implementation-policy.md#bistro-residency)も参照する。
+
+```powershell
+cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12,memory-profiling,development-validation --example bistro --target-dir .tools/bistro-residency/strict-build
+cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12,memory-profiling --example bistro --target-dir .tools/bistro-residency/shipping-build
+python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --output .tools/bistro-residency/fixture
+python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --output .tools/bistro-residency/full
+```
+
+各batchは二API×strict／Disabled×独立2 processを直列で実行する。
+fullは1080p、全素材、通常窓24 frame＋warmup 8、7固定視点の既存profileによる同API反復・二API照合を行う。
+同時Viewとpending差し替えは別の診断内で検査する。反復更新後のnative件数・byteと論理所有量の一致を確認し、
+OSの動的usage/budgetの増減をそれ自体でリークと判定しない。
+プロセスの失敗・timeout、計測欠落・不一致は失敗にし、途中のログとreportを出力先へ残す。
+出力先は新しいdirectoryを指定し、過去の結果を再利用しない。実行中は別のGPU試験を止める。
+生成したEXEを別buildで上書きせず、source commit・EXE hash・cook hash・全reportと比較結果を保持する。
+この計装構成の時間を通常releaseの性能結果として扱わない。
+
+native resource要件の合計はdriver内部の管理費や物理page常駐の測定ではない。
+Vulkanのmemory budget extension非対応やD3D12のIDXGIAdapter3非対応はAPIでは`None`として扱うが、
+このRTX 3060向けの受入batchはnative usage/budgetの欠落を失敗にする。
+D3D12 stagingのlive byte/high-waterは未観測なので`null`で残し、準備容量・native heap必要量と区別する。
+native OOM・Device lossの注入やOSによるVRAM evictionの受入は、この容量不足試験には含めない。
+[最新結果と共有データ](../verification/current.md#bistro-residency)で実行済み範囲を確認する。
+
 <a id="godot-bistro"></a>
 
 ### Godotを使ってBistroの性能目標を校正する

@@ -5,6 +5,82 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="bistro-residency"></a>
+
+## Bistro全素材のメモリ・差し替え受入（B2）
+
+`renderer-7ft.3.3`。source `b5480f60b4fe1b26b38f404087b3e3d3801c70b7`の最適化releaseで、
+Vulkan／D3D12へ同じ全Bistroを載せ、メモリ観測と変更境界の検査を追加した。
+[共有データ](bistro-residency.json)はsource／EXE／cook hash、全report、固定profileによる全比較を保持する。
+[再現手順](../guides/development.md#bistro-residency)と[観測の意味・保証境界](../design/implementation-policy.md#bistro-residency)を参照する。
+
+Windows 11、Core i5-14600KF、RTX 3060 12 GiB、driver 610.88、Rust 1.99.0。
+全1,296 mesh／1,591 primitive／132材質／405画像・3,529 mip／2,832,120三角形と4枚のdefault画像を保持した。
+cook manifestは既存の`d74e9863328c238ea4b2a8fc5b617fe28879acf904a46d6b59b4b6874488d4f5`で、
+素材の省略、圧縮形式の変更、元alphaのoverrideはない。B2のsun＋定数ambientによるPBRである。
+
+小fixtureと1080p全Bistroを、それぞれ二API×strict／Disabled×独立2 processの計8 run、合計16 runで直列受入した。
+全量は通常窓24 frame＋warmup 8、2 in-flight、7固定視点を使う。両構成に独立した`memory-profiling`を追加し、
+strictだけRenderer追加検証、Vulkan Core／SyncVal、D3D12 Debug Layer／GBVを要求した。
+Disabledは追加検証・専用native診断を除外し、native要求をDisabledとした。
+最終native ownerの解放後まで警告・エラー・callback失敗はゼロ。観測用構成の時間を通常release性能とは扱わない。
+
+### 観測した確保量
+
+以下は全量4 run/APIの準備後〜検査後で同じだった値。変更検査用の画像13枠・材質1枠、
+同時Viewのcapture/readback容量も含む3,746物理registry枠の予算で、最小の通常描画必要量ではない。
+登録済みの論理byteは両APIで5,184,373,768 byte（4.828 GiB）。画像はpacked texel量で、native確保量とは異なる。
+
+| 観測 | Vulkan | D3D12 |
+|---|---:|---:|
+| native Allocation／committed resource件数 | 3,748 | 3,755 |
+| VMA Allocation／committed資源の確保要件 | 5,433,374,144 byte（5.060 GiB） | 5,744,099,328 byte（5.350 GiB） |
+| VMA block／committedの暗黙heap件数 | 138 | 3,755 |
+| VMA block確保量／committed確保要件合計 | 5,716,431,872 byte（5.324 GiB） | 5,744,099,328 byte（5.350 GiB） |
+| OSのdevice-local／local segment使用量 | 5,597,736,960 byte（5.213 GiB） | 5,348,818,944〜5,356,425,216 byte（4.981〜4.989 GiB） |
+| 同じ照会の動的budget | 11,890,851,840 byte（11.074 GiB） | 11,890,851,840 byte（11.074 GiB） |
+
+Vulkanはheap別の値を保存し、複数memory typeが参照するheapを重複加算しない。
+`bufferImageGranularity`／`nonCoherentAtomSize`も保存した。D3D12の資源alignmentは全て64 KiBだった。
+D3D12 DEFAULT／UPLOAD／READBACKの必要量は、それぞれ5,499,977,728／44,957,696／199,163,904 byte。
+Vulkanのupload/readback容量は各66,371,584 byte、観測high-waterは22,369,792／66,355,200 byte。
+D3D12の準備容量はupload合計44,768,768 byte、readback合計199,090,176 byte。
+共通の同時capture予算を各result arenaへ渡す保守的な予約も含む。D3D12 live使用byte/high-waterは未観測で`null`のまま残した。
+
+VMA blockとD3D12のnative確保要件、driverのusage推定・OSのprocess会計値は異なる範囲であり、
+差額をそのままdriver overheadやallocatorの性能差にはしない。物理pageごとのVRAM常駐・evictionは測定していない。
+budgetは変動する目安で、B3用に予約された余裕でも次の確保成功の保証でもない。
+今回の全素材・変更用予算で不足や増加傾向を認めなかったため、VMA既定pool/suballocationとD3D12 committedを維持する。
+追加allocatorの導入は不要と判断した範囲をこの条件に限定し、性能上の優越や他GPUでの収容は主張しない。
+
+### 変更・容量・通常frameの確認
+
+- street／material-detailの二つのViewを完了観測前に投入し、HDR／SDR／depthを逐次実行の参照と全byte一致させた。
+- 2実行枠を使用中の3件目は`ExecutionSlots`／`ReleaseOwners`の型付き不足。必要件数が未取得の`None`は補完しない。
+  一件の結果・owner返却後に同じplanを再試行し、参照画像との一致を確認した。暗黙の増設・GPU待機はない。
+- 全素材を保持し、Vespa材質4・画像14の全12 mipと材質bufferを4回差し替えた。
+  画像だけの差し替えと、その後の材質変更でHDR／SDRがそれぞれ非ゼロ画素変化し、depthは不変だった。
+  旧pending描画は元画像と全byte一致し、古い画像／buffer planは型付きのstale拒否、新しいsnapshotのrefresh後に描画できた。
+- 各mipを別Viewからnearest samplingし、全texelのRGBを独立した定数期待値と1 code以内で照合した。
+  元画像のalphaは維持し、probe出力alphaは255を確認した。これは全供給画像を変更する試験ではなく、
+  全素材が存在する状態で選択画像の全mipを変更する試験である。
+- 各回の復元後にHDR／SDR／depthが参照と全byte一致し、native件数・必要byte・block量と論理所有量が横ばいだった。
+  回収後の未登録保持byteは0。pendingとは完了が未観測という意味であり、実GPUがその瞬間も実行中という時間仮定を置かない。
+
+同API反復はbit一致、二APIは既存のfixture／scene profileを変更せず全画素・全channelで比較した。
+変更中・復元後・容量回復後・同時View・選択mipも含め、fixture 80件、全量224件の比較が全て成功した。
+各runの通常窓はGraph build/compile/submit/poll/retire/result返却を含み、Rust 4種・VMA host 3種の
+確保／再確保／解放とnative作成／破棄8種が全て0。resetは別計上し、setup／shutdownの正の対照も確認した。
+追加scan、OS照会、資源変更、capture、file I/Oはこの窓の外にある。
+
+最適化workspace CPUはstrict 405件、shipping 391件（example・doctestを含む）、Bistro Python 96件成功
+（Windows symlink権限による既存CPU試験1件skip）。両API併用のClippy、fmt、通常PBRの材質・alpha／paired geometry、
+一般資源のpending更新・履歴・working set再準備も確認した。native OOM／Device lossの注入、
+物理page常駐、D3D12 staging live high-water、B5の最終巡回・実表示・操作の再受入は未実行である。
+Vulkanの追加metrics単体試験は厳格native検証を前提とし、strictで成功した。
+Disabledで呼んだ一回はこの前提のassertで停止したため、shippingの受入に数えていない。
+Disabledのメモリ照会・資源変更は、上記の独立したBistro受入で確認し、単体試験の検証条件は緩和していない。
+
 <a id="godot-bistro"></a>
 
 ## GodotによるBistroの性能目標の校正

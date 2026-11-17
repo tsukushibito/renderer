@@ -718,6 +718,14 @@ buffer snapshotは保持したkeyから再取得でき、scalarな`ImportImage`�
 native/CPU consumerの返却前に物理ownerを早期解放しない。容量不足・通常の準備失敗で旧登録を失わず、
 resizeの反復でregistryを追加し続けない。Device removal等による停止は従来どおり終端状態として扱う。
 
+`D3D12Runtime::memory_stats()`は明示した観測境界で、registryの登録中・未登録保持中・再利用可能な論理byteと
+準備済みtransfer容量を取得する。`memory-profiling`が有効なときだけ、Device単位で全committed資源の
+native確保要件とalignment別件数を保持する。Graph外のmanaged資源と退役中の所有も集計する。
+DXGIの同adapter・同processのlocal/non-local使用量・budget・reservationは別に照会し、
+resourceの論理byteや確保要件から推測しない。live staging使用量の未観測値は`None`で残す。
+観測は一時的なDXGI interface作成・scanを含み得るので、通常frameのゼロ確保窓へ入れない。
+feature無効時の専用metadata除外と測定の意味は[Bistroの常駐受入](implementation-policy.md#bistro-residency)に従う。
+
 registryを複数pool世代で共有する案より、返却済みの変更境界で値を移す方式を選ぶ。
 pending中の再準備を追加せず、共有寿命・退役世代・新しい回収APIを増やさないためである。
 GraphのUNORM/float color画像はtransfer／sampled／RT／UAVの固定用途とし、初回Program集合に関わらず後のstorage利用を許す。

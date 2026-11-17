@@ -1360,6 +1360,38 @@ HDR・SDR・depthの全byte一致で確認する。RGBA16F clearの基準をCPU�
 対照自体もclearの隣接有限値とresolve結果・depthを検査し、任意の出力を正解にしない。
 これはalpha無被覆の独立対照を正す変更であり、通常のfixture/scene比較profileと閾値は変更しない。
 
+<a id="bistro-residency"></a>
+
+### B2の資源差し替えとメモリ観測
+
+`renderer-7ft.3.3`では、全Bistroを保持した利用側の`bistro --resource-checks`を使う。
+通常frameの計測窓とは別に、異なるcamera Viewの同時投入、旧描画の所有が残る間の画像・材質の差し替え、
+古いsnapshotの拒否、準備済み容量の不足と回復、元の内容への復元を検査する。
+画像の全mipをuploadし、選択したmipごとのsamplingも照合する。
+差し替え用の予備枠と診断画像は明示した準備予算へ含め、通常実行へ暗黙の増設や待機を加えない。
+登録解除、GPU使用終了、CPUの結果・snapshot返却、物理資源の再利用は別の境界として扱う。
+
+論理byte、native確保要件、プロセス使用量・予算を区別する。
+VulkanはVMAのAllocation/block統計と、対応時だけ直接照会する`VK_EXT_memory_budget`のheap別推定値を記録する。
+VMAの既定poolとsuballocationを維持し、観測のためのVMA budget flag・毎frame更新を導入しない。
+D3D12は`memory-profiling`が有効なときだけ、成功した`CreateCommittedResource`の実descriptionについて
+`GetResourceAllocationInfo`の件数・必要byte・alignmentを保持し、最後のnative ownerが返ると差し引く。
+DEFAULT/UPLOAD/READBACKを分け、Graph外のmanaged資源や退役中の所有もDevice単位の集計へ含める。
+この専用metadata・native要件照会はfeature無効時に除外する。
+DXGIの同じadapterに対するlocal/non-local segmentの使用量・予算・reservationは、別のon-demand照会とする。
+D3D12のtransfer arenaは準備済み容量を示し、現在使用byte・high-waterの未観測値をゼロで埋めない。
+
+`GetResourceAllocationInfo`はdriverの内部管理費まで含む実使用量ではなく、資源のnative確保要件である。
+OSのusage/budgetも動的な会計値・推定値であり、全pageの物理VRAM常駐や次の確保成功を証明しない。
+診断中の確保量が足りるか、更新を繰り返しても所有・native必要量が増え続けないかを実測で判断する。
+native OOMやDevice lossの注入試験と、準備容量を使い切る通常のbackpressure試験は区別する。
+追加allocator、圧縮形式への変更、suballocationの導入は、対象GPUで必要性が示されたときに別途判断する。
+[再現手順](../guides/development.md#bistro-residency)と[最新の実測](../verification/current.md#bistro-residency)を参照する。
+
+根拠: [Vulkan memory budget](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceMemoryBudgetPropertiesEXT.html)、
+[D3D12の確保要件](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getresourceallocationinfo(uint_uint_constd3d12_resource_desc))、
+[DXGIの使用量と予算](https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_4/nf-dxgi1_4-idxgiadapter3-queryvideomemoryinfo)。
+
 手順は[開発ガイド](../guides/development.md#bistro-pbr)、実行した内容照合・レビュー修正・
 CPU/GPU計測と未確認範囲は[現行検証](../verification/current.md#bistro-pbr)へ集約する。
 `.3.3`の常駐・更新とallocation予算、B3/B4/B5の品質・表示の最終受入は各課題で扱う。
@@ -1463,7 +1495,9 @@ Apple展開が優先要件になった場合やWindows実機を維持できな�
 
 旧M4は固定操作をD3D12へ移植してから公開契約を抽出する計画だった。未着手分はB0〜B5へ置換した。
 現在は一般Program/bindingとownedパスへB2のcook・二API PBRを接続済みで、[実GPU受入と測定](../verification/current.md#bistro-pbr)を記録した。
-全量常駐・更新と実VRAM予算は`.3.3`、IBL・影・最終tone mapping以降はB3〜B5で扱う。
+全素材を保持した差し替えとnative必要量・OS予算の観測は
+[`.3.3`の受入](../verification/current.md#bistro-residency)で確認した。物理page常駐の保証とは区別する。
+IBL・影・最終tone mapping以降はB3〜B5で扱う。
 D3D12での表示経路を、共通契約の検証に先立つ必須条件にはしない。
 ただし[Bistroの確定要件](#bistro-requirements)により、両APIでのWindows表示は最終受入の必須条件である。
 
