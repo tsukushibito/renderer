@@ -313,6 +313,15 @@ impl PreparedOperation {
 
 fn index_error(error: IndexError) -> RuntimeError {
     match error {
+        IndexError::Capacity(error) => RuntimeError::capacity_with(
+            "generic index prefix summary capacity exhausted",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::GraphMetadata,
+                CapacityRecovery::Reconfigure,
+                Some(error.capacity as u64),
+                Some(error.required as u64),
+            ),
+        ),
         IndexError::UnknownContents => {
             RuntimeError::unsupported("raster indices must have CPU-known upload/copy contents")
         }
@@ -1161,6 +1170,29 @@ fn source_scope(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn generic_index_prefix_capacity_reports_reconfiguration() {
+        let error = super::index_error(crate::graph::provenance::IndexError::Capacity(
+            crate::graph::provenance::ProvenanceCapacityError {
+                required: 3,
+                capacity: 2,
+            },
+        ));
+        assert_eq!(
+            error.kind(),
+            crate::backends::vulkan::graph::RuntimeErrorKind::CapacityExhausted
+        );
+        assert_eq!(
+            error.capacity(),
+            Some(crate::capacity::RuntimeCapacityError::new(
+                crate::capacity::RuntimeCapacityKind::GraphMetadata,
+                crate::capacity::CapacityRecovery::Reconfigure,
+                Some(2),
+                Some(3),
+            ))
+        );
+    }
+
     #[test]
     fn raster_filter_requirements_follow_only_declared_sampling_pairs() {
         use crate::graph::{BindingOperands, Graph, ImageDesc};

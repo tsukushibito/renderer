@@ -39,6 +39,11 @@ pub struct D3D12FrameCapacity {
     /// Zero is valid for transient buffer-only work without retained provenance,
     /// and for complete immutable mesh index proofs.
     pub provenance_segments_per_resource: usize,
+    /// Distinct generic index-count prefix summaries retained per buffer and
+    /// snapshot until mutation. Exhaustion returns capacity backpressure without
+    /// eviction or rescanning. Zero supports immutable mesh proofs and work
+    /// that does not validate generic index contents.
+    pub index_prefixes_per_resource: usize,
     /// Canonical initialized intervals and independently retained import tokens.
     pub initialized_ranges_per_resource: usize,
     pub range_snapshots: usize,
@@ -104,6 +109,7 @@ impl Default for D3D12FrameCapacity {
             resource_capacity: 1024,
             operations: 4096,
             provenance_segments_per_resource: 64,
+            index_prefixes_per_resource: 64,
             initialized_ranges_per_resource: 64,
             range_snapshots: 1024,
             buffers: 16,
@@ -228,6 +234,7 @@ impl ExecutionSlot {
         for _ in 0..capacity.buffers {
             provenance.push(BufferProvenance::with_capacity(
                 capacity.provenance_segments_per_resource,
+                capacity.index_prefixes_per_resource,
             ));
         }
         Ok(Self {
@@ -249,6 +256,7 @@ impl ExecutionSlot {
             timestamps: None,
             provenance_scratch: BufferProvenance::with_capacity(
                 capacity.provenance_segments_per_resource,
+                capacity.index_prefixes_per_resource,
             ),
             allocator,
             list,
@@ -1624,7 +1632,7 @@ mod tests {
         )
         .unwrap();
         let strict = cfg!(feature = "development-validation");
-        for segments in [0, 1] {
+        for (segments, index_prefixes) in [(0, 0), (1, 1), (1, 0)] {
             let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
                 validation: if strict {
                     D3D12ValidationMode::Required
@@ -1638,6 +1646,7 @@ mod tests {
                     resource_capacity: 8,
                     operations: 32,
                     provenance_segments_per_resource: segments,
+                    index_prefixes_per_resource: index_prefixes,
                     initialized_ranges_per_resource: 32,
                     range_snapshots: 8,
                     buffers: 2,
@@ -1688,9 +1697,28 @@ mod tests {
                 "rejected recording must release every Graph pin"
             );
 
-            // Zero segments uses the immutable mesh proof. One segment accepts
-            // arbitrary CPU bytes after the split upload exhausted that limit.
-            let (valid, readback) = raster(&mut pool, &mesh, (segments != 0).then_some(false));
+            if segments != 0 && index_prefixes == 0 {
+                let (unprepared_prefix, _) = raster(&mut pool, &mesh, Some(false));
+                let error = runtime.prepare(&unprepared_prefix).err().unwrap();
+                assert_eq!(error.kind(), D3D12RuntimeErrorKind::CapacityExhausted);
+                let capacity = error.capacity().unwrap();
+                assert_eq!(
+                    capacity.resource,
+                    crate::capacity::RuntimeCapacityKind::GraphMetadata
+                );
+                assert_eq!(
+                    capacity.recovery,
+                    crate::capacity::CapacityRecovery::Reconfigure
+                );
+                assert_eq!((capacity.limit, capacity.required), (Some(0), Some(1)));
+                drop(unprepared_prefix);
+                assert_eq!(pool.leased_slots(), 0);
+            }
+            // Immutable mesh proofs need neither byte segments nor prefix slots.
+            // With both stores prepared, generic bytes recover after the split
+            // upload exhausted the segment limit.
+            let arbitrary = (segments != 0 && index_prefixes != 0).then_some(false);
+            let (valid, readback) = raster(&mut pool, &mesh, arbitrary);
             drop(runtime.prepare(&valid).unwrap());
             let mut submission = runtime.submit(&valid).unwrap();
             let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();

@@ -340,6 +340,7 @@ mod native {
                 readback_bytes: 16 * 1024,
                 scratch_bytes: 512,
                 provenance_segments_per_resource: 0,
+                index_prefixes_per_resource: 0,
                 ..Default::default()
             },
         })

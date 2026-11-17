@@ -92,6 +92,11 @@ pub struct FrameCapacity {
     pub range_snapshots: usize,
     pub initialized_ranges_per_resource: usize,
     pub provenance_segments_per_resource: usize,
+    /// Distinct generic index-count prefix summaries retained per resource and
+    /// snapshot until mutation. A new count beyond this limit returns capacity
+    /// backpressure without eviction or rescanning. Zero supports immutable
+    /// mesh proofs and work that does not validate generic index contents.
+    pub index_prefixes_per_resource: usize,
 }
 impl Default for FrameCapacity {
     fn default() -> Self {
@@ -103,6 +108,7 @@ impl Default for FrameCapacity {
             range_snapshots: 1024,
             initialized_ranges_per_resource: 32,
             provenance_segments_per_resource: 64,
+            index_prefixes_per_resource: 64,
         }
     }
 }
@@ -161,6 +167,7 @@ impl Clone for Snapshot {
         let mut result = Self::with_capacity(
             self.initialized.capacity(),
             self.provenance.segment_capacity(),
+            self.provenance.index_prefix_capacity(),
         )
         .unwrap();
         result.copy_from(self).unwrap();
@@ -483,6 +490,7 @@ impl VulkanRuntime {
                 let mut snapshot = Snapshot::with_capacity(
                     capacity.initialized_ranges_per_resource,
                     capacity.provenance_segments_per_resource,
+                    capacity.index_prefixes_per_resource,
                 )?;
                 snapshot.copy_from(&physical.lock().scheduled)?;
                 snapshots.push((index, snapshot));
@@ -1144,6 +1152,7 @@ impl VulkanRuntime {
                     Snapshot::with_capacity(
                         capacity.initialized_ranges_per_resource,
                         capacity.provenance_segments_per_resource,
+                        capacity.index_prefixes_per_resource,
                     )?
                 } else {
                     Snapshot::default()

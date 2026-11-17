@@ -15,9 +15,11 @@ use crate::graph::CompiledGraph;
 #[derive(Default)]
 pub(crate) struct BufferProvenance {
     segments: Vec<Segment>,
-    // A content maximum is independent of a draw's vertex/Device bounds. Keep
-    // one prefix summary; changing only those bounds never rescans the bytes.
-    validation: Option<IndexValidation>,
+    // Sorted, immutable-content prefix summaries. Every requested count is kept
+    // until a content mutation; changing draw counts never evicts a guarantee.
+    // The separate prepared limit makes exhaustion explicit instead of silently
+    // rescanning a still-valid prefix or growing storage during a frame.
+    validations: Vec<IndexValidation>,
     // Managed meshes need no CPU copy. This private proof is installed only by
     // uploads carrying GeometryData's or MeshData's immutable bound, at the same
     // byte positions.
@@ -29,7 +31,8 @@ pub(crate) struct BufferProvenance {
 #[derive(Clone, Copy)]
 struct IndexValidation {
     count: u32,
-    maximum: Result<u32, IndexError>,
+    // None records an unknown byte/hole, independently of draw/Device bounds.
+    maximum: Option<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -82,15 +85,17 @@ pub(crate) struct ProvenanceCapacityError {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum IndexError {
+    Capacity(ProvenanceCapacityError),
     UnknownContents,
     VertexBounds { index: u32, vertex_count: u64 },
     DeviceLimit { index: u32, maximum: u32 },
 }
 
 impl BufferProvenance {
-    pub(crate) fn with_capacity(segments: usize) -> Self {
+    pub(crate) fn with_capacity(segments: usize, index_prefixes: usize) -> Self {
         Self {
             segments: Vec::with_capacity(segments),
+            validations: Vec::with_capacity(index_prefixes),
             ..Self::default()
         }
     }
@@ -107,6 +112,11 @@ impl BufferProvenance {
         self.segments.capacity()
     }
 
+    #[cfg(test)]
+    pub(crate) fn index_prefix_capacity(&self) -> usize {
+        self.validations.capacity()
+    }
+
     fn require_capacity(&self, required: usize) -> Result<(), ProvenanceCapacityError> {
         if required > self.segment_capacity() {
             return Err(ProvenanceCapacityError {
@@ -117,11 +127,21 @@ impl BufferProvenance {
         Ok(())
     }
 
+    fn require_prefix_capacity(&self, required: usize) -> Result<(), ProvenanceCapacityError> {
+        if required > self.validations.capacity() {
+            return Err(ProvenanceCapacityError {
+                required,
+                capacity: self.validations.capacity(),
+            });
+        }
+        Ok(())
+    }
+
     /// The external GraphPool owner keeps its allocations alive when pins drop.
     /// Clearing state does not discard the prepared segment storage.
     pub(crate) fn clear(&mut self) {
         self.segments.clear();
-        self.validation = None;
+        self.validations.clear();
         self.mesh = None;
         #[cfg(test)]
         {
@@ -133,9 +153,11 @@ impl BufferProvenance {
     /// immutable backing and prefix summary can be shared without revalidation.
     pub(crate) fn copy_from(&mut self, source: &Self) -> Result<(), ProvenanceCapacityError> {
         self.require_capacity(source.segments.len())?;
+        self.require_prefix_capacity(source.validations.len())?;
         self.segments.clear();
         self.segments.extend(source.segments.iter().cloned());
-        self.validation = source.validation;
+        self.validations.clear();
+        self.validations.extend_from_slice(&source.validations);
         self.mesh = source.mesh;
         #[cfg(test)]
         {
@@ -154,7 +176,7 @@ impl BufferProvenance {
     /// Sparse/out-of-order writes remain unproven, never initialized by fiat.
     pub(crate) fn write_mesh_indices(&mut self, target: Range<u64>, byte_len: u64, maximum: u32) {
         self.segments.clear();
-        self.validation = None;
+        self.validations.clear();
         if target == (0..byte_len) {
             // A complete immutable replacement has no bytes from the previous
             // stream. Its new maximum may legitimately be smaller; retaining
@@ -248,8 +270,15 @@ impl BufferProvenance {
         output: &mut Self,
     ) -> Result<(), ProvenanceCapacityError> {
         let overlap = self.overlap_indices(&source);
+        let prefixes = if source.start == 0 && destination == 0 {
+            self.prefixes_within(source.end)
+        } else {
+            &[]
+        };
         output.require_capacity(overlap.len())?;
+        output.require_prefix_capacity(prefixes.len())?;
         output.clear();
+        output.validations.extend_from_slice(prefixes);
         output.mesh = self.mesh.filter(|proof| {
             destination == 0
                 && source == (0..proof.byte_len)
@@ -281,9 +310,25 @@ impl BufferProvenance {
             return Ok(());
         }
         let overlap = self.overlap_indices(&target);
+        let prefixes = if target.start == 0 {
+            contents.prefixes_within(target.end)
+        } else {
+            &[]
+        };
         self.require_capacity(self.replacement_len(&target, &overlap, contents.segments.len()))?;
+        self.require_prefix_capacity(prefixes.len())?;
         self.replace_segments(target, overlap, &contents.segments, contents.mesh);
+        self.validations.extend_from_slice(prefixes);
         Ok(())
+    }
+
+    // Summaries apply to the exact prefix at byte offset zero. Shifted copies
+    // cannot reuse them, even when their payload happens to be identical.
+    fn prefixes_within(&self, byte_end: u64) -> &[IndexValidation] {
+        let end = self
+            .validations
+            .partition_point(|v| u64::from(v.count) * 4 <= byte_end);
+        &self.validations[..end]
     }
 
     pub(crate) fn clear_range(
@@ -352,7 +397,7 @@ impl BufferProvenance {
         }
         // Every successful generic mutation invalidates successful and failed
         // validation. Other prepared snapshots retain their immutable version.
-        self.validation = None;
+        self.validations.clear();
         self.mesh = mesh.filter(|proof| target == (0..proof.byte_len));
     }
 
@@ -386,22 +431,26 @@ impl BufferProvenance {
             }
             return validate_index(proof.maximum, vertex_count, maximum);
         }
-        let content_maximum = match self.validation {
-            Some(validation) if validation.count == count => validation.maximum,
-            _ => {
+        let content_maximum = match self.validations.binary_search_by_key(&count, |v| v.count) {
+            Ok(index) => self.validations[index].maximum,
+            Err(index) => {
+                self.require_prefix_capacity(self.validations.len() + 1)
+                    .map_err(IndexError::Capacity)?;
                 #[cfg(test)]
                 {
                     self.validation_scans += 1;
                 }
                 let maximum = self.scan_indices(count);
-                self.validation = Some(IndexValidation { count, maximum });
+                self.validations
+                    .insert(index, IndexValidation { count, maximum });
                 maximum
             }
-        }?;
+        }
+        .ok_or(IndexError::UnknownContents)?;
         validate_index(content_maximum, vertex_count, maximum)
     }
 
-    fn scan_indices(&self, count: u32) -> Result<u32, IndexError> {
+    fn scan_indices(&self, count: u32) -> Option<u32> {
         let end = u64::from(count) * 4;
         let mut content_maximum = 0;
         let mut cursor = 0;
@@ -412,7 +461,7 @@ impl BufferProvenance {
                 continue;
             }
             if segment.start > cursor {
-                return Err(IndexError::UnknownContents);
+                return None;
             }
             let begin = segment.range.start + (cursor - segment.start) as usize;
             let next = end.min(segment.end());
@@ -439,13 +488,13 @@ impl BufferProvenance {
             cursor = next;
             if cursor == end {
                 debug_assert_eq!(filled, 0);
-                return Ok(content_maximum);
+                return Some(content_maximum);
             }
         }
         if cursor == end {
-            Ok(content_maximum)
+            Some(content_maximum)
         } else {
-            Err(IndexError::UnknownContents)
+            None
         }
     }
 }
@@ -468,7 +517,7 @@ mod tests {
     use super::*;
 
     fn prepared() -> BufferProvenance {
-        BufferProvenance::with_capacity(256)
+        BufferProvenance::with_capacity(256, 64)
     }
 
     fn snapshot(source: &BufferProvenance) -> BufferProvenance {
@@ -858,10 +907,146 @@ mod tests {
     }
 
     #[test]
+    fn alternating_index_counts_keep_exact_prefix_guarantees_until_mutation() {
+        let mut contents = prepared();
+        contents.write(
+            0..36,
+            [0u32, 1, 0, 9, 0, 2, 12, 0, 1]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        // A failed draw still establishes the content maximum; draw bounds are
+        // independent. A large prefix must not overestimate a shorter prefix.
+        assert_eq!(
+            contents.validate_indices(9, 1, u32::MAX),
+            Err(IndexError::VertexBounds {
+                index: 12,
+                vertex_count: 1
+            })
+        );
+        for _ in 0..32 {
+            for (count, maximum) in [(3, 1), (6, 9), (9, 12), (6, 9), (3, 1)] {
+                assert_eq!(
+                    contents.validate_indices(count, u64::from(maximum) + 1, maximum),
+                    Ok(())
+                );
+            }
+        }
+        assert_eq!(contents.validation_scans, 3);
+        let mut old = snapshot(&contents);
+        contents.write(0..1, Arc::from([2u8]));
+        assert_eq!(
+            contents.validate_indices(3, 2, u32::MAX),
+            Err(IndexError::VertexBounds {
+                index: 2,
+                vertex_count: 2
+            })
+        );
+        assert_eq!(contents.validation_scans, 4);
+        assert_eq!(old.validate_indices(3, 2, 1), Ok(()));
+        assert_eq!(old.validate_indices(9, 13, 12), Ok(()));
+        assert_eq!(old.validation_scans, 3);
+    }
+
+    #[test]
+    fn prefix_capacity_failure_preserves_prior_guarantees_and_destination_version() {
+        let input: Arc<[u8]> = Arc::from([0u8; 36]);
+        let mut contents = BufferProvenance::with_capacity(1, 2);
+        contents.write_slice(0..36, &input, 0..36).unwrap();
+        for count in [3, 6] {
+            assert_eq!(contents.validate_indices(count, 1, 0), Ok(()));
+        }
+        assert_eq!(
+            contents.validate_indices(9, 1, 0),
+            Err(IndexError::Capacity(ProvenanceCapacityError {
+                required: 3,
+                capacity: 2
+            }))
+        );
+        assert_eq!(
+            contents.validation_scans, 2,
+            "exhaustion must not scan or evict"
+        );
+        for count in [6, 3] {
+            assert_eq!(contents.validate_indices(count, 1, 0), Ok(()));
+        }
+        assert_eq!(contents.validation_scans, 2);
+
+        let mut destination = BufferProvenance::with_capacity(1, 1);
+        destination.write_mesh_indices(0..12, 12, 7);
+        let failure = Err(ProvenanceCapacityError {
+            required: 2,
+            capacity: 1,
+        });
+        assert_eq!(destination.copy_from(&contents), failure);
+        assert_eq!(contents.copy_into(0..36, 0, &mut destination), failure);
+        assert_eq!(destination.replace(0..36, &contents), failure);
+        assert_eq!(destination.validate_indices(3, 8, 7), Ok(()));
+        assert_eq!(destination.test_evidence(), (0, 0));
+
+        let mut managed_only = BufferProvenance::with_capacity(0, 0);
+        assert_eq!(managed_only.validate_indices(0, 0, 0), Ok(()));
+        managed_only.write_mesh_indices(0..12, 12, 2);
+        assert_eq!(managed_only.validate_indices(3, 3, 2), Ok(()));
+    }
+
+    #[test]
+    fn positional_prefix_copies_reuse_summaries_but_shifted_copies_do_not() {
+        let mut source = prepared();
+        source.write(
+            0..12,
+            [0u32, 1, 4]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        assert_eq!(source.validate_indices(2, 2, 1), Ok(()));
+        assert_eq!(source.validate_indices(3, 5, 4), Ok(()));
+        let mut copied = copy_range(&source, 0..12, 0);
+        assert_eq!(copied.validate_indices(3, 5, 4), Ok(()));
+        assert_eq!(copied.validate_indices(2, 2, 1), Ok(()));
+        assert_eq!(copied.validation_scans, 0);
+        let mut destination = prepared();
+        destination.replace(0..12, &copied).unwrap();
+        assert_eq!(destination.validate_indices(2, 2, 1), Ok(()));
+        assert_eq!(destination.validation_scans, 0);
+
+        let shifted = copy_range(&source, 0..12, 4);
+        assert!(shifted.validations.is_empty());
+        let mut suffix = copy_range(&source, 4..12, 0);
+        assert_eq!(
+            suffix.validate_indices(2, 2, u32::MAX),
+            Err(IndexError::VertexBounds {
+                index: 4,
+                vertex_count: 2
+            })
+        );
+        assert_eq!(suffix.validation_scans, 1);
+
+        source.clear_range(5..6).unwrap();
+        assert_eq!(
+            source.validate_indices(3, 5, 4),
+            Err(IndexError::UnknownContents)
+        );
+        let mut hole = copy_range(&source, 0..12, 0);
+        assert_eq!(
+            hole.validate_indices(3, 5, 4),
+            Err(IndexError::UnknownContents)
+        );
+        assert_eq!(hole.validation_scans, 0);
+        hole.write(5..6, Arc::from([0u8]));
+        assert_eq!(hole.validate_indices(3, 5, 4), Ok(()));
+        assert_eq!(hole.validation_scans, 1);
+    }
+
+    #[test]
     fn capacity_failure_preserves_bytes_summary_and_backing_owners() {
         let input: Arc<[u8]> = Arc::from([0u8; 12]);
         let patch: Arc<[u8]> = Arc::from([1u8; 4]);
-        let mut contents = BufferProvenance::with_capacity(2);
+        let mut contents = BufferProvenance::with_capacity(2, 4);
         contents.write_slice(0..12, &input, 0..12).unwrap();
         assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
         let retained = Arc::strong_count(&input);
@@ -906,10 +1091,10 @@ mod tests {
     #[test]
     fn failed_replacement_and_copy_leave_destination_version_intact() {
         let input: Arc<[u8]> = Arc::from([0u8; 12]);
-        let mut source = BufferProvenance::with_capacity(3);
+        let mut source = BufferProvenance::with_capacity(3, 4);
         source.write_slice(0..4, &input, 0..4).unwrap();
         source.write_slice(8..12, &input, 8..12).unwrap();
-        let mut target = BufferProvenance::with_capacity(1);
+        let mut target = BufferProvenance::with_capacity(1, 4);
         target.write_mesh_indices(0..12, 12, 2);
         let failure = Err(ProvenanceCapacityError {
             required: 2,
@@ -936,13 +1121,18 @@ mod tests {
         // through mutation/reset so removing metadata cannot free byte storage.
         let input: Arc<[u8]> = Arc::from([0u8; 32]);
         let patch: Arc<[u8]> = Arc::from([1u8; 4]);
-        let mut source = BufferProvenance::with_capacity(8);
-        let mut target = BufferProvenance::with_capacity(8);
-        let mut scratch = BufferProvenance::with_capacity(8);
+        let mut source = BufferProvenance::with_capacity(8, 4);
+        let mut target = BufferProvenance::with_capacity(8, 4);
+        let mut scratch = BufferProvenance::with_capacity(8, 4);
         let pointers = [
             source.segments.as_ptr(),
             target.segments.as_ptr(),
             scratch.segments.as_ptr(),
+        ];
+        let prefix_pointers = [
+            source.validations.as_ptr(),
+            target.validations.as_ptr(),
+            scratch.validations.as_ptr(),
         ];
         let capacities = [
             source.segment_capacity(),
@@ -953,6 +1143,8 @@ mod tests {
             source.write_slice(0..16, &input, 0..16).unwrap();
             source.write_slice(4..8, &patch, 0..4).unwrap();
             source.clear_range(10..12).unwrap();
+            assert_eq!(source.validate_indices(1, 1, 0), Ok(()));
+            assert_eq!(source.validate_indices(2, u64::MAX, u32::MAX), Ok(()));
             source.copy_into(0..16, 16, &mut scratch).unwrap();
             target.copy_from(&source).unwrap();
             target.replace(16..32, &scratch).unwrap();
@@ -981,6 +1173,17 @@ mod tests {
                 ],
                 capacities
             );
+            assert_eq!(
+                [
+                    source.validations.as_ptr(),
+                    target.validations.as_ptr(),
+                    scratch.validations.as_ptr()
+                ],
+                prefix_pointers
+            );
+            assert_eq!(source.index_prefix_capacity(), 4);
+            assert_eq!(target.index_prefix_capacity(), 4);
+            assert_eq!(scratch.index_prefix_capacity(), 4);
         }
         assert_eq!(Arc::strong_count(&input), 1);
         assert_eq!(Arc::strong_count(&patch), 1);

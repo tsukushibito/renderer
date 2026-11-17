@@ -43,6 +43,7 @@ impl Backend for Vulkan {
                 range_snapshots: 1,
                 initialized_ranges_per_resource: 1,
                 provenance_segments_per_resource: 0,
+                index_prefixes_per_resource: 0,
             },
             &[renderer::ResourceClass::Buffer {
                 desc: renderer::graph::BufferDesc { size: BYTES as u64 },
@@ -117,6 +118,7 @@ impl Backend for D3d12 {
                     .checked_add(1)
                     .ok_or("operation capacity overflow")?,
                 provenance_segments_per_resource: 0,
+                index_prefixes_per_resource: 0,
                 initialized_ranges_per_resource: 1,
                 range_snapshots: 1,
                 buffers: options.resources,

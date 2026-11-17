@@ -85,6 +85,7 @@ impl Backend for Vulkan {
                 range_snapshots: budget.ranges,
                 initialized_ranges_per_resource: 32,
                 provenance_segments_per_resource: 1,
+                index_prefixes_per_resource: 0,
             },
             &resources,
         )?;
@@ -187,6 +188,7 @@ impl Backend for D3d12 {
             resource_capacity: budget.physical_resources,
             operations: budget.graph.draws + 16,
             provenance_segments_per_resource: 1,
+            index_prefixes_per_resource: 0,
             initialized_ranges_per_resource: 32,
             range_snapshots: budget.ranges,
             buffers: budget.buffer_count,

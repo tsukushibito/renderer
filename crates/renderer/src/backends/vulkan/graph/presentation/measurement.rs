@@ -229,7 +229,7 @@ impl Measurements {
                             "work_slots": frame.work_slots, "result_slots": frame.result_slots,
                             "metadata_slots": frame.metadata_slots, "range_snapshots": frame.range_snapshots,
                             "initialized_ranges_per_resource": frame.initialized_ranges_per_resource,
-                            "provenance_segments_per_resource": frame.provenance_segments_per_resource,
+                            "provenance_segments_per_resource": frame.provenance_segments_per_resource, "index_prefixes_per_resource": frame.index_prefixes_per_resource,
                         },
                         "image_extents": extents,
                         "rgba8_instances_per_extent": 15,

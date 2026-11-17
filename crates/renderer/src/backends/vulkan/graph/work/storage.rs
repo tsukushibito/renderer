@@ -63,6 +63,7 @@ impl WorkData {
             final_states.push(Some(Snapshot::with_capacity(
                 limit.initialized_ranges_per_resource,
                 limit.provenance_segments_per_resource,
+                limit.index_prefixes_per_resource,
             )?));
         }
         let mut validated_raster_bindings = reserved(limit.graph.bindings)?;
@@ -103,7 +104,10 @@ impl WorkData {
             buffers: reserved(limit.graph.accesses)?,
             images: reserved(limit.graph.accesses)?,
             uploads: reserved(limit.graph.passes)?,
-            copy_scratch: BufferProvenance::with_capacity(limit.provenance_segments_per_resource),
+            copy_scratch: BufferProvenance::with_capacity(
+                limit.provenance_segments_per_resource,
+                limit.index_prefixes_per_resource,
+            ),
             limit,
         })
     }
@@ -172,6 +176,7 @@ mod tests {
             },
             initialized_ranges_per_resource: 1,
             provenance_segments_per_resource: 1,
+            index_prefixes_per_resource: 1,
             ..FrameCapacity::default()
         };
         let pool = StoragePool::new(1, || WorkData::new(capacity), WorkData::reset).unwrap();

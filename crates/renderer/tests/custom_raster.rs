@@ -265,6 +265,7 @@ mod native {
                     work_slots: EXECUTIONS,
                     result_slots: 4,
                     provenance_segments_per_resource: 16,
+                    index_prefixes_per_resource: 16,
                     ..Default::default()
                 },
                 &resources(),
@@ -423,6 +424,7 @@ mod native {
                 executions: EXECUTIONS,
                 buffers: 5,
                 provenance_segments_per_resource: 16,
+                index_prefixes_per_resource: 16,
                 ..Default::default()
             },
         })

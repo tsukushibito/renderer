@@ -134,6 +134,7 @@ impl Backend {
                             resource_capacity: 64,
                             operations: 16,
                             provenance_segments_per_resource: 16,
+                            index_prefixes_per_resource: 16,
                             initialized_ranges_per_resource: 8,
                             range_snapshots: 64,
                             buffers: 2,
@@ -215,6 +216,7 @@ impl Backend {
                         range_snapshots: 64,
                         initialized_ranges_per_resource: 8,
                         provenance_segments_per_resource: 16,
+                        index_prefixes_per_resource: 16,
                     },
                     &[
                         renderer::ResourceClass::Buffer {

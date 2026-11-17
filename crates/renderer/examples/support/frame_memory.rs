@@ -1229,6 +1229,7 @@ mod buffer {
             range_snapshots: 32,
             initialized_ranges_per_resource: 8,
             provenance_segments_per_resource: 8,
+            index_prefixes_per_resource: 8,
         };
         runtime
             .prepare_working_set(
@@ -1302,7 +1303,7 @@ mod buffer {
                 "metadata_slots": frame_capacity.metadata_slots,
                 "range_snapshots": frame_capacity.range_snapshots,
                 "initialized_ranges_per_resource": frame_capacity.initialized_ranges_per_resource,
-                "provenance_segments_per_resource": frame_capacity.provenance_segments_per_resource,
+                "provenance_segments_per_resource": frame_capacity.provenance_segments_per_resource, "index_prefixes_per_resource": frame_capacity.index_prefixes_per_resource,
                 "additional_buffer_classes": [{ "bytes": 32, "instances": IN_FLIGHT }, { "bytes": 16, "instances": IN_FLIGHT }],
             }),
         );
@@ -1372,6 +1373,7 @@ mod buffer {
         config.capacity.resources = 2;
         config.capacity.operations = 4;
         config.capacity.provenance_segments_per_resource = 0;
+        config.capacity.index_prefixes_per_resource = 0;
         config.capacity.buffers = 2;
         config.capacity.buffer_bytes = 32;
         config.capacity.upload_bytes = 32;
@@ -1416,7 +1418,7 @@ mod buffer {
                 "results": config.capacity.results,
                 "resources": config.capacity.resources,
                 "operations": config.capacity.operations,
-                "provenance_segments_per_resource": config.capacity.provenance_segments_per_resource,
+                "provenance_segments_per_resource": config.capacity.provenance_segments_per_resource, "index_prefixes_per_resource": config.capacity.index_prefixes_per_resource,
                 "buffers": config.capacity.buffers,
                 "buffer_bytes": config.capacity.buffer_bytes,
                 "upload_bytes": config.capacity.upload_bytes,
