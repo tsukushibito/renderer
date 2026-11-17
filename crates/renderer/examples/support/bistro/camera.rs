@@ -15,6 +15,7 @@ pub(super) struct Conditions {
     pub route: Vec<(usize, Camera)>,
     pub light_direction: [f32; 3],
     pub light_color: [f32; 3],
+    pub ambient_occlusion: bool,
     pub background: [f32; 3],
     pub near: f32,
     pub far: f32,
@@ -90,6 +91,9 @@ impl Conditions {
             route,
             light_direction: vector(&value["lighting"]["sun"]["direction_to_light"])?,
             light_color: vector(&value["lighting"]["sun"]["irradiance_rgb"])?,
+            ambient_occlusion: value["lighting"]["ambient_occlusion"]["enabled"]
+                .as_bool()
+                .ok_or("missing ambient occlusion lighting policy")?,
             background: vector(&value["output"]["background_linear_rgb"])?,
             near,
             far,

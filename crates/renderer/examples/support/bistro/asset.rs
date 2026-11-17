@@ -578,6 +578,19 @@ fn material(
 }
 
 impl Scene {
+    /// Apply the explicit Bistro lighting profile before publishing materials.
+    /// Source ORM pixels and texture references stay intact. Generic fixtures
+    /// continue to exercise authored AO, including genuine zero occlusion.
+    pub fn disable_environment_occlusion(&mut self) {
+        for material in &mut self.materials {
+            material.uniform[40..44].copy_from_slice(&0.0f32.to_le_bytes());
+        }
+        self.source["applied_material_policy"] = serde_json::json!({
+            "ambient_occlusion_enabled": false,
+            "reference": "Falcor 4.0.1 default; c53908dd7930c031eb28b7ee49025eb27a833d64",
+            "source_pixels_and_references_preserved": true
+        });
+    }
     pub fn load(manifest: &Path, force_opaque: bool) -> Result<Self> {
         let manifest = manifest.canonicalize()?;
         let root = manifest
@@ -769,6 +782,29 @@ pub(super) mod material_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_bistro_ao_policy_only_changes_the_environment_contribution() {
+        let mut scene = Scene::fixture(false);
+        let original: Vec<_> = scene
+            .materials
+            .iter()
+            .map(|m| (m.uniform, m.textures))
+            .collect();
+        let image_count = scene.images.len();
+        scene.disable_environment_occlusion();
+        for (material, (uniform, textures)) in scene.materials.iter().zip(original) {
+            assert_eq!(material.uniform[..40], uniform[..40]);
+            assert_eq!(material.uniform[44..], uniform[44..]);
+            assert_eq!(material.uniform[40..44], 0f32.to_le_bytes());
+            assert_eq!(material.textures, textures);
+        }
+        assert_eq!(scene.images.len(), image_count);
+        assert_eq!(
+            scene.source["applied_material_policy"]["ambient_occlusion_enabled"],
+            false
+        );
+    }
 
     struct CookedFixture {
         root: PathBuf,

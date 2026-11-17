@@ -20,7 +20,8 @@ def fixture():
                       "keyframes": [{"seconds": 0, "view": "street"},
                                     {"seconds": 10, "view": "alley"},
                                     {"seconds": 30, "view": "street"}]},
-            "lighting": {"sun": {"direction_to_light": [0, 1, 0],
+            "lighting": {"ambient_occlusion": {"enabled": False},
+                         "sun": {"direction_to_light": [0, 1, 0],
                                  "irradiance_rgb": [3, 3, 3], "angular_diameter_degrees": 0.53},
                          "ibl": {"path": "environment.hdr", "sha256": "a" * 64,
                                  "strength": 1, "yaw_degrees": 0,
@@ -90,6 +91,8 @@ class ConditionsTests(unittest.TestCase):
 
     def test_nonfinite_projection_and_lighting_are_rejected(self):
         mutations = [lambda c: c["views"][0]["position"].__setitem__(1, float("nan")),
+                     lambda c: c["lighting"].pop("ambient_occlusion"),
+                     lambda c: c["lighting"]["ambient_occlusion"].__setitem__("enabled", 0),
                      lambda c: c["views"][0].__setitem__("vertical_fov_degrees", 180),
                      lambda c: c["camera"].__setitem__("near_m", 500),
                      lambda c: c["lighting"]["sun"].__setitem__("direction_to_light", [0, 2, 0]),

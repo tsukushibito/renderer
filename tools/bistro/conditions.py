@@ -129,6 +129,9 @@ def validate_conditions(config):
         raise ValueError("Route must close with the same pose and FOV")
     for first_key, second_key in zip(keys, keys[1:]):
         _check_segment(views[first_key["view"]], views[second_key["view"]])
+    ao = config["lighting"].get("ambient_occlusion")
+    if not isinstance(ao, dict) or type(ao.get("enabled")) is not bool:
+        raise ValueError("Ambient occlusion lighting policy must be an explicit boolean")
     sun = config["lighting"]["sun"]
     direction = _vector(sun["direction_to_light"], "sun.direction_to_light")
     if not math.isclose(math.hypot(*direction), 1, rel_tol=0, abs_tol=1e-6):

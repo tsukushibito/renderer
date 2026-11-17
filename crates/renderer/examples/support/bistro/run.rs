@@ -448,6 +448,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     } else {
         Scene::fixture(options.force_opaque)
     };
+    if !options.fixture && !conditions.ambient_occlusion {
+        scene.disable_environment_occlusion();
+    }
     let mut environment =
         if options.fixture {
             super::ibl::Environment::fixture()

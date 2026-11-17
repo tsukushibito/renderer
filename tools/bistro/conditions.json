@@ -189,6 +189,11 @@
     "collision": "No collision or walking-physics requirement; composition/clearance audit recorded separately."
   },
   "lighting": {
+    "ambient_occlusion": {
+      "enabled": false,
+      "policy": "Bistro comparison profile follows Falcor 4.0.1's default-disabled occlusion map. Preserve all source ORM texels and material references; disable only their lighting contribution at the consumer creation boundary.",
+      "reference_commit": "c53908dd7930c031eb28b7ee49025eb27a833d64"
+    },
     "sun": {
       "direction_to_light": [
         0.6123724356957945,
