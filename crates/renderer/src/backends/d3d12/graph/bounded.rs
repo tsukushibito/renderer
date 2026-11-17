@@ -756,34 +756,8 @@ pub(super) fn prepare(
                 0,
             )
         });
-        let slot = work.slot_mut();
-        for index in 0..slot.buffers_used {
-            transition(
-                &list,
-                slot.buffers[index].raw(),
-                &mut slot.states[index],
-                D3D12_RESOURCE_STATE_COMMON,
-            );
-        }
-        transition(
-            &list,
-            slot.scratch.raw(),
-            &mut slot.scratch_state,
-            D3D12_RESOURCE_STATE_COMMON,
-        );
-        if let Some(storage) = &mut slot.raster {
-            for image in &mut storage.images {
-                if image.used {
-                    transition(
-                        &list,
-                        image.native.raw(),
-                        &mut image.state,
-                        D3D12_RESOURCE_STATE_COMMON,
-                    );
-                }
-            }
-        }
-        slot.provenance_scratch.clear();
+        super::transition_to_common(work.slot_mut(), &list)?;
+        work.slot_mut().provenance_scratch.clear();
     }
     {
         #[cfg(feature = "tracy")]

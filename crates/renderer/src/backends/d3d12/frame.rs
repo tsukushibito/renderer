@@ -157,6 +157,7 @@ pub(super) struct ExecutionSlot {
     pub(super) upload: DeviceBuffer,
     pub(super) scratch: DeviceBuffer,
     pub(super) states: Vec<D3D12_RESOURCE_STATES>,
+    pub(super) common_barriers: super::graph::TransitionBatch,
     pub(super) resource_map: Vec<usize>,
     pub(super) buffers_used: usize,
     pub(super) upload_used: u64,
@@ -259,6 +260,10 @@ impl ExecutionSlot {
             upload,
             scratch: DeviceBuffer::new(owner, capacity.scratch_bytes, D3D12_HEAP_TYPE_DEFAULT)?,
             states,
+            common_barriers: super::graph::TransitionBatch::new(super::graph::common_capacity(
+                capacity.buffers,
+                0,
+            )?)?,
             resource_map,
             buffers_used: 0,
             upload_used: 0,
@@ -266,6 +271,7 @@ impl ExecutionSlot {
         })
     }
     fn reset(&mut self, owner: &DeviceOwner) -> Result<(), D3D12RuntimeError> {
+        self.common_barriers.clear();
         // SAFETY: Only Available slots reach reset. Prior GPU use has completed,
         // and cancellation closed the sole recording before returning the slot.
         #[cfg(feature = "memory-profiling")]
@@ -696,6 +702,11 @@ impl FramePool {
                 compute_descriptors,
                 slot_index == 0,
             )?);
+            slot.common_barriers
+                .prepare_capacity(super::graph::common_capacity(
+                    capacity.buffers,
+                    slot.raster.as_ref().unwrap().images.len(),
+                )?)?;
             pool_mut
                 .registry
                 .get_mut()
@@ -1145,6 +1156,7 @@ impl Drop for FrameWork {
         if self.slot.is_none() {
             return;
         }
+        self.slot_mut().common_barriers.clear();
         if self.phase == Phase::Recording {
             // SAFETY: Cancel owns the sole open list and has never submitted it.
             self.phase = if unsafe { self.slot().list.Close() }.is_ok() {
