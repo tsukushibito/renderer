@@ -210,6 +210,7 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
         resource_capacity: 64,
         operations: 16,
         provenance_segments_per_resource: 8,
+        index_prefixes_per_resource: 8,
         initialized_ranges_per_resource: 8,
         range_snapshots: 64,
         buffers: 1,

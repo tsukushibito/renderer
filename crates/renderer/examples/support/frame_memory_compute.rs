@@ -357,6 +357,7 @@ fn vulkan_workload(baseline: bool, workload: Workload) {
                 range_snapshots: 64,
                 initialized_ranges_per_resource: 16,
                 provenance_segments_per_resource: workload.provenance_capacity(),
+                index_prefixes_per_resource: workload.provenance_capacity(),
             },
             &workload
                 .buffer_classes()
@@ -424,7 +425,7 @@ fn vulkan_workload(baseline: bool, workload: Workload) {
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "device_luid": info.device_luid, "driver_version_raw": info.driver_version_raw, "driver_name": info.driver_name, "driver_info": info.driver_info, "api_version": info.api_version }),
         serde_json::json!({ "requested": format!("{:?}", validation.requested), "core_validation": validation.core_validation, "synchronization_validation": validation.synchronization_validation, "warnings": validation.warnings, "errors": validation.errors, "callback_failures": validation.callback_failures, "dropped_problems": validation.dropped_problems }),
-        serde_json::json!({ "execution_slots": IN_FLIGHT, "work_slots": IN_FLIGHT, "result_slots": IN_FLIGHT * 2, "resource_capacity": 64, "staging_bytes": 16384, "staging_ranges": 64, "max_shader_bindings": 32, "metadata_slots": 16, "range_snapshots": 64, "initialized_ranges_per_resource": 16, "provenance_segments_per_resource": workload.provenance_capacity(), "buffer_classes": workload.buffer_classes().iter().map(|&(size,count)| serde_json::json!({ "buffer_bytes": size, "count": count * IN_FLIGHT })).collect::<Vec<_>>(), "image_classes": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}", desc.format), "extent": [desc.width,desc.height], "count": count * IN_FLIGHT })).collect::<Vec<_>>() }),
+        serde_json::json!({ "execution_slots": IN_FLIGHT, "work_slots": IN_FLIGHT, "result_slots": IN_FLIGHT * 2, "resource_capacity": 64, "staging_bytes": 16384, "staging_ranges": 64, "max_shader_bindings": 32, "metadata_slots": 16, "range_snapshots": 64, "initialized_ranges_per_resource": 16, "provenance_segments_per_resource": workload.provenance_capacity(), "index_prefixes_per_resource": workload.provenance_capacity(), "buffer_classes": workload.buffer_classes().iter().map(|&(size,count)| serde_json::json!({ "buffer_bytes": size, "count": count * IN_FLIGHT })).collect::<Vec<_>>(), "image_classes": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}", desc.format), "extent": [desc.width,desc.height], "count": count * IN_FLIGHT })).collect::<Vec<_>>() }),
     );
 }
 
@@ -479,6 +480,7 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
     config.capacity.resources = workload.capacity().resources;
     config.capacity.operations = 32;
     config.capacity.provenance_segments_per_resource = workload.provenance_capacity();
+    config.capacity.index_prefixes_per_resource = workload.provenance_capacity();
     let buffers = workload
         .buffer_classes()
         .iter()
@@ -552,6 +554,6 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
         measured,
         serde_json::json!({ "name": info.name, "vendor_id": info.vendor_id, "device_id": info.device_id, "luid": info.luid, "driver_version": info.driver_version, "shader_model": info.shader_model }),
         serde_json::json!({ "debug_layer_enabled": validation.debug_layer_enabled, "gpu_based_validation_enabled": validation.gpu_based_validation_enabled, "teardown_checked": validation.teardown_checked, "warnings": validation.warnings, "errors": validation.errors, "corruption": validation.corruption, "callback_failures": validation.callback_failures, "dropped_messages": validation.dropped_messages }),
-        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "buffers": buffers, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count * IN_FLIGHT })).collect::<Vec<_>>() }),
+        serde_json::json!({ "executions": IN_FLIGHT, "results": IN_FLIGHT * 2, "resources": workload.capacity().resources, "operations": 32, "provenance_segments_per_resource": workload.provenance_capacity(), "index_prefixes_per_resource": workload.provenance_capacity(), "buffers": buffers, "buffer_bytes": 512, "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512, "image_classes": workload.image_classes().into_iter().map(|(desc,count)| serde_json::json!({ "format": format!("{:?}",desc.format), "extent": [desc.width,desc.height], "count": count * IN_FLIGHT })).collect::<Vec<_>>() }),
     );
 }

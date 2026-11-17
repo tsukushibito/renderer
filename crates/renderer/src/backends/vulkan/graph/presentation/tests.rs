@@ -107,6 +107,7 @@ fn frame_capacity() -> FrameCapacity {
         range_snapshots: 256,
         initialized_ranges_per_resource: 16,
         provenance_segments_per_resource: 32,
+        index_prefixes_per_resource: 32,
     }
 }
 

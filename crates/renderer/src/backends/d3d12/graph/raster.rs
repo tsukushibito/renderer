@@ -518,6 +518,15 @@ pub(super) fn record(
                 .map_err(|error| {
                     use crate::graph::provenance::IndexError;
                     match error {
+                        IndexError::Capacity(error) => D3D12RuntimeError::capacity_with(
+                            "generic index prefix summary capacity exhausted",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::GraphMetadata,
+                                CapacityRecovery::Reconfigure,
+                                Some(error.capacity as u64),
+                                Some(error.required as u64),
+                            ),
+                        ),
                         IndexError::UnknownContents => D3D12RuntimeError::unsupported(
                             "Raster indices require known initialized CPU contents",
                         ),

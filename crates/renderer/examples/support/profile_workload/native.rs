@@ -196,7 +196,7 @@ fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             "segments": graph_capacity.segments, "readers": graph_capacity.readers },
         "prepared_capacity": { "execution_slots": 1, "result_slots": 1, "graph_slots": 1,
             "resource_capacity": options.resources, "buffer_instances": options.resources,
-            "initialized_ranges_per_resource": 1, "range_snapshots": 1, "provenance_segments_per_resource": 0,
+            "initialized_ranges_per_resource": 1, "range_snapshots": 1, "provenance_segments_per_resource": 0, "index_prefixes_per_resource": 0,
             "vulkan_work_slots": 1, "vulkan_metadata_slots": 1, "vulkan_max_shader_bindings": 1,
             "vulkan_staging_bytes_per_arena": 16384, "vulkan_staging_ranges_per_arena": 1,
             "d3d12_operations": graph_capacity.passes, "d3d12_upload_bytes": BYTES,

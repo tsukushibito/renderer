@@ -459,6 +459,7 @@ pub fn lifecycle(baseline: bool) {
                 range_snapshots: 1024,
                 initialized_ranges_per_resource: 32,
                 provenance_segments_per_resource: 64,
+                index_prefixes_per_resource: 64,
             },
             &[
                 ResourceClass::Image {

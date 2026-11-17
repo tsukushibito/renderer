@@ -93,7 +93,10 @@ impl<P> Entry<P> {
             registered: false,
             revision: 0,
             initialized: Vec::with_capacity(capacity.initialized_ranges_per_resource),
-            provenance: BufferProvenance::with_capacity(capacity.provenance_segments_per_resource),
+            provenance: BufferProvenance::with_capacity(
+                capacity.provenance_segments_per_resource,
+                capacity.index_prefixes_per_resource,
+            ),
         }
     }
     fn fits(&self, desc: ResourceDesc) -> bool {

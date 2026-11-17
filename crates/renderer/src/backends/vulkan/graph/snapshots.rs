@@ -14,6 +14,7 @@ impl Snapshot {
     pub(super) fn with_capacity(
         initialized_ranges: usize,
         provenance_segments: usize,
+        index_prefixes: usize,
     ) -> Result<Self, RuntimeError> {
         let mut initialized = Vec::new();
         initialized
@@ -21,7 +22,7 @@ impl Snapshot {
             .map_err(|error| RuntimeError::with_source(RuntimeErrorKind::Native, error))?;
         Ok(Self {
             initialized,
-            provenance: BufferProvenance::with_capacity(provenance_segments),
+            provenance: BufferProvenance::with_capacity(provenance_segments, index_prefixes),
             ..Self::default()
         })
     }
@@ -34,7 +35,7 @@ impl Snapshot {
         // operation can fail or require a larger backing allocation.
         self.provenance.copy_from(&source.provenance).map_err(|_| {
             RuntimeError::capacity_with(
-                "snapshot provenance segment capacity exhausted",
+                "snapshot provenance metadata capacity exhausted",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::GraphMetadata,
                     CapacityRecovery::Reconfigure,
@@ -141,12 +142,12 @@ mod tests {
     #[test]
     fn copying_rejects_either_capacity_before_changing_the_destination() {
         let bytes: Arc<[u8]> = Arc::from([0u8; 12]);
-        let mut source = Snapshot::with_capacity(2, 2).unwrap();
+        let mut source = Snapshot::with_capacity(2, 2, 4).unwrap();
         source.set_initialized(&[0..4, 8..12]).unwrap();
         source.provenance.write_slice(0..4, &bytes, 0..4).unwrap();
         source.provenance.write_slice(8..12, &bytes, 8..12).unwrap();
         for (range_capacity, segment_capacity) in [(1, 2), (2, 1)] {
-            let mut target = Snapshot::with_capacity(range_capacity, segment_capacity).unwrap();
+            let mut target = Snapshot::with_capacity(range_capacity, segment_capacity, 4).unwrap();
             set_native_state(&mut target);
             target
                 .set_initialized(std::slice::from_ref(&(0..12)))
@@ -167,7 +168,7 @@ mod tests {
 
     #[test]
     fn initialized_capacity_failure_keeps_existing_contents_and_native_state() {
-        let mut state = Snapshot::with_capacity(1, 0).unwrap();
+        let mut state = Snapshot::with_capacity(1, 0, 4).unwrap();
         set_native_state(&mut state);
         state
             .set_initialized(std::slice::from_ref(&(0..12)))
@@ -186,8 +187,8 @@ mod tests {
     fn copying_preserves_independent_contents_and_reuses_the_destination_backing() {
         let bytes: Arc<[u8]> = Arc::from([0u8; 12]);
         let patch: Arc<[u8]> = Arc::from([2u8]);
-        let mut source = Snapshot::with_capacity(2, 3).unwrap();
-        let mut target = Snapshot::with_capacity(2, 3).unwrap();
+        let mut source = Snapshot::with_capacity(2, 3, 4).unwrap();
+        let mut target = Snapshot::with_capacity(2, 3, 4).unwrap();
         let initialized_pointer = target.initialized.as_ptr();
         let initialized_capacity = target.initialized.capacity();
         let provenance_capacity = target.provenance.segment_capacity();
@@ -215,7 +216,7 @@ mod tests {
     #[test]
     fn clearing_and_resetting_reuse_both_stores_and_keep_the_required_native_state() {
         let bytes: Arc<[u8]> = Arc::from([0u8; 12]);
-        let mut state = Snapshot::with_capacity(2, 2).unwrap();
+        let mut state = Snapshot::with_capacity(2, 2, 4).unwrap();
         let initialized_pointer = state.initialized.as_ptr();
         let initialized_capacity = state.initialized.capacity();
         let provenance_capacity = state.provenance.segment_capacity();
@@ -249,7 +250,10 @@ mod tests {
     #[test]
     fn impossible_initialized_capacity_is_a_preparation_error() {
         assert_eq!(
-            Snapshot::with_capacity(usize::MAX, 0).err().unwrap().kind(),
+            Snapshot::with_capacity(usize::MAX, 0, 4)
+                .err()
+                .unwrap()
+                .kind(),
             RuntimeErrorKind::Native
         );
     }

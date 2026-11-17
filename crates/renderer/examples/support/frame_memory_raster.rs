@@ -520,7 +520,7 @@ impl Backend for renderer::VulkanRuntime {
             "staging_bytes": 16384, "staging_ranges": 64, "max_shader_bindings": 32,
             "work_slots": IN_FLIGHT, "result_slots": IN_FLIGHT * 2,
             "metadata_slots": 16, "range_snapshots": 64,
-            "initialized_ranges_per_resource": 16, "provenance_segments_per_resource": 16,
+            "initialized_ranges_per_resource": 16, "provenance_segments_per_resource": 16, "index_prefixes_per_resource": 16,
             "resource_classes": [
                 { "kind": "buffer", "bytes": 84, "count": IN_FLIGHT },
                 { "kind": "buffer", "bytes": 12, "count": IN_FLIGHT },
@@ -596,6 +596,7 @@ pub fn vulkan(baseline: bool) {
                 range_snapshots: 64,
                 initialized_ranges_per_resource: 16,
                 provenance_segments_per_resource: 16,
+                index_prefixes_per_resource: 16,
             },
             &classes,
         )
@@ -661,7 +662,7 @@ impl Backend for renderer::D3D12Runtime {
     fn native_capacity() -> serde_json::Value {
         serde_json::json!({
             "executions": IN_FLIGHT, "results": IN_FLIGHT * 2,
-            "resources": 16, "operations_and_draws": 32, "provenance_segments_per_resource": 16,
+            "resources": 16, "operations_and_draws": 32, "provenance_segments_per_resource": 16, "index_prefixes_per_resource": 16,
             "buffers": 4, "buffer_bytes": 512,
             "upload_bytes": 16384, "readback_bytes": 16384, "scratch_bytes": 512,
             "image_classes": [
@@ -687,6 +688,7 @@ pub fn d3d12(baseline: bool) {
     config.capacity.resources = 16;
     config.capacity.operations = 32;
     config.capacity.provenance_segments_per_resource = 16;
+    config.capacity.index_prefixes_per_resource = 16;
     config.capacity.buffers = 4;
     config.capacity.buffer_bytes = 512;
     config.capacity.upload_bytes = 16 * 1024;
