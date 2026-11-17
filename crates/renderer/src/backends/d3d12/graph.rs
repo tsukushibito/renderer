@@ -16,6 +16,9 @@ use crate::graph::{CompiledGraph, PassHandle};
 
 mod bounded;
 mod raster;
+mod transition_batch;
+
+pub(super) use transition_batch::{TransitionBatch, common_capacity};
 
 #[cfg(test)]
 use super::device::DeviceOwner;
@@ -192,6 +195,57 @@ impl Work {
             std::thread::sleep(remaining.min(Duration::from_millis(1)));
         }
     }
+}
+
+pub(super) fn transition_to_common(
+    slot: &mut super::frame::ExecutionSlot,
+    list: &ID3D12GraphicsCommandList,
+) -> Result<(), D3D12RuntimeError> {
+    let required = common_capacity(
+        slot.buffers_used,
+        slot.raster
+            .as_ref()
+            .map_or(0, |storage| storage.images.len()),
+    )?;
+    slot.common_barriers.record(list, required, |batch| {
+        for index in 0..slot.buffers_used {
+            batch.push_transition(
+                slot.buffers[index].raw(),
+                slot.states[index],
+                D3D12_RESOURCE_STATE_COMMON,
+            )?;
+        }
+        batch.push_transition(
+            slot.scratch.raw(),
+            slot.scratch_state,
+            D3D12_RESOURCE_STATE_COMMON,
+        )?;
+        if let Some(storage) = &slot.raster {
+            for image in &storage.images {
+                if image.used {
+                    batch.push_transition(
+                        image.native.raw(),
+                        image.state,
+                        D3D12_RESOURCE_STATE_COMMON,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    })?;
+    // Publish planned states only after the whole batch was recorded. A
+    // capacity/fill failure cancels unsubmitted work without changing these
+    // states; canonical contents still commit only after successful Signal.
+    slot.states[..slot.buffers_used].fill(D3D12_RESOURCE_STATE_COMMON);
+    slot.scratch_state = D3D12_RESOURCE_STATE_COMMON;
+    if let Some(storage) = &mut slot.raster {
+        for image in &mut storage.images {
+            if image.used {
+                image.state = D3D12_RESOURCE_STATE_COMMON;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn transition(
@@ -913,6 +967,124 @@ mod tests {
         // Native-independent preflight admits imports. The mutable registry
         // checks their owner/generation/revision at preparation and submission.
         assert!(requirements(&graph.compile().unwrap()).is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
+    fn d3d12_final_common_batch_records_once_and_recovers_after_capacity_rejection() {
+        use super::super::{
+            D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12RuntimeConfig,
+            D3D12ValidationMode,
+        };
+        let mut runtime = D3D12Runtime::new_with_working_set(
+            D3D12RuntimeConfig {
+                validation: if cfg!(feature = "d3d12-diagnostics") {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                capacity: D3D12FrameCapacity {
+                    executions: 1,
+                    results: 1,
+                    resources: 8,
+                    resource_capacity: 8,
+                    operations: 16,
+                    buffers: 2,
+                    buffer_bytes: 32,
+                    upload_bytes: 2048,
+                    readback_bytes: 2048,
+                    scratch_bytes: 32,
+                    ..Default::default()
+                },
+            },
+            &[D3D12BufferClass { size: 32, count: 2 }],
+            &[D3D12ImageClass {
+                desc: ImageDesc::rgba8(1, 1),
+                count: 1,
+            }],
+            &[],
+            &[],
+        )
+        .unwrap();
+        let monitor = runtime.validation_monitor();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let a = graph.buffer("source", BufferDesc { size: 4 }).unwrap();
+        let b = graph.buffer("destination", BufferDesc { size: 4 }).unwrap();
+        graph.upload_buffer("upload", a, 0, &[1, 2, 3, 4]).unwrap();
+        graph.copy_buffer("copy", a, 0, b, 0, 4).unwrap();
+        let bytes = graph.readback_buffer("bytes", b, 0, 4).unwrap();
+        let image = graph.image("image", ImageDesc::rgba8(1, 1)).unwrap();
+        graph
+            .upload_image("pixels", image, &[5, 6, 7, 255])
+            .unwrap();
+        let pixels = graph.readback_image("pixels", image).unwrap();
+        let graph = graph.compile().unwrap();
+        let mut canceled = runtime.prepare(&graph).unwrap();
+        let PreparedWork::Pooled(work) = &mut canceled.kind else {
+            unreachable!()
+        };
+        let slot = work.slot_mut();
+        assert_eq!(
+            (
+                slot.common_barriers.recorded_calls,
+                slot.common_barriers.recorded_transitions
+            ),
+            (1, 3),
+            "two active buffers and one image share one actual native call; COMMON scratch is omitted"
+        );
+        assert!(
+            slot.states[..slot.buffers_used]
+                .iter()
+                .all(|&state| state == D3D12_RESOURCE_STATE_COMMON)
+        );
+        assert_eq!(slot.scratch_state, D3D12_RESOURCE_STATE_COMMON);
+        assert!(
+            slot.raster
+                .as_ref()
+                .unwrap()
+                .images
+                .iter()
+                .filter(|image| image.used)
+                .all(|image| image.state == D3D12_RESOURCE_STATE_COMMON)
+        );
+        // Private unsubmitted planned states simulate a late capacity rejection;
+        // the closed list is never submitted and canonical storage stays COMMON.
+        slot.states[0] = D3D12_RESOURCE_STATE_COPY_DEST;
+        let previous = slot.states.clone();
+        slot.common_barriers.prepare_capacity(0).unwrap();
+        let list: ID3D12GraphicsCommandList = slot.list.clone();
+        assert!(transition_to_common(slot, &list).is_err());
+        assert_eq!(slot.states, previous);
+        assert_eq!(slot.common_barriers.recorded_calls, 0);
+        slot.common_barriers
+            .prepare_capacity(
+                common_capacity(
+                    slot.buffers.len(),
+                    slot.raster.as_ref().unwrap().images.len(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        drop(canceled);
+        let mut submission = runtime.submit(&graph).unwrap();
+        let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
+        let mut data = [0; 4];
+        result.readback_into(bytes, &mut data).unwrap();
+        assert_eq!(data, [1, 2, 3, 4]);
+        result.readback_into(pixels, &mut data).unwrap();
+        assert_eq!(data, [5, 6, 7, 255]);
+        drop((result, submission, graph, pool, list));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:?}");
+        assert!(report.teardown_checked, "{report:?}");
+        if cfg!(feature = "d3d12-diagnostics") {
+            assert!(
+                report.debug_layer_enabled && report.gpu_based_validation_enabled,
+                "{report:?}"
+            );
+        }
     }
 
     #[test]

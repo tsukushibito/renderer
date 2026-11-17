@@ -1639,6 +1639,20 @@ buffer operand数と最大logical size、upload・readback・scratchのbyte上�
 枠不足・上限超過は待たずに型付きエラーを返す。容量変更は旧consumerの寿命を終えた明示準備境界で行う。
 DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit promotion／decayによるbarrier削減は
 現段階では採用しない。状態と命令の対応を確認しやすい基準を優先する選択であり、余分なbarrier費用は残る。[^d3dbarriers]
+記録末尾のCOMMON復帰は、active buffer、copy scratch、used imageの順を保ったtransition配列を
+一回の`ResourceBarrier`へ渡す。COMMON済みの資源と空配列のnative呼出しは省くが、必要なtransition自体は減らさない。
+Microsoftは配列呼出しを要素順の個別呼出しと同じ意味とし、可能な場合のbatch化を推奨している。[^d3dbarriercall]
+各executionの配列容量はbuffer operand上限＋scratch一個＋準備済みimage枠数からcheckedに求め、
+nativeのUINT件数内に制限して初期化／working-set変更時だけ予約する。通常記録で増設や待機へfallbackしない。
+全体の容量確認をtemporary COM cloneや命令記録より先に行い、batchの記録成功後だけslotのplanned stateをCOMMONへ更新する。
+配列のoccupied要素が保持するCOM参照はflush、fill失敗、unwind、cancel、Dropで一度ずつ解放し、
+実GPUの資源寿命は既存のslot leaseで保持する。`ResourceBarrier`はvoidであり、後続の`Close`失敗は従来どおり未投入の記録として扱う。
+canonical registryの内容は成功したExecute／Signal後だけcommitするため、記録の容量不足やcancelから実資源の状態変更を推定しない。
+これはCOMMON方針を維持したnative呼出し集約であり、promotion／decay、省略transition、性能改善の実測を意味しない。
+CPU fixtureは順序、COMMON済み／空batch、容量不足とfill失敗／unwind、予約領域の再利用を、
+shipping／development-validationの通常・最適化構成で確認する。
+実COM参照の回収、native呼出し件数、buffer／画像の内容とcancel後再利用は明示実行の実GPU fixtureで扱う。
+実行済み／未実行のnative確認と同条件性能比較は[現在の検証状況](../verification/current.md)へ記録する。
 同じbufferの非重複copyは、別のscratch bufferを介した二段copyで共通Graphの意味を保つ。
 一つのbufferへ`COPY_SOURCE`と`COPY_DEST`を同時に要求しない。
 Enhanced Barriers、外部suballocatorは未対応である。import／exportは後述の共有registryを使う。
@@ -1959,5 +1973,7 @@ GPU検証ができない場合は、実行済みの確認と未検証項目を�
 [^d3dsignal]: Microsoft「ID3D12CommandQueue::Signal」。queue上のGPU側signalをHRESULTで報告する。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12commandqueue-signal`
 
 [^d3dbarriers]: Microsoft「Using Resource Barriers to Synchronize Resource States in Direct3D 12」。read／write stateの制限、bufferのpromotion／decayと明示遷移、barrier削減の推奨。`https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12`
+
+[^d3dbarriercall]: Microsoft「ID3D12GraphicsCommandList::ResourceBarrier」。配列の件数はUINT、指定順の個別呼出しと同じ意味を持つ。戻り値はなく、runtime検証の失敗は後続のCloseへ報告される。`https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-resourcebarrier`
 
 [^metal]: Apple「Metal」。AppleプラットフォームとAPI／shader検証・診断ツールの概要。`https://developer.apple.com/metal/`
