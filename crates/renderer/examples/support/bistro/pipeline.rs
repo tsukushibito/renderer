@@ -61,6 +61,11 @@ impl Budget {
         add(program::CAMERA_BYTES as u64);
         add(24);
         add(12);
+        if options.resource_checks {
+            // Explicit change-boundary overlap: the old material can still be
+            // referenced by a submission while its new version is uploaded.
+            add(program::MATERIAL_BYTES as u64);
+        }
         let max_buffer_bytes = buffers
             .iter()
             .map(|(size, _)| *size)
@@ -93,6 +98,22 @@ impl Budget {
         for image in &scene.images {
             add_image(image_desc(image), 1);
         }
+        let mut check_images = 0;
+        if options.resource_checks {
+            let (_, image) = super::lifecycle::selection(scene)?;
+            let desc = image_desc(&scene.images[image]);
+            add_image(desc, 1);
+            check_images += 1;
+            // Whole-image transfer APIs intentionally expose one mip. Probe
+            // each selected sampled mip into a separately prepared target.
+            for mip in 0..desc.mip_levels {
+                add_image(
+                    ImageDesc::rgba8((desc.width >> mip).max(1), (desc.height >> mip).max(1)),
+                    1,
+                );
+                check_images += 1;
+            }
+        }
         add_image(
             ImageDesc::rgba16_float(options.width, options.height),
             options.inflight,
@@ -106,7 +127,11 @@ impl Budget {
             options.inflight,
         );
         let resources = buffer_count + scene.images.len() + 3;
-        let physical_resources = buffer_count + scene.images.len() + options.inflight * 3;
+        let physical_resources = buffer_count
+            + scene.images.len()
+            + options.inflight * 3
+            + check_images
+            + usize::from(options.resource_checks);
         let accesses = scene.primitives.len() * 10 + 128;
         let graph = GraphCapacity {
             resources,
@@ -144,10 +169,23 @@ impl Budget {
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
-        let readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
+        let frame_readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
             + (u64::from(options.width) * 4).next_multiple_of(256) * 2)
             * u64::from(options.height)
             + 4096;
+        let readback_bytes = if options.resource_checks {
+            let (_, image) = super::lifecycle::selection(scene)?;
+            let image = &scene.images[image];
+            frame_readback_bytes
+                .checked_mul(options.inflight as u64)
+                .ok_or("overlapping readback budget overflow")?
+                .max(
+                    (u64::from(image.width) * 4).next_multiple_of(256) * u64::from(image.height)
+                        + 4096,
+                )
+        } else {
+            frame_readback_bytes
+        };
         Ok(Self {
             graph,
             buffers,
@@ -234,7 +272,7 @@ fn upload_geometry<B: Backend>(
     Ok(imports)
 }
 
-fn upload_buffer<B: Backend>(
+pub(super) fn upload_buffer<B: Backend>(
     backend: &mut B,
     owners: &mut Vec<GraphPool>,
     bytes: &[u8],

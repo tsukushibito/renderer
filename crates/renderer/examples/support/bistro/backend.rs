@@ -16,6 +16,11 @@ pub(super) trait Backend: Sized {
     fn export_buffer(pending: &Self::Pending, buffer: BufferHandle) -> Result<ImportBuffer, Error>;
     fn export_image(pending: &Self::Pending, image: ImageHandle) -> Result<ImportImage, Error>;
     fn delete(&mut self, key: ResourceKey) -> Result<(), Error>;
+    fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, Error>;
+    fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error>;
+    fn capacity_error(error: &Error) -> Option<renderer::capacity::RuntimeCapacityError>;
+    fn stale_error(error: &Error) -> bool;
+    fn memory_snapshot(&self) -> Result<serde_json::Value, Error>;
     fn metrics(completed: &Self::Completed) -> Option<renderer::SubmissionMetrics>;
     fn readback(
         completed: &mut Self::Completed,
@@ -107,6 +112,25 @@ impl Backend for Vulkan {
     }
     fn delete(&mut self, key: ResourceKey) -> Result<(), Error> {
         Ok(self.runtime.delete(key)?)
+    }
+    fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, Error> {
+        Ok(self.runtime.refresh_image(key)?)
+    }
+    fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error> {
+        Ok(self.runtime.refresh_buffer(key)?)
+    }
+    fn capacity_error(error: &Error) -> Option<renderer::capacity::RuntimeCapacityError> {
+        error
+            .downcast_ref::<renderer::RuntimeError>()
+            .and_then(|error| error.capacity())
+    }
+    fn stale_error(error: &Error) -> bool {
+        error
+            .downcast_ref::<renderer::RuntimeError>()
+            .is_some_and(|error| error.kind() == renderer::RuntimeErrorKind::StaleResource)
+    }
+    fn memory_snapshot(&self) -> Result<serde_json::Value, Error> {
+        super::memory::vulkan(&self.runtime)
     }
     fn metrics(completed: &Self::Completed) -> Option<renderer::SubmissionMetrics> {
         completed.metrics().copied()
@@ -213,6 +237,25 @@ impl Backend for D3d12 {
     }
     fn delete(&mut self, key: ResourceKey) -> Result<(), Error> {
         Ok(self.runtime.delete(key)?)
+    }
+    fn refresh_image(&self, key: ResourceKey) -> Result<ImportImage, Error> {
+        Ok(self.runtime.refresh_image(key)?)
+    }
+    fn refresh_buffer(&self, key: ResourceKey) -> Result<ImportBuffer, Error> {
+        Ok(self.runtime.refresh_buffer(key)?)
+    }
+    fn capacity_error(error: &Error) -> Option<renderer::capacity::RuntimeCapacityError> {
+        error
+            .downcast_ref::<renderer::D3D12RuntimeError>()
+            .and_then(|error| error.capacity())
+    }
+    fn stale_error(error: &Error) -> bool {
+        error
+            .downcast_ref::<renderer::D3D12RuntimeError>()
+            .is_some_and(|error| error.kind() == renderer::D3D12RuntimeErrorKind::StaleResource)
+    }
+    fn memory_snapshot(&self) -> Result<serde_json::Value, Error> {
+        super::memory::d3d12(&self.runtime)
     }
     fn metrics(completed: &Self::Completed) -> Option<renderer::SubmissionMetrics> {
         completed.metrics().copied()
