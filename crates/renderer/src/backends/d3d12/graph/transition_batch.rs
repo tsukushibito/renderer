@@ -442,7 +442,11 @@ mod tests {
         runtime.shutdown().unwrap();
         let report = monitor.snapshot();
         assert!(report.is_clean(), "{report:?}");
-        assert!(report.teardown_checked, "{report:?}");
+        assert_eq!(
+            report.teardown_checked,
+            cfg!(feature = "d3d12-diagnostics"),
+            "{report:?}"
+        );
         if cfg!(feature = "d3d12-diagnostics") {
             assert!(
                 report.debug_layer_enabled && report.gpu_based_validation_enabled,
