@@ -93,7 +93,7 @@ Godotのmesh圧縮・生成mip・材質BRDF/depth prepass・表示は、Renderer
 warning/error/VUIDは0。正式版とproject sourceのhashは同じだが、PCK hashは異なるため同一artifact試験とは呼ばない。
 SyncValの明示有効化は行っていない。Renderer側の既存Core/SyncVal受入を代替しない。
 CPU証拠受入6試験、固定条件検査、実行後のhash・全sample再集計が成功し、
-再生成した基本証拠JSONもbyte一致した。HTMLは17 page・2,350 local link/resource/fragmentを確認した。
+再生成した基本証拠JSONもbyte一致した。最新main取込後のHTMLは17 page・2,369 local link/resource/fragmentを確認した。
 既存mdbook-mermaidのmdBook版警告は残るが、生成とリンク確認は成功した。
 他GPU/OS、長時間soak、OOM/device loss、GPU利用率・clock・schedulerによる外れ値原因、
 Godotのallocation event観測、B3/B4相当の描画と最終表示の受入は未実行である。
