@@ -4,7 +4,8 @@
 //! The reference uses f64 and Smith's slope/lambda formulation instead of the
 //! shader's factored visibility expression. It models the glTF channel meanings,
 //! OPAQUE/MASK/BLEND coverage and sRGB transfer explicitly. This is directional
-//! light plus B2's constant ambient, not an IBL/shadow/tone-mapping reference.
+//! light with IBL/shadows/AA explicitly disabled. SDR is independently computed
+//! through B3's fixed exposure, Neutral transform, half storage and sRGB encode.
 
 use super::{Material, Pixels, Primitive, Scene, TextureImage, fallback_images, material};
 use crate::bistro::{backend::Backend, camera::Camera, pipeline};
@@ -424,7 +425,6 @@ fn surface_with_base(case: &Case, position: V3, sampled_base: V3) -> V3 {
         let diffuse_color = base * (1. - case.metallic);
         let diffuse = (1. - fresnel) * diffuse_color / std::f64::consts::PI;
         ((diffuse + fresnel * d * visibility) * f64::from(LIGHT_COLOR[i]) * nl
-            + 0.03 * diffuse_color
             + case.emissive[i] * srgb_decode(case.emissive_map[i]))
         .clamp(0., 65504.)
     })
@@ -464,6 +464,32 @@ struct Expected {
     sdr: [u8; 4],
     depth: f64,
 }
+
+/// f64 reference for the fixed display transform, distinct from the shader's
+/// FP32 execution and binary16 intermediate. The compressed peak is solved
+/// first and used to reconstruct RGB/chroma, rather than sampling GPU output.
+fn neutral_rgb(hdr: V3, exposure: f64) -> V3 {
+    let exposed = hdr.map(|x| x.max(0.) * exposure);
+    let low = exposed.into_iter().fold(f64::INFINITY, f64::min);
+    let black_lift = if low < 0.08 {
+        low - 6.25 * low * low
+    } else {
+        0.04
+    };
+    let shifted = exposed.map(|x| x - black_lift);
+    let peak = shifted.into_iter().fold(0., f64::max);
+    if peak < 0.76 {
+        return shifted;
+    }
+    let white = 1. - 0.0576 / (peak - 0.52);
+    let chroma = 1. / (1. + 0.15 * (peak - white));
+    shifted.map(|x| white * (1. + chroma * (x / peak - 1.)))
+}
+
+fn display_rgb(hdr: V3) -> [u8; 3] {
+    neutral_rgb(hdr, 2.)
+        .map(|linear| (srgb_encode(stored_half(linear.clamp(0., 1.))) * 255.).round() as u8)
+}
 fn expected(case: &Case, force_opaque: bool) -> Expected {
     let (_, position, geometry_depth) = probe(case);
     let alpha_mode = if force_opaque { 0 } else { case.alpha_mode };
@@ -486,14 +512,10 @@ fn expected(case: &Case, force_opaque: bool) -> Expected {
             color.map(stored_half)
         }
     };
+    let display = display_rgb(rgb);
     Expected {
         hdr: [rgb[0], rgb[1], rgb[2], 1.],
-        sdr: [
-            (srgb_encode(rgb[0]) * 255.).round() as u8,
-            (srgb_encode(rgb[1]) * 255.).round() as u8,
-            (srgb_encode(rgb[2]) * 255.).round() as u8,
-            255,
-        ],
+        sdr: [display[0], display[1], display[2], 255],
         depth: if absent || alpha_mode == 2 {
             1.
         } else {
@@ -507,6 +529,40 @@ fn close(actual: f64, expected: f64) -> bool {
 }
 
 fn capture_scene<B: Backend>(scene: &Scene, width: u32, height: u32) -> [Vec<u8>; 3] {
+    capture_lighting::<B>(scene, width, height, &Lighting::direct()).main
+}
+
+struct Lighting {
+    environment: crate::bistro::ibl::Environment,
+    light_color: [f32; 3],
+    aa: bool,
+    shadows: bool,
+    capture_shadows: bool,
+}
+impl Lighting {
+    fn direct() -> Self {
+        let mut environment = crate::bistro::ibl::Environment::fixture();
+        environment.strength = 0.;
+        Self {
+            environment,
+            light_color: LIGHT_COLOR,
+            aa: false,
+            shadows: false,
+            capture_shadows: false,
+        }
+    }
+}
+struct Capture {
+    main: [Vec<u8>; 3],
+    shadows: Option<[Vec<u8>; 4]>,
+}
+
+fn capture_lighting<B: Backend>(
+    scene: &Scene,
+    width: u32,
+    height: u32,
+    lighting: &Lighting,
+) -> Capture {
     let mut options = crate::bistro::Options::parse(
         [
             "--fixture",
@@ -522,13 +578,29 @@ fn capture_scene<B: Backend>(scene: &Scene, width: u32, height: u32) -> [Vec<u8>
     .unwrap();
     options.width = width;
     options.height = height;
-    let budget = pipeline::Budget::new(scene, &options).unwrap();
+    options.aa = lighting.aa;
+    options.shadows = lighting.shadows;
+    options.capture_shadows = lighting.capture_shadows;
+    let budget = pipeline::Budget::new(scene, &lighting.environment, &options).unwrap();
     let camera = Camera::fixture();
     let uniform = camera
-        .uniform(width as f32 / height as f32, NEAR, FAR, LIGHT, LIGHT_COLOR)
+        .uniform(
+            width as f32 / height as f32,
+            NEAR,
+            FAR,
+            LIGHT,
+            lighting.light_color,
+        )
         .unwrap();
     let mut backend = B::create(&options, &budget).unwrap();
-    let resident = pipeline::Resident::upload(&mut backend, scene, &budget, &uniform).unwrap();
+    let resident = pipeline::Resident::upload(
+        &mut backend,
+        scene,
+        &lighting.environment,
+        &budget,
+        &uniform,
+    )
+    .unwrap();
     let mut pool = renderer::graph::GraphPool::new(budget.graph, 2).unwrap();
     let mut workspace = pipeline::Workspace::new(scene);
     let built = pipeline::build(
@@ -554,11 +626,26 @@ fn capture_scene<B: Backend>(scene: &Scene, width: u32, height: u32) -> [Vec<u8>
     B::readback(&mut completed, captures[0], &mut hdr).unwrap();
     B::readback(&mut completed, captures[1], &mut sdr).unwrap();
     B::readback(&mut completed, captures[2], &mut depth).unwrap();
+    let shadows = built.shadow_captures.map(|passes| {
+        let resolution = resident.shadow_parameters.resolution as usize;
+        passes.map(|pass| {
+            let mut bytes = vec![0; resolution * resolution * 4];
+            B::readback(&mut completed, pass, &mut bytes).unwrap();
+            for word in bytes.as_chunks::<4>().0 {
+                let depth = f32::from_le_bytes(*word);
+                assert!(depth.is_finite() && (0.0..=1.0).contains(&depth));
+            }
+            bytes
+        })
+    });
     drop((completed, pending, plan, resident, workspace));
     let validation = backend.close().unwrap();
     assert_eq!(validation["clean"], true);
     drop(pool);
-    [hdr, sdr, depth]
+    Capture {
+        main: [hdr, sdr, depth],
+        shadows,
+    }
 }
 
 pub(in crate::bistro) fn native_acceptance<B: Backend>() {
@@ -577,6 +664,12 @@ pub(in crate::bistro) fn native_acceptance<B: Backend>() {
             let (pixel, _, _) = probe(case);
             let index = (pixel[1] * WIDTH + pixel[0]) as usize;
             let expected = expected(case, force_opaque);
+            let actual_rgb = std::array::from_fn(|channel| {
+                let offset = index * 8 + channel * 2;
+                half(u16::from_le_bytes(
+                    hdr[offset..offset + 2].try_into().unwrap(),
+                ))
+            });
             for channel in 0..4 {
                 let offset = index * 8 + channel * 2;
                 let actual = half(u16::from_le_bytes(
@@ -596,7 +689,7 @@ pub(in crate::bistro) fn native_acceptance<B: Backend>() {
                     );
                 }
                 let expected_sdr = if peak {
-                    (srgb_encode(actual) * 255.).round() as u8
+                    display_rgb(actual_rgb)[channel]
                 } else {
                     expected.sdr[channel]
                 };
@@ -649,6 +742,12 @@ fn validate_clear_control(captures: &[Vec<u8>; 3], width: u32, height: u32) {
         .iter()
         .zip(captures[1].as_chunks::<4>().0)
     {
+        let actual_rgb = std::array::from_fn(|channel| {
+            half(u16::from_le_bytes(
+                pixel[channel * 2..channel * 2 + 2].try_into().unwrap(),
+            ))
+        });
+        let expected_display = display_rgb(actual_rgb);
         for channel in 0..4 {
             let value = half(u16::from_le_bytes(
                 pixel[channel * 2..channel * 2 + 2].try_into().unwrap(),
@@ -661,7 +760,7 @@ fn validate_clear_control(captures: &[Vec<u8>; 3], width: u32, height: u32) {
                     clear_neighbors(BACKGROUND[channel]).contains(&value),
                     "clear-only conversion escaped adjacent representable values"
                 );
-                let expected = (srgb_encode(value) * 255.).round() as u8;
+                let expected = expected_display[channel];
                 assert!(
                     encoded[channel].abs_diff(expected) <= 1,
                     "clear-only resolve differs from stored HDR"
@@ -733,7 +832,7 @@ fn clear_control_accepts_only_adjacent_half_conversions() {
         for word in [bits, bits, bits, 0x3c00] {
             pixel.extend_from_slice(&word.to_le_bytes());
         }
-        let encoded = (srgb_encode(value) * 255.).round() as u8;
+        let encoded = display_rgb([value; 3])[0];
         let captures = [
             pixel,
             vec![encoded, encoded, encoded, 255],
@@ -745,6 +844,9 @@ fn clear_control_accepts_only_adjacent_half_conversions() {
         assert!(std::panic::catch_unwind(|| validate_clear_control(&wrong, 1, 1)).is_err());
     }
 }
+
+#[path = "material_tests/lighting_tests.rs"]
+mod lighting_tests;
 
 #[test]
 fn analytic_probes_reject_shared_material_mutations() {
