@@ -170,27 +170,29 @@ impl D3D12Runtime {
 
 /// Fixed sampler settings shared by immutable native bindings and prepared Graph heaps.
 pub(super) fn sampler_desc(desc: SamplerDescriptor) -> D3D12_SAMPLER_DESC {
-    let linear = match desc {
-        SamplerDescriptor::NearestClamp => false,
-        SamplerDescriptor::LinearRepeat => true,
-    };
+    let linear = desc.is_linear();
+    let repeat_u = matches!(
+        desc,
+        SamplerDescriptor::LinearRepeat | SamplerDescriptor::LinearRepeatUClampV
+    );
+    let repeat_vw = desc == SamplerDescriptor::LinearRepeat;
     D3D12_SAMPLER_DESC {
         Filter: if linear {
             D3D12_FILTER_MIN_MAG_MIP_LINEAR
         } else {
             D3D12_FILTER_MIN_MAG_MIP_POINT
         },
-        AddressU: if linear {
+        AddressU: if repeat_u {
             D3D12_TEXTURE_ADDRESS_MODE_WRAP
         } else {
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP
         },
-        AddressV: if linear {
+        AddressV: if repeat_vw {
             D3D12_TEXTURE_ADDRESS_MODE_WRAP
         } else {
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP
         },
-        AddressW: if linear {
+        AddressW: if repeat_vw {
             D3D12_TEXTURE_ADDRESS_MODE_WRAP
         } else {
             D3D12_TEXTURE_ADDRESS_MODE_CLAMP
@@ -219,5 +221,22 @@ mod tests {
         assert_eq!(linear.AddressV, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
         assert_eq!(linear.AddressW, D3D12_TEXTURE_ADDRESS_MODE_WRAP);
         assert_eq!(linear.MaxLOD, f32::MAX);
+        for (policy, u) in [
+            (
+                SamplerDescriptor::LinearClamp,
+                D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            ),
+            (
+                SamplerDescriptor::LinearRepeatUClampV,
+                D3D12_TEXTURE_ADDRESS_MODE_WRAP,
+            ),
+        ] {
+            let linear = sampler_desc(policy);
+            assert_eq!(linear.Filter, D3D12_FILTER_MIN_MAG_MIP_LINEAR);
+            assert_eq!(linear.AddressU, u);
+            assert_eq!(linear.AddressV, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+            assert_eq!(linear.AddressW, D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+            assert_eq!(linear.MaxLOD, f32::MAX);
+        }
     }
 }

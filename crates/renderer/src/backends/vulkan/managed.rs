@@ -491,7 +491,7 @@ impl VulkanBindings {
             matches!(
                 binding.resource,
                 BindingResource::Sampler(sampler)
-                    if sampler.desc() == crate::program::SamplerDescriptor::LinearRepeat
+                    if sampler.desc().is_linear()
             )
         }) && input.iter().any(|binding| {
             matches!(

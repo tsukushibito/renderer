@@ -73,6 +73,12 @@ static ALPHA: RasterProgramDescriptor = RasterProgramDescriptor {
             stages: ShaderStages::FRAGMENT,
         },
     ],
+    sampling_pairs: &[renderer::program::SampledImageSamplerPair {
+        image_group: 2,
+        image_binding: 4,
+        sampler_group: 2,
+        sampler_binding: 5,
+    }],
     binding_bytes: &[16, 16, 0, 0],
     blend: BlendState::Alpha,
     depth: DepthState::Required {

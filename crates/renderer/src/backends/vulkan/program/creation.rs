@@ -235,6 +235,8 @@ pub(in crate::backends::vulkan) struct Program {
     pub(super) pipeline: vk::Pipeline,
     pub(in crate::backends::vulkan) sampler: vk::Sampler,
     linear_sampler: vk::Sampler,
+    linear_clamp_sampler: vk::Sampler,
+    linear_u_repeat_sampler: vk::Sampler,
     pub(super) raster_layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
     pub(super) raster_groups: usize,
     pub(super) raster_asset: Option<ManagedRasterProgram>,
@@ -249,6 +251,8 @@ impl Program {
         match desc {
             crate::program::SamplerDescriptor::NearestClamp => self.sampler,
             crate::program::SamplerDescriptor::LinearRepeat => self.linear_sampler,
+            crate::program::SamplerDescriptor::LinearClamp => self.linear_clamp_sampler,
+            crate::program::SamplerDescriptor::LinearRepeatUClampV => self.linear_u_repeat_sampler,
         }
     }
 
@@ -273,6 +277,8 @@ impl Program {
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
             linear_sampler: vk::Sampler::null(),
+            linear_clamp_sampler: vk::Sampler::null(),
+            linear_u_repeat_sampler: vk::Sampler::null(),
             raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
             raster_groups: 0,
             raster_asset: None,
@@ -425,6 +431,8 @@ impl Program {
             pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
             linear_sampler: vk::Sampler::null(),
+            linear_clamp_sampler: vk::Sampler::null(),
+            linear_u_repeat_sampler: vk::Sampler::null(),
             raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
             raster_groups: 0,
             raster_asset: None,
@@ -484,6 +492,24 @@ impl Program {
                     .device
                     .create_sampler(&super::super::managed::sampler_info(
                         crate::program::SamplerDescriptor::LinearRepeat,
+                    ))?
+            };
+            // SAFETY: Feature-free policies; the result immediately owns each handle.
+            result.linear_clamp_sampler = unsafe {
+                result
+                    .owner
+                    .device
+                    .create_sampler(&super::super::managed::sampler_info(
+                        crate::program::SamplerDescriptor::LinearClamp,
+                    ))?
+            };
+            // SAFETY: Same ownership and feature contract as the other prepared samplers.
+            result.linear_u_repeat_sampler = unsafe {
+                result
+                    .owner
+                    .device
+                    .create_sampler(&super::super::managed::sampler_info(
+                        crate::program::SamplerDescriptor::LinearRepeatUClampV,
                     ))?
             };
         }
@@ -671,7 +697,9 @@ impl Program {
                 include_bytes!("../../../../shaders/composite.vert.spv")
             },
         )?;
-        let fragment = if depth_only {
+        let has_fragment =
+            raster_program.is_none_or(|(program, _)| !program.fragment_spirv().is_empty());
+        let fragment = if !has_fragment {
             None
         } else {
             Some(ShaderModule::new(
@@ -697,7 +725,7 @@ impl Program {
                 )
                 .name(c"main"),
         ];
-        let stages = if depth_only {
+        let stages = if !has_fragment {
             &stages[..1]
         } else {
             &stages[..]
@@ -889,6 +917,10 @@ impl Drop for Program {
             }
             self.owner.device.destroy_sampler(self.sampler);
             self.owner.device.destroy_sampler(self.linear_sampler);
+            self.owner.device.destroy_sampler(self.linear_clamp_sampler);
+            self.owner
+                .device
+                .destroy_sampler(self.linear_u_repeat_sampler);
         }
     }
 }

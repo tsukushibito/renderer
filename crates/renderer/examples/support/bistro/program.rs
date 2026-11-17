@@ -22,7 +22,8 @@
 use renderer::ImageFormat;
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterProgramDescriptor, ShaderStages, VertexAttribute, VertexFormat,
+    RasterParameterLayout, RasterProgramDescriptor, SampledImageSamplerPair, ShaderStages,
+    VertexAttribute, VertexFormat,
 };
 
 pub const VERTEX_BYTES: usize = 48;
@@ -113,6 +114,32 @@ static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         },
     ],
     binding_bytes: &[CAMERA_BYTES as u64, MATERIAL_BYTES as u64, 0, 0, 0, 0, 0],
+    sampling_pairs: &[
+        SampledImageSamplerPair {
+            image_group: 1,
+            image_binding: 0,
+            sampler_group: 1,
+            sampler_binding: 4,
+        },
+        SampledImageSamplerPair {
+            image_group: 1,
+            image_binding: 1,
+            sampler_group: 1,
+            sampler_binding: 4,
+        },
+        SampledImageSamplerPair {
+            image_group: 1,
+            image_binding: 2,
+            sampler_group: 1,
+            sampler_binding: 4,
+        },
+        SampledImageSamplerPair {
+            image_group: 1,
+            image_binding: 3,
+            sampler_group: 1,
+            sampler_binding: 4,
+        },
+    ],
     blend: BlendState::Replace,
     depth: DepthState::Required {
         compare: CompareOp::Less,
@@ -167,6 +194,12 @@ static RESOLVE: RasterProgramDescriptor = RasterProgramDescriptor {
         },
     ],
     binding_bytes: &[0, 0],
+    sampling_pairs: &[SampledImageSamplerPair {
+        image_group: 0,
+        image_binding: 0,
+        sampler_group: 0,
+        sampler_binding: 1,
+    }],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
     vertex_spirv: include_bytes!("shaders/resolve.vert.spv"),

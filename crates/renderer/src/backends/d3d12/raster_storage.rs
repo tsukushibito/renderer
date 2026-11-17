@@ -652,7 +652,7 @@ impl RasterStorage {
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
             true,
         )?;
-        let sampler = DescriptorHeap::new(owner, 2, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, true)?;
+        let sampler = DescriptorHeap::new(owner, 4, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, true)?;
         let rtv_heap = (color_count != 0)
             .then(|| DescriptorHeap::new(owner, color_count, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, false))
             .transpose()?;
@@ -768,19 +768,21 @@ impl RasterStorage {
                 });
             }
         }
-        // Prepare both immutable policies once. A Graph binding selects its
+        // Prepare all immutable policies once. A Graph binding selects its
         // actual policy without editing a live descriptor or allocating.
-        // SAFETY: Live shader-visible heap holds both in-bounds descriptors.
+        // SAFETY: Live shader-visible heap holds all four in-bounds descriptors.
         let sampler_cpu = unsafe { sampler.raw.GetCPUDescriptorHandleForHeapStart() };
         checked_handle_capacity(
             sampler_cpu,
             Some(sampler_gpu_start),
             owner.descriptor_steps[1],
-            2,
+            4,
         )?;
         for (index, policy) in [
             crate::program::SamplerDescriptor::NearestClamp,
             crate::program::SamplerDescriptor::LinearRepeat,
+            crate::program::SamplerDescriptor::LinearClamp,
+            crate::program::SamplerDescriptor::LinearRepeatUClampV,
         ]
         .into_iter()
         .enumerate()
@@ -862,6 +864,8 @@ impl RasterStorage {
         let index = match policy {
             crate::program::SamplerDescriptor::NearestClamp => 0u64,
             crate::program::SamplerDescriptor::LinearRepeat => 1u64,
+            crate::program::SamplerDescriptor::LinearClamp => 2u64,
+            crate::program::SamplerDescriptor::LinearRepeatUClampV => 3u64,
         };
         D3D12_GPU_DESCRIPTOR_HANDLE {
             ptr: self.sampler_gpu_start.ptr + index * u64::from(self.sampler_step),

@@ -61,7 +61,7 @@ mod raster;
 pub use raster::{
     BlendState, CompareOp, DepthState, MAX_RASTER_ATTRIBUTES, MAX_RASTER_BIND_GROUPS,
     MAX_RASTER_BINDINGS, MAX_RASTER_PROGRAMS, ManagedRasterProgram, RasterParameterLayout,
-    RasterProgramDescriptor, VertexAttribute, VertexFormat,
+    RasterProgramDescriptor, SampledImageSamplerPair, VertexAttribute, VertexFormat,
 };
 
 /// A resource's immutable native usage. No CPU mapping or mutation is exposed.
@@ -262,6 +262,18 @@ pub enum SamplerDescriptor {
     /// Linear minification/magnification and mip interpolation, repeat on all
     /// axes, and the complete selected View's LOD range.
     LinearRepeat,
+    /// Linear minification/magnification/mip interpolation, clamp-to-edge on
+    /// every axis, and the complete selected View's LOD range.
+    LinearClamp,
+    /// Linear minification/magnification/mip interpolation, repeat on U and
+    /// clamp-to-edge on V/W, and the complete selected View's LOD range.
+    LinearRepeatUClampV,
+}
+#[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
+impl SamplerDescriptor {
+    pub(crate) const fn is_linear(self) -> bool {
+        !matches!(self, Self::NearestClamp)
+    }
 }
 
 /// A reviewed shader asset. Ordinary builds use checked-in artifacts and need

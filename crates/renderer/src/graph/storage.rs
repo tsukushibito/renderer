@@ -255,6 +255,10 @@ impl GraphStorage {
     pub(crate) fn raster_bindings(&self, range: &Range<usize>) -> &[BindingOperands] {
         &self.bindings[range.clone()]
     }
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn binding_count(&self) -> usize {
+        self.bindings.len()
+    }
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn raster_attachments(&self, range: &Range<usize>) -> &[AttachmentOperand] {
         &self.attachments[range.clone()]

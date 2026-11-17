@@ -24,6 +24,8 @@ pub(in crate::backends::vulkan::graph) struct WorkData {
     pub(in crate::backends::vulkan::graph) final_states: Vec<Option<Snapshot>>,
     pub(super) passes: Vec<PreparedPass>,
     pub(super) raster_descriptors: Vec<[vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS]>,
+    pub(super) validated_raster_bindings: Vec<bool>,
+    pub(super) active_raster_bindings: usize,
     #[cfg(feature = "vulkan-diagnostics")]
     pub(super) labels: Vec<u8>,
     pub(super) buffers: Vec<vk::BufferMemoryBarrier2<'static>>,
@@ -63,8 +65,12 @@ impl WorkData {
                 limit.provenance_segments_per_resource,
             )?));
         }
+        let mut validated_raster_bindings = reserved(limit.graph.bindings)?;
+        validated_raster_bindings.resize(limit.graph.bindings, false);
         Ok(Self {
             active_resources: 0,
+            validated_raster_bindings,
+            active_raster_bindings: 0,
             physical,
             keys,
             needed,
@@ -119,6 +125,8 @@ impl WorkData {
         self.labels.clear();
         self.passes.clear();
         self.raster_descriptors.clear();
+        self.validated_raster_bindings[..self.active_raster_bindings].fill(false);
+        self.active_raster_bindings = 0;
         self.buffers.clear();
         self.images.clear();
         self.uploads.clear();
@@ -179,6 +187,14 @@ mod tests {
         for resources in [6, 2, 8, 0, 3] {
             let mut work = pool.acquire().unwrap();
             assert_eq!(work.active_resources, 0);
+            assert_eq!(work.active_raster_bindings, 0);
+            assert!(
+                work.validated_raster_bindings
+                    .iter()
+                    .all(|&validated| !validated)
+            );
+            work.validated_raster_bindings[resources] = true;
+            work.active_raster_bindings = resources + 1;
             assert_eq!(work.final_states.as_ptr(), backing);
             assert_eq!(
                 work.final_states[0].as_ref().unwrap().initialized.as_ptr(),

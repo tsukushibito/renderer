@@ -100,6 +100,16 @@ impl DepthState {
     }
 }
 
+/// A possible image/sampler combination used by a trusted graphics shader.
+/// `Load`/`texelFetch` accesses do not use a sampler and need no pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SampledImageSamplerPair {
+    pub image_group: u32,
+    pub image_binding: u32,
+    pub sampler_group: u32,
+    pub sampler_binding: u32,
+}
+
 /// Immutable graphics assets and their complete ABI. Slices are static so
 /// frame plans retain the contract without allocating or borrowing frame input.
 pub struct RasterProgramDescriptor {
@@ -111,6 +121,8 @@ pub struct RasterProgramDescriptor {
     pub bindings: &'static [BindingLayout],
     /// Buffer-prefix footprints in binding order; zero for images/samplers.
     pub binding_bytes: &'static [u64],
+    /// Complete possible sampling combinations in both shader stages.
+    pub sampling_pairs: &'static [SampledImageSamplerPair],
     pub blend: BlendState,
     pub depth: DepthState,
     pub vertex_spirv: &'static [u8],
@@ -151,6 +163,7 @@ static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
     color_outputs: &[ImageFormat::Rgba8Unorm],
     bindings: &[],
     binding_bytes: &[],
+    sampling_pairs: &[],
     blend: BlendState::Replace,
     depth: DepthState::Optional {
         compare: CompareOp::Less,
@@ -190,6 +203,12 @@ static TEXTURED_MESH: RasterProgramDescriptor = RasterProgramDescriptor {
         },
     ],
     binding_bytes: &[16, 0, 0],
+    sampling_pairs: &[SampledImageSamplerPair {
+        image_group: 1,
+        image_binding: 0,
+        sampler_group: 1,
+        sampler_binding: 1,
+    }],
     vertex_spirv: include_bytes!("../../shaders/textured.vert.spv"),
     fragment_spirv: include_bytes!("../../shaders/textured.frag.spv"),
     vertex_dxil: include_bytes!("../../shaders/dxil/textured.vert.dxil"),
@@ -254,8 +273,11 @@ impl ManagedRasterProgram {
     /// DXIL uses TEXCOORD semantic indices equal to attribute locations. Indices
     /// are u32 triangle lists, with first index/base vertex zero and one instance.
     /// No undeclared vertex input, resources, push constants or side effects are
-    /// permitted. A fragment shader is required exactly when one color output is
-    /// present; the sole output is RGBA8_UNORM or RGBA16_FLOAT, never depth.
+    /// permitted. One color output requires a fragment shader; the sole output
+    /// is RGBA8_UNORM or RGBA16_FLOAT, never depth. With no color outputs a
+    /// fragment shader is optional and may discard fragments, but has no outputs.
+    /// An absent stage has empty binaries for both backends and no stage inputs,
+    /// bindings or inline parameters declared for it.
     /// Fragment depth, stencil, sample-mask writes, sample shading, storage writes,
     /// atomics, input attachments and attachment feedback are unsupported.
     ///
@@ -277,6 +299,10 @@ impl ManagedRasterProgram {
     /// Images are non-array, non-MS float 2D resources. Sampling may read any
     /// mip of the selected View; its complete range is declared as a read. No
     /// optional narrow arithmetic types or unsupported capabilities are required.
+    /// `sampling_pairs` lists every possible image/sampler combination in both
+    /// stages. Each referenced slot exists with the corresponding SampledImage
+    /// or Sampler kind. No combination may be omitted, including dynamically
+    /// selected combinations. Load/texelFetch-only accesses need no pair.
     ///
     /// For every accepted draw, all permitted inline words and resource contents,
     /// shaders may access only the declared buffer prefixes and selected image
@@ -359,6 +385,9 @@ impl ManagedRasterProgram {
     }
     pub const fn binding_bytes(&self) -> &'static [u64] {
         self.manifest.binding_bytes
+    }
+    pub const fn sampling_pairs(&self) -> &'static [SampledImageSamplerPair] {
+        self.manifest.sampling_pairs
     }
     pub const fn blend(&self) -> BlendState {
         self.manifest.blend
