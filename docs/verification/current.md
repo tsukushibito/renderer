@@ -5,6 +5,54 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="rendergraph-review-fixes"></a>
+
+## RenderGraphの保証再利用・容量・公開APIのレビュー修正
+
+`renderer-kkv`／`.1`〜`.5`。比較元`30eb807`、統合受入ソース
+`66765be2a1a5ce691fc7c91379f73ca640ad0425`、Windows x64／Rust 1.99.0／RTX 3060・driver 610.88。
+[現在の契約](../design/rendergraph.md)、[容量の数え方](../design/rendergraph.md#capacity-planning)、
+[再実行手順](../guides/development.md#graph-review-gates)を更新した。
+[ソースレビューの証拠](source-review.json)の`rendergraph_review_fixes`へsource/binary hash、コマンド、
+生のメモリcounter、B3の実行条件・結果とCPU局所比較を記録した。ログ・raw画像は`.tools/kkv/`へ保持する。
+
+| 修正 | 確認したこと |
+|---|---|
+| readerの区間複製を除去 | read-only accessを一件ずつ記録し、同じ範囲はAVLのkeyを共有。部分read→全域readと逆順の2,048 read、部分上書き、RAW/WAR/WAW、容量不足後の再利用を確認 |
+| 一般indexのprefix保証 | count A/B/A、異なる頂点・Device上限、部分byte write、穴、snapshot、offset 0の完全prefix copyとshifted copyを確認。満杯は`GraphMetadata/Reconfigure`で、要約を追い出して再走査しない |
+| Vulkanの共有descriptor | 異なる2 setは容量1で拒否し、同じsetの2 drawは容量1で描画成功。red→green→red、取消・reset・pending中の保持と出力を確認 |
+| D3D12の画像slotとtarget view | description別候補/cursor、重複class、4,096画像、未使用classを含む返却を確認。3枚の色画像でもRTVは描画先の1個だけ、depth-onlyではDSV1個・RTV0個を実GPUで確認 |
+| 確定したFrameGraph | graph/output/readbackを個別変更できないcompile-fail例、caller所有のimport出力とreadback/exportの対応、既存consumer移行、`buffer_desc`のowner・世代拒否を確認 |
+| 説明・可読性 | 全13 Graph容量の単位と相互関係、compileの消費、import/exportとpoolの寿命をRustdocへ記載。`declare_pass`の圧縮記述を展開 |
+
+release workspace試験はCPU **239件**／追加検証・Graph診断あり **241件**、
+Vulkan/D3D12・presentation・memory-profilingあり **441件**／追加検証・Graph診断あり **454件**が成功した。
+後二構成のignored各94件はこの件数へ含めない。別途、両APIの新しい回帰3件と既存の
+owned Raster／caller-composed Engine Graphをshipping/strictで明示実行し、計10件成功した。
+四構成のall-targets Clippy、warnings拒否Rustdoc、fmt、全featureのall-targets checkとHTMLのリンク検査も成功した。
+
+独立した12個の`frame_memory` process（shipping/strict各6個）はCPU、両APIのowned/custom Raster、
+Vulkan Engine画像経路の構築・compile・prepare・record・submitから完了／CPU結果・全slot返却までを確認した。
+全窓でRust alloc／alloc_zeroed／realloc／deallocと要求byte、VMA host alloc／realloc／free、
+native資源・memory・descriptorの作成／破棄・確保／解放がゼロで、resetは別計上した。
+可変draw／Program／attachment、取消、保持結果、複数pendingを含み、準備と終了の費用は別に記録した。
+
+既存のB3全量受入も両API×strict/shipping×独立3 process、計12回すべて成功した。
+geometryは`full-a3`、IBLは`ibl-final`を使い、全7視点、4 shadow map、AA-off、同時View、
+容量拒否／再試行、pending差し替え・復元を含む。既存profileの**1,360件の画像比較がすべて成功**し、
+同API反復とstrict/shippingはbit一致した。strictはVulkan Core/SyncValとD3D12 Debug Layer/GBVの実効と
+終了後までのwarning/error/corruption/callback失敗ゼロを確認し、例外・抑制を追加していない。
+全runで通常frameのRust/VMA host/nativeのゼロ条件も維持した。
+
+reader索引はWindows x64で一件72 byteとresource root 8 byteを予約し、writer nodeの旧履歴リンク8 byteを除いた。
+queryは最悪O(S×R)となり得る。prefix要約は既定64件・768 byteとVec headerを各storeへ追加し、
+Vulkanのbinding索引とD3D12のclass/target索引も準備時のmetadataを増やす。これらの交換条件と失効条件を現行設計へ記載した。
+同一CPU小負荷の3回交互比較では、read-only断片化ケースのcompile/返却中央値は101.57→12.09 μs、
+同一全域readの反復は4.86→4.74 μsだった。ただし他のworkerのCPU負荷は管理しておらず、
+全Bistroの通常release比較、GPU時間短縮や一般的な高速化率の証拠にはしない。
+今回のGPU受入も計装付きの正しさ・メモリ確認であり、通常性能の再計測ではない。
+driver/OS内部の未観測allocation、別機材、長時間soak、実OOM/Device loss注入とWSI受入は再実行していない。
+
 <a id="bistro-lighting"></a>
 
 ## BistroのIBL・影・HDRとGodot比較（B3）

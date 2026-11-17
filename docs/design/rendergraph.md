@@ -229,8 +229,8 @@ native作成・破棄や表示・結果消費を含む全体のゼロ達成を�
 | `dependencies` | `depends_on`で明示した重複しない依存 |
 | `initial_ranges` | importからGraphへcaptureする初期化済み範囲の合計 |
 | `name_bytes` / `upload_bytes` | UTF-8名と公開uploadからcaptureするpayloadのbyte合計 |
-| `edges` | producer・明示依存・RAW/WAR/WAWを解析する辺の予約量。pass数だけからは決まらない |
-| `segments` | 内容のproducer／有効性と最後のwriterを表す区間nodeの上限。部分writeで増え、全域置換で再利用する |
+| `edges` | producer/dataflowと実行順序の各arenaへ同じ上限を予約する。二つの合計ではなく、pass数だけからは決まらない |
+| `segments` | 内容のproducer／有効性と最後のwriterを表す各区間arena、および最終初期化範囲の上限。部分writeで増え、全域置換で再利用する |
 | `readers` | 生存するread-only accessの範囲索引。開発用の全宣言診断ではdead部分のreadも対象 |
 
 `GraphError::capacity()`の`kind`と`limit`から不足した領域を選ぶ。`required`は観測できた最小必要量で、
