@@ -42,8 +42,13 @@ SCOPE = (
     "Both full-scene lighting profiles disable source AO contribution following the reference default; "
     "all ORM pixels and material references are retained. "
     "CPU active host elapsed excludes explicit yield waits but includes polling and possible OS descheduling; "
-    "charged process/main-thread CPU and wall/N remain separate. Godot CPU is setup+viewport and excludes "
-    "script/physics. Timestamp/query and native CPU timer observations are opt-in and may affect cost. "
+    "Whole-process charged CPU/N uses identical Windows accounting over N stationary route iterations in both engines, "
+    "sums all threads and includes mandatory planning/record/submit/poll/retire/return as well as benchmark bookkeeping. "
+    "It is an aggregate mean, never a per-frame p95 or a rendering-only efficiency ratio. "
+    "Godot additionally includes scripts/physics/engine/presentation. Its pre/post draw elapsed covers native lowering, "
+    "submit/present and ring wait/retire; setup and delayed viewport observations remain separate with no producer ID. "
+    "Renderer full ROI including final drain, phase elapsed, explicit yields and wall/N remain reported. "
+    "Timestamp/query and native CPU timer observations are opt-in and may affect cost. "
     "Iteration intervals include pipeline backpressure from an earlier submitted frame; per-frame "
     "build-to-observed-completion latency is never converted to FPS. Neither engine measures scanout/input latency. "
     "GPU correctness, final resource release, zero allocation and B5 window/interaction acceptance are separate."
@@ -147,6 +152,7 @@ def make_plan(args):
     prepared = args.godot_prepared.resolve()
     godot_identity = godot.verify_prepared(prepared)
     require(godot_identity["profile"] == "b3", "Comparison requires an explicit Godot B3 profile")
+    require(godot_identity.get("cpu_clock"), "Formal CPU comparison requires the optional native Godot CPU clock")
     require(build["git"]["commit"] == godot_identity["source_commit"],
             "Prepare both engines from the same committed source")
     manifest, ibl_manifest = load_json(args.manifest), load_json(args.ibl_manifest)
@@ -169,6 +175,9 @@ def make_plan(args):
         ROOT / "tools/godot_bistro/benchmark.py", ROOT / "tools/godot_bistro/profiles.py",
         ROOT / "tools/godot_bistro/summarize.py")]
     inputs.append(describe(ROOT / "tools/godot_bistro/repeat.py"))
+    inputs.append(describe(prepared / "cpu-clock/manifest.json"))
+    inputs += [describe(prepared / "cpu-clock" / entry["path"])
+               for entry in godot_identity["cpu_clock"]["manifest"]["files"]]
     inputs += cook_inputs(args.manifest, [manifest["vertices"], manifest["indices"], *manifest["images"]])
     inputs += cook_inputs(args.ibl_manifest, list(ibl_manifest["images"].values()))
     inputs += [{"path": str(Path(godot_identity["asset_root"]) / record["path"]),
@@ -180,7 +189,7 @@ def make_plan(args):
             command = [str(binary), "--api", run["variant"], "--manifest", str(args.manifest.resolve()),
                        "--ibl-manifest", str(args.ibl_manifest.resolve()), "--view", "route", "--width", "1920",
                        "--height", "1080", "--warmup", "3600", "--frames", "1800", "--inflight", "2",
-                       "--capture-all-views", "--output", str(output / "renderer" / run["run_id"])]
+                       "--capture-all-views", "--steady-state-cpu", "--output", str(output / "renderer" / run["run_id"])]
             if run["timing"]:
                 command.append("--gpu-timing")
             run["command"] = command
@@ -243,6 +252,16 @@ def renderer_metrics(report, condition, window):
                "process_charged_cpu_ms_per_frame": legacy["process_cpu_ns_per_frame"] / 1e6,
                "main_thread_charged_cpu_ms_per_frame": legacy["main_thread_cpu_ns_per_frame"] / 1e6,
                "offscreen_throughput_fps": legacy["throughput_frames_per_second"]}
+    stationary = report["measurement"]["steady_state_window"]
+    require(stationary["frames"] == window["frames"]
+            and stationary["host_pending_at_start"] == stationary["host_pending_at_end"] == window["inflight"],
+            "Stationary CPU window must preserve the requested pipeline occupancy")
+    require(type(stationary["wall_ns"]) is int and 0 < stationary["wall_ns"] <= report["measurement"]["wall_ns"]
+            and stationary["wall_ns"] + report["measurement"]["drain_tail_wall_ns"] == report["measurement"]["wall_ns"],
+            "Stationary interval and retained drain tail must reproduce complete ROI wall")
+    scalars.update({"stationary_" + name: value for name, value in
+                    godot.charged_cpu_scalars(stationary["cpu"], window["frames"]).items()})
+    scalars["drain_tail_wall_ms"] = report["measurement"]["drain_tail_wall_ns"] / 1e6
     return {"distributions": {name: distribution(data) for name, data in values.items()}, "scalars": scalars,
             "build_to_observed_completion_latency": legacy["individual_frame_wall_ns"]}
 
@@ -271,14 +290,13 @@ def aggregate_renderer(runs):
 
 
 def reference_ratios(renderer_groups, godot_groups):
-    """Descriptive p95 ratios; CPU scopes differ and this is not Graph overhead."""
+    """GPU observation ratio only; incompatible CPU phase ratios are rejected."""
     reference = godot_groups["all-timing-1"]
     result = {}
     for api in ("vulkan", "d3d12"):
         measured = renderer_groups[f"{api}/timing-1"]["distributions"]
         result[api] = {}
-        for name, renderer_metric, godot_metric in (("cpu_elapsed_scope_comparison", "active_host_ms", "cpu_render_ms"),
-                                                    ("gpu", "gpu_ms", "gpu_ms")):
+        for name, renderer_metric, godot_metric in (("gpu", "gpu_ms", "gpu_ms"),):
             baseline = reference[godot_metric]["p95"]["run_max"]
             observed = measured[renderer_metric]["p95"]["run_max"]
             result[api][name] = {"godot_slowest_run_p95_ms": baseline,
@@ -433,6 +451,8 @@ def run_plan(plan):
         summary["godot_groups"] = godot_evidence["groups"]
         summary["descriptive_reference_ratios"] = reference_ratios(summary["renderer_groups"], summary["godot_groups"])
         summary["reference_p95_budgets_ms"] = godot_evidence["reference_p95_budgets_ms"]
+        summary["godot_whole_process_scalars"] = godot_evidence["whole_process_scalars"]
+        summary["reference_mean_cpu_budget_ms"] = godot_evidence["reference_mean_cpu_budget_ms"]
         summary["godot_evidence_sha256"] = digest(output / "godot-evidence.json")
         summary["status"] = "passed"
     except BaseException as error:

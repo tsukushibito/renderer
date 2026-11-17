@@ -80,6 +80,22 @@ def prepare(args):
         raise ValueError("The B3 profile requires --ibl-manifest; B2 does not use an IBL cook")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    cpu_clock = None
+    if getattr(args, "cpu_clock_manifest", None):
+        source = args.cpu_clock_manifest.resolve()
+        clock = read(source)
+        clock_output = output / "cpu-clock"
+        clock_output.mkdir()
+        for entry in clock["files"]:
+            relative = Path(entry["path"])
+            original = (source.parent / relative).resolve()
+            if relative.is_absolute() or not original.is_relative_to(source.parent) or relative.name != str(relative):
+                raise ValueError("CPU clock files must be flat paths inside their manifest directory")
+            if original.stat().st_size != entry["byte_length"] or digest(original) != entry["sha256"]:
+                raise ValueError("CPU clock input identity differs")
+            shutil.copyfile(original, clock_output / relative)
+        shutil.copyfile(source, clock_output / "manifest.json")
+        cpu_clock = {"manifest": clock, "manifest_sha256": digest(source)}
     assets = args.asset_root.resolve()
     expected = read(ROOT / "assets/bistro/manifest.json")
     verified = []
@@ -134,6 +150,7 @@ def prepare(args):
                 "benchmark_tool_sha256": digest(SOURCE / "benchmark.py"),
                 "profile_tool_sha256": digest(SOURCE / "profiles.py"),
                 "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents, uncompressed ImageTexture material images; no LOD/occlusion, optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. B2 retains base-only PNG images, authored AO, constant ambient .03, no IBL/shadow/AA, linear exposure1. B3 explicitly generates full PNG mip chains before warmup, renormalizing only normal-map coarser levels, and verifies actual native readbacks, base bytes and shared material references. Renderer retains authored DDS mip chains; Godot generated mip pixels are not equivalent. B3 disables source AO maps while retaining all source bytes/materials; cap4 static IBL strength3, four 2048-effective CSM splits/PCF/no PCSS, native AgX exposure2 and FXAA, no Bloom/extra effects. Godot's BRDF, prefilter, shadow filter, depth prepass, batching, mip chain and presentation differ from Renderer; AgX and pre-tonemap FXAA differ from Renderer Neutral and post-tonemap FXAA."}
+    identity["cpu_clock"] = cpu_clock
     write(output / "identity.json", identity)
     print(output / "identity.json")
 
@@ -144,6 +161,51 @@ def percentile(values, p):
     lower = math.floor(position)
     upper = math.ceil(position)
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def charged_cpu_scalars(cpu, frames):
+    """Whole-window OS accounting; these means have no per-frame percentiles."""
+    keys = ("qpc_start", "qpc_end", "qpc_frequency", "process_kernel_100ns", "process_user_100ns",
+            "main_thread_kernel_100ns", "main_thread_user_100ns")
+    if type(frames) is not int or frames <= 0 or any(type(cpu.get(k)) is not int or cpu[k] < 0 for k in keys):
+        raise ValueError("Invalid charged CPU boundary counters")
+    ticks = cpu["qpc_end"] - cpu["qpc_start"]
+    if ticks <= 0 or cpu["qpc_frequency"] <= 0:
+        raise ValueError("Invalid charged CPU QPC window")
+    wall_ms = ticks * 1000 / cpu["qpc_frequency"]
+    process = (cpu["process_kernel_100ns"] + cpu["process_user_100ns"]) / 10000
+    caller = (cpu["main_thread_kernel_100ns"] + cpu["main_thread_user_100ns"]) / 10000
+    # OS process/thread counters are read sequentially at each boundary; their
+    # intervals differ slightly. Do not demand a strict subset inequality.
+    if process <= 0 or caller <= 0:
+        raise ValueError("Charged CPU window must contain process and caller execution")
+    return {"process_charged_cpu_ms_per_frame": process / frames,
+            "caller_thread_charged_cpu_ms_per_frame": caller / frames,
+            "qpc_wall_ms_per_frame": wall_ms / frames,
+            "throughput_frames_per_second": frames * 1000 / wall_ms}
+
+
+def cpu_window_metrics(report, frames):
+    window = report["cpu_window"]
+    start, end = window["start"], window["end"]
+    if (not isinstance(start, list) or not isinstance(end, list) or len(start) != 7 or len(end) != 7
+            or any(type(x) is not int or x < 0 for x in start + end)
+            or start[1] != end[1] or start[6] != end[6] or start[6] == 0):
+        raise ValueError("Invalid native CPU snapshot, frequency or caller thread")
+    if any(end[i] < start[i] for i in range(2, 6)):
+        raise ValueError("Native CPU counter decreased")
+    cpu = {"qpc_start": start[0], "qpc_end": end[0], "qpc_frequency": start[1]}
+    cpu.update({name: end[i] - start[i] for i, name in enumerate(
+        ("process_kernel_100ns", "process_user_100ns", "main_thread_kernel_100ns", "main_thread_user_100ns"), 2)})
+    brackets = window["call_brackets_usec"]
+    if (not isinstance(brackets, list) or len(brackets) != 4
+            or any(type(x) is not int or x < 0 for x in brackets)
+            or brackets != sorted(brackets)):
+        raise ValueError("Invalid CPU clock endpoint brackets")
+    qpc_usec = (end[0] - start[0]) * 1e6 / start[1]
+    if not brackets[2] - brackets[1] - 2 <= qpc_usec <= brackets[3] - brackets[0] + 2:
+        raise ValueError("Native QPC interval lies outside endpoint clock brackets")
+    return charged_cpu_scalars(cpu, frames)
 
 
 def validate_material_mips(inventory):
@@ -255,9 +317,9 @@ def validate_report(report, config):
     samples = report.get("samples", [])
     if len(samples) != config["frames"]:
         raise ValueError("Incomplete samples")
-    metrics = ["frame_interval_ms"]
+    metrics = ["frame_interval_ms", "render_pre_post_ms"]
     if config["timing"]:
-        metrics += ["cpu_setup_ms", "cpu_viewport_ms", "cpu_render_ms", "gpu_ms", "draw_calls", "primitives"]
+        metrics += ["cpu_setup_ms", "cpu_viewport_ms", "gpu_ms", "draw_calls", "primitives"]
     for index, sample in enumerate(samples):
         if sample.get("frame") != index:
             raise ValueError("Discontinuous frame identity")
@@ -265,12 +327,23 @@ def validate_report(report, config):
             value = sample.get(metric)
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"Invalid or missing {metric} at frame {index}")
-        if config["timing"] and abs(sample["cpu_render_ms"] - sample["cpu_setup_ms"] - sample["cpu_viewport_ms"]) > 1e-6:
-            raise ValueError("CPU render total differs from setup + viewport")
-        if not config["timing"] and any(key in sample for key in ("gpu_ms", "cpu_render_ms")):
+        if not config["timing"] and any(key in sample for key in ("gpu_ms", "cpu_setup_ms", "cpu_viewport_ms", "cpu_render_ms")):
             raise ValueError("Timing-disabled run contains timer readings")
     if abs(sum(x["frame_interval_ms"] for x in samples) - report["roi_wall_ms"]) > 0.01:
         raise ValueError("Frame intervals do not cover exact ROI")
+    if config.get("cpu_clock_library"):
+        if report.get("schema_version") != 2 or report.get("render_thread_model") != 1:
+            raise ValueError("CPU scope requires schema 2 and Safe/main-thread rendering")
+        cpu_window_metrics(report, config["frames"])
+        drawn = [sample.get("observation_frame_drawn") for sample in samples]
+        if (any(type(value) is not int or value < 0 for value in drawn)
+                or any(second != first + 1 for first, second in zip(drawn, drawn[1:]))):
+            raise ValueError("Post-draw observation frame IDs are discontinuous")
+        if any(sample["render_pre_post_ms"] > sample["frame_interval_ms"] + .002 for sample in samples):
+            raise ValueError("Render pre/post interval exceeds its callback interval")
+        brackets = report["cpu_window"]["call_brackets_usec"]
+        if abs((brackets[2] - brackets[0]) / 1000 - report["roi_wall_ms"]) > .002:
+            raise ValueError("Native CPU boundary brackets cover a different callback ROI")
     return {metric: {"mean": statistics.mean(x[metric] for x in samples),
                      "p50": percentile([x[metric] for x in samples], .5),
                      "p95": percentile([x[metric] for x in samples], .95),
@@ -280,6 +353,15 @@ def validate_report(report, config):
 def verify_prepared(prepared):
     prepared = Path(prepared).resolve()
     identity = read(prepared / "identity.json")
+    if identity.get("cpu_clock"):
+        clock_root = prepared / "cpu-clock"
+        if digest(clock_root / "manifest.json") != identity["cpu_clock"]["manifest_sha256"]:
+            raise ValueError("Prepared CPU clock manifest was modified")
+        for entry in identity["cpu_clock"]["manifest"]["files"]:
+            path = (clock_root / entry["path"]).resolve()
+            if (not path.is_relative_to(clock_root.resolve()) or path.stat().st_size != entry["byte_length"]
+                    or digest(path) != entry["sha256"]):
+                raise ValueError("Prepared CPU clock was modified")
     if digest(prepared / "bistro-reference.exe") != identity["binary_sha256"] or digest(prepared / "bistro-reference.pck") != identity["pack_sha256"]:
         raise ValueError("Prepared executable or pack was modified")
     if digest(prepared / "conditions.json") != identity["conditions_sha256"]:
@@ -317,12 +399,14 @@ def run_case(prepared, identity, folder, *, culling, timing, repetition,
               "profile": identity["profile"], "quality": identity["quality"],
               "frames": frames, "warmup": warmup, "timing": timing, "culling": culling,
               "output": str(folder / "report.json"), "capture": str(folder / "route0.png")}
+    if identity.get("cpu_clock"):
+        config["cpu_clock_library"] = str(prepared / "cpu-clock/b3_cpu_clock.gdextension")
     if identity["profile"] == "b3":
         config["ibl_path"] = str(prepared / "godot-panorama.hdr")
         config["ibl"] = {"sha256": identity["ibl"]["panorama"]["sha256"],
                          "width": 4096, "height": 2048}
     write(folder / "config.json", config)
-    command = [prepared / "bistro-reference.exe", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
+    command = [prepared / "bistro-reference.exe", "--verbose", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
                "--resolution", "1920x1080", "--position", "0,0", "--disable-vsync", "--audio-driver", "Dummy",
                "--log-file", folder / "engine.log"]
     if validation:
@@ -386,6 +470,7 @@ def main():
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--profile", choices=PROFILES, default="b2")
     build.add_argument("--ibl-manifest", type=Path)
+    build.add_argument("--cpu-clock-manifest", type=Path)
     build.set_defaults(func=prepare)
     run = commands.add_parser("run")
     run.add_argument("--prepared", type=Path, required=True)

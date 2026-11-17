@@ -1473,18 +1473,28 @@ Godotはnative AgX/FXAAの位置/IBL/PCF、影のcaster判定、depth prepass/ba
 #### B3の参照予算と改善対象
 
 同じCore i5-14600KF／RTX 3060、1080p、全Bistro、静的IBL／4分割影／FXAA、固定routeと
-上記CPU条件で、**CPU描画p95 3.0 ms／GPU p95 5.5 ms**を参照値とする。
-独立3 processのGodot all・timing有効で最も遅いp95（2.992050088／5.400250101 ms）を、
-既存と同じ0.5 ms単位で切り上げた。GodotのCPU p95は1.895／1.944／2.992 msで上位側の変動が残り、
-この群の保守的な目安を将来の安定上限、他機材の保証、Rendererの達成済み予算として扱わない。
+上記CPU条件で、正式CPU指標は**全process・全threadの平均charged CPU時間/frame**とする。
+Windowsの`GetProcessTimes`のuser＋kernel差分を、同じ定常区間のroute反復数Nで割る。
+caller threadだけではGodotのculling workerを捉えられず、elapsedでは実行とGPU待機・deschedulingを区別できないため、
+この共通のOS会計を採用する。利用側・worker・計装を含み、Godotにはscript/mainloopと表示も入る。
+計測範囲を揃えた全体費用の比較であり、native仕事量や描画方式の等価性を証明するものではない。
+[GetProcessTimesの契約](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes)
+
+CPU参照予算はGodot all・詳細timer/query無効の独立3 processの平均のうち最大を0.5 ms単位で切り上げる。
+式は`0.5 ms × ceil(max(run平均1, run平均2, run平均3) / 0.5 ms)`とする。
+GPUはtiming有効の最悪run p95を同様に切り上げる。値と独立反復の変動は[現行検証](../verification/current.md#bistro-b3-performance)へ記録する。
+これは固定機材・全mip・B3画質・route・CPU policyでの改善目標であり、frame上限や他機材の保証ではない。
+run平均をper-frame p95へ読み替えず、通常CIへ壁時計の固定合否閾値を置かない。
+旧Godot setup＋viewport p95から丸めた3.0 msは異なるscopeの参考値であり、Renderer全経路の必達CPU予算にしない。
 主camera culling無効を主参照とするが、Godot nativeのshadow caster判定は残す。
 
-Rendererのtiming有効時の最悪p95は、active host経過時間がVulkan 9.404／D3D12 8.001 ms、
-GPUが8.140／7.746 msだった。active hostは明示yieldを除きpoll・deschedulingを含み、
-Godotのsetup＋viewport CPU時間と範囲が異なる。画像の数値受入を画素等価性とせず、
-CPU/GPU差をRenderGraph単体overheadや同一native仕事量の効率差へ帰属しない。
-通常のprofiling無効ではoffscreen throughput中央値132.708／140.121 frame/s、
-iteration p99は10.632〜12.999／10.374〜10.702 msで、実表示・ゲーム処理込みのFPSや投入完了latencyとは分ける。
+定常区間は開始終了で準備済みpipelineの占有数を揃え、前後frameをまたぐpoll/retire・所有返却も含める。
+同じproducer frame IDの生成から完了を囲む境界ではなく、Rendererの全loopと最終drainのCPU/wallも別に残す。
+active hostは明示yieldを除きpoll呼出し・deschedulingを含む非重複phaseの和であり、loop全費用やcharged CPUではない。
+Godotのpre/post draw elapsedはnative lowering・record・submit・present・ring待機/回収を含むが、mainloopの前後は除く。
+旧setupは現在draw、viewport CPU/GPUはproducer IDが公開されない遅延観測なので、同一frameのCPUとして足さない。
+画像の数値受入を画素等価性とせず、差をRenderGraph単体overheadや同一仕事量の効率差へ帰属しない。
+wall/Nによるthroughput、iteration percentile、観測完了latency、実表示・ゲーム処理込みのFPSを分ける。
 CPUとGPUの時間を加算してFPSを求めない。旧B2予算は別の機能・材質mip条件として保持する。
 
 次の改善調査は共通の利用側Graph buildとVulkan prepare（`renderer-7ft.9`）、D3D12 record（`renderer-c4y`）を優先する。

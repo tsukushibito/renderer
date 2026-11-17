@@ -9,6 +9,10 @@ var samples: Array = []
 var tick := 0
 var previous_post_usec := 0
 var roi_start_usec := 0
+var pre_draw_usec := 0
+var cpu_clock_enabled := false
+var cpu_start: PackedInt64Array
+var cpu_start_after_usec := 0
 var inventory := {"mesh_instances": 0, "surfaces": 0, "triangles": 0}
 var import_inventory: Dictionary
 var finished := false
@@ -103,6 +107,17 @@ func _ready() -> void:
 		return
 	config = JSON.parse_string(FileAccess.get_file_as_string(args[0]))
 	conditions = JSON.parse_string(FileAccess.get_file_as_string(config.conditions))
+	if int(ProjectSettings.get_setting("rendering/driver/threads/thread_model")) != 1:
+		fail("CPU elapsed scopes require pinned Safe/main-thread rendering")
+		return
+	if config.has("cpu_clock_library"):
+		if GDExtensionManager.load_extension(config.cpu_clock_library) != GDExtensionManager.LOAD_STATUS_OK:
+			fail("Could not load the optional benchmark CPU clock")
+			return
+		cpu_clock_enabled = ClassDB.class_exists("B3CpuClock")
+		if not cpu_clock_enabled:
+			fail("Optional CPU clock class is unavailable")
+			return
 	if OS.has_feature("editor") or OS.has_feature("debug"):
 		fail("Benchmark requires a release export template")
 		return
@@ -237,6 +252,7 @@ func _ready() -> void:
 	set_camera(0)
 	samples.resize(int(config.frames))
 	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), config.timing)
+	RenderingServer.frame_pre_draw.connect(before_draw)
 	RenderingServer.frame_post_draw.connect(after_draw)
 	print("BISTRO_READY ", JSON.stringify(inventory))
 
@@ -287,6 +303,16 @@ func _process(_delta: float) -> void:
 		# The logical 60Hz route is indexed by rendered frames, never wall time.
 		set_camera(tick if tick < int(config.warmup) else tick - int(config.warmup))
 
+func before_draw() -> void:
+	pre_draw_usec = Time.get_ticks_usec()
+
+func cpu_snapshot() -> PackedInt64Array:
+	var value: PackedInt64Array = ClassDB.class_call_static("B3CpuClock", "snapshot")
+	if value.size() != 7 or value[0] < 0 or value[1] <= 0:
+		fail("Native CPU boundary snapshot failed")
+		return PackedInt64Array()
+	return value
+
 func after_draw() -> void:
 	if finished:
 		return
@@ -294,13 +320,22 @@ func after_draw() -> void:
 	var frame := tick - int(config.warmup)
 	if frame == -1:
 		roi_start_usec = now
+		if cpu_clock_enabled:
+			cpu_start = cpu_snapshot()
+			cpu_start_after_usec = Time.get_ticks_usec()
+	var cpu_end := PackedInt64Array()
+	var cpu_end_after_usec := 0
+	if frame == int(config.frames) - 1 and cpu_clock_enabled:
+		cpu_end = cpu_snapshot()
+		cpu_end_after_usec = Time.get_ticks_usec()
 	if frame >= 0 and frame < int(config.frames):
 		var viewport := get_viewport().get_viewport_rid()
-		var sample := {"frame": frame, "frame_interval_ms": float(now - previous_post_usec) / 1000.0}
+		var sample := {"frame": frame, "frame_interval_ms": float(now - previous_post_usec) / 1000.0,
+			"render_pre_post_ms": float(now - pre_draw_usec) / 1000.0,
+			"observation_frame_drawn": Engine.get_frames_drawn()}
 		if config.timing:
 			sample.cpu_setup_ms = RenderingServer.get_frame_setup_time_cpu()
 			sample.cpu_viewport_ms = RenderingServer.viewport_get_measured_render_time_cpu(viewport)
-			sample.cpu_render_ms = sample.cpu_setup_ms + sample.cpu_viewport_ms
 			sample.gpu_ms = RenderingServer.viewport_get_measured_render_time_gpu(viewport)
 			sample.draw_calls = RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)
 			sample.primitives = RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)
@@ -309,7 +344,7 @@ func after_draw() -> void:
 	tick += 1
 	if frame == int(config.frames) - 1:
 		finished = true
-		var report := {"schema_version": 1, "config": config, "inventory": inventory,
+		var report := {"schema_version": 2, "config": config, "inventory": inventory,
 			"quality": quality_settings(), "ibl": ibl_identity,
 			"godot": Engine.get_version_info(), "debug": OS.has_feature("debug"),
 			"import_inventory": import_inventory,
@@ -318,6 +353,20 @@ func after_draw() -> void:
 			"api_version": RenderingServer.get_video_adapter_api_version(),
 			"driver": RenderingServer.get_current_rendering_driver_name(),
 			"renderer": RenderingServer.get_current_rendering_method(),
+			"render_thread_model": int(ProjectSettings.get_setting("rendering/driver/threads/thread_model")),
+			"frame_queue": {"configured_frames": ProjectSettings.get_setting("rendering/rendering_device/vsync/frame_queue_size"),
+				"actual_rd_frame_delay": RenderingServer.get_rendering_device().get_frame_delay(),
+				"requested_swapchain_images": ProjectSettings.get_setting("rendering/rendering_device/vsync/swapchain_image_count"),
+				"actual_swapchain_images": null,
+				"scope": "RD ring slots, not host-owned pending count or actual GPU occupancy; requested swapchain images may be driver-clamped and actual count is not exposed here"},
+			"worker_pool": {"configured_max_threads": ProjectSettings.get_setting("threading/worker_pool/max_threads"),
+				"low_priority_thread_ratio": ProjectSettings.get_setting("threading/worker_pool/low_priority_thread_ratio"),
+				"actual_threads_source": "WorkerThreadPool startup line in verbose stdout.log"},
+			"cpu_window": {"start": Array(cpu_start), "end": Array(cpu_end),
+				"call_brackets_usec": [roi_start_usec, cpu_start_after_usec, now, cpu_end_after_usec],
+				"boundary_order": "QPC_then_process_times_then_thread_times",
+				"scope": "N post-draw callback intervals; all process threads, script/physics, rendering, native graph lowering/record/submit/present, ring-slot fence wait/retire and timer bookkeeping; steady-state pipeline remains occupied, no forced GPU drain/readback; presentation/engine work differs from Renderer"},
+			"timing_attribution": "frame is the callback/route observation index; setup is current draw, viewport CPU/GPU are delayed timestamp observations with no exposed producer frame ID; never add their percentiles or interpret setup+viewport as one-frame CPU",
 			"viewport_size": [get_viewport().size.x, get_viewport().size.y],
 			"vsync": DisplayServer.window_get_vsync_mode(), "max_fps": Engine.max_fps,
 			"roi_wall_ms": float(now - roi_start_usec) / 1000.0, "samples": samples,

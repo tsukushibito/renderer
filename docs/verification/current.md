@@ -68,8 +68,8 @@ RGBA16F、EV+1、PBR Neutral、FXAAを接続した。効果名によるbackend�
 Rendererのbuild入力402ファイルとcompiler／feature／profileは先の受入点と一致する。
 カメラとCSMを通常窓でも更新する受入controllerは`c303035`であり、実行物のsourceと区別してhashを保存する。
 比較controllerは`42d94c4`。**描画機能の受入と、材質mip・Pコア条件を揃えた24 processの正式比較が完了した**。
-B3の参照値はCPU描画p95 3.0 ms／GPU p95 5.5 msとする。以下の機材・画質・CPU設定に限った保守的な目安であり、
-GodotのCPU上位側には反復間の変動が残る。Rendererの現在値と改善対象は[性能の節](#bistro-b3-performance)へ示す。
+旧Godot CPU p95から丸めた3.0 msはscopeの異なる参考値であり、Renderer全体の必達予算にはしない。
+正式CPU指標は両processの全thread charged CPU/frame平均へ再校正する。[性能の節](#bistro-b3-performance)で境界と実測の範囲を区別する。
 Windows 11、Core i5-14600KF、RTX 3060 12 GiB、driver 610.88、Rust 1.99.0。
 全BistroのcookはB2と同じ`d74e9863328c238ea4b2a8fc5b617fe28879acf904a46d6b59b4b6874488d4f5`。
 1,296 mesh／1,591 primitive／132材質／405原画像＋4 default画像、3,529 mip、2,832,120三角形を保持する。
@@ -157,6 +157,38 @@ Native BRDF・IBL・影のfilter／絞り込み・depth prepass・batching、AgX
 
 ### CPU条件を揃えた正式比較と性能目標
 
+`renderer-7ft.10`の固定ソース監査では、Godot 4.7.2
+`ed1daf0bf001b61586d9930840f2f1394092c079`の旧CPU timerがnative記録・submit・回収を除外することを確認した。
+主thread描画ではpost-draw signal後にtimestamp結果をviewportへ反映するため、既存sampleのsetupは現在draw、
+viewport CPU/GPUは以前の結果である。producer frame IDはscriptへ公開されず、その和を同一frameのCPUとみなさない。
+
+| 処理 | 固定Godotソースの境界 | 旧setup／viewport |
+|---|---|---|
+| scene/canvas更新 | `_draw`開始からsetup終了 | setupに含む |
+| viewport・culling・描画命令追加 | `_draw_viewport`のbegin/end timestamp | viewport elapsedに含む。workerのjoinまでで、worker CPU総和ではない |
+| screen blit/acquire | viewport本体終了後 | 除外 |
+| Graph lowering・native command記録・submit/present | compositor end_frame→RD swap_buffers | 除外 |
+| 次slotのfence待機・retire・query読出し | RD `_begin_frame` | 除外 |
+| script/physics・draw前のmainloop同期・post-signal dispatch | draw本体の前後 | 除外 |
+
+根拠は固定版の[server drawとtimestamp反映](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/rendering_server_default.cpp#L76-L165)、
+[viewport開始](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_viewport.cpp#L338-L343)と
+[終了](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_viewport.cpp#L750-L764)、
+[viewport後のblit](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_viewport.cpp#L977-L983)、
+[RD swap_buffers](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/rendering_device.cpp#L7868-L7881)、
+[回収とGraph end](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/rendering_device.cpp#L8048-L8127)、
+[executeと待機](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/rendering_device.cpp#L8187-L8220)である。
+Safeの[main-thread描画](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/main/main.cpp#L2775-L2786)でも
+[culling workerとjoin](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_scene_cull.cpp#L3438-L3453)は残る。
+
+比較用の`render_pre_post_ms`はSafe/main-threadの同期的draw全体を囲み、native lowering・submit・待機/回収も含む。
+前後のmainloopは含まないため、正式CPU基準は両engineの全process・全thread charged CPU/N平均とする。
+Rendererは開始終了の実host未回収submission数を揃え、Godotは通常のframe ringを進める。
+これは定常的な流入出の区間であり、実GPU occupancyや同じproducer frameの生成〜完了を揃えた測定ではない。
+poll/retire・容量・寿命・失敗処理を保持し、Rendererの全loopと最終drain、明示yield、GPU、throughputも別に残す。
+100 nsはOS CPUカウンタの単位であり精度の保証ではない。開始終了の読みは逐次なので端点のずれと計装費用も残る。
+Godot native時計とRustの新しい定常経路について、以下の旧cohortとは独立して実GPU・メモリ受入と正式反復を確認する。
+
 最初の通常release比較は3,600 warmup＋1,800 frame、各条件3 processの計24 processを完走したが、
 **性能目標には採用していない**。Godotは上記のmipなし条件で、CPUにも大きな変動があった。
 例えばVulkanの計測有効時のactive host p95は13.50→49.21→50.60 ms、
@@ -189,7 +221,7 @@ p95は3 runの最小〜最大、p99は3 runの最大を示す。run平均のperc
 | Renderer D3D12 active host | 6.364 | 7.610〜8.001 | 10.355 |
 | Renderer Vulkan GPU | 7.438 | 8.091〜8.140 | 8.281 |
 | Renderer D3D12 GPU | 7.086 | 7.664〜7.746 | 7.928 |
-| Godot all CPU描画 | 1.545 | 1.895〜2.992 | 4.134 |
+| Godot all 旧setup＋遅延viewport合成 | 1.545 | 1.895〜2.992 | 4.134 |
 | Godot all GPU | 4.592 | 4.818〜5.400 | 5.652 |
 
 Rendererのactive hostはbuild／compile／submit／poll呼出し／結果返却の重複しないhost経過時間で、
@@ -204,9 +236,8 @@ Godot all CPU p95はrun順に1.895／1.944／2.992 ms、p50は1.502／1.545／1.
 有効runのRenderer active host p95の最大／最小差はVulkan約6.2%／D3D12約5.1%、GPU p95は約0.6%／1.1%だった。
 各群の全runを残し、遅い値を外れ値として除外しなかった。
 
-**B3の参照予算はCPU描画p95 3.0 ms／GPU p95 5.5 ms**とする。
-従来と同じくGodot all・timing有効の最悪run p95（2.992050088／5.400250101 ms）を0.5 ms単位で切り上げた。
-この収集群を代表する保守的な比較値であり、普遍的な安定上限やRendererが達成済みの予算ではない。
+旧scopeのCPU参考値3.0 msとGPU参考値5.5 msは、この群のGodot all・timing有効の最悪run p95
+（2.992050088／5.400250101 ms）を0.5 ms単位で切り上げた値である。CPUの3.0 msは正式な全process予算へ流用しない。
 CPUの対象範囲とBRDF／IBL／影のfilter・caster判定／depth prepass／batching／mip画素／出力処理の差は残る。
 表の差や比率をGraph単体の費用、同一GPU命令量による効率差へ帰属しない。
 下のB2予算はbase-only画像・影等なしの過去条件として保持し、B3には適用しない。

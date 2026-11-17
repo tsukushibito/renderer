@@ -511,9 +511,11 @@ viewport timingの無効/有効を独立3 processずつ、計12 run直列実行�
 Godotの全1,296 mesh/1,591 surface/2,832,120 triangleと132材質/405画像を確認し、LOD/occlusionは無効にする。
 内部viewportを固定するのでWindowsのwindow枠による小さい描画領域を1080pと誤認しない。
 
-CPUは[`get_frame_setup_time_cpu()`とviewport CPU時間の和](https://docs.godotengine.org/en/4.7/classes/class_renderingserver.html#class-renderingserver-method-viewport-get-measured-render-time-cpu)、
-GPUはviewport GPU時間、frame間隔は`frame_post_draw`の単調時計差を使う。
-CPU描画値はscript/physics等を含むprocess全体のCPU占有時間ではない。
+CPUの診断内訳として`get_frame_setup_time_cpu()`とviewport CPUを別々に保存する。
+setupは現在draw、viewport CPU/GPUは遅延結果であり、同一frameのCPU時間として加算しない。
+`render_pre_post_ms`はSafe/main-thread描画のpre/post signal間のelapsed、frame間隔はpost-drawの単調時計差である。
+前者はnative Graph lowering・command記録・submit・present・ring-slot待機/回収も含むが、draw前のmainloop同期とscript/physics、
+post signal後のtimestamp dispatch・memory monitor更新は除く。process全体のCPU占有時間とは区別する。
 GPU queryは遅れて観測され得るので、sampleのframe番号をGPU命令の厳密なframe対応に使わず、
 同じ周期routeの分布として比較する。表示完了時刻・input latency・実scanout FPSは計測していない。
 通常実行のframe間隔とtiming有効時のCPU/GPU値を区別する。
@@ -555,7 +557,8 @@ IBL・影・表示変換を完成させてから、画像受入と通常版の�
 python -B tools/bistro/b3_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-pbr/b3-acceptance --repeats 3
 ```
 
-正式比較のEXEは検証・memory計装・Tracyを含めない。同じclean commitからRendererとGodotを準備する。
+正式比較のRenderer EXEは検証・memory計装・Tracyを含めない。同じclean commitからRendererとGodotを準備する。
+Godotには別buildのoptional native CPU clockを指定し、元editor/templateとDLL/descriptor/ABI header/sourceのhashを保存する。
 通常ホストの非管理者・非AppContainerで実行し、計測中はbuild/cook・他のGPU試験や画像解析を並行させない。
 ゲーム等の別の描画負荷も待機させ、実行時のCPU条件を記録する。
 
@@ -570,7 +573,7 @@ QoSは[Windowsの契約](https://learn.microsoft.com/en-us/windows/win32/procthr
 
 ```powershell
 python -B tools/cpu_profile/build.py --profile release --example bistro --features vulkan,d3d12 --output .tools/bistro-pbr/b3-normal-build
-python -B tools/godot_bistro/benchmark.py prepare --profile b3 --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --editor .tools/godot-baseline/editor/Godot_v4.7.2-stable_win64_console.exe --template .tools/godot-baseline/templates/windows_release_x86_64.exe --asset-root . --output .tools/godot-baseline/prepared-b3
+python -B tools/godot_bistro/benchmark.py prepare --profile b3 --cpu-clock-manifest .tools/b3-cpu-clock/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --editor .tools/godot-baseline/editor/Godot_v4.7.2-stable_win64_console.exe --template .tools/godot-baseline/templates/windows_release_x86_64.exe --asset-root . --output .tools/godot-baseline/prepared-b3
 python -B tools/bistro/b3_benchmark.py plan --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200 --cpu-policy performance-cores
 python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200 --cpu-policy performance-cores
 ```
@@ -583,7 +586,18 @@ Godotのdraw／primitive値はエンジン内のbatch等の統計で、Renderer�
 3600 frameのwarmup後に1800 frameを測り、CPUの各phase・poll/yield・OS charged CPU・GPUを分ける。
 `active_host_elapsed_ns`は重複しないcaller処理の経過時間で、yieldを除くがOS deschedulingを含み得る。
 native CPU timerは内包されるので加算せず、観測完了latencyやCPU/GPUの和から表示FPSを計算しない。
-GodotのCPU値はsetup＋viewport、Rendererはoffscreenであり、表示完了・操作の最終受入はB5で行う。
+正式CPU指標は両engineで共通のWindows全process・全thread charged CPU/frame平均とする。
+Godotはwarmup最後とN frame後のpost-draw callback、Rendererは`--steady-state-cpu`のN route反復を囲む。
+Rendererは開始終了のhost所有未回収submission数を実測して揃え、Godotは通常frame ringを維持し、強制GPU idle/readbackを加えない。
+これは定常的な流入出を揃えた区間であり、同じproducer frame IDの生成から完了までを囲む境界ではない。
+Godotのqueryには公開producer IDがなく、sample frameはcallback/routeの観測番号である。
+caller thread CPU、QPC wall/N、throughput、Rendererの全loop/最終drainと各submissionの観測完了latencyも独立して残す。
+平均CPUをper-frame p95へ読み替えず、wallから全thread CPUを引いてwait時間としない。
+native時計のQPC窓は呼出し前後の単調時計で囲んで整合を検査し、境界のdeschedulingを架空の精度で消さない。
+Godotはthread_model=1を明示し起動verbose logのworker数を保存する。affinity論理CPU数をworker数とはみなさない。
+Godotにはscript/mainloop/表示が含まれ、Rendererはoffscreenである。BRDF/影/AA等の違いと計装費用も残す。
+正式CPU参照予算はGodot all・timer/query無効の最悪run平均を0.5ms単位で切り上げ、旧3ms p95は流用しない。
+画像・strict/shipping・寿命・ゼロframe割当はstationary経路でも別artifactで確認する。表示完了・操作の最終受入はB5で行う。
 Godot画像のB3反復は、予備検証で固定した全画素最大1 RGB code・変動畫素16以下・alpha完全一致を使う。
 露出/AAの既知誤りを拒否する感度を確認し、正式runの失敗に合わせて閾値を変更しない。
 Renderer反復とstrict/Disabled照合はbit exactを維持する。結果と未確認範囲は[現在の検証状況](../verification/current.md)へ記録する。

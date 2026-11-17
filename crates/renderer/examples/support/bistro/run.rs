@@ -27,6 +27,7 @@ struct Pending<B: Backend> {
     plan: CompiledGraph,
     sample: Sample,
     started: Instant,
+    record: bool,
 }
 
 fn camera(conditions: &Conditions, options: &Options, frame: usize) -> Result<Camera, Error> {
@@ -70,12 +71,9 @@ fn frames<B: Backend>(
     samples: &mut Vec<Sample>,
     count: usize,
     record: bool,
+    drain: bool,
 ) -> Result<(), Error> {
-    fn retire<B: Backend>(
-        mut entry: Pending<B>,
-        samples: &mut Vec<Sample>,
-        record: bool,
-    ) -> Result<(), Error> {
+    fn retire<B: Backend>(mut entry: Pending<B>, samples: &mut Vec<Sample>) -> Result<(), Error> {
         #[cfg(feature = "tracy")]
         let _retire = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("bistro.retire"), 0));
@@ -112,7 +110,7 @@ fn frames<B: Backend>(
             drop((completed, entry.work, entry.plan));
         }
         entry.sample.phases[4] = started.elapsed().as_nanos() as u64;
-        if record {
+        if entry.record {
             samples.push(entry.sample);
         }
         Ok(())
@@ -129,7 +127,7 @@ fn frames<B: Backend>(
             None
         };
         if queue.len() == options.inflight {
-            retire(queue.pop_front().unwrap(), samples, record)?;
+            retire(queue.pop_front().unwrap(), samples)?;
         }
         let started = Instant::now();
         let stage = Instant::now();
@@ -195,6 +193,7 @@ fn frames<B: Backend>(
                 iteration_ns: iteration_started.elapsed().as_nanos() as u64,
             },
             started,
+            record,
         });
         #[cfg(feature = "tracy")]
         {
@@ -210,8 +209,10 @@ fn frames<B: Backend>(
     } else {
         None
     };
-    while let Some(entry) = queue.pop_front() {
-        retire(entry, samples, record)?;
+    if drain {
+        while let Some(entry) = queue.pop_front() {
+            retire(entry, samples)?;
+        }
     }
     Ok(())
 }
@@ -404,7 +405,7 @@ fn measurement(
             "active_host_elapsed_ns":s.phases[0]+s.phases[1]+s.phases[2]+s.poll_cpu_ns+s.phases[4],
             "iteration_wall_ns":s.iteration_ns,
             "gpu_ns":s.native.and_then(|n|if let renderer::GpuTiming::Available{elapsed,..}=n.gpu {Some(elapsed.as_nanos() as u64)}else{None})})).collect::<Vec<_>>(),
-        "active_host_scope":"nonoverlapping caller build/compile/submit/poll-call/result-return elapsed; excludes explicit yield waits, includes polling overhead and possible OS descheduling; not charged CPU or Godot-identical scope",
+        "active_host_scope":"nonoverlapping caller build/compile/submit/poll-call/result-return elapsed phase sum; excludes explicit yield waits and bookkeeping outside these timers (poll-loop timeout checks, metrics/sample recording); includes poll-call cost and possible OS descheduling; complete windows retain the omitted bookkeeping; not charged CPU or Godot-identical scope",
         "frame_wall_scope":"host build start to observed GPU completion; includes queue residence and intervening host work; excludes result return; not display latency",
         "readback_outside_measurement":true,"presentation":false}),
     )
@@ -531,6 +532,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         &mut samples,
         options.warmup,
         false,
+        !options.steady_state_cpu,
     )?;
     let warmup_ns = stage.elapsed().as_nanos() as u64;
     if options.resource_checks {
@@ -555,6 +557,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let tracy_connected_start = tracy_client::Client::is_connected();
     #[cfg(windows)]
     let frequency = super::clock::frequency()?;
+    let steady_pending_start = queue.len();
     #[cfg(windows)]
     let cpu_start = super::clock::Boundary::capture()?;
     #[cfg(feature = "memory-profiling")]
@@ -576,6 +579,34 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             &mut samples,
             options.frames,
             true,
+            !options.steady_state_cpu,
+        )?;
+    }
+    // A stationary window retains the same bounded pipeline occupancy at
+    // both boundaries, like Godot's post-draw callback interval. The drain
+    // remains inside the separately reported complete ROI, never discarded.
+    let steady_wall = started.elapsed().as_nanos() as u64;
+    let steady_pending_end = queue.len();
+    #[cfg(windows)]
+    let steady_boundary = if options.steady_state_cpu {
+        Some(super::clock::Boundary::capture()?)
+    } else {
+        None
+    };
+    if options.steady_state_cpu {
+        frames(
+            &mut backend,
+            &mut resident,
+            &scene,
+            options,
+            &conditions,
+            &mut pool,
+            &mut workspace,
+            &mut queue,
+            &mut samples,
+            0,
+            true,
+            true,
         )?;
     }
     let wall = started.elapsed().as_nanos() as u64;
@@ -583,11 +614,29 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let memory = renderer::measurement::Snapshot::now().since(memory_start);
     #[cfg(windows)]
     let cpu = super::clock::Boundary::capture()?.difference(cpu_start, frequency)?;
+    #[cfg(windows)]
+    let steady_cpu = steady_boundary
+        .map(|boundary| boundary.difference(cpu_start, frequency))
+        .transpose()?
+        .unwrap_or(Value::Null);
     #[cfg(not(windows))]
     let cpu = Value::Null;
+    #[cfg(not(windows))]
+    let steady_cpu = Value::Null;
     #[cfg(feature = "tracy")]
     let tracy_connected_end = tracy_client::Client::is_connected();
-    let measured = measurement(&samples, options, wall, cpu)?;
+    let mut measured = measurement(&samples, options, wall, cpu)?;
+    measured["steady_state_window"] = if options.steady_state_cpu {
+        json!({"frames":options.frames,"wall_ns":steady_wall,"cpu":steady_cpu,
+            "host_pending_at_start":steady_pending_start,"host_pending_at_end":steady_pending_end,
+            "scope":"all-process CPU and caller wall over N changing-route iterations with equal host-owned unretired submission counts; not actual GPU occupancy; includes prior-frame poll/retire/result return, exports/deletion, instrumentation and scheduling; no explicit final drain in this stationary interval; complete ROI cpu/wall and tail remain reported separately"})
+    } else {
+        Value::Null
+    };
+    measured["drain_tail_wall_ns"] = json!(wall - steady_wall);
+    measured["drain_tail_scope"] = json!(
+        "caller wall after stationary endpoint through final pending drain; includes boundary-clock acquisition/bookkeeping, not a pure GPU wait"
+    );
     if options.resource_checks {
         resource_stages["after_frames"] = backend.memory_snapshot()?;
     }

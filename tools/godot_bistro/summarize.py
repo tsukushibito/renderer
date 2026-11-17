@@ -6,11 +6,11 @@ from pathlib import Path
 import statistics
 
 if __package__:
-    from .benchmark import digest, read, validate_report
+    from .benchmark import digest, read, validate_report, cpu_window_metrics
     from .profiles import compare_settings, orientation_fixture, settings
     from .repeat import PROFILE as REPEAT_PROFILE, compare_files
 else:
-    from benchmark import digest, read, validate_report
+    from benchmark import digest, read, validate_report, cpu_window_metrics
     from profiles import compare_settings, orientation_fixture, settings
     from repeat import PROFILE as REPEAT_PROFILE, compare_files
 
@@ -40,7 +40,7 @@ def aggregate(runs):
     # fast runs, an average FPS, or a percentile of run averages.
     all_timed = groups["all-timing-1"]
     budgets = {metric: math.ceil(all_timed[metric]["p95"]["run_max"] * 2) / 2
-               for metric in ("cpu_render_ms", "gpu_ms")}
+               for metric in ("gpu_ms",)}
     return groups, budgets
 
 
@@ -94,6 +94,17 @@ def assemble(path):
         runs.append({**entry, "report": report, "engine_log_sha256": digest(folder / "engine.log"),
                      "stdout_log_sha256": digest(folder / "stdout.log")})
     groups, budgets = aggregate(runs)
+    cpu_groups = {}
+    if identity.get("cpu_clock"):
+        for culling in ("all", "frustum"):
+            for timing in (False, True):
+                selected = [run for run in runs if run["culling"] == culling and run["timing"] is timing]
+                scalars = [cpu_window_metrics(run["report"], 1800) for run in selected]
+                cpu_groups[f"{culling}-timing-{int(timing)}"] = {
+                    metric: {"run_values": [value[metric] for value in scalars],
+                             "run_median": statistics.median(value[metric] for value in scalars),
+                             "run_min": min(value[metric] for value in scalars),
+                             "run_max": max(value[metric] for value in scalars)} for metric in scalars[0]}
     comparisons = []
     if identity["profile"] == "b3":
         reference = directory / runs[0]["run_id"]
@@ -108,8 +119,11 @@ def assemble(path):
             "capture_reproducibility": {"profile": REPEAT_PROFILE if identity["profile"] == "b3" else "B2 archived byte-exact reference; hashes retained",
                                         "comparisons": comparisons},
             "reference_p95_budgets_ms": budgets,
+            "whole_process_scalars": cpu_groups,
+            "reference_mean_cpu_budget_ms": (math.ceil(cpu_groups["all-timing-0"]
+                ["process_charged_cpu_ms_per_frame"]["run_max"] * 2) / 2) if cpu_groups else None,
             "capture_distinct_hashes": {name: sorted(values) for name, values in capture_sets.items()},
-            "scope": "Godot renderer reference for the explicitly archived B2/B3 profile, not isolated RenderGraph overhead or pixel parity with Renderer. B3 retains native Godot AgX, pre-tonemap FXAA, BRDF/prefilter/shadow-filter differences versus Renderer Neutral/post-tonemap FXAA. CPU = setup + viewport, excludes scripts/physics/process-wide CPU; GPU = viewport observed query. Frame intervals = post-draw callback gaps, not scanout. Query observations may lag route frame numbers. Timers off/on are independent processes; differences include run variability. Godot memory monitors are not residency or allocation event counts; static_memory_bytes=0 is an unavailable release counter, not zero memory use.",
+            "scope": "Godot whole-process charged CPU/N is an aggregate mean across all threads, includes scripts/physics, rendering, native record/submit/present, ring waits/retire and instrumentation. It has no per-frame p95. pre/post draw is synchronous elapsed in Safe thread model; excludes earlier mainloop/sync and later timestamp dispatch. Setup is current draw; viewport CPU/GPU are delayed observations with no exposed producer ID and are never summed with current setup. Frame intervals and QPC wall/N are throughput, not scanout. Complete route cycles and stationary pipeline occupancy do not make native workloads, presentation, IBL, mips, shadows or AA identical to Renderer. Timers off/on differences include independent run variability. Godot static_memory_bytes=0 is an unavailable release counter, not zero allocations.",
             "runs": runs}
 
 

@@ -32,6 +32,7 @@
 # Vendored upstream byte hashes and original license/whitespace are preserved.
 /tools/bistro/mikktspace/mikktspace.[ch] -text -whitespace linguist-vendored=true
 /tools/bistro/mikktspace/bridge.c text eol=lf
+/tools/godot_bistro/cpu_clock/vendor/* -text -whitespace linguist-vendored=true
 /docs/verification/bistro-*.json text eol=lf
 
 # The documentation bundle, license and digest are reproduced byte-for-byte.

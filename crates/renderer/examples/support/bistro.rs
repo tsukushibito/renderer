@@ -50,6 +50,7 @@ struct Options {
     warmup: usize,
     inflight: usize,
     gpu_timing: bool,
+    steady_state_cpu: bool,
     alpha_only: bool,
     force_opaque: bool,
     capture_all_views: bool,
@@ -76,6 +77,7 @@ impl Options {
             warmup: 24,
             inflight: 2,
             gpu_timing: false,
+            steady_state_cpu: false,
             alpha_only: false,
             force_opaque: false,
             capture_all_views: false,
@@ -93,6 +95,7 @@ impl Options {
             match argument.as_str() {
                 "--fixture" => result.fixture = true,
                 "--gpu-timing" => result.gpu_timing = true,
+                "--steady-state-cpu" => result.steady_state_cpu = true,
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
                 "--resource-checks" => result.resource_checks = true,
@@ -160,6 +163,9 @@ impl Options {
             || !(1..=4).contains(&result.inflight)
         {
             return Err("invalid extent/frame/in-flight limits".into());
+        }
+        if result.steady_state_cpu && result.warmup < result.inflight {
+            return Err("stationary CPU measurement requires a fully warmed pipeline".into());
         }
         if result.resource_checks
             && (!cfg!(feature = "memory-profiling")

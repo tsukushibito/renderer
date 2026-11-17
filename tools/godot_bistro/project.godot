@@ -15,6 +15,7 @@ window/stretch/mode="viewport"
 window/stretch/aspect="keep"
 
 [rendering]
+driver/threads/thread_model=1
 renderer/rendering_method="forward_plus"
 rendering_device/driver.windows="vulkan"
 renderer/rendering_method.mobile="forward_plus"

@@ -42,7 +42,7 @@ def schedule(repeats):
 
 
 def command(binary, directory, *, api, manifest=None, ibl_manifest=None):
-    result = [str(binary), "--api", api, "--resource-checks", "--capture-shadow-maps",
+    result = [str(binary), "--api", api, "--resource-checks", "--capture-shadow-maps", "--steady-state-cpu",
               "--capture-all-views", "--frames", "24", "--warmup", "8", "--inflight", "2",
               "--view", "route", "--output", str(directory)]
     if manifest:

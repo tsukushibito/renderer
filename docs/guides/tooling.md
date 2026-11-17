@@ -98,6 +98,22 @@ captureは実体解決後もreport directory内にあることを要求する。
 `measure_runtime.py`は通常releaseの保存済みEXEを逐次実行し、native詳細CPU timerとGPU timestampを
 一緒に切り替えたoff/onを分ける。非収集の`native_phase_totals_ns`は`null`であり、query単独の費用を分離した計測とは扱わない。
 これらの計測にWPRや管理者実行は不要であり、ETWの収集手順とは独立する。
+正式B3比較ではGodotのoptional CPU clock GDExtensionも使い、両engineで全thread合計のcharged CPU/Nを測る。
+時計はROI境界だけでQPC→`GetProcessTimes`→`GetThreadTimes`の順に取得し、frequency、生counter、caller thread IDと失敗を保存する。
+Godotの固定editorから生成したABI header、source、compiler、DLL、descriptorをhashで結び付ける。
+実装とbuild/smoke手順は[CPU clock](../../tools/godot_bistro/cpu_clock/README.md)を参照する。
+計装はbenchmark用extensionとexample supportだけに置き、Rendererライブラリのshippingには呼出し・metadata・依存を追加しない。
+`GetProcessTimes`は全threadのuser/kernel合計、`GetThreadTimes`はcallerだけで、後者を前者へ加算しない。
+100 nsは戻り値の単位であり実効精度の保証ではなく、並列実行でprocess CPUがwallを超え得る。
+[process時間](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes)、
+[thread時間](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadtimes)
+
+QPCは待機・deschedulingを含むelapsedである。wallからprocess CPUを引いてwait時間とせず、明示yieldは別のelapsedとして残す。
+CPU/frame平均、wall/N、個別frame percentile、GPU timestamp、観測完了latencyを混同しない。
+時計二回、Godotのpre/post callback・sample作成、詳細timestampの文字列/map/query読出しにも費用がある。
+timer/query無効と有効を独立反復し、差にはrun間変動が含まれることを明記する。
+並行build/cook/重い試験/GPU/性能収集には`tools/bistro/exclusive_work.ps1`の共有lockを使い、
+`FileMode.CreateNew`で取得した自分のtokenだけをfinallyで解放する。他者lockを消さない。
 実行したprofile/hash・レビュー修正・二APIの内容照合と計測値は[現行検証](../verification/current.md#bistro-pbr)へまとめる。
 
 ## D3D12 bindingsの生成

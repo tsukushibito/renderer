@@ -19,6 +19,9 @@ def measured(timing=False, api="vulkan"):
          "poll_calls_elapsed_ns": 25, "yield_elapsed_ns": 50,
          "active_host_elapsed_ns": 425, "iteration_wall_ns": 1000,
          "gpu_ns": 100_000 if timing else None} for index in range(10)]
+    value["measurement"]["steady_state_window"] = {"frames": 10, "host_pending_at_start": 2, "host_pending_at_end": 2,
+        "cpu": value["measurement"]["cpu"], "wall_ns": 999_999_000}
+    value["measurement"]["drain_tail_wall_ns"] = 1000
     return value
 
 
@@ -58,6 +61,8 @@ class B3ComparisonTests(unittest.TestCase):
         self.assertEqual(metric["scalars"]["main_thread_charged_cpu_ms_per_frame"], 40)
         self.assertEqual(metric["scalars"]["wall_ms_per_frame"], 100)
         self.assertEqual(metric["scalars"]["offscreen_throughput_fps"], 10)
+        self.assertEqual(metric["scalars"]["stationary_process_charged_cpu_ms_per_frame"], 60)
+        self.assertNotIn("process_charged_cpu_ms_per_frame", metric["distributions"])
         self.assertNotIn("gpu_ms", metric["distributions"])
         self.assertNotIn("fps", metric["build_to_observed_completion_latency"])
         timed = b3.renderer_metrics(measured(True), {"variant": "vulkan", "timing": True}, input_plan())

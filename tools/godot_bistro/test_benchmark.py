@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from benchmark import CAPTURE_VIEWS, ROOT, digest, percentile, read, run_logged, validate_report
+from benchmark import CAPTURE_VIEWS, ROOT, digest, percentile, read, run_logged, validate_report, cpu_window_metrics
 from profiles import compare_settings, orientation_fixture, settings, split_offsets, verify_ibl_manifest
 from summarize import aggregate, assemble
 
@@ -49,10 +49,10 @@ def mip_inventory():
 def fixture(timing=True, profile="b2"):
     config = {"frames": 2, "timing": timing, "profile": profile,
               "quality": settings(profile, B3_CONDITIONS if profile == "b3" else CONDITIONS)}
-    samples = [{"frame": frame, "frame_interval_ms": 10.0} for frame in range(2)]
+    samples = [{"frame": frame, "frame_interval_ms": 10.0, "render_pre_post_ms": 8.0} for frame in range(2)]
     if timing:
         for sample in samples:
-            sample.update(cpu_setup_ms=.1, cpu_viewport_ms=.2, cpu_render_ms=.3,
+            sample.update(cpu_setup_ms=.1, cpu_viewport_ms=.2,
                           gpu_ms=2., draw_calls=1591, primitives=2832120)
     report = {"config": config, "quality": copy.deepcopy(config["quality"]),
                     "debug": False, "driver": "vulkan", "renderer": "forward_plus",
@@ -74,6 +74,41 @@ def fixture(timing=True, profile="b2"):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_native_window_requires_paired_callbacks_and_clock_brackets(self):
+        config, report = fixture()
+        config["cpu_clock_library"] = "/prepared/cpu-clock/b3_cpu_clock.gdextension"
+        report.update(schema_version=2, render_thread_model=1, cpu_window={
+            "start": [100000, 1000000, 10, 20, 2, 3, 42],
+            "end": [120000, 1000000, 10010, 20020, 1002, 2003, 42],
+            "call_brackets_usec": [1000, 1010, 21000, 21010]})
+        for index, sample in enumerate(report["samples"]):
+            sample["observation_frame_drawn"] = 100 + index
+        validate_report(report, config)
+        mutations = [lambda r: r["samples"][1].update(observation_frame_drawn=100),
+                     lambda r: r["samples"][0].update(render_pre_post_ms=11),
+                     lambda r: r["cpu_window"]["end"].__setitem__(0, 140000),
+                     lambda r: r.update(render_thread_model=2)]
+        for mutate in mutations:
+            altered = copy.deepcopy(report)
+            mutate(altered)
+            with self.subTest(mutation=mutate), self.assertRaises(ValueError):
+                validate_report(altered, config)
+
+    def test_charged_window_is_all_threads_mean_and_rejects_bad_boundaries(self):
+        report = {"cpu_window": {"start": [100, 1000, 10, 20, 2, 3, 42],
+                                  "call_brackets_usec": [0, 2, 1000000, 1000002],
+                                  "end": [1100, 1000, 100010, 200020, 10002, 20003, 42]}}
+        result = cpu_window_metrics(report, 10)
+        self.assertEqual(result["process_charged_cpu_ms_per_frame"], 3)
+        self.assertEqual(result["caller_thread_charged_cpu_ms_per_frame"], .3)
+        self.assertEqual(result["qpc_wall_ms_per_frame"], 100)
+        self.assertNotIn("p95", result)
+        for position, invalid in ((0, 99), (1, 1001), (2, 9), (6, 43)):
+            altered = copy.deepcopy(report)
+            altered["cpu_window"]["end"][position] = invalid
+            with self.subTest(position=position), self.assertRaises(ValueError):
+                cpu_window_metrics(altered, 10)
+
     def test_b3_requires_complete_native_mips_base_pixels_and_material_references(self):
         config, report = fixture(profile="b3")
         validate_report(report, config)
@@ -129,7 +164,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_timing_disabled_is_missing_instead_of_zero(self):
         config, report = fixture(False)
-        self.assertEqual(set(validate_report(report, config)), {"frame_interval_ms"})
+        self.assertEqual(set(validate_report(report, config)), {"frame_interval_ms", "render_pre_post_ms"})
         report["samples"][0]["gpu_ms"] = 0
         with self.assertRaises(ValueError):
             validate_report(report, config)
@@ -174,12 +209,12 @@ class EvidenceTests(unittest.TestCase):
         for culling in ("all", "frustum"):
             for timing in (False, True):
                 for repetition in (1, 2, 3):
-                    metrics = ["frame_interval_ms"] + (["cpu_render_ms", "gpu_ms"] if timing else [])
+                    metrics = ["frame_interval_ms"] + (["cpu_setup_ms", "cpu_viewport_ms", "gpu_ms"] if timing else [])
                     runs.append({"run_id": f"{culling}-timing-{int(timing)}-{repetition}",
                                  "culling": culling, "timing": timing,
                                  "summary": {m: {s: 1.1 * repetition for s in ("mean", "p50", "p95", "p99")} for m in metrics}})
         _, budgets = aggregate(runs)
-        self.assertEqual(budgets, {"cpu_render_ms": 3.5, "gpu_ms": 3.5})
+        self.assertEqual(budgets, {"gpu_ms": 3.5})
         for invalid in (runs[:-1], runs[:-1] + [runs[0]]):
             with self.assertRaises(ValueError):
                 aggregate(invalid)
