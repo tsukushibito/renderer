@@ -153,6 +153,37 @@ fn reusable_image_extension_discovers_each_input_description() {
 }
 
 #[test]
+fn reusable_buffer_extension_discovers_size_and_rejects_recycled_handles() {
+    fn copy(graph: &mut Graph, input: renderer::graph::BufferHandle) -> Result<(), GraphError> {
+        let desc = graph.buffer_desc(input)?;
+        let output = graph.buffer("compatible buffer", desc)?;
+        graph.copy_buffer("copy full input", input, 0, output, 0, desc.size)?;
+        graph.export_buffer(output)
+    }
+
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let desc = BufferDesc { size: 28 };
+    let input = graph.buffer("input", desc).unwrap();
+    // Description lookup is valid before initialization, just as for images.
+    assert_eq!(graph.buffer_desc(input).unwrap(), desc);
+    graph
+        .upload_buffer("input bytes", input, 0, &[0; 28])
+        .unwrap();
+    copy(&mut graph, input).unwrap();
+    let plan = graph.compile().unwrap();
+    assert_eq!(plan.pass_count(), 2);
+    drop(plan);
+
+    let mut recycled = pool.begin().unwrap();
+    recycled.buffer("new occupant", desc).unwrap();
+    let error = recycled.buffer_desc(input).unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
+    assert_eq!(error.resource(), Some(input.into()));
+    assert_eq!(error.resource_name(), None);
+}
+
+#[test]
 fn builder_errors_identify_the_attempt_without_creating_a_pass() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();

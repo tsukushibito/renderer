@@ -63,9 +63,18 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
             Ok(transformed)
         })
         .unwrap();
-    assert!(frame.readback.is_some());
+    let output = frame.output();
+    frame.readback().expect("requested final output readback");
+    assert_eq!(
+        frame.graph().image_desc(output).unwrap(),
+        renderer::graph::ImageDesc::rgba8(view.width, view.height)
+    );
     assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
-    let plan = frame.graph.compile().unwrap();
+    let plan = frame.compile().unwrap();
+    assert!(
+        plan.ordered_pass_names()
+            .any(|name| name == "view readback")
+    );
     assert!(
         plan.ordered_pass_names()
             .any(|name| name == "external custom transform")
@@ -114,9 +123,9 @@ fn identity_extension_exports_its_input_without_a_copy() {
             Ok(color)
         })
         .unwrap();
-    assert_eq!(frame.output, returned.unwrap());
+    assert_eq!(frame.output(), returned.unwrap());
     assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
-    let plan = frame.graph.compile().unwrap();
+    let plan = frame.compile().unwrap();
     assert_eq!(
         plan.ordered_pass_names().collect::<Vec<_>>(),
         ["view clear"]

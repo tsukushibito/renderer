@@ -14,20 +14,61 @@ use std::{
 
 /// Limits reserved at an explicit preparation boundary. Normal frames never grow
 /// these buffers; changing a limit requires preparing a new pool.
+///
+/// Limits apply to each slot, not to the pool as a whole. Budget for the largest
+/// declaration set, including branches that compilation will cull. Shared
+/// bindings save operand storage, but each using pass still needs accesses.
+/// Builder scratch can require more accesses than the final deduplicated plan.
+/// The analysis limits describe metadata, not GPU memory or native capacities.
+///
+/// A failed builder returns its unpublished storage. Compilation consumes the
+/// graph even on failure. Inspect [`GraphError::capacity`] to identify the bound:
+/// return retained owners for slot backpressure, or prepare a new pool with the
+/// relevant metadata bounds at a change boundary. No limit silently grows or
+/// waits for GPU work. Analysis may report no exact `required` count, so tune
+/// against representative maximum inputs, not only a single frame's draw count.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GraphCapacity {
+    /// Logical buffer/image declarations, including distinct canonical imports.
+    /// Reimporting the same consistent snapshot does not consume another entry.
     pub resources: usize,
+    /// Operation declarations, including passes that may later be culled.
     pub passes: usize,
+    /// Encoded resource accesses and per-pass overlap/deduplication scratch.
+    /// Include temporary duplicate reads before Raster access compression.
     pub accesses: usize,
+    /// Indexed draw operands across all Raster passes; attachment-only passes
+    /// consume no draw entries.
     pub draws: usize,
+    /// Descriptor operands across Compute dispatches and distinct Raster binding
+    /// sets. Reusing one set in more draws does not duplicate its operands.
     pub bindings: usize,
+    /// Color plus depth attachment operands across Raster/attachment passes.
+    /// Reusing a View in another pass consumes another operand.
     pub attachments: usize,
+    /// Distinct explicit [`Graph::depends_on`] edges. Repeating the same pair
+    /// does not consume capacity; inferred dependencies use `edges` instead.
     pub dependencies: usize,
+    /// Initialized intervals captured by buffer/image imports across resources.
+    /// This is separate from the backing slots of [`super::ImportRangesPool`].
     pub initial_ranges: usize,
+    /// UTF-8 bytes in declaration names, including names of culled declarations.
+    /// This counts bytes, not Unicode characters or a per-name maximum.
     pub name_bytes: usize,
+    /// Total bytes captured by public buffer/image uploads in one graph.
+    /// Compilation shares this storage rather than copying the payload again.
     pub upload_bytes: usize,
+    /// Bound for each analysis edge arena: producer/dataflow and execution
+    /// ordering. They are separate arenas with this same bound, not a combined
+    /// edge count; fan-out and explicit dependencies can exceed the pass count.
     pub edges: usize,
+    /// Bound for each resource-interval arena and for final initialized ranges.
+    /// Partial writes/initial ranges split intervals, so resource count alone
+    /// does not determine this requirement.
     pub segments: usize,
+    /// Read-only access records retained by hazard analysis. One record is
+    /// needed per live read-only access, independent of interval fragmentation.
+    /// Development validation also analyzes otherwise culled declarations.
     pub readers: usize,
 }
 impl Default for GraphCapacity {
@@ -312,6 +353,9 @@ impl fmt::Debug for GraphPool {
     }
 }
 impl GraphPool {
+    /// Reserve `slots` independent Graph backings with the given per-slot
+    /// limits. This is a preparation boundary and can allocate. Zero slots and
+    /// failed reservations return a classified capacity error.
     pub fn new(capacity: GraphCapacity, slots: usize) -> Result<Self, GraphError> {
         if slots == 0 {
             return Err(capacity_error(GraphCapacityKind::Slots, 0, Some(1)));
@@ -327,6 +371,7 @@ impl GraphPool {
             capacity,
         })
     }
+    /// The immutable per-slot limits selected at preparation.
     pub fn capacity(&self) -> GraphCapacity {
         self.capacity
     }
@@ -360,6 +405,12 @@ impl GraphPool {
         }
         released
     }
+    /// Borrow an idle prepared slot and give it a fresh handle identity.
+    ///
+    /// Returns `Slots` capacity backpressure while all slots are retained by
+    /// builders, plans or native/CPU consumers; no allocation or wait is used.
+    /// Dropping an unfinished builder or returning all pins of a compiled plan
+    /// permits reuse. Handles from the previous checkout are always rejected.
     pub fn begin(&mut self) -> Result<Graph, GraphError> {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running()

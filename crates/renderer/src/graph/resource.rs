@@ -64,6 +64,8 @@ pub struct ResourceKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BufferDesc {
+    /// Logical byte length. [`Graph::buffer`] rejects zero; native alignment,
+    /// memory placement and Device size limits are separate runtime concerns.
     pub size: u64,
 }
 
@@ -349,6 +351,9 @@ impl Graph {
         data.exported.push(false);
         Ok(index)
     }
+    /// Declare a nonempty transient buffer with initially undefined contents.
+    /// This reserves logical metadata only, not native memory. Use upload/copy
+    /// or a reviewed producer before reading/exporting the required bytes.
     pub fn buffer(&mut self, name: &str, desc: BufferDesc) -> Result<BufferHandle, GraphError> {
         if desc.size == 0 {
             return Err(GraphError::new(
@@ -363,6 +368,10 @@ impl Graph {
             index,
         })
     }
+    /// Declare a transient image with initially undefined contents.
+    /// Extents, mip/layer counts and packed byte length must be representable.
+    /// Logical support does not imply that every backend supports every use;
+    /// native capabilities and prepared working-set limits are checked later.
     pub fn image(&mut self, name: &str, desc: ImageDesc) -> Result<ImageHandle, GraphError> {
         if desc.width == 0 || desc.height == 0 || desc.byte_len().is_none() {
             return Err(GraphError::new(
@@ -377,6 +386,19 @@ impl Graph {
             index,
         })
     }
+    /// Query a local transient or imported buffer's immutable description.
+    /// No contents, initialization or GPU-completion guarantee is implied.
+    /// Foreign handles, including an earlier checkout of this pool, are rejected.
+    pub fn buffer_desc(&self, buffer: BufferHandle) -> Result<BufferDesc, GraphError> {
+        let id = self.buffer_id(buffer)?;
+        let ResourceDesc::Buffer(desc) = self.resources[id].desc else {
+            unreachable!("buffer_id established the resource kind")
+        };
+        Ok(desc)
+    }
+    /// Query a local transient or imported image's immutable description.
+    /// No contents, initialization or GPU-completion guarantee is implied.
+    /// Foreign handles, including an earlier checkout of this pool, are rejected.
     pub fn image_desc(&self, image: ImageHandle) -> Result<ImageDesc, GraphError> {
         self.image_desc_at(self.image_id(image)?)
     }
@@ -439,6 +461,14 @@ impl Graph {
             aspect: desc.format.aspect(),
         })
     }
+    /// Connect a runtime-issued buffer snapshot to this graph.
+    ///
+    /// The snapshot supplies canonical identity, content revision, description
+    /// and known initialized ranges. Consistent repeated imports return the
+    /// same logical handle; conflicting snapshots of one identity are rejected.
+    /// Submission checks that mutable runtime state still matches the snapshot.
+    /// Importing does not wait for GPU completion or transfer registration
+    /// ownership from the original caller.
     pub fn import_buffer(
         &mut self,
         name: &str,
@@ -456,6 +486,13 @@ impl Graph {
             index,
         })
     }
+    /// Connect a runtime-issued image snapshot to this graph.
+    ///
+    /// Consistent repeated imports share one logical identity. The snapshot's
+    /// initialization guarantee covers the complete image, and conflicting
+    /// revisions/descriptions are rejected. The runtime checks freshness again
+    /// at submission. This operation neither waits for GPU completion nor
+    /// transfers the caller's runtime registration ownership.
     pub fn import_image(
         &mut self,
         name: &str,
@@ -512,6 +549,13 @@ impl Graph {
         self.data_mut().imports.insert(key, index);
         Ok(index)
     }
+    /// Keep this buffer's final contents observable outside the graph.
+    ///
+    /// Compilation requires every byte to be initialized and retains its
+    /// necessary producers. Repeated export is idempotent. Export does not
+    /// submit, wait, read back bytes, or transfer an imported registration's
+    /// ownership. Read-only snapshot mesh inputs must first be copied into an
+    /// independent buffer rather than exported directly.
     pub fn export_buffer(&mut self, buffer: BufferHandle) -> Result<(), GraphError> {
         let id = self.buffer_id(buffer)?;
         if self.resources[id].read_only_input {
@@ -524,6 +568,13 @@ impl Graph {
         self.export(id);
         Ok(())
     }
+    /// Keep this image's final contents observable outside the graph.
+    ///
+    /// Compilation requires all mip/layer subresources to have valid contents
+    /// and retains the necessary producers. Repeated export is idempotent.
+    /// Native registration/result retrieval is a separate runtime operation;
+    /// this declaration neither submits nor waits, and an imported image's
+    /// registration remains owned by its caller.
     pub fn export_image(&mut self, image: ImageHandle) -> Result<(), GraphError> {
         let id = self.image_id(image)?;
         self.export(id);

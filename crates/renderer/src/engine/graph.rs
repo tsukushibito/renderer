@@ -4,8 +4,8 @@ use std::ops::Range;
 
 use super::{FrameSnapshot, MeshData, SnapshotDraw, SnapshotMesh, View};
 use crate::graph::{
-    BufferDesc, BufferHandle, Graph, GraphError, GraphErrorKind, GraphPool, ImageDesc, ImageHandle,
-    MeshUpload, PassHandle,
+    BufferDesc, BufferHandle, CompiledGraph, Graph, GraphError, GraphErrorKind, GraphPool,
+    ImageDesc, ImageHandle, MeshUpload, PassHandle,
 };
 
 /// Responsibility for the final output's runtime registration. This does not
@@ -18,20 +18,88 @@ pub enum FrameOutputOwnership {
     Caller,
 }
 
-/// A normal graph, its final linear RGBA8 output and optional readback pass.
-/// The caller can inspect or extend it before compilation.
+/// A finalized standard graph, its linear RGBA8 output and optional readback.
+///
+/// The output, its registration ownership and the readback selection stay
+/// together until [`Self::compile`] consumes the frame. Inspect the graph with
+/// [`Self::graph`]; add work and choose the output in
+/// [`FrameSnapshot::build_graph`]'s extension callback, before finalization.
+/// Use [`FrameSnapshot::connect_graph`] to assemble a freely mutable recipe.
+///
+/// The final selection cannot be reassigned independently of its ownership:
+/// ```compile_fail
+/// use renderer::engine::FrameGraph;
+/// use renderer::graph::ImageHandle;
+/// fn change_output(frame: &mut FrameGraph, output: ImageHandle) {
+///     frame.output = output;
+/// }
+/// ```
+/// Replacing the graph after finalization is also disallowed:
+/// ```compile_fail
+/// use renderer::engine::FrameGraph;
+/// use renderer::graph::Graph;
+/// fn replace_graph(frame: &mut FrameGraph, graph: Graph) {
+///     frame.graph = graph;
+/// }
+/// ```
 pub struct FrameGraph {
-    pub graph: Graph,
-    pub output: ImageHandle,
-    pub readback: Option<PassHandle>,
+    graph: Graph,
+    output: ImageHandle,
+    readback: Option<PassHandle>,
     output_ownership: FrameOutputOwnership,
 }
 
 impl FrameGraph {
+    /// Inspect the finalized declarations without changing their identity,
+    /// selected output or readback association.
+    pub fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
+    /// The exported final output selected by the extension callback.
+    /// The handle belongs only to this frame's graph.
+    pub fn output(&self) -> ImageHandle {
+        self.output
+    }
+
+    /// The readback of [`Self::output`], if requested during construction.
+    /// Save this handle before compilation to identify its eventual CPU result.
+    ///
+    /// Its association cannot be edited separately from the finalized output:
+    /// ```compile_fail
+    /// use renderer::engine::FrameGraph;
+    /// fn remove_readback(frame: &mut FrameGraph) {
+    ///     frame.readback = None;
+    /// }
+    /// ```
+    pub fn readback(&self) -> Option<PassHandle> {
+        self.readback
+    }
+
     /// Reports who releases the final output registration after GPU consumers
     /// have been scheduled. Imported outputs remain owned by their caller.
     pub fn output_ownership(&self) -> FrameOutputOwnership {
         self.output_ownership
+    }
+
+    /// Consume the finalized declarations and compile them without loading a
+    /// native backend. Output and readback handles obtained above remain valid
+    /// for the resulting plan. Failure returns the graph slot to its pool.
+    pub fn compile(self) -> Result<CompiledGraph, GraphError> {
+        self.graph.compile()
+    }
+
+    /// The native adapter transfers the complete finalized selection together.
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn into_parts(
+        self,
+    ) -> (Graph, ImageHandle, Option<PassHandle>, FrameOutputOwnership) {
+        (
+            self.graph,
+            self.output,
+            self.readback,
+            self.output_ownership,
+        )
     }
 }
 
@@ -204,8 +272,18 @@ impl FrameSnapshot {
         Ok(inputs)
     }
 
-    /// Build the current standard RGBA8 graph. The generic input connection
-    /// above does not impose this recipe's View/output restrictions.
+    /// Build and finalize the standard RGBA8 graph for this snapshot's View.
+    ///
+    /// `extension` adds ordinary Graph operations and returns the final image;
+    /// returning the input unchanged requires no copy. Its image must belong to
+    /// the original graph and match the View's RGBA8 description. Finalization
+    /// exports that image, records its registration ownership, and optionally
+    /// appends a readback of the same image. Compile later checks initialization.
+    ///
+    /// Further customization belongs in `extension`, or in a caller-owned
+    /// graph connected with [`Self::connect_graph`]. The returned [`FrameGraph`]
+    /// exposes its finalized selection immutably. An error returns the borrowed
+    /// Graph slot and snapshot connection scratch without growing either pool.
     pub fn build_graph(
         &self,
         pool: &mut GraphPool,
@@ -406,7 +484,7 @@ mod tests {
                 .build_graph(&mut graph_pool, false, |_, color| Ok(color))
                 .unwrap();
             // Two shared mesh uploads and one opaque list; output is the list's color.
-            assert_eq!(frame.graph.compile().unwrap().pass_count(), 3);
+            assert_eq!(frame.compile().unwrap().pass_count(), 3);
         }
     }
 
@@ -433,7 +511,7 @@ mod tests {
         let frame = snapshot
             .build_graph(&mut graph_pool, false, |_, color| Ok(color))
             .unwrap();
-        let plan = frame.graph.compile().unwrap();
+        let plan = frame.compile().unwrap();
         assert_eq!(plan.pass_count(), MESHES * 2 + 1);
         #[cfg(feature = "graph-diagnostics")]
         assert!(plan.culled_pass_names().next().is_none());
@@ -465,8 +543,8 @@ mod tests {
             .build_graph(&mut graph_pool, false, |_, color| Ok(color))
             .unwrap();
         assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
-        assert!(frame.readback.is_none());
-        let plan = frame.graph.compile().unwrap();
+        assert!(frame.readback().is_none());
+        let plan = frame.compile().unwrap();
         assert_eq!(
             plan.ordered_pass_names().collect::<Vec<_>>(),
             ["view clear"]
@@ -541,7 +619,7 @@ mod tests {
                 Ok(output)
             })
             .unwrap();
-        let error = frame.graph.compile().unwrap_err();
+        let error = frame.compile().unwrap_err();
         assert_eq!(error.kind(), GraphErrorKind::UninitializedRead);
         assert_eq!(error.resource(), Some(uninitialized.unwrap().into()));
     }
@@ -566,17 +644,31 @@ mod tests {
             4,
             ImageDesc::rgba8(16, 16),
         );
-        let mut returned = None;
-        let frame = snapshot
-            .build_graph(&mut graph_pool, false, |graph, _| {
-                let handle = graph.import_image("caller image", &imported)?;
-                returned = Some(handle);
-                Ok(handle)
-            })
-            .unwrap();
-        assert_eq!(frame.output, returned.unwrap());
-        assert_eq!(frame.output_ownership(), FrameOutputOwnership::Caller);
-        // No copy or rendering is required to export an already valid image.
-        assert_eq!(frame.graph.compile().unwrap().pass_count(), 0);
+        for readback in [false, true] {
+            let mut returned = None;
+            let frame = snapshot
+                .build_graph(&mut graph_pool, readback, |graph, _| {
+                    let handle = graph.import_image("caller image", &imported)?;
+                    returned = Some(handle);
+                    Ok(handle)
+                })
+                .unwrap();
+            let output = frame.output();
+            assert_eq!(output, returned.unwrap());
+            assert_eq!(frame.output_ownership(), FrameOutputOwnership::Caller);
+            assert_eq!(frame.graph().image_desc(output).unwrap(), imported.desc());
+            let readback_pass = frame.readback();
+            assert_eq!(readback_pass.is_some(), readback);
+            let plan = frame.compile().unwrap();
+            // No copy or rendering is required to export an already valid image.
+            assert_eq!(plan.pass_count(), usize::from(readback));
+            assert!(plan.has_export(output.index));
+            if let Some(pass) = readback_pass {
+                assert!(matches!(
+                    plan.passes[pass.index].operation,
+                    crate::graph::Operation::ReadbackImage { src } if src == output.index
+                ));
+            }
+        }
     }
 }

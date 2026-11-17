@@ -1,4 +1,32 @@
 //! Native-independent, prepared Graph construction and immutable frame plans.
+//!
+//! Prepare a [`GraphPool`], borrow a [`Graph`] with [`GraphPool::begin`], then
+//! declare resources and operations. Operands determine their resource accesses;
+//! callers do not maintain a second read/write list for ordinary operations.
+//! Reads consume contents established by preceding declarations, while
+//! [`Graph::depends_on`] adds ordering without changing the selected producer.
+//! Mark outputs with [`Graph::export_buffer`] or [`Graph::export_image`], or use
+//! readback operations. [`Graph::compile`] checks contents and dependencies,
+//! removes unobserved work, and freezes the same prepared backing.
+//!
+//! All handles are local to one checkout, even when a pool reuses its slot.
+//! Compilation does not load a native backend or prove Device-specific limits;
+//! native runtime preparation/submission establishes those guarantees separately.
+//!
+//! ```
+//! use renderer::graph::{BufferDesc, GraphCapacity, GraphPool};
+//! # fn main() -> Result<(), renderer::graph::GraphError> {
+//! let mut pool = GraphPool::new(GraphCapacity::default(), 2)?;
+//! let mut graph = pool.begin()?;
+//! let output = graph.buffer("output", BufferDesc { size: 4 })?;
+//! graph.upload_buffer("initialize", output, 0, &[1, 2, 3, 4])?;
+//! graph.export_buffer(output)?;
+//! let plan = graph.compile()?;
+//! assert_eq!(plan.pass_count(), 1);
+//! drop(plan); // Return this checkout once every other consumer has finished.
+//! # Ok(())
+//! # }
+//! ```
 
 use std::{
     ops::{Deref, Range},
@@ -53,6 +81,11 @@ pub(crate) fn next_id() -> u64 {
 
 /// Unique mutable checkout from a prepared [`GraphPool`]. Dropping an unfinished
 /// Graph returns its slot; compiling consumes it and freezes the same backing.
+///
+/// Builders capture borrowed operands in prepared storage and roll back their
+/// unpublished additions on error. Handles from successful earlier builders
+/// remain usable. Required input, owner and capacity guarantees also apply when
+/// development validation is disabled.
 pub struct Graph {
     slot: Arc<Slot>,
 }
@@ -128,6 +161,19 @@ impl Graph {
         }
         Ok(())
     }
+    /// Consume the declarations and produce an immutable execution plan.
+    ///
+    /// Compilation resolves construction-order contents, culls unobserved work,
+    /// and orders the live passes with their required hazards. Uninitialized
+    /// reads/exports and live cycles are rejected in every configuration;
+    /// development validation additionally diagnoses otherwise culled cycles.
+    ///
+    /// Success freezes the existing backing, without cloning its arrays or
+    /// upload payloads. Failure consumes the builder and returns its slot to
+    /// the pool; correct the input or prepare the missing metadata capacity and
+    /// rebuild. An error itself retains neither the Graph nor GPU resources.
+    /// A plan's clones and native consumers pin its slot until they all return.
+    /// This operation performs no native recording, submission or GPU wait.
     pub fn compile(self) -> Result<CompiledGraph, GraphError> {
         compile::compile(self)
     }

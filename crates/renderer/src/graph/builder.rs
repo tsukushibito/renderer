@@ -491,42 +491,57 @@ impl Graph {
                     ResourceHandle::Image(h) => graph.image_id(h)?,
                 };
                 let range = match (&access.range, graph.resources[id].desc) {
-                    (AccessRange::Buffer(r), ResourceDesc::Buffer(_)) => graph.buffer_range(
-                        id,
-                        r.start,
-                        r.end
-                            .checked_sub(r.start)
-                            .ok_or_else(|| graph.resource_error(GraphErrorKind::InvalidInput, "reversed byte range", id)
-                                .with_range(access.range.clone()))?,
-                        false,
-                    )?,
+                    (AccessRange::Buffer(range), ResourceDesc::Buffer(_)) => {
+                        let size = range.end.checked_sub(range.start).ok_or_else(|| {
+                            graph
+                                .resource_error(
+                                    GraphErrorKind::InvalidInput,
+                                    "reversed byte range",
+                                    id,
+                                )
+                                .with_range(access.range.clone())
+                        })?;
+                        graph.buffer_range(id, range.start, size, false)?
+                    }
                     (
                         AccessRange::Image {
                             mip,
                             layer,
                             aspect,
                         },
-                        ResourceDesc::Image(d),
-                    ) if *mip < d.mip_levels && *layer < d.array_layers && *aspect == d.format.aspect() =>
+                        ResourceDesc::Image(desc),
+                    ) if *mip < desc.mip_levels
+                        && *layer < desc.array_layers
+                        && *aspect == desc.format.aspect() =>
                     {
-                        let unit = u64::from(*layer) * u64::from(d.mip_levels) + u64::from(*mip);
+                        let unit = u64::from(*layer) * u64::from(desc.mip_levels)
+                            + u64::from(*mip);
                         unit..unit + 1
                     }
                     _ => {
-                        return Err(graph.resource_error(GraphErrorKind::Unsupported,
-                            "image subresource must fit its mip/layer counts and match its format aspect",
-                            id,
-                        ).with_range(access.range.clone()));
+                        return Err(graph
+                            .resource_error(
+                                GraphErrorKind::Unsupported,
+                                "image subresource must fit its mip/layer counts and match its format aspect",
+                                id,
+                            )
+                            .with_range(access.range.clone()));
                     }
                 };
                 validate_purpose(kind, graph.resources[id].desc, access.kind, access.purpose)
-                    .map_err(|error| graph.resource_context(error, id).with_range(access.range.clone()))?;
+                    .map_err(|error| {
+                        graph
+                            .resource_context(error, id)
+                            .with_range(access.range.clone())
+                    })?;
+                let stages = match kind {
+                    PassKind::Compute => crate::program::ShaderStages::COMPUTE,
+                    PassKind::Raster => crate::program::ShaderStages::VERTEX
+                        .union(crate::program::ShaderStages::FRAGMENT),
+                    PassKind::Copy => crate::program::ShaderStages::EMPTY,
+                };
                 graph.append_access(ResourceAccess {
-            stages: match kind {
-                        PassKind::Compute => crate::program::ShaderStages::COMPUTE,
-                        PassKind::Raster => crate::program::ShaderStages::VERTEX.union(crate::program::ShaderStages::FRAGMENT),
-                        PassKind::Copy => crate::program::ShaderStages::EMPTY,
-                    },
+                    stages,
                     resource: id,
                     range,
                     read: access.kind != AccessKind::Write,
@@ -539,15 +554,30 @@ impl Graph {
             // This public input boundary establishes pass-local disjointness.
             // Rechecking the immutable encoded accesses at submit is unnecessary.
             let encoded = first_access..graph.accesses.len();
-            let conflict = { let data=graph.data_mut(); conflicting_accesses_in(&data.accesses[encoded.clone()], |access| {
-                (access.resource, access.range.clone(), access.write)
-            }, &mut data.overlap).map_err(|_| super::storage::capacity_error(super::GraphCapacityKind::Accesses, data.capacity.accesses, Some(encoded.len())))? };
+            let conflict = {
+                let data = graph.data_mut();
+                conflicting_accesses_in(
+                    &data.accesses[encoded.clone()],
+                    |access| (access.resource, access.range.clone(), access.write),
+                    &mut data.overlap,
+                )
+                .map_err(|_| {
+                    super::storage::capacity_error(
+                        super::GraphCapacityKind::Accesses,
+                        data.capacity.accesses,
+                        Some(encoded.len()),
+                    )
+                })?
+            };
             if let Some((left, _)) = conflict {
                 let access = &graph.accesses[encoded.start + left];
-                return Err(graph.resource_error(GraphErrorKind::InvalidInput,
-                    "overlapping pass accesses must use one read_write declaration",
-                    access.resource,
-                ).with_range(graph.access_range(access.resource, access.range.clone())));
+                return Err(graph
+                    .resource_error(
+                        GraphErrorKind::InvalidInput,
+                        "overlapping pass accesses must use one read_write declaration",
+                        access.resource,
+                    )
+                    .with_range(graph.access_range(access.resource, access.range.clone())));
             }
             Ok((Operation::Declared(kind), encoded, side_effect))
         })

@@ -516,13 +516,13 @@ impl VulkanEngine {
         let inputs = self.connect_snapshot(&mut prepared, snapshot)?;
         let frame =
             snapshot.build_graph_with_inputs(prepared.graph, inputs, readback, extension)?;
-        let output_ownership = frame.output_ownership();
+        let (graph, output, readback, output_ownership) = frame.into_parts();
         Ok(PreparedEngineFrame {
-            source_graph: frame.graph.id,
-            source_output: frame.output,
-            graph: frame.graph,
-            output: frame.output,
-            readback: frame.readback,
+            source_graph: graph.id,
+            source_output: output,
+            graph,
+            output,
+            readback,
             owner: prepared.owner,
             output_ownership,
             scratch: prepared.scratch,
