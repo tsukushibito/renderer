@@ -1649,6 +1649,8 @@ nativeのUINT件数内に制限して初期化／working-set変更時だけ予�
 実GPUの資源寿命は既存のslot leaseで保持する。`ResourceBarrier`はvoidであり、後続の`Close`失敗は従来どおり未投入の記録として扱う。
 canonical registryの内容は成功したExecute／Signal後だけcommitするため、記録の容量不足やcancelから実資源の状態変更を推定しない。
 これはCOMMON方針を維持したnative呼出し集約であり、promotion／decay、省略transition、性能改善の実測を意味しない。
+任意のTracy子区間`renderer.d3d12.graph.common_barrier_call`を追加したため、変更前後の時間比較は
+親`renderer.d3d12.graph.common_barriers`のinclusiveで揃える。旧leafのselfと新しい親のselfとの差を削減時間として扱わない。
 CPU fixtureは順序、COMMON済み／空batch、容量不足とfill失敗／unwind、予約領域の再利用を、
 shipping／development-validationの通常・最適化構成で確認する。
 実COM参照の回収、native呼出し件数、buffer／画像の内容とcancel後再利用は明示実行の実GPU fixtureで扱う。
