@@ -212,6 +212,37 @@ native実行枠・物理資源・readback結果の準備は各backendの所有�
 [検証状況](../verification/current.md)で確認し、この共通所有契約だけから
 native作成・破棄や表示・結果消費を含む全体のゼロ達成を主張しない。
 
+<a id="capacity-planning"></a>
+
+### Graph容量の数え方と不足時の扱い
+
+`GraphCapacity`は一つのslotについての予約量であり、pool全体の量はslot数に応じて増える。
+通常frame内で増設する上限や、backendの物理資源数ではない。
+
+| 上限 | 数えるもの |
+|---|---|
+| `resources` / `passes` | 宣言した論理資源とpass。compileで消える枝も構築時には容量を使う |
+| `accesses` | passが持つ資源アクセス。Rasterの重複read圧縮前の作業領域も覆う |
+| `draws` | 全Raster passのdraw合計。bindingの共有とは別に命令・定数を保持する |
+| `bindings` | ComputeのoperandとRaster setのoperandの合計。同じsetを使うdraw数ではない |
+| `attachments` | 各passのcolorとdepth attachment operandの合計 |
+| `dependencies` | `depends_on`で明示した重複しない依存 |
+| `initial_ranges` | importからGraphへcaptureする初期化済み範囲の合計 |
+| `name_bytes` / `upload_bytes` | UTF-8名と公開uploadからcaptureするpayloadのbyte合計 |
+| `edges` | producer・明示依存・RAW/WAR/WAWを解析する辺の予約量。pass数だけからは決まらない |
+| `segments` | 内容のproducer／有効性と最後のwriterを表す区間nodeの上限。部分writeで増え、全域置換で再利用する |
+| `readers` | 生存するread-only accessの範囲索引。開発用の全宣言診断ではdead部分のreadも対象 |
+
+`GraphError::capacity()`の`kind`と`limit`から不足した領域を選ぶ。`required`は観測できた最小必要量で、
+解析時の不足などでは`None`になり得る。失敗時の値だけで、後続宣言も含めた全体の必要量を保証しない。
+`Slots`の不足ならplan/native consumerの返却を進める。配列の上限不足なら、明示した準備・変更境界で
+必要な上限を変更し、新しいpoolでGraphを再構築する。`compile(self)`は失敗時もGraphを消費し、
+同じ構築途中の値へ戻るAPIではない。旧poolのconsumerが残る場合はownerを保ち、idle後に保守として解放する。
+
+大きめの容量を予約してから想定する可変入力・pass構成を確認する。資源数だけを増やしても
+範囲や依存の不足は解消しない。Graphの容量とruntimeのworking set、descriptor、provenance、
+結果保持の容量はそれぞれ独立して準備する。
+
 ## producer・範囲・Attachment
 
 ### 画像subresourceとowned attachment配列
@@ -453,7 +484,14 @@ VulkanではDeviceの実際の`maxDrawIndexedIndexValue`も確認し、feature�
 このprovenance配列は論理Graphの初期化・hazard解析と別に、native実行用の内容要約を管理する。
 heap nodeの確保・解放を避けるための交換条件であり、確保ゼロから更新時間の改善を推定しない。
 一般入力のindex検査は同じ内容・index数について最大値を一度求める。
-頂点数／Device上限が変わってもこの要約を比較し、同じindex本文を再走査しない。
+検査したprefixをindex数で索引し、A→B→Aのようにdraw範囲が戻っても同じindex本文を再走査しない。
+頂点数／Device上限は保存した内容最大値と比較する。各backendの
+`index_prefixes_per_resource`で異なるprefix数を明示準備し、容量不足では要約を追い出して
+再走査せず、型付き容量エラーを返す。byte sliceの区間数を制限する
+`provenance_segments_per_resource`とは別の上限である。
+prefix数Pについて検索はO(log P)、初回はindex本文の走査とO(P)の整列配列挿入を行う。
+要約はcountと内容最大値／未知の区別だけで、1件12 byte、既定64件なら768 byteとVec headerを
+各provenance storeへ追加予約する。payloadや別の所有者は追加せず、巨大な全prefix表は作らない。
 write／copyによる置換で要約を失効し、import snapshotのClone後の更新も独立して扱う。
 現在のindex用途とそのcopy元、import／exportしたbufferに必要な内容だけを追跡する。
 import／exportしたbufferは後のGraphでindexに使えるため、元の入力を共有したまま保持する。
@@ -489,15 +527,24 @@ producerの重複排除、内容の有効性、実行されるwriteに対応し�
 nativeのstage・access・layoutは、残った実際の操作から具体化する。
 トポロジカル順序だけではVulkanのメモリ依存は成立しない。
 
-順序依存は資源の区間ごとのwriterと未処理readerから作り、全先行パスとの総当たりを行わない。
-reader履歴はindexで参照する不変のarenaへ保持し、区間の分割では履歴を共有する。
-writeで複数区間のreaderを辿る際も共有tailを重複して走査しない。履歴はcompileごとにresetし、
-arenaの予約領域は再利用する。長い連鎖の破棄で再帰する所有構造にはしない。
+順序依存は資源の区間ごとのwriterとreaderの範囲索引から作り、全先行パスとの総当たりを行わない。
+readerはliveなread-only accessにつき一件を、resourceごとの予約済み区間AVLへ記録する。
+readでwriterの区間を分割したり、readerを重なる区間数だけ複製したりしない。
+同じ範囲のreadは一つの木のkeyへpass履歴を連結する。異なる範囲数Gに対する追加はO(log G)で、
+同じ全域だけを繰り返すG=1の追加はO(1)となる。
+writerの各区間では、それと重なる先行readのうち、その区間の最後のwriterより新しいものからWARを作る。
+部分writeが覆った範囲だけで古いreadを退役扱いにし、別の範囲のWARを失わない。
+木はsubtreeの最大終端と最大passを保持して対象外の枝を省く。履歴はcompileごとにresetし、
+arenaの予約領域は再利用する。`GraphCapacity::readers`はread-only access数の上限となる。
 内容とhazardの区間はそれぞれ、resourceごとのrootを持つ予約済みAVL node arenaへ保持する。
 リンクはindexで、削除枠はfree listへ戻す。回転・分割・置換で無関係なresourceや配列の
 後続全体を動かさず、offsetの追加順に依存した二乗時間を避ける。通常frameのheap node確保・解放はない。
-リンクとproducer/writer/readerの任意indexは、checkedなone-based `NonZeroUsize`へ格納する。
-`Option`を一つのmachine wordで表し、現行Windows x64測定の内容/hazard nodeは各64 byte、reader履歴は24 byteとなる。
+リンクとproducer/writer等の任意indexは、checkedなone-based `NonZeroUsize`へ格納する。
+`Option`を一つのmachine wordで表す。reader索引は範囲と枝刈り用のmetadataを追加保持するため、
+旧24-byteの共有連鎖nodeと同じ単価ではない。Windows x64ではreader一件72 byte、resource rootは8 byteで、
+writer区間から旧readerリンク8 byteを除いた。必要件数をread数へ抑えることとmetadataの単価を区別する。
+writer区間数S、reader数Rに対するqueryは最悪O(S×R)になり得る。read-only区間分割の二次増加を除く修正であり、
+全入力の線形時間や一般的なframe時間短縮を約束しない。
 32-bitの固定index上限を導入せず、準備済み非ZST Vecが表現できるindex範囲を維持する。
 区間数S、対象区間数Kに対し検索と連続読取はO(log S + K)、複数nodeの置換はO((K + 1) log S)となる。
 単一区間内の置換は既存nodeを再利用し、容量不足は必要な残存区間数を先に確認してから拒否する。
@@ -507,7 +554,7 @@ resourceの全域置換では、そのrootだけを切り離してnodeをpostord
 一つのnodeへまとめる。部分範囲と別resourceは触らず、再帰深さはAVLの高さに限定する。
 少なくとも置換用node一つを回収できるため、切り離し後に容量不足は起こらない。
 この場合はO(log S + K)で、古い区間ごとの検索・削除・回転を繰り返さない。
-reader履歴は共有indexを保持し、長い履歴の返却で所有連鎖の再帰Dropを起こさない。
+reader索引も所有pointerの連鎖を持たず、履歴の返却で再帰Dropを起こさない。
 producerとcullingの意味は維持する。
 
 単純な整列配列に比べ、nodeのリンク・height・rootと木の更新費用が増える。
@@ -691,6 +738,12 @@ submitの境界で照合し、記録後の更新・削除も投入前に拒否�
 明示transitionを使い、producerのCPU完了待機を挟まない。これは[Microsoftの状態遷移契約](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12)
 に従う保守的な基準で、Vulkanのstage/access/layoutをD3D12へ移植せず、barrier削減の性能主張もしない。
 RTV／DSVは実行slotの専用descriptorへ借りた画像を設定し、GPU完了前に書き換えない。
+logical imageを実行slot内の画像operand枠へ対応づける際も、明示準備したdescription別の
+候補列とcursorを使う。classを二分探索して未使用枠を一つ取得し、画像ごとに配列先頭から探索し直さない。
+この枠の対応づけと、registryの物理資源lease取得は別であり、importのidentity確認も維持する。
+RTV／DSVを設定する対象は生存passのattachmentに使う画像だけを重複なく列挙し、
+sampled／Compute／copy専用画像へ使わないtarget viewを設定しない。
+候補cursorとattachment列はexclusiveなslotの返却時にresetし、途中失敗・取消でも次のGraphへ残さない。
 native実行前に容量とexport tokenを全て予約し、ExecuteとSignal成功後にのみ予定内容と新規登録を公開する。
 Signal失敗ではDeviceを停止し、内容を公開せず、実行資源・program・Deviceを含む所有を隔離保持する。
 [Fenceの`UINT64_MAX`](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12fence-getcompletedvalue)を正常完了と扱わない。
@@ -982,7 +1035,11 @@ GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame m
 snapshotの`build_graph(&mut graph_pool, readback, extension)`はGPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
 mesh解決はsnapshot slotの予約済み配列とsort/index検索で行い、frameごとの一時BTreeMapを作らない。
-取得した`FrameGraph.graph`は消費型compileへ渡し、構築Graphを残すための複製を行わない。
+`FrameGraph`は標準recipeの最終出力・export・任意readback・登録解除責任を確定した値である。
+`graph()`は読み取り専用で、`output()`／`readback()`／`output_ownership()`も確定時の対応を保つ。
+拡張と出力の選択は`build_graph`のcallback内で済ませる。任意の後続構築が必要なら
+`connect_graph`と通常のGraph APIを使う。公開fieldの差し替えで所有情報だけが古く残る経路は設けない。
+`FrameGraph::compile(self)`は同じbackingを不変planへ移し、構築Graphを残すための複製を行わない。
 持続的な実行では、利用側の`Engine`がCPU assetとsnapshotを所有し、`VulkanEngine`は
 runtimeとGPU常駐を所有する。同じsnapshotを独立したrendererへ渡すことができ、
 バックエンド別のCPU asset登録は要求しない。
@@ -1054,7 +1111,7 @@ closureはGraph構築時に実行され、GPU記録中にsceneへ再入しない
 返された完成画像を直接exportし、無変換の最終compositeと別画像を毎Viewに強制しない。
 `FrameOutputOwnership::Frame`はこのGraphで作った出力、`Caller`は利用側がimportした出力を表す。
 `release_output`はframe所有の元のkeyだけを登録解除し、caller所有の登録には触れない。
-CPU経路では`FrameGraph.graph.compile()`、持続的な実行経路では`PreparedEngineFrame::compile()`で
+CPU経路では`FrameGraph::compile()`、持続的な実行経路では`PreparedEngineFrame::compile()`で
 構築物を消費して凍結する。後者はmeshのpinと出力の所有権を`CompiledEngineFrame`へ引き継ぎ、
 `VulkanEngine::submit_frame(compiled)`が同じ所有付き入力を受け取る。
 build、compile、submitを分けられる。利用側の履歴処理や測定を標準描画と同じGraphへ接続できる。

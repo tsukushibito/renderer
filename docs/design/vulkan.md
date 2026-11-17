@@ -296,7 +296,14 @@ pipeline layoutは各descriptorの頂点属性、最大128-byteのVS／FS inline
 最大4 groupのUniform／StorageRead／sampled image・separate samplerを具体化する。
 standard meshの80-byte定数とtexturedのbindingも同じ経路を使う。
 Uniformの実Device alignment/range上限は記録前のnative適合境界で保証する。
-drawごとのdescriptorを容量内で別slotへ設定し、記録済み／pendingのsetを別drawで再更新しない。
+同じWork内では、Graphの不変binding範囲とnative Raster layoutが一致するdrawでdescriptor setを共有する。
+準備済みの索引から結果を取得し、最初の使用だけでsampled適合とbufferのDevice上限を保証してsetを設定する。
+同じ内容をdrawごとに再検査・再更新せず、異なるbinding/layoutは別の予約済みslotを使う。
+再利用索引とsetはWorkのlease内だけで有効で、取消または実GPU完了後にresetする。
+異なるWork/pending間のpointer一致を再利用根拠にせず、記録済み／pendingのsetを更新しない。
+索引はbinding容量に対応する旧bool配列から、二つのdepth variantとnative layout／set結果を持つ
+`RasterBindingEntry`配列へ変わる。その`size_of`×binding上限を各Workへ予約する交換条件があり、
+draw別のset複製・更新とDevice適合の再検査を減らすために採用した。全域的なcacheや通常frameでの増設は行わない。
 Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ含め、cancelまたは実GPU完了後だけ再利用する。
 
 static `RasterProgramDescriptor`の取込は明示したunsafe境界であり、binaryの有効性だけでなく
@@ -572,6 +579,9 @@ Runtime自身のDropには既存の保守的な後始末を残すが、通常fra
 
 `prepare_working_set(FrameCapacity, &[ResourceClass])`を初期化・資源変更境界で呼び、
 Graphの配列上限とwork/result/export枠、import範囲snapshot、CPU provenanceの容量を準備する。
+`FrameCapacity::index_prefixes_per_resource`は内容ごとの異なるindex-count要約数を予約する。
+byte provenance区間数の`provenance_segments_per_resource`と独立し、いずれも通常frameで増設しない。
+prefix容量不足は要約の追い出しではなく型付きエラーを返し、同じ内容のA→B→Aで本文を再走査しない。
 `ResourceClass`はbackend非依存のbuffer/image descriptorと同時保持数であり、登録済み入力とは別に
 記録・GPU・exportが保持し得る未登録instance数を含める。変更には既存のframe/result/metadata/range tokenの返却が必要である。
 入力やdraw/pass構成は準備済み上限内で毎frame変更でき、固定planの再生を条件にしない。

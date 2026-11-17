@@ -5,6 +5,40 @@
 今後の方針は[実装方針](../design/implementation-policy.md)を参照してください。
 現在の実行結果と未確認範囲は[最新の検証結果](../verification/current.md)にまとめます。
 
+<a id="graph-review-gates"></a>
+
+## Graphの容量・保証再利用・出力APIを変更したときの確認
+
+Graphの上限は[容量の数え方](../design/rendergraph.md#capacity-planning)と公開Rustdocを確認する。
+`GraphError::capacity()`で不足領域を識別し、予約量の変更はconsumerが返った明示境界で行う。
+runtime側の`index_prefixes_per_resource`は、同じbuffer内容について利用する異なるindex-count数の上限である。
+一般のprefix drawを使うときは必要数を予約する。管理下geometryの全countだけを描く経路やindexを使わない経路では0にできる。
+
+標準recipeの`FrameGraph`は確定済み出力を持つ。拡張と出力選択は`build_graph`のcallback内で行い、
+`output()`／`readback()`のhandleを保存してから`compile()`へ渡す。任意の構築を続ける場合は
+`connect_graph`と通常のGraphを使い、確定済みの出力・所有情報を個別に変更しない。
+
+CPUで追加検証の有無を確認した後、nativeに影響する修正は両構成でGPU試験を明示実行する。
+以下のlib試験は省略時に成功扱いにせず、ログで各filterの試験数が1件であることも確認する。
+Vulkan Core/SyncValとD3D12 Debug Layer/GBVの準備が必要で、通常ホストでGPU試験を逐次実行する。
+
+```powershell
+foreach ($features in @('vulkan,d3d12,memory-profiling', 'vulkan,d3d12,memory-profiling,development-validation,graph-diagnostics')) {
+    cargo test --locked --workspace --release --no-default-features --features $features
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    foreach ($test in @('vulkan_owned_raster_descriptor_capacity_recovery', 'd3d12_raster_srv_reuse_preserves_views_cancel_and_pending_ownership', 'd3d12_index_provenance_capacity_rejects_and_recovers')) {
+        cargo test --locked -p renderer --release --lib --no-default-features --features $features $test -- --ignored --nocapture --test-threads=1
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+}
+```
+
+これらは共有descriptorの容量／取消／再利用、attachmentだけのRTV/DSV、一般prefixの容量拒否と
+管理下meshへの回復を確認する。描画内容・寿命の全体には既存の[owned Raster受入](#bistro-pbr)と
+[B3受入](#bistro-b3)、通常frameの確保／再確保／解放には既存の`frame_memory`を併用する。
+build/cookを終えてからGPU受入を実行し、ログ・binary hash・source commit・featureと未実行範囲を保存する。
+構造上の走査回数削減やCPU小負荷の比較を、通常Bistroの速度改善やGPU/FPSの結果へ読み替えない。
+
 ## 必要なツール
 
 | 用途 | 必要なもの |

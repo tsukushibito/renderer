@@ -1842,6 +1842,12 @@ canonical registry entryの既知slice数を
 必要な上限は明示した準備・変更境界で選ぶ。registry側の保持分も容量へ含め、
 旧slot内資源だけの予約枠数や比率を現在の常駐量・時間性能へ読み替えない。
 
+`index_prefixes_per_resource`は同じ内容について保持する異なるindex-countの最大値要約数で、
+byte slice数とは独立して予約する。count順に保持して二分探索し、一度検査したprefixを
+draw数や頂点数／Device上限の変更だけで再走査しない。write／copyの内容変更は影響する保証を失効し、
+既存のsnapshotは元の要約を保持する。満杯なら型付きの容量不足を返し、追い出し・暗黙の再確保はしない。
+管理下meshの不変要約だけを使う経路ではこの予約も0にできる。
+
 各Rasterのbuffer/image用途は、そのpassの不変access列を一回列挙して合成する。
 `RasterStorage`は準備済みbuffer数とimage数に対応するstate配列・初回使用index列を別々に持ち、
 同じbufferのVertex/Index/Uniform/StorageReadのstateを合わせる。適用は従来どおりbufferの初出順、
@@ -1864,7 +1870,13 @@ SRV再利用による新しい容量受理範囲や、密な入力の時間改�
 同じ親区間のinclusiveを使う。新selfはこのchildを除くため旧selfとの差を削減時間とみなさない。
 計装費用・初回source locationの確保は通常構成と区別し、比較のwarm-upとfeatureを揃える。
 [D3D12 descriptorのGPU handle・参照先寿命](https://learn.microsoft.com/en-us/windows/win32/direct3d12/descriptors-overview)
-に従い、shader-visible heapと参照先を全命令の完了まで保持する。RTV/DSVの再作成方針は今回変更しない。
+に従い、shader-visible heapと参照先を全命令の完了まで保持する。
+logical imageのslot選択はdescription別の予約済み候補列を二分探索し、class内cursorで取得する。
+登録画像も同じ対応づけを使い、同descriptionの重複classでは元のindex順を保つ。
+attachment用途の画像だけを既存のaccess列から一度集め、その画像へRTV/DSVを設定する。
+sampled専用画像等のtarget view作成を除き、native identityが変わり得るslot間でviewを使い回すcacheは追加しない。
+候補列・使用attachment列は明示準備するmetadataであり、GPU完了または未投入cancel後の
+exclusive resetでのみ返す。COMMON復帰、importの失効検査、pendingのlease保持は変更しない。
 depth clearの有限値・範囲・subnormal拒否はGraph構築で確立し、privateな不変operandを引き継ぐ。
 native適用時に同じ値を再検査せず、MRT未対応、実Deviceへの適合、容量・同期・完了管理は維持する。
 
