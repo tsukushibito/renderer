@@ -1391,10 +1391,22 @@ impl VulkanRuntime {
                     shader_needs.compute = true;
                     1
                 }
-                Operation::Raster { program, draws, .. } => {
+                Operation::Raster {
+                    program,
+                    draws,
+                    depth,
+                    ..
+                } => {
                     shader_needs.raster = true;
                     if !program.bindings().is_empty() {
-                        draws.len()
+                        graph
+                            .raster_draws(draws)
+                            .iter()
+                            .filter(|draw| {
+                                work.raster_bindings
+                                    .require(&draw.bindings, depth.is_some())
+                            })
+                            .count()
                     } else {
                         0
                     }

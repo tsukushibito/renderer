@@ -28,6 +28,34 @@ mod record;
 mod storage;
 pub(super) use storage::{ResultData, WorkData};
 
+/// Resolve immutable logical operands after the Work has leased its physical
+/// table and established sampled-view suitability. Buffer Device limits are
+/// checked by ShaderBindings when the descriptor set is first prepared.
+fn native_raster_binding(
+    operand: &crate::graph::BindingOperands,
+    physical: &[Option<super::PhysicalLease>],
+    sampler_for: impl FnOnce(crate::program::SamplerDescriptor) -> vk::Sampler,
+) -> super::super::program::RasterBinding {
+    use super::super::program::RasterBinding;
+    use crate::graph::BindingOperands;
+    match operand {
+        BindingOperands::Buffer { resource, range } => RasterBinding::Buffer {
+            buffer: physical[*resource].as_ref().unwrap().buffer().handle,
+            offset: range.offset,
+            size: range.size,
+        },
+        BindingOperands::ImageView(view) => RasterBinding::Image(
+            physical[view.image().index]
+                .as_ref()
+                .unwrap()
+                .image()
+                .view_for_mips(view.mip_level(), view.mip_level_count())
+                .expect("validated prepared sampled view range"),
+        ),
+        BindingOperands::Sampler(desc) => RasterBinding::Sampler(sampler_for(*desc)),
+    }
+}
+
 pub(super) fn validate_sampled_operands(
     layout: &[crate::program::BindingLayout],
     operands: &[crate::graph::BindingOperands],
@@ -491,8 +519,7 @@ impl GraphWork {
             retain_provenance,
             copy_scratch,
             raster_descriptors,
-            validated_raster_bindings,
-            active_raster_bindings,
+            raster_bindings,
             ..
         } = data;
         #[cfg(feature = "vulkan-diagnostics")]
@@ -861,6 +888,11 @@ impl GraphWork {
                         });
                         let programs = programs.as_ref().unwrap();
                         let native_program = programs.raster_program(*program, depth.is_some())?;
+                        let binding_layout = (!program.bindings().is_empty()).then(|| {
+                            programs
+                                .raster_key(*program, depth.is_some())
+                                .expect("prepared Raster binding layout")
+                        });
                         for (draw_index, draw) in graph.raster_draws(draws).iter().enumerate() {
                             #[cfg(feature = "tracy")]
                             let _span = tracy_client::Client::running().map(|client| {
@@ -871,23 +903,6 @@ impl GraphWork {
                                     0,
                                 )
                             });
-                            if !draw.bindings.is_empty()
-                                && !validated_raster_bindings[draw.bindings.start]
-                            {
-                                validate_sampled_operands(
-                                    program.bindings(),
-                                    graph.raster_bindings(&draw.bindings),
-                                    physical,
-                                    Some(program.sampling_pairs()),
-                                )?;
-                                // A private Graph binding range belongs to one
-                                // exact Program and immutable operand set. The
-                                // physical table also stays fixed for this work.
-                                // Publish the guarantee only after validation.
-                                validated_raster_bindings[draw.bindings.start] = true;
-                                *active_raster_bindings =
-                                    (*active_raster_bindings).max(draw.bindings.end);
-                            }
                             let vertex_count = graph.resources[draw.vertices].desc.units()
                                 / u64::from(program.vertex_stride());
                             states[draw.indices]
@@ -902,64 +917,46 @@ impl GraphWork {
                                 .map_err(|error| {
                                     index_error(error).context(format_args!("draw {draw_index}"))
                                 })?;
-                            let sets = if !program.bindings().is_empty() {
-                                #[cfg(feature = "tracy")]
-                                let _span = tracy_client::Client::running().map(|client| {
-                                    client.span(
-                                        tracy_client::span_location!(
-                                            "renderer.vulkan.raster.descriptors"
-                                        ),
-                                        0,
-                                    )
-                                });
-                                let operands = program
-                                    .bindings()
-                                    .iter()
-                                    .copied()
-                                    .zip(graph.raster_bindings(&draw.bindings))
-                                    .map(|(slot, operand)| {
-                                        use super::super::program::RasterBinding;
-                                        let native = match operand {
-                                            crate::graph::BindingOperands::Buffer {
-                                                resource,
-                                                range,
-                                            } => RasterBinding::Buffer {
-                                                buffer: physical[*resource]
-                                                    .as_ref()
-                                                    .unwrap()
-                                                    .buffer()
-                                                    .handle,
-                                                offset: range.offset,
-                                                size: range.size,
-                                            },
-                                            crate::graph::BindingOperands::ImageView(view) => {
-                                                RasterBinding::Image(
-                                                    physical[view.image().index]
-                                                        .as_ref()
-                                                        .unwrap()
-                                                        .image()
-                                                        .view_for_mips(
-                                                            view.mip_level(),
-                                                            view.mip_level_count(),
-                                                        )
-                                                        .expect(
-                                                            "validated prepared sampled view range",
-                                                        ),
+                            let sets = if let Some(key) = binding_layout {
+                                raster_bindings.resolve(
+                                    &draw.bindings,
+                                    depth.is_some(),
+                                    key,
+                                    |validate_sampled| {
+                                        if validate_sampled {
+                                            validate_sampled_operands(
+                                                program.bindings(),
+                                                graph.raster_bindings(&draw.bindings),
+                                                physical,
+                                                Some(program.sampling_pairs()),
+                                            )?;
+                                        }
+                                        #[cfg(feature = "tracy")]
+                                        let _span = tracy_client::Client::running().map(|client| {
+                                            client.span(
+                                                tracy_client::span_location!(
+                                                    "renderer.vulkan.raster.descriptors"
+                                                ),
+                                                0,
+                                            )
+                                        });
+                                        let operands = program
+                                            .bindings()
+                                            .iter()
+                                            .copied()
+                                            .zip(graph.raster_bindings(&draw.bindings))
+                                            .map(|(slot, operand)| {
+                                                (
+                                                    slot,
+                                                    native_raster_binding(
+                                                        operand,
+                                                        physical,
+                                                        |desc| native_program.sampler_for(desc),
+                                                    ),
                                                 )
-                                            }
-                                            crate::graph::BindingOperands::Sampler(desc) => {
-                                                RasterBinding::Sampler(
-                                                    native_program.sampler_for(*desc),
-                                                )
-                                            }
-                                        };
-                                        (slot, native)
-                                    });
-                                bindings.as_mut().unwrap().raster(
-                                    programs
-                                        .raster_key(*program, depth.is_some())
-                                        .expect("prepared Raster binding layout"),
-                                    operands,
+                                            });
+                                        bindings.as_mut().unwrap().raster(key, operands)
+                                    },
                                 )?
                             } else {
                                 [vk::DescriptorSet::null(); crate::program::MAX_RASTER_BIND_GROUPS]

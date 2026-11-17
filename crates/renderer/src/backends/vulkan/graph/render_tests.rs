@@ -310,11 +310,11 @@ fn vulkan_attachment_subresource_native_boundaries() {
 }
 
 #[test]
-#[ignore = "real GPU Raster descriptor exhaustion/recovery and HDR content; run strict and shipping separately"]
+#[ignore = "real GPU shared Raster descriptors, exhaustion/recovery and HDR content; run strict and shipping separately"]
 fn vulkan_owned_raster_descriptor_capacity_recovery() {
     use crate::graph::{Binding, BindingResource};
     use crate::program::{ManagedRasterProgram, SamplerDescriptor};
-    fn plan(draw_count: usize) -> (CompiledGraph, PassHandle) {
+    fn plan(distinct_sets: bool, color: [u8; 4]) -> (CompiledGraph, PassHandle) {
         let mut graph = Graph::test_new();
         let vertices = graph.buffer("vertices", BufferDesc { size: 112 }).unwrap();
         let indices = graph.buffer("indices", BufferDesc { size: 24 }).unwrap();
@@ -340,7 +340,7 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
             .unwrap();
         graph.upload_buffer("offset", uniform, 0, &[0; 16]).unwrap();
         graph
-            .upload_image("red", source, &[255, 0, 0, 255].repeat(4))
+            .upload_image("source color", source, &color.repeat(4))
             .unwrap();
         let bindings = [
             Binding {
@@ -363,21 +363,29 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
                 resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
             },
         ];
-        let bindings = graph
+        let first = graph
             .raster_bindings(&ManagedRasterProgram::textured_mesh_hdr(), &bindings)
             .unwrap();
-        let draws = [RasterDraw {
-            bindings: Some(bindings),
+        let second = if distinct_sets {
+            graph
+                .raster_bindings(&ManagedRasterProgram::textured_mesh_hdr(), &bindings)
+                .unwrap()
+        } else {
+            first
+        };
+        let mut draws = [RasterDraw {
+            bindings: Some(first),
             vertices,
             indices,
             index_count: 6,
             parameters: RasterParameters::default().into(),
         }; 2];
+        draws[1].bindings = Some(second);
         graph
             .raster(
                 "HDR",
                 &ManagedRasterProgram::textured_mesh_hdr(),
-                &draws[..draw_count],
+                draws,
                 RasterAttachments {
                     colors: &[Attachment {
                         view: graph.image_view(target, 0, 0).unwrap(),
@@ -439,7 +447,7 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
     runtime
         .prepare_raster_programs(&[ManagedRasterProgram::textured_mesh_hdr()])
         .unwrap();
-    let (too_many, _) = plan(2);
+    let (too_many, _) = plan(true, [255, 0, 0, 255]);
     assert_eq!(
         runtime.submit(&too_many).err().unwrap().kind(),
         RuntimeErrorKind::CapacityExhausted
@@ -449,15 +457,19 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
         (stats.upload_live_ranges, stats.readback_live_ranges),
         (0, 0)
     );
-    let (valid, read) = plan(1);
-    let mut pending = runtime.submit(&valid).unwrap();
-    let mut result = pending.wait(WAIT).unwrap().expect("actual completion");
-    assert_eq!(
-        result.test_readback(read).unwrap(),
-        [0u8, 60, 0, 0, 0, 0, 0, 60].repeat(16)
-    );
-    drop(result);
-    drop(pending);
+    // Two draws sharing one immutable set fit capacity one. Repeat with new
+    // Graph identities and contents to verify retired work does not reuse old
+    // validation or descriptors, including after the rejected preparation.
+    for (color, expected) in [
+        ([255, 0, 0, 255], [0u8, 60, 0, 0, 0, 0, 0, 60]),
+        ([0, 255, 0, 255], [0u8, 0, 0, 60, 0, 0, 0, 60]),
+        ([255, 0, 0, 255], [0u8, 60, 0, 0, 0, 0, 0, 60]),
+    ] {
+        let (valid, read) = plan(false, color);
+        let mut pending = runtime.submit(&valid).unwrap();
+        let mut result = pending.wait(WAIT).unwrap().expect("actual completion");
+        assert_eq!(result.test_readback(read).unwrap(), expected.repeat(16));
+    }
     drop(runtime);
     let report = monitor.report();
     assert!(report.is_clean(), "teardown diagnostics: {report:?}");
