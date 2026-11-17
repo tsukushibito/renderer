@@ -11,29 +11,91 @@ use std::{
 pub(super) struct ReadAccessSet {
     slots: Vec<usize>,
     touched: Vec<usize>,
+    first: Vec<FirstRead>,
+    resources: Vec<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct FirstRead {
+    index: usize,
+    hashed: bool,
+}
+impl FirstRead {
+    const EMPTY: Self = Self {
+        index: usize::MAX,
+        hashed: false,
+    };
 }
 
 impl ReadAccessSet {
-    pub fn new(capacity: usize) -> Result<Self, ()> {
+    pub fn new(capacity: usize, resources: usize) -> Result<Self, super::GraphCapacityKind> {
+        use super::GraphCapacityKind;
         let count = capacity
             .checked_mul(2)
             .and_then(|n| n.checked_add(1))
-            .ok_or(())?;
+            .ok_or(GraphCapacityKind::Accesses)?;
         let mut slots = Vec::new();
-        slots.try_reserve_exact(count).map_err(|_| ())?;
+        slots
+            .try_reserve_exact(count)
+            .map_err(|_| GraphCapacityKind::Accesses)?;
         slots.resize(count, usize::MAX);
         let mut touched = Vec::new();
-        touched.try_reserve_exact(capacity).map_err(|_| ())?;
-        Ok(Self { slots, touched })
+        touched
+            .try_reserve_exact(capacity)
+            .map_err(|_| GraphCapacityKind::Accesses)?;
+        let mut first = Vec::new();
+        first
+            .try_reserve_exact(resources)
+            .map_err(|_| GraphCapacityKind::Resources)?;
+        first.resize(resources, FirstRead::EMPTY);
+        let mut used_resources = Vec::new();
+        used_resources
+            .try_reserve_exact(resources)
+            .map_err(|_| GraphCapacityKind::Resources)?;
+        Ok(Self {
+            slots,
+            touched,
+            first,
+            resources: used_resources,
+        })
     }
 
     pub fn clear(&mut self) {
         for bucket in self.touched.drain(..) {
             self.slots[bucket] = usize::MAX;
         }
+        for resource in self.resources.drain(..) {
+            self.first[resource] = FirstRead::EMPTY;
+        }
     }
 
     pub fn insert(
+        &mut self,
+        access: &super::ResourceAccess,
+        destination: usize,
+        accesses: &[super::ResourceAccess],
+    ) -> bool {
+        // Most resources have one exact read per pass. Retain the first record
+        // directly and compare its repeats without hashing. Distinct ranges or
+        // purposes/stages promote that resource into the general hash index;
+        // no per-resource linear chain can become quadratic for many ranges.
+        let first = self.first[access.resource];
+        if first.index == usize::MAX {
+            self.first[access.resource].index = destination;
+            self.resources.push(access.resource);
+            return true;
+        }
+        if accesses[first.index] == *access {
+            return false;
+        }
+        if !first.hashed {
+            self.insert_hashed(&accesses[first.index], first.index, accesses);
+            self.first[access.resource].hashed = true;
+        }
+        self.insert_hashed(access, destination, accesses)
+    }
+
+    fn insert_hashed(
         &mut self,
         access: &super::ResourceAccess,
         destination: usize,
@@ -127,9 +189,12 @@ pub(super) struct IndexedAccess {
 ///
 /// The sorted prefixes answer whether an interval overlaps any writer, or any
 /// other access for a writer. Two longest ends exclude the queried writer itself.
-/// Original-order queries and one final suffix scan preserve the same pair and
-/// error attribution as a pairwise scan. A accesses use O(A log A) time and O(A)
-/// temporary storage. All-reader passes need O(A) time and no allocation.
+/// Up to four writers use direct comparisons against the original declarations,
+/// selecting the same lexicographically first pair without sorting the readers.
+/// Otherwise original-order prefix queries and one final suffix scan preserve
+/// the same pair and error attribution as a pairwise scan. A accesses use at
+/// most O(A log A) time and O(A) prepared storage. All-reader passes need O(A)
+/// time and no scratch storage.
 #[cfg(test)]
 pub(super) fn conflicting_accesses<T>(
     accesses: &[T],
@@ -157,10 +222,62 @@ pub(super) fn conflicting_ranges_in<I>(
 where
     I: Iterator<Item = (usize, Range<u64>, bool)>,
 {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running().map(|client| {
+        client.span(
+            tracy_client::span_location!("renderer.graph.pass_overlap"),
+            0,
+        )
+    });
     sorted.clear();
-    if !accesses().any(|(_, _, write)| write) {
-        return Ok(None);
+    // Raster commonly reads thousands of mesh/binding ranges and writes only
+    // its attachments. Indexing/sorting every reader costs more than comparing
+    // it with this small writer set. Retain original indices for error order.
+    let mut count = 0;
+    for (index, (resource, range, write)) in accesses().enumerate() {
+        count = index + 1;
+        if write {
+            if sorted.len() == sorted.capacity() {
+                return Err(());
+            }
+            sorted.push(IndexedAccess {
+                resource,
+                range,
+                write,
+                index,
+                prefix: Prefix::default(),
+            });
+            if sorted.len() > 4 {
+                break;
+            }
+        }
     }
+    if sorted.len() <= 4 {
+        if sorted.is_empty() {
+            return Ok(None);
+        }
+        // Preserve the capacity contract for all declarations, not just writers.
+        if count > sorted.capacity() {
+            return Err(());
+        }
+        let mut conflict = None;
+        for (index, (resource, range, _)) in accesses().enumerate() {
+            for writer in sorted.iter() {
+                if index != writer.index
+                    && resource == writer.resource
+                    && range.start < writer.range.end
+                    && writer.range.start < range.end
+                {
+                    let pair = (index.min(writer.index), index.max(writer.index));
+                    conflict = Some(conflict.map_or(pair, |previous| pair.min(previous)));
+                }
+            }
+        }
+        return Ok(conflict);
+    }
+    // Many writers retain the general O(A log A) interval index. Re-enumerate
+    // from the start so indices and first-conflict attribution remain identical.
+    sorted.clear();
     for (index, (resource, range, write)) in accesses().enumerate() {
         if sorted.len() == sorted.capacity() {
             return Err(());
@@ -258,7 +375,7 @@ mod tests {
                 ..original.clone()
             },
         ];
-        let mut index = ReadAccessSet::new(accesses.len()).unwrap();
+        let mut index = ReadAccessSet::new(accesses.len(), 1).unwrap();
         let slots = index.slots.as_ptr();
         let touched = index.touched.as_ptr();
         for _ in 0..3 {
@@ -274,6 +391,61 @@ mod tests {
         }
         assert_eq!(index.slots.as_ptr(), slots);
         assert_eq!(index.touched.as_ptr(), touched);
+    }
+
+    #[test]
+    fn read_compaction_promotes_variants_and_resets_between_passes() {
+        use crate::{graph::ResourceAccess, program::ShaderStages};
+        let first = ResourceAccess {
+            resource: 63,
+            range: 0..16,
+            read: true,
+            write: false,
+            initializes: false,
+            discard_after: false,
+            purpose: super::super::AccessPurpose::Uniform,
+            stages: ShaderStages::VERTEX,
+        };
+        let variants = [
+            first.clone(),
+            ResourceAccess {
+                range: 4..16,
+                ..first.clone()
+            },
+            ResourceAccess {
+                stages: ShaderStages::FRAGMENT,
+                ..first.clone()
+            },
+            ResourceAccess {
+                resource: 0,
+                ..first
+            },
+        ];
+        let sequence = [0, 0, 1, 0, 1, 2, 3, 3, 2, 1];
+        let mut index = ReadAccessSet::new(sequence.len(), 64).unwrap();
+        let mut compacted = Vec::with_capacity(sequence.len());
+        // A different first variant on reuse must not observe any prior pass's
+        // compacted indices or hash entries. Resource count also exceeds A.
+        for reverse in [false, true, false] {
+            index.clear();
+            compacted.clear();
+            let mut expected = Vec::new();
+            for step in 0..sequence.len() {
+                let step = if reverse {
+                    sequence.len() - 1 - step
+                } else {
+                    step
+                };
+                let access = &variants[sequence[step]];
+                let unique = !expected.contains(access);
+                assert_eq!(index.insert(access, compacted.len(), &compacted), unique);
+                if unique {
+                    expected.push(access.clone());
+                    compacted.push(access.clone());
+                }
+            }
+            assert_eq!(compacted, expected);
+        }
     }
 
     #[derive(Clone)]
@@ -341,6 +513,40 @@ mod tests {
             ),
             None,
         );
+    }
+
+    #[test]
+    fn sparse_and_dense_writers_keep_exact_pair_order_and_capacity_contract() {
+        for writers in [1, 3, 4, 5] {
+            let mut accesses = (0..96)
+                .map(|index| access(0, index * 4..index * 4 + 4, false))
+                .collect::<Vec<_>>();
+            for index in 0..writers {
+                accesses.push(access(1, index * 4..index * 4 + 4, true));
+            }
+            let mut scratch = Vec::with_capacity(accesses.len());
+            let pointer = scratch.as_ptr();
+            assert_eq!(
+                conflicting_accesses_in(&accesses, view, &mut scratch),
+                Ok(None),
+            );
+            // The first writer precedes its conflicting reader. A writer-only
+            // existence query cannot itself choose this original-order pair.
+            accesses[0] = access(1, 0..4, true);
+            accesses[1] = access(1, 2..4, false);
+            assert_eq!(
+                conflicting_accesses_in(&accesses, view, &mut scratch),
+                Ok(Some((0, 1))),
+            );
+            assert_eq!(scratch.as_ptr(), pointer);
+
+            let mut short = Vec::with_capacity(accesses.len() - 1);
+            assert_eq!(
+                conflicting_accesses_in(&accesses, view, &mut short),
+                Err(()),
+                "the capacity bound includes readers, writers={writers}",
+            );
+        }
     }
 
     #[test]

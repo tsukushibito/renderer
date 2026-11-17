@@ -845,6 +845,9 @@ matching EXE/PDBによるinline/source帰属を確認する。未知symbolや端
 `tracy` featureを明示した場合は、これと独立に非管理者の手動CPU zoneを採取できる。
 Graph begin/compile/解析、Vulkanのprepare・pass/draw準備・descriptor具体化、
 record・pass/barrier・draw batch等のhost範囲へprivateなzoneを置く。
+Graph構築のpass内overlapとexact-read圧縮、Vulkanのprepare prelude内のimport revision照合・
+resource lease取得と、その後のcanonical snapshot copyにも独立zoneを置く。
+これらは既存のnative CPU prepare計測範囲を変更せず、Graph/APIの保証や寿命処理も省略しない。
 既定offでzone専用コード・metadata・依存を除外し、通常submitのnative呼出し・同期・寿命・検証は変えない。
 `Client::running()`のguardはcollectorの接続を意味せず、on-demand切断時のclient費用も別に確認する。
 

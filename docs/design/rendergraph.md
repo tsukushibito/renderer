@@ -152,11 +152,25 @@ pass内overlap検査を終えてから圧縮し、Computeのwrite hazardやimage
 Rasterはbindingがあればpass全体を一度検査し、bindingがなければbuffer入力とimage出力が異なるため
 attachmentだけを一度検査する。attachment-onlyでも重複Viewを拒否する。
 
+pass内のwriterが4件以下なら、元の全accessとwriter列だけを直接比較し、
+競合pairの宣言indexが辞書順で最小のものを返す。自身との比較を除外し、
+buffer/imageの半開範囲とresource同一性を従来と同じ条件で判定する。
+多数のreaderまでsortする費用を避ける一般的な小集合経路であり、draw数や固定planに依存しない。
+5件以上のwriterは従来の全accessの区間索引へ戻し、最悪O(A log A)を保つ。
+writerがあれば全access数Aについてscratch容量を確認し、all-readerはscratchを使わない。
+
 `GraphCapacity::bindings`はdispatchのoperandと、各Raster setのoperandで共有する上限である。
 同じsetを使うdrawごとの追加消費はない。空setはhandleの値以外のmetadataを保存しない。
 templateと使用済みsetの作業領域はbinding上限以内に準備する。exact-read indexはaccess上限をAとして
-`(2A + 1) × size_of::<usize>()`のbucketと`A × size_of::<usize>()`の使用bucket列を追加し、
-前回触れたbucketだけを消す。templateは最大`bindings × size_of::<ResourceAccess>()`、setの使用markと
+`(2A + 1) × size_of::<usize>()`のbucketと`A × size_of::<usize>()`の使用bucket列を準備する。
+resource上限Rに対し、最初のreadの保持位置・hash昇格markと使用resource列も
+`R × (size_of::<FirstRead>() + size_of::<usize>())`（Windows x64では24R byte/slot）予約する。
+resourceの最初のreadと、その全属性が完全一致する反復はhashせず処理し、
+異なる範囲・用途・stage等が現れたときだけ最初のreadをhash索引へ一度登録する。
+以後の異なるreadは既存のhash索引を使い、多数rangeをresourceごとの線形列へ変えない。
+保持位置は圧縮中も後続要素に上書きされず、各passの開始とslot resetで使用resource/bucketだけを消す。
+代償は準備時のmetadata増加であり、追加容量・通常frameの確保・失敗時の再走査へ移さない。
+templateは最大`bindings × size_of::<ResourceAccess>()`、setの使用markと
 列は最大`bindings × (size_of::<bool>() + size_of::<usize>())`を各Graph slotに準備する。
 access容量は圧縮前の構築作業領域も覆う。通常frameでheapを増設せず、容量不足は明示エラーとする。
 set作成失敗はoperandとtemplateの追加を戻し、後続pass失敗は既存setを維持してdraw/access/attachment/nameを戻す。

@@ -534,6 +534,13 @@ impl GraphWork {
         #[cfg(feature = "vulkan-diagnostics")]
         let labels = &mut data.labels;
         let readbacks = &mut self.result.readbacks;
+        #[cfg(feature = "tracy")]
+        let snapshots = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.vulkan.graph.snapshot_states"),
+                0,
+            )
+        });
         for (index, physical) in physical.iter().enumerate().take(graph.resources.len()) {
             if let Some(physical) = physical {
                 states[index]
@@ -542,6 +549,8 @@ impl GraphWork {
                     .copy_from(&physical.lock().scheduled)?;
             }
         }
+        #[cfg(feature = "tracy")]
+        drop(snapshots);
         provenance_requirements(graph, provenance_needed, retain_provenance);
         for &index in &graph.order {
             #[cfg(feature = "tracy")]
