@@ -600,6 +600,13 @@ impl Graph {
             self.attachments.len(),
         );
         let result = build(self).and_then(|(operation, accesses, side_effect)| {
+            #[cfg(feature = "tracy")]
+            let _span = tracy_client::Client::running().map(|client| {
+                client.span(
+                    tracy_client::span_location!("renderer.graph.compact_reads"),
+                    0,
+                )
+            });
             // All access-sensitive validation has completed. Compact exact
             // readers only now, preserving binding-slot error attribution and
             // every write, purpose, stage and original first occurrence.

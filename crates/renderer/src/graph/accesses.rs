@@ -157,6 +157,13 @@ pub(super) fn conflicting_ranges_in<I>(
 where
     I: Iterator<Item = (usize, Range<u64>, bool)>,
 {
+    #[cfg(feature = "tracy")]
+    let _span = tracy_client::Client::running().map(|client| {
+        client.span(
+            tracy_client::span_location!("renderer.graph.pass_overlap"),
+            0,
+        )
+    });
     sorted.clear();
     if !accesses().any(|(_, _, write)| write) {
         return Ok(None);

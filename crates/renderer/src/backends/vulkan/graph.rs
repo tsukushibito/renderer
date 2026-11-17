@@ -1221,6 +1221,13 @@ impl VulkanRuntime {
         graph: &CompiledGraph,
         #[cfg(feature = "graph-diagnostics")] capture_diagnostics: bool,
     ) -> Result<(Submission, LoweringCapture), RuntimeError> {
+        #[cfg(feature = "tracy")]
+        let prepare_prelude = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.vulkan.graph.prepare_prelude"),
+                0,
+            )
+        });
         self.collect_recycled();
         let profile_started = self.profiling_enabled.then(Instant::now);
         self.owner
@@ -1356,6 +1363,13 @@ impl VulkanRuntime {
         // Validate logical contents, including culled imports, before allocation.
         // Read-only uses may have advanced native scopes/layouts since compile;
         // prepare rebases those from the latest canonical scheduled state.
+        #[cfg(feature = "tracy")]
+        let import_check = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.vulkan.graph.import_revisions"),
+                0,
+            )
+        });
         for (resource_index, resource) in graph.resources.iter().enumerate() {
             if let Some(key) = resource.import {
                 let physical = self.entry(key)?.physical();
@@ -1377,6 +1391,15 @@ impl VulkanRuntime {
                 }
             }
         }
+        #[cfg(feature = "tracy")]
+        drop(import_check);
+        #[cfg(feature = "tracy")]
+        let resource_leases = tracy_client::Client::running().map(|client| {
+            client.span(
+                tracy_client::span_location!("renderer.vulkan.graph.resource_leases"),
+                0,
+            )
+        });
         for (index, resource) in graph.resources.iter().enumerate() {
             if !work.needed[index] {
                 continue;
@@ -1392,6 +1415,8 @@ impl VulkanRuntime {
             work.keys[index] = Some(key);
             work.physical[index] = Some(value);
         }
+        #[cfg(feature = "tracy")]
+        drop(resource_leases);
         let mut shader_needs = ShaderNeeds::default();
         let mut binding_count = 0usize;
         for &pass in &graph.order {
@@ -1490,6 +1515,8 @@ impl VulkanRuntime {
         });
         #[cfg(not(feature = "graph-diagnostics"))]
         let diagnostic = ();
+        #[cfg(feature = "tracy")]
+        drop(prepare_prelude);
         let mut work = work.prepare(
             graph,
             programs,
