@@ -523,12 +523,22 @@ python -B tools/bistro/b3_acceptance.py --strict-binary .tools/bistro-residency/
 
 正式比較のEXEは検証・memory計装・Tracyを含めない。同じclean commitからRendererとGodotを準備する。
 通常ホストの非管理者・非AppContainerで実行し、計測中はbuild/cook・他のGPU試験や画像解析を並行させない。
+ゲーム等の別の描画負荷も待機させ、実行時のCPU条件を記録する。
+
+以下の`--cpu-policy performance-cores`は、同じ最高`EfficiencyClass`のコア群を両対象processへ割り当て、
+HighQoSを明示する。各processを停止状態で作成し、affinityとQoSのnative読戻しが成功してから初期threadを再開する。
+設定失敗や予期しない初期thread数は、対象を終了・回収して測定失敗とする。
+この機材ではPコアの論理CPU 0〜11が対象であり、CPU全体を既定schedulerに任せた値とは条件を分ける。
+単一processor groupを対象とする。`system`が既定で、CPU設定を変更しない参考条件として残している。
+CPU clockや外部負荷は別途確認し、過去の変動原因をコア選択だけで断定しない。
+選択根拠は[Windows CPU Sets](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_cpu_set_information)、
+QoSは[Windowsの契約](https://learn.microsoft.com/en-us/windows/win32/procthread/quality-of-service)に従う。
 
 ```powershell
 python -B tools/cpu_profile/build.py --profile release --example bistro --features vulkan,d3d12 --output .tools/bistro-pbr/b3-normal-build
 python -B tools/godot_bistro/benchmark.py prepare --profile b3 --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --editor .tools/godot-baseline/editor/Godot_v4.7.2-stable_win64_console.exe --template .tools/godot-baseline/templates/windows_release_x86_64.exe --asset-root . --output .tools/godot-baseline/prepared-b3
-python -B tools/bistro/b3_benchmark.py plan --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200
-python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200
+python -B tools/bistro/b3_benchmark.py plan --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200 --cpu-policy performance-cores
+python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200 --cpu-policy performance-cores
 ```
 
 `plan`は実行予定を表示し、`run`だけが新規outputへ実行する。
