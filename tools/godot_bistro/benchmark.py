@@ -17,6 +17,9 @@ import statistics
 import subprocess
 import time
 
+from profiles import (PROFILES, compare_settings, orientation_fixture, project_settings,
+                      settings, verify_ibl_manifest)
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = Path(__file__).resolve().parent
@@ -50,6 +53,9 @@ def run_logged(command, log, timeout=600):
 
 
 def prepare(args):
+    profile = args.profile
+    if (profile == "b3") != (args.ibl_manifest is not None):
+        raise ValueError("The B3 profile requires --ibl-manifest; B2 does not use an IBL cook")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     assets = args.asset_root.resolve()
@@ -69,8 +75,21 @@ def prepare(args):
     hashes = {}
     for name in ("project.godot", "main.gd", "main.tscn"):
         shutil.copyfile(SOURCE / name, project / name)
-        hashes[name] = digest(project / name)
     shutil.copyfile(ROOT / "tools/bistro/conditions.json", output / "conditions.json")
+    conditions = read(output / "conditions.json")
+    quality = settings(profile, conditions)
+    ibl_identity = None
+    if profile == "b3":
+        panorama, ibl_identity = verify_ibl_manifest(args.ibl_manifest, conditions, read, digest)
+        shutil.copyfile(panorama, output / "godot-panorama.hdr")
+        shutil.copyfile(args.ibl_manifest, output / "ibl-manifest.json")
+        write(output / "orientation-fixture.json", orientation_fixture())
+        ibl_identity["orientation_fixture_sha256"] = digest(output / "orientation-fixture.json")
+        project_file = project / "project.godot"
+        project_file.write_text(project_file.read_text(encoding="utf-8").replace(
+            "[audio]", project_settings(profile) + "\n[audio]"), encoding="utf-8")
+    for name in ("project.godot", "main.gd", "main.tscn"):
+        hashes[name] = digest(project / name)
     editor, template = args.editor.resolve(), args.template.resolve()
     # Custom template avoids any modification to the user's installed Godot.
     (project / "export_presets.cfg").write_text(
@@ -81,15 +100,18 @@ def prepare(args):
         'graphics/opengl3/include=false\ngraphics/d3d12/include=false\n', encoding="utf-8")
     run_logged([editor, "--headless", "--path", project, "--editor", "--import"], output / "import.log")
     run_logged([editor, "--headless", "--path", project, "--export-release", "Windows", output / "bistro-reference.exe"], output / "export.log")
-    identity = {"schema_version": 1, "created_utc": datetime.now(timezone.utc).isoformat(),
+    identity = {"schema_version": 2, "created_utc": datetime.now(timezone.utc).isoformat(),
+                "profile": profile, "quality": quality, "ibl": ibl_identity,
                 "editor_sha256": digest(editor), "template_sha256": digest(template),
                 "binary_sha256": digest(output / "bistro-reference.exe"),
                 "pack_sha256": digest(output / "bistro-reference.pck"), "project_sources": hashes,
                 "conditions_sha256": digest(output / "conditions.json"), "inputs": verified,
                 "gltf": str(assets / "assets/bistro/converted/BistroExterior.gltf"),
+                "asset_root": str(assets),
                 "source_commit": subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                 "benchmark_tool_sha256": digest(SOURCE / "benchmark.py"),
-                "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents and PNG mipmaps; no compression/IBL/shadows/AA/glow; constant ambient 0.03; linear tonemap exposure 1; no LOD/occlusion; optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. Godot's BRDF, depth prepass, batching, mip chain and presentation differ from Renderer."}
+                "profile_tool_sha256": digest(SOURCE / "profiles.py"),
+                "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents and PNG mipmaps; no LOD/occlusion, optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. B2 retains constant ambient .03, no IBL/shadow/AA, linear exposure1. B3 uses cap4 static IBL strength3, four 2048-effective CSM splits/PCF/no PCSS, native AgX exposure2 and FXAA, no Bloom/extra effects. Godot's BRDF, prefilter, shadow filter, depth prepass, batching, mip chain and presentation differ from Renderer; AgX and pre-tonemap FXAA differ from Renderer Neutral and post-tonemap FXAA."}
     write(output / "identity.json", identity)
     print(output / "identity.json")
 
@@ -116,6 +138,14 @@ def validate_report(report, config):
         raise ValueError("Expected the pinned official Godot 4.7.2 release")
     if report.get("viewport_size") != [1920, 1080] or report.get("vsync") != 0 or report.get("max_fps") != 0:
         raise ValueError("Resolution or frame pacing mismatch")
+    if config.get("profile") not in PROFILES:
+        raise ValueError("Missing explicit quality profile")
+    if config["quality"].get("profile") != config["profile"]:
+        raise ValueError("Requested profile differs from its quality settings")
+    compare_settings(report.get("quality"), config["quality"])
+    if config["profile"] == "b3":
+        if report.get("ibl") != config["ibl"]:
+            raise ValueError("Effective IBL input differs from the archived cook")
     samples = report.get("samples", [])
     if len(samples) != config["frames"]:
         raise ValueError("Incomplete samples")
@@ -148,12 +178,36 @@ def measure(args):
         raise ValueError("Prepared executable or pack was modified")
     if digest(prepared / "conditions.json") != identity["conditions_sha256"]:
         raise ValueError("Prepared conditions were modified")
+    if (digest(SOURCE / "benchmark.py") != identity["benchmark_tool_sha256"]
+            or digest(SOURCE / "profiles.py") != identity["profile_tool_sha256"]):
+        raise ValueError("Measurement tools differ from the prepared source identity")
+    for name, expected in identity["project_sources"].items():
+        if digest(prepared / "project" / name) != expected:
+            raise ValueError(f"Prepared project source was modified: {name}")
+    for item in identity["inputs"]:
+        source = Path(identity["asset_root"]) / item["path"]
+        if source.stat().st_size != item["size"] or digest(source) != item["sha256"]:
+            raise ValueError(f"Runtime Bistro input was modified: {source}")
+    profile = identity["profile"]
+    conditions = read(prepared / "conditions.json")
+    compare_settings(identity["quality"], settings(profile, conditions))
+    if profile == "b3":
+        ibl = identity["ibl"]
+        if (digest(prepared / "ibl-manifest.json") != ibl["manifest_sha256"]
+                or digest(prepared / "godot-panorama.hdr") != ibl["panorama"]["sha256"]
+                or digest(prepared / "orientation-fixture.json") != ibl["orientation_fixture_sha256"]
+                or read(prepared / "orientation-fixture.json") != orientation_fixture()):
+            raise ValueError("Prepared IBL input was modified")
     if args.frames <= 0 or args.warmup < 2 or args.repeats < 1:
         raise ValueError("frames/repeats must be positive and warmup >= 2")
-    if not args.smoke and (args.frames != 1800 or args.warmup != 3600 or args.repeats < 3):
-        raise ValueError("Formal baseline requires 3600 warmup, 1800 frames and >= 3 independent runs")
+    if not args.smoke and (args.frames != 1800 or args.warmup != 3600 or args.repeats != 3):
+        raise ValueError("Formal baseline requires 3600 warmup, 1800 frames and exactly 3 independent runs")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
+    shutil.copyfile(prepared / "conditions.json", output / "conditions.json")
+    if profile == "b3":
+        for name in ("ibl-manifest.json", "orientation-fixture.json"):
+            shutil.copyfile(prepared / name, output / name)
     runs = []
     for repetition in range(args.repeats):
         cases = [(culling, timing) for culling in args.culling for timing in (False, True)]
@@ -163,8 +217,13 @@ def measure(args):
             folder = output / run_id
             folder.mkdir()
             config = {"gltf": identity["gltf"], "conditions": str(prepared / "conditions.json"),
+                      "profile": profile, "quality": identity["quality"],
                       "frames": args.frames, "warmup": args.warmup, "timing": timing, "culling": culling,
                       "output": str(folder / "report.json"), "capture": str(folder / "route0.png")}
+            if profile == "b3":
+                config["ibl_path"] = str(prepared / "godot-panorama.hdr")
+                config["ibl"] = {"sha256": identity["ibl"]["panorama"]["sha256"],
+                                 "width": 4096, "height": 2048}
             write(folder / "config.json", config)
             command = [prepared / "bistro-reference.exe", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
                        "--resolution", "1920x1080", "--position", "0,0", "--disable-vsync", "--audio-driver", "Dummy",
@@ -199,6 +258,8 @@ def main():
     build.add_argument("--template", type=Path, required=True)
     build.add_argument("--asset-root", type=Path, default=ROOT)
     build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--profile", choices=PROFILES, default="b2")
+    build.add_argument("--ibl-manifest", type=Path)
     build.set_defaults(func=prepare)
     run = commands.add_parser("run")
     run.add_argument("--prepared", type=Path, required=True)

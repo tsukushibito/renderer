@@ -12,6 +12,12 @@ var roi_start_usec := 0
 var inventory := {"mesh_instances": 0, "surfaces": 0, "triangles": 0}
 var import_inventory: Dictionary
 var finished := false
+var environment: Environment
+var sun: DirectionalLight3D
+var panorama: PanoramaSkyMaterial
+var sky: Sky
+var ibl_identity: Dictionary = {}
+var mesh_shadow_modes: Dictionary = {}
 
 func fail(message: String) -> void:
 	push_error(message)
@@ -19,6 +25,58 @@ func fail(message: String) -> void:
 
 func vec(values: Array) -> Vector3:
 	return Vector3(values[0], values[1], values[2])
+
+func triple(value: Vector3) -> Array:
+	return [value.x, value.y, value.z]
+
+func quality_settings() -> Dictionary:
+	# Read back the live objects and loaded project settings, not config echoes.
+	var background := environment.background_color.srgb_to_linear()
+	var result := {
+		"profile": config.profile, "background_mode": environment.background_mode,
+		"background_linear_rgb": [background.r, background.g, background.b],
+		"background_energy": environment.background_energy_multiplier,
+		"ambient_source": environment.ambient_light_source,
+		"ambient_energy": environment.ambient_light_energy,
+		"ambient_sky_contribution": environment.ambient_light_sky_contribution,
+		"reflection_source": environment.reflected_light_source,
+		"sky_rotation": triple(environment.sky_rotation),
+		"sun_energy": sun.light_energy,
+		"sun_color": [sun.light_color.r, sun.light_color.g, sun.light_color.b],
+		"sun_direction": triple(sun.global_basis.z),
+		"shadow_enabled": sun.shadow_enabled,
+		"tonemap_mode": environment.tonemap_mode, "exposure": environment.tonemap_exposure,
+		"screen_space_aa": get_viewport().screen_space_aa,
+		"msaa_3d": get_viewport().msaa_3d, "taa": get_viewport().use_taa,
+		"scaling_3d_scale": get_viewport().scaling_3d_scale,
+		"mesh_lod_threshold": get_viewport().mesh_lod_threshold,
+		"occlusion_culling": get_viewport().use_occlusion_culling,
+		"ssao": environment.ssao_enabled, "ssil": environment.ssil_enabled,
+		"ssr": environment.ssr_enabled, "sdfgi": environment.sdfgi_enabled,
+		"glow": environment.glow_enabled, "fog": environment.fog_enabled,
+		"volumetric_fog": environment.volumetric_fog_enabled,
+		"adjustments": environment.adjustment_enabled, "debanding": get_viewport().use_debanding,
+		"physical_light_units": ProjectSettings.get_setting("rendering/lights_and_shadows/use_physical_light_units"),
+		"mesh_shadow_casting": mesh_shadow_modes.keys()[0] if mesh_shadow_modes.size() == 1 else -1,
+	}
+	if config.profile == "b3":
+		result.merge({
+			"ibl_energy": panorama.energy_multiplier,
+			"sky_process_mode": sky.process_mode, "sky_radiance_size": sky.radiance_size,
+			"shadow_mode": sun.directional_shadow_mode,
+			"shadow_distance": sun.directional_shadow_max_distance,
+			"shadow_splits": [sun.directional_shadow_split_1, sun.directional_shadow_split_2, sun.directional_shadow_split_3],
+			"shadow_blend_splits": sun.directional_shadow_blend_splits,
+			"shadow_fade_start": sun.directional_shadow_fade_start,
+			"shadow_bias": sun.shadow_bias, "shadow_normal_bias": sun.shadow_normal_bias,
+			"shadow_blur": sun.shadow_blur, "shadow_pancake_size": sun.directional_shadow_pancake_size,
+			"sun_angular_distance": sun.light_angular_distance,
+			"shadow_atlas_size": ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/size"),
+			"shadow_16_bits": ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/16_bits"),
+			"shadow_filter_quality": ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality"),
+			"agx_white": environment.tonemap_agx_white, "agx_contrast": environment.tonemap_agx_contrast,
+		})
+	return result
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
@@ -40,6 +98,11 @@ func _ready() -> void:
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	get_viewport().mesh_lod_threshold = 0.0
 	get_viewport().use_occlusion_culling = false
+	get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+	get_viewport().use_taa = false
+	get_viewport().use_debanding = false
+	get_viewport().scaling_3d_scale = 1.0
+	get_viewport().screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if config.profile == "b3" else Viewport.SCREEN_SPACE_AA_DISABLED
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
 	var error := doc.append_from_file(config.gltf, state, GLTFDocument.IMPORT_FLAG_GENERATE_TANGENT_ARRAYS)
@@ -60,7 +123,7 @@ func _ready() -> void:
 		fail("Bistro inventory differs: %s" % inventory)
 		return
 	var world := WorldEnvironment.new()
-	var environment := Environment.new()
+	environment = Environment.new()
 	environment.background_mode = Environment.BG_COLOR
 	# Godot Color properties are sRGB; the source condition is scene-linear.
 	var background := vec(conditions.output.background_linear_rgb)
@@ -79,11 +142,53 @@ func _ready() -> void:
 	environment.glow_enabled = false
 	environment.fog_enabled = false
 	environment.volumetric_fog_enabled = false
+	environment.adjustment_enabled = false
+	if config.profile == "b3":
+		var image := Image.load_from_file(config.ibl_path)
+		if image == null or image.is_empty():
+			fail("Cannot load the cooked B3 IBL panorama")
+			return
+		ibl_identity = {"sha256": FileAccess.get_sha256(config.ibl_path), "width": image.get_width(), "height": image.get_height()}
+		if ibl_identity != config.ibl:
+			fail("B3 IBL panorama identity differs from its cook")
+			return
+		panorama = PanoramaSkyMaterial.new()
+		panorama.panorama = ImageTexture.create_from_image(image)
+		panorama.energy_multiplier = 3.0
+		sky = Sky.new()
+		sky.sky_material = panorama
+		sky.process_mode = Sky.PROCESS_MODE_QUALITY
+		sky.radiance_size = Sky.RADIANCE_SIZE_512
+		environment.sky = sky
+		environment.sky_rotation = Vector3.ZERO
+		environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		environment.ambient_light_sky_contribution = 1.0
+		environment.ambient_light_energy = 1.0
+		environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+		environment.tonemap_mode = Environment.TONE_MAPPER_AGX
+		environment.tonemap_exposure = 2.0
+		environment.tonemap_agx_white = 16.29
+		environment.tonemap_agx_contrast = 1.25
 	world.environment = environment
 	add_child(world)
-	var sun := DirectionalLight3D.new()
+	sun = DirectionalLight3D.new()
 	sun.shadow_enabled = false
 	sun.light_energy = 1.0
+	if config.profile == "b3":
+		sun.shadow_enabled = true
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+		sun.directional_shadow_max_distance = 120.0
+		sun.directional_shadow_split_1 = config.quality.shadow_splits[0]
+		sun.directional_shadow_split_2 = config.quality.shadow_splits[1]
+		sun.directional_shadow_split_3 = config.quality.shadow_splits[2]
+		sun.directional_shadow_blend_splits = true
+		sun.directional_shadow_fade_start = 0.9
+		sun.shadow_bias = 0.1
+		sun.shadow_normal_bias = 2.0
+		sun.shadow_blur = 1.0
+		sun.directional_shadow_pancake_size = 20.0
+		# Keep fixed PCF. Nonzero angular distance would add Godot PCSS.
+		sun.light_angular_distance = 0.0
 	add_child(sun)
 	sun.look_at(-vec(conditions.lighting.sun.direction_to_light), Vector3.UP)
 	camera = Camera3D.new()
@@ -106,7 +211,8 @@ func inspect_scene(node: Node) -> void:
 		var instance := node as MeshInstance3D
 		inventory.mesh_instances += 1
 		RenderingServer.instance_set_ignore_culling(instance.get_instance(), config.culling == "all")
-		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if config.profile == "b3" else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mesh_shadow_modes[instance.cast_shadow] = true
 		for surface in instance.mesh.get_surface_count():
 			inventory.surfaces += 1
 			var arrays := instance.mesh.surface_get_arrays(surface)
@@ -167,6 +273,7 @@ func after_draw() -> void:
 	if frame == int(config.frames) - 1:
 		finished = true
 		var report := {"schema_version": 1, "config": config, "inventory": inventory,
+			"quality": quality_settings(), "ibl": ibl_identity,
 			"godot": Engine.get_version_info(), "debug": OS.has_feature("debug"),
 			"import_inventory": import_inventory,
 			"adapter": RenderingServer.get_video_adapter_name(),
