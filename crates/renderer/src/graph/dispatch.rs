@@ -126,11 +126,20 @@ impl Graph {
         if bindings.len != 0 && !self.raster_binding_seen[bindings.first] {
             // The trusted Raster contract allows only read-only descriptors
             // and forbids shader side effects/inter-draw synchronization.
+            // Creation already validated their immutable ranges and input
+            // permissions. Only remaining pass capacity changes on reuse.
             // Compute write footprints keep the separate dispatch path.
-            for index in bindings.first_access..access_end {
-                self.append_access(self.binding_accesses[index].clone())?;
+            let required = self.accesses.len().checked_add(bindings.access_len);
+            if required.is_none_or(|required| required > self.capacity.accesses) {
+                return Err(capacity_error(
+                    GraphCapacityKind::Accesses,
+                    self.capacity.accesses,
+                    required,
+                ));
             }
             let data = self.data_mut();
+            data.accesses
+                .extend_from_slice(&data.binding_accesses[bindings.first_access..access_end]);
             data.raster_binding_seen[bindings.first] = true;
             // Every nonempty set owns at least one unique binding slot.
             data.raster_binding_sets.push(bindings.first);

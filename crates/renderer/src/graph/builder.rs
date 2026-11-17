@@ -861,6 +861,91 @@ mod tests {
     }
 
     #[test]
+    fn binding_template_capacity_failure_preserves_sets_and_allows_pass_retry() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                bindings: 9,
+                accesses: 13,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mesh = uploaded_draw(&mut graph, "geometry");
+        let sets = std::array::from_fn::<_, 3, _>(|_| {
+            let (set, texture) = textured_bindings(&mut graph);
+            graph
+                .upload_image("texture contents", texture, &[0; 16])
+                .unwrap();
+            set
+        });
+        let output = graph.image("output", ImageDesc::rgba8(2, 2)).unwrap();
+        let colors = [Attachment {
+            view: graph.image_view(output, 0, 0).unwrap(),
+            load: LoadOp::Clear([0.0; 4]),
+            store: StoreOp::Store,
+        }];
+        let before = (
+            graph.accesses.len(),
+            graph.draws.len(),
+            graph.attachments.len(),
+        );
+        let error = graph
+            .raster(
+                "too many binding reads",
+                &ManagedRasterProgram::textured_mesh(),
+                sets.map(|set| RasterDraw {
+                    bindings: Some(set),
+                    ..mesh
+                }),
+                RasterAttachments {
+                    colors: &colors,
+                    depth: None,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
+        assert_eq!(
+            error.capacity().unwrap().kind,
+            super::super::GraphCapacityKind::Accesses
+        );
+        assert_eq!(error.capacity().unwrap().required, Some(14));
+        assert_eq!(
+            (
+                graph.accesses.len(),
+                graph.draws.len(),
+                graph.attachments.len()
+            ),
+            before,
+        );
+        assert_eq!(graph.bindings.len(), 9);
+        assert_eq!(graph.binding_accesses.len(), 6);
+        let pass = graph
+            .raster(
+                "retry published set",
+                &ManagedRasterProgram::textured_mesh(),
+                [RasterDraw {
+                    bindings: Some(sets[0]),
+                    ..mesh
+                }; 2],
+                RasterAttachments {
+                    colors: &colors,
+                    depth: None,
+                },
+            )
+            .unwrap();
+        graph.export_image(output).unwrap();
+        let plan = graph.compile().unwrap();
+        assert_eq!(plan.accesses(pass.index).len(), 5);
+        assert_eq!(
+            plan.pass_count(),
+            5,
+            "retry retains exactly its four input producers"
+        );
+    }
+
+    #[test]
     fn reused_set_selects_each_pass_producer_and_does_not_keep_culled_reads() {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
