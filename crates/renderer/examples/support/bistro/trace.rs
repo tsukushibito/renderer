@@ -178,8 +178,8 @@ pub(super) fn done(options: &Options, measured: &Value, tracy: &Value) -> Result
             "clock": boundary()?,
         }),
     )?;
-    // Keep Renderer resources alive until capture has drained and disconnected;
-    // image readback and original teardown follow END outside the captured ROI.
+    // END releases post-ROI readback and teardown, then normal process exit
+    // drains Tracy's queues before the collector completes its natural save.
     handshake(b"END", Duration::from_secs(180))
 }
 

@@ -110,7 +110,8 @@ build・cook・他のGPU試験・offline画像解析は計測と並行させな�
 | Vulkan | 19.583（18.212〜20.148） | 19.462（18.125〜20.061） | 20.081（19.059〜21.214） | 4.906（4.488〜5.024） |
 | D3D12 | 32.674（31.241〜33.967） | 32.613（31.207〜33.915） | 33.785（33.014〜35.545） | 8.479（8.158〜8.958） |
 
-process／main CPUはOSのcharged timeである。wall/frameはROI全体のQPC時間をframe数で割り、最後のdrainとresult returnを含む。
+process／main CPUはOSのcharged timeである。wall/frameはROI全体のrunner wallをframe数で割り、最後のdrainとresult returnを含む。
+保存したQPC窓との整合も検査しているが、読取位置が異なる二つの値を同じ値として扱わない。
 ロード・upload・prepare・warmup・最終capture・shutdownはROIへ含めない。
 frameごとのbuild開始〜完了観測にはqueue滞在と後続host処理を含むため、上のwall/frameや表示遅延とは異なる。
 headlessのyield pollでありVSync／present／表示FPSの測定ではない。GPU値はtimestampを有効にした別processの観測である。
@@ -128,7 +129,7 @@ driver内部の原因や全workloadでのAPI優劣をこの区間計測だけか
 D3D12の計測有効runではnative `record`が18.064〜19.018ms/frame、中央値18.068msだった。
 これは命令記録、descriptor設定、barrier、export取得、query終了、Closeまでのhost経過区間である。
 Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phaseを同じ仕事内容として単純比較しない。
-実スタックからの原因特定と最適化前後の比較は`renderer-4wl`へ記録した。
+後続の`renderer-4wl`では、以下のTracy計装でソース区間を調べた。sampled stackの取得や最適化実装は行っていない。
 
 内部CPUタイマーとGPU timestampをまとめて有効にしたprocess CPU中央値はVulkan 20.139ms、D3D12 33.568msだった。
 無効時に対する観測差は+2.84%／+2.74%、wallは+5.87%／+2.16%。
@@ -141,6 +142,92 @@ Vulkanはdescriptor準備の一部を`prepare`へ計上するため、同名phas
 独立レビューでも全reportのhash・数値・ROI・同一EXE・画像hashを再照合し、不整合を認めなかった。
 ドキュメントは17 HTML page・2,270 local link/resource/fragment、32 diagram instanceを検査し、viewer・theme・mobile・printの表示を確認した。
 これは新しいPBR負荷の基準測定であり、PBR未実装時との速度改善率ではない。
+
+<a id="bistro-tracy"></a>
+
+### Tracyによる非管理者のCPU区間計測
+
+`renderer-4wl`で任意の`tracy` featureを追加し、Graph構築・Bistro利用側・二backendのhost処理を計装した。
+通常構成は依存・区間名・計装処理をコンパイル除外する。最適化と追加検証の選択は独立のままである。
+`tracy-client 0.19.0`／`tracy-client-sys 0.30.1`に同梱されたTracyは0.14.1で、portableの収集・exportも同版へ固定した。
+有効にしたnative機能は`enable,ondemand,only-localhost`だけで、system tracing・sampling・context switch収集は使わない。
+配布ZIP・native header・license・EXE/PDB・source・入力・CLIのhashは、
+[機械可読データ](source-review.json)の`tracy_profiling`へ保存する。
+導入・収集・exportを含む関係processのWindows `TokenElevation`は全て0で、UAC・driver/service導入・OS設定変更は使用していない。
+
+同じ機材・全量cook・shader・固定routeで、通常版／同じ計装EXEの未接続／接続を各API独立3 process、計18 run実行した。
+1920×1080、2 in-flight、warmup 3,600＋測定1,800 frame、release最適化、追加検証と内部CPU/GPU timestamp計測は無効である。
+二buildのRust sourceは`ccb20b0fbde461cb440c11007883817bee2d7452`で一致し、feature差は`tracy`だけである。
+通常EXEは`e169be1fcd74145b018e5739b934cf48109703160cb7f9f2d14ec077b7a2f2a6`、
+計装EXEは`d6c23b77e80597ba36c08a7faa8075dd7d04821208d902649c83bbc1507b98fe`。
+通常EXEに代表3区間の文字列がなく、計装EXEには存在することも確認した。
+順序を周回ごとに入れ替え、warmup終了後に専用collectorへ接続してから測定を始めた。
+収集のflush・画像readback・CSV解析はROI外で、全18 run終了まではbuild・GPU試験・offline解析を並行させなかった。
+
+以下はprocess CPUの3 run中央値（最小〜最大）、単位はms/frameである。
+
+| API | 通常版 | 計装・未接続 | 計装・接続 |
+| --- | ---: | ---: | ---: |
+| Vulkan | 20.113（17.344〜20.590） | 18.837（17.083〜19.479） | 19.592（19.479〜20.790） |
+| D3D12 | 31.892（21.953〜32.231） | 32.083（27.786〜33.932） | 32.352（30.660〜37.300） |
+
+同じROIのrunner wall/frameは次のとおりで、最終drainを含むheadless throughputの分母である。保存QPC窓との整合も確認した。
+
+| API | 通常版 | 計装・未接続 | 計装・接続 |
+| --- | ---: | ---: | ---: |
+| Vulkan | 20.779（17.843〜21.324） | 19.347（17.763〜20.005） | 19.372（19.088〜20.124） |
+| D3D12 | 33.103（22.712〜33.314） | 32.803（28.949〜34.896） | 31.611（29.509〜35.593） |
+
+接続時process CPUの通常版に対する観測差はVulkan -2.59%／D3D12 +1.44%だった。
+run間差が大きく、負の差は高速化の証拠ではない。純粋な計装費用や低overheadの上限をこの比較から確定しない。
+process CPUにはTracy clientのbackground threadも入り、別processのcollector CPUは含まない。
+main thread・呼出側phase・各runの値もJSONへ保持し、通常版と計装版を混ぜて集計していない。
+全runの描画identityが一致し、ROI後に描くroute frame 0のHDR／SDR／depthはAPI内で全mode・反復を通してbit一致した。
+二API間も既定のscene閾値で成功した。全1,800 frameの画像一致を検査したという意味ではない。
+
+ソース区間の集計には、APIごとに完全な3 trace、計10,800 frameを使った。
+各Vulkan traceはROI内5,844,602 zone、D3D12は11,550,602 zoneで、全6本のnonce・閉じたROI・
+1,800個のframe・入れ子とself算術・raw inclusive/self exportの対応を検査した。
+最初のVulkan 2本目は測定rootの終了を含まず拒否し、同じEXEと入力でその1本だけを再取得した。
+元18 runのCPU／画像比較は保持し、再取得したreportをそこへ混ぜず、source trace側だけを置き換えた。
+
+原因はcollectorへ先に停止を要求すると、clientの未送信queueを捨て得ることだった。
+正常収集を`DONE → END → 対象の通常終了 → native clientのqueue排出 → collectorの自然終了・保存`へ修正した。
+frame markはzoneとは別queueであり、frame数やquery backlog 0だけでは末尾送信の証明にならない。
+新手順は二APIの実fixtureでも取得・exportまで確認し、再取得分も全frameと完全ROIを通過した。
+traceに入るROI後の画像取得・teardown区間は集計から外した。旧不完全ファイルも失敗の証拠として残している。
+
+次は各runのself総時間を1,800 frameで割った値の3 run中央値（最小〜最大）、ms/frameである。
+selfは直接の子zoneを引いたhost経過時間で、待機・descheduling・未計装呼出し・計装費用も含む。
+表の各中央値を足して正確なframe内割合にせず、inclusiveとの重複加算も行わない。
+
+| ソース区間 | Vulkan | D3D12 |
+| --- | ---: | ---: |
+| Graph Rasterのアクセス整理・attachment | 5.664（5.312〜5.741） | 5.204（4.695〜5.712） |
+| 常駐資源のGraph import・camera更新 | 4.697（4.430〜4.795） | 4.331（3.975〜4.830） |
+| D3D12のpass共通記録 `raster.record` self | 対象外 | 5.706（5.492〜6.569） |
+| D3D12のdescriptor構築・root binding | 対象外 | 5.166（4.790〜5.716） |
+| D3D12のCOMMONへのbarrier記録 | 対象外 | 4.255（4.078〜5.012） |
+
+共通側のアクセス区間は、使用bufferのソート、attachment登録、全drawのbindingを含むaccess競合整理を含む。
+importは常駐vertex／index／材質／画像の登録、検索・ソート済み配列への挿入・metadataコピーとcamera更新である。
+これらを再利用・失効の保証とともに減らす調査を`renderer-ic1`へ登録した。
+
+D3D12の`raster.record` selfはdraw childを除いた4 call/frameで、pass access集約・transition・clear・PSO/state設定を含む。
+descriptor区間は1,592 call/frameで、buffer GPUVA／root descriptor・image SRV構築／CreateSRV・table設定をまとめて含む。
+COMMON区間はbuffer／scratch／imageの走査と必要なtransitionの記録で、GPUでのbarrier実行時間ではない。
+個別native callやdriver内部のCPU費用は未分離であり、細分化・発行数の観測と削減候補の検証を`renderer-9v5`へ登録した。
+この負荷では共通Graph構築とD3D12のhost記録を先に調べる根拠が得られたが、最適化の速度改善はまだ主張しない。
+
+CPU workspaceは`--all-features`計396 testと`--no-default-features --features vulkan,d3d12`計366 testが成功した。
+Tracy有効のstrict／shipping実GPU材質・alpha・geometry容量は各3件、警告・エラー0で成功した。
+PythonはTracy 19件、CPU調査58件、Bistro計測11件、Clippy・fmt・warnings拒否Rustdoc・依存監査を確認した。
+Windows専用終了処理6件はローカル非管理者で実行した。Linux CIのskipや管理者Windows runnerをその実行証拠とは数えない。
+大量解析はdisk-backed SQLiteで、生成1,800 frame・117,002行/exportの回帰ではtracemallocのPython保持peakが16 MiB未満だった。
+設定cacheやbatch上限を、全量process RSSやchild・OS file cacheを含む上限とは扱わない。
+Vulkan／検証／frame memoryの方針に従い、GPU命令順・同期・寿命・容量・必須検証は維持した。
+通常構成の保証と任意Tracyの費用・確保は区別し、vendor最適化の採用や一般推奨からの逸脱はない。
+GPU timestamp・sampled stack・scheduler／driver内部の原因・他機材・長時間soakはこのTracy計測で確認していない。
 
 素材全量の更新・実VRAM予算の`.3.3`、B3以降の画質、他機材・長時間soak・device lossはこの受入へ追加していない。
 詳細と実行identityは[ソースレビューの証拠](source-review.json)の`bistro_pbr`へ記録する。

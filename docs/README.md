@@ -20,7 +20,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |
-| 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、通常・切断・接続時の費用 |
+| 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、[実トレースと費用・hotspot](verification/current.md#bistro-tracy) |
 | 対応済みと計画を見分けたい | [現在の検証状況](verification/current.md)と[今後の計画](design/implementation-policy.md#bistro-roadmap) |
 
 ## 文書一覧
