@@ -121,7 +121,7 @@ Rendererのbuild/compile自体も増え、OS charged CPUも増加しており、
 同じPコア群（論理CPU 0〜11、mask 4095）とHighQoSの設定・native読戻し後に再開した。
 全24 processで非管理者・非AppContainer、同じmask/QoS、初期threadの停止数1からの再開を確認した。
 Controllerと他アプリのCPU設定、OSのclock／電源設定は変更していない。ユーザーはYouTube再生を測定前に一時停止し、
-収集終了後に再開した。測定中にbuild、cook、画像解析、別のGPU試験を並行しなかった。
+収集終了後に再生を再開できることを伝えた。測定中にbuild、cook、画像解析、別のGPU試験を並行しなかった。
 このCPU条件の固定をshippingコードの高速化や、既定schedulerでの機材全体の性能と混同しない。
 
 材質の全mipを持つ同一sourceの通常releaseを使い、1080p、全Bistro、固定route、2 in-flightで、
@@ -177,6 +177,7 @@ Godot all・timing無効のpost-draw frame間隔p99は5.649〜6.269 msである�
 iterationには過去の投入に対するbackpressureが入り、buildから観測完了までのlatencyとも、表示完了時刻とも異なる。
 CPUとGPUを足してFPSを求めず、offscreen throughputを実表示FPSへ読み替えない。
 今回のRenderer iteration p99は60 frame/s相当の16.67 msを下回る一方、120相当の8.33 msを超えた。
+個別sampleの最大はVulkan 29.098 ms／D3D12 21.602 msであり、p99の達成を全frameの停止・遅延がない保証にはしない。
 ゲーム処理を含む実表示の達成や120 frame/sの安定維持は未確認である。
 
 ### 比較から選ぶ改善の優先度
