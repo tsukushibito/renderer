@@ -222,11 +222,19 @@ fn identity(
     conditions_hash: &str,
     environment: &Value,
 ) -> Value {
+    let shadow = super::shadow::Parameters::default();
     json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
         "shaders_sha256":super::digest(include_bytes!("shaders/manifest.json")),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,
+        "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
+            "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
+            "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
+            "normal_offset_texels":shadow.normal_offset_texels,"depth_padding_m":shadow.depth_padding,
+            "filter":"manual nearest 3x3 PCF"},
+        "aa_profile":{"edge_threshold_min":0.0312,"edge_threshold_max":0.125,"iterations":12,
+            "subpixel_quality":0.75,"position":"after Neutral, before sRGB"},
         "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
         "output":"linear RGBA16F -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"})
