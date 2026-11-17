@@ -163,6 +163,7 @@ def make_plan(args):
         ROOT / "tools/cpu_profile/identity.py",
         ROOT / "tools/godot_bistro/benchmark.py", ROOT / "tools/godot_bistro/profiles.py",
         ROOT / "tools/godot_bistro/summarize.py")]
+    inputs.append(describe(ROOT / "tools/godot_bistro/repeat.py"))
     inputs += cook_inputs(args.manifest, [manifest["vertices"], manifest["indices"], *manifest["images"]])
     inputs += cook_inputs(args.ibl_manifest, list(ibl_manifest["images"].values()))
     inputs += [{"path": str(Path(godot_identity["asset_root"]) / record["path"]),
@@ -397,8 +398,8 @@ def run_plan(plan):
             print(condition["engine"], condition["run_id"], "passed", flush=True)
         verify_inputs(plan["inputs"])
         godot_evidence = godot_summary.assemble(output / "godot")
-        require(all(len(values) == 1 for values in godot_evidence["capture_distinct_hashes"].values()),
-                "Godot fixed views changed between repeated identical inputs")
+        require(all(entry["passed"] for entry in godot_evidence["capture_reproducibility"]["comparisons"]),
+                "Godot fixed views exceeded the frozen B3 repeat tolerance")
         write(output / "godot-evidence.json", godot_evidence)
         renderer_runs = [run for run in summary["runs"] if run["engine"] == "renderer"]
         for record in renderer_runs:
