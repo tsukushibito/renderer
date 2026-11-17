@@ -14,6 +14,13 @@ Graphの上限は[容量の数え方](../design/rendergraph.md#capacity-planning
 runtime側の`index_prefixes_per_resource`は、同じbuffer内容について利用する異なるindex-count数の上限である。
 一般のprefix drawを使うときは必要数を予約する。管理下geometryの全countだけを描く経路やindexを使わない経路では0にできる。
 
+pass内overlap/read圧縮を変更する場合は、`graph::accesses::tests`の生成したpairwise参照との一致、
+writer数4/5の境界、元の宣言順の競合pair、全access容量、read属性/rangeの昇格とpass間resetを確認する。
+その後も以下のnative受入と通常frameメモリ窓を実行する。
+局所probeと通常release全Bistroは測定範囲を分け、前後で同じprofile・画質・計測境界・CPU条件を使う。
+[現在のGraph構築比較](../verification/current.md#rendergraph-hotspot-optimization)はsource/EXE/PDBのidentity、
+全独立process、個別sampleのp95、一般入力の交換条件、未実行範囲を記録している。
+
 標準recipeの`FrameGraph`は確定済み出力を持つ。拡張と出力選択は`build_graph`のcallback内で行い、
 `output()`／`readback()`のhandleを保存してから`compile()`へ渡す。任意の構築を続ける場合は
 `connect_graph`と通常のGraphを使い、確定済みの出力・所有情報を個別に変更しない。

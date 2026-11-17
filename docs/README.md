@@ -23,6 +23,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | IBL・影・HDRを含むBistroを比較したい | [B3の再現手順](guides/development.md#bistro-b3)と[最新の受入・Godot比較](verification/current.md#bistro-lighting)：静的IBL、CSM/PCF、Neutral/FXAA、CPU/GPUと通常frameメモリ |
 | 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、[実トレースと費用・hotspot](verification/current.md#bistro-tracy) |
 | Graph・D3D12のCPU処理削減を確認したい | [変更前後の通常版計測・実発行数・描画とメモリ受入](verification/current.md#bistro-cpu-optimization)：共有binding、不変snapshot、import検索表、SRV再利用とbarrier集約 |
+| 現行Graph構築のhotspotと改善を確認したい | [通常releaseの独立前後比較](verification/current.md#rendergraph-hotspot-optimization)：小writer判定、read索引、Vulkan prepareの分解と交換条件 |
 | Graphの予約量や容量不足を扱いたい | [容量の数え方](design/rendergraph.md#capacity-planning)：各上限の単位、compileの消費、poolの変更と所有者の返却 |
 | RenderGraphレビュー修正の結果を確認したい | [保証再利用・画像slot・出力APIの修正受入](verification/current.md#rendergraph-review-fixes)：CPU、実GPU、通常frameメモリと全Bistro反復の確認範囲 |
 | 対応済みと計画を見分けたい | [現在の検証状況](verification/current.md)と[今後の計画](design/implementation-policy.md#bistro-roadmap) |

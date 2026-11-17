@@ -5,6 +5,85 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="rendergraph-hotspot-optimization"></a>
+
+## 現行RenderGraphの構築hotspotと削減
+
+`renderer-7ft.9`。比較元は`5da64b2079d65db4d2b87a2674e81f5e20c67e7d`、
+実装は`55744b5f5b4a5dcd93f2b3a28f447ccdd8a02127`。
+Windows 11／Core i5-14600KF／RTX 3060・driver 610.88／Rust 1.99.0で確認した。
+過去のB3値を現在のhotspotの根拠にせず、同じ利用側測定コード・画質・phase境界で取り直した。
+CPU範囲を校正する`renderer-7ft.10`のGodot比較とは独立した変更前後比較である。
+
+通常releaseは`vulkan,d3d12`だけを有効にし、Tracy・追加検証・memory計装を除外した。
+全量`full-a3`と`ibl-final`、1920×1080、route、2 in-flight、1,440 warmup＋720測定frame、
+GPU query/native CPU timerありを前後で統一し、各API/sourceを3独立processで直列実行した。
+全childは停止状態で作り、Pコアの論理CPU 0〜11（mask 4095）とHighQoSをnative読戻ししてから再開した。
+build/cook・他の試験・画像解析とは共有lockで排他した。初期にTracy exportと重なったcohortは無効として除外した。
+正式B3の3,600/1,800 frame窓とは区別し、before→afterの逐次cohortであることも限界として保持する。
+
+| Graph構築 | Vulkan 変更前→後 | D3D12 変更前→後 |
+|---|---|---|
+| processごとの平均のrun中央値 | 2.574→0.917 ms | 2.471→0.916 ms |
+| 個別frame p95のrun中央値 | 3.466→1.231 ms | 3.042→1.203 ms |
+| 平均のrun間範囲 | 2.522〜3.043→0.907〜0.925 ms | 2.460〜2.508→0.894〜0.933 ms |
+| 平均の減少率 | 64.39% | 62.92% |
+
+この率はGraph build区間のelapsedだけである。最終drainを含む同じ旧protocol窓の
+process charged CPU/frameのrun中央値は
+Vulkan 7.595→7.465 ms、D3D12 7.357→7.205 ms、wall/frameは7.744→7.591 msと7.402→7.273 msだった。
+全体差は約2%に留まり、3 processの小差から有意差・FPS向上を主張しない。GPUとpollingの費用は残る。
+この窓を`.10`が校正した新しい共通CPU範囲やGodotの描画CPUへ読み替えない。
+caller phaseへ内包されるnative timerを加算せず、広い`poll_and_retire`とyieldを除くactive-hostの
+`poll_calls_elapsed`も混同しない。保存した全12runのroute0 HDR/SDR/depthは実ファイルのSHA-256を再計算し、
+同APIの前後・反復でbit一致した。
+
+最小の既定off Tracy scopeを追加した`20b0dc5`と実装後を、Pコア・同じ60測定/120 warmupで比較した。
+pass内overlapは0.747→0.017 ms/frame、exact-read圧縮は0.960→0.117 ms/frame、
+Graph buildは2.485→0.904 ms/frameだった。binding構築は変更前0.048 ms/frameであり、今回の優先対象にしなかった。
+多数readerまでsortする費用と、resource/range/全属性をreadごとにhashする費用を、
+[小writerの厳密比較と最初のreadの再利用](../design/rendergraph.md)で減らした。
+単なるphaseの付替え、固定plan cache、unsafe化やvalidation offへの移動ではない。
+
+Vulkanの変更前prepare prelude内ではimport revision照合0.055 ms、resource lease取得0.061 ms、
+後続のcanonical snapshot copyは0.119 ms/frameだった。owner/generation lookupはO(1)であり、
+線形lookupが主因とは扱わない。これらのscopeは既存native prepareのtimer境界を変更せず、
+可変importの照合、予定状態rebase、lease、同期・完了・失敗時保持を維持して分解した。
+今回のnative prepare短縮は主張しない。
+
+一般入力の交換条件も、同じ公開Graphの構築・declare・取消/返却を使って確認した。
+2,048 access、100 warmup、31×100 cycle、前後交互の各3独立processのsample中央値のrun中央値は、
+同一read反復75.8→24.6 μs、異なるresource114.9→52.7 μs、1 writer127.9→95.5 μsだった。
+単一resourceの全て異なるrangeは86.5→94.8 μs、read/write混在の多数writerは93.1→98.7 μsで、
+約9.6%／6.0%の追加費用がある。GPUやcompileを含むframe全体の比較ではない。
+準備metadataはWindows x64で24R byte/Graph slot増える。全range・purpose・stage・access属性の一致、
+最初の競合pair、全accessによる容量拒否と一般区間索引を維持し、一律高速化を主張しない。
+
+release workspace試験はCPU shipping **241件**／strict **243件**、
+二API・presentation・memory計装あり shipping **443件**／strict **456件**が成功した。
+後二構成のignored各94件は別枠であり、焦点GPU試験は二構成各5件、計10件を明示実行して成功した。
+4構成のall-targets Clippyとfmtも通過した。
+独立した`frame_memory`の二構成各6 processは、可変draw/Program/attachment、取消、pending・保持結果、
+全slot返却を含み、Rust alloc/alloc_zeroed/realloc/dealloc、VMA host alloc/realloc/free、
+Renderer発行native object/resource/memory/descriptor作成・破棄/確保・解放が全窓ゼロだった。resetは別計上した。
+両APIの表示・resize・取消・pending終了/通常frameメモリも、shipping/strictの4試験で成功した。
+表示のshippingは両APIでゼロを維持した。D3D12 strictは既存試験の診断baselineとして
+Rust alloc 8回/645 byte（realloc/dealloc、VMA host、native作成/破棄はゼロ）を観測した。
+この診断費用をshippingのゼロ条件へ含めず、Vulkan strict表示のRenderer通常窓はゼロだった。
+
+全量B3のstrict/shipping・二API各3 process、計12 processは全て成功し、
+既存profileの**1,360件の画像比較**が通過した。全7視点、shadow map 4枚、AA-off、同時View、
+容量拒否/再試行、pending差し替えと復元を含む。同APIの反復とstrict/shippingはbit一致し、
+全runで通常窓のRust/VMA host/nativeのゼロ条件を維持した。
+strictはVulkan Core/SyncValとD3D12 Debug Layer/GBVの実効、終了後までのwarning/error/callback失敗ゼロを確認し、
+例外・抑制は追加していない。正常終了した画像はSHA-256と全byte照合後に同一内容だけをhardlinkで共有し、
+raw path・内容・report hashを保った。省容量化は全process/比較の完了後、共有lockの所有下で行った。
+
+条件・source/EXE/PDB identity、全runの平均/p95、生counter、コマンドと原本のhashは
+[ソースレビューの証拠](source-review.json)の`rendergraph_hotspot_optimization`へ記録した。
+driver/OS内の未観測allocation、他機材、長時間soakと実OOM/Device loss注入は実行していない。
+main統合・push・CIと課題の最終closeは`renderer-7ft.10`が担当する。
+
 <a id="rendergraph-review-fixes"></a>
 
 ## RenderGraphの保証再利用・容量・公開APIのレビュー修正
