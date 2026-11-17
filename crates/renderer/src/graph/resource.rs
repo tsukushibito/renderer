@@ -167,17 +167,47 @@ impl ImageDesc {
 /// read-only uses preserve it and rebase native synchronization state at submit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportBuffer {
-    pub(crate) key: ResourceKey,
-    pub(crate) revision: u64,
-    pub(crate) desc: BufferDesc,
-    pub(crate) initialized: super::ImportRanges,
+    key: ResourceKey,
+    revision: u64,
+    desc: BufferDesc,
+    initialized: super::ImportRanges,
 }
 impl ImportBuffer {
+    /// Issue an immutable snapshot at a runtime creation/change boundary.
+    /// Descriptor and canonical content bounds are checked here once; Graph
+    /// construction consumes the frozen guarantee rather than rescanning it.
+    #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub(crate) fn new(
+        key: ResourceKey,
+        revision: u64,
+        desc: BufferDesc,
+        initialized: super::ImportRanges,
+    ) -> Result<Self, GraphError> {
+        if desc.size == 0 {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "runtime buffer snapshot size must be nonzero",
+            ));
+        }
+        validate_snapshot_ranges(&initialized, desc.size)?;
+        Ok(Self {
+            key,
+            revision,
+            desc,
+            initialized,
+        })
+    }
     pub fn key(&self) -> ResourceKey {
         self.key
     }
     pub fn desc(&self) -> BufferDesc {
         self.desc
+    }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn initialized(&self) -> &super::ImportRanges {
+        &self.initialized
     }
 }
 
@@ -185,18 +215,70 @@ impl ImportBuffer {
 /// Read-only uses preserve this snapshot; writes or invalidation make it stale.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImportImage {
-    pub(crate) key: ResourceKey,
-    pub(crate) revision: u64,
-    pub(crate) desc: ImageDesc,
-    pub(crate) initialized: bool,
+    key: ResourceKey,
+    revision: u64,
+    desc: ImageDesc,
+    initialized: bool,
 }
 impl ImportImage {
+    /// Metadata fixtures only; real runtimes derive coverage from their state.
+    #[cfg(test)]
+    pub(crate) fn test_initialized(key: ResourceKey, revision: u64, desc: ImageDesc) -> Self {
+        let complete = 0..ResourceDesc::Image(desc).units();
+        Self::new(key, revision, desc, std::slice::from_ref(&complete)).unwrap()
+    }
+    /// Derive the complete-image content guarantee from canonical runtime
+    /// ranges; a caller cannot supply an unverified `initialized` boolean.
+    #[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+    pub(crate) fn new(
+        key: ResourceKey,
+        revision: u64,
+        desc: ImageDesc,
+        initialized: &[Range<u64>],
+    ) -> Result<Self, GraphError> {
+        if desc.byte_len().is_none() {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "runtime image snapshot description must be valid",
+            ));
+        }
+        let initialized = validate_snapshot_ranges(initialized, ResourceDesc::Image(desc).units())?;
+        Ok(Self {
+            key,
+            revision,
+            desc,
+            initialized,
+        })
+    }
     pub fn key(&self) -> ResourceKey {
         self.key
     }
     pub fn desc(&self) -> ImageDesc {
         self.desc
     }
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+    pub(crate) fn initialized(&self) -> bool {
+        self.initialized
+    }
+}
+
+#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+fn validate_snapshot_ranges(initialized: &[Range<u64>], units: u64) -> Result<bool, GraphError> {
+    let mut end = 0;
+    let mut complete = true;
+    for range in initialized {
+        if range.start >= range.end || range.end > units || range.start < end {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "runtime snapshot ranges must be ordered, nonoverlapping and within the resource",
+            ));
+        }
+        complete &= range.start == end;
+        end = range.end;
+    }
+    Ok(complete && end == units)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -366,8 +448,8 @@ impl Graph {
             name,
             ResourceDesc::Buffer(source.desc),
             source.key,
-            source.revision,
-            &source.initialized,
+            source.revision(),
+            source.initialized(),
         )?;
         Ok(BufferHandle {
             graph: self.id,
@@ -380,7 +462,7 @@ impl Graph {
         source: &ImportImage,
     ) -> Result<ImageHandle, GraphError> {
         let initialized = 0..ResourceDesc::Image(source.desc).units();
-        let initial = if source.initialized {
+        let initial = if source.initialized() {
             std::slice::from_ref(&initialized)
         } else {
             &[]
@@ -389,7 +471,7 @@ impl Graph {
             name,
             ResourceDesc::Image(source.desc),
             source.key,
-            source.revision,
+            source.revision(),
             initial,
         )?;
         Ok(ImageHandle {
@@ -421,17 +503,10 @@ impl Graph {
             }
             return Ok(index);
         }
-        if desc.units() == 0
-            || initial
-                .iter()
-                .any(|r| r.start >= r.end || r.end > desc.units())
-        {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidInput,
-                "invalid runtime import description or initialized range",
-            )
-            .with_resource_name(name));
-        }
+        // Only private checked snapshot constructors can reach this path.
+        // Their descriptor/ranges stay frozen for every token and clone; a
+        // changed runtime revision issues another snapshot and is checked again
+        // at submission. Repeated-import consistency above remains dynamic.
         let index = self.add_resource(name, desc, Some(key), revision, initial)?;
         self.data_mut()
             .imports
@@ -664,6 +739,159 @@ mod tests {
     use super::*;
     use crate::graph::{GraphCapacity, GraphPool};
 
+    const SNAPSHOT_KEY: ResourceKey = ResourceKey {
+        owner: 3,
+        index: 2,
+        generation: 1,
+    };
+
+    #[test]
+    fn snapshots_reject_invalid_descriptions_and_noncanonical_ranges_at_issuance() {
+        let mut ranges = super::super::ImportRangesPool::new(2, 1).unwrap();
+        assert_eq!(
+            ImportBuffer::new(
+                SNAPSHOT_KEY,
+                1,
+                BufferDesc { size: 0 },
+                ranges.capture(&[]).unwrap()
+            )
+            .unwrap_err()
+            .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        for invalid in [
+            std::slice::from_ref(&(0..17)),
+            std::slice::from_ref(&(4..4)),
+            &[8..12, 0..4],
+            &[0..8, 4..12],
+        ] {
+            let token = ranges.capture(invalid).unwrap();
+            assert_eq!(
+                ImportBuffer::new(SNAPSHOT_KEY, 1, BufferDesc { size: 16 }, token)
+                    .unwrap_err()
+                    .kind(),
+                GraphErrorKind::InvalidInput
+            );
+            assert!(
+                ranges.is_idle(),
+                "rejected issuance returns its pooled token"
+            );
+        }
+        for desc in [
+            ImageDesc::rgba8(0, 1),
+            ImageDesc {
+                mip_levels: 0,
+                ..ImageDesc::rgba8(1, 1)
+            },
+            ImageDesc {
+                array_layers: 0,
+                ..ImageDesc::rgba8(1, 1)
+            },
+            ImageDesc::rgba8(u32::MAX, u32::MAX),
+        ] {
+            assert_eq!(
+                ImportImage::new(SNAPSHOT_KEY, 1, desc, &[])
+                    .unwrap_err()
+                    .kind(),
+                GraphErrorKind::InvalidInput
+            );
+        }
+        assert_eq!(
+            ImportImage::new(
+                SNAPSHOT_KEY,
+                1,
+                ImageDesc::rgba8(1, 1),
+                std::slice::from_ref(&(0..2))
+            )
+            .unwrap_err()
+            .kind(),
+            GraphErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn image_snapshot_derives_whole_mip_layer_coverage_without_claiming_holes() {
+        let desc = ImageDesc {
+            mip_levels: 3,
+            array_layers: 2,
+            ..ImageDesc::rgba8(4, 2)
+        };
+        for partial in [
+            &[][..],
+            std::slice::from_ref(&(0..3)),
+            &[0..2, 3..6],
+            std::slice::from_ref(&(1..6)),
+        ] {
+            let snapshot = ImportImage::new(SNAPSHOT_KEY, 1, desc, partial).unwrap();
+            assert!(!snapshot.initialized());
+            let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+            let mut graph = pool.begin().unwrap();
+            let image = graph.import_image("incomplete image", &snapshot).unwrap();
+            graph.export_image(image).unwrap();
+            assert_eq!(
+                graph.compile().unwrap_err().kind(),
+                GraphErrorKind::UninitializedRead
+            );
+        }
+        let snapshot = ImportImage::new(SNAPSHOT_KEY, 1, desc, &[0..2, 2..6]).unwrap();
+        assert!(snapshot.initialized());
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let image = graph.import_image("complete image", &snapshot).unwrap();
+        graph.export_image(image).unwrap();
+        assert!(graph.compile().is_ok());
+    }
+
+    #[test]
+    fn frozen_snapshot_clones_survive_range_slot_reuse_and_new_revision_issuance() {
+        let mut ranges = super::super::ImportRangesPool::new(1, 1).unwrap();
+        let source = ImportBuffer::new(
+            SNAPSHOT_KEY,
+            7,
+            BufferDesc { size: 8 },
+            ranges.capture(std::slice::from_ref(&(0..4))).unwrap(),
+        )
+        .unwrap();
+        let retained = source.clone();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let buffer = graph.import_buffer("frozen source", &source).unwrap();
+        assert_eq!(
+            graph
+                .import_buffer("same immutable source", &retained)
+                .unwrap(),
+            buffer
+        );
+        drop(source);
+        assert!(ranges.capture(&[]).is_err());
+        assert_eq!(retained.revision(), 7);
+        assert_eq!(
+            retained.initialized().as_slice(),
+            std::slice::from_ref(&(0..4))
+        );
+        drop(retained);
+        let changed = ImportBuffer::new(
+            SNAPSHOT_KEY,
+            8,
+            BufferDesc { size: 8 },
+            ranges.capture(std::slice::from_ref(&(4..8))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph
+                .import_buffer("changed revision", &changed)
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InconsistentImport
+        );
+        // Graph captured the old contents independently before the pooled token
+        // returned. Reusing the token cannot rewrite this immutable plan input.
+        graph
+            .readback_buffer("old known prefix", buffer, 0, 4)
+            .unwrap();
+        assert!(graph.compile().is_ok());
+    }
+
     #[test]
     fn packed_bytes_include_shrinking_mips_and_every_layer() {
         let desc = ImageDesc {
@@ -798,16 +1026,15 @@ mod tests {
         let image = graph
             .import_image(
                 "complete",
-                &ImportImage {
-                    key: ResourceKey {
+                &ImportImage::test_initialized(
+                    ResourceKey {
                         owner: 7,
                         index: 0,
                         generation: 1,
                     },
-                    revision: 3,
+                    3,
                     desc,
-                    initialized: true,
-                },
+                ),
             )
             .unwrap();
         graph.export_image(image).unwrap();

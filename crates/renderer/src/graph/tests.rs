@@ -278,53 +278,55 @@ fn repeated_imports_share_one_identity_and_reject_changed_snapshots() {
     let mut range_pool = ImportRangesPool::new(1, 1).unwrap();
     let initial = 0..8;
     let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
-    let import = ImportBuffer {
-        key: ResourceKey {
+    let import = ImportBuffer::new(
+        ResourceKey {
             owner: 4,
             index: 2,
             generation: 3,
         },
-        revision: 9,
-        desc: BufferDesc { size: 16 },
-        initialized: range_pool.capture(std::slice::from_ref(&initial)).unwrap(),
-    };
+        9,
+        BufferDesc { size: 16 },
+        range_pool.capture(std::slice::from_ref(&initial)).unwrap(),
+    )
+    .unwrap();
     let first = graph.import_buffer("first", &import).unwrap();
     let again = graph.import_buffer("again", &import).unwrap();
     assert_eq!(first, again);
     assert_eq!(graph.resources.len(), 1);
-    let mut changed = import.clone();
-    changed.revision += 1;
+    let changed = ImportBuffer::new(
+        import.key(),
+        import.revision() + 1,
+        import.desc(),
+        import.initialized().clone(),
+    )
+    .unwrap();
     let error = graph.import_buffer("stale alias", &changed).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InconsistentImport);
     assert_eq!(error.resource(), Some(first.into()));
     assert_eq!(error.resource_name(), Some("first"));
-    let image = ImportImage {
-        key: import.key,
-        revision: 9,
-        desc: ImageDesc::rgba8(2, 2),
-        initialized: true,
-    };
+    let image = ImportImage::test_initialized(import.key(), 9, ImageDesc::rgba8(2, 2));
     assert!(graph.import_image("wrong kind alias", &image).is_err());
 }
 
 #[test]
 fn image_metadata_preserves_imports_and_rejects_invalid_local_handles() {
     let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
-    let source = ImportImage {
-        key: ResourceKey {
+    let source = ImportImage::new(
+        ResourceKey {
             owner: 7,
             index: 4,
             generation: 2,
         },
-        revision: 3,
-        desc: ImageDesc::depth32(9, 5),
-        initialized: false,
-    };
+        3,
+        ImageDesc::depth32(9, 5),
+        &[],
+    )
+    .unwrap();
     let image = graph.import_image("imported depth", &source).unwrap();
-    assert_eq!(graph.image_desc(image).unwrap(), source.desc);
+    assert_eq!(graph.image_desc(image).unwrap(), source.desc());
     assert_eq!(graph.import_image("alias", &source).unwrap(), image);
-    let mut changed = source.clone();
-    changed.desc = ImageDesc::rgba8(9, 5);
+    let changed =
+        ImportImage::new(source.key(), source.revision(), ImageDesc::rgba8(9, 5), &[]).unwrap();
     let error = graph
         .import_image("different description", &changed)
         .unwrap_err();
@@ -845,15 +847,18 @@ fn import_identity_survives_interleaved_transients_and_failed_aliases() {
     let initialized = range_pool.capture(std::slice::from_ref(&initial)).unwrap();
     let (_graph_pool, mut graph) = prepared_graph(GraphCapacity::default());
     let sources = (0..64)
-        .map(|index| ImportBuffer {
-            key: ResourceKey {
-                owner: 7,
-                index,
-                generation: 1,
-            },
-            revision: u64::from(index) + 1,
-            desc: BufferDesc { size: 12 },
-            initialized: initialized.clone(),
+        .map(|index| {
+            ImportBuffer::new(
+                ResourceKey {
+                    owner: 7,
+                    index,
+                    generation: 1,
+                },
+                u64::from(index) + 1,
+                BufferDesc { size: 12 },
+                initialized.clone(),
+            )
+            .unwrap()
         })
         .collect::<Vec<_>>();
     let mut handles = Vec::new();
@@ -869,12 +874,8 @@ fn import_identity_survives_interleaved_transients_and_failed_aliases() {
         assert_eq!(graph.import_buffer("alias", source).unwrap(), handle);
     }
     let first = &sources[0];
-    let image_alias = ImportImage {
-        key: first.key,
-        revision: first.revision,
-        desc: ImageDesc::rgba8(1, 3),
-        initialized: true,
-    };
+    let image_alias =
+        ImportImage::test_initialized(first.key(), first.revision(), ImageDesc::rgba8(1, 3));
     let error = graph.import_image("wrong kind", &image_alias).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InconsistentImport);
     assert_eq!(error.resource(), Some(handles[0].into()));
@@ -895,16 +896,17 @@ fn import_and_batch_limits_report_their_distinct_capacity_dimensions() {
     });
     let mut ranges = ImportRangesPool::new(1, 1).unwrap();
     let initialized = ranges.capture(&[0..4]).unwrap();
-    let source = ImportBuffer {
-        key: ResourceKey {
+    let source = ImportBuffer::new(
+        ResourceKey {
             owner: 1,
             index: 0,
             generation: 1,
         },
-        revision: 1,
-        desc: BufferDesc { size: 4 },
+        1,
+        BufferDesc { size: 4 },
         initialized,
-    };
+    )
+    .unwrap();
     let details = graph
         .import_buffer("input", &source)
         .unwrap_err()

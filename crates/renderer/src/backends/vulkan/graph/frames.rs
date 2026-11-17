@@ -316,19 +316,16 @@ mod tests {
                 generation: 1,
             };
             let value = if index % 2 == 0 {
-                Export::Buffer(ImportBuffer {
-                    key,
-                    revision: 73,
-                    desc: BufferDesc { size: 4 },
-                    initialized: initialized.clone(),
-                })
+                Export::Buffer(
+                    ImportBuffer::new(key, 73, BufferDesc { size: 4 }, initialized.clone())
+                        .unwrap(),
+                )
             } else {
-                Export::Image(ImportImage {
+                Export::Image(ImportImage::test_initialized(
                     key,
-                    revision: 73,
-                    desc: ImageDesc::rgba8(1, 1),
-                    initialized: true,
-                })
+                    73,
+                    ImageDesc::rgba8(1, 1),
+                ))
             };
             exports.insert(index, value).unwrap();
         }

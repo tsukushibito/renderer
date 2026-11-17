@@ -101,16 +101,16 @@ impl VulkanRuntime {
             return Ok(outcome);
         }
         let profiling_started = inner.profiling_enabled.then(Instant::now);
-        let source = self.lease(image.key)?;
+        let source = self.lease(image.key())?;
         let ResourceDesc::Image(desc) = source.desc else {
             return Err(RuntimeError::invalid("presentation source is not an image"));
         };
         let previous = {
             let state = source.lock();
             let previous = &state.scheduled;
-            if desc != image.desc
-                || previous.revision != image.revision
-                || !image.initialized
+            if desc != image.desc()
+                || previous.revision != image.revision()
+                || !image.initialized()
                 || previous.initialized.len() != 1
                 || previous.initialized[0] != (0..1)
             {

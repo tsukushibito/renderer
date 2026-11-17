@@ -51,13 +51,10 @@ impl VulkanRuntime {
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
         let initialized = self.capture_ranges(&[])?;
+        let snapshot = ImportBuffer::new(key, revision, desc, initialized)
+            .map_err(|error| RuntimeError::invalid(error.to_string()))?;
         self.register(key.index as usize);
-        Ok(ImportBuffer {
-            key,
-            revision,
-            desc,
-            initialized,
-        })
+        Ok(snapshot)
     }
 
     /// Fixed capacity of the shared upload staging buffer, in bytes.
