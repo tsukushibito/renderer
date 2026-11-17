@@ -170,7 +170,7 @@ def console_snapshot(console):
 
 
 def console_broker(specification):
-    """Internal subprocess entry point; STOP means flush, EOF means abort."""
+    """FINISH waits for native client shutdown; STOP is an abort/test path."""
     if sys.platform != "win32":
         raise ValueError("The private console broker requires Windows")
     spec = json.loads(Path(specification).read_text(encoding="utf-8"))
@@ -190,8 +190,23 @@ def console_broker(specification):
             evidence = require_nonadmin(process.pid, handle=process._handle)
             print("BROKER_READY " + json.dumps({"pid": os.getpid(), "capture": evidence,
                                                "broker": require_nonadmin(), "kill_on_job_close": bool(job)}), flush=True)
-            if sys.stdin.readline().strip() != "STOP":
-                raise ValueError("Capture broker requires STOP; controller closed or aborted")
+            request = sys.stdin.readline().strip()
+            if request == "FINISH":
+                # Do not send SIGINT/ServerQueryDisconnect: in the pinned
+                # no-system-tracing client that path clears queued tail zones.
+                # The target's normal return invokes ~Profiler(), which drains
+                # both event queues, commits them and sends QueueType::Terminate.
+                code = process.wait(timeout=spec["flush_timeout_seconds"])
+                _raw, rendered = console_snapshot(stdout)
+                log.write("NATURAL_CLIENT_TERMINATION_CONSOLE_SNAPSHOT\n" + rendered + "\n")
+                log.flush()
+                print("BROKER_DONE " + json.dumps({"pid": os.getpid(), "returncode": code,
+                      "natural_client_termination": True, "collector_stop_requested": False}), flush=True)
+                return code
+            if request != "STOP":
+                raise ValueError("Capture broker requires FINISH; controller closed or aborted")
+            # Explicit abort/test-only path. Normal successful captures use
+            # FINISH above and never request a collector-side disconnect.
             deadline = time.monotonic() + spec.get("readiness_timeout_seconds", 30)
             while True:
                 raw, rendered = console_snapshot(stdout)
@@ -216,7 +231,9 @@ def console_broker(specification):
             log.write("FINAL_CONSOLE_SNAPSHOT\n" + rendered + "\n")
             log.flush()
             print("BROKER_DONE " + json.dumps({"pid": os.getpid(), "returncode": code,
-                                               "sigint_handler_ready_observed": True}), flush=True)
+                                               "sigint_handler_ready_observed": True,
+                                               "natural_client_termination": False,
+                                               "collector_stop_requested": True}), flush=True)
             return code
     finally:
         if process is not None and process.poll() is None:

@@ -2,8 +2,9 @@
 
 Use matched portable Tracy 0.14.1 binaries. READY follows warmup; the private
 capture connects to localhost, then GO permits the target to verify connection
-and begin its ROI. DONE precedes capture SIGINT/flush; END releases post-ROI
-readback and shutdown. Disconnected mode measures the same instrumented bytes
+and begin its ROI. DONE precedes END, post-ROI readback and normal target return.
+The native client destructor drains its queues before the collector saves and
+exits naturally. Disconnected mode measures the same instrumented bytes
 without a collector. No command changes UAC, ETW, kernel or machine settings.
 """
 import argparse
@@ -141,8 +142,10 @@ def make_plan(args):
             "max_output_bytes": args.max_output_mib * 1024 * 1024,
             "quota_scope": "Polling guard over owned output files; collector in-memory buffers and a single native write may transiently exceed the file quota. No preexisting outputs are reused.",
             "capture_command": ([tools["capture"]["path"], "-a", "127.0.0.1", "-p", "8086", "-o", str(output / "capture.tracy")] if tools else None),
-            "target_environment": {"TRACY_PORT": "8086", "RENDERER_TRACY_CAPTURE_ID": uuid.uuid4().hex},
-            "contract": "Instrumented elapsed wall zones only; not normal-release results, CPU samples or scheduler attribution. Serial owned process, localhost only, hidden private capture console, verified non-elevated tokens, no system settings changes."}
+            "target_environment": {"TRACY_PORT": "8086", "TRACY_NO_EXIT": "0", "RENDERER_TRACY_CAPTURE_ID": uuid.uuid4().hex},
+            "controller_scripts": {"controller": file_identity(__file__), "broker": file_identity(Path(__file__).with_name("windows.py"))},
+            "completion_protocol": "DONE -> END -> normal target return -> native client queue drain/Terminate -> collector natural exit/save; no normal-path SIGINT or Disconnect",
+            "contract": "Instrumented elapsed wall zones only; not normal-release results, CPU samples or scheduler attribution. Serial owned process, localhost only, hidden private capture console, verified non-elevated tokens, no system settings changes. Raw trace includes post-ROI readback/teardown; analysis selects the closed measurement root."}
 
 
 def verify_plan(plan):
@@ -232,6 +235,8 @@ def capture(plan):
     if sys.platform != "win32":
         raise ValueError("Capture requires Windows; analysis and planning are portable")
     verify_plan(plan)
+    for record in plan.get("controller_scripts", {}).values():
+        verify_file(record)
     output = Path(plan["output"])
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "plan.json", plan)
@@ -294,11 +299,17 @@ def capture(plan):
                     done = wait_event(target, target_events, "BISTRO_DONE", guard)
                     checked_handshake(done, plan, ready=False)
                     result["events"]["done"] = done
-                    send(broker, "STOP")
+                    # Native normal shutdown is the actual transport barrier.
+                    # Frame marks use the serial queue and can overtake pending
+                    # per-thread ZoneEnd events; they do not prove a drained ROI.
+                    send(target, "END")
+                    result["events"]["target_end_released_utc"] = utc()
+                    send(broker, "FINISH")
                     stopped = wait_event(broker, broker_events, "BROKER_DONE", guard)
-                    if (stopped.get("returncode") != 0 or stopped.get("sigint_handler_ready_observed") is not True
+                    if (stopped.get("returncode") != 0 or stopped.get("natural_client_termination") is not True
+                            or stopped.get("collector_stop_requested") is not False
                             or broker.wait(timeout=10) != 0):
-                        raise RuntimeError("Capture failed to stop and flush")
+                        raise RuntimeError("Capture failed to complete through natural client termination")
                     broker.stdin.close()
                     broker = None
                     trace = file_identity(output / "capture.tracy")
@@ -306,9 +317,10 @@ def capture(plan):
                         raise ValueError("Capture did not produce a complete nonempty trace")
                     result["trace"] = trace
                     result["events"]["capture_flushed_utc"] = utc()
-                    result["events"]["capture_sigint_handler_ready_observed"] = True
-                    result["collector_stdout_scope"] = "Rendered snapshots of the owned hidden console; real console stdout exposes Tracy's post-SIGINT-handler progress marker. No unrelated console is read."
-                    send(target, "END")
+                    result["events"]["native_client_termination_observed"] = True
+                    result["events"]["collector_stop_requested"] = False
+                    result["collector_stdout_scope"] = "Rendered final snapshot of the owned hidden console after natural client shutdown and trace save. No unrelated console is read."
+                    result["trace_scope"] = "Includes measured ROI plus post-ROI verification/readback and teardown. Analysis requires a complete nonce-bound measurement root and selects only its nested zones."
             while target.poll() is None:
                 guard()
                 time.sleep(0.05)

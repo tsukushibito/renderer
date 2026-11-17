@@ -1,4 +1,4 @@
-"""CPU-only Windows process tests: private SIGINT flush and abrupt broker death."""
+"""CPU-only Windows native completion, timeout, and private abort process tests."""
 import ctypes
 from ctypes import wintypes
 import json
@@ -20,15 +20,16 @@ class WindowsBrokerTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
 
-    def broker(self, flush_code, *, wait_ready=True, delay_handler=False):
+    def broker(self, flush_code, *, wait_ready=True, delay_handler=False,
+               lifetime_tail="while True: time.sleep(.1)", flush_timeout=30):
         ready_path = self.directory / "fake.ready"
         code = ("import signal,time,sys\nfrom pathlib import Path\n" + ("time.sleep(.25)\n" if delay_handler else "")
                 + "signal.signal(signal.SIGINT," + flush_code
                 + ")\nprint('FAKE_READY query backlog',flush=True)\nPath(" + repr(str(ready_path))
-                + ").write_text('ready')\nwhile True: time.sleep(.1)")
+                + ").write_text('ready')\n" + lifetime_tail)
         specification = {"command": [sys.executable, "-c", code], "cwd": str(self.directory),
                          "stdout": str(self.directory / "collector.stdout.txt"), "stderr": str(self.directory / "collector.stderr.txt"),
-                         "flush_timeout_seconds": 30}
+                         "flush_timeout_seconds": flush_timeout}
         path = self.directory / "specification.json"
         path.write_text(json.dumps(specification), encoding="utf-8")
         stderr = (self.directory / "broker.stderr.txt").open("wb")
@@ -51,6 +52,58 @@ class WindowsBrokerTests(unittest.TestCase):
             self.assertLess(time.monotonic(), deadline, "Fake collector did not establish its signal handler")
             time.sleep(.02)
         return process, ready
+
+    def capture_handle(self, pid):
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel.OpenProcess(0x00100000, False, pid)
+        self.assertTrue(handle)
+        self.addCleanup(lambda: kernel.CloseHandle(handle))
+        return kernel, handle
+
+    def test_finish_waits_for_slow_natural_completion_without_signalling_collector(self):
+        ended, flushed = self.directory / "client.ended", self.directory / "tail.flushed"
+        unexpected = self.directory / "unexpected.signal"
+        tail = ("while not Path(" + repr(str(ended)) + ").exists(): time.sleep(.02)\n"
+                "time.sleep(.15)\nPath(" + repr(str(flushed)) + ").write_text('tail flushed')\n"
+                "print('NATIVE_TAIL_FLUSHED',flush=True)\n")
+        process, _ready = self.broker("lambda *args: Path(" + repr(str(unexpected)) + ").write_text('signalled')",
+                                      lifetime_tail=tail)
+        process.stdin.write("FINISH\n")
+        process.stdin.flush()
+        ended.write_text("normal client shutdown")
+        done = json.loads(process.stdout.readline().removeprefix("BROKER_DONE "))
+        self.assertEqual(done["returncode"], 0)
+        self.assertTrue(done["natural_client_termination"])
+        self.assertFalse(done["collector_stop_requested"])
+        self.assertTrue(flushed.exists())
+        self.assertFalse(unexpected.exists())
+        self.assertEqual(process.wait(timeout=10), 0)
+        self.assertIn("NATIVE_TAIL_FLUSHED", (self.directory / "collector.stdout.txt").read_text())
+
+    def test_finish_timeout_fails_and_reaps_only_owned_collector(self):
+        process, ready = self.broker("lambda *args: None", flush_timeout=.2)
+        kernel, capture = self.capture_handle(ready["capture"]["pid"])
+        process.stdin.write("FINISH\n")
+        process.stdin.flush()
+        self.assertNotEqual(process.wait(timeout=10), 0)
+        self.assertEqual(kernel.WaitForSingleObject(capture, 5000), 0,
+                         "Owned collector survived natural-completion timeout")
+        self.assertIn("TimeoutExpired", (self.directory / "broker.stderr.txt").read_text())
+
+    def test_finish_accepts_a_collector_that_already_completed_naturally(self):
+        process, ready = self.broker("lambda *args: None", lifetime_tail="print('ALREADY_FLUSHED',flush=True)")
+        kernel, capture = self.capture_handle(ready["capture"]["pid"])
+        self.assertEqual(kernel.WaitForSingleObject(capture, 5000), 0)
+        process.stdin.write("FINISH\n")
+        process.stdin.flush()
+        done = json.loads(process.stdout.readline().removeprefix("BROKER_DONE "))
+        self.assertEqual(done["returncode"], 0)
+        self.assertTrue(done["natural_client_termination"])
+        self.assertEqual(process.wait(timeout=10), 0)
 
     def test_stop_flushes_only_private_console_and_exits_normally(self):
         process, ready = self.broker("lambda *args: sys.exit(0)")
