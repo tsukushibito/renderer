@@ -10,6 +10,7 @@ mod diagnostics;
 mod frame;
 mod graph;
 mod image;
+mod memory;
 mod metrics;
 #[cfg(feature = "presentation")]
 mod presentation;
@@ -25,6 +26,10 @@ pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12Valid
 pub use frame::{D3D12BufferClass, D3D12FrameCapacity};
 pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 pub use image::{D3D12Image, D3D12ImageView, D3D12Sampler};
+pub use memory::{
+    D3D12CommittedHeapStats, D3D12CommittedMemoryStats, D3D12MemoryStats, D3D12StagingMemoryStats,
+    D3D12VideoMemoryInfo,
+};
 #[cfg(feature = "presentation")]
 pub use presentation::D3D12Presenter;
 pub use program::{D3D12Bindings, D3D12Buffer, D3D12Program};

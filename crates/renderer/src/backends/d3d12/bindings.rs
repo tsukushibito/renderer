@@ -1701,11 +1701,22 @@ pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR: DXGI_INFO_QUEUE_MESSAGE_SEVERI
 pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_INFO: DXGI_INFO_QUEUE_MESSAGE_SEVERITY = 3;
 pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_MESSAGE: DXGI_INFO_QUEUE_MESSAGE_SEVERITY = 4;
 pub const DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING: DXGI_INFO_QUEUE_MESSAGE_SEVERITY = 2;
+pub type DXGI_MEMORY_SEGMENT_GROUP = i32;
+pub const DXGI_MEMORY_SEGMENT_GROUP_LOCAL: DXGI_MEMORY_SEGMENT_GROUP = 0;
+pub const DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL: DXGI_MEMORY_SEGMENT_GROUP = 1;
 pub type DXGI_MODE_SCALING = i32;
 pub type DXGI_MODE_SCANLINE_ORDER = i32;
 pub const DXGI_MWA_NO_ALT_ENTER: i32 = 2;
 pub const DXGI_PRESENT_ALLOW_TEARING: u32 = 512;
 pub const DXGI_PRESENT_DO_NOT_WAIT: u32 = 8;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DXGI_QUERY_VIDEO_MEMORY_INFO {
+    pub Budget: u64,
+    pub CurrentUsage: u64,
+    pub AvailableForReservation: u64,
+    pub CurrentReservation: u64,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DXGI_RATIONAL {
@@ -3773,6 +3784,82 @@ pub struct IDXGIAdapter1_Vtbl {
     ) -> windows_core::HRESULT,
 }
 impl windows_core::RuntimeName for IDXGIAdapter1 {}
+windows_core::imp::define_interface!(
+    IDXGIAdapter2,
+    IDXGIAdapter2_Vtbl,
+    0x0aa1ae0a_fa0e_4b84_8644_e05ff8e5acb5
+);
+impl core::ops::Deref for IDXGIAdapter2 {
+    type Target = IDXGIAdapter1;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGIAdapter2,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIAdapter,
+    IDXGIAdapter1
+);
+#[repr(C)]
+pub struct IDXGIAdapter2_Vtbl {
+    pub base__: IDXGIAdapter1_Vtbl,
+    GetDesc2: usize,
+}
+impl windows_core::RuntimeName for IDXGIAdapter2 {}
+windows_core::imp::define_interface!(
+    IDXGIAdapter3,
+    IDXGIAdapter3_Vtbl,
+    0x645967a4_1392_4310_a798_8053ce3e93fd
+);
+impl core::ops::Deref for IDXGIAdapter3 {
+    type Target = IDXGIAdapter2;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    IDXGIAdapter3,
+    windows_core::IUnknown,
+    IDXGIObject,
+    IDXGIAdapter,
+    IDXGIAdapter1,
+    IDXGIAdapter2
+);
+impl IDXGIAdapter3 {
+    pub unsafe fn QueryVideoMemoryInfo(
+        &self,
+        nodeindex: u32,
+        memorysegmentgroup: DXGI_MEMORY_SEGMENT_GROUP,
+        pvideomemoryinfo: *mut DXGI_QUERY_VIDEO_MEMORY_INFO,
+    ) -> windows_core::HRESULT {
+        unsafe {
+            (windows_core::Interface::vtable(self).QueryVideoMemoryInfo)(
+                windows_core::Interface::as_raw(self),
+                nodeindex,
+                memorysegmentgroup,
+                pvideomemoryinfo as _,
+            )
+        }
+    }
+}
+#[repr(C)]
+pub struct IDXGIAdapter3_Vtbl {
+    pub base__: IDXGIAdapter2_Vtbl,
+    RegisterHardwareContentProtectionTeardownStatusEvent: usize,
+    UnregisterHardwareContentProtectionTeardownStatus: usize,
+    pub QueryVideoMemoryInfo: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        u32,
+        DXGI_MEMORY_SEGMENT_GROUP,
+        *mut DXGI_QUERY_VIDEO_MEMORY_INFO,
+    ) -> windows_core::HRESULT,
+    SetVideoMemoryReservation: usize,
+    RegisterVideoMemoryBudgetChangeNotificationEvent: usize,
+    UnregisterVideoMemoryBudgetChangeNotification: usize,
+}
+impl windows_core::RuntimeName for IDXGIAdapter3 {}
 windows_core::imp::define_interface!(
     IDXGIDevice,
     IDXGIDevice_Vtbl,

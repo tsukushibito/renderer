@@ -39,6 +39,9 @@ fn validate_buffer_request(
 pub(super) struct DeviceBuffer {
     raw: ID3D12Resource,
     mapped: Option<ptr::NonNull<c_void>>,
+    // Drop native COM ownership before removing the optional accounting entry.
+    #[cfg(feature = "memory-profiling")]
+    _memory: super::memory::CommittedAllocation,
 }
 
 impl Drop for DeviceBuffer {
@@ -133,7 +136,12 @@ impl DeviceBuffer {
         .map_err(|error| owner.native("ID3D12Device::CreateCommittedResource", error))?;
         let raw =
             raw.ok_or_else(|| missing_output(owner, "ID3D12Device::CreateCommittedResource"))?;
-        Ok(Self { raw, mapped: None })
+        Ok(Self {
+            raw,
+            mapped: None,
+            #[cfg(feature = "memory-profiling")]
+            _memory: super::memory::CommittedAllocation::new(owner, heap, &desc)?,
+        })
     }
 
     /// Maps a newly owned CPU-visible arena once at the explicit preparation
@@ -329,6 +337,8 @@ impl DeviceBuffer {
 /// nonzero Device-supported extent/format before reaching this native factory.
 pub(super) struct DeviceImage {
     raw: ID3D12Resource,
+    #[cfg(feature = "memory-profiling")]
+    _memory: super::memory::CommittedAllocation,
 }
 
 impl Drop for DeviceImage {
@@ -456,6 +466,12 @@ impl DeviceImage {
             raw: raw.ok_or_else(|| {
                 missing_output(owner, "ID3D12Device::CreateCommittedResource(image)")
             })?,
+            #[cfg(feature = "memory-profiling")]
+            _memory: super::memory::CommittedAllocation::new(
+                owner,
+                D3D12_HEAP_TYPE_DEFAULT,
+                &desc,
+            )?,
         })
     }
     pub(super) fn raw(&self) -> &ID3D12Resource {

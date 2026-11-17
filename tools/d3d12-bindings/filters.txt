@@ -22,6 +22,8 @@ DXGIGetDebugInterface1
 IDXGIFactory1::EnumAdapters1
 IDXGIAdapter1::GetDesc1
 IDXGIAdapter::CheckInterfaceSupport
+IDXGIAdapter3::QueryVideoMemoryInfo
+DXGI_MEMORY_SEGMENT_GROUP
 IDXGIDevice::{}
 IDXGIInfoQueue::{GetNumStoredMessages,GetNumMessagesDeniedByStorageFilter,GetNumMessagesDiscardedByMessageCountLimit,GetMessage,SetMessageCountLimit}
 DXGI_DEBUG_ALL
