@@ -90,7 +90,7 @@ def prepare(args):
     hashes = {}
     for name in ("project.godot", "main.gd", "main.tscn"):
         shutil.copyfile(SOURCE / name, project / name)
-    shutil.copyfile(ROOT / "tools/bistro/conditions.json", output / "conditions.json")
+    shutil.copyfile(args.conditions, output / "conditions.json")
     conditions = read(output / "conditions.json")
     quality = settings(profile, conditions)
     ibl_identity = None
@@ -126,7 +126,7 @@ def prepare(args):
                 "source_commit": subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                 "benchmark_tool_sha256": digest(SOURCE / "benchmark.py"),
                 "profile_tool_sha256": digest(SOURCE / "profiles.py"),
-                "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents and PNG mipmaps; no LOD/occlusion, optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. B2 retains constant ambient .03, no IBL/shadow/AA, linear exposure1. B3 uses cap4 static IBL strength3, four 2048-effective CSM splits/PCF/no PCSS, native AgX exposure2 and FXAA, no Bloom/extra effects. Godot's BRDF, prefilter, shadow filter, depth prepass, batching, mip chain and presentation differ from Renderer; AgX and pre-tonemap FXAA differ from Renderer Neutral and post-tonemap FXAA."}
+                "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents and PNG mipmaps; no LOD/occlusion, optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. B2 retains authored AO, constant ambient .03, no IBL/shadow/AA, linear exposure1. B3 explicitly disables source AO maps while retaining all source bytes/materials; cap4 static IBL strength3, four 2048-effective CSM splits/PCF/no PCSS, native AgX exposure2 and FXAA, no Bloom/extra effects. Godot's BRDF, prefilter, shadow filter, depth prepass, batching, mip chain and presentation differ from Renderer; AgX and pre-tonemap FXAA differ from Renderer Neutral and post-tonemap FXAA."}
     write(output / "identity.json", identity)
     print(output / "identity.json")
 
@@ -161,6 +161,13 @@ def validate_report(report, config):
     if config["profile"] == "b3":
         if report.get("ibl") != config["ibl"]:
             raise ValueError("Effective IBL input differs from the archived cook")
+        override = report.get("material_overrides", {})
+        if (override.get("policy") != "bistro-source-ao-disabled"
+                or override.get("inspected_materials") != 132
+                or type(override.get("ao_enabled_before")) is not int
+                or not 0 < override["ao_enabled_before"] <= 132
+                or override.get("ao_enabled_after") != 0):
+            raise ValueError("B3 source AO material override was not applied")
     samples = report.get("samples", [])
     if len(samples) != config["frames"]:
         raise ValueError("Incomplete samples")
@@ -291,6 +298,7 @@ def main():
     build.add_argument("--editor", type=Path, required=True)
     build.add_argument("--template", type=Path, required=True)
     build.add_argument("--asset-root", type=Path, default=ROOT)
+    build.add_argument("--conditions", type=Path, default=ROOT / "tools/bistro/conditions.json")
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--profile", choices=PROFILES, default="b2")
     build.add_argument("--ibl-manifest", type=Path)
