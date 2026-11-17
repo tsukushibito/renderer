@@ -1464,8 +1464,35 @@ native readbackの形式・非圧縮・完全なmip数、全667材質参照とfi
 出力は露出前HDR→EV+1→Khronos PBR Neutral→FXAA→sRGB一回で、AAなしも保存する。
 Godotはnative AgX/FXAAの位置/IBL/PCF、影のcaster判定、depth prepass/batchingと表示処理の差を残す。
 [B3の描画・メモリ受入](../verification/current.md#bistro-lighting)は成功した。
-初回比較はCPU変動とGodotのmip不足があったため目標へ採用せず、mip修正とPコア群・HighQoSを揃えた再計測を準備した。
-CPU/GPU予算と改善優先度は再計測後に確定する。AgX追加と再比較は速度改善後の別課題`renderer-5io`で扱う。
+初回比較はCPU変動とGodotのmip不足があったため目標へ採用しなかった。
+全mip、Pコア群（論理CPU 0〜11、mask 4095）・HighQoSを両processで揃えた24 runの正式比較を完了した。
+これは比較対象のCPU条件を制御する選択であり、shippingコードの高速化や既定schedulerでの全機材性能を意味しない。
+
+<a id="bistro-b3-performance-target"></a>
+
+#### B3の参照予算と改善対象
+
+同じCore i5-14600KF／RTX 3060、1080p、全Bistro、静的IBL／4分割影／FXAA、固定routeと
+上記CPU条件で、**CPU描画p95 3.0 ms／GPU p95 5.5 ms**を参照値とする。
+独立3 processのGodot all・timing有効で最も遅いp95（2.992050088／5.400250101 ms）を、
+既存と同じ0.5 ms単位で切り上げた。GodotのCPU p95は1.895／1.944／2.992 msで上位側の変動が残り、
+この群の保守的な目安を将来の安定上限、他機材の保証、Rendererの達成済み予算として扱わない。
+主camera culling無効を主参照とするが、Godot nativeのshadow caster判定は残す。
+
+Rendererのtiming有効時の最悪p95は、active host経過時間がVulkan 9.404／D3D12 8.001 ms、
+GPUが8.140／7.746 msだった。active hostは明示yieldを除きpoll・deschedulingを含み、
+Godotのsetup＋viewport CPU時間と範囲が異なる。画像の数値受入を画素等価性とせず、
+CPU/GPU差をRenderGraph単体overheadや同一native仕事量の効率差へ帰属しない。
+通常のprofiling無効ではoffscreen throughput中央値132.708／140.121 frame/s、
+iteration p99は10.632〜12.999／10.374〜10.702 msで、実表示・ゲーム処理込みのFPSや投入完了latencyとは分ける。
+CPUとGPUの時間を加算してFPSを求めない。旧B2予算は別の機能・材質mip条件として保持する。
+
+次の改善調査は共通の利用側Graph buildとVulkan prepare（`renderer-7ft.9`）、D3D12 record（`renderer-c4y`）を優先する。
+GPUもpass別に影・PBR・転送の費用を分け、4 cascadeのcaster負荷を含めて確認する（`renderer-7ft.8`）。
+個別timerは含まれる呼出側区間へ重複加算せず、必須の計画・同期・GPU/CPU寿命・容量・native失敗処理を維持する。
+今回の結果だけからaliasing、複数queue、vendor固有方式を採用せず、正しいbaselineと同条件で利益・代償を測る。
+実測、通常／計測有効の分離、反復変動と未確認範囲は[検証記録](../verification/current.md#bistro-b3-performance)を参照する。
+高速化の実装は今回の範囲へ含めない。AgX追加と再比較は速度改善後の別課題`renderer-5io`で扱う。
 
 ### B4: 利用側の独自Bloomとパスの合成・交換
 
