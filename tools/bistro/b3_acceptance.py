@@ -44,7 +44,7 @@ def schedule(repeats):
 def command(binary, directory, *, api, manifest=None, ibl_manifest=None):
     result = [str(binary), "--api", api, "--resource-checks", "--capture-shadow-maps",
               "--capture-all-views", "--frames", "24", "--warmup", "8", "--inflight", "2",
-              "--view", "street", "--output", str(directory)]
+              "--view", "route", "--output", str(directory)]
     if manifest:
         require(ibl_manifest is not None, "Full B3 acceptance needs --ibl-manifest")
         result += ["--manifest", str(manifest.resolve()), "--ibl-manifest", str(ibl_manifest.resolve()),
@@ -294,7 +294,7 @@ def run(args):
                "source_commit": args.source_commit, "sources": sources, "binaries": binary_identity,
                "schedule": [{"mode": mode, "api": api, "repeat": repeat} for mode, api, repeat in plan],
                "runs": [], "comparisons": [],
-               "scope": "B3 short image/resource acceptance with memory instrumentation; not normal-release performance, display FPS, physical residency, OOM or device-loss injection. Existing numerical profiles are unchanged; independent B3 fixture/error-sensitivity calibration precedes formal acceptance."}
+               "scope": "B3 short image/resource acceptance with memory instrumentation and changing route camera/CSM inputs; not normal-release performance, display FPS, physical residency, OOM or device-loss injection. Existing numerical profiles are unchanged; independent B3 fixture/error-sensitivity calibration precedes formal acceptance."}
     write_json(output / "summary.json", summary)
     conditions, modes, apis = {}, {}, {}
     try:

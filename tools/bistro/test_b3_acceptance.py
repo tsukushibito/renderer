@@ -101,6 +101,7 @@ class B3AcceptanceTests(unittest.TestCase):
             self.assertIn(flag, args)
         for option, value in (("--frames", "24"), ("--warmup", "8"), ("--inflight", "2")):
             self.assertEqual(args[args.index(option) + 1], value)
+        self.assertEqual(args[args.index("--view") + 1], "route")
         with self.assertRaises(ValueError):
             acceptance.command(Path("exe"), Path("out"), api="vulkan", manifest=Path("cook.json"))
 
