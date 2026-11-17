@@ -10,6 +10,8 @@
 .tools/
 /tools/bistro/__pycache__/
 /tools/cpu_profile/__pycache__/
+/tools/godot_bistro/__pycache__/
+/tools/godot_bistro/.godot/
 /tools/docs/node_modules/
 
 # Rust build output (Cargo.lock is tracked for reproducible dependency resolution)
