@@ -1,6 +1,6 @@
 //! Caller-owned right-handed camera. Matrices are column-major, depth is [0,1].
 
-use super::Error;
+use super::{Error, shadow::Bounds};
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug)]
@@ -8,6 +8,93 @@ pub(super) struct Camera {
     pub position: [f32; 3],
     pub target: [f32; 3],
     pub fov: f32,
+}
+
+/// Clip planes for the exact FP32 view-projection matrix consumed by PBR.
+/// An uncertifiable matrix leaves the original draw list visible.
+pub(super) struct Frustum {
+    planes: Option<[ClipPlane; 6]>,
+}
+
+struct ClipPlane {
+    coefficients: [f64; 4],
+    tolerance: f64,
+}
+
+impl ClipPlane {
+    fn combine(row: [f64; 4], other: [f64; 4], sign: f64, tolerance: f64) -> Self {
+        Self {
+            coefficients: std::array::from_fn(|i| row[i] + sign * other[i]),
+            tolerance,
+        }
+    }
+
+    fn overlaps(&self, bounds: Bounds) -> bool {
+        let mut maximum = self.coefficients[3];
+        for (axis, coefficient) in self.coefficients[..3].iter().copied().enumerate() {
+            let corner = if coefficient >= 0.0 {
+                bounds.max[axis]
+            } else {
+                bounds.min[axis]
+            };
+            maximum += coefficient * f64::from(corner);
+        }
+        maximum >= -self.tolerance || !maximum.is_finite()
+    }
+}
+
+impl Frustum {
+    pub fn new(matrix: [[f32; 4]; 4], scene: Bounds) -> Self {
+        let rows: [[f64; 4]; 4] =
+            std::array::from_fn(|row| matrix.map(|column| f64::from(column[row])));
+        let position_limit: [f64; 3] =
+            std::array::from_fn(|i| f64::from(scene.min[i].abs().max(scene.max[i].abs())));
+        let errors = rows.map(|row| {
+            let size = row[3].abs()
+                + row[..3]
+                    .iter()
+                    .zip(position_limit)
+                    .map(|(coefficient, limit)| coefficient.abs() * limit)
+                    .sum::<f64>();
+            if !size.is_finite() || size >= 0.5 * f64::from(f32::MAX) {
+                return None;
+            }
+            // Bound the three products and three sums in pbr.vert relative
+            // to the absolute terms, including cancellation and subnormals.
+            let rounding = 32.0 * f64::from(f32::EPSILON) * size.max(1.0);
+            let denorm = 8.0
+                * f64::from(f32::MIN_POSITIVE)
+                * (1.0
+                    + position_limit.into_iter().sum::<f64>()
+                    + row.into_iter().map(f64::abs).sum::<f64>());
+            Some(rounding + denorm)
+        });
+        let [Some(dx), Some(dy), Some(dz), Some(dw)] = errors else {
+            return Self { planes: None };
+        };
+        let [x, y, z, w] = rows;
+        // Work in homogeneous coordinates without dividing by W. Both APIs
+        // use [0, W] depth, and their clip-Y flip exchanges the two Y planes.
+        Self {
+            planes: Some([
+                ClipPlane::combine(w, x, 1.0, dw + dx),
+                ClipPlane::combine(w, x, -1.0, dw + dx),
+                ClipPlane::combine(w, y, 1.0, dw + dy),
+                ClipPlane::combine(w, y, -1.0, dw + dy),
+                ClipPlane {
+                    coefficients: z,
+                    tolerance: dz,
+                },
+                ClipPlane::combine(w, z, -1.0, dw + dz),
+            ]),
+        }
+    }
+
+    pub fn overlaps(&self, bounds: Bounds) -> bool {
+        self.planes
+            .as_ref()
+            .is_none_or(|planes| planes.iter().all(|plane| plane.overlaps(bounds)))
+    }
 }
 
 pub(super) struct Conditions {
@@ -244,6 +331,40 @@ mod tests {
         assert!(project(matrix, [0.0, 1.0, 0.0, 1.0])[1] < 0.0);
         assert!(project(matrix, [0.0, 0.0, 3.98, 1.0])[2].abs() < 1e-4);
         assert!((project(matrix, [0.0, 0.0, -496.0, 1.0])[2] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn frustum_culls_only_bounds_outside_one_homogeneous_plane() {
+        let scene = Bounds::new([-10.0; 3], [10.0; 3]).unwrap();
+        let matrix = Camera::fixture().matrix(1.0, 1.0, 10.0).unwrap();
+        let frustum = Frustum::new(matrix, scene);
+        let visible = |point| frustum.overlaps(Bounds::new(point, point).unwrap());
+        assert!(visible([0.0, 0.0, 0.0]));
+        assert!(!visible([0.0, 0.0, 3.5]));
+        assert!(!visible([0.0, 0.0, 5.0]));
+        assert!(!visible([0.0, 0.0, -7.0]));
+        assert!(!visible([-4.0, 0.0, 0.0]));
+        assert!(!visible([4.0, 0.0, 0.0]));
+        assert!(!visible([0.0, -4.0, 0.0]));
+        assert!(!visible([0.0, 4.0, 0.0]));
+        assert!(frustum.overlaps(Bounds::new([-8.0, -8.0, 0.0], [8.0, 8.0, 5.0]).unwrap()));
+    }
+
+    #[test]
+    fn frustum_retains_clip_edges_and_falls_back_for_uncertifiable_math() {
+        let scene = Bounds::new([-10.0; 3], [10.0; 3]).unwrap();
+        let mut matrix = std::array::from_fn(|column| {
+            std::array::from_fn(|row| if column == row { 1.0 } else { 0.0 })
+        });
+        let frustum = Frustum::new(matrix, scene);
+        let edge = [1.0 + f32::EPSILON, 0.0, 0.0];
+        let outside = [2.0, 2.0, 2.0];
+        assert!(frustum.overlaps(Bounds::new(edge, edge).unwrap()));
+        assert!(!frustum.overlaps(Bounds::new(outside, outside).unwrap()));
+        for coefficient in [f32::NAN, f32::MAX] {
+            matrix[0][0] = coefficient;
+            assert!(Frustum::new(matrix, scene).overlaps(Bounds::new(outside, outside).unwrap()));
+        }
     }
     #[test]
     fn conditions_route_returns_named_endpoints_and_loops() {

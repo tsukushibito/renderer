@@ -1446,6 +1446,14 @@ Bistroのcaster選別は、resident準備時に実際のupload頂点から求め
 [Direct3DのFP32演算規則](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/floating-point-rules)を参照する。
 通常Zと既定near/farを維持し、画質・費用と未確認範囲は実GPU受入の記録へ分ける。
 
+Bistroの主cameraは同じworld AABBと、PBRの頂点shaderに渡すFP32行列を再利用する。
+同次clip座標の左・右・上・下・near・farのいずれか一面で、丸めの余裕を含めてAABB全体が外側と分かるdrawだけを省く。
+境界と交差するdrawや計算の有限性を保証できない入力を保持する。選別はPBRのみに適用し、
+opaque/maskの入力順、blendの距離順と同距離のtie順、cascadeのcaster選別、素材の常駐を維持する。
+選別結果はresident準備に対応する予約済み配列を再利用する。
+現行BistroのPBRは主camera cullingを適用し、Godotの主参照`all`はこれを無効にする。
+測定時のdraw数と構成の差を比較に記録する。
+
 IBLはRGBA16Fの2D diffuse irradiance128×64、specular1024×512の11 mip、BRDF LUT256×256を事前生成する。
 GGX/height-correlated Smith、固定Hammersley1024 sampleから始め、diffuseはEを保存してshaderでπ除算する。
 specularのroughness0〜1はLOD0〜4へ対応させる。1×1まで使う案は方向依存を失い、LOD5もpole誤差が

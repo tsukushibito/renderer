@@ -1,6 +1,12 @@
 //! Public Graph composition and explicit working-set budgets for this consumer.
 
-use super::{Error, Options, asset::Scene, backend::Backend, camera::Camera, ibl, program, shadow};
+use super::{
+    Error, Options,
+    asset::Scene,
+    backend::Backend,
+    camera::{Camera, Frustum},
+    ibl, program, shadow,
+};
 use renderer::{
     ImageFormat,
     graph::{
@@ -271,8 +277,8 @@ pub(super) struct Resident {
     pub environment: [ImportImage; 3],
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
-    pub shadow_bounds: shadow::Bounds,
-    shadow_caster_bounds: Vec<shadow::Bounds>,
+    scene_bounds: shadow::Bounds,
+    primitive_bounds: Vec<shadow::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     pub resolve_vertices: ImportBuffer,
@@ -392,7 +398,7 @@ impl Resident {
         let mut upload_owners = Vec::with_capacity(scene.materials.len() + 1);
         let mut vertices = Vec::with_capacity(scene.primitives.len());
         let mut indices = Vec::with_capacity(scene.primitives.len());
-        let mut shadow_caster_bounds = Vec::with_capacity(scene.primitives.len());
+        let mut primitive_bounds = Vec::with_capacity(scene.primitives.len());
         for (index, primitive) in scene.primitives.iter().enumerate() {
             let primitive_vertices = &scene.vertices[primitive.vertices.clone()];
             let mut minimum = [f32::INFINITY; 3];
@@ -408,7 +414,7 @@ impl Resident {
                     maximum[axis] = maximum[axis].max(value);
                 }
             }
-            shadow_caster_bounds.push(shadow::Bounds::new(minimum, maximum)?);
+            primitive_bounds.push(shadow::Bounds::new(minimum, maximum)?);
             let encoded = &scene.indices[primitive.indices.clone()];
             let decoded = encoded
                 .as_chunks::<4>()
@@ -490,7 +496,7 @@ impl Resident {
             upload_environment(&environment.specular)?,
             upload_environment(&environment.brdf)?,
         ];
-        let shadow_bounds = shadow_caster_bounds
+        let scene_bounds = primitive_bounds
             .iter()
             .copied()
             .reduce(shadow::Bounds::union)
@@ -515,8 +521,8 @@ impl Resident {
                 environment.yaw_degrees.to_radians(),
                 environment.max_prefilter_lod as f32,
             ],
-            shadow_bounds,
-            shadow_caster_bounds,
+            scene_bounds,
+            primitive_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
             resolve_vertices,
@@ -533,6 +539,7 @@ pub(super) struct Workspace {
     images: Vec<ImageHandle>,
     bindings: Vec<RasterBindings>,
     shadow_bindings: Vec<RasterBindings>,
+    opaque: Vec<usize>,
     blended: Vec<usize>,
 }
 impl Workspace {
@@ -544,6 +551,7 @@ impl Workspace {
             images: Vec::with_capacity(scene.images.len()),
             bindings: Vec::with_capacity(scene.materials.len()),
             shadow_bindings: Vec::with_capacity(scene.materials.len()),
+            opaque: Vec::with_capacity(scene.primitives.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
         }
     }
@@ -580,7 +588,7 @@ pub(super) fn build(
         read_word(19),
         read_word(23),
         [read_word(20), read_word(21), read_word(22)],
-        resident.shadow_bounds,
+        resident.scene_bounds,
         resident.shadow_parameters,
     )?;
     let mut frame_uniform = [0u8; program::CAMERA_BYTES];
@@ -605,6 +613,7 @@ pub(super) fn build(
         workspace.images.clear();
         workspace.bindings.clear();
         workspace.shadow_bindings.clear();
+        workspace.opaque.clear();
         workspace.blended.clear();
         for value in &resident.vertices {
             workspace
@@ -703,14 +712,14 @@ pub(super) fn build(
     }
     for (cascade, view) in shadow_views.into_iter().enumerate() {
         let parameters = RasterConstants::new(&[cascade as u32])?;
-        let clip = shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.shadow_bounds);
+        let clip = shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.scene_bounds);
         let draws = (0..scene.primitives.len())
             .filter(|&index| {
                 let material = &scene.materials[scene.primitives[index].material];
                 options.shadows
                     && !material.blend
                     && (!options.alpha_only || material.alpha_zero)
-                    && clip.overlaps(resident.shadow_caster_bounds[index])
+                    && clip.overlaps(resident.primitive_bounds[index])
             })
             .map(|index| {
                 let primitive = &scene.primitives[index];
@@ -895,9 +904,21 @@ pub(super) fn build(
         )?;
         (color, depth, output, color_view, depth_view)
     };
-    let eligible = |index: usize| {
-        !options.alpha_only || scene.materials[scene.primitives[index].material].alpha_zero
-    };
+    let camera_matrix =
+        std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
+    let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
+    for (index, primitive) in scene.primitives.iter().enumerate() {
+        let material = &scene.materials[primitive.material];
+        if (!options.alpha_only || material.alpha_zero)
+            && frustum.overlaps(resident.primitive_bounds[index])
+        {
+            if material.blend {
+                workspace.blended.push(index);
+            } else {
+                workspace.opaque.push(index);
+            }
+        }
+    }
     let draw = |index: usize| {
         let primitive = &scene.primitives[index];
         RasterDraw {
@@ -913,13 +934,10 @@ pub(super) fn build(
         let _opaque = tracy_client::Client::running().map(|client| {
             client.span(tracy_client::span_location!("bistro.build.opaque_draws"), 0)
         });
-        let opaque = (0..scene.primitives.len()).filter(|&index| {
-            eligible(index) && !scene.materials[scene.primitives[index].material].blend
-        });
         graph.raster(
             "Forward PBR opaque and mask",
             &program::opaque_program(),
-            opaque.map(draw),
+            workspace.opaque.iter().copied().map(draw),
             RasterAttachments {
                 colors: &[Attachment {
                     view: color_view,
@@ -939,11 +957,6 @@ pub(super) fn build(
         let _sort = tracy_client::Client::running().map(|client| {
             client.span(tracy_client::span_location!("bistro.build.blended_sort"), 0)
         });
-        for index in 0..scene.primitives.len() {
-            if eligible(index) && scene.materials[scene.primitives[index].material].blend {
-                workspace.blended.push(index);
-            }
-        }
         // A deterministic far-to-near primitive order. This is ordinary alpha
         // blending, not order-independent transparency or per-triangle sorting.
         workspace.blended.sort_unstable_by(|&a, &b| {
@@ -1086,9 +1099,7 @@ pub(super) fn build(
     } else {
         None
     };
-    let draws = (0..scene.primitives.len())
-        .filter(|&index| eligible(index))
-        .count();
+    let draws = workspace.opaque.len() + workspace.blended.len();
     Ok(Built {
         graph,
         output,
