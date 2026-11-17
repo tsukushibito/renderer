@@ -155,7 +155,7 @@ def validate_material_mips(inventory):
     require(isinstance(inventory, dict), "missing native preparation proof")
     for key, expected in (("policy", "b3-explicit-png-full-mips-v1"), ("outside_roi", True),
                           ("verified", True), ("image_count", 405), ("material_count", 132),
-                          ("material_reference_count", 667), ("normal_images", 131),
+                          ("material_reference_count", 667), ("normal_images", 132),
                           ("total_levels_including_base", 3529)):
         require(type(inventory.get(key)) is type(expected) and inventory[key] == expected, key + " differs")
     records, references = inventory.get("images"), inventory.get("references")
@@ -204,7 +204,7 @@ def validate_material_mips(inventory):
                 and type(reference.get("rid")) is int and reference["rid"] > 0, "missing live resource identities")
         slots.add((material, role))
         roles[image].add(role)
-    require(levels == 3529 and normal_images == 131, "full chain or normal image count changed")
+    require(levels == 3529 and normal_images == 132, "full chain or normal image count changed")
     require(all(uses and (uses == {"normal"}) == by_index[index]["normal_renormalized"]
                 and ("normal" not in uses or uses == {"normal"}) for index, uses in roles.items()),
             "unused image or mixed normal/color roles")

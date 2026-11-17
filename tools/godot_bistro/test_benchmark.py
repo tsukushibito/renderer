@@ -24,23 +24,25 @@ def mip_inventory():
         channels = 3 if index < 273 else 4
         images.append({"index": index, "class": "ImageTexture", "width": width, "height": width,
             "format": 4 if channels == 3 else 5, "compressed": False, "mipmaps_before": 0,
-            "mipmap_count": count, "has_mipmaps": True, "normal_renormalized": index < 131,
+            "mipmap_count": count, "has_mipmaps": True, "normal_renormalized": index < 132,
             "base_bytes": width * width * channels,
             "native_data_bytes": sum((width >> level) ** 2 * channels for level in range(count + 1)),
             "base_sha256": "a" * 64, "native_base_sha256": "a" * 64, "resource_identity_preserved": True})
     references = []
-    for material in range(131):
-        for role, image in (("normal", material), ("albedo", 131 + material),
-                            ("metallic", 262 + material), ("roughness", 262 + material),
-                            ("ao", 262 + material)):
+    for material in range(132):
+        for role, image in (("normal", material), ("albedo", 132 + material)):
             references.append({"material": material, "role": role, "image": image,
                                "resource_id": image + 1, "rid": image + 1})
-    for material in range(12):
-        references.append({"material": material, "role": "emission", "image": 393 + material,
-                           "resource_id": 394 + material, "rid": 394 + material})
+    for material in range(131):
+        for role in ("metallic", "roughness", "ao"):
+            references.append({"material": material, "role": role, "image": 264 + material,
+                               "resource_id": 265 + material, "rid": 265 + material})
+    for material in range(10):
+        references.append({"material": material, "role": "emission", "image": 395 + material,
+                           "resource_id": 396 + material, "rid": 396 + material})
     return {"policy": "b3-explicit-png-full-mips-v1", "outside_roi": True, "verified": True,
             "image_count": 405, "material_count": 132, "material_reference_count": 667,
-            "normal_images": 131, "total_levels_including_base": 3529,
+            "normal_images": 132, "total_levels_including_base": 3529,
             "images": images, "references": references}
 
 
