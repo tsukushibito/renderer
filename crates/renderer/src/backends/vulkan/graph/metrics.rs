@@ -21,7 +21,23 @@ pub struct StagingMemoryStats {
     pub live_ranges: usize,
 }
 
-/// A diagnostic snapshot, not process VRAM usage or a promise of future budget.
+/// One native memory heap, counted once even when several memory types use it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MemoryHeapStats {
+    pub capacity_bytes: u64,
+    /// DEVICE_LOCAL does not establish physical page residency or dedicated VRAM.
+    pub device_local: bool,
+    pub vma_allocation_count: u32,
+    pub vma_allocation_bytes: u64,
+    pub vma_block_count: u32,
+    pub vma_block_bytes: u64,
+    /// Direct EXT_memory_budget process allocation estimate, not resident pages.
+    pub process_usage_bytes: Option<u64>,
+    /// Dynamic native guideline; it does not reserve future allocation success.
+    pub process_budget_bytes: Option<u64>,
+}
+
+/// An on-demand diagnostic snapshot, not proof of physical VRAM residency.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemoryStats {
     /// Buffer sizes plus packed image texel bytes of externally named resources.
@@ -36,9 +52,50 @@ pub struct MemoryStats {
     pub vma_allocation_bytes: u64,
     pub vma_block_count: u32,
     pub vma_block_bytes: u64,
-    /// EXT_memory_budget is not enabled by this baseline; do not report a VMA
-    /// fallback estimate as measured process usage/budget.
+    /// Active prefix of `heaps`; unused array entries are zero/default.
+    pub heap_count: usize,
+    pub heaps: [MemoryHeapStats; vk::MAX_MEMORY_HEAPS],
+    pub memory_budget_extension_enabled: bool,
+    /// Sum of native estimates for DEVICE_LOCAL heaps, each counted once.
+    /// None when EXT_memory_budget is unavailable; no VMA fallback is substituted.
+    pub process_usage_bytes: Option<u64>,
+    /// Sum of dynamic native budgets for DEVICE_LOCAL heaps, not heap capacity.
     pub process_budget_bytes: Option<u64>,
+    pub buffer_image_granularity: u64,
+    pub non_coherent_atom_size: u64,
+}
+
+impl MemoryStats {
+    fn set_heap_properties(
+        &mut self,
+        properties: &vk::PhysicalDeviceMemoryProperties,
+        budget: Option<&vk::PhysicalDeviceMemoryBudgetPropertiesEXT<'_>>,
+    ) {
+        self.heap_count = properties.memory_heap_count as usize;
+        self.memory_budget_extension_enabled = budget.is_some();
+        self.process_usage_bytes = budget.map(|_| 0);
+        self.process_budget_bytes = budget.map(|_| 0);
+        for (index, heap) in properties.memory_heaps[..self.heap_count]
+            .iter()
+            .enumerate()
+        {
+            let output = &mut self.heaps[index];
+            output.capacity_bytes = heap.size;
+            output.device_local = heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL);
+            output.process_usage_bytes = budget.map(|budget| budget.heap_usage[index]);
+            output.process_budget_bytes = budget.map(|budget| budget.heap_budget[index]);
+            if output.device_local
+                && let Some(budget) = budget
+            {
+                self.process_usage_bytes = self
+                    .process_usage_bytes
+                    .map(|sum| sum.saturating_add(budget.heap_usage[index]));
+                self.process_budget_bytes = self
+                    .process_budget_bytes
+                    .map(|sum| sum.saturating_add(budget.heap_budget[index]));
+            }
+        }
+    }
 }
 
 impl VulkanRuntime {
@@ -67,6 +124,9 @@ impl VulkanRuntime {
     /// Calculate VMA allocator statistics on demand, outside the normal hot path.
     /// Image logical bytes are packed texels, not optimal-image allocation sizes.
     /// VMA covers this allocator, excluding driver/Swapchain allocations.
+    /// Native process estimates include allocations outside VMA. The optional
+    /// EXT query is direct, not VMA's cached/fallback budget estimate: VMA's
+    /// EXT_MEMORY_BUDGET flag and per-frame budget updates remain disabled.
     pub fn memory_stats(&self) -> Result<MemoryStats, RuntimeError> {
         let total = self.owner.raw.calculate_statistics().map_err(|result| {
             RuntimeError::native("vmaCalculateStatistics", self.device_name(), result)
@@ -86,8 +146,43 @@ impl VulkanRuntime {
             vma_allocation_bytes: native.allocationBytes,
             vma_block_count: native.blockCount,
             vma_block_bytes: native.blockBytes,
+            buffer_image_granularity: self.owner.device.limits().buffer_image_granularity,
+            non_coherent_atom_size: self.owner.device.limits().non_coherent_atom_size,
             ..MemoryStats::default()
         };
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceMemoryProperties2::default();
+        if self.owner.device.memory_budget_enabled() {
+            properties = properties.push_next(&mut budget);
+        }
+        // SAFETY: The physical adapter belongs to the retained Instance;
+        // properties2 is core 1.1, required by our 1.3 baseline. The optional
+        // budget structure is chained only for an enumerated/enabled extension.
+        // All query outputs remain stack-owned and live through this call.
+        unsafe {
+            self.owner
+                .device
+                .instance_raw()
+                .get_physical_device_memory_properties2(
+                    self.owner.device.physical_device(),
+                    &mut properties,
+                );
+        }
+        let memory_properties = properties.memory_properties;
+        output.set_heap_properties(
+            &memory_properties,
+            self.owner.device.memory_budget_enabled().then_some(&budget),
+        );
+        for (output, native) in output.heaps[..output.heap_count]
+            .iter_mut()
+            .zip(&total.memoryHeap)
+        {
+            let native = &native.statistics;
+            output.vma_allocation_count = native.allocationCount;
+            output.vma_allocation_bytes = native.allocationBytes;
+            output.vma_block_count = native.blockCount;
+            output.vma_block_bytes = native.blockBytes;
+        }
         for entry in &self.entries {
             let Some(physical) = &entry.physical else {
                 continue;
@@ -425,6 +520,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_budget_keeps_heaps_and_unavailable_estimates_distinct() {
+        let mut properties = vk::PhysicalDeviceMemoryProperties {
+            memory_heap_count: 3,
+            memory_type_count: 4,
+            ..Default::default()
+        };
+        properties.memory_heaps[0] = vk::MemoryHeap {
+            size: 1000,
+            flags: vk::MemoryHeapFlags::DEVICE_LOCAL,
+        };
+        properties.memory_heaps[1] = vk::MemoryHeap {
+            size: 2000,
+            flags: vk::MemoryHeapFlags::empty(),
+        };
+        properties.memory_heaps[2] = vk::MemoryHeap {
+            size: 3000,
+            flags: vk::MemoryHeapFlags::DEVICE_LOCAL,
+        };
+        // Two types share heap zero. Its capacity and budget are still counted once.
+        properties.memory_types[0].heap_index = 0;
+        properties.memory_types[1].heap_index = 0;
+        properties.memory_types[2].heap_index = 1;
+        properties.memory_types[3].heap_index = 2;
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        budget.heap_usage[..3].copy_from_slice(&[100, 200, 300]);
+        budget.heap_budget[..3].copy_from_slice(&[500, 1000, 1500]);
+        let mut snapshot = MemoryStats::default();
+        snapshot.set_heap_properties(&properties, Some(&budget));
+        assert!(snapshot.memory_budget_extension_enabled);
+        assert_eq!(snapshot.heap_count, 3);
+        assert_eq!(snapshot.process_usage_bytes, Some(400));
+        assert_eq!(snapshot.process_budget_bytes, Some(2000));
+        assert_eq!(snapshot.heaps[1].process_usage_bytes, Some(200));
+        assert_eq!(snapshot.heaps[1].capacity_bytes, 2000);
+        assert!(!snapshot.heaps[1].device_local);
+        assert_eq!(snapshot.heaps[3], MemoryHeapStats::default());
+
+        snapshot.set_heap_properties(&properties, None);
+        assert!(!snapshot.memory_budget_extension_enabled);
+        assert_eq!(snapshot.process_usage_bytes, None);
+        assert_eq!(snapshot.process_budget_bytes, None);
+        assert_eq!(snapshot.heaps[0].process_budget_bytes, None);
+        assert_eq!(snapshot.heaps[2].capacity_bytes, 3000);
+    }
+
+    #[test]
     fn timestamp_difference_uses_valid_bits_and_rejects_ambiguous_age() {
         assert_eq!(
             counter_interval(0xffff_fff0, 0x1000_0010, 28, 2.0, Duration::from_millis(1)),
@@ -554,7 +695,50 @@ mod tests {
                 assert_eq!(memory.cached_logical_bytes, 32);
                 assert!(memory.vma_block_bytes >= memory.vma_allocation_bytes);
                 assert!(memory.vma_allocation_bytes > 0);
-                assert_eq!(memory.process_budget_bytes, None);
+                let heaps = &memory.heaps[..memory.heap_count];
+                assert_eq!(
+                    heaps
+                        .iter()
+                        .map(|heap| heap.vma_allocation_bytes)
+                        .sum::<u64>(),
+                    memory.vma_allocation_bytes
+                );
+                assert_eq!(
+                    heaps.iter().map(|heap| heap.vma_block_bytes).sum::<u64>(),
+                    memory.vma_block_bytes
+                );
+                assert_eq!(
+                    heaps
+                        .iter()
+                        .map(|heap| heap.vma_allocation_count)
+                        .sum::<u32>(),
+                    memory.vma_allocation_count
+                );
+                assert_eq!(
+                    heaps.iter().map(|heap| heap.vma_block_count).sum::<u32>(),
+                    memory.vma_block_count
+                );
+                assert_eq!(
+                    memory.buffer_image_granularity,
+                    runtime.owner.device.limits().buffer_image_granularity
+                );
+                assert_eq!(
+                    memory.non_coherent_atom_size,
+                    runtime.owner.device.limits().non_coherent_atom_size
+                );
+                for heap in heaps {
+                    assert_eq!(
+                        heap.process_usage_bytes.is_some(),
+                        memory.memory_budget_extension_enabled
+                    );
+                    assert_eq!(
+                        heap.process_budget_bytes.is_some(),
+                        memory.memory_budget_extension_enabled
+                    );
+                    if let Some(budget) = heap.process_budget_bytes {
+                        assert!(budget > 0 && budget <= heap.capacity_bytes);
+                    }
+                }
                 runtime.set_profiling(true).unwrap();
                 assert!(Arc::ptr_eq(
                     &query_owner,

@@ -27,6 +27,9 @@ struct State {
     debug_lookups: usize,
     property_queries: usize,
     max_draw_indexed_index_value: u32,
+    memory_budget_supported: bool,
+    fail_extension_query: bool,
+    create_extensions: Vec<String>,
 }
 
 thread_local! {
@@ -130,6 +133,44 @@ fn indexed_draw_limit_preserves_the_reported_value_and_is_cached() {
 }
 
 #[test]
+fn optional_budget_is_enabled_only_when_advertised() {
+    for supported in [false, true] {
+        let instance = instance(false);
+        STATE.with(|state| state.borrow_mut().memory_budget_supported = supported);
+        let owner = VulkanDevice::create_selected(instance, selected()).unwrap();
+        assert_eq!(owner.memory_budget_enabled(), supported);
+        STATE.with(|state| {
+            assert_eq!(
+                state.borrow().create_extensions,
+                if supported {
+                    vec!["VK_EXT_memory_budget"]
+                } else {
+                    vec![]
+                }
+            );
+        });
+    }
+}
+
+#[test]
+fn failed_optional_capability_query_preserves_cause_without_creating_device() {
+    let instance = instance(false);
+    STATE.with(|state| state.borrow_mut().fail_extension_query = true);
+    let error = VulkanDevice::create_selected(instance, selected())
+        .err()
+        .unwrap();
+    assert!(matches!(
+        error,
+        DeviceInitError::Vulkan {
+            operation: "vkEnumerateDeviceExtensionProperties(memory budget)",
+            result: vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+            ..
+        }
+    ));
+    STATE.with(|state| assert_eq!(state.borrow().events, [Event::DestroyInstance]));
+}
+
+#[test]
 #[cfg(feature = "vulkan-diagnostics")]
 fn queue_naming_failure_retires_the_created_device_and_preserves_cause() {
     let instance = instance(false);
@@ -221,6 +262,17 @@ unsafe extern "system" fn get_instance_proc_addr(
     // SAFETY: ash supplies a live NUL-terminated lookup name.
     let name = unsafe { CStr::from_ptr(name) };
     match name.to_bytes() {
+        b"vkEnumerateDeviceExtensionProperties" => {
+            let function: vk::PFN_vkEnumerateDeviceExtensionProperties =
+                enumerate_device_extension_properties;
+            // SAFETY: ash restores the exact extension-enumeration signature.
+            Some(unsafe {
+                std::mem::transmute::<
+                    vk::PFN_vkEnumerateDeviceExtensionProperties,
+                    unsafe extern "system" fn(),
+                >(function)
+            })
+        }
         b"vkGetPhysicalDeviceProperties2" => {
             let function: vk::PFN_vkGetPhysicalDeviceProperties2 = get_physical_device_properties2;
             // SAFETY: ash restores the exact property-query signature.
@@ -250,6 +302,38 @@ unsafe extern "system" fn get_instance_proc_addr(
         }
         _ => None,
     }
+}
+
+unsafe extern "system" fn enumerate_device_extension_properties(
+    _physical_device: vk::PhysicalDevice,
+    _layer_name: *const c_char,
+    count: *mut u32,
+    properties: *mut vk::ExtensionProperties,
+) -> vk::Result {
+    let (supported, fail) = STATE.with(|state| {
+        let state = state.borrow();
+        (state.memory_budget_supported, state.fail_extension_query)
+    });
+    if fail {
+        return vk::Result::ERROR_OUT_OF_HOST_MEMORY;
+    }
+    // SAFETY: ash supplies a live count output and, for the second call, the
+    // storage requested by the first count. Only our optional extension exists.
+    unsafe { *count = u32::from(supported) };
+    if supported && !properties.is_null() {
+        let mut extension = vk::ExtensionProperties::default();
+        for (output, byte) in extension
+            .extension_name
+            .iter_mut()
+            .zip(ash::ext::memory_budget::NAME.to_bytes_with_nul())
+        {
+            *output = *byte as c_char;
+        }
+        extension.spec_version = 1;
+        // SAFETY: The caller reserved the one advertised output element.
+        unsafe { properties.write(extension) };
+    }
+    vk::Result::SUCCESS
 }
 
 unsafe extern "system" fn get_physical_device_properties2(
@@ -287,10 +371,26 @@ unsafe extern "system" fn create_device(
     // SAFETY: The real constructor keeps its create info and queue array live
     // through this call. The API contract requires at least one queue request.
     let queue = unsafe { &*(*create_info).p_queue_create_infos };
+    // SAFETY: The helper retains the pointer array and static C-string names.
+    let extensions = unsafe {
+        std::slice::from_raw_parts(
+            (*create_info).pp_enabled_extension_names,
+            (*create_info).enabled_extension_count as usize,
+        )
+    }
+    .iter()
+    .map(|name| {
+        // SAFETY: Each enumerated name is a live NUL-terminated C string.
+        unsafe { CStr::from_ptr(*name) }
+            .to_string_lossy()
+            .into_owned()
+    })
+    .collect();
     let fail = STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.events.push(Event::CreateDevice);
         state.create_request = Some((physical_device, queue.queue_family_index, queue.queue_count));
+        state.create_extensions = extensions;
         state.fail_create
     });
     if fail {

@@ -45,7 +45,7 @@ use super::resources::{DeviceBuffer, DeviceImage};
 use crate::graph::provenance::{self, BufferProvenance};
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
 pub use frames::{FrameCompletion, FrameId, FrameSubmission};
-pub use metrics::{MemoryStats, StagingMemoryStats};
+pub use metrics::{MemoryHeapStats, MemoryStats, StagingMemoryStats};
 #[cfg(all(feature = "presentation", windows))]
 pub use presentation::Presenter;
 use storage::StoragePool;

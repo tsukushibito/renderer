@@ -328,12 +328,13 @@ fn with_create_info<T>(
     queue_family_index: u32,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
-    with_presentation_create_info(queue_family_index, false, create)
+    with_presentation_create_info(queue_family_index, false, false, create)
 }
 
 fn with_presentation_create_info<T>(
     queue_family_index: u32,
     presentation: bool,
+    memory_budget: bool,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
     let priorities = [1.0];
@@ -346,18 +347,29 @@ fn with_presentation_create_info<T>(
         .dynamic_rendering(true);
     let mut maintenance =
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
-    let extensions = [
-        ash::khr::swapchain::NAME.as_ptr(),
-        ash::ext::swapchain_maintenance1::NAME.as_ptr(),
-    ];
+    let mut extensions = Vec::new();
+    if presentation {
+        extensions.extend([
+            ash::khr::swapchain::NAME,
+            ash::ext::swapchain_maintenance1::NAME,
+        ]);
+    }
+    if memory_budget {
+        extensions.push(ash::ext::memory_budget::NAME);
+    }
+    extensions.sort_unstable();
+    extensions.dedup();
+    let extension_names = extensions
+        .iter()
+        .map(|name| name.as_ptr())
+        .collect::<Vec<_>>();
     let mut create_info = vk::DeviceCreateInfo::default()
         .queue_create_infos(&queues)
+        .enabled_extension_names(&extension_names)
         .push_next(&mut features12)
         .push_next(&mut features13);
     if presentation {
-        create_info = create_info
-            .enabled_extension_names(&extensions)
-            .push_next(&mut maintenance);
+        create_info = create_info.push_next(&mut maintenance);
     }
     create(&create_info)
 }
@@ -372,6 +384,7 @@ pub(super) struct VulkanDevice {
     selected: SelectedDevice,
     max_buffer_size: vk::DeviceSize,
     limits: vk::PhysicalDeviceLimits,
+    memory_budget_enabled: bool,
     queue: vk::Queue,
     queue_lock: Mutex<()>,
     state: AtomicU8,
@@ -607,6 +620,10 @@ impl VulkanDevice {
         &self.limits
     }
 
+    pub(super) fn memory_budget_enabled(&self) -> bool {
+        self.memory_budget_enabled
+    }
+
     pub(super) fn name(&self) -> &str {
         &self.selected.info.name
     }
@@ -728,6 +745,22 @@ impl VulkanDevice {
         // this adapter's actual value rather than assuming either 24 or 32 bits.
         let limits = properties.properties.limits;
         let max_buffer_size = maintenance4.max_buffer_size;
+        // Optional observation only. Vulkan 1.3 supplies the properties2
+        // dependency in core; this extension has no feature to enable.
+        // SAFETY: The selected adapter belongs to this retained Instance.
+        let extensions = unsafe {
+            instance
+                .raw()
+                .enumerate_device_extension_properties(selected.physical_device)
+        }
+        .map_err(|result| DeviceInitError::Vulkan {
+            operation: "vkEnumerateDeviceExtensionProperties(memory budget)",
+            device_name: Some(selected.info.name.clone()),
+            result,
+        })?;
+        let memory_budget_enabled = extensions.iter().any(|extension| {
+            extension.extension_name_as_c_str() == Ok(ash::ext::memory_budget::NAME)
+        });
         tracing::info!(target: LOG_TARGET, device = %selected.info.name,
             device_type = ?selected.info.device_type, family = selected.queue_family_index,
             queue_index = 0, queue_count = 1,
@@ -737,12 +770,14 @@ impl VulkanDevice {
         let device = with_presentation_create_info(
             selected.queue_family_index,
             presentation,
+            memory_budget_enabled,
             |create_info| {
                 #[cfg(feature = "memory-profiling")]
                 crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
                 // SAFETY: Selected features and queue family were queried from this
                 // Instance/device. All create-info storage remains live for the call.
-                // No extensions, children, custom allocator, or work are introduced.
+                // Enabled extensions were enumerated; their dependencies are
+                // either core 1.3 or required by the presentation selector.
                 unsafe {
                     instance
                         .raw()
@@ -765,6 +800,7 @@ impl VulkanDevice {
             selected,
             max_buffer_size,
             limits,
+            memory_budget_enabled,
             queue: vk::Queue::null(),
             queue_lock: Mutex::new(()),
             state: AtomicU8::new(DeviceState::Active as u8),
@@ -1019,6 +1055,36 @@ mod tests {
             assert!(seen.contains(&vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES));
             assert!(seen.contains(&vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES));
         });
+    }
+
+    #[test]
+    fn memory_budget_is_optional_and_coexists_with_presentation_extensions() {
+        for presentation in [false, true] {
+            with_presentation_create_info(0, presentation, true, |info| {
+                // SAFETY: The helper retains the extension pointers and C strings.
+                let pointers = unsafe {
+                    std::slice::from_raw_parts(
+                        info.pp_enabled_extension_names,
+                        info.enabled_extension_count as usize,
+                    )
+                };
+                let names = pointers
+                    .iter()
+                    .map(|pointer| {
+                        // SAFETY: Each pointer refers to a static extension C string.
+                        unsafe { std::ffi::CStr::from_ptr(*pointer) }
+                    })
+                    .collect::<Vec<_>>();
+                assert!(names.contains(&ash::ext::memory_budget::NAME));
+                assert_eq!(names.len(), if presentation { 3 } else { 1 });
+                assert_eq!(names.contains(&ash::khr::swapchain::NAME), presentation);
+                assert_eq!(
+                    names.contains(&ash::ext::swapchain_maintenance1::NAME),
+                    presentation
+                );
+                assert!(names.windows(2).all(|pair| pair[0] < pair[1]));
+            });
+        }
     }
 
     #[test]

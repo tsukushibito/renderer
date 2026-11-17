@@ -46,9 +46,10 @@ pub use backends::vulkan::engine::{
 
 #[cfg(feature = "vulkan")]
 pub use backends::vulkan::graph::{
-    DeviceInfo, FrameCapacity, FrameCompletion, FrameId, FrameSubmission, MemoryStats,
-    ResourceClass, RuntimeConfig, RuntimeError, RuntimeErrorKind, RuntimeStats, StagingMemoryStats,
-    Submission, SubmissionResult, ValidationMonitor, ValidationReport, VulkanRuntime,
+    DeviceInfo, FrameCapacity, FrameCompletion, FrameId, FrameSubmission, MemoryHeapStats,
+    MemoryStats, ResourceClass, RuntimeConfig, RuntimeError, RuntimeErrorKind, RuntimeStats,
+    StagingMemoryStats, Submission, SubmissionResult, ValidationMonitor, ValidationReport,
+    VulkanRuntime,
 };
 
 #[cfg(feature = "vulkan")]
