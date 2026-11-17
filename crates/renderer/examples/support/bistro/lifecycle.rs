@@ -481,16 +481,40 @@ pub(super) fn execute<B: Backend>(
         let old_buffer = resident.materials[material_index].clone();
         let (stale_pool, stale_image, stale_buffer) = stale_plans(&old_image, &old_buffer)?;
         backend.delete(old_image.key())?;
-        backend.delete(old_buffer.key())?;
         resident.images[image_index] =
             upload_texture(backend, &mut upload_pool, desc, &changed_texture)?;
+        require_stale(backend, &stale_image)?;
+        resident.images[image_index] = backend.refresh_image(resident.images[image_index].key())?;
+        // Isolate the texture binding: the original material is still registered
+        // and the earlier frame owner has not observed completion. A simultaneous
+        // material-factor change must not mask a missing texture-reference update.
+        let built = build_frame(
+            resident,
+            scene,
+            options,
+            conditions,
+            cameras[1],
+            &mut pool,
+            &mut workspace,
+        )?;
+        let texture_only = finish_frame(accept_frame(backend, resident, built)?, options)?;
+        let texture_hdr_changed = texture_only.changed_pixels(&references[1], 0);
+        let texture_sdr_changed = texture_only.changed_pixels(&references[1], 1);
+        if texture_hdr_changed == 0 || texture_sdr_changed == 0 {
+            return Err("replacement texture binding did not change the diagnostic View".into());
+        }
+        if texture_only.bytes[2] != references[1].bytes[2] {
+            return Err("texture-only replacement changed scene depth".into());
+        }
+        let texture_only_report = texture_only.save(
+            &directory.join(format!("cycle-{cycle}-texture-only")),
+            options,
+        )?;
+        backend.delete(old_buffer.key())?;
         let mut new_owners = Vec::new();
         resident.materials[material_index] =
             pipeline::upload_buffer(backend, &mut new_owners, &changed_material)?;
-        require_stale(backend, &stale_image)?;
         require_stale(backend, &stale_buffer)?;
-        // Refresh the newly registered versions explicitly at the caller boundary.
-        resident.images[image_index] = backend.refresh_image(resident.images[image_index].key())?;
         resident.materials[material_index] =
             backend.refresh_buffer(resident.materials[material_index].key())?;
         let old_capture = finish_frame(old_frame, options)?;
@@ -510,6 +534,11 @@ pub(super) fn execute<B: Backend>(
         let changed = finish_frame(accept_frame(backend, resident, built)?, options)?;
         let hdr_changed = changed.changed_pixels(&references[1], 0);
         let sdr_changed = changed.changed_pixels(&references[1], 1);
+        let material_hdr_changed = changed.changed_pixels(&texture_only, 0);
+        let material_sdr_changed = changed.changed_pixels(&texture_only, 1);
+        if material_hdr_changed == 0 || material_sdr_changed == 0 {
+            return Err("replacement material binding did not change the texture-only View".into());
+        }
         if hdr_changed == 0 || sdr_changed == 0 {
             return Err("replacement material is not visible in the diagnostic View".into());
         }
@@ -557,7 +586,10 @@ pub(super) fn execute<B: Backend>(
         memory_samples.push(memory.clone());
         cycles.push(json!({"cycle":cycle,"old_pending_matches":true,"stale_image_rejected":true,"stale_buffer_rejected":true,
             "changed_pixels":{"hdr":hdr_changed,"sdr":sdr_changed},"depth_unchanged":true,"restored_matches":true,
-            "changed_captures":changed_report,"restored_captures":restored_report,"mip_probes":probes,"memory":memory}));
+            "texture_changed_pixels":{"hdr":texture_hdr_changed,"sdr":texture_sdr_changed},
+            "material_changed_pixels":{"hdr":material_hdr_changed,"sdr":material_sdr_changed},
+            "texture_only_captures":texture_only_report,"changed_captures":changed_report,
+            "restored_captures":restored_report,"mip_probes":probes,"memory":memory}));
     }
     let plateau = super::memory::plateau(&memory_samples)?;
     let mut stages = stages;
