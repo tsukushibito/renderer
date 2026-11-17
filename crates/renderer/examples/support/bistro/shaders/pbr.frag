@@ -183,10 +183,13 @@ void main() {
     vec2 brdf = textureLod(sampler2D(brdf_image, environment_sampler), lut_uv, 0.0).rg;
     vec3 indirect_diffuse = irradiance * diffuse_color / PI * ao;
     vec3 indirect_specular = prefiltered * (f0 * brdf.x + brdf.y);
+    // At exactly zero N dot L, finite shadow visibility can only multiply
+    // zero. Shadow sampling uses explicit LOD, so this branch needs no gradients.
+    float shadow_visibility = 1.0;
+    if (nl != 0.0) { shadow_visibility = sun_visibility(geometric_normal, l); }
     // AO is an authored diffuse-environment term, not a direct-light shadow or
     // an attenuation of emissive/specular contributions.
-    vec3 color = (diffuse + specular) * camera.light_color.rgb * nl *
-        sun_visibility(geometric_normal, l)
+    vec3 color = (diffuse + specular) * camera.light_color.rgb * nl * shadow_visibility
         + (indirect_diffuse + indirect_specular) * max(camera.environment.x, 0.0) + emissive;
     // The ideal low-roughness peak may exceed binary16's finite range. Preserve
     // finite linear target values; final SDR clamping remains a separate pass.
