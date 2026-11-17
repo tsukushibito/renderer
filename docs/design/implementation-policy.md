@@ -1401,9 +1401,11 @@ CPU/GPU計測と未確認範囲は[現行検証](../verification/current.md#bist
 #### Godotを基準にしたB2の暫定性能予算
 
 `renderer-yxz`でGodot 4.7.2 Forward+/Vulkanの全量Bistroを基準にする。
-同じ機材・1080p・固定route・影/IBL/AA/Bloomなしの範囲で、CPU描画p95 3.5ms、GPU p95 5.0msを
+同じ機材・1080p・固定route・影/IBL/AA/Bloomなしの範囲で、旧scopeのCPU参考p95 3.5ms、GPU p95 5.0msを
 Godot相当の予算の目安とする。独立3 runのうち最も遅いp95を0.5ms単位で切り上げた値であり、
 将来の機能込み、他機材、異なるshader品質、Graph単体のoverheadに共通の固定上限ではない。
+旧CPU値も現在setupと遅延viewportの観測であり、Renderer全経路へ3.5msを直接課す根拠にはしない。
+全process charged CPU/frameを用いる現行B3の正式指標とは、機能条件も集計範囲も分ける。
 CPUでは利用側のbuild/compileとruntimeのprepare/record/submit/retireを含む描画経路全体を評価し、
 GPU待機は別計上する。並列phaseを重複加算せず、CPU/GPUの和からFPSを計算しない。
 

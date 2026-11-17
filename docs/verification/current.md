@@ -180,6 +180,11 @@ viewport CPU/GPUは以前の結果である。producer frame IDはscriptへ公�
 [executeと待機](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/rendering_device.cpp#L8187-L8220)である。
 Safeの[main-thread描画](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/main/main.cpp#L2775-L2786)でも
 [culling workerとjoin](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_scene_cull.cpp#L3438-L3453)は残る。
+別のverbose metadata probeではworker 20、max low-priority 6、実RD ring 2を観測した。
+formal runの実worker数はscriptへ非公開のため設定値-1と区別する。ring容量2もRendererのhost未回収2件と同じ状態ではない。
+verboseが表示する[既存RGB8→RGBA8変換](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_rd/storage_rd/texture_storage.cpp#L2303-L2312)の
+[通知条件](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_rd/storage_rd/texture_storage.cpp#L2852-L2855)も確認し、
+そのsmokeを正式値から除外した。素材を書き換えず従来のverbosityへ戻し、一般のwarning拒否は維持する。
 
 比較用の`render_pre_post_ms`はSafe/main-threadの同期的draw全体を囲み、native lowering・submit・待機/回収も含む。
 前後のmainloopは含まないため、正式CPU基準は両engineの全process・全thread charged CPU/N平均とする。
