@@ -5,8 +5,12 @@ import math
 from pathlib import Path
 import statistics
 
-from benchmark import digest, read, validate_report
-from profiles import compare_settings, orientation_fixture, settings
+if __package__:
+    from .benchmark import digest, read, validate_report
+    from .profiles import compare_settings, orientation_fixture, settings
+else:
+    from benchmark import digest, read, validate_report
+    from profiles import compare_settings, orientation_fixture, settings
 
 
 def aggregate(runs):

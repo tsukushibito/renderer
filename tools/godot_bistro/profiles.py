@@ -97,6 +97,8 @@ def verify_ibl_manifest(path, conditions, read, digest):
                 or [source["width"], source["height"]] != [4096, 2048]
                 or light["strength"] != 3 or light["yaw_degrees"] != 0
                 or manifest["recipe"]["cap"] != 4
+                or manifest["max_prefilter_lod"] != 4
+                or manifest["recipe"]["max_prefilter_lod"] != 4
                 or [panorama["width"], panorama["height"]] != [4096, 2048]
                 or panorama["format"] != "radiance-rgbe"
                 or panorama["rotation_columns"] != 1024

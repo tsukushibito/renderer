@@ -142,7 +142,8 @@ class EvidenceTests(unittest.TestCase):
             manifest = {
                 "schema_version": 1,
                 "source": {"sha256": CONDITIONS["lighting"]["ibl"]["sha256"], "width": 4096, "height": 2048},
-                "lighting": {"strength": 3, "yaw_degrees": 0}, "recipe": {"cap": 4},
+                "lighting": {"strength": 3, "yaw_degrees": 0},
+                "max_prefilter_lod": 4, "recipe": {"cap": 4, "max_prefilter_lod": 4},
                 "godot_panorama": {"path": image.name, "sha256": digest(image),
                     "byte_length": image.stat().st_size, "width": 4096, "height": 2048,
                     "format": "radiance-rgbe", "rotation_columns": 1024,
