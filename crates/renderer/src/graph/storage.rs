@@ -6,6 +6,7 @@ use super::{
 };
 use std::{
     cell::UnsafeCell,
+    collections::HashMap,
     fmt,
     ops::{Deref, Range},
     sync::Arc,
@@ -101,7 +102,9 @@ pub struct GraphStorage {
     pub(crate) passes: Vec<Pass>,
     pub(crate) exports: Vec<usize>,
     pub(super) exported: Vec<bool>,
-    pub(super) imports: Vec<(ResourceKey, usize)>,
+    // One entry per imported resource; reserved for the complete resource limit.
+    // Resource indices still follow caller order, never hash-table iteration.
+    pub(super) imports: HashMap<ResourceKey, usize>,
     pub(super) accesses: Vec<ResourceAccess>,
     pub(super) dependencies: Vec<Dependency>,
     pub(super) initial_ranges: Vec<Range<u64>>,
@@ -137,6 +140,14 @@ impl GraphStorage {
     fn new(capacity: GraphCapacity) -> Result<Self, GraphError> {
         let mut raster_ranges = buffer(capacity.resources, GraphCapacityKind::Resources)?;
         raster_ranges.resize(capacity.resources, [0; 2]);
+        let mut imports = HashMap::new();
+        imports.try_reserve(capacity.resources).map_err(|_| {
+            capacity_error(
+                GraphCapacityKind::Resources,
+                capacity.resources,
+                Some(capacity.resources),
+            )
+        })?;
         let mut raster_binding_seen = buffer(capacity.bindings, GraphCapacityKind::Bindings)?;
         raster_binding_seen.resize(capacity.bindings, false);
         Ok(Self {
@@ -145,7 +156,7 @@ impl GraphStorage {
             passes: buffer(capacity.passes, GraphCapacityKind::Passes)?,
             exports: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             exported: buffer(capacity.resources, GraphCapacityKind::Resources)?,
-            imports: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            imports,
             accesses: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
             dependencies: buffer(capacity.dependencies, GraphCapacityKind::Dependencies)?,
             initial_ranges: buffer(capacity.initial_ranges, GraphCapacityKind::InitialRanges)?,

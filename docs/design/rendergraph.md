@@ -545,6 +545,11 @@ bufferの非ゼロbyte数、画像のextent／mip／layerとbyte数、初期化�
 buffer範囲tokenは貸出中に`Arc::get_mut`で書換え不能な`ImportRanges`を保持する。
 cloneと通常のGraph importでは保証済みdescriptor／範囲を再走査せず、必要な予約領域へのcaptureを行う。
 同じkeyの繰返しimportで異なるdescriptor／revision／内容を渡した場合の拒否は維持する。
+keyの検索表はresource上限分をGraphPool準備時に予約する。新規登録は利用側の呼出順で
+resource indexを決め、HashMapの列挙順は使わない。key順が交錯しても、整列配列への逐次挿入と
+後続要素の移動は発生しない。各keyが一つのresourceを占めるため、resource上限の検査により
+通常frameの検索表の拡張も防ぐ。resetはbucketを保持するがcontrol領域のclearを伴う。
+整列Vecより準備時のmetadata容量を使う代わりに、平均的な定数時間の検索・追加を選んだ。
 これらはsnapshot内部の形式・範囲の保証であり、runtimeのowner／世代／revisionによる
 鮮度照合、native容量・実完了・失敗処理を省略するものではない。
 write・clear・discard・deleteや世代の再利用はcanonical状態を更新・失効し、

@@ -487,9 +487,7 @@ impl Graph {
         revision: u64,
         initial: &[Range<u64>],
     ) -> Result<usize, GraphError> {
-        let position = self.imports.binary_search_by_key(&key, |&(key, _)| key);
-        if let Ok(position) = position {
-            let index = self.imports[position].1;
+        if let Some(&index) = self.imports.get(&key) {
             let existing = &self.resources[index];
             if existing.desc != desc
                 || existing.import_revision != revision
@@ -508,9 +506,10 @@ impl Graph {
         // changed runtime revision issues another snapshot and is checked again
         // at submission. Repeated-import consistency above remains dynamic.
         let index = self.add_resource(name, desc, Some(key), revision, initial)?;
-        self.data_mut()
-            .imports
-            .insert(position.unwrap_err(), (key, index));
+        // A new key owns one resource. add_resource enforces the prepared
+        // resource limit, and the table reserved that full limit at creation;
+        // insertion therefore cannot grow it on a frame path.
+        self.data_mut().imports.insert(key, index);
         Ok(index)
     }
     pub fn export_buffer(&mut self, buffer: BufferHandle) -> Result<(), GraphError> {
@@ -744,6 +743,67 @@ mod tests {
         index: 2,
         generation: 1,
     };
+
+    #[test]
+    fn unsorted_imports_keep_identity_at_capacity_and_across_pool_reuse() {
+        let mut ranges = super::super::ImportRangesPool::new(1, 1).unwrap();
+        let initialized = ranges.capture(std::slice::from_ref(&(0..4))).unwrap();
+        let sources = [17, 3, 11, 5].map(|index| {
+            ImportBuffer::new(
+                ResourceKey {
+                    index,
+                    ..SNAPSHOT_KEY
+                },
+                1,
+                BufferDesc { size: 4 },
+                initialized.clone(),
+            )
+            .unwrap()
+        });
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                resources: 3,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut previous = None;
+        for _ in 0..3 {
+            let mut graph = pool.begin().unwrap();
+            let handles =
+                [0, 1, 2].map(|index| graph.import_buffer("input", &sources[index]).unwrap());
+            if let Some(old) = previous {
+                assert_eq!(
+                    graph.export_buffer(old).unwrap_err().kind(),
+                    GraphErrorKind::WrongOwner
+                );
+            }
+            for index in (0..3).rev() {
+                assert_eq!(
+                    graph.import_buffer("alias", &sources[index]).unwrap(),
+                    handles[index]
+                );
+            }
+            let error = graph.import_buffer("overflow", &sources[3]).unwrap_err();
+            assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::Resources);
+            let changed =
+                ImportBuffer::new(sources[0].key(), 2, sources[0].desc(), initialized.clone())
+                    .unwrap();
+            assert_eq!(
+                graph
+                    .import_buffer("stale alias", &changed)
+                    .unwrap_err()
+                    .kind(),
+                GraphErrorKind::InconsistentImport
+            );
+            assert_eq!(
+                graph.import_buffer("still valid", &sources[0]).unwrap(),
+                handles[0]
+            );
+            previous = Some(handles[0]);
+        }
+    }
 
     #[test]
     fn snapshots_reject_invalid_descriptions_and_noncanonical_ranges_at_issuance() {
