@@ -14,6 +14,8 @@ mod camera;
 #[cfg(windows)]
 #[path = "profile_workload/clock.rs"]
 mod clock;
+#[path = "bistro/ibl.rs"]
+mod ibl;
 #[path = "bistro/lifecycle.rs"]
 mod lifecycle;
 #[path = "bistro/memory.rs"]
@@ -24,6 +26,8 @@ mod pipeline;
 mod program;
 #[path = "bistro/run.rs"]
 mod run;
+#[path = "bistro/shadow.rs"]
+mod shadow;
 #[cfg(feature = "tracy")]
 #[path = "bistro/trace.rs"]
 mod trace;
@@ -37,6 +41,7 @@ type Error = Box<dyn std::error::Error>;
 struct Options {
     api: String,
     manifest: Option<PathBuf>,
+    ibl_manifest: Option<PathBuf>,
     fixture: bool,
     view: String,
     width: u32,
@@ -49,6 +54,9 @@ struct Options {
     force_opaque: bool,
     capture_all_views: bool,
     resource_checks: bool,
+    aa: bool,
+    shadows: bool,
+    capture_shadows: bool,
     #[cfg(feature = "tracy")]
     capture_handshake: bool,
     output: PathBuf,
@@ -59,6 +67,7 @@ impl Options {
         let mut result = Self {
             api: "vulkan".into(),
             manifest: None,
+            ibl_manifest: None,
             fixture: false,
             view: "street".into(),
             width: 1920,
@@ -71,6 +80,9 @@ impl Options {
             force_opaque: false,
             capture_all_views: false,
             resource_checks: false,
+            aa: true,
+            shadows: true,
+            capture_shadows: false,
             #[cfg(feature = "tracy")]
             capture_handshake: false,
             output: PathBuf::from(".tools/bistro-runtime"),
@@ -84,11 +96,18 @@ impl Options {
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
                 "--resource-checks" => result.resource_checks = true,
+                "--aa-off" => result.aa = false,
+                "--shadows-off" => result.shadows = false,
+                "--capture-shadow-maps" => result.capture_shadows = true,
                 #[cfg(feature = "tracy")]
                 "--capture-handshake" => result.capture_handshake = true,
                 "--api" => result.api = args.next().ok_or("--api needs vulkan or d3d12")?,
                 "--manifest" => {
                     result.manifest = Some(args.next().ok_or("--manifest needs a path")?.into())
+                }
+                "--ibl-manifest" => {
+                    result.ibl_manifest =
+                        Some(args.next().ok_or("--ibl-manifest needs a path")?.into())
                 }
                 "--view" => {
                     result.view = args.next().ok_or("--view needs a fixed name or route")?
@@ -112,7 +131,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--capture-all-views] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]

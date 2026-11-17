@@ -1,6 +1,6 @@
 //! Public Graph composition and explicit working-set budgets for this consumer.
 
-use super::{Error, Options, asset::Scene, backend::Backend, camera::Camera, program};
+use super::{Error, Options, asset::Scene, backend::Backend, camera::Camera, ibl, program, shadow};
 use renderer::{
     ImageFormat,
     graph::{
@@ -35,8 +35,19 @@ pub(super) fn image_desc(image: &super::asset::TextureImage) -> ImageDesc {
     }
 }
 
+fn environment_desc(image: &ibl::Image) -> ImageDesc {
+    ImageDesc {
+        mip_levels: image.mips.len() as u32,
+        ..ImageDesc::rgba16_float(image.width, image.height)
+    }
+}
+
 impl Budget {
-    pub fn new(scene: &Scene, options: &Options) -> Result<Self, Error> {
+    pub fn new(
+        scene: &Scene,
+        environment: &ibl::Environment,
+        options: &Options,
+    ) -> Result<Self, Error> {
         let buffer_count = scene
             .primitives
             .len()
@@ -98,6 +109,9 @@ impl Budget {
         for image in &scene.images {
             add_image(image_desc(image), 1);
         }
+        for image in environment.images() {
+            add_image(environment_desc(image), 1);
+        }
         let mut check_images = 0;
         if options.resource_checks {
             let (_, image) = super::lifecycle::selection(scene)?;
@@ -116,7 +130,7 @@ impl Budget {
         }
         add_image(
             ImageDesc::rgba16_float(options.width, options.height),
-            options.inflight,
+            options.inflight * 2,
         );
         add_image(
             ImageDesc::depth32(options.width, options.height),
@@ -126,24 +140,32 @@ impl Budget {
             ImageDesc::rgba8(options.width, options.height),
             options.inflight,
         );
-        let resources = buffer_count + scene.images.len() + 3;
+        add_image(
+            ImageDesc::depth32(
+                shadow::Parameters::default().resolution,
+                shadow::Parameters::default().resolution,
+            ),
+            options.inflight * 4,
+        );
+        let resources = buffer_count + scene.images.len() + 11;
         let physical_resources = buffer_count
             + scene.images.len()
-            + options.inflight * 3
+            + 3
+            + options.inflight * 8
             + check_images
             + usize::from(options.resource_checks);
-        let accesses = scene.primitives.len() * 10 + 128;
+        let accesses = scene.primitives.len() * 64 + 256;
         let graph = GraphCapacity {
             resources,
-            passes: 12,
+            passes: 24,
             accesses,
-            draws: scene.primitives.len() + 1,
-            bindings: scene.materials.len() * 7 + 2,
-            attachments: 12,
-            dependencies: 16,
+            draws: scene.primitives.len() * 5 + 2,
+            bindings: scene.materials.len() * 20 + 4,
+            attachments: 24,
+            dependencies: 32,
             initial_ranges: resources * 2,
             name_bytes: resources * 32 + 2048,
-            upload_bytes: 128,
+            upload_bytes: program::CAMERA_BYTES,
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
@@ -165,14 +187,35 @@ impl Budget {
             .max()
             .unwrap_or(0)
             .max(geometry_upload_bytes)
+            .max(
+                environment
+                    .images()
+                    .into_iter()
+                    .map(|image| {
+                        let mut end = 0usize;
+                        for mip in 0..image.mips.len() {
+                            let width = (image.width as usize >> mip).max(1);
+                            let height = (image.height as usize >> mip).max(1);
+                            end = end.next_multiple_of(512)
+                                + (width * 8).next_multiple_of(256) * height;
+                        }
+                        end.max(image.byte_length())
+                    })
+                    .max()
+                    .unwrap_or(0),
+            )
             .max(max_buffer_bytes as usize)
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
-        let frame_readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
+        let mut frame_readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
             + (u64::from(options.width) * 4).next_multiple_of(256) * 2)
             * u64::from(options.height)
             + 4096;
+        if options.capture_shadows {
+            let resolution = u64::from(shadow::Parameters::default().resolution);
+            frame_readback_bytes += (resolution * 4).next_multiple_of(256) * resolution * 4 + 4096;
+        }
         let readback_bytes = if options.resource_checks {
             let (_, image) = super::lifecycle::selection(scene)?;
             let image = &scene.images[image];
@@ -225,6 +268,11 @@ pub(super) struct Resident {
     pub indices: Vec<ImportBuffer>,
     pub materials: Vec<ImportBuffer>,
     pub images: Vec<ImportImage>,
+    pub environment: [ImportImage; 3],
+    pub environment_mips: [u32; 3],
+    pub environment_parameters: [f32; 3],
+    pub shadow_bounds: shadow::Bounds,
+    pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     pub resolve_vertices: ImportBuffer,
     pub resolve_indices: ImportBuffer,
@@ -317,6 +365,7 @@ impl Resident {
     pub fn upload<B: Backend>(
         backend: &mut B,
         scene: &Scene,
+        environment: &ibl::Environment,
         budget: &Budget,
         camera: &[u8; 128],
     ) -> Result<Self, Error> {
@@ -375,7 +424,9 @@ impl Resident {
                 &material.uniform,
             )?);
         }
-        let camera = upload_buffer(backend, &mut upload_owners, camera)?;
+        let mut initial_uniform = [0; program::CAMERA_BYTES];
+        initial_uniform[..128].copy_from_slice(camera);
+        let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
         let resolve_vertices = program::RESOLVE_VERTICES
             .into_iter()
             .flat_map(f32::to_le_bytes)
@@ -405,11 +456,56 @@ impl Resident {
                 eprintln!("Bistro image upload {}/{}", index + 1, scene.images.len());
             }
         }
+        let mut upload_environment = |image: &ibl::Image| -> Result<ImportImage, Error> {
+            let mut graph = pool.begin()?;
+            let target = graph.image("immutable environment", environment_desc(image))?;
+            graph.upload_image("environment import boundary", target, &image.bytes)?;
+            graph.export_image(target)?;
+            let plan = graph.compile()?;
+            let mut pending = backend.submit(&plan)?;
+            let imported = B::export_image(&pending, target)?;
+            drop(B::wait(&mut pending, super::WAIT)?);
+            drop((pending, plan));
+            Ok(imported)
+        };
+        let environment_images = [
+            upload_environment(&environment.diffuse)?,
+            upload_environment(&environment.specular)?,
+            upload_environment(&environment.brdf)?,
+        ];
+        let mut minimum = [f32::INFINITY; 3];
+        let mut maximum = [f32::NEG_INFINITY; 3];
+        if scene.vertices.is_empty() {
+            // An empty scene is a valid clear-only control, with no casters.
+            minimum = [-1.0; 3];
+            maximum = [1.0; 3];
+        }
+        for vertex in scene.vertices.as_chunks::<{ program::VERTEX_BYTES }>().0 {
+            for axis in 0..3 {
+                let value = f32::from_le_bytes(vertex[axis * 4..axis * 4 + 4].try_into().unwrap());
+                minimum[axis] = minimum[axis].min(value);
+                maximum[axis] = maximum[axis].max(value);
+            }
+        }
+        let shadow_bounds = shadow::Bounds::new(minimum, maximum)?;
         Ok(Self {
             vertices,
             indices,
             materials,
             images,
+            environment: environment_images,
+            environment_mips: [
+                environment.diffuse.mips.len() as u32,
+                environment.specular.mips.len() as u32,
+                environment.brdf.mips.len() as u32,
+            ],
+            environment_parameters: [
+                environment.strength,
+                environment.yaw_degrees.to_radians(),
+                environment.max_prefilter_lod as f32,
+            ],
+            shadow_bounds,
+            shadow_parameters: shadow::Parameters::default(),
             camera,
             resolve_vertices,
             resolve_indices,
@@ -424,6 +520,7 @@ pub(super) struct Workspace {
     materials: Vec<BufferHandle>,
     images: Vec<ImageHandle>,
     bindings: Vec<RasterBindings>,
+    shadow_bindings: Vec<RasterBindings>,
     blended: Vec<usize>,
 }
 impl Workspace {
@@ -434,6 +531,7 @@ impl Workspace {
             materials: Vec::with_capacity(scene.materials.len()),
             images: Vec::with_capacity(scene.images.len()),
             bindings: Vec::with_capacity(scene.materials.len()),
+            shadow_bindings: Vec::with_capacity(scene.materials.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
         }
     }
@@ -443,6 +541,7 @@ pub(super) struct Built {
     pub output: ImageHandle,
     pub camera: BufferHandle,
     pub captures: Option<[PassHandle; 3]>,
+    pub shadow_captures: Option<[PassHandle; 4]>,
     pub draws: usize,
 }
 
@@ -461,6 +560,28 @@ pub(super) fn build(
     background: [f32; 3],
     capture: bool,
 ) -> Result<Built, Error> {
+    let read_word =
+        |word: usize| f32::from_le_bytes(camera_bytes[word * 4..word * 4 + 4].try_into().unwrap());
+    let shadow_data = shadow::calculate(
+        camera,
+        options.width as f32 / options.height as f32,
+        read_word(19),
+        read_word(23),
+        [read_word(20), read_word(21), read_word(22)],
+        resident.shadow_bounds,
+        resident.shadow_parameters,
+    )?;
+    let mut frame_uniform = [0u8; program::CAMERA_BYTES];
+    frame_uniform[..128].copy_from_slice(camera_bytes);
+    for (word, value) in resident
+        .environment_parameters
+        .into_iter()
+        .chain([if options.shadows { 1.0 } else { 0.0 }])
+        .enumerate()
+    {
+        frame_uniform[112 + word * 4..116 + word * 4].copy_from_slice(&value.to_le_bytes());
+    }
+    frame_uniform[128..].copy_from_slice(&shadow_data.uniform_bytes());
     let mut graph = pool.begin()?;
     let (uniform, resolve_vertices, resolve_indices) = {
         #[cfg(feature = "tracy")]
@@ -471,6 +592,7 @@ pub(super) fn build(
         workspace.materials.clear();
         workspace.images.clear();
         workspace.bindings.clear();
+        workspace.shadow_bindings.clear();
         workspace.blended.clear();
         for value in &resident.vertices {
             workspace
@@ -493,13 +615,111 @@ pub(super) fn build(
                 .push(graph.import_image("material image", value)?);
         }
         let uniform = graph.import_buffer("camera", &resident.camera)?;
-        graph.upload_buffer("camera update boundary", uniform, 0, camera_bytes)?;
+        graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
         graph.export_buffer(uniform)?;
         let resolve_vertices =
             graph.import_buffer("resolve vertices", &resident.resolve_vertices)?;
         let resolve_indices = graph.import_buffer("resolve indices", &resident.resolve_indices)?;
         (uniform, resolve_vertices, resolve_indices)
     };
+    let environment = [
+        graph.import_image("diffuse environment", &resident.environment[0])?,
+        graph.import_image("specular environment", &resident.environment[1])?,
+        graph.import_image("BRDF integration", &resident.environment[2])?,
+    ];
+    let mut make_shadow = || {
+        graph.image(
+            "sun cascade",
+            ImageDesc::depth32(
+                resident.shadow_parameters.resolution,
+                resident.shadow_parameters.resolution,
+            ),
+        )
+    };
+    let shadows = [
+        make_shadow()?,
+        make_shadow()?,
+        make_shadow()?,
+        make_shadow()?,
+    ];
+    let shadow_views = [
+        graph.image_view(shadows[0], 0, 0)?,
+        graph.image_view(shadows[1], 0, 0)?,
+        graph.image_view(shadows[2], 0, 0)?,
+        graph.image_view(shadows[3], 0, 0)?,
+    ];
+    let shadow_program = program::shadow_program();
+    for (index, material) in scene.materials.iter().enumerate() {
+        let base = material.textures[0];
+        let bindings = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    offset: 0,
+                    size: program::CAMERA_BYTES as u64,
+                },
+            },
+            Binding {
+                group: 0,
+                binding: 1,
+                resource: BindingResource::Buffer {
+                    buffer: workspace.materials[index],
+                    offset: 0,
+                    size: 64,
+                },
+            },
+            Binding {
+                group: 1,
+                binding: 0,
+                resource: BindingResource::ImageView(graph.sampled_image_view(
+                    workspace.images[base],
+                    0,
+                    scene.images[base].mips.len() as u32,
+                )?),
+            },
+            Binding {
+                group: 1,
+                binding: 4,
+                resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+            },
+        ];
+        workspace
+            .shadow_bindings
+            .push(graph.raster_bindings(&shadow_program, &bindings)?);
+    }
+    for (cascade, view) in shadow_views.into_iter().enumerate() {
+        let parameters = RasterConstants::new(&[cascade as u32])?;
+        let draws = (0..scene.primitives.len())
+            .filter(|&index| {
+                let material = &scene.materials[scene.primitives[index].material];
+                options.shadows && !material.blend && (!options.alpha_only || material.alpha_zero)
+            })
+            .map(|index| {
+                let primitive = &scene.primitives[index];
+                RasterDraw {
+                    bindings: Some(workspace.shadow_bindings[primitive.material]),
+                    vertices: workspace.vertices[index],
+                    indices: workspace.indices[index],
+                    index_count: primitive.index_count,
+                    parameters,
+                }
+            });
+        graph.raster(
+            "sun shadow depth",
+            &shadow_program,
+            draws,
+            RasterAttachments {
+                colors: &[],
+                depth: Some(Attachment {
+                    view,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+        )?;
+    }
     {
         #[cfg(feature = "tracy")]
         let _bindings = tracy_client::Client::running()
@@ -519,7 +739,7 @@ pub(super) fn build(
                     resource: BindingResource::Buffer {
                         buffer: uniform,
                         offset: 0,
-                        size: 128,
+                        size: program::CAMERA_BYTES as u64,
                     },
                 },
                 Binding {
@@ -555,6 +775,63 @@ pub(super) fn build(
                     group: 1,
                     binding: 4,
                     resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+                },
+                Binding {
+                    group: 2,
+                    binding: 0,
+                    resource: BindingResource::ImageView(graph.sampled_image_view(
+                        environment[0],
+                        0,
+                        resident.environment_mips[0],
+                    )?),
+                },
+                Binding {
+                    group: 2,
+                    binding: 1,
+                    resource: BindingResource::ImageView(graph.sampled_image_view(
+                        environment[1],
+                        0,
+                        resident.environment_mips[1],
+                    )?),
+                },
+                Binding {
+                    group: 2,
+                    binding: 2,
+                    resource: BindingResource::ImageView(graph.sampled_image_view(
+                        environment[2],
+                        0,
+                        resident.environment_mips[2],
+                    )?),
+                },
+                Binding {
+                    group: 2,
+                    binding: 3,
+                    resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeatUClampV),
+                },
+                Binding {
+                    group: 3,
+                    binding: 0,
+                    resource: BindingResource::ImageView(shadow_views[0]),
+                },
+                Binding {
+                    group: 3,
+                    binding: 1,
+                    resource: BindingResource::ImageView(shadow_views[1]),
+                },
+                Binding {
+                    group: 3,
+                    binding: 2,
+                    resource: BindingResource::ImageView(shadow_views[2]),
+                },
+                Binding {
+                    group: 3,
+                    binding: 3,
+                    resource: BindingResource::ImageView(shadow_views[3]),
+                },
+                Binding {
+                    group: 3,
+                    binding: 4,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
                 },
             ];
             let program = if material.blend {
@@ -695,7 +972,12 @@ pub(super) fn build(
             0,
         )
     });
-    let resolve_bindings = [
+    let tone = graph.image(
+        "Neutral display linear",
+        ImageDesc::rgba16_float(options.width, options.height),
+    )?;
+    let tone_program = program::tone_program();
+    let tone_bindings = [
         Binding {
             group: 0,
             binding: 0,
@@ -707,10 +989,50 @@ pub(super) fn build(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
-    let resolve_program = program::resolve_program();
+    let tone_bindings = graph.raster_bindings(&tone_program, &tone_bindings)?;
+    graph.raster(
+        "fixed exposure and PBR Neutral",
+        &tone_program,
+        [RasterDraw {
+            bindings: Some(tone_bindings),
+            vertices: resolve_vertices,
+            indices: resolve_indices,
+            index_count: 3,
+            parameters: RasterConstants::default(),
+        }],
+        RasterAttachments {
+            colors: &[Attachment {
+                view: graph.image_view(tone, 0, 0)?,
+                load: LoadOp::Clear([0.0; 4]),
+                store: StoreOp::Store,
+            }],
+            depth: None,
+        },
+    )?;
+    let resolve_bindings = [
+        Binding {
+            group: 0,
+            binding: 0,
+            resource: BindingResource::ImageView(graph.image_view(tone, 0, 0)?),
+        },
+        Binding {
+            group: 0,
+            binding: 1,
+            resource: BindingResource::Sampler(if options.aa {
+                SamplerDescriptor::LinearClamp
+            } else {
+                SamplerDescriptor::NearestClamp
+            }),
+        },
+    ];
+    let resolve_program = if options.aa {
+        program::resolve_aa_program()
+    } else {
+        program::resolve_program()
+    };
     let resolve_bindings = graph.raster_bindings(&resolve_program, &resolve_bindings)?;
     graph.raster(
-        "B2 clamp and sRGB encode",
+        "FXAA and single sRGB encode",
         &resolve_program,
         [RasterDraw {
             bindings: Some(resolve_bindings),
@@ -738,6 +1060,16 @@ pub(super) fn build(
     } else {
         None
     };
+    let shadow_captures = if capture && options.capture_shadows {
+        Some([
+            graph.readback_image("capture cascade 0", shadows[0])?,
+            graph.readback_image("capture cascade 1", shadows[1])?,
+            graph.readback_image("capture cascade 2", shadows[2])?,
+            graph.readback_image("capture cascade 3", shadows[3])?,
+        ])
+    } else {
+        None
+    };
     let draws = (0..scene.primitives.len())
         .filter(|&index| eligible(index))
         .count();
@@ -746,6 +1078,7 @@ pub(super) fn build(
         output,
         camera: uniform,
         captures,
+        shadow_captures,
         draws,
     })
 }
@@ -763,11 +1096,12 @@ mod tests {
         )
         .unwrap();
         options.inflight = 1;
-        let one = Budget::new(&scene, &options).unwrap();
+        let environment = ibl::Environment::fixture();
+        let one = Budget::new(&scene, &environment, &options).unwrap();
         options.inflight = 4;
-        let four = Budget::new(&scene, &options).unwrap();
+        let four = Budget::new(&scene, &environment, &options).unwrap();
         assert_eq!(one.buffers, four.buffers);
-        assert_eq!(four.physical_resources - one.physical_resources, 9);
+        assert_eq!(four.physical_resources - one.physical_resources, 24);
         assert_eq!(four.graph.resources, one.graph.resources);
         assert!(
             one.readback_bytes > 101 * 73 * 16,
@@ -824,7 +1158,7 @@ mod tests {
             "the second stream exceeds ordinary alignment slack"
         );
         assert!(
-            Budget::new(&scene, &tiny_output_options())
+            Budget::new(&scene, &ibl::Environment::fixture(), &tiny_output_options())
                 .unwrap()
                 .upload_bytes
                 >= pair_bytes
@@ -837,9 +1171,11 @@ mod tests {
     fn d3d12_large_geometry_pair_fits_prepared_upload_capacity() {
         let scene = large_geometry_scene();
         let options = tiny_output_options();
-        let budget = Budget::new(&scene, &options).unwrap();
+        let environment = ibl::Environment::fixture();
+        let budget = Budget::new(&scene, &environment, &options).unwrap();
         let mut backend = super::super::backend::D3d12::create(&options, &budget).unwrap();
-        let resident = Resident::upload(&mut backend, &scene, &budget, &[0; 128]).unwrap();
+        let resident =
+            Resident::upload(&mut backend, &scene, &environment, &budget, &[0; 128]).unwrap();
         drop(resident);
         assert_eq!(backend.close().unwrap()["clean"], true);
     }

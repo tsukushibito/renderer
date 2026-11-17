@@ -18,6 +18,9 @@ struct Sample {
     phases: [u64; 5],
     latency: u64,
     native: Option<SubmissionMetrics>,
+    poll_cpu_ns: u64,
+    yield_ns: u64,
+    iteration_ns: u64,
 }
 struct Pending<B: Backend> {
     work: B::Pending,
@@ -82,7 +85,21 @@ fn frames<B: Backend>(
             let _poll = tracy_client::Client::running().map(|client| {
                 client.span(tracy_client::span_location!("bistro.poll_and_retire"), 0)
             });
-            B::wait(&mut entry.work, super::WAIT)?
+            let timeout = Instant::now();
+            loop {
+                let poll = Instant::now();
+                let completed = B::poll(&mut entry.work)?;
+                entry.sample.poll_cpu_ns += poll.elapsed().as_nanos() as u64;
+                if let Some(completed) = completed {
+                    break completed;
+                }
+                if timeout.elapsed() > super::WAIT {
+                    return Err("Bistro completion timed out".into());
+                }
+                let yielded = Instant::now();
+                std::thread::yield_now();
+                entry.sample.yield_ns += yielded.elapsed().as_nanos() as u64;
+            }
         };
         entry.sample.phases[3] = started.elapsed().as_nanos() as u64;
         entry.sample.native = B::metrics(&completed);
@@ -101,6 +118,7 @@ fn frames<B: Backend>(
         Ok(())
     }
     for frame in 0..count {
+        let iteration_started = Instant::now();
         // This zone is a contiguous CPU iteration. Pending.started continues
         // to measure build-to-observed-completion latency across iterations.
         #[cfg(feature = "tracy")]
@@ -172,6 +190,9 @@ fn frames<B: Backend>(
                 phases: [build, compile, submit, 0, 0],
                 latency: 0,
                 native: None,
+                poll_cpu_ns: 0,
+                yield_ns: 0,
+                iteration_ns: iteration_started.elapsed().as_nanos() as u64,
             },
             started,
         });
@@ -195,13 +216,19 @@ fn frames<B: Backend>(
     Ok(())
 }
 
-fn identity(options: &Options, cook_hash: &str, conditions_hash: &str) -> Value {
+fn identity(
+    options: &Options,
+    cook_hash: &str,
+    conditions_hash: &str,
+    environment: &Value,
+) -> Value {
     json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
         "shaders_sha256":super::digest(include_bytes!("shaders/manifest.json")),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
-        "lighting":"B2 GGX directional sun + constant diffuse ambient 0.03; no IBL, shadows, exposure or tone mapping",
-        "output":"linear RGBA16F alpha composition -> clamp [0,1] -> sRGB OETF -> RGBA8 UNORM; alpha 1",
+        "environment":environment,"shadows":options.shadows,"aa":options.aa,
+        "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
+        "output":"linear RGBA16F -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"})
 }
 
@@ -272,8 +299,28 @@ fn capture<B: Backend>(
         captures[name] = json!({"path":std::fs::canonicalize(&path)?,"format":format,
             "width":options.width,"height":options.height,"sha256":super::digest(&bytes),"byte_length":bytes.len()});
     }
+    let mut shadow_captures = json!({});
+    if let Some(passes) = built.shadow_captures {
+        let resolution = resident.shadow_parameters.resolution;
+        for (cascade, pass) in passes.into_iter().enumerate() {
+            let mut bytes = vec![0; resolution as usize * resolution as usize * 4];
+            B::readback(&mut completed, pass, &mut bytes)?;
+            if bytes.as_chunks::<4>().0.iter().any(|v| {
+                let d = f32::from_le_bytes(*v);
+                !d.is_finite() || !(0.0..=1.0).contains(&d)
+            }) {
+                return Err("capture has invalid shadow depth".into());
+            }
+            let name = format!("shadow{cascade}");
+            let path = options.output.join(format!("{name}.bin"));
+            std::fs::write(&path, &bytes)?;
+            shadow_captures[name] = json!({"path":std::fs::canonicalize(&path)?,
+                "format":"r32f-le","width":resolution,"height":resolution,
+                "sha256":super::digest(&bytes),"byte_length":bytes.len()});
+        }
+    }
     Ok(
-        json!({"captures":captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
+        json!({"captures":captures,"shadow_captures":shadow_captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
         "readback_outside_measurement":true}),
     )
 }
@@ -344,6 +391,12 @@ fn measurement(
         "gpu":{"enabled":options.gpu_timing,"samples":gpu_samples,"total_ns":gpu_total,
             "min_ns":if gpu_samples==0{None}else{Some(gpu_min)},"max_ns":if gpu_samples==0{None}else{Some(gpu_max)}},
         "frame_wall_ns":samples.iter().map(|sample|sample.latency).collect::<Vec<_>>(),
+        "frame_samples":samples.iter().enumerate().map(|(frame,s)|json!({"frame":frame,
+            "phase_ns":s.phases,"poll_calls_elapsed_ns":s.poll_cpu_ns,"yield_elapsed_ns":s.yield_ns,
+            "active_host_elapsed_ns":s.phases[0]+s.phases[1]+s.phases[2]+s.poll_cpu_ns+s.phases[4],
+            "iteration_wall_ns":s.iteration_ns,
+            "gpu_ns":s.native.and_then(|n|if let renderer::GpuTiming::Available{elapsed,..}=n.gpu {Some(elapsed.as_nanos() as u64)}else{None})})).collect::<Vec<_>>(),
+        "active_host_scope":"nonoverlapping caller build/compile/submit/poll-call/result-return elapsed; excludes explicit yield waits, includes polling overhead and possible OS descheduling; not charged CPU or Godot-identical scope",
         "frame_wall_scope":"host build start to observed GPU completion; includes queue residence and intervening host work; excludes result return; not display latency",
         "readback_outside_measurement":true,"presentation":false}),
     )
@@ -387,6 +440,15 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     } else {
         Scene::fixture(options.force_opaque)
     };
+    let mut environment =
+        if options.fixture {
+            super::ibl::Environment::fixture()
+        } else {
+            super::ibl::Environment::load(options.ibl_manifest.as_deref().ok_or(
+                "B3 full-scene rendering requires --ibl-manifest from tools/bistro/ibl.py",
+            )?)?
+        };
+    let environment_identity = environment.identity.clone();
     // Hash the same manifest bytes that Scene::load parsed. A separate read
     // could otherwise identify a different revision from the loaded contents.
     let cook_hash = loaded_cook_hash(&scene, options.fixture)?;
@@ -396,7 +458,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "source":source,"resident_images_with_defaults":scene.images.len(),
         "alpha_zero_materials":scene.materials.iter().filter(|material|material.alpha_zero).count()});
     let stage = Instant::now();
-    let budget = Budget::new(&scene, options)?;
+    let budget = Budget::new(&scene, &environment, options)?;
     let budget_ns = stage.elapsed().as_nanos() as u64;
     let (first_camera, first_uniform) = uniform(&conditions, options, 0)?;
     let _ = first_camera;
@@ -418,7 +480,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         runtime["main_thread_id"] = json!(super::clock::thread_id());
     }
     let stage = Instant::now();
-    let mut resident = Resident::upload(&mut backend, &scene, &budget, &first_uniform)?;
+    let mut resident =
+        Resident::upload(&mut backend, &scene, &environment, &budget, &first_uniform)?;
+    environment.release_pixels();
     if options.resource_checks {
         resource_stages["uploaded"] = backend.memory_snapshot()?;
     }
@@ -472,7 +536,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     if options.capture_handshake {
         super::trace::ready(
             options,
-            &identity(options, &cook_hash, &conditions_hash),
+            &identity(options, &cook_hash, &conditions_hash, &environment_identity),
             tracy_capture_id.as_deref(),
         )?;
     }
@@ -536,6 +600,23 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         &mut pool,
         &mut workspace,
     )?;
+    let aa_off = if options.aa {
+        let mut diagnostic = options.clone();
+        diagnostic.aa = false;
+        diagnostic.capture_shadows = false;
+        diagnostic.output = options.output.join("aa-off");
+        Some(capture(
+            &mut backend,
+            &mut resident,
+            &scene,
+            &diagnostic,
+            &conditions,
+            &mut pool,
+            &mut workspace,
+        )?)
+    } else {
+        None
+    };
     let mut view_reports = Vec::new();
     let mut captured_views = Vec::new();
     if options.capture_all_views && !options.fixture {
@@ -543,7 +624,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             let mut view = options.clone();
             view.view = name.clone();
             view.output = options.output.join("views").join(name);
-            let capture = capture(
+            let captured_view = capture(
                 &mut backend,
                 &mut resident,
                 &scene,
@@ -552,9 +633,27 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
                 &mut pool,
                 &mut workspace,
             )?;
-            let report = json!({"schema_version":1,"identity":identity(&view,&cook_hash,&conditions_hash),"runtime":runtime,
-                "scene":counts,"capture_only":true,"measurement":Value::Null,"captures":capture["captures"],
-                "depth_coverage_pixels":capture["depth_coverage_pixels"],"draw_count":capture["draw_count"],"readback_outside_measurement":true});
+            let aa_off = if view.aa {
+                let mut diagnostic = view.clone();
+                diagnostic.aa = false;
+                diagnostic.capture_shadows = false;
+                diagnostic.output = view.output.join("aa-off");
+                Some(capture(
+                    &mut backend,
+                    &mut resident,
+                    &scene,
+                    &diagnostic,
+                    &conditions,
+                    &mut pool,
+                    &mut workspace,
+                )?)
+            } else {
+                None
+            };
+            let report = json!({"schema_version":1,"identity":identity(&view,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
+                "scene":counts,"capture_only":true,"measurement":Value::Null,"captures":captured_view["captures"],
+                "shadow_captures":captured_view["shadow_captures"],"aa_off":aa_off,
+                "depth_coverage_pixels":captured_view["depth_coverage_pixels"],"draw_count":captured_view["draw_count"],"readback_outside_measurement":true});
             captured_views.push((name.clone(), view.output, report));
         }
     }
@@ -590,15 +689,16 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "scope":"Graph build/compile/submit/poll/retire/result return; no capture/file I/O; setup/shutdown separate positive controls"});
     #[cfg(not(feature = "memory-profiling"))]
     let memory_json = Value::Null;
-    let report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash),"runtime":runtime,
+    let report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
         "scene":counts,"prepared":prepared,"setup_ns":setup_ns,
         "setup_phases_ns":{"asset_load":asset_load_ns,"budget":budget_ns,"native_prepare":native_prepare_ns,"upload":upload_ns,
             "frame_storage_and_profiling_prepare":frame_storage_and_profiling_prepare_ns,"warmup":warmup_ns},
         "setup_scope":"combined asset/conditions load, boundary validation, native resource/pipeline preparation, upload/CPU input release, frame storage and warmup; checkpoints exclude some reporting/bookkeeping; outside measured frame ROI",
         "measurement":measured,"memory":memory_json,"validation":validation,"resource_checks":resource_checks,
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
+        "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
         "views":view_reports,"readback_outside_measurement":true,
-        "limits":"B2 Forward PBR; headless, no frustum/occlusion culling, no IBL/shadows/tonemapper/Bloom/AA or display FPS claim; whole primitives sorted for transparency"});
+        "limits":"B3 Forward PBR; offscreen, no frustum/occlusion culling or Bloom/display FPS claim; whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
     #[cfg(feature = "tracy")]
     let report = {
         let mut report = report;
@@ -606,7 +706,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         report
     };
     write_report(&options.output, &report)?;
-    println!("REPORT {}", serde_json::to_string(&report)?);
+    println!("REPORT {}", options.output.join("report.json").display());
     #[cfg(feature = "memory-profiling")]
     if !memory.is_allocation_free() {
         return Err("steady-state allocation/native event gate failed; inspect report.json".into());
@@ -632,6 +732,9 @@ mod tests {
             phases: [1, 2, 3, 4, 5],
             latency: 30,
             native: None,
+            poll_cpu_ns: 0,
+            yield_ns: 0,
+            iteration_ns: 1,
         };
         let measured =
             measurement(std::slice::from_ref(&sample), &options, 100, Value::Null).unwrap();
@@ -649,7 +752,7 @@ mod tests {
         scene.source["cooked_manifest_sha256"] = json!(loaded);
         let hash = loaded_cook_hash(&scene, false).unwrap();
         assert_eq!(
-            identity(&fixture_options(), &hash, "conditions")["cook_manifest_sha256"],
+            identity(&fixture_options(), &hash, "conditions", &Value::Null)["cook_manifest_sha256"],
             loaded
         );
         scene

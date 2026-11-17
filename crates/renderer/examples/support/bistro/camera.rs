@@ -210,10 +210,12 @@ impl Camera {
         let mut words = [0.0f32; 32];
         words[..16].copy_from_slice(matrix.as_flattened());
         words[16..19].copy_from_slice(&self.position);
+        words[19] = near;
         words[20..23].copy_from_slice(&normalize(light)?);
+        words[23] = far;
         words[24..27].copy_from_slice(&color);
-        // B2's explicit constant diffuse fill; environment IBL belongs to B3.
-        words[28..31].fill(0.03);
+        // The frame builder fills the environment and shadow appendix from
+        // prepared immutable assets; this helper only emits the camera prefix.
         let mut bytes = [0; 128];
         for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *out = value.to_le_bytes();

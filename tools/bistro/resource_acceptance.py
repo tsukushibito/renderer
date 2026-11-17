@@ -150,6 +150,7 @@ def validate_report(report, *, api, mode, full_scene):
 
 def run(args):
     require(args.repeats >= 2, "Use at least two independent processes per API/configuration")
+    require(not args.manifest or args.ibl_manifest, "Full B3 acceptance needs --ibl-manifest")
     output = args.output.resolve()
     require(not output.exists(), "Choose a new output directory")
     binaries = {"strict": args.strict_binary.resolve(), "disabled": args.shipping_binary.resolve()}
@@ -161,6 +162,7 @@ def run(args):
                "started_utc": datetime.now(timezone.utc).isoformat(), "binaries": identities,
                "source_commit": args.source_commit, "source_manifest_sha256":
                    digest(args.manifest) if args.manifest else None,
+               "ibl_manifest_sha256": digest(args.ibl_manifest) if args.ibl_manifest else None,
                "tool_sha256": digest(__file__), "runs": [], "comparisons": [],
                "scope": "Serial acceptance with memory instrumentation; not normal-release performance, guaranteed VRAM residency, native OOM or device-loss injection."}
     write_json(output / "summary.json", summary)
@@ -177,6 +179,7 @@ def run(args):
                                "--view", "street", "--output", str(directory)]
                     if args.manifest:
                         command += ["--manifest", str(args.manifest.resolve()),
+                                    "--ibl-manifest", str(args.ibl_manifest.resolve()),
                                     "--width", "1920", "--height", "1080", "--capture-all-views"]
                     else:
                         command += ["--fixture"]
@@ -246,6 +249,7 @@ def main():
     parser.add_argument("--shipping-binary", type=Path, required=True)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--ibl-manifest", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--timeout", type=int, default=900)
