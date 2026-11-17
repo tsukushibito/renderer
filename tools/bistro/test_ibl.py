@@ -8,6 +8,7 @@ import unittest
 import numpy as np
 
 import ibl
+from ibl_pilot import runtime_specular
 
 
 def decode_rgbe(payload):
@@ -122,6 +123,19 @@ class IblTests(unittest.TestCase):
         checked_in = root / "crates/renderer/examples/support/bistro/ibl-fixture-brdf.rgba16f"
         generated = ibl.rgba16_bytes([ibl.brdf_lut(16, 16, samples=1024)])
         self.assertEqual(checked_in.read_bytes(), generated)
+
+    def test_roughness_one_keeps_directional_light_after_runtime_sampling(self):
+        normals = np.array([[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],dtype=np.float64)
+        source = .6 + ibl.directions(256,128)*np.array([.3,.2,.1])
+        xi = ibl.hammersley(1024)
+        actual = np.array([runtime_specular(source,normal,1.,xi,max_lod=4) for normal in normals])
+        # At alpha=1 the normalized prefilter is a cosine integral of this
+        # linear spherical function, whose exact mean direction is 2*N/3.
+        reference = .6 + (2/3)*normals*np.array([.3,.2,.1])
+        np.testing.assert_allclose(actual,reference,rtol=0,atol=1/64)
+        self.assertGreater(actual[0,0]-actual[1,0],.39)
+        legacy = np.array([runtime_specular(source,normal,1.,xi,max_lod=10) for normal in normals])
+        self.assertGreater(np.max(np.abs(legacy-reference)),.39)
 
     def test_rgbe_writer_and_godot_quarter_turn_keep_source_linear(self):
         source = np.maximum(ibl.directions(32, 16), 0.) * 3.

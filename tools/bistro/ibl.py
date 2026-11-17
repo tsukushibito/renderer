@@ -27,7 +27,7 @@ SPECULAR_SIZE = (1024, 512)
 BRDF_SIZE = (256, 256)
 SAMPLES = 1024
 CAP = 4.0
-MAX_PREFILTER_LOD = 5
+MAX_PREFILTER_LOD = 4
 
 
 def require(condition, message):
@@ -157,7 +157,7 @@ def prefilter_directions(pixels, normals, roughness, xi, chunk=64):
     return values
 
 
-def prefilter(pixels, width=1024, height=512, samples=1024, chunk=64, max_lod=5):
+def prefilter(pixels, width=1024, height=512, samples=1024, chunk=64, max_lod=MAX_PREFILTER_LOD):
     require(chunk > 0, "Positive chunk size required")
     levels = max(width, height).bit_length()
     require(type(max_lod) is int and max_lod > 0 and levels > 1, "Positive prefilter LOD required")
@@ -168,7 +168,7 @@ def prefilter(pixels, width=1024, height=512, samples=1024, chunk=64, max_lod=5)
         w, h = max(width >> level, 1), max(height >> level, 1)
         normals = directions(w, h).reshape(-1, 3)
         # A lat-long 1x1 map cannot represent the directional irradiance still
-        # present at roughness1. Keep at least32x16 at production maximum LOD5.
+        # present at roughness1. Keep at least64x32 at production maximum LOD4.
         # Lower resolution tail mips are initialized but never selected by PBR.
         roughness = min(level, max_lod) / max_lod
         result.append(prefilter_directions(pixels, normals, roughness, xi, chunk).reshape(h, w, 3))
