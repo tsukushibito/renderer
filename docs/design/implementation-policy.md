@@ -1427,6 +1427,31 @@ native API方針の変更・vendor最適化の採用や、一般推奨からの�
 **完了条件:** 固定camera/lightsの対象Bistroで影・材質・色空間とHDRから出力まで確認できる。
 同じパス構成を二APIで実行し、機能ごとの内容照合と同期・寿命検証を実装時から行う。
 
+利用側Bistroは通常の公開Raster/画像/transferで、静的IBL、4枚のD32によるCSM、Neutral、FXAAを構成する。
+Rendererへ効果列挙や専用loweringを加えない。共通追加契約はサンプラー2種、画像とsamplerの対応宣言、
+色出力なしのdiscard fragment shaderである。IBLと影を含めPBRは464-byte UBO・16 binding以内とする。
+影は4×2048、距離120m、practical split λ=.6、nearestの手動3×3 PCF、末尾10%の分割blendと最終fadeを使う。
+camera依存の安定したXY範囲をtexelへ量子化し、全sceneのcaster深度範囲とnormal offset/PCFの余白を確保する。
+通常Zと既定near/farを維持し、画質・費用と未確認範囲は実GPU受入の記録へ分ける。
+
+IBLはRGBA16Fの2D diffuse irradiance128×64、specular1024×512の11 mip、BRDF LUT256×256を事前生成する。
+GGX/height-correlated Smith、固定Hammersley1024 sampleから始め、diffuseはEを保存してshaderでπ除算する。
+specularのroughness0〜1はLOD0〜4へ対応させる。1×1まで使う案は方向依存を失い、LOD5もpole誤差が
+独立積分との事前閾値を超えたため採用しなかった。LOD4の64×32で方向依存を保持し、尾の全mipも初期化する。
+半精度保存とbilinear/trilinearを含む独立数値pilot、別processでのbyte再現性を受け入れる。
+環境diffuseはLambert、specularはsplit-sumで、GodotのBRDF/前処理や多重散乱補償と一致するとは主張しない。
+
+**BistroのAO適用方針:** 元ORM131画像はRが全0で、変換glTFのocclusion参照を無条件に使うと環境diffuseが消える。
+原本Exterior.pysceneはAOを有効にせず、対応する[固定FalcorのMaterial既定](https://github.com/NVIDIAGameWorks/Falcor/blob/c53908dd7930c031eb28b7ee49025eb27a833d64/Source/Falcor/Scene/Material/Material.h#L272)も無効である。
+従って`conditions.json`のB3照明profileではAO適用を無効にし、Rendererは素材作成境界のAO強度、
+GodotはStandardMaterial3DのAO有効値へ反映する。原本・変換glTF・全ORM byte・材質参照は保持する。
+R=0を汎用shaderで特別扱いせず、独立fixtureでは本物のAO0が環境diffuseだけを抑えることを検証する。
+旧CPU CyclesプレビューはglTF AOの受入証拠ではない。
+
+出力は露出前HDR→EV+1→Khronos PBR Neutral→FXAA→sRGB一回で、AAなしも保存する。
+Godotはnative AgX/FXAAの位置/IBL/PCFと表示処理の差を残す。B3完成後に機能・画質を合わせて正式比較し、
+CPU/GPU/待機とメモリから改善優先度を決める。AgX追加と再比較は速度改善後の別課題`renderer-5io`で扱う。
+
 ### B4: 利用側の独自Bloomとパスの合成・交換
 
 `renderer-7ft.5`。Renderer外のmodule/crateで独自shaderの多段Bloomを定義し、標準HDR出力へ接続する。

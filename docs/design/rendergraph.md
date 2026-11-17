@@ -261,8 +261,13 @@ texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation size�
 `Rgba8Srgb`はsample/transfer用途で、storage/attachmentへは受け付けない。
 linear filteringの実format能力は作成・準備境界で確認する。
 `NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、
-repeat、選択View内のLOD範囲を使う。Graphのsampler operandに従ってnative設定を選び、
+repeat、選択View内のLOD範囲を使う。`LinearClamp`は全軸clamp、`LinearRepeatUClampV`はUだけrepeatとし、
+いずれもlinear min/mag/mipと選択View内のLOD範囲を使う。Graphのsampler operandに従ってnative設定を選び、
 比較・anisotropy samplerや一般的な任意設定へは広げない。
+trusted Rasterの`sampling_pairs`は、shaderが使う画像とsamplerの全組み合わせを宣言する。
+実samplerがlinearな組の画像だけにlinear-filter能力を要求し、Load/texelFetch専用画像は組を持たない。
+Programを差し替える場合はこの保証も再確立する。同じ不変RasterBindingsの能力照合はsubmit内で一度とし、
+準備済みの領域で結果を引き継ぐ。Computeの保守的な画像能力条件は別契約として維持する。
 画像単位の保守的なnative state/layout管理を維持し、一部の操作を画像全体の初期化として扱わない。
 
 資源は可変で、readは宣言順で直前までに書かれた内容を使う。
@@ -365,6 +370,8 @@ meshのinline `b0`と同じnative layoutを流用できる契約ではない。
 
 `mesh_hdr()`/`textured_mesh_hdr()`は同じfloat出力shaderをRGBA16F attachmentへ書くレビュー済み契約である。
 `depth_only()`はmeshのvertex shaderと固定深度処理を使い、fragment shaderとcolor出力を持たない。
+利用側のtrusted descriptorはcolor出力なしでもdiscard用fragment shaderを持てる。
+shaderによるdepth/stencil/sample-mask出力やstorage副作用は引き続き禁止する。
 これらのProgram identityとcolor/depthの有無・形式をnative pipelineの識別に含める。
 独自descriptorは単一vertex streamのstrideと属性location／offset／Float32x2・x3・x4、
 inline定数のbyte数・VS／FS stageとDXIL register／space、読み取りbindingとそのbyte footprint、

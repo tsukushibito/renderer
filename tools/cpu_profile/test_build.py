@@ -15,6 +15,7 @@ class BuildTests(unittest.TestCase):
     def test_bistro_embedded_conditions_are_bound_to_the_build_source(self):
         name = "tools/bistro/conditions.json"
         snapshot = source_snapshot()
+        self.assertIn("tools/bistro/ibl.py", snapshot)
         self.assertEqual(snapshot[name]["raw_sha256"],
                          hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
 

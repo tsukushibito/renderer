@@ -289,7 +289,9 @@ sampled Viewの単一mip／全2D mip chainは対応範囲に含む。
 `prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
 選択したtrusted Program（prepassedの深度stateも含む）とcolor形式・depth有無をkeyとしてpipelineを保持し、
 通常prepareで新しい種類を作成しない。既存meshのcolor＋depthは従来のworking-set準備で利用できる。
-HDRは同じfloat出力shaderをRGBA16Fへ書き、depth-onlyはfragment stageとcolor attachmentを省く。
+HDRは同じfloat出力shaderをRGBA16Fへ書く。depth-onlyはcolor attachmentを持たず、
+fragment stageなし、またはalpha判定とdiscard用fragment stageを許可する。
+stageの有無は実bytecodeから決め、fragment depth/stencil/sample-mask出力やstorage副作用は許可しない。
 pipeline layoutは各descriptorの頂点属性、最大128-byteのVS／FS inline定数、
 最大4 groupのUniform／StorageRead／sampled image・separate samplerを具体化する。
 standard meshの80-byte定数とtexturedのbindingも同じ経路を使う。
@@ -447,6 +449,7 @@ extent/mip/layer/sample対応を作成境界で照会する。packed pixel量を
 呼出し側に別のaspect指定を要求しない。depth attachment Viewのmip countは1、sampled bindingには`Sampled` Viewだけを受け付ける。
 `create_sampler(NearestClamp)`はnormalized coordinate、nearest min/mag/mip、clamp-to-edge、
 LOD0、`LinearRepeat`はlinear min/mag/mip、repeat、選択View内のLOD範囲を使い、いずれもcompare/anisotropyなしで作る。
+`LinearClamp`は全軸clamp、`LinearRepeatUClampV`はU repeat/VとW clampで同じlinear設定を使う。
 Graphのsampler operandも実際のnative samplerへ対応させる。Device全体の生存sampler数をnative作成前に予約し、
 失敗時またはnative破棄後に返す。既存固定Graph/表示samplerも同じ上限契約を使う。
 
@@ -456,6 +459,10 @@ set0/binding1のseparate sampler、set1/binding0の16-byte StorageWriteを持つ
 全slot解決と種別/owner/範囲検査後に通常descriptor setを一度作成/updateし、公開後は変更しない。
 View/Image/samplerをdrawごとに再走査する処理や、検査専用Vecを追加しない。
 Deviceに対するsampled-image/samplerのstage別/set別descriptor上限もProgram作成時に保証する。
+Rasterのtrusted `sampling_pairs`は実際の画像・sampler組を保証し、対応samplerがlinearの場合だけ
+その画像のfilter能力を照合する。色のlinearとD32のnearestを同じパスで使っても、D32へlinear能力を要求しない。
+同じ不変binding集合はsubmit内で一度だけ確認し、明示準備したビット領域を実行枠の再利用時に戻す。
+追加のヒープ確保やdrawごとの内容再走査は行わない。Computeは従来の保守的な能力条件を維持する。
 
 private受入は2x2の非対称RGBA8をuploadし、4回の`textureLod(..., 0)`を実行して
 `packUnorm4x8`で16 byteへ戻す。UVは(-0.25,-0.25)、(0.6,0.2)、(0.2,0.6)、(1.25,1.25)で、

@@ -274,6 +274,25 @@ world transformを反映したposition/normal/tangent、handednessと反射時�
 同じコマンドを別directoryへ実行し、manifestと全streamのhashを比較して再生成の一致を確認する。
 小fixtureの契約回帰は`python -B -m unittest discover -s tools/bistro -p 'test_*.py'`で実行する。
 
+<a id="bistro-b3"></a>
+
+### B3の環境照明と影・表示変換
+
+全Bistroには、geometry/material cookに加えて静的IBLのmanifestを明示する。
+固定Blender4.5.16/build `3f6797307da5`はHDR復号にだけ使い、NumPyで前処理する。
+元HDRの輝度cap4を適用してから、diffuse/specular/BRDFを線形RGBA16Fへ生成する。
+強度3とyaw0は実行時に一度だけ適用する。元HDRと既存素材を上書きしない。
+
+```powershell
+python -B tools/bistro/ibl.py --source assets/bistro/environment/san_giuseppe_bridge_4k.hdr --blender .tools/bistro/tools/blender-4.5.16-windows-x64/blender.exe --output .tools/bistro-pbr/ibl
+python -B tools/bistro/ibl.py --source assets/bistro/environment/san_giuseppe_bridge_4k.hdr --blender .tools/bistro/tools/blender-4.5.16-windows-x64/blender.exe --output .tools/bistro-pbr/ibl-repeat --chunk 37
+```
+
+両出力のmanifest、raw3画像、Godot用HDRのhashを比較する。最大prefilter LOD4で粗さ1の方向依存を保持し、
+全11 mipを初期化する。BRDF/環境の独立数値pilotは`tools/bistro/ibl_pilot.py --help`を参照する。
+Godot用HDRは同じcap済み元画像をU方向へ四分の一周ずらし、両実装の投影方向を揃える。
+shaderの再生成は既存の`shaders/regenerate.ps1 -Verify`で確認し、配布時には同directoryの`licenses/`通知も保持する。
+
 ### 同じ描画例を二APIで実行する
 
 小fixtureはLFS素材やcook生成物を要求しない。Vulkan実行にはVulkan 1.3 runtime、D3D12にはWindowsの実GPUを使う。
@@ -283,8 +302,8 @@ native検証を要求する受入では`development-validation`を付け、対�
 ```powershell
 cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-vulkan-strict
 cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api d3d12 --fixture --frames 8 --warmup 2 --output .tools/bistro-pbr/fixture-d3d12-strict
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example bistro -- --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-vulkan
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example bistro -- --api d3d12 --manifest .tools/bistro-pbr/cooked/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-d3d12
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example bistro -- --api vulkan --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-vulkan
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example bistro -- --api d3d12 --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --view street --width 1920 --height 1080 --frames 120 --warmup 24 --inflight 2 --output .tools/bistro-pbr/street-d3d12
 ```
 
 `--manifest`と`--fixture`は入力の選択である。`--view`には`conditions.json`の固定視点名、または`route`を使う。
@@ -293,7 +312,7 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 実効設定をreportへ残す。`--gpu-timing`は既定offのnative詳細CPU timerとGPU timestampを一緒に有効にする。
 `--alpha-only`は元alpha0材質のgeometryだけを診断し、`--alpha-override opaque`は
 そのcolor/depth被覆が非ゼロになることを確かめる感度確認に使う。
-上記の短いrunはB2の確認・計測例であり、前節のB5最終巡回受入を代替しない。
+現在の描画例はB3のIBL・影・表示変換を含む。上記の短いrunはB5最終巡回受入を代替しない。
 
 各runは`report.json`と、測定後に別途描いた診断frameのHDR／SDR／depthを保存する。
 診断は指定したviewを使い、`route`ではframe0を描く。最終測定frameそのもののreadbackではない。
@@ -302,8 +321,13 @@ HDRはlittle-endian RGBA16F、SDRはRGBA8、depthはlittle-endian FP32で、
 `--capture-all-views`は同じ常駐assetを使い、追加で全7固定視点を`views/<view>/report.json`へ出力する。
 これらは`capture_only: true`／`measurement: null`の診断であり、巡回全frameのcaptureではない。
 この例はoffscreenの材質描画であり、Windows表示・VSync待ちや操作の受入とは区別する。
-B2はGGXのsun＋明示した一定ambientを使い、線形RGBA16FでblendしてからclampとsRGB OETFを一度適用する。
-IBL、影、固定EV/PBR Neutral、Bloom、AAは後続B3/B4の対象である。
+B3はGGXのsun＋静的IBL、4分割の影、線形RGBA16Fのblend、EV+1、Neutral、FXAA、sRGB一回を使う。
+`--aa-off`は出力AAを無効にし、`--shadows-off`は影の診断に使う。
+通常のAAありrunも測定後に`aa-off/`へ診断画像を保存する。
+`--capture-shadow-maps`は測定後の4枚のD32画像を`shadow_captures`へ保存し、readback容量も準備時に予約する。
+full-sceneのAO適用は固定照明profileに従って無効とし、元ORM・glTF・材質参照を保持する。
+汎用shaderのAO契約は独立fixtureで検証する。[採用理由](../design/implementation-policy.md#b3-影線形hdrトーンマッピング)を参照する。
+Bloomの追加はB4、表示・自由操作の最終統合受入はB5で行う。
 
 ### 画像比較と性能値の読み方
 
@@ -362,8 +386,8 @@ BistroがEXEへ埋め込む`tools/bistro/conditions.json`もsource hashへ含め
 
 ```powershell
 python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --output .tools/bistro-pbr/release-build
-python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
-python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
+python -B tools/bistro/measure_runtime.py plan --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
+python -B tools/bistro/measure_runtime.py run --build-manifest .tools/bistro-pbr/release-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --frames 1800 --warmup 3600 --inflight 2 --timeout-seconds 600 --output .tools/bistro-pbr/measurements
 ```
 
 既定のrouteは1,800 frameで一周し、`--warmup 3600`の二周後に一周を測る。独立3 processの各回で二周をwarmupする。
@@ -388,7 +412,7 @@ native必要量、論理byte、staging容量、プロセス使用量・budgetを
 cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12,memory-profiling,development-validation --example bistro --target-dir .tools/bistro-residency/strict-build
 cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12,memory-profiling --example bistro --target-dir .tools/bistro-residency/shipping-build
 python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --output .tools/bistro-residency/fixture
-python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --output .tools/bistro-residency/full
+python -B tools/bistro/resource_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-residency/full
 ```
 
 各batchは二API×strict／Disabled×独立2 processを直列で実行する。
@@ -412,8 +436,9 @@ native OOM・Device lossの注入やOSによるVRAM evictionの受入は、こ�
 ### Godotを使ってBistroの性能目標を校正する
 
 `tools/godot_bistro/`はGodotの描画系全体を比較基準にする利用側のプロジェクトである。
-Renderer本体や既存のcookを変更しない。対象は影・IBL・AA・BloomなしのB2相当であり、
-将来のB3/B4の画質を含む目標はその機能を揃えて再校正する。
+Renderer本体や既存のcookを変更しない。既定profileは影・IBL・AA・BloomなしのB2相当である。
+`--profile b3`は静的IBL・CSM・FXAAを含み、BistroのAO適用はRendererと同様に無効とする。
+Godot native AgX/FXAA位置/IBL前処理/PCF/表示処理の差は残し、B4のBloom追加後は再校正する。
 実測と暫定予算は[現在の検証状況](../verification/current.md#godot-bistro)を参照する。
 
 [公式Godot 4.7.2](https://godotengine.org/download/archive/4.7.2-stable/)のStandard Windows x86_64版、
@@ -479,6 +504,36 @@ CPUだけの証拠受入試験は以下で実行できる。通常CIにも含め
 ```powershell
 python -B -m unittest discover -s tools/godot_bistro -p 'test_*.py'
 ```
+
+### B3の画像受入とGodotとの正式比較
+
+IBL・影・表示変換を完成させてから、画像受入と通常版の性能比較を別々に実行する。
+画像受入は`memory-profiling`付きstrict/Disabledの独立EXEを保存し、通常窓24 frame＋warmup8、
+各条件3 processで全7視点・影4枚・AAなし・差し替え・同時View・容量不足からの回復を確認する。
+
+```powershell
+python -B tools/bistro/b3_acceptance.py --strict-binary .tools/bistro-residency/strict-build/release/examples/bistro.exe --shipping-binary .tools/bistro-residency/shipping-build/release/examples/bistro.exe --source-commit (git rev-parse HEAD) --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --output .tools/bistro-pbr/b3-acceptance --repeats 3
+```
+
+正式比較のEXEは検証・memory計装・Tracyを含めない。同じclean commitからRendererとGodotを準備する。
+通常ホストの非管理者・非AppContainerで実行し、計測中はbuild/cook・他のGPU試験や画像解析を並行させない。
+
+```powershell
+python -B tools/cpu_profile/build.py --profile release --example bistro --features vulkan,d3d12 --output .tools/bistro-pbr/b3-normal-build
+python -B tools/godot_bistro/benchmark.py prepare --profile b3 --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --editor .tools/godot-baseline/editor/Godot_v4.7.2-stable_win64_console.exe --template .tools/godot-baseline/templates/windows_release_x86_64.exe --asset-root . --output .tools/godot-baseline/prepared-b3
+python -B tools/bistro/b3_benchmark.py plan --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200
+python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3-normal-build/manifest.json --manifest .tools/bistro-pbr/cooked/manifest.json --ibl-manifest .tools/bistro-pbr/ibl/manifest.json --godot-prepared .tools/godot-baseline/prepared-b3 --output .tools/bistro-pbr/b3-comparison --timeout 1200
+```
+
+`plan`は実行予定を表示し、`run`だけが新規outputへ実行する。
+Renderer二APIとGodotのall/frustum、timer off/onを各3独立process、計24 processで順序を回して直列実行する。
+3600 frameのwarmup後に1800 frameを測り、CPUの各phase・poll/yield・OS charged CPU・GPUを分ける。
+`active_host_elapsed_ns`は重複しないcaller処理の経過時間で、yieldを除くがOS deschedulingを含み得る。
+native CPU timerは内包されるので加算せず、観測完了latencyやCPU/GPUの和から表示FPSを計算しない。
+GodotのCPU値はsetup＋viewport、Rendererはoffscreenであり、表示完了・操作の最終受入はB5で行う。
+Godot画像のB3反復は、予備検証で固定した全画素最大1 RGB code・変動畫素16以下・alpha完全一致を使う。
+露出/AAの既知誤りを拒否する感度を確認し、正式runの失敗に合わせて閾値を変更しない。
+Renderer反復とstrict/Disabled照合はbit exactを維持する。結果と未確認範囲は[現在の検証状況](../verification/current.md)へ記録する。
 
 <a id="bistro-tracy"></a>
 
