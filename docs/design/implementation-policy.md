@@ -1412,7 +1412,8 @@ Godotの通常全量runの最悪p99は10.630msであり、平均約239 frame/s�
 CPU/GPU描画費用と、OS scheduling/pacingを含むframe間隔の両方を調べる。
 Rendererの現在の達成を宣言したものではなく、実表示・ゲーム処理込みの目標は別に検証する。
 
-Godotの生成mip/mesh圧縮/材質/depth prepass/表示とRendererのcook/shaderには差があるため、
+このB2校正のGodotはrelease実行時にPNG baseのみを非圧縮ImageTextureへ読み込む。
+以前の「生成mip」という説明は誤りだった。Godotの生成tangent/材質/depth prepass/表示とRendererのcook/shaderには差があるため、
 予算超過時はCPU phase・GPU workload・画像品質の差を説明し、同じ条件で改善前後を測る。
 基本目標を満たすだけでGodot相当の効率を達成したとは扱わず、CPU/GPUの比較も残す。
 B3/B4の機能や画質を追加したときは比較側にも同じ機能を与えて再校正する。
@@ -1447,6 +1448,16 @@ specularのroughness0〜1はLOD0〜4へ対応させる。1×1まで使う案は�
 GodotはStandardMaterial3DのAO有効値へ反映する。原本・変換glTF・全ORM byte・材質参照は保持する。
 R=0を汎用shaderで特別扱いせず、独立fixtureでは本物のAO0が環境diffuseだけを抑えることを検証する。
 旧CPU CyclesプレビューはglTF AOの受入証拠ではない。
+
+**Godotの材質mip:** 固定release版のruntime glTF読込はPNGの縮小段を自動生成しない。
+B3比較では読込・準備境界で全405画像に`Image.generate_mipmaps`を適用し、normal画像だけ縮小段を正規化する。
+通常画像はGodotのチャンネル平均であり、RendererのDDS由来mipとの画素一致は要求しない。
+`ImageTexture.set_image`で既存のResource/RIDと共有参照を保って置換し、base画素のhash、
+native readbackの形式・非圧縮・完全なmip数、全667材質参照とfilter設定をROI前に検査する。
+毎frameの画像走査は追加しない。B2の既存計測物はbase-onlyとして保持し、B3の新しい比較と混ぜない。
+根拠は固定版の[PNG読込](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/drivers/png/png_driver_common.cpp#L123)、
+[mip生成](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/core/io/image.cpp#L2048)、
+[画像置換](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/scene/resources/image_texture.cpp#L63)である。
 
 出力は露出前HDR→EV+1→Khronos PBR Neutral→FXAA→sRGB一回で、AAなしも保存する。
 Godotはnative AgX/FXAAの位置/IBL/PCFと表示処理の差を残す。B3完成後に機能・画質を合わせて正式比較し、

@@ -1,8 +1,9 @@
 """Prepare and measure a pinned Godot release-template Bistro reference.
 
 No global install, editor asset import, system setting change, or headless GPU
-measurement. Runtime GLTFDocument import is outside ROI. PNG mip generation and
-Godot materials differ from the Renderer DDS cook; this is a renderer reference,
+measurement. Runtime GLTFDocument import is outside ROI. B2 retains native
+base-only PNG textures; B3 explicitly generates and verifies full material mips.
+Godot materials and generated mips differ from the Renderer DDS cook; this is a renderer reference,
 not an isolated RenderGraph-overhead measurement.
 """
 import argparse
@@ -11,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import statistics
@@ -29,6 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = Path(__file__).resolve().parent
 CAPTURE_VIEWS = {"route0", "overview", "street", "material-detail", "glass-detail",
                  "label-detail", "street-mid", "street-end"}
+PROJECT_SOURCES = ("project.godot", "main.gd", "main.tscn", "material_mips.gd")
 
 
 def digest(path):
@@ -44,7 +47,9 @@ def write(path, value):
     Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def run_logged(command, log, timeout=600, process_observer=None):
+def run_logged(command, log, timeout=600, process_observer=None, start_suspended=False):
+    if start_suspended and process_observer is None:
+        raise ValueError("Suspended launch requires an observer to configure and resume the target")
     environment = os.environ.copy()
     # Keep editor settings, release shader caches and user:// inside task output.
     environment["APPDATA"] = str(Path(log).resolve().parent / "appdata")
@@ -52,7 +57,7 @@ def run_logged(command, log, timeout=600, process_observer=None):
     with Path(log).open("w", encoding="utf-8") as stream:
         process = subprocess.Popen([str(x) for x in command], stdout=stream,
                                    stderr=subprocess.STDOUT, env=environment,
-                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | (0x4 if start_suspended else 0))
         try:
             observation = process_observer(process.pid) if process_observer else None
             returncode = process.wait(timeout=timeout)
@@ -90,7 +95,7 @@ def prepare(args):
     project = output / "project"
     project.mkdir()
     hashes = {}
-    for name in ("project.godot", "main.gd", "main.tscn"):
+    for name in PROJECT_SOURCES:
         shutil.copyfile(SOURCE / name, project / name)
     shutil.copyfile(args.conditions, output / "conditions.json")
     conditions = read(output / "conditions.json")
@@ -105,7 +110,7 @@ def prepare(args):
         project_file = project / "project.godot"
         project_file.write_text(project_file.read_text(encoding="utf-8").replace(
             "[audio]", project_settings(profile) + "\n[audio]"), encoding="utf-8")
-    for name in ("project.godot", "main.gd", "main.tscn"):
+    for name in PROJECT_SOURCES:
         hashes[name] = digest(project / name)
     editor, template = args.editor.resolve(), args.template.resolve()
     # Custom template avoids any modification to the user's installed Godot.
@@ -128,7 +133,7 @@ def prepare(args):
                 "source_commit": subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                 "benchmark_tool_sha256": digest(SOURCE / "benchmark.py"),
                 "profile_tool_sha256": digest(SOURCE / "profiles.py"),
-                "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents and PNG mipmaps; no LOD/occlusion, optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. B2 retains authored AO, constant ambient .03, no IBL/shadow/AA, linear exposure1. B3 explicitly disables source AO maps while retaining all source bytes/materials; cap4 static IBL strength3, four 2048-effective CSM splits/PCF/no PCSS, native AgX exposure2 and FXAA, no Bloom/extra effects. Godot's BRDF, prefilter, shadow filter, depth prepass, batching, mip chain and presentation differ from Renderer; AgX and pre-tonemap FXAA differ from Renderer Neutral and post-tonemap FXAA."}
+                "contract": "Forward+ Vulkan release template; runtime glTF full exterior; generated tangents, uncompressed ImageTexture material images; no LOD/occlusion, optional frustum culling; windowed 1080p vsync off; fixed frame-indexed route. B2 retains base-only PNG images, authored AO, constant ambient .03, no IBL/shadow/AA, linear exposure1. B3 explicitly generates full PNG mip chains before warmup, renormalizing only normal-map coarser levels, and verifies actual native readbacks, base bytes and shared material references. Renderer retains authored DDS mip chains; Godot generated mip pixels are not equivalent. B3 disables source AO maps while retaining all source bytes/materials; cap4 static IBL strength3, four 2048-effective CSM splits/PCF/no PCSS, native AgX exposure2 and FXAA, no Bloom/extra effects. Godot's BRDF, prefilter, shadow filter, depth prepass, batching, mip chain and presentation differ from Renderer; AgX and pre-tonemap FXAA differ from Renderer Neutral and post-tonemap FXAA."}
     write(output / "identity.json", identity)
     print(output / "identity.json")
 
@@ -139,6 +144,70 @@ def percentile(values, p):
     lower = math.floor(position)
     upper = math.ceil(position)
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def validate_material_mips(inventory):
+    """Accept the fixed full-scene preparation proof, not a config echo."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError("B3 material mip inventory: " + message)
+
+    require(isinstance(inventory, dict), "missing native preparation proof")
+    for key, expected in (("policy", "b3-explicit-png-full-mips-v1"), ("outside_roi", True),
+                          ("verified", True), ("image_count", 405), ("material_count", 132),
+                          ("material_reference_count", 667), ("normal_images", 131),
+                          ("total_levels_including_base", 3529)):
+        require(type(inventory.get(key)) is type(expected) and inventory[key] == expected, key + " differs")
+    records, references = inventory.get("images"), inventory.get("references")
+    require(isinstance(records, list) and len(records) == 405, "all source images are required")
+    require(isinstance(references, list) and len(references) == 667, "all material references are required")
+    require(all(isinstance(record, dict) and type(record.get("index")) is int for record in records)
+            and {record["index"] for record in records} == set(range(405)), "image indices are incomplete or duplicated")
+    by_index = {record["index"]: record for record in records}
+    levels = normal_images = 0
+    roles = {index: set() for index in by_index}
+    slots = set()
+    for record in records:
+        width, height, format = record.get("width"), record.get("height"), record.get("format")
+        require(type(width) is int and width > 0 and type(height) is int and height > 0, "invalid extent")
+        require(type(format) is int and format in (4, 5), "expected native RGB8/RGBA8 readback format")
+        count, bytes, w, h = 0, 0, width, height
+        while True:
+            bytes += w * h * (3 if format == 4 else 4)
+            if w == h == 1:
+                break
+            w, h = max(1, w // 2), max(1, h // 2)
+            count += 1
+        require(record.get("class") == "ImageTexture" and record.get("compressed") is False,
+                "source image is compressed or not the native runtime texture type")
+        require(type(record.get("mipmap_count")) is int and record["mipmap_count"] == count
+                and record.get("has_mipmaps") is (count > 0), "native chain is incomplete")
+        require(type(record.get("mipmaps_before")) is int and record["mipmaps_before"] == 0,
+                "unexpected pre-generation chain")
+        require(type(record.get("base_bytes")) is int and record["base_bytes"] == width * height * (3 if format == 4 else 4)
+                and type(record.get("native_data_bytes")) is int and record["native_data_bytes"] == bytes,
+                "readback byte size differs from its full chain")
+        require(record.get("resource_identity_preserved") is True, "texture ownership/reference identity changed")
+        require(isinstance(record.get("base_sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", record["base_sha256"])
+                and record.get("native_base_sha256") == record["base_sha256"], "base pixels changed")
+        require(type(record.get("normal_renormalized")) is bool, "missing normal mip policy")
+        levels += count + 1
+        normal_images += record["normal_renormalized"]
+    for reference in references:
+        require(isinstance(reference, dict), "invalid material reference")
+        material, role, image = reference.get("material"), reference.get("role"), reference.get("image")
+        require(type(material) is int and 0 <= material < 132
+                and role in ("albedo", "normal", "metallic", "roughness", "emission", "ao")
+                and type(image) is int and image in by_index, "invalid material/image slot")
+        require((material, role) not in slots, "duplicated material slot")
+        require(type(reference.get("resource_id")) is int and reference["resource_id"] > 0
+                and type(reference.get("rid")) is int and reference["rid"] > 0, "missing live resource identities")
+        slots.add((material, role))
+        roles[image].add(role)
+    require(levels == 3529 and normal_images == 131, "full chain or normal image count changed")
+    require(all(uses and (uses == {"normal"}) == by_index[index]["normal_renormalized"]
+                and ("normal" not in uses or uses == {"normal"}) for index, uses in roles.items()),
+            "unused image or mixed normal/color roles")
 
 
 def validate_report(report, config):
@@ -161,6 +230,7 @@ def validate_report(report, config):
         raise ValueError("Requested profile differs from its quality settings")
     compare_settings(report.get("quality"), config["quality"])
     if config["profile"] == "b3":
+        validate_material_mips(report.get("material_mips"))
         if report.get("ibl") != config["ibl"]:
             raise ValueError("Effective IBL input differs from the archived cook")
         override = report.get("material_overrides", {})
@@ -237,7 +307,7 @@ def verify_prepared(prepared):
 
 def run_case(prepared, identity, folder, *, culling, timing, repetition,
              frames=1800, warmup=3600, validation=False, timeout=600,
-             process_observer=None):
+             process_observer=None, start_suspended=False):
     """One unchanged CLI case, shared with the serial cross-engine scheduler."""
     prepared, folder = Path(prepared), Path(folder)
     folder.mkdir()
@@ -257,7 +327,7 @@ def run_case(prepared, identity, folder, *, culling, timing, repetition,
         command.append("--gpu-validation")
     command += ["--", folder / "config.json"]
     start = time.monotonic()
-    process = run_logged(command, folder / "stdout.log", timeout, process_observer)
+    process = run_logged(command, folder / "stdout.log", timeout, process_observer, start_suspended=start_suspended)
     summary = validate_report(read(folder / "report.json"), config)
     captures = {}
     import struct

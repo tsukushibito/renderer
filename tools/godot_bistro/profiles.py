@@ -52,6 +52,8 @@ def settings(profile, conditions):
             "agx_white": 16.29, "agx_contrast": 1.25,
             "screen_space_aa": 1, "mesh_shadow_casting": 1,
             "ambient_occlusion_enabled_materials": 0,
+            "material_full_mipmaps": True, "material_texture_filter": 3,
+            "nearest_mipmap_filter": False,
         })
     return result
 
