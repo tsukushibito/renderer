@@ -168,7 +168,7 @@ impl Environment {
         )?;
         exact(
             &value["max_prefilter_lod"],
-            json!(5),
+            json!(4),
             "IBL maximum LOD must retain directional resolution",
         )?;
         exact(
@@ -226,7 +226,7 @@ impl Environment {
                 "specular_roughness",
                 json!("min(mip,max_prefilter_lod)/max_prefilter_lod"),
             ),
-            ("max_prefilter_lod", json!(5)),
+            ("max_prefilter_lod", json!(4)),
             ("source_cap_arithmetic", json!("float32 before resampling")),
             ("integration_arithmetic", json!("float64")),
             ("numpy", json!("1.26.4")),
@@ -267,7 +267,7 @@ impl Environment {
             brdf,
             strength: 3.,
             yaw_degrees: 0.,
-            max_prefilter_lod: 5,
+            max_prefilter_lod: 4,
             identity: value,
         })
     }
@@ -290,7 +290,7 @@ impl Environment {
             strength: 1.,
             yaw_degrees: 0.,
             max_prefilter_lod: 3,
-            identity: json!({"kind":"fixture-constant-diffuse", "strength":1, "yaw_degrees":0,
+            identity: json!({"kind":"fixture-constant-diffuse", "strength":1, "yaw_degrees":0,"max_prefilter_lod":3,
                 "diffuse_irradiance_half":0x2e08, "specular":0,
                 "brdf_samples":1024, "brdf_sha256":format!("{:x}", Sha256::digest(include_bytes!("ibl-fixture-brdf.rgba16f")))}),
         }
@@ -421,13 +421,13 @@ mod tests {
             images.insert(name.into(),json!({"path":name_file,"format":"rgba16f-le","width":width,"height":height,
                 "mip_levels":levels,"byte_length":image.bytes.len(),"sha256":format!("{:x}",Sha256::digest(&image.bytes))}));
         }
-        let manifest = json!({"schema_version":1,"max_prefilter_lod":5,"source":{"sha256":SOURCE,"width":4096,"height":2048,"byte_length":23_695_717},
+        let manifest = json!({"schema_version":1,"max_prefilter_lod":4,"source":{"sha256":SOURCE,"width":4096,"height":2048,"byte_length":23_695_717},
             "lighting":{"strength":3,"yaw_degrees":0},"images":images,
             "recipe":{"version":1,"mapping":MAPPING,"cap":4,"strength_applied":false,"yaw_applied":false,
                 "diffuse_storage":"irradiance E; shader divides by pi","brdf_storage":"A,B,0,1; f0*A+B",
                 "distribution":"isotropic GGX; alpha=max(roughness^2,1e-3)","visibility":"height-correlated Smith",
                 "sequence":"Hammersley base2","diffuse_size":[128,64],"specular_size":[1024,512],"brdf_size":[256,256],
-                "specular_roughness":"min(mip,max_prefilter_lod)/max_prefilter_lod","max_prefilter_lod":5,"source_cap_arithmetic":"float32 before resampling",
+                "specular_roughness":"min(mip,max_prefilter_lod)/max_prefilter_lod","max_prefilter_lod":4,"source_cap_arithmetic":"float32 before resampling",
                 "integration_arithmetic":"float64","numpy":"1.26.4","samples":1024,"tool_sha256_utf8_lf":tool_hash(),
                 "decoder":{"version":[4,5,16],"build":"3f6797307da5","numpy":"1.26.4"}}});
         let path = root.join("manifest.json");
@@ -439,6 +439,7 @@ mod tests {
         assert_eq!(loaded.brdf.bytes.len(), 524_288);
         for (pointer, wrong) in [
             ("/schema_version", json!(2)),
+            ("/max_prefilter_lod", json!(10)),
             ("/source/sha256", json!("wrong")),
             ("/lighting/strength", json!(9)),
             ("/recipe/cap", json!(8)),
