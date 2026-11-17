@@ -27,6 +27,8 @@ else:
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = Path(__file__).resolve().parent
+CAPTURE_VIEWS = {"route0", "overview", "street", "material-detail", "glass-detail",
+                 "label-detail", "street-mid", "street-end"}
 
 
 def digest(path):
@@ -168,6 +170,16 @@ def validate_report(report, config):
                 or not 0 < override["ao_enabled_before"] <= 132
                 or override.get("ao_enabled_after") != 0):
             raise ValueError("B3 source AO material override was not applied")
+        capture = report.get("capture_validation", {})
+        if ({key: capture.get(key) for key in ("settling_frames", "maximum_frames",
+                "consecutive_equal_readbacks", "outside_roi")}
+                != {"settling_frames": 8, "maximum_frames": 16,
+                    "consecutive_equal_readbacks": 2, "outside_roi": True}):
+            raise ValueError("B3 fixed-view capture stability protocol differs")
+        frames = capture.get("frames_by_view", {})
+        if (not isinstance(frames, dict) or set(frames) != CAPTURE_VIEWS
+                or any(type(value) is not int or not 9 <= value <= 16 for value in frames.values())):
+            raise ValueError("B3 fixed-view captures did not establish bounded byte stability")
     samples = report.get("samples", [])
     if len(samples) != config["frames"]:
         raise ValueError("Incomplete samples")

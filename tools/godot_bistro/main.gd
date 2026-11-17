@@ -20,6 +20,10 @@ var ibl_identity: Dictionary = {}
 var mesh_shadow_modes: Dictionary = {}
 var b3_materials: Array[Material] = []
 var ao_enabled_before := 0
+var completed_report: Dictionary
+var capture_frames: Dictionary = {}
+const CAPTURE_SETTLING_FRAMES := 8
+const CAPTURE_MAX_FRAMES := 16
 
 func fail(message: String) -> void:
 	push_error(message)
@@ -313,20 +317,37 @@ func after_draw() -> void:
 		if config.profile == "b3":
 			report.material_overrides = {"policy": "bistro-source-ao-disabled", "inspected_materials": b3_materials.size(),
 				"ao_enabled_before": ao_enabled_before, "ao_enabled_after": report.quality.ambient_occlusion_enabled_materials}
-		var output := FileAccess.open(config.output, FileAccess.WRITE)
-		if output == null:
-			fail("Cannot write report")
-			return
-		# Preserve the original parsed double-valued configuration exactly.
-		output.store_string(JSON.stringify(report, "", true, true))
-		output.close()
+		completed_report = report
 		capture.call_deferred()
+
+func capture_image(name: String) -> Image:
+	if config.profile != "b3":
+		await RenderingServer.frame_post_draw
+		return get_viewport().get_texture().get_image()
+	# Hold each pinned camera for a fixed settling interval, then require two
+	# consecutive exact readbacks. This is outside ROI and never substitutes for
+	# cross-process image equality. Fail explicitly if the image does not settle.
+	var previous := PackedByteArray()
+	for index in range(CAPTURE_MAX_FRAMES):
+		await RenderingServer.frame_post_draw
+		if index + 1 < CAPTURE_SETTLING_FRAMES:
+			continue
+		var image := get_viewport().get_texture().get_image()
+		if image == null or image.is_empty():
+			fail("Empty fixed-view capture: " + name)
+			return null
+		var pixels := image.get_data()
+		if not previous.is_empty() and pixels == previous:
+			capture_frames[name] = index + 1
+			return image
+		previous = pixels
+	fail("Fixed-view capture did not become byte-stable: " + name)
+	return null
 
 func capture() -> void:
 	# Readback and PNG work occur strictly after ROI, at seven pinned cameras.
 	set_camera(0)
-	await RenderingServer.frame_post_draw
-	var image := get_viewport().get_texture().get_image()
+	var image: Image = await capture_image("route0")
 	if image == null or image.is_empty() or image.save_png(config.capture) != OK:
 		fail("Capture failed")
 		return
@@ -334,10 +355,21 @@ func capture() -> void:
 		camera.position = vec(view.position)
 		camera.look_at(vec(view.target), Vector3.UP)
 		camera.fov = view.vertical_fov_degrees
-		await RenderingServer.frame_post_draw
-		image = get_viewport().get_texture().get_image()
-		if image.save_png(config.capture.get_base_dir().path_join(view.name + ".png")) != OK:
+		image = await capture_image(view.name)
+		if image == null or image.is_empty() or image.save_png(config.capture.get_base_dir().path_join(view.name + ".png")) != OK:
 			fail("Named capture failed")
 			return
+	if config.profile == "b3":
+		completed_report.capture_validation = {"settling_frames": CAPTURE_SETTLING_FRAMES,
+			"maximum_frames": CAPTURE_MAX_FRAMES, "consecutive_equal_readbacks": 2,
+			"outside_roi": true, "frames_by_view": capture_frames}
+	var output := FileAccess.open(config.output, FileAccess.WRITE)
+	if output == null:
+		fail("Cannot write report")
+		return
+	# Preserve the original parsed double-valued configuration exactly, and only
+	# publish a complete report after every requested capture has succeeded.
+	output.store_string(JSON.stringify(completed_report, "", true, true))
+	output.close()
 	print("BISTRO_DONE ", config.output)
 	get_tree().quit()

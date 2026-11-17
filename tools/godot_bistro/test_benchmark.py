@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from benchmark import ROOT, digest, percentile, read, validate_report
+from benchmark import CAPTURE_VIEWS, ROOT, digest, percentile, read, validate_report
 from profiles import compare_settings, orientation_fixture, settings, split_offsets, verify_ibl_manifest
 from summarize import aggregate, assemble
 
@@ -35,10 +35,29 @@ def fixture(timing=True, profile="b2"):
         report["ibl"] = dict(config["ibl"])
         report["material_overrides"] = {"policy": "bistro-source-ao-disabled", "inspected_materials": 132,
                                         "ao_enabled_before": 132, "ao_enabled_after": 0}
+        report["capture_validation"] = {"settling_frames": 8, "maximum_frames": 16,
+            "consecutive_equal_readbacks": 2, "outside_roi": True,
+            "frames_by_view": dict.fromkeys(CAPTURE_VIEWS, 9)}
     return config, report
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_b3_requires_complete_bounded_capture_stability_outside_roi(self):
+        config, report = fixture(profile="b3")
+        validate_report(report, config)
+        for mutate in (
+                lambda r: r.pop("capture_validation"),
+                lambda r: r["capture_validation"].update(outside_roi=False),
+                lambda r: r["capture_validation"].update(consecutive_equal_readbacks=1),
+                lambda r: r["capture_validation"]["frames_by_view"].pop("street"),
+                lambda r: r["capture_validation"]["frames_by_view"].update(street=8),
+                lambda r: r["capture_validation"]["frames_by_view"].update(street=17),
+                lambda r: r["capture_validation"]["frames_by_view"].update(street=True)):
+            altered = copy.deepcopy(report)
+            mutate(altered)
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                validate_report(altered, config)
+
     def test_timing_disabled_is_missing_instead_of_zero(self):
         config, report = fixture(False)
         self.assertEqual(set(validate_report(report, config)), {"frame_interval_ms"})
