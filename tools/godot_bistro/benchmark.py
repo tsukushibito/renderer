@@ -17,8 +17,12 @@ import statistics
 import subprocess
 import time
 
-from profiles import (PROFILES, compare_settings, orientation_fixture, project_settings,
-                      settings, verify_ibl_manifest)
+if __package__:
+    from .profiles import (PROFILES, compare_settings, orientation_fixture, project_settings,
+                           settings, verify_ibl_manifest)
+else:
+    from profiles import (PROFILES, compare_settings, orientation_fixture, project_settings,
+                          settings, verify_ibl_manifest)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,18 +42,29 @@ def write(path, value):
     Path(path).write_text(json.dumps(value, indent=2, ensure_ascii=False, allow_nan=False) + "\n", encoding="utf-8")
 
 
-def run_logged(command, log, timeout=600):
+def run_logged(command, log, timeout=600, process_observer=None):
     environment = os.environ.copy()
     # Keep editor settings, release shader caches and user:// inside task output.
     environment["APPDATA"] = str(Path(log).resolve().parent / "appdata")
     environment["LOCALAPPDATA"] = str(Path(log).resolve().parent / "localappdata")
     with Path(log).open("w", encoding="utf-8") as stream:
-        result = subprocess.run([str(x) for x in command], stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, env=environment)
-    if result.returncode:
-        raise ValueError(f"Process failed ({result.returncode}); see {log}")
+        process = subprocess.Popen([str(x) for x in command], stdout=stream,
+                                   stderr=subprocess.STDOUT, env=environment,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            observation = process_observer(process.pid) if process_observer else None
+            returncode = process.wait(timeout=timeout)
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            raise
+    if returncode:
+        raise ValueError(f"Process failed ({returncode}); see {log}")
     text = Path(log).read_text(encoding="utf-8", errors="replace")
     if any(marker in text for marker in ("ERROR:", "SCRIPT ERROR:", "WARNING:", "Validation Error", "Validation Warning")):
         raise ValueError(f"Engine diagnostics require investigation; see {log}")
+    return {"pid": process.pid, "process_observation": observation, "returncode": returncode}
 
 
 def prepare(args):
@@ -171,8 +186,8 @@ def validate_report(report, config):
                      "p99": percentile([x[metric] for x in samples], .99)} for metric in metrics}
 
 
-def measure(args):
-    prepared = args.prepared.resolve()
+def verify_prepared(prepared):
+    prepared = Path(prepared).resolve()
     identity = read(prepared / "identity.json")
     if digest(prepared / "bistro-reference.exe") != identity["binary_sha256"] or digest(prepared / "bistro-reference.pck") != identity["pack_sha256"]:
         raise ValueError("Prepared executable or pack was modified")
@@ -198,6 +213,52 @@ def measure(args):
                 or digest(prepared / "orientation-fixture.json") != ibl["orientation_fixture_sha256"]
                 or read(prepared / "orientation-fixture.json") != orientation_fixture()):
             raise ValueError("Prepared IBL input was modified")
+    return identity
+
+
+def run_case(prepared, identity, folder, *, culling, timing, repetition,
+             frames=1800, warmup=3600, validation=False, timeout=600,
+             process_observer=None):
+    """One unchanged CLI case, shared with the serial cross-engine scheduler."""
+    prepared, folder = Path(prepared), Path(folder)
+    folder.mkdir()
+    config = {"gltf": identity["gltf"], "conditions": str(prepared / "conditions.json"),
+              "profile": identity["profile"], "quality": identity["quality"],
+              "frames": frames, "warmup": warmup, "timing": timing, "culling": culling,
+              "output": str(folder / "report.json"), "capture": str(folder / "route0.png")}
+    if identity["profile"] == "b3":
+        config["ibl_path"] = str(prepared / "godot-panorama.hdr")
+        config["ibl"] = {"sha256": identity["ibl"]["panorama"]["sha256"],
+                         "width": 4096, "height": 2048}
+    write(folder / "config.json", config)
+    command = [prepared / "bistro-reference.exe", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
+               "--resolution", "1920x1080", "--position", "0,0", "--disable-vsync", "--audio-driver", "Dummy",
+               "--log-file", folder / "engine.log"]
+    if validation:
+        command.append("--gpu-validation")
+    command += ["--", folder / "config.json"]
+    start = time.monotonic()
+    process = run_logged(command, folder / "stdout.log", timeout, process_observer)
+    summary = validate_report(read(folder / "report.json"), config)
+    captures = {}
+    import struct
+    for name in ["route0"] + [view["name"] for view in read(prepared / "conditions.json")["views"]]:
+        path = folder / f"{name}.png"
+        header = path.read_bytes()[:24]
+        if header[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", header[16:24]) != (1920, 1080):
+            raise ValueError(f"Capture has wrong format/size: {path}")
+        captures[name] = digest(path)
+    return {"run_id": f"{culling}-timing-{int(timing)}-{repetition}",
+            "culling": culling, "timing": timing, **process,
+            "controller_wall_seconds": time.monotonic() - start,
+            "command": [str(x) for x in command], "summary": summary,
+            "report_sha256": digest(folder / "report.json"), "captures_sha256": captures}
+
+
+def measure(args):
+    prepared = args.prepared.resolve()
+    identity = verify_prepared(prepared)
+    profile = identity["profile"]
     if args.frames <= 0 or args.warmup < 2 or args.repeats < 1:
         raise ValueError("frames/repeats must be positive and warmup >= 2")
     if not args.smoke and (args.frames != 1800 or args.warmup != 3600 or args.repeats != 3):
@@ -215,39 +276,12 @@ def measure(args):
         for culling, timing in cases[offset:] + cases[:offset]:
             run_id = f"{culling}-timing-{int(timing)}-{repetition + 1}"
             folder = output / run_id
-            folder.mkdir()
-            config = {"gltf": identity["gltf"], "conditions": str(prepared / "conditions.json"),
-                      "profile": profile, "quality": identity["quality"],
-                      "frames": args.frames, "warmup": args.warmup, "timing": timing, "culling": culling,
-                      "output": str(folder / "report.json"), "capture": str(folder / "route0.png")}
-            if profile == "b3":
-                config["ibl_path"] = str(prepared / "godot-panorama.hdr")
-                config["ibl"] = {"sha256": identity["ibl"]["panorama"]["sha256"],
-                                 "width": 4096, "height": 2048}
-            write(folder / "config.json", config)
-            command = [prepared / "bistro-reference.exe", "--rendering-driver", "vulkan", "--rendering-method", "forward_plus",
-                       "--resolution", "1920x1080", "--position", "0,0", "--disable-vsync", "--audio-driver", "Dummy",
-                       "--log-file", folder / "engine.log"]
-            if args.validation:
-                command.append("--gpu-validation")
-            command += ["--", folder / "config.json"]
-            start = time.monotonic()
-            run_logged(command, folder / "stdout.log", args.timeout)
-            summary = validate_report(read(folder / "report.json"), config)
-            captures = {}
-            import struct
-            for name in ["route0"] + [view["name"] for view in read(prepared / "conditions.json")["views"]]:
-                path = folder / f"{name}.png"
-                header = path.read_bytes()[:24]
-                if header[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", header[16:24]) != (1920, 1080):
-                    raise ValueError(f"Capture has wrong format/size: {path}")
-                captures[name] = digest(path)
-            runs.append({"run_id": run_id, "culling": culling, "timing": timing,
-                         "controller_wall_seconds": time.monotonic() - start,
-                         "command": [str(x) for x in command], "summary": summary,
-                         "report_sha256": digest(folder / "report.json"), "captures_sha256": captures})
+            record = run_case(prepared, identity, folder, culling=culling, timing=timing,
+                              repetition=repetition + 1, frames=args.frames, warmup=args.warmup,
+                              validation=args.validation, timeout=args.timeout)
+            runs.append(record)
             write(output / "runs.json", {"identity": identity, "smoke": args.smoke, "validation": args.validation, "runs": runs})
-            print(run_id, json.dumps(summary, ensure_ascii=False), flush=True)
+            print(run_id, json.dumps(record["summary"], ensure_ascii=False), flush=True)
 
 
 def main():
