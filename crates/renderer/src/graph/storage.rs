@@ -212,9 +212,17 @@ impl GraphStorage {
             raster_ranges,
             raster_resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
             overlap: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
-            read_accesses: super::accesses::ReadAccessSet::new(capacity.accesses).map_err(
-                |_| capacity_error(GraphCapacityKind::Accesses, capacity.accesses, None),
-            )?,
+            read_accesses: super::accesses::ReadAccessSet::new(
+                capacity.accesses,
+                capacity.resources,
+            )
+            .map_err(|kind| {
+                let limit = match kind {
+                    GraphCapacityKind::Resources => capacity.resources,
+                    _ => capacity.accesses,
+                };
+                capacity_error(kind, limit, None)
+            })?,
             workspace: analysis::Workspace::new(capacity.analysis())
                 .map_err(|error| capacity.analysis_error(error))?,
             output: analysis::Output::new(capacity.analysis())
