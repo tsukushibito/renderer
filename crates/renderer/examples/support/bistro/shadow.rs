@@ -30,6 +30,13 @@ impl Bounds {
         Ok(Self { min, max })
     }
 
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            min: std::array::from_fn(|axis| self.min[axis].min(other.min[axis])),
+            max: std::array::from_fn(|axis| self.max[axis].max(other.max[axis])),
+        }
+    }
+
     fn corners(self) -> [[f64; 3]; 8] {
         std::array::from_fn(|index| {
             std::array::from_fn(|axis| {
@@ -40,6 +47,75 @@ impl Bounds {
                 })
             })
         })
+    }
+}
+
+/// Conservative test against the rasterized XY extent of an orthographic
+/// shadow map. W is 1. The clip-Y flip on D3D12 leaves the limits symmetric.
+pub(super) struct CascadeClip {
+    x: ClipAxis,
+    y: ClipAxis,
+}
+
+struct ClipAxis {
+    coefficients: [f64; 3],
+    translation: f64,
+    limit: f64,
+}
+
+impl ClipAxis {
+    fn new(matrix: &[[f32; 4]; 4], scene: Bounds, row: usize) -> Self {
+        let coefficients = std::array::from_fn(|column| f64::from(matrix[column][row]));
+        let translation = f64::from(matrix[3][row]);
+        let position_limit: [f64; 3] =
+            std::array::from_fn(|axis| f64::from(scene.min[axis].abs().max(scene.max[axis].abs())));
+        let size = dot(coefficients.map(f64::abs), position_limit) + translation.abs();
+        // Bound rounding for the shader's three FP32 products and three sums
+        // using the sum of absolute terms, including catastrophic cancellation.
+        // Cover possible flushing of subnormal operands and intermediate values.
+        let rounding = 8.0 * f64::from(f32::EPSILON) * size.max(1.0);
+        let denorm = 8.0
+            * f64::from(f32::MIN_POSITIVE)
+            * (1.0
+                + position_limit.into_iter().sum::<f64>()
+                + coefficients.into_iter().map(f64::abs).sum::<f64>());
+        let limit = if size < 0.5 * f64::from(f32::MAX) {
+            1.0 + rounding + denorm
+        } else {
+            // Extremely large coordinates could overflow on the GPU. In that
+            // case retain every caster on this axis.
+            f64::INFINITY
+        };
+        Self {
+            coefficients,
+            translation,
+            limit,
+        }
+    }
+
+    fn overlaps(&self, bounds: Bounds) -> bool {
+        let mut minimum = self.translation;
+        let mut maximum = self.translation;
+        for (axis, coefficient) in self.coefficients.into_iter().enumerate() {
+            let a = coefficient * f64::from(bounds.min[axis]);
+            let b = coefficient * f64::from(bounds.max[axis]);
+            minimum += a.min(b);
+            maximum += a.max(b);
+        }
+        minimum <= self.limit && maximum >= -self.limit
+    }
+}
+
+impl CascadeClip {
+    pub fn new(matrix: &[[f32; 4]; 4], scene: Bounds) -> Self {
+        Self {
+            x: ClipAxis::new(matrix, scene, 0),
+            y: ClipAxis::new(matrix, scene, 1),
+        }
+    }
+
+    pub fn overlaps(&self, bounds: Bounds) -> bool {
+        self.x.overlaps(bounds) && self.y.overlaps(bounds)
     }
 }
 
@@ -338,6 +414,38 @@ mod tests {
             parameters,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn cascade_culling_keeps_touching_and_depth_only_casters() {
+        let matrix = [
+            [-1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let clip = CascadeClip::new(&matrix, bounds());
+        let xy = |min, max| Bounds::new([min, -0.5, 100.0], [max, 0.5, 101.0]).unwrap();
+        assert!(clip.overlaps(xy(1.0, 2.0)));
+        assert!(clip.overlaps(xy(-1.1, -0.9)));
+        assert!(!clip.overlaps(xy(1.01, 2.0)));
+        assert!(!clip.overlaps(xy(-2.0, -1.01)));
+        assert!(!clip.overlaps(Bounds::new([0.0, 2.0, 0.0], [0.0, 3.0, 0.0]).unwrap()));
+    }
+
+    #[test]
+    fn cascade_culling_keeps_casters_that_can_round_back_into_clip_space() {
+        let matrix = [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [-100_000_000.0, -2.0, 0.0, 1.0],
+        ];
+        let point = [100_000_000.0, 2.0, 0.0];
+        let caster = Bounds::new(point, point).unwrap();
+        // The exact result for X is 2, but the shader's first addition
+        // rounds away the 2 before adding the negative translation.
+        assert!(CascadeClip::new(&matrix, caster).overlaps(caster));
     }
 
     #[test]

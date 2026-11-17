@@ -1437,6 +1437,13 @@ Rendererへ効果列挙や専用loweringを加えない。共通追加契約は�
 色出力なしのdiscard fragment shaderである。IBLと影を含めPBRは464-byte UBO・16 binding以内とする。
 影は4×2048、距離120m、practical split λ=.6、nearestの手動3×3 PCF、末尾10%の分割blendと最終fadeを使う。
 camera依存の安定したXY範囲をtexelへ量子化し、全sceneのcaster深度範囲とnormal offset/PCFの余白を確保する。
+Bistroのcaster選別は、resident準備時に実際のupload頂点から求めたworld AABBを使う。
+各cascadeに渡すFP32行列で射影し、丸めと非正規数の余裕を含めても同じXY clip面の外に全体があるdrawだけを省く。
+画面外でもlightのXY範囲と重なるcasterを保持する。全sceneの深度範囲、cascadeの余白とblend、
+材質のalpha判定、残るdrawの順序を維持する。境界の構築には従来のresident準備時の頂点走査を使い、
+毎frameは準備済み境界を読む。
+[VulkanのSPIR-V演算精度](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html)と
+[Direct3DのFP32演算規則](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/floating-point-rules)を参照する。
 通常Zと既定near/farを維持し、画質・費用と未確認範囲は実GPU受入の記録へ分ける。
 
 IBLはRGBA16Fの2D diffuse irradiance128×64、specular1024×512の11 mip、BRDF LUT256×256を事前生成する。

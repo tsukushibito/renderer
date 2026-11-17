@@ -272,6 +272,7 @@ pub(super) struct Resident {
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
     pub shadow_bounds: shadow::Bounds,
+    shadow_caster_bounds: Vec<shadow::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     pub resolve_vertices: ImportBuffer,
@@ -391,7 +392,23 @@ impl Resident {
         let mut upload_owners = Vec::with_capacity(scene.materials.len() + 1);
         let mut vertices = Vec::with_capacity(scene.primitives.len());
         let mut indices = Vec::with_capacity(scene.primitives.len());
+        let mut shadow_caster_bounds = Vec::with_capacity(scene.primitives.len());
         for (index, primitive) in scene.primitives.iter().enumerate() {
+            let primitive_vertices = &scene.vertices[primitive.vertices.clone()];
+            let mut minimum = [f32::INFINITY; 3];
+            let mut maximum = [f32::NEG_INFINITY; 3];
+            for vertex in primitive_vertices
+                .as_chunks::<{ program::VERTEX_BYTES }>()
+                .0
+            {
+                for axis in 0..3 {
+                    let value =
+                        f32::from_le_bytes(vertex[axis * 4..axis * 4 + 4].try_into().unwrap());
+                    minimum[axis] = minimum[axis].min(value);
+                    maximum[axis] = maximum[axis].max(value);
+                }
+            }
+            shadow_caster_bounds.push(shadow::Bounds::new(minimum, maximum)?);
             let encoded = &scene.indices[primitive.indices.clone()];
             let decoded = encoded
                 .as_chunks::<4>()
@@ -403,7 +420,7 @@ impl Resident {
                 backend,
                 &mut geometry_pool,
                 program::VERTEX_BYTES as u32,
-                &scene.vertices[primitive.vertices.clone()],
+                primitive_vertices,
                 &decoded,
             )?;
             vertices.push(vertex);
@@ -473,21 +490,15 @@ impl Resident {
             upload_environment(&environment.specular)?,
             upload_environment(&environment.brdf)?,
         ];
-        let mut minimum = [f32::INFINITY; 3];
-        let mut maximum = [f32::NEG_INFINITY; 3];
-        if scene.vertices.is_empty() {
+        let shadow_bounds = shadow_caster_bounds
+            .iter()
+            .copied()
+            .reduce(shadow::Bounds::union)
             // An empty scene is a valid clear-only control, with no casters.
-            minimum = [-1.0; 3];
-            maximum = [1.0; 3];
-        }
-        for vertex in scene.vertices.as_chunks::<{ program::VERTEX_BYTES }>().0 {
-            for axis in 0..3 {
-                let value = f32::from_le_bytes(vertex[axis * 4..axis * 4 + 4].try_into().unwrap());
-                minimum[axis] = minimum[axis].min(value);
-                maximum[axis] = maximum[axis].max(value);
-            }
-        }
-        let shadow_bounds = shadow::Bounds::new(minimum, maximum)?;
+            .unwrap_or(shadow::Bounds {
+                min: [-1.0; 3],
+                max: [1.0; 3],
+            });
         Ok(Self {
             vertices,
             indices,
@@ -505,6 +516,7 @@ impl Resident {
                 environment.max_prefilter_lod as f32,
             ],
             shadow_bounds,
+            shadow_caster_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
             resolve_vertices,
@@ -691,10 +703,14 @@ pub(super) fn build(
     }
     for (cascade, view) in shadow_views.into_iter().enumerate() {
         let parameters = RasterConstants::new(&[cascade as u32])?;
+        let clip = shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.shadow_bounds);
         let draws = (0..scene.primitives.len())
             .filter(|&index| {
                 let material = &scene.materials[scene.primitives[index].material];
-                options.shadows && !material.blend && (!options.alpha_only || material.alpha_zero)
+                options.shadows
+                    && !material.blend
+                    && (!options.alpha_only || material.alpha_zero)
+                    && clip.overlaps(resident.shadow_caster_bounds[index])
             })
             .map(|index| {
                 let primitive = &scene.primitives[index];
