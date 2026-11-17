@@ -87,11 +87,12 @@ fn draw(
     bindings: &[Binding],
     output: ImageView,
 ) -> Result<renderer::graph::PassHandle, renderer::graph::GraphError> {
+    let bindings = graph.raster_bindings(&ManagedRasterProgram::textured_mesh(), bindings)?;
     graph.raster(
         name,
         &ManagedRasterProgram::textured_mesh(),
         [RasterDraw {
-            bindings,
+            bindings: Some(bindings),
             ..geometry
         }],
         RasterAttachments {
@@ -271,19 +272,29 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
     let source = color(&mut graph, "source");
     let output = color(&mut graph, "output");
     seed(&mut graph, "source clear", source);
-    let good = bindings(uniform, source);
-    let feedback = bindings(uniform, output);
+    let good = graph
+        .raster_bindings(
+            &ManagedRasterProgram::textured_mesh(),
+            &bindings(uniform, source),
+        )
+        .unwrap();
+    let feedback = graph
+        .raster_bindings(
+            &ManagedRasterProgram::textured_mesh(),
+            &bindings(uniform, output),
+        )
+        .unwrap();
     let error = graph
         .raster(
             "bad later draw",
             &ManagedRasterProgram::textured_mesh(),
             [
                 RasterDraw {
-                    bindings: &good,
+                    bindings: Some(good),
                     ..mesh
                 },
                 RasterDraw {
-                    bindings: &feedback,
+                    bindings: Some(feedback),
                     ..mesh
                 },
             ],
@@ -300,11 +311,11 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
             &ManagedRasterProgram::textured_mesh(),
             [
                 RasterDraw {
-                    bindings: &good,
+                    bindings: Some(good),
                     ..mesh
                 },
                 RasterDraw {
-                    bindings: &good,
+                    bindings: Some(good),
                     ..mesh
                 },
             ],
@@ -315,17 +326,19 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
         )
         .unwrap();
     graph.readback_image("result", output.image()).unwrap();
+    let plan = graph.compile().unwrap();
     assert!(
-        !graph
-            .compile()
-            .unwrap()
+        !plan
             .ordered_pass_names()
             .any(|name| name == "bad later draw")
     );
+    for producer in ["source clear", "offset bytes"] {
+        assert!(plan.ordered_pass_names().any(|name| name == producer));
+    }
 }
 
 #[test]
-fn slot_kind_owner_and_late_binding_capacity_failures_allow_retry() {
+fn binding_creation_failures_allow_retry_and_reused_sets_share_capacity() {
     let mut pool = GraphPool::new(
         GraphCapacity {
             bindings: 3,
@@ -398,38 +411,38 @@ fn slot_kind_owner_and_late_binding_capacity_failures_allow_retry() {
         );
     }
     drop(other);
+    let valid = graph
+        .raster_bindings(&ManagedRasterProgram::textured_mesh(), &valid)
+        .unwrap();
     let error = graph
-        .raster(
-            "too many",
+        .raster_bindings(
             &ManagedRasterProgram::textured_mesh(),
-            [
-                RasterDraw {
-                    bindings: &valid,
-                    ..mesh
-                },
-                RasterDraw {
-                    bindings: &valid,
-                    ..mesh
-                },
-            ],
+            &bindings(uniform, source),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
+    assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::Bindings);
+    graph
+        .raster(
+            "reused binding set",
+            &ManagedRasterProgram::textured_mesh(),
+            [RasterDraw {
+                bindings: Some(valid),
+                ..mesh
+            }; 2],
             RasterAttachments {
                 colors: &[attachment(output)],
                 depth: None,
             },
         )
-        .unwrap_err();
-    assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);
-    assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::Bindings);
-    draw(&mut graph, "retry", mesh, &valid, output).unwrap();
+        .unwrap();
     graph.readback_image("observe", output.image()).unwrap();
-    assert_eq!(
+    assert!(
         graph
             .compile()
             .unwrap()
             .ordered_pass_names()
-            .filter(|name| *name == "retry")
-            .count(),
-        1
+            .any(|name| name == "reused binding set")
     );
 }
 
@@ -445,19 +458,29 @@ fn distinct_materials_in_one_pass_keep_both_texture_producers() {
     seed(&mut graph, "texture a", a);
     seed(&mut graph, "texture b", b);
     {
-        let a_bindings = bindings(uniform, a);
-        let b_bindings = bindings(uniform, b);
+        let a_bindings = graph
+            .raster_bindings(
+                &ManagedRasterProgram::textured_mesh(),
+                &bindings(uniform, a),
+            )
+            .unwrap();
+        let b_bindings = graph
+            .raster_bindings(
+                &ManagedRasterProgram::textured_mesh(),
+                &bindings(uniform, b),
+            )
+            .unwrap();
         graph
             .raster(
                 "different materials",
                 &ManagedRasterProgram::textured_mesh(),
                 [
                     RasterDraw {
-                        bindings: &a_bindings,
+                        bindings: Some(a_bindings),
                         ..mesh
                     },
                     RasterDraw {
-                        bindings: &b_bindings,
+                        bindings: Some(b_bindings),
                         ..mesh
                     },
                 ],

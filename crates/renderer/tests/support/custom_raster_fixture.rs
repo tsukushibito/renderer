@@ -211,6 +211,7 @@ pub struct Inputs {
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
     pub bindings: [Binding; 4],
+    pub raster_bindings: renderer::graph::RasterBindings,
 }
 
 pub fn inputs(graph: &mut Graph, frame: usize) -> Inputs {
@@ -328,11 +329,15 @@ pub fn inputs(graph: &mut Graph, frame: usize) -> Inputs {
         .into(),
         bindings: None,
     };
+    let raster_bindings = graph
+        .raster_bindings(&custom_program(blend(frame)), &bindings)
+        .unwrap();
     Inputs {
         opaque: [opaque; 4],
         vertices,
         indices,
         bindings,
+        raster_bindings,
     }
 }
 
@@ -378,11 +383,11 @@ fn overlay_values(frame: usize, draw: usize) -> (f32, [f32; 4]) {
     ([0.5, 0.25, 0.875][draw], tint)
 }
 
-pub fn overlay_draws<'a>(inputs: &'a Inputs, frame: usize) -> [RasterDraw; 3] {
+pub fn overlay_draws(inputs: &Inputs, frame: usize) -> [RasterDraw; 3] {
     std::array::from_fn(|draw| {
         let (depth, tint) = overlay_values(frame, draw);
         RasterDraw {
-            bindings: &inputs.bindings,
+            bindings: Some(inputs.raster_bindings),
             vertices: inputs.vertices,
             indices: inputs.indices,
             index_count: 3,

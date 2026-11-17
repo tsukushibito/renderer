@@ -508,6 +508,12 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     };
     let left = bindings(&graph, source_a, 0);
     let right = bindings(&graph, source_b, 256);
+    let left = graph
+        .raster_bindings(&ManagedRasterProgram::textured_mesh(), &left)
+        .unwrap();
+    let right = graph
+        .raster_bindings(&ManagedRasterProgram::textured_mesh(), &right)
+        .unwrap();
     let output = graph
         .image("two textured panels", ImageDesc::rgba8(4, 4))
         .unwrap();
@@ -521,11 +527,11 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
             &ManagedRasterProgram::textured_mesh(),
             [
                 RasterDraw {
-                    bindings: &left,
+                    bindings: Some(left),
                     ..panel
                 },
                 RasterDraw {
-                    bindings: &right,
+                    bindings: Some(right),
                     ..panel
                 },
             ],
@@ -589,13 +595,16 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
         .upload_image("HDR texels", source, &half_bytes(&source_halves))
         .unwrap();
     let hdr_bindings = bindings(&graph, source, 512);
+    let hdr_bindings = graph
+        .raster_bindings(&ManagedRasterProgram::textured_mesh_hdr(), &hdr_bindings)
+        .unwrap();
     let output = graph.image("textured HDR", hdr(4, 4)).unwrap();
     graph
         .raster(
             "HDR sampling",
             &ManagedRasterProgram::textured_mesh_hdr(),
             [RasterDraw {
-                bindings: &hdr_bindings,
+                bindings: Some(hdr_bindings),
                 ..quad
             }],
             RasterAttachments {

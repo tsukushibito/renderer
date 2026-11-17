@@ -216,6 +216,9 @@ fn append_owned_textured_raster(graph: &mut Graph) -> renderer::graph::ImageHand
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
+    let bindings = graph
+        .raster_bindings(&ManagedRasterProgram::textured_mesh(), &bindings)
+        .unwrap();
     graph
         .raster(
             "textured Raster",
@@ -225,7 +228,7 @@ fn append_owned_textured_raster(graph: &mut Graph) -> renderer::graph::ImageHand
                 indices,
                 index_count: 3,
                 parameters: RasterParameters::default().into(),
-                bindings: &bindings,
+                bindings: Some(bindings),
             }],
             RasterAttachments {
                 colors: &[Attachment {

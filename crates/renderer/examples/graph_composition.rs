@@ -38,11 +38,12 @@ fn sampled_pass(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
+    let bindings = graph.raster_bindings(&ManagedRasterProgram::textured_mesh(), &bindings)?;
     graph.raster(
         name,
         &ManagedRasterProgram::textured_mesh(),
         [RasterDraw {
-            bindings: &bindings,
+            bindings: Some(bindings),
             ..draw
         }],
         RasterAttachments {

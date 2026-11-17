@@ -207,6 +207,19 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             },
         ]
     });
+    let program = if depth_only {
+        ManagedRasterProgram::depth_only()
+    } else if textured && float_color {
+        ManagedRasterProgram::textured_mesh_hdr()
+    } else if textured {
+        ManagedRasterProgram::textured_mesh()
+    } else if float_color {
+        ManagedRasterProgram::mesh_hdr()
+    } else {
+        ManagedRasterProgram::mesh()
+    };
+    let bindings = bindings
+        .map(|bindings| textured.then(|| graph.raster_bindings(&program, &bindings).unwrap()));
     let draws: [RasterDraw; 3] = std::array::from_fn(|draw| {
         let mut transform = *RasterParameters::default().transform();
         transform[3][2] = 0.75 - draw as f32 * 0.25;
@@ -228,21 +241,10 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
             vertices: vertex_buffer,
             indices: index_buffer,
             index_count: 3,
-            bindings: if textured { &bindings[draw] } else { &[] },
+            bindings: bindings[draw],
             parameters: RasterParameters::new(transform, tint).unwrap().into(),
         }
     });
-    let program = if depth_only {
-        ManagedRasterProgram::depth_only()
-    } else if textured && float_color {
-        ManagedRasterProgram::textured_mesh_hdr()
-    } else if textured {
-        ManagedRasterProgram::textured_mesh()
-    } else if float_color {
-        ManagedRasterProgram::mesh_hdr()
-    } else {
-        ManagedRasterProgram::mesh()
-    };
     let clear = if float_color {
         [0.125, 0.25, 0.5, 1.0]
     } else {

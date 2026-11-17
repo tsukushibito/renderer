@@ -86,21 +86,9 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
         store: StoreOp::Store,
     };
     let program = fixture::custom_program(BlendState::Alpha);
-    let missing = RasterDraw {
-        bindings: &inputs.bindings[..3],
-        ..draws[0]
-    };
     assert_eq!(
         graph
-            .raster(
-                "missing uniform",
-                &program,
-                [missing],
-                RasterAttachments {
-                    colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
-                    depth: Some(depth_attachment(&graph, LoadOp::Load)),
-                }
-            )
+            .raster_bindings(&program, &inputs.bindings[..3])
             .unwrap_err()
             .kind(),
         GraphErrorKind::InvalidInput

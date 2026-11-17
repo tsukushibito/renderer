@@ -590,6 +590,11 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                 },
             ]
         });
+        let bindings = bindings.map(|bindings| {
+            graph
+                .raster_bindings(&ManagedRasterProgram::textured_mesh(), &bindings)
+                .unwrap()
+        });
         let mut draws = std::array::from_fn::<_, 2, _>(|draw| RasterDraw {
             vertices,
             indices,
@@ -600,7 +605,7 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
             )
             .unwrap()
             .into(),
-            bindings: &bindings[draw],
+            bindings: Some(bindings[draw]),
         });
         graph
             .raster(
