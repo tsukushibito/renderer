@@ -172,6 +172,7 @@ impl<T: Copy> Intervals<T> {
         None
     }
 
+    #[cfg(test)]
     pub fn set_cursor_value(&mut self, cursor: Cursor, value: T) {
         self.nodes[cursor.0.get()].entry.value = value;
     }
@@ -191,6 +192,7 @@ impl<T: Copy> Intervals<T> {
         None
     }
 
+    #[cfg(test)]
     pub fn split(&mut self, resource: usize, point: u64) -> Result<(), ()> {
         let Some(index) = self.index_at(resource, point) else {
             return Ok(());

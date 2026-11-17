@@ -10,10 +10,12 @@ use std::ops::Range;
 
 mod index;
 mod intervals;
+mod readers;
 #[cfg(feature = "development-validation")]
 use super::accesses::{IndexedAccess, conflicting_ranges_in};
 use index::Index;
 use intervals::{Entry, Intervals};
+use readers::Readers;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Limits {
@@ -207,21 +209,13 @@ struct ContentSegment {
 #[derive(Clone, Copy)]
 struct HazardSegment {
     writer: Option<Index>,
-    readers: Option<Index>,
-}
-
-struct Reader {
-    pass: usize,
-    previous: Option<Index>,
-    visited: usize,
 }
 
 pub(crate) struct Workspace {
     limits: Limits,
     contents: Intervals<ContentSegment>,
     hazards: Intervals<HazardSegment>,
-    readers: Vec<Reader>,
-    visit_epoch: usize,
+    readers: Readers,
     data: Vec<(usize, usize)>,
     data_offsets: Vec<Range<usize>>,
     data_marks: Vec<usize>,
@@ -251,8 +245,7 @@ impl Workspace {
             limits,
             contents: Intervals::new(limits.resources, limits.segments).map_err(Error::capacity)?,
             hazards: Intervals::new(limits.resources, limits.segments).map_err(Error::capacity)?,
-            readers: reserve(limits.readers, Capacity::Readers)?,
-            visit_epoch: 0,
+            readers: Readers::new(limits.resources, limits.readers).map_err(Error::capacity)?,
             data: reserve(limits.edges, Capacity::Edges)?,
             data_offsets: reserve(limits.passes, Capacity::Passes)?,
             data_marks: reserve(limits.passes, Capacity::Passes)?,
@@ -286,8 +279,6 @@ impl Workspace {
     }
 
     fn reset(&mut self, passes: usize) {
-        self.readers.clear();
-        self.visit_epoch = 0;
         self.data.clear();
         self.data_offsets.clear();
         self.data_marks.clear();
@@ -401,34 +392,16 @@ impl Workspace {
     }
 
     fn add_edge(&mut self, from: usize, to: usize, kind: DependencyKind) -> Result<(), Error> {
-        if self.edge_marks[from] != to {
-            self.edge_marks[from] = to;
-            self.edge_kinds[from] = 0;
-        }
-        let bit = 1 << kind as u8;
-        if self.edge_kinds[from] & bit == 0 {
-            push(
-                &mut self.edges,
-                Edge { from, to, kind },
-                self.limits.edges,
-                Capacity::Edges,
-            )?;
-            self.edge_kinds[from] |= bit;
-        }
-        Ok(())
+        add_edge(
+            &mut self.edges,
+            &mut self.edge_marks,
+            &mut self.edge_kinds,
+            self.limits.edges,
+            Edge { from, to, kind },
+        )
     }
 
     fn hazard_dependencies(&mut self, to: usize, access: &Access) -> Result<(), Error> {
-        if access.write {
-            if self.visit_epoch == usize::MAX {
-                for reader in &mut self.readers {
-                    reader.visited = 0;
-                }
-                self.visit_epoch = 1;
-            } else {
-                self.visit_epoch += 1;
-            }
-        }
         let mut cursor = self.hazards.find(access.resource, access.range.start);
         while let Some(current) = cursor {
             let segment = self.hazards.entry(current);
@@ -445,18 +418,27 @@ impl Workspace {
                 }
             }
             if access.write {
-                let mut reader = segment.value.readers;
-                while let Some(index) = reader {
-                    let index = index.get();
-                    if self.readers[index].visited == self.visit_epoch {
-                        break;
-                    }
-                    self.readers[index].visited = self.visit_epoch;
-                    let entry = &self.readers[index];
-                    let from = entry.pass;
-                    reader = entry.previous;
-                    self.add_edge(from, to, DependencyKind::War)?;
-                }
+                // A read remains relevant on bytes not overwritten since its
+                // declaration. Query original access intervals newer than this
+                // segment's writer instead of copying histories into segments.
+                self.readers.visit(
+                    access.resource,
+                    segment.start.max(access.range.start)..segment.end.min(access.range.end),
+                    segment.value.writer.map(Index::get),
+                    |from| {
+                        add_edge(
+                            &mut self.edges,
+                            &mut self.edge_marks,
+                            &mut self.edge_kinds,
+                            self.limits.edges,
+                            Edge {
+                                from,
+                                to,
+                                kind: DependencyKind::War,
+                            },
+                        )
+                    },
+                )?;
             }
             cursor = self.hazards.next(current);
         }
@@ -471,43 +453,13 @@ impl Workspace {
                     access.range.clone(),
                     HazardSegment {
                         writer: Some(Index::new(pass)),
-                        readers: None,
                     },
                 )
                 .map_err(|_| Error::capacity(Capacity::Segments))?;
         } else {
-            self.hazards
-                .split(access.resource, access.range.start)
-                .map_err(|_| Error::capacity(Capacity::Segments))?;
-            self.hazards
-                .split(access.resource, access.range.end)
-                .map_err(|_| Error::capacity(Capacity::Segments))?;
-            let mut cursor = self.hazards.find(access.resource, access.range.start);
-            while let Some(current) = cursor {
-                let segment = self.hazards.entry(current);
-                if segment.start >= access.range.end {
-                    break;
-                }
-                let reader = self.readers.len();
-                push(
-                    &mut self.readers,
-                    Reader {
-                        pass,
-                        previous: segment.value.readers,
-                        visited: 0,
-                    },
-                    self.limits.readers,
-                    Capacity::Readers,
-                )?;
-                self.hazards.set_cursor_value(
-                    current,
-                    HazardSegment {
-                        readers: Some(Index::new(reader)),
-                        ..segment.value
-                    },
-                );
-                cursor = self.hazards.next(current);
-            }
+            self.readers
+                .insert(access.resource, access.range.clone(), pass)
+                .map_err(Error::capacity)?;
         }
         Ok(())
     }
@@ -517,9 +469,8 @@ impl Workspace {
         let _span = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("renderer.graph.hazards"), 0));
         self.hazards.clear(input.resource_count());
-        self.readers.clear();
+        self.readers.clear(input.resource_count());
         self.edges.clear();
-        self.visit_epoch = 0;
         self.edge_marks.fill(usize::MAX);
         self.edge_kinds.fill(0);
         for resource in 0..input.resource_count() {
@@ -529,10 +480,7 @@ impl Workspace {
                     Entry {
                         start: 0,
                         end: input.resource_size(resource),
-                        value: HazardSegment {
-                            writer: None,
-                            readers: None,
-                        },
+                        value: HazardSegment { writer: None },
                     },
                 )
                 .map_err(|_| Error::capacity(Capacity::Segments))?;
@@ -641,6 +589,28 @@ impl Workspace {
                 .expect("remaining predecessor");
         }
     }
+}
+
+/// Deduplicate dependency kinds for one target pass without a separate set.
+/// Kept independent of Workspace so reader queries can immutably borrow their
+/// index while appending only to the disjoint prepared edge storage.
+fn add_edge(
+    edges: &mut Vec<Edge>,
+    marks: &mut [usize],
+    kinds: &mut [u8],
+    limit: usize,
+    edge: Edge,
+) -> Result<(), Error> {
+    if marks[edge.from] != edge.to {
+        marks[edge.from] = edge.to;
+        kinds[edge.from] = 0;
+    }
+    let bit = 1 << edge.kind as u8;
+    if kinds[edge.from] & bit == 0 {
+        push(edges, edge, limit, Capacity::Edges)?;
+        kinds[edge.from] |= bit;
+    }
+    Ok(())
 }
 
 pub(crate) fn analyze(
@@ -1369,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn splitting_read_ranges_preserves_all_readers_within_prepared_history_capacity() {
+    fn broad_and_narrow_reads_use_one_reader_record_each_in_both_declaration_orders() {
         let count = 1_024_usize;
         let size = count as u64 * 4;
         let writer = count * 2;
@@ -1378,50 +1348,78 @@ mod tests {
             passes: writer + 2,
             accesses: writer + 2,
             edges: writer + 1,
-            segments: count,
+            segments: 1,
             readers: writer + 1,
         };
-        let mut graph = fixture(vec![0..size]);
-        graph.resources[0].size = size;
-        graph
-            .passes
-            .extend((0..count).map(|_| pass(vec![read(0..size)], true)));
-        graph
-            .passes
-            .extend((0..count).map(|i| pass(vec![read(i as u64 * 4..i as u64 * 4 + 4)], true)));
-        graph.passes.push(pass(vec![write(0..size)], true));
-        graph.passes.push(pass(vec![read(0..size)], true));
         let mut work = Workspace::new(limits).unwrap();
         let mut out = Output::new(limits).unwrap();
-        // The declared capacity admits each whole or partial read once. A split
-        // that cloned all prior histories would fail this ordinary analysis.
-        analyze(&graph, &mut work, &mut out).unwrap();
-        for from in 0..writer {
-            assert!(
-                out.ordering_edges
-                    .binary_search(&Edge {
-                        from,
-                        to: writer,
-                        kind: DependencyKind::War
-                    })
-                    .is_ok()
+        for narrow_first in [false, true] {
+            let mut graph = fixture(vec![0..size]);
+            graph.resources[0].size = size;
+            for narrow in [narrow_first, !narrow_first] {
+                graph.passes.extend((0..count).map(|i| {
+                    pass(
+                        vec![read(if narrow {
+                            i as u64 * 4..i as u64 * 4 + 4
+                        } else {
+                            0..size
+                        })],
+                        true,
+                    )
+                }));
+            }
+            graph.passes.push(pass(vec![write(0..size)], true));
+            graph.passes.push(pass(vec![read(0..size)], true));
+            // Read-only fragmentation consumes neither writer-frontier nodes
+            // nor reader-by-segment history copies, in either declaration order.
+            analyze(&graph, &mut work, &mut out).unwrap();
+            for from in 0..writer {
+                assert!(
+                    out.ordering_edges
+                        .binary_search(&Edge {
+                            from,
+                            to: writer,
+                            kind: DependencyKind::War,
+                        })
+                        .is_ok()
+                );
+            }
+            let after_write = out
+                .ordering_edges
+                .iter()
+                .filter(|edge| edge.to == writer + 1)
+                .copied()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                after_write,
+                [Edge {
+                    from: writer,
+                    to: writer + 1,
+                    kind: DependencyKind::Raw,
+                }]
             );
+            assert_eq!(out.final_contents(0), [0..size]);
         }
-        let after_write = out
-            .ordering_edges
-            .iter()
-            .filter(|edge| edge.to == writer + 1)
-            .copied()
-            .collect::<Vec<_>>();
+    }
+
+    #[test]
+    fn reader_capacity_failure_can_be_followed_by_a_smaller_analysis() {
+        let limits = Limits {
+            readers: 1,
+            ..limits()
+        };
+        let mut graph = fixture(vec![0..16]);
+        graph.passes = vec![pass(vec![read(0..4)], true), pass(vec![read(0..16)], true)];
+        let mut work = Workspace::new(limits).unwrap();
+        let mut out = Output::new(limits).unwrap();
         assert_eq!(
-            after_write,
-            [Edge {
-                from: writer,
-                to: writer + 1,
-                kind: DependencyKind::Raw
-            }]
+            analyze(&graph, &mut work, &mut out).unwrap_err().kind,
+            ErrorKind::Capacity(Capacity::Readers)
         );
-        assert_eq!(out.final_contents(0), [0..size]);
+        graph.passes.remove(0);
+        analyze(&graph, &mut work, &mut out).unwrap();
+        assert_eq!(out.order, [0]);
+        assert_eq!(out.final_contents(0), [0..16]);
     }
 
     #[test]
