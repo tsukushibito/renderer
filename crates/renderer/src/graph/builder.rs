@@ -1030,13 +1030,19 @@ mod tests {
             };
             let mut first = material(a_view);
             let second = material(b_view);
+            let first_set = graph
+                .raster_bindings(&ManagedRasterProgram::textured_mesh(), &first)
+                .unwrap();
+            let second_set = graph
+                .raster_bindings(&ManagedRasterProgram::textured_mesh(), &second)
+                .unwrap();
             let draws = [
                 RasterDraw {
-                    bindings: &first,
+                    bindings: Some(first_set),
                     ..mesh
                 },
                 RasterDraw {
-                    bindings: &second,
+                    bindings: Some(second_set),
                     ..mesh
                 },
             ];
@@ -1109,6 +1115,11 @@ mod tests {
             ));
         }
         let accesses = plan.accesses(pass.index);
+        assert_eq!(
+            accesses.iter().filter(|access| access.purpose == AccessPurpose::Uniform).count(),
+            1,
+            "identical camera footprints shared across material sets are emitted once"
+        );
         for access in accesses
             .iter()
             .filter(|access| access.purpose == AccessPurpose::Uniform)

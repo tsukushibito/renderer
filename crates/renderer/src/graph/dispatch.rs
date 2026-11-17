@@ -131,6 +131,9 @@ impl Graph {
         }
         let end = end.unwrap();
         if bindings.len != 0 && !self.raster_binding_seen[bindings.first] {
+            // The trusted Raster contract allows only read-only descriptors
+            // and forbids shader side effects/inter-draw synchronization.
+            // Compute write footprints keep the separate dispatch path.
             for index in bindings.first_access..access_end.unwrap() {
                 self.append_access(self.binding_accesses[index].clone())?;
             }

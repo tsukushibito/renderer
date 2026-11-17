@@ -363,8 +363,11 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
                 resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
             },
         ];
+        let bindings = graph
+            .raster_bindings(&ManagedRasterProgram::textured_mesh_hdr(), &bindings)
+            .unwrap();
         let draws = [RasterDraw {
-            bindings: &bindings,
+            bindings: Some(bindings),
             vertices,
             indices,
             index_count: 6,

@@ -6,7 +6,7 @@ use renderer::{
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity,
         GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, LoadOp, PassHandle,
-        RasterAttachments, RasterConstants, RasterDraw, StoreOp,
+        RasterAttachments, RasterBindings, RasterConstants, RasterDraw, StoreOp,
     },
     program::SamplerDescriptor,
 };
@@ -113,7 +113,7 @@ impl Budget {
             passes: 12,
             accesses,
             draws: scene.primitives.len() + 1,
-            bindings: scene.primitives.len() * 7 + 2,
+            bindings: scene.materials.len() * 7 + 2,
             attachments: 12,
             dependencies: 16,
             initial_ranges: resources * 2,
@@ -385,7 +385,7 @@ pub(super) struct Workspace {
     indices: Vec<BufferHandle>,
     materials: Vec<BufferHandle>,
     images: Vec<ImageHandle>,
-    bindings: Vec<[Binding; 7]>,
+    bindings: Vec<RasterBindings>,
     blended: Vec<usize>,
 }
 impl Workspace {
@@ -474,7 +474,7 @@ pub(super) fn build(
                     graph.sampled_image_view(handle, 0, mip_count)?,
                 ))
             };
-            workspace.bindings.push([
+            let bindings = [
                 Binding {
                     group: 0,
                     binding: 0,
@@ -518,7 +518,15 @@ pub(super) fn build(
                     binding: 4,
                     resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
                 },
-            ]);
+            ];
+            let program = if material.blend {
+                program::blend_program()
+            } else {
+                program::opaque_program()
+            };
+            workspace
+                .bindings
+                .push(graph.raster_bindings(&program, &bindings)?);
         }
     }
     let (color, depth, output, color_view, depth_view) = {
@@ -562,7 +570,7 @@ pub(super) fn build(
     let draw = |index: usize| {
         let primitive = &scene.primitives[index];
         RasterDraw {
-            bindings: &workspace.bindings[primitive.material],
+            bindings: Some(workspace.bindings[primitive.material]),
             vertices: workspace.vertices[index],
             indices: workspace.indices[index],
             index_count: primitive.index_count,
@@ -661,11 +669,13 @@ pub(super) fn build(
             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
         },
     ];
+    let resolve_program = program::resolve_program();
+    let resolve_bindings = graph.raster_bindings(&resolve_program, &resolve_bindings)?;
     graph.raster(
         "B2 clamp and sRGB encode",
-        &program::resolve_program(),
+        &resolve_program,
         [RasterDraw {
-            bindings: &resolve_bindings,
+            bindings: Some(resolve_bindings),
             vertices: resolve_vertices,
             indices: resolve_indices,
             index_count: 3,
