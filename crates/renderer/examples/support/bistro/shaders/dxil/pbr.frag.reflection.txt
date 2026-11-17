@@ -16,7 +16,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 95c4ac2551af0d8355cd03f32633baca
+; shader hash: 96e67f2aaeba3c9c6cab2f9d57b15587
 ;
 ; Pipeline Runtime Information:
 ;
@@ -56,34 +56,40 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _54_56
+; cbuffer _64_66
 ; {
 ;
-;   struct _54_56
+;   struct hostlayout._64_66
 ;   {
 ;
-;       float4 _56_m0;                                ; Offset:    0
-;       float4 _56_m1;                                ; Offset:   16
-;       float4 _56_m2;                                ; Offset:   32
-;       uint4 _56_m3;                                 ; Offset:   48
+;       row_major float4x4 _66_m0;                    ; Offset:    0
+;       float4 _66_m1;                                ; Offset:   64
+;       float4 _66_m2;                                ; Offset:   80
+;       float4 _66_m3;                                ; Offset:   96
+;       float4 _66_m4;                                ; Offset:  112
+;       row_major float4x4 _66_m5[4];                 ; Offset:  128
+;       float4 _66_m6;                                ; Offset:  384
+;       float4 _66_m7;                                ; Offset:  400
+;       float4 _66_m8;                                ; Offset:  416
+;       float4 _66_m9;                                ; Offset:  432
+;       float4 _66_m10;                               ; Offset:  448
 ;
-;   } _54_56;                                         ; Offset:    0 Size:    64
+;   } _64_66;                                         ; Offset:    0 Size:   464
 ;
 ; }
 ;
-; cbuffer _262_264
+; cbuffer _521_523
 ; {
 ;
-;   struct hostlayout._262_264
+;   struct _521_523
 ;   {
 ;
-;       row_major float4x4 _264_m0;                   ; Offset:    0
-;       float4 _264_m1;                               ; Offset:   64
-;       float4 _264_m2;                               ; Offset:   80
-;       float4 _264_m3;                               ; Offset:   96
-;       float4 _264_m4;                               ; Offset:  112
+;       float4 _523_m0;                               ; Offset:    0
+;       float4 _523_m1;                               ; Offset:   16
+;       float4 _523_m2;                               ; Offset:   32
+;       uint4 _523_m3;                                ; Offset:   48
 ;
-;   } _262_264;                                       ; Offset:    0 Size:   128
+;   } _521_523;                                       ; Offset:    0 Size:    64
 ;
 ; }
 ;
@@ -92,13 +98,22 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _54_56                            cbuffer      NA          NA     CB0            cb1     1
-; _262_264                          cbuffer      NA          NA     CB1            cb0     1
-; _81                               sampler      NA          NA      S0      s4,space1     1
-; _77                               texture     f32          2d      T0      t0,space1     1
-; _126                              texture     f32          2d      T1      t2,space1     1
-; _213                              texture     f32          2d      T2      t1,space1     1
-; _416                              texture     f32          2d      T3      t3,space1     1
+; _64_66                            cbuffer      NA          NA     CB0            cb0     1
+; _521_523                          cbuffer      NA          NA     CB1            cb1     1
+; _146                              sampler      NA          NA      S0      s4,space3     1
+; _538                              sampler      NA          NA      S1      s4,space1     1
+; _878                              sampler      NA          NA      S2      s3,space2     1
+; _142                              texture     f32          2d      T0      t0,space3     1
+; _159                              texture     f32          2d      T1      t1,space3     1
+; _171                              texture     f32          2d      T2      t2,space3     1
+; _179                              texture     f32          2d      T3      t3,space3     1
+; _536                              texture     f32          2d      T4      t0,space1     1
+; _576                              texture     f32          2d      T5      t2,space1     1
+; _671                              texture     f32          2d      T6      t1,space1     1
+; _865                              texture     f32          2d      T7      t3,space1     1
+; _876                              texture     f32          2d      T8      t0,space2     1
+; _898                              texture     f32          2d      T9      t1,space2     1
+; _909                              texture     f32          2d     T10      t2,space2     1
 ;
 ;
 ; ViewId state:

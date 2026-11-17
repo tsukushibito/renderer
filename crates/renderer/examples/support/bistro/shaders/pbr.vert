@@ -15,7 +15,13 @@ layout(set = 0, binding = 0, std140) uniform Camera {
     vec4 eye;
     vec4 light_direction;
     vec4 light_color;
-    vec4 ambient;
+    vec4 environment; // strength, inverse-yaw input radians, specular max LOD, shadows enabled
+    mat4 shadow_view_projection[4];
+    vec4 shadow_splits;
+    vec4 shadow_texel_world;
+    vec4 shadow_depth_scale;
+    vec4 camera_forward_blend;
+    vec4 shadow_bias; // receiver constant/slope/normal offset in world-texel units
 } camera;
 
 void main() {

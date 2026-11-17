@@ -19,7 +19,7 @@
 ; TEXCOORD                 3   xy          3     NONE   float   xy
 ; SV_Position              0   xyzw        4      POS   float   xyzw
 ;
-; shader hash: 761ac3d1ef3baf7e8c97eff0277c523a
+; shader hash: 97c7ea3d006eb37967bee4a92c573143
 ;
 ; Pipeline Runtime Information:
 ;
@@ -61,19 +61,25 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _11_13
+; cbuffer _14_16
 ; {
 ;
-;   struct hostlayout._11_13
+;   struct hostlayout._14_16
 ;   {
 ;
-;       row_major float4x4 _13_m0;                    ; Offset:    0
-;       float4 _13_m1;                                ; Offset:   64
-;       float4 _13_m2;                                ; Offset:   80
-;       float4 _13_m3;                                ; Offset:   96
-;       float4 _13_m4;                                ; Offset:  112
+;       row_major float4x4 _16_m0;                    ; Offset:    0
+;       float4 _16_m1;                                ; Offset:   64
+;       float4 _16_m2;                                ; Offset:   80
+;       float4 _16_m3;                                ; Offset:   96
+;       float4 _16_m4;                                ; Offset:  112
+;       row_major float4x4 _16_m5[4];                 ; Offset:  128
+;       float4 _16_m6;                                ; Offset:  384
+;       float4 _16_m7;                                ; Offset:  400
+;       float4 _16_m8;                                ; Offset:  416
+;       float4 _16_m9;                                ; Offset:  432
+;       float4 _16_m10;                               ; Offset:  448
 ;
-;   } _11_13;                                         ; Offset:    0 Size:   128
+;   } _14_16;                                         ; Offset:    0 Size:   464
 ;
 ; }
 ;
@@ -82,7 +88,7 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _11_13                            cbuffer      NA          NA     CB0            cb0     1
+; _14_16                            cbuffer      NA          NA     CB0            cb0     1
 ;
 ;
 ; ViewId state:

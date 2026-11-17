@@ -1,23 +1,25 @@
-//! Consumer-owned Forward PBR assets. Renderer has no material/effect enum here.
+//! Consumer-owned Bistro Forward PBR, CSM and SDR output Programs.
 //!
-//! Vertices are world-space position/normal/tangent/UV, stride 48. Camera words
-//! are column-major view-projection, eye, surface-to-sun direction, sun RGB and
-//! diffuse ambient RGB (128 bytes). Material words are base RGBA, emissive RGB /
-//! normal scale, metallic / roughness / AO strength / cutoff, then four u32 flags
-//! (64 bytes). Flags are alpha mode (0 opaque, 1 mask, 2 blend), double-sided,
-//! and two reserved zero words. The loader establishes finite values/ranges.
+//! World-space position/normal/tangent/UV uses a 48-byte stream. The Camera UBO
+//! is 464 bytes: VP, eye (w=near), sun direction/RGB, environment parameters,
+//! four shadow matrices, split distances, world texel sizes, depth scales,
+//! camera forward/blend, receiver bias. Matrices are column-major. Environment
+//! words are strength, source yaw radians, reflection max LOD, shadows enabled.
+//! Material is the unchanged 64-byte B2 factor/flag ABI. All finite data and
+//! asset ranges are established at cook/import or explicit update boundaries.
 //!
-//! Base/emissive textures use sRGB sampled formats; normal/ORM are linear data.
-//! The linear RGBA16F target is blended before the final clamp/sRGB encode. This
-//! B2 light is directional plus a declared constant diffuse ambient term: no
-//! environment IBL, shadows, exposure, tone mapping, Bloom or AA is implied.
-//! GGX uses alpha >= 1e-3 to regularize zero roughness; linear output saturates
-//! to binary16's finite range before storage. Cooked factors stay unchanged.
-//! Vertex clip coordinates use ordered `precise` FP32 products/additions.
-//! This prevents compiler-specific contraction/reassociation from amplifying
-//! world-space cancellation differently across APIs. It can cost fused-multiply-
-//! add opportunities; it does not introduce optional GPU precision features or
-//! change the camera ABI. Performance and real-GPU agreement remain measured.
+//! Static IBL uses three 2D RGBA16F images. Irradiance stores E (shader uses
+//! E/pi), reflection mips follow roughness, and BRDF RG stores split-sum A/B.
+//! Environment diffuse is Lambert without extra view-Fresnel or multi-scattering
+//! compensation; this approximation is distinct from cross-API agreement.
+//! D32 shadows use nearest sampling and explicit 3x3 depth comparisons. The
+//! camera-facing HDR image is exposed only by the caller after alpha blending.
+//! Neutral runs with EV+1 into a separate RGBA16F image; optional FXAA then one
+//! sRGB encode produces RGBA8. The resolve without AA also serves mip probes.
+//!
+//! No effect kind, hidden Graph operation, runtime shader compilation or shader
+//! storage side effect is introduced. Generated SPIR-V/DXIL and reflection are
+//! checked in, with the fixed toolchain and upstream license notices retained.
 
 use renderer::ImageFormat;
 use renderer::program::{
@@ -27,118 +29,131 @@ use renderer::program::{
 };
 
 pub const VERTEX_BYTES: usize = 48;
-pub const CAMERA_BYTES: usize = 128;
+pub const CAMERA_BYTES: usize = 464;
 pub const MATERIAL_BYTES: usize = 64;
 
+const CAMERA: BindingLayout = BindingLayout {
+    group: 0,
+    binding: 0,
+    kind: BindingType::Uniform,
+    min_size: CAMERA_BYTES as u64,
+    stages: ShaderStages::VERTEX.union(ShaderStages::FRAGMENT),
+};
+const MATERIAL: BindingLayout = BindingLayout {
+    group: 0,
+    binding: 1,
+    kind: BindingType::Uniform,
+    min_size: MATERIAL_BYTES as u64,
+    stages: ShaderStages::FRAGMENT,
+};
+const fn image(group: u32, binding: u32) -> BindingLayout {
+    BindingLayout {
+        group,
+        binding,
+        kind: BindingType::SampledImage,
+        min_size: 0,
+        stages: ShaderStages::FRAGMENT,
+    }
+}
+const fn sampler(group: u32, binding: u32) -> BindingLayout {
+    BindingLayout {
+        group,
+        binding,
+        kind: BindingType::Sampler,
+        min_size: 0,
+        stages: ShaderStages::FRAGMENT,
+    }
+}
+const fn pair(group: u32, image: u32, sampler: u32) -> SampledImageSamplerPair {
+    SampledImageSamplerPair {
+        image_group: group,
+        image_binding: image,
+        sampler_group: group,
+        sampler_binding: sampler,
+    }
+}
+const NO_PARAMETERS: RasterParameterLayout = RasterParameterLayout {
+    size: 0,
+    stages: ShaderStages::EMPTY,
+    dxil_register: 0,
+    dxil_space: 0,
+};
+const PBR_ATTRIBUTES: &[VertexAttribute] = &[
+    VertexAttribute {
+        location: 0,
+        offset: 0,
+        format: VertexFormat::Float32x3,
+    },
+    VertexAttribute {
+        location: 1,
+        offset: 12,
+        format: VertexFormat::Float32x3,
+    },
+    VertexAttribute {
+        location: 2,
+        offset: 24,
+        format: VertexFormat::Float32x4,
+    },
+    VertexAttribute {
+        location: 3,
+        offset: 40,
+        format: VertexFormat::Float32x2,
+    },
+];
 static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: VERTEX_BYTES as u32,
-    vertex_attributes: &[
-        VertexAttribute {
-            location: 0,
-            offset: 0,
-            format: VertexFormat::Float32x3,
-        },
-        VertexAttribute {
-            location: 1,
-            offset: 12,
-            format: VertexFormat::Float32x3,
-        },
-        VertexAttribute {
-            location: 2,
-            offset: 24,
-            format: VertexFormat::Float32x4,
-        },
-        VertexAttribute {
-            location: 3,
-            offset: 40,
-            format: VertexFormat::Float32x2,
-        },
-    ],
-    parameters: RasterParameterLayout {
-        size: 0,
-        stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
-    },
+    vertex_attributes: PBR_ATTRIBUTES,
+    parameters: NO_PARAMETERS,
     color_outputs: &[ImageFormat::Rgba16Float],
     bindings: &[
-        BindingLayout {
-            group: 0,
-            binding: 0,
-            kind: BindingType::Uniform,
-            min_size: CAMERA_BYTES as u64,
-            stages: ShaderStages::VERTEX.union(ShaderStages::FRAGMENT),
-        },
-        BindingLayout {
-            group: 0,
-            binding: 1,
-            kind: BindingType::Uniform,
-            min_size: MATERIAL_BYTES as u64,
-            stages: ShaderStages::FRAGMENT,
-        },
-        BindingLayout {
-            group: 1,
-            binding: 0,
-            kind: BindingType::SampledImage,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
-        BindingLayout {
-            group: 1,
-            binding: 1,
-            kind: BindingType::SampledImage,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
-        BindingLayout {
-            group: 1,
-            binding: 2,
-            kind: BindingType::SampledImage,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
-        BindingLayout {
-            group: 1,
-            binding: 3,
-            kind: BindingType::SampledImage,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
-        BindingLayout {
-            group: 1,
-            binding: 4,
-            kind: BindingType::Sampler,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
+        CAMERA,
+        MATERIAL,
+        image(1, 0),
+        image(1, 1),
+        image(1, 2),
+        image(1, 3),
+        sampler(1, 4),
+        image(2, 0),
+        image(2, 1),
+        image(2, 2),
+        sampler(2, 3),
+        image(3, 0),
+        image(3, 1),
+        image(3, 2),
+        image(3, 3),
+        sampler(3, 4),
     ],
-    binding_bytes: &[CAMERA_BYTES as u64, MATERIAL_BYTES as u64, 0, 0, 0, 0, 0],
+    binding_bytes: &[
+        CAMERA_BYTES as u64,
+        MATERIAL_BYTES as u64,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ],
     sampling_pairs: &[
-        SampledImageSamplerPair {
-            image_group: 1,
-            image_binding: 0,
-            sampler_group: 1,
-            sampler_binding: 4,
-        },
-        SampledImageSamplerPair {
-            image_group: 1,
-            image_binding: 1,
-            sampler_group: 1,
-            sampler_binding: 4,
-        },
-        SampledImageSamplerPair {
-            image_group: 1,
-            image_binding: 2,
-            sampler_group: 1,
-            sampler_binding: 4,
-        },
-        SampledImageSamplerPair {
-            image_group: 1,
-            image_binding: 3,
-            sampler_group: 1,
-            sampler_binding: 4,
-        },
+        pair(1, 0, 4),
+        pair(1, 1, 4),
+        pair(1, 2, 4),
+        pair(1, 3, 4),
+        pair(2, 0, 3),
+        pair(2, 1, 3),
+        pair(2, 2, 3),
+        pair(3, 0, 4),
+        pair(3, 1, 4),
+        pair(3, 2, 4),
+        pair(3, 3, 4),
     ],
     blend: BlendState::Replace,
     depth: DepthState::Required {
@@ -151,7 +166,6 @@ static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     vertex_dxil: include_bytes!("shaders/dxil/pbr.vert.dxil"),
     fragment_dxil: include_bytes!("shaders/dxil/pbr.frag.dxil"),
 };
-
 static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     blend: BlendState::Alpha,
     depth: DepthState::Required {
@@ -161,7 +175,50 @@ static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     },
     ..OPAQUE
 };
-
+static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
+    entry: "main",
+    vertex_stride: VERTEX_BYTES as u32,
+    vertex_attributes: &[
+        VertexAttribute {
+            location: 0,
+            offset: 0,
+            format: VertexFormat::Float32x3,
+        },
+        VertexAttribute {
+            location: 3,
+            offset: 40,
+            format: VertexFormat::Float32x2,
+        },
+    ],
+    parameters: RasterParameterLayout {
+        size: 4,
+        stages: ShaderStages::VERTEX,
+        dxil_register: 7,
+        dxil_space: 0,
+    },
+    color_outputs: &[],
+    bindings: &[
+        BindingLayout {
+            stages: ShaderStages::VERTEX,
+            ..CAMERA
+        },
+        MATERIAL,
+        image(1, 0),
+        sampler(1, 4),
+    ],
+    binding_bytes: &[CAMERA_BYTES as u64, MATERIAL_BYTES as u64, 0, 0],
+    sampling_pairs: &[pair(1, 0, 4)],
+    blend: BlendState::Replace,
+    depth: DepthState::Required {
+        compare: CompareOp::Less,
+        write: true,
+        require_load: false,
+    },
+    vertex_spirv: include_bytes!("shaders/shadow.vert.spv"),
+    fragment_spirv: include_bytes!("shaders/shadow.frag.spv"),
+    vertex_dxil: include_bytes!("shaders/dxil/shadow.vert.dxil"),
+    fragment_dxil: include_bytes!("shaders/dxil/shadow.frag.dxil"),
+};
 static RESOLVE: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 8,
@@ -170,36 +227,11 @@ static RESOLVE: RasterProgramDescriptor = RasterProgramDescriptor {
         offset: 0,
         format: VertexFormat::Float32x2,
     }],
-    parameters: RasterParameterLayout {
-        size: 0,
-        stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
-    },
+    parameters: NO_PARAMETERS,
     color_outputs: &[ImageFormat::Rgba8Unorm],
-    bindings: &[
-        BindingLayout {
-            group: 0,
-            binding: 0,
-            kind: BindingType::SampledImage,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
-        BindingLayout {
-            group: 0,
-            binding: 1,
-            kind: BindingType::Sampler,
-            min_size: 0,
-            stages: ShaderStages::FRAGMENT,
-        },
-    ],
+    bindings: &[image(0, 0), sampler(0, 1)],
     binding_bytes: &[0, 0],
-    sampling_pairs: &[SampledImageSamplerPair {
-        image_group: 0,
-        image_binding: 0,
-        sampler_group: 0,
-        sampler_binding: 1,
-    }],
+    sampling_pairs: &[pair(0, 0, 1)],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
     vertex_spirv: include_bytes!("shaders/resolve.vert.spv"),
@@ -207,40 +239,71 @@ static RESOLVE: RasterProgramDescriptor = RasterProgramDescriptor {
     vertex_dxil: include_bytes!("shaders/dxil/resolve.vert.dxil"),
     fragment_dxil: include_bytes!("shaders/dxil/resolve.frag.dxil"),
 };
+static TONE: RasterProgramDescriptor = RasterProgramDescriptor {
+    color_outputs: &[ImageFormat::Rgba16Float],
+    fragment_spirv: include_bytes!("shaders/tone.frag.spv"),
+    fragment_dxil: include_bytes!("shaders/dxil/tone.frag.dxil"),
+    ..RESOLVE
+};
+static RESOLVE_AA: RasterProgramDescriptor = RasterProgramDescriptor {
+    fragment_spirv: include_bytes!("shaders/resolve_aa.frag.spv"),
+    fragment_dxil: include_bytes!("shaders/dxil/resolve_aa.frag.dxil"),
+    ..RESOLVE
+};
 
 pub const fn opaque_program() -> ManagedRasterProgram {
-    // SAFETY: Pinned modules/reflection implement precisely these vertex, UBO,
-    // stage and descriptor ABIs. There are no inline constants, storage writes,
-    // atomics, depth writes from the shader or hidden resources. The shaders
-    // access only constant 128/64-byte UBO prefixes and normalized 2D sampled
-    // images within the selected mip Views. Gradients are formed before any
-    // discard; hardware sampling bounds all addresses even for arbitrary float
-    // payloads. Floating-point guards avoid zero-length normalization/division.
-    // No optional arithmetic/capabilities or inter-draw synchronization is used.
-    // Source/binary/metadata changes require re-review and regeneration.
+    // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,
+    // 464/64-byte UBO prefixes, 16 bindings and every image/sampler pairing.
+    // All dynamic shadow indices are clamped to four matrices/vectors. Sampling
+    // uses normalized coordinates/explicit LOD and native-bounded selected Views.
+    // Gradients precede any discard. Arithmetic has guarded normalization and
+    // divisions. There are no storage, depth, sample-mask, atomic or undeclared
+    // side effects and no inter-draw synchronization or optional capabilities.
+    // Source/binary/ABI replacement invalidates this reviewed guarantee.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&OPAQUE) }
 }
-
 pub const fn blend_program() -> ManagedRasterProgram {
-    // SAFETY: Same immutable shader/resource contract as opaque_program; only
-    // fixed alpha blending and read-only, loaded depth differ. Zero alpha is
-    // discarded before attachment writes; blend draws must be ordered by caller.
+    // SAFETY: Identical immutable contract to opaque_program; only fixed alpha
+    // blending and loaded, read-only depth differ. Caller orders transparent draws.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&BLEND) }
 }
-
+pub const fn shadow_program() -> ManagedRasterProgram {
+    // SAFETY: Declared position/UV, 464/64-byte UBOs and sampled alpha exactly
+    // match generated modules. The four-byte inline index is clamped to 0..3
+    // before Uniform-array access (the inline block itself has no array).
+    // FS only discards: no color/depth/storage/sample-mask/stencil output. It
+    // rejects BLEND, one-sided back faces and authored MASK holes before depth.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&SHADOW) }
+}
+pub const fn tone_program() -> ManagedRasterProgram {
+    // SAFETY: One selected 2D float image and sampler at explicit LOD0, declared
+    // vec2 stream, no parameters, and one RGBA16F color output. Fixed exposure
+    // and Neutral have positive division guards and no hidden resources/effects.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&TONE) }
+}
 pub const fn resolve_program() -> ManagedRasterProgram {
-    // SAFETY: Pinned modules use the declared vec2 stream, no parameters, and
-    // one image plus sampler at explicit LOD0. Normalized coordinates and the
-    // caller's nearest-clamp sampler bound access to that selected View. There
-    // are no other resources, side effects, optional capabilities or shader depth.
+    // SAFETY: One selected 2D float image/sampler, explicit LOD0, vec2 stream,
+    // no parameters. Clamp and one sRGB encode write only the RGBA8 attachment.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&RESOLVE) }
 }
-
-pub const fn programs() -> [ManagedRasterProgram; 3] {
-    [opaque_program(), blend_program(), resolve_program()]
+pub const fn resolve_aa_program() -> ManagedRasterProgram {
+    // SAFETY: Same resource/stream/output contract as resolve_program. Bounded
+    // FXAA search uses normalized LOD0 texture samples, not unchecked texel loads;
+    // clamp sampling covers edge coordinates and divisions have positive guards.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&RESOLVE_AA) }
+}
+pub const fn programs() -> [ManagedRasterProgram; 6] {
+    [
+        opaque_program(),
+        blend_program(),
+        shadow_program(),
+        tone_program(),
+        resolve_program(),
+        resolve_aa_program(),
+    ]
 }
 
-/// Fullscreen indexed triangle for resolve, prepared once by the consumer.
+/// Fullscreen indexed triangle, prepared once by the consumer.
 pub const RESOLVE_VERTICES: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
 pub const RESOLVE_INDICES: [u32; 3] = [0, 1, 2];
 
@@ -385,7 +448,7 @@ mod tests {
                         assert_eq!(
                             offsets,
                             if size == CAMERA_BYTES as u64 {
-                                vec![0, 64, 80, 96, 112]
+                                vec![0, 64, 80, 96, 112, 128, 384, 400, 416, 432, 448]
                             } else {
                                 vec![0, 16, 32, 48]
                             }
@@ -416,6 +479,15 @@ mod tests {
                     "t2,space1",
                     "t3,space1",
                     "s4,space1",
+                    "t0,space2",
+                    "t1,space2",
+                    "t2,space2",
+                    "s3,space2",
+                    "t0,space3",
+                    "t1,space3",
+                    "t2,space3",
+                    "t3,space3",
+                    "s4,space3",
                 ][..],
             ),
         ] {
@@ -435,6 +507,78 @@ mod tests {
             for binding in expected {
                 assert!(actual.contains(binding), "missing DXIL binding {binding}");
             }
+        }
+    }
+    #[test]
+    fn shadow_fragment_and_cascade_parameter_match_the_declared_depth_only_contract() {
+        let program = shadow_program();
+        assert!(program.is_depth_only());
+        assert_eq!(program.parameter_size(), 4);
+        assert_eq!(program.parameter_layout().stages, ShaderStages::VERTEX);
+        assert_eq!(program.bindings().len(), 4);
+        assert!(matches!(
+            program.depth(),
+            DepthState::Required { write: true, .. }
+        ));
+        let vertex: serde_json::Value = serde_json::from_str(include_str!(
+            "shaders/dxil/shadow.vert.spirv-reflection.json"
+        ))
+        .unwrap();
+        let fragment: serde_json::Value = serde_json::from_str(include_str!(
+            "shaders/dxil/shadow.frag.spirv-reflection.json"
+        ))
+        .unwrap();
+        assert_eq!(vertex["ubos"][0]["block_size"], CAMERA_BYTES);
+        let push = &vertex["push_constants"][0];
+        let members = vertex["types"][push["type"].as_str().unwrap()]["members"]
+            .as_array()
+            .unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["type"], "uint");
+        assert_eq!(members[0]["offset"], 0);
+        assert!(fragment.get("outputs").is_none());
+        assert!(fragment.get("push_constants").is_none());
+        assert_eq!(fragment["ubos"][0]["block_size"], MATERIAL_BYTES);
+        assert_eq!(fragment["separate_images"][0]["set"], 1);
+        assert_eq!(fragment["separate_images"][0]["binding"], 0);
+        assert_eq!(fragment["separate_samplers"][0]["binding"], 4);
+        let dxil = include_str!("shaders/dxil/shadow.vert.reflection.txt");
+        assert!(dxil.contains("cb7"));
+        assert!(!include_str!("shaders/dxil/shadow.frag.reflection.txt").contains("SV_Target"));
+    }
+
+    #[test]
+    fn post_programs_have_only_the_selected_image_and_no_hidden_parameters() {
+        for (program, reflection, expected) in [
+            (
+                tone_program(),
+                include_str!("shaders/dxil/tone.frag.spirv-reflection.json"),
+                ImageFormat::Rgba16Float,
+            ),
+            (
+                resolve_program(),
+                include_str!("shaders/dxil/resolve.frag.spirv-reflection.json"),
+                ImageFormat::Rgba8Unorm,
+            ),
+            (
+                resolve_aa_program(),
+                include_str!("shaders/dxil/resolve_aa.frag.spirv-reflection.json"),
+                ImageFormat::Rgba8Unorm,
+            ),
+        ] {
+            assert_eq!(program.color_outputs(), &[expected]);
+            assert_eq!(program.parameter_size(), 0);
+            assert_eq!(program.depth(), DepthState::Disabled);
+            assert_eq!(program.bindings().len(), 2);
+            let reflected: serde_json::Value = serde_json::from_str(reflection).unwrap();
+            for forbidden in ["ubos", "ssbos", "push_constants", "images"] {
+                assert!(reflected.get(forbidden).is_none());
+            }
+            assert_eq!(reflected["separate_images"].as_array().unwrap().len(), 1);
+            assert_eq!(reflected["separate_images"][0]["set"], 0);
+            assert_eq!(reflected["separate_images"][0]["binding"], 0);
+            assert_eq!(reflected["separate_samplers"].as_array().unwrap().len(), 1);
+            assert_eq!(reflected["separate_samplers"][0]["binding"], 1);
         }
     }
 }
