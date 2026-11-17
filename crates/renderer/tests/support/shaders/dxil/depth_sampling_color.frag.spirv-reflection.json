@@ -1,0 +1,62 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_32" : {
+            "name" : "_32",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_60",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "_23",
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_46",
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "_27",
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "sampler",
+            "name" : "_48",
+            "set" : 0,
+            "binding" : 3
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_32",
+            "name" : "_34",
+            "push_constant" : true
+        }
+    ]
+}
