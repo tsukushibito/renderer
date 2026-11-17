@@ -163,7 +163,6 @@ pub(super) struct ExecutionSlot {
     pub(super) upload_used: u64,
     pub(super) scratch_state: D3D12_RESOURCE_STATES,
     pub(super) raster: Option<RasterStorage>,
-    pub(super) raster_descriptors_used: usize,
     pub(super) compute_descriptors_used: usize,
     pub(super) buffer_scopes: Vec<D3D12_RESOURCE_STATES>,
     pub(super) provenance: Vec<BufferProvenance>,
@@ -235,7 +234,6 @@ impl ExecutionSlot {
             resource_uses: vec![None; capacity.resources],
             resource_count: 0,
             raster: None,
-            raster_descriptors_used: 0,
             compute_descriptors_used: 0,
             buffer_scopes: {
                 let mut values = reserved(capacity.buffers)?;
@@ -297,7 +295,6 @@ impl ExecutionSlot {
         // Graph requirements initializes the active logical resource map once.
         self.buffers_used = 0;
         self.upload_used = 0;
-        self.raster_descriptors_used = 0;
         self.compute_descriptors_used = 0;
         self.scratch_state = D3D12_RESOURCE_STATE_COMMON;
         Ok(())
@@ -700,6 +697,7 @@ impl FramePool {
                 registered_images,
                 raster_descriptors,
                 compute_descriptors,
+                capacity.buffers,
                 slot_index == 0,
             )?);
             slot.common_barriers

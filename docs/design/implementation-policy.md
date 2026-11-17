@@ -1715,11 +1715,29 @@ canonical registry entryの既知slice数を
 必要な上限は明示した準備・変更境界で選ぶ。registry側の保持分も容量へ含め、
 旧slot内資源だけの予約枠数や比率を現在の常駐量・時間性能へ読み替えない。
 
-各Rasterのbuffer用途は、そのpassの不変access列だけを二回列挙して合成・適用する。
-同じbufferのVertex/Index/Uniform/StorageReadのstateを合わせ、最初の適用でscratchをCOMMONへ戻すため、
-後段のindex拒否・cancelや次passへ用途を残さない。clear-onlyではbuffer slotへ触れない。
-全Graphのbuffer数に比例する初期化・走査と追加の使用列metadataを避ける代わりに、
-重複bindingを含むaccess列を二回歩く。密な入力の時間改善は測定なしに主張しない。
+各Rasterのbuffer/image用途は、そのpassの不変access列を一回列挙して合成する。
+`RasterStorage`は準備済みbuffer数とimage数に対応するstate配列・初回使用index列を別々に持ち、
+同じbufferのVertex/Index/Uniform/StorageReadのstateを合わせる。適用は従来どおりbufferの初出順、
+次にimageの初出順で行い、使用したscratchだけCOMMONへ戻す。後段のindex拒否・cancelや次passへ
+用途を残さず、clear-onlyではbufferへ触れない。記録途中のunwindでも残るindex列からresetできる。
+使用index列は各資源につき一件だけ追加し、対応する準備済み配列の要素数以内へ収める。
+buffer二回・image二回の全access走査を除いた代わりに、資源数に比例する有界metadataを明示準備する。
+
+Rasterの画像SRVは一つのexecution lease内で同じnative資源・sampled format・mip開始/個数を再利用する。
+2D/layer 0/plane 0/default component mapping/LOD clamp 0は現在固定であり、可変化するときはkeyも拡張する。
+準備済みの半分以下の占有率を持つ有界hash表と使用bucket列を使い、missだけ新しいdescriptorへ書き、
+hitでは既存descriptorを変更しない。keyはnative所有者を追加保持せず、slotの全physical leaseが
+記録・pending GPUからの参照を満たす。正常Fence完了または未投入cancel後のexclusive slot resetで、
+使用bucketだけ消してからregistryがphysical資源を付け替える。Graphの論理IDや前frameのpointer一致を
+再利用根拠としない。OOM・未知完了・pending処理ではこのresetへ進めず、従来の保持契約を維持する。
+descriptor容量の事前検査は引き続き全binding occurrenceの保守的上限であり、unique View数の予算ではない。
+SRV再利用による新しい容量受理範囲や、密な入力の時間改善は未計測のまま主張しない。
+任意Tracyの`renderer.d3d12.raster.create_srv` child zoneはmiss時の実CreateSRV呼出しだけを囲み、
+発行数を観測する。旧descriptor区間はleafだったためselfとinclusiveが等しく、新構成との時間比較は
+同じ親区間のinclusiveを使う。新selfはこのchildを除くため旧selfとの差を削減時間とみなさない。
+計装費用・初回source locationの確保は通常構成と区別し、比較のwarm-upとfeatureを揃える。
+[D3D12 descriptorのGPU handle・参照先寿命](https://learn.microsoft.com/en-us/windows/win32/direct3d12/descriptors-overview)
+に従い、shader-visible heapと参照先を全命令の完了まで保持する。RTV/DSVの再作成方針は今回変更しない。
 depth clearの有限値・範囲・subnormal拒否はGraph構築で確立し、privateな不変operandを引き継ぐ。
 native適用時に同じ値を再検査せず、MRT未対応、実Deviceへの適合、容量・同期・完了管理は維持する。
 

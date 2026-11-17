@@ -10,7 +10,7 @@ use super::super::{
     device::DeviceOwner,
     frame::{ExecutionSlot, FrameWork, ReadbackImage, ReadbackMeta},
     raster::{INLINE_ROOT, RasterPipeline},
-    raster_storage::RasterStorage,
+    raster_storage::{PassScopes, RasterStorage},
 };
 use super::transition;
 use crate::{
@@ -138,44 +138,37 @@ pub(super) fn validate_targets(colors: &Range<usize>) -> Result<(), D3D12Runtime
     Ok(())
 }
 
-fn buffer_scopes(
+fn pass_scopes(
     graph: &CompiledGraph,
     pass: usize,
     resource_map: &[usize],
-    scopes: &mut [D3D12_RESOURCE_STATES],
-    mut apply: impl FnMut(usize, D3D12_RESOURCE_STATES),
+    scopes: &mut PassScopes,
 ) {
-    // Graph derives these uses from immutable commands. Combine native read
-    // states for shared Vertex/Index/Uniform buffers using only this pass's
-    // accesses, without clearing or scanning unrelated Graph buffers.
+    // Immutable Graph accesses establish these purposes. Aggregate every use
+    // once, preserving each resource's first access order in its native class.
     for access in graph.accesses(pass) {
-        if matches!(
-            graph.resources[access.resource].desc,
-            ResourceDesc::Buffer(_)
-        ) {
-            scopes[resource_map[access.resource]] |= match access.purpose {
-                AccessPurpose::Vertex | AccessPurpose::Uniform => {
-                    D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
-                }
-                AccessPurpose::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
-                AccessPurpose::StorageRead => shader_read_state(access.stages),
-                _ => unreachable!("trusted Raster has read-only buffer uses"),
-            };
-        }
-    }
-    // Entries start at COMMON and are drained before any later fallible work.
-    // Repeated accesses apply the combined scope once; every pass, including a
-    // clear-only pass, leaves the scratch array ready for its next use.
-    for access in graph.accesses(pass) {
-        if matches!(
-            graph.resources[access.resource].desc,
-            ResourceDesc::Buffer(_)
-        ) {
-            let index = resource_map[access.resource];
-            let scope = std::mem::replace(&mut scopes[index], D3D12_RESOURCE_STATE_COMMON);
-            if scope != D3D12_RESOURCE_STATE_COMMON {
-                apply(index, scope);
-            }
+        let index = resource_map[access.resource];
+        match graph.resources[access.resource].desc {
+            ResourceDesc::Buffer(_) => scopes.buffer(
+                index,
+                match access.purpose {
+                    AccessPurpose::Vertex | AccessPurpose::Uniform => {
+                        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+                    }
+                    AccessPurpose::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
+                    AccessPurpose::StorageRead => shader_read_state(access.stages),
+                    _ => unreachable!("trusted Raster has read-only buffer uses"),
+                },
+            ),
+            ResourceDesc::Image(_) => scopes.image(
+                index,
+                match access.purpose {
+                    AccessPurpose::ColorAttachment => D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    AccessPurpose::DepthAttachment => D3D12_RESOURCE_STATE_DEPTH_WRITE,
+                    AccessPurpose::Sampled => shader_read_state(access.stages),
+                    _ => unreachable!("trusted Raster image purposes"),
+                },
+            ),
         }
     }
 }
@@ -393,48 +386,24 @@ pub(super) fn record(
         Operation::AttachmentPass { colors, depth, .. } => (None, None, colors, depth),
         _ => unreachable!(),
     };
-    buffer_scopes(
-        graph,
-        pass,
-        &slot.resource_map,
-        &mut slot.buffer_scopes,
-        |index, scope| {
-            transition(
-                &slot.list,
-                slot.buffers[index].raw(),
-                &mut slot.states[index],
-                scope,
-            );
-        },
-    );
     let storage = slot.raster.as_mut().unwrap();
-    for access in graph.accesses(pass) {
-        if matches!(
-            graph.resources[access.resource].desc,
-            ResourceDesc::Image(_)
-        ) {
-            let image = &mut storage.images[slot.resource_map[access.resource]];
-            image.raster_scope |= match access.purpose {
-                AccessPurpose::ColorAttachment => D3D12_RESOURCE_STATE_RENDER_TARGET,
-                AccessPurpose::DepthAttachment => D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                AccessPurpose::Sampled => shader_read_state(access.stages),
-                _ => unreachable!("trusted Raster image purposes"),
-            };
-        }
-    }
-    for access in graph.accesses(pass) {
-        if matches!(
-            graph.resources[access.resource].desc,
-            ResourceDesc::Image(_)
-        ) {
-            let image = &mut storage.images[slot.resource_map[access.resource]];
-            let state = std::mem::replace(&mut image.raster_scope, D3D12_RESOURCE_STATE_COMMON);
-            if state != D3D12_RESOURCE_STATE_COMMON {
-                transition(&slot.list, image.native.raw(), &mut image.state, state);
-                image.uav_write = false;
-            }
-        }
-    }
+    pass_scopes(graph, pass, &slot.resource_map, &mut storage.scopes);
+    // Preserve native order: all buffer transitions precede all image
+    // transitions, each in first-use order. Both scratch lists are drained
+    // before any later fallible validation, descriptor or draw preparation.
+    storage.scopes.drain_buffers(|index, scope| {
+        transition(
+            &slot.list,
+            slot.buffers[index].raw(),
+            &mut slot.states[index],
+            scope,
+        );
+    });
+    storage.scopes.drain_images(|index, scope| {
+        let image = &mut storage.images[index];
+        transition(&slot.list, image.native.raw(), &mut image.state, scope);
+        image.uav_write = false;
+    });
     let color = graph.raster_attachments(colors).first().map(|attachment| {
         (
             attachment,
@@ -640,37 +609,21 @@ pub(super) fn record(
                         }
                     }
                     BindingOperands::ImageView(view) => {
-                        let image = &storage.images[slot.resource_map[view.image().index]];
-                        let descriptor = slot.raster_descriptors_used;
-                        let srv = D3D12_SHADER_RESOURCE_VIEW_DESC {
-                            Format: super::super::resources::sampled_format(image.desc.format),
-                            ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
-                            Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING
-                                as u32,
-                            Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
-                                Texture2D: D3D12_TEX2D_SRV {
-                                    MostDetailedMip: view.mip_level(),
-                                    MipLevels: view.mip_level_count(),
-                                    PlaneSlice: 0,
-                                    ResourceMinLODClamp: 0.0,
-                                },
-                            },
-                        };
-                        // SAFETY: Each image binding owns a distinct prepared SRV
-                        // slot until actual GPU completion. Its format and single
-                        // subresource match the retained physical Graph image.
+                        let descriptor = storage.raster_srv(
+                            owner,
+                            slot.resource_map[view.image().index],
+                            view.mip_level(),
+                            view.mip_level_count(),
+                        )?;
+                        // SAFETY: The cached immutable SRV refers to the retained
+                        // image/View, and this execution owns its descriptor heap
+                        // through actual GPU completion or unsubmitted cancel.
                         unsafe {
-                            owner.raw.CreateShaderResourceView(
-                                image.native.raw(),
-                                Some(&srv),
-                                storage.texture_cpu(descriptor),
-                            );
                             slot.list.SetGraphicsRootDescriptorTable(
                                 root,
                                 storage.texture_gpu(descriptor),
                             );
                         }
-                        slot.raster_descriptors_used += 1;
                     }
                     BindingOperands::Sampler(sampler) => {
                         // SAFETY: The supported immutable nearest/clamp sampler and
@@ -772,13 +725,16 @@ mod tests {
                     resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
                 },
             ];
+            let bindings = graph
+                .raster_bindings(&ManagedRasterProgram::textured_mesh(), &bindings)
+                .unwrap();
             passes.push(
                 graph
                     .raster(
                         "shared buffer scopes",
                         &ManagedRasterProgram::textured_mesh(),
                         [RasterDraw {
-                            bindings: &bindings,
+                            bindings: Some(bindings),
                             vertices,
                             indices: shared,
                             index_count: 3,
@@ -823,37 +779,262 @@ mod tests {
     }
 
     #[test]
-    fn buffer_read_scopes_combine_once_and_do_not_leak_into_later_passes() {
+    fn pass_read_scopes_combine_once_in_native_first_use_order() {
         let fixture = scope_fixture();
         let mut map = vec![usize::MAX; fixture.plan.resources.len()];
         for (index, buffer) in fixture.buffers.iter().enumerate() {
             map[buffer.index] = index;
         }
+        let mut image = 0;
+        for (index, resource) in fixture.plan.resources.iter().enumerate() {
+            if matches!(resource.desc, ResourceDesc::Image(_)) {
+                map[index] = image;
+                image += 1;
+            }
+        }
         let combined =
             D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER;
-        let expected = [
+        let expected_buffers = [
             vec![(0, combined)],
             vec![
-                (0, D3D12_RESOURCE_STATE_INDEX_BUFFER),
                 (1, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER),
+                (0, D3D12_RESOURCE_STATE_INDEX_BUFFER),
             ],
             vec![],
         ];
-        let mut scopes = [D3D12_RESOURCE_STATE_COMMON; 2];
-        for (pass, expected) in fixture.passes.iter().zip(expected) {
+        let expected_images = [
+            vec![
+                (0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+                (1, D3D12_RESOURCE_STATE_RENDER_TARGET),
+            ],
+            vec![
+                (0, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+                (1, D3D12_RESOURCE_STATE_RENDER_TARGET),
+            ],
+            vec![(1, D3D12_RESOURCE_STATE_RENDER_TARGET)],
+        ];
+        let mut scopes = PassScopes::new(2, 2).unwrap();
+        for ((pass, buffers), images) in fixture
+            .passes
+            .iter()
+            .zip(expected_buffers)
+            .zip(expected_images)
+        {
+            pass_scopes(&fixture.plan, pass.index, &map, &mut scopes);
             let mut applied = Vec::new();
-            buffer_scopes(
-                &fixture.plan,
-                pass.index,
-                &map,
-                &mut scopes,
-                |index, scope| {
-                    applied.push((index, scope));
+            scopes.drain_buffers(|index, scope| applied.push((index, scope)));
+            assert_eq!(applied, buffers);
+            applied.clear();
+            scopes.drain_images(|index, scope| applied.push((index, scope)));
+            assert_eq!(applied, images);
+        }
+    }
+
+    fn sampled_views_fixture(
+        invalid_index: bool,
+    ) -> (GraphPool, CompiledGraph, Vec<(PassHandle, [u8; 4])>) {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
+        let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
+        let uniform = graph.buffer("offset", BufferDesc { size: 16 }).unwrap();
+        let vertex_data: [[f32; 7]; 3] = [
+            [-1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            [3.0, -1.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            [-1.0, 3.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        ];
+        let vertex_data = vertex_data
+            .into_iter()
+            .flatten()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>();
+        let index_data = [0_u32, 1, 2]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect::<Vec<_>>();
+        graph
+            .upload_buffer("vertices", vertices, 0, &vertex_data)
+            .unwrap();
+        graph
+            .upload_buffer("indices", indices, 0, &index_data)
+            .unwrap();
+        graph.upload_buffer("offset", uniform, 0, &[0; 16]).unwrap();
+        let mut mipped = ImageDesc::rgba8(2, 2);
+        mipped.mip_levels = 2;
+        let texture = graph.image("mipped texture", mipped).unwrap();
+        let other = graph
+            .image("other texture", ImageDesc::rgba8(1, 1))
+            .unwrap();
+        let target = graph.image("target", ImageDesc::rgba8(1, 1)).unwrap();
+        let mut pixels = [255, 0, 0, 255].repeat(4);
+        pixels.extend_from_slice(&[0, 255, 0, 255]);
+        graph.upload_image("mips", texture, &pixels).unwrap();
+        graph
+            .upload_image("blue", other, &[0, 0, 255, 255])
+            .unwrap();
+        let program = ManagedRasterProgram::textured_mesh();
+        let mut readbacks = Vec::new();
+        for (case, (image, mip, expected)) in [
+            (texture, 0, [255, 0, 0, 255]),
+            (texture, 1, [0, 255, 0, 255]),
+            (other, 0, [0, 0, 255, 255]),
+            (texture, 0, [255, 0, 0, 255]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if invalid_index && case == 1 {
+                // Reject a later pass after the first pass has already written
+                // a cached SRV. Unsubmitted failure must not publish that cache
+                // into the next execution lease.
+                let invalid = [0_u32, 1, 99]
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>();
+                graph
+                    .upload_buffer("invalid later indices", indices, 0, &invalid)
+                    .unwrap();
+            }
+            let bindings = [
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: uniform,
+                        offset: 0,
+                        size: 16,
+                    },
                 },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::ImageView(graph.image_view(image, mip, 0).unwrap()),
+                },
+                Binding {
+                    group: 1,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+            ];
+            let bindings = graph.raster_bindings(&program, &bindings).unwrap();
+            graph
+                .raster(
+                    "sample view",
+                    &program,
+                    [RasterDraw {
+                        bindings: Some(bindings),
+                        vertices,
+                        indices,
+                        index_count: 3,
+                        parameters: RasterParameters::default().into(),
+                    }; 2],
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: graph.image_view(target, 0, 0).unwrap(),
+                            load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
+                            store: StoreOp::Store,
+                        }],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+            readbacks.push((
+                graph.readback_image("sampled result", target).unwrap(),
+                expected,
+            ));
+        }
+        (pool, graph.compile().unwrap(), readbacks)
+    }
+
+    fn srv_creations(prepared: &super::super::D3D12PreparedGraph) -> usize {
+        let super::super::PreparedWork::Pooled(work) = &prepared.kind else {
+            panic!("pooled Graph expected")
+        };
+        work.slot().raster.as_ref().unwrap().srv_creations
+    }
+
+    #[test]
+    #[ignore = "requires real D3D12 hardware and requested native diagnostics"]
+    fn d3d12_raster_srv_reuse_preserves_views_cancel_and_pending_ownership() {
+        let strict = cfg!(feature = "development-validation");
+        let mut runtime = D3D12Runtime::new(D3D12RuntimeConfig {
+            validation: if strict {
+                D3D12ValidationMode::Required
+            } else {
+                D3D12ValidationMode::Disabled
+            },
+            capacity: D3D12FrameCapacity {
+                executions: 1,
+                buffers: 3,
+                buffer_bytes: 84,
+                upload_bytes: 4096,
+                readback_bytes: 4096,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        let monitor = runtime.validation_monitor();
+        let mut mipped = ImageDesc::rgba8(2, 2);
+        mipped.mip_levels = 2;
+        runtime
+            .prepare_graph_working_set(
+                None,
+                &[
+                    D3D12ImageClass {
+                        desc: mipped,
+                        count: 1,
+                    },
+                    D3D12ImageClass {
+                        desc: ImageDesc::rgba8(1, 1),
+                        count: 2,
+                    },
+                ],
+                &[ManagedRasterProgram::textured_mesh()],
+                &[],
+            )
+            .unwrap();
+        let (bad_pool, bad_graph, _) = sampled_views_fixture(true);
+        assert!(
+            runtime.prepare(&bad_graph).is_err(),
+            "late index rejection must return the slot"
+        );
+        let (pool, graph, readbacks) = sampled_views_fixture(false);
+        let cancelled = runtime.prepare(&graph).unwrap();
+        // Eight binding occurrences across four passes create only three views.
+        assert_eq!(srv_creations(&cancelled), 3);
+        assert!(
+            runtime.prepare(&graph).is_err(),
+            "recorded descriptors remain exclusively leased"
+        );
+        drop(cancelled);
+        for _ in 0..2 {
+            let prepared = runtime.prepare(&graph).unwrap();
+            // Reset invalidates every prior key, even if the native resources
+            // happen to keep the same address after cancel/retirement.
+            assert_eq!(srv_creations(&prepared), 3);
+            let mut submission = runtime.submit_prepared(prepared).unwrap();
+            assert!(
+                runtime.prepare(&graph).is_err(),
+                "pending descriptors cannot be overwritten"
             );
-            applied.sort_by_key(|(index, _)| *index);
-            assert_eq!(applied, expected);
-            assert_eq!(scopes, [D3D12_RESOURCE_STATE_COMMON; 2]);
+            let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
+            for &(pass, expected) in &readbacks {
+                let mut actual = [0; 4];
+                result.readback_into(pass, &mut actual).unwrap();
+                assert_eq!(actual, expected);
+            }
+            drop((result, submission));
+        }
+        drop((bad_graph, bad_pool, graph, pool));
+        runtime.shutdown().unwrap();
+        let report = monitor.snapshot();
+        assert!(report.is_clean(), "{report:#?}");
+        if strict {
+            assert!(
+                report.teardown_checked
+                    && report.debug_layer_enabled
+                    && report.gpu_based_validation_enabled
+            );
         }
     }
 

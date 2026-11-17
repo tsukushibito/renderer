@@ -3,6 +3,7 @@
 use crate::ImageFormat;
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use crate::graph::ImageDesc;
+use windows_core::Interface;
 
 use super::{
     D3D12RuntimeError,
@@ -34,7 +35,6 @@ pub(super) struct GraphImage {
     pub(super) native: super::registry::PhysicalRef,
     pub(super) state: D3D12_RESOURCE_STATES,
     pub(super) uav_write: bool,
-    pub(super) raster_scope: D3D12_RESOURCE_STATES,
     pub(super) used: bool,
     pub(super) rtv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
     pub(super) dsv: Option<D3D12_CPU_DESCRIPTOR_HANDLE>,
@@ -119,6 +119,180 @@ pub(super) struct RasterStorage {
     pub(super) raster_descriptor_capacity: usize,
     pub(super) compute_descriptor_start: usize,
     pub(super) compute_descriptor_capacity: usize,
+    pub(super) scopes: PassScopes,
+    raster_srvs: RasterSrvCache,
+    #[cfg(test)]
+    pub(super) srv_creations: usize,
+}
+
+/// Prepared per-pass state aggregation. The two native index namespaces remain
+/// separate, and each touched list preserves its resource's first access order.
+pub(super) struct PassScopes {
+    buffers: Vec<D3D12_RESOURCE_STATES>,
+    images: Vec<D3D12_RESOURCE_STATES>,
+    touched_buffers: Vec<usize>,
+    touched_images: Vec<usize>,
+}
+
+fn reserved<T>(capacity: usize) -> Result<Vec<T>, D3D12RuntimeError> {
+    let mut values = Vec::new();
+    values.try_reserve_exact(capacity).map_err(|_| {
+        D3D12RuntimeError::capacity_with(
+            "Raster recording metadata reservation failed",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::HostMemory,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        )
+    })?;
+    Ok(values)
+}
+
+impl PassScopes {
+    pub(super) fn new(buffers: usize, images: usize) -> Result<Self, D3D12RuntimeError> {
+        let mut buffer_states = reserved(buffers)?;
+        buffer_states.resize(buffers, D3D12_RESOURCE_STATE_COMMON);
+        let mut image_states = reserved(images)?;
+        image_states.resize(images, D3D12_RESOURCE_STATE_COMMON);
+        Ok(Self {
+            buffers: buffer_states,
+            images: image_states,
+            touched_buffers: reserved(buffers)?,
+            touched_images: reserved(images)?,
+        })
+    }
+
+    pub(super) fn buffer(&mut self, index: usize, scope: D3D12_RESOURCE_STATES) {
+        if self.buffers[index] == D3D12_RESOURCE_STATE_COMMON {
+            // Every trusted Raster use has a nonempty state. Only the first use
+            // appends, so the prepared buffer count bounds this list exactly.
+            self.touched_buffers.push(index);
+        }
+        self.buffers[index] |= scope;
+    }
+
+    pub(super) fn image(&mut self, index: usize, scope: D3D12_RESOURCE_STATES) {
+        if self.images[index] == D3D12_RESOURCE_STATE_COMMON {
+            self.touched_images.push(index);
+        }
+        self.images[index] |= scope;
+    }
+
+    pub(super) fn drain_buffers(&mut self, mut apply: impl FnMut(usize, D3D12_RESOURCE_STATES)) {
+        // Retain the touched list until all callbacks finish. An unwind leaves
+        // the remaining indices available to reset at the next exclusive lease.
+        for &index in &self.touched_buffers {
+            let scope = std::mem::replace(&mut self.buffers[index], D3D12_RESOURCE_STATE_COMMON);
+            apply(index, scope);
+        }
+        self.touched_buffers.clear();
+    }
+
+    pub(super) fn drain_images(&mut self, mut apply: impl FnMut(usize, D3D12_RESOURCE_STATES)) {
+        for &index in &self.touched_images {
+            let scope = std::mem::replace(&mut self.images[index], D3D12_RESOURCE_STATE_COMMON);
+            apply(index, scope);
+        }
+        self.touched_images.clear();
+    }
+
+    fn reset(&mut self) {
+        self.drain_buffers(|_, _| {});
+        self.drain_images(|_, _| {});
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RasterSrvKey {
+    resource: usize,
+    format: DXGI_FORMAT,
+    first_mip: u32,
+    mip_count: u32,
+}
+
+#[derive(Clone, Copy)]
+struct RasterSrvEntry {
+    key: RasterSrvKey,
+    descriptor: usize,
+}
+
+/// One exclusive execution's immutable SRVs. Keys do not retain native owners:
+/// the slot's pinned physical images already outlive all recorded/GPU uses.
+struct RasterSrvCache {
+    entries: Vec<Option<RasterSrvEntry>>,
+    occupied: Vec<usize>,
+    limit: usize,
+}
+
+impl RasterSrvCache {
+    fn new(limit: usize) -> Result<Self, D3D12RuntimeError> {
+        let size = limit
+            .checked_mul(2)
+            .and_then(|size| size.max(1).checked_next_power_of_two())
+            .ok_or_else(|| Self::capacity_error(limit, None))?;
+        let mut entries = reserved(size)?;
+        entries.resize(size, None);
+        Ok(Self {
+            entries,
+            occupied: reserved(limit)?,
+            limit,
+        })
+    }
+
+    fn capacity_error(limit: usize, required: Option<u64>) -> D3D12RuntimeError {
+        D3D12RuntimeError::capacity_with(
+            "prepared Raster SRV capacity exhausted",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::Descriptors,
+                CapacityRecovery::Reconfigure,
+                Some(limit as u64),
+                required,
+            ),
+        )
+    }
+
+    fn bucket(&self, key: RasterSrvKey) -> usize {
+        // Full key equality resolves collisions; hashing is only an index into
+        // this bounded table. At most half its buckets can become occupied.
+        let hash = (key.resource as u64).rotate_left(21)
+            ^ (u64::from(key.format as u32) << 32)
+            ^ u64::from(key.first_mip).rotate_left(11)
+            ^ u64::from(key.mip_count);
+        let hash = hash.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        (hash ^ (hash >> 32)) as usize & (self.entries.len() - 1)
+    }
+
+    fn get_or_insert(&mut self, key: RasterSrvKey) -> Result<(usize, bool), D3D12RuntimeError> {
+        let mut bucket = self.bucket(key);
+        loop {
+            match self.entries[bucket] {
+                Some(entry) if entry.key == key => return Ok((entry.descriptor, false)),
+                Some(_) => bucket = (bucket + 1) & (self.entries.len() - 1),
+                None => {
+                    let descriptor = self.occupied.len();
+                    if descriptor == self.limit {
+                        return Err(Self::capacity_error(
+                            self.limit,
+                            (descriptor as u64).checked_add(1),
+                        ));
+                    }
+                    self.entries[bucket] = Some(RasterSrvEntry { key, descriptor });
+                    self.occupied.push(bucket);
+                    return Ok((descriptor, true));
+                }
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        // Clear only entries used by this execution, never the full prepared
+        // table. Available-slot ownership proves no recorded/pending user.
+        for bucket in self.occupied.drain(..) {
+            self.entries[bucket] = None;
+        }
+    }
 }
 
 fn validate_class(class: D3D12ImageClass) -> Result<(), D3D12RuntimeError> {
@@ -302,6 +476,65 @@ fn copy_layout(
 }
 
 impl RasterStorage {
+    pub(super) fn raster_srv(
+        &mut self,
+        owner: &DeviceOwner,
+        image: usize,
+        first_mip: u32,
+        mip_count: u32,
+    ) -> Result<usize, D3D12RuntimeError> {
+        let image = &self.images[image];
+        let key = RasterSrvKey {
+            resource: image.native.raw().as_raw() as usize,
+            format: super::resources::sampled_format(image.desc.format),
+            first_mip,
+            mip_count,
+        };
+        let (descriptor, create) = self.raster_srvs.get_or_insert(key)?;
+        if create {
+            // The current contract fixes dimension, mapping, plane and LOD
+            // clamp. Extend the key if any of those become caller-selectable.
+            let srv = D3D12_SHADER_RESOURCE_VIEW_DESC {
+                Format: key.format,
+                ViewDimension: D3D12_SRV_DIMENSION_TEXTURE2D,
+                Shader4ComponentMapping: D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING as u32,
+                Anonymous: D3D12_SHADER_RESOURCE_VIEW_DESC_0 {
+                    Texture2D: D3D12_TEX2D_SRV {
+                        MostDetailedMip: first_mip,
+                        MipLevels: mip_count,
+                        PlaneSlice: 0,
+                        ResourceMinLODClamp: 0.0,
+                    },
+                },
+            };
+            let resource = image.native.raw();
+            let target = self.texture_cpu(descriptor);
+            {
+                #[cfg(feature = "tracy")]
+                let _span = tracy_client::Client::running().map(|client| {
+                    client.span(
+                        tracy_client::span_location!("renderer.d3d12.raster.create_srv"),
+                        0,
+                    )
+                });
+                // SAFETY: Preflight established the view contract and bounded
+                // all binding occurrences. A miss owns a new in-bounds
+                // descriptor; a hit never overwrites it. The slot pins the
+                // image and heap until completion or unsubmitted cancellation.
+                unsafe {
+                    owner
+                        .raw
+                        .CreateShaderResourceView(resource, Some(&srv), target);
+                }
+            }
+            #[cfg(test)]
+            {
+                self.srv_creations += 1;
+            }
+        }
+        Ok(descriptor)
+    }
+
     pub(super) fn bind_views(&self, owner: &DeviceOwner) {
         for image in &self.images {
             if !image.used {
@@ -341,6 +574,7 @@ impl RasterStorage {
         registered_images: &[ImageDesc],
         raster_descriptor_capacity: usize,
         compute_descriptor_capacity: usize,
+        buffer_capacity: usize,
         allocate_images: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
@@ -523,7 +757,6 @@ impl RasterStorage {
                     native,
                     state: D3D12_RESOURCE_STATE_COMMON,
                     uav_write: false,
-                    raster_scope: D3D12_RESOURCE_STATE_COMMON,
                     used: false,
                     rtv,
                     dsv,
@@ -578,6 +811,10 @@ impl RasterStorage {
             raster_descriptor_capacity,
             compute_descriptor_start: raster_descriptor_capacity,
             compute_descriptor_capacity,
+            scopes: PassScopes::new(buffer_capacity, total)?,
+            raster_srvs: RasterSrvCache::new(raster_descriptor_capacity)?,
+            #[cfg(test)]
+            srv_creations: 0,
         })
     }
 
@@ -585,11 +822,16 @@ impl RasterStorage {
         // Only an exclusive available frame lease may reset this storage. The
         // recorder restored actual resources to COMMON before successful Close;
         // cancelled recording was never executed and cannot change their state.
+        self.scopes.reset();
+        self.raster_srvs.reset();
+        #[cfg(test)]
+        {
+            self.srv_creations = 0;
+        }
         for image in &mut self.images {
             image.state = D3D12_RESOURCE_STATE_COMMON;
             image.used = false;
             image.uav_write = false;
-            image.raster_scope = D3D12_RESOURCE_STATE_COMMON;
         }
     }
 
@@ -638,6 +880,160 @@ impl RasterStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pass_scopes_keep_unique_first_use_order_and_recover_from_partial_drain() {
+        let mut scopes = PassScopes::new(2, 2).unwrap();
+        let capacities = (
+            scopes.touched_buffers.capacity(),
+            scopes.touched_images.capacity(),
+        );
+        scopes.image(1, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        scopes.buffer(1, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        scopes.image(0, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        scopes.buffer(0, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        scopes.buffer(1, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        scopes.image(1, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        let mut applied = Vec::new();
+        scopes.drain_buffers(|index, state| applied.push((false, index, state)));
+        scopes.drain_images(|index, state| applied.push((true, index, state)));
+        assert_eq!(
+            applied,
+            [
+                (
+                    false,
+                    1,
+                    D3D12_RESOURCE_STATE_INDEX_BUFFER
+                        | D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
+                ),
+                (false, 0, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER),
+                (
+                    true,
+                    1,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                        | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
+                ),
+                (true, 0, D3D12_RESOURCE_STATE_RENDER_TARGET),
+            ]
+        );
+        assert!(
+            scopes
+                .buffers
+                .iter()
+                .chain(&scopes.images)
+                .all(|&state| state == D3D12_RESOURCE_STATE_COMMON)
+        );
+        scopes.buffer(0, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        scopes.buffer(1, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+        scopes.image(0, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scopes.drain_buffers(|_, _| panic!("native recording failed"));
+        }));
+        assert!(failed.is_err());
+        scopes.reset();
+        assert!(
+            scopes
+                .buffers
+                .iter()
+                .chain(&scopes.images)
+                .all(|&state| state == D3D12_RESOURCE_STATE_COMMON)
+        );
+        // An image-only pass must not retain either buffer from the failed pass.
+        scopes.image(1, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        scopes.drain_buffers(|_, _| panic!("stale buffer scope"));
+        scopes.drain_images(|index, state| {
+            assert_eq!((index, state), (1, D3D12_RESOURCE_STATE_DEPTH_WRITE))
+        });
+        assert_eq!(
+            capacities,
+            (
+                scopes.touched_buffers.capacity(),
+                scopes.touched_images.capacity()
+            )
+        );
+        let mut empty = PassScopes::new(0, 0).unwrap();
+        empty.reset();
+    }
+
+    #[test]
+    fn srv_cache_reuses_views_and_preserves_full_capacity_hits_until_reset() {
+        let mut cache = RasterSrvCache::new(5).unwrap();
+        let base = RasterSrvKey {
+            resource: 0x1000,
+            format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            first_mip: 0,
+            mip_count: 1,
+        };
+        let keys = [
+            base,
+            RasterSrvKey {
+                resource: 0x2000,
+                ..base
+            },
+            RasterSrvKey {
+                format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                ..base
+            },
+            RasterSrvKey {
+                first_mip: 1,
+                ..base
+            },
+            RasterSrvKey {
+                mip_count: 2,
+                ..base
+            },
+        ];
+        let capacity = (cache.entries.capacity(), cache.occupied.capacity());
+        for (index, key) in keys.into_iter().enumerate() {
+            assert_eq!(cache.get_or_insert(key).unwrap(), (index, true));
+            assert_eq!(cache.get_or_insert(key).unwrap(), (index, false));
+        }
+        let extra = RasterSrvKey {
+            resource: 0x3000,
+            ..base
+        };
+        let error = cache.get_or_insert(extra).unwrap_err();
+        assert_eq!(
+            error.capacity().unwrap().resource,
+            RuntimeCapacityKind::Descriptors
+        );
+        for (index, key) in keys.into_iter().enumerate() {
+            assert_eq!(cache.get_or_insert(key).unwrap(), (index, false));
+        }
+        cache.reset();
+        assert!(cache.entries.iter().all(Option::is_none));
+        // Equal pointer values in a later lease cannot reuse the old descriptor.
+        assert_eq!(cache.get_or_insert(base).unwrap(), (0, true));
+        assert_eq!(
+            capacity,
+            (cache.entries.capacity(), cache.occupied.capacity())
+        );
+        let mut empty = RasterSrvCache::new(0).unwrap();
+        assert!(empty.get_or_insert(base).is_err());
+        assert!(RasterSrvCache::new(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn srv_cache_resolves_collisions_across_the_table_boundary() {
+        let mut cache = RasterSrvCache::new(3).unwrap();
+        let keys = (1..1000)
+            .map(|resource| RasterSrvKey {
+                resource,
+                format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                first_mip: 0,
+                mip_count: 1,
+            })
+            .filter(|&key| cache.bucket(key) == cache.entries.len() - 1)
+            .take(3)
+            .collect::<Vec<_>>();
+        assert_eq!(keys.len(), 3);
+        for (index, &key) in keys.iter().enumerate() {
+            assert_eq!(cache.get_or_insert(key).unwrap(), (index, true));
+        }
+        for (index, &key) in keys.iter().enumerate() {
+            assert_eq!(cache.get_or_insert(key).unwrap(), (index, false));
+        }
+    }
 
     #[test]
     fn prepared_classes_reject_empty_and_unsupported_image_descriptions() {
