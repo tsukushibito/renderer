@@ -6,6 +6,7 @@ from pathlib import Path
 import statistics
 
 from benchmark import digest, read, validate_report
+from profiles import compare_settings, orientation_fixture, settings
 
 
 def aggregate(runs):
@@ -42,6 +43,18 @@ def assemble(path):
     manifest = read(directory / "runs.json")
     if manifest.get("smoke") is not False or manifest.get("validation") is not False:
         raise ValueError("Smoke or validation runs are not normal performance evidence")
+    identity = manifest["identity"]
+    if identity.get("profile") not in ("b2", "b3"):
+        raise ValueError("Archive requires an explicit B2 or B3 profile")
+    conditions = read(directory / "conditions.json")
+    if digest(directory / "conditions.json") != identity["conditions_sha256"]:
+        raise ValueError("Archived conditions differ from the prepared source")
+    compare_settings(identity["quality"], settings(identity["profile"], conditions))
+    if identity["profile"] == "b3":
+        if (digest(directory / "ibl-manifest.json") != identity["ibl"]["manifest_sha256"]
+                or digest(directory / "orientation-fixture.json") != identity["ibl"]["orientation_fixture_sha256"]
+                or read(directory / "orientation-fixture.json") != orientation_fixture()):
+            raise ValueError("Archived IBL cook or orientation fixture was modified")
     runs = []
     capture_sets = {}
     for entry in manifest["runs"]:
@@ -55,6 +68,12 @@ def assemble(path):
             raise ValueError("Wrong formal measurement window")
         if config["culling"] != entry["culling"] or config["timing"] != entry["timing"]:
             raise ValueError("Condition mismatch")
+        if config["profile"] != identity["profile"]:
+            raise ValueError("Archive contains mixed quality profiles")
+        compare_settings(config["quality"], identity["quality"])
+        if identity["profile"] == "b3" and config["ibl"] != {
+                "sha256": identity["ibl"]["panorama"]["sha256"], "width": 4096, "height": 2048}:
+            raise ValueError("Archive contains a different IBL cook")
         summary = validate_report(report, config)
         if summary != entry["summary"] or digest(folder / "report.json") != entry["report_sha256"]:
             raise ValueError("Report or summary changed after collection")
@@ -69,10 +88,10 @@ def assemble(path):
         runs.append({**entry, "report": report, "engine_log_sha256": digest(folder / "engine.log"),
                      "stdout_log_sha256": digest(folder / "stdout.log")})
     groups, budgets = aggregate(runs)
-    return {"schema_version": 1, "identity": manifest["identity"], "groups": groups,
+    return {"schema_version": 2, "identity": identity, "conditions": conditions, "groups": groups,
             "reference_p95_budgets_ms": budgets,
             "capture_distinct_hashes": {name: sorted(values) for name, values in capture_sets.items()},
-            "scope": "B2-like Godot renderer reference, not isolated RenderGraph overhead or pixel parity with Renderer. CPU = setup + viewport, excludes scripts/physics/process-wide CPU; GPU = viewport observed query. Frame intervals = post-draw callback gaps, not scanout. Query observations may lag route frame numbers. Timers off/on are independent processes; differences include run variability. Godot memory monitors are not residency or allocation event counts; static_memory_bytes=0 is an unavailable release counter, not zero memory use.",
+            "scope": "Godot renderer reference for the explicitly archived B2/B3 profile, not isolated RenderGraph overhead or pixel parity with Renderer. B3 retains native Godot AgX, pre-tonemap FXAA, BRDF/prefilter/shadow-filter differences versus Renderer Neutral/post-tonemap FXAA. CPU = setup + viewport, excludes scripts/physics/process-wide CPU; GPU = viewport observed query. Frame intervals = post-draw callback gaps, not scanout. Query observations may lag route frame numbers. Timers off/on are independent processes; differences include run variability. Godot memory monitors are not residency or allocation event counts; static_memory_bytes=0 is an unavailable release counter, not zero memory use.",
             "runs": runs}
 
 
