@@ -1792,10 +1792,20 @@ buffer operand数と最大logical size、upload・readback・scratchのbyte上�
 `capacity.buffers`はimportも含むexecutionごとのlogical operand枠であり、物理bufferの個数とは別である。
 通常prepareはその上限内で変わる入力を記録し直し、native資源やCPU配列を増設しない。
 枠不足・上限超過は待たずに型付きエラーを返す。容量変更は旧consumerの寿命を終えた明示準備境界で行う。
-DEFAULT bufferは一つのcommand list内で明示的に遷移し、implicit promotion／decayによるbarrier削減は
-現段階では採用しない。状態と命令の対応を確認しやすい基準を優先する選択であり、余分なbarrier費用は残る。[^d3dbarriers]
-記録末尾のCOMMON復帰は、active buffer、copy scratch、used imageの順を保ったtransition配列を
-一回の`ResourceBarrier`へ渡す。COMMON済みの資源と空配列のnative呼出しは省くが、必要なtransition自体は減らさない。
+全live passでRasterのvertex・index・uniform・storage read、またはsampled readにのみ使うimport済み
+DEFAULT bufferと非depth画像は、COMMONからのimplicit promotionと実行後のdecayを使う。[^d3dbarriers]
+D3D12はこれらのread stateへの昇格を許可し、bufferと暗黙にread-onlyへ昇格した画像subresourceを
+`ExecuteCommandLists`のGPU実行終了時にCOMMONへ戻す。投入は単一DIRECT queueで、一回につき一つのlistを渡す。
+同一keyは一つのGraph資源を指し、別のlive資源に同じ物理領域をaliasしない。
+事前のaccess走査で各listの適用可否を決定し、executionごとに予約済みのlogical資源配列を再利用する。
+使用したmipはdecayし、使用しないmipはCOMMONに留まるため、一部mipだけを読む場合も次のlistで再利用できる。
+Raster read以外のlive accessがある資源、depth画像と一時資源には従来の明示遷移を適用する。
+特にupload／copy／dispatch／attachmentとreadを同じlistで行う場合は必要な依存を記録し、
+未投入のcancelや失敗は実状態を変えない。registryの失効確認・queue順序・資源寿命・Fence回収は維持する。
+
+明示遷移した資源の記録末尾のCOMMON復帰は、active buffer、copy scratch、used imageの順を保ったtransition配列を
+一回の`ResourceBarrier`へ渡す。全資源を毎回明示遷移する方針は状態の追跡が容易だが、Bistroでは同じ
+mesh・材質・画像へのreadだけで多数の開始・終了transitionを発行するため、上記の条件で省く。
 Microsoftは配列呼出しを要素順の個別呼出しと同じ意味とし、可能な場合のbatch化を推奨している。[^d3dbarriercall]
 各executionの配列容量はbuffer operand上限＋scratch一個＋準備済みimage枠数からcheckedに求め、
 nativeのUINT件数内に制限して初期化／working-set変更時だけ予約する。通常記録で増設や待機へfallbackしない。
@@ -1803,7 +1813,6 @@ nativeのUINT件数内に制限して初期化／working-set変更時だけ予�
 配列のoccupied要素が保持するCOM参照はflush、fill失敗、unwind、cancel、Dropで一度ずつ解放し、
 実GPUの資源寿命は既存のslot leaseで保持する。`ResourceBarrier`はvoidであり、後続の`Close`失敗は従来どおり未投入の記録として扱う。
 canonical registryの内容は成功したExecute／Signal後だけcommitするため、記録の容量不足やcancelから実資源の状態変更を推定しない。
-これはCOMMON方針を維持したnative呼出し集約であり、promotion／decay、省略transition、性能改善の実測を意味しない。
 任意のTracy子区間`renderer.d3d12.graph.common_barrier_call`を追加したため、変更前後の時間比較は
 親`renderer.d3d12.graph.common_barriers`のinclusiveで揃える。旧leafのselfと新しい親のselfとの差を削減時間として扱わない。
 CPU fixtureは順序、COMMON済み／空batch、容量不足とfill失敗／unwind、予約領域の再利用を、

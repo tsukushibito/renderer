@@ -126,11 +126,19 @@ fn pass_scopes(
     graph: &CompiledGraph,
     pass: usize,
     resource_map: &[usize],
+    read_promotions: &[bool],
     scopes: &mut PassScopes,
 ) {
     // Immutable Graph accesses establish these purposes. Aggregate every use
     // once, preserving each resource's first access order in its native class.
     for access in graph.accesses(pass) {
+        // These imports start in COMMON. Preflight established that every
+        // use in this list can implicitly promote to a read state. All used
+        // subresources decay after this single-list ExecuteCommandLists, so
+        // neither pass transitions nor the final COMMON batch are necessary.
+        if read_promotions[access.resource] {
+            continue;
+        }
         let index = resource_map[access.resource];
         match graph.resources[access.resource].desc {
             ResourceDesc::Buffer(_) => scopes.buffer(
@@ -371,7 +379,13 @@ pub(super) fn record(
         _ => unreachable!(),
     };
     let storage = slot.raster.as_mut().unwrap();
-    pass_scopes(graph, pass, &slot.resource_map, &mut storage.scopes);
+    pass_scopes(
+        graph,
+        pass,
+        &slot.resource_map,
+        &slot.raster_read_promotions,
+        &mut storage.scopes,
+    );
     // Preserve native order: all buffer transitions precede all image
     // transitions, each in first-use order. Both scratch lists are drained
     // before any later fallible validation, descriptor or draw preparation.
@@ -657,8 +671,8 @@ mod tests {
         },
         graph::{
             Attachment, Binding, BindingResource, BufferDesc, BufferHandle, GraphCapacity,
-            GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterDraw,
-            RasterParameters, StoreOp,
+            GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, ImportRanges, LoadOp,
+            PassHandle, RasterAttachments, RasterDraw, RasterParameters, ResourceKey, StoreOp,
         },
         program::{ManagedRasterProgram, SamplerDescriptor},
     };
@@ -668,28 +682,56 @@ mod tests {
         _pool: GraphPool,
         plan: CompiledGraph,
         buffers: [BufferHandle; 2],
+        texture: ImageHandle,
+        target: ImageHandle,
         passes: [PassHandle; 3],
         readbacks: [PassHandle; 3],
     }
 
-    fn scope_fixture() -> ScopeFixture {
+    fn scope_fixture(import_inputs: bool) -> ScopeFixture {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
-        let shared = graph
-            .buffer("shared geometry", BufferDesc { size: 84 })
-            .unwrap();
-        let other = graph
-            .buffer("other geometry", BufferDesc { size: 84 })
-            .unwrap();
+        let key = |index| ResourceKey {
+            owner: 1,
+            index,
+            generation: 1,
+        };
+        let desc = BufferDesc { size: 84 };
+        let mut buffer = |name, index| {
+            if import_inputs {
+                let snapshot = ImportBuffer::new(
+                    key(index),
+                    1,
+                    desc,
+                    ImportRanges::test_capture(std::slice::from_ref(&(0..desc.size))),
+                )
+                .unwrap();
+                graph.import_buffer(name, &snapshot).unwrap()
+            } else {
+                graph.buffer(name, desc).unwrap()
+            }
+        };
+        let shared = buffer("shared geometry", 1);
+        let other = buffer("other geometry", 2);
         for buffer in [shared, other] {
+            if import_inputs && buffer == shared {
+                continue;
+            }
             // Zero indices and vertices form a valid degenerate triangle; the
             // first 16 bytes also provide the textured shader's zero offset.
             graph
                 .upload_buffer("zero geometry", buffer, 0, &[0; 84])
                 .unwrap();
         }
-        let texture = graph.image("texture", ImageDesc::rgba8(1, 1)).unwrap();
-        graph.upload_image("white", texture, &[255; 4]).unwrap();
+        let texture_desc = ImageDesc::rgba8(1, 1);
+        let texture = if import_inputs {
+            let snapshot = ImportImage::test_initialized(key(3), 1, texture_desc);
+            graph.import_image("texture", &snapshot).unwrap()
+        } else {
+            let texture = graph.image("texture", texture_desc).unwrap();
+            graph.upload_image("white", texture, &[255; 4]).unwrap();
+            texture
+        };
         let target = graph.image("target", ImageDesc::rgba8(1, 1)).unwrap();
         let mut passes = Vec::new();
         let mut readbacks = Vec::new();
@@ -766,6 +808,8 @@ mod tests {
             _pool: pool,
             plan: graph.compile().unwrap(),
             buffers: [shared, other],
+            texture,
+            target,
             passes: passes.try_into().unwrap(),
             readbacks: readbacks.try_into().unwrap(),
         }
@@ -773,7 +817,7 @@ mod tests {
 
     #[test]
     fn pass_read_scopes_combine_once_in_native_first_use_order() {
-        let fixture = scope_fixture();
+        let fixture = scope_fixture(false);
         let mut map = vec![usize::MAX; fixture.plan.resources.len()];
         for (index, buffer) in fixture.buffers.iter().enumerate() {
             map[buffer.index] = index;
@@ -807,13 +851,14 @@ mod tests {
             vec![(1, D3D12_RESOURCE_STATE_RENDER_TARGET)],
         ];
         let mut scopes = PassScopes::new(2, 2).unwrap();
+        let promotions = vec![false; map.len()];
         for ((pass, buffers), images) in fixture
             .passes
             .iter()
             .zip(expected_buffers)
             .zip(expected_images)
         {
-            pass_scopes(&fixture.plan, pass.index, &map, &mut scopes);
+            pass_scopes(&fixture.plan, pass.index, &map, &promotions, &mut scopes);
             let mut applied = Vec::new();
             scopes.drain_buffers(|index, scope| applied.push((index, scope)));
             assert_eq!(applied, buffers);
@@ -823,8 +868,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn raster_read_promotion_excludes_uploaded_imports_and_attachments() {
+        use super::super::bounded::{initialize_raster_read_promotions, preflight_accesses};
+
+        let fixture = scope_fixture(true);
+        let plan = &fixture.plan;
+        let [shared, updated] = fixture.buffers;
+        let mut promotions = vec![true; plan.resources.len()];
+        initialize_raster_read_promotions(plan, &mut promotions);
+        for &pass in &plan.order {
+            preflight_accesses(plan, pass, &mut promotions).unwrap();
+        }
+        let promoted: Vec<_> = promotions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &eligible)| eligible.then_some(index))
+            .collect();
+        assert_eq!(promoted, [shared.index, fixture.texture.index]);
+        let mut map = vec![usize::MAX; plan.resources.len()];
+        map[shared.index] = 0;
+        map[updated.index] = 1;
+        map[fixture.texture.index] = 0;
+        map[fixture.target.index] = 1;
+        let mut scopes = PassScopes::new(2, 2).unwrap();
+        pass_scopes(
+            plan,
+            fixture.passes[1].index,
+            &map,
+            &promotions,
+            &mut scopes,
+        );
+        let mut buffers = Vec::new();
+        let mut images = Vec::new();
+        scopes.drain_buffers(|index, _| buffers.push(index));
+        scopes.drain_images(|index, _| images.push(index));
+        assert_eq!(buffers, [1]);
+        assert_eq!(images, [1]);
+    }
+
     fn sampled_views_fixture(
         invalid_index: bool,
+        texture: &ImportImage,
     ) -> (GraphPool, CompiledGraph, Vec<(PassHandle, [u8; 4])>) {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
@@ -852,16 +937,11 @@ mod tests {
             .upload_buffer("indices", indices, 0, &index_data)
             .unwrap();
         graph.upload_buffer("offset", uniform, 0, &[0; 16]).unwrap();
-        let mut mipped = ImageDesc::rgba8(2, 2);
-        mipped.mip_levels = 2;
-        let texture = graph.image("mipped texture", mipped).unwrap();
+        let texture = graph.import_image("mipped texture", texture).unwrap();
         let other = graph
             .image("other texture", ImageDesc::rgba8(1, 1))
             .unwrap();
         let target = graph.image("target", ImageDesc::rgba8(1, 1)).unwrap();
-        let mut pixels = [255, 0, 0, 255].repeat(4);
-        pixels.extend_from_slice(&[0, 255, 0, 255]);
-        graph.upload_image("mips", texture, &pixels).unwrap();
         graph
             .upload_image("blue", other, &[0, 0, 255, 255])
             .unwrap();
@@ -939,6 +1019,12 @@ mod tests {
         (pool, graph.compile().unwrap(), readbacks)
     }
 
+    fn mip_layers() -> [u8; 20] {
+        [
+            255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255,
+        ]
+    }
+
     fn srv_creations(prepared: &super::super::D3D12PreparedGraph) -> usize {
         let super::super::PreparedWork::Pooled(work) = &prepared.kind else {
             panic!("pooled Graph expected")
@@ -993,18 +1079,38 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let (bad_pool, bad_graph, _) = sampled_views_fixture(true);
+        let mut upload_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut upload = upload_pool.begin().unwrap();
+        let texture = upload.image("mipped texture", mipped).unwrap();
+        upload.upload_image("mips", texture, &mip_layers()).unwrap();
+        upload.export_image(texture).unwrap();
+        let mut upload_submission = runtime.submit(&upload.compile().unwrap()).unwrap();
+        let snapshot = upload_submission.export_image(texture).unwrap();
+        assert!(
+            upload_submission
+                .wait(Duration::from_secs(30))
+                .unwrap()
+                .is_some()
+        );
+        drop((upload_submission, upload_pool));
+        let (bad_pool, bad_graph, _) = sampled_views_fixture(true, &snapshot);
         assert!(
             runtime.prepare(&bad_graph).is_err(),
             "late index rejection must return the slot"
         );
-        let (pool, graph, readbacks) = sampled_views_fixture(false);
+        let (pool, graph, readbacks) = sampled_views_fixture(false, &snapshot);
         let cancelled = runtime.prepare(&graph).unwrap();
         // Eight binding occurrences across four passes create only three views.
         assert_eq!(srv_creations(&cancelled), 3);
         // All four passes share one target. The two sampled-only color images
         // must not receive unused RTVs (including the multi-mip texture).
         assert_eq!(target_view_creations(&cancelled), [1, 0]);
+        let super::super::PreparedWork::Pooled(work) = &cancelled.kind else {
+            panic!("pooled Graph expected")
+        };
+        // The final batch contains three uploaded buffers, the local image
+        // and the readback target. The imported mip chain decays implicitly.
+        assert_eq!(work.slot().common_barriers.recorded_transitions, 5);
         assert!(
             runtime.prepare(&graph).is_err(),
             "recorded descriptors remain exclusively leased"
@@ -1030,6 +1136,7 @@ mod tests {
             drop((result, submission));
         }
         drop((bad_graph, bad_pool, graph, pool));
+        runtime.delete(snapshot.key()).unwrap();
         // Exercise the attachment-only path after a working-set change. A live
         // transfer-only color image still requires no target view, while the
         // depth attachment requires one DSV even though there are no draws.
@@ -1135,7 +1242,7 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let fixture = scope_fixture();
+        let fixture = scope_fixture(false);
         let mut submission = runtime.submit(&fixture.plan).unwrap();
         let mut result = submission.wait(Duration::from_secs(30)).unwrap().unwrap();
         for (pass, expected) in

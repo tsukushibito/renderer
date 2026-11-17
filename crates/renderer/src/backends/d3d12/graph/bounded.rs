@@ -4,7 +4,7 @@ use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKin
 
 use std::sync::Arc;
 
-use crate::graph::{CompiledGraph, Operation, ResourceDesc};
+use crate::graph::{AccessPurpose, CompiledGraph, Operation, ResourceDesc};
 
 use super::super::{
     D3D12RuntimeError,
@@ -79,12 +79,62 @@ pub(super) fn requirements(
     resource_map: &mut [usize],
     capacity: D3D12FrameCapacity,
 ) -> Result<usize, D3D12RuntimeError> {
-    requirements_inner(graph, resource_map, capacity, None, &[], &[])
+    let mut raster_read_promotions = vec![false; resource_map.len()];
+    requirements_inner(
+        graph,
+        resource_map,
+        &mut raster_read_promotions,
+        capacity,
+        None,
+        &[],
+        &[],
+    )
+}
+
+pub(super) fn initialize_raster_read_promotions(graph: &CompiledGraph, promotions: &mut [bool]) {
+    for (eligible, resource) in promotions.iter_mut().zip(&graph.resources) {
+        *eligible = resource.import.is_some()
+            && !matches!(resource.desc, ResourceDesc::Image(desc) if desc.format.aspect() == crate::graph::ImageAspect::Depth);
+    }
+}
+
+pub(super) fn preflight_accesses(
+    graph: &CompiledGraph,
+    pass: usize,
+    promotions: &mut [bool],
+) -> Result<(), D3D12RuntimeError> {
+    let raster = matches!(graph.passes[pass].operation, Operation::Raster { .. });
+    for access in graph.accesses(pass) {
+        if !raster
+            || !matches!(
+                access.purpose,
+                AccessPurpose::Vertex
+                    | AccessPurpose::Index
+                    | AccessPurpose::Uniform
+                    | AccessPurpose::StorageRead
+                    | AccessPurpose::Sampled
+            )
+        {
+            promotions[access.resource] = false;
+        }
+        if matches!(
+            access.purpose,
+            AccessPurpose::ColorAttachment | AccessPurpose::DepthAttachment
+        ) && let ResourceDesc::Image(desc) = graph.resources[access.resource].desc
+            && !desc.is_single_subresource()
+        {
+            return Err(D3D12RuntimeError::unsupported(
+                "D3D12 attachments currently require a single-mip image",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn requirements_inner(
     graph: &CompiledGraph,
     resource_map: &mut [usize],
+    raster_read_promotions: &mut [bool],
     capacity: D3D12FrameCapacity,
     mut raster: Option<&mut super::super::raster_storage::RasterStorage>,
     programs: &[super::super::raster::RasterPipeline],
@@ -99,6 +149,7 @@ fn requirements_inner(
     });
     if graph.resources.len() > capacity.resources
         || graph.resources.len() > resource_map.len()
+        || graph.resources.len() > raster_read_promotions.len()
         || graph.order.len() > capacity.operations
     {
         return Err(D3D12RuntimeError::capacity_with(
@@ -114,6 +165,7 @@ fn requirements_inner(
     // Each Graph uses only this prefix; later checkouts reinitialize their own
     // full active range, including when it grows after a smaller Graph.
     resource_map[..graph.resources.len()].fill(usize::MAX);
+    initialize_raster_read_promotions(graph, raster_read_promotions);
     let mut used = 0;
     let mut upload_bytes = 0;
     let mut readback_bytes = 0;
@@ -123,20 +175,7 @@ fn requirements_inner(
     // Establish support and all variable capacity requirements before recording.
     // This scans changing work; it does not revalidate Graph byte-range contents.
     for &pass in &graph.order {
-        for access in graph.accesses(pass) {
-            if let ResourceDesc::Image(desc) = graph.resources[access.resource].desc
-                && matches!(
-                    access.purpose,
-                    crate::graph::AccessPurpose::ColorAttachment
-                        | crate::graph::AccessPurpose::DepthAttachment
-                )
-                && !desc.is_single_subresource()
-            {
-                return Err(D3D12RuntimeError::unsupported(
-                    "D3D12 attachments currently require a single-mip image",
-                ));
-            }
-        }
+        preflight_accesses(graph, pass, raster_read_promotions)?;
         match &graph.passes[pass].operation {
             Operation::UploadBuffer { dst, .. } => {
                 use_buffer(
@@ -492,6 +531,7 @@ pub(super) fn prepare(
     let used = requirements_inner(
         graph,
         &mut slot.resource_map,
+        &mut slot.raster_read_promotions,
         capacity,
         slot.raster.as_mut(),
         &pool.raster_programs,
