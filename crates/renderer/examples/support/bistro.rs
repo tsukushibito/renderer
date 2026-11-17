@@ -134,7 +134,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -227,6 +227,34 @@ mod tests {
         assert!(parsed.unwrap().capture_handshake);
         #[cfg(not(feature = "tracy"))]
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn stationary_cpu_requires_a_prepared_pending_window() {
+        assert!(!options(&["--fixture"]).unwrap().steady_state_cpu);
+        assert!(
+            options(&[
+                "--fixture",
+                "--steady-state-cpu",
+                "--warmup",
+                "1",
+                "--inflight",
+                "2"
+            ])
+            .is_err()
+        );
+        assert!(
+            options(&[
+                "--fixture",
+                "--steady-state-cpu",
+                "--warmup",
+                "2",
+                "--inflight",
+                "2"
+            ])
+            .unwrap()
+            .steady_state_cpu
+        );
     }
 
     #[test]

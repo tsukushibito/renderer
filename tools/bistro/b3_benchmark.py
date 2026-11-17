@@ -253,12 +253,22 @@ def renderer_metrics(report, condition, window):
                "main_thread_charged_cpu_ms_per_frame": legacy["main_thread_cpu_ns_per_frame"] / 1e6,
                "offscreen_throughput_fps": legacy["throughput_frames_per_second"]}
     stationary = report["measurement"]["steady_state_window"]
+    for key in ("frames", "host_pending_at_start", "host_pending_at_end", "wall_ns"):
+        renderer_measure._integer(stationary[key], key, positive=True)
+    renderer_measure._integer(report["measurement"]["drain_tail_wall_ns"], "drain_tail_wall_ns")
     require(stationary["frames"] == window["frames"]
             and stationary["host_pending_at_start"] == stationary["host_pending_at_end"] == window["inflight"],
             "Stationary CPU window must preserve the requested pipeline occupancy")
     require(type(stationary["wall_ns"]) is int and 0 < stationary["wall_ns"] <= report["measurement"]["wall_ns"]
             and stationary["wall_ns"] + report["measurement"]["drain_tail_wall_ns"] == report["measurement"]["wall_ns"],
             "Stationary interval and retained drain tail must reproduce complete ROI wall")
+    full_cpu, stationary_cpu = report["measurement"]["cpu"], stationary["cpu"]
+    require(stationary_cpu["qpc_start"] == full_cpu["qpc_start"]
+            and stationary_cpu["qpc_frequency"] == full_cpu["qpc_frequency"]
+            and stationary_cpu["qpc_end"] <= full_cpu["qpc_end"],
+            "Stationary CPU window must start with, and remain inside, the complete ROI")
+    for key in ("process_kernel_100ns", "process_user_100ns", "main_thread_kernel_100ns", "main_thread_user_100ns"):
+        require(stationary_cpu[key] <= full_cpu[key], "Stationary CPU cost exceeds the retained complete ROI")
     scalars.update({"stationary_" + name: value for name, value in
                     godot.charged_cpu_scalars(stationary["cpu"], window["frames"]).items()})
     scalars["drain_tail_wall_ms"] = report["measurement"]["drain_tail_wall_ns"] / 1e6
