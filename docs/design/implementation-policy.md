@@ -1490,7 +1490,8 @@ run平均をper-frame p95へ読み替えず、通常CIへ壁時計の固定合�
 旧Godot setup＋viewport p95から丸めた3.0 msは異なるscopeの参考値であり、Renderer全経路の必達CPU予算にしない。
 主camera culling無効を主参照とするが、Godot nativeのshadow caster判定は残す。
 
-定常区間は開始終了で準備済みpipelineの占有数を揃え、前後frameをまたぐpoll/retire・所有返却も含める。
+Rendererの定常区間は開始終了で実際のhost所有・未回収submission数を揃え、前後frameをまたぐpoll/retire・所有返却も含める。
+これはGPUで実行中の占有数ではなく、GodotのRD ring容量2やpost-draw時のslot状態とも同一ではない。
 同じproducer frame IDの生成から完了を囲む境界ではなく、Rendererの全loopと最終drainのCPU/wallも別に残す。
 active hostは明示yieldを除きpoll呼出し・deschedulingを含む非重複phaseの和であり、loop全費用やcharged CPUではない。
 Godotのpre/post draw elapsedはnative lowering・record・submit・present・ring待機/回収を含むが、mainloopの前後は除く。
@@ -1499,12 +1500,14 @@ Godotのpre/post draw elapsedはnative lowering・record・submit・present・ri
 wall/Nによるthroughput、iteration percentile、観測完了latency、実表示・ゲーム処理込みのFPSを分ける。
 CPUとGPUの時間を加算してFPSを求めない。旧B2予算は別の機能・材質mip条件として保持する。
 
-次の改善調査は共通の利用側Graph buildとVulkan prepare（`renderer-7ft.9`）、D3D12 record（`renderer-c4y`）を優先する。
+共通Graph buildは`renderer-7ft.9`で厳密な小writer照合とread再利用を実装し、
+[効果と一般入力の追加費用](../verification/current.md#rendergraph-hotspot-optimization)を確認した。
+残るpoll/retire・Vulkan prepareの内訳とD3D12 record（`renderer-c4y`）を次の改善調査とする。
 GPUもpass別に影・PBR・転送の費用を分け、4 cascadeのcaster負荷を含めて確認する（`renderer-7ft.8`）。
 個別timerは含まれる呼出側区間へ重複加算せず、必須の計画・同期・GPU/CPU寿命・容量・native失敗処理を維持する。
 今回の結果だけからaliasing、複数queue、vendor固有方式を採用せず、正しいbaselineと同条件で利益・代償を測る。
 実測、通常／計測有効の分離、反復変動と未確認範囲は[検証記録](../verification/current.md#bistro-b3-performance)を参照する。
-高速化の実装は今回の範囲へ含めない。AgX追加と再比較は速度改善後の別課題`renderer-5io`で扱う。
+CPU範囲の再校正とGraph最適化の証拠は別cohortとして保持する。AgX追加と再比較は別課題`renderer-5io`で扱う。
 
 ### B4: 利用側の独自Bloomとパスの合成・交換
 

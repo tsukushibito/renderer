@@ -529,7 +529,9 @@ GPU queryは遅れて観測され得るので、sampleのframe番号をGPU命令
 
 生sample、各runの平均/p50/p95/p99、実行引数、EXE/PCK/source/conditions/入力/画像のhashを保存する。
 `summarize.py`は12 runの集合・hash・生sampleからの再集計を照合し、
-最も遅い全量runのCPU/GPU p95を0.5ms単位で切り上げた予算の目安を出力する。
+最も遅い全量・timing有効runのGPU p95を0.5ms単位で切り上げた参照値を出力する。
+native CPU時計を指定した場合は、全量・timing無効runの全process charged CPU/frame平均を別に集計し、
+最も遅いrun平均を0.5ms単位で切り上げる。平均CPUの値をper-frame p95へ読み替えない。
 欠落や0/非有限の有効時GPU時間、debug build、誤backend、異なる解像度・pacing、
 不完全なframe窓は拒否し、未計測値を0へ補完しない。
 固定7視点とroute先頭のPNGはROI後に取得する。画像の形式・寸法を検査しただけで、

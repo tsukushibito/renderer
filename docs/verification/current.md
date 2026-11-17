@@ -141,14 +141,13 @@ RGBA16F、EV+1、PBR Neutral、FXAAを接続した。効果名によるbackend�
 [再現手順](../guides/development.md#bistro-b3)、[設計と採用理由](../design/implementation-policy.md#bistro-b3)、
 [共有データ](bistro-lighting.json)、[同じ視点の比較画像](bistro-lighting-preview.png)を参照する。
 
-画像・メモリ受入の実行物は`bdc413c5d90e57ff422b1eb8aeaef21e7355afe6`。
-独立したstrict＋メモリ観測／Disabled＋メモリ観測のEXE/PDB・有効feature・入力hashを保存した。
-再計測用の通常releaseとGodotは同じclean commit `ae9659a6c69d94cc7ac786e75514cf6fd09abc93`から準備した。
-Rendererのbuild入力402ファイルとcompiler／feature／profileは先の受入点と一致する。
-カメラとCSMを通常窓でも更新する受入controllerは`c303035`であり、実行物のsourceと区別してhashを保存する。
-比較controllerは`42d94c4`。**描画機能の受入と、材質mip・Pコア条件を揃えた24 processの正式比較が完了した**。
+現行の通常release、strict＋メモリ観測、Disabled＋メモリ観測、Godot projectは同じclean code commit
+`6dfa9dfaa980f4f9d4b10799bd334160c2c2fffd`から準備した。EXE/PDB・有効feature・入力hashを保存した。
+その後の統合差分は文書と検証データだけで、実行時のsource入力は一致する。
+**Graph最適化後の全量12 processの画像・メモリ受入と、CPU範囲を校正した24 processの正式比較が完了した**。
 旧Godot CPU p95から丸めた3.0 msはscopeの異なる参考値であり、Renderer全体の必達予算にはしない。
-正式CPU指標は両processの全thread charged CPU/frame平均へ再校正する。[性能の節](#bistro-b3-performance)で境界と実測の範囲を区別する。
+正式CPU指標を両processの全thread charged CPU/frame平均へ再校正し、今回の参照予算は4.5 msとした。
+[性能の節](#bistro-b3-performance)で境界と実測の範囲を区別する。
 Windows 11、Core i5-14600KF、RTX 3060 12 GiB、driver 610.88、Rust 1.99.0。
 全BistroのcookはB2と同じ`d74e9863328c238ea4b2a8fc5b617fe28879acf904a46d6b59b4b6874488d4f5`。
 1,296 mesh／1,591 primitive／132材質／405原画像＋4 default画像、3,529 mip、2,832,120三角形を保持する。
@@ -177,26 +176,30 @@ MASKのdiscard・両面指定と、BLENDのshadow非投影を保持する。主d
 near 0.02／far 500 mのまま。reversed-Zへ変更した結果とは扱わない。
 線形HDR→露出×2→Neutral→FXAA→sRGBを各一回通す。AAなしの診断出力も別に保存する。
 
-最適化workspace CPUはstrict 423件／shipping 409件、Bistro Python 126件成功
-（既存のWindows symlink権限試験1件skip）、Godot Python 17件、build helper 7件が成功した。
-controller修正後の回帰と、Windowsの所有子processへのCPU設定も含む。両構成のClippy、fmt、shader生成照合も成功。
+現行sourceの二API・診断なしrelease workspace CPUは430件成功（ignored 87件は別枠）、
+Bistro Python 126件（既存のWindows symlink権限試験1件skip）、Godot Python 19件が成功した。
+all-target Clippy、fmt、任意Tracy構成のcompileとnative時計の`/W4 /WX` build・固定Godotでのsmokeも成功した。
+strict/shipping・表示・memory構成の追加試験は[Graph最適化の記録](#rendergraph-hotspot-optimization)へ分けた。
 Bistroの実GPU試験はstrict／shippingそれぞれ5件成功し、材質、alpha、IBL、HDR出力、影と大geometryを検査した。
 共通APIのdepth-only discard／linear sampler pairも両API・両構成で別に確認している。
 
 ### 二APIの画像・資源・通常frameメモリ
 
-小fixtureと1080p全Bistroをそれぞれ、二API×strict／Disabled×独立3 processの12 runで直列受入した。
+小fixtureの先行受入に加え、現行sourceの1080p全Bistroを二API×strict／Disabled×独立3 processの12 runで直列受入した。
 通常窓24 frame＋warmup 8、2 in-flightで、全Bistroの通常窓ではカメラとCSM入力を更新する。
 ROI外に主画像・7固定視点のHDR／SDR／depth、影4枚、AAなしを保存し、
 差し替え4 cycle、textureと材質の変更・textureだけの変更、旧pending結果、同時View、容量不足と再試行も確認した。
 同API反復・strict/Disabledはbit一致、二APIは既存のfixture／scene数値profileを変更せず、
-fixture 300件／全量1,360件の比較が全て成功した。境界画素やalphaを比較対象から除外していない。
+先行fixture 300件／現行全量1,360件の比較が全て成功した。境界画素やalphaを比較対象から除外していない。
 strictのVulkan Core／SyncVal、D3D12 Debug Layer／GBVは最終native解放後まで警告・エラー・callback失敗0だった。
 
 全runの通常窓でRust 4種とVMA host 3種の確保／再確保／解放、native作成／破棄8種が全て0。
 resetは別計上であり、setup/shutdownの正の対照も確認した。
 範囲はGraph build/compile、prepare/record/submit、poll/retire、結果返却で、capture/file I/Oや変更検査は窓の外にある。
 driver内部の確保、実表示、物理page常駐を保証した観測ではない。
+現行12 runは`--steady-state-cpu`でwarmupの未回収結果を通常窓へ引き継ぐ経路も使う。
+同じ最適化済みGraphの旧drain経路と新経路を別途照合し、両API・両構成の464 planeが全byte一致した。
+CPU境界の変更が画像、pending所有権、最終回収を変えていないことを確認した。
 
 以下は影のreadbackと変更検査も準備した受入構成の、4 cycle排出後に一定へ戻った値。
 最小限の通常描画に必要な量や、通常releaseのメモリ費用とは区別する。
@@ -243,12 +246,13 @@ viewport CPU/GPUは以前の結果である。producer frame IDはscriptへ公�
 
 | 処理 | 固定Godotソースの境界 | 旧setup／viewport |
 |---|---|---|
-| scene/canvas更新 | `_draw`開始からsetup終了 | setupに含む |
+| scene/canvas更新 | `begin_frame`／`TIMESTAMP_BEGIN`後の時計取得からsetup終了 | setupに含む |
 | viewport・culling・描画命令追加 | `_draw_viewport`のbegin/end timestamp | viewport elapsedに含む。workerのjoinまでで、worker CPU総和ではない |
 | screen blit/acquire | viewport本体終了後 | 除外 |
 | Graph lowering・native command記録・submit/present | compositor end_frame→RD swap_buffers | 除外 |
 | 次slotのfence待機・retire・query読出し | RD `_begin_frame` | 除外 |
-| script/physics・draw前のmainloop同期・post-signal dispatch | draw本体の前後 | 除外 |
+| script/physics・draw前のmainloop同期 | `_draw`より前のmainloop | 除外 |
+| timestamp dispatch・memory monitor更新 | post signal後だが`_draw`内 | 除外 |
 
 根拠は固定版の[server drawとtimestamp反映](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/rendering_server_default.cpp#L76-L165)、
 [viewport開始](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_viewport.cpp#L338-L343)と
@@ -265,100 +269,105 @@ verboseが表示する[既存RGB8→RGBA8変換](https://github.com/godotengine/
 [通知条件](https://github.com/godotengine/godot/blob/ed1daf0bf001b61586d9930840f2f1394092c079/servers/rendering/renderer_rd/storage_rd/texture_storage.cpp#L2852-L2855)も確認し、
 そのsmokeを正式値から除外した。素材を書き換えず従来のverbosityへ戻し、一般のwarning拒否は維持する。
 
-比較用の`render_pre_post_ms`はSafe/main-threadの同期的draw全体を囲み、native lowering・submit・待機/回収も含む。
-前後のmainloopは含まないため、正式CPU基準は両engineの全process・全thread charged CPU/N平均とする。
+比較用の`render_pre_post_ms`はSafe/main-threadのpre/post signal間を囲み、native lowering・submit・待機/回収も含む。
+前後のmainloopと、post signal後のtimestamp dispatch・memory monitor更新は含まないため、
+正式CPU基準は両engineの全process・全thread charged CPU/N平均とする。
 Rendererは開始終了の実host未回収submission数を揃え、Godotは通常のframe ringを進める。
 これは定常的な流入出の区間であり、実GPU occupancyや同じproducer frameの生成〜完了を揃えた測定ではない。
 poll/retire・容量・寿命・失敗処理を保持し、Rendererの全loopと最終drain、明示yield、GPU、throughputも別に残す。
 100 nsはOS CPUカウンタの単位であり精度の保証ではない。開始終了の読みは逐次なので端点のずれと計装費用も残る。
-Godot native時計とRustの新しい定常経路について、以下の旧cohortとは独立して実GPU・メモリ受入と正式反復を確認する。
+Godot native時計はbench専用の任意GDExtensionであり、製品Renderer libraryの依存や常設probeには追加していない。
+固定公式Godotの生成header、ABIサイズ、EXE/descriptor/DLL/source hashを記録し、busy/sleepの独立smokeを確認した。
 
-最初の通常release比較は3,600 warmup＋1,800 frame、各条件3 processの計24 processを完走したが、
-**性能目標には採用していない**。Godotは上記のmipなし条件で、CPUにも大きな変動があった。
-例えばVulkanの計測有効時のactive host p95は13.50→49.21→50.60 ms、
-Godot主条件のCPU描画p95は3.50→5.69→12.03 msだった。
-Rendererのbuild/compile自体も増え、OS charged CPUも増加しており、単なるyield待ち増加とは説明できない。
-当時の実行コアやQoS履歴は未観測なので、温度・電源・schedulingや別アプリの影響へ原因を断定しない。
-全生sample、実行物、画像hashと初期の自動集計値は「未採用」と区別して共有JSONへ保存した。
+2026-11-18の正式比較は、材質の全mipを持つ同じcode source `6dfa9df`から準備した一組を用いた。
+1920×1080、全Bistro、固定route、2 in-flight、各process 3,600 frame warmup＋1,800 frame測定とした。
+Renderer二API×profiling off/on、Godot主camera culling off/on×timing off/onを各3独立process、計24 process、
+順番を入れ替えて直列実行した。Godot主参照はculling無効の`all`であり、native shadow caster判定は残る。
+通常Rendererはreleaseの`vulkan,d3d12`だけで、追加検証・memory計装・Tracyを含まない。
+詳細native CPU timerとGPU queryはoff/onを分け、ROI端点のCPU/QPC時計と基本sample bookkeepingは両条件に残る。
 
-修正後の正式比較は2026-11-18に完了した（`renderer-7ft.4.4`）。両対象processを停止状態で作成し、
-同じPコア群（論理CPU 0〜11、mask 4095）とHighQoSの設定・native読戻し後に再開した。
-全24 processで非管理者・非AppContainer、同じmask/QoS、初期threadの停止数1からの再開を確認した。
-Controllerと他アプリのCPU設定、OSのclock／電源設定は変更していない。ユーザーはYouTube再生を測定前に一時停止し、
-収集終了後に再生を再開できることを伝えた。測定中にbuild、cook、画像解析、別のGPU試験を並行しなかった。
-このCPU条件の固定をshippingコードの高速化や、既定schedulerでの機材全体の性能と混同しない。
+全childを停止状態で作り、Pコア論理CPU 0〜11（mask 4095）とHighQoSをnative読戻ししてから再開した。
+全24 processで非管理者・非AppContainerと同じCPU policyを確認した。controllerや他アプリの設定は変更していない。
+build/cook・別試験・画像解析とは共有lockで排他し、収集前後のheavy process一覧は空だった。
+GPU状態・clientとnative診断環境も前後に保存したが、desktop負荷・clock・温度を連続制御した記録ではない。
 
-材質の全mipを持つ同一sourceの通常releaseを使い、1080p、全Bistro、固定route、2 in-flightで、
-各processの3,600 frame warmup後に1,800 frameを収集した。
-Renderer二API×profiling off/onと、Godot主camera culling off/on×timing off/onを各3 process、計24 run直列実行した。
-Godotの主参照は主camera culling無効の`all`で、nativeのshadow caster判定は残る。
-Godotの88画像比較は事前固定の反復profile（RGB差1 code以内・変更16画素以内・alpha完全一致）を満たした。
-最大差は2,073,600画素中5画素・1 codeであり、最終群の全PNGがbit一致したという意味ではない。
-Renderer同APIの反復画像も既存profileを通過した。生sample、入力・実行物・画像hashと再集計結果は共有JSONへ保存した。
+次は**詳細timer/query無効**の共通OS会計である。単位はms/frame、3 runの平均値の中央値と最小〜最大を示す。
+run平均のpercentileや個別frameのCPU上限ではない。caller threadはprocessの内訳として読み、加算しない。
 
-以下は**profiling／timing有効**の各run内sampleから求めた値。単位はmsで、p50は3 runの中央値、
-p95は3 runの最小〜最大、p99は3 runの最大を示す。run平均のpercentileではない。
+| 対象 | 全process CPU平均 | caller thread CPU平均 | QPC wall/N |
+|---|---:|---:|---:|
+| Renderer Vulkan | 7.127（7.083〜7.222） | 7.127（7.083〜7.205） | 7.261（7.203〜7.295） |
+| Renderer D3D12 | 6.866（6.866〜6.901） | 6.866（6.858〜6.901） | 6.920（6.919〜6.996） |
+| Godot all | 2.951（2.491〜4.462） | 2.517（2.387〜3.568） | 4.568（4.553〜4.782） |
+| Godot frustum・補助条件 | 3.064（2.665〜3.967） | 2.431（2.274〜3.160） | 4.329（4.321〜4.420） |
+
+Godot allのprocess CPU平均はrun順に2.951389／4.461806／2.491319 ms/frameだった。
+最悪の4.461806を0.5 ms単位で切り上げ、**正式な平均CPU参照予算を4.5 ms/frame**とする。
+2回目のwall/Nも4.782 msへ増えたがCPUほどの変動ではなく、原因は未特定である。遅いrunは除外していない。
+Rendererは両APIともこの改善目標を上回った。旧3.0 msはsetup＋遅延viewport合成p95から導いた異なるscopeの参考値であり、
+全Graph構築・native記録・submit・poll/retire・返却へ課す必達予算ではない。
+CPU meanの差を同一仕事量の効率比へ読み替えず、4.5 msもframeごとのdeadlineや安定性保証にはしない。
+
+**詳細timer/query有効**の別process群では、全process CPU平均の3 run中央値（範囲）は
+Vulkan 7.188（7.144〜7.196）、D3D12 6.858（6.849〜6.910）、Godot all 2.891（2.821〜2.917）ms/frameだった。
+独立runの変動が含まれ、on/off差をそのまま計装overheadにしない。端点時計は逐次読取りであり、
+最初の返却配列構築が窓内、最後が窓外になる有限の費用とずれもある。100 ns単位は精度の保証ではない。
+
+次は有効runのsampleごとの経過時間／GPU観測である。単位はms、p50は3 run中央値、p95はrun間範囲、p99は最悪run。
+setupは現在draw、viewport/GPUは遅延結果なので、sample位置を同じproducer frameとみなさない。
 
 | 対象と区間 | p50中央値 | p95範囲 | 最悪p99 |
 |---|---:|---:|---:|
-| Renderer Vulkan active host | 7.283 | 8.855〜9.404 | 11.998 |
-| Renderer D3D12 active host | 6.364 | 7.610〜8.001 | 10.355 |
-| Renderer Vulkan GPU | 7.438 | 8.091〜8.140 | 8.281 |
-| Renderer D3D12 GPU | 7.086 | 7.664〜7.746 | 7.928 |
-| Godot all 旧setup＋遅延viewport合成 | 1.545 | 1.895〜2.992 | 4.134 |
-| Godot all GPU | 4.592 | 4.818〜5.400 | 5.652 |
+| Renderer Vulkan active host | 6.917 | 7.741〜7.956 | 9.371 |
+| Renderer D3D12 active host | 5.064 | 5.999〜6.219 | 8.288 |
+| Renderer Vulkan GPU | 7.390 | 7.493〜7.525 | 7.544 |
+| Renderer D3D12 GPU | 7.037 | 7.132〜7.148 | 7.174 |
+| Godot all pre/post draw elapsed | 4.523 | 4.633〜4.807 | 5.060 |
+| Godot all 現在setup | 0.006 | 0.011〜0.012 | 0.023 |
+| Godot all 遅延viewport CPU | 1.480 | 1.859〜2.447 | 2.993 |
+| Godot all 遅延GPU | 4.543 | 4.608〜4.801 | 5.019 |
 
-Rendererのactive hostはbuild／compile／submit／poll呼出し／結果返却の重複しないhost経過時間で、
-明示`yield_now`の時間を除き、poll費用とOS deschedulingを含む。CPU占有時間ではなく、
-Godotのsetup＋viewport CPU時間（script／physics等を含まない）とも範囲が異なる。
-たとえば有効runの平均値を3 runで比べると、poll呼出しはVulkan 1.536〜1.685 ms／D3D12 0.366〜0.429 ms、
-明示yieldはVulkan 0.071〜0.074 ms／D3D12 0.303〜0.355 msだった。
-待機込みのpoll/retire区間、poll呼出しの処理、native退役timerを同じCPU費用として重複加算しない。
+Godot all・timing有効の最悪GPU p95は4.801 msで、**GPU参照予算は5.0 ms**となる。
+通常時のGodot all pre/post draw平均は3 run中央値4.515 ms、p95は4.658〜6.005 msだった。
+旧CPU合成では欠けていたnative記録・submit・次slot待機/回収を含むが、これはcharged CPUとは別のelapsedである。
+Godot反復画像88比較は固定profile（RGB差1 code以内・変更16画素以内・alpha完全一致）を満たした。
+最大5画素・1 codeの差があり、全PNGのbit一致とは言わない。Rendererの反復画像も既存profileを通過した。
 
-Godot all CPU p95はrun順に1.895／1.944／2.992 ms、p50は1.502／1.545／1.613 msで、
-中央値の変動に比べて3回目の上位側が重い。原因を特定した記録はなく、Pコア固定だけで安定性を保証しない。
-有効runのRenderer active host p95の最大／最小差はVulkan約6.2%／D3D12約5.1%、GPU p95は約0.6%／1.1%だった。
-各群の全runを残し、遅い値を外れ値として除外しなかった。
+通常Rendererの全ROI charged CPU/Nは3 run中央値でVulkan 7.135／D3D12 6.875 msだった。
+全ROI wall/Nは7.268／6.926 ms、最終drainと境界bookkeepingのtail総時間は各run
+Vulkan 10.624〜12.689 ms／D3D12 9.946〜10.664 msで、すべて残している。tailを純粋なGPU待機とみなさない。
+定常wall/Nの逆数の中央値は137.713／144.506 frame/sであり、offscreen throughputである。
+iteration間隔p99は9.686〜12.024／9.223〜11.492 msだった。Godot allの通常post-draw間隔p99は4.913〜7.919 ms。
+Rendererは今回のp99で60 frame/s相当の16.67 msを下回るが、120相当の8.33 msを超えた。
+個別frameの最大や観測完了latencyは別途生sampleに残し、p99達成を全frame無停止の保証にはしない。
+CPUとGPUを足してFPSを求めず、build-to-observed-completion latencyやoffscreen throughputを実表示FPSへ読み替えない。
+ゲーム処理・scanout/input latencyを含む実表示の最終達成は未確認である。
 
-旧scopeのCPU参考値3.0 msとGPU参考値5.5 msは、この群のGodot all・timing有効の最悪run p95
-（2.992050088／5.400250101 ms）を0.5 ms単位で切り上げた値である。CPUの3.0 msは正式な全process予算へ流用しない。
-CPUの対象範囲とBRDF／IBL／影のfilter・caster判定／depth prepass／batching／mip画素／出力処理の差は残る。
-表の差や比率をGraph単体の費用、同一GPU命令量による効率差へ帰属しない。
-下のB2予算はbase-only画像・影等なしの過去条件として保持し、B3には適用しない。
+### 残る費用と改善の範囲
 
-通常の**profiling無効**runは次のとおり。wall/frameは最終drainまで含むROI総時間÷frame数、
-throughputはその逆数の3 run中央値、iteration p99はrunごとのCPU iteration間隔の範囲である。
+詳細計測有効のrun平均の範囲は、Graph buildがVulkan 0.849〜0.889／D3D12 0.835〜0.856 ms、
+native prepareが0.718〜0.732／0.241〜0.247 ms、native recordが0.618〜0.644／2.643〜2.694 msだった。
+poll呼出しelapsedは4.160〜4.241／0.976〜1.010 ms、明示yieldは0.206〜0.210／0.855〜0.879 msである。
+active hostは非重複phaseの和であり、loop/sample bookkeepingを含む全費用ではない。
+native timerはcaller区間に、poll呼出しとyieldはpoll/retire区間に内包される。phaseのp95同士も加算しない。
+Godotのblocking acquire/fence待機とRendererのnonblocking poll/yieldは同じ待機方針ではなく、
+process CPU差からどちらかの純粋な描画費用やblocked時間を逆算しない。
 
-| Renderer | wall/frame中央値（ms） | offscreen throughput中央値（frame/s） | iteration p99範囲（ms） |
-|---|---:|---:|---:|
-| Vulkan | 7.535 | 132.708 | 10.632〜12.999 |
-| D3D12 | 7.137 | 140.121 | 10.374〜10.702 |
+新protocolの未最適化baseline `eed95cc` も、同じ入力・画質・route・3,600/1,800 frame・CPU policyで
+二API各3独立processを収集した。通常stationary process CPU平均のrun中央値は
+Vulkan 7.240→7.127 ms（−1.56%）、D3D12 6.953→6.866 ms（−1.25%）だった。
+Vulkanのrun範囲は7.161〜7.274→7.083〜7.222 msで重なる。D3D12は6.927〜6.970→6.866〜6.901 msだった。
+Graph build短縮に対してpoll/yieldが増え、全CPU改善は小さい。独立した時系列cohortであり、
+A/B交互収集や統計的信頼区間ではないため、この小差を保証率や一意な最適化寄与とはしない。
+別の同一旧境界による局所改善比較と、一般Graph入力での代償は[Graphの記録](#rendergraph-hotspot-optimization)へ分けた。
 
-同じ無効runのactive host p95はVulkan 8.765〜9.320 ms、D3D12 7.626〜8.049 ms、
-OS process charged CPUは3 run中央値で7.396／7.075 ms/frameだった。
-Godot all・timing無効のpost-draw frame間隔p99は5.649〜6.269 msである。
-iterationには過去の投入に対するbackpressureが入り、buildから観測完了までのlatencyとも、表示完了時刻とも異なる。
-CPUとGPUを足してFPSを求めず、offscreen throughputを実表示FPSへ読み替えない。
-今回のRenderer iteration p99は60 frame/s相当の16.67 msを下回る一方、120相当の8.33 msを超えた。
-個別sampleの最大はVulkan 29.098 ms／D3D12 21.602 msであり、p99の達成を全frameの停止・遅延がない保証にはしない。
-ゲーム処理を含む実表示の達成や120 frame/sの安定維持は未確認である。
-
-### 比較から選ぶ改善の優先度
-
-CPU／GPUとも参照値を上回るため、次は処理別に費用を分離して改善候補を選ぶ。
-有効runでのframe平均は、利用側Graph buildがVulkan 2.528〜2.651 ms／D3D12 2.436〜2.489 ms、
-native prepareが1.530〜1.621／0.342〜0.348 ms、native recordが1.102〜1.165／2.861〜2.951 msだった。
-native区間は呼出側submit内の内訳であり、submitへ重ねて加算しない。各phaseのp95同士も加算しない。
-
-1. 共通の利用側Graph buildの宣言・binding構築と、必要なcompile費用を分けて調べる（`renderer-7ft.9`）。
-2. Vulkanはprepare（`renderer-7ft.9`）、D3D12はrecord（`renderer-c4y`）の大きい区間を細分化し、同期・所有・容量の必須処理を保って削減候補を測る。
-3. GPUはpass単位の計測を追加する調査で影・PBR・画像の読み書きを分離し、特に4 cascadeのcaster負荷を確認する（`renderer-7ft.8`）。
-
-これは次の調査順序であり、今回高速化を実装した記録ではない。
-特定APIの普遍的な優劣、GodotとのCPU差の全てがRenderer内部の余分な検証であること、
-aliasing／複数queue／新しいshader方式の利益を結論づけない。
-画像・同期・寿命・失敗処理、通常frameのメモリ規約を維持し、同じ制御条件で改善前後を比較する。
-Bloom/B4、B5の実表示・操作・temporalなちらつきの最終受入、長時間soak、他機材、OOM/device loss注入は残る。
+次は残るpoll/retireとVulkan prepareの内訳、D3D12 record（`renderer-c4y`）、GPU pass別の影・PBR・転送
+（`renderer-7ft.8`）を調査する。同期・GPU/CPU寿命・容量・native失敗処理は維持する。
+比較値だけからaliasing、複数queue、vendor固有方式の利益を結論づけない。
+Renderer Neutral／post-tonemap FXAA／consumer IBLと、Godot AgX／pre-tonemap FXAA／native IBL・BRDF・
+PCF・caster判定・depth prepass・batching・表示の差、素材mip画素の差は残る。
+AgX追加、Lumberyardの見え方変更、Bloom/B4、B5の表示・操作・temporal最終受入は今回へ含めない。
+長時間soak、他機材、物理VRAM常駐、実OOM/device loss注入は未実行である。
 
 <a id="bistro-residency"></a>
 
@@ -503,10 +512,11 @@ buffer 124,799,072 byteだったが、実VRAM常駐やnative確保event数とし
 
 ### 暫定目標と確認範囲
 
-Godot相当の描画予算の目安は、**CPU描画p95 3.5ms、GPU p95 5.0ms**とする。
-全量・計測有効の最も遅いrunのp95を、それぞれ0.5ms単位で切り上げた値である。
-Rendererではbuild/compile/prepare/record/submit/retireを含むCPU描画経路全体を対象にするが、
-Godotの同名phaseとの一対一比較や、必須同期/寿命/容量/安全性の処理を除く根拠にしない。
+このB2条件の旧参考値はCPUのsetup＋遅延viewport合成p95 3.5ms、GPU p95 5.0msである。
+全量・計測有効の最悪run p95を0.5ms単位で切り上げた過去値であり、CPUの3.5msを
+Rendererのbuild/compile/prepare/record/submit/poll/retire/返却全体へ課す根拠にはしない。
+現行B3の全process charged CPU/frame平均とは集計範囲も機能条件も分け、
+必須同期/寿命/容量/安全性の処理を除かない。
 
 frame間隔の暫定基本目標は**60 FPS（各runのp99 ≤16.67ms）**、追加目標は
 **120 FPS（同p99 ≤8.33ms）**とする。通常runの最悪p99 10.630msは前者に約6.04msの余裕を残すが、後者を超える。
