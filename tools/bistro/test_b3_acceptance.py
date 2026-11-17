@@ -150,8 +150,14 @@ class B3AcceptanceTests(unittest.TestCase):
                 acceptance.validate_identity(value, expected, full_scene=False)
         report["identity"].update(width=1920, height=1080, cook_manifest_sha256="a" * 64,
                                   environment={"manifest_sha256": "b" * 64})
+        report["scene"] = {"source": {"applied_material_policy": {
+            "ambient_occlusion_enabled": False, "source_pixels_and_references_preserved": True}}}
         expected.update(cook_manifest_sha256="a" * 64, ibl_manifest_sha256="b" * 64)
         acceptance.validate_identity(report, expected, full_scene=True)
+        report["scene"]["source"]["applied_material_policy"]["ambient_occlusion_enabled"] = True
+        with self.assertRaisesRegex(ValueError, "AO lighting profile"):
+            acceptance.validate_identity(report, expected, full_scene=True)
+        report["scene"]["source"]["applied_material_policy"]["ambient_occlusion_enabled"] = False
         report["identity"]["environment"]["manifest_sha256"] = "f" * 64
         with self.assertRaises(ValueError):
             acceptance.validate_identity(report, expected, full_scene=True)

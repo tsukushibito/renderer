@@ -22,6 +22,20 @@ def measured(timing=False, api="vulkan"):
 
 
 class B3ComparisonTests(unittest.TestCase):
+    def test_full_inventory_and_reference_ao_policy_are_required(self):
+        value = {"scene": {"meshes": 1296, "primitives": 1591, "materials": 132,
+            "source": {"image_count": 405, "triangle_count": 2832120,
+                "applied_material_policy": {"ambient_occlusion_enabled": False,
+                    "source_pixels_and_references_preserved": True}}},
+            "identity": {"alpha_only": False, "alpha_override": False}}
+        b3.validate_renderer_scene(value)
+        value["scene"]["source"]["applied_material_policy"]["ambient_occlusion_enabled"] = True
+        with self.assertRaisesRegex(ValueError, "AO profile"):
+            b3.validate_renderer_scene(value)
+        value["scene"]["source"]["applied_material_policy"]["ambient_occlusion_enabled"] = False
+        value["scene"]["primitives"] = 1590
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            b3.validate_renderer_scene(value)
     def test_schedule_rotates_engines_and_uses_exactly_three_processes_per_condition(self):
         scheduled = b3.schedule()
         self.assertEqual(len(scheduled), 24)

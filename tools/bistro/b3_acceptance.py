@@ -119,6 +119,10 @@ def validate_identity(report, expected, *, full_scene):
             and aa["position"] == "after Neutral, before sRGB",
             "AA quality differs from the fixed B3 profile")
     if full_scene:
+        policy = report["scene"]["source"].get("applied_material_policy", {})
+        require(policy.get("ambient_occlusion_enabled") is False
+                and policy.get("source_pixels_and_references_preserved") is True,
+                "Full Bistro must apply the fixed default-disabled AO lighting profile")
         require(identity["cook_manifest_sha256"] == expected["cook_manifest_sha256"],
                 "Loaded geometry cook identity changed")
         require(identity["environment"]["manifest_sha256"] == expected["ibl_manifest_sha256"],

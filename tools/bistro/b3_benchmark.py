@@ -35,6 +35,8 @@ SCOPE = (
     "Renderer: Neutral, post-tonemap FXAA, consumer IBL cook, offscreen. Godot: native AgX, "
     "pre-tonemap FXAA, RGBE-quantized panorama and native BRDF/prefilter/PCF/depth-prepass/batching/presentation. "
     "Godot all-culling-disabled is the primary reference; frustum culling is supplementary. "
+    "Both full-scene lighting profiles disable source AO contribution following the reference default; "
+    "all ORM pixels and material references are retained. "
     "CPU active host elapsed excludes explicit yield waits but includes polling and possible OS descheduling; "
     "charged process/main-thread CPU and wall/N remain separate. Godot CPU is setup+viewport and excludes "
     "script/physics. Timestamp/query and native CPU timer observations are opt-in and may affect cost. "
@@ -330,6 +332,7 @@ def run_renderer(plan, condition, output):
     require("panicked at" not in stderr.read_text(encoding="utf-8", errors="replace"), "Renderer panic in successful process")
     path = output / "report.json"
     report = load_json(path)
+    validate_renderer_scene(report)
     for key, expected in (("cook_manifest_sha256", plan["cook_manifest_sha256"]),
                           ("conditions_sha256", plan["conditions_sha256"])):
         require(report["identity"].get(key) == expected, f"Renderer loaded a different {key}")
@@ -341,6 +344,20 @@ def run_renderer(plan, condition, output):
             "controller_wall_ns": time.monotonic_ns() - started, "report": str(path),
             "report_sha256": digest(path), "stdout_sha256": digest(stdout), "stderr_sha256": digest(stderr),
             "metrics": renderer_metrics(report, condition, plan["window"]), "captures": captures(path, report)}
+
+
+def validate_renderer_scene(report):
+    scene = report["scene"]
+    require((scene["meshes"], scene["primitives"], scene["materials"],
+             scene["source"]["image_count"], scene["source"]["triangle_count"])
+            == (1296, 1591, 132, 405, 2832120), "Incomplete full Bistro inventory")
+    policy = scene["source"].get("applied_material_policy", {})
+    require(policy.get("ambient_occlusion_enabled") is False
+            and policy.get("source_pixels_and_references_preserved") is True,
+            "Renderer must apply the fixed default-disabled Bistro AO profile")
+    identity = report["identity"]
+    require(identity.get("alpha_only") is False and identity.get("alpha_override") is False,
+            "Renderer comparison requires the original material alpha inputs")
 
 
 def run_plan(plan):
