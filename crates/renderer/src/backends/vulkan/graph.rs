@@ -24,6 +24,7 @@ use crate::graph::{
     BufferHandle, CompiledGraph, GraphCapacity, ImageHandle, ImportBuffer, ImportImage,
     ImportRanges, ImportRangesPool, Operation, PassHandle, ResourceDesc, ResourceKey, SampleCount,
 };
+use crate::runtime::WorkingSet;
 
 mod cache;
 mod compute;
@@ -115,19 +116,7 @@ impl Default for FrameCapacity {
     }
 }
 
-/// Native-independent resource classes and simultaneously retained instance
-/// counts. New classes/counts require an explicit working-set preparation.
-#[derive(Clone, Copy, Debug)]
-pub enum ResourceClass {
-    Buffer {
-        desc: crate::graph::BufferDesc,
-        count: usize,
-    },
-    Image {
-        desc: crate::graph::ImageDesc,
-        count: usize,
-    },
-}
+pub use crate::runtime::ResourceClass;
 
 pub use super::error::{RuntimeError, RuntimeErrorKind};
 
@@ -403,13 +392,38 @@ impl VulkanRuntime {
         capacity: FrameCapacity,
         resources: &[ResourceClass],
     ) -> Result<(), RuntimeError> {
-        self.prepare_working_set_with(capacity, resources, PhysicalPlan::create)
+        self.prepare_working_set_with(capacity, resources, None, PhysicalPlan::create)
+    }
+
+    pub(crate) fn prepare_graph_working_set(
+        &mut self,
+        initial_capacity: Option<FrameCapacity>,
+        working_set: WorkingSet<'_>,
+    ) -> Result<(), RuntimeError> {
+        let capacity = initial_capacity.or(self.frame_capacity).ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "frame working set is not prepared",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::WorkingSet,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
+            )
+        })?;
+        self.prepare_working_set_with(
+            capacity,
+            working_set.resources,
+            Some(working_set),
+            PhysicalPlan::create,
+        )
     }
 
     fn prepare_working_set_with(
         &mut self,
         capacity: FrameCapacity,
         resources: &[ResourceClass],
+        working_set: Option<WorkingSet<'_>>,
         create: impl FnMut(
             PhysicalPlan,
             &Arc<MemoryOwner>,
@@ -520,39 +534,24 @@ impl VulkanRuntime {
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
-        // Derive private shader needs from actual prepared/registered resource
-        // classes. Buffer-only working sets impose no unrelated image features;
-        // color/depth classes permit every supported pass mix using them.
-        let mut color = false;
-        let mut depth = false;
-        for desc in prepared.descriptors(self) {
-            if let ResourceDesc::Image(desc) = desc
-                && desc.sample_count == SampleCount::X1
-            {
-                match desc.format {
-                    ImageFormat::Rgba8Unorm => color = true,
-                    ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
-                    ImageFormat::Depth32Float => depth = true,
-                }
-            }
-        }
-        if color && depth {
-            if let Some(programs) = &self.programs {
-                programs.prepare_implicit_raster()?;
-            } else {
-                let programs = ShaderPrograms::new(
-                    Arc::clone(&self.owner),
-                    self.config.execution_slots,
-                    self.config.max_shader_bindings,
-                    true,
-                )?;
-                programs.prepare_implicit_raster()?;
-                self.programs = Some(programs);
-            }
-        }
-        // All fallible work has finished. Publish the resource keys, backing,
-        // and capacities together under the Runtime borrow.
+        let descriptors = prepared.descriptors(self);
+        let (raster, compute) = if let Some(working_set) = working_set {
+            let depth_samples = Self::depth_sample_counts(descriptors);
+            let raster = self.stage_raster_programs(working_set.raster, depth_samples)?;
+            let compute = self.stage_compute_programs(working_set.compute)?;
+            (Some(raster), Some(compute))
+        } else {
+            (self.stage_implicit_raster(descriptors)?, None)
+        };
+        // Workspaces, registry changes, and explicit programs become visible
+        // together after all fallible work finishes.
         prepared.commit(self);
+        if let Some(raster) = raster {
+            self.programs = Some(raster);
+        }
+        if let Some(compute) = compute {
+            self.compute_programs = Some(compute);
+        }
         self.workspaces = Some(workspaces);
         self.results = Some(results);
         self.exports = Some(exports);
@@ -562,6 +561,69 @@ impl VulkanRuntime {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = ranges;
         Ok(())
+    }
+
+    fn stage_implicit_raster(
+        &self,
+        resources: impl Iterator<Item = ResourceDesc>,
+    ) -> Result<Option<Arc<ShaderPrograms>>, RuntimeError> {
+        // Preserve the backend-specific convenience path for prepared RGBA8
+        // and D32 resources. The common working set uses explicit requests.
+        let mut color = false;
+        let mut depth = false;
+        for resource in resources {
+            if let ResourceDesc::Image(desc) = resource
+                && desc.sample_count == SampleCount::X1
+            {
+                match desc.format {
+                    ImageFormat::Rgba8Unorm => color = true,
+                    ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
+                    ImageFormat::Depth32Float => depth = true,
+                }
+            }
+        }
+        if !(color && depth) {
+            return Ok(None);
+        }
+        if let Some(programs) = &self.programs {
+            programs.prepare_implicit_raster()?;
+            return Ok(None);
+        }
+        let programs = ShaderPrograms::new(
+            Arc::clone(&self.owner),
+            self.config.execution_slots,
+            self.config.max_shader_bindings,
+            true,
+        )?;
+        programs.prepare_implicit_raster()?;
+        Ok(Some(programs))
+    }
+
+    fn depth_sample_counts(resources: impl Iterator<Item = ResourceDesc>) -> vk::SampleCountFlags {
+        let mut depth_samples = vk::SampleCountFlags::empty();
+        for resource in resources {
+            if let ResourceDesc::Image(desc) = resource
+                && desc.format == ImageFormat::Depth32Float
+            {
+                depth_samples |= super::resources::sample_count_flags(desc.sample_count);
+            }
+        }
+        depth_samples
+    }
+
+    fn stage_raster_programs(
+        &self,
+        programs: &[impl Copy + Into<crate::program::RasterPipelineRequest>],
+        depth_samples: vk::SampleCountFlags,
+    ) -> Result<Arc<ShaderPrograms>, RuntimeError> {
+        let replacement = ShaderPrograms::new(
+            Arc::clone(&self.owner),
+            self.config.execution_slots,
+            self.config.max_shader_bindings,
+            false,
+        )?;
+        replacement.prepare_rasters(programs, depth_samples)?;
+        Ok(replacement)
     }
 
     /// Replace the complete Raster Program working set before ordinary frames.
@@ -603,25 +665,12 @@ impl VulkanRuntime {
                 ),
             ));
         }
-        let replacement = ShaderPrograms::new(
-            Arc::clone(&self.owner),
-            self.config.execution_slots,
-            self.config.max_shader_bindings,
-            false,
-        )?;
-        let mut depth_samples = vk::SampleCountFlags::empty();
-        for physical in self
+        let descriptors = self
             .entries
             .iter()
-            .filter_map(|entry| entry.physical.as_ref())
-        {
-            if let ResourceDesc::Image(desc) = physical.desc
-                && desc.format == ImageFormat::Depth32Float
-            {
-                depth_samples |= super::resources::sample_count_flags(desc.sample_count);
-            }
-        }
-        replacement.prepare_rasters(programs, depth_samples)?;
+            .filter_map(|entry| entry.physical.as_ref().map(|physical| physical.desc));
+        let replacement =
+            self.stage_raster_programs(programs, Self::depth_sample_counts(descriptors))?;
         self.programs = Some(replacement);
         Ok(())
     }
@@ -676,14 +725,21 @@ impl VulkanRuntime {
                 ),
             ));
         }
-        let prepared = compute::ComputePrograms::new(
+        let prepared = self.stage_compute_programs(programs)?;
+        self.compute_programs = Some(prepared);
+        Ok(())
+    }
+
+    fn stage_compute_programs(
+        &self,
+        programs: &[crate::program::ManagedProgram],
+    ) -> Result<Arc<compute::ComputePrograms>, RuntimeError> {
+        compute::ComputePrograms::new(
             Arc::clone(&self.owner),
             programs,
             self.config.execution_slots,
             self.config.max_shader_bindings,
-        )?;
-        self.compute_programs = Some(prepared);
-        Ok(())
+        )
     }
 
     pub fn new(config: RuntimeConfig) -> Result<Self, RuntimeError> {

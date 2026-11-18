@@ -3,12 +3,22 @@
 mod error;
 mod frames;
 mod id;
+mod preparation;
 mod queue;
+#[cfg(all(feature = "presentation", windows))]
+mod window;
 
 pub use error::{ExecutionError, ExecutionErrorKind};
 pub use frames::{FrameCompletion, FrameSubmission};
 pub use id::FrameId;
+#[cfg(all(feature = "d3d12", windows))]
+pub use preparation::D3D12Config;
+#[cfg(feature = "vulkan")]
+pub use preparation::VulkanConfig;
+pub use preparation::{ResourceClass, RuntimeConfig, RuntimeLimits, WorkingSet};
 pub(crate) use queue::{FrameQueue, Observation};
+#[cfg(all(feature = "presentation", windows))]
+pub use window::{WindowPresenter, WindowReadiness};
 
 use std::time::{Duration, Instant};
 
