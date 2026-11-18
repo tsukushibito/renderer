@@ -26,6 +26,9 @@ pub mod deferred;
 #[path = "program/forward_plus.rs"]
 pub mod forward_plus;
 
+#[path = "program/visibility.rs"]
+pub mod visibility;
+
 use renderer::ImageFormat;
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
