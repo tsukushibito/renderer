@@ -204,6 +204,7 @@ impl Snapshot {
         layout_change: bool,
     ) {
         if layout_change {
+            self.layout_transition_stage = stage;
             self.stage = stage;
             self.access = access;
         } else {
@@ -218,6 +219,9 @@ impl Snapshot {
 
     fn record_access(&mut self, current: Use, layout_change: bool, serial: u64) {
         if current.writes {
+            if layout_change {
+                self.layout_transition_stage = current.stage;
+            }
             self.stage = current.stage;
             self.access = current.access;
             self.writer_stage = current.stage;
@@ -1166,7 +1170,7 @@ fn source_scope(
 ) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
     if current.writes || layout_change {
         let scope = (
-            previous.stage | previous.writer_stage,
+            previous.stage | previous.writer_stage | previous.layout_transition_stage,
             previous.access | previous.writer_access,
         );
         if layout_change && previous.layout == vk::ImageLayout::UNDEFINED && scope.0.is_empty() {
@@ -1187,14 +1191,18 @@ fn source_scope(
         // includes later commands on the same queue; no intervening write or
         // layout transition has invalidated that visibility. Equality keeps
         // this deliberately narrow and does not infer stage/access pairings
-        // from independently accumulated masks. Keep the writer below for a
-        // different reader scope and for subsequent writes/layout changes.
+        // from independently accumulated masks. Keep the earlier writer and
+        // layout transition for other reads, writes and layout changes.
         (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE)
     } else {
-        // A COPY read does not by itself make an older COPY write visible to
-        // vertex/index/shader reads. Preserve the last writer across readers,
-        // including imports, and expose it to each actual destination access.
-        (previous.writer_stage, previous.writer_access)
+        // Expose the last writer to each new reader scope. Layout transitions
+        // can also write memory and make those writes available automatically.
+        // Chain through the transition's destination stage so a reader using
+        // a different stage still waits for the transition and sees its writes.
+        (
+            previous.writer_stage | previous.layout_transition_stage,
+            previous.writer_access,
+        )
     }
 }
 
@@ -1768,8 +1776,8 @@ mod tests {
         );
         for different_scope in [
             usage(
-                AccessPurpose::StorageRead,
-                AccessPurpose::StorageRead.default_stages(),
+                AccessPurpose::Sampled,
+                crate::program::ShaderStages::COMPUTE,
             ),
             Use {
                 access: vk::AccessFlags2::SHADER_STORAGE_READ,
@@ -1779,10 +1787,10 @@ mod tests {
             assert_eq!(
                 source_scope(&state, different_scope, false),
                 (
-                    vk::PipelineStageFlags2::COPY,
+                    vk::PipelineStageFlags2::COPY | vk::PipelineStageFlags2::FRAGMENT_SHADER,
                     vk::AccessFlags2::TRANSFER_WRITE
                 ),
-                "a new reader stage or access type still needs writer visibility"
+                "a new reader scope needs both the writer and the layout transition"
             );
         }
         assert!(

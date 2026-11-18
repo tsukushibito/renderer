@@ -53,9 +53,9 @@ pub(in super::super) fn begin(
 fn state(output: &mut String, label: &str, snapshot: &Snapshot) {
     writeln!(
         output,
-        "  {label} revision={} last_use_serial={} initialized={:?} stage={:?} access={:?} layout={:?} writer_stage={:?} writer_access={:?} read_stage={:?} read_access={:?}",
+        "  {label} revision={} last_use_serial={} initialized={:?} stage={:?} access={:?} layout={:?} layout_transition_stage={:?} writer_stage={:?} writer_access={:?} read_stage={:?} read_access={:?}",
         snapshot.revision, snapshot.serial, snapshot.initialized, snapshot.stage, snapshot.access,
-        snapshot.layout, snapshot.writer_stage, snapshot.writer_access,
+        snapshot.layout, snapshot.layout_transition_stage, snapshot.writer_stage, snapshot.writer_access,
         snapshot.read_stage, snapshot.read_access,
     )
     .expect("writing String");
@@ -81,7 +81,7 @@ fn reason(previous: &Snapshot, current: Use, layout_change: bool, emitted: bool)
         {
             "writer already visible to this exact read scope"
         } else {
-            "no prior writer or layout change requiring a dependency"
+            "no prior writer or transition requiring a dependency"
         }
     } else if layout_change
         && previous.layout == vk::ImageLayout::UNDEFINED
@@ -92,6 +92,8 @@ fn reason(previous: &Snapshot, current: Use, layout_change: bool, emitted: bool)
         "prior accesses and writer before image layout transition"
     } else if current.writes {
         "prior accesses and writer before write"
+    } else if !previous.layout_transition_stage.is_empty() {
+        "last writer visibility and prior layout transition to this reader"
     } else {
         "last writer visibility to this reader"
     }
