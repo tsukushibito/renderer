@@ -266,21 +266,55 @@ impl SlotRecord {
             spare_binding: None,
         })
     }
-    /// Prepare the fixed Surface format working set without modifying any
-    /// descriptor retained by recorded, GPU or presentation work.
+    /// Prepare every Slot before replacing any of the idle spare descriptors.
+    /// Active bindings remain owned by their Slot throughout the change.
     pub(in crate::backends::vulkan) fn prepare_format(
-        &mut self,
-        program: Arc<Program>,
+        slots: &mut Vec<Self>,
+        max_frames: usize,
+        program: &Arc<Program>,
+        #[cfg(test)] fail_after_spare_binding: bool,
     ) -> Result<(), RuntimeError> {
-        if self.slot.binding.program.format != program.format
-            && self
+        let mut spares = Vec::new();
+        spares.try_reserve_exact(slots.len()).map_err(|e| {
+            RuntimeError::reservation_error(format!("cannot stage presentation bindings: {e}"))
+        })?;
+        for (index, slot) in slots.iter().enumerate() {
+            if !slot.has_format(program.format) {
+                spares.push((index, Binding::new(Arc::clone(program))?));
+                #[cfg(test)]
+                if fail_after_spare_binding {
+                    return Err(native(
+                        program.owner(),
+                        "injected presentation binding setup",
+                        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                    ));
+                }
+            }
+        }
+        let mut additional_slots = Vec::new();
+        additional_slots
+            .try_reserve_exact(max_frames - slots.len())
+            .map_err(|e| {
+                RuntimeError::reservation_error(format!("cannot stage presentation slots: {e}"))
+            })?;
+        for _ in slots.len()..max_frames {
+            additional_slots.push(Self::new(Arc::clone(program))?);
+        }
+
+        for (index, binding) in spares {
+            slots[index].spare_binding = Some(binding);
+        }
+        // The caller reserves max_frames at Presenter creation.
+        slots.append(&mut additional_slots);
+        Ok(())
+    }
+
+    pub(in crate::backends::vulkan) fn has_format(&self, format: vk::Format) -> bool {
+        self.slot.binding.program.format == format
+            || self
                 .spare_binding
                 .as_ref()
-                .is_none_or(|binding| binding.program.format != program.format)
-        {
-            self.spare_binding = Some(Binding::new(program)?);
-        }
-        Ok(())
+                .is_some_and(|binding| binding.program.format == format)
     }
     pub(in crate::backends::vulkan) fn slot(&self) -> &Arc<Slot> {
         &self.slot

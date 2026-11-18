@@ -108,6 +108,7 @@ impl Swapchain {
         surface: Arc<WindowSurface>,
         plan: SwapchainPlan,
         old: vk::SwapchainKHR,
+        #[cfg(test)] fail_after_create: bool,
     ) -> Result<Arc<Self>, RuntimeError> {
         let SwapchainPlan {
             extent,
@@ -152,6 +153,14 @@ impl Swapchain {
             extent,
             format: format.format,
         };
+        #[cfg(test)]
+        if fail_after_create {
+            return Err(native(
+                &chain.owner,
+                "injected Swapchain image setup",
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+            ));
+        }
         // SAFETY: The successful Swapchain is immediately owned by chain.
         chain.images = unsafe { chain.loader.get_swapchain_images(handle) }
             .map_err(|r| native(&chain.owner, "vkGetSwapchainImagesKHR", r))?;
@@ -194,6 +203,10 @@ impl Drop for Swapchain {
     }
 }
 impl SwapchainPlan {
+    pub(in crate::backends::vulkan) fn format(&self) -> vk::Format {
+        self.format.format
+    }
+
     pub(in crate::backends::vulkan) fn query(
         owner: &MemoryOwner,
         surface: &WindowSurface,
