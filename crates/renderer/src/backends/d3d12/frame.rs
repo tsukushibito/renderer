@@ -1621,21 +1621,6 @@ mod tests {
             graph
                 .raster(
                     "triangle",
-                    &ManagedRasterProgram::mesh(),
-                    [RasterDraw {
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 3,
-                        instance_count: 1,
-                        bindings: None,
-                        parameters: RasterParameters::new(
-                            *RasterParameters::default().transform(),
-                            [1.0, 0.0, 0.0, 1.0],
-                        )
-                        .unwrap()
-                        .into(),
-                    }],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1644,6 +1629,25 @@ mod tests {
                             store: StoreOp::Store,
                         }],
                         depth: None,
+                    },
+                    |raster| {
+                        raster.draw(
+                            &ManagedRasterProgram::mesh(),
+                            [RasterDraw {
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 3,
+                                instance_count: 1,
+                                bindings: None,
+                                parameters: RasterParameters::new(
+                                    *RasterParameters::default().transform(),
+                                    [1.0, 0.0, 0.0, 1.0],
+                                )
+                                .unwrap()
+                                .into(),
+                            }],
+                        )
                     },
                 )
                 .unwrap();

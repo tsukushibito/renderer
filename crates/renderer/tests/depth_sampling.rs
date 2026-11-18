@@ -251,8 +251,6 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
     graph
         .raster(
             "alpha discard with no color outputs",
-            &mask,
-            [draw],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[],
@@ -262,6 +260,7 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
                     store: StoreOp::Store,
                 }),
             },
+            |raster| raster.draw(&mask, [draw]),
         )
         .unwrap();
     let depth_bytes: Vec<_> = (0..16)
@@ -328,12 +327,6 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
         graph
             .raster(
                 name,
-                &sample,
-                [RasterDraw {
-                    bindings: Some(bindings),
-                    parameters: RasterConstants::new(&constants).unwrap(),
-                    ..draw
-                }],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -342,6 +335,16 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
                         store: StoreOp::Store,
                     }],
                     depth: None,
+                },
+                |raster| {
+                    raster.draw(
+                        &sample,
+                        [RasterDraw {
+                            bindings: Some(bindings),
+                            parameters: RasterConstants::new(&constants).unwrap(),
+                            ..draw
+                        }],
+                    )
                 },
             )
             .unwrap();

@@ -403,11 +403,12 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 文字列は資源の所有を保持せず、GPU完了tokenでもない。native handle等は実行ごとに変わるため、
 安定した機械可読形式や実行間で同一のdumpは保証しない。
 
-`Graph::raster(name, &program, draws, attachments)`は明示的な`ManagedRasterProgram`とdrawのiteratorを受け取る。
+`Graph::raster(name, attachments, record)`は宣言時に`record`を実行する。
+`RasterPass::draw(&program, draws)`へ`ManagedRasterProgram`とdrawのiteratorを渡す。
 配列・sliceと`SnapshotInputs::draws()`は同じ入口を使い、要素は値または`Borrow<RasterDraw>`とする。
-各`RasterDraw`はvertex／index buffer・index count・`RasterConstants`と`Option<RasterBindings>`をまとめ、
-attachmentsは`colors: &[Attachment<[f32; 4]>]`と`depth: Option<Attachment<f32>>`を区別する。
-管理下の色Programは出力形式に一致する一個のcolorを要求し、depthを省略できる。
+各`RasterDraw`はvertex／index buffer・範囲とinstance count・`RasterConstants`・`Option<RasterBindings>`を持つ。
+各Programの色出力形式は`RasterAttachments::colors`のスロット順と一致させる。
+`RasterAttachments::depth`は深度アタッチメント、`color_resolves`は色スロットごとのresolve先を指定する。
 `depth_only()`はcolorを持たず、depthを要求する。native実行は単一subresource画像を扱う。
 各attachmentは画像、`LoadOp<T>`、`StoreOp`を持ち、`Clear(value)`だけがclear値を要求・検査する。
 `Load`／`Discard`には未使用clear値を渡さず、native operandには固定値0を使う。
@@ -439,12 +440,13 @@ shaderによるdepth/stencil/sample-mask出力やstorage副作用は引き続き
 独自descriptorは単一vertex streamのstrideと属性location／offset／Float32x2・x3・x4、
 inline定数のbyte数・VS／FS stageとDXIL register／space、読み取りbindingとそのbyte footprint、
 color形式、blend、depth状態、両APIのVS／FS binaryを定める。DXILの頂点semanticは
-`TEXCOORD`＋location番号とし、entryは`main`、sample数は1、cullingなしのu32 indexed triangleとする。
+`TEXCOORD`＋location番号とし、entryは`main`、cullingなしのu32 indexed triangleとする。
 Uniform／StorageRead／SampledImage／SamplerをVS・FSから利用でき、storage書き込みやattachment feedbackは扱わない。
 resource descriptorの配列は扱わず、各slotは一個とする。
 [D3D12 root constantsの契約](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#using-constants-directly-in-the-root-arguments)に従い
 inline定数の動的indexは使わない。動的indexが必要な配列はUniform／StorageReadへ置く。
-MRT、比較sampler、影の照明処理、tone mappingはこの契約に含めない。
+色出力はスロット順に最大8個まで指定でき、Programのblend状態を全スロットへ適用する。
+比較sampler、影の照明処理、tone mappingはこの契約に含めない。
 両backendの明示的なProgram/画像準備は通常frameの外で行い、capacity不足や未準備のProgramを
 通常prepare中のnative作成・内部waitで補わない。各drawのdescriptor内容は記録からcancelまたは実GPU完了まで保持し、
 同じpass内でも別drawのUniform/画像/samplerに上書きされない。
@@ -928,7 +930,7 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 ## 公開標準パスと標準グラフ
 
 `standard::passes`は公開Graph操作だけを使う構築関数、`standard::graphs`はそれらを組み合わせる任意のrecipeである。
-Engineやsnapshotを必須にせず、`Graph::raster`と同じowned／borrowed `RasterDraw`のiteratorを受け取る。
+Engineやsnapshotを必須にせず、`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取る。
 標準グラフもGraphを借用してその場で構築し、`SceneColor { color, depth }`というGraph内のhandleを返す。
 export、readback、compile、submit、presentと、その結果の所有は呼び出し側が選ぶ。
 
@@ -1037,7 +1039,8 @@ draw配列・mesh解決用scratchをpoolへ返す。元のEngineとSnapshotPool�
 
 GPUなしでは`GraphPool::begin()`から構築を開始し、`snapshot.connect_graph(&mut graph)`で
 `SnapshotInputs`を得る。接続はmesh bufferとuploadだけを追加し、Raster・画像・export・readbackは追加しない。
-`inputs.draws()`を通常の`Graph::raster`へ渡し、Program・描画先・Load/Store・後続処理を利用側で定める。
+`Graph::raster`のクロージャ内で`raster.draw(&program, inputs.draws())`を呼ぶ。
+Program・描画先・Load/Store・後続処理は利用側で定める。
 使わないuploadは通常のcullingで除去する。複数snapshot/Viewや同じmeshの異なる版も接続できる。
 入力leaseとsnapshotをdropした後も、構築済み命令は定数と必要なmesh streamを保持する。
 

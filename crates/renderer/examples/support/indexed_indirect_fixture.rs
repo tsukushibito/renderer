@@ -173,7 +173,7 @@ fn build(
             parameters,
             bindings: None,
         });
-    graph.raster_pass(
+    graph.raster(
         "direct reference",
         RasterAttachments {
             colors: &[Attachment {
@@ -186,7 +186,7 @@ fn build(
         },
         |raster| raster.draw(&program, reference),
     )?;
-    graph.raster_pass(
+    graph.raster(
         "indirect draws",
         RasterAttachments {
             colors: &[Attachment {

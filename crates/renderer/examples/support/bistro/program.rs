@@ -174,9 +174,11 @@ static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     vertex_dxil: include_bytes!("shaders/dxil/pbr.vert.dxil"),
     fragment_dxil: include_bytes!("shaders/dxil/pbr.frag.dxil"),
 };
+pub(super) const INSTANCE_INLINE_BYTES: u32 = 68;
+
 static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
-        size: super::instancing::INLINE_BYTES,
+        size: INSTANCE_INLINE_BYTES,
         stages: ShaderStages::VERTEX,
         dxil_register: 7,
         dxil_space: 0,

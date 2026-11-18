@@ -31,7 +31,8 @@ GraphからEngineの型には依存しません。Engineは不変mesh入力をGr
 Graphのprivateな保証境界を通します。任意の生CommandBufferを受け取るAPIも現在はありません。
 操作と宣言した用途・範囲を対応させることで、解析した計画と実際の処理を結び付けます。
 利用側は`FrameSnapshot::connect_graph`、常駐入力では`VulkanEngine::begin_graph`／`connect_snapshot`から
-描画を強制せず構築を始められます。`SnapshotInputs::draws()`を公開の`Graph::raster`へ渡し、出力を利用側で選びます。
+描画を強制せず構築を始められます。`Graph::raster`のクロージャ内で`RasterPass::draw`に
+`SnapshotInputs::draws()`を渡し、出力を利用側で選びます。
 現行Engine層には、標準opaqueや出力を構築する便利経路も残ります。
 `standard::passes`と`standard::graphs`へ[標準部品を公開](rendergraph.md#公開標準パスと標準グラフ)しました。
 標準forward全体の利用、opaque後のlinear colorを渡すpost境界の交換、公開パスの直接合成を選べます。
@@ -191,7 +192,8 @@ Samplerは`NearestClamp`または`LinearRepeat`の不変設定を保持し、別
 型付きstorage画像の全域writeは対象extentとdispatchの契約に結び付け、両backendのowned命令へ接続します。
 
 `Graph::raster_bindings(&program, &bindings)`はdescriptorを一度検査・所有し、GraphとProgramに固有の
-不変handleを返します。`Graph::raster(name, &program, draws, attachments)`は、そのhandleを共有するdraw列をcaptureします。
+不変handleを返します。`Graph::raster`のクロージャ内から`raster.draw(&program, draws)`を呼び、
+そのhandleを共有するdraw列をcaptureします。
 bindingなしのProgramは`RasterDraw::bindings: None`を使います。使用passごとにreadを宣言し、
 同じpassの完全一致readだけを一件にまとめるため、draw順と実descriptor、producerの意味を保ちます。
 `ManagedRasterProgram::mesh()`はbindingなし、`textured_mesh()`はCPU計画でUniform・sampled View・Samplerを扱います。

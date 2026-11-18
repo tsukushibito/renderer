@@ -142,16 +142,6 @@ fn vulkan_attachment_subresource_native_boundaries() {
         unsupported
             .raster(
                 "CPU color-only plan",
-                &crate::program::ManagedRasterProgram::mesh(),
-                [RasterDraw {
-                    bindings: None,
-                    vertices,
-                    indices,
-                    first_index: 0,
-                    index_count: 12,
-                    instance_count: 1,
-                    parameters: RasterParameters::default().into(),
-                }],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -160,6 +150,20 @@ fn vulkan_attachment_subresource_native_boundaries() {
                         store: StoreOp::Store,
                     }],
                     depth: None,
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        [RasterDraw {
+                            bindings: None,
+                            vertices,
+                            indices,
+                            first_index: 0,
+                            index_count: 12,
+                            instance_count: 1,
+                            parameters: RasterParameters::default().into(),
+                        }],
+                    )
                 },
             )
             .unwrap();
@@ -200,27 +204,6 @@ fn vulkan_attachment_subresource_native_boundaries() {
         loaded
             .raster(
                 "loaded draw list",
-                &crate::program::ManagedRasterProgram::mesh(),
-                [
-                    RasterDraw {
-                        bindings: None,
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 12,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    },
-                    RasterDraw {
-                        bindings: None,
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 12,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    },
-                ],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -233,6 +216,31 @@ fn vulkan_attachment_subresource_native_boundaries() {
                         load: LoadOp::Load,
                         store: StoreOp::Store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        [
+                            RasterDraw {
+                                bindings: None,
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 12,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            },
+                            RasterDraw {
+                                bindings: None,
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 12,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            },
+                        ],
+                    )
                 },
             )
             .unwrap();
@@ -398,8 +406,6 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
         graph
             .raster(
                 "HDR",
-                &ManagedRasterProgram::textured_mesh_hdr(),
-                draws,
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -409,6 +415,7 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
                     }],
                     depth: None,
                 },
+                |raster| raster.draw(&ManagedRasterProgram::textured_mesh_hdr(), draws),
             )
             .unwrap();
         let read = graph.readback_image("HDR result", target).unwrap();
@@ -610,8 +617,6 @@ fn opaque_batch_comparison(
         graph
             .raster(
                 "opaque batch",
-                &crate::program::ManagedRasterProgram::mesh(),
-                batch_draws(draws),
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -624,6 +629,12 @@ fn opaque_batch_comparison(
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        batch_draws(draws),
+                    )
                 },
             )
             .unwrap();
@@ -650,16 +661,6 @@ fn opaque_batch_comparison(
             graph
                 .raster(
                     "scalar draw",
-                    &crate::program::ManagedRasterProgram::mesh(),
-                    [RasterDraw {
-                        bindings: None,
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: count,
-                        instance_count: 1,
-                        parameters: parameters.into(),
-                    }],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -672,6 +673,20 @@ fn opaque_batch_comparison(
                             load: LoadOp::Load,
                             store: StoreOp::Store,
                         }),
+                    },
+                    |raster| {
+                        raster.draw(
+                            &crate::program::ManagedRasterProgram::mesh(),
+                            [RasterDraw {
+                                bindings: None,
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: count,
+                                instance_count: 1,
+                                parameters: parameters.into(),
+                            }],
+                        )
                     },
                 )
                 .unwrap();
@@ -813,11 +828,6 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
         graph
             .raster(
                 "bounds batch",
-                &crate::program::ManagedRasterProgram::mesh(),
-                batch_draws(vec![
-                    (full, indices, 3, RasterParameters::default()),
-                    (short, indices, 3, RasterParameters::default()),
-                ]),
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -830,6 +840,15 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        batch_draws(vec![
+                            (full, indices, 3, RasterParameters::default()),
+                            (short, indices, 3, RasterParameters::default()),
+                        ]),
+                    )
                 },
             )
             .unwrap();
@@ -885,8 +904,6 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
         graph
             .raster(
                 "shared input batch",
-                &crate::program::ManagedRasterProgram::mesh(),
-                batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -899,6 +916,12 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
+                    )
                 },
             )
             .unwrap();
@@ -1051,16 +1074,6 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             invalid
                 .raster(
                     "reject-invalid-index",
-                    &crate::program::ManagedRasterProgram::mesh(),
-                    [RasterDraw {
-                        bindings: None,
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 12,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    }],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1073,6 +1086,20 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
                         }),
+                    },
+                    |raster| {
+                        raster.draw(
+                            &crate::program::ManagedRasterProgram::mesh(),
+                            [RasterDraw {
+                                bindings: None,
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 12,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            }],
+                        )
                     },
                 )
                 .unwrap();
@@ -1266,16 +1293,6 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
             .unwrap();
         mesh.raster(
             "lazy-mesh",
-            &crate::program::ManagedRasterProgram::mesh(),
-            [RasterDraw {
-                bindings: None,
-                vertices,
-                indices,
-                first_index: 0,
-                index_count: 12,
-                instance_count: 1,
-                parameters: RasterParameters::default().into(),
-            }],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[Attachment {
@@ -1288,6 +1305,20 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
                 }),
+            },
+            |raster| {
+                raster.draw(
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    [RasterDraw {
+                        bindings: None,
+                        vertices,
+                        indices,
+                        first_index: 0,
+                        index_count: 12,
+                        instance_count: 1,
+                        parameters: RasterParameters::default().into(),
+                    }],
+                )
             },
         )
         .unwrap();
@@ -1448,16 +1479,6 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             graph
                 .raster(
                     "mesh-clear",
-                    &crate::program::ManagedRasterProgram::mesh(),
-                    [RasterDraw {
-                        bindings: None,
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 12,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    }],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1470,6 +1491,20 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
                         }),
+                    },
+                    |raster| {
+                        raster.draw(
+                            &crate::program::ManagedRasterProgram::mesh(),
+                            [RasterDraw {
+                                bindings: None,
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 12,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            }],
+                        )
                     },
                 )
                 .unwrap();
@@ -1505,16 +1540,6 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
             graph
                 .raster(
                     "mesh-load",
-                    &crate::program::ManagedRasterProgram::mesh(),
-                    [RasterDraw {
-                        bindings: None,
-                        vertices: blue_vertices,
-                        indices: blue_indices,
-                        first_index: 0,
-                        index_count: 6,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    }],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1527,6 +1552,20 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                             load: LoadOp::Load,
                             store: StoreOp::Store,
                         }),
+                    },
+                    |raster| {
+                        raster.draw(
+                            &crate::program::ManagedRasterProgram::mesh(),
+                            [RasterDraw {
+                                bindings: None,
+                                vertices: blue_vertices,
+                                indices: blue_indices,
+                                first_index: 0,
+                                index_count: 6,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            }],
+                        )
                     },
                 )
                 .unwrap();
@@ -1611,16 +1650,6 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             graph
                 .raster(
                     "scene-mesh-depth",
-                    &crate::program::ManagedRasterProgram::mesh(),
-                    [RasterDraw {
-                        bindings: None,
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 12,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    }],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1633,6 +1662,20 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                             load: LoadOp::Clear(1.0),
                             store: StoreOp::Store,
                         }),
+                    },
+                    |raster| {
+                        raster.draw(
+                            &crate::program::ManagedRasterProgram::mesh(),
+                            [RasterDraw {
+                                bindings: None,
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 12,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            }],
+                        )
                     },
                 )
                 .unwrap();

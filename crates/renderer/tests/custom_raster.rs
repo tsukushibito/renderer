@@ -101,13 +101,12 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
         graph
             .raster(
                 "wrong constants",
-                &program,
-                [wrong_constants],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                     depth: Some(depth_attachment(&graph, LoadOp::Load)),
-                }
+                },
+                |raster| { raster.draw(&program, [wrong_constants]) },
             )
             .unwrap_err()
             .kind(),
@@ -117,13 +116,12 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
         graph
             .raster(
                 "wrong format",
-                &program,
-                [draws[0]],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[attachment(&graph, wrong_color, LoadOp::Clear([0.0; 4]))],
                     depth: Some(depth_attachment(&graph, LoadOp::Load)),
-                }
+                },
+                |raster| { raster.draw(&program, [draws[0]]) },
             )
             .unwrap_err()
             .kind(),
@@ -134,13 +132,12 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
             graph
                 .raster(
                     "missing required depth",
-                    &program,
-                    &draws[..draw_count],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                         depth: None,
-                    }
+                    },
+                    |raster| { raster.draw(&program, &draws[..draw_count]) },
                 )
                 .unwrap_err()
                 .kind(),
@@ -150,13 +147,12 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
             graph
                 .raster(
                     "required depth is not loaded",
-                    &program,
-                    &draws[..draw_count],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                         depth: Some(depth_attachment(&graph, LoadOp::Clear(1.0))),
-                    }
+                    },
+                    |raster| { raster.draw(&program, &draws[..draw_count]) },
                 )
                 .unwrap_err()
                 .kind(),
@@ -183,8 +179,6 @@ fn custom_raster_draw_capacity_fails_before_implicit_growth() {
     let error = graph
         .raster(
             "over-capacity custom draws",
-            &fixture::custom_program(BlendState::Alpha),
-            &draws[..2],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[Attachment {
@@ -198,6 +192,7 @@ fn custom_raster_draw_capacity_fails_before_implicit_growth() {
                     store: StoreOp::Store,
                 }),
             },
+            |raster| raster.draw(&fixture::custom_program(BlendState::Alpha), &draws[..2]),
         )
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::CapacityExhausted);

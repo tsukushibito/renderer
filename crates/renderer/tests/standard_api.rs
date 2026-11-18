@@ -170,13 +170,12 @@ fn standard_parts_compose_with_a_user_pass_without_the_standard_graph() {
     graph
         .raster(
             "user overlay",
-            &ManagedRasterProgram::mesh_hdr(),
-            [draw],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment],
                 depth: None,
             },
+            |raster| raster.draw(&ManagedRasterProgram::mesh_hdr(), [draw]),
         )
         .unwrap();
     let output = graph

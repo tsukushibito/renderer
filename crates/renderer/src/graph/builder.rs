@@ -660,24 +660,18 @@ mod tests {
         ] {
             assert_eq!(
                 graph
-                    .raster(
-                        "invalid range or count",
-                        &program,
-                        [later, invalid],
-                        attachments
-                    )
+                    .raster("invalid range or count", attachments, |raster| {
+                        raster.draw(&program, [later, invalid])
+                    },)
                     .unwrap_err()
                     .kind(),
                 GraphErrorKind::InvalidInput,
             );
         }
         let pass = graph
-            .raster(
-                "draw the initialized ranges",
-                &program,
-                [overlapping, baseline, later],
-                attachments,
-            )
+            .raster("draw the initialized ranges", attachments, |raster| {
+                raster.draw(&program, [overlapping, baseline, later])
+            })
             .unwrap();
         graph.export_image(target).unwrap();
         let plan = graph.compile().unwrap();
@@ -714,13 +708,6 @@ mod tests {
         graph
             .raster(
                 "reads a missing index",
-                &ManagedRasterProgram::mesh(),
-                [RasterDraw {
-                    indices,
-                    first_index: 3,
-                    instance_count: 2,
-                    ..draw
-                }],
                 RasterAttachments {
                     colors: &[Attachment {
                         view: graph.image_view(target, 0, 0).unwrap(),
@@ -729,6 +716,17 @@ mod tests {
                     }],
                     depth: None,
                     color_resolves: &[],
+                },
+                |raster| {
+                    raster.draw(
+                        &ManagedRasterProgram::mesh(),
+                        [RasterDraw {
+                            indices,
+                            first_index: 3,
+                            instance_count: 2,
+                            ..draw
+                        }],
+                    )
                 },
             )
             .unwrap();
@@ -813,13 +811,14 @@ mod tests {
             graph
                 .raster(
                     "failed after first draw",
-                    &ManagedRasterProgram::textured_mesh(),
-                    [mesh, invalid],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &colors,
                         depth: None
-                    }
+                    },
+                    |raster| {
+                        raster.draw(&ManagedRasterProgram::textured_mesh(), [mesh, invalid])
+                    },
                 )
                 .unwrap_err()
                 .kind(),
@@ -840,13 +839,12 @@ mod tests {
         let pass = graph
             .raster(
                 "shared descriptors",
-                &ManagedRasterProgram::textured_mesh(),
-                draws,
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &colors,
                     depth: None,
                 },
+                |raster| raster.draw(&ManagedRasterProgram::textured_mesh(), draws),
             )
             .unwrap();
         graph.readback_image("read output", output).unwrap();
@@ -901,15 +899,19 @@ mod tests {
         let error = graph
             .raster(
                 "too many binding reads",
-                &ManagedRasterProgram::textured_mesh(),
-                sets.map(|set| RasterDraw {
-                    bindings: Some(set),
-                    ..mesh
-                }),
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &colors,
                     depth: None,
+                },
+                |raster| {
+                    raster.draw(
+                        &ManagedRasterProgram::textured_mesh(),
+                        sets.map(|set| RasterDraw {
+                            bindings: Some(set),
+                            ..mesh
+                        }),
+                    )
                 },
             )
             .unwrap_err();
@@ -932,15 +934,19 @@ mod tests {
         let pass = graph
             .raster(
                 "retry published set",
-                &ManagedRasterProgram::textured_mesh(),
-                [RasterDraw {
-                    bindings: Some(sets[0]),
-                    ..mesh
-                }; 2],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &colors,
                     depth: None,
+                },
+                |raster| {
+                    raster.draw(
+                        &ManagedRasterProgram::textured_mesh(),
+                        [RasterDraw {
+                            bindings: Some(sets[0]),
+                            ..mesh
+                        }; 2],
+                    )
                 },
             )
             .unwrap();
@@ -982,8 +988,6 @@ mod tests {
                     } else {
                         "live draw"
                     },
-                    &ManagedRasterProgram::textured_mesh(),
-                    [mesh],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -993,6 +997,7 @@ mod tests {
                         }],
                         depth: None,
                     },
+                    |raster| raster.draw(&ManagedRasterProgram::textured_mesh(), [mesh]),
                 )
                 .unwrap();
         }
@@ -1040,8 +1045,6 @@ mod tests {
                     let error = graph
                         .raster(
                             "invalid prepass continuation",
-                            &program,
-                            draws,
                             RasterAttachments {
                                 color_resolves: &[],
                                 colors: &colors,
@@ -1051,6 +1054,7 @@ mod tests {
                                     store: StoreOp::Store,
                                 }),
                             },
+                            |raster| raster.draw(&program, draws),
                         )
                         .unwrap_err();
                     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
@@ -1076,8 +1080,6 @@ mod tests {
                 graph
                     .raster(
                         "valid prepass continuation",
-                        &program,
-                        draws,
                         RasterAttachments {
                             color_resolves: &[],
                             colors: &colors,
@@ -1087,6 +1089,7 @@ mod tests {
                                 store: StoreOp::Store,
                             }),
                         },
+                        |raster| raster.draw(&program, draws),
                     )
                     .unwrap();
             }
@@ -1134,8 +1137,6 @@ mod tests {
             let pass = graph
                 .raster(
                     "owned",
-                    &ManagedRasterProgram::mesh(),
-                    draws,
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &colors,
@@ -1145,6 +1146,7 @@ mod tests {
                             store: StoreOp::Store,
                         }),
                     },
+                    |raster| raster.draw(&ManagedRasterProgram::mesh(), draws),
                 )
                 .unwrap();
             draws.swap(0, 1);
@@ -1244,7 +1246,7 @@ mod tests {
         let output = graph.image("output", ImageDesc::rgba8(2, 2)).unwrap();
         let target = graph.image_view(output, 0, 0).unwrap();
         let pass = graph
-            .raster_pass(
+            .raster(
                 "ordered graphics",
                 RasterAttachments {
                     colors: &[Attachment {
@@ -1326,7 +1328,7 @@ mod tests {
         };
         let program = ManagedRasterProgram::mesh();
         let error = graph
-            .raster_pass("two slots", attachments, |raster| {
+            .raster("two slots", attachments, |raster| {
                 raster.draw(&program, [mesh])?;
                 assert!(raster.draw(&program, [mesh, mesh]).is_err());
                 Ok(())
@@ -1338,7 +1340,7 @@ mod tests {
         );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = graph.raster_pass("unwound", attachments, |raster| {
+                let _ = graph.raster("unwound", attachments, |raster| {
                     raster.draw(&program, [mesh])?;
                     panic!("application callback panicked");
                 });
@@ -1346,7 +1348,7 @@ mod tests {
             .is_err()
         );
         graph
-            .raster_pass("retry", attachments, |raster| {
+            .raster("retry", attachments, |raster| {
                 raster.draw(&program, [mesh])?;
                 raster.draw(&program, [mesh])
             })
@@ -1374,7 +1376,7 @@ mod tests {
         let target = graph.image_view(color, 0, 0).unwrap();
         let resolve_view = graph.image_view(resolve, 0, 0).unwrap();
         let error = graph
-            .raster_pass(
+            .raster(
                 "resolve with feedback",
                 RasterAttachments {
                     colors: &[Attachment {
@@ -1427,13 +1429,12 @@ mod tests {
         let error = graph
             .raster(
                 "resolution failed",
-                &ManagedRasterProgram::mesh(),
-                [draw, invalid],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
+                |raster| raster.draw(&ManagedRasterProgram::mesh(), [draw, invalid]),
             )
             .unwrap_err();
         assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
@@ -1441,13 +1442,12 @@ mod tests {
         graph
             .raster(
                 "retry",
-                &ManagedRasterProgram::mesh(),
-                [draw, draw],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
+                |raster| raster.draw(&ManagedRasterProgram::mesh(), [draw, draw]),
             )
             .unwrap();
         graph.readback_image("pixels", image).unwrap();
@@ -1517,8 +1517,6 @@ mod tests {
             let pass = graph
                 .raster(
                     "materials",
-                    &ManagedRasterProgram::textured_mesh(),
-                    draws,
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1528,6 +1526,7 @@ mod tests {
                         }],
                         depth: None,
                     },
+                    |raster| raster.draw(&ManagedRasterProgram::textured_mesh(), draws),
                 )
                 .unwrap();
             first.fill(second[0]);

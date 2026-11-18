@@ -1380,7 +1380,15 @@ readback結果は`FrameCompletion::result`から消費でき、未読結果の�
 利用側が構成する場合は`begin_graph()` → 必要な`connect_snapshot()` → 公開Graph操作 →
 `compile()` → `submit_graph()`を使います。snapshotなし、複数View、任意の画像/buffer出力も同じ入口です。
 一画像の出力と解放をまとめる場合は構成後に`select_output(image, readback)`を選び、`submit_frame`へ渡します。
-`SnapshotInputs::draws()`は通常の`Graph::raster`で使い、接続leaseは構築後に返します。
+`Graph::raster`で描画先とLoad/Storeを指定し、クロージャ内で接続済みのdraw列を登録します。
+次の例では、接続leaseを構築後に返せます。
+
+```rust,ignore
+graph.raster("opaque", attachments, |raster| {
+    raster.draw(&program, inputs.draws())
+})?;
+```
+
 mesh inputは読み取り専用で直接exportできません。必要な変更・exportは独立bufferへのcopy後に行います。
 `standard::graphs::forward`／`forward_with_post`で標準構成を選び、`standard::passes`を直接組み合わせることもできます。
 opaque、depth prepass、同formatのcolor出力copyを公開Graph APIで構築し、出力handleから必要な消費方法を選びます。

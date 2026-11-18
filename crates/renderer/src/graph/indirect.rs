@@ -260,7 +260,7 @@ mod tests {
         let output = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
         let view = graph.image_view(output, 0, 0).unwrap();
         let pass = graph
-            .raster_pass(
+            .raster(
                 "draw",
                 RasterAttachments {
                     colors: &[Attachment {
@@ -374,7 +374,7 @@ mod tests {
         let target = next.image("color", ImageDesc::rgba8(1, 1)).unwrap();
         let view = next.image_view(target, 0, 0).unwrap();
         let error = next
-            .raster_pass(
+            .raster(
                 "foreign arguments",
                 RasterAttachments {
                     colors: &[Attachment {

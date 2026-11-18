@@ -273,25 +273,23 @@ fn resident_versions(engine: &mut VulkanEngine) {
     graph
         .raster(
             "old mesh version",
-            &ManagedRasterProgram::mesh_hdr(),
-            old_inputs.draws(),
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[attachment(graph, first)],
                 depth: None,
             },
+            |raster| raster.draw(&ManagedRasterProgram::mesh_hdr(), old_inputs.draws()),
         )
         .unwrap();
     graph
         .raster(
             "new mesh version",
-            &ManagedRasterProgram::mesh_hdr(),
-            new_inputs.draws(),
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[attachment(graph, second)],
                 depth: None,
             },
+            |raster| raster.draw(&ManagedRasterProgram::mesh_hdr(), new_inputs.draws()),
         )
         .unwrap();
     graph.export_image(first).unwrap();

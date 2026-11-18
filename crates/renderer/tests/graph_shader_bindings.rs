@@ -93,15 +93,19 @@ fn draw(
     let bindings = graph.raster_bindings(&ManagedRasterProgram::textured_mesh(), bindings)?;
     graph.raster(
         name,
-        &ManagedRasterProgram::textured_mesh(),
-        [RasterDraw {
-            bindings: Some(bindings),
-            ..geometry
-        }],
         RasterAttachments {
             color_resolves: &[],
             colors: &[attachment(output)],
             depth: None,
+        },
+        |raster| {
+            raster.draw(
+                &ManagedRasterProgram::textured_mesh(),
+                [RasterDraw {
+                    bindings: Some(bindings),
+                    ..geometry
+                }],
+            )
         },
     )
 }
@@ -291,21 +295,25 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
     let error = graph
         .raster(
             "bad later draw",
-            &ManagedRasterProgram::textured_mesh(),
-            [
-                RasterDraw {
-                    bindings: Some(good),
-                    ..mesh
-                },
-                RasterDraw {
-                    bindings: Some(feedback),
-                    ..mesh
-                },
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[attachment(output)],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::textured_mesh(),
+                    [
+                        RasterDraw {
+                            bindings: Some(good),
+                            ..mesh
+                        },
+                        RasterDraw {
+                            bindings: Some(feedback),
+                            ..mesh
+                        },
+                    ],
+                )
             },
         )
         .unwrap_err();
@@ -313,21 +321,25 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
     graph
         .raster(
             "two valid draws",
-            &ManagedRasterProgram::textured_mesh(),
-            [
-                RasterDraw {
-                    bindings: Some(good),
-                    ..mesh
-                },
-                RasterDraw {
-                    bindings: Some(good),
-                    ..mesh
-                },
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[attachment(output)],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::textured_mesh(),
+                    [
+                        RasterDraw {
+                            bindings: Some(good),
+                            ..mesh
+                        },
+                        RasterDraw {
+                            bindings: Some(good),
+                            ..mesh
+                        },
+                    ],
+                )
             },
         )
         .unwrap();
@@ -431,15 +443,19 @@ fn binding_creation_failures_allow_retry_and_reused_sets_share_capacity() {
     graph
         .raster(
             "reused binding set",
-            &ManagedRasterProgram::textured_mesh(),
-            [RasterDraw {
-                bindings: Some(valid),
-                ..mesh
-            }; 2],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[attachment(output)],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::textured_mesh(),
+                    [RasterDraw {
+                        bindings: Some(valid),
+                        ..mesh
+                    }; 2],
+                )
             },
         )
         .unwrap();
@@ -480,21 +496,25 @@ fn distinct_materials_in_one_pass_keep_both_texture_producers() {
         graph
             .raster(
                 "different materials",
-                &ManagedRasterProgram::textured_mesh(),
-                [
-                    RasterDraw {
-                        bindings: Some(a_bindings),
-                        ..mesh
-                    },
-                    RasterDraw {
-                        bindings: Some(b_bindings),
-                        ..mesh
-                    },
-                ],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[attachment(output)],
                     depth: None,
+                },
+                |raster| {
+                    raster.draw(
+                        &ManagedRasterProgram::textured_mesh(),
+                        [
+                            RasterDraw {
+                                bindings: Some(a_bindings),
+                                ..mesh
+                            },
+                            RasterDraw {
+                                bindings: Some(b_bindings),
+                                ..mesh
+                            },
+                        ],
+                    )
                 },
             )
             .unwrap();

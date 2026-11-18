@@ -896,16 +896,6 @@ mod tests {
                 graph
                     .raster(
                         "shared buffer scopes",
-                        &ManagedRasterProgram::textured_mesh(),
-                        [RasterDraw {
-                            bindings: Some(bindings),
-                            vertices,
-                            indices: shared,
-                            first_index: 0,
-                            index_count: 3,
-                            instance_count: 1,
-                            parameters: RasterParameters::default().into(),
-                        }],
                         RasterAttachments {
                             color_resolves: &[],
                             colors: &[Attachment {
@@ -914,6 +904,20 @@ mod tests {
                                 store: StoreOp::Store,
                             }],
                             depth: None,
+                        },
+                        |raster| {
+                            raster.draw(
+                                &ManagedRasterProgram::textured_mesh(),
+                                [RasterDraw {
+                                    bindings: Some(bindings),
+                                    vertices,
+                                    indices: shared,
+                                    first_index: 0,
+                                    index_count: 3,
+                                    instance_count: 1,
+                                    parameters: RasterParameters::default().into(),
+                                }],
+                            )
                         },
                     )
                     .unwrap(),
@@ -1126,16 +1130,6 @@ mod tests {
             graph
                 .raster(
                     "sample view",
-                    &program,
-                    [RasterDraw {
-                        bindings: Some(bindings),
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 3,
-                        instance_count: 1,
-                        parameters: RasterParameters::default().into(),
-                    }; 2],
                     RasterAttachments {
                         color_resolves: &[],
                         colors: &[Attachment {
@@ -1144,6 +1138,20 @@ mod tests {
                             store: StoreOp::Store,
                         }],
                         depth: None,
+                    },
+                    |raster| {
+                        raster.draw(
+                            &program,
+                            [RasterDraw {
+                                bindings: Some(bindings),
+                                vertices,
+                                indices,
+                                first_index: 0,
+                                index_count: 3,
+                                instance_count: 1,
+                                parameters: RasterParameters::default().into(),
+                            }; 2],
+                        )
                     },
                 )
                 .unwrap();
