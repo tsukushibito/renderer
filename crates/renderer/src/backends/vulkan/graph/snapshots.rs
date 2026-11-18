@@ -49,6 +49,7 @@ impl Snapshot {
         self.revision = source.revision;
         self.serial = source.serial;
         self.layout = source.layout;
+        self.layout_transition_stage = source.layout_transition_stage;
         self.stage = source.stage;
         self.access = source.access;
         self.writer_stage = source.writer_stage;
@@ -95,6 +96,7 @@ impl Snapshot {
         self.revision = 0;
         self.serial = 0;
         self.layout = vk::ImageLayout::UNDEFINED;
+        self.layout_transition_stage = vk::PipelineStageFlags2::NONE;
         self.stage = vk::PipelineStageFlags2::NONE;
         self.access = vk::AccessFlags2::NONE;
         self.writer_stage = vk::PipelineStageFlags2::NONE;
@@ -114,6 +116,7 @@ mod tests {
         snapshot.revision = 13;
         snapshot.serial = 17;
         snapshot.layout = vk::ImageLayout::GENERAL;
+        snapshot.layout_transition_stage = vk::PipelineStageFlags2::FRAGMENT_SHADER;
         snapshot.stage = vk::PipelineStageFlags2::COPY;
         snapshot.access = vk::AccessFlags2::TRANSFER_READ;
         snapshot.writer_stage = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -126,6 +129,10 @@ mod tests {
         assert_eq!(snapshot.revision, 13);
         assert_eq!(snapshot.serial, 17);
         assert_eq!(snapshot.layout, vk::ImageLayout::GENERAL);
+        assert_eq!(
+            snapshot.layout_transition_stage,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        );
         assert_eq!(snapshot.stage, vk::PipelineStageFlags2::COPY);
         assert_eq!(snapshot.access, vk::AccessFlags2::TRANSFER_READ);
         assert_eq!(

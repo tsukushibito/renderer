@@ -21,7 +21,7 @@ pub(super) fn prepare_source(previous: &Snapshot) -> Option<SourceScope> {
         None
     } else {
         Some(SourceScope {
-            stage: previous.stage | previous.writer_stage,
+            stage: previous.stage | previous.writer_stage | previous.layout_transition_stage,
             access: previous.access | previous.writer_access,
             layout: previous.layout,
         })
@@ -104,6 +104,10 @@ mod tests {
         assert_eq!(first.layout, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
         let initialized_storage = next.initialized.as_ptr();
         commit_source(&mut next, 8);
+        assert_eq!(
+            next.layout_transition_stage,
+            vk::PipelineStageFlags2::FRAGMENT_SHADER
+        );
         assert!(prepare_source(&next).is_none());
         commit_source(&mut next, 9);
         assert_eq!(next.initialized.as_ptr(), initialized_storage);

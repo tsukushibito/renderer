@@ -150,6 +150,8 @@ struct Snapshot {
     serial: u64,
     initialized: Vec<Range<u64>>,
     layout: vk::ImageLayout,
+    // Destination scope of the last native image layout transition.
+    layout_transition_stage: vk::PipelineStageFlags2,
     stage: vk::PipelineStageFlags2,
     access: vk::AccessFlags2,
     writer_stage: vk::PipelineStageFlags2,
@@ -182,6 +184,7 @@ impl Default for Snapshot {
             serial: 0,
             initialized: Vec::new(),
             layout: vk::ImageLayout::UNDEFINED,
+            layout_transition_stage: vk::PipelineStageFlags2::NONE,
             stage: vk::PipelineStageFlags2::NONE,
             access: vk::AccessFlags2::NONE,
             writer_stage: vk::PipelineStageFlags2::NONE,
