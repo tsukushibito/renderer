@@ -5,8 +5,9 @@ from pathlib import Path
 
 import numpy as np
 
+from b5_evidence import loaded_inputs, render_modes, verified_report
 from bloom_acceptance import APIS, plane
-from compare_runtime import digest, load_json
+from compare_runtime import canonical_hash, digest, load_json
 from resource_acceptance import require, write_json
 
 
@@ -33,7 +34,27 @@ def compare_linear(path, expected, sha256):
             "maximum_srgb_code_error_after_linear_quantization": int(np.max(np.abs(actual - sdr)))}
 
 
+def street_reference(directory, summary, api):
+    run = summary["runs"][f"strict-{api}-1"]
+    parent = verified_report(directory, run["report"])
+    path = verified_report(directory, run["samples"]["view/street"])
+    require(path == parent.parent / "views" / "street" / "report.json",
+            f"Street reference is not part of the accepted {api} run")
+    report = load_json(path)
+    require(report["runtime"]["api"] == api and report["identity"]["view"] == "street"
+            and render_modes(report, windowed=False) == summary["settings"]["modes"],
+            f"Wrong offscreen reference: {path}")
+    return path, report
+
+
 def verify(directory, references, route_directory=None):
+    references = references.resolve()
+    summary = load_json(references / "summary.json")
+    require(type(summary.get("schema_version")) is int and summary["schema_version"] == 1
+            and summary["stage"] == "accept" and summary["status"] == "passed"
+            and canonical_hash(summary["settings"]) == summary["settings_sha256"],
+            "Expected a successful current B5 image acceptance")
+    street = {api: street_reference(references, summary, api) for api in APIS}
     reports = {}
     for mode in ("strict", "shipping"):
         for api in APIS:
@@ -53,14 +74,14 @@ def verify(directory, references, route_directory=None):
             require(all(smoke[name] is True for name in
                         ("passed", "resized", "minimized", "restored", "rendered_camera_replay")),
                     f"Window smoke check failed {tag}")
-            reference = references / f"strict-{api}-1" / "views" / "street" / "report.json"
-            reference_report = load_json(reference)
-            samples = reference_report["identity"].get("samples", 1)
-            pipeline = reference_report["identity"].get("pipeline", "forward")
-            local_lights = reference_report["identity"].get("local_lights")
-            require(report.get("samples", 1) == samples, f"Incorrect MSAA mode {tag}")
-            require(report.get("pipeline", "forward") == pipeline, f"Incorrect pipeline {tag}")
-            require(report.get("local_lights") == local_lights, f"Incorrect local lights {tag}")
+            reference, reference_report = street[api]
+            modes = render_modes(reference_report, windowed=False)
+            inputs = loaded_inputs(reference_report, windowed=False)
+            local_lights = reference_report["identity"]["local_lights"]
+            require(render_modes(report, windowed=True) == modes and report["local_lights"] == local_lights,
+                    f"Incorrect render modes or local lights {tag}")
+            require(loaded_inputs(report, windowed=True) == inputs,
+                    f"Window and offscreen rendered different inputs {tag}")
             expected, meta = plane(reference, reference_report, "sdr")
             comparison = compare_linear(path.parent / "linear-first.bin", expected, smoke["linear_first_sha256"])
             reports[tag] = {"report_sha256": digest(path), "reference_sdr_sha256": meta["sha256"],
@@ -72,14 +93,15 @@ def verify(directory, references, route_directory=None):
                 require(route["runtime"] == report["runtime"] and route["validation"] == validation,
                         f"Route changed adapter or validation {tag}")
                 require(route["presentation"] and route["bloom"] == "tent"
-                        and route.get("samples", 1) == samples
-                        and route.get("pipeline", "forward") == pipeline
-                        and route.get("local_lights") == local_lights
+                        and render_modes(route, windowed=True) == modes
+                        and route["local_lights"] == local_lights
                         and not route["smoke"] and route["warmup"] == 24
                         and route["accepted"] == 1824 and route["pending_on_exit"] > 0
                         and (route["initial_width"], route["initial_height"]) == (1920, 1080)
                         and len(route["timing"]["frame_intervals_ns"]) == 1800,
                         f"Incomplete Window route {tag}")
+                require(loaded_inputs(route, windowed=True) == inputs,
+                        f"Window route rendered different inputs {tag}")
                 require(route["steady_memory"]["allocation_free"] is True
                         and not route["steady_memory"]["overflowed"], f"Route memory gate failed {tag}")
                 reports[tag]["route"] = {"report_sha256": digest(route_path),

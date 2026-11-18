@@ -469,6 +469,12 @@ python -B tools/bistro/b5_images.py pilot --strict $strict --shipping $shipping 
 python -B tools/bistro/b5_images.py accept --strict $strict --shipping $shipping --manifest $manifest --ibl-manifest $iblManifest --profile $profile --output $imageDirectory
 ```
 
+中断した画像受入は同じコマンドに`--resume`を足して再開する。進捗にはEXE・cook・IBL・校正の
+SHA-256と完了した試行のreportを記録する。完了済みのreportとcaptureを再検査し、途中で止まった試行は
+別ディレクトリでやり直す。入力や実行物を差し替えた場合は新しい出力先を指定する。
+表示受入には新しい`accept`の出力を渡す。reportに明記されたsample数・pipeline・描画方法と、
+実際に読み込んだ素材および組み込まれた描画条件・shaderの識別をオフスクリーンと照合する。
+
 同じrelease構成に`presentation`を追加し、各API・構成で`--window-smoke --bloom tent --frames 24`を実行する。
 1080pの自由カメラ入力をアプリ内で再生し、実際のウィンドウをresize・最小化・復帰した後、pendingから終了する。
 続いて`--windowed --view route --bloom tent --warmup 24 --frames 1800 --vsync off`で巡回と定常メモリを確認する。
@@ -481,7 +487,7 @@ python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $man
 
 4×の画像・性能受入では`b5_images.py`の両stageと`b5_benchmark.py`に`--msaa 4`を渡し、
 profileと出力先を分ける。`b5_window_acceptance.py`はoffscreen参照とWindow reportのサンプル数を照合する。
-Deferredの各受入スクリプトには`--pipeline deferred`を渡し、Forwardと別のprofile・出力先を使う。
+Deferredの画像・性能スクリプトには`--pipeline deferred`を渡し、Forwardと別のprofile・出力先を使う。
 `--pipeline forward-plus`と`--pipeline forward-reference`もそれぞれ別のprofile・出力先を使う。
 `b5_window_acceptance.py`は同じ描画経路のoffscreen参照を要求する。
 
@@ -490,6 +496,7 @@ Deferredの各受入スクリプトには`--pipeline deferred`を渡し、Forwar
 オフスクリーンは3,600 warmup＋5,400測定frame、別枠のウィンドウ計測は120 warmup＋600測定frameとする。
 各API・条件を独立3 processで実行する。
 表示側の計時経路だけを修正した前後の記録には、`--window-binary`でウィンドウ測定用EXEを明示できる。
+性能計測を`--resume`で再開する場合も、開始時と同じEXE・入力・条件を使う。
 実ウィンドウの時刻はアプリとnative APIの観測であり、ディスプレイ走査時刻はこの方法で測定しない。
 
 ### 画像比較と性能値の読み方

@@ -8,6 +8,10 @@ import subprocess
 import time
 
 from b3_benchmark import distribution, observe_target, ordinary_host_token, renderer_metrics
+from b5_evidence import (
+    INSTANCES, PIPELINES, SAMPLES, SUBMISSIONS, attempt_directory, render_modes,
+    validate_loaded_manifests, write_checkpoint,
+)
 from compare_runtime import digest, load_json
 import host_policy
 from resource_acceptance import require, write_json
@@ -89,20 +93,14 @@ def active_power_scheme():
     return match[0].decode("ascii").lower()
 
 
-def run(args, policy, api, scenario, timed, destination):
+def run(args, policy, api, scenario, timed, destination, inputs):
     windowed = scenario != "offscreen"
     frames = WINDOW_FRAMES if windowed else FRAMES
     binary = args.window_binary if windowed and args.window_binary is not None else args.binary
     command = [str(binary), "--api", api, "--manifest", str(args.manifest), "--ibl-manifest",
-               str(args.ibl_manifest), "--bloom", "tent", "--output", str(destination)]
-    if args.msaa == 4:
-        command += ["--msaa", "4"]
-    if args.pipeline != "forward":
-        command += ["--pipeline", args.pipeline]
-    if args.submission != "direct":
-        command += ["--submission", args.submission]
-    if args.instances != "off":
-        command += ["--instances", args.instances]
+               str(args.ibl_manifest), "--bloom", "tent", "--output", str(destination),
+               "--msaa", str(args.msaa), "--pipeline", args.pipeline,
+               "--submission", args.submission, "--instances", args.instances]
     for key, value in frames.items():
         command += [f"--{key}", str(value)]
     if timed:
@@ -136,25 +134,20 @@ def run(args, policy, api, scenario, timed, destination):
             and report["validation"]["clean"], f"Wrong runtime or diagnostics {destination}")
     require("RTX 3060" in report["runtime"]["name"] and report["runtime"]["device_luid"] is not None,
             f"Wrong hardware adapter {destination}")
+    modes = {"samples": args.msaa, "pipeline": args.pipeline,
+             "submission": args.submission, "instances": args.instances}
+    require(render_modes(report, windowed=windowed) == modes,
+            f"Bistro render modes changed: {destination}")
+    validate_loaded_manifests(report, inputs["manifest"], inputs["ibl_manifest"], windowed=windowed)
     if windowed:
-        require(report["bloom"] == "tent" and report["vsync"] == (scenario == "window-vsync")
-                and report.get("samples", 1) == args.msaa
-                and report.get("pipeline", "forward") == args.pipeline,
+        require(report["bloom"] == "tent" and report["vsync"] == (scenario == "window-vsync"),
                 "Window quality or pacing request changed")
         metrics = summarize_window(report, frames)
-        identity = report
     else:
-        require(report["identity"]["bloom"] == "tent"
-                and report["identity"].get("samples", 1) == args.msaa
-                and report["identity"].get("pipeline", "forward") == args.pipeline,
-                "Offscreen quality changed")
+        require(report["identity"]["bloom"] == "tent", "Offscreen quality changed")
         metrics = renderer_metrics(report, {"variant": api, "timing": timed}, FRAMES)
         metrics["cold_phases_ns"] = report["setup_phases_ns"]
         metrics["native_memory_at_boundaries"] = report["native_memory_at_boundaries"]
-        identity = report["identity"]
-    require(identity.get("submission", "direct") == args.submission
-            and identity.get("instances", "off") == args.instances,
-            f"Draw submission or instance mode changed in {destination}")
     return {"report": str(path), "report_sha256": digest(path), "process_elapsed_ns": elapsed,
             "token": token, "before": before, "after": after,
             "metrics": metrics, "runtime": report["runtime"]}
@@ -170,41 +163,30 @@ def main():
     parser.add_argument("--scenario", action="append", choices=tuple(dict.fromkeys(
         scenario for scenario, _ in SCENARIOS)),
         help="run only the selected scenarios, repeat to select more than one")
-    parser.add_argument("--submission", choices=("direct", "packed", "indirect"),
-                        default="direct")
-    parser.add_argument("--instances", choices=("off", "individual", "instanced"),
-                        default="off")
-    parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
+    parser.add_argument("--submission", choices=SUBMISSIONS, default="direct")
+    parser.add_argument("--instances", choices=INSTANCES, default="off")
+    parser.add_argument("--msaa", type=int, choices=SAMPLES, default=1,
                         help="scene sample count for the MSAA comparison cohort")
-    parser.add_argument("--pipeline", choices=("forward", "forward-plus", "forward-reference", "deferred"),
-                        default="forward")
+    parser.add_argument("--pipeline", choices=PIPELINES, default="forward")
     args = parser.parse_args()
     if args.pipeline == "deferred" and args.msaa != 1:
         parser.error("the deferred pipeline requires --msaa 1")
     ordinary_host_token()
     policy = host_policy.plan("performance-cores")
-    settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
+    args.output = args.output.resolve()
     scenarios = tuple((name, timed) for name, timed in SCENARIOS
                       if args.scenario is None or name in args.scenario)
-    if args.scenario is not None:
-        settings["scenarios"] = list(dict.fromkeys(name for name, _ in scenarios))
-    if args.submission != "direct":
-        settings["submission"] = args.submission
-    if args.instances != "off":
-        settings["instances"] = args.instances
-    if args.msaa == 4:
-        settings["samples"] = 4
-    if args.pipeline != "forward":
-        settings["pipeline"] = args.pipeline
+    settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES,
+                "scenarios": list(dict.fromkeys(name for name, _ in scenarios)),
+                "modes": {"samples": args.msaa, "pipeline": args.pipeline,
+                          "submission": args.submission, "instances": args.instances}}
     identity = input_identity(args)
     power_scheme = active_power_scheme()
     progress = args.output / "progress.json"
     if args.resume:
         result = load_json(progress)
-        if ("window_binary" in identity and "window_binary" not in result["identity"]
-                and all(label.startswith("offscreen-") for label in result["runs"])):
-            result["identity"]["window_binary"] = identity["window_binary"]
-        require(result["identity"] == identity and result["settings"] == settings
+        require(type(result.get("schema_version")) is int and result["schema_version"] == 1
+                and result["identity"] == identity and result["settings"] == settings
                 and result["power_scheme"] == power_scheme
                 and policy_identity(result["cpu_policy"]) == policy_identity(policy),
                 "Resume identity differs")
@@ -215,9 +197,9 @@ def main():
                     and digest(report) == record["report_sha256"], f"Stored report differs: {run_id}")
     else:
         args.output.mkdir(exist_ok=False)
-        result = {"identity": identity, "settings": settings, "cpu_policy": policy,
+        result = {"schema_version": 1, "identity": identity, "settings": settings, "cpu_policy": policy,
                   "power_scheme": power_scheme, "runs": {}}
-    write_json(progress, result)
+    write_checkpoint(progress, result)
     runs = result["runs"]
     for scenario, timed in scenarios:
         for repeat in range(1, 4):
@@ -226,13 +208,12 @@ def main():
                 if label in runs:
                     continue
                 print(label, flush=True)
-                destination = args.output / label
-                attempt = 1
-                while destination.exists():
-                    attempt += 1
-                    destination = args.output / f"{label}-attempt{attempt}"
-                runs[label] = run(args, policy, api, scenario, timed, destination)
-                write_json(progress, result)
+                require(input_identity(args) == identity, "Benchmark executable or input identity changed")
+                destination = attempt_directory(args.output, label)
+                record = run(args, policy, api, scenario, timed, destination, identity)
+                require(input_identity(args) == identity, "Benchmark executable or input identity changed")
+                runs[label] = record
+                write_checkpoint(progress, result)
     adapters = {tuple(record["runtime"]["device_luid"]) for record in runs.values()}
     require(len(adapters) == 1, "Runs must use the same physical adapter")
     result["median_window_wall_ms"] = {
@@ -243,7 +224,7 @@ def main():
     }
     require(input_identity(args) == identity,
             "Benchmark executable or input identity changed")
-    write_json(args.output / "summary.json", result)
+    write_checkpoint(args.output / "summary.json", result)
 
 
 if __name__ == "__main__":

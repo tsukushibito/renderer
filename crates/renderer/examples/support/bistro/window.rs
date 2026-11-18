@@ -524,7 +524,7 @@ impl<B: WindowBackend> State<B> {
         Ok(())
     }
 
-    fn close(mut self, options: &Options, asset_load_ns: u64) -> Result<(), Error> {
+    fn close(mut self, options: &Options, asset_load_ns: u64, inputs: &Value) -> Result<(), Error> {
         self.discard_presentation_source()?;
         if self.pending_on_exit == 0 {
             self.pending_on_exit = self.frames.len();
@@ -566,6 +566,7 @@ impl<B: WindowBackend> State<B> {
         }
         let report = json!({
             "schema_version": 1, "presentation": true, "runtime": runtime, "validation": validation,
+            "inputs": inputs,
             "initial_width": self.seed_dimensions.0, "initial_height": self.seed_dimensions.1,
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
@@ -803,9 +804,8 @@ pub(super) fn execute<B: WindowBackend>(mut options: Options) -> Result<(), Erro
         options.warmup = 0;
     }
     let load_started = Instant::now();
-    let conditions = Conditions::parse(&serde_json::from_slice(include_bytes!(
-        "../../../../../tools/bistro/conditions.json"
-    ))?)?;
+    let condition_bytes = include_bytes!("../../../../../tools/bistro/conditions.json");
+    let conditions = Conditions::parse(&serde_json::from_slice(condition_bytes)?)?;
     let mut scene = if let Some(path) = &options.manifest {
         Scene::load(path, false)?
     } else {
@@ -825,6 +825,12 @@ pub(super) fn execute<B: WindowBackend>(mut options: Options) -> Result<(), Erro
         )?
     };
     let asset_load_ns = ns(load_started.elapsed());
+    let inputs = json!({
+        "cook_manifest_sha256": super::run::loaded_cook_hash(&scene, options.fixture)?,
+        "ibl_manifest_sha256": environment.identity["manifest_sha256"],
+        "conditions_sha256": super::digest(condition_bytes),
+        "shaders_sha256": super::digest(include_bytes!("shaders/manifest.json")),
+    });
     let deadline = options
         .frame_limit
         .map(|_| Instant::now() + Duration::from_secs(900));
@@ -839,7 +845,7 @@ pub(super) fn execute<B: WindowBackend>(mut options: Options) -> Result<(), Erro
     };
     EventLoop::new()?.run_app(&mut app)?;
     let result = if let Some(state) = app.state {
-        state.close(&app.options, asset_load_ns)
+        state.close(&app.options, asset_load_ns, &inputs)
     } else {
         Ok(())
     };

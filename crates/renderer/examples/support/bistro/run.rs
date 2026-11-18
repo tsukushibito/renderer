@@ -259,7 +259,7 @@ fn identity(
     identity
 }
 
-fn loaded_cook_hash(scene: &Scene, fixture: bool) -> Result<String, Error> {
+pub(super) fn loaded_cook_hash(scene: &Scene, fixture: bool) -> Result<String, Error> {
     if fixture {
         return Ok(super::digest(b"builtin-pbr-material-fixture-v1"));
     }
