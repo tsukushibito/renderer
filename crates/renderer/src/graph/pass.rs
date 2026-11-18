@@ -214,6 +214,8 @@ pub enum AccessPurpose {
     Sampled,
     Vertex,
     Index,
+    /// Device reads of a renderer-encoded indirect argument buffer.
+    Indirect,
     ColorAttachment,
     ColorResolve,
     DepthAttachment,
@@ -334,6 +336,22 @@ pub(crate) enum MeshUpload {
 pub(crate) struct RasterBatchOperands {
     pub program: crate::program::ManagedRasterProgram,
     pub draws: Range<usize>,
+    /// When present, the sole draw in `draws` supplies bindings and proves
+    /// the index prefix needed by the real commands in the argument buffer.
+    pub indirect: Option<IndirectDrawOperands>,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),
+    allow(
+        dead_code,
+        reason = "indirect command operands are consumed by native recording"
+    )
+)]
+pub(crate) struct IndirectDrawOperands {
+    pub buffer: usize,
+    pub command_count: u32,
 }
 
 #[derive(Clone, Debug)]

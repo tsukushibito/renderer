@@ -298,8 +298,8 @@ pub struct ComputeProgramDescriptor {
 
 /// Reviewed execution footprint, separate from the ABI's minimum descriptor
 /// size. Entries follow manifest binding order. A buffer entry is its byte
-/// prefix except for the output of [`DispatchWorkgroups::BufferGrid2d`], where
-/// it is the number of bytes written per workgroup. Image entries are zero and
+/// prefix except for the grid-sized slots of [`DispatchWorkgroups::BufferGrid2d`],
+/// where it is the number of bytes accessed per workgroup. Image entries are zero and
 /// cover the complete selected View. Samplers have no content access.
 /// Changing shader behavior requires reviewing this contract too.
 pub struct DispatchContract {
@@ -325,6 +325,9 @@ pub enum DispatchWorkgroups {
     BufferGrid2d {
         group: u32,
         binding: u32,
+        /// Distinct read-only storage slots whose packed footprint also scales
+        /// with the workgroup count, starting at each binding offset.
+        read_bindings: &'static [(u32, u32)],
         max_workgroups: [u32; 2],
     },
 }
@@ -391,6 +394,55 @@ static STORAGE_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
     ],
     spirv: include_bytes!("../shaders/storage_read.comp.spv"),
     dxil: include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
+};
+
+pub(crate) const INDIRECT_GROUP_SIZE: u32 = 64;
+pub(crate) const MAX_INDIRECT_GROUPS: u32 = 65_535;
+pub(crate) const INDIRECT_TEMPLATE_BYTES: u64 = 8;
+pub(crate) const INDIRECT_MASK_BYTES: u64 = 4;
+pub(crate) const INDIRECT_COMMAND_BYTES: u64 = 20;
+
+static INDEXED_INDIRECT_ENCODER: ComputeProgramDescriptor = ComputeProgramDescriptor {
+    entry: "main",
+    workgroup_size: [INDIRECT_GROUP_SIZE, 1, 1],
+    dispatch: DispatchContract {
+        workgroups: DispatchWorkgroups::BufferGrid2d {
+            group: 0,
+            binding: 2,
+            read_bindings: &[(0, 0), (0, 1)],
+            max_workgroups: [MAX_INDIRECT_GROUPS, 1],
+        },
+        bytes: &[
+            INDIRECT_TEMPLATE_BYTES * INDIRECT_GROUP_SIZE as u64,
+            INDIRECT_MASK_BYTES * INDIRECT_GROUP_SIZE as u64,
+            INDIRECT_COMMAND_BYTES * INDIRECT_GROUP_SIZE as u64,
+        ],
+    },
+    bindings: &[
+        BindingLayout {
+            group: 0,
+            binding: 0,
+            kind: BindingType::StorageRead,
+            stages: ShaderStages::COMPUTE,
+            min_size: INDIRECT_TEMPLATE_BYTES * INDIRECT_GROUP_SIZE as u64,
+        },
+        BindingLayout {
+            group: 0,
+            binding: 1,
+            kind: BindingType::StorageRead,
+            stages: ShaderStages::COMPUTE,
+            min_size: INDIRECT_MASK_BYTES * INDIRECT_GROUP_SIZE as u64,
+        },
+        BindingLayout {
+            group: 0,
+            binding: 2,
+            kind: BindingType::StorageWrite,
+            stages: ShaderStages::COMPUTE,
+            min_size: INDIRECT_COMMAND_BYTES * INDIRECT_GROUP_SIZE as u64,
+        },
+    ],
+    spirv: include_bytes!("../shaders/indexed_indirect.comp.spv"),
+    dxil: include_bytes!("../shaders/dxil/indexed_indirect.comp.dxil"),
 };
 
 static SAMPLED_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
@@ -474,8 +526,8 @@ impl ManagedProgram {
     /// undeclared resources or side effects are not permitted. Buffer minimum
     /// sizes and `dispatch.bytes` must have one entry per binding, with a nonzero
     /// byte prefix no larger than the minimum size for buffers and zero for
-    /// image/sampler bindings. The selected `BufferGrid2d` output uses a nonzero
-    /// per-workgroup stride instead of a fixed prefix. All slots must have only
+    /// image/sampler bindings. The selected `BufferGrid2d` slots use nonzero
+    /// per-workgroup strides instead of fixed prefixes. All slots must have only
     /// `ShaderStages::COMPUTE`.
     /// Non-buffer slots must have minimum size zero. Images must be non-array,
     /// non-multisampled 2D float-component resources; shader arithmetic uses
@@ -502,7 +554,9 @@ impl ManagedProgram {
     /// safely guard rounded-up invocations. The shader must work for every
     /// nonzero accepted image extent, with all storage images sharing that
     /// extent. Sampled images may have different extents. `BufferGrid2d` must
-    /// name a write-only storage buffer slot and use nonzero axis maxima. Each
+    /// name a write-only storage buffer slot and use nonzero axis maxima. Its
+    /// optional read slots must be distinct read-only storage buffer slots and
+    /// may only read the prefix computed from the same workgroup count. Each
     /// workgroup coordinates writes so that its entire entry is initialized
     /// without racing another workgroup. The shader must write exactly
     /// `x * y * stride` bytes in the packed grid for every accepted dispatch
@@ -519,6 +573,14 @@ impl ManagedProgram {
     ) -> Self {
         Self {
             manifest: descriptor,
+        }
+    }
+
+    /// Portable compute encoder used by [`crate::graph::Graph::encode_indexed_indirect`].
+    /// Include it in the prepared Compute program set before submitting those graphs.
+    pub const fn indexed_indirect_encoder() -> Self {
+        Self {
+            manifest: &INDEXED_INDIRECT_ENCODER,
         }
     }
 
@@ -835,6 +897,40 @@ pub(crate) const DEPTH_TEST_EXPECTED: [u32; 2] = [0x3e80_0000, 0x3f40_0000];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_indirect_encoder_matches_unsized_shader_buffer_layouts() {
+        let reflection: serde_json::Value = serde_json::from_str(include_str!(
+            "../shaders/dxil/indexed_indirect.comp.spirv-reflection.json"
+        ))
+        .unwrap();
+        let program = ManagedProgram::indexed_indirect_encoder();
+        assert_eq!(
+            reflection["entryPoints"][0]["workgroup_size"],
+            serde_json::json!(program.workgroup_size())
+        );
+        let buffers = reflection["ssbos"].as_array().unwrap();
+        let contract = program.dispatch_contract();
+        assert_eq!(buffers.len(), program.bindings().len());
+        for ((buffer, slot), &footprint) in
+            buffers.iter().zip(program.bindings()).zip(contract.bytes)
+        {
+            assert_eq!(buffer["set"], slot.group);
+            assert_eq!(buffer["binding"], slot.binding);
+            assert_eq!(buffer["block_size"], 0);
+            match slot.kind {
+                BindingType::StorageRead => assert_eq!(buffer["readonly"], true),
+                BindingType::StorageWrite => assert_eq!(buffer["writeonly"], true),
+                _ => panic!("indexed indirect uses only storage buffers"),
+            }
+            let member = &reflection["types"][buffer["type"].as_str().unwrap()]["members"][0];
+            assert_eq!(member["offset"], 0);
+            assert_eq!(member["array"], serde_json::json!([0]));
+            let stride = member["array_stride"].as_u64().unwrap();
+            assert_eq!(footprint, stride * u64::from(INDIRECT_GROUP_SIZE));
+            assert_eq!(slot.min_size, footprint);
+        }
+    }
 
     #[test]
     fn managed_layout_matches_generated_shader_reflection() {

@@ -85,7 +85,6 @@ impl Graph {
 
     /// Retain a slice of shared immutable input without allocating a chunk copy.
     /// The CPU source offset is independent of the aligned GPU destination offset.
-    #[cfg(test)]
     pub(crate) fn upload_buffer_slice(
         &mut self,
         name: &str,
@@ -527,13 +526,15 @@ fn validate_purpose(
 ) -> Result<(), GraphError> {
     use AccessPurpose::*;
     let mode = match purpose {
-        CopySource | Uniform | StorageRead | Sampled | Vertex | Index => access == AccessKind::Read,
+        CopySource | Uniform | StorageRead | Sampled | Vertex | Index | Indirect => {
+            access == AccessKind::Read
+        }
         CopyDestination | StorageWrite | ColorResolve => access == AccessKind::Write,
         StorageReadWrite => access == AccessKind::ReadWrite,
         ColorAttachment | DepthAttachment => access != AccessKind::Read,
     };
     let domain = match purpose {
-        ColorResolve => false,
+        ColorResolve | Indirect => false,
         CopySource | CopyDestination => kind == PassKind::Copy,
         Uniform => kind == PassKind::Compute && matches!(desc, ResourceDesc::Buffer(_)),
         StorageRead | StorageWrite | StorageReadWrite => kind == PassKind::Compute,

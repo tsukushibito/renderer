@@ -3,10 +3,11 @@
 use super::builder::read;
 use super::storage::capacity_error;
 use super::{
-    AccessPurpose, Graph, GraphCapacityKind, GraphError, GraphErrorKind, LoadOp, Operation,
-    PassHandle, RasterAttachments, RasterBatchOperands, RasterDraw, RasterDrawOperands,
+    AccessPurpose, Graph, GraphCapacityKind, GraphError, GraphErrorKind, IndexedIndirectArgs,
+    IndirectDrawOperands, LoadOp, Operation, PassHandle, RasterAttachments, RasterBatchOperands,
+    RasterBindings, RasterConstants, RasterDraw, RasterDrawOperands,
 };
-use crate::program::ManagedRasterProgram;
+use crate::program::{INDIRECT_COMMAND_BYTES, ManagedRasterProgram};
 use std::{borrow::Borrow, ops::Range};
 
 /// A temporary recorder for ordered draw batches in one Raster attachment scope.
@@ -33,6 +34,67 @@ impl RasterPass<'_, '_> {
         })
     }
 
+    /// Append indexed commands encoded by this Graph. All commands in the
+    /// batch share one Program, geometry pair, binding set and constants.
+    /// Any indices in the complete prefix covered by the template ranges
+    /// must be initialized and valid for the vertex buffer.
+    pub fn draw_indirect(
+        &mut self,
+        program: &ManagedRasterProgram,
+        arguments: IndexedIndirectArgs,
+        bindings: Option<RasterBindings>,
+        parameters: RasterConstants,
+    ) -> Result<(), GraphError> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        self.capture_indirect(program, arguments, bindings, parameters)
+            .inspect_err(|error| {
+                self.error = Some(error.clone());
+            })
+    }
+
+    fn capture_indirect(
+        &mut self,
+        program: &ManagedRasterProgram,
+        arguments: IndexedIndirectArgs,
+        bindings: Option<RasterBindings>,
+        parameters: RasterConstants,
+    ) -> Result<(), GraphError> {
+        self.validate_attachments(program)?;
+        let graph = &mut *self.graph;
+        let buffer = graph.buffer_id(arguments.buffer)?;
+        let first_draw = graph.draws.len();
+        // The templates validate the topology of each actual draw. The
+        // representative draw covers their entire prefix for GPU preflight.
+        graph.capture_raster_draw(
+            program,
+            &RasterDraw {
+                vertices: arguments.vertices,
+                indices: arguments.indices,
+                first_index: 0,
+                index_count: arguments.max_index_end,
+                instance_count: 1,
+                bindings,
+                parameters,
+            },
+        )?;
+        graph.append_access(read(
+            buffer,
+            0..u64::from(arguments.command_count) * INDIRECT_COMMAND_BYTES,
+            AccessPurpose::Indirect,
+        ))?;
+        graph.data_mut().raster_batches.push(RasterBatchOperands {
+            program: *program,
+            draws: first_draw..first_draw + 1,
+            indirect: Some(IndirectDrawOperands {
+                buffer,
+                command_count: arguments.command_count,
+            }),
+        });
+        Ok(())
+    }
+
     fn capture<I, D>(&mut self, program: &ManagedRasterProgram, draws: I) -> Result<(), GraphError>
     where
         I: IntoIterator<Item = D>,
@@ -50,40 +112,14 @@ impl RasterPass<'_, '_> {
         });
         for draw in draws {
             let draw = draw.borrow();
-            if graph.draws.len() == graph.capacity.draws {
-                return Err(capacity_error(
-                    GraphCapacityKind::Draws,
-                    graph.capacity.draws,
-                    graph.draws.len().checked_add(1),
-                ));
-            }
-            if draw.parameters.words().len() * 4 != program.parameter_size() as usize {
-                return Err(GraphError::new(
+            if !draw.index_count.is_multiple_of(3) {
+                return Err(graph.resource_error(
                     GraphErrorKind::InvalidInput,
-                    "Raster inline constants do not match the Program ABI",
+                    "Raster requires complete triangles",
+                    graph.buffer_id(draw.indices)?,
                 ));
             }
-            let bindings = graph.use_raster_bindings(program, draw.bindings)?;
-            let (vertices, indices, index_range) =
-                graph.raster_buffers(draw, u64::from(program.vertex_stride()))?;
-            let vs = graph.resources[vertices].desc.units();
-            let data = graph.data_mut();
-            data.track_raster_prefix(vertices, 0, vs);
-            if draw.first_index == 0 {
-                data.track_raster_prefix(indices, 1, index_range.end);
-            } else {
-                // One scratch range per stored draw fits the reserved draw limit.
-                data.raster_index_ranges.push((indices, index_range));
-            }
-            data.draws.push(RasterDrawOperands {
-                bindings,
-                vertices,
-                indices,
-                first_index: draw.first_index,
-                index_count: draw.index_count,
-                instance_count: draw.instance_count,
-                parameters: draw.parameters,
-            });
+            graph.capture_raster_draw(program, draw)?;
         }
         let draws = first_draw..graph.draws.len();
         if !draws.is_empty() {
@@ -92,6 +128,7 @@ impl RasterPass<'_, '_> {
             graph.data_mut().raster_batches.push(RasterBatchOperands {
                 program: *program,
                 draws,
+                indirect: None,
             });
         }
         Ok(())
@@ -136,6 +173,48 @@ impl RasterPass<'_, '_> {
 }
 
 impl Graph {
+    fn capture_raster_draw(
+        &mut self,
+        program: &ManagedRasterProgram,
+        draw: &RasterDraw,
+    ) -> Result<(), GraphError> {
+        if self.draws.len() == self.capacity.draws {
+            return Err(capacity_error(
+                GraphCapacityKind::Draws,
+                self.capacity.draws,
+                self.draws.len().checked_add(1),
+            ));
+        }
+        if draw.parameters.words().len() * 4 != program.parameter_size() as usize {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "Raster inline constants do not match the Program ABI",
+            ));
+        }
+        let bindings = self.use_raster_bindings(program, draw.bindings)?;
+        let (vertices, indices, index_range) =
+            self.raster_buffers(draw, u64::from(program.vertex_stride()))?;
+        let vertex_bytes = self.resources[vertices].desc.units();
+        let data = self.data_mut();
+        data.track_raster_prefix(vertices, 0, vertex_bytes);
+        if draw.first_index == 0 {
+            data.track_raster_prefix(indices, 1, index_range.end);
+        } else {
+            // One scratch range per stored draw fits the reserved draw limit.
+            data.raster_index_ranges.push((indices, index_range));
+        }
+        data.draws.push(RasterDrawOperands {
+            bindings,
+            vertices,
+            indices,
+            first_index: draw.first_index,
+            index_count: draw.index_count,
+            instance_count: draw.instance_count,
+            parameters: draw.parameters,
+        });
+        Ok(())
+    }
+
     /// Build an ordered Raster scope using one set of attachments, load/store
     /// actions, and optional color resolves. The callback is consumed during
     /// declaration. Its draws, Programs and resources are owned by the Graph.
@@ -291,13 +370,10 @@ impl Graph {
         }
         let start = u64::from(draw.first_index) * 4;
         let end = start + u64::from(draw.index_count) * 4;
-        if draw.index_count == 0
-            || !draw.index_count.is_multiple_of(3)
-            || end > self.resources[indices].desc.units()
-        {
+        if draw.index_count == 0 || end > self.resources[indices].desc.units() {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
-                "Raster requires nonzero triangle u32 indices within the index buffer",
+                "Raster requires a nonempty u32 index range within the index buffer",
                 indices,
             ));
         }

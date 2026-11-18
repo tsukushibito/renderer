@@ -60,13 +60,14 @@ pub(crate) enum BindingOperands {
 }
 
 #[derive(Clone, Copy)]
-struct BufferGridWrite {
+struct BufferGrid {
     group: u32,
     binding: u32,
+    read_bindings: &'static [(u32, u32)],
     workgroup_count: u64,
 }
 
-impl BufferGridWrite {
+impl BufferGrid {
     fn from_dispatch(
         domain: DispatchWorkgroups,
         [x, y, z]: [u32; 3],
@@ -74,6 +75,7 @@ impl BufferGridWrite {
         let DispatchWorkgroups::BufferGrid2d {
             group,
             binding,
+            read_bindings,
             max_workgroups: [max_x, max_y],
         } = domain
         else {
@@ -88,6 +90,7 @@ impl BufferGridWrite {
         Ok(Some(Self {
             group,
             binding,
+            read_bindings,
             workgroup_count: u64::from(x) * u64::from(y),
         }))
     }
@@ -203,7 +206,7 @@ impl Graph {
         self.build_pass(name, |graph| {
             let contract = program.dispatch_contract();
             let first_access = graph.accesses.len();
-            let buffer_grid = BufferGridWrite::from_dispatch(contract.workgroups, workgroups)?;
+            let buffer_grid = BufferGrid::from_dispatch(contract.workgroups, workgroups)?;
             let owned =
                 graph.append_bindings(program.bindings(), contract.bytes, bindings, buffer_grid)?;
             graph.validate_dispatch_domain(program, owned.clone(), workgroups)?;
@@ -359,7 +362,7 @@ impl Graph {
         layout: &[BindingLayout],
         bytes: &[u64],
         bindings: &[Binding],
-        buffer_grid: Option<BufferGridWrite>,
+        buffer_grid: Option<BufferGrid>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
         self.append_bindings_into(layout, bytes, bindings, false, buffer_grid)
     }
@@ -390,7 +393,7 @@ impl Graph {
         bytes: &[u64],
         bindings: &[Binding],
         template: bool,
-        buffer_grid: Option<BufferGridWrite>,
+        buffer_grid: Option<BufferGrid>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
         if bindings.len() != layout.len() {
             return Err(GraphError::new(
@@ -443,10 +446,13 @@ impl Graph {
                                 )
                                 .with_range(super::AccessRange::Buffer(descriptor)));
                         }
-                        let written = buffer_grid
-                            .filter(|grid| grid.group == slot.group && grid.binding == slot.binding)
+                        let footprint = buffer_grid
+                            .filter(|grid| {
+                                (grid.group, grid.binding) == (slot.group, slot.binding)
+                                    || grid.read_bindings.contains(&(slot.group, slot.binding))
+                            })
                             .map_or(Some(bytes), |grid| bytes.checked_mul(grid.workgroup_count));
-                        let end = written
+                        let end = footprint
                             .and_then(|bytes| offset.checked_add(bytes))
                             .filter(|&end| end <= descriptor.end)
                             .ok_or_else(|| {
@@ -889,10 +895,11 @@ mod tests {
                     size: 64,
                 },
             }];
-            let grid = BufferGridWrite::from_dispatch(
+            let grid = BufferGrid::from_dispatch(
                 DispatchWorkgroups::BufferGrid2d {
                     group: 1,
                     binding: 2,
+                    read_bindings: &[],
                     max_workgroups: [2, 3],
                 },
                 workgroups,
@@ -935,17 +942,19 @@ mod tests {
         let domain = DispatchWorkgroups::BufferGrid2d {
             group: 0,
             binding: 0,
+            read_bindings: &[],
             max_workgroups: [u32::MAX; 2],
         };
         for workgroups in [[0, 1, 1], [1, 0, 1], [1, 1, 2]] {
-            assert!(BufferGridWrite::from_dispatch(domain, workgroups).is_err());
+            assert!(BufferGrid::from_dispatch(domain, workgroups).is_err());
         }
         let small_domain = DispatchWorkgroups::BufferGrid2d {
             group: 0,
             binding: 0,
+            read_bindings: &[],
             max_workgroups: [4; 2],
         };
-        assert!(BufferGridWrite::from_dispatch(small_domain, [1, 5, 1]).is_err());
+        assert!(BufferGrid::from_dispatch(small_domain, [1, 5, 1]).is_err());
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let output = graph.buffer("grid", BufferDesc { size: 32 }).unwrap();
@@ -971,7 +980,7 @@ mod tests {
                     &layout,
                     &[8],
                     &bindings,
-                    BufferGridWrite::from_dispatch(domain, workgroups).unwrap(),
+                    BufferGrid::from_dispatch(domain, workgroups).unwrap(),
                 )
                 .unwrap_err();
             assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
