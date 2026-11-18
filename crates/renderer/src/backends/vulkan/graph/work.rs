@@ -1133,6 +1133,11 @@ fn usage(purpose: AccessPurpose, stages: crate::program::ShaderStages) -> Use {
             vk::AccessFlags2::INDEX_READ,
             vk::ImageLayout::UNDEFINED,
         ),
+        Indirect => (
+            vk::PipelineStageFlags2::DRAW_INDIRECT,
+            vk::AccessFlags2::INDIRECT_COMMAND_READ,
+            vk::ImageLayout::UNDEFINED,
+        ),
         ColorAttachment | ColorResolve => (
             vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,

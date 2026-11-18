@@ -7,7 +7,9 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::super::super::memory::MemoryOwner;
-use super::super::super::program::{NativeRasterDraw, RenderingAttachments, attachment_info};
+use super::super::super::program::{
+    NativeIndexedDraw, NativeRasterDraw, RenderingAttachments, attachment_info,
+};
 use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
 use super::super::super::transfer::{TransferError, TransferPayload};
@@ -234,6 +236,10 @@ impl TransferPayload for GraphWork {
                             let descriptor_sets =
                                 &self.raster_descriptors[descriptor_start..descriptor_end];
                             descriptor_start = descriptor_end;
+                            let indirect = batch.indirect.map(|args| NativeIndexedDraw::Indirect {
+                                buffer: self.resource(args.buffer).buffer().handle,
+                                command_count: args.command_count,
+                            });
                             programs.record_raster_batch(
                                 command,
                                 programs.raster_program(slot),
@@ -244,9 +250,11 @@ impl TransferPayload for GraphWork {
                                     .map(|(draw, &sets)| NativeRasterDraw {
                                         vertices: self.resource(draw.vertices).buffer().handle,
                                         indices: self.resource(draw.indices).buffer().handle,
-                                        first_index: draw.first_index,
-                                        index_count: draw.index_count,
-                                        instance_count: draw.instance_count,
+                                        command: indirect.unwrap_or(NativeIndexedDraw::Direct {
+                                            first_index: draw.first_index,
+                                            index_count: draw.index_count,
+                                            instance_count: draw.instance_count,
+                                        }),
                                         parameters: &draw.parameters,
                                         sets,
                                     }),

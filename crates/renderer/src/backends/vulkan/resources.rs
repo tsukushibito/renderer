@@ -40,6 +40,7 @@ fn create_buffer<T>(
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::VERTEX_BUFFER
                 | vk::BufferUsageFlags::INDEX_BUFFER
+                | vk::BufferUsageFlags::INDIRECT_BUFFER
                 | vk::BufferUsageFlags::UNIFORM_BUFFER
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
         )
@@ -540,6 +541,7 @@ mod tests {
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::VERTEX_BUFFER
                     | vk::BufferUsageFlags::INDEX_BUFFER
+                    | vk::BufferUsageFlags::INDIRECT_BUFFER
                     | vk::BufferUsageFlags::UNIFORM_BUFFER
                     | vk::BufferUsageFlags::STORAGE_BUFFER
             );

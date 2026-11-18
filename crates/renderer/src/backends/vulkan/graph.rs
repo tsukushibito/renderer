@@ -1337,6 +1337,13 @@ impl VulkanRuntime {
                     })?;
                     let sample_count = attachment_samples(graph, colors, *depth);
                     for batch in graph.raster_batches(batches) {
+                        if let Some(indirect) = batch.indirect
+                            && indirect.command_count > self.owner.device.max_draw_indirect_count()
+                        {
+                            return Err(RuntimeError::unsupported(
+                                "indirect batch exceeds the Device's enabled draw count limit",
+                            ));
+                        }
                         let slot = programs.select_raster_program(
                             batch.program,
                             depth.is_some(),

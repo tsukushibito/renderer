@@ -140,6 +140,7 @@ struct Candidate {
     physical_device: vk::PhysicalDevice,
     info: AdapterInfo,
     features: RequiredFeatures,
+    multi_draw_indirect: bool,
     queues: Vec<vk::QueueFamilyProperties>,
     property_failures: Vec<RequirementFailure>,
 }
@@ -148,6 +149,7 @@ struct SelectedDevice {
     physical_device: vk::PhysicalDevice,
     info: AdapterInfo,
     queue_family_index: u32,
+    multi_draw_indirect: bool,
 }
 
 fn supported_api(api: u32) -> bool {
@@ -193,6 +195,7 @@ impl Candidate {
                 // Vulkan family indices are uint32_t; the queried list is
                 // bounded by the same uint32_t count.
                 queue_family_index: queue_family_index.expect("checked queue family") as u32,
+                multi_draw_indirect: self.multi_draw_indirect,
             })
         } else {
             Err(AdapterRejection {
@@ -269,6 +272,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         driver: None,
     };
     let mut features = RequiredFeatures::default();
+    let mut multi_draw_indirect = false;
     if supported_api(properties.api_version) {
         let mut driver = vk::PhysicalDeviceDriverProperties::default();
         let mut properties2 = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
@@ -297,6 +301,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         // SAFETY: Same live Vulkan 1.3 device. Both core feature structures are
         // supported query inputs and remain live for this synchronous call.
         unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
+        multi_draw_indirect = features2.features.multi_draw_indirect == vk::TRUE;
         features = RequiredFeatures {
             timeline_semaphore: features12.timeline_semaphore == vk::TRUE,
             synchronization2: features13.synchronization2 == vk::TRUE,
@@ -316,6 +321,7 @@ fn inspect(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Can
         physical_device,
         info,
         features,
+        multi_draw_indirect,
         queues,
         property_failures,
     }
@@ -328,13 +334,14 @@ fn with_create_info<T>(
     queue_family_index: u32,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
-    with_presentation_create_info(queue_family_index, false, false, create)
+    with_presentation_create_info(queue_family_index, false, false, false, create)
 }
 
 fn with_presentation_create_info<T>(
     queue_family_index: u32,
     presentation: bool,
     memory_budget: bool,
+    multi_draw_indirect: bool,
     create: impl FnOnce(&vk::DeviceCreateInfo<'_>) -> T,
 ) -> T {
     let priorities = [1.0];
@@ -345,6 +352,7 @@ fn with_presentation_create_info<T>(
     let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
         .synchronization2(true)
         .dynamic_rendering(true);
+    let features = vk::PhysicalDeviceFeatures::default().multi_draw_indirect(multi_draw_indirect);
     let mut maintenance =
         vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default().swapchain_maintenance1(true);
     let mut extensions = Vec::new();
@@ -368,6 +376,9 @@ fn with_presentation_create_info<T>(
         .enabled_extension_names(&extension_names)
         .push_next(&mut features12)
         .push_next(&mut features13);
+    if multi_draw_indirect {
+        create_info = create_info.enabled_features(&features);
+    }
     if presentation {
         create_info = create_info.push_next(&mut maintenance);
     }
@@ -615,6 +626,14 @@ impl VulkanDevice {
         self.limits.max_draw_indexed_index_value
     }
 
+    pub(super) fn max_draw_indirect_count(&self) -> u32 {
+        if self.selected.multi_draw_indirect {
+            self.limits.max_draw_indirect_count
+        } else {
+            self.limits.max_draw_indirect_count.min(1)
+        }
+    }
+
     /// Immutable adapter limits cached before Device creation.
     pub(super) fn limits(&self) -> &vk::PhysicalDeviceLimits {
         &self.limits
@@ -771,6 +790,7 @@ impl VulkanDevice {
             selected.queue_family_index,
             presentation,
             memory_budget_enabled,
+            selected.multi_draw_indirect,
             |create_info| {
                 #[cfg(feature = "memory-profiling")]
                 crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
@@ -904,6 +924,7 @@ mod tests {
                 synchronization2: true,
                 dynamic_rendering: true,
             },
+            multi_draw_indirect: false,
             queues: vec![vk::QueueFamilyProperties {
                 queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
                 queue_count: 1,
@@ -1012,6 +1033,23 @@ mod tests {
     }
 
     #[test]
+    fn only_supported_core_indirect_feature_is_enabled() {
+        let mut adapter = candidate(1, vk::PhysicalDeviceType::DISCRETE_GPU);
+        adapter.multi_draw_indirect = true;
+        let selected = adapter
+            .assess()
+            .expect("optional feature does not reject Device");
+        with_presentation_create_info(7, false, false, selected.multi_draw_indirect, |info| {
+            assert!(!info.p_enabled_features.is_null());
+            // SAFETY: The helper keeps explicitly selected core features live.
+            let features = unsafe { &*info.p_enabled_features };
+            assert_eq!(features.multi_draw_indirect, vk::TRUE);
+            assert_eq!(features.draw_indirect_first_instance, vk::FALSE);
+            assert_eq!(features.robust_buffer_access, vk::FALSE);
+        });
+    }
+
+    #[test]
     fn actual_creation_configuration_requests_one_queue_and_required_features_only() {
         with_create_info(7, |info| {
             assert_eq!(info.queue_create_info_count, 1);
@@ -1060,7 +1098,7 @@ mod tests {
     #[test]
     fn memory_budget_is_optional_and_coexists_with_presentation_extensions() {
         for presentation in [false, true] {
-            with_presentation_create_info(0, presentation, true, |info| {
+            with_presentation_create_info(0, presentation, true, false, |info| {
                 // SAFETY: The helper retains the extension pointers and C strings.
                 let pointers = unsafe {
                     std::slice::from_raw_parts(
