@@ -1,9 +1,31 @@
 # 現行実装の検証状況
 
-最終確認日: 2026-11-18。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日は2026-11-19。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+<a id="shared-runtime-and-standard-output"></a>
+
+## 共通Runtimeと標準HDR出力
+
+`renderer-qen`。修正前の比較元は`5c81454`。Windowsの同一RTX 3060（610.88）で、製品構成とCore＋SyncVal／Debug Layer＋GBVの厳格構成を別processで逐次実行した。
+受理情報とGPU作業を分離し、受理情報を破棄した後の実行、GPU完了後のCPU結果保持、登録済み資源を保持した作業セットの交換を確認した。
+Vulkanの作業セットは資源とProgramを一括で確定する。成功時は旧構成のうち再利用しない未登録資源を返し、準備中に失敗した場合は旧構成が使える。
+転送時のアラインメントと可視性は各バックエンドの既存経路で扱い、物理転送容量は初期化で個別に設定する。
+
+| 確認 | 実行条件と結果 |
+| --- | --- |
+| 全Bistroオフスクリーン | `full-a3`／`ibl-final`、固定`street`、1280×720、tent Bloom。ForwardはFXAAあり、DeferredはFXAAなし。両API×両構成×2経路のHDR・Bloom後HDR・D32・SDRの32ファイルが、同一APIの修正前出力とSHA-256で一致 |
+| Windows表示 | `windowed --smoke`は4 run×24フレーム。入力・リサイズ・最小化・復帰を確認し、全96サンプルの寸法、出力digestとgeometry画素数が修正前と一致。全Bistroの`--window-smoke`も各24フレームを受理し、GraphがVulkanで2件、D3D12で1件未完了の状態から終了 |
+| 通常フレームメモリ | オフスクリーン8 runに加え、全Bistroを1080p、VSync offで8 warmup＋48測定フレームの固定巡回として4 run実行。観測したRust確保／ゼロ初期化確保／再確保／解放、VMA host 3イベント、Renderer発行のnative作成・破棄8イベントはすべて0。native resetは別計上 |
+| 実GPU回帰 | 厳格・製品が各22件。共通Runtimeの再準備、Vulkanでの準備失敗と旧資源保持、D3D12の投入所有と結果枠、両APIの表示・resize・終了、全画面描画とindexed描画の混在、Compute・Bloom・Forward+・MSAA・indirect・変動frameメモリを確認 |
+| Bistro資源差し替え | 小fixtureの`--resource-checks`を両API・両構成で実行。pending中の材質差し替え、容量不足後の再試行、通常frameメモリを確認 |
+| CPU・静的検査 | workspaceのCPU試験は既定275、最適化済み両API製品486、全feature507件が成功。単独／両APIとGPU featureなしの全target Clippy、fmt、warnings拒否のRustdocを確認。固定SDKで標準出力・Bistro・全画面fixtureのshader再生成とABI照合を確認 |
+
+描画の比較は現在のForwardとDeferredの色変換を対象とし、GPUの描画完了とWindowsの表示処理の退役を別に確認した。
+最終解放後のnative診断はwarningとerrorが0だった。通常フレームの資源計測は既存の観測範囲に従い、driver内部の確保は観測対象外である。
+実行ログ、比較元・実行バイナリ、利用した各reportと生画像は`.tools/api-unification/`に保存した。
 
 <a id="raster-constant-storage"></a>
 

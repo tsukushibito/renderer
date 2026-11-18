@@ -18,6 +18,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | APIの正確な動作を確認したい | [RenderGraphの契約](design/rendergraph.md)：宣言、初期化、不要パス除去、owned Raster/Computeと画像copy、所有と容量 |
 | 準備容量と不足時の対処を知りたい | [容量不足の回復](guides/development.md#runtime-capacity)：Graph／両Runtimeの上限、型付き理由、poll・結果消費・owner返却と再準備の違い |
 | 公開APIの方針と変更順序を知りたい | [汎用Graph・標準パス・標準グラフ](design/implementation-policy.md#public-api-layers)と[移行計画](design/implementation-policy.md#public-api-migration)：標準利用、部分交換、独自構成 |
+| 共通Runtimeでフレームを処理したい | [準備容量と不足時の回復](guides/development.md#runtime-capacity)と[共通Runtimeと標準HDR出力の検証](verification/current.md#shared-runtime-and-standard-output) |
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |

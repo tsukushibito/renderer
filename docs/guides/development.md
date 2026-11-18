@@ -910,12 +910,14 @@ feature統合後の実構成を確認し、
 `runtime::Runtime::new`またはWindows用の`Runtime::for_window`に、バックエンドを選ぶ
 `RuntimeConfig`、共通の`RuntimeLimits`、資源とProgramの`WorkingSet`を渡します。
 初期化の後も、登録済み資源のキーを保持したまま`Runtime::prepare_working_set`で作業セットを交換できます。
+新しい作業セットの準備が成功した時点で、選ばれなかった未登録・使用終了済みの資源を解放します。
 `FrameSubmission`の破棄はGPUを待機せず、受理済み作業は`poll_frame`または明示的な`wait_frame`で完了を確認します。
 特定の投入結果は`wait_for_frame`で取得できます。他のフレームの結果は引き続き取得できます。
 表示時は`WindowPresenter::prepare`の`Ready { extent, .. }`を使ってGraphを構築します。
 
-通常frameでは準備済み容量を再利用します。Graphの上限は`GraphCapacity`、
-共通実行の上限は`RuntimeLimits`で指定します。Vulkanの共有stagingとD3D12の転送領域はそれぞれ
+通常frameでは準備済み容量を再利用します。`GraphPool`の`GraphCapacity`が宣言時の各上限を適用します。
+`RuntimeLimits::graph`には同じ値を渡し、バックエンドの実行領域の準備に使います。
+Vulkanの共有stagingとD3D12の転送領域はそれぞれ
 `runtime::VulkanConfig`と`runtime::D3D12Config`で指定します。異なるサイズのbufferは、サイズごとに`ResourceClass::Buffer`として予約します。
 buffer/画像classのcountはglobalな物理準備数で、execution数による自動乗算はありません。
 `capacity.buffers`は各executionのlogical buffer operand数、`buffer_bytes`は最大logical sizeです。
