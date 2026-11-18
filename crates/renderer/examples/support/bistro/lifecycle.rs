@@ -4,20 +4,24 @@
 //! already have finished. Native validation and retained owners, not a timing
 //! assumption, establish the lifetime contract.
 
+use super::{Error, asset::Scene};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
-    Error, Options,
-    asset::Scene,
-    backend::Backend,
+    Options, backend,
     camera::{Camera, Conditions},
     pipeline::{self, Budget, Captures, Resident, Workspace},
     program,
 };
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     capacity::CapacityRecovery,
     graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
+    runtime::{ExecutionErrorKind, FrameId, Runtime},
     standard::passes::{SdrEncoding, SdrOutput, write_sdr},
 };
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use serde_json::{Value, json};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use std::path::Path;
 
 /// The fixed Bistro cook preserves glTF material order: material 4 is the Vespa
@@ -46,16 +50,19 @@ pub(super) fn selection(scene: &Scene) -> Result<(usize, usize), Error> {
     Ok((material, scene.materials[material].textures[0]))
 }
 
-struct Frame<B: Backend> {
-    pending: B::Pending,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+struct Frame {
+    id: FrameId,
     plan: CompiledGraph,
     passes: Captures,
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 struct Capture {
     bytes: [Vec<u8>; 3],
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl Capture {
     fn matches(&self, other: &Self) -> bool {
         self.bytes == other.bytes
@@ -90,6 +97,7 @@ impl Capture {
     }
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn uniform(camera: Camera, options: &Options, conditions: &Conditions) -> Result<[u8; 128], Error> {
     camera.uniform(
         options.width as f32 / options.height as f32,
@@ -104,6 +112,7 @@ fn uniform(camera: Camera, options: &Options, conditions: &Conditions) -> Result
     clippy::too_many_arguments,
     reason = "one explicit consumer acceptance context"
 )]
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn build_frame(
     resident: &Resident,
     scene: &Scene,
@@ -126,52 +135,55 @@ fn build_frame(
     )
 }
 
-fn accept_frame<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn accept_frame(
+    backend: &mut Runtime,
     resident: &mut Resident,
     built: pipeline::Built,
-) -> Result<Frame<B>, Error> {
+) -> Result<Frame, Error> {
     let passes = built
         .captures
         .ok_or("resource check frame needs readback")?;
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
-    resident.accept_buffer_updates::<B>(&pending, built.updates)?;
-    let output = B::export_image(&pending, built.output)?;
+    resident.accept_buffer_updates(&pending, built.updates)?;
+    let output = pending.export_image(built.output)?;
     backend.delete(output.key())?;
     Ok(Frame {
-        pending,
+        id: pending.id(),
         plan,
         passes,
     })
 }
 
-fn finish_frame<B: Backend>(mut frame: Frame<B>, options: &Options) -> Result<Capture, Error> {
-    let mut completed = B::wait(&mut frame.pending, super::WAIT)?;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn finish_frame(backend: &mut Runtime, frame: Frame, options: &Options) -> Result<Capture, Error> {
+    let mut completed = backend::wait_for(backend, frame.id)?;
     let pixels = options.width as usize * options.height as usize;
     let mut bytes = [vec![0; pixels * 8], vec![0; pixels * 4], Vec::new()];
-    B::readback(&mut completed, frame.passes.hdr, &mut bytes[0])?;
-    B::readback(&mut completed, frame.passes.sdr, &mut bytes[1])?;
+    backend::readback(&mut completed, frame.passes.hdr, &mut bytes[0])?;
+    backend::readback(&mut completed, frame.passes.sdr, &mut bytes[1])?;
     if let Some(pass) = frame.passes.depth {
         bytes[2].resize(pixels * 4, 0);
-        B::readback(&mut completed, pass, &mut bytes[2])?;
+        backend::readback(&mut completed, pass, &mut bytes[2])?;
     }
-    // Return result, native work, export metadata and immutable plan together.
-    drop((completed, frame.pending, frame.plan));
+    drop((completed, frame.plan));
     Ok(Capture { bytes })
 }
 
-fn require_stale<B: Backend>(backend: &mut B, plan: &CompiledGraph) -> Result<(), Error> {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn require_stale(backend: &mut Runtime, plan: &CompiledGraph) -> Result<(), Error> {
     match backend.submit(plan) {
-        Err(error) if B::stale_error(&error) => Ok(()),
+        Err(error) if error.kind() == ExecutionErrorKind::StaleResource => Ok(()),
         Err(error) => Err(format!("expected typed stale-resource rejection: {error}").into()),
-        Ok(mut pending) => {
-            drop(B::wait(&mut pending, super::WAIT)?);
+        Ok(pending) => {
+            drop(backend::wait_for(backend, pending.id())?);
             Err("stale resource plan was accepted".into())
         }
     }
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn stale_plans(
     image: &ImportImage,
     buffer: &ImportBuffer,
@@ -207,6 +219,7 @@ fn changed_texture(scene: &Scene, image: usize, original: &[u8]) -> Vec<u8> {
     changed
 }
 
+#[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
 fn expected_encoded(code: u8, srgb: bool) -> u8 {
     if srgb {
         code
@@ -225,8 +238,9 @@ fn expected_encoded(code: u8, srgb: bool) -> u8 {
     clippy::too_many_arguments,
     reason = "explicit mip-probe inputs outside normal frame processing"
 )]
-fn mip_probes<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn mip_probes(
+    backend: &mut Runtime,
     resident: &Resident,
     scene: &Scene,
     image_index: usize,
@@ -254,10 +268,10 @@ fn mip_probes<B: Backend>(
         )?;
         let pass = graph.readback_image("mip texels", output)?;
         let plan = graph.compile()?;
-        let mut pending = backend.submit(&plan)?;
-        let mut completed = B::wait(&mut pending, super::WAIT)?;
+        let pending = backend.submit(&plan)?;
+        let mut completed = backend::wait_for(backend, pending.id())?;
         let mut bytes = vec![0; width as usize * height as usize * 4];
-        B::readback(&mut completed, pass, &mut bytes)?;
+        backend::readback(&mut completed, pass, &mut bytes)?;
         let expected = mip_color(mip as usize)
             .map(|code| expected_encoded(code, scene.images[image_index].srgb));
         let mut max_error = 0u8;
@@ -282,8 +296,9 @@ fn mip_probes<B: Backend>(
     Ok(reports)
 }
 
-fn upload_texture<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn upload_texture(
+    backend: &mut Runtime,
     pool: &mut GraphPool,
     desc: ImageDesc,
     bytes: &[u8],
@@ -293,9 +308,9 @@ fn upload_texture<B: Backend>(
     graph.upload_image("replace every texture mip", image, bytes)?;
     graph.export_image(image)?;
     let plan = graph.compile()?;
-    let mut pending = backend.submit(&plan)?;
-    let import = B::export_image(&pending, image)?;
-    drop(B::wait(&mut pending, super::WAIT)?);
+    let pending = backend.submit(&plan)?;
+    let import = pending.export_image(image)?;
+    drop(backend::wait_for(backend, pending.id())?);
     drop((pending, plan));
     Ok(import)
 }
@@ -304,8 +319,9 @@ fn upload_texture<B: Backend>(
     clippy::too_many_arguments,
     reason = "opt-in acceptance shares the prepared full-scene context"
 )]
-pub(super) fn execute<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(super) fn execute(
+    backend: &mut Runtime,
     resident: &mut Resident,
     scene: &Scene,
     options: &Options,
@@ -345,7 +361,7 @@ pub(super) fn execute<B: Backend>(
             &mut workspace,
         )?;
         let frame = accept_frame(backend, resident, built)?;
-        let capture = finish_frame(frame, options)?;
+        let capture = finish_frame(backend, frame, options)?;
         reference_reports
             .push(capture.save(&directory.join(format!("serial-{}", names[index])), options)?);
         references.push(capture);
@@ -382,12 +398,14 @@ pub(super) fn execute<B: Backend>(
     let retry_plan = built.graph.compile()?;
     let error = match backend.submit(&retry_plan) {
         Err(error) => error,
-        Ok(mut pending) => {
-            drop(B::wait(&mut pending, super::WAIT)?);
+        Ok(pending) => {
+            drop(backend::wait_for(backend, pending.id())?);
             return Err("configured execution capacity was silently exceeded".into());
         }
     };
-    let capacity = B::capacity_error(&error).ok_or("capacity probe returned an untyped error")?;
+    let capacity = error
+        .capacity()
+        .ok_or("capacity probe returned an untyped error")?;
     if !matches!(
         capacity.recovery,
         CapacityRecovery::Poll | CapacityRecovery::ReleaseOwners | CapacityRecovery::ReleaseResults
@@ -395,29 +413,31 @@ pub(super) fn execute<B: Backend>(
         return Err(format!("unexpected capacity recovery: {capacity}").into());
     }
     let (first_view, first) = queued.remove(0);
-    let first = finish_frame(first, options)?;
+    let first = finish_frame(backend, first, options)?;
     if !first.matches(&references[first_view]) {
         return Err("overlapping View changed the first camera capture".into());
     }
     let retry = backend.submit(&retry_plan)?;
-    resident.accept_buffer_updates::<B>(&retry, retry_updates)?;
-    let output = B::export_image(&retry, retry_output)?;
+    resident.accept_buffer_updates(&retry, retry_updates)?;
+    let output = retry.export_image(retry_output)?;
     backend.delete(output.key())?;
-    let retry: Frame<B> = Frame {
-        pending: retry,
+    let id = retry.id();
+    drop(retry);
+    let retry = Frame {
+        id,
         plan: retry_plan,
         passes: retry_passes,
     };
     let mut overlap_reports = vec![first.save(&directory.join("overlap-0"), options)?];
     for (index, (view, frame)) in queued.into_iter().enumerate() {
-        let capture = finish_frame(frame, options)?;
+        let capture = finish_frame(backend, frame, options)?;
         if !capture.matches(&references[view]) {
             return Err("overlapping View differs from its serial reference".into());
         }
         overlap_reports
             .push(capture.save(&directory.join(format!("overlap-{}", index + 1)), options)?);
     }
-    let retry = finish_frame(retry, options)?;
+    let retry = finish_frame(backend, retry, options)?;
     if !retry.matches(&references[0]) {
         return Err("retry after capacity recovery changed pixels".into());
     }
@@ -468,7 +488,8 @@ pub(super) fn execute<B: Backend>(
             &mut pool,
             &mut workspace,
         )?;
-        let texture_only = finish_frame(accept_frame(backend, resident, built)?, options)?;
+        let frame = accept_frame(backend, resident, built)?;
+        let texture_only = finish_frame(backend, frame, options)?;
         let texture_hdr_changed = texture_only.changed_pixels(&references[1], 0);
         let texture_sdr_changed = texture_only.changed_pixels(&references[1], 1);
         if texture_hdr_changed == 0 || texture_sdr_changed == 0 {
@@ -488,7 +509,7 @@ pub(super) fn execute<B: Backend>(
         require_stale(backend, &stale_buffer)?;
         resident.materials[material_index] =
             backend.refresh_buffer(resident.materials[material_index].key())?;
-        let pending_memory = backend.memory_snapshot()?;
+        let pending_memory = backend::memory_snapshot(backend)?;
         let expected_retained_bytes = desc
             .byte_len()
             .and_then(|bytes| bytes.checked_add(program::MATERIAL_BYTES as u64))
@@ -502,7 +523,7 @@ pub(super) fn execute<B: Backend>(
                     .into(),
             );
         }
-        let old_capture = finish_frame(old_frame, options)?;
+        let old_capture = finish_frame(backend, old_frame, options)?;
         if !old_capture.matches(&references[1]) {
             return Err("pending old View did not retain the old material and texture".into());
         }
@@ -516,7 +537,8 @@ pub(super) fn execute<B: Backend>(
             &mut pool,
             &mut workspace,
         )?;
-        let changed = finish_frame(accept_frame(backend, resident, built)?, options)?;
+        let frame = accept_frame(backend, resident, built)?;
+        let changed = finish_frame(backend, frame, options)?;
         let hdr_changed = changed.changed_pixels(&references[1], 0);
         let sdr_changed = changed.changed_pixels(&references[1], 1);
         let material_hdr_changed = changed.changed_pixels(&texture_only, 0);
@@ -560,14 +582,15 @@ pub(super) fn execute<B: Backend>(
             &mut pool,
             &mut workspace,
         )?;
-        let restored = finish_frame(accept_frame(backend, resident, built)?, options)?;
+        let frame = accept_frame(backend, resident, built)?;
+        let restored = finish_frame(backend, frame, options)?;
         if !restored.matches(&references[1]) {
             return Err("restored assets differ from their serial reference".into());
         }
         let restored_report =
             restored.save(&directory.join(format!("cycle-{cycle}-restored")), options)?;
         upload_pool.release_idle();
-        let memory = backend.memory_snapshot()?;
+        let memory = backend::memory_snapshot(backend)?;
         memory_samples.push(memory.clone());
         cycles.push(json!({"cycle":cycle,"old_pending_matches":true,"stale_image_rejected":true,"stale_buffer_rejected":true,
             "changed_pixels":{"hdr":hdr_changed,"sdr":sdr_changed},"depth_unchanged":true,"restored_matches":true,
@@ -579,7 +602,7 @@ pub(super) fn execute<B: Backend>(
     }
     let plateau = super::memory::plateau(&memory_samples)?;
     let mut stages = stages;
-    stages["after_checks"] = backend.memory_snapshot()?;
+    stages["after_checks"] = backend::memory_snapshot(backend)?;
     Ok(json!({"passed":true,"stages":stages,
         "views":{"names":names,"queued_before_completion_observation":options.inflight,"serial_matches":true,
             "serial_captures":reference_reports,"overlapping_captures":overlap_reports,

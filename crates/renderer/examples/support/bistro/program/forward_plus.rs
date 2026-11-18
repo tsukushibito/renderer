@@ -11,9 +11,11 @@ use renderer::program::{
 use super::{BLEND, OPAQUE};
 use culling::{LIGHTS, TILES, buffer_binding, buffer_slot};
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub use culling::compute_program;
 pub use culling::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, MAX_TILES, PointLight, TILE_SIZE, active_tile_count,
-    append_culling, compute_program, light_bytes,
+    append_culling, light_bytes,
 };
 
 pub const TILE_BUFFER_BYTES: u64 = MAX_TILES as u64 * culling::TILE_BYTES;

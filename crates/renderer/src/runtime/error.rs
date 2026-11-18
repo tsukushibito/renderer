@@ -84,6 +84,12 @@ impl ExecutionError {
         Self::local(ExecutionErrorKind::InvalidInput, message, None)
     }
 
+    #[cfg(all(
+        windows,
+        feature = "vulkan",
+        feature = "d3d12",
+        feature = "presentation"
+    ))]
     pub(crate) fn wrong_owner(message: &'static str) -> Self {
         Self::local(ExecutionErrorKind::WrongOwner, message, None)
     }

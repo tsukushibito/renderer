@@ -20,7 +20,7 @@ mod window_scene;
 #[cfg(all(windows, any(feature = "vulkan", feature = "d3d12")))]
 mod demo {
     use super::{
-        window_backend::{self as backend, Api, Backend, Monitor, Pending, Result},
+        window_backend::{self as backend, Api, IN_FLIGHT, Monitor, Result},
         window_camera::Motion,
         window_input::{CameraInput, InputReplay, REPLAY_DT, REPLAY_STEPS},
         window_scene::{self as scene, Composition},
@@ -29,6 +29,7 @@ mod demo {
         graph::{GraphPool, ImportBuffer, ImportImage, PassHandle, ResourceKey},
         presentation::PresentOutcome,
         profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics},
+        runtime::{FrameCompletion, FrameId, Runtime, WindowPresenter, WindowReadiness},
     };
     use std::{
         sync::Arc,
@@ -46,7 +47,6 @@ mod demo {
     const SHUTDOWN_BUDGET: Duration = Duration::from_secs(10);
     const RUN_BUDGET: Duration = Duration::from_secs(90);
     const RETRY_INTERVAL: Duration = Duration::from_millis(1);
-    const IN_FLIGHT: usize = 3;
 
     enum LoopAction {
         Wait(ControlFlow),
@@ -199,17 +199,44 @@ mod demo {
         graph: Option<SubmissionMetrics>,
     }
     struct Frame {
-        pending: Option<Pending>,
+        pending: Option<FrameId>,
         image: Option<ImportImage>,
         readback: Option<PassHandle>,
         bytes: usize,
         sample: Option<usize>,
     }
+    impl Frame {
+        fn consume_result(
+            &mut self,
+            mut result: FrameCompletion,
+            readback: &mut [u8],
+            samples: &mut [Sample],
+        ) -> Result<()> {
+            self.pending = None;
+            if let Some(pass) = self.readback.take() {
+                let bytes = &mut readback[..self.bytes];
+                result.readback_into(pass, bytes)?;
+                let (digest, geometry) = scene::verify(bytes).map_err(str::to_owned)?;
+                if let Some(index) = self.sample {
+                    samples[index].digest = Some(digest);
+                    samples[index].geometry_pixels = geometry;
+                }
+            }
+            if let Some(index) = self.sample {
+                samples[index].graph = result.metrics().copied();
+            }
+            Ok(())
+        }
+    }
+    struct WindowRenderer {
+        presenter: WindowPresenter,
+        runtime: Runtime,
+    }
     struct App {
         options: Options,
         exiting: bool,
         window: Option<Arc<Window>>,
-        backend: Option<Backend>,
+        backend: Option<WindowRenderer>,
         monitor: Option<Monitor>,
         device: Option<serde_json::Value>,
         buffers: Option<[ImportBuffer; 2]>,
@@ -297,19 +324,19 @@ mod demo {
                         .with_inner_size(PhysicalSize::new(640, 480)),
                 )?,
             );
-            let backend = Backend::new(
+            let (runtime, presenter) = backend::open(
                 self.options.api,
                 Arc::clone(&window),
                 self.options.vsync,
                 self.options.measure,
             )?;
-            let monitor = backend.monitor();
+            let monitor = Monitor::new(&runtime);
             monitor.check(false)?;
-            self.device = Some(backend.device());
+            self.device = Some(backend::device_info(&runtime));
             let size = window.inner_size();
             self.redraw.resize(size.width, size.height);
             self.window = Some(window);
-            self.backend = Some(backend);
+            self.backend = Some(WindowRenderer { presenter, runtime });
             self.monitor = Some(monitor);
             self.update_title();
             Ok(())
@@ -337,7 +364,7 @@ mod demo {
             let Some(backend) = self.backend.as_mut() else {
                 return Ok(());
             };
-            while let Some(profile) = backend.take_profile() {
+            while let Some(profile) = backend.presenter.take_profile() {
                 if self.presentation_samples.len() == self.presentation_samples.capacity() {
                     return Err("prepared presentation report capacity exhausted".into());
                 }
@@ -346,34 +373,22 @@ mod demo {
             Ok(())
         }
         fn poll_frames(&mut self) -> Result<()> {
+            let runtime = &mut self.backend.as_mut().expect("initialized backend").runtime;
             for slot in &mut self.frames {
                 let Some(frame) = slot else {
                     continue;
                 };
-                if let Some(pending) = &mut frame.pending {
+                if let Some(id) = frame.pending {
                     let started = self.options.measure.then(Instant::now);
-                    let result = pending.wait(Duration::ZERO)?;
+                    let result = runtime.wait_for_frame(id, Duration::ZERO)?;
                     let poll_elapsed = elapsed(started);
                     self.poll_api += poll_elapsed;
                     if let Some(index) = frame.sample {
                         self.samples[index].poll_api += poll_elapsed;
                     }
-                    if let Some(mut result) = result {
+                    if let Some(result) = result {
                         let started = self.options.measure.then(Instant::now);
-                        if let Some(pass) = frame.readback.take() {
-                            let bytes = &mut self.readback[..frame.bytes];
-                            result.readback_into(pass, bytes)?;
-                            let (digest, geometry) = scene::verify(bytes).map_err(str::to_owned)?;
-                            if let Some(index) = frame.sample {
-                                self.samples[index].digest = Some(digest);
-                                self.samples[index].geometry_pixels = geometry;
-                            }
-                        }
-                        if let Some(index) = frame.sample {
-                            self.samples[index].graph = result.metrics();
-                        }
-                        drop(result);
-                        frame.pending = None;
+                        frame.consume_result(result, &mut self.readback, &mut self.samples)?;
                         if let Some(index) = frame.sample {
                             self.samples[index].result_return = elapsed(started);
                             self.result_return += self.samples[index].result_return;
@@ -392,13 +407,13 @@ mod demo {
             };
             for frame in self.frames.iter_mut().flatten() {
                 if let Some(image) = frame.image.take() {
-                    backend.delete(image.key())?;
+                    backend.runtime.delete(image.key())?;
                 }
             }
             Ok(())
         }
         fn prepare_extent(&mut self, extent: (u32, u32)) -> Result<bool> {
-            if self.prepared_extent == Some(extent) {
+            if self.prepared_extent == Some(extent) && self.buffers.is_some() {
                 return Ok(true);
             }
             let readback_bytes = if self.options.verify {
@@ -411,34 +426,36 @@ mod demo {
                 return Ok(false);
             }
             let backend = self.backend.as_mut().expect("initialized backend");
-            if !backend.presentation_idle()? {
+            if !backend.presenter.wait_idle(Duration::ZERO)? {
                 return Ok(false);
             }
             self.buffers = None;
-            match backend.prepare_resources(extent) {
+            match backend::prepare_resources(&mut backend.runtime, extent) {
                 Ok(()) => {}
                 Err(error) if backend::is_backpressure(error.as_ref()) => return Ok(false),
                 Err(error) => return Err(error),
             }
             if let Some(keys) = self.keys {
                 self.buffers = Some([
-                    backend.refresh_buffer(keys[0])?,
-                    backend.refresh_buffer(keys[1])?,
+                    backend.runtime.refresh_buffer(keys[0])?,
+                    backend.runtime.refresh_buffer(keys[1])?,
                 ]);
             } else {
                 let mut graph = self.pool.begin()?;
                 let (vertices, indices) = scene::upload(&mut graph)?;
                 let plan = graph.compile()?;
-                let mut pending = backend.submit(&plan)?;
+                let submission = backend.runtime.submit(&plan)?;
                 let buffers = [
-                    pending.export_buffer(vertices)?,
-                    pending.export_buffer(indices)?,
+                    submission.export_buffer(vertices)?,
+                    submission.export_buffer(indices)?,
                 ];
-                let result = pending
-                    .wait(SHUTDOWN_BUDGET)?
+                let id = submission.id();
+                drop(submission);
+                let result = backend
+                    .runtime
+                    .wait_for_frame(id, SHUTDOWN_BUDGET)?
                     .ok_or("initial scene upload timed out")?;
                 drop(result);
-                drop(pending);
                 drop(plan);
                 self.keys = Some(buffers.each_ref().map(|buffer| buffer.key()));
                 self.buffers = Some(buffers);
@@ -461,6 +478,7 @@ mod demo {
                 .backend
                 .as_mut()
                 .ok_or("windowed backend is not initialized")?
+                .presenter
                 .poll();
             self.poll_api += elapsed(started);
             result?;
@@ -471,10 +489,9 @@ mod demo {
             self.poll_frames()
         }
         fn draw_inner(&mut self) -> Result<()> {
-            let Some(backend) = &mut self.backend else {
+            if self.backend.is_none() {
                 return Ok(());
-            };
-            let _ = backend;
+            }
             self.poll()?;
             if self
                 .options
@@ -487,25 +504,19 @@ mod demo {
                 return Ok(());
             }
             let started = self.options.measure.then(Instant::now);
-            let prepared = self.backend.as_mut().unwrap().prepare();
+            let prepared = self.backend.as_mut().unwrap().presenter.prepare();
             self.prepare_api += elapsed(started);
-            let prepared = match prepared {
-                Ok(value) => value,
-                Err(error) if backend::is_backpressure(error.as_ref()) => {
+            let extent = match prepared {
+                Ok(WindowReadiness::Ready { extent, .. }) => extent,
+                Ok(WindowReadiness::Pending | WindowReadiness::Suspended) => {
                     self.retry();
                     return Ok(());
                 }
-                Err(error) => return Err(error),
-            };
-            if matches!(
-                prepared,
-                Some(PresentOutcome::NotReady | PresentOutcome::Suspended)
-            ) {
-                self.retry();
-                return Ok(());
-            }
-            let Some(extent) = self.backend.as_ref().unwrap().extent() else {
-                return Ok(());
+                Err(error) if backend::is_backpressure(&error) => {
+                    self.retry();
+                    return Ok(());
+                }
+                Err(error) => return Err(error.into()),
             };
             if !self.prepare_extent(extent)? {
                 self.retry();
@@ -551,21 +562,24 @@ mod demo {
                 let started = self.options.measure.then(Instant::now);
                 let plan = graph.compile()?;
                 let compile = elapsed(started);
+                let report = self.options.verify || self.options.measure;
+                if report && self.samples.len() == self.samples.capacity() {
+                    return Err("prepared report sample capacity exhausted".into());
+                }
                 let started = self.options.measure.then(Instant::now);
-                let pending = match self.backend.as_mut().unwrap().submit(&plan) {
+                let submission = match self.backend.as_mut().unwrap().runtime.submit(&plan) {
                     Ok(value) => value,
-                    Err(error) if backend::is_backpressure(error.as_ref()) => {
+                    Err(error) if backend::is_backpressure(&error) => {
                         self.retry();
                         return Ok(());
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(error.into()),
                 };
                 let submit_api = elapsed(started);
-                let image = pending.export_image(image)?;
-                let sample = if self.options.verify || self.options.measure {
-                    if self.samples.len() == self.samples.capacity() {
-                        return Err("prepared report sample capacity exhausted".into());
-                    }
+                let image = submission.export_image(image)?;
+                let id = submission.id();
+                drop(submission);
+                let sample = if report {
                     let index = self.samples.len();
                     self.samples.push(Sample {
                         ordinal: self.accepted as u64,
@@ -581,7 +595,7 @@ mod demo {
                     None
                 };
                 self.frames[slot] = Some(Frame {
-                    pending: Some(pending),
+                    pending: Some(id),
                     image: Some(image),
                     readback,
                     bytes: self.readback.len(),
@@ -594,15 +608,16 @@ mod demo {
             let image = frame.image.as_ref().unwrap();
             let started = self.options.measure.then(Instant::now);
             self.present_attempts += 1;
-            let outcome = self.backend.as_mut().unwrap().present(image);
+            let backend = self.backend.as_mut().unwrap();
+            let outcome = backend.runtime.present(&mut backend.presenter, image);
             self.present_api += elapsed(started);
             let outcome = match outcome {
                 Ok(value) => value,
-                Err(error) if backend::is_backpressure(error.as_ref()) => {
+                Err(error) if backend::is_backpressure(&error) => {
                     self.retry();
                     return Ok(());
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             };
             match outcome {
                 PresentOutcome::Presented { .. } => {
@@ -616,6 +631,7 @@ mod demo {
                     self.backend
                         .as_mut()
                         .unwrap()
+                        .runtime
                         .delete(frame.image.take().unwrap().key())?;
                     self.accepted += 1;
                     if let Some(started) = self.backpressure_since.take() {
@@ -626,6 +642,7 @@ mod demo {
                     self.backend
                         .as_mut()
                         .unwrap()
+                        .runtime
                         .delete(frame.image.take().unwrap().key())?;
                 }
                 PresentOutcome::NotReady | PresentOutcome::Suspended => self.retry(),
@@ -634,7 +651,7 @@ mod demo {
         }
         fn toggle_vsync(&mut self) -> Result<()> {
             if let Some(backend) = &mut self.backend {
-                backend.set_vsync(!self.options.vsync)?;
+                backend.presenter.set_vsync(!self.options.vsync)?;
             }
             self.options.vsync = !self.options.vsync;
             self.update_title();
@@ -661,48 +678,44 @@ mod demo {
                 return Ok(());
             }
             let started = Instant::now();
-            self.pending_at_shutdown = self
-                .frames
-                .iter()
-                .filter(|frame| frame.as_ref().is_some_and(|frame| frame.pending.is_some()))
-                .count();
+            self.pending_at_shutdown = self.backend.as_ref().unwrap().runtime.pending_frames();
             self.discard_outputs()?;
             let deadline = Instant::now() + SHUTDOWN_BUDGET;
+            let backend = self.backend.as_mut().unwrap();
             for slot in &mut self.frames {
                 if let Some(frame) = slot
-                    && let Some(pending) = &mut frame.pending
+                    && let Some(id) = frame.pending
                 {
                     let remaining = deadline
                         .checked_duration_since(Instant::now())
                         .ok_or("Graph shutdown timed out")?;
-                    let mut result = pending.wait(remaining)?.ok_or("Graph shutdown timed out")?;
-                    if let Some(pass) = frame.readback.take() {
-                        let bytes = &mut self.readback[..frame.bytes];
-                        result.readback_into(pass, bytes)?;
-                        let (digest, geometry) = scene::verify(bytes).map_err(str::to_owned)?;
-                        if let Some(index) = frame.sample {
-                            self.samples[index].digest = Some(digest);
-                            self.samples[index].geometry_pixels = geometry;
-                        }
-                    }
-                    if let Some(index) = frame.sample {
-                        self.samples[index].graph = result.metrics();
-                    }
-                    drop(result);
+                    let result = backend
+                        .runtime
+                        .wait_for_frame(id, remaining)?
+                        .ok_or("Graph shutdown timed out")?;
+                    frame.consume_result(result, &mut self.readback, &mut self.samples)?;
                 }
                 *slot = None;
+            }
+            // A submission accepted before an application error may have no
+            // frame record. Release any such work within the same budget.
+            if !backend
+                .runtime
+                .drain_frames(deadline.saturating_duration_since(Instant::now()))?
+            {
+                return Err("Graph shutdown timed out".into());
             }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .ok_or("presentation shutdown timed out")?;
-            if !self.backend.as_mut().unwrap().close(remaining)? {
+            if !backend.presenter.close(remaining)? {
                 return Err("presentation shutdown timed out".into());
             }
             self.drain_profiles()?;
             self.buffers = None;
             if let Some(keys) = self.keys.take() {
                 for key in keys {
-                    self.backend.as_mut().unwrap().delete(key)?;
+                    self.backend.as_mut().unwrap().runtime.delete(key)?;
                 }
             }
             self.backend = None;
@@ -835,7 +848,7 @@ mod demo {
                                 window.set_minimized(true);
                             }
                             if let Some(backend) = &mut self.backend {
-                                backend.resize(0, 0);
+                                backend.presenter.resize(0, 0);
                             }
                             self.redraw.resize(0, 0);
                             self.restore_at = Some(now + Duration::from_millis(80));
@@ -852,7 +865,7 @@ mod demo {
                     let _ = window.request_inner_size(PhysicalSize::new(640, 480));
                 }
                 if let Some(backend) = &mut self.backend {
-                    backend.resize(640, 480);
+                    backend.presenter.resize(640, 480);
                 }
                 self.redraw.resize(640, 480);
             }
@@ -872,7 +885,12 @@ mod demo {
                             return Ok(false);
                         }
                         let started = self.options.measure.then(Instant::now);
-                        let idle = self.backend.as_mut().unwrap().presentation_idle();
+                        let idle = self
+                            .backend
+                            .as_mut()
+                            .unwrap()
+                            .presenter
+                            .wait_idle(Duration::ZERO);
                         self.poll_api += elapsed(started);
                         let idle = idle?;
                         self.drain_profiles()?;
@@ -977,7 +995,7 @@ mod demo {
                     }
                     self.redraw.resize(size.width, size.height);
                     if let Some(backend) = &mut self.backend {
-                        backend.resize(size.width, size.height);
+                        backend.presenter.resize(size.width, size.height);
                     }
                 }
                 // The local smoke script owns its first five poses. Ambient

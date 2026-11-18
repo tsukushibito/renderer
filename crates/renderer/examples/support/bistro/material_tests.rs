@@ -8,7 +8,9 @@
 //! through B3's fixed exposure, Neutral transform, half storage and sRGB encode.
 
 use super::{Material, Pixels, Primitive, Scene, TextureImage, fallback_images, material};
-use crate::bistro::{backend::Backend, camera::Camera, pipeline};
+use crate::bistro::camera::Camera;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use crate::bistro::{backend, pipeline};
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 256;
@@ -528,10 +530,12 @@ fn close(actual: f64, expected: f64) -> bool {
     actual.is_finite() && (actual - expected).abs() <= ABSOLUTE + RELATIVE * expected.abs()
 }
 
-fn capture_scene<B: Backend>(scene: &Scene, width: u32, height: u32) -> [Vec<u8>; 3] {
-    capture_lighting::<B>(scene, width, height, &Lighting::direct()).main
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn capture_scene(api: &str, scene: &Scene, width: u32, height: u32) -> [Vec<u8>; 3] {
+    capture_lighting(api, scene, width, height, &Lighting::direct()).main
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 struct Lighting {
     environment: crate::bistro::ibl::Environment,
     light_color: [f32; 3],
@@ -539,6 +543,7 @@ struct Lighting {
     shadows: bool,
     capture_shadows: bool,
 }
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 impl Lighting {
     fn direct() -> Self {
         let mut environment = crate::bistro::ibl::Environment::fixture();
@@ -552,12 +557,15 @@ impl Lighting {
         }
     }
 }
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 struct Capture {
     main: [Vec<u8>; 3],
     shadows: Option<[Vec<u8>; 4]>,
 }
 
-fn capture_lighting<B: Backend>(
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn capture_lighting(
+    api: &str,
     scene: &Scene,
     width: u32,
     height: u32,
@@ -576,6 +584,7 @@ fn capture_lighting<B: Backend>(
         .map(str::to_owned),
     )
     .unwrap();
+    options.api = api.into();
     options.width = width;
     options.height = height;
     options.aa = lighting.aa;
@@ -592,7 +601,7 @@ fn capture_lighting<B: Backend>(
             lighting.light_color,
         )
         .unwrap();
-    let mut backend = B::create(&options, &budget).unwrap();
+    let mut backend = backend::create(&options, &budget).unwrap();
     let resident = pipeline::Resident::upload(
         &mut backend,
         scene,
@@ -617,20 +626,20 @@ fn capture_lighting<B: Backend>(
     .unwrap();
     assert_eq!(built.draws, Some(scene.primitives.len()));
     let plan = built.graph.compile().unwrap();
-    let mut pending = backend.submit(&plan).unwrap();
-    let mut completed = B::wait(&mut pending, crate::bistro::WAIT).unwrap();
+    let pending = backend.submit(&plan).unwrap();
+    let mut completed = backend::wait_for(&mut backend, pending.id()).unwrap();
     let captures = built.captures.unwrap();
     let mut hdr = vec![0; width as usize * height as usize * 8];
     let mut sdr = vec![0; width as usize * height as usize * 4];
     let mut depth = vec![0; width as usize * height as usize * 4];
-    B::readback(&mut completed, captures.hdr, &mut hdr).unwrap();
-    B::readback(&mut completed, captures.sdr, &mut sdr).unwrap();
-    B::readback(&mut completed, captures.depth.unwrap(), &mut depth).unwrap();
+    backend::readback(&mut completed, captures.hdr, &mut hdr).unwrap();
+    backend::readback(&mut completed, captures.sdr, &mut sdr).unwrap();
+    backend::readback(&mut completed, captures.depth.unwrap(), &mut depth).unwrap();
     let shadows = built.shadow_captures.map(|passes| {
         let resolution = resident.shadow_parameters.resolution as usize;
         passes.map(|pass| {
             let mut bytes = vec![0; resolution * resolution * 4];
-            B::readback(&mut completed, pass, &mut bytes).unwrap();
+            backend::readback(&mut completed, pass, &mut bytes).unwrap();
             for word in bytes.as_chunks::<4>().0 {
                 let depth = f32::from_le_bytes(*word);
                 assert!(depth.is_finite() && (0.0..=1.0).contains(&depth));
@@ -639,7 +648,7 @@ fn capture_lighting<B: Backend>(
         })
     });
     drop((completed, pending, plan, resident, workspace));
-    let validation = backend.close().unwrap();
+    let validation = backend::close(backend).unwrap();
     assert_eq!(validation["clean"], true);
     drop(pool);
     Capture {
@@ -648,11 +657,12 @@ fn capture_lighting<B: Backend>(
     }
 }
 
-pub(in crate::bistro) fn native_acceptance<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(in crate::bistro) fn native_acceptance(api: &str) {
     let cases = cases();
     for force_opaque in [false, true] {
         let scene = scene(&cases, force_opaque);
-        let [hdr, sdr, depth] = capture_scene::<B>(&scene, WIDTH, HEIGHT);
+        let [hdr, sdr, depth] = capture_scene(api, &scene, WIDTH, HEIGHT);
         for bits in hdr.as_chunks::<2>().0 {
             let value = half(u16::from_le_bytes(*bits));
             assert!(
@@ -780,7 +790,8 @@ fn validate_clear_control(captures: &[Vec<u8>; 3], width: u32, height: u32) {
 /// Compare with a separate zero-PBR-draw run using the same API, clear,
 /// attachments, resolve and readback. This preserves exact no-write checks
 /// without confusing a permitted clear conversion with alpha coverage.
-pub(in crate::bistro) fn alpha_background<B: Backend>(report: &serde_json::Value) {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(in crate::bistro) fn alpha_background(api: &str, report: &serde_json::Value) {
     assert_eq!(
         report["draw_count"].as_u64(),
         Some(2),
@@ -810,7 +821,7 @@ pub(in crate::bistro) fn alpha_background<B: Backend>(report: &serde_json::Value
         source: serde_json::json!({"fixture":"independent-clear-only-control"}),
     };
     assert!(empty.primitives.is_empty() && empty.materials.is_empty());
-    let control = capture_scene::<B>(&empty, width, height);
+    let control = capture_scene(api, &empty, width, height);
     validate_clear_control(&control, width, height);
     for ((actual, control), name) in actual.iter().zip(control.iter()).zip(names) {
         assert_eq!(actual.len(), control.len());

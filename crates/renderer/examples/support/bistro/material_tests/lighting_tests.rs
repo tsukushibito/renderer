@@ -166,13 +166,14 @@ fn analytic_fixture_words_round_trip_and_keep_mips_distinct() {
     }
 }
 
-fn hdr_and_display<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn hdr_and_display(api: &str) {
     let mut case = panel("HDR emissive");
     case.emissive = [4., 1., 0.25];
     let scene = scene(std::slice::from_ref(&case), false);
     let mut lighting = Lighting::direct();
     lighting.light_color = [0.; 3];
-    let captured = capture_lighting::<B>(&scene, WIDTH, HEIGHT, &lighting);
+    let captured = capture_lighting(api, &scene, WIDTH, HEIGHT, &lighting);
     let pixel = probe(&case).0;
     let hdr = rgb_at(&captured.main[0], pixel);
     assert_rgb(
@@ -190,7 +191,8 @@ fn hdr_and_display<B: Backend>() {
     }
 }
 
-fn ibl_materials<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn ibl_materials(api: &str) {
     let colors = [
         [1., 0.5, 0.25],
         [0.5, 1., 0.25],
@@ -218,7 +220,7 @@ fn ibl_materials<B: Backend>() {
         case.emissive = [0.; 3];
     }
     let mut model = scene(&probes, false);
-    let captured = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let captured = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     for (i, case) in probes.iter().enumerate() {
         let expected = std::array::from_fn(|channel| {
             let f0 = 0.04 * (1. - case.metallic) + case.base[channel] * case.metallic;
@@ -244,7 +246,7 @@ fn ibl_materials<B: Backend>() {
         material.textures[2] = ao_image;
         material.uniform[40..44].copy_from_slice(&1_f32.to_le_bytes());
     }
-    let occluded = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let occluded = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     for (i, case) in probes.iter().enumerate() {
         let expected = std::array::from_fn(|channel| {
             let f0 = 0.04 * (1. - case.metallic) + case.base[channel] * case.metallic;
@@ -307,7 +309,8 @@ fn bilinear_environment(pixels: &[V3], uv: [f64; 2]) -> V3 {
     })
 }
 
-fn ibl_directions<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn ibl_directions(api: &str) {
     let (environment, pixels) = direction_environment();
     let mut lighting = Lighting::direct();
     lighting.light_color = [0.; 3];
@@ -349,7 +352,7 @@ fn ibl_directions<B: Backend>() {
     let model = scene(&probes, false);
     for yaw in [0., 90.] {
         lighting.environment.yaw_degrees = yaw;
-        let captured = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+        let captured = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
         for (case, mut coordinate) in probes.iter().zip(uv) {
             coordinate[0] = (coordinate[0] + f64::from(yaw) / 360.).fract();
             let expected =
@@ -363,13 +366,14 @@ fn ibl_directions<B: Backend>() {
     }
 }
 
-fn fxaa_behavior<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn fxaa_behavior(api: &str) {
     let mut lighting = Lighting::direct();
     lighting.light_color = [0.; 3];
     let clear = empty_scene();
-    let no_aa = capture_lighting::<B>(&clear, WIDTH, HEIGHT, &lighting);
+    let no_aa = capture_lighting(api, &clear, WIDTH, HEIGHT, &lighting);
     lighting.aa = true;
-    let aa = capture_lighting::<B>(&clear, WIDTH, HEIGHT, &lighting);
+    let aa = capture_lighting(api, &clear, WIDTH, HEIGHT, &lighting);
     assert_eq!(
         no_aa.main, aa.main,
         "FXAA must preserve a uniform image including viewport edges"
@@ -385,9 +389,9 @@ fn fxaa_behavior<B: Backend>() {
         vertex[4..8].copy_from_slice(&(x * angle.sin() + y * angle.cos()).to_le_bytes());
     }
     lighting.aa = false;
-    let no_aa = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let no_aa = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     lighting.aa = true;
-    let aa = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let aa = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     assert_eq!(no_aa.main[0], aa.main[0], "AA is after scene HDR");
     assert_eq!(
         no_aa.main[2], aa.main[2],
@@ -439,9 +443,9 @@ fn fxaa_behavior<B: Backend>() {
         vertex[0..4].copy_from_slice(&((x + 2.3) * 0.1 - 2.3).to_le_bytes());
     }
     lighting.aa = false;
-    let no_aa = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let no_aa = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     lighting.aa = true;
-    let aa = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let aa = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     for y in HEIGHT / 2 - 8..HEIGHT / 2 + 8 {
         for x in [0, WIDTH - 1] {
             let index = (y * WIDTH + x) as usize * 4;
@@ -453,7 +457,8 @@ fn fxaa_behavior<B: Backend>() {
     }
 }
 
-fn transparent_shadows<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn transparent_shadows(api: &str) {
     let mut probes = cases()[11..13].to_vec();
     for (i, case) in probes.iter_mut().enumerate() {
         case.center = [i as f64 - 0.5, 0.];
@@ -462,7 +467,7 @@ fn transparent_shadows<B: Backend>() {
     let mut lighting = Lighting::direct();
     lighting.shadows = true;
     lighting.capture_shadows = true;
-    let transparent = capture_lighting::<B>(&scene(&probes, false), WIDTH, HEIGHT, &lighting);
+    let transparent = capture_lighting(api, &scene(&probes, false), WIDTH, HEIGHT, &lighting);
     let transparent_maps = transparent.shadows.unwrap();
     assert!(
         transparent_maps.iter().all(|bytes| bytes
@@ -472,7 +477,7 @@ fn transparent_shadows<B: Backend>() {
             .all(|v| f32::from_le_bytes(*v) == 1.)),
         "alpha-zero MASK and BLEND must leave every cascade clear"
     );
-    let opaque = capture_lighting::<B>(&scene(&probes, true), WIDTH, HEIGHT, &lighting);
+    let opaque = capture_lighting(api, &scene(&probes, true), WIDTH, HEIGHT, &lighting);
     let opaque_maps = opaque.shadows.unwrap();
     assert!(
         opaque_maps.iter().any(|bytes| bytes
@@ -488,7 +493,8 @@ fn transparent_shadows<B: Backend>() {
     );
 }
 
-fn shadow_occlusion<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn shadow_occlusion(api: &str) {
     let mut receiver = panel("shadow receiver");
     receiver.base = [0.8, 0.4, 0.2, 1.];
     let mut caster = panel("sun occluder");
@@ -505,9 +511,9 @@ fn shadow_occlusion<B: Backend>() {
     }
     model.primitives[1].center[2] = 1.;
     let mut lighting = Lighting::direct();
-    let no_shadow = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let no_shadow = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     lighting.shadows = true;
-    let shadowed = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let shadowed = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     let center = probe(&receiver).0;
     let unoccluded = rgb_at(&no_shadow.main[0], center);
     let occluded = rgb_at(&shadowed.main[0], center);
@@ -536,7 +542,7 @@ fn shadow_occlusion<B: Backend>() {
         vertex[0..4].copy_from_slice(&x.to_le_bytes());
     }
     model.primitives[1].center[0] += 1.;
-    let moved = capture_lighting::<B>(&model, WIDTH, HEIGHT, &lighting);
+    let moved = capture_lighting(api, &model, WIDTH, HEIGHT, &lighting);
     assert_rgb(
         rgb_at(&moved.main[0], center),
         unoccluded,
@@ -550,31 +556,32 @@ fn shadow_occlusion<B: Backend>() {
     );
 }
 
-fn native<B: Backend>() {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn native(api: &str) {
     eprintln!("B3 acceptance: HDR and display");
-    hdr_and_display::<B>();
+    hdr_and_display(api);
     eprintln!("B3 acceptance: IBL materials and AO");
-    ibl_materials::<B>();
+    ibl_materials(api);
     eprintln!("B3 acceptance: IBL directions");
-    ibl_directions::<B>();
+    ibl_directions(api);
     eprintln!("B3 acceptance: FXAA");
-    fxaa_behavior::<B>();
+    fxaa_behavior(api);
     eprintln!("B3 acceptance: alpha shadow coverage");
-    transparent_shadows::<B>();
+    transparent_shadows(api);
     eprintln!("B3 acceptance: shadow occlusion");
-    shadow_occlusion::<B>();
+    shadow_occlusion(api);
 }
 
 #[cfg(feature = "vulkan")]
 #[test]
 #[ignore = "requires real Vulkan GPU; run strict and shipping explicitly"]
 fn vulkan_b3_lighting_display_and_shadows() {
-    native::<crate::bistro::backend::Vulkan>();
+    native("vulkan");
 }
 
 #[cfg(all(windows, feature = "d3d12"))]
 #[test]
 #[ignore = "requires real D3D12 GPU; run strict and shipping explicitly"]
 fn d3d12_b3_lighting_display_and_shadows() {
-    native::<crate::bistro::backend::D3d12>();
+    native("d3d12");
 }

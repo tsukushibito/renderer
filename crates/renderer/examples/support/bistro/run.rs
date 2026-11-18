@@ -1,18 +1,23 @@
 //! Measurement boundaries include changing Graph construction and completion.
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use super::backend;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use super::pipeline::{self, Budget, Resident, Workspace};
 use super::{
     Error, Options,
     asset::Scene,
-    backend::Backend,
     camera::{Camera, Conditions},
-    pipeline::{self, Budget, Resident, Workspace},
 };
-use renderer::{
-    SubmissionMetrics,
-    graph::{CompiledGraph, GraphPool},
-};
+use renderer::SubmissionMetrics;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::graph::{CompiledGraph, GraphPool};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::runtime::{FrameId, Runtime};
 use serde_json::{Value, json};
-use std::{collections::VecDeque, path::Path, time::Instant};
+use std::path::Path;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use std::{collections::VecDeque, time::Instant};
 
 struct Sample {
     phases: [u64; 5],
@@ -22,8 +27,9 @@ struct Sample {
     yield_ns: u64,
     iteration_ns: u64,
 }
-struct Pending<B: Backend> {
-    work: B::Pending,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+struct Pending {
+    frame: FrameId,
     plan: CompiledGraph,
     sample: Sample,
     started: Instant,
@@ -59,21 +65,26 @@ fn uniform(
     clippy::too_many_arguments,
     reason = "one explicit bounded frame context; avoids another owner abstraction"
 )]
-fn frames<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn frames(
+    backend: &mut Runtime,
     resident: &mut Resident,
     scene: &Scene,
     options: &Options,
     conditions: &Conditions,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
-    queue: &mut VecDeque<Pending<B>>,
+    queue: &mut VecDeque<Pending>,
     samples: &mut Vec<Sample>,
     count: usize,
     record: bool,
     drain: bool,
 ) -> Result<(), Error> {
-    fn retire<B: Backend>(mut entry: Pending<B>, samples: &mut Vec<Sample>) -> Result<(), Error> {
+    fn retire(
+        backend: &mut Runtime,
+        mut entry: Pending,
+        samples: &mut Vec<Sample>,
+    ) -> Result<(), Error> {
         #[cfg(feature = "tracy")]
         let _retire = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("bistro.retire"), 0));
@@ -86,7 +97,7 @@ fn frames<B: Backend>(
             let timeout = Instant::now();
             loop {
                 let poll = Instant::now();
-                let completed = B::poll(&mut entry.work)?;
+                let completed = backend.wait_for_frame(entry.frame, std::time::Duration::ZERO)?;
                 entry.sample.poll_cpu_ns += poll.elapsed().as_nanos() as u64;
                 if let Some(completed) = completed {
                     break completed;
@@ -100,14 +111,14 @@ fn frames<B: Backend>(
             }
         };
         entry.sample.phases[3] = started.elapsed().as_nanos() as u64;
-        entry.sample.native = B::metrics(&completed);
+        entry.sample.native = completed.metrics().copied();
         entry.sample.latency = entry.started.elapsed().as_nanos() as u64;
         let started = Instant::now();
         {
             #[cfg(feature = "tracy")]
             let _return = tracy_client::Client::running()
                 .map(|client| client.span(tracy_client::span_location!("bistro.result_return"), 0));
-            drop((completed, entry.work, entry.plan));
+            drop((completed, entry.plan));
         }
         entry.sample.phases[4] = started.elapsed().as_nanos() as u64;
         if entry.record {
@@ -127,7 +138,7 @@ fn frames<B: Backend>(
             None
         };
         if queue.len() == options.inflight {
-            retire(queue.pop_front().unwrap(), samples)?;
+            retire(backend, queue.pop_front().unwrap(), samples)?;
         }
         let started = Instant::now();
         let stage = Instant::now();
@@ -174,16 +185,18 @@ fn frames<B: Backend>(
             let _export = tracy_client::Client::running().map(|client| {
                 client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
             });
-            resident.accept_buffer_updates::<B>(&work, built.updates)?;
-            workspace.accept_shadow_updates::<B>(&work, built.shadow_updates)?;
-            let output = B::export_image(&work, built.output)?;
+            resident.accept_buffer_updates(&work, built.updates)?;
+            workspace.accept_shadow_updates(&work, built.shadow_updates)?;
+            let output = work.export_image(built.output)?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
             // name is not early GPU release: pending work owns its prepared lease.
             backend.delete(output.key())?;
         }
+        let frame = work.id();
+        drop(work);
         let submit = stage.elapsed().as_nanos() as u64;
         queue.push_back(Pending {
-            work,
+            frame,
             plan,
             sample: Sample {
                 phases: [build, compile, submit, 0, 0],
@@ -212,7 +225,7 @@ fn frames<B: Backend>(
     };
     if drain {
         while let Some(entry) = queue.pop_front() {
-            retire(entry, samples)?;
+            retire(backend, entry, samples)?;
         }
     }
     Ok(())
@@ -273,8 +286,9 @@ pub(super) fn loaded_cook_hash(scene: &Scene, fixture: bool) -> Result<String, E
     clippy::too_many_arguments,
     reason = "captures use the same prepared frame context outside measurement"
 )]
-fn capture_planes<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn capture_planes(
+    backend: &mut Runtime,
     resident: &mut Resident,
     scene: &Scene,
     options: &Options,
@@ -298,12 +312,12 @@ fn capture_planes<B: Backend>(
         true,
     )?;
     let plan = built.graph.compile()?;
-    let mut pending = backend.submit(&plan)?;
-    resident.accept_buffer_updates::<B>(&pending, built.updates)?;
-    workspace.accept_shadow_updates::<B>(&pending, built.shadow_updates)?;
-    let output = B::export_image(&pending, built.output)?;
+    let pending = backend.submit(&plan)?;
+    resident.accept_buffer_updates(&pending, built.updates)?;
+    workspace.accept_shadow_updates(&pending, built.shadow_updates)?;
+    let output = pending.export_image(built.output)?;
     backend.delete(output.key())?;
-    let mut completed = B::wait(&mut pending, super::WAIT)?;
+    let mut completed = backend::wait_for(backend, pending.id())?;
     let passes = built.captures.unwrap();
     let pixels = (options.width as usize) * (options.height as usize);
     let mut captures = json!({});
@@ -322,7 +336,7 @@ fn capture_planes<B: Backend>(
             continue;
         }
         let mut bytes = vec![0u8; pixels * stride];
-        B::readback(&mut completed, pass, &mut bytes)?;
+        backend::readback(&mut completed, pass, &mut bytes)?;
         if name == "depth" {
             let mut coverage = 0usize;
             for value in bytes.as_chunks::<4>().0 {
@@ -344,7 +358,7 @@ fn capture_planes<B: Backend>(
         let resolution = resident.shadow_parameters.resolution;
         for (cascade, pass) in passes.into_iter().enumerate() {
             let mut bytes = vec![0; resolution as usize * resolution as usize * 4];
-            B::readback(&mut completed, pass, &mut bytes)?;
+            backend::readback(&mut completed, pass, &mut bytes)?;
             if bytes.as_chunks::<4>().0.iter().any(|v| {
                 let d = f32::from_le_bytes(*v);
                 !d.is_finite() || !(0.0..=1.0).contains(&d)
@@ -371,8 +385,9 @@ fn capture_planes<B: Backend>(
     clippy::too_many_arguments,
     reason = "captures share the prepared frame context outside measurement"
 )]
-fn capture<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn capture(
+    backend: &mut Runtime,
     resident: &mut Resident,
     scene: &Scene,
     options: &Options,
@@ -491,7 +506,8 @@ pub(super) fn memory_report(snapshot: renderer::measurement::Snapshot) -> Value 
         "event_order":"Rust Allocate/AllocateZeroed/Reallocate/Deallocate; VMA Allocate/Reallocate/Deallocate; native ObjectCreate/ObjectDestroy/ResourceCreate/ResourceDestroy/MemoryAllocate/MemoryFree/DescriptorAllocate/DescriptorFree/Reset"})
 }
 
-pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(super) fn execute(options: &Options) -> Result<(), Error> {
     if options.output.join("report.json").exists() {
         return Err("output report already exists; choose a new output directory".into());
     }
@@ -548,13 +564,13 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         budget.physical_resources
     );
     let stage = Instant::now();
-    let mut backend = B::create(options, &budget)?;
+    let mut backend = backend::create(options, &budget)?;
     let native_prepare_ns = stage.elapsed().as_nanos() as u64;
     let mut resource_stages = json!({});
     if options.resource_checks {
-        resource_stages["prepared"] = backend.memory_snapshot()?;
+        resource_stages["prepared"] = backend::memory_snapshot(&backend)?;
     }
-    let mut runtime = backend.info();
+    let mut runtime = backend::info(&backend);
     runtime["process_id"] = json!(std::process::id());
     #[cfg(windows)]
     {
@@ -565,7 +581,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         Resident::upload(&mut backend, &scene, &environment, &budget, &first_uniform)?;
     environment.release_pixels();
     if options.resource_checks {
-        resource_stages["uploaded"] = backend.memory_snapshot()?;
+        resource_stages["uploaded"] = backend::memory_snapshot(&backend)?;
     }
     let prepared = json!({"physical_resources":budget.physical_resources,"logical_buffers_per_graph":budget.buffer_count,
         "max_buffer_bytes":budget.max_buffer_bytes,"upload_capacity_bytes":budget.upload_bytes,"readback_capacity_bytes":budget.readback_bytes,
@@ -616,10 +632,10 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     )?;
     let warmup_ns = stage.elapsed().as_nanos() as u64;
     if options.resource_checks {
-        resource_stages["warmed"] = backend.memory_snapshot()?;
+        resource_stages["warmed"] = backend::memory_snapshot(&backend)?;
     }
     let warmed_native = if options.gpu_timing && !options.fixture {
-        backend.memory_snapshot()?
+        backend::memory_snapshot(&backend)?
     } else {
         Value::Null
     };
@@ -701,7 +717,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(windows)]
     let cpu = super::clock::Boundary::capture()?.difference(cpu_start, frequency)?;
     let drained_native = if options.gpu_timing && !options.fixture {
-        backend.memory_snapshot()?
+        backend::memory_snapshot(&backend)?
     } else {
         Value::Null
     };
@@ -732,7 +748,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "caller wall after stationary endpoint through final pending drain; includes boundary-clock acquisition/bookkeeping, not a pure GPU wait"
     );
     if options.resource_checks {
-        resource_stages["after_frames"] = backend.memory_snapshot()?;
+        resource_stages["after_frames"] = backend::memory_snapshot(&backend)?;
     }
     #[cfg(feature = "tracy")]
     let tracy = json!({
@@ -867,7 +883,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "memory-profiling")]
     let shutdown_memory = renderer::measurement::Snapshot::now();
     drop((resident, queue, samples, workspace));
-    let validation = backend.close()?;
+    let validation = backend::close(backend)?;
     drop(pool);
     for (name, directory, mut report) in captured_views {
         report["validation"] = validation.clone();
@@ -966,8 +982,8 @@ mod tests {
         assert!(loaded_cook_hash(&scene, true).is_ok());
     }
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    fn native_fixture<B: Backend>() {
-        super::super::asset::material_tests::native_acceptance::<B>();
+    fn native_fixture(api: &str) {
+        super::super::asset::material_tests::native_acceptance(api);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -982,12 +998,13 @@ mod tests {
             ("opaque-override", true, true),
         ] {
             let mut options = fixture_options();
+            options.api = api.into();
             options.frames = 8;
             options.warmup = 8;
             options.alpha_only = alpha_only;
             options.force_opaque = force_opaque;
             options.output = root.join(label);
-            execute::<B>(&options).unwrap();
+            execute(&options).unwrap();
             let report: Value =
                 serde_json::from_slice(&std::fs::read(options.output.join("report.json")).unwrap())
                     .unwrap();
@@ -999,7 +1016,7 @@ mod tests {
             );
             assert_eq!(report["validation"]["clean"], true);
             if alpha_only && !force_opaque {
-                super::super::asset::material_tests::alpha_background::<B>(&report);
+                super::super::asset::material_tests::alpha_background(api, &report);
             }
         }
     }
@@ -1007,12 +1024,12 @@ mod tests {
     #[test]
     #[ignore = "requires real Vulkan GPU; execute explicitly in shipping and strict configurations"]
     fn vulkan_materials_and_alpha_coverage() {
-        native_fixture::<super::super::backend::Vulkan>();
+        native_fixture("vulkan");
     }
     #[cfg(all(windows, feature = "d3d12"))]
     #[test]
     #[ignore = "requires real D3D12 GPU; execute explicitly in shipping and strict configurations"]
     fn d3d12_materials_and_alpha_coverage() {
-        native_fixture::<super::super::backend::D3d12>();
+        native_fixture("d3d12");
     }
 }
