@@ -20,6 +20,15 @@ pub(super) struct DeviceBuffer {
     allocation: vk_mem::Allocation,
 }
 
+pub(super) fn validate_buffer_size(size: u64, max_buffer_size: u64) -> Result<(), RuntimeError> {
+    if size == 0 || size > max_buffer_size {
+        return Err(RuntimeError::invalid(format!(
+            "graph buffer size {size} must be nonzero and not exceed Device maxBufferSize {max_buffer_size}"
+        )));
+    }
+    Ok(())
+}
+
 fn create_buffer<T>(
     size: u64,
     max_buffer_size: u64,
@@ -28,11 +37,7 @@ fn create_buffer<T>(
         &vk_mem::AllocationCreateInfo,
     ) -> Result<T, RuntimeError>,
 ) -> Result<T, RuntimeError> {
-    if size == 0 || size > max_buffer_size {
-        return Err(RuntimeError::invalid(format!(
-            "graph buffer size {size} must be nonzero and not exceed Device maxBufferSize {max_buffer_size}"
-        )));
-    }
+    validate_buffer_size(size, max_buffer_size)?;
     let info = vk::BufferCreateInfo::default()
         .size(size)
         .usage(
@@ -160,16 +165,28 @@ pub(super) struct DeviceImage {
     pub(super) aspect: vk::ImageAspectFlags,
 }
 
+/// Validated creation parameters for the Device that owns the Graph resources.
+#[derive(Clone, Copy)]
+pub(super) struct ImageCreation {
+    width: u32,
+    height: u32,
+    mip_levels: u32,
+    format: vk::Format,
+    samples: vk::SampleCountFlags,
+    usage: vk::ImageUsageFlags,
+    aspect: vk::ImageAspectFlags,
+    supports_linear_filtering: bool,
+}
+
 impl DeviceImage {
     pub(super) fn belongs_to(&self, owner: &Arc<MemoryOwner>) -> bool {
         Arc::ptr_eq(&self.owner, owner)
     }
 
-    pub(super) fn new(
-        owner: Arc<MemoryOwner>,
+    pub(super) fn prepare(
+        owner: &MemoryOwner,
         desc: ImageDesc,
-        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] name: &str,
-    ) -> Result<Self, RuntimeError> {
+    ) -> Result<ImageCreation, RuntimeError> {
         owner
             .device
             .ensure_active()
@@ -224,7 +241,7 @@ impl DeviceImage {
         }
         // Only attachment uses are supported for multisampled Graph images.
         let (usage, supports_linear_filtering) = match desc.sample_count {
-            SampleCount::X1 => (usage, sampled_linear_support(&owner, format)?),
+            SampleCount::X1 => (usage, sampled_linear_support(owner, format)?),
             SampleCount::X4 if mip_levels == 1 => (
                 usage
                     & (vk::ImageUsageFlags::COLOR_ATTACHMENT
@@ -262,7 +279,7 @@ impl DeviceImage {
         }
         .map_err(|result| {
             native(
-                &owner,
+                owner,
                 "vkGetPhysicalDeviceImageFormatProperties2(Graph)",
                 result,
             )
@@ -294,6 +311,37 @@ impl DeviceImage {
                 "Graph image exceeds framebuffer/viewport dimensions",
             ));
         }
+        Ok(ImageCreation {
+            width,
+            height,
+            mip_levels,
+            format,
+            samples,
+            usage,
+            aspect,
+            supports_linear_filtering,
+        })
+    }
+
+    pub(super) fn create(
+        owner: Arc<MemoryOwner>,
+        creation: ImageCreation,
+        #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] name: &str,
+    ) -> Result<Self, RuntimeError> {
+        owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
+        let ImageCreation {
+            width,
+            height,
+            mip_levels,
+            format,
+            samples,
+            usage,
+            aspect,
+            supports_linear_filtering,
+        } = creation;
         let extent = vk::Extent2D { width, height };
         let info = vk::ImageCreateInfo::default()
             .image_type(vk::ImageType::TYPE_2D)

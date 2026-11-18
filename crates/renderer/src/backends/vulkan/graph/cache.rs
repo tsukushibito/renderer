@@ -123,6 +123,7 @@ pub(super) enum CacheTarget {
     Replace(usize),
 }
 
+#[derive(Clone, Copy)]
 struct CandidateClass<K> {
     descriptor: K,
     count: usize,
@@ -160,6 +161,17 @@ impl<K: Copy + Ord> CacheIndex<K> {
             last_class: usize::MAX,
             count: 0,
         })
+    }
+
+    /// Keep tentative selections private to an explicit preparation attempt.
+    pub(super) fn for_preparation(&self) -> Result<Self, TryReserveError> {
+        let mut scratch = Self::new(self.records.len())?;
+        scratch.records.copy_from_slice(&self.records);
+        scratch.available.copy_from_slice(&self.available);
+        scratch.classes.extend_from_slice(&self.classes);
+        scratch.last_class = self.last_class;
+        scratch.count = self.count;
+        Ok(scratch)
     }
 
     fn class(&mut self, descriptor: K) -> Result<usize, usize> {

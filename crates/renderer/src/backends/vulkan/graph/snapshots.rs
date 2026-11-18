@@ -7,9 +7,17 @@ use std::ops::Range;
 
 use ash::vk;
 
-use super::{BufferProvenance, RuntimeError, RuntimeErrorKind, Snapshot};
+use super::{BufferProvenance, FrameCapacity, RuntimeError, RuntimeErrorKind, Snapshot};
 
 impl Snapshot {
+    pub(super) fn for_working_set(capacity: FrameCapacity) -> Result<Self, RuntimeError> {
+        Self::with_capacity(
+            capacity.initialized_ranges_per_resource,
+            capacity.provenance_segments_per_resource,
+            capacity.index_prefixes_per_resource,
+        )
+    }
+
     /// Explicit preparation boundary for both variable-length content stores.
     pub(super) fn with_capacity(
         initialized_ranges: usize,
@@ -46,6 +54,12 @@ impl Snapshot {
         })?;
         self.initialized.clear();
         self.initialized.extend_from_slice(&source.initialized);
+        self.copy_native_from(source);
+        Ok(())
+    }
+
+    /// Copy the native history into a fresh snapshot for a reused allocation.
+    pub(super) fn copy_native_from(&mut self, source: &Self) {
         self.revision = source.revision;
         self.serial = source.serial;
         self.layout = source.layout;
@@ -55,7 +69,6 @@ impl Snapshot {
         self.writer_access = source.writer_access;
         self.read_stage = source.read_stage;
         self.read_access = source.read_access;
-        Ok(())
     }
 
     /// Graph's initialized-range guarantee is already established. This update

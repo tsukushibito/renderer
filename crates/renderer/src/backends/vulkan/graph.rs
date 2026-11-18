@@ -41,6 +41,7 @@ mod storage;
 use cache::{CacheIndex, CacheTarget, RecycleQueue, ResourceLease};
 mod uploads;
 mod work;
+mod working_set;
 use super::resources::{DeviceBuffer, DeviceImage};
 use crate::graph::provenance::{self, BufferProvenance};
 pub use environment::{DeviceInfo, ValidationMonitor, ValidationReport};
@@ -51,6 +52,7 @@ pub use presentation::Presenter;
 use storage::StoragePool;
 use work::GraphWork;
 use work::{ResultData, WorkData};
+use working_set::PhysicalPlan;
 
 #[cfg(feature = "graph-diagnostics")]
 type LoweringCapture = Option<String>;
@@ -391,10 +393,26 @@ impl VulkanRuntime {
     /// explicitly registered inputs. Include recording, GPU and exported uses
     /// in the counts. Every recording/result/metadata token must be returned
     /// before changing capacities; ordinary exhaustion never waits implicitly.
+    /// Recoverable preparation failures preserve the live working set. During replacement,
+    /// the previous and staged native allocations may temporarily coexist.
     pub fn prepare_working_set(
         &mut self,
         capacity: FrameCapacity,
         resources: &[ResourceClass],
+    ) -> Result<(), RuntimeError> {
+        self.prepare_working_set_with(capacity, resources, PhysicalPlan::create)
+    }
+
+    fn prepare_working_set_with(
+        &mut self,
+        capacity: FrameCapacity,
+        resources: &[ResourceClass],
+        create: impl FnMut(
+            PhysicalPlan,
+            &Arc<MemoryOwner>,
+            &str,
+            Snapshot,
+        ) -> Result<Arc<Physical>, RuntimeError>,
     ) -> Result<(), RuntimeError> {
         if resources.iter().any(|class| {
             matches!(class,
@@ -494,46 +512,24 @@ impl VulkanRuntime {
                 ),
             ));
         }
-        let mut retained = storage::reserved(instances)?;
-        for class in resources {
-            let (desc, count) = match *class {
-                ResourceClass::Buffer { desc, count } => (ResourceDesc::Buffer(desc), count),
-                ResourceClass::Image { desc, count } => (ResourceDesc::Image(desc), count),
-            };
-            for _ in 0..count {
-                retained.push(self.acquire_inner(desc, "prepared graph resource", true)?.1);
-            }
-        }
-        drop(retained);
-        self.collect_recycled();
-        let mut snapshots = storage::reserved(self.entries.len())?;
-        for (index, entry) in self.entries.iter().enumerate() {
-            if let Some(physical) = &entry.physical {
-                let mut snapshot = Snapshot::with_capacity(
-                    capacity.initialized_ranges_per_resource,
-                    capacity.provenance_segments_per_resource,
-                    capacity.index_prefixes_per_resource,
-                )?;
-                snapshot.copy_from(&physical.lock().scheduled)?;
-                snapshots.push((index, snapshot));
-            }
-        }
+        let prepared = self.stage_resources(capacity, resources, instances, create)?;
+        self.owner
+            .device
+            .ensure_active()
+            .map_err(RuntimeError::device_unavailable)?;
         // Derive private shader needs from actual prepared/registered resource
         // classes. Buffer-only working sets impose no unrelated image features;
         // color/depth classes permit every supported pass mix using them.
         let mut color = false;
         let mut depth = false;
-        for entry in &self.entries {
-            if let Some(physical) = &entry.physical {
-                match physical.desc {
-                    ResourceDesc::Image(desc) if desc.sample_count == SampleCount::X1 => {
-                        match desc.format {
-                            ImageFormat::Rgba8Unorm => color = true,
-                            ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
-                            ImageFormat::Depth32Float => depth = true,
-                        }
-                    }
-                    ResourceDesc::Buffer(_) | ResourceDesc::Image(_) => {}
+        for desc in prepared.descriptors(self) {
+            if let ResourceDesc::Image(desc) = desc
+                && desc.sample_count == SampleCount::X1
+            {
+                match desc.format {
+                    ImageFormat::Rgba8Unorm => color = true,
+                    ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
+                    ImageFormat::Depth32Float => depth = true,
                 }
             }
         }
@@ -543,19 +539,22 @@ impl VulkanRuntime {
             composite: color,
         };
         if needs.any() {
-            if self.programs.is_none() {
-                self.programs = Some(ShaderPrograms::new(
+            if let Some(programs) = &self.programs {
+                programs.prepare_bindings(needs)?;
+            } else {
+                let programs = ShaderPrograms::new(
                     Arc::clone(&self.owner),
                     self.config.execution_slots,
                     self.config.max_shader_bindings,
                     true,
-                )?);
+                )?;
+                programs.prepare_bindings(needs)?;
+                self.programs = Some(programs);
             }
-            self.programs.as_ref().unwrap().prepare_bindings(needs)?;
         }
-        for (index, snapshot) in snapshots {
-            self.entries[index].physical().lock().scheduled = snapshot;
-        }
+        // All fallible work has finished. Publish the resource keys, backing,
+        // and capacities together under the Runtime borrow.
+        prepared.commit(self);
         self.workspaces = Some(workspaces);
         self.results = Some(results);
         self.exports = Some(exports);
@@ -1088,6 +1087,18 @@ impl VulkanRuntime {
         self.acquire_inner(desc, name, false)
     }
 
+    fn physical_capacity_exhausted() -> RuntimeError {
+        RuntimeError::capacity_with(
+            "graph physical resource capacity exhausted",
+            RuntimeCapacityError::new(
+                RuntimeCapacityKind::Resources,
+                CapacityRecovery::Reconfigure,
+                None,
+                None,
+            ),
+        )
+    }
+
     fn acquire_inner(
         &mut self,
         desc: ResourceDesc,
@@ -1109,17 +1120,7 @@ impl VulkanRuntime {
                 self.vacant.first().copied(),
                 |index| self.entries.get(index).is_some_and(Entry::reusable),
             )
-            .map_err(|()| {
-                RuntimeError::capacity_with(
-                    "graph physical resource capacity exhausted",
-                    RuntimeCapacityError::new(
-                        RuntimeCapacityKind::Resources,
-                        CapacityRecovery::Reconfigure,
-                        None,
-                        None,
-                    ),
-                )
-            })?;
+            .map_err(|()| Self::physical_capacity_exhausted())?;
         if !allow_create && !matches!(target, CacheTarget::Reuse(_)) {
             return Err(RuntimeError::capacity_with(
                 "resource class has no prepared free instance",
@@ -1161,42 +1162,35 @@ impl VulkanRuntime {
         };
         // Complete native creation and naming before replacing an idle entry.
         // Failure must retain its allocation, generation and accepted state.
-        let native = match desc {
-            ResourceDesc::Buffer(desc) => NativeResource::Buffer(
-                DeviceBuffer::new(Arc::clone(&self.owner), desc.size, name)
-                    .map_err(|error| error.context(format_args!("resource {name:?}")))?,
-            ),
-            ResourceDesc::Image(desc) => NativeResource::Image(
-                DeviceImage::new(Arc::clone(&self.owner), desc, name)
-                    .map_err(|error| error.context(format_args!("resource {name:?}")))?,
-            ),
-        };
-        let physical = Arc::new(Physical {
-            owner: Arc::clone(&self.owner),
-            desc,
-            native,
-            state: Mutex::new(State {
-                scheduled: if let Some(capacity) = self.frame_capacity {
-                    Snapshot::with_capacity(
-                        capacity.initialized_ranges_per_resource,
-                        capacity.provenance_segments_per_resource,
-                        capacity.index_prefixes_per_resource,
-                    )?
-                } else {
-                    Snapshot::default()
-                },
-                completed_serial: 0,
-            }),
-        });
+        let creation = PhysicalPlan::prepare(&self.owner, desc)
+            .map_err(|error| error.context(format_args!("resource {name:?}")))?;
+        let scheduled = self
+            .frame_capacity
+            .map_or_else(|| Ok(Snapshot::default()), Snapshot::for_working_set)?;
+        let physical = creation.create(&self.owner, name, scheduled)?;
         let index = replace.unwrap_or(self.entries.len());
-        let generation = replace.map_or(1, |index| self.entries[index].generation + 1);
+        let key = self.install_physical(index, Arc::clone(&physical));
+        Ok((
+            key,
+            PhysicalLease::new(physical, index, Arc::clone(&self.recycle)),
+        ))
+    }
+
+    /// Install a successfully staged allocation in a reserved, eligible slot.
+    fn install_physical(&mut self, index: usize, physical: Arc<Physical>) -> ResourceKey {
+        let replace = index < self.entries.len();
+        let generation = if replace {
+            self.entries[index].generation + 1
+        } else {
+            1
+        };
         let entry = Entry {
             generation,
             registered: false,
             pending_registration: 0,
-            physical: Some(Arc::clone(&physical)),
+            physical: Some(physical),
         };
-        if replace.is_some() {
+        if replace {
             self.available.remove(index);
             if let Ok(position) = self.vacant.binary_search(&index) {
                 self.vacant.remove(position);
@@ -1206,14 +1200,11 @@ impl VulkanRuntime {
             self.entries.push(entry);
         }
         self.resources_created += 1;
-        Ok((
-            ResourceKey {
-                owner: self.id,
-                index: index as u32,
-                generation,
-            },
-            PhysicalLease::new(physical, index, Arc::clone(&self.recycle)),
-        ))
+        ResourceKey {
+            owner: self.id,
+            index: index as u32,
+            generation,
+        }
     }
 
     /// Records one compiled graph and submits it once. It does not wait for any

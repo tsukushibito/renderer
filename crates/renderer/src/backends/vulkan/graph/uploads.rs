@@ -3,6 +3,7 @@
 use crate::graph::{BufferDesc, ImportBuffer};
 
 use super::{ResourceDesc, RuntimeError, VulkanRuntime};
+use crate::backends::vulkan::resources::validate_buffer_size;
 
 impl VulkanRuntime {
     /// Physical registry bound including meshes and view targets.
@@ -35,13 +36,7 @@ impl VulkanRuntime {
                 "graph buffer debug name contains a NUL byte",
             ));
         }
-        let maximum = self.owner.device.max_buffer_size();
-        if desc.size == 0 || desc.size > maximum {
-            return Err(RuntimeError::invalid(format!(
-                "graph buffer size {} must be nonzero and not exceed Device maxBufferSize {maximum}",
-                desc.size,
-            )));
-        }
+        validate_buffer_size(desc.size, self.owner.device.max_buffer_size())?;
         let (key, physical) = self.acquire_inner(ResourceDesc::Buffer(desc), name, true)?;
         let revision = physical.lock().scheduled.revision;
         // A poisoned resource state stops the Device. Do not publish a new
