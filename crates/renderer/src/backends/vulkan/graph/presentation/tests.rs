@@ -84,7 +84,8 @@ struct HeldResult {
 
 fn graph_capacity() -> GraphCapacity {
     GraphCapacity {
-        bindings: 0,
+        // The workload can append two managed transforms with two views each.
+        bindings: 4,
         attachments: 16,
         resources: 8,
         passes: 8,

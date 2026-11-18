@@ -2,30 +2,42 @@
 
 use super::tests::prepare_scenario;
 use super::*;
+use crate::ValidationMode;
 use crate::graph::{BufferDesc, Graph, ImageDesc};
 
 const WAIT: Duration = Duration::from_secs(10);
 
-fn real_gpu(capacity: usize, slots: usize, test: impl FnOnce(&mut VulkanRuntime)) {
+fn real_gpu(
+    capacity: usize,
+    slots: usize,
+    validation: ValidationMode,
+    test: impl FnOnce(&mut VulkanRuntime),
+) {
     let dispatch = crate::backends::vulkan::real_vulkan_dispatch();
     tracing::dispatcher::with_default(&dispatch, || {
-        let mut runtime = VulkanRuntime::new(RuntimeConfig {
-            execution_slots: slots,
-            resource_capacity: capacity,
-            staging_bytes: 4096,
-            max_shader_bindings: 1,
-            staging_ranges: 256,
-        })
+        let mut runtime = VulkanRuntime::new_with_validation(
+            RuntimeConfig {
+                execution_slots: slots,
+                resource_capacity: capacity,
+                staging_bytes: 4096,
+                max_shader_bindings: 1,
+                staging_ranges: 256,
+            },
+            validation,
+        )
         .expect("real Vulkan runtime is required");
         assert_ne!(
             runtime.owner.device.device_type(),
             vk::PhysicalDeviceType::CPU
         );
-        let diagnostics = runtime.diagnostics.clone();
-        crate::backends::vulkan::assert_real_validation(&diagnostics);
+        if validation == ValidationMode::Required {
+            crate::backends::vulkan::assert_real_validation(&runtime.diagnostics);
+        }
+        let monitor = runtime.validation_monitor();
         test(&mut runtime);
         drop(runtime);
-        let report = diagnostics.snapshot();
+        let report = monitor.report();
+        assert_eq!(report.requested, validation);
         assert!(
             report.is_clean(),
             "validation through shutdown: {report:#?}"
@@ -80,7 +92,7 @@ fn prepare_images(runtime: &mut VulkanRuntime, sizes: &[u32]) {
 #[test]
 #[ignore = "explicit real-GPU working-set failure recovery in strict and shipping builds"]
 fn vulkan_graph_working_set_failure_preserves_committed_resources() {
-    real_gpu(3, 1, |runtime| {
+    real_gpu(3, 1, ValidationMode::default(), |runtime| {
         let class = |size| ResourceClass::Buffer {
             desc: BufferDesc { size },
             count: 1,
@@ -224,7 +236,7 @@ fn replace_image_asset(runtime: &mut VulkanRuntime, size: u32) {
 #[test]
 #[ignore = "explicit real-GPU alternating cache descriptors; requires Core/SyncVal"]
 fn vulkan_graph_cache_retains_alternating_image_extents() {
-    real_gpu(8, 1, |runtime| {
+    real_gpu(8, 1, ValidationMode::Required, |runtime| {
         prepare_images(runtime, &[2, 3]);
         for frame in 0..8 {
             let size = if frame % 2 == 0 { 2 } else { 3 };
@@ -240,7 +252,7 @@ fn vulkan_graph_cache_retains_alternating_image_extents() {
 #[test]
 #[ignore = "explicit real-GPU cache eviction and generations; requires Core/SyncVal"]
 fn vulkan_graph_cache_pressure_preserves_recent_descriptors_and_generations() {
-    real_gpu(2, 1, |runtime| {
+    real_gpu(2, 1, ValidationMode::Required, |runtime| {
         prepare_images(runtime, &[2, 3]);
         let first_a = complete_image(runtime, 2, 11);
         let first_b = complete_image(runtime, 3, 22);
@@ -279,7 +291,7 @@ fn vulkan_graph_cache_pressure_preserves_recent_descriptors_and_generations() {
 #[test]
 #[ignore = "explicit real-GPU registered and pending cache protection; requires Core/SyncVal"]
 fn vulkan_graph_cache_never_evicts_registered_or_unobserved_pending_resources() {
-    real_gpu(2, 3, |runtime| {
+    real_gpu(2, 3, ValidationMode::Required, |runtime| {
         prepare_images(runtime, &[2, 3]);
         let (first_plan, first_image, first_read) = image_plan(2, 17);
         let mut first = runtime.submit(&first_plan).unwrap();
@@ -325,7 +337,7 @@ fn vulkan_graph_cache_never_evicts_registered_or_unobserved_pending_resources() 
 #[test]
 #[ignore = "explicit real-GPU failed cache replacement retains its victim; requires Core/SyncVal"]
 fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
-    real_gpu(1, 1, |runtime| {
+    real_gpu(1, 1, ValidationMode::Required, |runtime| {
         prepare_images(runtime, &[2]);
         let original = complete_image(runtime, 2, 7);
         let entry = &runtime.entries[original.index as usize];
@@ -359,7 +371,7 @@ fn vulkan_graph_cache_failed_replacement_preserves_existing_allocation() {
 #[test]
 #[ignore = "explicit real-GPU idle trim ownership and native memory test; requires Core/SyncVal"]
 fn vulkan_graph_trim_releases_idle_working_set_and_preserves_live_owners() {
-    real_gpu(8, 3, |runtime| {
+    real_gpu(8, 3, ValidationMode::Required, |runtime| {
         let baseline = runtime.memory_stats().unwrap();
         prepare_images(runtime, &[4, 8, 3]);
         let first = complete_image(runtime, 4, 11);
@@ -466,7 +478,7 @@ fn vulkan_graph_trim_releases_idle_working_set_and_preserves_live_owners() {
 #[test]
 #[ignore = "explicit real-GPU saturated generation trim test; requires Core/SyncVal"]
 fn vulkan_graph_trim_releases_saturated_generations_without_reviving_keys() {
-    real_gpu(1, 1, |runtime| {
+    real_gpu(1, 1, ValidationMode::Required, |runtime| {
         let baseline = runtime.memory_stats().unwrap();
         prepare_images(runtime, &[2]);
         let key = complete_image(runtime, 2, 17);
