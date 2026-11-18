@@ -55,11 +55,6 @@ pub use backends::vulkan::graph::{
 #[cfg(feature = "vulkan")]
 pub use backends::vulkan::ValidationMode;
 
-#[cfg(feature = "vulkan")]
-pub use backends::vulkan::{
-    VulkanBindings, VulkanBuffer, VulkanImage, VulkanImageView, VulkanProgram, VulkanSampler,
-};
-
 #[cfg(all(feature = "d3d12", windows))]
 pub use backends::d3d12::{
     D3D12Bindings, D3D12Buffer, D3D12BufferClass, D3D12CommittedHeapStats,

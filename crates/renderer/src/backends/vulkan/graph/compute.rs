@@ -7,7 +7,10 @@ use std::sync::{Arc, Mutex};
 use ash::vk;
 
 use super::{PhysicalLease, RuntimeError};
-use crate::backends::vulkan::{managed::VulkanProgram, memory::MemoryOwner};
+use crate::backends::vulkan::{
+    managed::{ComputePipeline, descriptor_type},
+    memory::MemoryOwner,
+};
 use crate::graph::BindingOperands;
 use crate::program::{BindingType, ManagedProgram};
 
@@ -18,7 +21,7 @@ fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeEr
 
 struct PreparedProgram {
     managed: ManagedProgram,
-    native: VulkanProgram,
+    native: ComputePipeline,
 }
 
 struct Arena {
@@ -70,7 +73,7 @@ impl Arena {
             }
         }
         let group_count = programs.iter().try_fold(0u32, |total, program| {
-            total.checked_add(program.native.0.set_layouts.len() as u32)
+            total.checked_add(program.native.set_layouts.len() as u32)
         });
         let max_sets = group_count
             .and_then(|count| count.checked_mul(capacity))
@@ -108,7 +111,7 @@ impl Arena {
         }
         for program in programs {
             let layouts: Vec<_> = (0..capacity)
-                .flat_map(|_| program.native.0.set_layouts.iter().copied())
+                .flat_map(|_| program.native.set_layouts.iter().copied())
                 .collect();
             let sets = if layouts.is_empty() {
                 Vec::new()
@@ -206,7 +209,7 @@ impl ComputePrograms {
             {
                 continue;
             }
-            let native = VulkanProgram::create(Arc::clone(&result.owner), &managed)?;
+            let native = ComputePipeline::create(Arc::clone(&result.owner), &managed)?;
             result.programs.push(PreparedProgram { managed, native });
         }
         if result.programs.iter().any(|program| {
@@ -377,7 +380,7 @@ impl ComputeLease {
             ));
         }
         super::work::validate_sampled_operands(managed.bindings(), operands, physical, None)?;
-        let native_program = &self.programs.programs[index].native.0;
+        let native_program = &self.programs.programs[index].native;
         let groups = native_program.set_layouts.len();
         let sets = &arena.sets[index][arena.used * groups..(arena.used + 1) * groups];
         for (slot, operand) in managed.bindings().iter().zip(operands) {
@@ -466,7 +469,7 @@ impl ComputeLease {
         dispatch: ComputeDispatch,
         workgroups: [u32; 3],
     ) {
-        let program = &self.programs.programs[dispatch.program].native.0;
+        let program = &self.programs.programs[dispatch.program].native;
         let groups = program.set_layouts.len();
         let sets = &self.arena.as_ref().unwrap().sets[dispatch.program]
             [dispatch.invocation * groups..(dispatch.invocation + 1) * groups];
@@ -503,18 +506,6 @@ impl Drop for ComputeLease {
             .unwrap_or_else(|e| e.into_inner());
         cache.leased -= 1;
         cache.idle.push(arena);
-    }
-}
-
-pub(super) fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
-    match kind {
-        BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
-        BindingType::StorageRead | BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
-        BindingType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
-        BindingType::StorageImageRead(_) | BindingType::StorageImageWrite(_) => {
-            vk::DescriptorType::STORAGE_IMAGE
-        }
-        BindingType::Sampler => vk::DescriptorType::SAMPLER,
     }
 }
 

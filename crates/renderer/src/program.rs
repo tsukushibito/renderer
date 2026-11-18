@@ -15,25 +15,6 @@
 //! use renderer::program::{Binding, BindingResource, BufferDescriptor, ManagedProgram,
 //!     ImageDescriptor, ImageViewDescriptor, SamplerDescriptor};
 //!
-//! #[cfg(feature = "vulkan")]
-//! fn create(runtime: &renderer::VulkanRuntime)
-//!     -> Result<renderer::VulkanBindings, renderer::RuntimeError>
-//! {
-//!     let program = runtime.create_program(&ManagedProgram::sampled_readback())?;
-//!     let image = runtime.create_managed_image(ImageDescriptor {
-//!         mip_levels: 1,
-//!         width: 2, height: 2, format: ImageFormat::Rgba8Unorm, preferred_depth_clear: None })?;
-//!     let view = runtime.create_image_view(&image, ImageViewDescriptor::default())?;
-//!     let sampler = runtime.create_sampler(SamplerDescriptor::NearestClamp)?;
-//!     let storage = runtime.create_managed_buffer(BufferDescriptor::Storage { size: 272 })?;
-//!     runtime.create_bindings(&program, &[
-//!         Binding { group: 0, binding: 0, resource: BindingResource::ImageView(&view) },
-//!         Binding { group: 0, binding: 1, resource: BindingResource::Sampler(&sampler) },
-//!         Binding { group: 1, binding: 0,
-//!             resource: BindingResource::Buffer { buffer: &storage, offset: 256, size: 16 } },
-//!     ])
-//! }
-//!
 //! #[cfg(all(feature = "d3d12", windows))]
 //! fn create_d3d12(runtime: &renderer::D3D12Runtime)
 //!     -> Result<renderer::D3D12Bindings, renderer::D3D12RuntimeError>
@@ -652,7 +633,7 @@ impl ManagedProgram {
     }
 }
 
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProgramError {
     BindingCount,
@@ -667,7 +648,7 @@ pub(crate) enum ProgramError {
     InvalidClearValue,
 }
 
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 impl std::fmt::Display for ProgramError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -691,7 +672,7 @@ impl std::fmt::Display for ProgramError {
     }
 }
 
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 type ResolvedBinding<'a, 'b, B, V, S> = (BindingLayout, &'a Binding<'b, B, V, S>);
 
 /// Resolve directly from caller input in manifest order without a validation
@@ -699,7 +680,7 @@ type ResolvedBinding<'a, 'b, B, V, S> = (BindingLayout, &'a Binding<'b, B, V, S>
 /// input per slot prove complete coverage and reject unknown/duplicate inputs.
 /// Callers must consume every result successfully before publishing native
 /// bindings. Each selected pair already has matching group/binding values.
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 pub(crate) fn resolve_bindings<'a, 'b, B, V, S>(
     layout: &'a [BindingLayout],
     input: &'a [Binding<'b, B, V, S>],
@@ -725,7 +706,7 @@ pub(crate) fn resolve_bindings<'a, 'b, B, V, S>(
 /// The resolver selected this immutable descriptor for `layout`. Check its
 /// external resource usage/range against the real Device limits once; slot
 /// equality is already established and is not revalidated here.
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 pub(crate) fn validate_buffer_binding(
     layout: BindingLayout,
     usage: BufferUsage,
@@ -753,7 +734,7 @@ pub(crate) fn validate_buffer_binding(
     Ok(())
 }
 
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 pub(crate) fn validate_image_descriptor(
     desc: ImageDescriptor,
     max_dimension: u32,
@@ -778,7 +759,7 @@ pub(crate) fn validate_image_descriptor(
     Ok(())
 }
 
-#[cfg(any(test, feature = "vulkan", all(feature = "d3d12", windows)))]
+#[cfg(any(test, all(feature = "d3d12", windows)))]
 pub(crate) fn validate_image_view_descriptor(
     format: ImageFormat,
     image_mip_levels: u32,
@@ -805,7 +786,7 @@ pub(crate) fn validate_image_view_descriptor(
 
 // Native acceptance uses the same asymmetric bytes. Payloads are not retained
 // by ordinary builds, including those with development diagnostics enabled.
-#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[cfg(all(test, feature = "d3d12", windows))]
 pub(crate) const UNIFORM_TEST_DATA: [[u8; 16]; 2] = [
     [
         0x67, 0x45, 0x23, 0x01, 0xef, 0xcd, 0xab, 0x89, 0x98, 0xba, 0xdc, 0xfe, 0x10, 0x32, 0x54,
@@ -816,7 +797,7 @@ pub(crate) const UNIFORM_TEST_DATA: [[u8; 16]; 2] = [
     ],
 ];
 
-#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[cfg(all(test, feature = "d3d12", windows))]
 pub(crate) const SAMPLE_TEST_DATA: [[u8; 16]; 2] = [
     [
         5, 17, 29, 43, 61, 79, 97, 113, 127, 149, 173, 199, 211, 223, 239, 251,
@@ -831,7 +812,7 @@ pub(crate) const SAMPLE_TEST_DATA: [[u8; 16]; 2] = [
 // The second image reverses component order. Avoid denormals, NaNs and negative
 // zero so this fixture checks storage conversion and sampling without relying
 // on optional shader floating-point controls or a runtime half converter.
-#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[cfg(all(test, feature = "d3d12", windows))]
 pub(crate) const SAMPLE_FLOAT_TEST_DATA: [[u8; 32]; 2] = [
     [
         0x00, 0xc0, 0x00, 0xbc, 0x00, 0xb8, 0x00, 0xb4, 0x00, 0x00, 0x00, 0x34, 0x00, 0x38, 0x00,
@@ -846,7 +827,7 @@ pub(crate) const SAMPLE_FLOAT_TEST_DATA: [[u8; 32]; 2] = [
 ];
 
 /// Expected FP32 bit patterns, independently specified from the half payload.
-#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[cfg(all(test, feature = "d3d12", windows))]
 pub(crate) const SAMPLE_FLOAT_EXPECTED: [[u32; 16]; 2] = [
     [
         0xc000_0000,
@@ -888,10 +869,10 @@ pub(crate) const SAMPLE_FLOAT_EXPECTED: [[u32; 16]; 2] = [
 
 // Depth acceptance clears each complete image to one exact finite value, then
 // compares the R component of all four samples from sampled_float_readback.
-#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[cfg(all(test, feature = "d3d12", windows))]
 pub(crate) const DEPTH_TEST_VALUES: [f32; 2] = [0.25, 0.75];
 
-#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+#[cfg(all(test, feature = "d3d12", windows))]
 pub(crate) const DEPTH_TEST_EXPECTED: [u32; 2] = [0x3e80_0000, 0x3f40_0000];
 
 #[cfg(test)]
