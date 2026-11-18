@@ -87,6 +87,7 @@ struct Options {
     vsync: bool,
     resource_checks: bool,
     bloom: bloom::Bloom,
+    sample_count: renderer::graph::SampleCount,
     #[cfg(feature = "development-validation")]
     omit_material: Option<usize>,
     #[cfg(feature = "development-validation")]
@@ -126,6 +127,7 @@ impl Options {
             vsync: true,
             resource_checks: false,
             bloom: bloom::Bloom::Off,
+            sample_count: renderer::graph::SampleCount::X1,
             #[cfg(feature = "development-validation")]
             omit_material: None,
             #[cfg(feature = "development-validation")]
@@ -178,6 +180,14 @@ impl Options {
                     };
                 }
                 "--aa-off" => result.aa = false,
+                "--msaa" => {
+                    use renderer::graph::SampleCount;
+                    result.sample_count = match args.next().as_deref() {
+                        Some("1") => SampleCount::X1,
+                        Some("4") => SampleCount::X4,
+                        _ => return Err("--msaa needs 1 or 4".into()),
+                    };
+                }
                 "--shadows-off" => result.shadows = false,
                 "--redraw-shadows" => result.reuse_shadows = false,
                 "--capture-shadow-maps" => result.capture_shadows = true,
@@ -216,7 +226,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--msaa 1|4] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -344,6 +354,17 @@ mod tests {
             (128, 96, 2)
         );
         assert!(fixture.gpu_timing);
+    }
+
+    #[test]
+    fn msaa_is_selected_independently_of_fxaa() {
+        let defaults = options(&["--fixture"]).unwrap();
+        assert_eq!(defaults.sample_count.as_u32(), 1);
+        assert!(defaults.aa);
+        let msaa = options(&["--fixture", "--msaa", "4", "--aa-off"]).unwrap();
+        assert_eq!(msaa.sample_count.as_u32(), 4);
+        assert!(!msaa.aa);
+        assert!(options(&["--fixture", "--msaa", "2"]).is_err());
     }
 
     #[test]

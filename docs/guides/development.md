@@ -411,6 +411,19 @@ Tで巡回を切り替え、Escで終了する。`--view route`は固定1,800フ
 `--frames`を指定するとwarmupと測定を終えて自動終了する。`--vsync on|off`は表示要求を選ぶ。
 resizeではGraphと表示の利用者が返却された時点で、登録済みassetを保持したままextent依存の画像を準備し直す。
 
+`--msaa 4`はForwardのHDRカラーと深度を4サンプルで描き、半透明を含む最後の描画でカラーを
+1サンプルにresolveしてBloomに渡す。既定の`--msaa 1`ではB5と同じ描画経路を使う。
+FXAAは独立に`--aa-off`で無効化できる。4×のoffscreen captureはresolve済みHDR/SDRと指定した
+1×の影マップを出力する。4×のカメラ深度はreadback対象外で、`depth_coverage_pixels`は`null`となる。
+
+```powershell
+cargo run --locked --release -p renderer --example msaa --no-default-features --features vulkan,d3d12
+cargo test --locked --release -p renderer --test msaa --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
+```
+
+専用例と実GPU試験では、同じGPU上の両APIで斜めの輪郭の1×/4×画像、奥の三角形の遮蔽、
+drawを含まないclear/resolveを照合する。製品構成の試験には`development-validation`を外す。
+
 画像受入では、両APIのreleaseを`memory-profiling`付きでビルドし、別の出力先にstrictとshippingを保存する。
 strictに`development-validation,graph-diagnostics`を加える。下記の`pilot`で比較基準と故障検出を確認し、
 同じEXE・入力・閾値を使う`accept`で、両API・両構成・3反復を逐次実行する。
@@ -430,6 +443,9 @@ python -B tools/bistro/b5_images.py accept --strict $strict --shipping $shipping
 python -B tools/bistro/b5_window_acceptance.py $windowSmokeDirectory $imageDirectory --route-directory $windowRouteDirectory
 python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $manifest --ibl-manifest $iblManifest --output $performanceDirectory
 ```
+
+4×の画像・性能受入では`b5_images.py`の両stageと`b5_benchmark.py`に`--msaa 4`を渡し、
+profileと出力先を分ける。`b5_window_acceptance.py`はoffscreen参照とWindow reportのサンプル数を照合する。
 
 性能には`vulkan,d3d12,presentation`のみのreleaseを使う。hostのCPU policyを検証してから逐次起動し、
 初回の読込／準備／upload、定常のCPU phase／GPU時間／frame間隔、VSync on/offのpresentを記録する。

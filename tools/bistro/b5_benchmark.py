@@ -95,6 +95,8 @@ def run(args, policy, api, scenario, timed, destination):
     binary = args.window_binary if windowed and args.window_binary is not None else args.binary
     command = [str(binary), "--api", api, "--manifest", str(args.manifest), "--ibl-manifest",
                str(args.ibl_manifest), "--bloom", "tent", "--output", str(destination)]
+    if args.msaa == 4:
+        command += ["--msaa", "4"]
     for key, value in frames.items():
         command += [f"--{key}", str(value)]
     if timed:
@@ -129,11 +131,14 @@ def run(args, policy, api, scenario, timed, destination):
     require("RTX 3060" in report["runtime"]["name"] and report["runtime"]["device_luid"] is not None,
             f"Wrong hardware adapter {destination}")
     if windowed:
-        require(report["bloom"] == "tent" and report["vsync"] == (scenario == "window-vsync"),
+        require(report["bloom"] == "tent" and report["vsync"] == (scenario == "window-vsync")
+                and report.get("samples", 1) == args.msaa,
                 "Window quality or pacing request changed")
         metrics = summarize_window(report, frames)
     else:
-        require(report["identity"]["bloom"] == "tent", "Offscreen quality changed")
+        require(report["identity"]["bloom"] == "tent"
+                and report["identity"].get("samples", 1) == args.msaa,
+                "Offscreen quality changed")
         metrics = renderer_metrics(report, {"variant": api, "timing": timed}, FRAMES)
         metrics["cold_phases_ns"] = report["setup_phases_ns"]
         metrics["native_memory_at_boundaries"] = report["native_memory_at_boundaries"]
@@ -149,10 +154,14 @@ def main():
     parser.add_argument("--window-binary", type=Path,
                         help="use a separate release executable for the Windows timing cohort")
     parser.add_argument("--resume", action="store_true", help="reuse validated completed runs")
+    parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
+                        help="scene sample count for the MSAA comparison cohort")
     args = parser.parse_args()
     ordinary_host_token()
     policy = host_policy.plan("performance-cores")
     settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
+    if args.msaa == 4:
+        settings["samples"] = 4
     identity = input_identity(args)
     power_scheme = active_power_scheme()
     progress = args.output / "progress.json"

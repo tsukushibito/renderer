@@ -230,6 +230,7 @@ fn identity(
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
+        "samples":options.sample_count.as_u32(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
             "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
             "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
@@ -302,13 +303,13 @@ fn capture_planes<B: Backend>(
     let passes = built.captures.unwrap();
     let pixels = (options.width as usize) * (options.height as usize);
     let mut captures = json!({});
-    let mut depth_coverage = 0usize;
+    let mut depth_coverage = None;
     let planes = [
-        (passes[0], "hdr", "rgba16f-le", 8),
-        (passes[1], "sdr", "rgba8-unorm", 4),
-        (passes[2], "depth", "r32f-le", 4),
+        Some((passes.hdr, "hdr", "rgba16f-le", 8)),
+        Some((passes.sdr, "sdr", "rgba8-unorm", 4)),
+        passes.depth.map(|pass| (pass, "depth", "r32f-le", 4)),
     ];
-    for (pass, name, format, stride) in planes.into_iter().chain(
+    for (pass, name, format, stride) in planes.into_iter().flatten().chain(
         built
             .bloom_capture
             .map(|pass| (pass, "bloom_hdr", "rgba16f-le", 8)),
@@ -319,13 +320,15 @@ fn capture_planes<B: Backend>(
         let mut bytes = vec![0u8; pixels * stride];
         B::readback(&mut completed, pass, &mut bytes)?;
         if name == "depth" {
+            let mut coverage = 0usize;
             for value in bytes.as_chunks::<4>().0 {
                 let value = f32::from_le_bytes(*value);
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                     return Err("capture has invalid depth".into());
                 }
-                depth_coverage += usize::from(value < 1.0);
+                coverage += usize::from(value < 1.0);
             }
+            depth_coverage = Some(coverage);
         }
         let path = options.output.join(format!("{name}.bin"));
         std::fs::write(&path, &bytes)?;

@@ -54,7 +54,10 @@ def verify(directory, references, route_directory=None):
                         ("passed", "resized", "minimized", "restored", "rendered_camera_replay")),
                     f"Window smoke check failed {tag}")
             reference = references / f"strict-{api}-1" / "views" / "street" / "report.json"
-            expected, meta = plane(reference, load_json(reference), "sdr")
+            reference_report = load_json(reference)
+            samples = reference_report["identity"].get("samples", 1)
+            require(report.get("samples", 1) == samples, f"Incorrect MSAA mode {tag}")
+            expected, meta = plane(reference, reference_report, "sdr")
             comparison = compare_linear(path.parent / "linear-first.bin", expected, smoke["linear_first_sha256"])
             reports[tag] = {"report_sha256": digest(path), "reference_sdr_sha256": meta["sha256"],
                             "comparison": comparison, "runtime": report["runtime"],
@@ -65,6 +68,7 @@ def verify(directory, references, route_directory=None):
                 require(route["runtime"] == report["runtime"] and route["validation"] == validation,
                         f"Route changed adapter or validation {tag}")
                 require(route["presentation"] and route["bloom"] == "tent"
+                        and route.get("samples", 1) == samples
                         and not route["smoke"] and route["warmup"] == 24
                         and route["accepted"] == 1824 and route["pending_on_exit"] > 0
                         and (route["initial_width"], route["initial_height"]) == (1920, 1080)

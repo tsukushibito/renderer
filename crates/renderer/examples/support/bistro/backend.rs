@@ -95,11 +95,7 @@ impl Vulkan {
             )
             .collect::<Vec<_>>();
         runtime.prepare_working_set(Self::frame_capacity(options, budget), &resources)?;
-        if options.windowed {
-            runtime.prepare_raster_programs(&super::program::window_programs(options.aa))?;
-        } else {
-            runtime.prepare_raster_programs(&super::program::programs())?;
-        }
+        runtime.prepare_raster_programs(&super::program::raster_requests(options))?;
         runtime.prepare_compute_programs(options.bloom.programs())?;
         Ok(Self { runtime })
     }
@@ -230,13 +226,7 @@ impl Backend for D3d12 {
             .iter()
             .map(|&(desc, count)| renderer::D3D12ImageClass { desc, count })
             .collect::<Vec<_>>();
-        let raster = super::program::programs();
-        let window_raster = super::program::window_programs(options.aa);
-        let raster = if options.windowed {
-            window_raster.as_slice()
-        } else {
-            raster.as_slice()
-        };
+        let raster = super::program::raster_requests(options);
         let runtime = renderer::D3D12Runtime::new_with_working_set(
             renderer::D3D12RuntimeConfig {
                 capacity,
@@ -244,7 +234,7 @@ impl Backend for D3d12 {
             },
             &buffers,
             &images,
-            raster,
+            &raster,
             options.bloom.programs(),
         )?;
         Ok(Self { runtime })

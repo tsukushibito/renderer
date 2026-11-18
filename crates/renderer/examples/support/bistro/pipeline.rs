@@ -12,7 +12,7 @@ use renderer::{
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity,
         GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, LoadOp, PassHandle,
-        RasterAttachments, RasterBindings, RasterConstants, RasterDraw, StoreOp,
+        RasterAttachments, RasterBindings, RasterConstants, RasterDraw, SampleCount, StoreOp,
     },
     program::SamplerDescriptor,
 };
@@ -60,13 +60,17 @@ impl Budget {
         };
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
         add(hdr, options.inflight * 2);
+        if options.sample_count == SampleCount::X4 {
+            add(hdr.with_sample_count(SampleCount::X4), options.inflight);
+        }
         if let Some(extra) = options.bloom.images(hdr) {
             for desc in extra {
                 add(desc, options.inflight);
             }
         }
         add(
-            ImageDesc::depth32(options.width, options.height),
+            ImageDesc::depth32(options.width, options.height)
+                .with_sample_count(options.sample_count),
             options.inflight,
         );
         // Presented images remain owned by the Presenter after Graph completion.
@@ -179,7 +183,11 @@ impl Budget {
             add_image(desc, count);
             frame_instances += count;
         }
-        let resources = buffer_count + scene.images.len() + 11 + bloom_passes;
+        let resources = buffer_count
+            + scene.images.len()
+            + 11
+            + bloom_passes
+            + usize::from(options.sample_count == SampleCount::X4);
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
@@ -729,13 +737,19 @@ pub(super) struct Built {
     pub graph: Graph,
     pub output: ImageHandle,
     pub camera: BufferHandle,
-    pub captures: Option<[PassHandle; 3]>,
+    pub captures: Option<Captures>,
     pub bloom_capture: Option<PassHandle>,
     #[cfg(all(windows, feature = "presentation"))]
     pub present_capture: Option<PassHandle>,
     pub shadow_captures: Option<[PassHandle; 4]>,
     pub shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
     pub draws: usize,
+}
+
+pub(super) struct Captures {
+    pub hdr: PassHandle,
+    pub sdr: PassHandle,
+    pub depth: Option<PassHandle>,
 }
 
 #[allow(
@@ -935,6 +949,7 @@ pub(super) fn build(
             &shadow_program,
             draws,
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[],
                 depth: Some(Attachment {
                     view,
@@ -1068,40 +1083,55 @@ pub(super) fn build(
                 .push(graph.raster_bindings(&program, &bindings)?);
         }
     }
-    let (color, depth, output, color_view, depth_view) = {
+    let multisampled = options.sample_count == SampleCount::X4;
+    let scene_clear = [background[0], background[1], background[2], 1.0];
+    let (color, depth, output, color_view, depth_view, resolve_view) = {
         #[cfg(feature = "tracy")]
         let _targets = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("bistro.build.targets"), 0));
-        let color = graph.image(
-            "scene linear HDR",
-            ImageDesc::rgba16_float(options.width, options.height),
-        )?;
+        let hdr_desc = ImageDesc::rgba16_float(options.width, options.height);
+        let color = graph.image("scene linear HDR", hdr_desc)?;
+        let (color_view, resolve_view) = if multisampled {
+            let multisample = graph.image(
+                "scene multisampled HDR",
+                hdr_desc.with_sample_count(options.sample_count),
+            )?;
+            (
+                graph.image_view(multisample, 0, 0)?,
+                Some(graph.image_view(color, 0, 0)?),
+            )
+        } else {
+            (graph.image_view(color, 0, 0)?, None)
+        };
         let depth = graph.image(
             "scene depth",
-            ImageDesc::depth32(options.width, options.height),
+            ImageDesc::depth32(options.width, options.height)
+                .with_sample_count(options.sample_count),
         )?;
         let output = graph.image(
             "B2 sRGB output",
             ImageDesc::rgba8(options.width, options.height),
         )?;
-        let color_view = graph.image_view(color, 0, 0)?;
         let depth_view = graph.image_view(depth, 0, 0)?;
-        graph.attachment_pass(
-            "scene clears",
-            RasterAttachments {
-                colors: &[Attachment {
-                    view: color_view,
-                    load: LoadOp::Clear([background[0], background[1], background[2], 1.0]),
-                    store: StoreOp::Store,
-                }],
-                depth: Some(Attachment {
-                    view: depth_view,
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-            },
-        )?;
-        (color, depth, output, color_view, depth_view)
+        if !multisampled {
+            graph.attachment_pass(
+                "scene clears",
+                RasterAttachments {
+                    color_resolves: &[],
+                    colors: &[Attachment {
+                        view: color_view,
+                        load: LoadOp::Clear(scene_clear),
+                        store: StoreOp::Store,
+                    }],
+                    depth: Some(Attachment {
+                        view: depth_view,
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )?;
+        }
+        (color, depth, output, color_view, depth_view, resolve_view)
     };
     let camera_matrix =
         std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
@@ -1132,25 +1162,47 @@ pub(super) fn build(
             parameters: RasterConstants::default(),
         }
     };
+    let final_resolve = resolve_view.map(Some);
     {
         #[cfg(feature = "tracy")]
         let _opaque = tracy_client::Client::running().map(|client| {
             client.span(tracy_client::span_location!("bistro.build.opaque_draws"), 0)
         });
+        // Bind the resolve to the last scene pass. With no opaque draws, the
+        // same operation clears the attachments before continuing or resolving.
+        let final_opaque = multisampled && workspace.blended.is_empty();
+        let store = if final_opaque {
+            StoreOp::Discard
+        } else {
+            StoreOp::Store
+        };
         graph.raster(
             "Forward PBR opaque and mask",
             &program::opaque_program(),
             workspace.opaque.iter().copied().map(draw),
             RasterAttachments {
+                color_resolves: if final_opaque {
+                    final_resolve.as_slice()
+                } else {
+                    &[]
+                },
                 colors: &[Attachment {
                     view: color_view,
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
+                    load: if multisampled {
+                        LoadOp::Clear(scene_clear)
+                    } else {
+                        LoadOp::Load
+                    },
+                    store,
                 }],
                 depth: Some(Attachment {
                     view: depth_view,
-                    load: LoadOp::Load,
-                    store: StoreOp::Store,
+                    load: if multisampled {
+                        LoadOp::Clear(1.0)
+                    } else {
+                        LoadOp::Load
+                    },
+                    store,
                 }),
             },
         )?;
@@ -1178,20 +1230,26 @@ pub(super) fn build(
             )
         });
         if !workspace.blended.is_empty() {
+            let store = if multisampled {
+                StoreOp::Discard
+            } else {
+                StoreOp::Store
+            };
             graph.raster(
                 "Forward PBR alpha blend",
                 &program::blend_program(),
                 workspace.blended.iter().copied().map(draw),
                 RasterAttachments {
+                    color_resolves: final_resolve.as_slice(),
                     colors: &[Attachment {
                         view: color_view,
                         load: LoadOp::Load,
-                        store: StoreOp::Store,
+                        store,
                     }],
                     depth: Some(Attachment {
                         view: depth_view,
                         load: LoadOp::Load,
-                        store: StoreOp::Store,
+                        store,
                     }),
                 },
             )?;
@@ -1234,6 +1292,7 @@ pub(super) fn build(
             parameters: RasterConstants::default(),
         }],
         RasterAttachments {
+            color_resolves: &[],
             colors: &[Attachment {
                 view: graph.image_view(tone, 0, 0)?,
                 load: LoadOp::Clear([0.0; 4]),
@@ -1281,6 +1340,7 @@ pub(super) fn build(
             parameters: RasterConstants::default(),
         }],
         RasterAttachments {
+            color_resolves: &[],
             colors: &[Attachment {
                 view: graph.image_view(output, 0, 0)?,
                 load: LoadOp::Clear([0.0; 4]),
@@ -1298,11 +1358,15 @@ pub(super) fn build(
     };
     let capture = capture && !options.windowed;
     let captures = if capture {
-        Some([
-            graph.readback_image("capture linear HDR", color)?,
-            graph.readback_image("capture sRGB", output)?,
-            graph.readback_image("capture depth", depth)?,
-        ])
+        Some(Captures {
+            hdr: graph.readback_image("capture linear HDR", color)?,
+            sdr: graph.readback_image("capture sRGB", output)?,
+            depth: if multisampled {
+                None
+            } else {
+                Some(graph.readback_image("capture depth", depth)?)
+            },
+        })
     } else {
         None
     };
@@ -1372,6 +1436,14 @@ mod tests {
             one.readback_bytes > 101 * 73 * 16,
             "odd output rows need padding beyond packed texels"
         );
+        options.sample_count = SampleCount::X4;
+        let multisampled = Budget::new(&scene, &environment, &options).unwrap();
+        assert_eq!(multisampled.physical_resources - four.physical_resources, 4);
+        for format in [ImageFormat::Rgba16Float, ImageFormat::Depth32Float] {
+            assert!(multisampled.images.iter().any(|&(desc, count)| {
+                desc.format == format && desc.sample_count == SampleCount::X4 && count == 4
+            }));
+        }
     }
 
     fn large_geometry_scene() -> Scene {

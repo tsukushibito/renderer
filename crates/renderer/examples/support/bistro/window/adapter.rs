@@ -134,7 +134,7 @@ impl WindowBackend for super::super::backend::D3d12 {
         self.runtime.prepare_graph_working_set(
             Some(&[]),
             &images,
-            &super::super::program::window_programs(options.aa),
+            &super::super::program::raster_requests(options),
             options.bloom.programs(),
         )?;
         Ok(())

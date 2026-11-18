@@ -9,15 +9,14 @@ use super::{
     asset::Scene,
     backend::Backend,
     camera::{Camera, Conditions},
-    pipeline::{self, Budget, Resident, Workspace},
+    pipeline::{self, Budget, Captures, Resident, Workspace},
     program,
 };
 use renderer::{
     capacity::CapacityRecovery,
     graph::{
         Attachment, Binding, BindingResource, CompiledGraph, GraphCapacity, GraphPool, ImageDesc,
-        ImportBuffer, ImportImage, LoadOp, PassHandle, RasterAttachments, RasterConstants,
-        RasterDraw, StoreOp,
+        ImportBuffer, ImportImage, LoadOp, RasterAttachments, RasterConstants, RasterDraw, StoreOp,
     },
     program::SamplerDescriptor,
 };
@@ -53,7 +52,7 @@ pub(super) fn selection(scene: &Scene) -> Result<(usize, usize), Error> {
 struct Frame<B: Backend> {
     pending: B::Pending,
     plan: CompiledGraph,
-    passes: [PassHandle; 3],
+    passes: Captures,
 }
 
 struct Capture {
@@ -81,6 +80,9 @@ impl Capture {
             (2, "depth", "r32f-le"),
         ] {
             let bytes = &self.bytes[slot];
+            if bytes.is_empty() {
+                continue;
+            }
             let path = directory.join(format!("{name}.bin"));
             std::fs::write(&path, bytes)?;
             report[name] = json!({"path":std::fs::canonicalize(path)?,"format":format,
@@ -150,13 +152,12 @@ fn accept_frame<B: Backend>(
 fn finish_frame<B: Backend>(mut frame: Frame<B>, options: &Options) -> Result<Capture, Error> {
     let mut completed = B::wait(&mut frame.pending, super::WAIT)?;
     let pixels = options.width as usize * options.height as usize;
-    let mut bytes = [
-        vec![0; pixels * 8],
-        vec![0; pixels * 4],
-        vec![0; pixels * 4],
-    ];
-    for (pass, output) in frame.passes.into_iter().zip(&mut bytes) {
-        B::readback(&mut completed, pass, output)?;
+    let mut bytes = [vec![0; pixels * 8], vec![0; pixels * 4], Vec::new()];
+    B::readback(&mut completed, frame.passes.hdr, &mut bytes[0])?;
+    B::readback(&mut completed, frame.passes.sdr, &mut bytes[1])?;
+    if let Some(pass) = frame.passes.depth {
+        bytes[2].resize(pixels * 4, 0);
+        B::readback(&mut completed, pass, &mut bytes[2])?;
     }
     // Return result, native work, export metadata and immutable plan together.
     drop((completed, frame.pending, frame.plan));
@@ -273,6 +274,7 @@ fn mip_probes<B: Backend>(
                 parameters: RasterConstants::default(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(output, 0, 0)?,
                     load: LoadOp::Clear([0.; 4]),

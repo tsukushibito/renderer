@@ -623,9 +623,9 @@ fn capture_lighting<B: Backend>(
     let mut hdr = vec![0; width as usize * height as usize * 8];
     let mut sdr = vec![0; width as usize * height as usize * 4];
     let mut depth = vec![0; width as usize * height as usize * 4];
-    B::readback(&mut completed, captures[0], &mut hdr).unwrap();
-    B::readback(&mut completed, captures[1], &mut sdr).unwrap();
-    B::readback(&mut completed, captures[2], &mut depth).unwrap();
+    B::readback(&mut completed, captures.hdr, &mut hdr).unwrap();
+    B::readback(&mut completed, captures.sdr, &mut sdr).unwrap();
+    B::readback(&mut completed, captures.depth.unwrap(), &mut depth).unwrap();
     let shadows = built.shadow_captures.map(|passes| {
         let resolution = resident.shadow_parameters.resolution as usize;
         passes.map(|pass| {

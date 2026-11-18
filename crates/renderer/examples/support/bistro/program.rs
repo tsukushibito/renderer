@@ -21,11 +21,12 @@
 //! storage side effect is introduced. Generated SPIR-V/DXIL and reflection are
 //! checked in, with the fixed toolchain and upstream license notices retained.
 
+use super::Options;
 use renderer::ImageFormat;
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterProgramDescriptor, SampledImageSamplerPair, ShaderStages,
-    VertexAttribute, VertexFormat,
+    RasterParameterLayout, RasterPipelineRequest, RasterProgramDescriptor, SampledImageSamplerPair,
+    ShaderStages, VertexAttribute, VertexFormat,
 };
 
 pub const VERTEX_BYTES: usize = 48;
@@ -313,25 +314,21 @@ pub const fn present_program(aa: bool) -> ManagedRasterProgram {
         })
     }
 }
-pub const fn programs() -> [ManagedRasterProgram; 6] {
-    [
-        opaque_program(),
-        blend_program(),
-        shadow_program(),
-        tone_program(),
-        resolve_program(),
-        resolve_aa_program(),
-    ]
-}
-
-pub const fn window_programs(aa: bool) -> [ManagedRasterProgram; 5] {
-    [
-        opaque_program(),
-        blend_program(),
-        shadow_program(),
-        tone_program(),
-        present_program(aa),
-    ]
+pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
+    let mut requests = Vec::with_capacity(6);
+    requests.extend(
+        [opaque_program(), blend_program()].map(|program| RasterPipelineRequest {
+            program,
+            sample_count: options.sample_count,
+        }),
+    );
+    requests.extend([shadow_program(), tone_program()].map(RasterPipelineRequest::from));
+    if options.windowed {
+        requests.push(present_program(options.aa).into());
+    } else {
+        requests.extend([resolve_program(), resolve_aa_program()].map(RasterPipelineRequest::from));
+    }
+    requests
 }
 
 /// Fullscreen indexed triangle, prepared once by the consumer.

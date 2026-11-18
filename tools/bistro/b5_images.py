@@ -17,7 +17,7 @@ from compare_runtime import (
 from resource_acceptance import require, write_json
 
 
-PLANES = ("hdr", "bloom_hdr", "sdr", "bloom_bypass", "depth")
+COLOR_PLANES = ("hdr", "bloom_hdr", "sdr", "bloom_bypass")
 SHADOWS = tuple(f"shadow{cascade}" for cascade in range(4))
 ROI = {
     "street-pavement": ("view/street", 384, 540, 1152, 540),
@@ -35,6 +35,8 @@ def sample_path(directory, args, binary, api, extra):
                str(args.ibl_manifest), "--width", "1920", "--height", "1080",
                "--frames", "4", "--warmup", "2", "--inflight", "2", "--output", str(directory),
                *extra]
+    if args.msaa == 4:
+        command += ["--msaa", "4"]
     if args.resume and root.is_file():
         require(load_json(directory / "command.json") == command, f"Changed command {directory}")
         return root, load_json(root)
@@ -45,7 +47,7 @@ def sample_path(directory, args, binary, api, extra):
     return root, load_json(root)
 
 
-def validated_run(path, report, mode, api):
+def validated_run(path, report, mode, api, samples):
     validation = report["validation"]
     identity = report["identity"]
     require(report["runtime"]["api"] == api and validation["mode"] == mode and validation["clean"],
@@ -63,7 +65,8 @@ def validated_run(path, report, mode, api):
                 and validation["corruption"] == 0
                 and (mode != "strict" or validation["teardown_checked"]), path)
     require((identity["width"], identity["height"]) == (1920, 1080)
-            and identity["shadows"] and identity["aa"], path)
+            and identity["shadows"] and identity["aa"] and identity.get("samples", 1) == samples,
+            path)
     scene = report["scene"]
     require((scene["meshes"], scene["primitives"], scene["materials"], scene["alpha_zero_materials"])
             == (1296, 1591, 132, 2), f"Missing full-scene inputs {path}")
@@ -109,7 +112,7 @@ def share_capture(root, index, report, path, name, meta):
         temporary.unlink(missing_ok=True)
 
 
-def collect(path, report, root, index):
+def collect(path, report, root, index, planes, sample_count):
     samples = {}
     for name, capture_path in reports(path.parent, report).items():
         captured = load_json(capture_path)
@@ -117,12 +120,14 @@ def collect(path, report, root, index):
         expected = captured["identity"].get("route_frame") if name.startswith("route/") else captured["identity"]["view"]
         require(str(expected) == label and captured["capture_only"]
                 and captured["readback_outside_measurement"], f"Unexpected sample {capture_path}")
-        require(set(captured["captures"]) == set(PLANES)
+        require(captured["identity"].get("samples", 1) == sample_count,
+                f"Sample count differs in {capture_path}")
+        require(set(captured["captures"]) == set(planes)
                 and set(captured["shadow_captures"]) == set(SHADOWS), f"Missing planes {capture_path}")
         require(captured["validation"] == report["validation"]
                 and captured["runtime"] == report["runtime"], f"Sample owner mismatch {capture_path}")
         hashes = {}
-        for key in PLANES + SHADOWS:
+        for key in planes + SHADOWS:
             values, meta = read_plane(capture_path, captured, key)
             if key in ("hdr", "bloom_hdr", "sdr", "bloom_bypass"):
                 alpha = 255 if FORMATS.get(key, key) == "sdr" else 1.0
@@ -143,7 +148,7 @@ def difference_image(path, first, second):
     Image.fromarray(np.minimum(delta * 16, 255).astype(np.uint8)).save(path)
 
 
-def compare_cross(first, second, differences):
+def compare_cross(first, second, differences, planes):
     require(first.keys() == second.keys(), "Mismatched Vulkan and D3D12 sample sets")
     counts = Counter()
     maximum = Counter()
@@ -151,7 +156,7 @@ def compare_cross(first, second, differences):
         path_b, other_identity, _ = second[name]
         require(identity == other_identity, f"API identity differs for {name}")
         report_a, report_b = (load_json(path) for path in (path_a, path_b))
-        for key in PLANES + SHADOWS:
+        for key in planes + SHADOWS:
             a, _ = read_plane(path_a, report_a, key)
             b, _ = read_plane(path_b, report_b, key)
             fmt = FORMATS.get(key, key)
@@ -187,7 +192,7 @@ def probe_faults(args, root, street):
         ("receiver-offset", ["--offset-shadow-receiver"], "street-shadow"),
     ]:
         wrong_path, wrong_report = sample_path(root / name, args, args.strict, "vulkan", common + params)
-        validated_run(wrong_path, wrong_report, "strict", "vulkan")
+        validated_run(wrong_path, wrong_report, "strict", "vulkan", args.msaa)
         wrong, _ = read_plane(wrong_path, wrong_report, "sdr")
         result = compare_pixels(roi_pixels(normal, ROI[region]), roi_pixels(wrong, ROI[region]),
                                 "sdr", profile="scene")
@@ -209,10 +214,14 @@ def probe_faults(args, root, street):
                              ["--view", name, "--alpha-only", "--capture-shadow-maps", *extra])
                  for label, extra in (("original", []), ("opaque", ["--alpha-override", "opaque"]))]
         for sample, report in paths:
-            validated_run(sample, report, "strict", "vulkan")
+            validated_run(sample, report, "strict", "vulkan", args.msaa)
         first, second = (item[1] for item in paths)
-        require(first["depth_coverage_pixels"] == 0 and second["depth_coverage_pixels"] > 0,
-                f"Missing controlled alpha coverage {name}")
+        if args.msaa == 1:
+            require(first["depth_coverage_pixels"] == 0 and second["depth_coverage_pixels"] > 0,
+                    f"Missing controlled alpha coverage {name}")
+        else:
+            require(all(item["depth_coverage_pixels"] is None and "depth" not in item["captures"]
+                        for item in (first, second)), f"Unexpected multisample depth capture {name}")
         for key in SHADOWS:
             values, _ = read_plane(*paths[0], key)
             require(np.all(values == 1.0), f"Original alpha caused shadow coverage {name}/{key}")
@@ -228,6 +237,7 @@ def cohort(args, modes, differences=None):
     seen = {}
     files = {}
     source_hashes = {}
+    planes = (*COLOR_PLANES, "depth") if args.msaa == 1 else COLOR_PLANES
     for repeat in range(1, 4):
         for mode in modes:
             for api in APIS if repeat % 2 else reversed(APIS):
@@ -238,9 +248,9 @@ def cohort(args, modes, differences=None):
                                            ["--view", "route", "--bloom", "tent", "--capture-all-views",
                                             "--capture-route-samples", "--capture-shadow-maps",
                                             "--capture-bloom-bypass"])
-                validated_run(path, report, mode, api)
+                validated_run(path, report, mode, api, args.msaa)
                 require(report["identity"]["bloom"] == "tent", f"Wrong Bloom identity {path}")
-                samples = collect(path, report, args.output, files)
+                samples = collect(path, report, args.output, files, planes, args.msaa)
                 if api in seen:
                     before = {key: value[1:] for key, value in seen[api].items()}
                     after = {key: value[1:] for key, value in samples.items()}
@@ -249,7 +259,7 @@ def cohort(args, modes, differences=None):
                     seen[api] = samples
                 source_hashes[directory.name] = {"report_sha256": digest(path),
                                                   "device": report["runtime"]}
-    result = compare_cross(seen["vulkan"], seen["d3d12"], differences)
+    result = compare_cross(seen["vulkan"], seen["d3d12"], differences, planes)
     return seen, {"runs": source_hashes, "cross": result}
 
 
@@ -260,6 +270,8 @@ def main():
         parser.add_argument(f"--{argument}", type=Path, required=True)
     parser.add_argument("--resume", action="store_true",
                         help="revalidate completed reports from the same cohort")
+    parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
+                        help="scene sample count for the MSAA comparison cohort")
     args = parser.parse_args()
     args.output = args.output.resolve()
     require(args.output.parent.exists(), "Create the parent evidence directory first")
@@ -267,6 +279,8 @@ def main():
                 "source": {"strict_sha256": digest(args.strict), "shipping_sha256": digest(args.shipping),
                            "manifest_sha256": digest(args.manifest),
                            "ibl_manifest_sha256": digest(args.ibl_manifest)}}
+    if args.msaa == 4:
+        settings["samples"] = 4
     # Compare the serialized form, including the coordinate arrays.
     settings_hash = canonical_hash(settings)
     if args.stage == "accept":
