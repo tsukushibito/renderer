@@ -5,7 +5,7 @@ use super::{
     asset::Scene,
     backend::Backend,
     camera::{Camera, Frustum},
-    deferred, forward_lighting, ibl,
+    deferred, forward_lighting, ibl, instancing,
     program::{self, forward_plus},
     shadow,
 };
@@ -244,12 +244,13 @@ impl Budget {
                 + local_lights
                 + tiled_lights,
             accesses,
-            draws: scene.primitives.len() * 5 + 2 + deferred,
+            draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
             bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
                 + 4
                 + bloom_bindings
                 + deferred * 16
-                + tiled_lights * 3,
+                + tiled_lights * 3
+                + usize::from(options.instances.enabled()) * 16,
             attachments: 24 + deferred * deferred::PLANES.len(),
             dependencies: 32,
             initial_ranges: resources * 2,
@@ -466,6 +467,29 @@ pub(super) fn upload_buffer<B: Backend>(
 }
 
 impl Resident {
+    pub fn instance_placements(
+        &self,
+        scene: &Scene,
+        options: &Options,
+        camera: Camera,
+        near_far: [f32; 2],
+    ) -> Result<Option<instancing::Placements>, Error> {
+        options
+            .instances
+            .enabled()
+            .then(|| {
+                instancing::Placements::new(
+                    scene,
+                    &self.primitive_bounds,
+                    camera,
+                    options.width as f32 / options.height as f32,
+                    near_far[0],
+                    near_far[1],
+                )
+            })
+            .transpose()
+    }
+
     #[cfg(all(windows, feature = "presentation"))]
     pub fn reprepare<B: Backend>(
         mut self,
@@ -685,6 +709,7 @@ pub(super) struct Workspace {
     bindings: Vec<RasterBindings>,
     shadow_bindings: Vec<RasterBindings>,
     shadow_cache: Option<ShadowCache>,
+    pub(super) placements: Option<instancing::Placements>,
     opaque: Vec<usize>,
     blended: Vec<usize>,
 }
@@ -735,6 +760,7 @@ impl Workspace {
             bindings: Vec::with_capacity(scene.materials.len()),
             shadow_bindings: Vec::with_capacity(scene.materials.len()),
             shadow_cache: None,
+            placements: None,
             opaque: Vec::with_capacity(scene.primitives.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
         }
@@ -1134,6 +1160,11 @@ pub(super) fn build(
         },
     ];
     let deferred = options.pipeline == PipelineMode::Deferred;
+    let mut instance_bindings = None;
+    let instance_material = workspace
+        .placements
+        .as_ref()
+        .map(|placement| placement.material);
     {
         #[cfg(feature = "tracy")]
         let _bindings = tracy_client::Client::running()
@@ -1204,6 +1235,12 @@ pub(super) fn build(
                     .zip(local_light_bindings.into_iter().flatten())
                 {
                     *slot = binding;
+                }
+                if instance_material == Some(index) {
+                    instance_bindings = Some(
+                        graph
+                            .raster_bindings(&program::instancing_program(), &bindings[..shared])?,
+                    );
                 }
                 graph.raster_bindings(&program, &bindings[..program.bindings().len()])?
             };
@@ -1320,10 +1357,8 @@ pub(super) fn build(
         } else {
             StoreOp::Store
         };
-        graph.raster(
+        graph.raster_pass(
             "Forward PBR opaque and mask",
-            &options.pipeline.forward_program(false),
-            workspace.opaque.iter().copied().map(draw),
             RasterAttachments {
                 color_resolves: if final_opaque {
                     final_resolve.as_slice()
@@ -1348,6 +1383,23 @@ pub(super) fn build(
                     },
                     store,
                 }),
+            },
+            |raster| {
+                raster.draw(
+                    &options.pipeline.forward_program(false),
+                    workspace.opaque.iter().copied().map(draw),
+                )?;
+                if let Some(placements) = &workspace.placements {
+                    let instance = RasterDraw {
+                        bindings: instance_bindings,
+                        ..draw(placements.primitive)
+                    };
+                    raster.draw(
+                        &program::instancing_program(),
+                        placements.draws(options.instances, instance),
+                    )?;
+                }
+                Ok(())
             },
         )?;
     }
@@ -1533,7 +1585,7 @@ pub(super) fn build(
     } else {
         None
     };
-    let draws = workspace.opaque.len() + workspace.blended.len();
+    let draws = workspace.opaque.len() + workspace.blended.len() + options.instances.draws();
     Ok(Built {
         graph,
         output,

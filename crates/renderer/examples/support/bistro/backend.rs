@@ -11,7 +11,7 @@ use renderer::{
 use std::time::{Duration, Instant};
 
 pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
-    let mut requests = Vec::with_capacity(7);
+    let mut requests = Vec::with_capacity(7 + usize::from(options.instances.enabled()));
     if options.pipeline == PipelineMode::Deferred {
         requests.extend(
             [
@@ -30,6 +30,12 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
         program: options.pipeline.forward_program(true),
         sample_count: options.sample_count,
     });
+    if options.instances.enabled() {
+        requests.push(RasterPipelineRequest {
+            program: program::instancing_program(),
+            sample_count: options.sample_count,
+        });
+    }
     requests.extend(
         [program::shadow_program(), program::tone_program()].map(RasterPipelineRequest::from),
     );

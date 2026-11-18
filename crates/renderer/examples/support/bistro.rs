@@ -22,6 +22,8 @@ mod deferred;
 mod forward_lighting;
 #[path = "bistro/ibl.rs"]
 mod ibl;
+#[path = "bistro/instancing.rs"]
+mod instancing;
 #[path = "bistro/lifecycle.rs"]
 mod lifecycle;
 #[path = "bistro/memory.rs"]
@@ -126,6 +128,7 @@ struct Options {
     bloom: bloom::Bloom,
     sample_count: renderer::graph::SampleCount,
     pipeline: PipelineMode,
+    instances: instancing::Mode,
     #[cfg(feature = "development-validation")]
     omit_material: Option<usize>,
     #[cfg(feature = "development-validation")]
@@ -174,6 +177,7 @@ impl Options {
             bloom: bloom::Bloom::Off,
             sample_count: renderer::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
+            instances: instancing::Mode::Off,
             #[cfg(feature = "development-validation")]
             omit_material: None,
             #[cfg(feature = "development-validation")]
@@ -246,6 +250,14 @@ impl Options {
                         _ => return Err("--msaa needs 1 or 4".into()),
                     };
                 }
+                "--instances" => {
+                    result.instances = match args.next().as_deref() {
+                        Some("off") => instancing::Mode::Off,
+                        Some("individual") => instancing::Mode::Individual,
+                        Some("instanced") => instancing::Mode::Instanced,
+                        _ => return Err("--instances needs off, individual or instanced".into()),
+                    };
+                }
                 "--shadows-off" => result.shadows = false,
                 "--redraw-shadows" => result.reuse_shadows = false,
                 "--capture-shadow-maps" => result.capture_shadows = true,
@@ -284,7 +296,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|forward-plus|forward-reference|deferred] [--msaa 1|4] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|forward-plus|forward-reference|deferred] [--msaa 1|4] [--instances off|individual|instanced] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -303,6 +315,18 @@ impl Options {
             && result.sample_count != renderer::graph::SampleCount::X1
         {
             return Err("the deferred pipeline requires --msaa 1".into());
+        }
+        if result.instances.enabled()
+            && (result.pipeline != PipelineMode::Forward
+                || result.alpha_only
+                || result.force_opaque
+                || result.resource_checks)
+        {
+            return Err("--instances requires the Forward pipeline and original material inputs without resource probes".into());
+        }
+        #[cfg(feature = "development-validation")]
+        if result.instances.enabled() && result.omit_material.is_some() {
+            return Err("--instances requires all original materials".into());
         }
         if result.fixture && !specified_size {
             result.width = 128;
@@ -429,6 +453,20 @@ mod tests {
         assert_eq!(msaa.sample_count.as_u32(), 4);
         assert!(!msaa.aa);
         assert!(options(&["--fixture", "--msaa", "2"]).is_err());
+    }
+
+    #[test]
+    fn instance_comparison_is_opt_in_and_runs_in_multisampled_forward() {
+        assert_eq!(options(&["--fixture"]).unwrap().instances.draws(), 0);
+        for (mode, draws) in [("individual", instancing::COUNT), ("instanced", 1)] {
+            let chosen = options(&["--fixture", "--instances", mode, "--msaa", "4"]).unwrap();
+            assert_eq!(chosen.instances.draws(), draws);
+            assert_eq!(chosen.instances.name(), mode);
+            assert!(
+                options(&["--fixture", "--instances", mode, "--pipeline", "deferred"]).is_err()
+            );
+        }
+        assert!(options(&["--fixture", "--instances", "wrong"]).is_err());
     }
 
     #[test]

@@ -24,19 +24,45 @@ layout(set = 0, binding = 0, std140) uniform Camera {
     vec4 shadow_bias; // receiver constant/slope/normal offset in world-texel units
 } camera;
 
+#ifdef BISTRO_INSTANCING
+layout(push_constant) uniform Placements {
+    vec4 source_scale;
+    vec4 origin;
+    vec4 column_step;
+    vec4 row_step;
+    uint instance_offset;
+} placements;
+
+vec3 placed_position(vec3 original_position) {
+    uint instance_index = min(
+        min(uint(gl_InstanceIndex), 23u) + min(placements.instance_offset, 23u), 23u);
+    precise vec3 local = (original_position - placements.source_scale.xyz) * placements.source_scale.w;
+    precise vec3 column = placements.column_step.xyz * float(instance_index % 6u);
+    precise vec3 row = placements.row_step.xyz * float(instance_index / 6u);
+    precise vec3 destination = placements.origin.xyz + column + row;
+    return destination + local;
+}
+#endif
+
 void main() {
+#ifdef BISTRO_INSTANCING
+    vec3 world = placed_position(position);
+#define PBR_POSITION world
+#else
+#define PBR_POSITION position
+#endif
     // World-space geometry close to the camera can cancel large MVP terms.
     // Use one shared FP32 operation order for both native compilers instead of
     // permitting each matrix-dot lowering to reassociate/contract differently.
     // This is a reproducibility boundary, not a higher-precision coordinate ABI.
-    precise vec4 x = camera.view_projection[0] * position.x;
-    precise vec4 y = camera.view_projection[1] * position.y;
-    precise vec4 z = camera.view_projection[2] * position.z;
+    precise vec4 x = camera.view_projection[0] * PBR_POSITION.x;
+    precise vec4 y = camera.view_projection[1] * PBR_POSITION.y;
+    precise vec4 z = camera.view_projection[2] * PBR_POSITION.z;
     precise vec4 xy = x + y;
     precise vec4 xyz = xy + z;
     precise vec4 clip = xyz + camera.view_projection[3];
     gl_Position = clip;
-    world_position = position;
+    world_position = PBR_POSITION;
     world_normal = normal;
     world_tangent = tangent;
     texcoord = uv;

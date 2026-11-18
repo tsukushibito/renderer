@@ -233,6 +233,7 @@ fn identity(
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "local_lights":options.pipeline.uses_local_lights()
             .then(|| super::forward_lighting::identity(options.fixture)),
+        "instances":options.instances.name(),"instance_draws":options.instances.draws(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
             "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
             "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
@@ -541,7 +542,6 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let budget = Budget::new(&scene, &environment, options)?;
     let budget_ns = stage.elapsed().as_nanos() as u64;
     let (first_camera, first_uniform) = uniform(&conditions, options, 0)?;
-    let _ = first_camera;
     eprintln!(
         "Bistro explicit GPU preparation: {} resources",
         budget.physical_resources
@@ -574,6 +574,12 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "scope":"packed logical resource bytes and prepared copy budgets; not actual native allocation size or VRAM residency"});
     // Typed geometry publication transfers scalar index guarantees to native
     // provenance. Both original loader bytes and upload owners are gone pre-ROI.
+    let placements = resident.instance_placements(
+        &scene,
+        options,
+        first_camera,
+        [conditions.near, conditions.far],
+    )?;
     scene.vertices = Vec::new();
     scene.indices = Vec::new();
     let upload_ns = stage.elapsed().as_nanos() as u64;
@@ -583,6 +589,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     // when all execution slots have otherwise completed (including inflight=1).
     let mut pool = GraphPool::new(budget.graph, options.inflight + 1)?;
     let mut workspace = Workspace::new(&scene);
+    workspace.placements = placements;
     if options.reuse_shadows && options.shadows {
         workspace.enable_shadow_reuse();
     }

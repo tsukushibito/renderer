@@ -73,12 +73,13 @@ try {
         'resolve_linear.frag', 'resolve_aa_linear.frag',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
         'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
-        'frustum_visibility.comp'
+        'frustum_visibility.comp', 'pbr_instancing.vert'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
         $shaderSource = $name -creplace '_linear\.frag$', '.frag'
         if ($name -cin @('pbr_all_lights.frag', 'pbr_forward_plus.frag')) { $shaderSource = 'pbr.frag' }
+        if ($name -ceq 'pbr_instancing.vert') { $shaderSource = 'pbr.vert' }
         $source = Join-Path $PSScriptRoot $shaderSource
         $spirv = Join-Path $temporaryRoot ($name + '.spv')
         $hlsl = Join-Path $temporaryRoot ($name + '.hlsl')
@@ -87,17 +88,19 @@ try {
         if ($name -cmatch '_linear\.frag$') { $glsl += '-DBISTRO_LINEAR_OUTPUT=1' }
         if ($name -ceq 'pbr_all_lights.frag') { $glsl += '-DBISTRO_LOCAL_LIGHTS=1' }
         if ($name -ceq 'pbr_forward_plus.frag') { $glsl += '-DBISTRO_LOCAL_LIGHTS=2' }
+        if ($name -ceq 'pbr_instancing.vert') { $glsl += '-DBISTRO_INSTANCING=1' }
         $null = Run $glslc ($glsl + @($source, '-o', $spirv))
         $null = Run $validator @('--target-env', 'vulkan1.3', $spirv)
         $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $stage, '--output', $hlsl)
         if ($stage -ceq 'vert') { $crossArgs += '--flip-vert-y' }
         $null = Run $cross $crossArgs
         # SPIRV-Cross leaves the sole push-constant cbuffer unbound. Reserve
-        # b7,space0 for the four-byte shadow cascade index only.
+        # b7,space0 for the shadow cascade index and instance placement.
         $text = [IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n")
         $pattern = '(?m)^cbuffer ([A-Za-z_][A-Za-z_0-9]*)$'
-        if ($name -ceq 'shadow.vert') {
-            if ([regex]::Matches($text, $pattern).Count -ne 1) { throw 'Shadow inline cbuffer missing' }
+        $hasInline = $name -cin @('shadow.vert', 'pbr_instancing.vert')
+        if ($hasInline) {
+            if ([regex]::Matches($text, $pattern).Count -ne 1) { throw "Inline cbuffer missing in $name" }
             $text = [regex]::Replace($text, $pattern, 'cbuffer $1 : register(b7, space0)')
         } elseif ([regex]::IsMatch($text, $pattern)) { throw "Unexpected inline cbuffer in $name" }
         # Hash and compile the same canonical text Git checks out on every OS.
@@ -128,7 +131,7 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        if (($reflection -match '\bcb7\b') -ne ($name -ceq 'shadow.vert')) {
+        if (($reflection -match '\bcb7\b') -ne $hasInline) {
             throw "Unexpected inline cbuffer contract in $name reflection"
         }
         $spirvReflection = Run $cross @($spirv, '--reflect')
@@ -160,7 +163,7 @@ try {
         Write-Text $canonical ([IO.File]::ReadAllText($included))
         $includes[$include] = Hash $canonical
     }
-    $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_bytes = 4; artifacts = $artifacts; includes = $includes; licenses = $licenses }
+    $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_bytes = 4; placement_inline_bytes = 68; artifacts = $artifacts; includes = $includes; licenses = $licenses }
     $manifestPath = Join-Path $temporaryRoot 'manifest.json'
     Write-Text $manifestPath (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
     $publish[$manifestPath] = Join-Path $PSScriptRoot 'manifest.json'

@@ -168,6 +168,12 @@ impl<B: WindowBackend> State<B> {
         let initial = uniform(seed, conditions, options)?;
         let started = Instant::now();
         let resident = Resident::upload(&mut backend, scene, environment, &budget, &initial)?;
+        let placements = resident.instance_placements(
+            scene,
+            options,
+            seed,
+            [conditions.near, conditions.far],
+        )?;
         scene.vertices = Vec::new();
         scene.indices = Vec::new();
         environment.release_pixels();
@@ -176,6 +182,7 @@ impl<B: WindowBackend> State<B> {
         surface.profile(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
         let mut workspace = Workspace::new(scene);
+        workspace.placements = placements;
         if options.reuse_shadows && options.shadows {
             workspace.enable_shadow_reuse();
         }
@@ -564,6 +571,7 @@ impl<B: WindowBackend> State<B> {
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
             "local_lights":options.pipeline.uses_local_lights()
                 .then(|| super::forward_lighting::identity(options.fixture)),
+            "instances": options.instances.name(), "instance_draws": options.instances.draws(),
             "warmup": options.warmup, "accepted": self.accepted, "pending_on_exit": self.pending_on_exit,
             "setup_ns": self.setup_ns, "native_memory": memory, "steady_memory": steady_memory,
             "setup_phases_ns": {"asset_load": asset_load_ns, "native_prepare": self.preparation_ns,

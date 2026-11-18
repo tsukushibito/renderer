@@ -174,6 +174,17 @@ static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     vertex_dxil: include_bytes!("shaders/dxil/pbr.vert.dxil"),
     fragment_dxil: include_bytes!("shaders/dxil/pbr.frag.dxil"),
 };
+static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
+    parameters: RasterParameterLayout {
+        size: super::instancing::INLINE_BYTES,
+        stages: ShaderStages::VERTEX,
+        dxil_register: 7,
+        dxil_space: 0,
+    },
+    vertex_spirv: include_bytes!("shaders/pbr_instancing.vert.spv"),
+    vertex_dxil: include_bytes!("shaders/dxil/pbr_instancing.vert.dxil"),
+    ..OPAQUE
+};
 static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
     blend: BlendState::Alpha,
     depth: DepthState::Required {
@@ -279,6 +290,12 @@ pub const fn opaque_program() -> ManagedRasterProgram {
     // side effects and no inter-draw synchronization or optional capabilities.
     // Source/binary/ABI replacement invalidates this reviewed guarantee.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&OPAQUE) }
+}
+pub const fn instancing_program() -> ManagedRasterProgram {
+    // SAFETY: This variant preserves the vertex inputs, fragment interface and
+    // bindings of OPAQUE. It only reads the declared 68 inline bytes, then
+    // uses a bounded instance index in arithmetic to transform the positions.
+    unsafe { ManagedRasterProgram::from_trusted_descriptor(&INSTANCING) }
 }
 pub const fn blend_program() -> ManagedRasterProgram {
     // SAFETY: Identical immutable contract to opaque_program; only fixed alpha
