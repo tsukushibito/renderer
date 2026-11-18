@@ -1,0 +1,110 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 1   xyz         1     NONE   float   xyz
+; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
+; TEXCOORD                 3   xy          3     NONE   float   xy
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 1   xyz         0     NONE   float   xyz
+; TEXCOORD                 2   xyzw        1     NONE   float   xyzw
+; TEXCOORD                 3   xy          2     NONE   float   xy
+; SV_Position              0   xyzw        3      POS   float   xyzw
+;
+; shader hash: 9f1d9922e354078bbbfc8af6e11bfbe5
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 4
+; SigOutputElements: 4
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 4
+; SigOutputVectors[0]: 4
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 1
+; TEXCOORD                 2
+; TEXCOORD                 3
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 1                 linear
+; TEXCOORD                 2                 linear
+; TEXCOORD                 3                 linear
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer _14_16
+; {
+;
+;   struct hostlayout._14_16
+;   {
+;
+;       row_major float4x4 _16_m0;                    ; Offset:    0
+;       float4 _16_m1;                                ; Offset:   64
+;       float4 _16_m2;                                ; Offset:   80
+;       float4 _16_m3;                                ; Offset:   96
+;       float4 _16_m4;                                ; Offset:  112
+;       row_major float4x4 _16_m5[4];                 ; Offset:  128
+;       float4 _16_m6;                                ; Offset:  384
+;       float4 _16_m7;                                ; Offset:  400
+;       float4 _16_m8;                                ; Offset:  416
+;       float4 _16_m9;                                ; Offset:  432
+;       float4 _16_m10;                               ; Offset:  448
+;
+;   } _14_16;                                         ; Offset:    0 Size:   464
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _14_16                            cbuffer      NA          NA     CB0            cb0     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 14, outputs: 16
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4 }
+;   output 1 depends on inputs: { 5 }
+;   output 2 depends on inputs: { 6 }
+;   output 4 depends on inputs: { 8 }
+;   output 5 depends on inputs: { 9 }
+;   output 6 depends on inputs: { 10 }
+;   output 7 depends on inputs: { 11 }
+;   output 8 depends on inputs: { 12 }
+;   output 9 depends on inputs: { 13 }
+;   output 12 depends on inputs: { 0, 1, 2 }
+;   output 13 depends on inputs: { 0, 1, 2 }
+;   output 14 depends on inputs: { 0, 1, 2 }
+;   output 15 depends on inputs: { 0, 1, 2 }
+;

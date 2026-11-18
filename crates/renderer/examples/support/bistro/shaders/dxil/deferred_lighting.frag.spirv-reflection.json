@@ -1,0 +1,201 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_78" : {
+            "name" : "_78",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "_m4",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "_m5",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m6",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "_m7",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "_m8",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "_m9",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "_m10",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
+        },
+        "_631" : {
+            "name" : "_631",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_984",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "_156",
+            "set" : 3,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_173",
+            "set" : 3,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_185",
+            "set" : 3,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_193",
+            "set" : 3,
+            "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_596",
+            "set" : 1,
+            "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_681",
+            "set" : 1,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_688",
+            "set" : 1,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_695",
+            "set" : 1,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_871",
+            "set" : 2,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_893",
+            "set" : 2,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_904",
+            "set" : 2,
+            "binding" : 2
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "_160",
+            "set" : 3,
+            "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "_598",
+            "set" : 1,
+            "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "_873",
+            "set" : 2,
+            "binding" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_78",
+            "name" : "_78_80",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "_631",
+            "name" : "_631_633",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

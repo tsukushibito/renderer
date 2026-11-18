@@ -1,0 +1,112 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_161" : {
+            "name" : "_161",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "uvec4",
+                    "offset" : 48
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec2",
+            "name" : "_147",
+            "location" : 3
+        },
+        {
+            "type" : "vec3",
+            "name" : "_259",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_277",
+            "location" : 2
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_385",
+            "location" : 0
+        },
+        {
+            "type" : "vec4",
+            "name" : "_393",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_404",
+            "location" : 2
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "_182",
+            "set" : 1,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_227",
+            "set" : 1,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_323",
+            "set" : 1,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_374",
+            "set" : 1,
+            "binding" : 3
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "_186",
+            "set" : 1,
+            "binding" : 4
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_161",
+            "name" : "_161_163",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

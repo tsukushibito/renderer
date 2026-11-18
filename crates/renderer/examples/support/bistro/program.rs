@@ -21,6 +21,11 @@
 //! storage side effect is introduced. Generated SPIR-V/DXIL and reflection are
 //! checked in, with the fixed toolchain and upstream license notices retained.
 
+#[path = "program/deferred.rs"]
+mod deferred;
+
+pub use deferred::{DEFERRED_RECONSTRUCTION_BYTES, deferred_lighting_program, gbuffer_program};
+
 use super::Options;
 use renderer::ImageFormat;
 use renderer::program::{

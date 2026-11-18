@@ -70,7 +70,7 @@ try {
         'pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'resolve.vert',
         'tone.frag', 'resolve.frag', 'resolve_aa.frag', 'bloom_extract.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
-        'resolve_linear.frag', 'resolve_aa_linear.frag'
+        'resolve_linear.frag', 'resolve_aa_linear.frag', 'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
@@ -103,7 +103,7 @@ try {
         }
         $null = Run $dxc (@($lock.dxc_arguments) + @('-T', $profile, $hlsl, '-Fo', $dxil))
         $dump = Run $dxc @('-dumpbin', $dxil)
-        if ($name -ceq 'pbr.vert') {
+        if ($name -ceq 'pbr.vert' -or $name -ceq 'gbuffer.vert') {
             # Retain the shared vertex FP32 sequence through DXIL lowering.
             # This deliberately restricts clip arithmetic, not global shader
             # optimization. A compiler/toolchain change must re-establish it.

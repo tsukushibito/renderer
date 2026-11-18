@@ -1,0 +1,160 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "vert"
+        }
+    ],
+    "types" : {
+        "_14" : {
+            "name" : "_14",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "_m4",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "_m5",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m6",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "_m7",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "_m8",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "_m9",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "_m10",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
+        },
+        "_61" : {
+            "name" : "_61",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4"
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "float"
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "float",
+                    "array" : [
+                        1
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ]
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "_24",
+            "location" : 0
+        },
+        {
+            "type" : "vec3",
+            "name" : "_69",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_73",
+            "location" : 2
+        },
+        {
+            "type" : "vec2",
+            "name" : "_79",
+            "location" : 3
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec3",
+            "name" : "_68",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_71",
+            "location" : 2
+        },
+        {
+            "type" : "vec2",
+            "name" : "_77",
+            "location" : 3
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_14",
+            "name" : "_14_16",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
+        }
+    ]
+}

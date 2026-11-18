@@ -1,0 +1,116 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; SV_Position              0   xyzw        0      POS   float   xy
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; SV_Target                0   xyzw        0   TARGET   float   xyzw
+;
+; shader hash: 2c965aa759ba4dadd174c9bc177fb0b0
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Pixel Shader
+; DepthOutput=0
+; SampleFrequency=0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 1
+; SigOutputElements: 1
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 1
+; SigOutputVectors[0]: 1
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; SV_Position              0          noperspective
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; SV_Target                0
+;
+; Buffer Definitions:
+;
+; cbuffer _78_80
+; {
+;
+;   struct hostlayout._78_80
+;   {
+;
+;       row_major float4x4 _80_m0;                    ; Offset:    0
+;       float4 _80_m1;                                ; Offset:   64
+;       float4 _80_m2;                                ; Offset:   80
+;       float4 _80_m3;                                ; Offset:   96
+;       float4 _80_m4;                                ; Offset:  112
+;       row_major float4x4 _80_m5[4];                 ; Offset:  128
+;       float4 _80_m6;                                ; Offset:  384
+;       float4 _80_m7;                                ; Offset:  400
+;       float4 _80_m8;                                ; Offset:  416
+;       float4 _80_m9;                                ; Offset:  432
+;       float4 _80_m10;                               ; Offset:  448
+;
+;   } _78_80;                                         ; Offset:    0 Size:   464
+;
+; }
+;
+; cbuffer _631_633
+; {
+;
+;   struct hostlayout._631_633
+;   {
+;
+;       row_major float4x4 _633_m0;                   ; Offset:    0
+;
+;   } _631_633;                                       ; Offset:    0 Size:    64
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _78_80                            cbuffer      NA          NA     CB0            cb0     1
+; _631_633                          cbuffer      NA          NA     CB1            cb1     1
+; _160                              sampler      NA          NA      S0      s4,space3     1
+; _598                              sampler      NA          NA      S1      s4,space1     1
+; _873                              sampler      NA          NA      S2      s3,space2     1
+; _156                              texture     f32          2d      T0      t0,space3     1
+; _173                              texture     f32          2d      T1      t1,space3     1
+; _185                              texture     f32          2d      T2      t2,space3     1
+; _193                              texture     f32          2d      T3      t3,space3     1
+; _596                              texture     f32          2d      T4      t3,space1     1
+; _681                              texture     f32          2d      T5      t0,space1     1
+; _688                              texture     f32          2d      T6      t1,space1     1
+; _695                              texture     f32          2d      T7      t2,space1     1
+; _871                              texture     f32          2d      T8      t0,space2     1
+; _893                              texture     f32          2d      T9      t1,space2     1
+; _904                              texture     f32          2d     T10      t2,space2     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 4, outputs: 4
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 0, 1 }
+;   output 1 depends on inputs: { 0, 1 }
+;   output 2 depends on inputs: { 0, 1 }
+;
