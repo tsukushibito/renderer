@@ -272,6 +272,20 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn graph_queue_can_use_fewer_slots_than_native_execution() {
+        let mut frames = FrameQueue::new(4).unwrap();
+        assert!(!frames.set_limit(0));
+        assert!(!frames.set_limit(frames.entries.capacity() + 1));
+        assert!(frames.set_limit(2));
+        frames.push(15);
+        assert!(!frames.set_limit(1));
+        frames.push(30);
+        assert!(frames.is_full());
+        assert_eq!(frames.limit(), 2);
+    }
+
     #[test]
     fn targeted_wait_leaves_other_completions_available() {
         let mut frames = FrameQueue::new(3).unwrap();

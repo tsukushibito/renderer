@@ -192,7 +192,7 @@ mod tests {
 
         let data = [17, 29, 83, 211, 27, 38, 11, 67];
         let mut producer = Graph::test_new();
-        let buffer = producer.buffer("buffer", BufferDesc { size: 16 }).unwrap();
+        let buffer = producer.buffer("buffer", BufferDesc { size: 8 }).unwrap();
         producer.upload_buffer("upload", buffer, 0, &data).unwrap();
         let producer_readback = producer.readback_buffer("read", buffer, 0, 8).unwrap();
         producer.export_buffer(buffer).unwrap();
