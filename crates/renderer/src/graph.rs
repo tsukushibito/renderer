@@ -47,6 +47,7 @@ mod pass;
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub(crate) mod provenance;
 mod ranges;
+mod raster;
 mod resource;
 mod storage;
 
@@ -61,9 +62,10 @@ pub use pass::{
 };
 pub(crate) use pass::{
     AttachmentOperand, Dependency, DependencyList, LoadAction, MeshUpload, Operation, Pass,
-    RasterDrawOperands, ResourceAccess, UploadSource,
+    RasterBatchOperands, RasterDrawOperands, ResourceAccess, UploadSource,
 };
 pub use ranges::{ImportRanges, ImportRangesPool};
+pub use raster::RasterPass;
 pub use resource::{
     BufferDesc, BufferHandle, ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage,
     PassHandle, ResourceKey, SampleCount,

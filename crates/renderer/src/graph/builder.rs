@@ -3,15 +3,60 @@
 //! Each builder validates raw inputs and appends only after all operands succeed.
 
 use crate::ImageFormat;
-use std::{borrow::Borrow, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use super::accesses::conflicting_accesses_in;
 use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
-    GraphError, GraphErrorKind, ImageDesc, ImageHandle, LoadOp, MeshUpload, Operation, PassHandle,
-    PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess, ResourceDesc,
-    ResourceHandle, SampleCount, UploadSource, overlaps,
+    GraphError, GraphErrorKind, ImageDesc, ImageHandle, MeshUpload, Operation, PassHandle,
+    PassKind, ResourceAccess, ResourceDesc, ResourceHandle, SampleCount, UploadSource, overlaps,
 };
+
+/// Roll back unpublished builder storage on a returned error or during an
+/// unwind from a caller-provided iterator or recording callback.
+struct PassTransaction<'a> {
+    graph: &'a mut Graph,
+    accesses: usize,
+    draws: usize,
+    raster_batches: usize,
+    uploads: usize,
+    names: usize,
+    bindings: usize,
+    attachments: usize,
+    committed: bool,
+}
+
+impl<'a> PassTransaction<'a> {
+    fn new(graph: &'a mut Graph) -> Self {
+        Self {
+            accesses: graph.accesses.len(),
+            draws: graph.draws.len(),
+            raster_batches: graph.raster_batches.len(),
+            uploads: graph.uploads.len(),
+            names: graph.names.len(),
+            bindings: graph.bindings.len(),
+            attachments: graph.attachments.len(),
+            graph,
+            committed: false,
+        }
+    }
+}
+
+impl Drop for PassTransaction<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let data = self.graph.data_mut();
+        data.accesses.truncate(self.accesses);
+        data.draws.truncate(self.draws);
+        data.raster_batches.truncate(self.raster_batches);
+        data.uploads.truncate(self.uploads);
+        data.names.truncate(self.names);
+        data.bindings.truncate(self.bindings);
+        data.attachments.truncate(self.attachments);
+    }
+}
 
 impl Graph {
     pub fn upload_buffer(
@@ -277,184 +322,6 @@ impl Graph {
             ))
         })
     }
-    /// Own a draw sequence using an explicit trusted Raster Program. Inputs are
-    /// u32 triangles in the Program's single per-vertex stream layout.
-    /// Accepts borrowed slices or iterators of owned or borrowed draws. Constants
-    /// and draws are captured into prepared storage in caller order. Iterator
-    /// size hints are not trusted for capacity or empty-pass decisions.
-    pub fn raster<I, D>(
-        &mut self,
-        name: &str,
-        program: &crate::program::ManagedRasterProgram,
-        draws: I,
-        attachments: RasterAttachments<'_>,
-    ) -> Result<PassHandle, GraphError>
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<RasterDraw>,
-    {
-        #[cfg(feature = "tracy")]
-        let _span = tracy_client::Client::running()
-            .map(|client| client.span(tracy_client::span_location!("renderer.graph.raster"), 0));
-        if program.requires_depth_load()
-            && !attachments
-                .depth
-                .is_some_and(|depth| matches!(depth.load, LoadOp::Load))
-        {
-            return Err(GraphError::new(
-                GraphErrorKind::InvalidInput,
-                "Raster Program requires a depth attachment with Load",
-            )
-            .with_pass_name(name));
-        }
-        (|| {
-            if program.requires_depth() && attachments.depth.is_none() {
-                return Err(GraphError::new(
-                    GraphErrorKind::InvalidInput,
-                    "Raster Program requires a depth attachment",
-                ));
-            }
-            if attachments.colors.len() != program.color_outputs().len() {
-                return Err(GraphError::new(
-                    GraphErrorKind::Unsupported,
-                    "Raster attachment count differs from the Program output contract",
-                ));
-            }
-            for (attachment, format) in attachments.colors.iter().zip(program.color_outputs()) {
-                let resource = self.image_id(attachment.view.image)?;
-                if self.image_desc_at(resource)?.format != *format {
-                    return Err(self.resource_error(
-                        GraphErrorKind::InvalidInput,
-                        "Raster attachment format differs from the Program output contract",
-                        resource,
-                    ));
-                }
-            }
-            Ok(())
-        })()
-        .map_err(|error: GraphError| error.with_pass_name(name))?;
-        let mut draws = draws.into_iter().peekable();
-        if draws.peek().is_none() {
-            return self.attachment_pass(name, attachments);
-        }
-        self.build_pass(name, |graph| {
-            let first_draw = graph.draws.len();
-            let first_access = graph.accesses.len();
-            graph.data_mut().clear_raster_ranges();
-            {
-                #[cfg(feature = "tracy")]
-                let _span = tracy_client::Client::running().map(|client| {
-                    client.span(
-                        tracy_client::span_location!("renderer.graph.raster.capture_draws"),
-                        0,
-                    )
-                });
-                for draw in draws {
-                    let draw = draw.borrow();
-                    let (vertices, indices, index_count, parameters, bindings) = (
-                        draw.vertices,
-                        draw.indices,
-                        draw.index_count,
-                        draw.parameters,
-                        draw.bindings,
-                    );
-                    if graph.draws.len() == graph.capacity.draws {
-                        return Err(super::storage::capacity_error(
-                            super::GraphCapacityKind::Draws,
-                            graph.capacity.draws,
-                            graph.draws.len().checked_add(1),
-                        ));
-                    }
-                    if parameters.words().len() * 4 != program.parameter_size() as usize {
-                        return Err(GraphError::new(
-                            GraphErrorKind::InvalidInput,
-                            "Raster inline constants do not match the Program ABI",
-                        ));
-                    }
-                    let bindings = graph.use_raster_bindings(program, bindings)?;
-                    let (vertices, indices) = graph.raster_buffers(
-                        vertices,
-                        indices,
-                        index_count,
-                        u64::from(program.vertex_stride()),
-                    )?;
-                    let vs = graph.resources[vertices].desc.units();
-                    let ix = u64::from(index_count) * 4;
-                    let data = graph.data_mut();
-                    for (resource, purpose, size) in [(vertices, 0, vs), (indices, 1, ix)] {
-                        if data.raster_ranges[resource] == [0; 2] {
-                            // A validated resource is registered once, so this list
-                            // fits the same prepared resource capacity as the ranges.
-                            data.raster_resources.push(resource);
-                        }
-                        let range = &mut data.raster_ranges[resource][purpose];
-                        *range = (*range).max(size);
-                    }
-                    data.draws.push(RasterDrawOperands {
-                        bindings,
-                        vertices,
-                        indices,
-                        index_count,
-                        parameters,
-                    });
-                }
-            }
-            let plan = {
-                #[cfg(feature = "tracy")]
-                let _span = tracy_client::Client::running().map(|client| {
-                    client.span(
-                        tracy_client::span_location!(
-                            "renderer.graph.raster.accesses_and_attachments"
-                        ),
-                        0,
-                    )
-                });
-                // Preserve resource-order accesses without scanning unused resources.
-                graph.data_mut().raster_resources.sort_unstable();
-                for index in 0..graph.raster_resources.len() {
-                    let resource = graph.raster_resources[index];
-                    let [vertices, indices] = graph.raster_ranges[resource];
-                    if vertices != 0 {
-                        graph.append_access(read(resource, 0..vertices, AccessPurpose::Vertex))?;
-                    }
-                    if indices != 0 {
-                        graph.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
-                    }
-                }
-                let plan = graph.append_attachments(attachments)?;
-                // Binding-free Raster has only read-only buffer inputs and
-                // image attachments, so only attachment pairs can conflict.
-                // Shader-bound Raster needs one check over the complete pass.
-                let checked = if program.bindings().is_empty() {
-                    plan.accesses.clone()
-                } else {
-                    first_access..graph.accesses.len()
-                };
-                if let Some(left) = graph.conflicting_pass_access(checked.clone())? {
-                    let access = &graph.accesses[checked.start + left];
-                    return Err(graph
-                        .resource_error(
-                            GraphErrorKind::InvalidInput,
-                            "overlapping Raster shader and attachment footprints are unsupported",
-                            access.resource,
-                        )
-                        .with_range(graph.access_range(access.resource, access.range.clone())));
-                }
-                plan
-            };
-            Ok((
-                Operation::Raster {
-                    program: *program,
-                    draws: first_draw..graph.draws.len(),
-                    colors: plan.colors,
-                    depth: plan.depth,
-                },
-                first_access..graph.accesses.len(),
-                false,
-            ))
-        })
-    }
-
     pub fn composite(
         &mut self,
         name: &str,
@@ -592,15 +459,8 @@ impl Graph {
         let _span = tracy_client::Client::running().map(|client| {
             client.span(tracy_client::span_location!("renderer.graph.build_pass"), 0)
         });
-        let checkpoint = (
-            self.accesses.len(),
-            self.draws.len(),
-            self.uploads.len(),
-            self.names.len(),
-            self.bindings.len(),
-            self.attachments.len(),
-        );
-        let result = build(self).and_then(|(operation, accesses, side_effect)| {
+        let mut transaction = PassTransaction::new(self);
+        let result = build(transaction.graph).and_then(|(operation, accesses, side_effect)| {
             #[cfg(feature = "tracy")]
             let _span = tracy_client::Client::running().map(|client| {
                 client.span(
@@ -611,7 +471,7 @@ impl Graph {
             // All access-sensitive validation has completed. Compact exact
             // readers only now, preserving binding-slot error attribution and
             // every write, purpose, stage and original first occurrence.
-            let data = self.data_mut();
+            let data = transaction.graph.data_mut();
             data.read_accesses.clear();
             let mut end = accesses.start;
             for index in accesses.clone() {
@@ -626,47 +486,16 @@ impl Graph {
                 end += 1;
             }
             data.accesses.truncate(end);
-            self.push(name, operation, accesses.start..end, side_effect)
+            transaction
+                .graph
+                .push(name, operation, accesses.start..end, side_effect)
         });
-        if result.is_err() {
-            let data = self.data_mut();
-            data.accesses.truncate(checkpoint.0);
-            data.draws.truncate(checkpoint.1);
-            data.uploads.truncate(checkpoint.2);
-            data.names.truncate(checkpoint.3);
-            data.bindings.truncate(checkpoint.4);
-            data.attachments.truncate(checkpoint.5);
-        }
+        transaction.committed = result.is_ok();
         result.map_err(|error| error.with_pass_name(name))
-    }
-    fn raster_buffers(
-        &self,
-        vertices: BufferHandle,
-        indices: BufferHandle,
-        index_count: u32,
-        stride: u64,
-    ) -> Result<(usize, usize), GraphError> {
-        let vertices = self.buffer_id(vertices)?;
-        let indices = self.buffer_id(indices)?;
-        let vs = self.resources[vertices].desc.units();
-        let ix = u64::from(index_count) * 4;
-        if vs < stride
-            || !vs.is_multiple_of(stride)
-            || index_count == 0
-            || !index_count.is_multiple_of(3)
-            || ix > self.resources[indices].desc.units()
-        {
-            return Err(self.resource_error(
-                GraphErrorKind::InvalidInput,
-                "raster requires complete vertex strides and nonzero triangle u32 indices within the index buffer",
-                if vs < stride || !vs.is_multiple_of(stride) { vertices } else { indices },
-            ));
-        }
-        Ok((vertices, indices))
     }
 }
 
-fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
+pub(super) fn read(resource: usize, range: Range<u64>, purpose: AccessPurpose) -> ResourceAccess {
     ResourceAccess {
         stages: purpose.default_stages(),
         resource,
@@ -761,7 +590,7 @@ mod tests {
     use super::*;
     use crate::graph::{
         Attachment, BufferDesc, GraphCapacity, GraphPool, ImageAspect, LoadAction, LoadOp,
-        RasterParameters, StoreOp,
+        RasterAttachments, RasterDraw, RasterParameters, StoreOp,
     };
     use crate::program::ManagedRasterProgram;
 
@@ -1216,7 +1045,7 @@ mod tests {
             .unwrap();
         let plan = graph.compile().unwrap();
         let Operation::Raster {
-            program,
+            batches,
             draws,
             colors,
             depth: depth_index,
@@ -1224,7 +1053,11 @@ mod tests {
         else {
             panic!("owned Raster operation")
         };
-        assert!(program.same(&ManagedRasterProgram::mesh()));
+        let [batch] = plan.raster_batches(batches) else {
+            panic!("one Program batch")
+        };
+        assert!(batch.program.same(&ManagedRasterProgram::mesh()));
+        assert_eq!(&batch.draws, draws);
         let owned = plan.raster_draws(draws);
         assert_eq!(owned.len(), 2);
         for (actual, expected) in owned.iter().zip([first, second]) {
@@ -1256,6 +1089,186 @@ mod tests {
                     && access.purpose == AccessPurpose::Index
                     && access.range == (0..12))
         );
+    }
+
+    #[test]
+    fn one_raster_scope_preserves_program_switches_and_shares_attachments() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                draws: 3,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mesh = uploaded_draw(&mut graph, "geometry");
+        let (bindings, texture) = textured_bindings(&mut graph);
+        graph
+            .upload_image("texture contents", texture, &[255; 16])
+            .unwrap();
+        let textured = RasterDraw {
+            bindings: Some(bindings),
+            ..mesh
+        };
+        let output = graph.image("output", ImageDesc::rgba8(2, 2)).unwrap();
+        let target = graph.image_view(output, 0, 0).unwrap();
+        let pass = graph
+            .raster_pass(
+                "ordered graphics",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: target,
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    color_resolves: &[],
+                    depth: None,
+                },
+                |raster| {
+                    raster.draw(&ManagedRasterProgram::mesh(), [mesh])?;
+                    raster.draw(&ManagedRasterProgram::textured_mesh(), [textured])?;
+                    raster.draw(&ManagedRasterProgram::mesh(), [mesh])
+                },
+            )
+            .unwrap();
+        graph.readback_image("output pixels", output).unwrap();
+        let plan = graph.compile().unwrap();
+        let Operation::Raster {
+            batches,
+            draws,
+            colors,
+            depth: None,
+        } = &plan.passes[pass.index].operation
+        else {
+            panic!("combined Raster operation");
+        };
+        let [first, second, third] = plan.raster_batches(batches) else {
+            panic!("three ordered batches");
+        };
+        assert!(first.program.same(&ManagedRasterProgram::mesh()));
+        assert!(second.program.same(&ManagedRasterProgram::textured_mesh()));
+        assert!(third.program.same(&first.program));
+        assert_eq!(first.draws.start, draws.start);
+        assert_eq!(first.draws.end, second.draws.start);
+        assert_eq!(second.draws.end, third.draws.start);
+        assert_eq!(third.draws.end, draws.end);
+        assert_eq!(colors.len(), 1);
+        let accesses = plan.accesses(pass.index);
+        assert_eq!(
+            accesses
+                .iter()
+                .filter(|access| access.purpose == AccessPurpose::ColorAttachment)
+                .count(),
+            1
+        );
+        assert!(
+            accesses
+                .iter()
+                .any(|access| access.resource == texture.index
+                    && access.purpose == AccessPurpose::Sampled)
+        );
+    }
+
+    #[test]
+    fn callbacks_cannot_publish_failed_draws_and_unwind_restores_capacity() {
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                draws: 2,
+                attachments: 1,
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mesh = uploaded_draw(&mut graph, "geometry");
+        let output = graph.image("output", ImageDesc::rgba8(2, 2)).unwrap();
+        let attachment = Attachment {
+            view: graph.image_view(output, 0, 0).unwrap(),
+            load: LoadOp::Clear([0.0; 4]),
+            store: StoreOp::Store,
+        };
+        let attachments = RasterAttachments {
+            colors: &[attachment],
+            color_resolves: &[],
+            depth: None,
+        };
+        let program = ManagedRasterProgram::mesh();
+        let error = graph
+            .raster_pass("two slots", attachments, |raster| {
+                raster.draw(&program, [mesh])?;
+                assert!(raster.draw(&program, [mesh, mesh]).is_err());
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(
+            error.capacity().unwrap().kind,
+            crate::graph::GraphCapacityKind::Draws
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = graph.raster_pass("unwound", attachments, |raster| {
+                    raster.draw(&program, [mesh])?;
+                    panic!("application callback panicked");
+                });
+            }))
+            .is_err()
+        );
+        graph
+            .raster_pass("retry", attachments, |raster| {
+                raster.draw(&program, [mesh])?;
+                raster.draw(&program, [mesh])
+            })
+            .unwrap();
+        graph.readback_image("output pixels", output).unwrap();
+        let plan = graph.compile().unwrap();
+        assert!(
+            plan.ordered_pass_names()
+                .eq(["geometry", "geometry", "retry", "output pixels"])
+        );
+    }
+
+    #[test]
+    fn shader_read_conflicts_with_resolve_output_from_the_same_raster_scope() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let mesh = uploaded_draw(&mut graph, "geometry");
+        let (bindings, resolve) = textured_bindings(&mut graph);
+        let color = graph
+            .image(
+                "MSAA color",
+                ImageDesc::rgba8(2, 2).with_sample_count(SampleCount::X4),
+            )
+            .unwrap();
+        let target = graph.image_view(color, 0, 0).unwrap();
+        let resolve_view = graph.image_view(resolve, 0, 0).unwrap();
+        let error = graph
+            .raster_pass(
+                "resolve with feedback",
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: target,
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Discard,
+                    }],
+                    color_resolves: &[Some(resolve_view)],
+                    depth: None,
+                },
+                |raster| {
+                    raster.draw(&ManagedRasterProgram::mesh(), [mesh])?;
+                    raster.draw(
+                        &ManagedRasterProgram::textured_mesh(),
+                        [RasterDraw {
+                            bindings: Some(bindings),
+                            ..mesh
+                        }],
+                    )
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.resource(), Some(resolve.into()));
     }
 
     #[test]

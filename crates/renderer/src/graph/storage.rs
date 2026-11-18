@@ -2,7 +2,7 @@
 
 use super::{
     AttachmentOperand, BindingOperands, Dependency, Graph, GraphCapacityKind, GraphError, Pass,
-    RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
+    RasterBatchOperands, RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
 };
 use std::{
     cell::UnsafeCell,
@@ -152,6 +152,7 @@ pub struct GraphStorage {
     pub(super) names: Vec<u8>,
     pub(super) uploads: Vec<u8>,
     pub(super) draws: Vec<RasterDrawOperands>,
+    pub(super) raster_batches: Vec<RasterBatchOperands>,
     pub(super) bindings: Vec<BindingOperands>,
     pub(super) binding_accesses: Vec<ResourceAccess>,
     pub(super) raster_binding_seen: Vec<bool>,
@@ -204,6 +205,8 @@ impl GraphStorage {
             names: buffer(capacity.name_bytes, GraphCapacityKind::NameBytes)?,
             uploads: buffer(capacity.upload_bytes, GraphCapacityKind::UploadBytes)?,
             draws: buffer(capacity.draws, GraphCapacityKind::Draws)?,
+            // An encoded Program batch contains at least one draw.
+            raster_batches: buffer(capacity.draws, GraphCapacityKind::Draws)?,
             bindings: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             binding_accesses: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             raster_binding_seen,
@@ -246,6 +249,7 @@ impl GraphStorage {
         self.names.clear();
         self.uploads.clear();
         self.draws.clear();
+        self.raster_batches.clear();
         self.bindings.clear();
         self.binding_accesses.clear();
         self.read_accesses.clear();
@@ -299,6 +303,9 @@ impl GraphStorage {
     )]
     pub(crate) fn raster_draws(&self, range: &Range<usize>) -> &[RasterDrawOperands] {
         &self.draws[range.clone()]
+    }
+    pub(crate) fn raster_batches(&self, range: &Range<usize>) -> &[RasterBatchOperands] {
+        &self.raster_batches[range.clone()]
     }
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn raster_bindings(&self, range: &Range<usize>) -> &[BindingOperands] {

@@ -43,6 +43,12 @@ impl Graph {
         &mut self,
         attachments: RasterAttachments<'_>,
     ) -> Result<AttachmentPlan, GraphError> {
+        if attachments.colors.len() > crate::program::MAX_RASTER_COLOR_ATTACHMENTS {
+            return Err(GraphError::new(
+                GraphErrorKind::Unsupported,
+                "color attachment count exceeds the common Raster limit",
+            ));
+        }
         let count = attachments
             .colors
             .len()

@@ -9,6 +9,7 @@ pub const MAX_RASTER_PROGRAMS: usize = 64;
 pub const MAX_RASTER_BIND_GROUPS: usize = 4;
 pub const MAX_RASTER_ATTRIBUTES: usize = 16;
 pub const MAX_RASTER_BINDINGS: usize = 16;
+pub const MAX_RASTER_COLOR_ATTACHMENTS: usize = 8;
 
 /// Component layout for one attribute in the single per-vertex stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -289,9 +290,11 @@ impl ManagedRasterProgram {
     /// DXIL uses TEXCOORD semantic indices equal to attribute locations. Indices
     /// are u32 triangle lists, with first index/base vertex zero and one instance.
     /// No undeclared vertex input, resources, push constants or side effects are
-    /// permitted. One color output requires a fragment shader; the sole output
-    /// is RGBA8_UNORM or RGBA16_FLOAT, never depth. With no color outputs a
-    /// fragment shader is optional and may discard fragments, but has no outputs.
+    /// permitted. Color outputs require a fragment shader. Declare their
+    /// formats in contiguous shader output location order from zero, up to
+    /// [`MAX_RASTER_COLOR_ATTACHMENTS`]. Each format is RGBA8_UNORM or RGBA16_FLOAT.
+    /// Blend state applies uniformly to every color target. With no color outputs
+    /// a fragment shader is optional and may discard fragments, but has no outputs.
     /// An absent stage has empty binaries for both backends and no stage inputs,
     /// bindings or inline parameters declared for it.
     /// Fragment depth, stencil, sample-mask writes, sample shading, storage writes,
