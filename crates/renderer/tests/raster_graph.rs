@@ -319,20 +319,24 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "ordered overlap without depth",
-            &ManagedRasterProgram::mesh(),
-            [
-                RasterDraw {
-                    // The failure fixture reaches a valid first draw before
-                    // discovering the bad sixth index of the second draw.
-                    index_count: if invalid_last_index { 3 } else { 6 },
-                    ..placed(quad, false, 0.5, [1.0, 0.0, 0.0, 1.0])
-                },
-                placed(quad, true, 0.5, [0.0, 1.0, 0.0, 1.0]),
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(&graph, order, LoadOp::Clear([0.0; 4]))],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::mesh(),
+                    [
+                        RasterDraw {
+                            // The failure fixture reaches a valid first draw before
+                            // discovering the bad sixth index of the second draw.
+                            index_count: if invalid_last_index { 3 } else { 6 },
+                            ..placed(quad, false, 0.5, [1.0, 0.0, 0.0, 1.0])
+                        },
+                        placed(quad, true, 0.5, [0.0, 1.0, 0.0, 1.0]),
+                    ],
+                )
             },
         )
         .unwrap();
@@ -355,13 +359,12 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "load existing color and replace right half",
-            &ManagedRasterProgram::mesh(),
-            [right_overlay],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(&graph, order, LoadOp::Load)],
                 depth: None,
             },
+            |raster| raster.draw(&ManagedRasterProgram::mesh(), [right_overlay]),
         )
         .unwrap();
     expected.push(observe(
@@ -386,16 +389,20 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "near far near sequence",
-            &ManagedRasterProgram::mesh(),
-            [
-                placed(quad, false, 0.25, [1.0, 0.0, 0.0, 1.0]),
-                placed(quad, false, 0.75, [0.0, 1.0, 0.0, 1.0]),
-                placed(quad, true, 0.125, [0.0, 0.0, 1.0, 1.0]),
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                 depth: Some(depth_attachment(&graph, depth, LoadOp::Clear(1.0))),
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::mesh(),
+                    [
+                        placed(quad, false, 0.25, [1.0, 0.0, 0.0, 1.0]),
+                        placed(quad, false, 0.75, [0.0, 1.0, 0.0, 1.0]),
+                        placed(quad, true, 0.125, [0.0, 0.0, 1.0, 1.0]),
+                    ],
+                )
             },
         )
         .unwrap();
@@ -424,15 +431,19 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "depth-only shadow",
-            &ManagedRasterProgram::depth_only(),
-            [
-                placed(quad, false, 0.5, [1.0; 4]),
-                placed(quad, true, 0.25, [1.0; 4]),
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[],
                 depth: Some(depth_attachment(&graph, shadow, LoadOp::Clear(1.0))),
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::depth_only(),
+                    [
+                        placed(quad, false, 0.5, [1.0; 4]),
+                        placed(quad, true, 0.25, [1.0; 4]),
+                    ],
+                )
             },
         )
         .unwrap();
@@ -445,12 +456,16 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "load shadow and reject farther geometry",
-            &ManagedRasterProgram::depth_only(),
-            [placed(quad, false, 0.75, [1.0; 4])],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[],
                 depth: Some(depth_attachment(&graph, shadow, LoadOp::Load)),
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::depth_only(),
+                    [placed(quad, false, 0.75, [1.0; 4])],
+                )
             },
         )
         .unwrap();
@@ -531,21 +546,25 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "per-draw descriptor ownership",
-            &ManagedRasterProgram::textured_mesh(),
-            [
-                RasterDraw {
-                    bindings: Some(left),
-                    ..panel
-                },
-                RasterDraw {
-                    bindings: Some(right),
-                    ..panel
-                },
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(&graph, output, LoadOp::Clear([0.0; 4]))],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::textured_mesh(),
+                    [
+                        RasterDraw {
+                            bindings: Some(left),
+                            ..panel
+                        },
+                        RasterDraw {
+                            bindings: Some(right),
+                            ..panel
+                        },
+                    ],
+                )
             },
         )
         .unwrap();
@@ -563,15 +582,19 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "signed HDR vertex color",
-            &ManagedRasterProgram::mesh_hdr(),
-            [
-                placed(quad, false, 0.5, [2.0, -0.5, 0.25, 1.0]),
-                placed(quad, true, 0.5, [0.5, 4.0, -1.0, 1.0]),
-            ],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(&graph, output, LoadOp::Clear([0.0; 4]))],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::mesh_hdr(),
+                    [
+                        placed(quad, false, 0.5, [2.0, -0.5, 0.25, 1.0]),
+                        placed(quad, true, 0.5, [0.5, 4.0, -1.0, 1.0]),
+                    ],
+                )
             },
         )
         .unwrap();
@@ -611,15 +634,19 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
     graph
         .raster(
             "HDR sampling",
-            &ManagedRasterProgram::textured_mesh_hdr(),
-            [RasterDraw {
-                bindings: Some(hdr_bindings),
-                ..quad
-            }],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(&graph, output, LoadOp::Clear([0.0; 4]))],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &ManagedRasterProgram::textured_mesh_hdr(),
+                    [RasterDraw {
+                        bindings: Some(hdr_bindings),
+                        ..quad
+                    }],
+                )
             },
         )
         .unwrap();

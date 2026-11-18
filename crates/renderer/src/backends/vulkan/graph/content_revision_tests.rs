@@ -290,16 +290,6 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
         discard
             .raster(
                 "discard",
-                &crate::program::ManagedRasterProgram::mesh(),
-                [RasterDraw {
-                    bindings: None,
-                    vertices,
-                    indices,
-                    first_index: 0,
-                    index_count: 3,
-                    instance_count: 1,
-                    parameters: RasterParameters::default().into(),
-                }],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -312,6 +302,20 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                         load: LoadOp::Load,
                         store: StoreOp::Discard,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        [RasterDraw {
+                            bindings: None,
+                            vertices,
+                            indices,
+                            first_index: 0,
+                            index_count: 3,
+                            instance_count: 1,
+                            parameters: RasterParameters::default().into(),
+                        }],
+                    )
                 },
             )
             .unwrap();

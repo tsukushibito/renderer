@@ -52,16 +52,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let final_image = graph.image("final composite", desc)?;
     graph.raster(
         "indexed mesh and depth",
-        &renderer::program::ManagedRasterProgram::mesh(),
-        [RasterDraw {
-            bindings: None,
-            vertices: vertex_buffer,
-            indices: index_buffer,
-            first_index: 0,
-            index_count: 6,
-            instance_count: 1,
-            parameters: RasterParameters::default().into(),
-        }],
         RasterAttachments {
             color_resolves: &[],
             colors: &[Attachment {
@@ -74,6 +64,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 load: LoadOp::Clear(1.0),
                 store: StoreOp::Store,
             }),
+        },
+        |raster| {
+            raster.draw(
+                &renderer::program::ManagedRasterProgram::mesh(),
+                [RasterDraw {
+                    bindings: None,
+                    vertices: vertex_buffer,
+                    indices: index_buffer,
+                    first_index: 0,
+                    index_count: 6,
+                    instance_count: 1,
+                    parameters: RasterParameters::default().into(),
+                }],
+            )
         },
     )?;
     graph.compute("invert", color, inverted, ComputeTransform::Invert)?;

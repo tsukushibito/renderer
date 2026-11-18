@@ -1181,8 +1181,6 @@ pub(super) fn build(
             });
         graph.raster(
             "sun shadow depth",
-            &shadow_program,
-            draws,
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[],
@@ -1192,6 +1190,7 @@ pub(super) fn build(
                     store: StoreOp::Store,
                 }),
             },
+            |raster| raster.draw(&shadow_program, draws),
         )?;
     }
     let lighting_bindings = [
@@ -1474,7 +1473,7 @@ pub(super) fn build(
         } else {
             StoreOp::Store
         };
-        graph.raster_pass(
+        graph.raster(
             "Forward PBR opaque and mask",
             RasterAttachments {
                 color_resolves: if final_opaque {
@@ -1547,8 +1546,6 @@ pub(super) fn build(
             };
             graph.raster(
                 "Forward PBR alpha blend",
-                &options.pipeline.forward_program(true),
-                workspace.blended.iter().copied().map(draw),
                 RasterAttachments {
                     color_resolves: final_resolve.as_slice(),
                     colors: &[Attachment {
@@ -1561,6 +1558,12 @@ pub(super) fn build(
                         load: LoadOp::Load,
                         store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &options.pipeline.forward_program(true),
+                        workspace.blended.iter().copied().map(draw),
+                    )
                 },
             )?;
         }
@@ -1593,16 +1596,6 @@ pub(super) fn build(
     let tone_bindings = graph.raster_bindings(&tone_program, &tone_bindings)?;
     graph.raster(
         "fixed exposure and PBR Neutral",
-        &tone_program,
-        [RasterDraw {
-            bindings: Some(tone_bindings),
-            vertices: resolve_vertices,
-            indices: resolve_indices,
-            first_index: 0,
-            index_count: 3,
-            instance_count: 1,
-            parameters: RasterConstants::default(),
-        }],
         RasterAttachments {
             color_resolves: &[],
             colors: &[Attachment {
@@ -1611,6 +1604,20 @@ pub(super) fn build(
                 store: StoreOp::Store,
             }],
             depth: None,
+        },
+        |raster| {
+            raster.draw(
+                &tone_program,
+                [RasterDraw {
+                    bindings: Some(tone_bindings),
+                    vertices: resolve_vertices,
+                    indices: resolve_indices,
+                    first_index: 0,
+                    index_count: 3,
+                    instance_count: 1,
+                    parameters: RasterConstants::default(),
+                }],
+            )
         },
     )?;
     let resolve_bindings = [
@@ -1643,16 +1650,6 @@ pub(super) fn build(
         } else {
             "FXAA and single sRGB encode"
         },
-        &resolve_program,
-        [RasterDraw {
-            bindings: Some(resolve_bindings),
-            vertices: resolve_vertices,
-            indices: resolve_indices,
-            first_index: 0,
-            index_count: 3,
-            instance_count: 1,
-            parameters: RasterConstants::default(),
-        }],
         RasterAttachments {
             color_resolves: &[],
             colors: &[Attachment {
@@ -1661,6 +1658,20 @@ pub(super) fn build(
                 store: StoreOp::Store,
             }],
             depth: None,
+        },
+        |raster| {
+            raster.draw(
+                &resolve_program,
+                [RasterDraw {
+                    bindings: Some(resolve_bindings),
+                    vertices: resolve_vertices,
+                    indices: resolve_indices,
+                    first_index: 0,
+                    index_count: 3,
+                    instance_count: 1,
+                    parameters: RasterConstants::default(),
+                }],
+            )
         },
     )?;
     graph.export_image(output)?;

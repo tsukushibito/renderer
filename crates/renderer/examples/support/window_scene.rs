@@ -156,13 +156,12 @@ pub fn build(
             };
             graph.raster(
                 "application raster scene",
-                &ManagedRasterProgram::mesh(),
-                draws,
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[color_attachment],
                     depth: Some(depth_attachment),
                 },
+                |raster| raster.draw(&ManagedRasterProgram::mesh(), draws),
             )?;
             let output = graph.image("application output", color_desc)?;
             passes::output(graph, "application output copy", color, output)?;

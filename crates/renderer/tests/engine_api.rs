@@ -197,8 +197,6 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
         graph
             .raster(
                 name,
-                &ManagedRasterProgram::mesh_hdr(),
-                inputs.draws(),
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -208,6 +206,7 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
                     }],
                     depth: None,
                 },
+                |raster| raster.draw(&ManagedRasterProgram::mesh_hdr(), inputs.draws()),
             )
             .unwrap();
         outputs.push(color);

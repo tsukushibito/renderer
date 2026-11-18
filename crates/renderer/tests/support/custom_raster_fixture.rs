@@ -417,12 +417,16 @@ pub fn overlay(
     graph
         .raster(
             name,
-            &custom_program(blend(frame)),
-            &draws[..overlay_count(frame)],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[color_attachment(graph, scene.color, LoadOp::Load)],
                 depth: Some(depth_attachment(graph, scene.depth.unwrap(), LoadOp::Load)),
+            },
+            |raster| {
+                raster.draw(
+                    &custom_program(blend(frame)),
+                    &draws[..overlay_count(frame)],
+                )
             },
         )
         .unwrap();

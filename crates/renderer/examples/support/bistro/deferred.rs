@@ -48,7 +48,7 @@ pub(super) fn append(
         load: LoadOp::Clear([0.0; 4]),
         store: StoreOp::Store,
     });
-    graph.raster_pass(
+    graph.raster(
         "G-buffer opaque and mask",
         RasterAttachments {
             color_resolves: &[],
@@ -95,16 +95,6 @@ pub(super) fn append(
     let bindings = graph.raster_bindings(&program, &bindings)?;
     graph.raster(
         "deferred PBR lighting",
-        &program,
-        [RasterDraw {
-            vertices: scene.fullscreen_vertices,
-            indices: scene.fullscreen_indices,
-            first_index: 0,
-            index_count: 3,
-            instance_count: 1,
-            parameters: RasterConstants::default(),
-            bindings: Some(bindings),
-        }],
         RasterAttachments {
             color_resolves: &[],
             colors: &[Attachment {
@@ -113,6 +103,20 @@ pub(super) fn append(
                 store: StoreOp::Store,
             }],
             depth: None,
+        },
+        |raster| {
+            raster.draw(
+                &program,
+                [RasterDraw {
+                    vertices: scene.fullscreen_vertices,
+                    indices: scene.fullscreen_indices,
+                    first_index: 0,
+                    index_count: 3,
+                    instance_count: 1,
+                    parameters: RasterConstants::default(),
+                    bindings: Some(bindings),
+                }],
+            )
         },
     )?;
     Ok(())

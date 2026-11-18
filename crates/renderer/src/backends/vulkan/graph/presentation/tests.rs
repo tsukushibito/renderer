@@ -213,16 +213,6 @@ fn image_frame(
     graph
         .raster(
             "wsi.standard.mesh",
-            &crate::program::ManagedRasterProgram::mesh(),
-            [RasterDraw {
-                bindings: None,
-                vertices,
-                indices,
-                first_index: 0,
-                index_count: 3,
-                instance_count: 1,
-                parameters: parameters.into(),
-            }],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[Attachment {
@@ -235,6 +225,20 @@ fn image_frame(
                     load: LoadOp::Clear(1.0),
                     store: StoreOp::Store,
                 }),
+            },
+            |raster| {
+                raster.draw(
+                    &crate::program::ManagedRasterProgram::mesh(),
+                    [RasterDraw {
+                        bindings: None,
+                        vertices,
+                        indices,
+                        first_index: 0,
+                        index_count: 3,
+                        instance_count: 1,
+                        parameters: parameters.into(),
+                    }],
+                )
             },
         )
         .unwrap();

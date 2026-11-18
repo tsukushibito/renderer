@@ -265,13 +265,12 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
     graph
         .raster(
             "owned Raster",
-            &program,
-            &draws[..draw_count],
             RasterAttachments {
                 color_resolves: &[],
                 colors: color_attachments.as_slice(),
                 depth: depth_attachment,
             },
+            |raster| raster.draw(&program, &draws[..draw_count]),
         )
         .unwrap();
     let mut expected = Expected {

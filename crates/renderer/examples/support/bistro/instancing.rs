@@ -6,7 +6,6 @@ use renderer::graph::{RasterConstants, RasterDraw};
 const COLUMNS: usize = 6;
 const ROWS: usize = 4;
 pub(super) const COUNT: usize = COLUMNS * ROWS;
-pub(super) const INLINE_BYTES: u32 = 68;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Mode {
@@ -41,7 +40,7 @@ impl Mode {
 pub(super) struct Placements {
     pub primitive: usize,
     pub material: usize,
-    layout: [u32; (INLINE_BYTES / 4) as usize],
+    layout: [u32; (program::INSTANCE_INLINE_BYTES / 4) as usize],
 }
 
 impl Placements {
@@ -89,7 +88,7 @@ impl Placements {
                 - spacing * (COLUMNS - 1) as f32 * 0.5 * right[i]
                 - spacing * (ROWS - 1) as f32 * 0.5 * up[i]
         });
-        let mut layout = [0; (INLINE_BYTES / 4) as usize];
+        let mut layout = [0; (program::INSTANCE_INLINE_BYTES / 4) as usize];
         for (word, value) in layout.iter_mut().zip(
             center
                 .into_iter()

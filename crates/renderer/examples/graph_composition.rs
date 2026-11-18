@@ -41,11 +41,6 @@ fn sampled_pass(
     let bindings = graph.raster_bindings(&ManagedRasterProgram::textured_mesh(), &bindings)?;
     graph.raster(
         name,
-        &ManagedRasterProgram::textured_mesh(),
-        [RasterDraw {
-            bindings: Some(bindings),
-            ..draw
-        }],
         RasterAttachments {
             color_resolves: &[],
             colors: &[Attachment {
@@ -54,6 +49,15 @@ fn sampled_pass(
                 store: StoreOp::Store,
             }],
             depth: None,
+        },
+        |raster| {
+            raster.draw(
+                &ManagedRasterProgram::textured_mesh(),
+                [RasterDraw {
+                    bindings: Some(bindings),
+                    ..draw
+                }],
+            )
         },
     )?;
     Ok(())

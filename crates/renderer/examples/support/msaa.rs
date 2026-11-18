@@ -112,12 +112,9 @@ fn frame(
                 }
             });
         graph
-            .raster(
-                "depth-tested triangles",
-                &ManagedRasterProgram::mesh_hdr(),
-                draws,
-                attachments,
-            )
+            .raster("depth-tested triangles", attachments, |raster| {
+                raster.draw(&ManagedRasterProgram::mesh_hdr(), draws)
+            })
             .unwrap();
     } else {
         graph

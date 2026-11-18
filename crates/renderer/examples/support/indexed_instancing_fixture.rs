@@ -156,7 +156,7 @@ fn build(
         parameters: RasterConstants::new(&[0])?,
         bindings: Some(bindings),
     };
-    graph.raster_pass("ranged indexed draws", targets, |raster| match mode {
+    graph.raster("ranged indexed draws", targets, |raster| match mode {
         DrawMode::Separate => raster.draw(
             &program,
             [

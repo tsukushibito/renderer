@@ -185,7 +185,7 @@ fn build(
     let second_pixel: &'static [u8];
     match scene {
         Scene::Opaque => {
-            graph.raster_pass("mixed-format MRT", targets, |raster| {
+            graph.raster("mixed-format MRT", targets, |raster| {
                 raster.draw(&opaque, [draw])
             })?;
             first_pixel = &[255, 0, 0, 255];
@@ -220,7 +220,7 @@ fn build(
             };
             let alpha = 0.5_f32.to_bits();
             let one = 1.0_f32.to_bits();
-            graph.raster_pass("inline, uniform, inline", targets, |raster| {
+            graph.raster("inline, uniform, inline", targets, |raster| {
                 raster.draw(
                     &inline,
                     [RasterDraw {

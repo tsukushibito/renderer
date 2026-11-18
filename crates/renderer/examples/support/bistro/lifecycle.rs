@@ -265,16 +265,6 @@ fn mip_probes<B: Backend>(
         )?;
         graph.raster(
             "sample selected mip",
-            &program,
-            [RasterDraw {
-                bindings: Some(bindings),
-                vertices,
-                indices,
-                first_index: 0,
-                index_count: 3,
-                instance_count: 1,
-                parameters: RasterConstants::default(),
-            }],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[Attachment {
@@ -283,6 +273,20 @@ fn mip_probes<B: Backend>(
                     store: StoreOp::Store,
                 }],
                 depth: None,
+            },
+            |raster| {
+                raster.draw(
+                    &program,
+                    [RasterDraw {
+                        bindings: Some(bindings),
+                        vertices,
+                        indices,
+                        first_index: 0,
+                        index_count: 3,
+                        instance_count: 1,
+                        parameters: RasterConstants::default(),
+                    }],
+                )
             },
         )?;
         let pass = graph.readback_image("mip texels", output)?;

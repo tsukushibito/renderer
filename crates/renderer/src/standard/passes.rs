@@ -53,13 +53,12 @@ where
     };
     graph.raster(
         name,
-        &program,
-        draws,
         RasterAttachments {
             color_resolves: &[],
             colors: &[color],
             depth,
         },
+        |raster| raster.draw(&program, draws),
     )
 }
 
@@ -79,13 +78,12 @@ where
 {
     graph.raster(
         name,
-        &ManagedRasterProgram::depth_only(),
-        draws,
         RasterAttachments {
             color_resolves: &[],
             colors: &[],
             depth: Some(depth),
         },
+        |raster| raster.draw(&ManagedRasterProgram::depth_only(), draws),
     )
 }
 

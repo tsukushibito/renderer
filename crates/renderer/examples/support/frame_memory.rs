@@ -448,8 +448,6 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
     graph
         .raster(
             "owned raster",
-            &ManagedRasterProgram::mesh(),
-            &draws[..count],
             RasterAttachments {
                 color_resolves: &[],
                 colors: &[Attachment {
@@ -463,6 +461,7 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                     store: StoreOp::Store,
                 }),
             },
+            |raster| raster.draw(&ManagedRasterProgram::mesh(), &draws[..count]),
         )
         .unwrap();
     // The caller may reuse or discard this input immediately after construction.
@@ -619,13 +618,12 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         graph
             .raster(
                 "sampled hop",
-                &ManagedRasterProgram::textured_mesh(),
-                draws,
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[target(views[1 - current])],
                     depth: None,
                 },
+                |raster| raster.draw(&ManagedRasterProgram::textured_mesh(), draws),
             )
             .unwrap();
         let discarded_input = RasterDraw {

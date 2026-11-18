@@ -219,7 +219,7 @@ impl Graph {
     /// actions, and optional color resolves. The callback is consumed during
     /// declaration. Its draws, Programs and resources are owned by the Graph.
     /// If no draws were recorded, the scope becomes an attachment-only pass.
-    pub fn raster_pass(
+    pub fn raster(
         &mut self,
         name: &str,
         attachments: RasterAttachments<'_>,
@@ -287,22 +287,6 @@ impl Graph {
             };
             Ok((operation, first_access..graph.accesses.len(), false))
         })
-    }
-
-    /// A single-program Raster scope. Indexed draw operands are captured in
-    /// caller order from borrowed or owned inputs.
-    pub fn raster<I, D>(
-        &mut self,
-        name: &str,
-        program: &ManagedRasterProgram,
-        draws: I,
-        attachments: RasterAttachments<'_>,
-    ) -> Result<PassHandle, GraphError>
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<RasterDraw>,
-    {
-        self.raster_pass(name, attachments, |raster| raster.draw(program, draws))
     }
 
     fn append_raster_buffer_accesses(&mut self) -> Result<(), GraphError> {

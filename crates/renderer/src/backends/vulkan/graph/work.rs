@@ -1525,16 +1525,6 @@ mod tests {
         graph
             .raster(
                 "mesh",
-                &crate::program::ManagedRasterProgram::mesh(),
-                [RasterDraw {
-                    bindings: None,
-                    vertices,
-                    indices,
-                    first_index: 0,
-                    index_count: 3,
-                    instance_count: 1,
-                    parameters: RasterParameters::default().into(),
-                }],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -1547,6 +1537,20 @@ mod tests {
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        [RasterDraw {
+                            bindings: None,
+                            vertices,
+                            indices,
+                            first_index: 0,
+                            index_count: 3,
+                            instance_count: 1,
+                            parameters: RasterParameters::default().into(),
+                        }],
+                    )
                 },
             )
             .unwrap();
@@ -2192,16 +2196,6 @@ mod tests {
             let depth = draw.image("depth", ImageDesc::depth32(1, 1)).unwrap();
             draw.raster(
                 "degenerate-mesh",
-                &crate::program::ManagedRasterProgram::mesh(),
-                [RasterDraw {
-                    bindings: None,
-                    vertices,
-                    indices,
-                    first_index: 0,
-                    index_count: 3,
-                    instance_count: 1,
-                    parameters: RasterParameters::default().into(),
-                }],
                 RasterAttachments {
                     color_resolves: &[],
                     colors: &[Attachment {
@@ -2214,6 +2208,20 @@ mod tests {
                         load: LoadOp::Clear(1.0),
                         store: StoreOp::Store,
                     }),
+                },
+                |raster| {
+                    raster.draw(
+                        &crate::program::ManagedRasterProgram::mesh(),
+                        [RasterDraw {
+                            bindings: None,
+                            vertices,
+                            indices,
+                            first_index: 0,
+                            index_count: 3,
+                            instance_count: 1,
+                            parameters: RasterParameters::default().into(),
+                        }],
+                    )
                 },
             )
             .unwrap();
