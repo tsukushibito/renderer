@@ -1,0 +1,127 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "comp",
+            "workgroup_size" : [
+                64,
+                1,
+                1
+            ],
+            "workgroup_size_is_spec_constant_id" : [
+                false,
+                false,
+                false
+            ]
+        }
+    ],
+    "types" : {
+        "_20" : {
+            "name" : "_20",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uvec2",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 8
+                }
+            ]
+        },
+        "_31" : {
+            "name" : "_31",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 4
+                }
+            ]
+        },
+        "_42" : {
+            "name" : "_42",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uint",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "uint",
+                    "offset" : 4
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "uint",
+                    "offset" : 8
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "int",
+                    "offset" : 12
+                },
+                {
+                    "name" : "_m4",
+                    "type" : "uint",
+                    "offset" : 16
+                }
+            ]
+        },
+        "_44" : {
+            "name" : "_44",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "_42",
+                    "array" : [
+                        0
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 0,
+                    "array_stride" : 20
+                }
+            ]
+        }
+    },
+    "ssbos" : [
+        {
+            "type" : "_20",
+            "name" : "_20_22",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "_31",
+            "name" : "_31_33",
+            "readonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 1
+        },
+        {
+            "type" : "_44",
+            "name" : "_44_46",
+            "writeonly" : true,
+            "block_size" : 0,
+            "set" : 0,
+            "binding" : 2
+        }
+    ]
+}

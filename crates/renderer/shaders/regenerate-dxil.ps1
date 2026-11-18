@@ -125,13 +125,15 @@ try {
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
         Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.reflection.txt')) $reflection
-        $reflected = $assetName -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'textured.vert', 'textured.frag', 'compute_hdr_sampled.comp', 'compute_hdr_storage.comp')
+        $reflected = $assetName -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'indexed_indirect.comp', 'textured.vert', 'textured.frag', 'compute_hdr_sampled.comp', 'compute_hdr_storage.comp')
         if ($reflected) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
             if ($source -ceq 'uniform.comp') {
                 Assert-BufferCopyAbi ($spirvReflection | ConvertFrom-Json) $reflection
             } elseif ($source -ceq 'storage_read.comp') {
                 Assert-BufferCopyAbi ($spirvReflection | ConvertFrom-Json) $reflection -StorageInput
+            } elseif ($source -ceq 'indexed_indirect.comp') {
+                Assert-IndexedIndirectAbi ($spirvReflection | ConvertFrom-Json) $reflection
             } elseif ($source -ceq 'sampled.comp') {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection
             } elseif ($source -ceq 'sampled_float.comp') {

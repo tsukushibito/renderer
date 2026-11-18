@@ -108,6 +108,64 @@ function Assert-HdrComputeAbi([object]$Spirv, [string]$Dxil, [switch]$StorageInp
     }
 }
 
+function Assert-IndexedIndirectAbi([object]$Spirv, [string]$Dxil) {
+    $asset = 'indexed_indirect.comp'
+    Assert-ManagedComputeEntry $Spirv $Dxil $asset @(64, 1, 1)
+    foreach ($category in @('ubos', 'textures', 'separate_images', 'separate_samplers', 'images',
+            'sampled_images', 'subpass_inputs', 'acceleration_structures', 'push_constants')) {
+        $property = $Spirv.PSObject.Properties[$category]
+        if ($null -ne $property -and @($property.Value).Count -ne 0) {
+            throw "$asset has unexpected resource category $category."
+        }
+    }
+
+    $buffers = @($Spirv.ssbos | Sort-Object binding)
+    if ($buffers.Count -ne 3) { throw "$asset requires three storage buffers." }
+    $strides = @(8, 4, 20)
+    for ($slot = 0; $slot -lt $buffers.Count; $slot++) {
+        $buffer = $buffers[$slot]
+        $usage = if ($slot -eq 2) { 'writeonly' } else { 'readonly' }
+        $qualifier = $buffer.PSObject.Properties[$usage]
+        if ($buffer.set -ne 0 -or $buffer.binding -ne $slot -or $buffer.block_size -ne 0 -or
+            $null -ne $buffer.PSObject.Properties['array'] -or $null -eq $qualifier -or -not $qualifier.Value) {
+            throw "$asset SPIR-V storage slot $slot has the wrong binding, array shape or mutability."
+        }
+        $members = @($Spirv.types.PSObject.Properties[$buffer.type].Value.members)
+        if ($members.Count -ne 1) { throw "$asset storage slot $slot must have one runtime array." }
+        $member = $members[0]
+        if ($member.offset -ne 0 -or $member.array_stride -ne $strides[$slot] -or
+            (@($member.array) -join ',') -cne '0' -or
+            (@($member.array_size_is_literal) -join ',') -cne 'True') {
+            throw "$asset storage slot $slot has the wrong entry offset, stride or array shape."
+        }
+        if ($slot -lt 2) {
+            $inputType = if ($slot -eq 0) { 'uvec2' } else { 'uint' }
+            if ($member.type -cne $inputType) { throw "$asset storage slot $slot has the wrong entry type." }
+        } else {
+            $fields = @($Spirv.types.PSObject.Properties[$member.type].Value.members)
+            if ((@($fields.type) -join ',') -cne 'uint,uint,uint,int,uint' -or
+                (@($fields.offset) -join ',') -cne '0,4,8,12,16' -or
+                @($fields | Where-Object { $null -ne $_.PSObject.Properties['array'] }).Count -ne 0) {
+                throw "$asset indexed arguments do not have the native five-word layout."
+            }
+        }
+    }
+
+    $sections = @($Dxil -csplit '; Resource Bindings:')
+    if ($sections.Count -ne 2) { throw "$asset DXIL resource reflection is missing." }
+    $rows = @(Get-DxilResourceRows $sections[1])
+    if ($rows.Count -ne 3) { throw "$asset DXIL resource count differs." }
+    foreach ($expected in @(@('texture', 'r/o', '^t0(?:,space0)?$'),
+            @('texture', 'r/o', '^t1(?:,space0)?$'), @('UAV', 'r/w', '^u2(?:,space0)?$'))) {
+        $matching = @($rows | Where-Object {
+            $_.Groups['kind'].Value -ceq $expected[0] -and $_.Groups['format'].Value -ceq 'byte' -and
+            $_.Groups['dimension'].Value -ceq $expected[1] -and $_.Groups['slot'].Value -cmatch $expected[2] -and
+            $_.Groups['count'].Value -ceq '1'
+        })
+        if ($matching.Count -ne 1) { throw "$asset DXIL raw buffer type, register or space differs." }
+    }
+}
+
 function Get-DxilResourceRows([string]$Section) {
     # Capture every resource row, including unsupported types, so an extra
     # resource cannot pass just because it is not one of the expected kinds.

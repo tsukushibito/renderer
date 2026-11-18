@@ -128,6 +128,23 @@ Expect-Rejected 'float output array stride' {
 Expect-Rejected 'float output specialized array count' {
     param($s) $s.types.PSObject.Properties[$s.ssbos[0].type].Value.members[0].array_size_is_literal = @($false)
 }
+# Indexed indirect output must match both native argument encodings.
+$verify = ${function:Assert-IndexedIndirectAbi}
+$json = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/indexed_indirect.comp.spirv-reflection.json') -Raw
+$reflection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dxil/indexed_indirect.comp.reflection.txt') -Raw
+Assert-IndexedIndirectAbi ($json | ConvertFrom-Json) $reflection
+Expect-Rejected 'indexed indirect input mutability' { param($s) $s.ssbos[0].readonly = $false }
+Expect-Rejected 'indexed indirect argument stride' {
+    param($s) $s.types.PSObject.Properties[$s.ssbos[2].type].Value.members[0].array_stride = 24
+}
+Expect-Rejected 'indexed indirect base vertex signedness' {
+    param($s)
+    $entries = $s.types.PSObject.Properties[$s.ssbos[2].type].Value.members[0]
+    $s.types.PSObject.Properties[$entries.type].Value.members[3].type = 'uint'
+}
+Expect-Rejected 'indexed indirect output register' { param($s, $d) $d.Replace('u2', 'u3') }
+Expect-Rejected 'indexed indirect local size' { param($s, $d) $d.Replace('NumThreads=(64,1,1)', 'NumThreads=(32,1,1)') }
+
 # Storage input reuses the buffer-copy layout and output checks above. Exercise
 # the new read-only qualifier and raw SRV branch, without duplicating that matrix.
 $verify = { param($s, $d) Assert-BufferCopyAbi $s $d -StorageInput }
@@ -230,4 +247,4 @@ Expect-Rejected 'DXIL readonly storage image treated as SRV' {
     param($s, $d) [regex]::Replace($d, '(?m)(^;[^\r\n]+\s+)UAV(\s+f32\s+2d\s+\S+\s+u0\s+1\s*$)', '${1}texture${2}')
 }
 Expect-Rejected 'DXIL HDR storage input buffer register' { param($s, $d) $d.Replace('t1', 't0') }
-Write-Output 'Managed compute, caller-owned HDR compute and descriptor-bound Raster ABI contracts and mismatch rejections passed.'
+Write-Output 'Managed compute, indexed indirect, caller-owned HDR compute and descriptor-bound Raster ABI contracts and mismatch rejections passed.'

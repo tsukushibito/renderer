@@ -13,6 +13,15 @@
     "color": "The older fixed fixtures use linear RGBA8_UNORM without filtering. sampled.comp uses nearest/clamp RGBA8 sampling and UNORM packing. sampled_float.comp reads View LOD0 through the selected immutable sampler and preserves all FP32 result bits. Native sRGB Views decode RGB before filtering; RGBA16F returns ordinary FP32 components. The shader does not perform tone mapping or sRGB output encoding."
   },
   "shaders": {
+    "indexed_indirect.comp": {
+      "profile": "cs_6_0",
+      "local_size": [64, 1, 1],
+      "vulkan_bindings": ["set0/binding0 readonly storage pairs, std430 stride 8", "set0/binding1 readonly storage u32, std430 stride 4", "set0/binding2 writeonly storage indirect commands, std430 stride 20"],
+      "d3d12_active_bindings": ["t0/space0 ByteAddressBuffer templates", "t1/space0 ByteAddressBuffer visibility", "u2/space0 RWByteAddressBuffer arguments"],
+      "behavior": "Each invocation reads one [first index, index count] template and one visibility word, then writes [index count, visibility != 0, first index, 0 signed base vertex, 0 first instance].",
+      "bounds": "The renderer dispatches [groups, 1, 1] with at most 65535 groups and binds aligned ranges for all 64 slots per group, using zero-instance padding where needed. Each invocation initializes twenty disjoint output bytes without accessing any other slot.",
+      "trust": "The renderer validates template geometry and index bounds before encoding. The shader has no arbitrary writable access or external effects. Compiler reflection verifies the binary interface, while native tests verify behavior and consumption."
+    },
     "../tests/support/shaders/compute_hdr_sampled.comp": {
       "profile": "cs_6_0",
       "local_size": [4, 4, 1],
