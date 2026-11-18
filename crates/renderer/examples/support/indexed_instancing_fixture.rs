@@ -180,14 +180,14 @@ fn build(
 }
 
 fn verify(bytes: &[u8; BYTES], mode: DrawMode, api: &str) {
-    for (index, pixel) in bytes.chunks_exact(4).enumerate() {
+    for (index, pixel) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let x = index % WIDTH as usize;
         let expected = if x < WIDTH as usize / 2 {
             [255, 0, 0, 255]
         } else {
             [0, 255, 0, 255]
         };
-        assert_eq!(pixel, expected, "{api} {mode:?}, pixel {index}");
+        assert_eq!(*pixel, expected, "{api} {mode:?}, pixel {index}");
     }
 }
 
