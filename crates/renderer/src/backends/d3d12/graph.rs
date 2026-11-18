@@ -228,8 +228,8 @@ impl D3D12SubmissionResult {
         self.check_graph(pass)?;
         self.result.readback_into(pass.index, destination)
     }
-    #[cfg(test)]
-    pub(super) fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
+    #[cfg(all(test, feature = "d3d12-diagnostics"))]
+    fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
         let mut bytes = vec![0; self.readback_len(pass)?];
         self.readback_into(pass, &mut bytes)?;
         Ok(bytes)

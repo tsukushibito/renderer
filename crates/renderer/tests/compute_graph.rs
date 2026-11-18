@@ -913,10 +913,9 @@ mod native {
     #[test]
     #[ignore = "requires optimized Vulkan/D3D12 hardware without diagnostics"]
     fn managed_binding_graph_readbacks_shipping() {
-        assert!(
-            !cfg!(debug_assertions),
-            "shipping acceptance requires --release"
-        );
+        if cfg!(debug_assertions) {
+            panic!("shipping acceptance requires --release");
+        }
         binding_readbacks(false);
     }
 
