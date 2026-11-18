@@ -84,10 +84,6 @@ impl ExecutionError {
         Self::local(ExecutionErrorKind::InvalidInput, message, None)
     }
 
-    pub(crate) fn unsupported(message: &'static str) -> Self {
-        Self::local(ExecutionErrorKind::Unsupported, message, None)
-    }
-
     pub(crate) fn wrong_owner(message: &'static str) -> Self {
         Self::local(ExecutionErrorKind::WrongOwner, message, None)
     }
