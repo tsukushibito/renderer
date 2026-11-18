@@ -138,6 +138,7 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
             group: 0,
             binding: TILES,
             max_workgroups: [MAX_TILES / TILES_PER_GROUP, 1],
+            read_bindings: &[],
         },
         bytes: &[CULL_CAMERA_BYTES, LIGHT_BUFFER_BYTES, GROUP_BYTES],
     },

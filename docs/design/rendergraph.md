@@ -299,9 +299,9 @@ loadがDiscardの操作だけで有効な内容を確立したとは扱わない
 `GraphCapacity::attachments`はcolorとdepthを合わせた保持数の上限で、失敗時には途中のarena/access/name追加を戻す。
 旧`clear_attachments`はこのAPIへ置換し、互換入口を残さない。
 
-両backendのnative attachment操作とRasterはcolor一個（RGBA8またはRGBA16F）、optional D32、
-またはcolorなし＋D32を扱う。Load/Clear/DiscardとStore/Discardを保持し、ダミーattachmentは要求しない。
-MRT、複数layer、multi-mip画像をattachment/storageへ使うlive計画はpreflightで拒否し、native記録・投入へ進めない。
+両backendのnative attachment操作とRasterは、デバイスが対応する範囲で最大8枚のカラー（RGBA8またはRGBA16F）と
+任意のD32を扱う。カラーなしのD32パスも構築できる。複数layerやmulti-mip画像をattachment/storageへ使う
+live計画はpreflightで拒否する。
 sampled mip chainのcache identityはmip数も区別し、同じbase extent/formatの1mip画像を誤再利用しない。
 D3D12のprepareは既存execution枠の取得後に適合を検査する。未準備容量の不足が先に返る場合があり、
 全backendのエラー種別の優先順位を固定する契約ではない。
@@ -449,10 +449,14 @@ MRT、比較sampler、影の照明処理、tone mappingはこの契約に含め�
 通常prepare中のnative作成・内部waitで補わない。各drawのdescriptor内容は記録からcancelまたは実GPU完了まで保持し、
 同じpass内でも別drawのUniform/画像/samplerに上書きされない。
 
-planはProgram identity、draw順、各定数、全buffer/View参照を準備済みarenaへ所有する。
-vertex/index用途はdrawから導き、共有bufferの各用途を失わずに集約する。Indexはu32三角形、
-first index/base vertexは0、instance数は1だけを扱う。CPU計画だけでindex本文の範囲内や実Device上限を保証せず、
-既存のnative provenance・更新時の失効・未知内容の拒否を維持する。
+planはProgram identity、draw順、各定数、全buffer/View参照を準備済みarenaで所有する。
+一つの描画区間に複数のProgramとdraw列を追加できる。全Programの色形式と順序をアタッチメントに合わせ、
+Load/Storeとresolveは区間全体に適用する。Programを切り替えても宣言されたdraw順を保持する。
+
+頂点とインデックスの用途はdrawから導き、共有bufferの各用途を集約する。u32三角形の直接描画は
+`first_index` と正の `instance_count` を指定でき、base vertexと開始instanceは0とする。
+Graphは使うインデックス範囲だけに依存を張る。nativeでは現行内容の範囲保証とDevice上限を確認し、
+不変な共有ストリームの全体上限で安全に証明できる場合は毎回の走査を省く。
 集約用range表に加え、各slotでresource上限分の使用index列を準備する。同じbufferは一度だけ列へ登録し、
 前回触れたrangeだけを消す。今回の使用indexだけをsortして従来のresource昇順でaccessを追加するため、
 非空Rasterごとの全resourceクリア・走査は行わない。draw数D・使用resource数Uに対して

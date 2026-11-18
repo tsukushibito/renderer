@@ -97,7 +97,9 @@ pub(super) fn append(
         [RasterDraw {
             vertices: scene.fullscreen_vertices,
             indices: scene.fullscreen_indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             parameters: RasterConstants::default(),
             bindings: Some(bindings),
         }],

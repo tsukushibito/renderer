@@ -277,13 +277,15 @@ Vulkan 1.3の全adapterで32bit全域を使えるとは仮定せず、feature有
 
 明示した`ManagedRasterProgram::mesh()`のowned Raster列は一つのDynamic Rendering区間で宣言したcolor/depthのLoad/Storeを適用し、
 pipelineとviewportを設定してから、owned draw列の順にbuffer binding・inline引数・indexed drawを記録する。
-draw命令自体はdraw数分あり、instancingやmulti-drawへの変換、描画順の並べ替えは行わない。
+宣言したdrawごとにインデックス範囲とインスタンス数を渡し、描画順を維持する。
 空listにはclear-onlyの既存経路を使い、Raster Programの作成を要求しない。
 単一drawも同じ列で記録する。Engineの標準opaqueは従来どおりClear/Storeを明示する。
 ProgramのSPIR-Vは管理下manifestからfactoryへ渡し、native pipelineは準備済み`ShaderPrograms`が保持する。
 CPUのstatic Program identityだけでnative所有者を代替せず、WorkのProgram/資源保持とplan pinをGPU完了まで維持する。
 color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を使う。
-MRT、複数subresourceを覆うattachment／storage View、array等の未対応live計画は物理取得前に拒否する。
+MRTは最大8色と任意のD32を一つのDynamic Rendering区間に設定し、Program切り替えも同じ区間で記録する。
+色形式と個数はDevice上限と照合し、共通のblend状態を各カラー出力に使う。
+複数subresourceを覆うattachment／storage Viewやarray等の未対応live計画は物理取得前に拒否する。
 sampled Viewの単一mip／全2D mip chainは対応範囲に含む。
 
 `prepare_raster_programs(&[ManagedRasterProgram])`は`prepare_working_set`に続く明示準備境界である。
