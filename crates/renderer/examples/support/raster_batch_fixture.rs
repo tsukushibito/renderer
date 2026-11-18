@@ -328,7 +328,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 ..Default::default()
             },
         },
-        &buffers.map(|(desc, count)| D3D12BufferClass { desc, count }),
+        &buffers.map(|(desc, count)| D3D12BufferClass {
+            size: desc.size,
+            count,
+        }),
         &images.map(|(desc, count)| D3D12ImageClass { desc, count }),
         &programs.map(Into::into),
         &[],
