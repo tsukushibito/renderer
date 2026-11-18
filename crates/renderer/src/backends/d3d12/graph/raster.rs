@@ -9,14 +9,14 @@ use super::super::{
     bindings::*,
     device::DeviceOwner,
     frame::{ExecutionSlot, FrameWork, ReadbackImage, ReadbackMeta},
-    raster::{INLINE_ROOT, RasterPipeline},
+    raster::{INLINE_ROOT, IndexedIndirectSignature, RasterPipeline},
     raster_storage::{PassScopes, RasterStorage},
 };
 use super::transition;
 use crate::{
     graph::{
-        AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, ResourceDesc,
-        SampleCount,
+        AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, RasterBatchOperands,
+        ResourceDesc, SampleCount,
     },
     program::{BindingType, MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram, ShaderStages},
 };
@@ -168,6 +168,7 @@ fn pass_scopes(
                         D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER
                     }
                     AccessPurpose::Index => D3D12_RESOURCE_STATE_INDEX_BUFFER,
+                    AccessPurpose::Indirect => D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
                     AccessPurpose::StorageRead => shader_read_state(access.stages),
                     _ => unreachable!("trusted Raster has read-only buffer uses"),
                 },
@@ -380,6 +381,7 @@ pub(super) fn record(
     pass: usize,
     programs: &[RasterPipeline],
     clear_programs: &super::super::raster_clear::ClearPrograms,
+    indexed_indirect: Option<&IndexedIndirectSignature>,
 ) -> Result<(), D3D12RuntimeError> {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::Client::running().map(|client| {
@@ -540,7 +542,7 @@ pub(super) fn record(
             }
             bound_heaps = true;
         }
-        record_draws(slot, owner, graph, program, &batch.draws)?;
+        record_draws(slot, owner, graph, batch, indexed_indirect)?;
     }
     record_resolves(
         graph,
@@ -556,11 +558,18 @@ fn record_draws(
     slot: &mut ExecutionSlot,
     owner: &DeviceOwner,
     graph: &CompiledGraph,
-    program: &ManagedRasterProgram,
-    draws: &Range<usize>,
+    batch: &RasterBatchOperands,
+    indexed_indirect: Option<&IndexedIndirectSignature>,
 ) -> Result<(), D3D12RuntimeError> {
+    let program = &batch.program;
     let storage = slot.raster.as_mut().unwrap();
-    for draw in graph.raster_draws(draws) {
+    let indirect = batch.indirect.as_ref().map(|command| {
+        let signature = indexed_indirect
+            .expect("preflight checked the encoder that owns this prepared signature");
+        let buffer = slot.buffers[slot.resource_map[command.buffer]].raw();
+        (signature, buffer, command.command_count)
+    });
+    for draw in graph.raster_draws(&batch.draws) {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running().map(|client| {
             client.span(
@@ -712,16 +721,30 @@ fn record_draws(
                     0,
                 )
             });
-            // SAFETY: Every vertex/index/binding operand is valid and retained, all
-            // required state is set, and native attachment order preserves draw order.
+            // SAFETY: The retained vertex, index and shader operands have
+            // valid bounds and every root argument is set. For indirect draws,
+            // Graph ties the buffer to the encoder that writes the known
+            // count of complete, in-bounds DRAW_INDEXED records, and the
+            // pass transition gives the reads INDIRECT_ARGUMENT state.
             unsafe {
-                slot.list.DrawIndexedInstanced(
-                    draw.index_count,
-                    draw.instance_count,
-                    draw.first_index,
-                    0,
-                    0,
-                );
+                if let Some((signature, commands, count)) = indirect {
+                    slot.list.ExecuteIndirect(
+                        signature.raw(),
+                        count,
+                        commands,
+                        0,
+                        None::<&ID3D12Resource>,
+                        0,
+                    );
+                } else {
+                    slot.list.DrawIndexedInstanced(
+                        draw.index_count,
+                        draw.instance_count,
+                        draw.first_index,
+                        0,
+                        0,
+                    );
+                }
             }
         }
     }

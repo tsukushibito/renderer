@@ -262,6 +262,14 @@ pub struct D3D12_COMMAND_QUEUE_DESC {
 pub type D3D12_COMMAND_QUEUE_FLAGS = u32;
 pub const D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT: D3D12_COMMAND_QUEUE_FLAGS = 1;
 pub const D3D12_COMMAND_QUEUE_FLAG_NONE: D3D12_COMMAND_QUEUE_FLAGS = 0;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_COMMAND_SIGNATURE_DESC {
+    pub ByteStride: u32,
+    pub NumArgumentDescs: u32,
+    pub pArgumentDescs: *const D3D12_INDIRECT_ARGUMENT_DESC,
+    pub NodeMask: u32,
+}
 pub type D3D12_COMPARISON_FUNC = i32;
 pub const D3D12_COMPARISON_FUNC_ALWAYS: D3D12_COMPARISON_FUNC = 8;
 pub const D3D12_COMPARISON_FUNC_EQUAL: D3D12_COMPARISON_FUNC = 3;
@@ -412,6 +420,15 @@ pub struct D3D12_DISCARD_REGION {
     pub pRects: *const D3D12_RECT,
     pub FirstSubresource: u32,
     pub NumSubresources: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_DRAW_INDEXED_ARGUMENTS {
+    pub IndexCountPerInstance: u32,
+    pub InstanceCount: u32,
+    pub StartIndexLocation: u32,
+    pub BaseVertexLocation: i32,
+    pub StartInstanceLocation: u32,
 }
 pub type D3D12_DSV_DIMENSION = i32;
 pub const D3D12_DSV_DIMENSION_TEXTURE1D: D3D12_DSV_DIMENSION = 1;
@@ -706,6 +723,78 @@ pub struct D3D12_INDEX_BUFFER_VIEW {
     pub SizeInBytes: u32,
     pub Format: DXGI_FORMAT,
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC {
+    pub Type: D3D12_INDIRECT_ARGUMENT_TYPE,
+    pub Anonymous: D3D12_INDIRECT_ARGUMENT_DESC_0,
+}
+impl Default for D3D12_INDIRECT_ARGUMENT_DESC {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union D3D12_INDIRECT_ARGUMENT_DESC_0 {
+    pub VertexBuffer: D3D12_INDIRECT_ARGUMENT_DESC_0_0,
+    pub Constant: D3D12_INDIRECT_ARGUMENT_DESC_0_1,
+    pub ConstantBufferView: D3D12_INDIRECT_ARGUMENT_DESC_0_2,
+    pub ShaderResourceView: D3D12_INDIRECT_ARGUMENT_DESC_0_3,
+    pub UnorderedAccessView: D3D12_INDIRECT_ARGUMENT_DESC_0_4,
+    pub IncrementingConstant: D3D12_INDIRECT_ARGUMENT_DESC_0_5,
+}
+impl Default for D3D12_INDIRECT_ARGUMENT_DESC_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC_0_0 {
+    pub Slot: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC_0_1 {
+    pub RootParameterIndex: u32,
+    pub DestOffsetIn32BitValues: u32,
+    pub Num32BitValuesToSet: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC_0_2 {
+    pub RootParameterIndex: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC_0_3 {
+    pub RootParameterIndex: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC_0_4 {
+    pub RootParameterIndex: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_INDIRECT_ARGUMENT_DESC_0_5 {
+    pub RootParameterIndex: u32,
+    pub DestOffsetIn32BitValues: u32,
+}
+pub type D3D12_INDIRECT_ARGUMENT_TYPE = i32;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT: D3D12_INDIRECT_ARGUMENT_TYPE = 5;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT_BUFFER_VIEW: D3D12_INDIRECT_ARGUMENT_TYPE = 6;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH: D3D12_INDIRECT_ARGUMENT_TYPE = 2;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH: D3D12_INDIRECT_ARGUMENT_TYPE = 10;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_RAYS: D3D12_INDIRECT_ARGUMENT_TYPE = 9;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_DRAW: D3D12_INDIRECT_ARGUMENT_TYPE = 0;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED: D3D12_INDIRECT_ARGUMENT_TYPE = 1;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_INCREMENTING_CONSTANT: D3D12_INDIRECT_ARGUMENT_TYPE = 11;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW: D3D12_INDIRECT_ARGUMENT_TYPE = 4;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_SHADER_RESOURCE_VIEW: D3D12_INDIRECT_ARGUMENT_TYPE = 7;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_UNORDERED_ACCESS_VIEW: D3D12_INDIRECT_ARGUMENT_TYPE = 8;
+pub const D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW: D3D12_INDIRECT_ARGUMENT_TYPE = 3;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_INFO_QUEUE_FILTER {
@@ -1995,6 +2084,29 @@ pub struct ID3D12CommandQueue_Vtbl {
 }
 impl windows_core::RuntimeName for ID3D12CommandQueue {}
 windows_core::imp::define_interface!(
+    ID3D12CommandSignature,
+    ID3D12CommandSignature_Vtbl,
+    0xc36a797c_ec80_4f0a_8985_a7b2475082d1
+);
+impl core::ops::Deref for ID3D12CommandSignature {
+    type Target = ID3D12Pageable;
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+windows_core::imp::interface_hierarchy!(
+    ID3D12CommandSignature,
+    windows_core::IUnknown,
+    ID3D12Object,
+    ID3D12DeviceChild,
+    ID3D12Pageable
+);
+#[repr(C)]
+pub struct ID3D12CommandSignature_Vtbl {
+    pub base__: ID3D12Pageable_Vtbl,
+}
+impl windows_core::RuntimeName for ID3D12CommandSignature {}
+windows_core::imp::define_interface!(
     ID3D12Debug,
     ID3D12Debug_Vtbl,
     0x344488b7_6846_474b_b989_f027448245e0
@@ -2552,6 +2664,27 @@ impl ID3D12Device {
             .ok()
         }
     }
+    pub unsafe fn CreateCommandSignature<P1, T>(
+        &self,
+        pdesc: *const D3D12_COMMAND_SIGNATURE_DESC,
+        prootsignature: P1,
+        result__: *mut Option<T>,
+    ) -> windows_core::Result<()>
+    where
+        P1: windows_core::Param<ID3D12RootSignature>,
+        T: windows_core::Interface,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).CreateCommandSignature)(
+                windows_core::Interface::as_raw(self),
+                pdesc,
+                prootsignature.param().abi(),
+                &T::IID,
+                result__ as *mut _ as *mut _,
+            )
+            .ok()
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12Device_Vtbl {
@@ -2698,7 +2831,13 @@ pub struct ID3D12Device_Vtbl {
         *mut *mut core::ffi::c_void,
     ) -> windows_core::HRESULT,
     SetStablePowerState: usize,
-    CreateCommandSignature: usize,
+    pub CreateCommandSignature: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const D3D12_COMMAND_SIGNATURE_DESC,
+        *mut core::ffi::c_void,
+        *const windows_core::GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> windows_core::HRESULT,
     GetResourceTiling: usize,
     GetAdapterLuid: usize,
 }
@@ -3221,6 +3360,31 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn ExecuteIndirect<P0, P2, P4>(
+        &self,
+        pcommandsignature: P0,
+        maxcommandcount: u32,
+        pargumentbuffer: P2,
+        argumentbufferoffset: u64,
+        pcountbuffer: P4,
+        countbufferoffset: u64,
+    ) where
+        P0: windows_core::Param<ID3D12CommandSignature>,
+        P2: windows_core::Param<ID3D12Resource>,
+        P4: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).ExecuteIndirect)(
+                windows_core::Interface::as_raw(self),
+                pcommandsignature.param().abi(),
+                maxcommandcount,
+                pargumentbuffer.param().abi(),
+                argumentbufferoffset,
+                pcountbuffer.param().abi(),
+                countbufferoffset,
+            );
+        }
+    }
 }
 #[repr(C)]
 pub struct ID3D12GraphicsCommandList_Vtbl {
@@ -3360,7 +3524,15 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     SetMarker: usize,
     BeginEvent: usize,
     EndEvent: usize,
-    ExecuteIndirect: usize,
+    pub ExecuteIndirect: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        u32,
+        *mut core::ffi::c_void,
+        u64,
+        *mut core::ffi::c_void,
+        u64,
+    ),
 }
 impl windows_core::RuntimeName for ID3D12GraphicsCommandList {}
 windows_core::imp::define_interface!(

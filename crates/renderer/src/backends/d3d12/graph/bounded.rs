@@ -806,6 +806,7 @@ pub(super) fn prepare(
                         pass,
                         &pool.raster_programs,
                         pool.clear_programs.as_ref().unwrap(),
+                        pool.indexed_indirect.as_ref(),
                     )?
                 }
                 _ => unreachable!("preflight established supported immutable operations"),

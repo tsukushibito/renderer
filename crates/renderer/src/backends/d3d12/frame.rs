@@ -20,7 +20,7 @@ use super::{
     D3D12RuntimeError,
     bindings::*,
     device::DeviceOwner,
-    raster::RasterPipeline,
+    raster::{IndexedIndirectSignature, RasterPipeline},
     raster_clear::ClearPrograms,
     raster_storage::{D3D12ImageClass, RasterStorage},
     resources::{DeviceBuffer, MAX_BUFFER_BYTES},
@@ -393,6 +393,7 @@ pub(super) struct FramePool {
     pub(super) raster_programs: Vec<RasterPipeline>,
     pub(super) clear_programs: Option<ClearPrograms>,
     pub(super) compute_programs: Vec<super::program::D3D12Program>,
+    pub(super) indexed_indirect: Option<IndexedIndirectSignature>,
     state: Mutex<PoolState>,
     profiling: AtomicBool,
     timestamps_prepared: AtomicBool,
@@ -471,6 +472,7 @@ impl FramePool {
             raster_programs: Vec::new(),
             clear_programs: None,
             compute_programs: Vec::new(),
+            indexed_indirect: None,
             profiling: AtomicBool::new(false),
             timestamps_prepared: AtomicBool::new(false),
             state: Mutex::new(PoolState {
@@ -644,6 +646,11 @@ impl FramePool {
             })?;
         let mut compute_images = 0;
         for program in compute_programs {
+            if pool_mut.indexed_indirect.is_none()
+                && program.same_asset(&crate::program::ManagedProgram::indexed_indirect_encoder())
+            {
+                pool_mut.indexed_indirect = Some(IndexedIndirectSignature::new(&pool_mut.owner)?);
+            }
             if !pool_mut
                 .compute_programs
                 .iter()
@@ -918,6 +925,7 @@ impl Drop for FramePool {
             std::mem::forget(std::mem::take(&mut self.raster_programs));
             std::mem::forget(self.clear_programs.take());
             std::mem::forget(std::mem::take(&mut self.compute_programs));
+            std::mem::forget(self.indexed_indirect.take());
             std::mem::forget(Arc::clone(&self.owner));
         }
     }

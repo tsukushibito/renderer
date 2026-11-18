@@ -4,8 +4,8 @@ use crate::{ImageFormat, graph::SampleCount};
 use std::mem::ManuallyDrop;
 
 use crate::program::{
-    BindingType, BlendState, CompareOp, MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram,
-    ShaderStages, VertexFormat,
+    BindingType, BlendState, CompareOp, INDIRECT_COMMAND_BYTES, MAX_RASTER_COLOR_ATTACHMENTS,
+    ManagedRasterProgram, ShaderStages, VertexFormat,
 };
 
 use super::{
@@ -16,6 +16,49 @@ use super::{
 };
 
 pub(super) const INLINE_ROOT: u32 = 0;
+
+const _: () = assert!(size_of::<D3D12_DRAW_INDEXED_ARGUMENTS>() == INDIRECT_COMMAND_BYTES as usize);
+
+pub(super) struct IndexedIndirectSignature(NativeObject<ID3D12CommandSignature>);
+// SAFETY: This immutable COM object is free-threaded. The FramePool retains it
+// until its recorded consumers have finished, including abnormal teardown.
+unsafe impl Send for IndexedIndirectSignature {}
+// SAFETY: Shared accesses only borrow the immutable free-threaded signature.
+unsafe impl Sync for IndexedIndirectSignature {}
+
+impl IndexedIndirectSignature {
+    pub(super) fn new(owner: &DeviceOwner) -> Result<Self, D3D12RuntimeError> {
+        let argument = D3D12_INDIRECT_ARGUMENT_DESC {
+            Type: D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED,
+            ..Default::default()
+        };
+        let descriptor = D3D12_COMMAND_SIGNATURE_DESC {
+            ByteStride: INDIRECT_COMMAND_BYTES as u32,
+            NumArgumentDescs: 1,
+            pArgumentDescs: &argument,
+            NodeMask: 0,
+        };
+        let mut signature = None;
+        // SAFETY: Both input descriptors live through this synchronous call.
+        // The signature contains only DRAW_INDEXED, so it needs no root
+        // signature. The returned owned COM reference moves into the pool.
+        let signature = object(owner, "ID3D12Device::CreateCommandSignature", || unsafe {
+            owner.raw.CreateCommandSignature(
+                &descriptor,
+                None::<&ID3D12RootSignature>,
+                &mut signature,
+            )?;
+            signature.ok_or_else(|| {
+                windows_core::Error::from_hresult(windows_core::HRESULT(0x8000_4003u32 as i32))
+            })
+        })?;
+        Ok(Self(signature))
+    }
+
+    pub(super) fn raw(&self) -> &ID3D12CommandSignature {
+        &self.0
+    }
+}
 
 fn visibility(stages: ShaderStages) -> D3D12_SHADER_VISIBILITY {
     if stages == ShaderStages::VERTEX {
