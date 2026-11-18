@@ -340,6 +340,7 @@ fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .attachment_pass(
             "seed Views",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &targets[..color_count],
                 depth: has_depth.then_some(Attachment {
                     view: depth_view,
@@ -356,6 +357,7 @@ fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .attachment_pass(
             "load Views",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &targets[..color_count],
                 depth: has_depth.then_some(Attachment {
                     view: depth_view,
@@ -391,6 +393,7 @@ fn attachment_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .attachment_pass(
             "dead View",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: unused,
                     load: LoadOp::Clear([0.0; 4]),
@@ -446,6 +449,7 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
             &ManagedRasterProgram::mesh(),
             &draws[..count],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([frame as f32, 0.0, 0.0, 1.0]),
@@ -560,6 +564,7 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .attachment_pass(
             "source texels",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[target(views[0])],
                 depth: None,
             },
@@ -613,6 +618,7 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                 &ManagedRasterProgram::textured_mesh(),
                 draws,
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target(views[1 - current])],
                     depth: None,
                 },
@@ -662,6 +668,7 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         .attachment_pass(
             "dead later write",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[target(views[current])],
                 depth: None,
             },

@@ -39,6 +39,9 @@ impl<T> Attachment<T> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RasterAttachments<'a> {
     pub colors: &'a [Attachment<[f32; 4]>],
+    /// Optional single-sample destination for each color slot. An empty slice
+    /// leaves all colors unresolved.
+    pub color_resolves: &'a [Option<ImageView>],
     /// Depth clear values must be zero or normal finite values in `[0, 1]`.
     /// Subnormal values are unsupported across the native clear paths.
     pub depth: Option<Attachment<f32>>,
@@ -47,6 +50,7 @@ pub struct RasterAttachments<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AttachmentOperand {
     pub view: ImageView,
+    pub resolve: Option<ImageView>,
     pub ops: AttachmentOps,
     /// Color RGBA or depth in the first component; meaningful only for Clear.
     #[cfg_attr(
@@ -207,6 +211,7 @@ pub enum AccessPurpose {
     Vertex,
     Index,
     ColorAttachment,
+    ColorResolve,
     DepthAttachment,
 }
 impl AccessPurpose {

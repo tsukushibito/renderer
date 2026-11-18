@@ -104,6 +104,7 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
                 &program,
                 [wrong_constants],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                     depth: Some(depth_attachment(&graph, LoadOp::Load)),
                 }
@@ -119,6 +120,7 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
                 &program,
                 [draws[0]],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[attachment(&graph, wrong_color, LoadOp::Clear([0.0; 4]))],
                     depth: Some(depth_attachment(&graph, LoadOp::Load)),
                 }
@@ -135,6 +137,7 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
                     &program,
                     &draws[..draw_count],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                         depth: None,
                     }
@@ -150,6 +153,7 @@ fn custom_raster_rejects_missing_input_constants_formats_and_required_depth() {
                     &program,
                     &draws[..draw_count],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                         depth: Some(depth_attachment(&graph, LoadOp::Clear(1.0))),
                     }
@@ -182,6 +186,7 @@ fn custom_raster_draw_capacity_fails_before_implicit_growth() {
             &fixture::custom_program(BlendState::Alpha),
             &draws[..2],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),

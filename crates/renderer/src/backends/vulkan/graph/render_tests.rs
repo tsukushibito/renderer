@@ -110,6 +110,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                 .attachment_pass(
                     "unsupported shape",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &colors[..[1, 0, 2][mode]],
                         depth: (mode == 1).then_some(depth_attachment),
                     },
@@ -150,6 +151,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: unsupported.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -179,6 +181,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
             .attachment_pass(
                 "blue seed",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: color_view,
                         load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
@@ -213,6 +216,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
                     },
                 ],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: color_view,
                         load: LoadOp::Load,
@@ -247,6 +251,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
             .attachment_pass(
                 "supported clear",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([1.0, 0.0, 0.0, 1.0]),
@@ -275,6 +280,7 @@ fn vulkan_attachment_subresource_native_boundaries() {
             .attachment_pass(
                 "dead subresource",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(multi, 1, 1).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -387,6 +393,7 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
                 &ManagedRasterProgram::textured_mesh_hdr(),
                 draws,
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(target, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -596,6 +603,7 @@ fn opaque_batch_comparison(
                 &crate::program::ManagedRasterProgram::mesh(),
                 batch_draws(draws),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
@@ -614,6 +622,7 @@ fn opaque_batch_comparison(
             .attachment_pass(
                 "opaque clear",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
@@ -640,6 +649,7 @@ fn opaque_batch_comparison(
                         parameters: parameters.into(),
                     }],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Load,
@@ -797,6 +807,7 @@ fn vulkan_graph_batch_rejects_later_draw_invalid_indices_before_submission() {
                     (short, indices, 3, RasterParameters::default()),
                 ]),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -865,6 +876,7 @@ fn vulkan_graph_batch_unions_shared_vertex_and_index_scopes() {
                 &crate::program::ManagedRasterProgram::mesh(),
                 batch_draws(vec![(buffer, buffer, 3, RasterParameters::default()); 3]),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
@@ -1036,6 +1048,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: invalid.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
@@ -1248,6 +1261,7 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: mesh.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
@@ -1427,6 +1441,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
@@ -1481,6 +1496,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Load,
@@ -1584,6 +1600,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),

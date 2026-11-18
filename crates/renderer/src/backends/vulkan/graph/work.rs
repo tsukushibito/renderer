@@ -1510,6 +1510,7 @@ mod tests {
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -2174,6 +2175,7 @@ mod tests {
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: draw.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([1.0, 0.0, 0.0, 1.0]),

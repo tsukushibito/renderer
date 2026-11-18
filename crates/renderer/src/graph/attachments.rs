@@ -2,8 +2,8 @@
 
 use super::{
     AccessPurpose, AttachmentOperand, Graph, GraphCapacityKind, GraphError, GraphErrorKind,
-    LoadAction, LoadOp, Operation, PassHandle, RasterAttachments, ResourceAccess, StoreOp,
-    storage::capacity_error,
+    LoadAction, LoadOp, Operation, PassHandle, RasterAttachments, ResourceAccess, SampleCount,
+    StoreOp, storage::capacity_error,
 };
 
 pub(super) struct AttachmentPlan {
@@ -63,8 +63,16 @@ impl Graph {
         }
         let first = self.attachments.len();
         let first_access = self.accesses.len();
-        let mut extent = None;
-        for attachment in attachments.colors {
+        if !attachments.color_resolves.is_empty()
+            && attachments.color_resolves.len() != attachments.colors.len()
+        {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "resolve list must be empty or match the color attachment count",
+            ));
+        }
+        let mut shape = None;
+        for (index, attachment) in attachments.colors.iter().enumerate() {
             let clear = match attachment.load {
                 LoadOp::Clear(value) if value.iter().all(|v| v.is_finite()) => value,
                 LoadOp::Clear(_) => {
@@ -79,11 +87,12 @@ impl Graph {
             self.append_attachment(
                 AttachmentOperand {
                     view: attachment.view,
+                    resolve: attachments.color_resolves.get(index).copied().flatten(),
                     ops: attachment.ops(),
                     clear,
                 },
                 super::ImageAspect::Color,
-                &mut extent,
+                &mut shape,
             )?;
         }
         let colors = first..self.attachments.len();
@@ -109,11 +118,12 @@ impl Graph {
             self.append_attachment(
                 AttachmentOperand {
                     view: attachment.view,
+                    resolve: None,
                     ops: attachment.ops(),
                     clear: [value, 0.0, 0.0, 0.0],
                 },
                 super::ImageAspect::Depth,
-                &mut extent,
+                &mut shape,
             )?;
             Some(index)
         } else {
@@ -164,7 +174,7 @@ impl Graph {
         &mut self,
         operand: AttachmentOperand,
         aspect: super::ImageAspect,
-        extent: &mut Option<[u32; 2]>,
+        shape: &mut Option<([u32; 2], SampleCount)>,
     ) -> Result<(), GraphError> {
         let resource = self.image_id(operand.view.image)?;
         let desc = self.image_desc_at(resource)?;
@@ -184,17 +194,18 @@ impl Graph {
         }
         // View creation validated these coordinates; descriptors cannot change
         // and image_id above establishes the same Graph owner and resource.
-        let current = desc
+        let extent = desc
             .mip_extent(operand.view.mip)
             .expect("immutable View extent");
-        if extent.is_some_and(|extent| extent != current) {
+        let current = (extent, desc.sample_count);
+        if shape.is_some_and(|shape| shape != current) {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
-                "attachment mip extents must match",
+                "attachment mip extents and sample counts must match",
                 resource,
             ));
         }
-        *extent = Some(current);
+        *shape = Some(current);
         let unit = u64::from(operand.view.layer) * u64::from(desc.mip_levels)
             + u64::from(operand.view.mip);
         self.append_access(ResourceAccess {
@@ -211,6 +222,31 @@ impl Graph {
                 AccessPurpose::DepthAttachment
             },
         })?;
+        if let Some(view) = operand.resolve {
+            let destination = self.image_id(view.image)?;
+            let resolved = self.image_desc_at(destination)?;
+            if desc.sample_count != SampleCount::X4
+                || operand.ops.load == LoadAction::Discard
+                || resolved != desc.with_sample_count(SampleCount::X1)
+                || view.mip_count != 1
+            {
+                return Err(self.resource_error(
+                    GraphErrorKind::InvalidInput,
+                    "color resolve requires initialized 4x color and a matching 1x destination",
+                    destination,
+                ));
+            }
+            self.append_access(ResourceAccess {
+                stages: crate::program::ShaderStages::EMPTY,
+                resource: destination,
+                range: 0..1,
+                read: false,
+                write: true,
+                initializes: true,
+                discard_after: false,
+                purpose: AccessPurpose::ColorResolve,
+            })?;
+        }
         self.data_mut().attachments.push(operand);
         Ok(())
     }
@@ -248,6 +284,7 @@ mod tests {
                 .attachment_pass(
                     "owned",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &colors,
                         depth: Some(Attachment {
                             view: d,
@@ -289,6 +326,7 @@ mod tests {
             .attachment_pass(
                 "baseline",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.25, 0.5, 0.75, 1.0]),

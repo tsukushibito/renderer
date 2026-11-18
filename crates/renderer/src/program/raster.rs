@@ -138,6 +138,22 @@ pub struct ManagedRasterProgram {
     manifest: &'static RasterProgramDescriptor,
 }
 
+/// A raster pipeline variant to prepare before frame processing.
+#[derive(Clone, Copy)]
+pub struct RasterPipelineRequest {
+    pub program: ManagedRasterProgram,
+    pub sample_count: crate::graph::SampleCount,
+}
+
+impl From<ManagedRasterProgram> for RasterPipelineRequest {
+    fn from(program: ManagedRasterProgram) -> Self {
+        Self {
+            program,
+            sample_count: crate::graph::SampleCount::X1,
+        }
+    }
+}
+
 const MESH_ATTRIBUTES: &[VertexAttribute] = &[
     VertexAttribute {
         location: 0,

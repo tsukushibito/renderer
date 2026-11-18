@@ -4,7 +4,7 @@ use crate::ImageFormat;
 use std::borrow::Borrow;
 
 use crate::graph::{
-    Attachment, Graph, GraphError, ImageDesc, ImageHandle, LoadOp, RasterDraw, StoreOp,
+    Attachment, Graph, GraphError, ImageDesc, ImageHandle, LoadOp, RasterDraw, SampleCount, StoreOp,
 };
 use crate::standard::passes::{self, OpaqueDepth};
 
@@ -73,9 +73,10 @@ where
         ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float
     ) || config.color.mip_levels != 1
         || config.color.array_layers != 1
+        || config.color.sample_count != SampleCount::X1
     {
         return Err(GraphError::custom(format!(
-            "standard forward '{name}': color must be a single-subresource RGBA8 or RGBA16F image"
+            "standard forward '{name}': color must be a single-sample, single-subresource RGBA8 or RGBA16F image"
         )));
     }
     let color = graph.image("forward color", config.color)?;

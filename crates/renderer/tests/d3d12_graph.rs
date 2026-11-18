@@ -231,6 +231,7 @@ fn append_owned_textured_raster(graph: &mut Graph) -> renderer::graph::ImageHand
                 bindings: Some(bindings),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(output, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),

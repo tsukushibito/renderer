@@ -266,6 +266,7 @@ mod tests {
                 .attachment_pass(
                     name,
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: color_view,
                             load: color_load,

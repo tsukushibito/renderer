@@ -222,6 +222,7 @@ fn image_frame(
                 parameters: parameters.into(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0, 0.0, if blue { 1.0 } else { 0.0 }, 1.0]),

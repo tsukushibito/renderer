@@ -157,6 +157,7 @@ pub fn build(
                 &ManagedRasterProgram::mesh(),
                 draws,
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[color_attachment],
                     depth: Some(depth_attachment),
                 },

@@ -87,6 +87,7 @@ fn shared_image_format_keeps_output_checks_and_transactional_capacity() {
                 &program,
                 [draw],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -101,6 +102,7 @@ fn shared_image_format_keeps_output_checks_and_transactional_capacity() {
             &ManagedRasterProgram::mesh_hdr(),
             [draw],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[hdr],
                 depth: None,
             },
@@ -151,6 +153,7 @@ fn whole_image_transfers_use_format_bytes_and_read_back_stored_depth() {
         .attachment_pass(
             "depth clear",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[],
                 depth: Some(Attachment {
                     view,
@@ -185,6 +188,7 @@ fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
                     &ManagedRasterProgram::depth_only(),
                     [draw],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[],
                         depth: None
                     },
@@ -199,6 +203,7 @@ fn depth_only_draws_require_depth_and_do_not_restore_discarded_contents() {
                 &ManagedRasterProgram::depth_only(),
                 [draw],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[],
                     depth: Some(Attachment {
                         view: graph.image_view(depth, 0, 0).unwrap(),
@@ -255,6 +260,7 @@ fn short_lived_draws_keep_both_meshes_alive_and_pin_the_completed_plan() {
                 &ManagedRasterProgram::mesh(),
                 draws,
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &targets,
                     depth: None,
                 },
@@ -306,6 +312,7 @@ fn a_later_draw_cannot_hide_an_uninitialized_vertex_or_index_input() {
                 &ManagedRasterProgram::mesh(),
                 [first, later],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -361,6 +368,7 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
                 },
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[target],
                 depth: None,
             },
@@ -414,6 +422,7 @@ fn late_draw_and_attachment_capacity_failures_leave_room_for_a_valid_sequence() 
                 &ManagedRasterProgram::mesh(),
                 [a, b],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: Some(depth),
                 },
@@ -427,6 +436,7 @@ fn late_draw_and_attachment_capacity_failures_leave_room_for_a_valid_sequence() 
                 &ManagedRasterProgram::mesh(),
                 [b],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -463,6 +473,7 @@ fn later_raster_passes_and_recycled_slots_do_not_keep_previous_draw_inputs() {
                     &ManagedRasterProgram::mesh(),
                     [draw],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[target],
                         depth: None,
                     },
@@ -500,6 +511,7 @@ fn empty_raster_checks_program_outputs_and_clear_only_uses_attachment_pass() {
             store: StoreOp::Store,
         };
         let targets = RasterAttachments {
+            color_resolves: &[],
             colors: if depth_only { &[] } else { &colors },
             depth: depth_only.then_some(depth),
         };
@@ -571,6 +583,7 @@ fn color_only_drawing_initializes_only_its_selected_mip_and_layer() {
                 &ManagedRasterProgram::mesh(),
                 [draw],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view,
                         load: LoadOp::Clear([0.0; 4]),
@@ -625,6 +638,7 @@ fn drawing_does_not_turn_discarded_or_missing_attachment_contents_into_full_init
                 .attachment_pass(
                     "seed",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[target],
                         depth: None,
                     },
@@ -639,6 +653,7 @@ fn drawing_does_not_turn_discarded_or_missing_attachment_contents_into_full_init
                 &ManagedRasterProgram::mesh(),
                 [draw],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -693,6 +708,7 @@ fn public_draw_validation_rejects_invalid_buffer_ranges() {
                 &ManagedRasterProgram::mesh(),
                 [invalid],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -711,6 +727,7 @@ fn public_draw_validation_rejects_invalid_buffer_ranges() {
                 &ManagedRasterProgram::mesh(),
                 [foreign],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None
                 }
@@ -725,6 +742,7 @@ fn public_draw_validation_rejects_invalid_buffer_ranges() {
             &ManagedRasterProgram::mesh(),
             [valid],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[target],
                 depth: None,
             },
@@ -804,6 +822,7 @@ fn raster_uses_actual_iterator_items_for_empty_paths_and_capacity() {
         let draw = mesh(&mut graph, "mesh", true, true);
         let target = color(&mut graph, "color");
         let attachments = RasterAttachments {
+            color_resolves: &[],
             colors: &[target],
             depth: None,
         };
@@ -887,6 +906,7 @@ fn wrong_constant_length_returns_draw_capacity_for_a_correct_retry() {
                 &ManagedRasterProgram::mesh(),
                 [wrong],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -901,6 +921,7 @@ fn wrong_constant_length_returns_draw_capacity_for_a_correct_retry() {
             &ManagedRasterProgram::mesh(),
             [draw],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[target],
                 depth: None,
             },
@@ -935,6 +956,7 @@ fn empty_draws_enforce_custom_depth_and_output_contracts() {
                 &program,
                 empty(),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None
                 }
@@ -963,6 +985,7 @@ fn empty_draws_enforce_custom_depth_and_output_contracts() {
                 &program,
                 empty(),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[wrong],
                     depth: Some(depth)
                 }
@@ -977,6 +1000,7 @@ fn empty_draws_enforce_custom_depth_and_output_contracts() {
             &program,
             empty(),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[target],
                 depth: Some(depth),
             },

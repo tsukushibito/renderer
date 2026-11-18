@@ -10,7 +10,7 @@ use super::{
     Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
     GraphError, GraphErrorKind, ImageDesc, ImageHandle, LoadOp, MeshUpload, Operation, PassHandle,
     PassKind, RasterAttachments, RasterDraw, RasterDrawOperands, ResourceAccess, ResourceDesc,
-    ResourceHandle, UploadSource, overlaps,
+    ResourceHandle, SampleCount, UploadSource, overlaps,
 };
 
 impl Graph {
@@ -176,10 +176,11 @@ impl Graph {
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let dst = graph.image_id(dst)?;
-            if graph.image_desc_at(dst)?.array_layers != 1 {
+            let desc = graph.image_desc_at(dst)?;
+            if desc.array_layers != 1 || desc.sample_count != SampleCount::X1 {
                 return Err(graph.resource_error(
                     GraphErrorKind::Unsupported,
-                    "image upload requires one array layer",
+                    "image upload requires one array layer and a single sample",
                     dst,
                 ));
             }
@@ -698,11 +699,12 @@ fn validate_purpose(
     use AccessPurpose::*;
     let mode = match purpose {
         CopySource | Uniform | StorageRead | Sampled | Vertex | Index => access == AccessKind::Read,
-        CopyDestination | StorageWrite => access == AccessKind::Write,
+        CopyDestination | StorageWrite | ColorResolve => access == AccessKind::Write,
         StorageReadWrite => access == AccessKind::ReadWrite,
         ColorAttachment | DepthAttachment => access != AccessKind::Read,
     };
     let domain = match purpose {
+        ColorResolve => false,
         CopySource | CopyDestination => kind == PassKind::Copy,
         Uniform => kind == PassKind::Compute && matches!(desc, ResourceDesc::Buffer(_)),
         StorageRead | StorageWrite | StorageReadWrite => kind == PassKind::Compute,
@@ -738,7 +740,14 @@ fn validate_purpose(
                 )
         }
     };
-    if !mode || !domain {
+    let multisampled = matches!(
+        desc,
+        ResourceDesc::Image(ImageDesc {
+            sample_count: SampleCount::X4,
+            ..
+        })
+    );
+    if !mode || !domain || (multisampled && !matches!(purpose, ColorAttachment | DepthAttachment)) {
         return Err(GraphError::new(
             GraphErrorKind::InvalidInput,
             "access purpose, kind, resource type and pass kind are incompatible",
@@ -848,6 +857,7 @@ mod tests {
                     &ManagedRasterProgram::textured_mesh(),
                     [mesh, invalid],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &colors,
                         depth: None
                     }
@@ -874,6 +884,7 @@ mod tests {
                 &ManagedRasterProgram::textured_mesh(),
                 draws,
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &colors,
                     depth: None,
                 },
@@ -937,6 +948,7 @@ mod tests {
                     ..mesh
                 }),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &colors,
                     depth: None,
                 },
@@ -967,6 +979,7 @@ mod tests {
                     ..mesh
                 }; 2],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &colors,
                     depth: None,
                 },
@@ -1013,6 +1026,7 @@ mod tests {
                     &ManagedRasterProgram::textured_mesh(),
                     [mesh],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(target, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0; 4]),
@@ -1070,6 +1084,7 @@ mod tests {
                             &program,
                             draws,
                             RasterAttachments {
+                                color_resolves: &[],
                                 colors: &colors,
                                 depth: load.map(|load| Attachment {
                                     view: depth_view,
@@ -1088,6 +1103,7 @@ mod tests {
                 .attachment_pass(
                     "initial depth",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[],
                         depth: Some(Attachment {
                             view: depth_view,
@@ -1104,6 +1120,7 @@ mod tests {
                         &program,
                         draws,
                         RasterAttachments {
+                            color_resolves: &[],
                             colors: &colors,
                             depth: Some(Attachment {
                                 view: depth_view,
@@ -1161,6 +1178,7 @@ mod tests {
                     &ManagedRasterProgram::mesh(),
                     draws,
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &colors,
                         depth: Some(Attachment {
                             view: depth,
@@ -1269,6 +1287,7 @@ mod tests {
                 &ManagedRasterProgram::mesh(),
                 [draw, invalid],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -1282,6 +1301,7 @@ mod tests {
                 &ManagedRasterProgram::mesh(),
                 [draw, draw],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[target],
                     depth: None,
                 },
@@ -1357,6 +1377,7 @@ mod tests {
                     &ManagedRasterProgram::textured_mesh(),
                     draws,
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: output_view,
                             load: LoadOp::Clear([0.0; 4]),

@@ -1,7 +1,7 @@
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, Graph, GraphCapacity,
     GraphCapacityKind, GraphErrorKind, GraphPool, ImageDesc, ImageView, LoadOp, PassHandle,
-    PassKind, RasterAttachments, StoreOp,
+    PassKind, RasterAttachments, SampleCount, StoreOp,
 };
 
 fn color(view: ImageView, load: LoadOp<[f32; 4]>, store: StoreOp) -> Attachment<[f32; 4]> {
@@ -13,11 +13,94 @@ fn clear(graph: &mut Graph, name: &str, view: ImageView) -> PassHandle {
         .attachment_pass(
             name,
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color(view, LoadOp::Clear([0.25; 4]), StoreOp::Store)],
                 depth: None,
             },
         )
         .unwrap()
+}
+
+#[test]
+fn msaa_resolve_keeps_a_distinct_single_sample_output_when_source_is_discarded() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let desc = ImageDesc::rgba16_float(8, 5);
+    let msaa = graph
+        .image("four samples", desc.with_sample_count(SampleCount::X4))
+        .unwrap();
+    let output = graph.image("one sample", desc).unwrap();
+    let source_view = graph.image_view(msaa, 0, 0).unwrap();
+    let output_view = graph.image_view(output, 0, 0).unwrap();
+    assert_eq!(
+        graph
+            .readback_image("illegal raw readback", msaa)
+            .unwrap_err()
+            .kind(),
+        GraphErrorKind::Unsupported
+    );
+    graph
+        .attachment_pass(
+            "clear and resolve",
+            RasterAttachments {
+                colors: &[color(
+                    source_view,
+                    LoadOp::Clear([1.0; 4]),
+                    StoreOp::Discard,
+                )],
+                depth: None,
+                color_resolves: &[Some(output_view)],
+            },
+        )
+        .unwrap();
+    graph.readback_image("resolved pixels", output).unwrap();
+    let plan = graph.compile().unwrap();
+    assert!(
+        plan.ordered_pass_names()
+            .eq(["clear and resolve", "resolved pixels"])
+    );
+}
+
+#[test]
+fn msaa_rejects_mixed_sample_counts_and_resolving_an_undefined_source() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let desc = ImageDesc::rgba8(4, 4);
+    let msaa = graph
+        .image("multisample color", desc.with_sample_count(SampleCount::X4))
+        .unwrap();
+    let output = graph.image("resolved color", desc).unwrap();
+    let depth = graph
+        .image("single-sample depth", ImageDesc::depth32(4, 4))
+        .unwrap();
+    let source_view = graph.image_view(msaa, 0, 0).unwrap();
+    let resolve_view = graph.image_view(output, 0, 0).unwrap();
+    let depth_view = graph.image_view(depth, 0, 0).unwrap();
+    for (load, depth) in [
+        (LoadOp::Discard, None),
+        (
+            LoadOp::Clear([0.0; 4]),
+            Some(Attachment {
+                view: depth_view,
+                load: LoadOp::Clear(1.0),
+                store: StoreOp::Discard,
+            }),
+        ),
+    ] {
+        let error = graph
+            .attachment_pass(
+                "invalid resolve",
+                RasterAttachments {
+                    colors: &[color(source_view, load, StoreOp::Discard)],
+                    depth,
+                    color_resolves: &[Some(resolve_view)],
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+    }
+    graph.readback_image("unwritten result", output).unwrap();
+    assert!(graph.compile().is_err());
 }
 
 #[test]
@@ -42,6 +125,7 @@ fn subnormal_depth_clear_rejection_returns_capacity_for_zero_and_normal_minimum(
             .attachment_pass(
                 "subnormal depth",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &colors,
                     depth: Some(Attachment {
                         view: depth_view,
@@ -60,6 +144,7 @@ fn subnormal_depth_clear_rejection_returns_capacity_for_zero_and_normal_minimum(
             .attachment_pass(
                 "accepted depth",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &colors,
                     depth: Some(Attachment {
                         view: depth_view,
@@ -135,6 +220,7 @@ fn mrt_and_optional_attachments_accept_matching_selected_mip_extents() {
                 .attachment_pass(
                     "targets",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: if with_colors { &colors } else { &[] },
                         depth: with_depth.then_some(Attachment {
                             view: depth,
@@ -243,6 +329,7 @@ fn load_and_store_operations_preserve_or_invalidate_contents() {
             .attachment_pass(
                 "apply ops",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[color(view, load, store)],
                     depth: None,
                 },
@@ -279,6 +366,7 @@ fn disjoint_layers_can_reorder_but_overlapping_load_dependencies_cannot() {
                 .attachment_pass(
                     "second",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[color(b, LoadOp::Load, StoreOp::Store)],
                         depth: None,
                     },
@@ -365,6 +453,7 @@ fn invalid_target_inputs_leave_room_for_a_valid_pass() {
             .attachment_pass(
                 name,
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[
                         color(view, LoadOp::Clear([0.0; 4]), StoreOp::Store),
                         color(second, LoadOp::Clear([0.0; 4]), StoreOp::Store),
@@ -381,6 +470,7 @@ fn invalid_target_inputs_leave_room_for_a_valid_pass() {
             .attachment_pass(
                 "empty",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[],
                     depth: None
                 }
@@ -395,6 +485,7 @@ fn invalid_target_inputs_leave_room_for_a_valid_pass() {
                 .attachment_pass(
                     "bad color",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[color(view, LoadOp::Clear([value; 4]), StoreOp::Store)],
                         depth: None,
                     }
@@ -410,6 +501,7 @@ fn invalid_target_inputs_leave_room_for_a_valid_pass() {
                 .attachment_pass(
                     "bad depth",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[],
                         depth: Some(Attachment {
                             view: depth,
@@ -428,6 +520,7 @@ fn invalid_target_inputs_leave_room_for_a_valid_pass() {
             .attachment_pass(
                 "color as depth",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[],
                     depth: Some(Attachment {
                         view,
@@ -483,6 +576,7 @@ fn late_capacity_failures_roll_back_owned_attachments_and_accesses() {
             .attachment_pass(
                 "too long",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[color(view, LoadOp::Clear([0.0; 4]), StoreOp::Store)],
                     depth: Some(Attachment {
                         view: depth,

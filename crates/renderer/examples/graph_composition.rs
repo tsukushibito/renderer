@@ -47,6 +47,7 @@ fn sampled_pass(
             ..draw
         }],
         RasterAttachments {
+            color_resolves: &[],
             colors: &[Attachment {
                 view: graph.image_view(destination, 0, 0)?,
                 load: LoadOp::Clear([0.0; 4]),

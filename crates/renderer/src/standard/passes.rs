@@ -56,6 +56,7 @@ where
         &program,
         draws,
         RasterAttachments {
+            color_resolves: &[],
             colors: &[color],
             depth,
         },
@@ -81,6 +82,7 @@ where
         &ManagedRasterProgram::depth_only(),
         draws,
         RasterAttachments {
+            color_resolves: &[],
             colors: &[],
             depth: Some(depth),
         },

@@ -171,6 +171,7 @@ fn standard_parts_compose_with_a_user_pass_without_the_standard_graph() {
             &ManagedRasterProgram::mesh_hdr(),
             [draw],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment],
                 depth: None,
             },
@@ -287,6 +288,7 @@ fn load_and_discard_keep_the_ordinary_graph_initialization_contract() {
                     graph.attachment_pass(
                         "discard post output",
                         RasterAttachments {
+                            color_resolves: &[],
                             colors: &[color],
                             depth: None,
                         },

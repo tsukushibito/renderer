@@ -568,6 +568,7 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: color_load,
@@ -604,6 +605,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(c, 0, 0).unwrap(),
                     load: LoadOp::Load,
@@ -639,6 +641,7 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(c, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
@@ -678,6 +681,7 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(c, 0, 0).unwrap(),
                     load: LoadOp::Discard,
@@ -717,6 +721,7 @@ fn batch_requires_initialized_buffers_from_later_draws() {
                 (missing, indices, 3, RasterParameters::default()),
             ]),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
@@ -751,6 +756,7 @@ fn batch_same_buffer_can_supply_vertex_and_index_reads() {
                 3
             ]),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
@@ -788,6 +794,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
                 (vertices, indices, 6, RasterParameters::default()),
             ]),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
@@ -818,6 +825,7 @@ fn batch_rejections_preserve_builder_context_without_partial_declarations() {
             &crate::program::ManagedRasterProgram::mesh(),
             batch_draws(vec![(foreign, indices, 3, RasterParameters::default())]),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),
@@ -923,6 +931,7 @@ fn import_and_batch_limits_report_their_distinct_capacity_dimensions() {
             &crate::program::ManagedRasterProgram::mesh(),
             batch_draws(vec![(vertices, indices, 3, RasterParameters::default())]),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear([0.0; 4]),

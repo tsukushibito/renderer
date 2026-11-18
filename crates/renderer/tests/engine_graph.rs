@@ -276,6 +276,7 @@ fn resident_versions(engine: &mut VulkanEngine) {
             &ManagedRasterProgram::mesh_hdr(),
             old_inputs.draws(),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[attachment(graph, first)],
                 depth: None,
             },
@@ -287,6 +288,7 @@ fn resident_versions(engine: &mut VulkanEngine) {
             &ManagedRasterProgram::mesh_hdr(),
             new_inputs.draws(),
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[attachment(graph, second)],
                 depth: None,
             },

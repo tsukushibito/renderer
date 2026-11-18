@@ -73,6 +73,7 @@ fn seed(graph: &mut Graph, name: &str, view: ImageView) {
         .attachment_pass(
             name,
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[attachment(view)],
                 depth: None,
             },
@@ -96,6 +97,7 @@ fn draw(
             ..geometry
         }],
         RasterAttachments {
+            color_resolves: &[],
             colors: &[attachment(output)],
             depth: None,
         },
@@ -299,6 +301,7 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
                 },
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[attachment(output)],
                 depth: None,
             },
@@ -320,6 +323,7 @@ fn feedback_in_a_later_draw_is_rejected_and_the_failed_pass_is_rolled_back() {
                 },
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[attachment(output)],
                 depth: None,
             },
@@ -431,6 +435,7 @@ fn binding_creation_failures_allow_retry_and_reused_sets_share_capacity() {
                 ..mesh
             }; 2],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[attachment(output)],
                 depth: None,
             },
@@ -485,6 +490,7 @@ fn distinct_materials_in_one_pass_keep_both_texture_producers() {
                     },
                 ],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[attachment(output)],
                     depth: None,
                 },
@@ -520,6 +526,7 @@ fn sampled_reader_and_later_attachment_writer_cannot_be_reordered() {
             .attachment_pass(
                 "overwrite texture",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[attachment(source)],
                     depth: None,
                 },
@@ -616,6 +623,7 @@ fn sampled_depth_requires_stored_depth_contents() {
             .attachment_pass(
                 "depth seed",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[],
                     depth: Some(Attachment {
                         view,

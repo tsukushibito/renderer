@@ -66,7 +66,7 @@ pub(crate) use pass::{
 pub use ranges::{ImportRanges, ImportRangesPool};
 pub use resource::{
     BufferDesc, BufferHandle, ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage,
-    PassHandle, ResourceKey,
+    PassHandle, ResourceKey, SampleCount,
 };
 pub(crate) use resource::{Resource, ResourceDesc};
 pub use storage::{GraphCapacity, GraphPool, GraphStorage};

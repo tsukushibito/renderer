@@ -61,6 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             parameters: RasterParameters::default().into(),
         }],
         RasterAttachments {
+            color_resolves: &[],
             colors: &[Attachment {
                 view: graph.image_view(color, 0, 0)?,
                 load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),

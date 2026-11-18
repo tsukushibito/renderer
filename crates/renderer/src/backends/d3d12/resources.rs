@@ -613,6 +613,7 @@ mod image_description_tests {
             format: crate::ImageFormat::Rgba8Srgb,
             mip_levels: 4,
             array_layers: 1,
+            sample_count: Default::default(),
         });
         assert_eq!(native.MipLevels, 4);
         assert_eq!(native.Format, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);

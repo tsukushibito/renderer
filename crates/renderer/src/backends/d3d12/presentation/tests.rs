@@ -113,6 +113,7 @@ fn build(
         .attachment_pass(
             "window.draw",
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[Attachment {
                     view: graph.image_view(color, 0, 0).unwrap(),
                     load: LoadOp::Clear(value),

@@ -328,6 +328,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 placed(quad, true, 0.5, [0.0, 1.0, 0.0, 1.0]),
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment(&graph, order, LoadOp::Clear([0.0; 4]))],
                 depth: None,
             },
@@ -355,6 +356,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
             &ManagedRasterProgram::mesh(),
             [right_overlay],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment(&graph, order, LoadOp::Load)],
                 depth: None,
             },
@@ -389,6 +391,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 placed(quad, true, 0.125, [0.0, 0.0, 1.0, 1.0]),
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment(&graph, color, LoadOp::Clear([0.0; 4]))],
                 depth: Some(depth_attachment(&graph, depth, LoadOp::Clear(1.0))),
             },
@@ -425,6 +428,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 placed(quad, true, 0.25, [1.0; 4]),
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[],
                 depth: Some(depth_attachment(&graph, shadow, LoadOp::Clear(1.0))),
             },
@@ -442,6 +446,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
             &ManagedRasterProgram::depth_only(),
             [placed(quad, false, 0.75, [1.0; 4])],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[],
                 depth: Some(depth_attachment(&graph, shadow, LoadOp::Load)),
             },
@@ -536,6 +541,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 },
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment(&graph, output, LoadOp::Clear([0.0; 4]))],
                 depth: None,
             },
@@ -561,6 +567,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 placed(quad, true, 0.5, [0.5, 4.0, -1.0, 1.0]),
             ],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment(&graph, output, LoadOp::Clear([0.0; 4]))],
                 depth: None,
             },
@@ -608,6 +615,7 @@ fn shared_graph(invalid_last_index: bool) -> (GraphPool, CompiledGraph, Vec<Expe
                 ..quad
             }],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[color_attachment(&graph, output, LoadOp::Clear([0.0; 4]))],
                 depth: None,
             },

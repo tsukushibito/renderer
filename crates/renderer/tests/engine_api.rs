@@ -200,6 +200,7 @@ fn caller_graph_connects_short_lived_inputs_without_selecting_passes_or_outputs(
                 &ManagedRasterProgram::mesh_hdr(),
                 inputs.draws(),
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),

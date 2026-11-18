@@ -1618,6 +1618,7 @@ mod tests {
                         .into(),
                     }],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(color, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),

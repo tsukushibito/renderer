@@ -61,7 +61,8 @@ mod raster;
 pub use raster::{
     BlendState, CompareOp, DepthState, MAX_RASTER_ATTRIBUTES, MAX_RASTER_BIND_GROUPS,
     MAX_RASTER_BINDINGS, MAX_RASTER_PROGRAMS, ManagedRasterProgram, RasterParameterLayout,
-    RasterProgramDescriptor, SampledImageSamplerPair, VertexAttribute, VertexFormat,
+    RasterPipelineRequest, RasterProgramDescriptor, SampledImageSamplerPair, VertexAttribute,
+    VertexFormat,
 };
 
 /// A resource's immutable native usage. No CPU mapping or mutation is exposed.

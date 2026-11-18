@@ -518,6 +518,7 @@ mod texture_tests {
             format: ImageFormat::Rgba8Srgb,
             mip_levels: 3,
             array_layers: 1,
+            sample_count: Default::default(),
         };
         let program = ManagedProgram::sampled_float_readback();
         runtime

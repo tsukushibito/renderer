@@ -39,6 +39,7 @@ fn sampled_mip_chain_requires_every_level_and_full_upload_initializes_it() {
                 .attachment_pass(
                     "base level only",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(image, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0; 4]),
@@ -120,6 +121,7 @@ fn sampled_view_range_checks_do_not_change_transfer_or_attachment_contracts() {
             .attachment_pass(
                 "not an attachment view",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view,
                         load: LoadOp::Clear([0.0; 4]),
@@ -155,6 +157,7 @@ fn sampled_view_range_checks_do_not_change_transfer_or_attachment_contracts() {
             .attachment_pass(
                 "sRGB is sampled-only",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: srgb_view,
                         load: LoadOp::Clear([0.0; 4]),

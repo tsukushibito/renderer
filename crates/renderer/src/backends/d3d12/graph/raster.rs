@@ -776,6 +776,7 @@ mod tests {
                             parameters: RasterParameters::default().into(),
                         }],
                         RasterAttachments {
+                            color_resolves: &[],
                             colors: &[Attachment {
                                 view: graph.image_view(target, 0, 0).unwrap(),
                                 load: LoadOp::Clear(clear),
@@ -793,6 +794,7 @@ mod tests {
                 .attachment_pass(
                     "clear only",
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(target, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 1.0, 1.0]),
@@ -1002,6 +1004,7 @@ mod tests {
                         parameters: RasterParameters::default().into(),
                     }; 2],
                     RasterAttachments {
+                        color_resolves: &[],
                         colors: &[Attachment {
                             view: graph.image_view(target, 0, 0).unwrap(),
                             load: LoadOp::Clear([0.0, 0.0, 0.0, 1.0]),
@@ -1170,6 +1173,7 @@ mod tests {
             .attachment_pass(
                 "depth only",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[],
                     depth: Some(Attachment {
                         view: graph.image_view(depth, 0, 0).unwrap(),

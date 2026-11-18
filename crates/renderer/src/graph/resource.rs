@@ -78,6 +78,23 @@ impl ImageFormat {
     }
 }
 
+/// Number of raster samples in one image texel.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum SampleCount {
+    #[default]
+    X1,
+    X4,
+}
+
+impl SampleCount {
+    pub const fn as_u32(self) -> u32 {
+        match self {
+            Self::X1 => 1,
+            Self::X4 => 4,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ImageDesc {
     pub width: u32,
@@ -85,6 +102,7 @@ pub struct ImageDesc {
     pub format: ImageFormat,
     pub mip_levels: u32,
     pub array_layers: u32,
+    pub sample_count: SampleCount,
 }
 
 impl ImageDesc {
@@ -95,6 +113,7 @@ impl ImageDesc {
             format: ImageFormat::Rgba8Unorm,
             mip_levels: 1,
             array_layers: 1,
+            sample_count: SampleCount::X1,
         }
     }
     /// Eight-bit sRGB color for sampling and transfer, with linear alpha.
@@ -111,6 +130,7 @@ impl ImageDesc {
             format: ImageFormat::Depth32Float,
             mip_levels: 1,
             array_layers: 1,
+            sample_count: SampleCount::X1,
         }
     }
     /// Scene-linear floating-point color, packed as four little-endian IEEE 754
@@ -121,12 +141,24 @@ impl ImageDesc {
             ..Self::rgba8(width, height)
         }
     }
+
+    pub const fn with_sample_count(self, sample_count: SampleCount) -> Self {
+        Self {
+            sample_count,
+            ..self
+        }
+    }
+
     pub fn byte_len(self) -> Option<u64> {
         if self.width == 0
             || self.height == 0
             || self.mip_levels == 0
             || self.mip_levels > self.maximum_mip_levels()
             || self.array_layers == 0
+            || (self.sample_count == SampleCount::X4
+                && (self.mip_levels != 1
+                    || self.array_layers != 1
+                    || self.format == ImageFormat::Rgba8Srgb))
         {
             return None;
         }
@@ -138,7 +170,9 @@ impl ImageDesc {
                 .checked_mul(self.format.texel_bytes())?;
             bytes = bytes.checked_add(level)?;
         }
-        bytes.checked_mul(u64::from(self.array_layers))
+        bytes
+            .checked_mul(u64::from(self.array_layers))?
+            .checked_mul(u64::from(self.sample_count.as_u32()))
     }
 
     pub(crate) fn is_single_subresource(self) -> bool {
@@ -446,6 +480,7 @@ impl Graph {
                 .checked_add(mip_level_count)
                 .is_none_or(|end| end > desc.mip_levels)
             || desc.array_layers != 1
+            || desc.sample_count != SampleCount::X1
         {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
@@ -577,6 +612,7 @@ impl Graph {
     /// registration remains owned by its caller.
     pub fn export_image(&mut self, image: ImageHandle) -> Result<(), GraphError> {
         let id = self.image_id(image)?;
+        self.single_sample_image(id)?;
         self.export(id);
         Ok(())
     }
@@ -701,10 +737,22 @@ impl Graph {
     }
     /// Fixed whole-image operations currently encode only one mip/layer.
     pub(super) fn single_image(&self, id: usize) -> Result<(), GraphError> {
+        self.single_sample_image(id)?;
         if !self.image_desc_at(id)?.is_single_subresource() {
             return Err(self.resource_error(
                 GraphErrorKind::Unsupported,
                 "operation requires a single-mip single-layer image",
+                id,
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn single_sample_image(&self, id: usize) -> Result<(), GraphError> {
+        if self.image_desc_at(id)?.sample_count != SampleCount::X1 {
+            return Err(self.resource_error(
+                GraphErrorKind::Unsupported,
+                "operation requires a single-sample image",
                 id,
             ));
         }

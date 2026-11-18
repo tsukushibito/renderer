@@ -434,6 +434,7 @@ impl Graph {
                         BindingResource::ImageView(view),
                     ) => {
                         let resource = self.image_id(view.image)?;
+                        self.single_sample_image(resource)?;
                         let desc = self.image_desc_at(resource)?;
                         let (read, write, purpose) = match slot.kind {
                             BindingType::SampledImage => (true, false, AccessPurpose::Sampled),

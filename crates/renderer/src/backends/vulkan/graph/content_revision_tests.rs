@@ -216,6 +216,7 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
             .attachment_pass(
                 "initial clear",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: initial.image_view(color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -247,6 +248,7 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
             .attachment_pass(
                 "same value clear",
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: clear.image_view(clear_color, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
@@ -297,6 +299,7 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: discard.image_view(color_target, 0, 0).unwrap(),
                         load: LoadOp::Load,

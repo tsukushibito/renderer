@@ -252,6 +252,7 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
             &mask,
             [draw],
             RasterAttachments {
+                color_resolves: &[],
                 colors: &[],
                 depth: Some(Attachment {
                     view: graph.image_view(depth, 0, 0).unwrap(),
@@ -332,6 +333,7 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
                     ..draw
                 }],
                 RasterAttachments {
+                    color_resolves: &[],
                     colors: &[Attachment {
                         view: graph.image_view(output, 0, 0).unwrap(),
                         load: LoadOp::Clear([0.0; 4]),
