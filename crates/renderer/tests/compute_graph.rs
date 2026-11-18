@@ -240,7 +240,8 @@ mod native {
     use super::image_transform::{self, Transform};
     use renderer::graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph,
-        GraphCapacity, GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, StoreOp,
+        GraphCapacity, GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, SampleCount,
+        StoreOp,
     };
     use renderer::program::{ManagedProgram, SamplerDescriptor};
     use renderer::{
@@ -575,8 +576,15 @@ mod native {
     }
 
     const BINDING_BUFFER_BYTES: u64 = 832;
-    const TRANSFORM_IMAGE: ImageDesc = ImageDesc::rgba8(9, 3);
-    const TRANSFORM_BYTES: usize = 9 * 3 * 4;
+    const TRANSFORM_IMAGE: ImageDesc = ImageDesc {
+        width: 9,
+        height: 3,
+        format: ImageFormat::Rgba8Unorm,
+        mip_levels: 1,
+        array_layers: 1,
+        sample_count: SampleCount::X1,
+    };
+    const TRANSFORM_BYTES: usize = (TRANSFORM_IMAGE.width * TRANSFORM_IMAGE.height * 4) as usize;
     const BINDING_PROGRAMS: [ManagedProgram; 6] = [
         ManagedProgram::uniform_readback(),
         ManagedProgram::storage_readback(),

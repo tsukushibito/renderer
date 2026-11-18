@@ -1703,6 +1703,11 @@ CPU型のソフトウェア実装は通常の候補になれますが、実GPU�
 SyncValはhost memory accessを追跡しないため、CPUアクセスの寿命・失敗時の保持はCPU試験でも確認します。
 CPU境界での失敗注入を、実ドライバーのOOM・Device loss・non-coherentメモリの確認とは扱いません。
 
+fragment sampleからCompute sampleへ渡る画像の同期は、releaseの`--test vulkan_layout_dependency`を
+`-- --ignored --test-threads=1`で実行します。厳格構成では専用の`vk_layer_settings.txt`に
+`khronos_validation.syncval_shader_accesses_heuristic = true`を設定し、そのディレクトリを当該processの
+`VK_LAYER_SETTINGS_PATH`に指定します。製品構成ではこの設定と診断featureを外して同じ画素を確認します。
+
 <a id="resource-reuse-measurement"></a>
 
 ## CPU資源探索の変更前後比較

@@ -2333,6 +2333,23 @@ workerではGPUを実行せず、rootが統合結果を逐次実行した。正�
 
 ## ソース全体のレビューと効率修正
 
+### 2026-11-18の同期・再試行と公開経路の整理
+
+比較元は `3fee629`。Windows／RTX 3060（610.88）、Vulkan SDK 1.4.341.1 を使用した。
+
+| 課題 | 確認した境界 |
+|---|---|
+| `renderer-80w` | `syncval_shader_accesses_heuristic=true` の Core/SyncVal で、同一Graphと連続submitのfragment→Computeサンプルを実行。依存stageと取得byteを照合し、解放後まで診断ゼロ |
+| `renderer-ywn` | 間接引数の予約失敗を64回繰り返し、同じGraphで正常な資源作成、compile、返却に成功。最適化したCPUメモリ窓の確保・再確保・解放は各ゼロ |
+| `renderer-9o5` | 作業セットの不正descriptor、縮小した範囲容量、先行資源作成後の故障注入に対して、旧クラスと登録済みの二つの区間を取得でき、正常な再準備にも成功。厳格構成でcache回帰4件も通過 |
+| `renderer-6vg` | Vulkan Win32の厳格・製品構成で表示slot準備失敗、native作成後の画像準備失敗、退役待ちと再試行を確認。各36 present・18 readbackで通常フレームのCPU／native確保・解放はゼロ |
+| `renderer-kvr`、`renderer-fdx` | 二APIの厳格・製品構成で、Graph経由の非ゼロoffset、RGBA8・RGBA16F・D32、二版の保持と再利用、9×3画像の反転と赤青入れ替えを期待値と照合 |
+
+`renderer-9o5` の小規模な故障注入では、VMA allocationの個数とbyteが再準備前の5件・8,384 byteから
+旧資源と新資源の併存時に6件・8,448 byteへ増え、失敗後は5件・8,384 byteへ戻った。
+この値はVMAのallocation統計であり、VMA blockやプロセスのVRAM使用量は別の指標である。
+WSIでは実際に旧Swapchainを退役させた後にエラーを注入した。ドライバーOOM自体の再現は未実施。
+
 `renderer-420`、比較元`f649bcf`。第一者のRenderer Rust 64ファイル、example 11、
 integration test 4、Bistro Python 28、validator 2、PowerShell 6と、benchmark、
 独立試作、生成・依存設定、CI、文書構成を分担レビューし、主要な修正を別担当が再レビューした。
