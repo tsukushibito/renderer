@@ -27,6 +27,7 @@ cargo run --locked -p renderer --no-default-features --features vulkan,developme
 **Windowsで描画する**
 
 `windowed`は標準Graphと独自Graphを切り替えられます。WASDとQ/Eで移動し、右ボタンを押して視点を操作します。
+両APIとも`runtime::Runtime`と`WindowPresenter`で作業セットの準備、フレーム投入、完了確認、表示を行います。
 画面操作と検証手順は[Windows表示](development.md#windows-presentation)を参照してください。
 
 ```powershell

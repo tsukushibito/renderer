@@ -16,9 +16,9 @@ indexed meshと深度、利用側shaderによるRaster/Compute、import/export�
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 
-既定featureではGPU・ウィンドウに依存しません。Graphの構築はGPU処理を開始せず、
-実行する場合はRuntimeの作成、working setとProgramの準備、submit、完了確認を明示します。
-通常frameでは準備済み容量を再利用し、不足時に暗黙の増設やGPU待機は行いません。
+既定featureではGPU・ウィンドウに依存しません。Graphを構築してから、`runtime::Runtime`で
+両バックエンド共通の準備・投入・完了確認を行います。Windows表示も同じ実行経路を使います。
+通常frameでは準備済み容量を再利用します。転送領域の物理容量は選択したバックエンドの初期設定で調整できます。
 
 - [ドキュメント一覧](docs/README.md)
 - [図で読むRenderGraph設計](docs/design/rendergraph-overview.md)・[HTML版の生成](docs/guides/html-docs.md)

@@ -907,17 +907,23 @@ feature統合後の実構成を確認し、
 
 ## 準備容量と不足時の回復
 
+`runtime::Runtime::new`またはWindows用の`Runtime::for_window`に、バックエンドを選ぶ
+`RuntimeConfig`、共通の`RuntimeLimits`、資源とProgramの`WorkingSet`を渡します。
+初期化の後も、登録済み資源のキーを保持したまま`Runtime::prepare_working_set`で作業セットを交換できます。
+`FrameSubmission`の破棄はGPUを待機せず、受理済み作業は`poll_frame`または明示的な`wait_frame`で完了を確認します。
+特定の投入結果は`wait_for_frame`で取得できます。他のフレームの結果は引き続き取得できます。
+表示時は`WindowPresenter::prepare`の`Ready { extent, .. }`を使ってGraphを構築します。
+
 通常frameでは準備済み容量を再利用します。Graphの上限は`GraphCapacity`、
-Vulkanのnative資源・実行枠・stagingは`RuntimeConfig`と`FrameCapacity`、
-D3D12は`D3D12FrameCapacity`とbuffer／画像／Program working setで指定します。
-大きさの異なる常駐bufferには`D3D12Runtime::new_with_working_set`と`D3D12BufferClass { size, count }`を使います。
+共通実行の上限は`RuntimeLimits`で指定します。Vulkanの共有stagingとD3D12の転送領域はそれぞれ
+`runtime::VulkanConfig`と`runtime::D3D12Config`で指定します。異なるサイズのbufferは、サイズごとに`ResourceClass::Buffer`として予約します。
 buffer/画像classのcountはglobalな物理準備数で、execution数による自動乗算はありません。
 `capacity.buffers`は各executionのlogical buffer operand数、`buffer_bytes`は最大logical sizeです。
 同時保持数には記録中・GPU実行中だけでなく、未読CPU結果、export、import snapshotも含めます。
 余裕を増やす操作は初期化・ロード・resize等の変更境界で行い、通常のsubmitに増設やwaitを隠しません。
 
 Graphの`GraphError::capacity()`は不足した項目と`limit`／`required`を返します。
-両native runtimeのエラーも`capacity()`で共通の`capacity::RuntimeCapacityError`を返し、
+`runtime::ExecutionError`および両native runtimeのエラーも`capacity()`で共通の`capacity::RuntimeCapacityError`を返し、
 `resource`と`recovery`を文字列照合なしで確認できます。byte容量の値はbyte、slot類は個数です。
 値が判明しない場合や必要数がoverflowする場合は`None`であり、ゼロや確保成功の保証ではありません。
 
@@ -1325,7 +1331,7 @@ graph.raster("opaque", attachments, |raster| {
 ```
 
 mesh inputは読み取り専用で直接exportできません。必要な変更・exportは独立bufferへのcopy後に行います。
-`standard::graphs::forward`／`forward_with_post`で標準構成を選び、`standard::passes`を直接組み合わせることもできます。
+`standard::graphs::forward`の出力を標準または独自の後処理へ直接つなげます。`standard::passes`を直接組み合わせることもできます。
 opaque、depth prepass、同formatのcolor出力copyを公開Graph APIで構築し、出力handleから必要な消費方法を選びます。
 API例・Load/Store・任意depth・色／深度規約は[標準部品の契約](../design/rendergraph.md#公開標準パスと標準グラフ)を参照してください。
 同geometry prepass後には`OpaqueDepth::Prepassed`とdepth Loadを使い、`mesh_prepassed`／`mesh_hdr_prepassed`も明示準備します。

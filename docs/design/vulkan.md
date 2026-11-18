@@ -443,7 +443,7 @@ native資源・payload・VMA・Deviceを含む所有連鎖を保持して早期�
 この異常経路では保持した資源を回収できない。
 通常の回収は明示的な完了確認で進め、Drop待機へ依存しない。
 
-フレームループにはRuntimeがpendingを保持する`submit_frame`を追加した。
+フレームループではRuntimeがpendingを保持する。共通の`runtime::Runtime::submit`はVulkanの`submit_frame`へ接続する。
 受理済みメタデータのDropは待機せず、`poll_frame`がtimeout 0で完了を観測する。
 `wait_frame(timeout)`は完了済みの結果を先に調べ、必要なときだけ最古の未完了Fenceを待ち、
 一件の`FrameCompletion`を返す。待機予算を各Fenceへ繰り返し適用せず、readback結果も破棄しない。
