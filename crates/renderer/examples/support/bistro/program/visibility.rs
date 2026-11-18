@@ -268,7 +268,9 @@ mod native {
     #[test]
     #[ignore = "requires Vulkan and Direct3D 12 hardware"]
     fn frustum_visibility_masks_cover_clip_planes_padding_and_uncertain_arithmetic() {
-        assert!(!cfg!(debug_assertions), "run native acceptance in release");
+        if cfg!(debug_assertions) {
+            panic!("run native acceptance in release");
+        }
         let strict = cfg!(feature = "development-validation");
         let mut vk = VulkanRuntime::new_with_validation(
             RuntimeConfig {
@@ -354,7 +356,9 @@ mod native {
         }
         drop(vk);
         dx.shutdown().unwrap();
-        assert!(vk_monitor.report().is_clean());
-        assert!(dx_monitor.snapshot().is_clean());
+        let vk_report = vk_monitor.report();
+        let dx_report = dx_monitor.snapshot();
+        assert!(vk_report.is_clean(), "{vk_report:?}");
+        assert!(dx_report.is_clean(), "{dx_report:?}");
     }
 }
