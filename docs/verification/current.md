@@ -361,8 +361,8 @@ Graph build短縮に対してpoll/yieldが増え、全CPU改善は小さい。�
 A/B交互収集や統計的信頼区間ではないため、この小差を保証率や一意な最適化寄与とはしない。
 別の同一旧境界による局所改善比較と、一般Graph入力での代償は[Graphの記録](#rendergraph-hotspot-optimization)へ分けた。
 
-次は残るpoll/retireとVulkan prepareの内訳、D3D12 record（`renderer-c4y`）、GPU pass別の影・PBR・転送
-（`renderer-7ft.8`）を調査する。同期・GPU/CPU寿命・容量・native失敗処理は維持する。
+この比較後のD3D12 record（`renderer-c4y`）、影・PBR（`renderer-7ft.8`）、poll/retireの候補は
+[120 FPSに向けた追加計測](#bistro-120-performance)に記録する。
 比較値だけからaliasing、複数queue、vendor固有方式の利益を結論づけない。
 Renderer Neutral／post-tonemap FXAA／consumer IBLと、Godot AgX／pre-tonemap FXAA／native IBL・BRDF・
 PCF・caster判定・depth prepass・batching・表示の差、素材mip画素の差は残る。
@@ -450,6 +450,47 @@ CPU平均はVulkan 6.189→4.497 ms/frame、D3D12 5.747→4.071 ms/frameだっ�
 
 同じ全量routeの単回候補では、Graph構築先行がVulkan p99 8.416→8.205 ms、
 非ブロッキング回収の試作が7.923 msだった。通常経路には影マップの再利用を採用した。
+
+### 最終通常版の120 FPS判定
+
+影マップ再利用を既定にした`2c85dba`を、同じ機材・素材・画質・route・CPU設定で両API各3 process実行した。
+比較前の3 runは上の交互収集で採取した`3d8369d`であり、最終版は別の連続収集である。
+最終版の詳細timer/queryはoffで、各runは3,600 warmup／1,800測定frame、2 in-flight。
+
+| API | 変更前 p99 範囲（ms） | 最終版 p99（ms） | 最終版CPU平均の中央値（ms/frame） | 最終版throughput中央値（frame/s） |
+|---|---:|---|---:|---:|
+| Vulkan | 9.271〜10.151 | 6.666 / 6.690 / 7.085 | 4.462 | 221.10 |
+| D3D12 | 9.536〜10.206 | 6.221 / 6.243 / 6.145 | 4.054 | 244.09 |
+
+**両APIで全3 runがフレーム間隔p99 ≤ 8.33 msを満たした。** CPU平均も両APIでGodot基準の4.5 ms/frame以下だった。
+最終版の各runで238／804／1,208／1,576回、合計3,826／7,200回（53.1%）のshadow再利用を観測した。
+route先頭を再captureした時点では、各runで1枚を描画し3枚を再利用していた。
+最終版6 runのHDR・SDR・depth計144 planeは同APIの変更前とbyte一致した。
+範囲は固定機材のオフスクリーン描画で、B5の実表示・ゲーム処理、他機材や長時間soakは未計測。
+生sample、artifactのSHA-256、CPU policyの読戻しを`.tools/b3-120/formal-default/`へ保管した。
+
+### 厳格検証と通常フレームのメモリ
+
+最初の全量D3D12 strictでは、2 in-flightの24測定frameにRustの確保と解放を各6回（各384 byte）観測した。
+同じ実行物で`--redraw-shadows`を指定した対照は各0回だった。
+`59a691b`で、D3D12診断履歴の保持先が確定してからメッセージ本文をコピーするようにした。
+保持上限で破棄する通知の確保・解放が消え、同じ再現条件で各0回となった。
+警告・エラー・callback失敗は0で、変更前後のHDR・SDR・depth・影の56 planeはbyte一致した。
+変更は`d3d12-diagnostics`を有効にした構成の診断履歴だけに適用する。
+
+修正後に通常性能版と同じfeature・target先でBistroを再ビルドし、PEの全ロード対象sectionが
+`2c85dba`の計測用実行物とbyte一致することを確認した。
+厳格構成で再利用と再描画が混在するrouteから1枚再利用・3枚再描画したcaptureを取得し、
+両APIで毎frame描画する対照とHDR・SDR・depth・4枚の影がbyte一致した。
+
+全量受入ではstrict／Disabled×二API×独立3 processの計12 runが成功した。
+7固定視点・route先頭、影、AA-off、差し替え、同時View、容量不足と回復を含む画像比較1,360件が通過した。
+同APIの反復とstrict／Disabledはbyte一致し、両APIの比較は既存のscene profileを適用した。
+通常区間のRust・VMAホスト確保／再確保／解放、native資源／メモリの作成／破棄は全runで0。
+厳格構成はVulkan Core／SyncVal、D3D12 Debug Layer／GBVの実効と最終解放時の警告・エラー0を確認した。
+両構成のrelease workspace試験、Bistro CPU／実GPU試験、owned/custom Raster・深度・一般資源の実GPU試験、
+D3D12ウィンドウ・resize・pending終了、fmtとall-target Clippyを実行した。
+受入の生report・比較結果は`.tools/b3-120/final-validation-checked/`へ保管した。
 
 <a id="bistro-residency"></a>
 
