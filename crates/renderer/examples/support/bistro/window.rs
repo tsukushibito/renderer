@@ -288,7 +288,10 @@ impl<B: WindowBackend> State<B> {
     }
 
     fn discard_presentation_source(&mut self) -> Result<(), Error> {
-        if !self.pixels.is_empty() && self.awaiting_present.is_some() && self.accepted < REPLAY_STEPS {
+        if !self.pixels.is_empty()
+            && self.awaiting_present.is_some()
+            && self.accepted < REPLAY_STEPS
+        {
             // Only the current source can be retried at this ordinal. It is
             // either the last pending frame or was already read back by poll.
             self.smoke.replay.discard(
