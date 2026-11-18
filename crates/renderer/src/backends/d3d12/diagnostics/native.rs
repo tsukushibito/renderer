@@ -18,19 +18,19 @@ struct State {
     active: AtomicUsize,
 }
 impl State {
-    fn push(&self, message: D3D12ValidationMessage) {
+    fn push(&self, source: &'static str, severity: i32, id: i32, message: impl FnOnce() -> String) {
         let mut report = self
             .report
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        match message.severity {
+        match severity {
             D3D12_MESSAGE_SEVERITY_CORRUPTION => report.corruption += 1,
             D3D12_MESSAGE_SEVERITY_ERROR => report.errors += 1,
             D3D12_MESSAGE_SEVERITY_WARNING => report.warnings += 1,
             _ => {}
         }
         if report.messages.len() == 1024 {
-            if message.severity > D3D12_MESSAGE_SEVERITY_WARNING {
+            if severity > D3D12_MESSAGE_SEVERITY_WARNING {
                 // Keep bounded informational context without making a healthy
                 // long-lived runtime fail strict validation due to INFO volume.
                 return;
@@ -46,7 +46,13 @@ impl State {
                 return;
             }
         }
-        report.messages.push(message);
+        // Decide retention before paying to copy native callback text.
+        report.messages.push(D3D12ValidationMessage {
+            source,
+            severity,
+            id,
+            message: message(),
+        });
     }
     fn fail(&self) {
         self.report
@@ -98,16 +104,13 @@ unsafe extern "system" fn receive_message(
         return;
     };
     let result = std::panic::catch_unwind(|| {
-        // SAFETY: The native callback supplies a NUL-terminated description for
-        // this call only. Copy it and never reenter D3D or caller logging here.
-        let message = unsafe { CStr::from_ptr(description.as_ptr().cast()) }
-            .to_string_lossy()
-            .into_owned();
-        state.push(D3D12ValidationMessage {
-            source: "D3D12",
-            severity,
-            id,
-            message,
+        state.push("D3D12", severity, id, || {
+            // SAFETY: The synchronous callback supplies a NUL-terminated
+            // description for this call. The closure is invoked synchronously
+            // for retained messages and copies the text before returning.
+            unsafe { CStr::from_ptr(description.as_ptr().cast()) }
+                .to_string_lossy()
+                .into_owned()
         });
     });
     if let Err(payload) = result {
@@ -288,18 +291,13 @@ impl Session {
                         D3D12RuntimeError::native("GetMessage", "D3D12 diagnostics", error)
                     })?;
                 let message = &*pointer;
-                let text = CStr::from_ptr(message.pDescription)
-                    .to_string_lossy()
-                    .into_owned();
+                let text = CStr::from_ptr(message.pDescription).to_string_lossy();
                 if message.ID == D3D12_MESSAGE_ID_CREATEDEVICE_DEBUG_LAYER_STARTUP_OPTIONS {
                     gbv |= text.contains("GPU-Based Validation is enabled (disabled by default).");
                 }
-                self.monitor.state.push(D3D12ValidationMessage {
-                    source: "D3D12",
-                    severity: message.Severity,
-                    id: message.ID,
-                    message: text,
-                });
+                self.monitor
+                    .state
+                    .push("D3D12", message.Severity, message.ID, || text.into_owned());
             }
             if info.GetNumMessagesDiscardedByMessageCountLimit() != 0 {
                 return Err(D3D12RuntimeError::unsupported(
@@ -427,26 +425,24 @@ impl Drop for Session {
                                 )
                             })?;
                         let message = &*pointer;
-                        self.monitor.state.push(D3D12ValidationMessage {
-                            source: "DXGI",
-                            severity: message.Severity,
-                            id: message.ID.0,
-                            message: CStr::from_ptr(message.pDescription)
-                                .to_string_lossy()
-                                .into_owned(),
-                        });
+                        self.monitor
+                            .state
+                            .push("DXGI", message.Severity, message.ID.0, || {
+                                CStr::from_ptr(message.pDescription)
+                                    .to_string_lossy()
+                                    .into_owned()
+                            });
                     }
                     Ok(())
                 })()
             };
             if let Err(error) = outcome {
                 self.monitor.state.fail();
-                self.monitor.state.push(D3D12ValidationMessage {
-                    source: "DXGI",
-                    severity: D3D12_MESSAGE_SEVERITY_ERROR,
-                    id: 0,
-                    message: error.to_string(),
-                });
+                self.monitor
+                    .state
+                    .push("DXGI", D3D12_MESSAGE_SEVERITY_ERROR, 0, || {
+                        error.to_string()
+                    });
             }
         }
         if let Some(token) = self.token.take() {
@@ -476,24 +472,25 @@ mod tests {
     #[test]
     fn informational_history_is_bounded_and_preserves_problem_text_priority() {
         let monitor = D3D12ValidationMonitor::new();
+        let mut copied = 0;
         for id in 0..2048 {
-            monitor.state.push(D3D12ValidationMessage {
-                source: "D3D12",
-                severity: D3D12_MESSAGE_SEVERITY_INFO,
-                id,
-                message: "informational context".to_owned(),
-            });
+            monitor
+                .state
+                .push("D3D12", D3D12_MESSAGE_SEVERITY_INFO, id, || {
+                    copied += 1;
+                    "informational context".to_owned()
+                });
         }
         let healthy = monitor.snapshot();
         assert_eq!(healthy.messages.len(), 1024);
+        assert_eq!(copied, healthy.messages.len());
         assert_eq!(healthy.dropped_messages, 0);
         assert!(healthy.is_clean());
-        monitor.state.push(D3D12ValidationMessage {
-            source: "D3D12",
-            severity: D3D12_MESSAGE_SEVERITY_WARNING,
-            id: 3000,
-            message: "first warning must survive INFO truncation".to_owned(),
-        });
+        monitor
+            .state
+            .push("D3D12", D3D12_MESSAGE_SEVERITY_WARNING, 3000, || {
+                "first warning must survive INFO truncation".to_owned()
+            });
         let problem = monitor.snapshot();
         assert_eq!(problem.messages.len(), 1024);
         assert_eq!(problem.warnings, 1);
