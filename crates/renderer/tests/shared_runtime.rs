@@ -31,7 +31,9 @@ fn expect_buffer(runtime: &mut Runtime, pool: &mut GraphPool, key: ResourceKey) 
 }
 
 fn reprepare(runtime: &mut Runtime, limits: RuntimeLimits) {
-    let mut pool = GraphPool::new(limits.graph, 1).unwrap();
+    // The exported buffer can retain the upload bytes as index provenance.
+    // Keep a second Graph slot for plans that consume the registration.
+    let mut pool = GraphPool::new(limits.graph, 2).unwrap();
     let mut upload = pool.begin().unwrap();
     let output = upload
         .buffer("persistent input", BufferDesc { size: 8 })
