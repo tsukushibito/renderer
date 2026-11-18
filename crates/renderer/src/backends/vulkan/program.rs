@@ -22,7 +22,8 @@ mod bindings;
 mod creation;
 mod record;
 pub(super) use record::{
-    NativeIndexedDraw, NativeRasterDraw, RenderingAttachments, attachment_info,
+    NativeIndexedDraw, NativeRasterDraw, NativeRasterGeometry, RenderingAttachments,
+    attachment_info,
 };
 
 use bindings::BindingPool;

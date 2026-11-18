@@ -177,7 +177,7 @@ impl Program {
             .unwrap_or(0);
         if limits.max_push_constants_size < managed.parameter_size()
             || limits.max_vertex_input_attributes < managed.vertex_attributes().len() as u32
-            || limits.max_vertex_input_bindings < 1
+            || (!managed.is_fullscreen() && limits.max_vertex_input_bindings < 1)
             || limits.max_vertex_input_binding_stride < managed.vertex_stride()
             || managed.vertex_attributes().iter().any(|attribute| {
                 attribute.offset > limits.max_vertex_input_attribute_offset
@@ -480,7 +480,11 @@ impl Program {
             })
             .collect();
         let vertex_input = vk::PipelineVertexInputStateCreateInfo::default()
-            .vertex_binding_descriptions(&bindings)
+            .vertex_binding_descriptions(if program.is_fullscreen() {
+                &[]
+            } else {
+                &bindings
+            })
             .vertex_attribute_descriptions(&attributes);
         let assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
