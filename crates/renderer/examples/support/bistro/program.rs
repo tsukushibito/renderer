@@ -23,6 +23,8 @@
 
 #[path = "program/deferred.rs"]
 mod deferred;
+#[path = "program/forward_plus.rs"]
+pub mod forward_plus;
 
 pub use deferred::{DEFERRED_RECONSTRUCTION_BYTES, deferred_lighting_program, gbuffer_program};
 

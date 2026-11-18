@@ -1,0 +1,129 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 1   xyz         1     NONE   float   xyz
+; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
+; TEXCOORD                 3   xy          3     NONE   float   xy
+; SV_IsFrontFace           0   x           4    FFACE    uint   x
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; SV_Target                0   xyzw        0   TARGET   float   xyzw
+;
+; shader hash: e184865df6d89534eddb5711d6e9da22
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Pixel Shader
+; DepthOutput=0
+; SampleFrequency=0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 5
+; SigOutputElements: 1
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 5
+; SigOutputVectors[0]: 1
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; TEXCOORD                 1                 linear
+; TEXCOORD                 2                 linear
+; TEXCOORD                 3                 linear
+; SV_IsFrontFace           0        nointerpolation
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; SV_Target                0
+;
+; Buffer Definitions:
+;
+; cbuffer _359_361
+; {
+;
+;   struct hostlayout._359_361
+;   {
+;
+;       row_major float4x4 _361_m0;                   ; Offset:    0
+;       float4 _361_m1;                               ; Offset:   64
+;       float4 _361_m2;                               ; Offset:   80
+;       float4 _361_m3;                               ; Offset:   96
+;       float4 _361_m4;                               ; Offset:  112
+;       row_major float4x4 _361_m5[4];                ; Offset:  128
+;       float4 _361_m6;                               ; Offset:  384
+;       float4 _361_m7;                               ; Offset:  400
+;       float4 _361_m8;                               ; Offset:  416
+;       float4 _361_m9;                               ; Offset:  432
+;       float4 _361_m10;                              ; Offset:  448
+;
+;   } _359_361;                                       ; Offset:    0 Size:   464
+;
+; }
+;
+; cbuffer _803_805
+; {
+;
+;   struct _803_805
+;   {
+;
+;       float4 _805_m0;                               ; Offset:    0
+;       float4 _805_m1;                               ; Offset:   16
+;       float4 _805_m2;                               ; Offset:   32
+;       uint4 _805_m3;                                ; Offset:   48
+;
+;   } _803_805;                                       ; Offset:    0 Size:    64
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _359_361                          cbuffer      NA          NA     CB0            cb0     1
+; _803_805                          cbuffer      NA          NA     CB1            cb1     1
+; _435                              sampler      NA          NA      S0      s4,space3     1
+; _820                              sampler      NA          NA      S1      s4,space1     1
+; _1156                             sampler      NA          NA      S2      s3,space2     1
+; _88                               texture    byte         r/o      T0             t2     1
+; _431                              texture     f32          2d      T1      t0,space3     1
+; _447                              texture     f32          2d      T2      t1,space3     1
+; _459                              texture     f32          2d      T3      t2,space3     1
+; _467                              texture     f32          2d      T4      t3,space3     1
+; _818                              texture     f32          2d      T5      t0,space1     1
+; _858                              texture     f32          2d      T6      t2,space1     1
+; _953                              texture     f32          2d      T7      t1,space1     1
+; _1143                             texture     f32          2d      T8      t3,space1     1
+; _1154                             texture     f32          2d      T9      t0,space2     1
+; _1176                             texture     f32          2d     T10      t1,space2     1
+; _1187                             texture     f32          2d     T11      t2,space2     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 17, outputs: 4
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16 }
+;   output 1 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16 }
+;   output 2 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16 }
+;   output 3 depends on inputs: { 12, 13 }
+;

@@ -1,0 +1,284 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_83" : {
+            "name" : "_83",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 16
+                }
+            ]
+        },
+        "_86" : {
+            "name" : "_86",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "uvec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "_83",
+                    "array" : [
+                        64
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 16,
+                    "array_stride" : 32
+                }
+            ]
+        },
+        "_359" : {
+            "name" : "_359",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "_m4",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "_m5",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "_m6",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "_m7",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "_m8",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "_m9",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "_m10",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
+        },
+        "_803" : {
+            "name" : "_803",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "_m1",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "_m2",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "_m3",
+                    "type" : "uvec4",
+                    "offset" : 48
+                }
+            ]
+        }
+    },
+    "inputs" : [
+        {
+            "type" : "vec3",
+            "name" : "_491",
+            "location" : 0
+        },
+        {
+            "type" : "vec2",
+            "name" : "_791",
+            "location" : 3
+        },
+        {
+            "type" : "vec3",
+            "name" : "_889",
+            "location" : 1
+        },
+        {
+            "type" : "vec4",
+            "name" : "_907",
+            "location" : 2
+        }
+    ],
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_1280",
+            "location" : 0
+        }
+    ],
+    "separate_images" : [
+        {
+            "type" : "texture2D",
+            "name" : "_431",
+            "set" : 3,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_447",
+            "set" : 3,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_459",
+            "set" : 3,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_467",
+            "set" : 3,
+            "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_818",
+            "set" : 1,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_858",
+            "set" : 1,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_953",
+            "set" : 1,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_1143",
+            "set" : 1,
+            "binding" : 3
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_1154",
+            "set" : 2,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_1176",
+            "set" : 2,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "_1187",
+            "set" : 2,
+            "binding" : 2
+        }
+    ],
+    "separate_samplers" : [
+        {
+            "type" : "sampler",
+            "name" : "_435",
+            "set" : 3,
+            "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "_820",
+            "set" : 1,
+            "binding" : 4
+        },
+        {
+            "type" : "sampler",
+            "name" : "_1156",
+            "set" : 2,
+            "binding" : 3
+        }
+    ],
+    "ssbos" : [
+        {
+            "type" : "_86",
+            "name" : "_86_88",
+            "readonly" : true,
+            "block_size" : 2064,
+            "set" : 0,
+            "binding" : 2
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_359",
+            "name" : "_359_361",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
+        },
+        {
+            "type" : "_803",
+            "name" : "_803_805",
+            "block_size" : 64,
+            "set" : 0,
+            "binding" : 1
+        }
+    ]
+}

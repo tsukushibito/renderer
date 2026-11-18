@@ -70,16 +70,22 @@ try {
         'pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'resolve.vert',
         'tone.frag', 'resolve.frag', 'resolve_aa.frag', 'bloom_extract.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
-        'resolve_linear.frag', 'resolve_aa_linear.frag', 'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag'
+        'resolve_linear.frag', 'resolve_aa_linear.frag',
+        'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
+        'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
-        $source = Join-Path $PSScriptRoot ($name -creplace '_linear\.frag$', '.frag')
+        $shaderSource = $name -creplace '_linear\.frag$', '.frag'
+        if ($name -cin @('pbr_all_lights.frag', 'pbr_forward_plus.frag')) { $shaderSource = 'pbr.frag' }
+        $source = Join-Path $PSScriptRoot $shaderSource
         $spirv = Join-Path $temporaryRoot ($name + '.spv')
         $hlsl = Join-Path $temporaryRoot ($name + '.hlsl')
         $dxil = Join-Path $temporaryRoot ($name + '.dxil')
         $glsl = @('--target-env=vulkan1.3', '--target-spv=spv1.3', '-std=450core', '-fentry-point=main', '-O', '-Werror')
         if ($name -cmatch '_linear\.frag$') { $glsl += '-DBISTRO_LINEAR_OUTPUT=1' }
+        if ($name -ceq 'pbr_all_lights.frag') { $glsl += '-DBISTRO_LOCAL_LIGHTS=1' }
+        if ($name -ceq 'pbr_forward_plus.frag') { $glsl += '-DBISTRO_LOCAL_LIGHTS=2' }
         $null = Run $glslc ($glsl + @($source, '-o', $spirv))
         $null = Run $validator @('--target-env', 'vulkan1.3', $spirv)
         $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $stage, '--output', $hlsl)
@@ -146,7 +152,14 @@ try {
     foreach ($license in @('FXAA-notices.txt', 'Godot-MIT.txt', 'Khronos-ToneMapping-Apache-2.0.txt')) {
         $licenses[$license] = Hash (Join-Path $PSScriptRoot ('licenses/' + $license))
     }
-    $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_bytes = 4; artifacts = $artifacts; licenses = $licenses }
+    $includes = [ordered]@{}
+    foreach ($include in @('local_lights.glsl', 'local_light_pbr.glsl')) {
+        $included = Join-Path $PSScriptRoot $include
+        $canonical = Join-Path $temporaryRoot $include
+        Write-Text $canonical ([IO.File]::ReadAllText($included))
+        $includes[$include] = Hash $canonical
+    }
+    $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_bytes = 4; artifacts = $artifacts; includes = $includes; licenses = $licenses }
     $manifestPath = Join-Path $temporaryRoot 'manifest.json'
     Write-Text $manifestPath (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
     $publish[$manifestPath] = Join-Path $PSScriptRoot 'manifest.json'

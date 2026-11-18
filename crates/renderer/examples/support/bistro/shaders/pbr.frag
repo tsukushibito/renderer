@@ -1,4 +1,7 @@
 #version 450 core
+#if defined(BISTRO_LOCAL_LIGHTS)
+#extension GL_GOOGLE_include_directive : require
+#endif
 
 layout(location = 0) in vec3 world_position;
 layout(location = 1) in vec3 world_normal;
@@ -46,6 +49,10 @@ vec3 unit_or(vec3 value, vec3 fallback) {
     float squared = dot(value, value);
     return squared > 1e-20 ? value * inversesqrt(squared) : fallback;
 }
+
+#if defined(BISTRO_LOCAL_LIGHTS)
+#include "local_light_pbr.glsl"
+#endif
 
 // Processed environment is top-origin lat-long. Rotate a world direction by
 // inverse source yaw; U wraps while V clamps, including the pole texels.
@@ -191,6 +198,9 @@ void main() {
     // an attenuation of emissive/specular contributions.
     vec3 color = (diffuse + specular) * camera.light_color.rgb * nl * shadow_visibility
         + (indirect_diffuse + indirect_specular) * max(camera.environment.x, 0.0) + emissive;
+#if defined(BISTRO_LOCAL_LIGHTS)
+    color += local_light_radiance(world_position, n, v, f0, diffuse_color, roughness);
+#endif
     // The ideal low-roughness peak may exceed binary16's finite range. Preserve
     // finite linear target values; final SDR clamping remains a separate pass.
     output_color = vec4(clamp(color, vec3(0.0), vec3(65504.0)), alpha_mode == 2u ? alpha : 1.0);
