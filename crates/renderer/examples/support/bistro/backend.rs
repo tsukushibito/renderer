@@ -1,10 +1,61 @@
 //! Small acceptance adapter; all assets and Graph construction are API-neutral.
 
-use super::{Error, Options, pipeline::Budget};
-use renderer::graph::{
-    BufferHandle, CompiledGraph, ImageHandle, ImportBuffer, ImportImage, PassHandle, ResourceKey,
+use super::{Error, Options, PipelineMode, pipeline::Budget, program};
+use renderer::{
+    graph::{
+        BufferHandle, CompiledGraph, ImageHandle, ImportBuffer, ImportImage, PassHandle,
+        ResourceKey,
+    },
+    program::{ManagedProgram, RasterPipelineRequest},
 };
 use std::time::{Duration, Instant};
+
+pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
+    let mut requests = Vec::with_capacity(7);
+    if options.pipeline == PipelineMode::Deferred {
+        requests.extend(
+            [
+                program::deferred::gbuffer_program(),
+                program::deferred::deferred_lighting_program(),
+            ]
+            .map(RasterPipelineRequest::from),
+        );
+    } else {
+        requests.push(RasterPipelineRequest {
+            program: options.pipeline.forward_program(false),
+            sample_count: options.sample_count,
+        });
+    }
+    requests.push(RasterPipelineRequest {
+        program: options.pipeline.forward_program(true),
+        sample_count: options.sample_count,
+    });
+    requests.extend(
+        [program::shadow_program(), program::tone_program()].map(RasterPipelineRequest::from),
+    );
+    if options.windowed {
+        requests.push(program::present_program(options.aa).into());
+    } else {
+        requests.extend(
+            [program::resolve_program(), program::resolve_aa_program()]
+                .map(RasterPipelineRequest::from),
+        );
+    }
+    requests
+}
+
+pub(super) fn compute_requests(options: &Options) -> Vec<ManagedProgram> {
+    options
+        .bloom
+        .programs()
+        .iter()
+        .copied()
+        .chain(
+            (options.pipeline == PipelineMode::ForwardPlus)
+                .then(program::forward_plus::compute_program),
+        )
+        .collect()
+}
 
 pub(super) trait Backend: Sized {
     type Pending;
@@ -95,8 +146,8 @@ impl Vulkan {
             )
             .collect::<Vec<_>>();
         runtime.prepare_working_set(Self::frame_capacity(options, budget), &resources)?;
-        runtime.prepare_raster_programs(&super::program::raster_requests(options))?;
-        runtime.prepare_compute_programs(options.bloom.programs())?;
+        runtime.prepare_raster_programs(&raster_requests(options))?;
+        runtime.prepare_compute_programs(&compute_requests(options))?;
         Ok(Self { runtime })
     }
 }
@@ -226,7 +277,7 @@ impl Backend for D3d12 {
             .iter()
             .map(|&(desc, count)| renderer::D3D12ImageClass { desc, count })
             .collect::<Vec<_>>();
-        let raster = super::program::raster_requests(options);
+        let raster = raster_requests(options);
         let runtime = renderer::D3D12Runtime::new_with_working_set(
             renderer::D3D12RuntimeConfig {
                 capacity,
@@ -235,7 +286,7 @@ impl Backend for D3d12 {
             &buffers,
             &images,
             &raster,
-            options.bloom.programs(),
+            &compute_requests(options),
         )?;
         Ok(Self { runtime })
     }

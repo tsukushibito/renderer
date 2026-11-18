@@ -18,6 +18,8 @@ mod camera;
 mod clock;
 #[path = "bistro/deferred.rs"]
 mod deferred;
+#[path = "bistro/forward_lighting.rs"]
+mod forward_lighting;
 #[path = "bistro/ibl.rs"]
 mod ibl;
 #[path = "bistro/lifecycle.rs"]
@@ -67,6 +69,8 @@ type Error = Box<dyn std::error::Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineMode {
     Forward,
+    ForwardPlus,
+    ForwardReference,
     Deferred,
 }
 
@@ -74,7 +78,23 @@ impl PipelineMode {
     fn name(self) -> &'static str {
         match self {
             Self::Forward => "forward",
+            Self::ForwardPlus => "forward-plus",
+            Self::ForwardReference => "forward-reference",
             Self::Deferred => "deferred",
+        }
+    }
+
+    fn uses_local_lights(self) -> bool {
+        matches!(self, Self::ForwardPlus | Self::ForwardReference)
+    }
+
+    fn forward_program(self, blend: bool) -> renderer::program::ManagedRasterProgram {
+        if self.uses_local_lights() {
+            program::forward_plus::raster_program(self == Self::ForwardPlus, blend)
+        } else if blend {
+            program::blend_program()
+        } else {
+            program::opaque_program()
         }
     }
 }
@@ -120,6 +140,13 @@ struct Options {
 }
 
 impl Options {
+    fn validate_lighting_extent(&self) -> Result<(), Error> {
+        if self.pipeline.uses_local_lights() {
+            program::forward_plus::active_tile_count(self.width, self.height)?;
+        }
+        Ok(())
+    }
+
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, Error> {
         let mut result = Self {
             api: "vulkan".into(),
@@ -202,8 +229,13 @@ impl Options {
                 "--pipeline" => {
                     result.pipeline = match args.next().as_deref() {
                         Some("forward") => PipelineMode::Forward,
+                        Some("forward-plus") => PipelineMode::ForwardPlus,
+                        Some("forward-reference") => PipelineMode::ForwardReference,
                         Some("deferred") => PipelineMode::Deferred,
-                        _ => return Err("--pipeline needs forward or deferred".into()),
+                        _ => return Err(
+                            "--pipeline needs forward, forward-plus, forward-reference or deferred"
+                                .into(),
+                        ),
                     };
                 }
                 "--msaa" => {
@@ -252,7 +284,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|deferred] [--msaa 1|4] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|forward-plus|forward-reference|deferred] [--msaa 1|4] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -290,6 +322,7 @@ impl Options {
         if result.steady_state_cpu && result.warmup < result.inflight {
             return Err("stationary CPU measurement requires a fully warmed pipeline".into());
         }
+        result.validate_lighting_extent()?;
         if result.capture_route_samples && result.fixture {
             return Err("route samples require a cooked Bistro scene".into());
         }
@@ -408,6 +441,29 @@ mod tests {
         assert_eq!(deferred.pipeline, PipelineMode::Deferred);
         let error = options(&["--fixture", "--msaa", "4", "--pipeline", "deferred"]).unwrap_err();
         assert_eq!(error.to_string(), "the deferred pipeline requires --msaa 1");
+    }
+
+    #[test]
+    fn forward_local_lights_support_both_sample_counts_and_check_tile_capacity() {
+        for mode in ["forward-plus", "forward-reference"] {
+            for samples in ["1", "4"] {
+                let opts = options(&["--fixture", "--pipeline", mode, "--msaa", samples]).unwrap();
+                assert_eq!(opts.pipeline.name(), mode);
+                assert!(opts.pipeline.uses_local_lights());
+            }
+            assert!(
+                options(&[
+                    "--fixture",
+                    "--pipeline",
+                    mode,
+                    "--width",
+                    "8192",
+                    "--height",
+                    "8192",
+                ])
+                .is_err()
+            );
+        }
     }
 
     #[test]

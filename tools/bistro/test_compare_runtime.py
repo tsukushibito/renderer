@@ -116,6 +116,23 @@ class RuntimeComparisonTests(unittest.TestCase):
                 compare.compare_reports(first, second, profile="fixture", regions=regions,
                                          expect_different=True, identity_changes=changes)
 
+    def test_forward_plus_reference_requires_the_same_lights_and_scene(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first, lhs, _ = self.make_report(root / "a", pixels=2)
+            second, rhs, _ = self.make_report(root / "b", pixels=2)
+            for (path, report, pipeline) in (
+                    (first, lhs, "forward-plus"), (second, rhs, "forward-reference")):
+                report["identity"].update(pipeline=pipeline, local_lights={"profile": "test", "count": 2})
+                path.write_text(json.dumps(report), encoding="utf-8")
+            result = compare.compare_reports(first, second, profile="repeat", forward_plus_reference=True)
+            self.assertTrue(result["passed"])
+            self.assertEqual(result["comparison"], "forward-plus-reference")
+            rhs["identity"]["local_lights"]["count"] = 3
+            second.write_text(json.dumps(rhs), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "same local-light"):
+                compare.compare_reports(first, second, profile="repeat", forward_plus_reference=True)
+
     def test_input_mismatch_and_incomplete_or_unexpected_raw_artifacts_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -251,7 +251,7 @@ def _regions(specification, width, height, planes):
 
 
 def compare_reports(first_path, second_path, *, profile, planes=None, regions=None,
-                    expect_different=False, identity_changes=None):
+                    expect_different=False, identity_changes=None, forward_plus_reference=False):
     first_path, second_path = Path(first_path), Path(second_path)
     first, second = load_json(first_path), load_json(second_path)
     if any(type(item.get("schema_version")) is not int or item["schema_version"] != 1 for item in (first, second)):
@@ -272,7 +272,13 @@ def compare_reports(first_path, second_path, *, profile, planes=None, regions=No
     if (profile == "repeat" or expect_different) and apis[0] != apis[1]:
         raise ValueError("Repeat and controlled sensitivity require the same API")
     identity_equal = first["identity"] == second.get("identity")
-    if expect_different:
+    if forward_plus_reference:
+        before, after = (dict(item["identity"]) for item in (first, second))
+        modes = {before.pop("pipeline", None), after.pop("pipeline", None)}
+        if (modes != {"forward-plus", "forward-reference"} or before != after
+                or not before.get("local_lights") or expect_different or identity_changes):
+            raise ValueError("Forward+ comparison requires the same local-light workload and settings")
+    elif expect_different:
         expected = dict(first["identity"])
         for key, change in (identity_changes or {}).items():
             if (not isinstance(change, list) or len(change) != 2
@@ -287,7 +293,12 @@ def compare_reports(first_path, second_path, *, profile, planes=None, regions=No
         raise ValueError("Rendering identities differ; this is not an agreement comparison")
     if expect_different and not regions:
         raise ValueError("Known-wrong sensitivity checks require explicit named ROIs")
-    output = {"schema_version": 1, "comparison": "known-wrong-sensitivity" if expect_different else "agreement",
+    comparison = "agreement"
+    if forward_plus_reference:
+        comparison = "forward-plus-reference"
+    elif expect_different:
+        comparison = "known-wrong-sensitivity"
+    output = {"schema_version": 1, "comparison": comparison,
               "profile": profile, "frozen_thresholds": copy.deepcopy(PROFILES[profile]),
               "thresholds_sha256": canonical_hash(PROFILES[profile]),
               "comparator_sha256": digest(Path(__file__)),
@@ -344,12 +355,15 @@ def main():
     parser.add_argument("--expect-different", action="store_true", help="Each ROI/plane must detect a known wrong variant")
     parser.add_argument("--identity-changes", type=Path,
                         help="Sensitivity-only JSON {identity_key:[exact_before,exact_after]}")
+    parser.add_argument("--forward-plus-reference", action="store_true",
+                        help="allow the Forward+/all-light pipeline difference with identical lighting and inputs")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     result = compare_reports(args.first, args.second, profile=args.profile, planes=args.planes,
                              regions=load_json(args.regions) if args.regions else None,
                              expect_different=args.expect_different,
-                             identity_changes=load_json(args.identity_changes) if args.identity_changes else None)
+                             identity_changes=load_json(args.identity_changes) if args.identity_changes else None,
+                             forward_plus_reference=args.forward_plus_reference)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     print(json.dumps({"passed": result["passed"], "profile": args.profile,

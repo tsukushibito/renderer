@@ -5,7 +5,9 @@ use super::{
     asset::Scene,
     backend::Backend,
     camera::{Camera, Frustum},
-    deferred, ibl, program, shadow,
+    deferred, forward_lighting, ibl,
+    program::{self, forward_plus},
+    shadow,
 };
 use renderer::{
     ImageFormat,
@@ -27,6 +29,8 @@ pub(super) struct Budget {
     pub upload_bytes: usize,
     pub readback_bytes: u64,
     pub ranges: usize,
+    pipeline: PipelineMode,
+    fixture: bool,
 }
 
 pub(super) fn image_desc(image: &super::asset::TextureImage) -> ImageDesc {
@@ -50,12 +54,14 @@ fn environment_desc(image: &ibl::Image) -> ImageDesc {
 
 impl Budget {
     pub fn frame_buffers(options: &Options) -> impl Iterator<Item = (u64, usize)> {
-        (options.pipeline == PipelineMode::Deferred)
-            .then_some((
-                program::DEFERRED_RECONSTRUCTION_BYTES as u64,
-                options.inflight,
-            ))
-            .into_iter()
+        let bytes = match options.pipeline {
+            PipelineMode::Deferred => Some(program::deferred::DEFERRED_RECONSTRUCTION_BYTES as u64),
+            PipelineMode::ForwardPlus | PipelineMode::ForwardReference => {
+                Some(forward_plus::LIGHT_BUFFER_BYTES)
+            }
+            PipelineMode::Forward => None,
+        };
+        bytes.map(|size| (size, options.inflight)).into_iter()
     }
 
     pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
@@ -105,7 +111,10 @@ impl Budget {
         environment: &ibl::Environment,
         options: &Options,
     ) -> Result<Self, Error> {
+        options.validate_lighting_extent()?;
         let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
+        let local_lights = usize::from(options.pipeline.uses_local_lights());
+        let tiled_lights = usize::from(options.pipeline == PipelineMode::ForwardPlus);
         let buffer_count = scene
             .primitives
             .len()
@@ -141,6 +150,11 @@ impl Budget {
             // Explicit change-boundary overlap: the old material can still be
             // referenced by a submission while its new version is uploaded.
             add(program::MATERIAL_BYTES as u64);
+        }
+        if tiled_lights != 0 {
+            // The one shared list is fully initialized by an explicit
+            // preparation dispatch. In-flight frames share one ordered queue.
+            add(forward_plus::TILE_BUFFER_BYTES);
         }
         let max_buffer_bytes = buffers
             .iter()
@@ -208,27 +222,41 @@ impl Budget {
             + 11
             + bloom_passes
             + deferred * (1 + deferred::PLANES.len())
+            + local_lights
+            + tiled_lights
             + usize::from(options.sample_count == SampleCount::X4);
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
             + frame_instances
             + frame_buffers
+            + tiled_lights
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
         let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings;
         let graph = GraphCapacity {
             resources,
-            passes: 24 + bloom_passes + usize::from(bloom_passes != 0) + deferred * 2,
+            passes: 24
+                + bloom_passes
+                + usize::from(bloom_passes != 0)
+                + deferred * 2
+                + local_lights
+                + tiled_lights,
             accesses,
             draws: scene.primitives.len() * 5 + 2 + deferred,
-            bindings: scene.materials.len() * 20 + 4 + bloom_bindings + deferred * 16,
+            bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
+                + 4
+                + bloom_bindings
+                + deferred * 16
+                + tiled_lights * 3,
             attachments: 24 + deferred * deferred::PLANES.len(),
             dependencies: 32,
             initial_ranges: resources * 2,
             name_bytes: resources * 32 + 2048,
-            upload_bytes: program::CAMERA_BYTES + deferred * program::DEFERRED_RECONSTRUCTION_BYTES,
+            upload_bytes: program::CAMERA_BYTES
+                + deferred * program::deferred::DEFERRED_RECONSTRUCTION_BYTES
+                + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize,
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
@@ -267,7 +295,13 @@ impl Budget {
                     .max()
                     .unwrap_or(0),
             )
-            .max(max_buffer_bytes as usize)
+            .max(if tiled_lights == 0 {
+                max_buffer_bytes as usize
+            } else {
+                // The tile-list class is large, but its contents are written by
+                // compute. Geometry streams above still size cold CPU uploads.
+                forward_plus::LIGHT_BUFFER_BYTES as usize
+            })
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
@@ -298,12 +332,14 @@ impl Budget {
             graph,
             buffers,
             images,
-            buffer_count: buffer_count + frame_buffers,
+            buffer_count: buffer_count + frame_buffers + tiled_lights,
             physical_resources,
             max_buffer_bytes,
             upload_bytes,
             readback_bytes,
             ranges: resources * (options.inflight + 3) + 32,
+            pipeline: options.pipeline,
+            fixture: options.fixture,
         })
     }
     pub fn upload_pool(&self) -> Result<GraphPool, Error> {
@@ -340,6 +376,8 @@ pub(super) struct Resident {
     primitive_bounds: Vec<shadow::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
+    local_lights: Option<forward_lighting::LightBytes>,
+    tiles: Option<ImportBuffer>,
     pub resolve_vertices: ImportBuffer,
     pub resolve_indices: ImportBuffer,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
@@ -448,6 +486,7 @@ impl Resident {
             self.resolve_vertices.key(),
             self.resolve_indices.key(),
         ];
+        let tiles = self.tiles.take().map(|tiles| tiles.key());
         drop((self.camera, self.resolve_vertices, self.resolve_indices));
         prepare(backend)?;
         let refresh = |keys: Vec<_>| -> Result<Vec<ImportBuffer>, Error> {
@@ -461,6 +500,7 @@ impl Resident {
         self.camera = backend.refresh_buffer(saved[0])?;
         self.resolve_vertices = backend.refresh_buffer(saved[1])?;
         self.resolve_indices = backend.refresh_buffer(saved[2])?;
+        self.tiles = tiles.map(|key| backend.refresh_buffer(key)).transpose()?;
         Ok(self)
     }
 
@@ -545,6 +585,14 @@ impl Resident {
         let mut initial_uniform = [0; program::CAMERA_BYTES];
         initial_uniform[..128].copy_from_slice(camera);
         let camera = upload_buffer(backend, &mut upload_owners, &initial_uniform)?;
+        let local_lights = budget
+            .pipeline
+            .uses_local_lights()
+            .then(|| forward_lighting::preset(budget.fixture))
+            .transpose()?;
+        let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
+            .then(|| forward_lighting::initialize_tiles(backend, &camera))
+            .transpose()?;
         let resolve_vertices = program::RESOLVE_VERTICES
             .into_iter()
             .flat_map(f32::to_le_bytes)
@@ -620,6 +668,8 @@ impl Resident {
             primitive_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
+            local_lights,
+            tiles,
             resolve_vertices,
             resolve_indices,
             upload_owners,
@@ -758,7 +808,7 @@ impl Workspace {
 pub(super) struct Built {
     pub graph: Graph,
     pub output: ImageHandle,
-    pub camera: BufferHandle,
+    pub updates: BufferUpdates,
     pub captures: Option<Captures>,
     pub bloom_capture: Option<PassHandle>,
     #[cfg(all(windows, feature = "presentation"))]
@@ -766,6 +816,29 @@ pub(super) struct Built {
     pub shadow_captures: Option<[PassHandle; 4]>,
     pub shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
     pub draws: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct BufferUpdates {
+    camera: BufferHandle,
+    tiles: Option<BufferHandle>,
+}
+
+impl Resident {
+    pub fn accept_buffer_updates<B: Backend>(
+        &mut self,
+        pending: &B::Pending,
+        updates: BufferUpdates,
+    ) -> Result<(), Error> {
+        let camera = B::export_buffer(pending, updates.camera)?;
+        let tiles = updates
+            .tiles
+            .map(|handle| B::export_buffer(pending, handle))
+            .transpose()?;
+        self.camera = camera;
+        self.tiles = tiles;
+        Ok(())
+    }
 }
 
 pub(super) struct Captures {
@@ -860,6 +933,24 @@ pub(super) fn build(
         let resolve_indices = graph.import_buffer("resolve indices", &resident.resolve_indices)?;
         (uniform, resolve_vertices, resolve_indices)
     };
+    let mut local_light_bindings = [None; 2];
+    let mut tile_update = None;
+    if let Some(preset) = &resident.local_lights {
+        let (lights, tiles) = forward_lighting::append(
+            &mut graph,
+            [options.width, options.height],
+            uniform,
+            preset,
+            resident.tiles.as_ref(),
+        )?;
+        tile_update = tiles;
+        for (slot, binding) in local_light_bindings
+            .iter_mut()
+            .zip(forward_plus::raster_bindings(lights, tiles))
+        {
+            *slot = Some(binding);
+        }
+    }
     let environment = [
         graph.import_image("diffuse environment", &resident.environment[0])?,
         graph.import_image("specular environment", &resident.environment[1])?,
@@ -1101,17 +1192,20 @@ pub(super) fn build(
                 },
             ];
             let bindings = if deferred && !material.blend {
-                graph.raster_bindings(&program::gbuffer_program(), &material_bindings)?
+                graph.raster_bindings(&program::deferred::gbuffer_program(), &material_bindings)?
             } else {
-                let program = if material.blend {
-                    program::blend_program()
-                } else {
-                    program::opaque_program()
-                };
-                let mut bindings = [material_bindings[0]; 16];
+                let program = options.pipeline.forward_program(material.blend);
+                let mut bindings = [material_bindings[0]; renderer::program::MAX_RASTER_BINDINGS];
+                let shared = material_bindings.len() + lighting_bindings.len();
                 bindings[..material_bindings.len()].copy_from_slice(&material_bindings);
-                bindings[material_bindings.len()..].copy_from_slice(&lighting_bindings);
-                graph.raster_bindings(&program, &bindings)?
+                bindings[material_bindings.len()..shared].copy_from_slice(&lighting_bindings);
+                for (slot, binding) in bindings[shared..]
+                    .iter_mut()
+                    .zip(local_light_bindings.into_iter().flatten())
+                {
+                    *slot = binding;
+                }
+                graph.raster_bindings(&program, &bindings[..program.bindings().len()])?
             };
             workspace.bindings.push(bindings);
         }
@@ -1228,7 +1322,7 @@ pub(super) fn build(
         };
         graph.raster(
             "Forward PBR opaque and mask",
-            &program::opaque_program(),
+            &options.pipeline.forward_program(false),
             workspace.opaque.iter().copied().map(draw),
             RasterAttachments {
                 color_resolves: if final_opaque {
@@ -1287,7 +1381,7 @@ pub(super) fn build(
             };
             graph.raster(
                 "Forward PBR alpha blend",
-                &program::blend_program(),
+                &options.pipeline.forward_program(true),
                 workspace.blended.iter().copied().map(draw),
                 RasterAttachments {
                     color_resolves: final_resolve.as_slice(),
@@ -1443,7 +1537,10 @@ pub(super) fn build(
     Ok(Built {
         graph,
         output,
-        camera: uniform,
+        updates: BufferUpdates {
+            camera: uniform,
+            tiles: tile_update,
+        },
         captures,
         bloom_capture,
         #[cfg(all(windows, feature = "presentation"))]

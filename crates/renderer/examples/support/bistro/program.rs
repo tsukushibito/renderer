@@ -22,18 +22,15 @@
 //! checked in, with the fixed toolchain and upstream license notices retained.
 
 #[path = "program/deferred.rs"]
-mod deferred;
+pub mod deferred;
 #[path = "program/forward_plus.rs"]
 pub mod forward_plus;
 
-pub use deferred::{DEFERRED_RECONSTRUCTION_BYTES, deferred_lighting_program, gbuffer_program};
-
-use super::{Options, PipelineMode};
 use renderer::ImageFormat;
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterPipelineRequest, RasterProgramDescriptor, SampledImageSamplerPair,
-    ShaderStages, VertexAttribute, VertexFormat,
+    RasterParameterLayout, RasterProgramDescriptor, SampledImageSamplerPair, ShaderStages,
+    VertexAttribute, VertexFormat,
 };
 
 pub const VERTEX_BYTES: usize = 48;
@@ -321,31 +318,6 @@ pub const fn present_program(aa: bool) -> ManagedRasterProgram {
         })
     }
 }
-pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
-    let mut requests = Vec::with_capacity(7);
-    if options.pipeline == PipelineMode::Deferred {
-        requests.extend(
-            [gbuffer_program(), deferred_lighting_program()].map(RasterPipelineRequest::from),
-        );
-    } else {
-        requests.push(RasterPipelineRequest {
-            program: opaque_program(),
-            sample_count: options.sample_count,
-        });
-    }
-    requests.push(RasterPipelineRequest {
-        program: blend_program(),
-        sample_count: options.sample_count,
-    });
-    requests.extend([shadow_program(), tone_program()].map(RasterPipelineRequest::from));
-    if options.windowed {
-        requests.push(present_program(options.aa).into());
-    } else {
-        requests.extend([resolve_program(), resolve_aa_program()].map(RasterPipelineRequest::from));
-    }
-    requests
-}
-
 /// Fullscreen indexed triangle, prepared once by the consumer.
 pub const RESOLVE_VERTICES: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
 pub const RESOLVE_INDICES: [u32; 3] = [0, 1, 2];

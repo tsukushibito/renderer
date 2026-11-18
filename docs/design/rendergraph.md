@@ -477,7 +477,7 @@ Program集合を変更する前には、GPU完了だけでなく結果ハンド�
 buffer snapshotも返却する。D3D12は最後のreadback消費時にnative readback枠を返すが、
 結果ハンドル自体の返却はregistryに保持する小さな共有anchorで追跡し、Vulkanと同じ変更境界にする。
 anchorは再準備でもregistryとともに保持し、通常frameの結果返却でheapを解放しない。
-共通上限は一つのworking set内の64 Program、4 binding group、16 binding、16 vertex属性、128 byteのinline定数であり、
+共通上限は一つのworking set内の64 Program、4 binding group、18 binding、16 vertex属性、128 byteのinline定数であり、
 実Device上限とD3D12の64-DWORD root signature上限も準備時に適合確認する。
 Vulkanは共有Program参照を無効化せず通常読取にlockを増やさないため、
 明示的なRaster集合の準備時に新しい所有者と固定slotを構築し、成功後だけ切り替える。

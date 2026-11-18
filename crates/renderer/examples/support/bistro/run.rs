@@ -174,7 +174,7 @@ fn frames<B: Backend>(
             let _export = tracy_client::Client::running().map(|client| {
                 client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
             });
-            resident.camera = B::export_buffer(&work, built.camera)?;
+            resident.accept_buffer_updates::<B>(&work, built.updates)?;
             workspace.accept_shadow_updates::<B>(&work, built.shadow_updates)?;
             let output = B::export_image(&work, built.output)?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
@@ -231,6 +231,8 @@ fn identity(
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
+        "local_lights":options.pipeline.uses_local_lights()
+            .then(|| super::forward_lighting::identity(options.fixture)),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
             "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
             "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
@@ -295,7 +297,7 @@ fn capture_planes<B: Backend>(
     )?;
     let plan = built.graph.compile()?;
     let mut pending = backend.submit(&plan)?;
-    resident.camera = B::export_buffer(&pending, built.camera)?;
+    resident.accept_buffer_updates::<B>(&pending, built.updates)?;
     workspace.accept_shadow_updates::<B>(&pending, built.shadow_updates)?;
     let output = B::export_image(&pending, built.output)?;
     backend.delete(output.key())?;

@@ -8,7 +8,7 @@ pub const MAX_RASTER_PROGRAMS: usize = 64;
 /// Baseline descriptor-set/register-space limit shared by both backends.
 pub const MAX_RASTER_BIND_GROUPS: usize = 4;
 pub const MAX_RASTER_ATTRIBUTES: usize = 16;
-pub const MAX_RASTER_BINDINGS: usize = 16;
+pub const MAX_RASTER_BINDINGS: usize = 18;
 pub const MAX_RASTER_COLOR_ATTACHMENTS: usize = 8;
 
 /// Component layout for one attribute in the single per-vertex stream.
@@ -308,7 +308,7 @@ impl ManagedRasterProgram {
     /// Inline members must not be dynamically indexed: D3D12 root constants
     /// permit only static/literal indexing. Use Uniform/StorageRead for arrays
     /// that require dynamic indexing.
-    /// There are at most 16 bindings, with group indices below 4, unique
+    /// There are at most 18 bindings, with group indices below 4, unique
     /// group/binding coordinates and nonempty graphics
     /// stages only. Supported kinds are Uniform, StorageRead, SampledImage and
     /// Sampler; every slot has exactly one descriptor (no descriptor arrays).

@@ -1,6 +1,9 @@
 //! Bistro's single-sample G-buffer and deferred lighting recipe.
 
-use super::{Error, program};
+use super::{
+    Error,
+    program::{self, deferred::DEFERRED_RECONSTRUCTION_BYTES},
+};
 use renderer::{
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, ImageView, LoadOp,
@@ -47,7 +50,7 @@ pub(super) fn append(
     });
     graph.raster(
         "G-buffer opaque and mask",
-        &program::gbuffer_program(),
+        &program::deferred::gbuffer_program(),
         draws,
         RasterAttachments {
             color_resolves: &[],
@@ -63,7 +66,7 @@ pub(super) fn append(
     let reconstruction = graph.buffer(
         "deferred inverse view projection",
         BufferDesc {
-            size: program::DEFERRED_RECONSTRUCTION_BYTES as u64,
+            size: DEFERRED_RECONSTRUCTION_BYTES as u64,
         },
     )?;
     graph.upload_buffer(
@@ -72,7 +75,7 @@ pub(super) fn append(
         0,
         &inverse_bytes(scene.view_projection)?,
     )?;
-    let inverse = uniform(1, reconstruction, program::DEFERRED_RECONSTRUCTION_BYTES);
+    let inverse = uniform(1, reconstruction, DEFERRED_RECONSTRUCTION_BYTES);
     let gbuffer = [
         uniform(0, scene.camera, program::CAMERA_BYTES),
         inverse,
@@ -89,7 +92,7 @@ pub(super) fn append(
     let mut bindings = [inverse; 16];
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
     bindings[gbuffer.len()..].copy_from_slice(&scene.lighting);
-    let program = program::deferred_lighting_program();
+    let program = program::deferred::deferred_lighting_program();
     let bindings = graph.raster_bindings(&program, &bindings)?;
     graph.raster(
         "deferred PBR lighting",

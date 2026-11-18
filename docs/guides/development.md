@@ -421,6 +421,20 @@ FXAAは独立に`--aa-off`で無効化できる。4×のoffscreen captureはreso
 奥から手前にForwardで合成する。Deferredにも同じBloom、露出、Neutral、FXAA、表示が続く。
 オフスクリーンとWindow reportの`pipeline`で経路を確認できる。
 
+`--pipeline forward-plus`と`--pipeline forward-reference`は同じ64灯と材質・カメラを使う。
+Forward+は16×16ピクセルのタイルごとに交差候補をComputeで求め、不透明・半透明の両方が一覧を読む。
+全灯参照は同じ局所光の計算を各フラグメントで全灯に対して実行する。両経路は`--msaa 1`と`--msaa 4`で比較できる。
+Forward+は準備時に一覧全体を初期化し、各フレームは使用する先頭範囲を更新する。
+Windowのresizeは最新の一覧をGPU資源として保持し、画像とフレーム用bufferを新しいextentで準備する。
+
+```powershell
+cargo test --locked --release -p renderer --test forward_plus_graph --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
+python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile repeat --planes hdr sdr --forward-plus-reference --output $comparison
+```
+
+実GPU試験は固定の投影でタイルごとの一覧をCPU参照と照合する。製品構成には`development-validation`を外す。
+画像照合で`--forward-plus-reference`を使うと、局所光プロファイル、視点、サンプル数等の一致を要求した上で両描画経路を比較できる。
+
 ```powershell
 cargo run --locked --release -p renderer --example msaa --no-default-features --features vulkan,d3d12
 cargo test --locked --release -p renderer --test msaa --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
@@ -452,6 +466,7 @@ python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $man
 4×の画像・性能受入では`b5_images.py`の両stageと`b5_benchmark.py`に`--msaa 4`を渡し、
 profileと出力先を分ける。`b5_window_acceptance.py`はoffscreen参照とWindow reportのサンプル数を照合する。
 Deferredの各受入スクリプトには`--pipeline deferred`を渡し、Forwardと別のprofile・出力先を使う。
+`--pipeline forward-plus`と`--pipeline forward-reference`もそれぞれ別のprofile・出力先を使う。
 `b5_window_acceptance.py`は同じ描画経路のoffscreen参照を要求する。
 
 性能には`vulkan,d3d12,presentation`のみのreleaseを使う。hostのCPU policyを検証してから逐次起動し、

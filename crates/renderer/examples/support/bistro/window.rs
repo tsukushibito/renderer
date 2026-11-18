@@ -395,6 +395,7 @@ impl<B: WindowBackend> State<B> {
             }
             self.workspace.clear_shadow_reuse(&mut self.backend)?;
             (options.width, options.height) = extent;
+            options.validate_lighting_extent()?;
             let budget = &self.budget;
             self.resident = Some(
                 self.resident
@@ -454,7 +455,7 @@ impl<B: WindowBackend> State<B> {
                 Err(error) if backpressure::<B>(&error) => return Ok(()),
                 Err(error) => return Err(error),
             };
-            resident.camera = B::export_buffer(&pending, built.camera)?;
+            resident.accept_buffer_updates::<B>(&pending, built.updates)?;
             self.workspace
                 .accept_shadow_updates::<B>(&pending, built.shadow_updates)?;
             let image = B::export_image(&pending, built.output)?;
@@ -560,7 +561,9 @@ impl<B: WindowBackend> State<B> {
             "schema_version": 1, "presentation": true, "runtime": runtime, "validation": validation,
             "initial_width": self.seed_dimensions.0, "initial_height": self.seed_dimensions.1,
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
-            "samples": options.sample_count.as_u32(), "pipeline": options.pipeline.name(),
+            "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
+            "local_lights":options.pipeline.uses_local_lights()
+                .then(|| super::forward_lighting::identity(options.fixture)),
             "warmup": options.warmup, "accepted": self.accepted, "pending_on_exit": self.pending_on_exit,
             "setup_ns": self.setup_ns, "native_memory": memory, "steady_memory": steady_memory,
             "setup_phases_ns": {"asset_load": asset_load_ns, "native_prepare": self.preparation_ns,

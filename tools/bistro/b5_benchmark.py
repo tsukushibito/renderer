@@ -97,8 +97,8 @@ def run(args, policy, api, scenario, timed, destination):
                str(args.ibl_manifest), "--bloom", "tent", "--output", str(destination)]
     if args.msaa == 4:
         command += ["--msaa", "4"]
-    if args.pipeline == "deferred":
-        command += ["--pipeline", "deferred"]
+    if args.pipeline != "forward":
+        command += ["--pipeline", args.pipeline]
     for key, value in frames.items():
         command += [f"--{key}", str(value)]
     if timed:
@@ -160,7 +160,8 @@ def main():
     parser.add_argument("--resume", action="store_true", help="reuse validated completed runs")
     parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
                         help="scene sample count for the MSAA comparison cohort")
-    parser.add_argument("--pipeline", choices=("forward", "deferred"), default="forward")
+    parser.add_argument("--pipeline", choices=("forward", "forward-plus", "forward-reference", "deferred"),
+                        default="forward")
     args = parser.parse_args()
     if args.pipeline == "deferred" and args.msaa != 1:
         parser.error("the deferred pipeline requires --msaa 1")
@@ -169,8 +170,8 @@ def main():
     settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
     if args.msaa == 4:
         settings["samples"] = 4
-    if args.pipeline == "deferred":
-        settings["pipeline"] = "deferred"
+    if args.pipeline != "forward":
+        settings["pipeline"] = args.pipeline
     identity = input_identity(args)
     power_scheme = active_power_scheme()
     progress = args.output / "progress.json"

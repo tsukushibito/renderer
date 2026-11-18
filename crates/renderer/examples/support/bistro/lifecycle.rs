@@ -139,7 +139,7 @@ fn accept_frame<B: Backend>(
         .ok_or("resource check frame needs readback")?;
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
-    resident.camera = B::export_buffer(&pending, built.camera)?;
+    resident.accept_buffer_updates::<B>(&pending, built.updates)?;
     let output = B::export_image(&pending, built.output)?;
     backend.delete(output.key())?;
     Ok(Frame {
@@ -409,7 +409,7 @@ pub(super) fn execute<B: Backend>(
         &mut pool,
         &mut workspace,
     )?;
-    let retry_camera = built.camera;
+    let retry_updates = built.updates;
     let retry_output = built.output;
     let retry_passes = built.captures.unwrap();
     let retry_plan = built.graph.compile()?;
@@ -433,7 +433,7 @@ pub(super) fn execute<B: Backend>(
         return Err("overlapping View changed the first camera capture".into());
     }
     let retry = backend.submit(&retry_plan)?;
-    resident.camera = B::export_buffer(&retry, retry_camera)?;
+    resident.accept_buffer_updates::<B>(&retry, retry_updates)?;
     let output = B::export_image(&retry, retry_output)?;
     backend.delete(output.key())?;
     let retry: Frame<B> = Frame {

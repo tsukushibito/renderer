@@ -57,8 +57,10 @@ def verify(directory, references, route_directory=None):
             reference_report = load_json(reference)
             samples = reference_report["identity"].get("samples", 1)
             pipeline = reference_report["identity"].get("pipeline", "forward")
+            local_lights = reference_report["identity"].get("local_lights")
             require(report.get("samples", 1) == samples, f"Incorrect MSAA mode {tag}")
             require(report.get("pipeline", "forward") == pipeline, f"Incorrect pipeline {tag}")
+            require(report.get("local_lights") == local_lights, f"Incorrect local lights {tag}")
             expected, meta = plane(reference, reference_report, "sdr")
             comparison = compare_linear(path.parent / "linear-first.bin", expected, smoke["linear_first_sha256"])
             reports[tag] = {"report_sha256": digest(path), "reference_sdr_sha256": meta["sha256"],
@@ -72,6 +74,7 @@ def verify(directory, references, route_directory=None):
                 require(route["presentation"] and route["bloom"] == "tent"
                         and route.get("samples", 1) == samples
                         and route.get("pipeline", "forward") == pipeline
+                        and route.get("local_lights") == local_lights
                         and not route["smoke"] and route["warmup"] == 24
                         and route["accepted"] == 1824 and route["pending_on_exit"] > 0
                         and (route["initial_width"], route["initial_height"]) == (1920, 1080)

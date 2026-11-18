@@ -37,8 +37,8 @@ def sample_path(directory, args, binary, api, extra):
                *extra]
     if args.msaa == 4:
         command += ["--msaa", "4"]
-    if args.pipeline == "deferred":
-        command += ["--pipeline", "deferred"]
+    if args.pipeline != "forward":
+        command += ["--pipeline", args.pipeline]
     if args.resume and root.is_file():
         require(load_json(directory / "command.json") == command, f"Changed command {directory}")
         return root, load_json(root)
@@ -70,6 +70,10 @@ def validated_run(path, report, mode, api, samples, pipeline):
             and identity["shadows"] and identity["aa"] and identity.get("samples", 1) == samples
             and identity.get("pipeline", "forward") == pipeline,
             path)
+    if pipeline in ("forward-plus", "forward-reference"):
+        require(identity.get("local_lights") == {
+            "profile": "bistro-street-grid-v1", "count": 64, "tile_size": 16,
+        }, f"Incorrect local-light workload {path}")
     scene = report["scene"]
     require((scene["meshes"], scene["primitives"], scene["materials"], scene["alpha_zero_materials"])
             == (1296, 1591, 132, 2), f"Missing full-scene inputs {path}")
@@ -124,7 +128,8 @@ def collect(path, report, root, index, planes, sample_count, pipeline):
         require(str(expected) == label and captured["capture_only"]
                 and captured["readback_outside_measurement"], f"Unexpected sample {capture_path}")
         require(captured["identity"].get("samples", 1) == sample_count
-                and captured["identity"].get("pipeline", "forward") == pipeline,
+                and captured["identity"].get("pipeline", "forward") == pipeline
+                and captured["identity"].get("local_lights") == report["identity"].get("local_lights"),
                 f"Pipeline or sample count differs in {capture_path}")
         require(set(captured["captures"]) == set(planes)
                 and set(captured["shadow_captures"]) == set(SHADOWS), f"Missing planes {capture_path}")
@@ -276,7 +281,8 @@ def main():
                         help="revalidate completed reports from the same cohort")
     parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
                         help="scene sample count for the MSAA comparison cohort")
-    parser.add_argument("--pipeline", choices=("forward", "deferred"), default="forward")
+    parser.add_argument("--pipeline", choices=("forward", "forward-plus", "forward-reference", "deferred"),
+                        default="forward")
     args = parser.parse_args()
     if args.pipeline == "deferred" and args.msaa != 1:
         parser.error("the deferred pipeline requires --msaa 1")
@@ -288,8 +294,8 @@ def main():
                            "ibl_manifest_sha256": digest(args.ibl_manifest)}}
     if args.msaa == 4:
         settings["samples"] = 4
-    if args.pipeline == "deferred":
-        settings["pipeline"] = "deferred"
+    if args.pipeline != "forward":
+        settings["pipeline"] = args.pipeline
     # Compare the serialized form, including the coordinate arrays.
     settings_hash = canonical_hash(settings)
     if args.stage == "accept":
