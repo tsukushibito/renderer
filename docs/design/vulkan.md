@@ -345,10 +345,18 @@ Vulkan 1.3基準のまま、追加featureなしで区間内へ任意のbarrier�
 
 用途は論理資源indexの準備済み配列へ集約してstage/access/writeを合成し、
 触れたindexを予約済み配列で列挙する。同じbufferのVertex/Index両用途も保つ。
-全drawのindex保証を各頂点範囲・Device上限で記録前に確認し、失敗はpassとdraw番号の文脈を伴って返す。
+indexed drawのindex保証を各頂点範囲・Device上限で記録前に確認し、失敗はpassとdraw番号の文脈を伴って返す。
 管理下meshは取込時に確立した不変count／最大値を使い、index本文や検査用CPU byte列を再保持しない。
 任意Graph入力では部分byte更新にも必要な内容追跡を維持し、同countの最大値要約を再利用する。
 保証の継承・失効・未知内容の拒否は[Graphの内容契約](rendergraph.md#producer範囲attachment)に従う。
+
+`draw_fullscreen`は頂点入力のないtrusted ProgramをGraph構築時に選び、空の頂点bindingとattribute配列で
+pipelineを準備する。頂点shaderは組み込みの頂点番号0〜2から三角形を生成する。
+`vkCmdDraw(3, 1, 0, 0)`を同じRaster区間とdraw順で記録し、頂点・index bufferのbindingや内容追跡はindexed drawに適用する。
+attachment・descriptor・inline定数には既存の準備・同期・所有規則を適用する。
+[Vulkanの頂点入力仕様](https://docs.vulkan.org/refpages/latest/refpages/source/VkPipelineVertexInputStateCreateInfo.html)、
+[vkCmdDrawの有効利用条件](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDraw.html)。
+
 GraphWorkはdraw列・全物理資源・不変Programを完了まで保持し、pending中のasset更新・削除でも上書きしない。
 clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・pending所有と、
 共有/異なる多数meshの比較結果を[現在の検証状況](../verification/current.md#draw-listの本実装と比較計測)へ記録する。

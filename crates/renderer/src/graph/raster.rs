@@ -1,11 +1,12 @@
 //! Ordered graphics commands recorded into one attachment scope.
 
 use super::builder::read;
+use super::pass::IndexedDrawOperands;
 use super::storage::capacity_error;
 use super::{
-    AccessPurpose, Graph, GraphCapacityKind, GraphError, GraphErrorKind, IndexedIndirectArgs,
-    IndirectDrawOperands, LoadOp, Operation, PassHandle, RasterAttachments, RasterBatchOperands,
-    RasterBindings, RasterConstants, RasterDraw, RasterDrawOperands,
+    AccessPurpose, Binding, Graph, GraphCapacityKind, GraphError, GraphErrorKind,
+    IndexedIndirectArgs, IndirectDrawOperands, LoadOp, Operation, PassHandle, RasterAttachments,
+    RasterBatchOperands, RasterBindings, RasterConstants, RasterDraw, RasterDrawOperands,
 };
 use crate::program::{INDIRECT_COMMAND_BYTES, ManagedRasterProgram};
 use std::{borrow::Borrow, ops::Range};
@@ -54,6 +55,60 @@ impl RasterPass<'_, '_> {
             })
     }
 
+    /// Append one generated fullscreen triangle. The Program supplies its
+    /// position from vertex IDs 0 through 2 and declares no vertex stream.
+    /// Graph owns the bindings and inline constants. The draw uses the same
+    /// attachments and ordering as other draws recorded in this pass.
+    pub fn draw_fullscreen(
+        &mut self,
+        program: &ManagedRasterProgram,
+        bindings: &[Binding],
+        parameters: RasterConstants,
+    ) -> Result<(), GraphError> {
+        if let Some(error) = &self.error {
+            return Err(error.clone());
+        }
+        self.capture_fullscreen(program, bindings, parameters)
+            .inspect_err(|error| {
+                self.error = Some(error.clone());
+            })
+    }
+
+    fn capture_fullscreen(
+        &mut self,
+        program: &ManagedRasterProgram,
+        bindings: &[Binding],
+        parameters: RasterConstants,
+    ) -> Result<(), GraphError> {
+        if !program.is_fullscreen() {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "fullscreen draw requires a generated-vertex Raster Program",
+            ));
+        }
+        self.validate_attachments(program)?;
+        let graph = &mut *self.graph;
+        let first_draw = graph.draws.len();
+        let constants_start = graph.raster_constant_words.len();
+        let words = parameters.words();
+        graph.check_raster_draw_storage(program, words)?;
+        let bindings = graph.raster_bindings(program, bindings)?;
+        let bindings = graph.use_raster_bindings(program, Some(bindings))?;
+        let data = graph.data_mut();
+        data.draws.push(RasterDrawOperands {
+            bindings,
+            indexed: None,
+        });
+        data.raster_constant_words.extend_from_slice(words);
+        data.raster_batches.push(RasterBatchOperands {
+            program: *program,
+            draws: first_draw..first_draw + 1,
+            constants_start,
+            indirect: None,
+        });
+        Ok(())
+    }
+
     fn capture_indirect(
         &mut self,
         program: &ManagedRasterProgram,
@@ -61,6 +116,7 @@ impl RasterPass<'_, '_> {
         bindings: Option<RasterBindings>,
         parameters: RasterConstants,
     ) -> Result<(), GraphError> {
+        Self::require_indexed_program(program)?;
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
         let buffer = graph.buffer_id(arguments.buffer)?;
@@ -102,6 +158,7 @@ impl RasterPass<'_, '_> {
         I: IntoIterator<Item = D>,
         D: Borrow<RasterDraw>,
     {
+        Self::require_indexed_program(program)?;
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
         let first_draw = graph.draws.len();
@@ -134,6 +191,16 @@ impl RasterPass<'_, '_> {
                 constants_start,
                 indirect: None,
             });
+        }
+        Ok(())
+    }
+
+    fn require_indexed_program(program: &ManagedRasterProgram) -> Result<(), GraphError> {
+        if program.is_fullscreen() {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "indexed draw requires a Raster Program with a vertex stream",
+            ));
         }
         Ok(())
     }
@@ -182,6 +249,41 @@ impl Graph {
         program: &ManagedRasterProgram,
         draw: &RasterDraw,
     ) -> Result<(), GraphError> {
+        let words = draw.parameters.words();
+        self.check_raster_draw_storage(program, words)?;
+        let bindings = self.use_raster_bindings(program, draw.bindings)?;
+        let (vertices, indices, index_range) =
+            self.raster_buffers(draw, u64::from(program.vertex_stride()))?;
+        let vertex_bytes = self.resources[vertices].desc.units();
+        let data = self.data_mut();
+        data.track_raster_prefix(vertices, 0, vertex_bytes);
+        if draw.first_index == 0 {
+            data.track_raster_prefix(indices, 1, index_range.end);
+        } else {
+            // One scratch range per stored draw fits the reserved draw limit.
+            data.raster_index_ranges.push((indices, index_range));
+        }
+        data.draws.push(RasterDrawOperands {
+            bindings,
+            indexed: Some(IndexedDrawOperands {
+                vertices,
+                indices,
+                first_index: draw.first_index,
+                index_count: draw.index_count,
+                instance_count: draw.instance_count,
+            }),
+        });
+        if !words.is_empty() {
+            data.raster_constant_words.extend_from_slice(words);
+        }
+        Ok(())
+    }
+
+    fn check_raster_draw_storage(
+        &self,
+        program: &ManagedRasterProgram,
+        words: &[u32],
+    ) -> Result<(), GraphError> {
         if self.draws.len() == self.capacity.draws {
             return Err(capacity_error(
                 GraphCapacityKind::Draws,
@@ -189,7 +291,6 @@ impl Graph {
                 self.draws.len().checked_add(1),
             ));
         }
-        let words = draw.parameters.words();
         if size_of_val(words) != program.parameter_size() as usize {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
@@ -205,29 +306,6 @@ impl Graph {
                     required,
                 ));
             }
-        }
-        let bindings = self.use_raster_bindings(program, draw.bindings)?;
-        let (vertices, indices, index_range) =
-            self.raster_buffers(draw, u64::from(program.vertex_stride()))?;
-        let vertex_bytes = self.resources[vertices].desc.units();
-        let data = self.data_mut();
-        data.track_raster_prefix(vertices, 0, vertex_bytes);
-        if draw.first_index == 0 {
-            data.track_raster_prefix(indices, 1, index_range.end);
-        } else {
-            // One scratch range per stored draw fits the reserved draw limit.
-            data.raster_index_ranges.push((indices, index_range));
-        }
-        data.draws.push(RasterDrawOperands {
-            bindings,
-            vertices,
-            indices,
-            first_index: draw.first_index,
-            index_count: draw.index_count,
-            instance_count: draw.instance_count,
-        });
-        if !words.is_empty() {
-            data.raster_constant_words.extend_from_slice(words);
         }
         Ok(())
     }

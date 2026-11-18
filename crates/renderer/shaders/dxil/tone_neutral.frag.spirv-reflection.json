@@ -5,6 +5,18 @@
             "mode" : "frag"
         }
     ],
+    "types" : {
+        "_140" : {
+            "name" : "_140",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "float",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
     "outputs" : [
         {
             "type" : "vec4",
@@ -26,6 +38,13 @@
             "name" : "_116",
             "set" : 0,
             "binding" : 1
+        }
+    ],
+    "push_constants" : [
+        {
+            "type" : "_140",
+            "name" : "_142",
+            "push_constant" : true
         }
     ]
 }

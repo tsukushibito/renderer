@@ -14,11 +14,8 @@ use super::{
 };
 use renderer::{
     capacity::CapacityRecovery,
-    graph::{
-        Attachment, Binding, BindingResource, CompiledGraph, GraphCapacity, GraphPool, ImageDesc,
-        ImportBuffer, ImportImage, LoadOp, RasterAttachments, RasterConstants, RasterDraw, StoreOp,
-    },
-    program::SamplerDescriptor,
+    graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
+    standard::passes::{SdrEncoding, SdrOutput, write_sdr},
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -245,48 +242,14 @@ fn mip_probes<B: Backend>(
         let source = graph.import_image("replacement mip chain", &resident.images[image_index])?;
         let source = graph.image_view(source, mip, 0)?;
         let output = graph.image("mip probe", ImageDesc::rgba8(width, height))?;
-        let vertices = graph.import_buffer("probe triangle", &resident.resolve_vertices)?;
-        let indices = graph.import_buffer("probe indices", &resident.resolve_indices)?;
-        let program = program::resolve_program();
-        let bindings = graph.raster_bindings(
-            &program,
-            &[
-                Binding {
-                    group: 0,
-                    binding: 0,
-                    resource: BindingResource::ImageView(source),
-                },
-                Binding {
-                    group: 0,
-                    binding: 1,
-                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
-                },
-            ],
-        )?;
-        graph.raster(
+        write_sdr(
+            &mut graph,
             "sample selected mip",
-            RasterAttachments {
-                color_resolves: &[],
-                colors: &[Attachment {
-                    view: graph.image_view(output, 0, 0)?,
-                    load: LoadOp::Clear([0.; 4]),
-                    store: StoreOp::Store,
-                }],
-                depth: None,
-            },
-            |raster| {
-                raster.draw(
-                    &program,
-                    [RasterDraw {
-                        bindings: Some(bindings),
-                        vertices,
-                        indices,
-                        first_index: 0,
-                        index_count: 3,
-                        instance_count: 1,
-                        parameters: RasterConstants::default(),
-                    }],
-                )
+            source,
+            output,
+            SdrOutput {
+                encoding: SdrEncoding::Srgb,
+                fxaa: false,
             },
         )?;
         let pass = graph.readback_image("mip texels", output)?;

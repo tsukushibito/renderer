@@ -77,8 +77,10 @@ SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view
 zlib-style licenseの所在は[provenance](../../tools/bistro/mikktspace/provenance.json)へ記録する。
 ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 
-PBRと最終SDR resolveの利用側shaderは`examples/support/bistro/shaders/`に置く。
-通常buildは生成済みSPIR-V／DXILを使い、変更時は固定SDKで再生成する。
+利用側のPBR、影、Bloom shaderは`examples/support/bistro/shaders/`に置く。
+標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer/shaders/`に置く。
+通常buildは生成済みSPIR-V／DXILを使う。標準shaderを変更したときは共通のSPIR-V／DXILを再生成してから、
+それらのmanifestを参照するBistroのmanifestも再生成する。
 
 ```powershell
 & ./crates/renderer/examples/support/bistro/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify

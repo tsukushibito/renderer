@@ -377,7 +377,9 @@ fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool], retained:
     for &pass in &graph.order {
         if let Operation::Raster { draws, .. } = &graph.passes[pass].operation {
             for draw in graph.raster_draws(draws) {
-                needed[draw.indices] = true;
+                if let Some(indexed) = &draw.indexed {
+                    needed[indexed.indices] = true;
+                }
             }
         }
     }
@@ -910,24 +912,27 @@ impl GraphWork {
                                         0,
                                     )
                                 });
-                                let vertex_count = graph.resources[draw.vertices].desc.units()
-                                    / u64::from(program.vertex_stride());
-                                states[draw.indices]
-                                    .as_mut()
-                                    .unwrap()
-                                    .provenance
-                                    .validate_index_range(
-                                        draw.first_index,
-                                        draw.index_count,
-                                        vertex_count,
-                                        owner.device.max_draw_indexed_index_value(),
-                                    )
-                                    .map_err(|error| {
-                                        let draw_index =
-                                            batch.draws.start - draws.start + draw_index;
-                                        index_error(error)
-                                            .context(format_args!("draw {draw_index}"))
-                                    })?;
+                                if let Some(indexed) = &draw.indexed {
+                                    let vertex_count =
+                                        graph.resources[indexed.vertices].desc.units()
+                                            / u64::from(program.vertex_stride());
+                                    states[indexed.indices]
+                                        .as_mut()
+                                        .unwrap()
+                                        .provenance
+                                        .validate_index_range(
+                                            indexed.first_index,
+                                            indexed.index_count,
+                                            vertex_count,
+                                            owner.device.max_draw_indexed_index_value(),
+                                        )
+                                        .map_err(|error| {
+                                            let draw_index =
+                                                batch.draws.start - draws.start + draw_index;
+                                            index_error(error)
+                                                .context(format_args!("draw {draw_index}"))
+                                        })?;
+                                }
                                 let sets = if let Some(key) = binding_layout {
                                     raster_bindings.resolve(
                                         &draw.bindings,

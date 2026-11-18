@@ -23,6 +23,7 @@ struct PassTransaction<'a> {
     uploads: usize,
     names: usize,
     bindings: usize,
+    binding_accesses: usize,
     attachments: usize,
     committed: bool,
 }
@@ -37,6 +38,7 @@ impl<'a> PassTransaction<'a> {
             uploads: graph.uploads.len(),
             names: graph.names.len(),
             bindings: graph.bindings.len(),
+            binding_accesses: graph.binding_accesses.len(),
             attachments: graph.attachments.len(),
             graph,
             committed: false,
@@ -58,6 +60,7 @@ impl Drop for PassTransaction<'_> {
         data.uploads.truncate(self.uploads);
         data.names.truncate(self.names);
         data.bindings.truncate(self.bindings);
+        data.binding_accesses.truncate(self.binding_accesses);
         data.attachments.truncate(self.attachments);
     }
 }
@@ -647,7 +650,10 @@ mod tests {
         assert!(
             plan.raster_draws(draws)
                 .iter()
-                .map(|draw| (draw.first_index, draw.instance_count))
+                .map(|draw| {
+                    let indexed = draw.indexed.unwrap();
+                    (indexed.first_index, indexed.instance_count)
+                })
                 .eq([(8, 4), (0, 1), (6, 2)])
         );
     }
@@ -828,7 +834,7 @@ mod tests {
         {
             assert_eq!(actual.bindings, 0..3);
             assert_eq!(words, expected.parameters.words());
-            assert_eq!(actual.index_count, expected.index_count);
+            assert_eq!(actual.indexed.unwrap().index_count, expected.index_count);
         }
         assert_eq!(
             plan.accesses(pass.index).len(),
@@ -1169,9 +1175,10 @@ mod tests {
             .zip(plan.raster_constants(batch))
             .zip([first, second])
         {
-            assert_eq!(actual.vertices, expected.vertices.index);
-            assert_eq!(actual.indices, expected.indices.index);
-            assert_eq!(actual.index_count, expected.index_count);
+            let indexed = actual.indexed.unwrap();
+            assert_eq!(indexed.vertices, expected.vertices.index);
+            assert_eq!(indexed.indices, expected.indices.index);
+            assert_eq!(indexed.index_count, expected.index_count);
             assert_eq!(words, expected.parameters.words());
         }
         assert_eq!(colors.len(), 1);

@@ -115,7 +115,15 @@ try {
         $null = Invoke-ShaderTool $cross $crossArgs
         # Canonical UTF-8/LF HLSL makes the checked-in text independent of
         # checkout line-ending settings; there are no includes or macros.
-        Write-Utf8 $hlsl ([IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n"))
+        $text = [IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n")
+        if ($source -ceq 'tone_neutral.frag') {
+            $unbound = '(?m)^cbuffer ([A-Za-z_][A-Za-z_0-9]*)$'
+            if ([regex]::Matches($text, $unbound).Count -ne 1) {
+                throw 'tone_neutral.frag must declare one inline constant block.'
+            }
+            $text = [regex]::Replace($text, $unbound, 'cbuffer $1 : register(b0, space0)')
+        }
+        Write-Utf8 $hlsl $text
         $dxcArgs = @($lock.dxc_arguments) + @('-T', $shader.profile, $hlsl, '-Fo', $dxil)
         $null = Invoke-ShaderTool $dxc $dxcArgs
         $dump = Invoke-ShaderTool $dxc @('-dumpbin', $dxil)
@@ -125,7 +133,8 @@ try {
         }
         $reflection = [regex]::Replace($dump.Substring(0, $reflectionEnd), '(?m)[ \t]+$', '')
         Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.reflection.txt')) $reflection
-        $reflected = $assetName -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'indexed_indirect.comp', 'textured.vert', 'textured.frag', 'compute_hdr_sampled.comp', 'compute_hdr_storage.comp')
+        $outputProgram = $assetName -cmatch '^(?:tone_neutral|sdr(?:_fxaa)?(?:_linear)?)\.frag$'
+        $reflected = $outputProgram -or $assetName -cin @('uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'indexed_indirect.comp', 'textured.vert', 'textured.frag', 'compute_hdr_sampled.comp', 'compute_hdr_storage.comp')
         if ($reflected) {
             $spirvReflection = Invoke-ShaderTool $cross @($spirv, '--reflect')
             if ($source -ceq 'uniform.comp') {
@@ -140,13 +149,16 @@ try {
                 Assert-SampledAbi ($spirvReflection | ConvertFrom-Json) $reflection -FloatOutput
             } elseif ($assetName -cin @('compute_hdr_sampled.comp', 'compute_hdr_storage.comp')) {
                 Assert-HdrComputeAbi ($spirvReflection | ConvertFrom-Json) $reflection -StorageInput:($assetName -ceq 'compute_hdr_storage.comp')
+            } elseif ($outputProgram) {
+                Assert-SdrOutputAbi ($spirvReflection | ConvertFrom-Json) $reflection -Exposure:($assetName -ceq 'tone_neutral.frag')
             } else {
                 Assert-TexturedRasterAbi ($spirvReflection | ConvertFrom-Json) $reflection -Vertex:($source -ceq 'textured.vert')
             }
             Write-Utf8 (Join-Path $temporaryRoot ($assetName + '.spirv-reflection.json')) $spirvReflection
         }
+        $sourceFile = $source -creplace '^(sdr(?:_fxaa)?)_linear\.frag$', '$1.frag'
         $hashes = [ordered]@{
-            source_utf8_lf = Get-SourceSha256 (Join-Path $PSScriptRoot $source)
+            source_utf8_lf = Get-SourceSha256 (Join-Path $PSScriptRoot $sourceFile)
             spirv = Get-Sha256 $spirv
             hlsl = Get-Sha256 $hlsl
             dxil = Get-Sha256 $dxil
@@ -164,12 +176,17 @@ try {
         }
         $artifacts[$source] = $hashes
     }
+    $licenses = [ordered]@{}
+    foreach ($license in @('FXAA-notices.txt', 'Godot-MIT.txt', 'Khronos-ToneMapping-Apache-2.0.txt')) {
+        $licenses[$license] = Get-SourceSha256 (Join-Path $PSScriptRoot ('licenses/' + $license))
+    }
     $manifest = [ordered]@{
         schema = 3
         toolchain_sha256 = Get-Sha256 $lockPath
         contracts_sha256 = Get-Sha256 (Join-Path $PSScriptRoot 'dxil-contracts.json')
         managed_abi_verifier_utf8_lf_sha256 = Get-SourceSha256 (Join-Path $PSScriptRoot 'managed-abi.ps1')
         artifacts = $artifacts
+        licenses = $licenses
     }
     Write-Utf8 (Join-Path $temporaryRoot 'manifest.json') (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
     $publish[(Join-Path $temporaryRoot 'manifest.json')] = Join-Path $destination 'manifest.json'

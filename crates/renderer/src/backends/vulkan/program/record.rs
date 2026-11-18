@@ -27,10 +27,17 @@ pub(in crate::backends::vulkan) enum NativeIndexedDraw {
     },
 }
 
+pub(in crate::backends::vulkan) enum NativeRasterGeometry {
+    Fullscreen,
+    Indexed {
+        vertices: vk::Buffer,
+        indices: vk::Buffer,
+        command: NativeIndexedDraw,
+    },
+}
+
 pub(in crate::backends::vulkan) struct NativeRasterDraw<'a> {
-    pub vertices: vk::Buffer,
-    pub indices: vk::Buffer,
-    pub command: NativeIndexedDraw,
+    pub geometry: NativeRasterGeometry,
     pub parameters: &'a [u32],
     pub sets: [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
 }
@@ -81,10 +88,12 @@ impl ShaderPrograms {
     /// # Safety
     /// The command is recording inside a rendering scope compatible with the
     /// prepared Program and sample count. The owner, descriptors and buffers
-    /// must survive GPU completion. Indices, ranges and shader inputs must
-    /// obey the validated draw contract. Indirect arguments must come from
-    /// the typed producer synchronized for indirect reads. The draw count
-    /// must fit the Device limit with the features enabled at creation.
+    /// must survive GPU completion. The geometry must match the Program's
+    /// vertex input, including the absence of vertex bindings for a fullscreen
+    /// draw. Indices, ranges and shader inputs must obey the validated draw
+    /// contract. Indirect arguments must come from the typed producer
+    /// synchronized for indirect reads. The draw count must fit the Device
+    /// limit with the features enabled at creation.
     pub(in crate::backends::vulkan) unsafe fn record_raster_batch<'a>(
         &self,
         command: vk::CommandBuffer,
@@ -139,31 +148,47 @@ impl ShaderPrograms {
                             &[],
                         );
                     }
-                    device.cmd_bind_vertex_buffers(command, 0, &[draw.vertices], &[0]);
-                    device.cmd_bind_index_buffer(command, draw.indices, 0, vk::IndexType::UINT32);
-                    match draw.command {
-                        NativeIndexedDraw::Direct {
-                            first_index,
-                            index_count,
-                            instance_count,
-                        } => device.cmd_draw_indexed(
-                            command,
-                            index_count,
-                            instance_count,
-                            first_index,
-                            0,
-                            0,
-                        ),
-                        NativeIndexedDraw::Indirect {
-                            buffer,
-                            command_count,
-                        } => device.cmd_draw_indexed_indirect(
-                            command,
-                            buffer,
-                            0,
-                            command_count,
-                            crate::program::INDIRECT_COMMAND_BYTES as u32,
-                        ),
+                    match draw.geometry {
+                        NativeRasterGeometry::Fullscreen => {
+                            device.cmd_draw(command, 3, 1, 0, 0);
+                        }
+                        NativeRasterGeometry::Indexed {
+                            vertices,
+                            indices,
+                            command: indexed,
+                        } => {
+                            device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
+                            device.cmd_bind_index_buffer(
+                                command,
+                                indices,
+                                0,
+                                vk::IndexType::UINT32,
+                            );
+                            match indexed {
+                                NativeIndexedDraw::Direct {
+                                    first_index,
+                                    index_count,
+                                    instance_count,
+                                } => device.cmd_draw_indexed(
+                                    command,
+                                    index_count,
+                                    instance_count,
+                                    first_index,
+                                    0,
+                                    0,
+                                ),
+                                NativeIndexedDraw::Indirect {
+                                    buffer,
+                                    command_count,
+                                } => device.cmd_draw_indexed_indirect(
+                                    command,
+                                    buffer,
+                                    0,
+                                    command_count,
+                                    crate::program::INDIRECT_COMMAND_BYTES as u32,
+                                ),
+                            }
+                        }
                     }
                 }
             }

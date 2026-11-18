@@ -1,4 +1,4 @@
-//! Consumer-owned Bistro Forward PBR, CSM and SDR output Programs.
+//! Consumer-owned Bistro Forward PBR and CSM Programs.
 //!
 //! World-space position/normal/tangent/UV uses a 48-byte stream. The Camera UBO
 //! is 464 bytes: VP, eye (w=near), sun direction/RGB, environment parameters,
@@ -14,8 +14,7 @@
 //! compensation; this approximation is distinct from cross-API agreement.
 //! D32 shadows use nearest sampling and explicit 3x3 depth comparisons. The
 //! camera-facing HDR image is exposed only by the caller after alpha blending.
-//! Neutral runs with EV+1 into a separate RGBA16F image; optional FXAA then one
-//! sRGB encode produces RGBA8. The resolve without AA also serves mip probes.
+//! The public standard output passes apply Neutral, FXAA and the output encoding.
 //!
 //! No effect kind, hidden Graph operation, runtime shader compilation or shader
 //! storage side effect is introduced. Generated SPIR-V/DXIL and reflection are
@@ -240,48 +239,6 @@ static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
     vertex_dxil: include_bytes!("shaders/dxil/shadow.vert.dxil"),
     fragment_dxil: include_bytes!("shaders/dxil/shadow.frag.dxil"),
 };
-static RESOLVE: RasterProgramDescriptor = RasterProgramDescriptor {
-    entry: "main",
-    vertex_stride: 8,
-    vertex_attributes: &[VertexAttribute {
-        location: 0,
-        offset: 0,
-        format: VertexFormat::Float32x2,
-    }],
-    parameters: NO_PARAMETERS,
-    color_outputs: &[ImageFormat::Rgba8Unorm],
-    bindings: &[image(0, 0), sampler(0, 1)],
-    binding_bytes: &[0, 0],
-    sampling_pairs: &[pair(0, 0, 1)],
-    blend: BlendState::Replace,
-    depth: DepthState::Disabled,
-    vertex_spirv: include_bytes!("shaders/resolve.vert.spv"),
-    fragment_spirv: include_bytes!("shaders/resolve.frag.spv"),
-    vertex_dxil: include_bytes!("shaders/dxil/resolve.vert.dxil"),
-    fragment_dxil: include_bytes!("shaders/dxil/resolve.frag.dxil"),
-};
-static TONE: RasterProgramDescriptor = RasterProgramDescriptor {
-    color_outputs: &[ImageFormat::Rgba16Float],
-    fragment_spirv: include_bytes!("shaders/tone.frag.spv"),
-    fragment_dxil: include_bytes!("shaders/dxil/tone.frag.dxil"),
-    ..RESOLVE
-};
-static RESOLVE_AA: RasterProgramDescriptor = RasterProgramDescriptor {
-    fragment_spirv: include_bytes!("shaders/resolve_aa.frag.spv"),
-    fragment_dxil: include_bytes!("shaders/dxil/resolve_aa.frag.dxil"),
-    ..RESOLVE
-};
-static RESOLVE_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
-    fragment_spirv: include_bytes!("shaders/resolve_linear.frag.spv"),
-    fragment_dxil: include_bytes!("shaders/dxil/resolve_linear.frag.dxil"),
-    ..RESOLVE
-};
-static RESOLVE_AA_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
-    fragment_spirv: include_bytes!("shaders/resolve_aa_linear.frag.spv"),
-    fragment_dxil: include_bytes!("shaders/dxil/resolve_aa_linear.frag.dxil"),
-    ..RESOLVE
-};
-
 pub const fn opaque_program() -> ManagedRasterProgram {
     // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,
     // 464/64-byte UBO prefixes, 16 bindings and every image/sampler pairing.
@@ -312,38 +269,6 @@ pub const fn shadow_program() -> ManagedRasterProgram {
     // rejects BLEND, one-sided back faces and authored MASK holes before depth.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&SHADOW) }
 }
-pub const fn tone_program() -> ManagedRasterProgram {
-    // SAFETY: One selected 2D float image and sampler at explicit LOD0, declared
-    // vec2 stream, no parameters, and one RGBA16F color output. Fixed exposure
-    // and Neutral have positive division guards and no hidden resources/effects.
-    unsafe { ManagedRasterProgram::from_trusted_descriptor(&TONE) }
-}
-pub const fn resolve_program() -> ManagedRasterProgram {
-    // SAFETY: One selected 2D float image/sampler, explicit LOD0, vec2 stream,
-    // no parameters. Clamp and one sRGB encode write only the RGBA8 attachment.
-    unsafe { ManagedRasterProgram::from_trusted_descriptor(&RESOLVE) }
-}
-pub const fn resolve_aa_program() -> ManagedRasterProgram {
-    // SAFETY: Same resource/stream/output contract as resolve_program. Bounded
-    // FXAA search uses normalized LOD0 texture samples, not unchecked texel loads;
-    // clamp sampling covers edge coordinates and divisions have positive guards.
-    unsafe { ManagedRasterProgram::from_trusted_descriptor(&RESOLVE_AA) }
-}
-pub const fn present_program(aa: bool) -> ManagedRasterProgram {
-    // SAFETY: Same bindings, accesses and bounded sampling as the resolve
-    // variants. These shaders output linear RGBA8 for the sRGB Presenter.
-    unsafe {
-        ManagedRasterProgram::from_trusted_descriptor(if aa {
-            &RESOLVE_AA_LINEAR
-        } else {
-            &RESOLVE_LINEAR
-        })
-    }
-}
-/// Fullscreen indexed triangle, prepared once by the consumer.
-pub const RESOLVE_VERTICES: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
-pub const RESOLVE_INDICES: [u32; 3] = [0, 1, 2];
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn opacity_and_resolve_keep_depth_and_color_contracts_distinct() {
+    fn opaque_and_blend_keep_distinct_depth_contracts() {
         let opaque = opaque_program();
         let blend = blend_program();
         assert_eq!(opaque.parameter_size(), 0);
@@ -419,10 +344,6 @@ mod tests {
             }
         ));
         assert_eq!(blend.blend(), BlendState::Alpha);
-        assert_eq!(
-            resolve_program().color_outputs(),
-            &[ImageFormat::Rgba8Unorm]
-        );
         assert_eq!(opaque.bindings().len(), opaque.binding_bytes().len());
     }
 
@@ -582,40 +503,5 @@ mod tests {
         let dxil = include_str!("shaders/dxil/shadow.vert.reflection.txt");
         assert!(dxil.contains("cb7"));
         assert!(!include_str!("shaders/dxil/shadow.frag.reflection.txt").contains("SV_Target"));
-    }
-
-    #[test]
-    fn post_programs_have_only_the_selected_image_and_no_hidden_parameters() {
-        for (program, reflection, expected) in [
-            (
-                tone_program(),
-                include_str!("shaders/dxil/tone.frag.spirv-reflection.json"),
-                ImageFormat::Rgba16Float,
-            ),
-            (
-                resolve_program(),
-                include_str!("shaders/dxil/resolve.frag.spirv-reflection.json"),
-                ImageFormat::Rgba8Unorm,
-            ),
-            (
-                resolve_aa_program(),
-                include_str!("shaders/dxil/resolve_aa.frag.spirv-reflection.json"),
-                ImageFormat::Rgba8Unorm,
-            ),
-        ] {
-            assert_eq!(program.color_outputs(), &[expected]);
-            assert_eq!(program.parameter_size(), 0);
-            assert_eq!(program.depth(), DepthState::Disabled);
-            assert_eq!(program.bindings().len(), 2);
-            let reflected: serde_json::Value = serde_json::from_str(reflection).unwrap();
-            for forbidden in ["ubos", "ssbos", "push_constants", "images"] {
-                assert!(reflected.get(forbidden).is_none());
-            }
-            assert_eq!(reflected["separate_images"].as_array().unwrap().len(), 1);
-            assert_eq!(reflected["separate_images"][0]["set"], 0);
-            assert_eq!(reflected["separate_images"][0]["binding"], 0);
-            assert_eq!(reflected["separate_samplers"].as_array().unwrap().len(), 1);
-            assert_eq!(reflected["separate_samplers"][0]["binding"], 1);
-        }
     }
 }
