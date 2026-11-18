@@ -13,7 +13,7 @@ use culling::{LIGHTS, TILES, buffer_binding, buffer_slot};
 
 pub use culling::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, MAX_TILES, PointLight, TILE_SIZE, active_tile_count,
-    append_culling, compute_program, light_bytes,
+    append_culling, light_bytes,
 };
 
 pub const TILE_BUFFER_BYTES: u64 = MAX_TILES as u64 * culling::TILE_BYTES;

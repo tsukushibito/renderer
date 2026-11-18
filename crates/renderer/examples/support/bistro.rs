@@ -7,6 +7,7 @@
 
 #[path = "bistro/asset.rs"]
 mod asset;
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 #[path = "bistro/backend.rs"]
 mod backend;
 #[path = "bloom.rs"]
@@ -438,6 +439,16 @@ Measurement and captures
     println!("  --capture-handshake");
 }
 
+fn require_backend(api: &str) -> Result<(), Error> {
+    if (cfg!(feature = "vulkan") && api == "vulkan")
+        || (cfg!(all(windows, feature = "d3d12")) && api == "d3d12")
+    {
+        Ok(())
+    } else {
+        Err("selected backend was not compiled into this example".into())
+    }
+}
+
 pub fn main() -> Result<(), Error> {
     let mut arguments = std::env::args().skip(1).peekable();
     if matches!(arguments.peek().map(String::as_str), Some("--help" | "-h")) {
@@ -455,13 +466,10 @@ pub fn main() -> Result<(), Error> {
             feature = "presentation",
             any(feature = "vulkan", feature = "d3d12")
         ))]
-        return match options.api.as_str() {
-            #[cfg(feature = "vulkan")]
-            "vulkan" => window::execute::<backend::Vulkan>(options),
-            #[cfg(feature = "d3d12")]
-            "d3d12" => window::execute::<backend::D3d12>(options),
-            _ => Err("selected backend was not compiled into this example".into()),
-        };
+        {
+            require_backend(&options.api)?;
+            return window::execute(options);
+        }
         #[cfg(not(all(
             windows,
             feature = "presentation",
@@ -469,13 +477,11 @@ pub fn main() -> Result<(), Error> {
         )))]
         return Err("windowed Bistro requires Windows and the presentation feature".into());
     }
-    match options.api.as_str() {
-        #[cfg(feature = "vulkan")]
-        "vulkan" => run::execute::<backend::Vulkan>(&options),
-        #[cfg(all(windows, feature = "d3d12"))]
-        "d3d12" => run::execute::<backend::D3d12>(&options),
-        _ => Err("selected backend was not compiled into this example".into()),
-    }
+    require_backend(&options.api)?;
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    return run::execute(&options);
+    #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
+    Ok(())
 }
 
 #[cfg(test)]

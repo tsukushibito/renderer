@@ -3,7 +3,6 @@
 use super::{
     Error, Options, PipelineMode, SubmissionMode,
     asset::Scene,
-    backend::Backend,
     camera::{Camera, Frustum},
     deferred, forward_lighting, ibl, instancing,
     program::{self, forward_plus},
@@ -12,12 +11,17 @@ use super::{
 use renderer::{
     ImageFormat,
     graph::{
-        Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity,
-        GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp,
-        PassHandle, RasterAttachments, RasterBindings, RasterConstants, RasterDraw, RasterPass,
-        SampleCount, StoreOp,
+        Attachment, Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphPool,
+        ImageDesc, ImageHandle, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp, PassHandle,
+        RasterAttachments, RasterBindings, RasterConstants, RasterDraw, RasterPass, SampleCount,
+        StoreOp,
     },
     program::{ManagedRasterProgram, SamplerDescriptor},
+};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::{
+    graph::BufferDesc,
+    runtime::{FrameSubmission, Runtime},
 };
 use std::sync::Arc;
 
@@ -506,8 +510,9 @@ pub(super) struct Resident {
     pub upload_owners: Vec<GraphPool>,
 }
 
-fn upload_geometry<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn upload_geometry(
+    backend: &mut Runtime,
     pool: &mut GraphPool,
     stride: u32,
     vertices: &[u8],
@@ -532,12 +537,12 @@ fn upload_geometry<B: Backend>(
     graph.export_buffer(vertex)?;
     graph.export_buffer(index)?;
     let plan = graph.compile()?;
-    let mut pending = backend.submit(&plan)?;
+    let pending = backend.submit(&plan)?;
     let imports = (
-        B::export_buffer(&pending, vertex)?,
-        B::export_buffer(&pending, index)?,
+        pending.export_buffer(vertex)?,
+        pending.export_buffer(index)?,
     );
-    drop(B::wait(&mut pending, super::WAIT)?);
+    drop(super::backend::wait_for(backend, pending.id())?);
     drop((pending, plan, geometry));
     // Native canonical provenance carries scalar index bounds, not CPU bytes.
     // Release this slot's final asset Arc at the explicit load boundary.
@@ -545,8 +550,9 @@ fn upload_geometry<B: Backend>(
     Ok(imports)
 }
 
-pub(super) fn upload_buffer<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(super) fn upload_buffer(
+    backend: &mut Runtime,
     owners: &mut Vec<GraphPool>,
     bytes: &[u8],
 ) -> Result<ImportBuffer, Error> {
@@ -579,9 +585,9 @@ pub(super) fn upload_buffer<B: Backend>(
     graph.upload_buffer("asset import boundary", buffer, 0, bytes)?;
     graph.export_buffer(buffer)?;
     let plan = graph.compile()?;
-    let mut pending = backend.submit(&plan)?;
-    let imported = B::export_buffer(&pending, buffer)?;
-    drop(B::wait(&mut pending, super::WAIT)?);
+    let pending = backend.submit(&plan)?;
+    let imported = pending.export_buffer(buffer)?;
+    drop(super::backend::wait_for(backend, pending.id())?);
     drop((pending, plan));
     owners.push(pool);
     Ok(imported)
@@ -611,11 +617,15 @@ impl Resident {
             .transpose()
     }
 
-    #[cfg(all(windows, feature = "presentation"))]
-    pub fn reprepare<B: Backend>(
+    #[cfg(all(
+        windows,
+        feature = "presentation",
+        any(feature = "vulkan", feature = "d3d12")
+    ))]
+    pub fn reprepare(
         mut self,
-        backend: &mut B,
-        prepare: impl FnOnce(&mut B) -> Result<(), Error>,
+        backend: &mut Runtime,
+        prepare: impl FnOnce(&mut Runtime) -> Result<(), Error>,
     ) -> Result<Self, Error> {
         let take_keys = |snapshots: &mut Vec<ImportBuffer>| {
             std::mem::take(snapshots)
@@ -637,7 +647,7 @@ impl Resident {
         prepare(backend)?;
         let refresh = |keys: Vec<_>| -> Result<Vec<ImportBuffer>, Error> {
             keys.into_iter()
-                .map(|key| backend.refresh_buffer(key))
+                .map(|key| Ok(backend.refresh_buffer(key)?))
                 .collect()
         };
         self.vertices = refresh(vertices)?;
@@ -651,8 +661,9 @@ impl Resident {
         Ok(self)
     }
 
-    pub fn upload<B: Backend>(
-        backend: &mut B,
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn upload(
+        backend: &mut Runtime,
         scene: &Scene,
         environment: &ibl::Environment,
         budget: &Budget,
@@ -777,9 +788,9 @@ impl Resident {
             graph.upload_image("texture import boundary", target, &pixels)?;
             graph.export_image(target)?;
             let plan = graph.compile()?;
-            let mut pending = backend.submit(&plan)?;
-            images.push(B::export_image(&pending, target)?);
-            drop(B::wait(&mut pending, super::WAIT)?);
+            let pending = backend.submit(&plan)?;
+            images.push(pending.export_image(target)?);
+            drop(super::backend::wait_for(backend, pending.id())?);
             drop((pending, plan, pixels));
             if (index + 1).is_multiple_of(32) {
                 eprintln!("Bistro image upload {}/{}", index + 1, scene.images.len());
@@ -791,9 +802,9 @@ impl Resident {
             graph.upload_image("environment import boundary", target, &image.bytes)?;
             graph.export_image(target)?;
             let plan = graph.compile()?;
-            let mut pending = backend.submit(&plan)?;
-            let imported = B::export_image(&pending, target)?;
-            drop(B::wait(&mut pending, super::WAIT)?);
+            let pending = backend.submit(&plan)?;
+            let imported = pending.export_image(target)?;
+            drop(super::backend::wait_for(backend, pending.id())?);
             drop((pending, plan));
             Ok(imported)
         };
@@ -914,9 +925,10 @@ impl Workspace {
         self.shadow_cache.get_or_insert_with(ShadowCache::default);
     }
 
-    pub fn accept_shadow_updates<B: Backend>(
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn accept_shadow_updates(
         &mut self,
-        pending: &B::Pending,
+        pending: &FrameSubmission,
         updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
     ) -> Result<(), Error> {
         let (Some(cache), Some(updates)) = (&mut self.shadow_cache, updates) else {
@@ -930,7 +942,7 @@ impl Workspace {
             if let Some(update) = update {
                 *destination = Some(ShadowEntry {
                     key: update.key,
-                    image: B::export_image(pending, update.handle)?,
+                    image: pending.export_image(update.handle)?,
                 });
             }
         }
@@ -960,7 +972,8 @@ impl Workspace {
             .map(|cache| (cache.hits, cache.misses))
     }
 
-    pub fn clear_shadow_reuse<B: Backend>(&mut self, backend: &mut B) -> Result<(), Error> {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn clear_shadow_reuse(&mut self, backend: &mut Runtime) -> Result<(), Error> {
         if let Some(cache) = &mut self.shadow_cache {
             for entry in &mut cache.entries {
                 if let Some(old) = entry {
@@ -993,15 +1006,16 @@ pub(super) struct BufferUpdates {
 }
 
 impl Resident {
-    pub fn accept_buffer_updates<B: Backend>(
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn accept_buffer_updates(
         &mut self,
-        pending: &B::Pending,
+        pending: &FrameSubmission,
         updates: BufferUpdates,
     ) -> Result<(), Error> {
-        let camera = B::export_buffer(pending, updates.camera)?;
+        let camera = pending.export_buffer(updates.camera)?;
         let tiles = updates
             .tiles
-            .map(|handle| B::export_buffer(pending, handle))
+            .map(|handle| pending.export_buffer(handle))
             .transpose()?;
         self.camera = camera;
         self.tiles = tiles;
@@ -1897,13 +1911,17 @@ mod tests {
     #[ignore = "requires real D3D12 GPU; verifies prepared paired-stream upload capacity"]
     fn d3d12_large_geometry_pair_fits_prepared_upload_capacity() {
         let scene = large_geometry_scene();
-        let options = tiny_output_options();
+        let mut options = tiny_output_options();
+        options.api = "d3d12".into();
         let environment = ibl::Environment::fixture();
         let budget = Budget::new(&scene, &environment, &options).unwrap();
-        let mut backend = super::super::backend::D3d12::create(&options, &budget).unwrap();
+        let mut backend = super::super::backend::create(&options, &budget).unwrap();
         let resident =
             Resident::upload(&mut backend, &scene, &environment, &budget, &[0; 128]).unwrap();
         drop(resident);
-        assert_eq!(backend.close().unwrap()["clean"], true);
+        assert_eq!(
+            super::super::backend::close(backend).unwrap()["clean"],
+            true
+        );
     }
 }

@@ -1,19 +1,21 @@
 //! Packed opaque geometry and fixed native indirect command slots.
 
 use super::super::{
-    Error, Options, SubmissionMode, asset::Scene, backend::Backend, camera::Frustum, program,
-    shadow::Bounds,
+    Error, Options, SubmissionMode, asset::Scene, camera::Frustum, program, shadow::Bounds,
 };
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{upload_buffer, upload_geometry};
 use program::visibility::{
     VISIBILITY_AABB_BYTES, VISIBILITY_CAMERA_BYTES, VISIBILITY_MASK_BYTES, VISIBILITY_THREADS,
     visibility_program,
 };
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::graph::GraphPool;
 use renderer::{
     graph::{
-        Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError, GraphPool,
-        ImportBuffer, IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate,
-        RasterBindings, RasterConstants, RasterDraw, RasterPass,
+        Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError, ImportBuffer,
+        IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate, RasterBindings,
+        RasterConstants, RasterDraw, RasterPass,
     },
     program::ManagedRasterProgram,
 };
@@ -199,8 +201,9 @@ pub(super) struct Resident {
 }
 
 impl Resident {
-    pub fn upload<B: Backend>(
-        backend: &mut B,
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn upload(
+        backend: &mut renderer::runtime::Runtime,
         geometry_pool: &mut GraphPool,
         upload_owners: &mut Vec<GraphPool>,
         scene: &Scene,
@@ -313,7 +316,8 @@ pub(super) struct Released {
 
 #[cfg(all(windows, feature = "presentation"))]
 impl Released {
-    pub fn refresh<B: Backend>(self, backend: &B) -> Result<Resident, Error> {
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub fn refresh(self, backend: &renderer::runtime::Runtime) -> Result<Resident, Error> {
         Ok(Resident {
             layout: self.layout,
             vertices: backend.refresh_buffer(self.vertices)?,

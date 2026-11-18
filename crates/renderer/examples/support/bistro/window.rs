@@ -1,23 +1,21 @@
 //! Event-loop ownership for the Bistro example.
 
-#[path = "window/adapter.rs"]
-mod adapter;
-
 use super::{
     Error, Options, WAIT,
     asset::Scene,
+    backend,
     camera::{Camera, Conditions},
     ibl::Environment,
     pipeline::{self, Budget, Resident, Workspace},
     window_camera::Motion,
     window_input::{CameraInput, REPLAY_DT, REPLAY_STEPS},
 };
-use adapter::{Surface, WindowBackend};
 use renderer::{
     PresentationMetrics, SubmissionMetrics,
     capacity::{CapacityRecovery, RuntimeCapacityKind},
     graph::{GraphPool, ImportImage, PassHandle},
     presentation::{PresentOutcome, PresentationConfig},
+    runtime::{ExecutionError, FrameId, Runtime, WindowPresenter, WindowReadiness},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -38,8 +36,8 @@ use winit::{
 const RETRY: Duration = Duration::from_millis(1);
 const TOUR_FRAMES: usize = 1800;
 
-struct Frame<B: WindowBackend> {
-    pending: B::Pending,
+struct Frame {
+    id: FrameId,
     replay: Option<ReplayReadback>,
     survey: bool,
 }
@@ -157,15 +155,15 @@ struct Smoke {
     replay_step: usize,
 }
 
-struct State<B: WindowBackend> {
+struct State {
     window: Arc<Window>,
-    surface: B::Surface,
-    backend: B,
+    surface: WindowPresenter,
+    backend: Runtime,
     resident: Option<Resident>,
     pool: GraphPool,
     workspace: Workspace,
     budget: Budget,
-    frames: VecDeque<Frame<B>>,
+    frames: VecDeque<Frame>,
     awaiting_present: Option<ImportImage>,
     frame_phases: [u64; 3],
     pixels: Vec<u8>,
@@ -186,7 +184,7 @@ struct State<B: WindowBackend> {
     pending_on_exit: usize,
 }
 
-impl<B: WindowBackend> State<B> {
+impl State {
     fn new(
         window: Arc<Window>,
         scene: &mut Scene,
@@ -205,7 +203,8 @@ impl<B: WindowBackend> State<B> {
             ..PresentationConfig::default()
         };
         let started = Instant::now();
-        let (mut backend, mut surface) = B::open(options, &budget, Arc::clone(&window), config)?;
+        let (mut backend, mut surface) =
+            backend::open(options, &budget, Arc::clone(&window), config)?;
         let preparation_ns = ns(started.elapsed());
         let seed = camera_seed(conditions, options)?;
         let initial = uniform(seed, conditions, options)?;
@@ -222,7 +221,7 @@ impl<B: WindowBackend> State<B> {
         environment.release_pixels();
         let upload_ns = ns(started.elapsed());
         backend.set_profiling(options.gpu_timing)?;
-        surface.profile(options.gpu_timing)?;
+        surface.set_profiling(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
         let mut workspace = Workspace::new(scene);
         workspace.placements = placements;
@@ -276,7 +275,7 @@ impl<B: WindowBackend> State<B> {
     fn set_extent(&mut self, extent: (u32, u32)) {
         if extent != self.desired {
             self.desired = extent;
-            self.surface.resize(extent);
+            self.surface.resize(extent.0, extent.1);
         }
     }
 
@@ -303,16 +302,16 @@ impl<B: WindowBackend> State<B> {
     }
 
     fn poll(&mut self) -> Result<(), Error> {
-        while let Some(frame) = self.frames.front_mut() {
-            let Some(mut result) = B::poll(&mut frame.pending)? else {
+        while let Some(frame) = self.frames.front() {
+            let Some(mut result) = self.backend.wait_for_frame(frame.id, Duration::ZERO)? else {
                 break;
             };
             if let Some((ordinal, pass)) = frame.replay {
-                B::readback(&mut result, pass, &mut self.pixels)?;
+                backend::readback(&mut result, pass, &mut self.pixels)?;
                 self.smoke.replay.record(ordinal, &self.pixels);
             }
             if frame.survey
-                && let Some(metrics) = B::metrics(&result)
+                && let Some(metrics) = result.metrics().copied()
             {
                 push(&mut self.timings.graph, metrics)?;
             }
@@ -322,7 +321,7 @@ impl<B: WindowBackend> State<B> {
     }
 
     fn collect_presentation_timings(&mut self) -> Result<(), Error> {
-        while let Some(metrics) = self.surface.pop_profile() {
+        while let Some(metrics) = self.surface.take_profile() {
             if self.timings.started.is_some() {
                 push(&mut self.timings.present, metrics)?;
             }
@@ -430,7 +429,7 @@ impl<B: WindowBackend> State<B> {
         let readiness = self.surface.prepare()?;
         self.collect_presentation_timings()?;
         if self.finished {
-            if self.frames.is_empty() && self.surface.idle()? {
+            if self.frames.is_empty() && self.surface.wait_idle(Duration::ZERO)? {
                 self.poll()?;
                 self.timings.finish();
             }
@@ -438,17 +437,11 @@ impl<B: WindowBackend> State<B> {
         }
         if self.desired.0 == 0
             || self.desired.1 == 0
-            || matches!(
-                readiness,
-                Some(PresentOutcome::Suspended | PresentOutcome::RecreateRequired)
-            )
+            || matches!(readiness, WindowReadiness::Suspended)
         {
             return self.discard_presentation_source();
         }
-        if readiness == Some(PresentOutcome::NotReady) {
-            return Ok(());
-        }
-        let Some(extent) = self.surface.extent() else {
+        let WindowReadiness::Ready { extent, .. } = readiness else {
             return Ok(());
         };
         if extent != self.desired {
@@ -456,7 +449,7 @@ impl<B: WindowBackend> State<B> {
         }
         if extent != (options.width, options.height) {
             self.discard_presentation_source()?;
-            if !self.frames.is_empty() || !self.surface.idle()? {
+            if !self.frames.is_empty() || !self.surface.wait_idle(Duration::ZERO)? {
                 return Ok(());
             }
             self.workspace.clear_shadow_reuse(&mut self.backend)?;
@@ -468,7 +461,7 @@ impl<B: WindowBackend> State<B> {
                     .take()
                     .unwrap()
                     .reprepare(&mut self.backend, |backend| {
-                        backend.reprepare(options, budget)
+                        backend::resize(backend, options, budget)
                     })?,
             );
             if options.reuse_shadows && options.shadows {
@@ -482,7 +475,7 @@ impl<B: WindowBackend> State<B> {
                 && self.timings.started.is_none()
                 && options.frame_limit.is_some()
             {
-                if !self.frames.is_empty() || !self.surface.idle()? {
+                if !self.frames.is_empty() || !self.surface.wait_idle(Duration::ZERO)? {
                     return Ok(());
                 }
                 self.poll()?;
@@ -518,15 +511,15 @@ impl<B: WindowBackend> State<B> {
             let started = Instant::now();
             let pending = match self.backend.submit(&plan) {
                 Ok(pending) => pending,
-                Err(error) if backpressure::<B>(&error) => return Ok(()),
-                Err(error) => return Err(error),
+                Err(error) if backpressure(&error) => return Ok(()),
+                Err(error) => return Err(error.into()),
             };
-            resident.accept_buffer_updates::<B>(&pending, built.updates)?;
+            resident.accept_buffer_updates(&pending, built.updates)?;
             self.workspace
-                .accept_shadow_updates::<B>(&pending, built.shadow_updates)?;
-            let image = B::export_image(&pending, built.output)?;
+                .accept_shadow_updates(&pending, built.shadow_updates)?;
+            let image = pending.export_image(built.output)?;
             self.frames.push_back(Frame {
-                pending,
+                id: pending.id(),
                 replay: built
                     .present_capture
                     .map(|capture| (self.accepted, capture)),
@@ -541,8 +534,8 @@ impl<B: WindowBackend> State<B> {
             .present(&mut self.surface, self.awaiting_present.as_ref().unwrap())
         {
             Ok(outcome) => outcome,
-            Err(error) if backpressure::<B>(&error) => PresentOutcome::NotReady,
-            Err(error) => return Err(error),
+            Err(error) if backpressure(&error) => PresentOutcome::NotReady,
+            Err(error) => return Err(error.into()),
         };
         if self.timings.started.is_some() {
             self.timings.present_calls += 1;
@@ -601,10 +594,10 @@ impl<B: WindowBackend> State<B> {
         }
         self.timings.finish();
         self.workspace.clear_shadow_reuse(&mut self.backend)?;
-        let runtime = self.backend.info();
-        let memory = self.backend.memory_snapshot()?;
+        let runtime = backend::info(&self.backend);
+        let memory = backend::memory_snapshot(&self.backend)?;
         drop((self.resident, self.surface));
-        let validation = self.backend.close()?;
+        let validation = backend::close(self.backend)?;
         #[cfg(feature = "memory-profiling")]
         let steady_memory = self.timings.memory.map(super::run::memory_report);
         #[cfg(not(feature = "memory-profiling"))]
@@ -683,8 +676,8 @@ fn uniform(camera: Camera, conditions: &Conditions, options: &Options) -> Result
     )
 }
 
-fn backpressure<B: WindowBackend>(error: &Error) -> bool {
-    B::capacity_error(error).is_some_and(|capacity| {
+fn backpressure(error: &ExecutionError) -> bool {
+    error.capacity().is_some_and(|capacity| {
         matches!(
             (capacity.resource, capacity.recovery),
             (_, CapacityRecovery::Poll)
@@ -732,17 +725,17 @@ fn gpu_ns(timing: renderer::GpuTiming) -> Option<u64> {
     }
 }
 
-struct App<B: WindowBackend> {
+struct App {
     options: Options,
     scene: Scene,
     environment: Environment,
     conditions: Conditions,
-    state: Option<State<B>>,
+    state: Option<State>,
     failure: Option<Error>,
     deadline: Option<Instant>,
 }
 
-impl<B: WindowBackend> ApplicationHandler for App<B> {
+impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -855,7 +848,7 @@ impl<B: WindowBackend> ApplicationHandler for App<B> {
     }
 }
 
-pub(super) fn execute<B: WindowBackend>(mut options: Options) -> Result<(), Error> {
+pub(super) fn execute(mut options: Options) -> Result<(), Error> {
     if options.output.join("report.json").exists() {
         return Err("output report already exists; choose a new output directory".into());
     }
@@ -894,7 +887,7 @@ pub(super) fn execute<B: WindowBackend>(mut options: Options) -> Result<(), Erro
     let deadline = options
         .frame_limit
         .map(|_| Instant::now() + Duration::from_secs(900));
-    let mut app = App::<B> {
+    let mut app = App {
         options,
         scene,
         environment,

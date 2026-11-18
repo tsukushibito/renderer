@@ -1,7 +1,9 @@
 //! A deterministic point-light workload shared by tiled and all-light Bistro.
 
-use super::{Error, backend::Backend, program::forward_plus};
-use renderer::graph::{BufferDesc, BufferHandle, Graph, GraphCapacity, GraphPool, ImportBuffer};
+use super::{Error, program::forward_plus};
+use renderer::graph::{BufferDesc, BufferHandle, Graph, ImportBuffer};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer::graph::{GraphCapacity, GraphPool};
 
 pub(super) type LightBytes = [u8; forward_plus::LIGHT_BUFFER_BYTES as usize];
 
@@ -52,8 +54,9 @@ fn light_upload(graph: &mut Graph, bytes: &LightBytes) -> Result<BufferHandle, E
     Ok(lights)
 }
 
-pub(super) fn initialize_tiles<B: Backend>(
-    backend: &mut B,
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(super) fn initialize_tiles(
+    backend: &mut renderer::runtime::Runtime,
     camera: &ImportBuffer,
 ) -> Result<ImportBuffer, Error> {
     const INITIAL_EXTENT: u32 = 4096;
@@ -98,9 +101,9 @@ pub(super) fn initialize_tiles<B: Backend>(
     )?;
     graph.export_buffer(tiles)?;
     let plan = graph.compile()?;
-    let mut pending = backend.submit(&plan)?;
-    let imported = B::export_buffer(&pending, tiles)?;
-    drop(B::wait(&mut pending, super::WAIT)?);
+    let pending = backend.submit(&plan)?;
+    let imported = pending.export_buffer(tiles)?;
+    drop(super::backend::wait_for(backend, pending.id())?);
     Ok(imported)
 }
 
