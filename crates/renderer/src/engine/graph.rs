@@ -156,7 +156,9 @@ impl SnapshotInputs<'_> {
             crate::graph::RasterDraw {
                 vertices,
                 indices,
+                first_index: 0,
                 index_count: draw.data.index_count,
+                instance_count: 1,
                 parameters: draw.parameters.into(),
                 bindings: None,
             }

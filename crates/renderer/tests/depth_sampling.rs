@@ -242,7 +242,9 @@ fn build() -> (GraphPool, CompiledGraph, Vec<Capture>) {
     let draw = RasterDraw {
         vertices,
         indices,
+        first_index: 0,
         index_count: 6,
+        instance_count: 1,
         bindings: Some(mask_bindings),
         parameters: RasterConstants::default(),
     };

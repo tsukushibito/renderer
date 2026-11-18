@@ -3,11 +3,11 @@
 use super::builder::read;
 use super::storage::capacity_error;
 use super::{
-    AccessPurpose, BufferHandle, Graph, GraphCapacityKind, GraphError, GraphErrorKind, LoadOp,
-    Operation, PassHandle, RasterAttachments, RasterBatchOperands, RasterDraw, RasterDrawOperands,
+    AccessPurpose, Graph, GraphCapacityKind, GraphError, GraphErrorKind, LoadOp, Operation,
+    PassHandle, RasterAttachments, RasterBatchOperands, RasterDraw, RasterDrawOperands,
 };
 use crate::program::ManagedRasterProgram;
-use std::borrow::Borrow;
+use std::{borrow::Borrow, ops::Range};
 
 /// A temporary recorder for ordered draw batches in one Raster attachment scope.
 /// On error the enclosing pass is discarded, including any earlier batches.
@@ -64,29 +64,24 @@ impl RasterPass<'_, '_> {
                 ));
             }
             let bindings = graph.use_raster_bindings(program, draw.bindings)?;
-            let (vertices, indices) = graph.raster_buffers(
-                draw.vertices,
-                draw.indices,
-                draw.index_count,
-                u64::from(program.vertex_stride()),
-            )?;
+            let (vertices, indices, index_range) =
+                graph.raster_buffers(draw, u64::from(program.vertex_stride()))?;
             let vs = graph.resources[vertices].desc.units();
-            let ix = u64::from(draw.index_count) * 4;
             let data = graph.data_mut();
-            for (resource, purpose, size) in [(vertices, 0, vs), (indices, 1, ix)] {
-                if data.raster_ranges[resource] == [0; 2] {
-                    // A validated resource is registered once, so this list
-                    // fits the same prepared resource capacity as the ranges.
-                    data.raster_resources.push(resource);
-                }
-                let range = &mut data.raster_ranges[resource][purpose];
-                *range = (*range).max(size);
+            data.track_raster_prefix(vertices, 0, vs);
+            if draw.first_index == 0 {
+                data.track_raster_prefix(indices, 1, index_range.end);
+            } else {
+                // One scratch range per stored draw fits the reserved draw limit.
+                data.raster_index_ranges.push((indices, index_range));
             }
             data.draws.push(RasterDrawOperands {
                 bindings,
                 vertices,
                 indices,
+                first_index: draw.first_index,
                 index_count: draw.index_count,
+                instance_count: draw.instance_count,
                 parameters: draw.parameters,
             });
         }
@@ -244,32 +239,74 @@ impl Graph {
                 self.append_access(read(resource, 0..indices, AccessPurpose::Index))?;
             }
         }
+        if !self.raster_index_ranges.is_empty() {
+            self.append_ranged_index_accesses()?;
+        }
+        Ok(())
+    }
+
+    fn append_ranged_index_accesses(&mut self) -> Result<(), GraphError> {
+        self.data_mut()
+            .raster_index_ranges
+            .sort_unstable_by_key(|(resource, range)| (*resource, range.start));
+        let mut pending = None::<(usize, Range<u64>)>;
+        for index in 0..self.raster_index_ranges.len() {
+            let (resource, mut range) = self.raster_index_ranges[index].clone();
+            // The offset-zero fast path has already emitted this prefix.
+            range.start = range.start.max(self.raster_ranges[resource][1]);
+            if range.is_empty() {
+                continue;
+            }
+            if let Some((previous_resource, previous)) = &mut pending
+                && *previous_resource == resource
+                && range.start <= previous.end
+            {
+                previous.end = previous.end.max(range.end);
+                continue;
+            }
+            if let Some((previous_resource, previous)) = pending.replace((resource, range)) {
+                self.append_access(read(previous_resource, previous, AccessPurpose::Index))?;
+            }
+        }
+        if let Some((resource, range)) = pending {
+            self.append_access(read(resource, range, AccessPurpose::Index))?;
+        }
         Ok(())
     }
 
     fn raster_buffers(
         &self,
-        vertices: BufferHandle,
-        indices: BufferHandle,
-        index_count: u32,
+        draw: &RasterDraw,
         stride: u64,
-    ) -> Result<(usize, usize), GraphError> {
-        let vertices = self.buffer_id(vertices)?;
-        let indices = self.buffer_id(indices)?;
+    ) -> Result<(usize, usize, Range<u64>), GraphError> {
+        let vertices = self.buffer_id(draw.vertices)?;
+        let indices = self.buffer_id(draw.indices)?;
         let vs = self.resources[vertices].desc.units();
-        let ix = u64::from(index_count) * 4;
-        if vs < stride
-            || !vs.is_multiple_of(stride)
-            || index_count == 0
-            || !index_count.is_multiple_of(3)
-            || ix > self.resources[indices].desc.units()
+        if vs < stride || !vs.is_multiple_of(stride) {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                "Raster requires complete vertex strides",
+                vertices,
+            ));
+        }
+        let start = u64::from(draw.first_index) * 4;
+        let end = start + u64::from(draw.index_count) * 4;
+        if draw.index_count == 0
+            || !draw.index_count.is_multiple_of(3)
+            || end > self.resources[indices].desc.units()
         {
             return Err(self.resource_error(
                 GraphErrorKind::InvalidInput,
-                "raster requires complete vertex strides and nonzero triangle u32 indices within the index buffer",
-                if vs < stride || !vs.is_multiple_of(stride) { vertices } else { indices },
+                "Raster requires nonzero triangle u32 indices within the index buffer",
+                indices,
             ));
         }
-        Ok((vertices, indices))
+        if draw.instance_count == 0 {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "Raster requires a nonzero instance count",
+            ));
+        }
+        Ok((vertices, indices, start..end))
     }
 }

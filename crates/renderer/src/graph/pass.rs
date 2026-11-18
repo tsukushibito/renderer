@@ -183,7 +183,11 @@ pub struct RasterDraw {
     pub bindings: Option<super::RasterBindings>,
     pub vertices: BufferHandle,
     pub indices: BufferHandle,
+    /// Offset in u32 indices from the start of `indices`.
+    pub first_index: u32,
     pub index_count: u32,
+    /// Nonzero count of instances. The shader's first instance ID is zero.
+    pub instance_count: u32,
     pub parameters: RasterConstants,
 }
 
@@ -304,7 +308,9 @@ pub(crate) struct RasterDrawOperands {
     pub bindings: Range<usize>,
     pub vertices: usize,
     pub indices: usize,
+    pub first_index: u32,
     pub index_count: u32,
+    pub instance_count: u32,
     pub parameters: RasterConstants,
 }
 /// Internal provenance for trusted immutable streams. Public byte uploads

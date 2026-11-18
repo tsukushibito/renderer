@@ -103,7 +103,9 @@ fn quad(graph: &mut Graph, invalid_last_index: bool) -> RasterDraw {
         bindings: None,
         vertices,
         indices,
+        first_index: 0,
         index_count: 6,
+        instance_count: 1,
         parameters: RasterParameters::default().into(),
     }
 }

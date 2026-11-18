@@ -582,7 +582,8 @@ fn record_draws(
             let index = slot.resource_map[draw.indices];
             let vertex_bytes = graph.resources[draw.vertices].desc.units();
             slot.provenance[index]
-                .validate_indices(
+                .validate_index_range(
+                    draw.first_index,
                     draw.index_count,
                     vertex_bytes / u64::from(program.vertex_stride()),
                     u32::MAX,
@@ -591,7 +592,7 @@ fn record_draws(
                     use crate::graph::provenance::IndexError;
                     match error {
                         IndexError::Capacity(error) => D3D12RuntimeError::capacity_with(
-                            "generic index prefix summary capacity exhausted",
+                            "generic index range summary capacity exhausted",
                             RuntimeCapacityError::new(
                                 RuntimeCapacityKind::GraphMetadata,
                                 CapacityRecovery::Reconfigure,
@@ -600,7 +601,7 @@ fn record_draws(
                             ),
                         ),
                         IndexError::UnknownContents => D3D12RuntimeError::unsupported(
-                            "Raster indices require known initialized CPU contents",
+                            "Raster index range lacks a valid bounds proof",
                         ),
                         IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
                             D3D12RuntimeError::invalid(
@@ -713,7 +714,15 @@ fn record_draws(
             });
             // SAFETY: Every vertex/index/binding operand is valid and retained, all
             // required state is set, and native attachment order preserves draw order.
-            unsafe { slot.list.DrawIndexedInstanced(draw.index_count, 1, 0, 0, 0) };
+            unsafe {
+                slot.list.DrawIndexedInstanced(
+                    draw.index_count,
+                    draw.instance_count,
+                    draw.first_index,
+                    0,
+                    0,
+                );
+            }
         }
     }
     Ok(())
@@ -869,7 +878,9 @@ mod tests {
                             bindings: Some(bindings),
                             vertices,
                             indices: shared,
+                            first_index: 0,
                             index_count: 3,
+                            instance_count: 1,
                             parameters: RasterParameters::default().into(),
                         }],
                         RasterAttachments {
@@ -1097,7 +1108,9 @@ mod tests {
                         bindings: Some(bindings),
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: 3,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     }; 2],
                     RasterAttachments {

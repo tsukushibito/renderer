@@ -113,7 +113,9 @@ pub fn build(
         RasterDraw {
             vertices,
             indices,
+            first_index: 0,
             index_count: 36,
+            instance_count: 1,
             bindings: None,
             parameters: RasterParameters::new(
                 multiply(clip_from_world, world_from_model),

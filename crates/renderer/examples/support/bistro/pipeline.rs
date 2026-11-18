@@ -962,7 +962,9 @@ pub(super) fn build(
                     bindings: Some(workspace.shadow_bindings[primitive.material]),
                     vertices: workspace.vertices[index],
                     indices: workspace.indices[index],
+                    first_index: 0,
                     index_count: primitive.index_count,
+                    instance_count: 1,
                     parameters,
                 }
             });
@@ -1189,7 +1191,9 @@ pub(super) fn build(
             bindings: Some(workspace.bindings[primitive.material]),
             vertices: workspace.vertices[index],
             indices: workspace.indices[index],
+            first_index: 0,
             index_count: primitive.index_count,
+            instance_count: 1,
             parameters: RasterConstants::default(),
         }
     };
@@ -1334,7 +1338,9 @@ pub(super) fn build(
             bindings: Some(tone_bindings),
             vertices: resolve_vertices,
             indices: resolve_indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             parameters: RasterConstants::default(),
         }],
         RasterAttachments {
@@ -1382,7 +1388,9 @@ pub(super) fn build(
             bindings: Some(resolve_bindings),
             vertices: resolve_vertices,
             indices: resolve_indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             parameters: RasterConstants::default(),
         }],
         RasterAttachments {

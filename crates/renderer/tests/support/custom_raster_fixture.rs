@@ -326,7 +326,9 @@ pub fn inputs(graph: &mut Graph, frame: usize) -> Inputs {
     let opaque = RasterDraw {
         vertices: standard_vertices,
         indices,
+        first_index: 0,
         index_count: 3,
+        instance_count: 1,
         parameters: RasterParameters::new(
             *RasterParameters::default().transform(),
             base_color(frame),
@@ -396,7 +398,9 @@ pub fn overlay_draws(inputs: &Inputs, frame: usize) -> [RasterDraw; 3] {
             bindings: Some(inputs.raster_bindings),
             vertices: inputs.vertices,
             indices: inputs.indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             parameters: words(&[0.0, 0.0, depth, 0.0, tint[0], tint[1], tint[2], tint[3]]),
         }
     })

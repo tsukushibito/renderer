@@ -226,7 +226,9 @@ fn append_owned_textured_raster(graph: &mut Graph) -> renderer::graph::ImageHand
             [RasterDraw {
                 vertices,
                 indices,
+                first_index: 0,
                 index_count: 3,
+                instance_count: 1,
                 parameters: RasterParameters::default().into(),
                 bindings: Some(bindings),
             }],

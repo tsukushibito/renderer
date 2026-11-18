@@ -160,6 +160,7 @@ pub struct GraphStorage {
     pub(super) attachments: Vec<AttachmentOperand>,
     pub(super) raster_ranges: Vec<[u64; 2]>,
     pub(super) raster_resources: Vec<usize>,
+    pub(super) raster_index_ranges: Vec<(usize, Range<u64>)>,
     pub(super) overlap: Vec<super::accesses::IndexedAccess>,
     pub(super) read_accesses: super::accesses::ReadAccessSet,
     pub(super) workspace: analysis::Workspace,
@@ -214,6 +215,8 @@ impl GraphStorage {
             attachments: buffer(capacity.attachments, GraphCapacityKind::Attachments)?,
             raster_ranges,
             raster_resources: buffer(capacity.resources, GraphCapacityKind::Resources)?,
+            // Only nonzero first indices need a separate range per draw.
+            raster_index_ranges: buffer(capacity.draws, GraphCapacityKind::Draws)?,
             overlap: buffer(capacity.accesses, GraphCapacityKind::Accesses)?,
             read_accesses: super::accesses::ReadAccessSet::new(
                 capacity.accesses,
@@ -265,6 +268,16 @@ impl GraphStorage {
             self.raster_ranges[resource] = [0; 2];
         }
         self.raster_resources.clear();
+        self.raster_index_ranges.clear();
+    }
+
+    pub(super) fn track_raster_prefix(&mut self, resource: usize, purpose: usize, end: u64) {
+        if self.raster_ranges[resource] == [0; 2] {
+            // Each resource is added once, within the prepared resource limit.
+            self.raster_resources.push(resource);
+        }
+        let previous = &mut self.raster_ranges[resource][purpose];
+        *previous = (*previous).max(end);
     }
     pub(super) fn name(&self, range: &Range<usize>) -> &str {
         // Only UTF-8 source strings are appended, with boundaries retained.

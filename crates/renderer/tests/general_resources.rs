@@ -502,7 +502,9 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
         [RasterDraw {
             vertices: v,
             indices: i,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             bindings: None,
             parameters: RasterParameters::default().into(),
         }],

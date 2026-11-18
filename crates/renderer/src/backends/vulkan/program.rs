@@ -21,7 +21,7 @@ use super::resources::sample_count_flags;
 mod bindings;
 mod creation;
 mod record;
-pub(super) use record::{RenderingAttachments, attachment_info};
+pub(super) use record::{NativeRasterDraw, RenderingAttachments, attachment_info};
 
 use bindings::BindingPool;
 pub(super) use bindings::{RasterBinding, ShaderBindings};

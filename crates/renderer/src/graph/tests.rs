@@ -23,7 +23,9 @@ fn batch_draws(draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>) 
             bindings: None,
             vertices,
             indices,
+            first_index: 0,
             index_count,
+            instance_count: 1,
             parameters: parameters.into(),
         })
         .collect()
@@ -564,7 +566,9 @@ fn raster_checks_clear_payloads_and_requires_none_for_load_or_discard() {
                 bindings: None,
                 vertices,
                 indices,
+                first_index: 0,
                 index_count: 3,
+                instance_count: 1,
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
@@ -601,7 +605,9 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 bindings: None,
                 vertices: v,
                 indices: i,
+                first_index: 0,
                 index_count: 3,
+                instance_count: 1,
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
@@ -637,7 +643,9 @@ fn attachment_load_needs_contents_and_store_discard_invalidates_them() {
                 bindings: None,
                 vertices: v,
                 indices: i,
+                first_index: 0,
                 index_count: 3,
+                instance_count: 1,
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
@@ -677,7 +685,9 @@ fn partial_raster_after_discard_does_not_claim_full_initialization() {
                 bindings: None,
                 vertices: v,
                 indices: i,
+                first_index: 0,
                 index_count: 3,
+                instance_count: 1,
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {

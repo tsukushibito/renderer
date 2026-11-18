@@ -121,7 +121,9 @@ fn draws(graph: &mut Graph, frame: usize) -> [RasterDraw; 4] {
         RasterDraw {
             vertices,
             indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             bindings: None,
             parameters: RasterParameters::new(transform, tint(frame, draw))
                 .unwrap()

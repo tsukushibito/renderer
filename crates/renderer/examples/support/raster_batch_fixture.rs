@@ -175,7 +175,9 @@ fn build(
         bindings: None,
         vertices: front,
         indices,
+        first_index: 0,
         index_count: 3,
+        instance_count: 1,
         parameters: RasterConstants::new(&[1.0_f32.to_bits(), 0, 0, 1.0_f32.to_bits()])?,
     };
 

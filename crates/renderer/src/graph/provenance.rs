@@ -424,31 +424,10 @@ impl BufferProvenance {
         start..start + count
     }
 
-    /// Validate little-endian u32 indices without reconstructing a byte buffer.
-    /// Partial writes may split an index across multiple backing slices.
-    pub(crate) fn validate_indices(
-        &mut self,
-        count: u32,
-        vertex_count: u64,
-        maximum: u32,
-    ) -> Result<(), IndexError> {
-        if count == 0 {
-            return Ok(());
-        }
-        if let Some(proof) = self.mesh {
-            if u64::from(count) * 4 != proof.byte_len || proof.known_prefix != proof.byte_len {
-                return Err(IndexError::UnknownContents);
-            }
-            return validate_index(proof.maximum, vertex_count, maximum);
-        }
-        self.validate_known_range(0, count, vertex_count, maximum)
-    }
-
     /// Check exactly the selected indices for a ranged draw. An immutable
     /// managed stream's full maximum can prove any contained range when that
     /// bound fits the selected vertex buffer and Device limit. A failed
     /// conservative bound does not prove a proper subrange is invalid.
-    #[allow(dead_code, reason = "used by the ranged Raster draw API")]
     pub(crate) fn validate_index_range(
         &mut self,
         first_index: u32,
@@ -626,7 +605,7 @@ mod tests {
                 .iter()
                 .all(|segment| shares(segment, &input))
         );
-        assert_eq!(contents.validate_indices(3, 8, u32::MAX), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 3, 8, u32::MAX), Ok(()));
         let copied = copy_range(&contents, 2..10, 4);
         assert_eq!(bytes(&copied, 4..12), bytes(&contents, 2..10));
         assert!(
@@ -639,7 +618,7 @@ mod tests {
         // previous successful bounds check and uses that slice's exact bytes.
         contents.write_slice(4..8, &input, 15..19).unwrap();
         assert_eq!(
-            contents.validate_indices(3, 8, u32::MAX),
+            contents.validate_index_range(0, 3, 8, u32::MAX),
             Err(IndexError::VertexBounds {
                 index: 9,
                 vertex_count: 8
@@ -647,7 +626,7 @@ mod tests {
         );
         contents.clear_range(1..2).unwrap();
         assert_eq!(
-            contents.validate_indices(3, 10, u32::MAX),
+            contents.validate_index_range(0, 3, 10, u32::MAX),
             Err(IndexError::UnknownContents)
         );
     }
@@ -692,18 +671,18 @@ mod tests {
         contents.write(0..1, Arc::from([bytes[0]]));
         contents.write(2..4, Arc::from([bytes[2], bytes[3]]));
         assert_eq!(
-            contents.validate_indices(3, u64::from(maximum) + 1, maximum),
+            contents.validate_index_range(0, 3, u64::from(maximum) + 1, maximum),
             Ok(())
         );
         assert_eq!(
-            contents.validate_indices(3, u64::from(maximum), maximum),
+            contents.validate_index_range(0, 3, u64::from(maximum), maximum),
             Err(IndexError::VertexBounds {
                 index: maximum,
                 vertex_count: u64::from(maximum)
             })
         );
         assert_eq!(
-            contents.validate_indices(3, u64::MAX, maximum - 1),
+            contents.validate_index_range(0, 3, u64::MAX, maximum - 1),
             Err(IndexError::DeviceLimit {
                 index: maximum,
                 maximum: maximum - 1
@@ -711,17 +690,17 @@ mod tests {
         );
         contents.clear_range(5..6).unwrap();
         assert_eq!(
-            contents.validate_indices(3, u64::MAX, u32::MAX),
+            contents.validate_index_range(0, 3, u64::MAX, u32::MAX),
             Err(IndexError::UnknownContents)
         );
         let full = Arc::from(u32::MAX.to_le_bytes());
         contents.write(0..4, full);
         assert_eq!(
-            contents.validate_indices(1, u64::from(u32::MAX) + 1, u32::MAX),
+            contents.validate_index_range(0, 1, u64::from(u32::MAX) + 1, u32::MAX),
             Ok(())
         );
         contents.write(0..4, Arc::from([0u8; 4]));
-        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 1, 1, 0), Ok(()));
     }
 
     #[test]
@@ -778,7 +757,7 @@ mod tests {
         let mut contents = prepared();
         contents.write(0..8, Arc::from([0u8; 8]));
         for _ in 0..100 {
-            assert_eq!(contents.validate_indices(2, 1, 0), Ok(()));
+            assert_eq!(contents.validate_index_range(0, 2, 1, 0), Ok(()));
         }
         assert_eq!(contents.validation_scans, 1);
         let mut old_contents = snapshot(&contents);
@@ -786,29 +765,29 @@ mod tests {
         // changing them does not scan again. A different prefix is summarized
         // independently, including when the previous draw's bounds failed.
         assert!(matches!(
-            contents.validate_indices(2, 0, 0),
+            contents.validate_index_range(0, 2, 0, 0),
             Err(IndexError::VertexBounds { .. })
         ));
         assert_eq!(contents.validation_scans, 1);
-        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 1, 1, 0), Ok(()));
         assert_eq!(contents.validation_scans, 2);
-        assert_eq!(contents.validate_indices(1, 1, 1), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 1, 1, 1), Ok(()));
         assert_eq!(contents.validation_scans, 2);
 
         // A partial upload invalidates the cache; clones keep their own old
         // contents and valid cache because all backing byte slices are immutable.
         contents.write(0..1, Arc::from([2u8]));
         assert_eq!(
-            contents.validate_indices(1, 1, 1),
+            contents.validate_index_range(0, 1, 1, 1),
             Err(IndexError::VertexBounds {
                 index: 2,
                 vertex_count: 1
             })
         );
-        assert_eq!(old_contents.validate_indices(2, 1, 0), Ok(()));
+        assert_eq!(old_contents.validate_index_range(0, 2, 1, 0), Ok(()));
         assert_eq!(old_contents.validation_scans, 1);
         assert_eq!(
-            contents.validate_indices(1, 3, 1),
+            contents.validate_index_range(0, 1, 3, 1),
             Err(IndexError::DeviceLimit {
                 index: 2,
                 maximum: 1
@@ -818,14 +797,14 @@ mod tests {
         contents
             .replace(0..4, &copy_range(&old_contents, 0..4, 0))
             .unwrap();
-        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 1, 1, 0), Ok(()));
         contents.clear_range(1..2).unwrap();
         assert_eq!(
-            contents.validate_indices(1, 1, 0),
+            contents.validate_index_range(0, 1, 1, 0),
             Err(IndexError::UnknownContents)
         );
         contents.write(1..2, Arc::from([0u8]));
-        assert_eq!(contents.validate_indices(1, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 1, 1, 0), Ok(()));
     }
 
     #[test]
@@ -833,32 +812,32 @@ mod tests {
         let mut contents = prepared();
         contents.write_mesh_indices(0..4, 12, 2);
         assert_eq!(
-            contents.validate_indices(3, 3, 2),
+            contents.validate_index_range(0, 3, 3, 2),
             Err(IndexError::UnknownContents)
         );
         let mut unaccepted = snapshot(&contents);
         contents.write_mesh_indices(4..12, 12, 2);
         for draw in 0..32 {
-            assert_eq!(contents.validate_indices(3, 3 + draw % 2, 2), Ok(()));
+            assert_eq!(contents.validate_index_range(0, 3, 3 + draw % 2, 2), Ok(()));
         }
         assert_eq!(contents.test_evidence(), (0, 0));
         assert_eq!(
-            unaccepted.validate_indices(3, 3, 2),
+            unaccepted.validate_index_range(0, 3, 3, 2),
             Err(IndexError::UnknownContents),
             "preparing another snapshot must not publish its accepted contents"
         );
         assert!(matches!(
-            contents.validate_indices(3, 2, 2),
+            contents.validate_index_range(0, 3, 2, 2),
             Err(IndexError::VertexBounds { .. })
         ));
         assert!(matches!(
-            contents.validate_indices(3, 3, 1),
+            contents.validate_index_range(0, 3, 3, 1),
             Err(IndexError::DeviceLimit { .. })
         ));
         assert_eq!(
-            contents.validate_indices(1, 3, 2),
-            Err(IndexError::UnknownContents),
-            "a whole-mesh maximum is not an exact prefix maximum"
+            contents.validate_index_range(0, 1, 3, 2),
+            Ok(()),
+            "a successful whole-mesh bound also proves a contained prefix"
         );
         assert_eq!(contents.test_evidence(), (0, 0));
         // Replacing a stream with another mesh of the same byte length must
@@ -866,9 +845,9 @@ mod tests {
         let mut mixed = prepared();
         mixed.write_mesh_indices(0..4, 12, 7);
         mixed.write_mesh_indices(4..12, 12, 2);
-        assert_eq!(mixed.validate_indices(3, 8, 7), Ok(()));
+        assert_eq!(mixed.validate_index_range(0, 3, 8, 7), Ok(()));
         assert_eq!(
-            mixed.validate_indices(3, 3, 7),
+            mixed.validate_index_range(0, 3, 3, 7),
             Err(IndexError::VertexBounds {
                 index: 7,
                 vertex_count: 3
@@ -882,10 +861,10 @@ mod tests {
         contents.write_mesh_indices(0..12, 12, 2);
         let mut old = snapshot(&contents);
         contents.write_mesh_indices(0..12, 12, 0);
-        assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 3, 1, 0), Ok(()));
         assert_eq!(contents.test_evidence(), (0, 0));
         assert_eq!(
-            old.validate_indices(3, 1, 0),
+            old.validate_index_range(0, 3, 1, 0),
             Err(IndexError::VertexBounds {
                 index: 2,
                 vertex_count: 1
@@ -894,13 +873,13 @@ mod tests {
         );
         contents.write_mesh_indices(0..12, 12, 3);
         assert_eq!(
-            contents.validate_indices(3, 4, 2),
+            contents.validate_index_range(0, 3, 4, 2),
             Err(IndexError::DeviceLimit {
                 index: 3,
                 maximum: 2
             })
         );
-        assert_eq!(contents.validate_indices(3, 4, 3), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 3, 4, 3), Ok(()));
         assert_eq!(contents.test_evidence(), (0, 0));
     }
 
@@ -912,27 +891,27 @@ mod tests {
         copied
             .replace(0..12, &copy_range(&original, 0..12, 0))
             .unwrap();
-        assert_eq!(copied.validate_indices(3, 3, 2), Ok(()));
+        assert_eq!(copied.validate_index_range(0, 3, 3, 2), Ok(()));
         assert_eq!(copied.test_evidence(), (0, 0));
         let mut partial = copy_range(&original, 0..4, 0);
         assert_eq!(
-            partial.validate_indices(1, 3, 2),
+            partial.validate_index_range(0, 1, 3, 2),
             Err(IndexError::UnknownContents)
         );
         copied.write(4..8, Arc::from(0u32.to_le_bytes()));
         assert_eq!(
-            copied.validate_indices(3, 3, 2),
+            copied.validate_index_range(0, 3, 3, 2),
             Err(IndexError::UnknownContents),
             "arbitrary writes cannot reuse the unmodified mesh proof"
         );
         assert_eq!(
-            original.validate_indices(3, 3, 2),
+            original.validate_index_range(0, 3, 3, 2),
             Ok(()),
             "immutable old snapshots keep their own proof"
         );
         copied.write(0..12, Arc::from([0u8; 12]));
         assert_eq!(
-            copied.validate_indices(3, 1, 0),
+            copied.validate_index_range(0, 3, 1, 0),
             Ok(()),
             "a complete generic replacement re-establishes byte provenance"
         );
@@ -940,7 +919,7 @@ mod tests {
         sparse.write_mesh_indices(4..12, 12, 2);
         sparse.write_mesh_indices(0..4, 12, 2);
         assert_eq!(
-            sparse.validate_indices(3, 3, 2),
+            sparse.validate_index_range(0, 3, 3, 2),
             Err(IndexError::UnknownContents)
         );
     }
@@ -957,7 +936,10 @@ mod tests {
                 .into(),
         );
         for draw in 0..32 {
-            assert_eq!(contents.validate_indices(3, 3 + draw % 2, u32::MAX), Ok(()));
+            assert_eq!(
+                contents.validate_index_range(0, 3, 3 + draw % 2, u32::MAX),
+                Ok(())
+            );
         }
         assert_eq!(contents.validation_scans, 1);
     }
@@ -976,7 +958,7 @@ mod tests {
         // A failed draw still establishes the content maximum; draw bounds are
         // independent. A large prefix must not overestimate a shorter prefix.
         assert_eq!(
-            contents.validate_indices(9, 1, u32::MAX),
+            contents.validate_index_range(0, 9, 1, u32::MAX),
             Err(IndexError::VertexBounds {
                 index: 12,
                 vertex_count: 1
@@ -985,7 +967,7 @@ mod tests {
         for _ in 0..32 {
             for (count, maximum) in [(3, 1), (6, 9), (9, 12), (6, 9), (3, 1)] {
                 assert_eq!(
-                    contents.validate_indices(count, u64::from(maximum) + 1, maximum),
+                    contents.validate_index_range(0, count, u64::from(maximum) + 1, maximum),
                     Ok(())
                 );
             }
@@ -994,15 +976,15 @@ mod tests {
         let mut old = snapshot(&contents);
         contents.write(0..1, Arc::from([2u8]));
         assert_eq!(
-            contents.validate_indices(3, 2, u32::MAX),
+            contents.validate_index_range(0, 3, 2, u32::MAX),
             Err(IndexError::VertexBounds {
                 index: 2,
                 vertex_count: 2
             })
         );
         assert_eq!(contents.validation_scans, 4);
-        assert_eq!(old.validate_indices(3, 2, 1), Ok(()));
-        assert_eq!(old.validate_indices(9, 13, 12), Ok(()));
+        assert_eq!(old.validate_index_range(0, 3, 2, 1), Ok(()));
+        assert_eq!(old.validate_index_range(0, 9, 13, 12), Ok(()));
         assert_eq!(old.validation_scans, 3);
     }
 
@@ -1012,10 +994,10 @@ mod tests {
         let mut contents = BufferProvenance::with_capacity(1, 2);
         contents.write_slice(0..36, &input, 0..36).unwrap();
         for count in [3, 6] {
-            assert_eq!(contents.validate_indices(count, 1, 0), Ok(()));
+            assert_eq!(contents.validate_index_range(0, count, 1, 0), Ok(()));
         }
         assert_eq!(
-            contents.validate_indices(9, 1, 0),
+            contents.validate_index_range(0, 9, 1, 0),
             Err(IndexError::Capacity(ProvenanceCapacityError {
                 required: 3,
                 capacity: 2
@@ -1026,7 +1008,7 @@ mod tests {
             "exhaustion must not scan or evict"
         );
         for count in [6, 3] {
-            assert_eq!(contents.validate_indices(count, 1, 0), Ok(()));
+            assert_eq!(contents.validate_index_range(0, count, 1, 0), Ok(()));
         }
         assert_eq!(contents.validation_scans, 2);
 
@@ -1039,13 +1021,13 @@ mod tests {
         assert_eq!(destination.copy_from(&contents), failure);
         assert_eq!(contents.copy_into(0..36, 0, &mut destination), failure);
         assert_eq!(destination.replace(0..36, &contents), failure);
-        assert_eq!(destination.validate_indices(3, 8, 7), Ok(()));
+        assert_eq!(destination.validate_index_range(0, 3, 8, 7), Ok(()));
         assert_eq!(destination.test_evidence(), (0, 0));
 
         let mut managed_only = BufferProvenance::with_capacity(0, 0);
-        assert_eq!(managed_only.validate_indices(0, 0, 0), Ok(()));
+        assert_eq!(managed_only.validate_index_range(0, 0, 0, 0), Ok(()));
         managed_only.write_mesh_indices(0..12, 12, 2);
-        assert_eq!(managed_only.validate_indices(3, 3, 2), Ok(()));
+        assert_eq!(managed_only.validate_index_range(0, 3, 3, 2), Ok(()));
     }
 
     #[test]
@@ -1059,22 +1041,22 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into(),
         );
-        assert_eq!(source.validate_indices(2, 2, 1), Ok(()));
-        assert_eq!(source.validate_indices(3, 5, 4), Ok(()));
+        assert_eq!(source.validate_index_range(0, 2, 2, 1), Ok(()));
+        assert_eq!(source.validate_index_range(0, 3, 5, 4), Ok(()));
         let mut copied = copy_range(&source, 0..12, 0);
-        assert_eq!(copied.validate_indices(3, 5, 4), Ok(()));
-        assert_eq!(copied.validate_indices(2, 2, 1), Ok(()));
+        assert_eq!(copied.validate_index_range(0, 3, 5, 4), Ok(()));
+        assert_eq!(copied.validate_index_range(0, 2, 2, 1), Ok(()));
         assert_eq!(copied.validation_scans, 0);
         let mut destination = prepared();
         destination.replace(0..12, &copied).unwrap();
-        assert_eq!(destination.validate_indices(2, 2, 1), Ok(()));
+        assert_eq!(destination.validate_index_range(0, 2, 2, 1), Ok(()));
         assert_eq!(destination.validation_scans, 0);
 
         let shifted = copy_range(&source, 0..12, 4);
         assert!(shifted.validations.is_empty());
         let mut suffix = copy_range(&source, 4..12, 0);
         assert_eq!(
-            suffix.validate_indices(2, 2, u32::MAX),
+            suffix.validate_index_range(0, 2, 2, u32::MAX),
             Err(IndexError::VertexBounds {
                 index: 4,
                 vertex_count: 2
@@ -1084,17 +1066,17 @@ mod tests {
 
         source.clear_range(5..6).unwrap();
         assert_eq!(
-            source.validate_indices(3, 5, 4),
+            source.validate_index_range(0, 3, 5, 4),
             Err(IndexError::UnknownContents)
         );
         let mut hole = copy_range(&source, 0..12, 0);
         assert_eq!(
-            hole.validate_indices(3, 5, 4),
+            hole.validate_index_range(0, 3, 5, 4),
             Err(IndexError::UnknownContents)
         );
         assert_eq!(hole.validation_scans, 0);
         hole.write(5..6, Arc::from([0u8]));
-        assert_eq!(hole.validate_indices(3, 5, 4), Ok(()));
+        assert_eq!(hole.validate_index_range(0, 3, 5, 4), Ok(()));
         assert_eq!(hole.validation_scans, 1);
     }
 
@@ -1190,7 +1172,7 @@ mod tests {
         let patch: Arc<[u8]> = Arc::from([1u8; 4]);
         let mut contents = BufferProvenance::with_capacity(2, 4);
         contents.write_slice(0..12, &input, 0..12).unwrap();
-        assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 3, 1, 0), Ok(()));
         let retained = Arc::strong_count(&input);
         assert_eq!(
             contents.write_slice(4..8, &patch, 0..4),
@@ -1202,7 +1184,7 @@ mod tests {
         assert_eq!(Arc::strong_count(&input), retained);
         assert_eq!(Arc::strong_count(&patch), 1);
         assert_eq!(bytes(&contents, 0..12), [Some(0); 12]);
-        assert_eq!(contents.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(contents.validate_index_range(0, 3, 1, 0), Ok(()));
         assert_eq!(contents.validation_scans, 1);
         contents.reserve_segments(3);
         contents.write_slice(4..8, &patch, 0..4).unwrap();
@@ -1224,7 +1206,7 @@ mod tests {
             ]
         );
         assert!(matches!(
-            contents.validate_indices(3, 1, 0),
+            contents.validate_index_range(0, 3, 1, 0),
             Err(IndexError::VertexBounds { .. })
         ));
         assert_eq!(contents.validation_scans, 2);
@@ -1245,15 +1227,15 @@ mod tests {
         assert_eq!(source.copy_into(0..12, 0, &mut target), failure);
         assert_eq!(target.copy_from(&source), failure);
         assert_eq!(target.replace(0..12, &source), failure);
-        assert_eq!(target.validate_indices(3, 3, 2), Ok(()));
+        assert_eq!(target.validate_index_range(0, 3, 3, 2), Ok(()));
         assert_eq!(target.test_evidence(), (0, 0));
 
         // Clearing a hole can itself need an extra retained edge segment.
         target.write_slice(0..12, &input, 0..12).unwrap();
-        assert_eq!(target.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(target.validate_index_range(0, 3, 1, 0), Ok(()));
         assert_eq!(target.clear_range(4..8), failure);
         assert_eq!(bytes(&target, 0..12), [Some(0); 12]);
-        assert_eq!(target.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(target.validate_index_range(0, 3, 1, 0), Ok(()));
         assert_eq!(target.validation_scans, 1);
     }
 
@@ -1285,8 +1267,11 @@ mod tests {
             source.write_slice(0..16, &input, 0..16).unwrap();
             source.write_slice(4..8, &patch, 0..4).unwrap();
             source.clear_range(10..12).unwrap();
-            assert_eq!(source.validate_indices(1, 1, 0), Ok(()));
-            assert_eq!(source.validate_indices(2, u64::MAX, u32::MAX), Ok(()));
+            assert_eq!(source.validate_index_range(0, 1, 1, 0), Ok(()));
+            assert_eq!(
+                source.validate_index_range(0, 2, u64::MAX, u32::MAX),
+                Ok(())
+            );
             source.copy_into(0..16, 16, &mut scratch).unwrap();
             target.copy_from(&source).unwrap();
             target.replace(16..32, &scratch).unwrap();

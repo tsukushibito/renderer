@@ -240,7 +240,9 @@ fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
         RasterDraw {
             vertices: vertex_buffer,
             indices: index_buffer,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             bindings: bindings[draw],
             parameters: RasterParameters::new(transform, tint).unwrap().into(),
         }

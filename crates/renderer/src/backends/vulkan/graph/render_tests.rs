@@ -147,7 +147,9 @@ fn vulkan_attachment_subresource_native_boundaries() {
                     bindings: None,
                     vertices,
                     indices,
+                    first_index: 0,
                     index_count: 12,
+                    instance_count: 1,
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
@@ -204,14 +206,18 @@ fn vulkan_attachment_subresource_native_boundaries() {
                         bindings: None,
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: 12,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     },
                     RasterDraw {
                         bindings: None,
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: 12,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     },
                 ],
@@ -383,7 +389,9 @@ fn vulkan_owned_raster_descriptor_capacity_recovery() {
             bindings: Some(first),
             vertices,
             indices,
+            first_index: 0,
             index_count: 6,
+            instance_count: 1,
             parameters: RasterParameters::default().into(),
         }; 2];
         draws[1].bindings = Some(second);
@@ -493,7 +501,9 @@ fn batch_draws(draws: Vec<(BufferHandle, BufferHandle, u32, RasterParameters)>) 
             bindings: None,
             vertices,
             indices,
+            first_index: 0,
             index_count,
+            instance_count: 1,
             parameters: parameters.into(),
         })
         .collect()
@@ -645,7 +655,9 @@ fn opaque_batch_comparison(
                         bindings: None,
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: count,
+                        instance_count: 1,
                         parameters: parameters.into(),
                     }],
                     RasterAttachments {
@@ -1044,7 +1056,9 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                         bindings: None,
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: 12,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
@@ -1257,7 +1271,9 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
                 bindings: None,
                 vertices,
                 indices,
+                first_index: 0,
                 index_count: 12,
+                instance_count: 1,
                 parameters: RasterParameters::default().into(),
             }],
             RasterAttachments {
@@ -1437,7 +1453,9 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         bindings: None,
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: 12,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
@@ -1492,7 +1510,9 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
                         bindings: None,
                         vertices: blue_vertices,
                         indices: blue_indices,
+                        first_index: 0,
                         index_count: 6,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {
@@ -1596,7 +1616,9 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                         bindings: None,
                         vertices,
                         indices,
+                        first_index: 0,
                         index_count: 12,
+                        instance_count: 1,
                         parameters: RasterParameters::default().into(),
                     }],
                     RasterAttachments {

@@ -57,7 +57,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             bindings: None,
             vertices: vertex_buffer,
             indices: index_buffer,
+            first_index: 0,
             index_count: 6,
+            instance_count: 1,
             parameters: RasterParameters::default().into(),
         }],
         RasterAttachments {

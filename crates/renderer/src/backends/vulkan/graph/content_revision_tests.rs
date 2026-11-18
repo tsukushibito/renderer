@@ -295,7 +295,9 @@ fn vulkan_graph_clear_and_attachment_discard_invalidate_old_content_snapshots() 
                     bindings: None,
                     vertices,
                     indices,
+                    first_index: 0,
                     index_count: 3,
+                    instance_count: 1,
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {

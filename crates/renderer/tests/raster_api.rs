@@ -27,7 +27,9 @@ fn mesh(graph: &mut Graph, name: &str, seed_vertices: bool, seed_indices: bool) 
         bindings: None,
         vertices,
         indices,
+        first_index: 0,
         index_count: 3,
+        instance_count: 1,
         parameters: RasterParameters::default().into(),
     }
 }
@@ -351,7 +353,9 @@ fn shared_vertex_index_inputs_keep_the_latest_producer_and_cull_older_contents()
         bindings: None,
         vertices: shared,
         indices: shared,
+        first_index: 0,
         index_count: 3,
+        instance_count: 1,
         parameters: RasterParameters::default().into(),
     };
     let target = color(&mut graph, "color");

@@ -342,7 +342,7 @@ impl PreparedOperation {
 fn index_error(error: IndexError) -> RuntimeError {
     match error {
         IndexError::Capacity(error) => RuntimeError::capacity_with(
-            "generic index prefix summary capacity exhausted",
+            "generic index range summary capacity exhausted",
             RuntimeCapacityError::new(
                 RuntimeCapacityKind::GraphMetadata,
                 CapacityRecovery::Reconfigure,
@@ -351,7 +351,7 @@ fn index_error(error: IndexError) -> RuntimeError {
             ),
         ),
         IndexError::UnknownContents => {
-            RuntimeError::unsupported("raster indices must have CPU-known upload/copy contents")
+            RuntimeError::unsupported("Raster index range lacks a valid bounds proof")
         }
         IndexError::VertexBounds {
             index,
@@ -938,7 +938,8 @@ impl GraphWork {
                                     .as_mut()
                                     .unwrap()
                                     .provenance
-                                    .validate_indices(
+                                    .validate_index_range(
+                                        draw.first_index,
                                         draw.index_count,
                                         vertex_count,
                                         owner.device.max_draw_indexed_index_value(),
@@ -1524,7 +1525,9 @@ mod tests {
                     bindings: None,
                     vertices,
                     indices,
+                    first_index: 0,
                     index_count: 3,
+                    instance_count: 1,
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {
@@ -2189,7 +2192,9 @@ mod tests {
                     bindings: None,
                     vertices,
                     indices,
+                    first_index: 0,
                     index_count: 3,
+                    instance_count: 1,
                     parameters: RasterParameters::default().into(),
                 }],
                 RasterAttachments {

@@ -162,7 +162,7 @@ mod tests {
                 target.initialized.as_slice(),
                 std::slice::from_ref(&(0..12))
             );
-            assert_eq!(target.provenance.validate_indices(3, 3, 2), Ok(()));
+            assert_eq!(target.provenance.validate_index_range(0, 3, 3, 2), Ok(()));
         }
     }
 
@@ -180,7 +180,7 @@ mod tests {
         );
         assert_eq!(state.initialized.as_slice(), std::slice::from_ref(&(0..12)));
         assert_native_state(&state);
-        assert_eq!(state.provenance.validate_indices(3, 3, 2), Ok(()));
+        assert_eq!(state.provenance.validate_index_range(0, 3, 3, 2), Ok(()));
     }
 
     #[test]
@@ -197,7 +197,7 @@ mod tests {
             .set_initialized(std::slice::from_ref(&(0..12)))
             .unwrap();
         source.provenance.write_slice(0..12, &bytes, 0..12).unwrap();
-        assert_eq!(source.provenance.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(source.provenance.validate_index_range(0, 3, 1, 0), Ok(()));
         target.copy_from(&source).unwrap();
         assert_native_state(&target);
         assert_eq!(
@@ -206,7 +206,7 @@ mod tests {
         );
         source.set_initialized(&[]).unwrap();
         source.provenance.write_slice(0..1, &patch, 0..1).unwrap();
-        assert_eq!(target.provenance.validate_indices(3, 1, 0), Ok(()));
+        assert_eq!(target.provenance.validate_index_range(0, 3, 1, 0), Ok(()));
         assert_eq!(target.provenance.test_evidence(), (1, 1));
         assert_eq!(target.initialized.as_ptr(), initialized_pointer);
         assert_eq!(target.initialized.capacity(), initialized_capacity);

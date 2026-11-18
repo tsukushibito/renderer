@@ -603,9 +603,138 @@ mod tests {
             bindings: None,
             vertices,
             indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             parameters: RasterParameters::default().into(),
         }
+    }
+
+    #[test]
+    fn indexed_instances_capture_exact_ranges_and_preserve_unread_gaps() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let default = uploaded_draw(&mut graph, "original geometry");
+        let indices = graph
+            .buffer("ranged indices", BufferDesc { size: 60 })
+            .unwrap();
+        graph
+            .upload_buffer("first triangle", indices, 0, &[0; 12])
+            .unwrap();
+        graph
+            .upload_buffer("later triangles", indices, 24, &[0; 20])
+            .unwrap();
+        let target = graph.image("target", ImageDesc::rgba8(2, 2)).unwrap();
+        let colors = [Attachment {
+            view: graph.image_view(target, 0, 0).unwrap(),
+            load: LoadOp::Clear([0.0; 4]),
+            store: StoreOp::Store,
+        }];
+        let attachments = RasterAttachments {
+            colors: &colors,
+            depth: None,
+            color_resolves: &[],
+        };
+        let program = ManagedRasterProgram::mesh();
+        let baseline = RasterDraw { indices, ..default };
+        let later = RasterDraw {
+            first_index: 6,
+            instance_count: 2,
+            ..baseline
+        };
+        let overlapping = RasterDraw {
+            first_index: 8,
+            instance_count: 4,
+            ..later
+        };
+        for invalid in [
+            RasterDraw {
+                first_index: u32::MAX,
+                ..later
+            },
+            RasterDraw {
+                instance_count: 0,
+                ..later
+            },
+        ] {
+            assert_eq!(
+                graph
+                    .raster(
+                        "invalid range or count",
+                        &program,
+                        [later, invalid],
+                        attachments
+                    )
+                    .unwrap_err()
+                    .kind(),
+                GraphErrorKind::InvalidInput,
+            );
+        }
+        let pass = graph
+            .raster(
+                "draw the initialized ranges",
+                &program,
+                [overlapping, baseline, later],
+                attachments,
+            )
+            .unwrap();
+        graph.export_image(target).unwrap();
+        let plan = graph.compile().unwrap();
+        assert!(
+            plan.accesses(pass.index)
+                .iter()
+                .filter(|access| access.purpose == AccessPurpose::Index)
+                .map(|access| access.range.clone())
+                .eq([0..12, 24..44])
+        );
+        let Operation::Raster { draws, .. } = &plan.passes[pass.index].operation else {
+            panic!("expected Raster operation");
+        };
+        assert!(
+            plan.raster_draws(draws)
+                .iter()
+                .map(|draw| (draw.first_index, draw.instance_count))
+                .eq([(8, 4), (0, 1), (6, 2)])
+        );
+    }
+
+    #[test]
+    fn ranged_index_draw_cannot_consume_a_hole_between_uploads() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let draw = uploaded_draw(&mut graph, "geometry");
+        let indices = graph
+            .buffer("partial indices", BufferDesc { size: 24 })
+            .unwrap();
+        graph
+            .upload_buffer("partial indices", indices, 16, &[0; 8])
+            .unwrap();
+        let target = graph.image("target", ImageDesc::rgba8(2, 2)).unwrap();
+        graph
+            .raster(
+                "reads a missing index",
+                &ManagedRasterProgram::mesh(),
+                [RasterDraw {
+                    indices,
+                    first_index: 3,
+                    instance_count: 2,
+                    ..draw
+                }],
+                RasterAttachments {
+                    colors: &[Attachment {
+                        view: graph.image_view(target, 0, 0).unwrap(),
+                        load: LoadOp::Clear([0.0; 4]),
+                        store: StoreOp::Store,
+                    }],
+                    depth: None,
+                    color_resolves: &[],
+                },
+            )
+            .unwrap();
+        graph.export_image(target).unwrap();
+        let error = graph.compile().unwrap_err();
+        assert_eq!(error.kind(), GraphErrorKind::UninitializedRead);
+        assert_eq!(error.resource(), Some(indices.into()));
     }
 
     fn textured_bindings(graph: &mut Graph) -> (super::super::RasterBindings, ImageHandle) {

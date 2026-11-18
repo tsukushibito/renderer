@@ -435,7 +435,9 @@ fn raster_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         bindings: None,
         vertices: vertices[draw % 2],
         indices: indices[draw % 2],
+        first_index: 0,
         index_count: 3,
+        instance_count: 1,
         parameters: RasterParameters::new(
             *RasterParameters::default().transform(),
             [frame as f32, draw as f32, 0.25, 1.0],
@@ -603,7 +605,9 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
         let mut draws = std::array::from_fn::<_, 2, _>(|draw| RasterDraw {
             vertices,
             indices,
+            first_index: 0,
             index_count: 3,
+            instance_count: 1,
             parameters: RasterParameters::new(
                 *RasterParameters::default().transform(),
                 [frame as f32, hop as f32, draw as f32, 1.0],

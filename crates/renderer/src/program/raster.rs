@@ -288,7 +288,8 @@ impl ManagedRasterProgram {
     /// and at most 16 unique attribute locations below 16,
     /// with four-byte aligned offsets and formats wholly within that stride.
     /// DXIL uses TEXCOORD semantic indices equal to attribute locations. Indices
-    /// are u32 triangle lists, with first index/base vertex zero and one instance.
+    /// are u32 triangle lists. Draws may select an index range and request any
+    /// nonzero instance count, with base vertex and first instance zero.
     /// No undeclared vertex input, resources, push constants or side effects are
     /// permitted. Color outputs require a fragment shader. Declare their
     /// formats in contiguous shader output location order from zero, up to
@@ -323,7 +324,8 @@ impl ManagedRasterProgram {
     /// or Sampler kind. No combination may be omitted, including dynamically
     /// selected combinations. Load/texelFetch-only accesses need no pair.
     ///
-    /// For every accepted draw, all permitted inline words and resource contents,
+    /// For every accepted draw, including every permitted instance index, all
+    /// permitted inline words and resource contents,
     /// shaders may access only the declared buffer prefixes and selected image
     /// Views. They must not perform out-of-bounds accesses, races or unsupported
     /// operations. No inter-draw shader synchronization or storage side effects

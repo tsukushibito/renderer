@@ -9,6 +9,16 @@ use super::super::resources::DeviceImage;
 use super::ShaderPrograms;
 use crate::graph::{RasterConstants, SampleCount};
 
+pub(in crate::backends::vulkan) struct NativeRasterDraw<'a> {
+    pub vertices: vk::Buffer,
+    pub indices: vk::Buffer,
+    pub first_index: u32,
+    pub index_count: u32,
+    pub instance_count: u32,
+    pub parameters: &'a RasterConstants,
+    pub sets: [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
+}
+
 pub(in crate::backends::vulkan) struct RenderingAttachments<'a> {
     pub extent: vk::Extent2D,
     pub colors: [vk::RenderingAttachmentInfo<'a>; crate::program::MAX_RASTER_COLOR_ATTACHMENTS],
@@ -106,15 +116,7 @@ impl ShaderPrograms {
         command: vk::CommandBuffer,
         program: &super::Program,
         sample_count: SampleCount,
-        draws: impl IntoIterator<
-            Item = (
-                vk::Buffer,
-                vk::Buffer,
-                u32,
-                &'a RasterConstants,
-                [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
-            ),
-        >,
+        draws: impl IntoIterator<Item = NativeRasterDraw<'a>>,
     ) {
         let device = self.owner.device.raw();
         let pipeline = program
@@ -137,11 +139,14 @@ impl ShaderPrograms {
                         0,
                     )
                 });
-                for (vertices, indices, index_count, parameters, sets) in draws {
+                for draw in draws {
                     if size != 0 {
                         let mut bytes = [0_u8; 128];
-                        for (value, output) in
-                            parameters.words().iter().zip(bytes.as_chunks_mut::<4>().0)
+                        for (value, output) in draw
+                            .parameters
+                            .words()
+                            .iter()
+                            .zip(bytes.as_chunks_mut::<4>().0)
                         {
                             output.copy_from_slice(&value.to_ne_bytes());
                         }
@@ -159,13 +164,20 @@ impl ShaderPrograms {
                             vk::PipelineBindPoint::GRAPHICS,
                             program.layout,
                             0,
-                            &sets[..program.raster_groups],
+                            &draw.sets[..program.raster_groups],
                             &[],
                         );
                     }
-                    device.cmd_bind_vertex_buffers(command, 0, &[vertices], &[0]);
-                    device.cmd_bind_index_buffer(command, indices, 0, vk::IndexType::UINT32);
-                    device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
+                    device.cmd_bind_vertex_buffers(command, 0, &[draw.vertices], &[0]);
+                    device.cmd_bind_index_buffer(command, draw.indices, 0, vk::IndexType::UINT32);
+                    device.cmd_draw_indexed(
+                        command,
+                        draw.index_count,
+                        draw.instance_count,
+                        draw.first_index,
+                        0,
+                        0,
+                    );
                 }
             }
         }

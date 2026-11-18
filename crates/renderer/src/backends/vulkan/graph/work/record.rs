@@ -7,7 +7,7 @@ use std::sync::Arc;
 use ash::vk;
 
 use super::super::super::memory::MemoryOwner;
-use super::super::super::program::{RenderingAttachments, attachment_info};
+use super::super::super::program::{NativeRasterDraw, RenderingAttachments, attachment_info};
 use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
 use super::super::super::transfer::{TransferError, TransferPayload};
@@ -241,14 +241,14 @@ impl TransferPayload for GraphWork {
                                 draw_operands
                                     .iter()
                                     .zip(descriptor_sets)
-                                    .map(|(draw, &sets)| {
-                                        (
-                                            self.resource(draw.vertices).buffer().handle,
-                                            self.resource(draw.indices).buffer().handle,
-                                            draw.index_count,
-                                            &draw.parameters,
-                                            sets,
-                                        )
+                                    .map(|(draw, &sets)| NativeRasterDraw {
+                                        vertices: self.resource(draw.vertices).buffer().handle,
+                                        indices: self.resource(draw.indices).buffer().handle,
+                                        first_index: draw.first_index,
+                                        index_count: draw.index_count,
+                                        instance_count: draw.instance_count,
+                                        parameters: &draw.parameters,
+                                        sets,
                                     }),
                             );
                         }
