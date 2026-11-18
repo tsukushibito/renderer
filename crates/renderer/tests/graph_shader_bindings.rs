@@ -159,7 +159,6 @@ fn short_lived_per_draw_bindings_connect_two_image_passes_to_sampled_compute() {
                 "sample compute",
                 &ManagedProgram::sampled_float_readback(),
                 &compute,
-                [1; 3],
             )
             .unwrap();
     }
@@ -247,7 +246,6 @@ fn selected_mip_and_layer_determine_initialization_and_feedback() {
                         },
                     },
                 ],
-                [1; 3],
             )
             .unwrap();
         graph.readback_buffer("observe", result, 0, 16).unwrap();
@@ -615,7 +613,6 @@ fn sampled_compute_does_not_initialize_descriptor_tail() {
                         },
                     },
                 ],
-                [1; 3],
             )
             .unwrap();
         graph

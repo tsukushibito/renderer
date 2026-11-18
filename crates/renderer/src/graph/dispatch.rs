@@ -70,7 +70,7 @@ struct BufferGrid {
 impl BufferGrid {
     fn from_dispatch(
         domain: DispatchWorkgroups,
-        [x, y, z]: [u32; 3],
+        workgroups: Option<[u32; 2]>,
     ) -> Result<Option<Self>, GraphError> {
         let DispatchWorkgroups::BufferGrid2d {
             group,
@@ -79,9 +79,22 @@ impl BufferGrid {
             max_workgroups: [max_x, max_y],
         } = domain
         else {
-            return Ok(None);
+            return if workgroups.is_some() {
+                Err(GraphError::new(
+                    GraphErrorKind::InvalidInput,
+                    "explicit workgroup counts require a buffer-grid Program",
+                ))
+            } else {
+                Ok(None)
+            };
         };
-        if x == 0 || y == 0 || z != 1 || x > max_x || y > max_y {
+        let Some([x, y]) = workgroups else {
+            return Err(GraphError::new(
+                GraphErrorKind::InvalidInput,
+                "a buffer-grid Program requires dispatch_buffer_grid",
+            ));
+        };
+        if x == 0 || y == 0 || x > max_x || y > max_y {
             return Err(GraphError::new(
                 GraphErrorKind::Unsupported,
                 "workgroup counts exceed the reviewed 2D buffer grid domain",
@@ -189,27 +202,52 @@ impl Graph {
         Ok(bindings.first..end)
     }
 
-    /// Own a managed Compute dispatch and derive accesses from its reviewed
-    /// shader contract. Buffer footprints are reviewed prefixes; a buffer grid
-    /// derives its write prefix from its workgroup count. Images access the
-    /// whole selected mip/layer. Bytes outside a write footprint are unchanged.
-    /// Image-domain dispatches must cover their output exactly after ceil
-    /// division by the local size, with guarded fringe invocations. Native
-    /// preparation establishes Device alignment, usage and limit guarantees.
+    /// Own a managed Compute dispatch and derive its accesses and workgroup
+    /// counts from the reviewed Program and bindings. Image-domain Programs
+    /// ceil-divide the output View's mip extent by their local size. The shader
+    /// must guard fringe invocations. Use [`Self::dispatch_buffer_grid`] for
+    /// Programs with a caller-selected buffer grid.
     pub fn dispatch(
         &mut self,
         name: &str,
         program: &ManagedProgram,
         bindings: &[Binding],
-        workgroups: [u32; 3],
+    ) -> Result<PassHandle, GraphError> {
+        self.build_dispatch(name, program, bindings, None)
+    }
+
+    /// Own a dispatch for a buffer-grid Program. The caller selects the active
+    /// workgroup count on X and Y. Z is always one. The Program's reviewed
+    /// strides determine the buffer footprints for that grid. Bytes outside
+    /// the write footprint are unchanged.
+    pub fn dispatch_buffer_grid(
+        &mut self,
+        name: &str,
+        program: &ManagedProgram,
+        bindings: &[Binding],
+        workgroups: [u32; 2],
+    ) -> Result<PassHandle, GraphError> {
+        self.build_dispatch(name, program, bindings, Some(workgroups))
+    }
+
+    fn build_dispatch(
+        &mut self,
+        name: &str,
+        program: &ManagedProgram,
+        bindings: &[Binding],
+        active_grid: Option<[u32; 2]>,
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
             let contract = program.dispatch_contract();
             let first_access = graph.accesses.len();
-            let buffer_grid = BufferGrid::from_dispatch(contract.workgroups, workgroups)?;
+            let buffer_grid = BufferGrid::from_dispatch(contract.workgroups, active_grid)?;
             let owned =
                 graph.append_bindings(program.bindings(), contract.bytes, bindings, buffer_grid)?;
-            graph.validate_dispatch_domain(program, owned.clone(), workgroups)?;
+            graph.validate_dispatch_image_layouts(program.bindings(), owned.clone())?;
+            let workgroups = match active_grid {
+                Some([x, y]) => [x, y, 1],
+                None => graph.derive_dispatch_workgroups(program, owned.clone())?,
+            };
             let accesses = first_access..graph.accesses.len();
             if let Some(left) = graph.conflicting_pass_access(accesses.clone())? {
                 let access = &graph.accesses[accesses.start + left];
@@ -240,16 +278,6 @@ impl Graph {
                 false,
             ))
         })
-    }
-
-    fn validate_dispatch_domain(
-        &self,
-        program: &ManagedProgram,
-        owned: std::ops::Range<usize>,
-        workgroups: [u32; 3],
-    ) -> Result<(), GraphError> {
-        self.validate_dispatch_image_layouts(program.bindings(), owned.clone())?;
-        self.validate_dispatch_workgroups(program, owned, workgroups)
     }
 
     fn validate_dispatch_image_layouts(
@@ -290,17 +318,16 @@ impl Graph {
         Ok(())
     }
 
-    fn validate_dispatch_workgroups(
+    fn derive_dispatch_workgroups(
         &self,
         program: &ManagedProgram,
         owned: std::ops::Range<usize>,
-        workgroups: [u32; 3],
-    ) -> Result<(), GraphError> {
-        let expected = match program.dispatch_contract().workgroups {
-            DispatchWorkgroups::Fixed(expected) => expected,
-            // The grid dimensions and output footprint were validated while
-            // deriving the buffer access.
-            DispatchWorkgroups::BufferGrid2d { .. } => return Ok(()),
+    ) -> Result<[u32; 3], GraphError> {
+        match program.dispatch_contract().workgroups {
+            DispatchWorkgroups::Fixed(workgroups) => Ok(workgroups),
+            DispatchWorkgroups::BufferGrid2d { .. } => {
+                unreachable!("buffer-grid workgroups were validated before capturing bindings")
+            }
             DispatchWorkgroups::Image2d { group, binding } => {
                 // The trusted descriptor identifies one unique write-only image
                 // and a nonzero local size. Resolve already canonical operands,
@@ -339,20 +366,13 @@ impl Graph {
                     }
                 }
                 let local = program.workgroup_size();
-                [
+                Ok([
                     extent[0].div_ceil(local[0]),
                     extent[1].div_ceil(local[1]),
                     1,
-                ]
+                ])
             }
-        };
-        if workgroups != expected {
-            return Err(GraphError::new(
-                GraphErrorKind::Unsupported,
-                "workgroup counts differ from the reviewed Program dispatch contract",
-            ));
         }
-        Ok(())
     }
 
     /// Append canonical owned descriptors and shader-derived accesses using only
@@ -872,11 +892,9 @@ mod tests {
     #[test]
     fn buffer_grid_initializes_only_the_active_workgroups() {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-        for (workgroups, read_size, succeeds) in [
-            ([2, 3, 1], 48, true),
-            ([1, 3, 1], 24, true),
-            ([1, 3, 1], 28, false),
-        ] {
+        for (workgroups, read_size, succeeds) in
+            [([2, 3], 48, true), ([1, 3], 24, true), ([1, 3], 28, false)]
+        {
             let mut graph = pool.begin().unwrap();
             let output = graph.buffer("grid", BufferDesc { size: 80 }).unwrap();
             let layout = [BindingLayout {
@@ -902,7 +920,7 @@ mod tests {
                     read_bindings: &[],
                     max_workgroups: [2, 3],
                 },
-                workgroups,
+                Some(workgroups),
             )
             .unwrap();
 
@@ -945,8 +963,8 @@ mod tests {
             read_bindings: &[],
             max_workgroups: [u32::MAX; 2],
         };
-        for workgroups in [[0, 1, 1], [1, 0, 1], [1, 1, 2]] {
-            assert!(BufferGrid::from_dispatch(domain, workgroups).is_err());
+        for workgroups in [[0, 1], [1, 0]] {
+            assert!(BufferGrid::from_dispatch(domain, Some(workgroups)).is_err());
         }
         let small_domain = DispatchWorkgroups::BufferGrid2d {
             group: 0,
@@ -954,7 +972,7 @@ mod tests {
             read_bindings: &[],
             max_workgroups: [4; 2],
         };
-        assert!(BufferGrid::from_dispatch(small_domain, [1, 5, 1]).is_err());
+        assert!(BufferGrid::from_dispatch(small_domain, Some([1, 5])).is_err());
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let output = graph.buffer("grid", BufferDesc { size: 32 }).unwrap();
@@ -974,13 +992,13 @@ mod tests {
                 size: 28,
             },
         }];
-        for workgroups in [[2, 2, 1], [u32::MAX, u32::MAX, 1]] {
+        for workgroups in [[2, 2], [u32::MAX, u32::MAX]] {
             let error = graph
                 .append_bindings(
                     &layout,
                     &[8],
                     &bindings,
-                    BufferGrid::from_dispatch(domain, workgroups).unwrap(),
+                    BufferGrid::from_dispatch(domain, Some(workgroups)).unwrap(),
                 )
                 .unwrap_err();
             assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
@@ -1016,12 +1034,7 @@ mod tests {
                 },
             ];
             graph
-                .dispatch(
-                    "dispatch",
-                    &ManagedProgram::uniform_readback(),
-                    &bindings,
-                    [1; 3],
-                )
+                .dispatch("dispatch", &ManagedProgram::uniform_readback(), &bindings)
                 .unwrap()
         };
         graph.readback_buffer("result", output, 32, 16).unwrap();

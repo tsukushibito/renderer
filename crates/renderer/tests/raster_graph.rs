@@ -267,23 +267,22 @@ fn standard_recipes(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expe
         "standard empty clear",
         pixels(|_, _| [255, 0, 0, 255]),
     ));
-    let post = graphs::forward_with_post(
+    let scene = graphs::forward(
         graph,
         "standard forward",
         [placed(quad, false, 0.5, [1.0, 0.0, 0.0, 1.0])],
         config,
-        |graph, scene| {
-            let a = graph.image("standard post a", config.color)?;
-            let b = graph.image("standard post b", config.color)?;
-            graph.copy_image("standard post first", scene.color, a)?;
-            graph.copy_image("standard post second", a, b)?;
-            Ok(b)
-        },
     )
     .unwrap();
+    let a = graph.image("standard post a", config.color).unwrap();
+    let post = graph.image("standard post b", config.color).unwrap();
+    graph
+        .copy_image("standard post first", scene.color, a)
+        .unwrap();
+    graph.copy_image("standard post second", a, post).unwrap();
     expected.push(observe(
         graph,
-        post.color,
+        post,
         "standard two-node post",
         pixels(|_, _| [255, 0, 0, 255]),
     ));
@@ -300,7 +299,9 @@ fn standard_recipes(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expe
     let target = graph
         .image("standard HDR output", graph.image_desc(hdr.color).unwrap())
         .unwrap();
-    passes::output(graph, "standard HDR copy", hdr.color, target).unwrap();
+    graph
+        .copy_image("standard HDR copy", hdr.color, target)
+        .unwrap();
     expected.push(observe(
         graph,
         target,

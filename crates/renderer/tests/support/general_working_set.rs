@@ -231,7 +231,6 @@ fn persistent_resize<B: Backend>(backend: &mut B) {
                         ),
                     },
                 ],
-                [1, 2, 1],
             )
             .unwrap();
         let pass = graph

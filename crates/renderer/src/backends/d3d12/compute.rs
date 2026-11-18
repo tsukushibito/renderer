@@ -439,7 +439,6 @@ mod tests {
                         },
                     },
                 ],
-                [1, 1, 1],
             )
             .unwrap();
         graph
@@ -570,7 +569,6 @@ mod texture_tests {
                             },
                         },
                     ],
-                    [1, 1, 1],
                 )
                 .unwrap();
             readbacks.push(

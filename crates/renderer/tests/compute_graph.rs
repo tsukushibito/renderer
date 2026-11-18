@@ -4,8 +4,11 @@
 mod fixture;
 
 use renderer::graph::{
-    Binding, BindingResource, BufferDesc, GraphCapacity, GraphErrorKind, GraphPool,
+    Binding, BindingResource, BufferDesc, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc,
+    RasterDraw,
 };
+use renderer::program::SamplerDescriptor;
+use renderer::standard::graphs::{self, ForwardConfig};
 
 #[test]
 fn consumer_owned_hdr_programs_form_a_changing_multistage_graph() {
@@ -45,6 +48,69 @@ fn consumer_owned_hdr_programs_form_a_changing_multistage_graph() {
         drop(plan);
         assert!(pool.is_idle());
     }
+}
+
+#[test]
+fn forward_color_can_feed_a_pass_with_a_different_format_and_extent() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let scene = graphs::forward(
+        &mut graph,
+        "standard scene",
+        std::iter::empty::<RasterDraw>(),
+        ForwardConfig {
+            color: ImageDesc::rgba8(15, 8),
+            clear_color: [0.25, 0.5, 1.0, 1.0],
+            depth: false,
+        },
+    )
+    .unwrap();
+    let output = graph.image("resized HDR", fixture::hdr()).unwrap();
+    let uniform = graph.buffer("multiplier", BufferDesc { size: 16 }).unwrap();
+    graph
+        .upload_buffer("multiplier data", uniform, 0, &[0; 16])
+        .unwrap();
+    graph
+        .dispatch(
+            "sample into smaller HDR target",
+            &fixture::sampled_program(),
+            &[
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::ImageView(
+                        graph.image_view(scene.color, 0, 0).unwrap(),
+                    ),
+                },
+                Binding {
+                    group: 0,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+                Binding {
+                    group: 0,
+                    binding: 2,
+                    resource: BindingResource::Buffer {
+                        buffer: uniform,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::ImageView(graph.image_view(output, 0, 0).unwrap()),
+                },
+            ],
+        )
+        .unwrap();
+    graph.export_image(output).unwrap();
+    let plan = graph.compile().unwrap();
+    assert!(plan.ordered_pass_names().eq([
+        "standard scene",
+        "multiplier data",
+        "sample into smaller HDR target",
+    ]));
 }
 
 fn storage_inputs(
@@ -97,12 +163,7 @@ fn storage_image_read_requires_initialized_contents() {
     let mut graph = pool.begin().unwrap();
     let inputs = storage_inputs(&mut graph, false, false, 16);
     let pass = graph
-        .dispatch(
-            "uninitialized image",
-            &fixture::storage_program(),
-            &inputs,
-            [1, 2, 1],
-        )
+        .dispatch("uninitialized image", &fixture::storage_program(), &inputs)
         .unwrap();
     let BindingResource::ImageView(output) = inputs[2].resource else {
         unreachable!()
@@ -122,12 +183,7 @@ fn overlapping_storage_images_and_short_buffer_abi_are_rejected() {
         let mut graph = pool.begin().unwrap();
         let inputs = storage_inputs(&mut graph, true, feedback, bytes);
         let error = graph
-            .dispatch(
-                "invalid binding",
-                &fixture::storage_program(),
-                &inputs,
-                [1, 2, 1],
-            )
+            .dispatch("invalid binding", &fixture::storage_program(), &inputs)
             .unwrap_err();
         assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
         drop(graph);
@@ -145,47 +201,29 @@ fn invalid_image_domain_rolls_back_the_complete_dispatch() {
         1,
     )
     .unwrap();
-    for failure in 0..3 {
+    for desc in [
+        renderer::graph::ImageDesc::rgba8(fixture::WIDTH, fixture::HEIGHT),
+        renderer::graph::ImageDesc {
+            height: fixture::HEIGHT + 1,
+            ..fixture::hdr()
+        },
+    ] {
         let mut graph = pool.begin().unwrap();
         let valid = storage_inputs(&mut graph, true, false, 16);
         let mut invalid = valid;
-        let groups = if failure == 0 { [1; 3] } else { [1, 2, 1] };
-        if failure != 0 {
-            let desc = if failure == 1 {
-                renderer::graph::ImageDesc::rgba8(fixture::WIDTH, fixture::HEIGHT)
-            } else {
-                renderer::graph::ImageDesc {
-                    height: fixture::HEIGHT + 1,
-                    ..fixture::hdr()
-                }
-            };
-            let incompatible = graph.image("incompatible image", desc).unwrap();
-            invalid[2].resource =
-                BindingResource::ImageView(graph.image_view(incompatible, 0, 0).unwrap());
-        }
+        let incompatible = graph.image("incompatible image", desc).unwrap();
+        invalid[2].resource =
+            BindingResource::ImageView(graph.image_view(incompatible, 0, 0).unwrap());
         let error = graph
             .dispatch(
                 "invalid image domain",
                 &fixture::storage_program(),
                 &invalid,
-                groups,
             )
             .unwrap_err();
-        assert_eq!(
-            error.kind(),
-            if failure == 0 {
-                GraphErrorKind::Unsupported
-            } else {
-                GraphErrorKind::InvalidInput
-            }
-        );
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
         graph
-            .dispatch(
-                "valid retry",
-                &fixture::storage_program(),
-                &valid,
-                [1, 2, 1],
-            )
+            .dispatch("valid retry", &fixture::storage_program(), &valid)
             .unwrap();
         let BindingResource::ImageView(output) = valid[2].resource else {
             unreachable!()
@@ -292,7 +330,6 @@ mod native {
                         },
                     },
                 ],
-                [1; 3],
             )
             .unwrap();
         graph
@@ -682,7 +719,6 @@ mod native {
                     buffer(0, uniform, 256, 16),
                     buffer(1, intermediate, 256, 16),
                 ],
-                [1; 3],
             )
             .unwrap();
         graph
@@ -690,7 +726,6 @@ mod native {
                 "consume produced storage range",
                 &BINDING_PROGRAMS[1],
                 &[buffer(0, intermediate, 256, 16), buffer(1, output, 256, 16)],
-                [1; 3],
             )
             .unwrap();
 
@@ -761,7 +796,6 @@ mod native {
                             resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
                         },
                     ],
-                    [1; 3],
                 )
                 .unwrap();
         }

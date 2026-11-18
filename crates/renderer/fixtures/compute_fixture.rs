@@ -275,7 +275,6 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
                 binding(0, 0, buffer(uniform, offset_offset, 16)),
                 binding(1, 0, buffer(offsets, 0, 32)),
             ],
-            [1; 3],
         )
         .unwrap();
 
@@ -293,7 +292,6 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
                 binding(0, 2, buffer(uniform, factor_offset, 16)),
                 binding(1, 0, image(&graph, first)),
             ],
-            [1, 2, 1],
         )
         .unwrap();
     let mut pixels: [[f32; 4]; PIXELS] = std::array::from_fn(|pixel| {
@@ -321,7 +319,6 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
                     binding(0, 1, buffer(offsets, 0, 32)),
                     binding(1, 0, image(&graph, destination)),
                 ],
-                [1, 2, 1],
             )
             .unwrap();
         current = destination;
@@ -348,7 +345,6 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
                 ),
                 binding(1, 0, buffer(sampled, 0, 64)),
             ],
-            [1; 3],
         )
         .unwrap();
     let sampled_readback = graph
@@ -376,7 +372,6 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
                 binding(0, 0, buffer(offsets, 0, 32)),
                 binding(1, 0, buffer(storage, 16, 32)),
             ],
-            [1; 3],
         )
         .unwrap();
     graph

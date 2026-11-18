@@ -3,9 +3,7 @@
 use crate::ImageFormat;
 use std::borrow::Borrow;
 
-use crate::graph::{
-    Attachment, Graph, GraphError, ImageHandle, PassHandle, RasterAttachments, RasterDraw,
-};
+use crate::graph::{Attachment, Graph, GraphError, PassHandle, RasterAttachments, RasterDraw};
 use crate::program::ManagedRasterProgram;
 
 /// Normal-Z depth behavior for standard opaque drawing.
@@ -85,17 +83,4 @@ where
         },
         |raster| raster.draw(&ManagedRasterProgram::depth_only(), draws),
     )
-}
-
-/// Copy complete linear color into an independent output of the same format and
-/// extent. Supports RGBA8 and RGBA16F, without blending, exposure, tone mapping or
-/// transfer-function conversion. This declares an ordinary [`Graph::copy_image`]
-/// operation; the caller owns output allocation and any export or readback.
-pub fn output(
-    graph: &mut Graph,
-    name: &str,
-    source: ImageHandle,
-    destination: ImageHandle,
-) -> Result<PassHandle, GraphError> {
-    graph.copy_image(name, source, destination)
 }

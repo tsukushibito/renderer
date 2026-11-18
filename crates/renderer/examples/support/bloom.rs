@@ -139,7 +139,6 @@ impl Bloom {
                 image_binding(graph, 0, 1, blurred)?,
                 image_binding(graph, 1, 0, result)?,
             ],
-            workgroups(output),
         )?;
         Ok(result)
     }
@@ -160,7 +159,6 @@ fn filter(
             image_binding(graph, 0, 0, input)?,
             image_binding(graph, 1, 0, output)?,
         ],
-        workgroups(desc),
     )?;
     Ok(output)
 }
@@ -176,12 +174,4 @@ fn image_binding(
         binding,
         resource: BindingResource::ImageView(graph.image_view(image, 0, 0)?),
     })
-}
-
-fn workgroups(desc: ImageDesc) -> [u32; 3] {
-    [
-        desc.width.div_ceil(GROUP_SIZE),
-        desc.height.div_ceil(GROUP_SIZE),
-        1,
-    ]
 }

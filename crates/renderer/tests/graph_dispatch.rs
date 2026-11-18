@@ -76,7 +76,6 @@ fn sampled_mip_chain_requires_every_level_and_full_upload_initializes_it() {
                         },
                     },
                 ],
-                [1; 3],
             )
             .unwrap();
         graph.readback_buffer("result", output, 0, 16).unwrap();
@@ -240,12 +239,7 @@ fn short_lived_bindings_build_a_two_dispatch_producer_chain() {
         set_buffer(&mut input[1], None, None, Some(32));
         input.swap(0, 1);
         graph
-            .dispatch(
-                "producer",
-                &ManagedProgram::uniform_readback(),
-                &input,
-                [1; 3],
-            )
+            .dispatch("producer", &ManagedProgram::uniform_readback(), &input)
             .unwrap();
         // Neither the caller's slot ordering nor its subsequent edits belong
         // to the frozen plan.
@@ -256,12 +250,7 @@ fn short_lived_bindings_build_a_two_dispatch_producer_chain() {
         set_buffer(&mut reader[1], None, Some(16), None);
         set_buffer(&mut reader[1], None, None, Some(32));
         graph
-            .dispatch(
-                "reader",
-                &ManagedProgram::storage_readback(),
-                &reader,
-                [1; 3],
-            )
+            .dispatch("reader", &ManagedProgram::storage_readback(), &reader)
             .unwrap();
     }
     graph.readback_buffer("result", output, 16, 16).unwrap();
@@ -286,12 +275,7 @@ fn descriptor_tail_is_neither_read_nor_initialized_by_the_shader() {
         set_buffer(&mut input[0], None, None, Some(32));
         set_buffer(&mut input[1], None, None, Some(32));
         graph
-            .dispatch(
-                "write prefix",
-                &ManagedProgram::uniform_readback(),
-                &input,
-                [1; 3],
-            )
+            .dispatch("write prefix", &ManagedProgram::uniform_readback(), &input)
             .unwrap();
         let offset = if read_tail { 16 } else { 0 };
         let readback = graph.readback_buffer("result", output, offset, 16).unwrap();
@@ -314,12 +298,7 @@ fn descriptor_tail_is_neither_read_nor_initialized_by_the_shader() {
     let mut producer = bindings(source, intermediate);
     set_buffer(&mut producer[1], None, None, Some(32));
     graph
-        .dispatch(
-            "producer",
-            &ManagedProgram::uniform_readback(),
-            &producer,
-            [1; 3],
-        )
+        .dispatch("producer", &ManagedProgram::uniform_readback(), &producer)
         .unwrap();
     let mut reader = bindings(intermediate, output);
     set_buffer(&mut reader[0], None, Some(16), None);
@@ -328,7 +307,6 @@ fn descriptor_tail_is_neither_read_nor_initialized_by_the_shader() {
             "read unwritten tail",
             &ManagedProgram::storage_readback(),
             &reader,
-            [1; 3],
         )
         .unwrap();
     graph.readback_buffer("result", output, 0, 16).unwrap();
@@ -350,12 +328,7 @@ fn overlapping_descriptors_with_disjoint_shader_footprints_are_supported() {
     set_buffer(&mut input[1], None, Some(16), None);
     set_buffer(&mut input[1], None, None, Some(32));
     graph
-        .dispatch(
-            "copy prefix",
-            &ManagedProgram::storage_readback(),
-            &input,
-            [1; 3],
-        )
+        .dispatch("copy prefix", &ManagedProgram::storage_readback(), &input)
         .unwrap();
     graph.readback_buffer("result", storage, 16, 16).unwrap();
     assert_eq!(graph.compile().unwrap().pass_count(), 3);
@@ -376,7 +349,6 @@ fn a_reader_keeps_only_the_latest_declared_producer() {
                 name,
                 &ManagedProgram::uniform_readback(),
                 &bindings(source, intermediate),
-                [1; 3],
             )
             .unwrap();
     }
@@ -385,7 +357,6 @@ fn a_reader_keeps_only_the_latest_declared_producer() {
             "reader",
             &ManagedProgram::storage_readback(),
             &bindings(intermediate, output),
-            [1; 3],
         )
         .unwrap();
     graph.readback_buffer("result", output, 0, 16).unwrap();
@@ -413,7 +384,6 @@ fn explicit_reordering_cannot_reverse_live_dispatch_hazards() {
                     "first write",
                     &ManagedProgram::uniform_readback(),
                     &bindings(source, shared),
-                    [1; 3],
                 )
                 .unwrap();
             let reader = if hazard != "WAW" {
@@ -423,7 +393,6 @@ fn explicit_reordering_cannot_reverse_live_dispatch_hazards() {
                             "read",
                             &ManagedProgram::storage_readback(),
                             &bindings(shared, output),
-                            [1; 3],
                         )
                         .unwrap(),
                 )
@@ -439,7 +408,6 @@ fn explicit_reordering_cannot_reverse_live_dispatch_hazards() {
                         "last write",
                         &ManagedProgram::uniform_readback(),
                         &bindings(source, shared),
-                        [1; 3],
                     )
                     .unwrap();
                 let result = graph.readback_buffer("result", shared, 0, 16).unwrap();
@@ -508,7 +476,6 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
             "missing count",
             &ManagedProgram::uniform_readback(),
             &valid[..1],
-            [1; 3],
         )
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
@@ -595,25 +562,37 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
         ),
     ] {
         let error = graph
-            .dispatch(name, &ManagedProgram::uniform_readback(), &input, [1; 3])
+            .dispatch(name, &ManagedProgram::uniform_readback(), &input)
             .unwrap_err();
         assert_eq!(error.kind(), expected_kind, "{name}");
         assert_eq!(error.binding(), Some(slot), "{name}");
         assert_eq!(error.pass_name(), Some(name));
     }
-    for groups in [[0, 1, 1], [2, 1, 1]] {
-        assert_eq!(
+    for (name, error) in [
+        (
+            "unexpected buffer grid",
             graph
-                .dispatch(
-                    "unreviewed groups",
+                .dispatch_buffer_grid(
+                    "unexpected buffer grid",
                     &ManagedProgram::uniform_readback(),
                     &valid,
-                    groups
+                    [1, 1],
                 )
-                .unwrap_err()
-                .kind(),
-            GraphErrorKind::Unsupported
-        );
+                .unwrap_err(),
+        ),
+        (
+            "missing buffer grid",
+            graph
+                .dispatch(
+                    "missing buffer grid",
+                    &ManagedProgram::indexed_indirect_encoder(),
+                    &[],
+                )
+                .unwrap_err(),
+        ),
+    ] {
+        assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+        assert_eq!(error.pass_name(), Some(name));
     }
     for program in [
         ManagedProgram::sampled_readback(),
@@ -621,7 +600,7 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
     ] {
         assert_eq!(
             graph
-                .dispatch("sampled asset missing bindings", &program, &[], [1; 3])
+                .dispatch("sampled asset missing bindings", &program, &[])
                 .unwrap_err()
                 .kind(),
             GraphErrorKind::InvalidInput
@@ -631,7 +610,7 @@ fn invalid_bindings_are_rejected_transactionally_with_slot_context() {
     // operands and accesses, leaving exactly enough room for this dispatch.
     graph.upload_buffer("seed", source, 0, &[0; 16]).unwrap();
     graph
-        .dispatch("valid", &ManagedProgram::uniform_readback(), &valid, [1; 3])
+        .dispatch("valid", &ManagedProgram::uniform_readback(), &valid)
         .unwrap();
     graph.readback_buffer("result", output, 0, 16).unwrap();
     assert_eq!(
@@ -662,24 +641,14 @@ fn late_capacity_failure_rolls_back_operands_before_retry() {
     graph.upload_buffer("seed", source, 0, &[0; 16]).unwrap();
     let input = bindings(source, output);
     let error = graph
-        .dispatch(
-            &"x".repeat(64),
-            &ManagedProgram::uniform_readback(),
-            &input,
-            [1; 3],
-        )
+        .dispatch(&"x".repeat(64), &ManagedProgram::uniform_readback(), &input)
         .unwrap_err();
     assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::NameBytes);
     graph
-        .dispatch("retry", &ManagedProgram::uniform_readback(), &input, [1; 3])
+        .dispatch("retry", &ManagedProgram::uniform_readback(), &input)
         .unwrap();
     let error = graph
-        .dispatch(
-            "no room",
-            &ManagedProgram::uniform_readback(),
-            &input,
-            [1; 3],
-        )
+        .dispatch("no room", &ManagedProgram::uniform_readback(), &input)
         .unwrap_err();
     let capacity = error.capacity().unwrap();
     assert_eq!(capacity.kind, GraphCapacityKind::Bindings);
@@ -714,7 +683,6 @@ fn held_plan_pins_owned_operands_and_reuse_rejects_old_handles() {
             "dispatch",
             &ManagedProgram::uniform_readback(),
             &bindings(source, output),
-            [1; 3],
         )
         .unwrap();
     graph.readback_buffer("result", output, 0, 16).unwrap();
@@ -736,7 +704,6 @@ fn held_plan_pins_owned_operands_and_reuse_rejects_old_handles() {
             "stale",
             &ManagedProgram::uniform_readback(),
             &bindings(source, output),
-            [1; 3],
         )
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
@@ -749,7 +716,6 @@ fn held_plan_pins_owned_operands_and_reuse_rejects_old_handles() {
             "new dispatch",
             &ManagedProgram::uniform_readback(),
             &bindings(replacement, output),
-            [1; 3],
         )
         .unwrap();
     graph.readback_buffer("new result", output, 0, 16).unwrap();

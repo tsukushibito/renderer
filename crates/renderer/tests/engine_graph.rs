@@ -159,7 +159,6 @@ fn without_snapshot(engine: &mut VulkanEngine) {
                     },
                 },
             ],
-            [1, 1, 1],
         )
         .unwrap();
     graph

@@ -1,7 +1,6 @@
 use renderer::graph::{
-    Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphError, GraphErrorKind,
-    GraphPool, ImageDesc, ImageHandle, LoadOp, RasterAttachments, RasterDraw, RasterParameters,
-    StoreOp,
+    Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool,
+    ImageDesc, ImageHandle, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::ManagedRasterProgram;
 use renderer::standard::{
@@ -91,37 +90,25 @@ fn forward_can_be_used_directly_without_implicit_consumers_or_a_depth_target() {
 }
 
 #[test]
-fn multi_node_post_borrows_frame_data_and_preserves_hdr_and_optional_depth() {
+fn forward_color_and_depth_can_feed_explicit_composition() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     for desc in [ImageDesc::rgba8(4, 3), ImageDesc::rgba16_float(6, 2)] {
         let mut graph = pool.begin().unwrap();
         let draw = mesh(&mut graph);
-        let mut calls = 0;
-        let mut source = None;
-        let mut post_output = None;
         let settings = config(desc, true);
-        let result =
-            graphs::forward_with_post(&mut graph, "opaque", [draw], settings, |graph, scene| {
-                calls += 1;
-                assert_eq!(graph.image_desc(scene.color)?, desc);
-                assert_eq!(
-                    graph.image_desc(scene.depth.unwrap())?,
-                    ImageDesc::depth32(desc.width, desc.height)
-                );
-                source = Some(scene.color);
-                let middle = graph.image("post middle", desc)?;
-                let output = graph.image("post output", desc)?;
-                graph.copy_image("post first", scene.color, middle)?;
-                graph.copy_image("post second", middle, output)?;
-                post_output = Some(output);
-                Ok(output)
-            })
-            .unwrap();
-        assert_eq!(calls, 1);
-        assert_eq!(result.color, post_output.unwrap());
-        assert_ne!(result.color, source.unwrap());
-        assert!(result.depth.is_some());
-        graph.export_image(result.color).unwrap();
+        let scene = graphs::forward(&mut graph, "opaque", [draw], settings).unwrap();
+        let depth = scene.depth.unwrap();
+        assert_eq!(graph.image_desc(scene.color).unwrap(), desc);
+        assert_eq!(
+            graph.image_desc(depth).unwrap(),
+            ImageDesc::depth32(desc.width, desc.height)
+        );
+        let middle = graph.image("post middle", desc).unwrap();
+        let output = graph.image("post output", desc).unwrap();
+        graph.copy_image("post first", scene.color, middle).unwrap();
+        graph.copy_image("post second", middle, output).unwrap();
+        graph.export_image(output).unwrap();
+        graph.export_image(depth).unwrap();
         assert_eq!(
             graph
                 .compile()
@@ -181,7 +168,7 @@ fn standard_parts_compose_with_a_user_pass_without_the_standard_graph() {
     let output = graph
         .image("output", ImageDesc::rgba16_float(4, 3))
         .unwrap();
-    passes::output(&mut graph, "linear output", color, output).unwrap();
+    graph.copy_image("linear output", color, output).unwrap();
     graph.export_image(output).unwrap();
     assert_eq!(
         graph
@@ -277,90 +264,38 @@ fn load_and_discard_keep_the_ordinary_graph_initialization_contract() {
     for discard in [false, true] {
         let mut graph = pool.begin().unwrap();
         let settings = config(ImageDesc::rgba8(4, 3), false);
-        let result = graphs::forward_with_post(
+        let scene = graphs::forward(
             &mut graph,
             "scene",
             std::iter::empty::<RasterDraw>(),
             settings,
-            |graph, scene| {
-                if discard {
-                    let mut color = target(graph, scene.color, LoadOp::Load);
-                    color.store = StoreOp::Discard;
-                    graph.attachment_pass(
-                        "discard post output",
-                        RasterAttachments {
-                            color_resolves: &[],
-                            colors: &[color],
-                            depth: None,
-                        },
-                    )?;
-                    Ok(scene.color)
-                } else {
-                    graph.image("unwritten post output", settings.color)
-                }
-            },
         )
         .unwrap();
-        graph.export_image(result.color).unwrap();
+        let output = if discard {
+            let mut color = target(&graph, scene.color, LoadOp::Load);
+            color.store = StoreOp::Discard;
+            graph
+                .attachment_pass(
+                    "discard post output",
+                    RasterAttachments {
+                        color_resolves: &[],
+                        colors: &[color],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+            scene.color
+        } else {
+            graph
+                .image("unwritten post output", settings.color)
+                .unwrap()
+        };
+        graph.export_image(output).unwrap();
         assert_eq!(
             graph.compile().unwrap_err().kind(),
             GraphErrorKind::UninitializedRead
         );
     }
-}
-
-#[test]
-fn post_output_contract_rejects_wrong_description_and_foreign_handles() {
-    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let settings = config(ImageDesc::rgba16_float(4, 3), false);
-    for wrong in [ImageDesc::rgba16_float(3, 4), ImageDesc::rgba8(4, 3)] {
-        let mut graph = pool.begin().unwrap();
-        let error = graphs::forward_with_post(
-            &mut graph,
-            "scene",
-            std::iter::empty::<RasterDraw>(),
-            settings,
-            |graph, _| graph.image("wrong output", wrong),
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), GraphErrorKind::Custom);
-        assert!(error.to_string().contains("post output"));
-    }
-    let mut foreign_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let mut foreign_graph = foreign_pool.begin().unwrap();
-    let foreign = foreign_graph.image("foreign", settings.color).unwrap();
-    let mut graph = pool.begin().unwrap();
-    let error = graphs::forward_with_post(
-        &mut graph,
-        "scene",
-        std::iter::empty::<RasterDraw>(),
-        settings,
-        |_, _| Ok(foreign),
-    )
-    .unwrap_err();
-    assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
-}
-
-#[test]
-fn post_cannot_replace_the_graph_and_return_a_matching_foreign_target() {
-    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let mut other_pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
-    let mut graph = pool.begin().unwrap();
-    let mut other = other_pool.begin().unwrap();
-    let settings = config(ImageDesc::rgba8(4, 3), true);
-    let replacement = other.image("replacement output", settings.color).unwrap();
-    let error = graphs::forward_with_post(
-        &mut graph,
-        "scene",
-        std::iter::empty::<RasterDraw>(),
-        settings,
-        |graph, _| {
-            drop(std::mem::replace(graph, other));
-            Ok(replacement)
-        },
-    )
-    .unwrap_err();
-    assert_eq!(error.kind(), GraphErrorKind::WrongOwner);
 }
 
 #[test]
@@ -375,19 +310,18 @@ fn unused_standard_graph_and_post_branches_are_culled_normally() {
         settings,
     )
     .unwrap();
-    let output = graphs::forward_with_post(
+    let scene = graphs::forward(
         &mut graph,
         "selected recipe",
         std::iter::empty::<RasterDraw>(),
         settings,
-        |graph, scene| {
-            let unused = graph.image("unused branch", settings.color)?;
-            graph.copy_image("unused effect", scene.color, unused)?;
-            Ok(scene.color)
-        },
     )
     .unwrap();
-    graph.export_image(output.color).unwrap();
+    let unused = graph.image("unused branch", settings.color).unwrap();
+    graph
+        .copy_image("unused effect", scene.color, unused)
+        .unwrap();
+    graph.export_image(scene.color).unwrap();
     assert_eq!(
         graph
             .compile()
@@ -455,7 +389,7 @@ fn standard_parts_keep_capacity_errors_and_return_failed_draw_capacity() {
 }
 
 #[test]
-fn recipe_configuration_and_callback_errors_remain_explicit() {
+fn invalid_forward_configuration_is_rejected_before_declaring_passes() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     for desc in [
         ImageDesc::depth32(4, 3),
@@ -482,14 +416,4 @@ fn recipe_configuration_and_callback_errors_remain_explicit() {
         );
         assert_eq!(graph.compile().unwrap().pass_count(), 0);
     }
-    let mut graph = pool.begin().unwrap();
-    let error = graphs::forward_with_post(
-        &mut graph,
-        "failed post",
-        std::iter::empty::<RasterDraw>(),
-        config(ImageDesc::rgba8(4, 3), false),
-        |_, _| Err(GraphError::custom("post construction failed")),
-    )
-    .unwrap_err();
-    assert_eq!(error.to_string(), "post construction failed");
 }

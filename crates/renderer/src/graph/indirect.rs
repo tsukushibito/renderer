@@ -159,7 +159,7 @@ impl Graph {
                 Arc::clone(&table.templates),
                 0..table.templates.len(),
             )?;
-            self.dispatch(
+            self.dispatch_buffer_grid(
                 name,
                 &ManagedProgram::indexed_indirect_encoder(),
                 &[
@@ -167,7 +167,7 @@ impl Graph {
                     indirect_binding(1, visibility, visibility_offset, visibility_size),
                     indirect_binding(2, buffer, 0, command_desc.size),
                 ],
-                [table.groups, 1, 1],
+                [table.groups, 1],
             )?;
             Ok(IndexedIndirectArgs {
                 buffer,

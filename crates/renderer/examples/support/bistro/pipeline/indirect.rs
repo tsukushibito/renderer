@@ -260,7 +260,7 @@ impl Resident {
                     size: self.layout.mask_bytes(),
                 },
             )?;
-            graph.dispatch(
+            graph.dispatch_buffer_grid(
                 "cull packed opaque draws",
                 &visibility_program(),
                 &[
@@ -268,7 +268,7 @@ impl Resident {
                     binding(1, aabbs, self.layout.aabb_bytes() as u64),
                     binding(2, mask, self.layout.mask_bytes()),
                 ],
-                [self.layout.padded_count / VISIBILITY_THREADS, 1, 1],
+                [self.layout.padded_count / VISIBILITY_THREADS, 1],
             )?;
             // The Workspace reserves one slot per material, which bounds groups.
             for group in &self.layout.groups {

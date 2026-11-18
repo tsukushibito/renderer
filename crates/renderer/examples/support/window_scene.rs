@@ -7,7 +7,7 @@ use renderer::{
         StoreOp,
     },
     program::ManagedRasterProgram,
-    standard::{graphs, passes},
+    standard::graphs,
 };
 
 pub const VERTEX_BYTES: u64 = 224;
@@ -164,9 +164,7 @@ pub fn build(
                 },
                 |raster| raster.draw(&ManagedRasterProgram::mesh(), draws),
             )?;
-            let output = graph.image("application output", color_desc)?;
-            passes::output(graph, "application output copy", color, output)?;
-            output
+            color
         }
     };
     graph.export_image(color)?;
