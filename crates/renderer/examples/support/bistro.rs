@@ -85,7 +85,7 @@ impl Options {
             resource_checks: false,
             aa: true,
             shadows: true,
-            reuse_shadows: false,
+            reuse_shadows: true,
             capture_shadows: false,
             #[cfg(feature = "tracy")]
             capture_handshake: false,
@@ -103,7 +103,7 @@ impl Options {
                 "--resource-checks" => result.resource_checks = true,
                 "--aa-off" => result.aa = false,
                 "--shadows-off" => result.shadows = false,
-                "--reuse-shadows" => result.reuse_shadows = true,
+                "--redraw-shadows" => result.reuse_shadows = false,
                 "--capture-shadow-maps" => result.capture_shadows = true,
                 #[cfg(feature = "tracy")]
                 "--capture-handshake" => result.capture_handshake = true,
@@ -137,7 +137,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--reuse-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -213,6 +213,12 @@ mod tests {
         assert!(options(&[]).is_err());
         assert!(options(&["--fixture", "--manifest", "x"]).is_err());
         assert!(options(&["--fixture", "--inflight", "0"]).is_err());
+        assert!(options(&["--fixture"]).unwrap().reuse_shadows);
+        assert!(
+            !options(&["--fixture", "--redraw-shadows"])
+                .unwrap()
+                .reuse_shadows
+        );
         assert!(options(&["--fixture", "--width", "0"]).is_err());
         assert!(options(&["--fixture", "--frames", "0"]).is_err());
         let fixture = options(&["--fixture", "--gpu-timing"]).unwrap();

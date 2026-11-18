@@ -141,7 +141,7 @@ RGBA16F、EV+1、PBR Neutral、FXAAを接続した。効果名によるbackend�
 [再現手順](../guides/development.md#bistro-b3)、[設計と採用理由](../design/implementation-policy.md#bistro-b3)、
 [共有データ](bistro-lighting.json)、[同じ視点の比較画像](bistro-lighting-preview.png)を参照する。
 
-現行の通常release、strict＋メモリ観測、Disabled＋メモリ観測、Godot projectは同じclean code commit
+Godot比較に使った通常release、strict＋メモリ観測、Disabled＋メモリ観測、Godot projectは同じclean code commit
 `6dfa9dfaa980f4f9d4b10799bd334160c2c2fffd`から準備した。EXE/PDB・有効feature・入力hashを保存した。
 その後の統合差分は文書と検証データだけで、実行時のsource入力は一致する。
 **Graph最適化後の全量12 processの画像・メモリ受入と、CPU範囲を校正した24 processの正式比較が完了した**。
@@ -407,11 +407,49 @@ depthと4枚の影を含む56 planeを同APIの変更前と照合し、すべて
 主カメラの視錐台外にあるPBR描画も除外した`14430eb`では、route先頭の描画が1,591→1,189件となった。
 CSM変更後との比較でGPU p95はVulkan 6.999→6.938 ms、D3D12 6.629→6.477 msだった。
 両APIの各56 planeはbyte一致し、Vulkanの単回frame間隔p99は8.567→9.500 msと変動した。
-GPU p95や描画数と、通常版でのフレーム間隔の判定は別に確認する。
+GPU p95や描画数に加えて、通常版でのフレーム間隔で120 FPS相当を判定する。
 
 回収前にGraphを構築・compileする実験`8b352d2`は、計測器off、600 warmup／600 frameの同一実行物で比較した。
 p99はVulkan 10.321→9.138 ms、D3D12 8.650→8.947 msだった。D3D12が悪化し、CPU時間の改善も小さいため、
 回収順の変更は統合候補から外した。
+
+主カメラ・CSMのカリングとD3D12の状態遷移変更を合わせた`4ca8435`の初回通常版A/Bでは、
+フレーム間隔p99がVulkan 9.317→8.693 ms、D3D12 9.641→7.666 msだった。
+同APIの24 plane（route先頭＋7固定視点のHDR・SDR・depth）は両APIでbyte一致した。
+
+Vulkanの最古submissionに対する明示Fence待機`c55b0f5`を、同一実行物の1,200 warmup／1,200 frameで
+poll＋yieldと比較した。プロセスCPU平均は6.432→4.297 ms/frame、iteration p99は9.337→12.310 ms。
+Fence待機と同期的な退役を含む呼出しの平均は2.699 msだった。p99が悪化したため採用しない。
+
+直射光の係数が厳密にゼロの画素でだけPBRの影samplingを省く`3e74fd1`では、
+同じ影・AA設定の600 warmup／600 frameでGPU p95がVulkan 6.922→6.432 ms、D3D12 6.511→5.924 msだった。
+有効な直射光のPCFと出力演算を保ち、固定toolでSPIR-VとDXILを再生成した。両APIの各56 planeはbyte一致した。
+
+### 影サンプリング変更までの通常版A/B
+
+`3d8369d`と`3e74fd1`を、通常releaseの二API×変更前後×独立3 process、計12 processで交互に実行した。
+各runのフレーム間隔p99と、定常区間のプロセスCPU時間・throughputの3 run中央値は以下のとおり。
+
+| API | 前 p99（ms） | 後 p99（ms） | CPU平均（ms/frame） | throughput（frame/s） |
+|---|---|---|---:|---:|
+| Vulkan | 10.151 / 9.271 / 9.400 | 8.335 / 9.179 / 9.411 | 7.248 → 6.250 | 137.05 → 158.98 |
+| D3D12 | 9.536 / 10.206 / 10.177 | 7.996 / 7.660 / 7.556 | 6.901 → 5.773 | 143.21 → 171.17 |
+
+D3D12は全3 runでp99予算を満たし、Vulkanは最速runも丸め前の8.335234 msで8.33 msを超えた。
+変更後6 runのroute先頭＋7固定視点のHDR・SDR・depth計144 planeは、同APIの変更前とbyte一致した。
+
+### 再描画が不要な影マップの再利用
+
+固定B3の各cascadeで、GPUへ渡す行列16要素のbit列とcaster条件が一致する場合にD32を再利用する。
+同一実行物`d8821ff`の1,200 warmup／1,800 frame、通常releaseの比較で、iteration p99は
+Vulkan 8.354→6.761 ms、D3D12 7.081→6.192 msだった。
+両APIでcascade別hitは238／803／1,207／1,575回、合計3,823／7,200回（53.1%）。
+CPU平均はVulkan 6.189→4.497 ms/frame、D3D12 5.747→4.071 ms/frameだった。
+同じ条件の固定カメラの厳格検証では全cascadeがhitし、両APIのHDR・SDR・depth・4枚の影が
+毎frame描画する経路とbyte一致した。再利用を通常経路に選び、`--redraw-shadows`で比較用の毎frame描画を選べる。
+
+同じ全量routeの単回候補では、Graph構築先行がVulkan p99 8.416→8.205 ms、
+非ブロッキング回収の試作が7.923 msだった。通常経路には影マップの再利用を採用した。
 
 <a id="bistro-residency"></a>
 

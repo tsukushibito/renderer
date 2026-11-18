@@ -589,6 +589,8 @@ python -B tools/bistro/b3_benchmark.py run --build-manifest .tools/bistro-pbr/b3
 
 `plan`は実行予定を表示し、`run`だけが新規outputへ実行する。
 Renderer二APIとGodotのall/frustum、timer off/onを各3独立process、計24 processで順序を回して直列実行する。
+Bistroで影map再利用の費用を個別に測るには、通常実行と`--redraw-shadows`を加えた実行を同じ条件で比較する。
+両方で影とAAを有効にし、通常実行のreportに含むcascade別hit／missとフレーム間隔を記録する。
 `all`は主cameraのfrustum cullingを無効にする条件であり、Godotの影のcascade／caster判定は残る。
 Godotのdraw／primitive値はエンジン内のbatch等の統計で、RendererのGraph draw数やnative API呼出数と同じ指標ではない。
 影の絞り込み・depth prepass・batchingを含む描画構成の差を保持した、レンダラー全体の参考比較とする。
