@@ -2350,6 +2350,12 @@ workerではGPUを実行せず、rootが統合結果を逐次実行した。正�
 この値はVMAのallocation統計であり、VMA blockやプロセスのVRAM使用量は別の指標である。
 WSIでは実際に旧Swapchainを退役させた後にエラーを注入した。ドライバーOOM自体の再現は未実施。
 
+`renderer-jgs` の画像受入は、全Bistroの1080p、Forward 1×、直接描画、Bloom tentで実行した。
+両APIの厳格・製品構成を3回ずつ実行し、同一APIの反復一致、二APIの126画像面と15 ROIの比較、通常フレームのメモリ条件を通過した。
+先行pilotで材質欠落、shadow receiverのずれ、二重sRGB変換、alpha強制不透明化の検出も確認した。
+画像要約のSHA-256は`28cd3786debc9af368c1dfc8d984338730fa2b648c8d30bd2abcf569ca2f54f6`。
+生のレポートと比較画像はローカルの`E:/renderer-review-20261118-3fee629`に保存した。
+
 `renderer-420`、比較元`f649bcf`。第一者のRenderer Rust 64ファイル、example 11、
 integration test 4、Bistro Python 28、validator 2、PowerShell 6と、benchmark、
 独立試作、生成・依存設定、CI、文書構成を分担レビューし、主要な修正を別担当が再レビューした。
