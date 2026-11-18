@@ -1,10 +1,10 @@
 //! Consumer-defined graphics assets use the standard Graph and lifetime paths.
 
 #[allow(dead_code)]
-#[path = "../examples/support/compute_fixture.rs"]
+#[path = "../fixtures/compute_fixture.rs"]
 mod compute_fixture;
 #[allow(dead_code)]
-#[path = "support/custom_raster_fixture.rs"]
+#[path = "../fixtures/custom_raster_fixture.rs"]
 mod fixture;
 
 use renderer::graph::{

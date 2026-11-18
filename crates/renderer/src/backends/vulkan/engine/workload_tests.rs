@@ -12,7 +12,7 @@ use crate::{
     graph::{BufferDesc, ImageDesc, ResourceKey},
 };
 
-#[path = "../../../../examples/support/engine_geometry.rs"]
+#[path = "../../../../fixtures/engine_geometry.rs"]
 mod engine_geometry;
 
 const TIMEOUT: Duration = Duration::from_secs(30);

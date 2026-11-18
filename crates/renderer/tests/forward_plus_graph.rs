@@ -1,10 +1,9 @@
 //! Consumer-owned light lists with an independent orthographic reference.
 
-#[allow(dead_code)] // The fixture uses the Bistro culler without the PBR renderer.
-#[path = "../examples/support/bistro/program.rs"]
-mod program;
+#[path = "../examples/support/bistro/program/forward_plus/culling.rs"]
+mod culling;
 
-use program::forward_plus::{
+use culling::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, PointLight, TILE_BYTES, TILES_PER_GROUP, active_tile_count,
     append_culling, light_bytes, workgroups,
 };
@@ -96,7 +95,7 @@ fn variable_view_extents_use_the_same_culling_program_and_reserve_complete_group
 #[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
 mod native {
     use super::*;
-    use program::forward_plus::{TILE_SIZE, compute_program};
+    use culling::{TILE_SIZE, compute_program};
     use renderer::{
         D3D12BufferClass, D3D12FrameCapacity, D3D12Runtime, D3D12RuntimeConfig,
         D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode,

@@ -322,13 +322,6 @@ impl Options {
                     }
                     result.force_opaque = true;
                 }
-                "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|forward-plus|forward-reference|deferred] [--msaa 1|4] [--instances off|individual|instanced] [--submission direct|packed|indirect] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
-                    #[cfg(feature = "tracy")]
-                    return Err(format!("{usage} [--capture-handshake]").into());
-                    #[cfg(not(feature = "tracy"))]
-                    return Err(usage.into());
-                }
                 _ => return Err(format!("unknown option: {argument}").into()),
             }
         }
@@ -410,8 +403,48 @@ fn digest(bytes: &[u8]) -> String {
 }
 const WAIT: Duration = Duration::from_secs(60);
 
+fn print_help() {
+    println!(
+        "bistro (--fixture | --manifest FILE --ibl-manifest FILE) [OPTIONS]
+
+Scenes and output
+  --api vulkan|d3d12             Default: vulkan
+  --output DIR                   Default: .tools/bistro-runtime
+  --view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
+  --width N --height N
+  --windowed | --window-smoke    Requires Windows and the presentation feature
+  --vsync on|off                 Default: on
+
+Rendering
+  --pipeline forward|forward-plus|forward-reference|deferred
+  --msaa 1|4
+  --bloom off|tent|box
+  --instances off|individual|instanced
+  --submission direct|packed|indirect
+  --aa-off --shadows-off --redraw-shadows
+
+Measurement and captures
+  --frames N --warmup N --inflight 1..4
+  --gpu-timing
+  --steady-state-cpu             Requires warmup >= inflight
+  --resource-checks              Requires memory-profiling and inflight >= 2
+  --capture-all-views --capture-route-samples
+  --capture-bloom-bypass --capture-shadow-maps
+  --alpha-only --alpha-override opaque"
+    );
+    #[cfg(feature = "development-validation")]
+    println!("  --omit-material INDEX --offset-shadow-receiver");
+    #[cfg(feature = "tracy")]
+    println!("  --capture-handshake");
+}
+
 pub fn main() -> Result<(), Error> {
-    let options = Options::parse(std::env::args().skip(1))?;
+    let mut arguments = std::env::args().skip(1).peekable();
+    if matches!(arguments.peek().map(String::as_str), Some("--help" | "-h")) {
+        print_help();
+        return Ok(());
+    }
+    let options = Options::parse(arguments)?;
     #[cfg(feature = "tracy")]
     let _client = tracy_client::Client::start();
     #[cfg(feature = "tracy")]

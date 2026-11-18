@@ -2,7 +2,7 @@
 //! Run with `--release --features vulkan,d3d12` on Windows.
 
 #[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
-#[path = "support/raster_batch_fixture.rs"]
+#[path = "../fixtures/raster_batch_fixture.rs"]
 mod fixture;
 
 #[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]

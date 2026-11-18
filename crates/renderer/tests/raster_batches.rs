@@ -1,6 +1,6 @@
 #![cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
 
-#[path = "../examples/support/raster_batch_fixture.rs"]
+#[path = "../fixtures/raster_batch_fixture.rs"]
 mod fixture;
 
 #[test]

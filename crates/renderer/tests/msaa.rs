@@ -1,6 +1,6 @@
 #![cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
 
-#[path = "../examples/support/msaa.rs"]
+#[path = "../fixtures/msaa.rs"]
 mod msaa;
 
 #[test]

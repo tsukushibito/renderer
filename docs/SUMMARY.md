@@ -19,6 +19,7 @@
 # 実行と検証
 
 - [現在の検証状況](verification/current.md)
+- [Examplesの実行と選び方](guides/examples.md)
 - [開発・ビルド・試験](guides/development.md)
 - [開発ツール](guides/tooling.md)
 - [HTML 文書の生成と選定理由](guides/html-docs.md)

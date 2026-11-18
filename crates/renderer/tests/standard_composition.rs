@@ -2,10 +2,10 @@
 //! the same consumer-owned Compute module. Native coverage extends raster_graph.
 
 #[allow(dead_code)]
-#[path = "../examples/support/compute_fixture.rs"]
+#[path = "../fixtures/compute_fixture.rs"]
 mod compute_fixture;
 #[allow(dead_code)]
-#[path = "../examples/support/standard_fixture.rs"]
+#[path = "../fixtures/standard_fixture.rs"]
 mod fixture;
 
 use fixture::PostMode;

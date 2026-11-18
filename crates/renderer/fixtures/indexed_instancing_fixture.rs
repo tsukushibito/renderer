@@ -78,10 +78,10 @@ static SHADER: RasterProgramDescriptor = RasterProgramDescriptor {
     sampling_pairs: &[],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
-    vertex_spirv: include_bytes!("../../tests/support/shaders/indexed_instancing.vert.spv"),
-    vertex_dxil: include_bytes!("../../tests/support/shaders/dxil/indexed_instancing.vert.dxil"),
-    fragment_spirv: include_bytes!("../../tests/support/shaders/indexed_instancing.frag.spv"),
-    fragment_dxil: include_bytes!("../../tests/support/shaders/dxil/indexed_instancing.frag.dxil"),
+    vertex_spirv: include_bytes!("../tests/support/shaders/indexed_instancing.vert.spv"),
+    vertex_dxil: include_bytes!("../tests/support/shaders/dxil/indexed_instancing.vert.dxil"),
+    fragment_spirv: include_bytes!("../tests/support/shaders/indexed_instancing.frag.spv"),
+    fragment_dxil: include_bytes!("../tests/support/shaders/dxil/indexed_instancing.frag.dxil"),
 };
 
 fn program() -> ManagedRasterProgram {

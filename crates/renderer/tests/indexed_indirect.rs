@@ -1,6 +1,6 @@
 #![cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
 
-#[path = "../examples/support/indexed_indirect_fixture.rs"]
+#[path = "../fixtures/indexed_indirect_fixture.rs"]
 mod fixture;
 
 #[test]
