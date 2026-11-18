@@ -182,6 +182,7 @@ impl Graph {
             // successful upload adds no bindings or extra upload arena bytes.
             let data = self.data_mut();
             data.resources.truncate(resources);
+            data.exported.truncate(resources);
             data.passes.truncate(passes);
             data.accesses.truncate(accesses);
             data.names.truncate(names);
@@ -334,10 +335,14 @@ mod tests {
         let visibility = graph
             .buffer("visibility", BufferDesc { size: 256 })
             .unwrap();
-        let err = graph
-            .encode_indexed_indirect("encode", &table, vertices, indices, visibility, 0)
-            .unwrap_err();
-        assert_eq!(err.capacity().unwrap().kind, GraphCapacityKind::Passes);
+        let export_capacity = graph.exported.capacity();
+        for _ in 0..64 {
+            let err = graph
+                .encode_indexed_indirect("encode", &table, vertices, indices, visibility, 0)
+                .unwrap_err();
+            assert_eq!(err.capacity().unwrap().kind, GraphCapacityKind::Passes);
+            assert_eq!(graph.exported.len(), graph.resources.len());
+        }
         let result = graph
             .buffer("remaining buffer", BufferDesc { size: 4 })
             .unwrap();
@@ -348,6 +353,7 @@ mod tests {
             .upload_buffer("retained upload", result, 0, &[0; 4])
             .unwrap();
         graph.export_buffer(result).unwrap();
+        assert_eq!(graph.exported.capacity(), export_capacity);
         assert!(
             graph
                 .compile()
