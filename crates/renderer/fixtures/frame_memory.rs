@@ -153,7 +153,7 @@ fn cpu_frames(
         let graph = phase(&mut phases[1], || {
             let mut graph = pool.begin().unwrap();
             let inputs = captured.connect_graph(&mut graph).unwrap();
-            let scene = graphs::forward_with_post(
+            let scene = graphs::forward(
                 &mut graph,
                 "memory forward",
                 inputs.draws(),
@@ -162,28 +162,26 @@ fn cpu_frames(
                     clear_color: view.clear_color,
                     depth: frame.is_multiple_of(2),
                 },
-                |graph, scene| {
-                    let mut color = scene.color;
-                    for _ in 0..extra_passes {
-                        let output = graph.image("memory transform", ImageDesc::rgba8(16, 16))?;
-                        image_transform::dispatch(
-                            graph,
-                            "memory transform",
-                            color,
-                            output,
-                            Transform::Invert,
-                        )?;
-                        color = output;
-                    }
-                    Ok(color)
-                },
             )
             .unwrap();
-            drop(inputs);
-            graph.export_image(scene.color).unwrap();
-            graph
-                .readback_image("memory readback", scene.color)
+            let mut color = scene.color;
+            for _ in 0..extra_passes {
+                let output = graph
+                    .image("memory transform", ImageDesc::rgba8(16, 16))
+                    .unwrap();
+                image_transform::dispatch(
+                    &mut graph,
+                    "memory transform",
+                    color,
+                    output,
+                    Transform::Invert,
+                )
                 .unwrap();
+                color = output;
+            }
+            drop(inputs);
+            graph.export_image(color).unwrap();
+            graph.readback_image("memory readback", color).unwrap();
             graph
         });
         let plan = phase(&mut phases[2], || graph.compile().unwrap());
@@ -257,7 +255,6 @@ fn owned_compute_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                         },
                     },
                 ],
-                [1, 1, 1],
             )
             .unwrap();
     };
@@ -664,7 +661,6 @@ fn shader_bindings_graph(pool: &mut GraphPool, frame: usize) -> Graph {
                     },
                 },
             ],
-            [1; 3],
         )
         .unwrap();
     graph.readback_buffer("output", result, offset, 64).unwrap();
@@ -825,7 +821,7 @@ pub fn cpu_lifecycle(baseline: bool) {
         "draw_counts": [0, 1, 4, 2],
         "extra_compute_passes": [0, 1, 2],
         "boundary_cases": ["snapshot/graph busy", "draw/resource capacity", "unbuilt snapshot/uncompiled graph cancel"],
-        "coverage": "Rust snapshot/connection/public standard forward_with_post build/compile with optional depth and all normal-frame owners dropped; no native execution or presentation",
+        "coverage": "Rust snapshot/connection/public forward and custom Compute composition, build/compile with optional depth and all normal-frame owners dropped; no native execution or presentation",
         "startup_positive_control": counts(startup),
         "shutdown_outside_normal_frames": counts(shutdown),
         "total": counts(report.total),

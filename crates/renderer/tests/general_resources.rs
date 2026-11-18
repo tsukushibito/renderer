@@ -216,11 +216,6 @@ fn step(
                     resource: BindingResource::ImageView(graph.image_view(output, 0, 0).unwrap()),
                 },
             ],
-            [
-                image.desc().width.div_ceil(4),
-                image.desc().height.div_ceil(4),
-                1,
-            ],
         )
         .unwrap();
     if generation % 2 == 1 {

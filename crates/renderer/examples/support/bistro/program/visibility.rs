@@ -252,11 +252,11 @@ mod native {
         })
         .collect::<Vec<_>>();
         graph
-            .dispatch(
+            .dispatch_buffer_grid(
                 "frustum visibility",
                 &visibility_program(),
                 &bindings,
-                [groups, 1, 1],
+                [groups, 1],
             )
             .unwrap();
         let capture = graph

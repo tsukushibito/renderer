@@ -101,9 +101,10 @@ StorageReadとStorageWriteはStorage資源へのアクセス用途であり、�
 
 ### Program由来bindingとshader stageのowned計画
 
-`Graph::dispatch(name, &program, &bindings, workgroups)`は不変の管理下Compute Programを計画する。
-既存の四readback assetは`[1, 1, 1]`を使う。利用側のProgramは固定dispatch数、
-画像extentとlocal sizeから求める2D dispatch数、または上限付きの`BufferGrid2d`を指定する。`graph::Binding`はgroup/bindingと
+`Graph::dispatch(name, &program, &bindings)`は不変の管理下Compute Programとbindingから実行範囲を決める。
+`Fixed`はProgramの固定workgroup数を使う。`Image2d`は出力Viewのmip extentをlocal sizeで切り上げ除算する。
+毎回の入力から可変な`BufferGrid2d`は`Graph::dispatch_buffer_grid(name, &program, &bindings, [x, y])`で指定する。
+`graph::Binding`はgroup/bindingと
 `BindingResource::{Buffer { buffer, offset, size }, ImageView, Sampler}`をまとめる。
 Rasterは`Graph::raster_bindings(&program, &bindings)`で同じ型のsliceを一度検査・所有し、
 各drawが不変な`RasterBindings` handleを共有する。用途・shader stage・実アクセス範囲をProgramから導く。
@@ -119,7 +120,7 @@ sampler設定により、呼出元のProgram変数・binding/draw sliceが変更
 uniform/storage readbackは先頭16 byteだけを読み書きし、sampled readbackの出力は16 byte、
 sampled float readbackは64 byteだけを初期化する。大きなdescriptorの未書込tailは有効にならない。
 `BufferGrid2d`は指定した書き込みバッファのbinding offsetから、XとYのworkgroup数の積に
-1グループ分のバイト数を掛けた範囲を初期化する。構築時にX/Yの非ゼロ条件と上限、Zが1であること、
+1グループ分のバイト数を掛けた範囲を初期化する。Zは常に1とし、構築時にX/Yの非ゼロ条件と上限、
 積のoverflow、実際のdescriptor範囲を検査する。取込側は受理される入力全体で、
 各workgroupが競合せず、対応する出力を過不足なく書き込むことを保証する。
 他のbindingは固定のfootprintを使い、GPUでのdispatch上限・descriptor適合・同期は既存の実行経路に従う。
@@ -953,9 +954,7 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 |---|---|
 | `passes::opaque` | callerのcolor attachmentと任意depthへ頂点色×tintを描く。RGBA8／RGBA16Fから公開mesh Programを選び、Clear／Load／Storeを引き継ぐ |
 | `passes::depth_prepass` | callerのD32 attachmentへ同じ頂点変換の深度だけを描く。colorを確保しない |
-| `passes::output` | callerの別画像へ同format・同extentのcolorをcopyする。露出・tone mapping・sRGB変換・拡縮を行わない |
 | `graphs::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
-| `graphs::forward_with_post` | opaque後の完成したlinear colorと任意depthを構築時の`FnOnce`へ渡す。返された同descriptionのcolorを後続出力とする |
 
 初期標準描画は照明を計算しない。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
 RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。
@@ -975,11 +974,11 @@ Loadは初期化済み内容を保持し、Clearは0 drawでも初期化する�
 trusted Raster descriptorと`Graph::raster`で独自の描画部品を定義する。
 独自graphics shaderや任意stateの提供を、固定Program群や標準部品の公開だけで完成扱いにしない。
 
-次のように標準グラフを直接選び、意味の定まったpost境界だけを複数ノードへ置き換えられる。
+`forward`が返すscene-linear colorやdepthを入力にして、追加のパスを同じGraphに構築できる。
 ここで`graph`は利用側が準備したGraph、`inputs`は任意のsnapshot接続である。
 
 ```rust,ignore
-use renderer::standard::{graphs, passes};
+use renderer::standard::graphs;
 use renderer::graph::ImageDesc;
 
 let config = graphs::ForwardConfig {
@@ -987,28 +986,19 @@ let config = graphs::ForwardConfig {
     clear_color: [0.0, 0.0, 0.0, 1.0],
     depth: true,
 };
-let scene = graphs::forward_with_post(
-    &mut graph, "forward", inputs.draws(), config,
-    |graph, scene| {
-        let desc = graph.image_desc(scene.color)?;
-        let a = graph.image("post a", desc)?;
-        let b = graph.image("post b", desc)?;
-        graph.copy_image("post first", scene.color, a)?;
-        graph.copy_image("post second", a, b)?;
-        Ok(b)
-    },
-)?;
-// 必要なら標準outputへ渡す。不要ならscene.colorを直接使う。
-let target = graph.image("target", config.color)?;
-passes::output(&mut graph, "output", scene.color, target)?;
-graph.export_image(target)?;
+let scene = graphs::forward(&mut graph, "forward", inputs.draws(), config)?;
+let output = if let Some(effect) = effect {
+    effect.append(&mut graph, scene.color)?
+} else {
+    scene.color
+};
+graph.export_image(output)?;
 ```
 
-postはこの一つの意味付き境界を交換する。identityは`scene.color`をそのまま返すだけで、
-完成Graphのnode名を検索・改変しない。出力format／extentを変える処理や別構造のrendererは、
-公開標準パスと独自Compute等から利用側が直接Graphを組み立てる。
+effect固有の出力formatやextentは利用側のパスが決める。別画像へ同format・同extentの内容が必要なら`Graph::copy_image`を使う。
+別構造のrendererは公開標準パスと独自Computeなどを直接組み合わせる。
 標準部品固有の設定誤りは公開`GraphError::custom`で説明し、owner・容量・内容等のGraphエラーはその分類を保つ。
-多段recipe全体の失敗はtransactionではないため、部分構築されたGraphは破棄するか残る容量を考慮して利用する。
+多段構成の失敗後は、部分構築されたGraphを破棄するか宣言済みの状態と残り容量を考慮して利用する。
 未使用の部品・中間画像は通常のcullingに従う。部品が隠れたexportや副作用rootを追加することはない。
 
 [標準構成fixture](../../crates/renderer/fixtures/standard_fixture.rs)は、同じframe入力について

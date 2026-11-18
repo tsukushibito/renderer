@@ -1946,7 +1946,6 @@ fn vulkan_sampled_mip_chain_srgb_linear_repeat() {
                         },
                     },
                 ],
-                [1, 1, 1],
             )
             .unwrap();
         reads.push(graph.readback_buffer("bits", output, 0, 64).unwrap());

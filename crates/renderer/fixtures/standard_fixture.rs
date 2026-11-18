@@ -196,7 +196,6 @@ fn post_inputs(graph: &mut Graph, frame: usize) -> PostInputs {
                     },
                 },
             ],
-            [1; 3],
         )
         .unwrap();
     PostInputs {
@@ -238,7 +237,6 @@ fn multiply(graph: &mut Graph, source: ImageHandle, inputs: PostInputs) -> Image
                     resource: BindingResource::ImageView(graph.image_view(output, 0, 0).unwrap()),
                 },
             ],
-            [1, 2, 1],
         )
         .unwrap();
     output
@@ -271,7 +269,6 @@ fn add(graph: &mut Graph, source: ImageHandle, inputs: PostInputs) -> ImageHandl
                     resource: BindingResource::ImageView(graph.image_view(output, 0, 0).unwrap()),
                 },
             ],
-            [1, 2, 1],
         )
         .unwrap();
     output
@@ -312,16 +309,11 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
     };
     let inputs = post_inputs(graph, frame);
     let direct = graphs::forward(graph, "standard direct route", draws, settings).unwrap();
-    let identity = graphs::forward_with_post(
-        graph,
-        "standard identity route",
-        draws,
-        settings,
-        |_, scene| Ok(scene.color),
-    )
-    .unwrap();
+    let identity = graphs::forward(graph, "standard identity route", draws, settings).unwrap();
+    let identity_color = post(graph, identity.color, inputs, PostMode::Disabled);
+    assert_eq!(identity_color, identity.color);
     let mode = post_mode(frame);
-    let selected = graphs::forward_with_post(
+    let scene = graphs::forward(
         graph,
         "standard consumer post route",
         draws,
@@ -329,9 +321,9 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
             depth: frame.is_multiple_of(2),
             ..settings
         },
-        |graph, scene| Ok(post(graph, scene.color, inputs, mode)),
     )
     .unwrap();
+    let selected = post(graph, scene.color, inputs, mode);
 
     // The same frame input and independently assembled pass structure. A depth
     // prepass also checks that equality shading and preserved depth compose with
@@ -371,7 +363,9 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
     .unwrap();
     let parts = post(graph, color, inputs, mode);
     let output = graph.image("direct parts output", hdr()).unwrap();
-    passes::output(graph, "direct parts output copy", parts, output).unwrap();
+    graph
+        .copy_image("direct parts output copy", parts, output)
+        .unwrap();
 
     // A valid but unconsumed module must not stay alive merely because the
     // observed post shares its Program and constant-buffer inputs.
@@ -417,8 +411,8 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
     ][frame % CASES];
     let values = [
         (direct.color, base),
-        (identity.color, base),
-        (selected.color, processed),
+        (identity_color, base),
+        (selected, processed),
         (output, processed),
     ];
     Expected {

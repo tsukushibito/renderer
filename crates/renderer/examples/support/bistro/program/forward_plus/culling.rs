@@ -40,10 +40,9 @@ pub fn active_tile_count(width: u32, height: u32) -> Result<u32, GraphError> {
 }
 
 /// Round to a full workgroup. Its padding invocations also initialize records.
-pub fn workgroups(width: u32, height: u32) -> Result<[u32; 3], GraphError> {
+pub fn workgroups(width: u32, height: u32) -> Result<[u32; 2], GraphError> {
     Ok([
         active_tile_count(width, height)?.div_ceil(TILES_PER_GROUP),
-        1,
         1,
     ])
 }
@@ -177,7 +176,7 @@ pub fn append_culling(
     tiles: BufferHandle,
 ) -> Result<PassHandle, GraphError> {
     let workgroups = workgroups(width, height)?;
-    graph.dispatch(
+    graph.dispatch_buffer_grid(
         "Forward+ tile light lists",
         &compute_program(),
         &[

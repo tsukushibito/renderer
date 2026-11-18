@@ -66,22 +66,7 @@ fn build(
     let mut prepared = renderer.begin_graph().unwrap();
     let inputs = renderer.connect_snapshot(&mut prepared, snapshot).unwrap();
     let graph = &mut prepared.graph;
-    let post = |graph: &mut renderer::graph::Graph, scene: graphs::SceneColor| {
-        let mut color = scene.color;
-        for _ in 0..invert_passes {
-            let output = graph.image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))?;
-            image_transform::dispatch(
-                graph,
-                "memory image transform",
-                color,
-                output,
-                Transform::Invert,
-            )?;
-            color = output;
-        }
-        Ok(color)
-    };
-    let scene = if invert_passes == 1 {
+    let mut color = if invert_passes == 1 {
         // Exercise direct public composition as well as the optional recipe,
         // including equal-depth shading and zero-draw clear/load frames.
         let color = graph
@@ -119,16 +104,9 @@ fn build(
             passes::OpaqueDepth::Prepassed,
         )
         .unwrap();
-        let scene = graphs::SceneColor {
-            color,
-            depth: Some(depth),
-        };
-        graphs::SceneColor {
-            color: post(graph, scene).unwrap(),
-            ..scene
-        }
+        color
     } else {
-        graphs::forward_with_post(
+        graphs::forward(
             graph,
             "memory forward",
             inputs.draws(),
@@ -137,15 +115,31 @@ fn build(
                 clear_color: snapshot.view().clear_color,
                 depth: true,
             },
-            post,
         )
         .unwrap()
+        .color
     };
+    for _ in 0..invert_passes {
+        let output = graph
+            .image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))
+            .unwrap();
+        image_transform::dispatch(
+            graph,
+            "memory image transform",
+            color,
+            output,
+            Transform::Invert,
+        )
+        .unwrap();
+        color = output;
+    }
     drop(inputs);
     let output = graph
         .image("memory standard output", ImageDesc::rgba8(WIDTH, HEIGHT))
         .unwrap();
-    passes::output(graph, "memory standard output", scene.color, output).unwrap();
+    graph
+        .copy_image("memory standard output", color, output)
+        .unwrap();
     prepared.select_output(output, readback).unwrap()
 }
 
@@ -556,7 +550,7 @@ pub fn lifecycle(baseline: bool) {
         "additional_working_set_images": { "rgba8": 12, "depth32": IN_FLIGHT },
         "draw_counts": [0, 1, 4, 2],
         "invert_passes": [0, 1, 2],
-        "composition_routes": ["forward_with_post", "depth_prepass then opaque Prepassed", "standard output copy"],
+        "composition_routes": ["forward then custom Compute", "depth_prepass then opaque Prepassed", "explicit output copy"],
         "prepass_when_invert_passes": 1,
         "x_translations": [-0.25, 0.25],
         "verified_pixels": { "left": [5, 8], "right": [10, 8], "background": "four corners" },

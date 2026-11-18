@@ -703,7 +703,6 @@ pub(super) fn sample_rgba8(
                     },
                 },
             ],
-            [1; 3],
         )
         .unwrap();
 }

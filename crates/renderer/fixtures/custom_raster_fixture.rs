@@ -492,22 +492,8 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
         depth: true,
     };
     let direct = graphs::forward(graph, "standard direct", opaque, config).unwrap();
-    let selected = graphs::forward_with_post(
-        graph,
-        "standard post base",
-        opaque,
-        config,
-        |graph, scene| {
-            Ok(overlay(
-                graph,
-                scene,
-                &inputs,
-                frame,
-                "consumer post raster",
-            ))
-        },
-    )
-    .unwrap();
+    let scene = graphs::forward(graph, "standard post base", opaque, config).unwrap();
+    let selected = overlay(graph, scene, &inputs, frame, "consumer post raster");
     let color = graph.image("independent color", hdr()).unwrap();
     let depth = graph
         .image("independent depth", ImageDesc::depth32(WIDTH, HEIGHT))
@@ -532,7 +518,9 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
         "consumer direct raster",
     );
     let copied = graph.image("standard output target", hdr()).unwrap();
-    passes::output(graph, "standard output copy", composed, copied).unwrap();
+    graph
+        .copy_image("standard output copy", composed, copied)
+        .unwrap();
     let mut depth_bytes = [0; IMAGE_BYTES];
     for component in depth_bytes[..PIXELS * 4].as_chunks_mut::<4>().0 {
         component.copy_from_slice(
@@ -552,12 +540,7 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
                 "standard direct pixels",
                 base_color(frame),
             ),
-            expected_image(
-                graph,
-                selected.color,
-                "custom post pixels",
-                final_color(frame),
-            ),
+            expected_image(graph, selected, "custom post pixels", final_color(frame)),
             expected_image(
                 graph,
                 copied,

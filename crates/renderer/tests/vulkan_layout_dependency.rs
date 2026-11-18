@@ -182,7 +182,6 @@ fn compute_sample(graph: &mut Graph, texture: ImageHandle) -> (PassHandle, PassH
                     },
                 },
             ],
-            [1; 3],
         )
         .unwrap();
     let readback = graph

@@ -68,7 +68,6 @@ fn append_owned_dispatch(graph: &mut Graph) -> BufferHandle {
                     },
                 },
             ],
-            [1, 1, 1],
         )
         .unwrap();
     output
@@ -290,7 +289,6 @@ fn append_owned_sampled_dispatch(graph: &mut Graph) -> BufferHandle {
                     },
                 },
             ],
-            [1; 3],
         )
         .unwrap();
     output

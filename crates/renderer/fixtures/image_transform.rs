@@ -83,7 +83,6 @@ pub(crate) fn dispatch(
     destination: ImageHandle,
     transform: Transform,
 ) -> Result<PassHandle, GraphError> {
-    let desc = graph.image_desc(destination)?;
     let bindings = [
         Binding {
             group: 0,
@@ -96,14 +95,5 @@ pub(crate) fn dispatch(
             resource: BindingResource::ImageView(graph.image_view(destination, 0, 0)?),
         },
     ];
-    graph.dispatch(
-        name,
-        &program(transform),
-        &bindings,
-        [
-            desc.width.div_ceil(LOCAL_SIZE),
-            desc.height.div_ceil(LOCAL_SIZE),
-            1,
-        ],
-    )
+    graph.dispatch(name, &program(transform), &bindings)
 }

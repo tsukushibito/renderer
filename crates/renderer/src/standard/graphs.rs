@@ -31,38 +31,15 @@ pub struct SceneColor {
     pub depth: Option<ImageHandle>,
 }
 
-/// Add standard opaque drawing and return its color/depth without a post stage.
-/// The name identifies the Raster/clear pass. No export, readback, submission or
-/// redundant final copy is added.
+/// Add standard opaque drawing and return its Graph-local color and depth.
+/// The name identifies the Raster/clear pass. Pass the returned images to
+/// additional Graph operations or select them for export or readback.
+/// Failed construction may leave earlier declarations in the Graph.
 pub fn forward<I, D>(
     graph: &mut Graph,
     name: &str,
     draws: I,
     config: ForwardConfig,
-) -> Result<SceneColor, GraphError>
-where
-    I: IntoIterator<Item = D>,
-    D: Borrow<RasterDraw>,
-{
-    forward_with_post(graph, name, draws, config, |_, scene| Ok(scene.color))
-}
-
-/// Add standard opaque drawing, then immediately call a scene-linear post
-/// builder. The closure may borrow frame inputs and add multiple ordinary Graph
-/// operations. It must return color of the same complete description; contents
-/// validity is checked by Graph compilation when a subsequent operation or
-/// export consumes that output. Returned depth is the original optional depth.
-///
-/// This is one semantic insertion point, not a deferred GPU callback. To change
-/// the pass structure, compose public passes directly. Failed composition may
-/// leave earlier successful declarations in the Graph; drop/rebuild as needed.
-/// Standard-specific contract failures use [`GraphError::custom`].
-pub fn forward_with_post<I, D>(
-    graph: &mut Graph,
-    name: &str,
-    draws: I,
-    config: ForwardConfig,
-    post: impl FnOnce(&mut Graph, SceneColor) -> Result<ImageHandle, GraphError>,
 ) -> Result<SceneColor, GraphError>
 where
     I: IntoIterator<Item = D>,
@@ -110,19 +87,5 @@ where
         depth_attachment,
         OpaqueDepth::Write,
     )?;
-    let scene = SceneColor { color, depth };
-    let output = post(graph, scene)?;
-    // A post builder must extend this Graph, including when it returns a new
-    // target. Replacing it would leave the original depth and scene handles
-    // attached to a different Graph identity.
-    graph.image_desc(scene.color)?;
-    if output != scene.color && graph.image_desc(output)? != config.color {
-        return Err(GraphError::custom(format!(
-            "standard forward '{name}': post output must preserve scene color format and extent"
-        )));
-    }
-    Ok(SceneColor {
-        color: output,
-        depth,
-    })
+    Ok(SceneColor { color, depth })
 }

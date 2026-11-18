@@ -1548,7 +1548,6 @@ mod tests {
                         },
                     },
                 ],
-                [1; 3],
             )
             .unwrap();
         graph.readback_buffer("bytes", result, 16, 64).unwrap();

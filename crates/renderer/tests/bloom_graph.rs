@@ -5,7 +5,7 @@ mod bloom;
 
 use bloom::Bloom;
 use renderer::graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, PassHandle};
-use renderer::standard::graphs::{ForwardConfig, forward_with_post};
+use renderer::standard::graphs::{ForwardConfig, forward};
 
 const WIDTH: u32 = 9;
 const HEIGHT: u32 = 5;
@@ -50,7 +50,7 @@ fn fixture(
 ) -> (CompiledGraph, PassHandle) {
     let mut graph = pool.begin().unwrap();
     let output = if standard {
-        forward_with_post(
+        let scene = forward(
             &mut graph,
             "standard HDR clear",
             std::iter::empty::<renderer::graph::RasterDraw>(),
@@ -59,14 +59,11 @@ fn fixture(
                 clear_color: [17.0, 0.0, 0.0, 0.75],
                 depth: false,
             },
-            |graph, scene| {
-                let output = effect.append(graph, scene.color)?;
-                assert_eq!(output == scene.color, effect == Bloom::Off);
-                Ok(if keep_effect { output } else { scene.color })
-            },
         )
-        .unwrap()
-        .color
+        .unwrap();
+        let output = effect.append(&mut graph, scene.color).unwrap();
+        assert_eq!(output == scene.color, effect == Bloom::Off);
+        if keep_effect { output } else { scene.color }
     } else {
         let mut bytes = [0; HDR_BYTES];
         for (index, pixel) in bytes.as_chunks_mut::<8>().0.iter_mut().enumerate() {
