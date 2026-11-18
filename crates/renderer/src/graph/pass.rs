@@ -288,7 +288,7 @@ pub(crate) struct ResourceAccess {
     pub purpose: AccessPurpose,
 }
 
-/// Owned indexed draw operands with a range of canonical material descriptors.
+/// Owned draw operands with a range of canonical material descriptors.
 #[derive(Clone, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
@@ -303,6 +303,19 @@ pub(crate) struct RasterDrawOperands {
         )
     )]
     pub bindings: Range<usize>,
+    /// A generated fullscreen triangle has no vertex or index resources.
+    pub indexed: Option<IndexedDrawOperands>,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(
+    not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),
+    allow(
+        dead_code,
+        reason = "indexed operands are consumed by native recording"
+    )
+)]
+pub(crate) struct IndexedDrawOperands {
     pub vertices: usize,
     pub indices: usize,
     pub first_index: u32,
@@ -399,7 +412,7 @@ pub(crate) enum Operation {
     },
     Raster {
         batches: Range<usize>,
-        /// All direct draws in the scope, including every Program batch.
+        /// All stored draws in the scope, including every Program batch.
         draws: Range<usize>,
         colors: Range<usize>,
         depth: Option<usize>,

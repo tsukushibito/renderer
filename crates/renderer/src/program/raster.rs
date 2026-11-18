@@ -115,6 +115,7 @@ pub struct SampledImageSamplerPair {
 /// frame plans retain the contract without allocating or borrowing frame input.
 pub struct RasterProgramDescriptor {
     pub entry: &'static str,
+    /// Zero selects a generated fullscreen triangle and requires no attributes.
     pub vertex_stride: u32,
     pub vertex_attributes: &'static [VertexAttribute],
     pub parameters: RasterParameterLayout,
@@ -284,12 +285,18 @@ impl ManagedRasterProgram {
     /// vertex/fragment programs for `entry = "main"`, using only enabled backend
     /// features. Their stage interfaces, descriptor slots, vertex attributes,
     /// inline parameters and outputs must exactly match this complete descriptor.
-    /// There is one per-vertex stream with a nonzero, four-byte-aligned stride,
-    /// and at most 16 unique attribute locations below 16,
-    /// with four-byte aligned offsets and formats wholly within that stride.
-    /// DXIL uses TEXCOORD semantic indices equal to attribute locations. Indices
-    /// are u32 triangle lists. Draws may select an index range and request any
-    /// nonzero instance count, with base vertex and first instance zero.
+    /// For indexed draws there is one per-vertex stream with a nonzero,
+    /// four-byte-aligned stride and at most 16 unique locations below 16,
+    /// with four-byte-aligned offsets and formats wholly within that stride.
+    /// DXIL uses TEXCOORD semantic indices equal to attribute locations.
+    /// Indices are u32 triangle lists with base vertex and first instance zero.
+    /// Draws may select an index range and request any nonzero instance count.
+    ///
+    /// A zero stride and empty attributes select vertex generation via
+    /// [`crate::graph::RasterPass::draw_fullscreen`]. The vertex shader consumes
+    /// no vertex attributes, and must support vertex IDs 0 through 2 and
+    /// instance ID 0.
+    ///
     /// No undeclared vertex input, resources, push constants or side effects are
     /// permitted. Color outputs require a fragment shader. Declare their
     /// formats in contiguous shader output location order from zero, up to
@@ -388,6 +395,9 @@ impl ManagedRasterProgram {
     }
     pub const fn vertex_stride(&self) -> u32 {
         self.manifest.vertex_stride
+    }
+    pub(crate) const fn is_fullscreen(&self) -> bool {
+        self.vertex_stride() == 0
     }
     pub const fn vertex_attributes(&self) -> &'static [VertexAttribute] {
         self.manifest.vertex_attributes
