@@ -1,7 +1,7 @@
 # Generate consumer-owned Raster fixtures with the repository's pinned SDK.
 # -Verify regenerates and compares every artifact without rewriting the checkout.
 [CmdletBinding()]
-param([string]$SdkRoot = $env:VULKAN_SDK, [switch]$Verify)
+param([string]$SdkRoot = $env:VULKAN_SDK, [switch]$Verify, [switch]$RasterBatches)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -66,8 +66,14 @@ $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {
     $publish = [ordered]@{}
     $artifacts = [ordered]@{}
-    foreach ($stage in @('vert', 'frag')) {
-        $name = "custom_raster.$stage"
+    $shaders = if ($RasterBatches) {
+        [ordered]@{ 'raster_batches.vert' = $false; 'raster_batches_inline.frag' = $true; 'raster_batches_uniform.frag' = $false }
+    } else {
+        [ordered]@{ 'custom_raster.vert' = $true; 'custom_raster.frag' = $true }
+    }
+    foreach ($shader in $shaders.GetEnumerator()) {
+        $name = $shader.Key
+        $stage = $name.Split('.')[-1]
         $source = Join-Path $PSScriptRoot $name
         $spirv = Join-Path $temporaryRoot ($name + '.spv')
         $hlsl = Join-Path $temporaryRoot ($name + '.hlsl')
@@ -82,7 +88,7 @@ try {
         # already have register declarations and cannot match this expression.
         $text = [IO.File]::ReadAllText($hlsl).Replace("`r`n", "`n")
         $pattern = '(?m)^cbuffer ([A-Za-z_][A-Za-z_0-9]*)$'
-        if ([regex]::Matches($text, $pattern).Count -ne 1) { throw "Expected one inline cbuffer in $name" }
+        if ([regex]::Matches($text, $pattern).Count -ne [int]$shader.Value) { throw "Unexpected inline cbuffer count in $name" }
         $text = [regex]::Replace($text, $pattern, 'cbuffer $1 : register(b7, space0)')
         Write-Text $hlsl $text
         $profile = if ($stage -ceq 'vert') { 'vs_6_0' } else { 'ps_6_0' }
@@ -95,7 +101,7 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        if ($reflection -notmatch '\bcb7\b') { throw "Inline cbuffer b7 missing from $name reflection" }
+        if ($shader.Value -and $reflection -notmatch '\bcb7\b') { throw "Inline cbuffer b7 missing from $name reflection" }
         $spirvReflection = Run $cross @($spirv, '--reflect')
         $jsonPath = Join-Path $temporaryRoot ($name + '.spirv-reflection.json')
         Write-Text $jsonPath $spirvReflection
@@ -115,9 +121,10 @@ try {
         $artifacts[$name] = $hashes
     }
     $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_dxil_register = 7; inline_dxil_space = 0; artifacts = $artifacts }
-    $manifestPath = Join-Path $temporaryRoot 'custom_raster-manifest.json'
+    $manifestName = if ($RasterBatches) { 'raster_batches-manifest.json' } else { 'custom_raster-manifest.json' }
+    $manifestPath = Join-Path $temporaryRoot $manifestName
     Write-Text $manifestPath (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")
-    $publish[$manifestPath] = Join-Path $PSScriptRoot 'custom_raster-manifest.json'
+    $publish[$manifestPath] = Join-Path $PSScriptRoot $manifestName
     foreach ($item in $publish.GetEnumerator()) {
         if ($Verify -and (-not (Test-Path -LiteralPath $item.Value -PathType Leaf) -or (Hash $item.Key) -cne (Hash $item.Value))) {
             throw "Custom Raster fixture differs or is missing: $($item.Value)"

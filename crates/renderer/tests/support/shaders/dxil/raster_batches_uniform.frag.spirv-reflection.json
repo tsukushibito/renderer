@@ -1,0 +1,41 @@
+{
+    "entryPoints" : [
+        {
+            "name" : "main",
+            "mode" : "frag"
+        }
+    ],
+    "types" : {
+        "_10" : {
+            "name" : "_10",
+            "members" : [
+                {
+                    "name" : "_m0",
+                    "type" : "vec4",
+                    "offset" : 0
+                }
+            ]
+        }
+    },
+    "outputs" : [
+        {
+            "type" : "vec4",
+            "name" : "_9",
+            "location" : 0
+        },
+        {
+            "type" : "vec4",
+            "name" : "_18",
+            "location" : 1
+        }
+    ],
+    "ubos" : [
+        {
+            "type" : "_10",
+            "name" : "_10_12",
+            "block_size" : 16,
+            "set" : 0,
+            "binding" : 2
+        }
+    ]
+}
