@@ -28,7 +28,7 @@ def reports(root, report):
 
 
 def plane(path, report, name):
-    capture_type = "hdr" if name == "bloom_hdr" else name
+    capture_type = {"bloom_hdr": "hdr", "bloom_bypass": "sdr"}.get(name, name)
     capture = report["captures"][name]
     actual, meta = load_capture(path, {"captures": {capture_type: capture}}, capture_type)
     require((meta["width"], meta["height"]) ==

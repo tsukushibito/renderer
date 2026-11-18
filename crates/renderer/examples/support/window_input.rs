@@ -42,6 +42,15 @@ impl CameraInput {
     pub fn position(&self) -> [f32; 3] {
         self.camera.position()
     }
+    #[allow(dead_code, reason = "available to other example scenes")]
+    pub fn set_pose(&mut self, position: [f32; 3], target: [f32; 3]) {
+        self.looking = false;
+        self.camera.set_pose(position, target);
+    }
+    #[allow(dead_code, reason = "available to other example scenes")]
+    pub fn target(&self) -> [f32; 3] {
+        self.camera.target()
+    }
     pub fn clip_from_world(&self, width: u32, height: u32) -> [[f32; 4]; 4] {
         self.camera.clip_from_world(width, height)
     }

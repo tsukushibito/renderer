@@ -477,7 +477,22 @@ impl D3D12Runtime {
             return Err(Error::invalid("invalid presentation capacities"));
         }
         let runtime = Self::new(config)?;
-        let owner = Arc::clone(&runtime.device);
+        let presenter = runtime.create_presenter(window, presentation)?;
+        Ok((runtime, presenter))
+    }
+
+    /// Attach a Window to this runtime and its existing exact working set.
+    /// Presentation shares the runtime's Device and queue.
+    pub fn create_presenter(
+        &self,
+        window: Arc<Window>,
+        presentation: PresentationConfig,
+    ) -> Result<D3D12Presenter, Error> {
+        if !presentation.has_valid_capacities() {
+            return Err(Error::invalid("invalid presentation capacities"));
+        }
+        self.device.ensure_active()?;
+        let owner = Arc::clone(&self.device);
         // SAFETY: Owned supported factory interface, no process-wide debug setter.
         let factory: IDXGIFactory2 = unsafe { CreateDXGIFactory2(0) }
             .map_err(|e| owner.native("CreateDXGIFactory2(presentation)", e))?;
@@ -502,7 +517,7 @@ impl D3D12Runtime {
             ));
         }
         let size = window.inner_size();
-        let registry_owner = runtime
+        let registry_owner = self
             .pool
             .registry
             .lock()
@@ -561,7 +576,7 @@ impl D3D12Runtime {
             _window: window,
         };
         inner.prepare()?;
-        Ok((runtime, D3D12Presenter { inner: Some(inner) }))
+        Ok(D3D12Presenter { inner: Some(inner) })
     }
 
     /// Sample linear RGBA8 output into the current Window's SRGB RTV. The source

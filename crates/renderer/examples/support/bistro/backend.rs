@@ -45,20 +45,38 @@ pub(super) trait Backend: Sized {
 
 #[cfg(feature = "vulkan")]
 pub(super) struct Vulkan {
-    runtime: renderer::VulkanRuntime,
+    pub(super) runtime: renderer::VulkanRuntime,
 }
 #[cfg(feature = "vulkan")]
-impl Backend for Vulkan {
-    type Pending = renderer::Submission;
-    type Completed = renderer::SubmissionResult;
-    fn create(options: &Options, budget: &Budget) -> Result<Self, Error> {
-        let mut runtime = renderer::VulkanRuntime::new(renderer::RuntimeConfig {
-            execution_slots: options.inflight,
+impl Vulkan {
+    pub(super) fn config(options: &Options, budget: &Budget) -> renderer::RuntimeConfig {
+        renderer::RuntimeConfig {
+            execution_slots: options.inflight * if options.windowed { 2 } else { 1 },
             resource_capacity: budget.physical_resources,
             staging_bytes: (budget.upload_bytes as u64).max(budget.readback_bytes) + 8192,
             staging_ranges: 64 + options.inflight * 4,
             max_shader_bindings: budget.graph.draws as u32,
-        })?;
+        }
+    }
+
+    pub(super) fn frame_capacity(options: &Options, budget: &Budget) -> renderer::FrameCapacity {
+        renderer::FrameCapacity {
+            graph: budget.graph,
+            work_slots: options.inflight,
+            result_slots: options.inflight + 1,
+            metadata_slots: options.inflight + 1,
+            range_snapshots: budget.ranges,
+            initialized_ranges_per_resource: 32,
+            provenance_segments_per_resource: 1,
+            index_prefixes_per_resource: 0,
+        }
+    }
+
+    pub(super) fn prepare(
+        mut runtime: renderer::VulkanRuntime,
+        options: &Options,
+        budget: &Budget,
+    ) -> Result<Self, Error> {
         if runtime.device_info().device_type == "CPU" {
             return Err("CPU Vulkan adapters are not accepted".into());
         }
@@ -76,22 +94,26 @@ impl Backend for Vulkan {
                     .map(|&(desc, count)| renderer::ResourceClass::Image { desc, count }),
             )
             .collect::<Vec<_>>();
-        runtime.prepare_working_set(
-            renderer::FrameCapacity {
-                graph: budget.graph,
-                work_slots: options.inflight,
-                result_slots: options.inflight + 1,
-                metadata_slots: options.inflight + 1,
-                range_snapshots: budget.ranges,
-                initialized_ranges_per_resource: 32,
-                provenance_segments_per_resource: 1,
-                index_prefixes_per_resource: 0,
-            },
-            &resources,
-        )?;
-        runtime.prepare_raster_programs(&super::program::programs())?;
+        runtime.prepare_working_set(Self::frame_capacity(options, budget), &resources)?;
+        if options.windowed {
+            runtime.prepare_raster_programs(&super::program::window_programs(options.aa))?;
+        } else {
+            runtime.prepare_raster_programs(&super::program::programs())?;
+        }
         runtime.prepare_compute_programs(options.bloom.programs())?;
         Ok(Self { runtime })
+    }
+}
+#[cfg(feature = "vulkan")]
+impl Backend for Vulkan {
+    type Pending = renderer::Submission;
+    type Completed = renderer::SubmissionResult;
+    fn create(options: &Options, budget: &Budget) -> Result<Self, Error> {
+        Self::prepare(
+            renderer::VulkanRuntime::new(Self::config(options, budget))?,
+            options,
+            budget,
+        )
     }
     fn info(&self) -> serde_json::Value {
         let info = self.runtime.device_info();
@@ -175,7 +197,7 @@ impl Backend for Vulkan {
 
 #[cfg(all(windows, feature = "d3d12"))]
 pub(super) struct D3d12 {
-    runtime: renderer::D3D12Runtime,
+    pub(super) runtime: renderer::D3D12Runtime,
 }
 #[cfg(all(windows, feature = "d3d12"))]
 impl Backend for D3d12 {
@@ -208,6 +230,13 @@ impl Backend for D3d12 {
             .iter()
             .map(|&(desc, count)| renderer::D3D12ImageClass { desc, count })
             .collect::<Vec<_>>();
+        let raster = super::program::programs();
+        let window_raster = super::program::window_programs(options.aa);
+        let raster = if options.windowed {
+            window_raster.as_slice()
+        } else {
+            raster.as_slice()
+        };
         let runtime = renderer::D3D12Runtime::new_with_working_set(
             renderer::D3D12RuntimeConfig {
                 capacity,
@@ -215,7 +244,7 @@ impl Backend for D3d12 {
             },
             &buffers,
             &images,
-            &super::program::programs(),
+            raster,
             options.bloom.programs(),
         )?;
         Ok(Self { runtime })

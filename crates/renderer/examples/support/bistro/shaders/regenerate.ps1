@@ -69,15 +69,18 @@ try {
     $shaders = @(
         'pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'resolve.vert',
         'tone.frag', 'resolve.frag', 'resolve_aa.frag', 'bloom_extract.comp',
-        'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp'
+        'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
+        'resolve_linear.frag', 'resolve_aa_linear.frag'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
-        $source = Join-Path $PSScriptRoot $name
+        $source = Join-Path $PSScriptRoot ($name -creplace '_linear\.frag$', '.frag')
         $spirv = Join-Path $temporaryRoot ($name + '.spv')
         $hlsl = Join-Path $temporaryRoot ($name + '.hlsl')
         $dxil = Join-Path $temporaryRoot ($name + '.dxil')
-        $null = Run $glslc @('--target-env=vulkan1.3', '--target-spv=spv1.3', '-std=450core', '-fentry-point=main', '-O', '-Werror', $source, '-o', $spirv)
+        $glsl = @('--target-env=vulkan1.3', '--target-spv=spv1.3', '-std=450core', '-fentry-point=main', '-O', '-Werror')
+        if ($name -cmatch '_linear\.frag$') { $glsl += '-DBISTRO_LINEAR_OUTPUT=1' }
+        $null = Run $glslc ($glsl + @($source, '-o', $spirv))
         $null = Run $validator @('--target-env', 'vulkan1.3', $spirv)
         $crossArgs = @($spirv) + @($lock.spirv_cross_arguments) + @('--stage', $stage, '--output', $hlsl)
         if ($stage -ceq 'vert') { $crossArgs += '--flip-vert-y' }

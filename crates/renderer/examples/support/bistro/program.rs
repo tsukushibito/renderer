@@ -250,6 +250,16 @@ static RESOLVE_AA: RasterProgramDescriptor = RasterProgramDescriptor {
     fragment_dxil: include_bytes!("shaders/dxil/resolve_aa.frag.dxil"),
     ..RESOLVE
 };
+static RESOLVE_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
+    fragment_spirv: include_bytes!("shaders/resolve_linear.frag.spv"),
+    fragment_dxil: include_bytes!("shaders/dxil/resolve_linear.frag.dxil"),
+    ..RESOLVE
+};
+static RESOLVE_AA_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
+    fragment_spirv: include_bytes!("shaders/resolve_aa_linear.frag.spv"),
+    fragment_dxil: include_bytes!("shaders/dxil/resolve_aa_linear.frag.dxil"),
+    ..RESOLVE
+};
 
 pub const fn opaque_program() -> ManagedRasterProgram {
     // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,
@@ -292,6 +302,17 @@ pub const fn resolve_aa_program() -> ManagedRasterProgram {
     // clamp sampling covers edge coordinates and divisions have positive guards.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(&RESOLVE_AA) }
 }
+pub const fn present_program(aa: bool) -> ManagedRasterProgram {
+    // SAFETY: Same bindings, accesses and bounded sampling as the resolve
+    // variants. These shaders output linear RGBA8 for the sRGB Presenter.
+    unsafe {
+        ManagedRasterProgram::from_trusted_descriptor(if aa {
+            &RESOLVE_AA_LINEAR
+        } else {
+            &RESOLVE_LINEAR
+        })
+    }
+}
 pub const fn programs() -> [ManagedRasterProgram; 6] {
     [
         opaque_program(),
@@ -300,6 +321,16 @@ pub const fn programs() -> [ManagedRasterProgram; 6] {
         tone_program(),
         resolve_program(),
         resolve_aa_program(),
+    ]
+}
+
+pub const fn window_programs(aa: bool) -> [ManagedRasterProgram; 5] {
+    [
+        opaque_program(),
+        blend_program(),
+        shadow_program(),
+        tone_program(),
+        present_program(aa),
     ]
 }
 

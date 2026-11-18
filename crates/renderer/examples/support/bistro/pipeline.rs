@@ -49,6 +49,41 @@ fn environment_desc(image: &ibl::Image) -> ImageDesc {
 }
 
 impl Budget {
+    pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
+        let mut images = Vec::new();
+        let mut add = |desc, count| {
+            if let Some((_, available)) = images.iter_mut().find(|(item, _)| *item == desc) {
+                *available += count;
+            } else {
+                images.push((desc, count));
+            }
+        };
+        let hdr = ImageDesc::rgba16_float(options.width, options.height);
+        add(hdr, options.inflight * 2);
+        if let Some(extra) = options.bloom.images(hdr) {
+            for desc in extra {
+                add(desc, options.inflight);
+            }
+        }
+        add(
+            ImageDesc::depth32(options.width, options.height),
+            options.inflight,
+        );
+        // Presented images remain owned by the Presenter after Graph completion.
+        let presentation_slots = if options.windowed {
+            options.inflight
+        } else {
+            0
+        };
+        add(
+            ImageDesc::rgba8(options.width, options.height),
+            options.inflight + presentation_slots,
+        );
+        let shadow = shadow::Parameters::default().resolution;
+        add(ImageDesc::depth32(shadow, shadow), options.inflight * 4);
+        images
+    }
+
     pub fn new(
         scene: &Scene,
         environment: &ibl::Environment,
@@ -134,39 +169,21 @@ impl Budget {
                 check_images += 1;
             }
         }
-        add_image(
-            ImageDesc::rgba16_float(options.width, options.height),
-            options.inflight * 2,
-        );
-        let bloom_images = options
-            .bloom
-            .images(ImageDesc::rgba16_float(options.width, options.height));
-        let bloom_passes = bloom_images.as_ref().map_or(0, |images| images.len());
-        if let Some(images) = bloom_images {
-            for desc in images {
-                add_image(desc, options.inflight);
-            }
+        let bloom_passes = if options.bloom == super::bloom::Bloom::Off {
+            0
+        } else {
+            5
+        };
+        let mut frame_instances = 0;
+        for (desc, count) in Self::frame_images(options) {
+            add_image(desc, count);
+            frame_instances += count;
         }
-        add_image(
-            ImageDesc::depth32(options.width, options.height),
-            options.inflight,
-        );
-        add_image(
-            ImageDesc::rgba8(options.width, options.height),
-            options.inflight,
-        );
-        add_image(
-            ImageDesc::depth32(
-                shadow::Parameters::default().resolution,
-                shadow::Parameters::default().resolution,
-            ),
-            options.inflight * 4,
-        );
         let resources = buffer_count + scene.images.len() + 11 + bloom_passes;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
-            + options.inflight * (8 + bloom_passes)
+            + frame_instances
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
@@ -381,6 +398,42 @@ pub(super) fn upload_buffer<B: Backend>(
 }
 
 impl Resident {
+    #[cfg(all(windows, feature = "presentation"))]
+    pub fn reprepare<B: Backend>(
+        mut self,
+        backend: &mut B,
+        prepare: impl FnOnce(&mut B) -> Result<(), Error>,
+    ) -> Result<Self, Error> {
+        let take_keys = |snapshots: &mut Vec<ImportBuffer>| {
+            std::mem::take(snapshots)
+                .into_iter()
+                .map(|snapshot| snapshot.key())
+                .collect::<Vec<_>>()
+        };
+        let vertices = take_keys(&mut self.vertices);
+        let indices = take_keys(&mut self.indices);
+        let materials = take_keys(&mut self.materials);
+        let saved = [
+            self.camera.key(),
+            self.resolve_vertices.key(),
+            self.resolve_indices.key(),
+        ];
+        drop((self.camera, self.resolve_vertices, self.resolve_indices));
+        prepare(backend)?;
+        let refresh = |keys: Vec<_>| -> Result<Vec<ImportBuffer>, Error> {
+            keys.into_iter()
+                .map(|key| backend.refresh_buffer(key))
+                .collect()
+        };
+        self.vertices = refresh(vertices)?;
+        self.indices = refresh(indices)?;
+        self.materials = refresh(materials)?;
+        self.camera = backend.refresh_buffer(saved[0])?;
+        self.resolve_vertices = backend.refresh_buffer(saved[1])?;
+        self.resolve_indices = backend.refresh_buffer(saved[2])?;
+        Ok(self)
+    }
+
     pub fn upload<B: Backend>(
         backend: &mut B,
         scene: &Scene,
@@ -678,6 +731,8 @@ pub(super) struct Built {
     pub camera: BufferHandle,
     pub captures: Option<[PassHandle; 3]>,
     pub bloom_capture: Option<PassHandle>,
+    #[cfg(all(windows, feature = "presentation"))]
+    pub present_capture: Option<PassHandle>,
     pub shadow_captures: Option<[PassHandle; 4]>,
     pub shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
     pub draws: usize,
@@ -709,6 +764,14 @@ pub(super) fn build(
         resident.scene_bounds,
         resident.shadow_parameters,
     )?;
+    #[cfg(feature = "development-validation")]
+    let shadow_data = {
+        let mut data = shadow_data;
+        if options.offset_shadow_receiver {
+            data.bias[2] = 16.0;
+        }
+        data
+    };
     let mut frame_uniform = [0u8; program::CAMERA_BYTES];
     frame_uniform[..128].copy_from_slice(camera_bytes);
     for (word, value) in resident
@@ -1044,6 +1107,10 @@ pub(super) fn build(
         std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
     let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
     for (index, primitive) in scene.primitives.iter().enumerate() {
+        #[cfg(feature = "development-validation")]
+        if options.omit_material == Some(primitive.material) {
+            continue;
+        }
         let material = &scene.materials[primitive.material];
         if (!options.alpha_only || material.alpha_zero)
             && frustum.overlaps(resident.primitive_bounds[index])
@@ -1191,14 +1258,20 @@ pub(super) fn build(
             }),
         },
     ];
-    let resolve_program = if options.aa {
+    let resolve_program = if options.windowed {
+        program::present_program(options.aa)
+    } else if options.aa {
         program::resolve_aa_program()
     } else {
         program::resolve_program()
     };
     let resolve_bindings = graph.raster_bindings(&resolve_program, &resolve_bindings)?;
     graph.raster(
-        "FXAA and single sRGB encode",
+        if options.windowed {
+            "FXAA and linear presentation source"
+        } else {
+            "FXAA and single sRGB encode"
+        },
         &resolve_program,
         [RasterDraw {
             bindings: Some(resolve_bindings),
@@ -1217,6 +1290,13 @@ pub(super) fn build(
         },
     )?;
     graph.export_image(output)?;
+    #[cfg(all(windows, feature = "presentation"))]
+    let present_capture = if capture && options.windowed {
+        Some(graph.readback_image("capture linear presentation source", output)?)
+    } else {
+        None
+    };
+    let capture = capture && !options.windowed;
     let captures = if capture {
         Some([
             graph.readback_image("capture linear HDR", color)?,
@@ -1248,6 +1328,8 @@ pub(super) fn build(
         camera: uniform,
         captures,
         bloom_capture,
+        #[cfg(all(windows, feature = "presentation"))]
+        present_capture,
         shadow_captures,
         shadow_updates,
         draws,

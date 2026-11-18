@@ -33,6 +33,29 @@ mod shadow;
 #[cfg(feature = "tracy")]
 #[path = "bistro/trace.rs"]
 mod trace;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+#[path = "bistro/window.rs"]
+mod window;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+#[path = "window_camera.rs"]
+#[allow(dead_code, reason = "shared with the smaller windowed example")]
+mod window_camera;
+#[cfg(all(
+    windows,
+    feature = "presentation",
+    any(feature = "vulkan", feature = "d3d12")
+))]
+#[path = "window_input.rs"]
+#[allow(dead_code, reason = "shared with the smaller windowed example")]
+mod window_input;
 
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, time::Duration};
@@ -57,8 +80,17 @@ struct Options {
     force_opaque: bool,
     capture_all_views: bool,
     capture_route_samples: bool,
+    capture_bloom_bypass: bool,
+    windowed: bool,
+    window_smoke: bool,
+    frame_limit: Option<usize>,
+    vsync: bool,
     resource_checks: bool,
     bloom: bloom::Bloom,
+    #[cfg(feature = "development-validation")]
+    omit_material: Option<usize>,
+    #[cfg(feature = "development-validation")]
+    offset_shadow_receiver: bool,
     aa: bool,
     shadows: bool,
     reuse_shadows: bool,
@@ -87,8 +119,17 @@ impl Options {
             force_opaque: false,
             capture_all_views: false,
             capture_route_samples: false,
+            capture_bloom_bypass: false,
+            windowed: false,
+            window_smoke: false,
+            frame_limit: None,
+            vsync: true,
             resource_checks: false,
             bloom: bloom::Bloom::Off,
+            #[cfg(feature = "development-validation")]
+            omit_material: None,
+            #[cfg(feature = "development-validation")]
+            offset_shadow_receiver: false,
             aa: true,
             shadows: true,
             reuse_shadows: true,
@@ -107,6 +148,26 @@ impl Options {
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
                 "--capture-route-samples" => result.capture_route_samples = true,
+                "--capture-bloom-bypass" => result.capture_bloom_bypass = true,
+                "--windowed" => result.windowed = true,
+                "--window-smoke" => {
+                    result.windowed = true;
+                    result.window_smoke = true;
+                }
+                "--vsync" => {
+                    result.vsync = match args.next().as_deref() {
+                        Some("on") => true,
+                        Some("off") => false,
+                        _ => return Err("--vsync needs on or off".into()),
+                    };
+                }
+                #[cfg(feature = "development-validation")]
+                "--omit-material" => {
+                    result.omit_material =
+                        Some(args.next().ok_or("missing material index")?.parse()?);
+                }
+                #[cfg(feature = "development-validation")]
+                "--offset-shadow-receiver" => result.offset_shadow_receiver = true,
                 "--resource-checks" => result.resource_checks = true,
                 "--bloom" => {
                     result.bloom = match args.next().as_deref() {
@@ -141,7 +202,10 @@ impl Options {
                     result.height = args.next().ok_or("missing height")?.parse()?;
                     specified_size = true;
                 }
-                "--frames" => result.frames = args.next().ok_or("missing frames")?.parse()?,
+                "--frames" => {
+                    result.frames = args.next().ok_or("missing frames")?.parse()?;
+                    result.frame_limit = Some(result.frames);
+                }
                 "--warmup" => result.warmup = args.next().ok_or("missing warmup")?.parse()?,
                 "--inflight" => result.inflight = args.next().ok_or("missing inflight")?.parse()?,
                 "--output" => result.output = args.next().ok_or("missing output directory")?.into(),
@@ -152,7 +216,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -188,6 +252,21 @@ impl Options {
         if result.capture_route_samples && result.fixture {
             return Err("route samples require a cooked Bistro scene".into());
         }
+        if result.capture_bloom_bypass && result.bloom == bloom::Bloom::Off {
+            return Err("Bloom bypass capture requires an active Bloom mode".into());
+        }
+        if result.windowed
+            && (result.capture_all_views
+                || result.capture_route_samples
+                || result.capture_bloom_bypass
+                || result.capture_shadows
+                || result.resource_checks
+                || result.steady_state_cpu
+                || result.alpha_only
+                || result.force_opaque)
+        {
+            return Err("offscreen capture and resource probes require offscreen mode".into());
+        }
         if result.resource_checks
             && (!cfg!(feature = "memory-profiling")
                 || result.inflight < 2
@@ -211,6 +290,26 @@ pub fn main() -> Result<(), Error> {
     let _client = tracy_client::Client::start();
     #[cfg(feature = "tracy")]
     tracy_client::set_thread_name!("Bistro main");
+    if options.windowed {
+        #[cfg(all(
+            windows,
+            feature = "presentation",
+            any(feature = "vulkan", feature = "d3d12")
+        ))]
+        return match options.api.as_str() {
+            #[cfg(feature = "vulkan")]
+            "vulkan" => window::execute::<backend::Vulkan>(options),
+            #[cfg(feature = "d3d12")]
+            "d3d12" => window::execute::<backend::D3d12>(options),
+            _ => Err("selected backend was not compiled into this example".into()),
+        };
+        #[cfg(not(all(
+            windows,
+            feature = "presentation",
+            any(feature = "vulkan", feature = "d3d12")
+        )))]
+        return Err("windowed Bistro requires Windows and the presentation feature".into());
+    }
     match options.api.as_str() {
         #[cfg(feature = "vulkan")]
         "vulkan" => run::execute::<backend::Vulkan>(&options),

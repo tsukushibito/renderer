@@ -1556,6 +1556,13 @@ Program作成と一時画像の容量は準備境界で確保する。入力は�
 両APIのWindows表示・自由移動、複数frame、更新・pending終了と補助sceneを統合確認する。
 初回受入は既存RTX 3060環境とし、初回読込と定常描画を分けて測定する。
 
+利用側のBistroはウィンドウとオフスクリーンでHDR、Bloom、露出、Neutral、FXAAを共有する。
+ウィンドウ向けresolveは同寸法のlinear RGBA8をexportし、PresenterのsRGB targetで変換する。
+D3D12は厳密な資源クラスで準備した既存RuntimeにPresenterを接続する。Vulkanはwindow surfaceから
+Runtimeを作り、同じ論理Graphの資源を準備する。extent変更では旧Graphと表示の完了を確認し、buffer
+snapshotを返却してから一時画像を準備し直す。登録済みassetの内容と所有は保持し、公開keyから
+buffer snapshotを取り直す。定常処理では準備済みのGraph、結果、一時画像、表示slotを使う。
+
 **完了条件:** 上表の描画・拡張性・二API・正しさ・所有・性能の証拠が揃う。
 外部の利用コードから再現できるガイドを整え、実行/未実行と既知の制限を説明できる。
 画像が出たことだけで拡張性や組込品質の達成を主張しない。

@@ -107,6 +107,21 @@ impl Camera {
         self.position
     }
 
+    #[allow(dead_code, reason = "available to other example scenes")]
+    pub fn set_pose(&mut self, position: [f32; 3], target: [f32; 3]) {
+        let delta: [f32; 3] = std::array::from_fn(|axis| target[axis] - position[axis]);
+        self.position = position;
+        self.yaw = delta[0].atan2(delta[2]);
+        self.pitch = delta[1].atan2(delta[0].hypot(delta[2]));
+        self.clear_input();
+    }
+
+    #[allow(dead_code, reason = "available to other example scenes")]
+    pub fn target(&self) -> [f32; 3] {
+        let forward = self.basis()[0];
+        std::array::from_fn(|axis| self.position[axis] + forward[axis])
+    }
+
     pub fn clip_from_world(&self, width: u32, height: u32) -> Matrix {
         let [forward, right, up] = self.basis();
         let view = [

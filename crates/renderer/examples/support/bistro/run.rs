@@ -225,7 +225,7 @@ fn identity(
     environment: &Value,
 ) -> Value {
     let shadow = super::shadow::Parameters::default();
-    json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
+    let identity = json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
         "shaders_sha256":super::digest(include_bytes!("shaders/manifest.json")),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
@@ -239,7 +239,19 @@ fn identity(
             "subpixel_quality":0.75,"position":"after Neutral, before sRGB"},
         "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
         "output":"linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
-        "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"})
+        "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"});
+    #[cfg(feature = "development-validation")]
+    let identity = {
+        let mut identity = identity;
+        if let Some(index) = options.omit_material {
+            identity["omit_material"] = json!(index);
+        }
+        if options.offset_shadow_receiver {
+            identity["receiver_normal_offset_texels"] = json!(16);
+        }
+        identity
+    };
+    identity
 }
 
 fn loaded_cook_hash(scene: &Scene, fixture: bool) -> Result<String, Error> {
@@ -256,7 +268,7 @@ fn loaded_cook_hash(scene: &Scene, fixture: bool) -> Result<String, Error> {
     clippy::too_many_arguments,
     reason = "captures use the same prepared frame context outside measurement"
 )]
-fn capture<B: Backend>(
+fn capture_planes<B: Backend>(
     backend: &mut B,
     resident: &mut Resident,
     scene: &Scene,
@@ -265,6 +277,7 @@ fn capture<B: Backend>(
     pool: &mut GraphPool,
     workspace: &mut Workspace,
     frame: usize,
+    sdr_only: bool,
 ) -> Result<Value, Error> {
     std::fs::create_dir_all(&options.output)?;
     let (camera, bytes) = uniform(conditions, options, frame)?;
@@ -300,6 +313,9 @@ fn capture<B: Backend>(
             .bloom_capture
             .map(|pass| (pass, "bloom_hdr", "rgba16f-le", 8)),
     ) {
+        if sdr_only && name != "sdr" {
+            continue;
+        }
         let mut bytes = vec![0u8; pixels * stride];
         B::readback(&mut completed, pass, &mut bytes)?;
         if name == "depth" {
@@ -340,6 +356,36 @@ fn capture<B: Backend>(
         "readback_outside_measurement":true});
     if let Some(updates) = built.shadow_updates {
         report["shadow_reuse_hits"] = json!(updates.map(|update| update.is_none()));
+    }
+    Ok(report)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "captures share the prepared frame context outside measurement"
+)]
+fn capture<B: Backend>(
+    backend: &mut B,
+    resident: &mut Resident,
+    scene: &Scene,
+    options: &Options,
+    conditions: &Conditions,
+    pool: &mut GraphPool,
+    workspace: &mut Workspace,
+    frame: usize,
+) -> Result<Value, Error> {
+    let mut report = capture_planes(
+        backend, resident, scene, options, conditions, pool, workspace, frame, false,
+    )?;
+    if options.capture_bloom_bypass {
+        let mut bypass = options.clone();
+        bypass.bloom = super::bloom::Bloom::Off;
+        bypass.capture_shadows = false;
+        bypass.output = options.output.join("bloom-bypass");
+        let mut reference = capture_planes(
+            backend, resident, scene, &bypass, conditions, pool, workspace, frame, true,
+        )?;
+        report["captures"]["bloom_bypass"] = reference["captures"]["sdr"].take();
     }
     Ok(report)
 }
@@ -421,7 +467,7 @@ fn measurement(
     )
 }
 
-fn write_report(directory: &Path, report: &Value) -> Result<(), Error> {
+pub(super) fn write_report(directory: &Path, report: &Value) -> Result<(), Error> {
     std::fs::create_dir_all(directory)?;
     std::fs::write(
         directory.join("report.json"),
@@ -431,7 +477,7 @@ fn write_report(directory: &Path, report: &Value) -> Result<(), Error> {
 }
 
 #[cfg(feature = "memory-profiling")]
-fn memory_report(snapshot: renderer::measurement::Snapshot) -> Value {
+pub(super) fn memory_report(snapshot: renderer::measurement::Snapshot) -> Value {
     json!({"rust":snapshot.rust.map(|event|json!({"calls":event.calls,"bytes":event.bytes})),
         "vma_host":snapshot.vma_host.map(|event|json!({"calls":event.calls,"bytes":event.bytes})),
         "native":snapshot.native,"overflowed":snapshot.overflowed,"allocation_free":snapshot.is_allocation_free(),
@@ -459,6 +505,13 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     } else {
         Scene::fixture(options.force_opaque)
     };
+    #[cfg(feature = "development-validation")]
+    if options
+        .omit_material
+        .is_some_and(|index| index >= scene.materials.len())
+    {
+        return Err("diagnostic material index is out of range".into());
+    }
     if !options.fixture && !conditions.ambient_occlusion {
         scene.disable_environment_occlusion();
     }
@@ -551,6 +604,11 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     if options.resource_checks {
         resource_stages["warmed"] = backend.memory_snapshot()?;
     }
+    let warmed_native = if options.gpu_timing && !options.fixture {
+        backend.memory_snapshot()?
+    } else {
+        Value::Null
+    };
     let setup_ns = setup.elapsed().as_nanos() as u64;
     #[cfg(feature = "memory-profiling")]
     let setup_memory = renderer::measurement::Snapshot::now().since(setup_memory);
@@ -628,6 +686,11 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let memory = renderer::measurement::Snapshot::now().since(memory_start);
     #[cfg(windows)]
     let cpu = super::clock::Boundary::capture()?.difference(cpu_start, frequency)?;
+    let drained_native = if options.gpu_timing && !options.fixture {
+        backend.memory_snapshot()?
+    } else {
+        Value::Null
+    };
     #[cfg(windows)]
     let steady_cpu = steady_boundary
         .map(|boundary| boundary.difference(cpu_start, frequency))
@@ -684,6 +747,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let aa_off = if options.aa {
         let mut diagnostic = options.clone();
         diagnostic.aa = false;
+        diagnostic.capture_bloom_bypass = false;
         diagnostic.capture_shadows = false;
         diagnostic.output = options.output.join("aa-off");
         Some(capture(
@@ -719,6 +783,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             let aa_off = if view.aa {
                 let mut diagnostic = view.clone();
                 diagnostic.aa = false;
+                diagnostic.capture_bloom_bypass = false;
                 diagnostic.capture_shadows = false;
                 diagnostic.output = view.output.join("aa-off");
                 Some(capture(
@@ -817,6 +882,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             "frame_storage_and_profiling_prepare":frame_storage_and_profiling_prepare_ns,"warmup":warmup_ns},
         "setup_scope":"combined asset/conditions load, boundary validation, native resource/pipeline preparation, upload/CPU input release, frame storage and warmup; checkpoints exclude some reporting/bookkeeping; outside measured frame ROI",
         "measurement":measured,"memory":memory_json,"validation":validation,"resource_checks":resource_checks,
+        "native_memory_at_boundaries":{"warmed":warmed_native,"drained":drained_native},
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
         "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
         "views":view_reports,"route_samples":route_reports,"readback_outside_measurement":true,

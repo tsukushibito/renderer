@@ -394,6 +394,49 @@ cargo test --locked --release -p renderer --test bloom_graph --no-default-featur
 python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 ```
 
+<a id="bistro-b5"></a>
+
+### 全Bistroの表示と統合受入
+
+アプリ側でBistroのHDR描画、外部Bloom、露出、Neutral、FXAAまで組み立てる。
+WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexportして渡す。
+オフスクリーンのSDRはresolve shader、ウィンドウはPresenterのsRGB targetで出力変換を行う。
+
+```powershell
+cargo run --locked --release -p renderer --example bistro --no-default-features --features vulkan,d3d12,presentation -- --api vulkan --manifest $manifest --ibl-manifest $iblManifest --bloom tent --windowed --output .tools/bistro-window
+```
+
+`--api d3d12`でも同じ入力とGraphを使う。WASDで移動、Q/Eで上下、Shiftで加速、右ボタンを押してマウスで視点を動かす。
+Tで巡回を切り替え、Escで終了する。`--view route`は固定1,800フレームの巡回から始める。
+`--frames`を指定するとwarmupと測定を終えて自動終了する。`--vsync on|off`は表示要求を選ぶ。
+resizeではGraphと表示の利用者が返却された時点で、登録済みassetを保持したままextent依存の画像を準備し直す。
+
+画像受入では、両APIのreleaseを`memory-profiling`付きでビルドし、別の出力先にstrictとshippingを保存する。
+strictに`development-validation,graph-diagnostics`を加える。下記の`pilot`で比較基準と故障検出を確認し、
+同じEXE・入力・閾値を使う`accept`で、両API・両構成・3反復を逐次実行する。
+`--capture-bloom-bypass`で同じ視点の無効時SDRを別に取り、比較のROI、差分画像、閾値hashを保存する。
+
+```powershell
+python -B tools/bistro/b5_images.py pilot --strict $strict --shipping $shipping --manifest $manifest --ibl-manifest $iblManifest --profile $profile --output $pilotDirectory
+python -B tools/bistro/b5_images.py accept --strict $strict --shipping $shipping --manifest $manifest --ibl-manifest $iblManifest --profile $profile --output $imageDirectory
+```
+
+同じrelease構成に`presentation`を追加し、各API・構成で`--window-smoke --bloom tent --frames 24`を実行する。
+1080pの自由カメラ入力をアプリ内で再生し、実際のウィンドウをresize・最小化・復帰した後、pendingから終了する。
+続いて`--windowed --view route --bloom tent --warmup 24 --frames 1800 --vsync off`で巡回と定常メモリを確認する。
+メモリの固定計測からresize・設定変更・画像ファイル書出しは外し、別の受入で確認する。
+
+```powershell
+python -B tools/bistro/b5_window_acceptance.py $windowSmokeDirectory $imageDirectory
+python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $manifest --ibl-manifest $iblManifest --output $performanceDirectory
+```
+
+性能には`vulkan,d3d12,presentation`のみのreleaseを使う。hostのCPU policyを検証してから逐次起動し、
+初回の読込／準備／upload、定常のCPU phase／GPU時間／frame間隔、VSync on/offのpresentを記録する。
+オフスクリーンは3,600 warmup＋5,400測定frame、別枠のウィンドウ計測は120 warmup＋600測定frameとする。
+各API・条件を独立3 processで実行する。
+実ウィンドウの時刻はアプリとnative APIの観測であり、ディスプレイ走査時刻はこの方法で測定しない。
+
 ### 画像比較と性能値の読み方
 
 同API反復と二API差は別に比較する。比較profileとそのhashを受入前に固定し、
