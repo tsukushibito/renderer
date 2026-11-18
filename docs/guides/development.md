@@ -439,7 +439,7 @@ python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile
 24回の直接描画と1回のインスタンス描画を比較する。既定値は `off` で、比較時も `--msaa 1|4` を使える。
 `--submission packed` と `--submission indirect` は、同じ共有頂点・インデックスと同じ不透明／MASKの材質グループを使う。
 `packed` ではCPU、`indirect` ではGPUが可視性を判定する。間接経路でも半透明はCPUが奥から手前に並べる。
-レポートの `packed_opaque` は準備したグループ数とプリミティブ候補数を示す。
+オフスクリーンの `prepared.packed_opaque` とWindowの `packed_opaque` は、準備したグループ数とプリミティブ候補数を示す。
 オフスクリーンの `draw_count` はカメラパスに発行した直接描画数で、GPUで可視数が決まる間接経路では `null` になる。
 インスタンス比較はForwardの `--submission direct` で実行する。
 

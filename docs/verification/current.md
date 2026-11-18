@@ -489,6 +489,7 @@ MRT専用例は異なる形式の2色出力と深度を検証した。同一パ�
 HDRの485画素とSDRのVulkan 1,871画素／D3D12 1,861画素で、各2,073,600画素の許容範囲内だった。
 DeferredのAPI間比較と同一APIの検証あり／製品構成も照合した。実ウィンドウではresize・最小化・復帰・pending終了と
 表示元／offscreen出力の量子化区間を確認した。要約のSHA-256は `d42c59224b84e9fadbe2c110db1a8f5c4981bc1bee2b3d63461bd61695c51f84`。
+既定のForward 1×は両APIで同じ視点のB5出力とHDR、Bloom HDR、深度、SDRがバイト一致した。
 
 Forward+のタイル一覧とGPUの視野カリングはCPU参照の境界ケースと照合した。直接インスタンシングは
 先頭以外から描画するインデックス範囲と左右の材質を確認し、間接描画は全可視・全不可視・混在とグループ境界を直接描画と比較した。
@@ -508,6 +509,48 @@ Forward 1×のHDR、Bloom HDR、SDR、深度は、両API・両構成の各組で
 間接描画の実ウィンドウ4実行は同じ表示とライフサイクルの条件を満たし、全12実行でnative診断はゼロだった。
 `.tools/pipeline-expansion/combined/combined-comparisons.json`のSHA-256は
 `c901e4374cfa64c48051eb7b259b5627bc9e861b1ef9f333a8fe953b0c968957`。
+
+全Bistroの巡回を、Deferred 1×、Forward+とインスタンシングの1×／4×、
+Forward 1×／Deferred 1×／Forward+ 4×に間接描画を組み合わせた計8通りで検証した。
+両API・開発検証あり／製品構成の32実行は、1080p実ウィンドウで24 warmup後に各180フレームを表示した。
+全実行でRustとVMAホストの確保・再確保・解放、およびRendererが発行するnative資源の作成・破棄はゼロだった。
+既存資源のresetは別に計上した。処理中の終了を含めて、native診断はゼロだった。
+`.tools/pipeline-expansion/memory-routes/summary.json`のSHA-256は
+`47a6e47a0d2228d26549596a1915f3effdac34d08be20e0282ad41c9e010a060`。
+
+### 1080p巡回の性能比較
+
+B5と同じWindows 11、Core i5-14600KFのPコア、HighQoS、Balanced電源プラン、RTX 3060（driver 610.88）を使った。
+`2ca3c58`の製品ビルドでGPUタイミングを有効にし、同じ全Bistro、1080p実ウィンドウ、VSync off、Bloom tent、2 in-flightに固定した。
+各構成・APIは独立processを3回起動し、毎回120 warmup後の600フレームを記録した。
+
+| 描画構成 | Vulkan フレーム間隔 p95 | D3D12 フレーム間隔 p95 | Vulkan Graph GPU p95 | D3D12 Graph GPU p95 |
+|---|---:|---:|---:|---:|
+| Forward 1× | 6.314 ms | 5.947 ms | 5.891 ms | 5.328 ms |
+| Forward 4× | 7.417 ms | 6.916 ms | 6.962 ms | 6.342 ms |
+| Deferred 1× | 5.094 ms | 5.192 ms | 4.622 ms | 4.473 ms |
+| 全ライト参照 1× | 11.844 ms | 11.825 ms | 11.161 ms | 11.052 ms |
+| Forward+ 1× | 8.364 ms | 7.969 ms | 7.988 ms | 7.206 ms |
+| 全ライト参照 4× | 14.506 ms | 14.983 ms | 13.953 ms | 14.054 ms |
+| Forward+ 4× | 10.249 ms | 9.848 ms | 9.669 ms | 8.925 ms |
+| 24回の個別描画 1× | 6.344 ms | 5.978 ms | 5.906 ms | 5.341 ms |
+| 1回のインスタンス描画 1× | 6.415 ms | 5.934 ms | 5.915 ms | 5.335 ms |
+| 共有ジオメトリ・直接 1× | 6.197 ms | 5.896 ms | 5.594 ms | 5.112 ms |
+| 共有ジオメトリ・間接 1× | 6.792 ms | 6.123 ms | 6.283 ms | 5.285 ms |
+
+値は各processで求めたp95の3回中央値。Forward+は同じ64灯の全ライト参照からフレーム間隔p95を29〜34%短縮した。
+Forward 4×のフレーム間隔p95は1×から約1.0〜1.1 ms増え、ドレイン時のOS報告GPU使用量の中央値は約171〜174 MiB増えた。
+Deferred 1×はこのシーンのForward 1×よりフレーム間隔p95が0.76〜1.22 ms短く、同GPU使用量は約101〜125 MiB多かった。
+24配置を1コマンドにまとめた場合、フレーム間隔p95の変化は両APIとも0.08 ms以内だった。
+
+同じ共有ジオメトリと材質順の間接描画は、直接描画よりフレーム間隔p95がVulkanで0.595 ms、D3D12で0.227 ms長かった。
+グループ別のテンプレート転送・エンコードとGPUカリングを含む。VulkanのGraph prepare平均は0.405 → 0.517 ms、
+record平均は0.363 → 0.421 msだった。D3D12のGraph record平均は1.115 → 1.097 msだった。
+Graph GPU p95には固定スロットの実行も含まれる。Bistroではこの構成を `--submission indirect` で選択する。
+
+66実行の報告と各フレームの生データは `.tools/pipeline-expansion/performance/` に保存した。
+`cohort-summary.json`のSHA-256は `96790497a5560b761752ce52a5ce4929286e244d412e22396499540318ad0983`。
+[再現手順](../guides/development.md#bistro-b5)
 
 ## Bistro B3の120 FPS目標と高速化
 
