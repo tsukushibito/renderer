@@ -18,7 +18,7 @@ use crate::{
         AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, ResourceDesc,
         SampleCount,
     },
-    program::{BindingType, ManagedRasterProgram, ShaderStages},
+    program::{BindingType, MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram, ShaderStages},
 };
 
 fn shader_read_state(stages: ShaderStages) -> D3D12_RESOURCE_STATES {
@@ -117,9 +117,9 @@ pub(super) fn use_image(
 }
 
 pub(super) fn validate_targets(colors: &Range<usize>) -> Result<(), D3D12RuntimeError> {
-    if colors.len() > 1 {
+    if colors.len() > MAX_RASTER_COLOR_ATTACHMENTS {
         return Err(D3D12RuntimeError::unsupported(
-            "D3D12 Raster supports one color attachment",
+            "D3D12 Raster color attachment count exceeds the supported maximum",
         ));
     }
     Ok(())
@@ -388,15 +388,14 @@ pub(super) fn record(
             0,
         )
     });
-    let (program, draws, colors, depth) = match &graph.passes[pass].operation {
+    let (batches, colors, depth) = match &graph.passes[pass].operation {
         Operation::Raster {
-            program,
-            draws,
+            batches,
             colors,
             depth,
             ..
-        } => (Some(program), Some(draws), colors, depth),
-        Operation::AttachmentPass { colors, depth, .. } => (None, None, colors, depth),
+        } => (graph.raster_batches(batches), colors, depth),
+        Operation::AttachmentPass { colors, depth, .. } => (&[][..], colors, depth),
         _ => unreachable!(),
     };
     let sample_count = target_samples(graph, colors, *depth);
@@ -424,12 +423,6 @@ pub(super) fn record(
         transition(&slot.list, image.native.raw(), &mut image.state, scope);
         image.uav_write = false;
     });
-    let color = graph.raster_attachments(colors).first().map(|attachment| {
-        (
-            attachment,
-            &storage.images[slot.resource_map[attachment.view.image().index]],
-        )
-    });
     let depth = depth.map(|index| {
         let attachment = graph.raster_attachment(index);
         (
@@ -437,12 +430,15 @@ pub(super) fn record(
             &storage.images[slot.resource_map[attachment.view.image().index]],
         )
     });
-    let mut color_handle = None;
+    let mut color_handles = [D3D12_CPU_DESCRIPTOR_HANDLE::default(); MAX_RASTER_COLOR_ATTACHMENTS];
     let mut depth_handle = None;
     let mut extent = [0, 0];
-    if let Some((attachment, image)) = color {
-        let handle = image.rtv.unwrap();
-        color_handle = Some(handle);
+    for (handle, attachment) in color_handles
+        .iter_mut()
+        .zip(graph.raster_attachments(colors))
+    {
+        let image = &storage.images[slot.resource_map[attachment.view.image().index]];
+        *handle = image.rtv.unwrap();
         extent = [image.desc.width, image.desc.height];
         if attachment.ops.load == LoadAction::Clear
             && attachment.clear.map(f32::to_bits) == [0.0f32, 0.0, 0.0, 1.0].map(f32::to_bits)
@@ -451,7 +447,7 @@ pub(super) fn record(
             // Graph guarantees finite clear color and complete attachment extent.
             unsafe {
                 slot.list
-                    .ClearRenderTargetView(handle, &attachment.clear, &[])
+                    .ClearRenderTargetView(*handle, &attachment.clear, &[])
             };
         } else if attachment.ops.load == LoadAction::Clear {
             clear_programs.record(&slot.list, image, attachment.clear, None);
@@ -479,14 +475,10 @@ pub(super) fn record(
             clear_programs.record(&slot.list, image, [1.0; 4], Some(attachment.clear[0]));
         }
     }
-    let Some(program) = program else {
+    if batches.is_empty() {
         record_resolves(graph, colors, &slot.resource_map, &slot.list, storage);
         return Ok(());
-    };
-    let pipeline = programs
-        .iter()
-        .find(|pipeline| pipeline.matches(program, depth.is_some(), sample_count))
-        .unwrap();
+    }
     let viewport = D3D12_VIEWPORT {
         TopLeftX: 0.0,
         TopLeftY: 0.0,
@@ -501,15 +493,14 @@ pub(super) fn record(
         right: extent[0] as i32,
         bottom: extent[1] as i32,
     };
-    // SAFETY: Immutable PSO matches attachment formats/depth and prepared root
-    // signature; the live images and descriptor heaps stay leased. Supported
-    // extents fit D3D12 viewport/scissor limits established at image creation.
+    // SAFETY: Pass preparation bounded the native target count. This stack
+    // array contains actual CPU handles in fragment-output slot order. The
+    // descriptors are not required to be contiguous in their native heap.
+    // The live images remain leased and the extent fits native limits.
     unsafe {
-        slot.list.SetPipelineState(&*pipeline.pipeline);
-        slot.list.SetGraphicsRootSignature(&*pipeline.signature);
         slot.list.OMSetRenderTargets(
-            color_handle.is_some() as u32,
-            color_handle.as_ref().map(std::ptr::from_ref),
+            colors.len() as u32,
+            (!colors.is_empty()).then_some(color_handles.as_ptr()),
             false,
             depth_handle.as_ref().map(std::ptr::from_ref),
         );
@@ -518,14 +509,58 @@ pub(super) fn record(
         slot.list.IASetPrimitiveTopology(D3D12_PRIMITIVE_TOPOLOGY(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
         ));
-        if !program.bindings().is_empty() {
-            slot.list.SetDescriptorHeaps(&[
-                Some(storage.srv_heap().clone()),
-                Some(storage.sampler_heap().clone()),
-            ]);
-        }
     }
-    for draw in graph.raster_draws(draws.unwrap()) {
+    let mut bound_program: Option<&ManagedRasterProgram> = None;
+    let mut bound_heaps = false;
+    for batch in batches {
+        let program = &batch.program;
+        if bound_program.is_none_or(|previous| !program.same(previous)) {
+            let pipeline = programs
+                .iter()
+                .find(|pipeline| pipeline.matches(program, depth_handle.is_some(), sample_count))
+                .expect("prepared Raster pipeline");
+            // SAFETY: Every prepared PSO matches these shared attachments and
+            // its own root signature. Changing the signature invalidates prior
+            // root arguments. record_draws sets all the current Program's roots.
+            unsafe {
+                slot.list.SetPipelineState(&*pipeline.pipeline);
+                slot.list.SetGraphicsRootSignature(&*pipeline.signature);
+            }
+            bound_program = Some(program);
+        }
+        if !bound_heaps && !program.bindings().is_empty() {
+            let storage = slot.raster.as_ref().unwrap();
+            // SAFETY: The execution owns both heaps and keeps them leased
+            // until every recorded use retires. Later batches reuse them.
+            unsafe {
+                slot.list.SetDescriptorHeaps(&[
+                    Some(storage.srv_heap().clone()),
+                    Some(storage.sampler_heap().clone()),
+                ]);
+            }
+            bound_heaps = true;
+        }
+        record_draws(slot, owner, graph, program, &batch.draws)?;
+    }
+    record_resolves(
+        graph,
+        colors,
+        &slot.resource_map,
+        &slot.list,
+        slot.raster.as_mut().unwrap(),
+    );
+    Ok(())
+}
+
+fn record_draws(
+    slot: &mut ExecutionSlot,
+    owner: &DeviceOwner,
+    graph: &CompiledGraph,
+    program: &ManagedRasterProgram,
+    draws: &Range<usize>,
+) -> Result<(), D3D12RuntimeError> {
+    let storage = slot.raster.as_mut().unwrap();
+    for draw in graph.raster_draws(draws) {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running().map(|client| {
             client.span(
@@ -681,7 +716,6 @@ pub(super) fn record(
             unsafe { slot.list.DrawIndexedInstanced(draw.index_count, 1, 0, 0, 0) };
         }
     }
-    record_resolves(graph, colors, &slot.resource_map, &slot.list, storage);
     Ok(())
 }
 

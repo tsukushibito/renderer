@@ -355,27 +355,14 @@ fn requirements_inner(
                     })?;
             }
             Operation::Raster {
-                program,
+                batches,
                 draws,
                 colors,
                 depth,
                 ..
             } => {
+                super::raster::validate_targets(colors)?;
                 let sample_count = super::raster::target_samples(graph, colors, *depth);
-                if !programs
-                    .iter()
-                    .any(|pipeline| pipeline.matches(program, depth.is_some(), sample_count))
-                {
-                    return Err(D3D12RuntimeError::capacity_with(
-                        "Raster pipeline working set has not been prepared",
-                        RuntimeCapacityError::new(
-                            RuntimeCapacityKind::WorkingSet,
-                            CapacityRecovery::Prepare,
-                            None,
-                            None,
-                        ),
-                    ));
-                }
                 draws_total = draws_total
                     .checked_add(draws.len())
                     .filter(|count| *count <= capacity.operations)
@@ -428,29 +415,48 @@ fn requirements_inner(
                         }
                     }
                 }
-                for draw in graph.raster_draws(draws) {
-                    raster_descriptors = raster_descriptors
-                        .checked_add(super::raster::binding_requirements(
-                            graph,
-                            program,
-                            &draw.bindings,
-                        )?)
-                        .filter(|count| *count <= storage.raster_descriptor_capacity)
-                        .ok_or_else(|| {
-                            D3D12RuntimeError::capacity_with(
-                                "prepared Raster image descriptor capacity exhausted",
+                let mut last_program: Option<&crate::program::ManagedRasterProgram> = None;
+                for batch in graph.raster_batches(batches) {
+                    if last_program.is_none_or(|previous| !batch.program.same(previous)) {
+                        if !programs.iter().any(|pipeline| {
+                            pipeline.matches(&batch.program, depth.is_some(), sample_count)
+                        }) {
+                            return Err(D3D12RuntimeError::capacity_with(
+                                "Raster pipeline working set has not been prepared",
                                 RuntimeCapacityError::new(
-                                    RuntimeCapacityKind::Descriptors,
-                                    CapacityRecovery::Reconfigure,
+                                    RuntimeCapacityKind::WorkingSet,
+                                    CapacityRecovery::Prepare,
                                     None,
                                     None,
                                 ),
-                            )
-                        })?;
+                            ));
+                        }
+                        last_program = Some(&batch.program);
+                    }
+                    for draw in graph.raster_draws(&batch.draws) {
+                        raster_descriptors = raster_descriptors
+                            .checked_add(super::raster::binding_requirements(
+                                graph,
+                                &batch.program,
+                                &draw.bindings,
+                            )?)
+                            .filter(|count| *count <= storage.raster_descriptor_capacity)
+                            .ok_or_else(|| {
+                                D3D12RuntimeError::capacity_with(
+                                    "prepared Raster image descriptor capacity exhausted",
+                                    RuntimeCapacityError::new(
+                                        RuntimeCapacityKind::Descriptors,
+                                        CapacityRecovery::Reconfigure,
+                                        None,
+                                        None,
+                                    ),
+                                )
+                            })?;
+                    }
                 }
-                super::raster::validate_targets(colors)?;
             }
             Operation::AttachmentPass { colors, .. } => {
+                super::raster::validate_targets(colors)?;
                 let storage = raster.as_deref_mut().ok_or_else(|| {
                     D3D12RuntimeError::capacity_with(
                         "Raster image working set has not been prepared",
@@ -471,7 +477,6 @@ fn requirements_inner(
                         storage.require_target_view(resource_map[access.resource]);
                     }
                 }
-                super::raster::validate_targets(colors)?;
             }
             _ => {
                 return Err(D3D12RuntimeError::unsupported(

@@ -4,7 +4,8 @@ use crate::{ImageFormat, graph::SampleCount};
 use std::mem::ManuallyDrop;
 
 use crate::program::{
-    BindingType, BlendState, CompareOp, ManagedRasterProgram, ShaderStages, VertexFormat,
+    BindingType, BlendState, CompareOp, MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram,
+    ShaderStages, VertexFormat,
 };
 
 use super::{
@@ -347,7 +348,12 @@ impl RasterPipeline {
             )?;
             super::raster_storage::require_multisample(owner, DXGI_FORMAT_D32_FLOAT, sample_count)?;
         }
-        let mut formats = [DXGI_FORMAT_UNKNOWN; 8];
+        if managed.color_outputs().len() > MAX_RASTER_COLOR_ATTACHMENTS {
+            return Err(D3D12RuntimeError::unsupported(
+                "Raster Program color output count exceeds the supported maximum",
+            ));
+        }
+        let mut formats = [DXGI_FORMAT_UNKNOWN; MAX_RASTER_COLOR_ATTACHMENTS];
         for (destination, format) in formats.iter_mut().zip(managed.color_outputs()) {
             *destination = match format {
                 ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
