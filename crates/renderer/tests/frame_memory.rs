@@ -20,6 +20,56 @@ static ALLOCATOR: CountingAllocator<System> = CountingAllocator::new(System);
 #[ignore = "explicit optimized full CPU lifecycle allocation gate; RENDERER_MEMORY_BASELINE=1 records a nonzero baseline"]
 fn frame_memory_cpu_full_lifecycle() {
     frame_memory::cpu_lifecycle(baseline());
+    indirect_capacity_retries_are_allocation_free();
+}
+
+fn indirect_capacity_retries_are_allocation_free() {
+    use renderer::graph::{
+        BufferDesc, GraphCapacity, GraphCapacityKind, GraphPool, IndexedIndirectTable,
+        IndexedIndirectTemplate,
+    };
+    use renderer::measurement::Snapshot;
+
+    let mut pool = GraphPool::new(
+        GraphCapacity {
+            resources: 5,
+            passes: 1,
+            ..GraphCapacity::default()
+        },
+        1,
+    )
+    .unwrap();
+    let table = IndexedIndirectTable::new(&[IndexedIndirectTemplate {
+        first_index: 0,
+        index_count: 3,
+    }])
+    .unwrap();
+    let mut graph = pool.begin().unwrap();
+    let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
+    let indices = graph.buffer("indices", BufferDesc { size: 12 }).unwrap();
+    let visibility = graph
+        .buffer("visibility", BufferDesc { size: 256 })
+        .unwrap();
+
+    let before = Snapshot::now();
+    for _ in 0..64 {
+        let error = graph
+            .encode_indexed_indirect("encode", &table, vertices, indices, visibility, 0)
+            .unwrap_err();
+        assert_eq!(error.capacity().unwrap().kind, GraphCapacityKind::Passes);
+    }
+    let output = graph.buffer("output", BufferDesc { size: 4 }).unwrap();
+    graph.buffer("second slot", BufferDesc { size: 4 }).unwrap();
+    graph.upload_buffer("recover", output, 0, &[0; 4]).unwrap();
+    graph.export_buffer(output).unwrap();
+    let compiled = graph.compile().unwrap();
+    assert!(compiled.ordered_pass_names().eq(["recover"]));
+    drop(compiled);
+    let events = Snapshot::now().since(before);
+    assert!(
+        events.is_allocation_free(),
+        "indirect retry events: {events:?}"
+    );
 }
 
 fn baseline() -> bool {
