@@ -91,18 +91,11 @@ bufferは半開byte範囲を指定する。
 両APIともnative未対応の操作や準備済み容量の不足をprepareで明示エラーにする。
 共有Graphを構築できることだけで、すべてのbackendがその操作を実行できるとは扱わない。
 
-B1の最初の範囲として、Graph外の`program::ManagedProgram`と両runtimeの
-Program、Uniform/Storage buffer、RGBA8/RGBA16F/D32画像/View、samplerの共通binding作成APIを用意する。
-`Rgba8Srgb`とsampled mip範囲、`LinearRepeat`はB2の材質入力用に加えた。
-Viewはsampled用とD32のdepth attachment用を区別し、aspectはformatから導出する。
-bindingはmanifest順に
-実Programと全資源の版/範囲を保持する。Storage本文はGPU可変で、作成を初期化とは扱わない。
-`StorageRead`と`StorageWrite`は同じStorage資源のbinding用途を表す。
-Graph外のbinding作成と、Graph内の論理bindingからnative命令へ具体化する経路は分ける。
-[管理下資源の契約](vulkan.md#managed-uniform)を参照する。
-作成API単体はdispatchを実行せず、内容初期化も保証しない。
-一般owned pass・attachment/subresource由来の計画とnative実行は以下の契約に従う。
-その作成領域・解析workspace・不変planの所有は、以下の準備済みslotへ移行した。
+`program::ManagedProgram`はComputeの不変ABIとアクセス範囲を定義する。
+`Graph::dispatch`が各bindingと論理資源を所有し、両runtimeが明示準備したpipelineとdescriptorへ具体化する。
+sampled image ViewとD32のdepth attachmentは画像の用途とformatで区別し、aspectはformatから導出する。
+StorageReadとStorageWriteはStorage資源へのアクセス用途であり、資源作成やbindingだけで内容を初期化しない。
+[管理下Programの契約](vulkan.md#managed-uniform)を参照する。
 
 <a id="owned-shader-bindings"></a>
 
@@ -119,8 +112,7 @@ Rasterは`Graph::raster_bindings(&program, &bindings)`で同じ型のsliceを一
 命令は不変な管理下Program identity、dispatch数、manifest順のbindingを所有する。
 Programの不変static descriptorと準備済みarenaへコピーしたbuffer descriptor・subresource View・
 sampler設定により、呼出元のProgram変数・binding/draw sliceが変更・破棄されてもplanは変わらない。
-同じRaster内のdrawごとに異なるmaterialのhandleを指定できる。これは論理Graph資源の所有であり、
-`.2.1`のnative Program/Bindingsをimportした契約ではない。
+同じRaster内のdrawごとに異なるmaterialのhandleを指定できる。命令は論理Graph資源を参照する。
 
 全slotの過不足・重複・種別・owner、非ゼロのbuffer範囲・ABI最小size・論理境界を構築時に確認する。
 解析にはABI最小sizeから推定した量ではなく、shaderと同時にレビューするfootprintを使う。

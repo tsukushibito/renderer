@@ -360,158 +360,36 @@ clear/store・draw順・depth/tint・共有Vertex/Index・後半drawの失敗・
 
 ### 管理下Programと資源binding
 
-`renderer-7ft.2.1.2`は、共通の`program::ManagedProgram`からnative Programを作成し、
-UniformとStorageの資源・binding作成を共通APIへまとめる。Graph非依存の`managed`
-moduleがpipeline、layout、allocation、bindingの所有を担当し、既存の固定`ProgramKind`を増やさない。
-`.2.1.4`でRGBA8画像/View/samplerの作成とbindingを加え、`.2.1.5`でRGBA16Fへ拡張する。
-そのB1 fixtureの初期範囲に、他format/mip/layer/filterと未信頼shaderの取込は含めない。
-B2で加えたsRGB・mip chain・linear repeatの現行契約は[画像とcopyの範囲](#画像とcopyの範囲)に従う。
-`Graph::dispatch`は管理下buffer・sampled assetの論理CPU計画を接続する。各drawの型付きbindingと共に、manifest由来のVertex/Fragment/Compute stageと実footprintを保持する。`textured_mesh()`のVS UniformとFS sampled画像/samplerはowned Rasterのnative PSOへ接続する。
-owned dispatchは論理Graphの資源とbindingを、明示準備したCompute pipeline/descriptorへ具体化する。
-Graph外のnative Bindingsをimportする経路とは別であり、既存の実行枠・資源lease・Fence退役を使う。
-culledな未対応枝は除去できる。Uniform/storage/sampled用途は保持した実shader stageと対応するaccessへ具体化し、Vertex/Index fetchはそれぞれ入力stageを使うが、
-storage画像はCOMPUTE_SHADERとSHADER_STORAGE_READ/WRITE、GENERAL layoutを使い、
-sampled用途との遷移とpass間依存を保持する。
+利用側は `Graph::dispatch` と `Graph::raster_bindings` に論理資源を渡す。
+Graphがbinding、実際のshader stage、アクセス範囲を所有し、runtimeは準備済みpipelineとdescriptorに具体化する。
+記録済み未投入、pending、完了不明の処理が参照するpipeline・descriptor・画像Viewは、取消または実完了まで保持する。
 
-safeなshader入口はレビュー済みの`ManagedProgram::uniform_readback()`、`storage_readback()`、
-`sampled_readback()`、`sampled_float_readback()`である。
-前者は以下のbuffer ABIを持つ。
-GLSL 450・SPIR-V 1.3、entry `main`、local size 1×1×1、set 0/binding 0の
-`std140 uvec4`（offset 0、16 byte）を読み、Storageのset 1/binding 0へ
-16 byteを書く。一つのinvocationだけを実行し、値依存の範囲外アクセスや競合を作らない。
-reflection・hashだけで任意source/binaryを信頼済みへ昇格させる機能は提供しない。
-利用側は`ComputeProgramDescriptor`をstaticに保持し、`ManagedProgram::from_trusted_descriptor`のunsafe境界で
-Compute shaderを追加できる。binary・entry・local size・binding ABIとformat、buffer footprint、
-全域writeとdispatch/extentの関係、宣言外アクセス・範囲外アクセス・race・shader内同期の安全性を
-取込側がレビューする。バイナリや宣言を変えるとその保証は失効し、新しい不変descriptorを使う。
-反射情報だけではデータ依存アクセスや全域writeを証明できないため、任意binaryを受けるsafe入口は採用しない。
-この責任分担はnativeの実Device能力・alignment・上限・容量・失敗処理を省く理由にはしない。
-現行descriptorはentry `main`、非配列・非MSのfloat 2D画像と通常FP32演算、D3D12のgroup=register space／
-binding=register番号を前提にする。bufferはroot descriptorで扱えるraw/structured ABIとし、
-typed buffer、push constant、descriptor配列、Workgroup/shared storageや未有効のoptional featureは扱わない。
-利用側fixtureのshaderと二API生成物も固定toolで管理し、Rendererのeffect列挙を増やさず実証する。
-生成時にSPIR-VとDXILのreflectionをABI契約へ照合する。CPU試験でRustのmanifest表も
-生成reflectionへ結び付け、kind/group/binding/minimum byte数を一致させる。
+`prepare_compute_programs(&[ManagedProgram])` は明示準備境界で実Deviceのcompute／descriptor上限を確認し、
+pipelineとgroup別set layout、容量付きdescriptorを作る。実際のbindingはoffset alignment、range、format／usageに適合させる。
+通常frameはその容量を借用し、未準備Programや枠不足は型付きエラーで返す。
+Uniformは`std140`の既存ABIを使う。StorageReadとStorageWriteはどちらも`STORAGE_BUFFER`へlowerし、
+storage画像のアクセスは実shader stageと`GENERAL` layoutを使う。形式を宣言するshaderを使い、
+read/write-without-formatのfeatureを暗黙に要求しない。
 
-作成時に実Deviceのcompute/descriptor上限とABIを検査し、manifest表からgroupごとの
-set layoutを作る。`create_managed_buffer`はUniformとStorageを受け、既存Graph registryの
-`create_buffer`とは所有の役割が異なる。Uniformは`UNIFORM_BUFFER`のVMA allocationへ
-初期byteを一度write/flushし、公開後のCPU上書きを許可しない。Storageは
-`STORAGE_BUFFER|TRANSFER_SRC`、`AutoPreferDevice`で未初期化作成し、CPU mapを公開しない。
-`std140`を使い、UBO標準layoutやscalar layout featureを要求しない。
+safeな入口はレビュー済みの`uniform_readback`、`storage_readback`、`sampled_readback`、
+`sampled_float_readback`。固定のreadback assetは1 invocationで、宣言済みの16または64 byteを書き込む。
+RGBA16FのsampleはFP32 bit列に戻し、shader内の16-bit演算型を必要としない。
+D32はdepth attachmentとして初期化でき、depth aspectのsampled Viewを使う。
+実行するfootprintとリソース上の論理descriptor範囲は[Graphの契約](rendergraph.md#program由来bindingとshader-stageのowned計画)に従う。
 
-`create_bindings`は全slotの過不足・重複、用途、owner、論理範囲を検査し、uniform/storage
-それぞれの実Device offset alignmentと最大rangeを満たすことを保証する。入力順は自由で、
-成功後はmanifest順のProgram・buffer/範囲・View/Image・samplerを強保持する。pool/setを新規作成し一度だけupdateする。
-slot解決は呼出し元の入力を直接参照し、検査専用descriptor Vecを作らない。各manifest slotへ
-対応する入力がちょうど1件であることと全体の件数から、過不足・重複を排除する。
-全結果の解決・資源検査が成功してからnative pool/setを作る。選択済みpairのslotを再照合せず、
-同じslotの対応付けを別処理で再探索しない。保持用buffer/範囲配列とnative descriptor更新用配列は維持する。
-Uniform専用の作成API・型とconsumerは共通APIへ置換し、互換wrapperを残さない。
-一資源の用途をUniformかStorageに固定し、両用途への同一資源aliasを許可しない。
-不変なのはProgram/descriptor/資源の版と範囲であり、Storage本文はGPUが書き換えられる。
-作成成功や`StorageWrite`だけで初期化済みにはしない。このshaderが確立するのは指定offsetの16 byteだけである。
-失効操作を公開しないABI・範囲を記録時に再走査せず、native失敗、容量、同期、実GPU完了と所有は製品に残す。
+利用側は静的な`ComputeProgramDescriptor`を`ManagedProgram::from_trusted_descriptor`のunsafe境界で取り込む。
+binary・entry・local size・binding ABI・format、範囲、dispatchと全域write、競合とshader内同期を取込側がレビューする。
+反射はABIを照合する。データ依存アクセスや全域writeはshader本体と宣言を合わせて確認する。
+Computeの画像は非配列・非MSのfloat 2Dとし、固定descriptor表を使う。
+root bufferに対応するraw／structured ABIを使い、typed buffer、push constant、descriptor配列、Workgroup/shared storageは対象外とする。
+生成条件とRust側ABIは固定ツールの反射結果に照合する。
 
-受入は公開APIで作成したStorageを使い、命令記録とreadbackだけを`cfg(test)`へ限定する。
-fixture専用の排他leaseで同一Storageへの重複記録を拒否し、cancelまたは実Fence完了で返す。
-reuse時のshader write/copy readから次のshader writeへの依存も記録する。
-leaseは既存transfer payloadと一緒に保持し、不確定失敗でも早期に返さない。
-この試験用state/lease/入力は通常buildに含めない。一般Graphは別の製品用計画・状態・所有へ接続し、
-private fixtureの入力照合やCPU待機で同期を補わない。
-
-`prepare_compute_programs(&[ManagedProgram])`は明示準備境界でpipeline/layoutと容量付きdescriptorを準備する。
-通常frameのprepare/recordはその容量を借用し、未準備Programや枠不足を型付きエラーにする。
-記録済み未投入、pending、完了不明の処理が参照するpipeline/descriptor/Viewを早期に返却しない。
-RGBA16F storage画像は実format/type/usage組の能力を確認する。format qualifier付きのshaderを使い、
-read/write-without-formatのfeatureを暗黙に要求しない。SPIR-Vの能力条件を生成物と有効featureへ対応付ける。
-実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
-
-`.2.1.7`の`StorageRead`は既存Storage資源を読むbindingであり、別のbuffer用途を増やさない。
-Vulkanのdescriptorはread/writeとも`STORAGE_BUFFER`で、descriptor上限も両者を合算する。
-offset alignmentと最大rangeは既存storage契約を使う。`storage_read.comp`はset0/binding0の
-readonly `std430 uvec4`の先頭16 byteを読み、set1/binding0のwriteonly出力へ16 byteを書く。
-生成reflectionでreadonly/writeonlyとmember/slot/sizeを照合し、不変manifestへ結び付ける。
-binding作成成功をStorage本文の初期化保証にはしない。
-
-private受入は同じWorkの中で`uniform_readback`をproducer、`storage_readback`をconsumerとして実行する。
-準備時にレビュー済みassetのidentity、producer出力とconsumer入力の同じBuffer版・先頭offset、
-実際の16-byte write/read保証を結び付け、input/outputの全buffer aliasを拒否する。
-公開binding作成へalias検査用scanを増やさない。両Program/Bindingsとinput/outputを保持し、
-各物理Storageを一度だけ排他leaseする。producer write→consumer readの
-`COMPUTE_SHADER`/`SHADER_STORAGE_WRITE`→`COMPUTE_SHADER`/`SHADER_STORAGE_READ`依存を置き、
-consumer出力だけを最後にcopy/readbackする。間のCPU待機やreadbackで同期を補わない。
-再利用時は前consumer read→次producer writeの実行順も保つ。
-asset identity確認とproducer/canonical slotの試験用metadataは`cfg(test)`に限定し、
-製品のcreation契約と一般Graphの実行計画を混同しない。
-
-`create_managed_image(ImageDescriptor)`はRGBA8_UNORM/sRGB、RGBA16FまたはD32_FLOATの2D、layer/sample各1、
-optimal tilingで作る。色は`SAMPLED|TRANSFER_DST`、D32は`DEPTH_STENCIL_ATTACHMENT|SAMPLED`に固定する。Graph画像のstorage/color attachment等の
-固定usageやframebuffer/viewport上限を持ち込まず、実際のformat/type/tiling/usage/flagsと
-extent/mip/layer/sample対応を作成境界で照会する。packed pixel量をVMA allocation sizeへ代用しない。
-作成直後は未初期化であり、upload/submit/waitを暗黙に行わない。
-`preferred_depth_clear: Option<f32>`はD32の後続attachment clearに予定する値であり、
-内容初期化や後続clear値の制限を意味しない。`None`も許可し、色への`Some`、非有限値、
-[0,1]外、subnormalは作成境界で拒否する。この不変metadataをView/Imageの所有とともに保持する。
-`ImageDescriptor::mip_levels`は非ゼロでextentから許される段数以下とする。
-`create_image_view`は選択する連続mip範囲、ownerと`ImageViewUsage`を検査し、ViewがImageを保持する。
-`Sampled`が既定で、`DepthAttachment`はD32だけに許可する。aspectはImageのformatからcolor/depthへ導出し、
-呼出し側に別のaspect指定を要求しない。depth attachment Viewのmip countは1、sampled bindingには`Sampled` Viewだけを受け付ける。
-`create_sampler(NearestClamp)`はnormalized coordinate、nearest min/mag/mip、clamp-to-edge、
-LOD0、`LinearRepeat`はlinear min/mag/mip、repeat、選択View内のLOD範囲を使い、いずれもcompare/anisotropyなしで作る。
-`LinearClamp`は全軸clamp、`LinearRepeatUClampV`はU repeat/VとW clampで同じlinear設定を使う。
-Graphのsampler operandも実際のnative samplerへ対応させる。Device全体の生存sampler数をnative作成前に予約し、
-失敗時またはnative破棄後に返す。既存固定Graph/表示samplerも同じ上限契約を使う。
-
-`Binding`のslotと`BindingResource`のbuffer/View/sampler参照へ入力をまとめ、旧buffer専用
-binding APIを置換する。sampled shaderはset0/binding0のseparate sampled image、
-set0/binding1のseparate sampler、set1/binding0の16-byte StorageWriteを持つ。
-全slot解決と種別/owner/範囲検査後に通常descriptor setを一度作成/updateし、公開後は変更しない。
-View/Image/samplerをdrawごとに再走査する処理や、検査専用Vecを追加しない。
-Deviceに対するsampled-image/samplerのstage別/set別descriptor上限もProgram作成時に保証する。
-Rasterのtrusted `sampling_pairs`は実際の画像・sampler組を保証し、対応samplerがlinearの場合だけ
-その画像のfilter能力を照合する。色のlinearとD32のnearestを同じパスで使っても、D32へlinear能力を要求しない。
-同じ不変binding集合はsubmit内で一度だけ確認し、明示準備したビット領域を実行枠の再利用時に戻す。
-追加のヒープ確保やdrawごとの内容再走査は行わない。Computeは従来の保守的な能力条件を維持する。
-
-private受入は2x2の非対称RGBA8をuploadし、4回の`textureLod(..., 0)`を実行して
-`packUnorm4x8`で16 byteへ戻す。UVは(-0.25,-0.25)、(0.6,0.2)、(0.2,0.6)、(1.25,1.25)で、
-nearestとclamp、行/成分の対応を実内容で確認する。`texelFetch`への置換でsamplerを除去しない。
-fixtureはImageとStorageの排他leaseを記録から退役まで保持する。画像は初回UNDEFINEDからTRANSFER_DSTへ遷移し、copy write→compute sampled readを
-可視化する。初回は既存の保守的COPY execution依存も維持する。一度uploadした画像は
-再初期化せずSHADER_READ_ONLY_OPTIMALで再sampleし、新しい色は別画像版へuploadする。受理済みsubmitの予定状態と
-未投入cancelを区別し、GPU完了を確認できない失敗では資源/descriptor/lease連鎖を早期解放しない。
-画像の公開作成/所有/descriptorは製品へ残し、upload色・private executorのstate/leaseは`cfg(test)`に限る。
-
-RGBA16Fは`ImageFormat::Rgba16Float`を`R16G16B16A16_SFLOAT`へ対応づけ、
-同じ実format/usage照会とfull color Viewの所有を使う。Viewのnative formatは保持したImageから決める。
-RGBA8の対応や既存Graph画像の用途を、RGBA16Fの対応根拠へ流用しない。
-`sampled_float_readback`は同じ4座標の各RGBAをFP32でsampleし、`floatBitsToUint`で
-4個の`uvec4`、計64 byteをStorageへ書く。画像の16-bit格納からFP32への解釈を確認するもので、
-shaderの16-bit演算型や追加の`shaderFloat16` featureは使わない。
-これは[画像readのbinary32への変換](https://docs.vulkan.org/spec/latest/chapters/images.html#images-reads-numericformat)と
-[shader内16-bit型のfeature](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceShaderFloat16Int8Features.html)を区別した選択である。
-private受入は32 byteの2x2 half入力と64 byteの出力を区別し、負値・小数・1超の値と行/成分順を照合する。
-shader ABI・画像format・参照範囲は作成時に保証し、upload byte列とreadback範囲の変更は試験専用経路に限定する。
-
-共通の`renderer::ImageFormat::Depth32Float`は`D32_SFLOAT`へ対応する。attachmentとsampledの組合せを
-実Deviceへ照会し、depth-only aspectのattachment用・sampled用Viewが同じImageを保持する。
-private受入は全2x2領域のdepth attachmentをDynamic Renderingのload `CLEAR`/store `STORE`で
-0.25または0.75へ初期化する。clearの前後でlayoutを明示し、rendering scopeの外に
-`EARLY_FRAGMENT_TESTS|LATE_FRAGMENT_TESTS`/`DEPTH_STENCIL_ATTACHMENT_WRITE`から
-`COMPUTE_SHADER`/`SHADER_SAMPLED_READ`への依存を置く。
-`DEPTH_STENCIL_ATTACHMENT_OPTIMAL`から`SHADER_READ_ONLY_OPTIMAL`を使い、
-separate depth/stencil layout featureを追加しない。
-初回UNDEFINED遷移には、既存Graphのdepthを含む画像と同じCOPY execution対策を継承する。
-これは既存の保守的な正しさ対策であり、D32の性能改善やdriver原因の確定を主張しない。
-[attachmentのload/storeとlayout](https://docs.vulkan.org/refpages/latest/refpages/source/VkRenderingAttachmentInfo.html)と
-[画像barrier](https://docs.vulkan.org/refpages/latest/refpages/source/VkImageMemoryBarrier2.html)に従う。
-既存`sampled_float_readback`と非comparison nearest samplerを再利用し、64-byte出力の4 texelのR成分を
-独立なFP32期待bit列へ照合する。色用uploadをdepth clearへ流用せず、D32にtransfer用途を追加しない。
-初期化後の旧版reuseは再clearしない。attachment Viewも記録/pendingの所有へ含め、同じImageの排他lease、
-cancel、受理済み予定状態、実Fence退役、最終解放は既存fixtureの契約を引き継ぐ。
-公開の用途/format/ownerとpreferred clear値の保証は製品に残し、clear命令記録・試験入力/stateは`cfg(test)`に限定する。
-
+`NearestClamp`、`LinearRepeat`、`LinearClamp`、`LinearRepeatUClampV`をProgramのsampler設定へ対応づける。
+compareやanisotropyは使わず、実Deviceの生存sampler数をnative作成前に予約し、失敗時または破棄後に返す。
+Rasterのtrusted `sampling_pairs` は実際の画像とsamplerの組を示し、linear samplingの能力をその組に対して確認する。
+不変binding集合はsubmit内で一度確認し、作業領域とdescriptor枠を実行枠の再利用時に返す。
+Computeのformat適合には既存の保守的な条件を使う。
+実行範囲は[現在の検証状況](../verification/current.md#managed-uniform)を参照する。
 
 ## 投入・完了・異常時の保持
 
@@ -532,8 +410,12 @@ process共通採番へ移し、backend間のkey衝突を防いだ。通常frame�
 
 同じqueueでwriterをreadへ可視化した後、write/layout変更がなく、直近に確立したreadの
 stage/access pairが完全に同じならwriter→reader barrierを重複記録しない。bufferと画像の両方へ適用する。
-このexact pairを最後のwriterと累積reader scopeから分け、Snapshotごとに16 byte追加する。
+このexact pairを最後のwriterと累積reader scopeから分けてSnapshotに保持する。
 writeでpairを失効し、異なるreadでは必要なwriter依存を設けてpairを置換する。
+画像は直近のlayout遷移の宛先stageも保持する。後続の別stageの依存では、そのstageをsourceに加える。
+たとえばCOPY後にFragment向けにlayoutを変え、続いてComputeでsampleする場合、元のCOPYだけでなくlayout遷移の完了も順序づける。
+Graphと表示の双方で遷移時に更新し、受理済み状態のコピーと再利用でも維持する。
+[Vulkanの画像layout遷移](https://docs.vulkan.org/spec/latest/chapters/synchronization.html#synchronization-image-layout-transitions)に従う。
 後続write/layout変更は累積readerとwriterを使い、pair一致だけでWAR/WAWを省略しない。
 presentationも同じ更新を使い、layout不変の再presentで過去readerのscopeを失わない。
 累積maskから任意のstage/accessの組合せの可視性を推論しない。一般Programへの拡張時は再検証する。
@@ -616,7 +498,7 @@ class表とbitmapのmetadataは初期化で予約する。代償は常駐metadat
 木nodeと回転規則を増やす案より小さな所有状態を選び、CPU比較の入力・結果と限界は
 [現在の検証](../verification/current.md#runtime-review-improvements)に記録する。GPU速度の改善は主張しない。
 
-再利用は旧内容の初期化状態とCPU provenanceを消す一方、実際のlayout・access・writer scopeは保持する。
+再利用は旧内容の初期化状態とCPU provenanceを消し、実際のlayout・layout遷移のstage・access・writer scopeは保持する。
 `delete`もkeyを直ちに失効させ、その内容の初期化/provenanceを解放する。既に記録した命令が必要な
 native参照・staging・planは別leaseでGPU完了まで保持し、削除済みproofだけがGraph slotを留め続ける進行性の循環を避ける。
 新しいnative資源とViewの作成・命名がすべて成功してから置換し、失敗時には既存entryのallocation・
@@ -796,7 +678,10 @@ enqueue済みとして扱われる。OOMの状態不変保証と同じrollback�
 `Recreated`は実際の再作成完了を表す。`Presented`を画面への表示完了の証明には使わない。
 `RecreateRequired`後は`prepare`を進め、更新したextentに合わせて描画を準備する。
 
-旧Swapchainは世代として保持し、`oldSwapchain`付き作成が失敗しても旧世代を再acquireしない。
+表示用slot・bindingは作成前に準備し、準備失敗時は現在の世代を保持する。
+旧Swapchainは世代として保持し、`oldSwapchain`付き作成が失敗した場合は旧世代を退役として扱う。
+次の作成は退役世代を回収できるまで既存の`RetiredSwapchains`／`Poll`で返す。
+準備と作成が成功した時点で新extentと`Recreated`を公開する。
 保持世代数には上限があり、回収前の上限到達は容量不足として返す。
 `poll`はGPU Fenceとpresent fenceを観測し、`wait_idle`／`close`はこのPresenterの処理だけを待つ。
 Queue／Device全体のidleをpresent完了の証明には使わない。

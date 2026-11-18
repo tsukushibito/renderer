@@ -880,29 +880,10 @@ cargo test --locked -p renderer --example graph_composition
 これはCPU計画の例で、一般native graphics/dispatch実行やBloom処理の受入ではない。
 現在の範囲と保証境界は[Graph設計](../design/rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
 
-`renderer-7ft.2.1.2`の公開入口は`program::ManagedProgram::uniform_readback()`と
-両runtimeの`create_program`、`create_managed_buffer`、`create_bindings`である。
-`.2.1.4`は`ManagedProgram::sampled_readback()`と、`create_managed_image`、
-`create_image_view`、`create_sampler`を加える。このB1 fixtureはRGBA8_UNORM 2Dのmip/layer/sample各1、
-full color View、`NearestClamp`で確認する。
-`.2.1.5`は`ImageFormat::Rgba16Float`と`ManagedProgram::sampled_float_readback()`を加える。
-同じ2D/full View/nearest samplerでRGBA16FをFP32としてsampleし、全RGBAをbit列で返す。
-深度画像には共通の`renderer::ImageFormat::Depth32Float`と`ImageViewDescriptor.usage`を使います。
-Viewの用途は既定の`ImageViewUsage::Sampled`と、D32専用の`DepthAttachment`を区別する。
-D32はattachment/sample両用途を持ち、aspectはformatから導出する。
-`ImageDescriptor::preferred_depth_clear`はD32の予定clear値を指定できる。色は`None`とし、
-D32の`Some`は[0,1]の有限・非subnormal値を使う。この指定で画像内容は初期化されない。
-`.2.1.7`は`ManagedProgram::storage_readback()`と`BindingType::StorageRead`を加える。
-同じ`BufferDescriptor::Storage`をreadonly入力とwriteonly出力へ使い、別のbuffer作成APIは持たない。
-[`program` moduleの例](../../crates/renderer/src/program.rs)は両APIの公開型でRustdocコンパイルする。
-Uniformのbyte更新は新しいbuffer/bindingを作り、旧参照の内容を変更しない。
-Storageの版/範囲は保持するが本文はGPU更新可能で、作成直後は未初期化である。
-binding集合は全slotを満たす必要があり、入力順は自由で、成功後はProgram/資源/範囲を所有する。
-`Binding`はslotと`BindingResource::{Buffer, ImageView, Sampler}`を持つ。
-画像の作成/参照保持は内容初期化を意味せず、作成時の暗黙upload/submit/waitはない。
-このfixtureの範囲と、一般Graphの実行・B2のsRGB/mip chain/linear repeat対応は区別する。
-現行の[画像契約](../design/rendergraph.md#画像subresourceとowned-attachment配列)と
-[Bistro手順](#bistro-pbr)を参照する。comparison sampler/PCFは後続へ残す。
+native実行は`Graph::dispatch`と、実行前のCompute Program準備を使う。
+`uniform_readback`と`storage_readback`は16-byte範囲、`sampled_readback`はRGBA8のnearest/clamp、
+`sampled_float_readback`はRGBA16FとD32のFP32出力を確認できる。
+資源の初期化はGraph上のupload、clear、またはProgramが保証する書き込みで行う。
 
 SDKなしのABI契約回帰は次を使う。生成条件を更新した場合は[shader再生成](tooling.md)も実行する。
 
@@ -912,34 +893,8 @@ SDKなしのABI契約回帰は次を使う。生成条件を更新した場合�
 ./scripts/regenerate-d3d12-bindings.ps1 -Verify
 ```
 
-実GPU受入は以下を逐次実行する。strictにはCore/SyncValまたはDebug Layer/GBVが必要で、
-前提不足をskip扱いにしない。共通入力からStorageのoffset 256へ書いた旧版/新版の内容、
-参照保持、未投入cancel/busy拒否/完了後reuseと最終native解放を確認する。
-Storage出力は公開APIで作成し、private fixtureは各shaderが初期化する16または64 byteだけをreadbackする。
-StorageReadの受入は、同じGPU処理内で既存uniform shaderがinputへ16 byteを書き、
-write→read依存の後にStorageRead shaderが別outputへcopyする。途中にCPU待機/readbackを挟まない。
-producerとconsumerのbuffer/offset一致、同buffer別範囲のinput/output拒否、cancel/pending/reuseを確認する。
-sampled fixtureは同じ2x2非対称RGBA8をnearest/clampの4座標で読み、入力16 byteへpackして照合する。
-同じ受入でRGBA16Fの32-byte入力も読み、4 texelの全RGBAを64-byteのFP32 bit列へ返す。
-halfで正確に表せる負値・小数・1超の値を使い、既存RGBA8と新RGBA16Fの旧版/新版をそれぞれ照合する。
-D32はdepth attachment全域を0.25/0.75へclearし、同じfloat shaderでsampleした4 texelのR成分を
-FP32 bit列で照合する。旧版reuseは再clearしない。attachment Viewをsampled bindingへ渡す入力は拒否する。
-ImageとStorageの両方を記録/pendingから排他保護し、View/Image/sampler/heapの最終解放も確認する。
-
-```powershell
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_storage_ -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation d3d12_managed_storage_strict -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_storage_ -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features d3d12 d3d12_managed_storage_shipping -- --ignored --nocapture --test-threads=1
-
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan,development-validation vulkan_managed_sampled_ -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features d3d12,development-validation d3d12_managed_sampled_strict -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features vulkan vulkan_managed_sampled_ -- --ignored --nocapture --test-threads=1
-cargo test --locked --release -p renderer --lib --no-default-features --features d3d12 d3d12_managed_sampled_shipping -- --ignored --nocapture --test-threads=1
-```
-
-製品構成の成功をnative診断の実効確認へ流用しない。結果・限界は
-[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
+厳格構成と製品構成の実GPU受入は[owned Computeの二API手順](#owned-compute-acceptance)を使う。
+結果・限界は[現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
 
 ## 製品・開発用の検証設定
 

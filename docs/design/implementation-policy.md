@@ -1669,112 +1669,22 @@ resourceごとのheapによるメモリ・作成費用を許容する単純な�
 
 ### D3D12の管理下Programと資源binding
 
-`renderer-7ft.2.1.2`は共通の`ManagedProgram`をSM6.0のcompute PSOとroot signatureへ
-具体化する。既存buffer-only runtimeのDevice要件を増やさず、Program作成時にSM6.0を確認する。
-`create_managed_buffer`のUniformは初期byteをUPLOAD allocationへ一度だけ書き、
-StorageはDEFAULT/ALLOW_UNORDERED_ACCESSで未初期化作成する。公開CPU mapを持たず、
-Program・binding・資源の版/用途/範囲は不変だが、Storage本文はGPUが更新できる。
-`create_bindings`は全slotの欠落/重複/余剰、Device owner、用途、offset、論理rangeと
-shaderの16-byte最小ABIを作成時に照合し、Programと全bufferをmanifest順に保持する。
-Uniformはoffset 256-byte境界/range 64 KiB以下、Storageのraw SRV/UAVはoffset 16-byte境界を使う。
-native allocationの切上げを論理rangeの拡大には使わない。旧Uniform専用APIは置換した。
-binding入力は検査専用Vecを経ずmanifest順に解決し、全結果の成功後だけ所有を公開する。
-対応付け済みslotの再照合と、集合検査後の別の再探索を除去した。途中のslot解決・資源検査が
-失敗すれば、それまでに複製した参照も解放し、不完全なbindingを公開しない。
-logical size/pad後native sizeの検査は、他のfactory呼出し元の安全性も守るため今回は変更しない。
-Device状態・native容量/失敗・Fence・GPU寿命の保証も変更しない。
+`ManagedProgram`は明示準備時にSM6.0のcompute PSOとroot signatureへ具体化する。必要能力はProgramを準備するときに確認する。
+Graphはbindingの所有者、用途、offset、論理範囲とshaderのfootprintを構築時に確定する。
+native適合ではUniformの256-byte offsetと64 KiB上限、raw storageの16-byte offsetを確認する。
+確保時のpaddingを論理範囲の拡大に使わない。
 
-この小さいassetはroot CBV `b0/space0`とroot UAV `u0/space1`を使う。
-kind/register/spaceとrecord root indexをmanifest表から導出し、nativeへ固定slotを持ち込まない。
-descriptor heap/tableを使う代案に対し、2資源だけの作成契約と版保持を確認するための単純な基準を選んだ。
-[root descriptorの仕様](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-descriptors-directly-in-the-root-signature)
-が許可するcounterなしのraw bufferだけを出力に使う。root descriptorにはrange境界がないため、
-レビュー済みshaderが一つのinvocationで16 byteだけアクセスすることと、不変の参照範囲を安全性の前提にする。
-shader/ABIを変更する際はこの保証を再確立する。一般shader/layoutやbindlessへの制約・性能優位は主張しない。
+root CBV／SRV／UAVのregister、space、root indexはProgramの不変ABIから導く。
+[root descriptorの範囲契約](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#using-descriptors-directly-in-the-root-arguments)に従い、
+レビュー済みshaderが論理descriptorの範囲に収まることを取込とGraph構築で保証する。
+sampled imageとsamplerは各descriptor tableへ対応づけ、実行枠がshader-visible heapと参照先を実完了まで保持する。
+PSOとroot signatureの部分作成はCOM所有者で回収する。
 
-PSO/root signatureの部分作成はCOM所有で片付ける。作成成功やStorageWrite指定を内容初期化とは扱わず、
-private受入だけがshaderの16-byte write保証を使う。Storage出力は公開作成APIを使い、
-命令記録/readbackとStorageの排他leaseは`cfg(test)`に限定する。leaseは既存Work/Retainedへ保持し、
-未投入cancelまたは実Fence完了で返し、未完了/Signal失敗時は早期に返さない。
-fixtureはCOMMON→UAV→COPY_SOURCE→COMMONで復帰させ、同一Storageのbusy拒否と再利用を確認する。
-このnative境界fixture単独は、一般Graphの製品状態管理・同期・GPU lifetimeの受入を代替しない。
-二APIの同じbyte入力と旧版/新版・最終解放の結果は[検証状況](../verification/current.md#managed-uniform)を参照する。
-
-`.2.1.7`の`StorageRead`は既存Storage資源をroot SRV `t0/space0`へlowerする。
-同じ管理下`storage_read.comp`をDXILの`ByteAddressBuffer.Load4(0)`→
-`RWByteAddressBuffer.Store4(0)`へ変換し、一つのinvocationが先頭16 byteだけをread/writeする。
-root SRVにもrange境界保護がないため、信頼済みassetの動作と作成時の論理範囲を保証へ結び付ける。
-root index/register/spaceはmanifestから導出し、通常の記録時にABIを再走査しない。
-[root descriptorの契約](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#using-descriptors-directly-in-the-root-arguments)に従う。
-private受入はuniform producerとStorageRead consumerを同じWorkへ保持し、途中のCPU待機を置かず、
-inputのUAV→NON_PIXEL_SHADER_RESOURCE transitionでwrite→readを同期する。追加のUAV barrierを重ねない。
-最後にinput/outputをCOMMONへ戻す。D3D12 bufferは一つのsubresourceなので、
-input/outputが同じbufferならbyte範囲が別でもprivate prepareで拒否する。
-公開binding作成は定義と所有を確立する境界とし、この実行制約のための全slot走査を加えない。
-producer/consumerのasset identityと同じBuffer版・先頭16 byteを準備時に照合し、
-input/outputを各一度leaseして両Program/Bindingsとともにcancel/実Fence退役まで保持する。
-
-管理下画像はRGBA8_UNORM/sRGB、RGBA16FまたはD32 Texture2D、layer/sample各1、DEFAULT heap、
-初期COMMON、未初期化である。実DeviceのTEXTURE2D/SHADER_SAMPLE対応とextent上限を作成時に保証する。
-`ImageDescriptor::mip_levels`を検査し、Viewは選択mip範囲・用途とImage owner、Samplerは
-`NearestClamp`または`LinearRepeat`の定義とDeviceを保持する。
-`ImageViewUsage::Sampled`が既定であり、`DepthAttachment`はD32だけに許可する。
-attachment Viewはsampled bindingへ受け付けない。aspectはImageのformatから導出する。
-non-comparison POINT filterのComparisonFuncはNEVERとし、無視される設定にもnative警告を残さない。
-D3D12には独立View/Sampler COM objectがないため、作成時にCPU専用descriptor heapを増設せず、
-`create_bindings`が所有するshader-visible heapへ一度だけnative descriptorを具体化する。
-textureはSRV table、samplerは別SAMPLER heap/tableとし、bufferは既存root CBV/UAVを使う。
-root index/register/space/descriptor種別は共通manifestから導出し、全slot保証後に公開する。
-root texture descriptorを使うことはできない。2種類のheapとProgram/View→Image/Samplerを
-bindingが保持し、GPU利用が終わるまで所有連鎖を保つ。これは必要なAPI構成であり性能優位は未測定である。
-
-root signatureのrange配列はtexture/samplerのtable slotだけに作り、root buffer descriptorには作らない。
-配列を完成させてからnative pointerを取り、同期的なsignature serializeの完了まで保持する。
-root parameterは全slotのmanifest順を維持する。buffer-only bindingはheapもtable handle配列も持たず、
-mixed bindingだけが従来どおりroot indexに対応したtable配列を保持する。
-この作成時の補助配列整理によって、Program/資源の強保持、入力保証、部分失敗cleanupやGPU寿命は変えない。
-
-sampled fixtureだけが`GetCopyableFootprints`の実結果を使ってupload bufferのrow配置を作り、
-COMMON→COPY_DEST→NON_PIXEL_SHADER_RESOURCEでsampling、最後にCOMMONへ戻す。
-packed RGBA8 byte数をnative image allocationやcopy row pitchへ代用しない。
-Storage側はUAV→COPY_SOURCE→COMMONを維持し、readbackするのは各shaderが書いた16または64 byteだけである。
-ImageとStorageをともに排他leaseで保護し、upload buffer、descriptor heapsと全参照をWork/Retainedへ保持する。
-画像の初期化済み状態は正常Fence完了後だけ確定し、旧画像の再利用は再uploadせずCOMMONからsamplingへ遷移する。
-未投入cancel、pending、Signal失敗と正常Fence完了の既存契約を引き継ぐ。
-製品の作成/descriptorと、`cfg(test)`だけのupload/実行/色payload/stateを区別する。
-
-`.2.1.5`の`ImageFormat::Rgba16Float`は`DXGI_FORMAT_R16G16B16A16_FLOAT`へ対応する。
-実Deviceの形式別TEXTURE2D/SHADER_SAMPLE照会結果を保持し、要求された画像の作成時に適合を確認する。
-RGBA16Fの対応をbuffer-only runtime全体の必須条件にはしない。SRVには保持したImageの実formatを使う。
-nearest samplerとdescriptor heap/tableの構成は既存と共通である。
-`sampled_float_readback`は4 sampleの全RGBAをFP32の`asuint` bit列として64 byteへ書く。
-root UAVの安全性はこのレビュー済み64-byte writeと作成済み範囲により確立し、記録時にABIを再走査しない。
-half入力は8 byte/texel、2x2で32 byteであり、uploadのrow配置はこの形式について返された
-[GetCopyableFootprints](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints)を使う。
-16-byte出力の既存shaderと64-byte出力の新shaderを区別し、
-各shaderが初期化する範囲だけをreadbackする。取消・pending・正常完了・最終解放の契約は共通である。
-
-`.2.1.6`のD32は`R32_TYPELESS`のDEFAULT資源を`ALLOW_DEPTH_STENCIL`で作り、
-DSVは`D32_FLOAT`、SRVは`R32_FLOAT`で解釈する。samplingも行うため`DENY_SHADER_RESOURCE`は付けない。
-resource形式のTEXTURE2D、DSV形式のDEPTH_STENCIL、SRV形式のSHADER_SAMPLE対応を
-実Deviceで分けて照会・保持し、D32作成要求へ適合確認する。buffer-only runtimeの必須能力へ昇格しない。
-`ImageDescriptor::preferred_depth_clear`の`Some`は、作成時に`D32_FLOAT`のoptimized clear値へlowerする。
-`None`も合法であり、値を渡しても内容の初期化やGPU投入は行わない。色への`Some`、
-非有限値、[0,1]外、subnormalは共通の作成境界で拒否する。
-これは最初のstrict受入で未指定clear値にnative警告821を3件観測したための宣言である。
-試験の旧版/新版はそれぞれ0.25/0.75を作成時に宣言し、その保持値で実clearする。
-警告を免除せず、実装済みのclear経路をnative診断ゼロで確認する選択であり、性能効果は測定していない。
-[CreateCommittedResource](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-createcommittedresource)と
-[ClearDepthStencilView](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12graphicscommandlist-cleardepthstencilview)に従う。
-[資源flagsの契約](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_flags)と
-[SRV形式の契約](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_shader_resource_view_desc)に従う。
-private受入は公開attachment Viewからnon-shader-visible DSV heapを具体化し、
-COMMON→DEPTH_WRITEで全2x2を0.25/0.75へclear、NON_PIXEL_SHADER_RESOURCEで通常sample後にCOMMONへ戻す。
-DSV heapとattachment ViewをWork/Retainedへ保持し、sampled Viewと同じImageの排他leaseで守る。
-既存64-byte float出力の4 texelのR成分だけを独立なFP32期待bit列へ照合し、旧版reuseは再clearしない。
-このprivate受入のDSV作成/clear命令と試験入力/stateは`cfg(test)`に限定する。
-owned Graphのattachment実行は以下の製品経路で扱う。
-
+D32は`R32_TYPELESS`のDEFAULT資源とし、DSVは`D32_FLOAT`、SRVは`R32_FLOAT`で作る。
+実DeviceのTEXTURE2D／DEPTH_STENCIL／SHADER_SAMPLE対応を用途ごとに確認する。
+画像uploadのrow配置は[GetCopyableFootprints](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints)の結果を使う。
+Graphのproducer→consumer間でnative依存を設定し、実行の途中にCPU待機を挟まない。
+二APIの内容と寿命の確認は[検証状況](../verification/current.md#managed-uniform)を参照する。
 
 ### D3D12のDeviceとGraph実行
 
