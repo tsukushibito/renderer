@@ -1,0 +1,85 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; SV_InstanceID            0   x           1   INSTID    uint   x
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; SV_Position              0   xyzw        1      POS   float   xyzw
+;
+; shader hash: bd44d5e3df9741e55e3d8d1c3314e550
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 2
+; SigOutputElements: 2
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 2
+; SigOutputVectors[0]: 2
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; SV_InstanceID            0
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer _16_18
+; {
+;
+;   struct _16_18
+;   {
+;
+;       uint _18_m0;                                  ; Offset:    0
+;
+;   } _16_18;                                         ; Offset:    0 Size:     4
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _16_18                            cbuffer      NA          NA     CB0            cb7     1
+; _34                               texture    byte         r/o      T0             t2     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 5, outputs: 8
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4 }
+;   output 1 depends on inputs: { 4 }
+;   output 2 depends on inputs: { 4 }
+;   output 4 depends on inputs: { 0, 4 }
+;   output 5 depends on inputs: { 1 }
+;
