@@ -1,11 +1,13 @@
 //! Native command recording and completion for an already prepared Graph.
 
 use std::ffi::CStr;
+use std::ops::Range;
 use std::sync::Arc;
 
 use ash::vk;
 
 use super::super::super::memory::MemoryOwner;
+use super::super::super::program::{RenderingAttachments, attachment_info};
 use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
 use super::super::super::transfer::{TransferError, TransferPayload};
@@ -209,6 +211,7 @@ impl TransferPayload for GraphWork {
                         draws,
                         colors,
                         depth,
+                        sample_count,
                     } => {
                         #[cfg(feature = "tracy")]
                         let _span = tracy_client::Client::running().map(|client| {
@@ -220,24 +223,12 @@ impl TransferPayload for GraphWork {
                         let plan = self.plan.as_ref().unwrap();
                         let programs = self.programs.as_ref().unwrap();
                         let native_program = programs
-                            .raster_program(*program, depth.is_some())
+                            .raster_program(*program, depth.is_some(), *sample_count)
                             .expect("prepared Raster Program");
-                        let color = plan.raster_attachments(colors).first().map(|attachment| {
-                            (
-                                self.resource(attachment.view.image().index).image(),
-                                attachment,
-                            )
-                        });
-                        let depth = depth.map(|index| {
-                            let attachment = plan.raster_attachment(index);
-                            (
-                                self.resource(attachment.view.image().index).image(),
-                                attachment,
-                            )
-                        });
                         programs.record_rasters(
                             command,
                             native_program,
+                            *sample_count,
                             plan.raster_draws(draws)
                                 .iter()
                                 .zip(&self.raster_descriptors[pass.raster_descriptors.clone()])
@@ -250,26 +241,15 @@ impl TransferPayload for GraphWork {
                                         sets,
                                     )
                                 }),
-                            color,
-                            depth,
+                            &rendering_attachments(self, colors, *depth),
                         );
                     }
                     PreparedOperation::ClearAttachments { colors, depth } => {
-                        let plan = self.plan.as_ref().unwrap();
-                        let color = plan.raster_attachments(colors).first().map(|attachment| {
-                            (
-                                self.resource(attachment.view.image().index).image(),
-                                attachment,
-                            )
-                        });
-                        let depth = depth.map(|index| {
-                            let attachment = plan.raster_attachment(index);
-                            (
-                                self.resource(attachment.view.image().index).image(),
-                                attachment,
-                            )
-                        });
-                        record_clear_attachments(device.raw(), command, color, depth);
+                        let attachments = rendering_attachments(self, colors, *depth);
+                        device
+                            .raw()
+                            .cmd_begin_rendering(command, &attachments.info());
+                        device.raw().cmd_end_rendering(command);
                     }
                     PreparedOperation::Dispatch { workgroups } => {
                         self.compute.as_ref().unwrap().record(
@@ -352,41 +332,30 @@ impl TransferPayload for GraphWork {
     }
 }
 
-/// # Safety
-/// The caller records outside rendering and has transitioned both retained
-/// images into their attachment layouts with the planned dependencies.
-unsafe fn record_clear_attachments(
-    device: &ash::Device,
-    command: vk::CommandBuffer,
-    color: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
-    depth: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
-) {
-    let extent = color
-        .map(|(image, _)| image.extent)
-        .or_else(|| depth.map(|(image, _)| image.extent))
-        .unwrap();
-    let colors = [color.map_or_else(
-        vk::RenderingAttachmentInfo::default,
-        |(image, attachment)| super::super::super::program::attachment_info(image, attachment),
-    )];
-    let depth_attachment = depth.map(|(image, attachment)| {
-        super::super::super::program::attachment_info(image, attachment)
-    });
-    let mut info = vk::RenderingInfo::default()
-        .render_area(vk::Rect2D {
-            offset: vk::Offset2D::default(),
-            extent,
-        })
-        .layer_count(1)
-        .color_attachments(if color.is_some() { &colors } else { &[] });
-    if let Some(attachment) = &depth_attachment {
-        info = info.depth_attachment(attachment);
-    }
-    // SAFETY: Caller's retained images are transitioned and loads validated;
-    // no shader commands/barriers execute inside this attachment-only scope.
-    unsafe {
-        device.cmd_begin_rendering(command, &info);
-        device.cmd_end_rendering(command);
+/// Every attachment and its resolve target are retained by this work and
+/// transitioned by the owning pass before either begins rendering.
+fn rendering_attachments(
+    work: &GraphWork,
+    colors: &Range<usize>,
+    depth: Option<usize>,
+) -> RenderingAttachments<'static> {
+    let plan = work.plan.as_ref().unwrap();
+    let prepare_attachment = |attachment: &crate::graph::AttachmentOperand| {
+        let image = work.resource(attachment.view.image().index).image();
+        let resolve = attachment
+            .resolve
+            .map(|view| work.resource(view.image().index).image());
+        (image.extent, attachment_info(image, attachment, resolve))
+    };
+    let color = plan
+        .raster_attachments(colors)
+        .first()
+        .map(prepare_attachment);
+    let depth = depth.map(|index| prepare_attachment(plan.raster_attachment(index)));
+    RenderingAttachments {
+        extent: color.or(depth).expect("Graph rendering has attachments").0,
+        color: color.map(|(_, info)| info),
+        depth: depth.map(|(_, info)| info),
     }
 }
 fn layers(image: &DeviceImage) -> vk::ImageSubresourceLayers {

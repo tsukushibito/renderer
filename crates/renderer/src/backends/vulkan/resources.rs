@@ -4,6 +4,7 @@
 use std::ffi::CString;
 use std::sync::Arc;
 
+use crate::graph::{ImageDesc, SampleCount};
 use ash::vk;
 use vk_mem::Alloc;
 
@@ -165,16 +166,16 @@ impl DeviceImage {
 
     pub(super) fn new(
         owner: Arc<MemoryOwner>,
-        width: u32,
-        height: u32,
-        mip_levels: u32,
-        format: vk::Format,
+        desc: ImageDesc,
         #[cfg_attr(not(feature = "vulkan-diagnostics"), allow(unused_variables))] name: &str,
     ) -> Result<Self, RuntimeError> {
         owner
             .device
             .ensure_active()
             .map_err(RuntimeError::device_unavailable)?;
+        let (width, height, mip_levels) = (desc.width, desc.height, desc.mip_levels);
+        let format = image_format(desc.format);
+        let samples = sample_count_flags(desc.sample_count);
         let (usage, aspect) = match format {
             vk::Format::R8G8B8A8_UNORM => (
                 vk::ImageUsageFlags::TRANSFER_SRC
@@ -220,7 +221,26 @@ impl DeviceImage {
                 "Graph image dimensions and mip count must describe a nonempty 2D chain",
             ));
         }
-        let supports_linear_filtering = sampled_linear_support(&owner, format)?;
+        // Only attachment uses are supported for multisampled Graph images.
+        let (usage, supports_linear_filtering) = match desc.sample_count {
+            SampleCount::X1 => (usage, sampled_linear_support(&owner, format)?),
+            SampleCount::X4 if mip_levels == 1 => (
+                usage
+                    & (vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+                false,
+            ),
+            SampleCount::X4 => {
+                return Err(RuntimeError::unsupported(
+                    "multisampled Graph images require one mip",
+                ));
+            }
+        };
+        if usage.is_empty() {
+            return Err(RuntimeError::unsupported(
+                "image format does not support Renderer multisampled attachments",
+            ));
+        }
         let query = vk::PhysicalDeviceImageFormatInfo2::default()
             .format(format)
             .ty(vk::ImageType::TYPE_2D)
@@ -252,7 +272,7 @@ impl DeviceImage {
             || limits.max_extent.depth < 1
             || limits.max_mip_levels < mip_levels
             || limits.max_array_layers < 1
-            || !limits.sample_counts.contains(vk::SampleCountFlags::TYPE_1)
+            || !limits.sample_counts.contains(samples)
         {
             return Err(RuntimeError::unsupported(format!(
                 "Graph image {width}x{height} {format:?} exceeds format limits {limits:?}"
@@ -284,7 +304,7 @@ impl DeviceImage {
             })
             .mip_levels(mip_levels)
             .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(samples)
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -452,6 +472,13 @@ impl Drop for DeviceImage {
 }
 
 /// Native image representation; support for each usage is checked separately.
+pub(super) fn sample_count_flags(count: SampleCount) -> vk::SampleCountFlags {
+    match count {
+        SampleCount::X1 => vk::SampleCountFlags::TYPE_1,
+        SampleCount::X4 => vk::SampleCountFlags::TYPE_4,
+    }
+}
+
 pub(super) fn image_format(format: crate::ImageFormat) -> vk::Format {
     match format {
         crate::ImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,

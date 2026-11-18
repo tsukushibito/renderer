@@ -649,7 +649,7 @@ fn vulkan_graph_failed_acquisition_recovers_and_rejects_foreign_or_stale_imports
 }
 
 #[test]
-fn image_reuse_keys_preserve_mip_count_and_srgb_identity() {
+fn image_reuse_keys_preserve_mip_count_srgb_and_sample_identity() {
     let desc = ImageDesc::rgba8(4, 4);
     let key = CacheDescriptor::from(ResourceDesc::Image(desc));
     let mipped = CacheDescriptor::from(ResourceDesc::Image(ImageDesc {
@@ -660,7 +660,10 @@ fn image_reuse_keys_preserve_mip_count_and_srgb_identity() {
         format: ImageFormat::Rgba8Srgb,
         ..desc
     }));
+    let multisampled =
+        CacheDescriptor::from(ResourceDesc::Image(desc.with_sample_count(SampleCount::X4)));
     assert!(key != mipped);
     assert!(key != srgb);
     assert!(mipped != srgb);
+    assert!(key != multisampled);
 }

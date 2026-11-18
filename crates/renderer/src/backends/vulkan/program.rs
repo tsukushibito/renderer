@@ -5,6 +5,8 @@
 //! retirement; publishing a new fixed program never replaces an existing one.
 
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+use crate::graph::SampleCount;
+use crate::program::{ManagedRasterProgram, RasterPipelineRequest};
 
 #[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CStr;
@@ -14,11 +16,12 @@ use ash::vk;
 
 use super::error::RuntimeError;
 use super::memory::MemoryOwner;
+use super::resources::sample_count_flags;
 
 mod bindings;
 mod creation;
 mod record;
-pub(super) use record::attachment_info;
+pub(super) use record::{RenderingAttachments, attachment_info};
 
 use bindings::BindingPool;
 pub(super) use bindings::{RasterBinding, ShaderBindings};
@@ -233,19 +236,16 @@ impl ShaderPrograms {
 
     pub(super) fn prepare_rasters(
         &self,
-        programs: &[crate::program::ManagedRasterProgram],
-        depth_available: bool,
+        programs: &[impl Copy + Into<RasterPipelineRequest>],
+        depth_samples: vk::SampleCountFlags,
     ) -> Result<(), RuntimeError> {
-        let distinct = programs
-            .iter()
-            .enumerate()
-            .filter(|(index, program)| {
-                !programs[..*index]
-                    .iter()
-                    .any(|earlier| earlier.same(program))
-            })
-            .count();
-        if distinct > crate::program::MAX_RASTER_PROGRAMS {
+        let requests: Vec<_> = programs.iter().copied().map(Into::into).collect();
+        let distinct_programs = requests.iter().enumerate().filter(|(index, program)| {
+            !requests[..*index]
+                .iter()
+                .any(|earlier| earlier.program.same(&program.program))
+        });
+        if distinct_programs.clone().count() > crate::program::MAX_RASTER_PROGRAMS {
             return Err(RuntimeError::capacity_with(
                 "Raster Program working set exceeds the common capacity",
                 RuntimeCapacityError::new(
@@ -260,39 +260,48 @@ impl ShaderPrograms {
             .initialization
             .lock()
             .map_err(|_| RuntimeError::invalid("Graph program initialization lock poisoned"))?;
-        for &managed in programs {
+        for (_, request) in distinct_programs {
+            let managed = request.program;
+            let mut requested_samples = vk::SampleCountFlags::empty();
+            for compatible in requests.iter().filter(|other| other.program.same(&managed)) {
+                requested_samples |= sample_count_flags(compatible.sample_count);
+            }
             for depth in [false, true] {
-                if (managed.requires_depth() && !depth)
-                    || (depth && !depth_available && !managed.is_depth_only())
-                {
+                if managed.requires_depth() && !depth {
                     continue;
                 }
-                if managed.same(&crate::program::ManagedRasterProgram::mesh())
-                    && depth
+                let mut samples = requested_samples;
+                if depth && !managed.is_depth_only() {
+                    samples &= depth_samples;
+                }
+                if depth
+                    && managed.same(&ManagedRasterProgram::mesh())
                     && self.raster.get().is_some()
                 {
+                    samples &= !vk::SampleCountFlags::TYPE_1;
+                }
+                if samples.is_empty() {
                     continue;
                 }
-                if self.raster_key(managed, depth).is_none() {
-                    let slot = self
-                        .rasters
-                        .iter()
-                        .find(|slot| slot.get().is_none())
-                        .ok_or_else(|| {
-                            RuntimeError::capacity_with(
-                                "Raster prepared Program capacity exhausted",
-                                RuntimeCapacityError::new(
-                                    RuntimeCapacityKind::Programs,
-                                    CapacityRecovery::Reconfigure,
-                                    None,
-                                    None,
-                                ),
-                            )
-                        })?;
-                    let program = Program::new_raster(Arc::clone(&self.owner), managed, depth)?;
-                    slot.set(program)
-                        .map_err(|_| RuntimeError::invalid("Raster unexpectedly published"))?;
-                }
+                let slot = self
+                    .rasters
+                    .iter()
+                    .find(|slot| slot.get().is_none())
+                    .ok_or_else(|| {
+                        RuntimeError::capacity_with(
+                            "Raster prepared Program capacity exhausted",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::Programs,
+                                CapacityRecovery::Reconfigure,
+                                None,
+                                None,
+                            ),
+                        )
+                    })?;
+                let program =
+                    Program::new_raster(Arc::clone(&self.owner), managed, depth, samples)?;
+                slot.set(program)
+                    .map_err(|_| RuntimeError::invalid("Raster unexpectedly published"))?;
             }
         }
         self.bindings.prepare(
@@ -307,8 +316,10 @@ impl ShaderPrograms {
         &self,
         managed: crate::program::ManagedRasterProgram,
         depth: bool,
+        sample_count: SampleCount,
     ) -> Result<&Program, RuntimeError> {
-        if managed.same(&crate::program::ManagedRasterProgram::mesh())
+        if sample_count == SampleCount::X1
+            && managed.same(&ManagedRasterProgram::mesh())
             && depth
             && let Some(program) = self.raster.get()
         {
@@ -316,6 +327,7 @@ impl ShaderPrograms {
         }
         self.raster_key(managed, depth)
             .and_then(|key| self.rasters[key].get())
+            .filter(|program| program.raster_pipeline(sample_count).is_some())
             .ok_or_else(|| {
                 RuntimeError::capacity_with(
                     "Raster Program variant is not prepared",

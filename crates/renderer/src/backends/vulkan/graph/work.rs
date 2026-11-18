@@ -20,6 +20,7 @@ use super::storage::{StorageLease, StoragePool};
 use super::{NativeResource, Physical, RuntimeError, Snapshot};
 use crate::graph::{
     AccessPurpose, CompiledGraph, ComputeTransform, MeshUpload, Operation, ResourceDesc,
+    SampleCount,
 };
 
 #[cfg(feature = "graph-diagnostics")]
@@ -272,6 +273,7 @@ enum PreparedOperation {
         draws: Range<usize>,
         colors: Range<usize>,
         depth: Option<usize>,
+        sample_count: SampleCount,
     },
     ClearAttachments {
         colors: Range<usize>,
@@ -322,6 +324,7 @@ impl PreparedOperation {
                 draws: draws.clone(),
                 colors: colors.clone(),
                 depth,
+                sample_count: super::attachment_samples(graph, colors, depth),
             },
             Operation::AttachmentPass {
                 ref colors, depth, ..
@@ -894,6 +897,7 @@ impl GraphWork {
                     Operation::Raster {
                         program,
                         draws,
+                        colors,
                         depth,
                         ..
                     } => {
@@ -905,7 +909,9 @@ impl GraphWork {
                             )
                         });
                         let programs = programs.as_ref().unwrap();
-                        let native_program = programs.raster_program(*program, depth.is_some())?;
+                        let sample_count = super::attachment_samples(graph, colors, *depth);
+                        let native_program =
+                            programs.raster_program(*program, depth.is_some(), sample_count)?;
                         let binding_layout = (!program.bindings().is_empty()).then(|| {
                             programs
                                 .raster_key(*program, depth.is_some())
@@ -1114,7 +1120,7 @@ fn usage(purpose: AccessPurpose, stages: crate::program::ShaderStages) -> Use {
             vk::AccessFlags2::INDEX_READ,
             vk::ImageLayout::UNDEFINED,
         ),
-        ColorAttachment => (
+        ColorAttachment | ColorResolve => (
             vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,

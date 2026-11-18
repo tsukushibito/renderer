@@ -7,7 +7,29 @@ use ash::vk;
 
 use super::super::resources::DeviceImage;
 use super::ShaderPrograms;
-use crate::graph::RasterConstants;
+use crate::graph::{RasterConstants, SampleCount};
+
+pub(in crate::backends::vulkan) struct RenderingAttachments<'a> {
+    pub extent: vk::Extent2D,
+    pub color: Option<vk::RenderingAttachmentInfo<'a>>,
+    pub depth: Option<vk::RenderingAttachmentInfo<'a>>,
+}
+
+impl RenderingAttachments<'_> {
+    pub(in crate::backends::vulkan) fn info(&self) -> vk::RenderingInfo<'_> {
+        let mut info = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent: self.extent,
+            })
+            .layer_count(1)
+            .color_attachments(self.color.as_slice());
+        if let Some(attachment) = &self.depth {
+            info = info.depth_attachment(attachment);
+        }
+        info
+    }
+}
 
 impl ShaderPrograms {
     /// # Safety
@@ -65,6 +87,7 @@ impl ShaderPrograms {
         &self,
         command: vk::CommandBuffer,
         program: &super::Program,
+        sample_count: SampleCount,
         draws: impl IntoIterator<
             Item = (
                 vk::Buffer,
@@ -74,35 +97,18 @@ impl ShaderPrograms {
                 [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
             ),
         >,
-        color: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
-        depth: Option<(&DeviceImage, &crate::graph::AttachmentOperand)>,
+        attachments: &RenderingAttachments<'_>,
     ) {
-        let extent = color
-            .map(|(image, _)| image.extent)
-            .or_else(|| depth.map(|(image, _)| image.extent))
-            .unwrap();
-        let colors = [color.map_or_else(
-            vk::RenderingAttachmentInfo::default,
-            |(image, attachment)| attachment_info(image, attachment),
-        )];
-        let depth_attachment = depth.map(|(image, attachment)| attachment_info(image, attachment));
-        let mut info = vk::RenderingInfo::default()
-            .render_area(vk::Rect2D {
-                offset: vk::Offset2D::default(),
-                extent,
-            })
-            .layer_count(1)
-            .color_attachments(if color.is_some() { &colors } else { &[] });
-        if let Some(attachment) = &depth_attachment {
-            info = info.depth_attachment(attachment);
-        }
         let device = self.owner.device.raw();
+        let pipeline = program
+            .raster_pipeline(sample_count)
+            .expect("prepared Raster pipeline for attachment sample count");
         // SAFETY: Caller retains compatible pipeline, descriptors, attachments
         // and buffers through actual retirement; all dependencies precede scope.
         unsafe {
-            device.cmd_begin_rendering(command, &info);
-            device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, program.pipeline);
-            self.viewport(command, extent);
+            device.cmd_begin_rendering(command, &attachments.info());
+            device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, pipeline);
+            self.viewport(command, attachments.extent);
             {
                 #[cfg(feature = "tracy")]
                 let _span = tracy_client::Client::running().map(|client| {
@@ -229,10 +235,11 @@ impl ShaderPrograms {
 pub(in crate::backends::vulkan) fn attachment_info<'a>(
     image: &DeviceImage,
     attachment: &crate::graph::AttachmentOperand,
+    resolve: Option<&DeviceImage>,
 ) -> vk::RenderingAttachmentInfo<'a> {
     use crate::graph::{LoadAction, StoreOp};
     let depth = image.aspect == vk::ImageAspectFlags::DEPTH;
-    vk::RenderingAttachmentInfo::default()
+    let mut info = vk::RenderingAttachmentInfo::default()
         .image_view(image.view)
         .image_layout(if depth {
             vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL
@@ -261,5 +268,12 @@ pub(in crate::backends::vulkan) fn attachment_info<'a>(
                     float32: attachment.clear,
                 },
             }
-        })
+        });
+    if let Some(resolve) = resolve {
+        info = info
+            .resolve_mode(vk::ResolveModeFlags::AVERAGE)
+            .resolve_image_view(resolve.view)
+            .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    }
+    info
 }

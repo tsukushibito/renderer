@@ -22,7 +22,7 @@ use super::transfer::staging::SharedStaging;
 use super::transfer::{ExecutionPool, PendingTransfer};
 use crate::graph::{
     BufferHandle, CompiledGraph, GraphCapacity, ImageHandle, ImportBuffer, ImportImage,
-    ImportRanges, ImportRangesPool, Operation, PassHandle, ResourceDesc, ResourceKey,
+    ImportRanges, ImportRangesPool, Operation, PassHandle, ResourceDesc, ResourceKey, SampleCount,
 };
 
 mod cache;
@@ -267,25 +267,47 @@ impl Entry {
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum CacheDescriptor {
     Buffer(u64),
-    Rgba8(u32, u32, u32),
-    Rgba8Srgb(u32, u32, u32),
-    Rgba16(u32, u32, u32),
-    Depth32(u32, u32, u32),
+    Rgba8(u32, u32, u32, u32),
+    Rgba8Srgb(u32, u32, u32, u32),
+    Rgba16(u32, u32, u32, u32),
+    Depth32(u32, u32, u32, u32),
 }
 impl From<ResourceDesc> for CacheDescriptor {
     fn from(desc: ResourceDesc) -> Self {
         match desc {
             ResourceDesc::Buffer(desc) => Self::Buffer(desc.size),
-            ResourceDesc::Image(desc) => match desc.format {
-                ImageFormat::Rgba8Unorm => Self::Rgba8(desc.width, desc.height, desc.mip_levels),
-                ImageFormat::Rgba8Srgb => Self::Rgba8Srgb(desc.width, desc.height, desc.mip_levels),
-                ImageFormat::Rgba16Float => Self::Rgba16(desc.width, desc.height, desc.mip_levels),
-                ImageFormat::Depth32Float => {
-                    Self::Depth32(desc.width, desc.height, desc.mip_levels)
+            ResourceDesc::Image(desc) => {
+                let (width, height, mip_levels, samples) = (
+                    desc.width,
+                    desc.height,
+                    desc.mip_levels,
+                    desc.sample_count.as_u32(),
+                );
+                match desc.format {
+                    ImageFormat::Rgba8Unorm => Self::Rgba8(width, height, mip_levels, samples),
+                    ImageFormat::Rgba8Srgb => Self::Rgba8Srgb(width, height, mip_levels, samples),
+                    ImageFormat::Rgba16Float => Self::Rgba16(width, height, mip_levels, samples),
+                    ImageFormat::Depth32Float => Self::Depth32(width, height, mip_levels, samples),
                 }
-            },
+            }
         }
     }
+}
+
+fn attachment_samples(
+    graph: &CompiledGraph,
+    colors: &Range<usize>,
+    depth: Option<usize>,
+) -> SampleCount {
+    let attachment = graph
+        .raster_attachments(colors)
+        .first()
+        .or_else(|| depth.map(|index| graph.raster_attachment(index)))
+        .expect("Graph rendering has at least one attachment");
+    let ResourceDesc::Image(desc) = graph.resources[attachment.view.image().index].desc else {
+        unreachable!("validated Graph attachment")
+    };
+    desc.sample_count
 }
 
 type PhysicalLease = ResourceLease<Physical>;
@@ -504,12 +526,14 @@ impl VulkanRuntime {
         for entry in &self.entries {
             if let Some(physical) = &entry.physical {
                 match physical.desc {
-                    ResourceDesc::Image(desc) => match desc.format {
-                        ImageFormat::Rgba8Unorm => color = true,
-                        ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
-                        ImageFormat::Depth32Float => depth = true,
-                    },
-                    ResourceDesc::Buffer(_) => {}
+                    ResourceDesc::Image(desc) if desc.sample_count == SampleCount::X1 => {
+                        match desc.format {
+                            ImageFormat::Rgba8Unorm => color = true,
+                            ImageFormat::Rgba16Float | ImageFormat::Rgba8Srgb => {}
+                            ImageFormat::Depth32Float => depth = true,
+                        }
+                    }
+                    ResourceDesc::Buffer(_) | ResourceDesc::Image(_) => {}
                 }
             }
         }
@@ -544,15 +568,16 @@ impl VulkanRuntime {
     }
 
     /// Replace the complete Raster Program working set before ordinary frames.
-    /// Color programs prepare color-only variants and depth-enabled variants
-    /// when the prepared resource working set includes depth images.
+    /// Programs prepare the explicitly requested raster sample counts. Color
+    /// programs prepare depth-enabled variants when the prepared resource
+    /// working set includes depth images of the same sample count.
     /// All recordings, pending commands, results and buffer export/refresh tokens
     /// must be returned before replacing descriptor layouts, as for resource preparation.
     /// The selected set replaces previous explicit Raster selections only after
     /// all native preparation succeeds; failure preserves the previous set.
     pub fn prepare_raster_programs(
         &mut self,
-        programs: &[crate::program::ManagedRasterProgram],
+        programs: &[impl Copy + Into<crate::program::RasterPipelineRequest>],
     ) -> Result<(), RuntimeError> {
         self.owner
             .device
@@ -594,9 +619,19 @@ impl VulkanRuntime {
         if needs.any() {
             replacement.prepare_fixed(needs)?;
         }
-        let depth_available = self.entries.iter().any(|entry| entry.physical.as_ref()
-            .is_some_and(|physical| matches!(physical.desc, ResourceDesc::Image(desc) if desc.format == ImageFormat::Depth32Float)));
-        replacement.prepare_rasters(programs, depth_available)?;
+        let mut depth_samples = vk::SampleCountFlags::empty();
+        for physical in self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.physical.as_ref())
+        {
+            if let ResourceDesc::Image(desc) = physical.desc
+                && desc.format == ImageFormat::Depth32Float
+            {
+                depth_samples |= super::resources::sample_count_flags(desc.sample_count);
+            }
+        }
+        replacement.prepare_rasters(programs, depth_samples)?;
         self.programs = Some(replacement);
         Ok(())
     }
@@ -1132,15 +1167,8 @@ impl VulkanRuntime {
                     .map_err(|error| error.context(format_args!("resource {name:?}")))?,
             ),
             ResourceDesc::Image(desc) => NativeResource::Image(
-                DeviceImage::new(
-                    Arc::clone(&self.owner),
-                    desc.width,
-                    desc.height,
-                    desc.mip_levels,
-                    super::resources::image_format(desc.format),
-                    name,
-                )
-                .map_err(|error| error.context(format_args!("resource {name:?}")))?,
+                DeviceImage::new(Arc::clone(&self.owner), desc, name)
+                    .map_err(|error| error.context(format_args!("resource {name:?}")))?,
             ),
         };
         let physical = Arc::new(Physical {
@@ -1305,7 +1333,11 @@ impl VulkanRuntime {
                                 ),
                             )
                         })?
-                        .raster_program(*program, depth.is_some())?;
+                        .raster_program(
+                            *program,
+                            depth.is_some(),
+                            attachment_samples(graph, colors, *depth),
+                        )?;
                 }
                 Operation::AttachmentPass { colors, .. } if colors.len() > 1 => {
                     return Err(RuntimeError::unsupported(
@@ -1341,6 +1373,7 @@ impl VulkanRuntime {
                     access.purpose,
                     crate::graph::AccessPurpose::ColorAttachment
                         | crate::graph::AccessPurpose::DepthAttachment
+                        | crate::graph::AccessPurpose::ColorResolve
                 ) && (access.range != (0..1)
                     || matches!(graph.resources[access.resource].desc, ResourceDesc::Image(desc) if desc.mip_levels != 1))
                 {

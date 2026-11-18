@@ -233,6 +233,7 @@ pub(in crate::backends::vulkan) struct Program {
     pub(super) set_layout: vk::DescriptorSetLayout,
     pub(super) layout: vk::PipelineLayout,
     pub(super) pipeline: vk::Pipeline,
+    multisample_pipeline: vk::Pipeline,
     pub(in crate::backends::vulkan) sampler: vk::Sampler,
     linear_sampler: vk::Sampler,
     linear_clamp_sampler: vk::Sampler,
@@ -244,6 +245,17 @@ pub(in crate::backends::vulkan) struct Program {
 }
 
 impl Program {
+    pub(in crate::backends::vulkan) fn raster_pipeline(
+        &self,
+        sample_count: crate::graph::SampleCount,
+    ) -> Option<vk::Pipeline> {
+        let pipeline = match sample_count {
+            crate::graph::SampleCount::X1 => self.pipeline,
+            crate::graph::SampleCount::X4 => self.multisample_pipeline,
+        };
+        (pipeline != vk::Pipeline::null()).then_some(pipeline)
+    }
+
     pub(in crate::backends::vulkan) fn sampler_for(
         &self,
         desc: crate::program::SamplerDescriptor,
@@ -275,6 +287,7 @@ impl Program {
             set_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
+            multisample_pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
             linear_sampler: vk::Sampler::null(),
             linear_clamp_sampler: vk::Sampler::null(),
@@ -294,6 +307,7 @@ impl Program {
         owner: Arc<MemoryOwner>,
         managed: crate::program::ManagedRasterProgram,
         depth: bool,
+        samples: vk::SampleCountFlags,
     ) -> Result<Self, RuntimeError> {
         if managed.requires_depth() && !depth {
             return Err(RuntimeError::invalid(
@@ -301,6 +315,13 @@ impl Program {
             ));
         }
         let limits = owner.device.limits();
+        if (!managed.is_depth_only() && !limits.framebuffer_color_sample_counts.contains(samples))
+            || (depth && !limits.framebuffer_depth_sample_counts.contains(samples))
+        {
+            return Err(RuntimeError::unsupported(
+                "Device does not support requested Raster framebuffer sample counts",
+            ));
+        }
         let groups = managed
             .bindings()
             .iter()
@@ -429,6 +450,7 @@ impl Program {
             set_layout: vk::DescriptorSetLayout::null(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
+            multisample_pipeline: vk::Pipeline::null(),
             sampler: vk::Sampler::null(),
             linear_sampler: vk::Sampler::null(),
             linear_clamp_sampler: vk::Sampler::null(),
@@ -534,7 +556,14 @@ impl Program {
                 .create_pipeline_layout(&info, None)
         }
         .map_err(|r| native(&result.owner, "vkCreatePipelineLayout(Raster)", r))?;
-        result.pipeline = result.graphics_pipeline(Some((managed, depth)))?;
+        if samples.contains(vk::SampleCountFlags::TYPE_1) {
+            result.pipeline =
+                result.graphics_pipeline(Some((managed, depth)), vk::SampleCountFlags::TYPE_1)?;
+        }
+        if samples.contains(vk::SampleCountFlags::TYPE_4) {
+            result.multisample_pipeline =
+                result.graphics_pipeline(Some((managed, depth)), vk::SampleCountFlags::TYPE_4)?;
+        }
         Ok(result)
     }
 
@@ -611,10 +640,11 @@ impl Program {
         }
         self.pipeline = match kind {
             ProgramKind::Compute => self.compute_pipeline()?,
-            ProgramKind::Raster => {
-                self.graphics_pipeline(Some((crate::program::ManagedRasterProgram::mesh(), true)))?
-            }
-            ProgramKind::Composite => self.graphics_pipeline(None)?,
+            ProgramKind::Raster => self.graphics_pipeline(
+                Some((crate::program::ManagedRasterProgram::mesh(), true)),
+                vk::SampleCountFlags::TYPE_1,
+            )?,
+            ProgramKind::Composite => self.graphics_pipeline(None, vk::SampleCountFlags::TYPE_1)?,
         };
         #[cfg(feature = "vulkan-diagnostics")]
         {
@@ -682,6 +712,7 @@ impl Program {
     fn graphics_pipeline(
         &self,
         raster_program: Option<(crate::program::ManagedRasterProgram, bool)>,
+        samples: vk::SampleCountFlags,
     ) -> Result<vk::Pipeline, RuntimeError> {
         let mesh = raster_program.is_some();
         let depth_attached = raster_program.is_some_and(|(_, depth)| depth);
@@ -761,8 +792,8 @@ impl Program {
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let multisample =
+            vk::PipelineMultisampleStateCreateInfo::default().rasterization_samples(samples);
         let depth = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(depth_enabled)
             .depth_write_enable(
@@ -881,13 +912,15 @@ impl Drop for Program {
         // retires. Unpublished partial programs have never been recorded.
         unsafe {
             let device = self.owner.device.raw();
-            if self.pipeline != vk::Pipeline::null() {
-                #[cfg(feature = "memory-profiling")]
-                crate::measurement::record_native(
-                    crate::measurement::NativeEvent::ObjectDestroy,
-                    1,
-                );
-                device.destroy_pipeline(self.pipeline, None);
+            for pipeline in [self.pipeline, self.multisample_pipeline] {
+                if pipeline != vk::Pipeline::null() {
+                    #[cfg(feature = "memory-profiling")]
+                    crate::measurement::record_native(
+                        crate::measurement::NativeEvent::ObjectDestroy,
+                        1,
+                    );
+                    device.destroy_pipeline(pipeline, None);
+                }
             }
             if self.layout != vk::PipelineLayout::null() {
                 #[cfg(feature = "memory-profiling")]
