@@ -955,6 +955,13 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 | `passes::opaque` | callerのcolor attachmentと任意depthへ頂点色×tintを描く。RGBA8／RGBA16Fから公開mesh Programを選び、Clear／Load／Storeを引き継ぐ |
 | `passes::depth_prepass` | callerのD32 attachmentへ同じ頂点変換の深度だけを描く。colorを確保しない |
 | `graphs::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
+| `passes::tone_map_neutral` | scene-linear RGBA16Fに露出倍率とKhronos Neutralを適用し、同寸のdisplay-linear RGBA16Fへ書く |
+| `passes::write_sdr` | 指定したcolor viewから同寸のRGBA8_UNORMへ書く。`SdrOutput`でFXAAの有無と出力encodingを選ぶ |
+
+両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
+`tone_map_neutral_pipeline()`と`SdrOutput::pipeline()`を使って実行前に対応するProgramを準備する。
+ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
+Bloomなど露出前の効果はscene-linear画像に接続し、トーンマッピングとSDR変換の間にも任意のGraph処理を組み込める。
 
 初期標準描画は照明を計算しない。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
 RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。

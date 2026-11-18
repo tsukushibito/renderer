@@ -11,8 +11,8 @@ indexed meshと深度、利用側shaderによるRaster/Compute、import/export�
 
 標準構成は`standard::graphs`、部分交換は`standard::passes`、独自構成は`graph`を使います。
 いずれも同じGraphの同期・寿命・不要パス除去を通り、標準構成の使用は必須ではありません。
-標準forwardはunlit描画です。`bistro`は利用側でPBR、IBL、カスケード影、トーンマッピング、
-任意のBloomを組み立て、同じ公開GraphをVulkanとD3D12で実行する例です。
+標準forwardはunlit描画です。`bistro`は利用側のPBR、IBL、カスケード影、任意のBloomを標準の
+NeutralトーンマッピングとSDR出力につなぎ、同じ公開GraphをVulkanとD3D12で実行する例です。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 

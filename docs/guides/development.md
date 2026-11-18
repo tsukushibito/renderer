@@ -398,9 +398,9 @@ python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 
 ### 全Bistroの表示と統合受入
 
-アプリ側でBistroのHDR描画、外部Bloom、露出、Neutral、FXAAまで組み立てる。
+アプリ側でBistroのHDR描画と外部Bloomを組み立て、公開`standard::passes`のNeutralとSDR変換をつなぐ。
 WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexportして渡す。
-オフスクリーンのSDRはresolve shader、ウィンドウはPresenterのsRGB targetで出力変換を行う。
+オフスクリーンでは`SdrEncoding::Srgb`を選ぶ。ウィンドウでは`SdrEncoding::Linear`を選び、PresenterのsRGB targetで変換する。
 
 ```powershell
 cargo run --locked --release -p renderer --example bistro --no-default-features --features vulkan,d3d12,presentation -- --api vulkan --manifest $manifest --ibl-manifest $iblManifest --bloom tent --windowed --output .tools/bistro-window
