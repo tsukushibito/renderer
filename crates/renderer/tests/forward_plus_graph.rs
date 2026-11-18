@@ -180,6 +180,7 @@ mod native {
                 executions: 1,
                 resources: 4,
                 resource_capacity: 4,
+                buffers: 3,
                 operations: 8,
                 upload_bytes: 4096,
                 readback_bytes: OUTPUT_BYTES,

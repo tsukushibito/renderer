@@ -99,6 +99,10 @@ def run(args, policy, api, scenario, timed, destination):
         command += ["--msaa", "4"]
     if args.pipeline != "forward":
         command += ["--pipeline", args.pipeline]
+    if args.submission != "direct":
+        command += ["--submission", args.submission]
+    if args.instances != "off":
+        command += ["--instances", args.instances]
     for key, value in frames.items():
         command += [f"--{key}", str(value)]
     if timed:
@@ -138,6 +142,7 @@ def run(args, policy, api, scenario, timed, destination):
                 and report.get("pipeline", "forward") == args.pipeline,
                 "Window quality or pacing request changed")
         metrics = summarize_window(report, frames)
+        identity = report
     else:
         require(report["identity"]["bloom"] == "tent"
                 and report["identity"].get("samples", 1) == args.msaa
@@ -146,6 +151,10 @@ def run(args, policy, api, scenario, timed, destination):
         metrics = renderer_metrics(report, {"variant": api, "timing": timed}, FRAMES)
         metrics["cold_phases_ns"] = report["setup_phases_ns"]
         metrics["native_memory_at_boundaries"] = report["native_memory_at_boundaries"]
+        identity = report["identity"]
+    require(identity.get("submission", "direct") == args.submission
+            and identity.get("instances", "off") == args.instances,
+            f"Draw submission or instance mode changed in {destination}")
     return {"report": str(path), "report_sha256": digest(path), "process_elapsed_ns": elapsed,
             "token": token, "before": before, "after": after,
             "metrics": metrics, "runtime": report["runtime"]}
@@ -158,6 +167,13 @@ def main():
     parser.add_argument("--window-binary", type=Path,
                         help="use a separate release executable for the Windows timing cohort")
     parser.add_argument("--resume", action="store_true", help="reuse validated completed runs")
+    parser.add_argument("--scenario", action="append", choices=tuple(dict.fromkeys(
+        scenario for scenario, _ in SCENARIOS)),
+        help="run only the selected scenarios, repeat to select more than one")
+    parser.add_argument("--submission", choices=("direct", "packed", "indirect"),
+                        default="direct")
+    parser.add_argument("--instances", choices=("off", "individual", "instanced"),
+                        default="off")
     parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
                         help="scene sample count for the MSAA comparison cohort")
     parser.add_argument("--pipeline", choices=("forward", "forward-plus", "forward-reference", "deferred"),
@@ -168,6 +184,14 @@ def main():
     ordinary_host_token()
     policy = host_policy.plan("performance-cores")
     settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
+    scenarios = tuple((name, timed) for name, timed in SCENARIOS
+                      if args.scenario is None or name in args.scenario)
+    if args.scenario is not None:
+        settings["scenarios"] = list(dict.fromkeys(name for name, _ in scenarios))
+    if args.submission != "direct":
+        settings["submission"] = args.submission
+    if args.instances != "off":
+        settings["instances"] = args.instances
     if args.msaa == 4:
         settings["samples"] = 4
     if args.pipeline != "forward":
@@ -195,7 +219,7 @@ def main():
                   "power_scheme": power_scheme, "runs": {}}
     write_json(progress, result)
     runs = result["runs"]
-    for scenario, timed in SCENARIOS:
+    for scenario, timed in scenarios:
         for repeat in range(1, 4):
             for api in APIS if repeat % 2 else reversed(APIS):
                 label = f"{scenario}-{'timed' if timed else 'normal'}-{api}-{repeat}"
@@ -215,7 +239,7 @@ def main():
         f"{scenario}/{api}": statistics.median(
             record["metrics"]["mean_wall_ms"] for label, record in runs.items()
             if label.startswith(scenario) and f"-{api}-" in label)
-        for scenario in ("window-vsync", "window-tearing") for api in APIS
+        for scenario, _ in scenarios if scenario != "offscreen" for api in APIS
     }
     require(input_identity(args) == identity,
             "Benchmark executable or input identity changed")
