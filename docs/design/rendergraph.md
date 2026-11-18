@@ -61,8 +61,16 @@ GeometryDataとidle upload poolを解放する。次の通常frameのresetへ最
 ## 対応範囲と処理の境界
 
 Vulkanの経路は、単一Graphics＋Computeキュー、物理aliasingなしを基準とする。
-両backendのnative画像は2D・layer/sample各1で、sampled入力とwhole-chain uploadは複数mipを扱う。
-attachment/storage画像、画像copy/readbackはmip数1に限定する。
+両backendのnative画像は2D・1 layerとする。実行できる画像の形状と用途は次のとおり。
+
+| 用途 | Vulkan／D3D12の共通範囲 |
+|---|---|
+| Raster・attachment操作 | RGBA8_UNORM／RGBA16Fのcolor attachmentを最大8枚、任意のD32 depth。各画像1 mipでextentとsample数を揃える |
+| MSAA | 実Deviceが対応する形式の4× color/depth attachment。colorは同形式・同extentの1×画像へresolveできる |
+| sampled入力・upload | 1×画像でsampled Viewは単一mipまたは全chain。uploadは対応するcolor形式の全chain |
+| storage・copy・readback | 1×・1 mip。copyは同形式・同extentのcolor画像間。readbackは対応するcolor形式とD32 |
+
+4×画像はattachment用途に限定する。形式ごとのshaderの型・用途と、実Deviceの上限も適用する。
 論理Graphは、以下のより広いmip/layer単位のCPU計画も扱う。
 bufferは半開byte範囲を指定する。
 論理ハンドルと物理資源の識別、内容の有効性と画像layout、

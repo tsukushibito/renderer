@@ -175,12 +175,10 @@ VMAのmap／unmap呼び出しを、毎回必ずnative mappingを作り直す処�
 ## 画像とcopyの範囲
 
 論理Graphは`ImageDesc::mip_levels`/`array_layers`とsubresource ViewをCPUで計画する。
-nativeは2D・layer/sample各1を扱い、B2のsampled入力とwhole-chain uploadは複数mipを許可する。
-owned attachment passとRasterはmip数1の画像で、
-color一個（RGBA8/RGBA16F）とoptional D32、またはdepth-onlyをDynamic Renderingへlowerする。
-Load/Clear/DiscardとStore/Discardを保持する。MRT、複数layer、multi-mip画像のattachment/storage等、
-未対応なlive構成は記録・投入前に拒否する。cache keyはbase extent/formatとmip数を区別する。
-culledな未対応枝は取得しない。未信頼shaderや一般的なarray/MSAA実行は扱わない。
+native画像の形状と用途は[共通の対応範囲](rendergraph.md#対応範囲と処理の境界)に従う。
+owned attachment passとRasterは、実Deviceの上限内でMRT・1×／4×・color resolveをDynamic Renderingへlowerする。
+Load/Clear/DiscardとStore/Discardを保持し、未対応なlive構成は記録・投入前に拒否する。
+cache keyはbase extent、format、mip数、sample数を区別する。culledな枝の資源は取得しない。
 
 既存の転送試験用`VulkanImage`はRGBA8_UNORM、2D、optimal tiling、mip・layer・sample各1、
 transfer source／destination、EXCLUSIVE共有、初期layout UNDEFINEDに限定する。
@@ -203,8 +201,8 @@ D32_SFLOATはdepth attachment、sampled、transfer source／destinationを持つ
 public GraphのD32 uploadは受け付けず、ここでのusageは実装した同期・転送と再利用の能力条件を表す。
 `Rgba8Srgb`は`R8G8B8A8_SRGB`のsampledとtransfer source／destinationを使い、
 storage/color attachment用途へは受け付けない。色のdecodeはfilterの前にnativeで行い、alphaは変換しない。
-いずれも2D・optimal tiling・layer／sample各1とし、実際のusage組の能力とextent/mip数、
-framebuffer／viewport上限を照会する。Graph画像はallocationとImageViewを一緒に保持する。
+2D・optimal tiling・1 layerとし、実際のusage組の能力とextent、mip数、sample数、
+framebuffer／viewport上限を照会する。4×画像はattachment用のusageを選び、Graph画像はallocationとImageViewを一緒に保持する。
 固定usageはexport後に対応操作へ再importできるようにするためであり、
 usage削減による最適化や、未確認GPUでの対応を主張しない。
 

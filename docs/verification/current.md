@@ -522,7 +522,7 @@ cpu setの生情報は再開前後で記録し、変動したparked bit以外の
 冷間区間・記録境界のメモリは`.tools/b5/performance/`に保存した。比較要約のSHA-256は
 `84f66641492f34a2881d486e5a738f5db477e282b54c88383eaf7ebea6998ec5`。
 
-<a id="bistro-120-performance"></a>
+<a id="bistro-raster-expansion"></a>
 
 ## B5後の描画パイプライン拡張
 
@@ -607,6 +607,8 @@ Graph GPU p95には固定スロットの実行も含まれる。Bistroではこ�
 66実行の報告と各フレームの生データは `.tools/pipeline-expansion/performance/` に保存した。
 `cohort-summary.json`のSHA-256は `96790497a5560b761752ce52a5ce4929286e244d412e22396499540318ad0983`。
 [再現手順](../guides/development.md#bistro-b5)
+
+<a id="bistro-120-performance"></a>
 
 ## Bistro B3の120 FPS目標と高速化
 

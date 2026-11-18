@@ -1867,8 +1867,8 @@ globalな準備数で、execution数を自動で掛けない。登録済み資�
 各execution leaseは物理資源を共有registryから借り、専用のRTV/DSVとdraw別SRVの枠、
 および不変nearest/clamp・linear/repeat sampler descriptorを所有する。Graphのsampler operandに従って選び、
 新classにない登録画像のdescriptor枠も補う。
-RGBA8/RGBA16Fのcolor targetとoptional D32、またはdepth-onlyを扱い、MRTと複数layer、
-multi-mip画像のattachment/storage利用は拒否する。
+Rasterとattachment操作は[共通の対応範囲](rendergraph.md#対応範囲と処理の境界)に従い、
+MRT、1×／4×、color resolveを扱う。複数layerとmulti-mip画像のattachment/storage利用は拒否する。
 実formatのrender target/depth/sample能力、SM6.0、root signature、native作成失敗はこの境界で扱う。
 GraphのRGBA8_UNORM/RGBA16F画像は初回からRT／UAVの固定用途で作成し、後から追加したProgramも同じ登録画像を使える。
 typed UAV view能力を画像準備で、load/store能力をProgramの用途に応じて確認する。
@@ -1948,7 +1948,7 @@ sampled専用画像等のtarget view作成を除き、native identityが変わ�
 候補列・使用attachment列は明示準備するmetadataであり、GPU完了または未投入cancel後の
 exclusive resetでのみ返す。COMMON復帰、importの失効検査、pendingのlease保持は変更しない。
 depth clearの有限値・範囲・subnormal拒否はGraph構築で確立し、privateな不変operandを引き継ぐ。
-native適用時に同じ値を再検査せず、MRT未対応、実Deviceへの適合、容量・同期・完了管理は維持する。
+native適用時は、実Deviceへの適合、容量・同期・完了を管理する。
 
 Graphのclear値はframeやpassで変えられるが、D3D12のoptimized clear値は資源作成時に固定される。
 作成時に値を渡さないclearは厳格受入でwarning820/821を発生させる。固定optimized値と異なる値も
