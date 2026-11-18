@@ -369,6 +369,19 @@ PCF・caster判定・depth prepass・batching・表示の差、素材mip画素�
 AgX追加、Lumberyardの見え方変更、Bloom/B4、B5の表示・操作・temporal最終受入は今回へ含めない。
 長時間soak、他機材、物理VRAM常駐、実OOM/device loss注入は未実行である。
 
+<a id="bistro-bloom-fixture"></a>
+
+## 外部Bloomの小HDR入力（B4）
+
+`renderer-7ft.5.1`。標準forward recipeのscene-linear callbackと利用側が直接構築するGraphで、
+同じ外部Bloomの無効・テント・ボックスをそれぞれ確認した。RTX 3060でstrict／shippingを
+最適化済みの別processとして実行し、9×5 RGBA16Fの6出力（各360 byte）を各APIで独立期待値に照合した。
+Vulkan/D3D12は全出力でbyte一致。一定色は厳密一致、端に明部を持つ入力では交換による出力差とalphaの保持を確認した。
+strictのVulkan Core/SyncValとD3D12 Debug Layer/GBVは実効で、最終native解放後の診断は両APIでゼロだった。
+CPU契約試験2件でculling、不適合format、未初期化read、Graph slot返却を確認し、固定SDKでshader生成物を再照合した。
+Bistro全体の露出前統合と定常メモリは後続の受入で扱う。
+[再現手順](../guides/development.md#bistro-bloom-fixture)。
+
 <a id="bistro-120-performance"></a>
 
 ## Bistro B3の120 FPS目標と高速化

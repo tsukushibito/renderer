@@ -370,6 +370,18 @@ full-sceneのAO適用は固定照明profileに従って無効とし、元ORM・g
 汎用shaderのAO契約は独立fixtureで検証する。[採用理由](../design/implementation-policy.md#b3-影線形hdrトーンマッピング)を参照する。
 Bloomの追加はB4、表示・自由操作の最終統合受入はB5で行う。
 
+<a id="bistro-bloom-fixture"></a>
+
+### 外部Bloomの小HDR入力受入
+
+利用側のBloomを標準forward recipeと独自Graphから呼び、無効・テント・ボックスを比較する。
+Windowsの同一物理GPUで最適化済みのstrictとshippingを別processとして実行する。
+
+```powershell
+cargo test --locked --release -p renderer --test bloom_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --test bloom_graph --no-default-features --features vulkan,d3d12 native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
+```
+
 ### 画像比較と性能値の読み方
 
 同API反復と二API差は別に比較する。比較profileとそのhashを受入前に固定し、

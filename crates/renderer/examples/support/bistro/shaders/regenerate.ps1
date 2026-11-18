@@ -66,7 +66,12 @@ $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {
     $publish = [ordered]@{}
     $artifacts = [ordered]@{}
-    foreach ($name in @('pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'resolve.vert', 'tone.frag', 'resolve.frag', 'resolve_aa.frag')) {
+    $shaders = @(
+        'pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'resolve.vert',
+        'tone.frag', 'resolve.frag', 'resolve_aa.frag', 'bloom_extract.comp',
+        'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp'
+    )
+    foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
         $source = Join-Path $PSScriptRoot $name
         $spirv = Join-Path $temporaryRoot ($name + '.spv')
@@ -87,7 +92,12 @@ try {
         } elseif ([regex]::IsMatch($text, $pattern)) { throw "Unexpected inline cbuffer in $name" }
         # Hash and compile the same canonical text Git checks out on every OS.
         Write-Text $hlsl $text
-        $profile = if ($stage -ceq 'vert') { 'vs_6_0' } else { 'ps_6_0' }
+        $profile = switch -CaseSensitive ($stage) {
+            'vert' { 'vs_6_0' }
+            'frag' { 'ps_6_0' }
+            'comp' { 'cs_6_0' }
+            default { throw "Unexpected shader stage: $stage" }
+        }
         $null = Run $dxc (@($lock.dxc_arguments) + @('-T', $profile, $hlsl, '-Fo', $dxil))
         $dump = Run $dxc @('-dumpbin', $dxil)
         if ($name -ceq 'pbr.vert') {

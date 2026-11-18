@@ -1,0 +1,18 @@
+#version 450 core
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D source_image;
+layout(set = 1, binding = 0, rgba16f) uniform writeonly image2D destination_image;
+
+void main() {
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(destination_image)))) {
+        return;
+    }
+    ivec2 source_end = textureSize(source_image, 0) - 1;
+    vec3 color = max(texelFetch(source_image, min(pixel, source_end), 0).rgb, 0.0);
+    float peak = max(max(color.r, color.g), color.b);
+    float contribution = max(peak - 1.0, 0.0) / max(peak, 1.0);
+    imageStore(destination_image, pixel, vec4(color * contribution, 0.0));
+}
