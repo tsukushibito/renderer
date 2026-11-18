@@ -1,8 +1,5 @@
 //! Committed buffer/image ownership and scoped or persistent CPU mapping.
-//! Managed owners and queue work retain the Device and release native resources first.
-
-#[cfg(test)]
-use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
+//! Prepared runtime owners release native resources before the Device.
 
 use std::{ffi::c_void, ptr};
 
@@ -243,45 +240,6 @@ impl DeviceBuffer {
     }
 
     /// # Safety
-    /// The caller must own a READBACK allocation from this Device, with `size`
-    /// initialized logical bytes and `size <= isize::MAX`. Actual successful GPU
-    /// completion must be established, with no concurrent CPU/GPU access. The
-    /// native owner must remain retained through this access and buffer release.
-    #[cfg(test)]
-    pub(super) unsafe fn read(
-        &self,
-        owner: &DeviceOwner,
-        size: usize,
-    ) -> Result<Vec<u8>, D3D12RuntimeError> {
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(size).map_err(|_| {
-            D3D12RuntimeError::capacity_with(
-                "CPU allocation for readback failed",
-                RuntimeCapacityError::new(
-                    RuntimeCapacityKind::HostMemory,
-                    CapacityRecovery::Reconfigure,
-                    None,
-                    None,
-                ),
-            )
-        })?;
-        let read = D3D12_RANGE {
-            Begin: 0,
-            End: size,
-        };
-        let empty = D3D12_RANGE { Begin: 0, End: 0 };
-        let mapping = Mapping::new(owner, &self.raw, read, empty)?;
-        // SAFETY: Only a completed result exposes this readback allocation;
-        // size is its checked logical length, and Map does not offset pointers.
-        // All bytes were initialized by the completed GPU copy. The slice is
-        // borrowed only while the mapping guard remains live, and size does not
-        // exceed Rust's slice limit. The reserved vector needs no zero-fill.
-        let mapped = unsafe { std::slice::from_raw_parts(mapping.pointer.cast::<u8>(), size) };
-        bytes.extend_from_slice(mapped);
-        Ok(bytes)
-    }
-
-    /// # Safety
     /// The READBACK range must fit the retained resource and contain initialized
     /// bytes from proven-complete GPU work. No GPU access may overlap this CPU
     /// access, and the destination must not alias the mapped native range.
@@ -351,59 +309,9 @@ impl Drop for DeviceImage {
     }
 }
 impl DeviceImage {
-    pub(super) fn new(
-        owner: &DeviceOwner,
-        desc: crate::program::ImageDescriptor,
-    ) -> Result<Self, D3D12RuntimeError> {
-        Self::with_description(owner, desc, false, crate::graph::SampleCount::X1)
-    }
-
     pub(super) fn graph(
         owner: &DeviceOwner,
         desc: crate::graph::ImageDesc,
-    ) -> Result<Self, D3D12RuntimeError> {
-        Self::with_description(owner, Self::graph_descriptor(desc), true, desc.sample_count)
-    }
-
-    fn graph_descriptor(desc: crate::graph::ImageDesc) -> crate::program::ImageDescriptor {
-        crate::program::ImageDescriptor {
-            width: desc.width,
-            height: desc.height,
-            mip_levels: desc.mip_levels,
-            format: desc.format,
-            preferred_depth_clear: None,
-        }
-    }
-
-    pub(super) fn graph_resource_desc(desc: crate::graph::ImageDesc) -> D3D12_RESOURCE_DESC {
-        Self::resource_desc(Self::graph_descriptor(desc), true, desc.sample_count)
-    }
-
-    fn resource_desc(
-        desc: crate::program::ImageDescriptor,
-        graph: bool,
-        sample_count: crate::graph::SampleCount,
-    ) -> D3D12_RESOURCE_DESC {
-        let mut native = image_desc(desc);
-        native.SampleDesc.Count = sample_count.as_u32();
-        if graph
-            && desc.format != crate::ImageFormat::Rgba8Srgb
-            && native.Flags == D3D12_RESOURCE_FLAG_NONE
-        {
-            native.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-            // Native multisampled render targets do not support UAV use.
-            if sample_count == crate::graph::SampleCount::X1 {
-                native.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-            }
-        }
-        native
-    }
-
-    fn with_description(
-        owner: &DeviceOwner,
-        desc: crate::program::ImageDescriptor,
-        graph: bool,
-        sample_count: crate::graph::SampleCount,
     ) -> Result<Self, D3D12RuntimeError> {
         let properties = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -411,44 +319,33 @@ impl DeviceImage {
             VisibleNodeMask: 1,
             ..Default::default()
         };
-        // A preferred clear value is an immutable creation hint, not an
-        // initialization operation. The public boundary validated D32/range.
-        let clear = if graph && desc.format != crate::ImageFormat::Rgba8Srgb {
-            Some(D3D12_CLEAR_VALUE {
-                Format: if desc.format == crate::ImageFormat::Depth32Float {
-                    DXGI_FORMAT_D32_FLOAT
-                } else {
-                    image_format(desc.format)
-                },
-                Anonymous: if desc.format == crate::ImageFormat::Depth32Float {
-                    D3D12_CLEAR_VALUE_0 {
-                        DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                            Depth: 1.0,
-                            Stencil: 0,
-                        },
-                    }
-                } else {
-                    D3D12_CLEAR_VALUE_0 {
-                        Color: [0.0, 0.0, 0.0, 1.0],
-                    }
-                },
-            })
-        } else {
-            desc.preferred_depth_clear.map(|value| D3D12_CLEAR_VALUE {
+        // The optimized clear is a creation hint. Graph operations establish
+        // initialized content independently of it.
+        let clear = match desc.format {
+            crate::ImageFormat::Depth32Float => Some(D3D12_CLEAR_VALUE {
                 Format: DXGI_FORMAT_D32_FLOAT,
                 Anonymous: D3D12_CLEAR_VALUE_0 {
                     DepthStencil: D3D12_DEPTH_STENCIL_VALUE {
-                        Depth: value,
+                        Depth: 1.0,
                         Stencil: 0,
                     },
                 },
-            })
+            }),
+            crate::ImageFormat::Rgba8Srgb => None,
+            crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba16Float => {
+                Some(D3D12_CLEAR_VALUE {
+                    Format: image_format(desc.format),
+                    Anonymous: D3D12_CLEAR_VALUE_0 {
+                        Color: [0.0, 0.0, 0.0, 1.0],
+                    },
+                })
+            }
         };
-        let desc = Self::resource_desc(desc, graph, sample_count);
+        let desc = Self::graph_resource_desc(desc);
         let mut raw = None;
-        // SAFETY: The managed creation boundary establishes the sampled mip-chain
-        // single-layer description, sample count and format support. COMMON has no valid
-        // contents yet. The owned COM output is released on every failure path.
+        // SAFETY: Working-set preparation checked the single-layer description,
+        // sample count and format support. The owned COM output stays local
+        // until creation and memory accounting succeed.
         unsafe {
             #[cfg(feature = "memory-profiling")]
             {
@@ -483,6 +380,36 @@ impl DeviceImage {
             )?,
         })
     }
+    pub(super) fn graph_resource_desc(desc: crate::graph::ImageDesc) -> D3D12_RESOURCE_DESC {
+        let flags = match desc.format {
+            crate::ImageFormat::Depth32Float => D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL,
+            crate::ImageFormat::Rgba8Srgb => D3D12_RESOURCE_FLAG_NONE,
+            crate::ImageFormat::Rgba8Unorm | crate::ImageFormat::Rgba16Float => {
+                // Multisampled render targets do not support UAV use.
+                let mut flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+                if desc.sample_count == crate::graph::SampleCount::X1 {
+                    flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+                }
+                flags
+            }
+        };
+        D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Width: u64::from(desc.width),
+            Height: desc.height,
+            DepthOrArraySize: 1,
+            MipLevels: desc.mip_levels as u16,
+            Format: image_format(desc.format),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: desc.sample_count.as_u32(),
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+            Flags: flags,
+            ..Default::default()
+        }
+    }
+
     pub(super) fn raw(&self) -> &ID3D12Resource {
         &self.raw
     }
@@ -501,28 +428,6 @@ pub(super) fn sampled_format(format: crate::ImageFormat) -> DXGI_FORMAT {
     match format {
         crate::ImageFormat::Depth32Float => DXGI_FORMAT_R32_FLOAT,
         _ => image_format(format),
-    }
-}
-
-pub(super) fn image_desc(desc: crate::program::ImageDescriptor) -> D3D12_RESOURCE_DESC {
-    D3D12_RESOURCE_DESC {
-        Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
-        Width: u64::from(desc.width),
-        Height: desc.height,
-        DepthOrArraySize: 1,
-        MipLevels: desc.mip_levels as u16,
-        Format: image_format(desc.format),
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
-        Flags: if desc.format == crate::ImageFormat::Depth32Float {
-            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL
-        } else {
-            D3D12_RESOURCE_FLAG_NONE
-        },
-        ..Default::default()
     }
 }
 

@@ -6,7 +6,7 @@ use std::{mem::ManuallyDrop, ops::Range};
 
 use super::{
     D3D12RuntimeError, bindings::*, device::DeviceOwner, frame::ExecutionSlot, graph::transition,
-    program::D3D12Program,
+    program::ComputePipeline,
 };
 use crate::{
     graph::{AccessPurpose, BindingOperands, CompiledGraph, ResourceDesc},
@@ -198,7 +198,7 @@ pub(super) fn record(
     owner: &DeviceOwner,
     graph: &CompiledGraph,
     pass: usize,
-    programs: &[D3D12Program],
+    programs: &[ComputePipeline],
 ) -> Result<(), D3D12RuntimeError> {
     let crate::graph::Operation::Dispatch {
         program,

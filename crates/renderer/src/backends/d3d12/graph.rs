@@ -1,16 +1,10 @@
-//! The first D3D12 lowering: transient buffers, one DIRECT queue, no aliasing.
+//! Lowers compiled Graphs into prepared work on one DIRECT queue.
 //!
 //! The shared compiled graph owns logical validity and scheduling. Preparation
 //! checks backend support and capacity, leases prepared native operands, and
 //! re-records changing work. Submission does not revalidate Graph contents.
 
-#[cfg(test)]
-use std::time::Instant;
-
 use std::{mem::ManuallyDrop, sync::Arc, time::Duration};
-
-#[cfg(test)]
-use windows_core::{Error, HRESULT};
 
 use crate::graph::{CompiledGraph, PassHandle};
 
@@ -20,182 +14,11 @@ mod transition_batch;
 
 pub(super) use transition_batch::{TransitionBatch, common_capacity};
 
-#[cfg(test)]
-use super::device::DeviceOwner;
-#[cfg(test)]
-use super::resources::{DeviceBuffer, MAX_BUFFER_BYTES};
-use super::{D3D12Runtime, D3D12RuntimeError, bindings::*};
-
-#[cfg(test)]
-const DROP_TIMEOUT: Duration = Duration::from_secs(5);
-
-#[cfg(test)]
-struct Plan<'a> {
-    graph: u64,
-    buffers: Vec<Option<u64>>,
-    operations: Vec<PlannedOperation<'a>>,
-}
-
-#[cfg(test)]
-enum PlannedOperation<'a> {
-    #[cfg(test)]
-    StorageReadFixture(super::program::StorageReadFixture<'a>),
-    #[cfg(test)]
-    ManagedFixture {
-        binding: &'a super::program::D3D12Bindings,
-        initialize: Option<super::program::ImageInitialization<'a>>,
-    },
-}
-
-#[cfg(test)]
-struct Readback {
-    pass: usize,
-    size: usize,
-    buffer: Option<DeviceBuffer>,
-}
-
-#[cfg(test)]
-struct Work {
-    graph: u64,
-    #[cfg(test)]
-    managed_bindings: Vec<super::program::D3D12Bindings>,
-    #[cfg(test)]
-    resource_leases: Vec<super::program::ExecutionLease>,
-    #[cfg(test)]
-    depth_targets: Vec<super::program::DepthTarget>,
-    buffers: Vec<Option<DeviceBuffer>>,
-    staging: Vec<DeviceBuffer>,
-    readbacks: Vec<Readback>,
-    _allocator: ID3D12CommandAllocator,
-    list: ID3D12GraphicsCommandList,
-    fence: ID3D12Fence,
-    owner: Arc<DeviceOwner>,
-}
-
-#[cfg(test)]
-impl Work {
-    #[cfg(test)]
-    fn retain_fixture(&mut self, recording: super::program::FixtureRecording) {
-        self.resource_leases.extend(recording.leases);
-        self.staging.extend(recording.staging);
-        self.depth_targets.extend(recording.depth_targets);
-        self.readbacks.push(Readback {
-            pass: 0,
-            size: recording.size,
-            buffer: Some(recording.readback),
-        });
-        self.managed_bindings.extend(recording.bindings);
-    }
-
-    fn prepare(
-        owner: Arc<DeviceOwner>,
-        plan: Plan<'_>,
-        #[cfg(test)] fail_after_first_buffer: bool,
-    ) -> Result<Self, D3D12RuntimeError> {
-        owner.ensure_active()?;
-        let mut buffers = Vec::with_capacity(plan.buffers.len());
-        for size in plan.buffers {
-            let buffer = size
-                .map(|size| DeviceBuffer::new(&owner, size, D3D12_HEAP_TYPE_DEFAULT))
-                .transpose()?;
-            #[cfg(test)]
-            let created = buffer.is_some();
-            buffers.push(buffer);
-            #[cfg(test)]
-            if fail_after_first_buffer && created {
-                // A narrow native-creation boundary fault: the first real
-                // committed resource has succeeded, later creation fails.
-                return Err(owner.native(
-                    "injected next committed resource creation",
-                    Error::from_hresult(HRESULT(0x8007_000Eu32 as i32)),
-                ));
-            }
-        }
-        // SAFETY: The live device and fixed DIRECT type are valid, and every
-        // returned COM object immediately enters an owned Rust value.
-        let allocator: ID3D12CommandAllocator = unsafe {
-            owner
-                .raw
-                .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
-        }
-        .map_err(|error| owner.native("ID3D12Device::CreateCommandAllocator", error))?;
-        // SAFETY: The matching DIRECT allocator is newly created and private;
-        // node zero selects the single-device baseline, with no initial PSO.
-        let list: ID3D12GraphicsCommandList = unsafe {
-            owner
-                .raw
-                .CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)
-        }
-        .map_err(|error| owner.native("ID3D12Device::CreateCommandList", error))?;
-        // SAFETY: Initial zero means unfinished; private work signals exactly
-        // value one on this fence after its ExecuteCommandLists call.
-        let fence: ID3D12Fence = unsafe { owner.raw.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
-            .map_err(|error| owner.native("ID3D12Device::CreateFence", error))?;
-        let mut work = Self {
-            graph: plan.graph,
-            #[cfg(test)]
-            managed_bindings: Vec::new(),
-            #[cfg(test)]
-            resource_leases: Vec::new(),
-            #[cfg(test)]
-            depth_targets: Vec::new(),
-            buffers,
-            staging: Vec::new(),
-            readbacks: Vec::new(),
-            _allocator: allocator,
-            list,
-            fence,
-            owner,
-        };
-        for operation in plan.operations {
-            match operation {
-                #[cfg(test)]
-                PlannedOperation::ManagedFixture {
-                    binding,
-                    initialize,
-                } => {
-                    let recording = binding.record_fixture(&work.list, initialize)?;
-                    work.retain_fixture(recording);
-                }
-                #[cfg(test)]
-                PlannedOperation::StorageReadFixture(plan) => {
-                    let recording = plan.record(&work.list)?;
-                    work.retain_fixture(recording);
-                }
-            }
-        }
-        // SAFETY: This uniquely owned command list is open and fully recorded.
-        unsafe { work.list.Close() }
-            .ok()
-            .map_err(|error| work.owner.native("ID3D12GraphicsCommandList::Close", error))?;
-        Ok(work)
-    }
-
-    fn completed(&self) -> Result<bool, D3D12RuntimeError> {
-        // SAFETY: The private fence is live and its owner retains the device.
-        let value = unsafe { self.fence.GetCompletedValue() };
-        if value == u64::MAX {
-            return Err(self.owner.removed());
-        }
-        Ok(value >= 1)
-    }
-
-    fn wait(&self, timeout: Duration) -> Result<bool, D3D12RuntimeError> {
-        let started = Instant::now();
-        loop {
-            if self.completed()? {
-                return Ok(true);
-            }
-            let remaining = timeout.saturating_sub(started.elapsed());
-            if remaining.is_zero() {
-                return Ok(false);
-            }
-            // M4's small baseline uses fence polling without an OS event or
-            // hidden queue-idle wait. Native event-backed pooling belongs to .6.
-            std::thread::sleep(remaining.min(Duration::from_millis(1)));
-        }
-    }
-}
+use super::{
+    D3D12Runtime, D3D12RuntimeError,
+    bindings::*,
+    frame::{FrameResult, FrameSubmission, FrameWork},
+};
 
 pub(super) fn transition_to_common(
     slot: &mut super::frame::ExecutionSlot,
@@ -283,97 +106,15 @@ pub(super) fn transition(
 /// Recorded but not submitted work. Dropping this value cancels immediately;
 /// every native object remains private and has never been used by the GPU.
 pub struct D3D12PreparedGraph {
-    kind: PreparedWork,
-}
-enum PreparedWork {
-    Pooled(super::frame::FrameWork),
-    #[cfg(test)]
-    Fixture(Work),
+    work: FrameWork,
 }
 
 impl D3D12Runtime {
-    #[cfg(test)]
-    pub(super) fn prepare_managed_fixture(
-        &self,
-        binding: &super::program::D3D12Bindings,
-    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        self.prepare_fixture(binding, None)
-    }
-
-    #[cfg(test)]
-    pub(super) fn prepare_sampled_fixture(
-        &self,
-        binding: &super::program::D3D12Bindings,
-        pixels: Option<&[u8]>,
-    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        self.prepare_fixture(
-            binding,
-            pixels.map(super::program::ImageInitialization::Upload),
-        )
-    }
-
-    #[cfg(test)]
-    pub(super) fn prepare_depth_fixture(
-        &self,
-        binding: &super::program::D3D12Bindings,
-        clear: Option<&super::image::D3D12ImageView>,
-    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        self.prepare_fixture(
-            binding,
-            clear.map(|view| super::program::ImageInitialization::DepthClear { view }),
-        )
-    }
-
-    #[cfg(test)]
-    pub(super) fn prepare_storage_read_fixture(
-        &self,
-        producer: &super::program::D3D12Bindings,
-        reader: &super::program::D3D12Bindings,
-    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        let plan = super::program::StorageReadFixture::new(&self.device, producer, reader)?;
-        let work = Work::prepare(
-            Arc::clone(&self.device),
-            Plan {
-                graph: 0,
-                buffers: vec![],
-                operations: vec![PlannedOperation::StorageReadFixture(plan)],
-            },
-            false,
-        )?;
-        Ok(D3D12PreparedGraph {
-            kind: PreparedWork::Fixture(work),
-        })
-    }
-
-    #[cfg(test)]
-    fn prepare_fixture(
-        &self,
-        binding: &super::program::D3D12Bindings,
-        initialize: Option<super::program::ImageInitialization<'_>>,
-    ) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
-        binding.check_owner(&self.device)?;
-        let work = Work::prepare(
-            Arc::clone(&self.device),
-            Plan {
-                graph: 0,
-                buffers: vec![],
-                operations: vec![PlannedOperation::ManagedFixture {
-                    binding,
-                    initialize,
-                }],
-            },
-            false,
-        )?;
-        Ok(D3D12PreparedGraph {
-            kind: PreparedWork::Fixture(work),
-        })
-    }
-
-    /// Records retained buffer operations without submitting or waiting. Input
-    /// validity and ordering come from the shared immutable compiled graph.
+    /// Records a compiled Graph without submitting or waiting. Input validity
+    /// and ordering come from the shared immutable compiled Graph.
     pub fn prepare(&self, graph: &CompiledGraph) -> Result<D3D12PreparedGraph, D3D12RuntimeError> {
         Ok(D3D12PreparedGraph {
-            kind: PreparedWork::Pooled(bounded::prepare(&self.pool, graph)?),
+            work: bounded::prepare(&self.pool, graph)?,
         })
     }
 
@@ -391,69 +132,15 @@ impl D3D12Runtime {
         &mut self,
         prepared: D3D12PreparedGraph,
     ) -> Result<D3D12Submission, D3D12RuntimeError> {
-        match prepared.kind {
-            PreparedWork::Pooled(work) => {
-                if !Arc::ptr_eq(&self.device, work.owner()) {
-                    return Err(D3D12RuntimeError::wrong_owner(
-                        "prepared Graph belongs to another D3D12 device",
-                    ));
-                }
-                Ok(D3D12Submission {
-                    kind: SubmissionKind::Pooled(work.submit()?),
-                })
-            }
-            #[cfg(test)]
-            PreparedWork::Fixture(work) => Ok(D3D12Submission {
-                kind: SubmissionKind::Fixture(self.submit_fixture(work)?),
-            }),
-        }
-    }
-
-    #[cfg(test)]
-    fn submit_fixture(&mut self, work: Work) -> Result<FixtureSubmission, D3D12RuntimeError> {
-        let mut retained = Retained::recorded(work);
-        let work = retained.value().unwrap();
-        if !Arc::ptr_eq(&self.device, &work.owner) {
+        let work = prepared.work;
+        if !Arc::ptr_eq(&self.device, work.owner()) {
             return Err(D3D12RuntimeError::wrong_owner(
                 "prepared Graph belongs to another D3D12 device",
             ));
         }
-        self.device.ensure_active()?;
-        // The generated interface hierarchy guarantees this parent conversion;
-        // no native QueryInterface is needed for an immutable recording.
-        let list: ID3D12CommandList = work.list.clone().into();
-        let owner = Arc::clone(&work.owner);
-        let queue_guard = owner.queue_gate.lock().map_err(|_| {
-            owner.mark_stopped();
-            D3D12RuntimeError::invalid("D3D12 queue transaction lock was poisoned")
-        })?;
-        owner.ensure_active()?;
-        let signaled = execute_and_signal(
-            &mut retained,
-            |_| {
-                // SAFETY: The list is closed and never previously executed;
-                // its matching allocator and resources remain in retained.
-                // The queue gate keeps execution and signal indivisible.
-                unsafe {
-                    owner.queue.ExecuteCommandLists(&[Some(list)]);
-                }
-            },
-            |work| {
-                // SAFETY: A private fence starts at zero; this queue signals
-                // one after the only execution using these private resources.
-                unsafe { owner.queue.Signal(&work.fence, 1) }.ok()
-            },
-        );
-        drop(queue_guard);
-        if let Err(error) = signaled {
-            let error = owner.native("ID3D12CommandQueue::Signal", error);
-            owner.mark_stopped();
-            // ExecuteCommandLists returned void. A failed later Signal is not
-            // proof of rejection or completion, so never rollback/free this work.
-            // Retaining the entire chain also retains diagnostics and the device.
-            return Err(error);
-        }
-        Ok(FixtureSubmission { retained })
+        Ok(D3D12Submission {
+            submission: work.submit()?,
+        })
     }
 }
 
@@ -462,12 +149,7 @@ impl D3D12Runtime {
 /// Export metadata remains retained after completion until this submission is
 /// dropped. Return it before changing the runtime's working set.
 pub struct D3D12Submission {
-    kind: SubmissionKind,
-}
-enum SubmissionKind {
-    Pooled(super::frame::FrameSubmission),
-    #[cfg(test)]
-    Fixture(FixtureSubmission),
+    submission: FrameSubmission,
 }
 impl D3D12Submission {
     /// Snapshot of accepted scheduled contents; completion is observed separately.
@@ -478,15 +160,11 @@ impl D3D12Submission {
         &self,
         handle: crate::graph::BufferHandle,
     ) -> Result<crate::graph::ImportBuffer, D3D12RuntimeError> {
-        match &self.kind {
-            SubmissionKind::Pooled(submission) => submission
-                .exports
-                .as_ref()
-                .ok_or_else(|| D3D12RuntimeError::invalid("Graph has no exports"))?
-                .buffer(handle),
-            #[cfg(test)]
-            _ => Err(D3D12RuntimeError::invalid("fixture has no exports")),
-        }
+        self.submission
+            .exports
+            .as_ref()
+            .ok_or_else(|| D3D12RuntimeError::invalid("Graph has no exports"))?
+            .buffer(handle)
     }
     /// Snapshot of accepted scheduled contents; completion is observed separately.
     /// Dropping it does not unregister the resource; use [`D3D12Runtime::delete`].
@@ -495,81 +173,41 @@ impl D3D12Submission {
         &self,
         handle: crate::graph::ImageHandle,
     ) -> Result<crate::graph::ImportImage, D3D12RuntimeError> {
-        match &self.kind {
-            SubmissionKind::Pooled(submission) => submission
-                .exports
-                .as_ref()
-                .ok_or_else(|| D3D12RuntimeError::invalid("Graph has no exports"))?
-                .image(handle),
-            #[cfg(test)]
-            _ => Err(D3D12RuntimeError::invalid("fixture has no exports")),
-        }
+        self.submission
+            .exports
+            .as_ref()
+            .ok_or_else(|| D3D12RuntimeError::invalid("Graph has no exports"))?
+            .image(handle)
     }
     pub fn poll(&mut self) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
-        match &mut self.kind {
-            SubmissionKind::Pooled(submission) => {
-                Ok(submission.poll()?.map(|result| D3D12SubmissionResult {
-                    kind: ResultKind::Pooled(result),
-                }))
-            }
-            #[cfg(test)]
-            SubmissionKind::Fixture(submission) => {
-                Ok(submission.poll()?.map(|result| D3D12SubmissionResult {
-                    kind: ResultKind::Fixture(result),
-                }))
-            }
-        }
+        Ok(self
+            .submission
+            .poll()?
+            .map(|result| D3D12SubmissionResult { result }))
     }
     pub fn wait(
         &mut self,
         timeout: Duration,
     ) -> Result<Option<D3D12SubmissionResult>, D3D12RuntimeError> {
-        match &mut self.kind {
-            SubmissionKind::Pooled(submission) => {
-                Ok(submission
-                    .wait(timeout)?
-                    .map(|result| D3D12SubmissionResult {
-                        kind: ResultKind::Pooled(result),
-                    }))
-            }
-            #[cfg(test)]
-            SubmissionKind::Fixture(submission) => {
-                Ok(submission
-                    .wait(timeout)?
-                    .map(|result| D3D12SubmissionResult {
-                        kind: ResultKind::Fixture(result),
-                    }))
-            }
-        }
+        Ok(self
+            .submission
+            .wait(timeout)?
+            .map(|result| D3D12SubmissionResult { result }))
     }
 }
 
 /// CPU readback ownership is separate from reusable command execution slots.
 pub struct D3D12SubmissionResult {
-    kind: ResultKind,
-}
-enum ResultKind {
-    Pooled(super::frame::FrameResult),
-    #[cfg(test)]
-    Fixture(FixtureResult),
+    result: FrameResult,
 }
 impl D3D12SubmissionResult {
     /// Optional completed CPU phases and DIRECT-queue Graph GPU interval.
     /// Present work and display/VSync completion are separate measurements.
     pub fn metrics(&self) -> Option<&crate::profiling::SubmissionMetrics> {
-        match &self.kind {
-            ResultKind::Pooled(result) => result.metrics(),
-            #[cfg(test)]
-            ResultKind::Fixture(_) => None,
-        }
+        self.result.metrics()
     }
     fn check_graph(&self, pass: PassHandle) -> Result<(), D3D12RuntimeError> {
-        let graph = match &self.kind {
-            ResultKind::Pooled(result) => result.graph(),
-            #[cfg(test)]
-            ResultKind::Fixture(result) => result.graph,
-        };
-        if graph != pass.graph {
+        if self.result.graph() != pass.graph {
             return Err(D3D12RuntimeError::wrong_owner(
                 "foreign Graph readback handle",
             ));
@@ -578,21 +216,7 @@ impl D3D12SubmissionResult {
     }
     pub fn readback_len(&self, pass: PassHandle) -> Result<usize, D3D12RuntimeError> {
         self.check_graph(pass)?;
-        match &self.kind {
-            ResultKind::Pooled(result) => result.readback_len(pass.index),
-            #[cfg(test)]
-            ResultKind::Fixture(result) => {
-                let index = result
-                    .readbacks
-                    .binary_search_by_key(&pass.index, |entry| entry.pass)
-                    .map_err(|_| D3D12RuntimeError::invalid("pass has no readback result"))?;
-                let entry = &result.readbacks[index];
-                if entry.buffer.is_none() {
-                    return Err(D3D12RuntimeError::invalid("readback was already consumed"));
-                }
-                Ok(entry.size)
-            }
-        }
+        self.result.readback_len(pass.index)
     }
     /// Copies into already prepared caller storage and consumes this readback.
     /// A wrong destination length or native failure leaves the lease available.
@@ -602,235 +226,23 @@ impl D3D12SubmissionResult {
         destination: &mut [u8],
     ) -> Result<(), D3D12RuntimeError> {
         self.check_graph(pass)?;
-        match &mut self.kind {
-            ResultKind::Pooled(result) => result.readback_into(pass.index, destination),
-            #[cfg(test)]
-            ResultKind::Fixture(result) => {
-                let index = result
-                    .readbacks
-                    .binary_search_by_key(&pass.index, |entry| entry.pass)
-                    .map_err(|_| D3D12RuntimeError::invalid("pass has no readback result"))?;
-                if destination.len() != result.readbacks[index].size {
-                    return Err(D3D12RuntimeError::invalid(
-                        "destination length does not match readback",
-                    ));
-                }
-                destination.copy_from_slice(&result.readback(pass)?);
-                Ok(())
-            }
-        }
+        self.result.readback_into(pass.index, destination)
     }
-    #[cfg(test)]
-    pub(super) fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
+    #[cfg(all(test, feature = "d3d12-diagnostics"))]
+    fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
         let mut bytes = vec![0; self.readback_len(pass)?];
         self.readback_into(pass, &mut bytes)?;
         Ok(bytes)
     }
     #[cfg(all(test, feature = "d3d12-diagnostics"))]
     fn has_owner(&self) -> bool {
-        match &self.kind {
-            ResultKind::Pooled(result) => result.has_owner(),
-            ResultKind::Fixture(result) => result.owner.is_some(),
-        }
-    }
-}
-
-#[cfg(test)]
-struct FixtureSubmission {
-    retained: Retained<Work>,
-}
-
-#[cfg(test)]
-impl FixtureSubmission {
-    pub fn poll(&mut self) -> Result<Option<FixtureResult>, D3D12RuntimeError> {
-        self.wait(Duration::ZERO)
-    }
-
-    /// A timeout preserves the complete pending owner for another wait. Device
-    /// removal never returns readable data, including UINT64_MAX fence values.
-    pub fn wait(&mut self, timeout: Duration) -> Result<Option<FixtureResult>, D3D12RuntimeError> {
-        let work = self
-            .retained
-            .value()
-            .ok_or_else(|| D3D12RuntimeError::invalid("D3D12 submission was already completed"))?;
-        if !work.wait(timeout)? {
-            return Ok(None);
-        }
-        // Real fence completion permits teardown even if a different operation
-        // stopped the shared owner; it does not permit returning successful data.
-        self.retained.complete();
-        let work = self.retained.value().unwrap();
-        work.owner.check_native_active()?;
-        let work = self.retained.take_retired().unwrap();
-        let Work {
-            graph,
-            mut readbacks,
-            #[cfg(test)]
-            managed_bindings,
-            #[cfg(test)]
-            resource_leases,
-            #[cfg(test)]
-            depth_targets,
-            owner,
-            buffers,
-            staging,
-            _allocator,
-            list,
-            fence,
-        } = work;
-        // Release every completed command/resource reference before possibly
-        // releasing the last owner. The owner keeps final-release diagnostics
-        // active; a partial pattern with `..` would defer these fields too far.
-        #[cfg(test)]
-        drop(depth_targets);
-        drop((buffers, staging, list, _allocator, fence));
-        #[cfg(test)]
-        {
-            for lease in &resource_leases {
-                lease.complete();
-            }
-            drop((managed_bindings, resource_leases));
-        }
-        // Native work is retired, so only CPU result lookup uses these entries.
-        // Keep them indexed by the logical fixture pass for result consumption.
-        readbacks.sort_unstable_by_key(|readback| readback.pass);
-        let remaining_readbacks = readbacks.len();
-        let owner = if readbacks.is_empty() {
-            None
-        } else {
-            Some(owner)
-        };
-        Ok(Some(FixtureResult {
-            graph,
-            readbacks,
-            remaining_readbacks,
-            owner,
-        }))
-    }
-}
-
-#[cfg(test)]
-impl Drop for FixtureSubmission {
-    fn drop(&mut self) {
-        if !self.retained.pending {
-            return;
-        }
-        let Some(work) = self.retained.value() else {
-            return;
-        };
-        match work.wait(DROP_TIMEOUT) {
-            Ok(true) => self.retained.complete(),
-            _ => {
-                work.owner.mark_stopped();
-                // Timeout or an unproven native failure must not free resources
-                // that the GPU may still access, even during panic unwinding.
-            }
-        }
-    }
-}
-
-/// Own the complete native dependency chain before the void Execute call. An
-/// unproven Signal/wait failure or unwind must not free that chain.
-#[cfg(test)]
-struct Retained<T> {
-    value: Option<T>,
-    pending: bool,
-}
-#[cfg(test)]
-impl<T> Retained<T> {
-    fn recorded(value: T) -> Self {
-        Self {
-            value: Some(value),
-            pending: false,
-        }
-    }
-    fn value(&self) -> Option<&T> {
-        self.value.as_ref()
-    }
-    fn complete(&mut self) {
-        self.pending = false;
-    }
-    fn take_retired(&mut self) -> Option<T> {
-        if self.pending {
-            None
-        } else {
-            self.value.take()
-        }
-    }
-}
-#[cfg(test)]
-impl<T> Drop for Retained<T> {
-    fn drop(&mut self) {
-        if self.pending
-            && let Some(value) = self.value.take()
-        {
-            std::mem::forget(value);
-        }
-    }
-}
-
-// The small boundary is shared with failure-path tests. Neither a failed
-// separate Signal nor unwinding after Execute proves commands were rejected.
-#[cfg(test)]
-fn execute_and_signal<T, E>(
-    retained: &mut Retained<T>,
-    execute: impl FnOnce(&T),
-    signal: impl FnOnce(&T) -> Result<(), E>,
-) -> Result<(), E> {
-    retained.pending = true;
-    let work = retained.value().unwrap();
-    execute(work);
-    signal(work)
-}
-
-/// Readback leases exposed only after real fence completion on an active device.
-#[cfg(test)]
-struct FixtureResult {
-    graph: u64,
-    readbacks: Vec<Readback>,
-    remaining_readbacks: usize,
-    owner: Option<Arc<DeviceOwner>>,
-}
-#[cfg(test)]
-impl FixtureResult {
-    /// Copies and consumes a pass's private native readback. Wrong handles and
-    /// repeated consumption fail; a Map/allocation failure preserves the lease.
-    pub fn readback(&mut self, pass: PassHandle) -> Result<Vec<u8>, D3D12RuntimeError> {
-        if pass.graph != self.graph {
-            return Err(D3D12RuntimeError::wrong_owner(
-                "foreign Graph readback handle",
-            ));
-        }
-        let index = self
-            .readbacks
-            .binary_search_by_key(&pass.index, |readback| readback.pass)
-            .map_err(|_| D3D12RuntimeError::invalid("pass has no readback result"))?;
-        let readback = &mut self.readbacks[index];
-        let buffer = readback
-            .buffer
-            .as_ref()
-            .ok_or_else(|| D3D12RuntimeError::invalid("readback was already consumed"))?;
-        let owner = self.owner.as_ref().unwrap();
-        owner.check_native_active()?;
-        // SAFETY: Normal Fence completion retired the GPU copy before this
-        // result existed. The private fixture recorder creates this exact-sized
-        // readback and copies its fixed, reviewed output into it. Its small byte
-        // count fits Rust slice limits; owner remains retained here.
-        let bytes = unsafe { buffer.read(owner, readback.size)? };
-        // Removal may occur while a previously completed readback is held or
-        // copied. Do not publish bytes as a valid result after native failure.
-        owner.check_native_active()?;
-        readback.buffer.take();
-        self.remaining_readbacks -= 1;
-        if self.remaining_readbacks == 0 {
-            self.owner.take();
-        }
-        Ok(bytes)
+        self.result.has_owner()
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::resources::MAX_BUFFER_BYTES;
     use super::*;
     use crate::graph::{BufferDesc, Graph, GraphCapacity, GraphPool, ImageDesc};
 
@@ -1022,10 +434,7 @@ mod tests {
         let pixels = graph.readback_image("pixels", image).unwrap();
         let graph = graph.compile().unwrap();
         let mut canceled = runtime.prepare(&graph).unwrap();
-        let PreparedWork::Pooled(work) = &mut canceled.kind else {
-            unreachable!()
-        };
-        let slot = work.slot_mut();
+        let slot = canceled.work.slot_mut();
         assert_eq!(
             (
                 slot.common_barriers.recorded_calls,
@@ -1118,17 +527,18 @@ mod tests {
 
         // This fault happens before command recording; one real buffer is
         // sufficient to verify cleanup without a second Graph lowering path.
-        let error = Work::prepare(
-            Arc::clone(&runtime.device),
-            Plan {
-                graph: graph.id,
-                buffers: vec![Some(4)],
-                operations: vec![],
-            },
-            true,
-        )
-        .err()
-        .expect("injected failure after first real committed buffer");
+        #[cfg(feature = "memory-profiling")]
+        let committed_before = runtime.memory_stats().unwrap().committed;
+        let error = (|| -> Result<(), D3D12RuntimeError> {
+            let _first = super::super::resources::DeviceBuffer::storage(&runtime.device, 4)?;
+            Err(runtime.device.native(
+                "injected next committed resource creation",
+                windows_core::Error::from_hresult(windows_core::HRESULT(0x8007_000e_u32 as i32)),
+            ))
+        })()
+        .unwrap_err();
+        #[cfg(feature = "memory-profiling")]
+        assert_eq!(runtime.memory_stats().unwrap().committed, committed_before);
         assert_eq!(error.kind(), D3D12RuntimeErrorKind::Native);
         assert!(std::error::Error::source(&error).is_some());
         assert_eq!(

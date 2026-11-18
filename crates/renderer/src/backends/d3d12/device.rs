@@ -42,10 +42,6 @@ pub(super) struct DeviceOwner {
     pub(super) raw: ManuallyDrop<ID3D12Device>,
     pub(super) queue_gate: Mutex<()>,
     pub(super) info: D3D12DeviceInfo,
-    pub(super) rgba8_sampled: bool,
-    pub(super) rgba8_srgb_sampled: bool,
-    pub(super) rgba16f_sampled: bool,
-    pub(super) d32_sampled: bool,
     pub(super) descriptor_steps: [u32; 2],
     pub(super) monitor: D3D12ValidationMonitor,
     #[cfg(feature = "d3d12-diagnostics")]
@@ -194,30 +190,6 @@ impl DeviceOwner {
             ..Default::default()
         };
         feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut format)?;
-        let mut rgba16f = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
-            Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
-            ..Default::default()
-        };
-        feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut rgba16f)?;
-        let mut rgba8_srgb = D3D12_FEATURE_DATA_FORMAT_SUPPORT {
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-            ..Default::default()
-        };
-        feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, &mut rgba8_srgb)?;
-        let mut depth_formats = [
-            DXGI_FORMAT_R32_TYPELESS,
-            DXGI_FORMAT_D32_FLOAT,
-            DXGI_FORMAT_R32_FLOAT,
-        ]
-        .map(|format| D3D12_FEATURE_DATA_FORMAT_SUPPORT {
-            Format: format,
-            ..Default::default()
-        });
-        for format in &mut depth_formats {
-            feature(&raw, &name, D3D12_FEATURE_FORMAT_SUPPORT, format)?;
-        }
-        // Query future shader capabilities, but buffer-only execution does not
-        // require SM6.0 or RGBA8 UAV support.
         let queue_desc = D3D12_COMMAND_QUEUE_DESC {
             Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
             ..Default::default()
@@ -254,26 +226,6 @@ impl DeviceOwner {
                 rgba8_typed_uav_store: format.Support2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE != 0,
             },
             descriptor_steps,
-            d32_sampled: depth_formats[0].Support1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D != 0
-                && depth_formats[1].Support1
-                    & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL)
-                    == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL)
-                && depth_formats[2].Support1
-                    & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
-                    == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),
-            rgba16f_sampled: rgba16f.Support1
-                & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
-                == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),
-            rgba8_srgb_sampled: rgba8_srgb.Support1
-                & (D3D12_FORMAT_SUPPORT1_TEXTURE2D
-                    | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
-                    | D3D12_FORMAT_SUPPORT1_MIP)
-                == (D3D12_FORMAT_SUPPORT1_TEXTURE2D
-                    | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
-                    | D3D12_FORMAT_SUPPORT1_MIP),
-            rgba8_sampled: format.Support1
-                & (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE)
-                == (D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE),
             monitor,
             #[cfg(feature = "d3d12-diagnostics")]
             session: Some(session),

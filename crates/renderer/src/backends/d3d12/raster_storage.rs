@@ -1017,7 +1017,7 @@ impl RasterStorage {
         .into_iter()
         .enumerate()
         {
-            let desc = super::image::sampler_desc(policy);
+            let desc = super::sampler::sampler_desc(policy);
             // SAFETY: Each prepared descriptor has its own bounded heap slot.
             unsafe {
                 owner.raw.CreateSampler(

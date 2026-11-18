@@ -392,7 +392,7 @@ pub(super) struct FramePool {
     buffer_classes: Vec<D3D12BufferClass>,
     pub(super) raster_programs: Vec<RasterPipeline>,
     pub(super) clear_programs: Option<ClearPrograms>,
-    pub(super) compute_programs: Vec<super::program::D3D12Program>,
+    pub(super) compute_programs: Vec<super::program::ComputePipeline>,
     pub(super) indexed_indirect: Option<IndexedIndirectSignature>,
     state: Mutex<PoolState>,
     profiling: AtomicBool,
@@ -658,7 +658,7 @@ impl FramePool {
             {
                 pool_mut
                     .compute_programs
-                    .push(super::program::D3D12Program::new(
+                    .push(super::program::ComputePipeline::new(
                         &pool_mut.owner,
                         program,
                         #[cfg(test)]
