@@ -15,10 +15,8 @@ use crate::graph::CompiledGraph;
 #[derive(Default)]
 pub(crate) struct BufferProvenance {
     segments: Vec<Segment>,
-    // Sorted, immutable-content prefix summaries. Every requested count is kept
-    // until a content mutation; changing draw counts never evicts a guarantee.
-    // The separate prepared limit makes exhaustion explicit instead of silently
-    // rescanning a still-valid prefix or growing storage during a frame.
+    // Exact range summaries sorted by first index and count. The prepared limit
+    // makes exhaustion explicit instead of rescanning or growing during a frame.
     validations: Vec<IndexValidation>,
     // Managed meshes need no CPU copy. This private proof is installed only by
     // uploads carrying GeometryData's or MeshData's immutable bound, at the same
@@ -30,9 +28,15 @@ pub(crate) struct BufferProvenance {
 
 #[derive(Clone, Copy)]
 struct IndexValidation {
+    first_index: u32,
     count: u32,
     // None records an unknown byte/hole, independently of draw/Device bounds.
     maximum: Option<u32>,
+}
+
+fn index_bytes(first_index: u32, count: u32) -> Range<u64> {
+    let start = u64::from(first_index) * 4;
+    start..start + u64::from(count) * 4
 }
 
 #[derive(Clone, Copy)]
@@ -150,7 +154,7 @@ impl BufferProvenance {
     }
 
     /// Copy an independent metadata version into already prepared storage. The
-    /// immutable backing and prefix summary can be shared without revalidation.
+    /// immutable backing and range summaries can be shared without revalidation.
     pub(crate) fn copy_from(&mut self, source: &Self) -> Result<(), ProvenanceCapacityError> {
         self.require_capacity(source.segments.len())?;
         self.require_prefix_capacity(source.validations.len())?;
@@ -270,15 +274,16 @@ impl BufferProvenance {
         output: &mut Self,
     ) -> Result<(), ProvenanceCapacityError> {
         let overlap = self.overlap_indices(&source);
-        let prefixes = if source.start == 0 && destination == 0 {
-            self.prefixes_within(source.end)
+        let validated_bytes = if source.start == destination {
+            source.clone()
         } else {
-            &[]
+            0..0
         };
+        let validations = self.validations_within(validated_bytes);
         output.require_capacity(overlap.len())?;
-        output.require_prefix_capacity(prefixes.len())?;
+        output.require_prefix_capacity(validations.clone().count())?;
         output.clear();
-        output.validations.extend_from_slice(prefixes);
+        output.validations.extend(validations);
         output.mesh = self.mesh.filter(|proof| {
             destination == 0
                 && source == (0..proof.byte_len)
@@ -310,25 +315,30 @@ impl BufferProvenance {
             return Ok(());
         }
         let overlap = self.overlap_indices(&target);
-        let prefixes = if target.start == 0 {
-            contents.prefixes_within(target.end)
-        } else {
-            &[]
-        };
+        let validations = contents.validations_within(target.clone());
         self.require_capacity(self.replacement_len(&target, &overlap, contents.segments.len()))?;
-        self.require_prefix_capacity(prefixes.len())?;
+        self.require_prefix_capacity(validations.clone().count())?;
         self.replace_segments(target, overlap, &contents.segments, contents.mesh);
-        self.validations.extend_from_slice(prefixes);
+        self.validations.extend(validations);
         Ok(())
     }
 
-    // Summaries apply to the exact prefix at byte offset zero. Shifted copies
-    // cannot reuse them, even when their payload happens to be identical.
-    fn prefixes_within(&self, byte_end: u64) -> &[IndexValidation] {
-        let end = self
+    // Exact range summaries stay valid only for bytes copied to the same
+    // positions. A partially copied range cannot propagate its summary.
+    fn validations_within(
+        &self,
+        bytes: Range<u64>,
+    ) -> impl Iterator<Item = IndexValidation> + Clone + '_ {
+        let first = self
             .validations
-            .partition_point(|v| u64::from(v.count) * 4 <= byte_end);
-        &self.validations[..end]
+            .partition_point(|value| u64::from(value.first_index) * 4 < bytes.start);
+        let end = first
+            + self.validations[first..]
+                .partition_point(|value| u64::from(value.first_index) * 4 < bytes.end);
+        self.validations[first..end]
+            .iter()
+            .copied()
+            .filter(move |value| index_bytes(value.first_index, value.count).end <= bytes.end)
     }
 
     pub(crate) fn clear_range(
@@ -431,7 +441,50 @@ impl BufferProvenance {
             }
             return validate_index(proof.maximum, vertex_count, maximum);
         }
-        let content_maximum = match self.validations.binary_search_by_key(&count, |v| v.count) {
+        self.validate_known_range(0, count, vertex_count, maximum)
+    }
+
+    /// Check exactly the selected indices for a ranged draw. An immutable
+    /// managed stream's full maximum can prove any contained range when that
+    /// bound fits the selected vertex buffer and Device limit. A failed
+    /// conservative bound does not prove a proper subrange is invalid.
+    #[allow(dead_code, reason = "used by the ranged Raster draw API")]
+    pub(crate) fn validate_index_range(
+        &mut self,
+        first_index: u32,
+        count: u32,
+        vertex_count: u64,
+        maximum: u32,
+    ) -> Result<(), IndexError> {
+        if count == 0 {
+            return Ok(());
+        }
+        if let Some(proof) = self.mesh {
+            let bytes = index_bytes(first_index, count);
+            if proof.known_prefix != proof.byte_len || bytes.end > proof.byte_len {
+                return Err(IndexError::UnknownContents);
+            }
+            let bound = validate_index(proof.maximum, vertex_count, maximum);
+            return if bytes == (0..proof.byte_len) || bound.is_ok() {
+                bound
+            } else {
+                Err(IndexError::UnknownContents)
+            };
+        }
+        self.validate_known_range(first_index, count, vertex_count, maximum)
+    }
+
+    fn validate_known_range(
+        &mut self,
+        first_index: u32,
+        count: u32,
+        vertex_count: u64,
+        maximum: u32,
+    ) -> Result<(), IndexError> {
+        let content_maximum = match self
+            .validations
+            .binary_search_by_key(&(first_index, count), |v| (v.first_index, v.count))
+        {
             Ok(index) => self.validations[index].maximum,
             Err(index) => {
                 self.require_prefix_capacity(self.validations.len() + 1)
@@ -440,9 +493,15 @@ impl BufferProvenance {
                 {
                     self.validation_scans += 1;
                 }
-                let maximum = self.scan_indices(count);
-                self.validations
-                    .insert(index, IndexValidation { count, maximum });
+                let maximum = self.scan_indices(index_bytes(first_index, count));
+                self.validations.insert(
+                    index,
+                    IndexValidation {
+                        first_index,
+                        count,
+                        maximum,
+                    },
+                );
                 maximum
             }
         }
@@ -450,16 +509,13 @@ impl BufferProvenance {
         validate_index(content_maximum, vertex_count, maximum)
     }
 
-    fn scan_indices(&self, count: u32) -> Option<u32> {
-        let end = u64::from(count) * 4;
+    fn scan_indices(&self, bytes: Range<u64>) -> Option<u32> {
+        let end = bytes.end;
         let mut content_maximum = 0;
-        let mut cursor = 0;
+        let mut cursor = bytes.start;
         let mut pending = [0u8; 4];
         let mut filled = 0;
-        for segment in &self.segments {
-            if segment.end() <= cursor {
-                continue;
-            }
+        for segment in &self.segments[self.overlap_indices(&bytes)] {
             if segment.start > cursor {
                 return None;
             }
@@ -1040,6 +1096,92 @@ mod tests {
         hole.write(5..6, Arc::from([0u8]));
         assert_eq!(hole.validate_indices(3, 5, 4), Ok(()));
         assert_eq!(hole.validation_scans, 1);
+    }
+
+    #[test]
+    fn nonzero_index_range_uses_only_its_own_bytes_and_revalidates_on_write() {
+        let mut contents = BufferProvenance::with_capacity(4, 2);
+        // The selected triangle begins after uninitialized data. Its largest
+        // index straddles two separate uploads.
+        contents.write(12..17, Arc::from([0u8, 0, 0, 0, 1]));
+        contents.write(17..24, Arc::from([1u8, 0, 0, 2, 0, 0, 0]));
+        contents.write(24..28, Arc::from(1024u32.to_le_bytes()));
+        assert_eq!(contents.validate_index_range(3, 3, 258, 257), Ok(()));
+        assert_eq!(
+            contents.validate_index_range(4, 3, 258, u32::MAX),
+            Err(IndexError::VertexBounds {
+                index: 1024,
+                vertex_count: 258,
+            })
+        );
+        assert_eq!(contents.validate_index_range(3, 3, 258, 257), Ok(()));
+        assert_eq!(contents.validation_scans, 2);
+        let mut previous = snapshot(&contents);
+        contents.write(17..18, Arc::from([2u8]));
+        assert_eq!(
+            contents.validate_index_range(3, 3, 258, u32::MAX),
+            Err(IndexError::VertexBounds {
+                index: 513,
+                vertex_count: 258,
+            })
+        );
+        assert_eq!(contents.validation_scans, 3);
+        assert_eq!(previous.validate_index_range(3, 3, 258, 257), Ok(()));
+        assert_eq!(previous.validation_scans, 2);
+    }
+
+    #[test]
+    fn positional_index_range_copy_inherits_only_contained_summaries() {
+        let mut source = prepared();
+        source.write(4..24, Arc::from([0u8; 20]));
+        for (first_index, count) in [(1, 2), (2, 4), (3, 2), (3, 3), (4, 1)] {
+            assert_eq!(
+                source.validate_index_range(first_index, count, 1, 0),
+                Ok(())
+            );
+        }
+        let copied = copy_range(&source, 12..20, 12);
+        let mut destination = prepared();
+        destination.replace(12..20, &copied).unwrap();
+        assert_eq!(destination.validate_index_range(3, 2, 1, 0), Ok(()));
+        assert_eq!(destination.validate_index_range(4, 1, 1, 0), Ok(()));
+        assert_eq!(destination.validation_scans, 0);
+        assert_eq!(
+            destination.validate_index_range(3, 3, 1, 0),
+            Err(IndexError::UnknownContents)
+        );
+        assert_eq!(destination.validation_scans, 1);
+    }
+
+    #[test]
+    fn packed_mesh_proves_ranged_draws_without_payload_or_range_slots() {
+        let mut contents = BufferProvenance::with_capacity(0, 0);
+        contents.write_mesh_indices(0..24, 48, 6);
+        assert_eq!(
+            contents.validate_index_range(3, 3, 7, 6),
+            Err(IndexError::UnknownContents)
+        );
+        contents.write_mesh_indices(24..48, 48, 8);
+        assert_eq!(contents.validate_index_range(0, 3, 9, 8), Ok(()));
+        assert_eq!(contents.validate_index_range(3, 3, 9, 8), Ok(()));
+        assert_eq!(contents.validate_index_range(9, 3, 9, 8), Ok(()));
+        assert_eq!(
+            contents.validate_index_range(3, 3, 9, 7),
+            Err(IndexError::UnknownContents)
+        );
+        assert_eq!(
+            contents.validate_index_range(9, 4, 9, 8),
+            Err(IndexError::UnknownContents)
+        );
+        assert_eq!(contents.test_evidence(), (0, 0));
+        let mut revised = BufferProvenance::with_capacity(0, 1);
+        revised.copy_from(&contents).unwrap();
+        revised.clear_range(14..15).unwrap();
+        assert_eq!(
+            revised.validate_index_range(3, 3, 9, 8),
+            Err(IndexError::UnknownContents)
+        );
+        assert_eq!(contents.validate_index_range(3, 3, 9, 8), Ok(()));
     }
 
     #[test]
