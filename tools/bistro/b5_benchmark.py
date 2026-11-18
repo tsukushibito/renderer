@@ -97,6 +97,8 @@ def run(args, policy, api, scenario, timed, destination):
                str(args.ibl_manifest), "--bloom", "tent", "--output", str(destination)]
     if args.msaa == 4:
         command += ["--msaa", "4"]
+    if args.pipeline == "deferred":
+        command += ["--pipeline", "deferred"]
     for key, value in frames.items():
         command += [f"--{key}", str(value)]
     if timed:
@@ -132,12 +134,14 @@ def run(args, policy, api, scenario, timed, destination):
             f"Wrong hardware adapter {destination}")
     if windowed:
         require(report["bloom"] == "tent" and report["vsync"] == (scenario == "window-vsync")
-                and report.get("samples", 1) == args.msaa,
+                and report.get("samples", 1) == args.msaa
+                and report.get("pipeline", "forward") == args.pipeline,
                 "Window quality or pacing request changed")
         metrics = summarize_window(report, frames)
     else:
         require(report["identity"]["bloom"] == "tent"
-                and report["identity"].get("samples", 1) == args.msaa,
+                and report["identity"].get("samples", 1) == args.msaa
+                and report["identity"].get("pipeline", "forward") == args.pipeline,
                 "Offscreen quality changed")
         metrics = renderer_metrics(report, {"variant": api, "timing": timed}, FRAMES)
         metrics["cold_phases_ns"] = report["setup_phases_ns"]
@@ -156,12 +160,17 @@ def main():
     parser.add_argument("--resume", action="store_true", help="reuse validated completed runs")
     parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
                         help="scene sample count for the MSAA comparison cohort")
+    parser.add_argument("--pipeline", choices=("forward", "deferred"), default="forward")
     args = parser.parse_args()
+    if args.pipeline == "deferred" and args.msaa != 1:
+        parser.error("the deferred pipeline requires --msaa 1")
     ordinary_host_token()
     policy = host_policy.plan("performance-cores")
     settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
     if args.msaa == 4:
         settings["samples"] = 4
+    if args.pipeline == "deferred":
+        settings["pipeline"] = "deferred"
     identity = input_identity(args)
     power_scheme = active_power_scheme()
     progress = args.output / "progress.json"

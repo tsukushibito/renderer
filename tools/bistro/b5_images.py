@@ -37,6 +37,8 @@ def sample_path(directory, args, binary, api, extra):
                *extra]
     if args.msaa == 4:
         command += ["--msaa", "4"]
+    if args.pipeline == "deferred":
+        command += ["--pipeline", "deferred"]
     if args.resume and root.is_file():
         require(load_json(directory / "command.json") == command, f"Changed command {directory}")
         return root, load_json(root)
@@ -47,7 +49,7 @@ def sample_path(directory, args, binary, api, extra):
     return root, load_json(root)
 
 
-def validated_run(path, report, mode, api, samples):
+def validated_run(path, report, mode, api, samples, pipeline):
     validation = report["validation"]
     identity = report["identity"]
     require(report["runtime"]["api"] == api and validation["mode"] == mode and validation["clean"],
@@ -65,7 +67,8 @@ def validated_run(path, report, mode, api, samples):
                 and validation["corruption"] == 0
                 and (mode != "strict" or validation["teardown_checked"]), path)
     require((identity["width"], identity["height"]) == (1920, 1080)
-            and identity["shadows"] and identity["aa"] and identity.get("samples", 1) == samples,
+            and identity["shadows"] and identity["aa"] and identity.get("samples", 1) == samples
+            and identity.get("pipeline", "forward") == pipeline,
             path)
     scene = report["scene"]
     require((scene["meshes"], scene["primitives"], scene["materials"], scene["alpha_zero_materials"])
@@ -112,7 +115,7 @@ def share_capture(root, index, report, path, name, meta):
         temporary.unlink(missing_ok=True)
 
 
-def collect(path, report, root, index, planes, sample_count):
+def collect(path, report, root, index, planes, sample_count, pipeline):
     samples = {}
     for name, capture_path in reports(path.parent, report).items():
         captured = load_json(capture_path)
@@ -120,8 +123,9 @@ def collect(path, report, root, index, planes, sample_count):
         expected = captured["identity"].get("route_frame") if name.startswith("route/") else captured["identity"]["view"]
         require(str(expected) == label and captured["capture_only"]
                 and captured["readback_outside_measurement"], f"Unexpected sample {capture_path}")
-        require(captured["identity"].get("samples", 1) == sample_count,
-                f"Sample count differs in {capture_path}")
+        require(captured["identity"].get("samples", 1) == sample_count
+                and captured["identity"].get("pipeline", "forward") == pipeline,
+                f"Pipeline or sample count differs in {capture_path}")
         require(set(captured["captures"]) == set(planes)
                 and set(captured["shadow_captures"]) == set(SHADOWS), f"Missing planes {capture_path}")
         require(captured["validation"] == report["validation"]
@@ -192,7 +196,7 @@ def probe_faults(args, root, street):
         ("receiver-offset", ["--offset-shadow-receiver"], "street-shadow"),
     ]:
         wrong_path, wrong_report = sample_path(root / name, args, args.strict, "vulkan", common + params)
-        validated_run(wrong_path, wrong_report, "strict", "vulkan", args.msaa)
+        validated_run(wrong_path, wrong_report, "strict", "vulkan", args.msaa, args.pipeline)
         wrong, _ = read_plane(wrong_path, wrong_report, "sdr")
         result = compare_pixels(roi_pixels(normal, ROI[region]), roi_pixels(wrong, ROI[region]),
                                 "sdr", profile="scene")
@@ -214,7 +218,7 @@ def probe_faults(args, root, street):
                              ["--view", name, "--alpha-only", "--capture-shadow-maps", *extra])
                  for label, extra in (("original", []), ("opaque", ["--alpha-override", "opaque"]))]
         for sample, report in paths:
-            validated_run(sample, report, "strict", "vulkan", args.msaa)
+            validated_run(sample, report, "strict", "vulkan", args.msaa, args.pipeline)
         first, second = (item[1] for item in paths)
         if args.msaa == 1:
             require(first["depth_coverage_pixels"] == 0 and second["depth_coverage_pixels"] > 0,
@@ -248,9 +252,9 @@ def cohort(args, modes, differences=None):
                                            ["--view", "route", "--bloom", "tent", "--capture-all-views",
                                             "--capture-route-samples", "--capture-shadow-maps",
                                             "--capture-bloom-bypass"])
-                validated_run(path, report, mode, api, args.msaa)
+                validated_run(path, report, mode, api, args.msaa, args.pipeline)
                 require(report["identity"]["bloom"] == "tent", f"Wrong Bloom identity {path}")
-                samples = collect(path, report, args.output, files, planes, args.msaa)
+                samples = collect(path, report, args.output, files, planes, args.msaa, args.pipeline)
                 if api in seen:
                     before = {key: value[1:] for key, value in seen[api].items()}
                     after = {key: value[1:] for key, value in samples.items()}
@@ -272,7 +276,10 @@ def main():
                         help="revalidate completed reports from the same cohort")
     parser.add_argument("--msaa", type=int, choices=(1, 4), default=1,
                         help="scene sample count for the MSAA comparison cohort")
+    parser.add_argument("--pipeline", choices=("forward", "deferred"), default="forward")
     args = parser.parse_args()
+    if args.pipeline == "deferred" and args.msaa != 1:
+        parser.error("the deferred pipeline requires --msaa 1")
     args.output = args.output.resolve()
     require(args.output.parent.exists(), "Create the parent evidence directory first")
     settings = {"scene": PROFILES["scene"], "repeat": PROFILES["repeat"], "regions": ROI,
@@ -281,6 +288,8 @@ def main():
                            "ibl_manifest_sha256": digest(args.ibl_manifest)}}
     if args.msaa == 4:
         settings["samples"] = 4
+    if args.pipeline == "deferred":
+        settings["pipeline"] = "deferred"
     # Compare the serialized form, including the coordinate arrays.
     settings_hash = canonical_hash(settings)
     if args.stage == "accept":

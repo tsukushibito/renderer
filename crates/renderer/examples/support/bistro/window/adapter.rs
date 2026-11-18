@@ -93,9 +93,16 @@ impl WindowBackend for super::super::backend::Vulkan {
     }
 
     fn reprepare(&mut self, options: &Options, budget: &Budget) -> Result<(), Error> {
-        let classes = Budget::frame_images(options)
-            .into_iter()
-            .map(|(desc, count)| renderer::ResourceClass::Image { desc, count })
+        let classes = Budget::frame_buffers(options)
+            .map(|(size, count)| renderer::ResourceClass::Buffer {
+                desc: renderer::graph::BufferDesc { size },
+                count,
+            })
+            .chain(
+                Budget::frame_images(options)
+                    .into_iter()
+                    .map(|(desc, count)| renderer::ResourceClass::Image { desc, count }),
+            )
             .collect::<Vec<_>>();
         self.runtime
             .prepare_working_set(Self::frame_capacity(options, budget), &classes)?;
@@ -127,12 +134,15 @@ impl WindowBackend for super::super::backend::D3d12 {
     }
 
     fn reprepare(&mut self, options: &Options, _: &Budget) -> Result<(), Error> {
+        let buffers = Budget::frame_buffers(options)
+            .map(|(size, count)| renderer::D3D12BufferClass { size, count })
+            .collect::<Vec<_>>();
         let images = Budget::frame_images(options)
             .into_iter()
             .map(|(desc, count)| renderer::D3D12ImageClass { desc, count })
             .collect::<Vec<_>>();
         self.runtime.prepare_graph_working_set(
-            Some(&[]),
+            Some(&buffers),
             &images,
             &super::super::program::raster_requests(options),
             options.bloom.programs(),

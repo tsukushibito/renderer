@@ -230,7 +230,7 @@ fn identity(
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
-        "samples":options.sample_count.as_u32(),
+        "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
             "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
             "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
@@ -889,7 +889,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
         "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
         "views":view_reports,"route_samples":route_reports,"readback_outside_measurement":true,
-        "limits":"Forward PBR offscreen; whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
+        "limits":"Whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
     #[cfg(feature = "tracy")]
     let report = {
         let mut report = report;

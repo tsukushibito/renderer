@@ -56,7 +56,9 @@ def verify(directory, references, route_directory=None):
             reference = references / f"strict-{api}-1" / "views" / "street" / "report.json"
             reference_report = load_json(reference)
             samples = reference_report["identity"].get("samples", 1)
+            pipeline = reference_report["identity"].get("pipeline", "forward")
             require(report.get("samples", 1) == samples, f"Incorrect MSAA mode {tag}")
+            require(report.get("pipeline", "forward") == pipeline, f"Incorrect pipeline {tag}")
             expected, meta = plane(reference, reference_report, "sdr")
             comparison = compare_linear(path.parent / "linear-first.bin", expected, smoke["linear_first_sha256"])
             reports[tag] = {"report_sha256": digest(path), "reference_sdr_sha256": meta["sha256"],
@@ -69,6 +71,7 @@ def verify(directory, references, route_directory=None):
                         f"Route changed adapter or validation {tag}")
                 require(route["presentation"] and route["bloom"] == "tent"
                         and route.get("samples", 1) == samples
+                        and route.get("pipeline", "forward") == pipeline
                         and not route["smoke"] and route["warmup"] == 24
                         and route["accepted"] == 1824 and route["pending_on_exit"] > 0
                         and (route["initial_width"], route["initial_height"]) == (1920, 1080)

@@ -1,11 +1,11 @@
 //! Public Graph composition and explicit working-set budgets for this consumer.
 
 use super::{
-    Error, Options,
+    Error, Options, PipelineMode,
     asset::Scene,
     backend::Backend,
     camera::{Camera, Frustum},
-    ibl, program, shadow,
+    deferred, ibl, program, shadow,
 };
 use renderer::{
     ImageFormat,
@@ -49,6 +49,15 @@ fn environment_desc(image: &ibl::Image) -> ImageDesc {
 }
 
 impl Budget {
+    pub fn frame_buffers(options: &Options) -> impl Iterator<Item = (u64, usize)> {
+        (options.pipeline == PipelineMode::Deferred)
+            .then_some((
+                program::DEFERRED_RECONSTRUCTION_BYTES as u64,
+                options.inflight,
+            ))
+            .into_iter()
+    }
+
     pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
         let mut images = Vec::new();
         let mut add = |desc, count| {
@@ -60,6 +69,9 @@ impl Budget {
         };
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
         add(hdr, options.inflight * 2);
+        if options.pipeline == PipelineMode::Deferred {
+            add(hdr, options.inflight * deferred::PLANES.len());
+        }
         if options.sample_count == SampleCount::X4 {
             add(hdr.with_sample_count(SampleCount::X4), options.inflight);
         }
@@ -93,6 +105,7 @@ impl Budget {
         environment: &ibl::Environment,
         options: &Options,
     ) -> Result<Self, Error> {
+        let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
         let buffer_count = scene
             .primitives
             .len()
@@ -117,6 +130,13 @@ impl Budget {
         add(program::CAMERA_BYTES as u64);
         add(24);
         add(12);
+        let mut frame_buffers = 0;
+        for (size, count) in Self::frame_buffers(options) {
+            for _ in 0..count {
+                add(size);
+            }
+            frame_buffers += count;
+        }
         if options.resource_checks {
             // Explicit change-boundary overlap: the old material can still be
             // referenced by a submission while its new version is uploaded.
@@ -187,26 +207,28 @@ impl Budget {
             + scene.images.len()
             + 11
             + bloom_passes
+            + deferred * (1 + deferred::PLANES.len())
             + usize::from(options.sample_count == SampleCount::X4);
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
             + frame_instances
+            + frame_buffers
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
         let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings;
         let graph = GraphCapacity {
             resources,
-            passes: 24 + bloom_passes + usize::from(bloom_passes != 0),
+            passes: 24 + bloom_passes + usize::from(bloom_passes != 0) + deferred * 2,
             accesses,
-            draws: scene.primitives.len() * 5 + 2,
-            bindings: scene.materials.len() * 20 + 4 + bloom_bindings,
-            attachments: 24,
+            draws: scene.primitives.len() * 5 + 2 + deferred,
+            bindings: scene.materials.len() * 20 + 4 + bloom_bindings + deferred * 16,
+            attachments: 24 + deferred * deferred::PLANES.len(),
             dependencies: 32,
             initial_ranges: resources * 2,
             name_bytes: resources * 32 + 2048,
-            upload_bytes: program::CAMERA_BYTES,
+            upload_bytes: program::CAMERA_BYTES + deferred * program::DEFERRED_RECONSTRUCTION_BYTES,
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
@@ -276,7 +298,7 @@ impl Budget {
             graph,
             buffers,
             images,
-            buffer_count,
+            buffer_count: buffer_count + frame_buffers,
             physical_resources,
             max_buffer_bytes,
             upload_bytes,
@@ -959,6 +981,66 @@ pub(super) fn build(
             },
         )?;
     }
+    let lighting_bindings = [
+        Binding {
+            group: 2,
+            binding: 0,
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[0],
+                0,
+                resident.environment_mips[0],
+            )?),
+        },
+        Binding {
+            group: 2,
+            binding: 1,
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[1],
+                0,
+                resident.environment_mips[1],
+            )?),
+        },
+        Binding {
+            group: 2,
+            binding: 2,
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[2],
+                0,
+                resident.environment_mips[2],
+            )?),
+        },
+        Binding {
+            group: 2,
+            binding: 3,
+            resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeatUClampV),
+        },
+        Binding {
+            group: 3,
+            binding: 0,
+            resource: BindingResource::ImageView(shadow_views[0]),
+        },
+        Binding {
+            group: 3,
+            binding: 1,
+            resource: BindingResource::ImageView(shadow_views[1]),
+        },
+        Binding {
+            group: 3,
+            binding: 2,
+            resource: BindingResource::ImageView(shadow_views[2]),
+        },
+        Binding {
+            group: 3,
+            binding: 3,
+            resource: BindingResource::ImageView(shadow_views[3]),
+        },
+        Binding {
+            group: 3,
+            binding: 4,
+            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+        },
+    ];
+    let deferred = options.pipeline == PipelineMode::Deferred;
     {
         #[cfg(feature = "tracy")]
         let _bindings = tracy_client::Client::running()
@@ -971,7 +1053,7 @@ pub(super) fn build(
                     graph.sampled_image_view(handle, 0, mip_count)?,
                 ))
             };
-            let bindings = [
+            let material_bindings = [
                 Binding {
                     group: 0,
                     binding: 0,
@@ -1015,72 +1097,21 @@ pub(super) fn build(
                     binding: 4,
                     resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
                 },
-                Binding {
-                    group: 2,
-                    binding: 0,
-                    resource: BindingResource::ImageView(graph.sampled_image_view(
-                        environment[0],
-                        0,
-                        resident.environment_mips[0],
-                    )?),
-                },
-                Binding {
-                    group: 2,
-                    binding: 1,
-                    resource: BindingResource::ImageView(graph.sampled_image_view(
-                        environment[1],
-                        0,
-                        resident.environment_mips[1],
-                    )?),
-                },
-                Binding {
-                    group: 2,
-                    binding: 2,
-                    resource: BindingResource::ImageView(graph.sampled_image_view(
-                        environment[2],
-                        0,
-                        resident.environment_mips[2],
-                    )?),
-                },
-                Binding {
-                    group: 2,
-                    binding: 3,
-                    resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeatUClampV),
-                },
-                Binding {
-                    group: 3,
-                    binding: 0,
-                    resource: BindingResource::ImageView(shadow_views[0]),
-                },
-                Binding {
-                    group: 3,
-                    binding: 1,
-                    resource: BindingResource::ImageView(shadow_views[1]),
-                },
-                Binding {
-                    group: 3,
-                    binding: 2,
-                    resource: BindingResource::ImageView(shadow_views[2]),
-                },
-                Binding {
-                    group: 3,
-                    binding: 3,
-                    resource: BindingResource::ImageView(shadow_views[3]),
-                },
-                Binding {
-                    group: 3,
-                    binding: 4,
-                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
-                },
             ];
-            let program = if material.blend {
-                program::blend_program()
+            let bindings = if deferred && !material.blend {
+                graph.raster_bindings(&program::gbuffer_program(), &material_bindings)?
             } else {
-                program::opaque_program()
+                let program = if material.blend {
+                    program::blend_program()
+                } else {
+                    program::opaque_program()
+                };
+                let mut bindings = [material_bindings[0]; 16];
+                bindings[..material_bindings.len()].copy_from_slice(&material_bindings);
+                bindings[material_bindings.len()..].copy_from_slice(&lighting_bindings);
+                graph.raster_bindings(&program, &bindings)?
             };
-            workspace
-                .bindings
-                .push(graph.raster_bindings(&program, &bindings)?);
+            workspace.bindings.push(bindings);
         }
     }
     let multisampled = options.sample_count == SampleCount::X4;
@@ -1113,7 +1144,7 @@ pub(super) fn build(
             ImageDesc::rgba8(options.width, options.height),
         )?;
         let depth_view = graph.image_view(depth, 0, 0)?;
-        if !multisampled {
+        if !multisampled && !deferred {
             graph.attachment_pass(
                 "scene clears",
                 RasterAttachments {
@@ -1163,7 +1194,22 @@ pub(super) fn build(
         }
     };
     let final_resolve = resolve_view.map(Some);
-    {
+    if deferred {
+        deferred::append(
+            &mut graph,
+            deferred::Inputs {
+                hdr: color_view,
+                depth: depth_view,
+                clear: scene_clear,
+                camera: uniform,
+                view_projection: camera_matrix,
+                fullscreen_vertices: resolve_vertices,
+                fullscreen_indices: resolve_indices,
+                lighting: lighting_bindings,
+            },
+            workspace.opaque.iter().copied().map(draw),
+        )?;
+    } else {
         #[cfg(feature = "tracy")]
         let _opaque = tracy_client::Client::running().map(|client| {
             client.span(tracy_client::span_location!("bistro.build.opaque_draws"), 0)
@@ -1444,6 +1490,12 @@ mod tests {
                 desc.format == format && desc.sample_count == SampleCount::X4 && count == 4
             }));
         }
+        options.sample_count = SampleCount::X1;
+        options.pipeline = PipelineMode::Deferred;
+        let deferred = Budget::new(&scene, &environment, &options).unwrap();
+        assert_eq!(deferred.physical_resources - four.physical_resources, 16);
+        assert_eq!(deferred.graph.resources - four.graph.resources, 4);
+        assert_eq!(deferred.graph.upload_bytes - four.graph.upload_bytes, 64);
     }
 
     fn large_geometry_scene() -> Scene {

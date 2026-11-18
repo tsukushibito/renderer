@@ -26,7 +26,7 @@ mod deferred;
 
 pub use deferred::{DEFERRED_RECONSTRUCTION_BYTES, deferred_lighting_program, gbuffer_program};
 
-use super::Options;
+use super::{Options, PipelineMode};
 use renderer::ImageFormat;
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
@@ -320,13 +320,21 @@ pub const fn present_program(aa: bool) -> ManagedRasterProgram {
     }
 }
 pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
-    let mut requests = Vec::with_capacity(6);
-    requests.extend(
-        [opaque_program(), blend_program()].map(|program| RasterPipelineRequest {
-            program,
+    let mut requests = Vec::with_capacity(7);
+    if options.pipeline == PipelineMode::Deferred {
+        requests.extend(
+            [gbuffer_program(), deferred_lighting_program()].map(RasterPipelineRequest::from),
+        );
+    } else {
+        requests.push(RasterPipelineRequest {
+            program: opaque_program(),
             sample_count: options.sample_count,
-        }),
-    );
+        });
+    }
+    requests.push(RasterPipelineRequest {
+        program: blend_program(),
+        sample_count: options.sample_count,
+    });
     requests.extend([shadow_program(), tone_program()].map(RasterPipelineRequest::from));
     if options.windowed {
         requests.push(present_program(options.aa).into());

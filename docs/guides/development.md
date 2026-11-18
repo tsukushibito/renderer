@@ -416,6 +416,11 @@ resizeではGraphと表示の利用者が返却された時点で、登録済み
 FXAAは独立に`--aa-off`で無効化できる。4×のoffscreen captureはresolve済みHDR/SDRと指定した
 1×の影マップを出力する。4×のカメラ深度はreadback対象外で、`depth_coverage_pixels`は`null`となる。
 
+`--pipeline deferred --msaa 1`では不透明・MASKを3枚のRGBA16FとD32へ描画し、
+深度と逆ビュー投影行列から位置を復元して共通のPBR照明を評価する。半透明はそのHDRと深度を読み込み、
+奥から手前にForwardで合成する。Deferredにも同じBloom、露出、Neutral、FXAA、表示が続く。
+オフスクリーンとWindow reportの`pipeline`で経路を確認できる。
+
 ```powershell
 cargo run --locked --release -p renderer --example msaa --no-default-features --features vulkan,d3d12
 cargo test --locked --release -p renderer --test msaa --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture
@@ -446,6 +451,8 @@ python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $man
 
 4×の画像・性能受入では`b5_images.py`の両stageと`b5_benchmark.py`に`--msaa 4`を渡し、
 profileと出力先を分ける。`b5_window_acceptance.py`はoffscreen参照とWindow reportのサンプル数を照合する。
+Deferredの各受入スクリプトには`--pipeline deferred`を渡し、Forwardと別のprofile・出力先を使う。
+`b5_window_acceptance.py`は同じ描画経路のoffscreen参照を要求する。
 
 性能には`vulkan,d3d12,presentation`のみのreleaseを使う。hostのCPU policyを検証してから逐次起動し、
 初回の読込／準備／upload、定常のCPU phase／GPU時間／frame間隔、VSync on/offのpresentを記録する。

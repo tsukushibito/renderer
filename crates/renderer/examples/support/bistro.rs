@@ -16,6 +16,8 @@ mod camera;
 #[cfg(windows)]
 #[path = "profile_workload/clock.rs"]
 mod clock;
+#[path = "bistro/deferred.rs"]
+mod deferred;
 #[path = "bistro/ibl.rs"]
 mod ibl;
 #[path = "bistro/lifecycle.rs"]
@@ -62,6 +64,21 @@ use std::{path::PathBuf, time::Duration};
 
 type Error = Box<dyn std::error::Error>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineMode {
+    Forward,
+    Deferred,
+}
+
+impl PipelineMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Deferred => "deferred",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Options {
     api: String,
@@ -88,6 +105,7 @@ struct Options {
     resource_checks: bool,
     bloom: bloom::Bloom,
     sample_count: renderer::graph::SampleCount,
+    pipeline: PipelineMode,
     #[cfg(feature = "development-validation")]
     omit_material: Option<usize>,
     #[cfg(feature = "development-validation")]
@@ -128,6 +146,7 @@ impl Options {
             resource_checks: false,
             bloom: bloom::Bloom::Off,
             sample_count: renderer::graph::SampleCount::X1,
+            pipeline: PipelineMode::Forward,
             #[cfg(feature = "development-validation")]
             omit_material: None,
             #[cfg(feature = "development-validation")]
@@ -180,6 +199,13 @@ impl Options {
                     };
                 }
                 "--aa-off" => result.aa = false,
+                "--pipeline" => {
+                    result.pipeline = match args.next().as_deref() {
+                        Some("forward") => PipelineMode::Forward,
+                        Some("deferred") => PipelineMode::Deferred,
+                        _ => return Err("--pipeline needs forward or deferred".into()),
+                    };
+                }
                 "--msaa" => {
                     use renderer::graph::SampleCount;
                     result.sample_count = match args.next().as_deref() {
@@ -226,7 +252,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--msaa 1|4] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|deferred] [--msaa 1|4] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -240,6 +266,11 @@ impl Options {
         }
         if result.fixture == result.manifest.is_some() {
             return Err("select exactly one of --fixture or --manifest".into());
+        }
+        if result.pipeline == PipelineMode::Deferred
+            && result.sample_count != renderer::graph::SampleCount::X1
+        {
+            return Err("the deferred pipeline requires --msaa 1".into());
         }
         if result.fixture && !specified_size {
             result.width = 128;
@@ -365,6 +396,18 @@ mod tests {
         assert_eq!(msaa.sample_count.as_u32(), 4);
         assert!(!msaa.aa);
         assert!(options(&["--fixture", "--msaa", "2"]).is_err());
+    }
+
+    #[test]
+    fn deferred_requires_single_sample_attachments() {
+        assert_eq!(
+            options(&["--fixture"]).unwrap().pipeline,
+            PipelineMode::Forward
+        );
+        let deferred = options(&["--fixture", "--pipeline", "deferred"]).unwrap();
+        assert_eq!(deferred.pipeline, PipelineMode::Deferred);
+        let error = options(&["--fixture", "--msaa", "4", "--pipeline", "deferred"]).unwrap_err();
+        assert_eq!(error.to_string(), "the deferred pipeline requires --msaa 1");
     }
 
     #[test]

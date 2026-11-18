@@ -560,7 +560,7 @@ impl<B: WindowBackend> State<B> {
             "schema_version": 1, "presentation": true, "runtime": runtime, "validation": validation,
             "initial_width": self.seed_dimensions.0, "initial_height": self.seed_dimensions.1,
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
-            "samples": options.sample_count.as_u32(),
+            "samples": options.sample_count.as_u32(), "pipeline": options.pipeline.name(),
             "warmup": options.warmup, "accepted": self.accepted, "pending_on_exit": self.pending_on_exit,
             "setup_ns": self.setup_ns, "native_memory": memory, "steady_memory": steady_memory,
             "setup_phases_ns": {"asset_load": asset_load_ns, "native_prepare": self.preparation_ns,
