@@ -510,7 +510,7 @@ fn run(strict: bool) {
             D3D12BufferClass { size: 24, count: 1 },
         ]),
         &images.map(|(desc, count)| D3D12ImageClass { desc, count }),
-        &programs(),
+        &programs().map(Into::into),
         &[],
     )
     .unwrap();

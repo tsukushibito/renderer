@@ -723,7 +723,7 @@ pub fn d3d12(baseline: bool) {
                     count: 2 * IN_FLIGHT,
                 },
             ],
-            &programs(),
+            &programs().map(Into::into),
             &[],
         )
         .unwrap();

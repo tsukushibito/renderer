@@ -256,7 +256,7 @@ impl Backend {
                         count: D3D12_EXECUTIONS,
                     },
                 ],
-                &programs,
+                &programs.map(Into::into),
                 &[],
             )?,
         }

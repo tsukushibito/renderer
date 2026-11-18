@@ -285,7 +285,7 @@ base0から全chainまでのViewを扱い、部分的な複数mip範囲は明示
 `Graph::attachment_pass(name, RasterAttachments)`は描画命令を持たないattachment操作を追加する。
 color配列は0個以上、depthは任意だが、全体が空の指定は拒否する。
 各`Attachment { view, load, store }`を準備済みarenaへcopyし、呼出元のsliceを変更/破棄してもplanは変わらない。
-選択mipのextentは全targetで一致させ、色/深度の形式、clear値、owner、同一subresourceへの重複writeを構築時に拒否する。
+選択mipのextentとsample数は全targetで一致させる。色/深度の形式、clear値、owner、同一subresourceへの重複writeを構築時に確認する。
 depth clearは有限な0〜1とし、subnormal値を拒否する。二APIのnative clearとshaderによる全域clearの間で
 FP32のflush差を持ち込まないための保証であり、既存managed D32作成のclear値と同じ境界を使う。
 ゼロと`f32::MIN_POSITIVE`以上の通常値は受け付け、この保証をprivateなowned operandで保持する。
@@ -301,6 +301,15 @@ sampled mip chainのcache identityはmip数も区別し、同じbase extent/form
 D3D12のprepareは既存execution枠の取得後に適合を検査する。未準備容量の不足が先に返る場合があり、
 全backendのエラー種別の優先順位を固定する契約ではない。
 culledな未対応枝は実行や物理資源取得を妨げない。
+
+画像は `SampleCount::X1` を既定とし、カラーとD32の単一subresourceアタッチメントには `X4` も選べる。
+`RasterAttachments::color_resolves` は空、またはカラーと同数のslotを持つ。
+resolveするslotではLoadまたはClearで4×画像の全域を確立し、同じextent・formatの1×画像を指定する。
+resolve先は独立した書き込みとして依存解析に入り、元の4×画像をStoreで破棄しても後続で使える。
+VulkanはDynamic Renderingのカラーresolve、D3D12は描画後の `ResolveSubresource` にloweringする。
+4×画像はアタッチメントで使い、sampling・storage・upload・readback・exportには1×画像を使う。
+通常フレームの前に、各画像クラスと `RasterPipelineRequest` のProgram／sample数を準備する。
+
 whole-image uploadはRGBA8（UNORM/sRGB）/RGBA16Fを扱う。複数mipはmip0から順に、
 各levelを隙間のないrow-major texel列として連結する。whole-chainの長さ・全level初期化を保証し、
 nativeのrow pitch・offset alignmentはbackendのstaging配置へ変換する。
@@ -924,7 +933,7 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 
 初期標準描画は照明を計算しない。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
 RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。
-これらのnative attachmentは2D・mip/layer各1・sample数1であり、MSAAやMRT、reversed-Zは提供しない。
+標準Forward recipeは2D・mip/layer各1・sample数1の通常Zを扱う。4× MSAAを組むときは公開Graphでアタッチメントとresolve先を指定する。
 `opaque`単体はcolor-onlyも許す。recipeの`depth: false`ならdepthは作らず、post入力のdepthも`None`となる。
 必要なdepthがなければ利用側は明示的に拒否するか別の処理を選び、暗黙の代用画像を作らない。
 

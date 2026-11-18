@@ -32,6 +32,7 @@ impl From<ResourceDesc> for ReuseClass {
                 format: desc.format as u8,
                 mip_levels: desc.mip_levels,
                 array_layers: desc.array_layers,
+                sample_count: desc.sample_count.as_u32(),
             },
         }
     }

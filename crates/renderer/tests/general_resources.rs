@@ -139,7 +139,7 @@ impl Backend for D3D12Runtime {
         self.prepare_graph_working_set(
             None,
             &images,
-            &[renderer::program::ManagedRasterProgram::mesh_hdr()],
+            &[renderer::program::ManagedRasterProgram::mesh_hdr().into()],
             &[fixture::storage_program()],
         )
         .map_err(|error| format!("{:?}", error.kind()))
@@ -693,7 +693,7 @@ fn run(strict: bool) {
                 count: 3 * EXECUTIONS,
             },
         ],
-        &[renderer::program::ManagedRasterProgram::mesh_hdr()],
+        &[renderer::program::ManagedRasterProgram::mesh_hdr().into()],
         &[fixture::storage_program()],
     )
     .unwrap();

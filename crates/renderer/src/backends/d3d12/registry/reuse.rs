@@ -20,6 +20,7 @@ pub(super) enum ReuseClass {
         format: u8,
         mip_levels: u32,
         array_layers: u32,
+        sample_count: u32,
     },
 }
 
@@ -277,6 +278,7 @@ mod tests {
                 format: 0,
                 mip_levels: 1,
                 array_layers: 1,
+                sample_count: 1,
             },
         );
         // Registered classes must not turn a failed small-buffer search into a

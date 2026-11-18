@@ -510,7 +510,7 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
             .prepare_graph_working_set(
                 None,
                 &image_classes,
-                &standard_fixture::raster_programs(),
+                &standard_fixture::raster_programs().map(Into::into),
                 &standard_fixture::programs(),
             )
             .unwrap(),
@@ -518,7 +518,7 @@ fn d3d12_workload(baseline: bool, workload: Workload) {
             .prepare_graph_working_set(
                 None,
                 &image_classes,
-                &custom_raster_fixture::raster_programs(),
+                &custom_raster_fixture::raster_programs().map(Into::into),
                 &[],
             )
             .unwrap(),

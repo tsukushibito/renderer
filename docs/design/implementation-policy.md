@@ -1567,6 +1567,14 @@ buffer snapshotを取り直す。定常処理では準備済みのGraph、結果
 外部の利用コードから再現できるガイドを整え、実行/未実行と既知の制限を説明できる。
 画像が出たことだけで拡張性や組込品質の達成を主張しない。
 
+### B5後の描画パイプライン拡張
+
+`renderer-7ft.13`。公開Graph・標準部品・入力接続の境界を使い、Forward系の4× MSAA、
+Deferred用のMRTと描画区間内のProgram切り替え、Forward+用のライト一覧、直接インスタンシングとGPU生成の間接描画を順に実証する。
+Rendererはパス・資源・描画命令の契約、利用側は照明・G-buffer・Program選択・可視性を担当する。
+各機能を専用例とBistroで比較し、Vulkan／D3D12の製品構成と開発用検証、GPUの描画結果、
+準備済み通常フレームのメモリとCPU/GPU費用を確認する。Deferredの初回受入は1×とする。
+
 ### 実測から選ぶ後続の最適化
 
 `renderer-7ft.7`で物理aliasing、複数queue、並列記録、cacheやbarrier削減の必要性と採否を判断する。

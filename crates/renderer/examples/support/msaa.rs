@@ -248,6 +248,7 @@ pub fn run() {
     assert_ne!(adapter.device_type, "CPU");
     assert_eq!(adapter.device_luid, Some(dx.device_info().luid));
     let vk_monitor = vk.validation_monitor();
+    let dx_monitor = dx.validation_monitor();
     let mut pool = GraphPool::new(graph_capacity, 1).unwrap();
     for (samples, draw_meshes) in [
         (SampleCount::X1, true),
@@ -261,7 +262,9 @@ pub fn run() {
         let mut result = pending.wait(WAIT).unwrap().expect("Vulkan completion");
         result.readback_into(readback, &mut vk_bytes).unwrap();
         drop((result, pending));
-        let mut pending = dx.submit(&plan).unwrap();
+        let mut pending = dx
+            .submit(&plan)
+            .unwrap_or_else(|error| panic!("{error}: {:#?}", dx_monitor.snapshot()));
         let mut result = pending.wait(WAIT).unwrap().expect("D3D12 completion");
         result.readback_into(readback, &mut dx_bytes).unwrap();
         drop((result, pending, plan));
