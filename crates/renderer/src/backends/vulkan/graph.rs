@@ -1307,42 +1307,45 @@ impl VulkanRuntime {
             graph,
             serial,
         )?;
+        let max_color_attachments = crate::program::MAX_RASTER_COLOR_ATTACHMENTS
+            .min(self.owner.device.limits().max_color_attachments as usize);
         for &pass in &graph.order {
             match &graph.passes[pass].operation {
+                Operation::Raster { colors, .. } | Operation::AttachmentPass { colors, .. }
+                    if colors.len() > max_color_attachments =>
+                {
+                    return Err(RuntimeError::unsupported(
+                        "rendering scope exceeds Device color attachment count",
+                    ));
+                }
                 Operation::Raster {
-                    program,
+                    batches,
                     colors,
                     depth,
                     ..
                 } => {
-                    if colors.len() > 1 {
-                        return Err(RuntimeError::unsupported(
-                            "Raster supports at most one color attachment",
-                        ));
-                    }
-                    self.programs
-                        .as_ref()
-                        .ok_or_else(|| {
-                            RuntimeError::capacity_with(
-                                "Raster programs are not prepared",
-                                RuntimeCapacityError::new(
-                                    RuntimeCapacityKind::Programs,
-                                    CapacityRecovery::Prepare,
-                                    None,
-                                    None,
-                                ),
-                            )
-                        })?
-                        .raster_program(
-                            *program,
+                    let programs = self.programs.as_ref().ok_or_else(|| {
+                        RuntimeError::capacity_with(
+                            "Raster programs are not prepared",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::Programs,
+                                CapacityRecovery::Prepare,
+                                None,
+                                None,
+                            ),
+                        )
+                    })?;
+                    let sample_count = attachment_samples(graph, colors, *depth);
+                    for batch in graph.raster_batches(batches) {
+                        let slot = programs.select_raster_program(
+                            batch.program,
                             depth.is_some(),
-                            attachment_samples(graph, colors, *depth),
+                            sample_count,
                         )?;
-                }
-                Operation::AttachmentPass { colors, .. } if colors.len() > 1 => {
-                    return Err(RuntimeError::unsupported(
-                        "native passes support at most one color attachment",
-                    ));
+                        // Every owned batch has at least one draw. Work
+                        // acquisition already verified the total draw bound.
+                        work.raster_programs.push(slot);
+                    }
                 }
                 _ => {}
             }
@@ -1452,31 +1455,27 @@ impl VulkanRuntime {
         drop(resource_leases);
         let mut shader_needs = ShaderNeeds::default();
         let mut binding_count = 0usize;
+        let mut textured_raster = false;
         for &pass in &graph.order {
             let count = match &graph.passes[pass].operation {
                 Operation::Compute { .. } => {
                     shader_needs.compute = true;
                     1
                 }
-                Operation::Raster {
-                    program,
-                    draws,
-                    depth,
-                    ..
-                } => {
+                Operation::Raster { batches, depth, .. } => {
                     shader_needs.raster = true;
-                    if !program.bindings().is_empty() {
-                        graph
-                            .raster_draws(draws)
-                            .iter()
-                            .filter(|draw| {
-                                work.raster_bindings
-                                    .require(&draw.bindings, depth.is_some())
-                            })
-                            .count()
-                    } else {
-                        0
-                    }
+                    let count = graph
+                        .raster_batches(batches)
+                        .iter()
+                        .filter(|batch| !batch.program.bindings().is_empty())
+                        .flat_map(|batch| graph.raster_draws(&batch.draws))
+                        .filter(|draw| {
+                            work.raster_bindings
+                                .require(&draw.bindings, depth.is_some())
+                        })
+                        .count();
+                    textured_raster |= count != 0;
+                    count
                 }
                 Operation::Composite { .. } => {
                     shader_needs.composite = true;
@@ -1518,10 +1517,6 @@ impl VulkanRuntime {
         if let Some(programs) = &programs {
             programs.ensure(shader_needs)?;
         }
-        let textured_raster = graph.order.iter().any(|&pass| {
-            matches!(&graph.passes[pass].operation,
-            Operation::Raster { program, .. } if !program.bindings().is_empty())
-        });
         let bindings = if shader_needs.compute || shader_needs.composite || textured_raster {
             Some(programs.as_ref().unwrap().acquire_bindings()?)
         } else {

@@ -11,7 +11,8 @@ use crate::graph::{RasterConstants, SampleCount};
 
 pub(in crate::backends::vulkan) struct RenderingAttachments<'a> {
     pub extent: vk::Extent2D,
-    pub color: Option<vk::RenderingAttachmentInfo<'a>>,
+    pub colors: [vk::RenderingAttachmentInfo<'a>; crate::program::MAX_RASTER_COLOR_ATTACHMENTS],
+    pub color_count: usize,
     pub depth: Option<vk::RenderingAttachmentInfo<'a>>,
 }
 
@@ -23,7 +24,7 @@ impl RenderingAttachments<'_> {
                 extent: self.extent,
             })
             .layer_count(1)
-            .color_attachments(self.color.as_slice());
+            .color_attachments(&self.colors[..self.color_count]);
         if let Some(attachment) = &self.depth {
             info = info.depth_attachment(attachment);
         }
@@ -77,13 +78,30 @@ impl ShaderPrograms {
     }
 
     /// # Safety
-    /// The command is recording outside rendering. All ordered draws, Programs
-    /// and attachments survive actual GPU completion; indices/ranges/ABI obey
-    /// the reviewed mesh contract. Dependencies establish attachment layouts
-    /// and valid contents for LOAD before this scope; no storage side effects
-    /// or barriers are admitted within the rendering scope.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::backends::vulkan) unsafe fn record_rasters<'a>(
+    /// The command is recording outside rendering. The caller retains the
+    /// attachments through GPU completion and applies their dependencies,
+    /// including valid contents for LOAD, before calling this method.
+    pub(in crate::backends::vulkan) unsafe fn begin_raster(
+        &self,
+        command: vk::CommandBuffer,
+        attachments: &RenderingAttachments<'_>,
+    ) {
+        // SAFETY: The caller established the attachment and command state.
+        unsafe {
+            self.owner
+                .device
+                .raw()
+                .cmd_begin_rendering(command, &attachments.info());
+            self.viewport(command, attachments.extent);
+        }
+    }
+
+    /// # Safety
+    /// The command is recording inside a rendering scope compatible with the
+    /// prepared Program and sample count. The owner, descriptors and buffers
+    /// must survive GPU completion. Indices, ranges and shader inputs must
+    /// obey the validated draw contract.
+    pub(in crate::backends::vulkan) unsafe fn record_raster_batch<'a>(
         &self,
         command: vk::CommandBuffer,
         program: &super::Program,
@@ -97,18 +115,20 @@ impl ShaderPrograms {
                 [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
             ),
         >,
-        attachments: &RenderingAttachments<'_>,
     ) {
         let device = self.owner.device.raw();
         let pipeline = program
             .raster_pipeline(sample_count)
             .expect("prepared Raster pipeline for attachment sample count");
-        // SAFETY: Caller retains compatible pipeline, descriptors, attachments
-        // and buffers through actual retirement; all dependencies precede scope.
+        let managed = program
+            .raster_asset
+            .unwrap_or_else(crate::program::ManagedRasterProgram::mesh);
+        let size = managed.parameter_size() as usize;
+        let stages = super::creation::shader_stages(managed.parameter_layout().stages);
+        // SAFETY: Dependencies, interface compatibility and retention were
+        // established by the caller before entering the rendering scope.
         unsafe {
-            device.cmd_begin_rendering(command, &attachments.info());
             device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, pipeline);
-            self.viewport(command, attachments.extent);
             {
                 #[cfg(feature = "tracy")]
                 let _span = tracy_client::Client::running().map(|client| {
@@ -118,10 +138,6 @@ impl ShaderPrograms {
                     )
                 });
                 for (vertices, indices, index_count, parameters, sets) in draws {
-                    let managed = program
-                        .raster_asset
-                        .unwrap_or_else(crate::program::ManagedRasterProgram::mesh);
-                    let size = managed.parameter_size() as usize;
                     if size != 0 {
                         let mut bytes = [0_u8; 128];
                         for (value, output) in
@@ -132,7 +148,7 @@ impl ShaderPrograms {
                         device.cmd_push_constants(
                             command,
                             program.layout,
-                            super::creation::shader_stages(managed.parameter_layout().stages),
+                            stages,
                             0,
                             &bytes[..size],
                         );
@@ -152,7 +168,6 @@ impl ShaderPrograms {
                     device.cmd_draw_indexed(command, index_count, 1, 0, 0, 0);
                 }
             }
-            device.cmd_end_rendering(command);
         }
     }
 

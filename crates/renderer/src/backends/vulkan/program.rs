@@ -30,6 +30,15 @@ use creation::{Program, ProgramKind};
 const RASTER_VARIANT_COUNT: usize = crate::program::MAX_RASTER_PROGRAMS * 2;
 const RASTER_GROUP_COUNT: usize = crate::program::MAX_RASTER_BIND_GROUPS;
 
+/// A prepared slot belongs to the retained immutable ShaderPrograms for one
+/// Graph work item. Color/depth and sample compatibility are resolved before
+/// selecting it.
+#[derive(Clone, Copy)]
+pub(super) enum RasterProgramSlot {
+    FixedMesh,
+    Managed(usize),
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct RasterLayout {
     layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
@@ -219,7 +228,7 @@ impl ShaderPrograms {
         })
     }
 
-    pub(in crate::backends::vulkan) fn raster_key(
+    fn raster_key(
         &self,
         managed: crate::program::ManagedRasterProgram,
         depth: bool,
@@ -312,22 +321,26 @@ impl ShaderPrograms {
         )
     }
 
-    pub(super) fn raster_program(
+    pub(super) fn select_raster_program(
         &self,
         managed: crate::program::ManagedRasterProgram,
         depth: bool,
         sample_count: SampleCount,
-    ) -> Result<&Program, RuntimeError> {
+    ) -> Result<RasterProgramSlot, RuntimeError> {
         if sample_count == SampleCount::X1
             && managed.same(&ManagedRasterProgram::mesh())
             && depth
-            && let Some(program) = self.raster.get()
+            && self.raster.get().is_some()
         {
-            return Ok(program);
+            return Ok(RasterProgramSlot::FixedMesh);
         }
         self.raster_key(managed, depth)
-            .and_then(|key| self.rasters[key].get())
-            .filter(|program| program.raster_pipeline(sample_count).is_some())
+            .filter(|&slot| {
+                self.rasters[slot]
+                    .get()
+                    .is_some_and(|program| program.raster_pipeline(sample_count).is_some())
+            })
+            .map(RasterProgramSlot::Managed)
             .ok_or_else(|| {
                 RuntimeError::capacity_with(
                     "Raster Program variant is not prepared",
@@ -339,6 +352,14 @@ impl ShaderPrograms {
                     ),
                 )
             })
+    }
+
+    pub(super) fn raster_program(&self, slot: RasterProgramSlot) -> &Program {
+        match slot {
+            RasterProgramSlot::FixedMesh => self.raster.get(),
+            RasterProgramSlot::Managed(slot) => self.rasters[slot].get(),
+        }
+        .expect("preflighted Raster Program slot")
     }
 
     fn compute(&self) -> &Program {

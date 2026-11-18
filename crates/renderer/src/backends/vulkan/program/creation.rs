@@ -218,14 +218,6 @@ fn validate_program(
     }
 }
 
-fn raster_format(program: crate::program::ManagedRasterProgram) -> vk::Format {
-    match program.color_outputs().first() {
-        Some(crate::ImageFormat::Rgba8Unorm) => vk::Format::R8G8B8A8_UNORM,
-        Some(crate::ImageFormat::Rgba16Float) => vk::Format::R16G16B16A16_SFLOAT,
-        _ => vk::Format::UNDEFINED,
-    }
-}
-
 /// One immutable program owns its complete native dependency chain. Null fields
 /// permit immediate ownership and cleanup of partially initialized programs.
 pub(in crate::backends::vulkan) struct Program {
@@ -336,7 +328,9 @@ impl Program {
                 attribute.offset > limits.max_vertex_input_attribute_offset
                     || attribute.location >= limits.max_vertex_input_attributes
             })
-            || (!managed.color_outputs().is_empty() && limits.max_color_attachments < 1)
+            || managed.color_outputs().len() > crate::program::MAX_RASTER_COLOR_ATTACHMENTS
+            || managed.color_outputs().len() > limits.max_color_attachments as usize
+            || managed.color_outputs().len() > limits.max_fragment_output_attachments as usize
             || limits.max_bound_descriptor_sets < groups as u32
         {
             return Err(RuntimeError::unsupported(
@@ -437,7 +431,13 @@ impl Program {
             } else {
                 vk::FormatFeatureFlags::empty()
             };
-        query(raster_format(managed), color_features, false)?;
+        for &format in managed.color_outputs() {
+            query(
+                super::super::resources::image_format(format),
+                color_features,
+                false,
+            )?;
+        }
         if depth {
             query(
                 vk::Format::D32_SFLOAT,
@@ -719,7 +719,17 @@ impl Program {
         let depth_state = raster_program.map(|(program, _)| program.depth());
         let depth_enabled =
             depth_attached && depth_state.is_some_and(|state| state.compare().is_some());
-        let depth_only = raster_program.is_some_and(|(program, _)| program.is_depth_only());
+        let mut formats = [vk::Format::UNDEFINED; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
+        let color_count = if let Some((program, _)) = raster_program {
+            let outputs = program.color_outputs();
+            for (destination, &format) in formats.iter_mut().zip(outputs) {
+                *destination = super::super::resources::image_format(format);
+            }
+            outputs.len()
+        } else {
+            formats[0] = vk::Format::R8G8B8A8_UNORM;
+            1
+        };
         let vertex = ShaderModule::new(
             Arc::clone(&self.owner),
             if let Some((program, _)) = raster_program {
@@ -831,7 +841,9 @@ impl Program {
                 vk::BlendFactor::ONE,
             ),
         };
-        let color_attachments = [vk::PipelineColorBlendAttachmentState::default()
+        // Each output uses the same state, so the optional independentBlend
+        // feature is not required.
+        let color_attachment = vk::PipelineColorBlendAttachmentState::default()
             .blend_enable(mode != BlendState::Replace)
             .src_color_blend_factor(source)
             .dst_color_blend_factor(destination)
@@ -839,21 +851,14 @@ impl Program {
             .src_alpha_blend_factor(source_alpha)
             .dst_alpha_blend_factor(destination_alpha)
             .alpha_blend_op(vk::BlendOp::ADD)
-            .color_write_mask(vk::ColorComponentFlags::RGBA)];
-        let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(if depth_only {
-            &[]
-        } else {
-            &color_attachments
-        });
+            .color_write_mask(vk::ColorComponentFlags::RGBA);
+        let color_attachments = [color_attachment; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
+        let blend = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(&color_attachments[..color_count]);
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-        let formats = [
-            raster_program.map_or(vk::Format::R8G8B8A8_UNORM, |(program, _)| {
-                raster_format(program)
-            }),
-        ];
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(if depth_only { &[] } else { &formats })
+            .color_attachment_formats(&formats[..color_count])
             .depth_attachment_format(if depth_attached {
                 vk::Format::D32_SFLOAT
             } else {

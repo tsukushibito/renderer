@@ -13,6 +13,7 @@ use crate::backends::vulkan::graph::{
     FrameCapacity, PhysicalLease, ResourceKey, RuntimeError, Snapshot,
     provenance::BufferProvenance, storage::reserved,
 };
+use crate::backends::vulkan::program::RasterProgramSlot;
 use crate::backends::vulkan::transfer::staging::StagingRange;
 
 type RasterSets = [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS];
@@ -94,6 +95,7 @@ pub(in crate::backends::vulkan::graph) struct WorkData {
     pub(in crate::backends::vulkan::graph) needed: Vec<bool>,
     pub(in crate::backends::vulkan::graph) final_states: Vec<Option<Snapshot>>,
     pub(super) passes: Vec<PreparedPass>,
+    pub(in crate::backends::vulkan::graph) raster_programs: Vec<RasterProgramSlot>,
     pub(super) raster_descriptors: Vec<[vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS]>,
     pub(in crate::backends::vulkan::graph) raster_bindings: RasterBindingCache,
     #[cfg(feature = "vulkan-diagnostics")]
@@ -167,6 +169,7 @@ impl WorkData {
                     })?,
             )?,
             passes: reserved(limit.graph.passes)?,
+            raster_programs: reserved(limit.graph.draws)?,
             raster_descriptors: reserved(limit.graph.draws)?,
             buffers: reserved(limit.graph.accesses)?,
             images: reserved(limit.graph.accesses)?,
@@ -195,6 +198,7 @@ impl WorkData {
         #[cfg(feature = "vulkan-diagnostics")]
         self.labels.clear();
         self.passes.clear();
+        self.raster_programs.clear();
         self.raster_descriptors.clear();
         self.raster_bindings.clear();
         self.buffers.clear();

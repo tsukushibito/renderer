@@ -207,8 +207,7 @@ impl TransferPayload for GraphWork {
                         )
                     }
                     PreparedOperation::Raster {
-                        program,
-                        draws,
+                        batches,
                         colors,
                         depth,
                         sample_count,
@@ -222,27 +221,38 @@ impl TransferPayload for GraphWork {
                         });
                         let plan = self.plan.as_ref().unwrap();
                         let programs = self.programs.as_ref().unwrap();
-                        let native_program = programs
-                            .raster_program(*program, depth.is_some(), *sample_count)
-                            .expect("prepared Raster Program");
-                        programs.record_rasters(
-                            command,
-                            native_program,
-                            *sample_count,
-                            plan.raster_draws(draws)
-                                .iter()
-                                .zip(&self.raster_descriptors[pass.raster_descriptors.clone()])
-                                .map(|(draw, &sets)| {
-                                    (
-                                        self.resource(draw.vertices).buffer().handle,
-                                        self.resource(draw.indices).buffer().handle,
-                                        draw.index_count,
-                                        &draw.parameters,
-                                        sets,
-                                    )
-                                }),
-                            &rendering_attachments(self, colors, *depth),
-                        );
+                        let attachments = rendering_attachments(self, colors, *depth);
+                        programs.begin_raster(command, &attachments);
+                        let mut descriptor_start = pass.raster_descriptors.start;
+                        for (batch, &slot) in plan
+                            .raster_batches(batches)
+                            .iter()
+                            .zip(&self.raster_programs[pass.raster_programs.clone()])
+                        {
+                            let draw_operands = plan.raster_draws(&batch.draws);
+                            let descriptor_end = descriptor_start + draw_operands.len();
+                            let descriptor_sets =
+                                &self.raster_descriptors[descriptor_start..descriptor_end];
+                            descriptor_start = descriptor_end;
+                            programs.record_raster_batch(
+                                command,
+                                programs.raster_program(slot),
+                                *sample_count,
+                                draw_operands
+                                    .iter()
+                                    .zip(descriptor_sets)
+                                    .map(|(draw, &sets)| {
+                                        (
+                                            self.resource(draw.vertices).buffer().handle,
+                                            self.resource(draw.indices).buffer().handle,
+                                            draw.index_count,
+                                            &draw.parameters,
+                                            sets,
+                                        )
+                                    }),
+                            );
+                        }
+                        device.raw().cmd_end_rendering(command);
                     }
                     PreparedOperation::ClearAttachments { colors, depth } => {
                         let attachments = rendering_attachments(self, colors, *depth);
@@ -347,14 +357,25 @@ fn rendering_attachments(
             .map(|view| work.resource(view.image().index).image());
         (image.extent, attachment_info(image, attachment, resolve))
     };
-    let color = plan
-        .raster_attachments(colors)
-        .first()
-        .map(prepare_attachment);
+    let attachment_operands = plan.raster_attachments(colors);
+    let mut native_colors =
+        [vk::RenderingAttachmentInfo::default(); crate::program::MAX_RASTER_COLOR_ATTACHMENTS];
+    let mut extent = None;
+    for (target, operand) in native_colors[..attachment_operands.len()]
+        .iter_mut()
+        .zip(attachment_operands)
+    {
+        let (current_extent, info) = prepare_attachment(operand);
+        extent = Some(current_extent);
+        *target = info;
+    }
     let depth = depth.map(|index| prepare_attachment(plan.raster_attachment(index)));
     RenderingAttachments {
-        extent: color.or(depth).expect("Graph rendering has attachments").0,
-        color: color.map(|(_, info)| info),
+        extent: extent
+            .or(depth.map(|(extent, _)| extent))
+            .expect("Graph rendering has attachments"),
+        colors: native_colors,
+        color_count: attachment_operands.len(),
         depth: depth.map(|(_, info)| info),
     }
 }
