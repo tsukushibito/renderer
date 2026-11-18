@@ -468,6 +468,22 @@ cpu setの生情報は再開前後で記録し、変動したparked bit以外の
 
 <a id="bistro-120-performance"></a>
 
+## B5後の描画パイプライン拡張
+
+4× MSAA専用例はRTX 3060のVulkan／D3D12で1×、4×、drawなしの4× clear/resolveを照合した。
+1×の部分被覆は0画素、4×の斜辺は両APIとも8画素で、奥に重ねた三角形は深度テストで隠れた。
+D3D12の実機検証で1×と4×を区別しない再利用キーを発見し、サンプル数を追加した。
+再試験では開発検証付きと製品構成の両方が最終解放時まで診断ゼロで終了した。
+
+全Bistroの1080p・4×・Bloom tentを両API・両構成で実行し、同一APIのHDR・Bloom HDR・SDR captureは完全一致した。
+B5の画像閾値を超えた画素は、各2,073,600画素のうちHDRとBloom HDRが各23、SDRが544で、すべて許容範囲に収まった。
+実ウィンドウ4実行はresize・最小化・復帰・pending終了に成功し、表示元とoffscreen SDRの比較も量子化許容区間内だった。
+`.tools/pipeline-expansion/msaa/smoke-summary.json` のSHA-256は
+`592b67f38069889a54a6a4ddd60cfeeec8b7709e8bd6e24c5fc9437f4599fbed`。
+
+MRT専用例は異なる形式の2色出力と深度を検証した。同一パスでinline定数のProgram → uniform bufferのProgram → inline定数のProgramを順に描き、
+ブレンド順と深度の期待画素をVulkan／D3D12の両構成で照合した。
+
 ## Bistro B3の120 FPS目標と高速化
 
 `renderer-7ft.12`。固定B3の全Bistro、1920×1080、巡回route、2 in-flight、Core i5-14600KF／RTX 3060

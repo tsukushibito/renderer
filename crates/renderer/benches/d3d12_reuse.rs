@@ -52,6 +52,7 @@ fn class_key(ordinal: usize) -> ReuseClass {
             format: 0,
             mip_levels: 1,
             array_layers: 1,
+            sample_count: 1,
         }
     }
 }
