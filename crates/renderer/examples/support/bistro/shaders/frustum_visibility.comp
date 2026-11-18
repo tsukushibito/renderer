@@ -1,0 +1,106 @@
+#version 450 core
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Same column-major prefix consumed by Bistro's raster vertex shaders.
+layout(set = 0, binding = 0, std140) uniform Camera {
+    mat4 view_projection;
+} camera;
+
+struct Bounds {
+    uvec4 minimum_enabled; // min.xyz FP32 bits, enabled mask
+    uvec4 maximum_padded;  // max.xyz FP32 bits, reserved word
+};
+
+layout(set = 0, binding = 1, std430) readonly buffer WorldBounds {
+    Bounds entries[];
+} world;
+
+layout(set = 0, binding = 2, std430) writeonly buffer Visibility {
+    uint words[];
+} visibility;
+
+const float FLOAT_EPSILON = 1.1920928955078125e-7;
+const float MIN_NORMAL = 1.1754943508222875e-38;
+const float SAFE_CLIP_MAGNITUDE = 4.253529332981611e37;
+
+bool finite(vec3 value) {
+    return all(lessThan(floatBitsToUint(value) & uvec3(0x7f800000u), uvec3(0x7f800000u)));
+}
+
+bool finite(vec4 value) {
+    return all(lessThan(floatBitsToUint(value) & uvec4(0x7f800000u), uvec4(0x7f800000u)));
+}
+
+bool outside(vec4 plane, float allowance, vec3 minimum, vec3 maximum) {
+    vec3 corner = mix(minimum, maximum, greaterThanEqual(plane.xyz, vec3(0.0)));
+    precise vec4 terms = plane * vec4(corner, 1.0);
+    precise float partial = terms.x + terms.y;
+    precise float top = partial + terms.z;
+    precise float score = top + terms.w;
+    return !isinf(score) && score < -allowance;
+}
+
+bool overlaps(vec3 minimum, vec3 maximum) {
+    vec4 column0 = camera.view_projection[0];
+    vec4 column1 = camera.view_projection[1];
+    vec4 column2 = camera.view_projection[2];
+    vec4 column3 = camera.view_projection[3];
+
+    // Invalid bounds or transforms leave geometry visible. Also stay
+    // conservative if intermediate clip or plane arithmetic could overflow.
+    if (!finite(minimum) || !finite(maximum) || any(greaterThan(minimum, maximum))
+        || !finite(column0) || !finite(column1) || !finite(column2) || !finite(column3)) {
+        return true;
+    }
+
+    vec3 position_limit = max(abs(minimum), abs(maximum));
+    vec4 abs0 = abs(column0);
+    vec4 abs1 = abs(column1);
+    vec4 abs2 = abs(column2);
+    vec4 abs3 = abs(column3);
+    precise vec4 coefficient_bound = ((abs0 + abs1) + abs2) + abs3;
+    precise vec4 clip_bound = ((abs0 * position_limit.x + abs1 * position_limit.y)
+        + abs2 * position_limit.z) + abs3;
+    if (!all(lessThan(coefficient_bound, vec4(SAFE_CLIP_MAGNITUDE)))
+        || !all(lessThan(clip_bound, vec4(SAFE_CLIP_MAGNITUDE)))) {
+        return true;
+    }
+
+    // Absolute-row products bound cancellation and rounding in both the
+    // raster vertex transform and the p-vertex test. The additional scaled
+    // sums cover devices that flush subnormal inputs or intermediate results.
+    precise vec3 lost_coordinates = (16.0 * MIN_NORMAL) * position_limit;
+    precise float lost_position = (lost_coordinates.x + lost_coordinates.y) + lost_coordinates.z;
+    precise vec4 roundoff = (128.0 * FLOAT_EPSILON) * max(clip_bound, vec4(1.0));
+    precise vec4 underflow = (16.0 * MIN_NORMAL) * coefficient_bound + vec4(lost_position);
+    precise vec4 error = roundoff + underflow;
+
+    // Both APIs clip Z to [0, W]. Reversing clip Y only exchanges the two
+    // Y planes. Keep everything homogeneous, including points behind W=0.
+    vec4 row_x = vec4(column0.x, column1.x, column2.x, column3.x);
+    vec4 row_y = vec4(column0.y, column1.y, column2.y, column3.y);
+    vec4 row_z = vec4(column0.z, column1.z, column2.z, column3.z);
+    vec4 row_w = vec4(column0.w, column1.w, column2.w, column3.w);
+    return !(
+        outside(row_w + row_x, error.w + error.x, minimum, maximum)
+        || outside(row_w - row_x, error.w + error.x, minimum, maximum)
+        || outside(row_w + row_y, error.w + error.y, minimum, maximum)
+        || outside(row_w - row_y, error.w + error.y, minimum, maximum)
+        || outside(row_z, error.z, minimum, maximum)
+        || outside(row_w - row_z, error.w + error.z, minimum, maximum)
+    );
+}
+
+void main() {
+    // The graph binds both padded ranges for the complete dispatch. Every
+    // invocation owns its output word, including disabled padding at the end.
+    uint slot = gl_GlobalInvocationID.x;
+    uvec4 minimum_enabled = world.entries[slot].minimum_enabled;
+    uint mask = 0u;
+    if (minimum_enabled.w != 0u) {
+        uvec3 maximum = world.entries[slot].maximum_padded.xyz;
+        mask = uint(overlaps(uintBitsToFloat(minimum_enabled.xyz), uintBitsToFloat(maximum)));
+    }
+    visibility.words[slot] = mask;
+}

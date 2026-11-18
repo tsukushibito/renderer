@@ -72,7 +72,8 @@ try {
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'resolve_linear.frag', 'resolve_aa_linear.frag',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
-        'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag'
+        'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
+        'frustum_visibility.comp'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
