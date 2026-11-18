@@ -12,9 +12,19 @@ use renderer::{
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let output = std::env::args_os()
-        .nth(1)
-        .ok_or("pass an output PPM path")?;
+    let mut arguments = std::env::args_os().skip(1);
+    let output = arguments
+        .next()
+        .ok_or("pass an output PPM path or --help")?;
+    if output == "--help" || output == "-h" {
+        println!(
+            "headless OUTPUT.ppm\n\nRender an offscreen image with Vulkan and save it as PPM."
+        );
+        return Ok(());
+    }
+    if arguments.next().is_some() {
+        return Err("pass exactly one output PPM path".into());
+    }
     let mut graph_pool = GraphPool::new(GraphCapacity::default(), 1)?;
     let mut graph = graph_pool.begin()?;
     // Near red triangle is submitted before the overlapping far green triangle.
