@@ -191,7 +191,11 @@ pub(super) fn provenance_requirements(graph: &CompiledGraph, needed: &mut [bool]
     needed[..graph.resources.len()].fill(false);
     for &pass in &graph.order {
         if let Operation::Raster { draws, .. } = &graph.passes[pass].operation {
-            for draw in graph.raster_draws(draws) {
+            for draw in graph
+                .raster_draws(draws)
+                .iter()
+                .filter_map(|draw| draw.indexed.as_ref())
+            {
                 needed[draw.indices] = true;
             }
         }
@@ -591,55 +595,60 @@ fn record_draws(
                     0,
                 )
             });
-            let vertex = slot.resource_map[draw.vertices];
-            let index = slot.resource_map[draw.indices];
-            let vertex_bytes = graph.resources[draw.vertices].desc.units();
-            slot.provenance[index]
-                .validate_index_range(
-                    draw.first_index,
-                    draw.index_count,
-                    vertex_bytes / u64::from(program.vertex_stride()),
-                    u32::MAX,
-                )
-                .map_err(|error| {
-                    use crate::graph::provenance::IndexError;
-                    match error {
-                        IndexError::Capacity(error) => D3D12RuntimeError::capacity_with(
-                            "generic index range summary capacity exhausted",
-                            RuntimeCapacityError::new(
-                                RuntimeCapacityKind::GraphMetadata,
-                                CapacityRecovery::Reconfigure,
-                                Some(error.capacity as u64),
-                                Some(error.required as u64),
+            if let Some(indexed) = &draw.indexed {
+                let vertex = slot.resource_map[indexed.vertices];
+                let index = slot.resource_map[indexed.indices];
+                let vertex_bytes = graph.resources[indexed.vertices].desc.units();
+                slot.provenance[index]
+                    .validate_index_range(
+                        indexed.first_index,
+                        indexed.index_count,
+                        vertex_bytes / u64::from(program.vertex_stride()),
+                        u32::MAX,
+                    )
+                    .map_err(|error| {
+                        use crate::graph::provenance::IndexError;
+                        match error {
+                            IndexError::Capacity(error) => D3D12RuntimeError::capacity_with(
+                                "generic index range summary capacity exhausted",
+                                RuntimeCapacityError::new(
+                                    RuntimeCapacityKind::GraphMetadata,
+                                    CapacityRecovery::Reconfigure,
+                                    Some(error.capacity as u64),
+                                    Some(error.required as u64),
+                                ),
                             ),
-                        ),
-                        IndexError::UnknownContents => D3D12RuntimeError::unsupported(
-                            "Raster index range lacks a valid bounds proof",
-                        ),
-                        IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
-                            D3D12RuntimeError::invalid(
-                                "Raster index exceeds the vertex buffer range",
-                            )
+                            IndexError::UnknownContents => D3D12RuntimeError::unsupported(
+                                "Raster index range lacks a valid bounds proof",
+                            ),
+                            IndexError::VertexBounds { .. } | IndexError::DeviceLimit { .. } => {
+                                D3D12RuntimeError::invalid(
+                                    "Raster index exceeds the vertex buffer range",
+                                )
+                            }
                         }
-                    }
-                })?;
-            // SAFETY: The retained buffer capacities cover immutable Graph ranges;
-            // validated index contents fit the declared vertex stream. Inline words
-            // match this immutable Program's byte count and stage/register ABI.
-            unsafe {
-                let vertices = D3D12_VERTEX_BUFFER_VIEW {
-                    BufferLocation: slot.buffers[vertex].raw().GetGPUVirtualAddress(),
-                    SizeInBytes: vertex_bytes as u32,
-                    StrideInBytes: program.vertex_stride(),
-                };
-                let indices = D3D12_INDEX_BUFFER_VIEW {
-                    BufferLocation: slot.buffers[index].raw().GetGPUVirtualAddress(),
-                    SizeInBytes: graph.resources[draw.indices].desc.units() as u32,
-                    Format: DXGI_FORMAT_R32_UINT,
-                };
-                slot.list.IASetVertexBuffers(0, Some(&[vertices]));
-                slot.list.IASetIndexBuffer(Some(&indices));
-                if !parameters.is_empty() {
+                    })?;
+                // SAFETY: The retained buffers cover the immutable Graph ranges
+                // and the validated indices fit the declared vertex stream.
+                unsafe {
+                    let vertices = D3D12_VERTEX_BUFFER_VIEW {
+                        BufferLocation: slot.buffers[vertex].raw().GetGPUVirtualAddress(),
+                        SizeInBytes: vertex_bytes as u32,
+                        StrideInBytes: program.vertex_stride(),
+                    };
+                    let indices = D3D12_INDEX_BUFFER_VIEW {
+                        BufferLocation: slot.buffers[index].raw().GetGPUVirtualAddress(),
+                        SizeInBytes: graph.resources[indexed.indices].desc.units() as u32,
+                        Format: DXGI_FORMAT_R32_UINT,
+                    };
+                    slot.list.IASetVertexBuffers(0, Some(&[vertices]));
+                    slot.list.IASetIndexBuffer(Some(&indices));
+                }
+            }
+            if !parameters.is_empty() {
+                // SAFETY: These initialized words match the bound Program's
+                // byte count and stage/register ABI.
+                unsafe {
                     slot.list.SetGraphicsRoot32BitConstants(
                         INLINE_ROOT,
                         parameters.len() as u32,
@@ -721,15 +730,15 @@ fn record_draws(
             #[cfg(feature = "tracy")]
             let _span = tracy_client::Client::running().map(|client| {
                 client.span(
-                    tracy_client::span_location!("renderer.d3d12.raster.draw_indexed"),
+                    tracy_client::span_location!("renderer.d3d12.raster.record_draw_command"),
                     0,
                 )
             });
-            // SAFETY: The retained vertex, index and shader operands have
-            // valid bounds and every root argument is set. For indirect draws,
-            // Graph ties the buffer to the encoder that writes the known
-            // count of complete, in-bounds DRAW_INDEXED records, and the
-            // pass transition gives the reads INDIRECT_ARGUMENT state.
+            // SAFETY: The prepared PSO matches the Graph's draw form and every
+            // root argument is set. Indexed draws have bounded, retained input
+            // buffers. Graph ties indirect arguments to the encoder for complete
+            // DRAW_INDEXED records; the pass establishes INDIRECT_ARGUMENT state.
+            // The fullscreen Program accepts vertex IDs 0..3 without a layout.
             unsafe {
                 if let Some((signature, commands, count)) = indirect {
                     slot.list.ExecuteIndirect(
@@ -740,14 +749,16 @@ fn record_draws(
                         None::<&ID3D12Resource>,
                         0,
                     );
-                } else {
+                } else if let Some(indexed) = &draw.indexed {
                     slot.list.DrawIndexedInstanced(
-                        draw.index_count,
-                        draw.instance_count,
-                        draw.first_index,
+                        indexed.index_count,
+                        indexed.instance_count,
+                        indexed.first_index,
                         0,
                         0,
                     );
+                } else {
+                    slot.list.DrawInstanced(3, 1, 0, 0);
                 }
             }
         }
