@@ -1105,7 +1105,7 @@ backend内の試験では未投入キャンセル・作成失敗の後始末、F
 depth付きcolor、depth-only、draw別Uniform/画像/samplerとRGBA16Fを二APIで逐次実行します。
 公開標準パスによる同geometry prepass後のLoad／等深度描画／depth非更新と、
 標準forwardの0 draw clear・二段画像copyのpost・HDR出力copyも同じfixtureで確認します。
-さらに[標準構成fixture](../../crates/renderer/examples/support/standard_fixture.rs)で、
+さらに[標準構成fixture](../../crates/renderer/fixtures/standard_fixture.rs)で、
 標準forward直接、identity post、利用側多段Computeのpost、標準パスと同じComputeの直接合成を比較します。
 3×7のRGBA16Fに既存の利用側sampled乗算／storage加算shaderを接続し、
 無効・乗算→加算・加算→乗算・追加加算、draw数0／1／4／2と定数を変えます。
@@ -1134,7 +1134,7 @@ strictはCore＋SyncVal／Debug Layer＋GBV、shippingはRenderer追加検証と
 設定は別processで切り替え、前提不足をskipしません。診断なしの件数0は外部Layer注入不在の証明には使いません。
 
 独自Rasterの公開契約は[`custom_raster`](../../crates/renderer/tests/custom_raster.rs)と
-[利用側fixture](../../crates/renderer/tests/support/custom_raster_fixture.rs)で確認します。
+[利用側fixture](../../crates/renderer/fixtures/custom_raster_fixture.rs)で確認します。
 shaderはRenderer本体のeffect列挙へ追加せず、staticな`RasterProgramDescriptor`をtrusted取込します。
 24-byte頂点、32-byteのVS／FS inline定数、三groupの疎なUniform／StorageRead／画像／sampler bindingを使い、
 標準forward直接・postの独自Raster交換・標準opaque＋独自半透明＋標準出力copyを同じ入力で比較します。

@@ -1,6 +1,6 @@
 //! Consumer-owned Compute programs: public Graph contracts and explicit two-API acceptance.
 
-#[path = "../examples/support/compute_fixture.rs"]
+#[path = "../fixtures/compute_fixture.rs"]
 mod fixture;
 
 use renderer::graph::{

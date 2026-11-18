@@ -1,6 +1,6 @@
 use renderer::engine;
 
-#[path = "../examples/support/engine_geometry.rs"]
+#[path = "../fixtures/engine_geometry.rs"]
 mod engine_geometry;
 #[cfg(feature = "vulkan")]
 #[path = "../examples/support/engine_workloads.rs"]

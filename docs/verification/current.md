@@ -1602,7 +1602,7 @@ release CPUは全feature325件、二API製品301件、D3D12単独の製品188件
 `frame_scaling`の古いexample CPU試験も現行の容量・pool・公開構成へ更新した。
 ライブラリの同期・寿命・検証配置やshader binaryは変更していない。
 
-[共有fixture](../../crates/renderer/examples/support/standard_fixture.rs)は、標準forward直接、
+[共有fixture](../../crates/renderer/fixtures/standard_fixture.rs)は、標準forward直接、
 identity post、利用側post、標準パスからの直接合成という4出力で三経路を比較する。
 既存trusted sampled乗算／storage加算shaderを`Graph::dispatch`で接続し、
 無効・乗算→加算・加算→乗算への交換・追加加算を選ぶ。3×7のRGBA16F全画素を独立期待値と照合する。

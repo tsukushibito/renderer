@@ -2,7 +2,7 @@
 #![cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
 
 #[allow(dead_code)]
-#[path = "../examples/support/compute_fixture.rs"]
+#[path = "../fixtures/compute_fixture.rs"]
 mod fixture;
 
 #[path = "support/general_working_set.rs"]

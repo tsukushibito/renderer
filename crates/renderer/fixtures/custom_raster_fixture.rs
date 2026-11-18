@@ -86,10 +86,10 @@ static ALPHA: RasterProgramDescriptor = RasterProgramDescriptor {
         write: false,
         require_load: true,
     },
-    vertex_spirv: include_bytes!("shaders/custom_raster.vert.spv"),
-    fragment_spirv: include_bytes!("shaders/custom_raster.frag.spv"),
-    vertex_dxil: include_bytes!("shaders/dxil/custom_raster.vert.dxil"),
-    fragment_dxil: include_bytes!("shaders/dxil/custom_raster.frag.dxil"),
+    vertex_spirv: include_bytes!("../tests/support/shaders/custom_raster.vert.spv"),
+    fragment_spirv: include_bytes!("../tests/support/shaders/custom_raster.frag.spv"),
+    vertex_dxil: include_bytes!("../tests/support/shaders/dxil/custom_raster.vert.dxil"),
+    fragment_dxil: include_bytes!("../tests/support/shaders/dxil/custom_raster.frag.dxil"),
 };
 static PREMULTIPLIED: RasterProgramDescriptor = RasterProgramDescriptor {
     blend: BlendState::PremultipliedAlpha,

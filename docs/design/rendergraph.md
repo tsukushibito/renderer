@@ -1010,7 +1010,7 @@ postはこの一つの意味付き境界を交換する。identityは`scene.colo
 多段recipe全体の失敗はtransactionではないため、部分構築されたGraphは破棄するか残る容量を考慮して利用する。
 未使用の部品・中間画像は通常のcullingに従う。部品が隠れたexportや副作用rootを追加することはない。
 
-[標準構成fixture](../../crates/renderer/examples/support/standard_fixture.rs)は、同じframe入力について
+[標準構成fixture](../../crates/renderer/fixtures/standard_fixture.rs)は、同じframe入力について
 標準forward直接、identity post、利用側多段Computeのpost、標準パスからの直接合成を示す。
 postは`Graph::dispatch`で既存の利用側sampled乗算／storage加算Programを接続し、
 順序の交換・追加加算・無効化を選ぶ。postを一つのGraphノードや固定effect列挙へ制限しない。

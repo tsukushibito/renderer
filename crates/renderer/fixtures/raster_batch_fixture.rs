@@ -64,12 +64,10 @@ static INLINE_COLOR: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    vertex_spirv: include_bytes!("../../tests/support/shaders/raster_batches.vert.spv"),
-    vertex_dxil: include_bytes!("../../tests/support/shaders/dxil/raster_batches.vert.dxil"),
-    fragment_spirv: include_bytes!("../../tests/support/shaders/raster_batches_inline.frag.spv"),
-    fragment_dxil: include_bytes!(
-        "../../tests/support/shaders/dxil/raster_batches_inline.frag.dxil"
-    ),
+    vertex_spirv: include_bytes!("../tests/support/shaders/raster_batches.vert.spv"),
+    vertex_dxil: include_bytes!("../tests/support/shaders/dxil/raster_batches.vert.dxil"),
+    fragment_spirv: include_bytes!("../tests/support/shaders/raster_batches_inline.frag.spv"),
+    fragment_dxil: include_bytes!("../tests/support/shaders/dxil/raster_batches_inline.frag.dxil"),
 };
 
 static UNIFORM_COLOR: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -92,10 +90,8 @@ static UNIFORM_COLOR: RasterProgramDescriptor = RasterProgramDescriptor {
         write: false,
         require_load: false,
     },
-    fragment_spirv: include_bytes!("../../tests/support/shaders/raster_batches_uniform.frag.spv"),
-    fragment_dxil: include_bytes!(
-        "../../tests/support/shaders/dxil/raster_batches_uniform.frag.dxil"
-    ),
+    fragment_spirv: include_bytes!("../tests/support/shaders/raster_batches_uniform.frag.spv"),
+    fragment_dxil: include_bytes!("../tests/support/shaders/dxil/raster_batches_uniform.frag.dxil"),
     ..INLINE_COLOR
 };
 

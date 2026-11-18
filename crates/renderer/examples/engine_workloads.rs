@@ -8,7 +8,7 @@ use std::{error::Error, path::PathBuf};
 
 use renderer::engine;
 
-#[path = "support/engine_geometry.rs"]
+#[path = "../fixtures/engine_geometry.rs"]
 mod engine_geometry;
 #[path = "support/engine_workloads.rs"]
 mod engine_workloads;

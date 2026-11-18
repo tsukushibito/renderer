@@ -1,7 +1,7 @@
 //! Compare 1× and 4× MSAA using the same Graph on Vulkan and D3D12.
 
 #[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
-#[path = "support/msaa.rs"]
+#[path = "../fixtures/msaa.rs"]
 mod msaa;
 
 #[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]

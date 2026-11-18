@@ -15,16 +15,16 @@ mod frame_memory_image;
 mod frame_memory_raster;
 
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
-#[path = "support/compute_fixture.rs"]
+#[path = "../fixtures/compute_fixture.rs"]
 mod compute_fixture;
 
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
-#[path = "support/standard_fixture.rs"]
+#[path = "../fixtures/standard_fixture.rs"]
 mod standard_fixture;
 
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 #[allow(dead_code)]
-#[path = "../tests/support/custom_raster_fixture.rs"]
+#[path = "../fixtures/custom_raster_fixture.rs"]
 mod custom_raster_fixture;
 
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]

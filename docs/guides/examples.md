@@ -64,3 +64,6 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 Bistroの全シーン以外の実行には、リポジトリに含まれる小さな入力を使います。
 二APIの受入条件と測定コマンドは[開発手順](development.md)に、
 実行済みの結果は[検証状況](../verification/current.md)に置いています。
+
+実行入口は `crates/renderer/examples/` にあり、試験や計測と共用するfixtureのRustコードは
+`crates/renderer/fixtures/` にあります。
