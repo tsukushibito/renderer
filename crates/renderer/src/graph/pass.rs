@@ -316,6 +316,20 @@ pub(crate) enum MeshUpload {
     Indices { byte_len: u64, maximum: u32 },
 }
 
+/// Consecutive draws submitted with one pipeline and resource layout.
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    not(any(test, feature = "vulkan", all(feature = "d3d12", windows))),
+    allow(
+        dead_code,
+        reason = "ordered Program groups are consumed by native recording"
+    )
+)]
+pub(crate) struct RasterBatchOperands {
+    pub program: crate::program::ManagedRasterProgram,
+    pub draws: Range<usize>,
+}
+
 #[derive(Clone, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
@@ -369,7 +383,8 @@ pub(crate) enum Operation {
         workgroups: [u32; 3],
     },
     Raster {
-        program: crate::program::ManagedRasterProgram,
+        batches: Range<usize>,
+        /// All direct draws in the scope, including every Program batch.
         draws: Range<usize>,
         colors: Range<usize>,
         depth: Option<usize>,
