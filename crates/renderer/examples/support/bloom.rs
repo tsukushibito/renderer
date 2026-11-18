@@ -74,6 +74,14 @@ bloom_program!(BLUR_BOX, "bloom_blur_box.comp", FILTER_BINDINGS, &[0, 0]);
 bloom_program!(COMBINE, "bloom_combine.comp", COMBINE_BINDINGS, &[0, 0, 0]);
 
 impl Bloom {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Tent => "tent",
+            Self::Box => "box",
+        }
+    }
+
     pub fn programs(self) -> &'static [ManagedProgram] {
         match self {
             Self::Off => &[],

@@ -90,6 +90,7 @@ impl Backend for Vulkan {
             &resources,
         )?;
         runtime.prepare_raster_programs(&super::program::programs())?;
+        runtime.prepare_compute_programs(options.bloom.programs())?;
         Ok(Self { runtime })
     }
     fn info(&self) -> serde_json::Value {
@@ -186,7 +187,7 @@ impl Backend for D3d12 {
             results: options.inflight + 1,
             resources: budget.graph.resources,
             resource_capacity: budget.physical_resources,
-            operations: budget.graph.draws + 16,
+            operations: budget.graph.draws + budget.graph.passes,
             provenance_segments_per_resource: 1,
             index_prefixes_per_resource: 0,
             initialized_ranges_per_resource: 32,
@@ -215,7 +216,7 @@ impl Backend for D3d12 {
             &buffers,
             &images,
             &super::program::programs(),
-            &[],
+            options.bloom.programs(),
         )?;
         Ok(Self { runtime })
     }

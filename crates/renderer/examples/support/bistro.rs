@@ -9,6 +9,8 @@
 mod asset;
 #[path = "bistro/backend.rs"]
 mod backend;
+#[path = "bloom.rs"]
+mod bloom;
 #[path = "bistro/camera.rs"]
 mod camera;
 #[cfg(windows)]
@@ -54,7 +56,9 @@ struct Options {
     alpha_only: bool,
     force_opaque: bool,
     capture_all_views: bool,
+    capture_route_samples: bool,
     resource_checks: bool,
+    bloom: bloom::Bloom,
     aa: bool,
     shadows: bool,
     reuse_shadows: bool,
@@ -82,7 +86,9 @@ impl Options {
             alpha_only: false,
             force_opaque: false,
             capture_all_views: false,
+            capture_route_samples: false,
             resource_checks: false,
+            bloom: bloom::Bloom::Off,
             aa: true,
             shadows: true,
             reuse_shadows: true,
@@ -100,7 +106,16 @@ impl Options {
                 "--steady-state-cpu" => result.steady_state_cpu = true,
                 "--alpha-only" => result.alpha_only = true,
                 "--capture-all-views" => result.capture_all_views = true,
+                "--capture-route-samples" => result.capture_route_samples = true,
                 "--resource-checks" => result.resource_checks = true,
+                "--bloom" => {
+                    result.bloom = match args.next().as_deref() {
+                        Some("off") => bloom::Bloom::Off,
+                        Some("tent") => bloom::Bloom::Tent,
+                        Some("box") => bloom::Bloom::Box,
+                        _ => return Err("--bloom needs off, tent or box".into()),
+                    };
+                }
                 "--aa-off" => result.aa = false,
                 "--shadows-off" => result.shadows = false,
                 "--redraw-shadows" => result.reuse_shadows = false,
@@ -137,7 +152,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -169,6 +184,9 @@ impl Options {
         }
         if result.steady_state_cpu && result.warmup < result.inflight {
             return Err("stationary CPU measurement requires a fully warmed pipeline".into());
+        }
+        if result.capture_route_samples && result.fixture {
+            return Err("route samples require a cooked Bistro scene".into());
         }
         if result.resource_checks
             && (!cfg!(feature = "memory-profiling")

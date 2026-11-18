@@ -138,6 +138,15 @@ impl Budget {
             ImageDesc::rgba16_float(options.width, options.height),
             options.inflight * 2,
         );
+        let bloom_images = options
+            .bloom
+            .images(ImageDesc::rgba16_float(options.width, options.height));
+        let bloom_passes = bloom_images.as_ref().map_or(0, |images| images.len());
+        if let Some(images) = bloom_images {
+            for desc in images {
+                add_image(desc, options.inflight);
+            }
+        }
         add_image(
             ImageDesc::depth32(options.width, options.height),
             options.inflight,
@@ -153,20 +162,21 @@ impl Budget {
             ),
             options.inflight * 4,
         );
-        let resources = buffer_count + scene.images.len() + 11;
+        let resources = buffer_count + scene.images.len() + 11 + bloom_passes;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
-            + options.inflight * 8
+            + options.inflight * (8 + bloom_passes)
             + check_images
             + usize::from(options.resource_checks);
-        let accesses = scene.primitives.len() * 64 + 256;
+        let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
+        let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings;
         let graph = GraphCapacity {
             resources,
-            passes: 24,
+            passes: 24 + bloom_passes + usize::from(bloom_passes != 0),
             accesses,
             draws: scene.primitives.len() * 5 + 2,
-            bindings: scene.materials.len() * 20 + 4,
+            bindings: scene.materials.len() * 20 + 4 + bloom_bindings,
             attachments: 24,
             dependencies: 32,
             initial_ranges: resources * 2,
@@ -214,7 +224,9 @@ impl Budget {
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
+        let hdr_captures = if bloom_passes == 0 { 1 } else { 2 };
         let mut frame_readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
+            * hdr_captures
             + (u64::from(options.width) * 4).next_multiple_of(256) * 2)
             * u64::from(options.height)
             + 4096;
@@ -665,6 +677,7 @@ pub(super) struct Built {
     pub output: ImageHandle,
     pub camera: BufferHandle,
     pub captures: Option<[PassHandle; 3]>,
+    pub bloom_capture: Option<PassHandle>,
     pub shadow_captures: Option<[PassHandle; 4]>,
     pub shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
     pub draws: usize,
@@ -1124,6 +1137,7 @@ pub(super) fn build(
             0,
         )
     });
+    let bloom = options.bloom.append(&mut graph, color)?;
     let tone = graph.image(
         "Neutral display linear",
         ImageDesc::rgba16_float(options.width, options.height),
@@ -1133,7 +1147,7 @@ pub(super) fn build(
         Binding {
             group: 0,
             binding: 0,
-            resource: BindingResource::ImageView(color_view),
+            resource: BindingResource::ImageView(graph.image_view(bloom, 0, 0)?),
         },
         Binding {
             group: 0,
@@ -1212,6 +1226,11 @@ pub(super) fn build(
     } else {
         None
     };
+    let bloom_capture = if capture && bloom != color {
+        Some(graph.readback_image("capture post-Bloom HDR", bloom)?)
+    } else {
+        None
+    };
     let shadow_captures = if capture && options.capture_shadows {
         Some([
             graph.readback_image("capture cascade 0", shadows[0])?,
@@ -1228,6 +1247,7 @@ pub(super) fn build(
         output,
         camera: uniform,
         captures,
+        bloom_capture,
         shadow_captures,
         shadow_updates,
         draws,

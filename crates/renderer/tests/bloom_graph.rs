@@ -95,6 +95,7 @@ fn bloom_composes_through_public_graphs_and_unused_passes_are_culled() {
     let mut pool = GraphPool::new(CAPACITY, 1).unwrap();
     for standard in [false, true] {
         for effect in [Bloom::Off, Bloom::Tent, Bloom::Box] {
+            assert!(!effect.name().is_empty());
             assert_eq!(
                 effect.programs().len(),
                 if effect == Bloom::Off { 0 } else { 4 }

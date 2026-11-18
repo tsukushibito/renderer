@@ -379,8 +379,20 @@ AgX追加、Lumberyardの見え方変更、Bloom/B4、B5の表示・操作・tem
 Vulkan/D3D12は全出力でbyte一致。一定色は厳密一致、端に明部を持つ入力では交換による出力差とalphaの保持を確認した。
 strictのVulkan Core/SyncValとD3D12 Debug Layer/GBVは実効で、最終native解放後の診断は両APIでゼロだった。
 CPU契約試験2件でculling、不適合format、未初期化read、Graph slot返却を確認し、固定SDKでshader生成物を再照合した。
-Bistro全体の露出前統合と定常メモリは後続の受入で扱う。
 [再現手順](../guides/development.md#bistro-bloom-fixture)。
+
+### 全Bistroへの露出前統合
+
+`renderer-7ft.5.2`。Windows／RTX 3060で全素材`full-a3`と`ibl-final`、1080p、2 in-flight、
+8 warmup＋24定常frame、両API×strict／shipping×Bloom 3設定の12 processを逐次実行した。
+7固定視点と巡回7サンプルで、API間のHDR・depth・SDR各42件、Bloom後HDR 28件の比較が通過した。
+同APIのstrict／shippingはbyte一致し、Bloom設定間で前段HDR・depth・HDRのalphaを保持した。
+無効→テント、テント→ボックスのSDR差を、各APIで固定6視点と巡回7サンプルすべてで確認した。
+テントでは複数View、容量拒否と再試行、差し替えと復元を確認し、全12 runの通常窓で
+Rust／VMA host／Renderer発行native作成・破棄の観測値はゼロだった。strictは最終解放後まで診断ゼロ。
+色変換、固定画質、通常frameの同期・寿命は共通Graphに従う。実ウィンドウと長い性能計測はB5に残す。
+コマンド、EXE、各reportと画像は`.tools/b4/`。比較要約のSHA-256は
+`15be0ad2f29e04d5827c61f5c0a43ec8c3a6419ba77310b6f6cc942a48bd6c2b`。
 
 <a id="bistro-120-performance"></a>
 

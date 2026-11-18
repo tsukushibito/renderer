@@ -368,7 +368,10 @@ B3はGGXのsun＋静的IBL、4分割の影、線形RGBA16Fのblend、EV+1、Neut
 `--capture-shadow-maps`は測定後の4枚のD32画像を`shadow_captures`へ保存し、readback容量も準備時に予約する。
 full-sceneのAO適用は固定照明profileに従って無効とし、元ORM・glTF・材質参照を保持する。
 汎用shaderのAO契約は独立fixtureで検証する。[採用理由](../design/implementation-policy.md#b3-影線形hdrトーンマッピング)を参照する。
-Bloomの追加はB4、表示・自由操作の最終統合受入はB5で行う。
+`--bloom off|tent|box`は露出前の外部Bloomを選ぶ。既定は`off`。
+有効時は`hdr.bin`に加えて、合成後・露出前の`bloom_hdr.bin`を保存する。
+`--capture-route-samples`は固定の巡回frame 0/300/600/900/1200/1500/1799の画像を別に取得する。
+表示・自由操作の最終統合受入はB5で行う。
 
 <a id="bistro-bloom-fixture"></a>
 
@@ -380,6 +383,15 @@ Windowsの同一物理GPUで最適化済みのstrictとshippingを別processと�
 ```powershell
 cargo test --locked --release -p renderer --test bloom_graph --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
 cargo test --locked --release -p renderer --test bloom_graph --no-default-features --features vulkan,d3d12 native::consumer_bloom_gpu -- --exact --ignored --nocapture --test-threads=1
+```
+
+全Bistroでは、`memory-profiling`付きのstrictとshippingを別にビルドする。
+各API・各Bloom設定について、同じ実行用cook／IBLを指定し、以下の条件で逐次実行する。
+出力名は`<strict|disabled>-<vulkan|d3d12>-<tent|off|box>`とし、`tent`では`--resource-checks`も指定する。
+
+```powershell
+& $binary --api $api --manifest $manifest --ibl-manifest $iblManifest --bloom $effect --view route --width 1920 --height 1080 --frames 24 --warmup 8 --inflight 2 --capture-all-views --capture-route-samples --output $runDirectory
+python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 ```
 
 ### 画像比較と性能値の読み方

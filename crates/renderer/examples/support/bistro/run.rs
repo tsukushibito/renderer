@@ -229,7 +229,7 @@ fn identity(
         "shaders_sha256":super::digest(include_bytes!("shaders/manifest.json")),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
-        "environment":environment,"shadows":options.shadows,"aa":options.aa,
+        "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
             "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
             "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
@@ -238,7 +238,7 @@ fn identity(
         "aa_profile":{"edge_threshold_min":0.0312,"edge_threshold_max":0.125,"iterations":12,
             "subpixel_quality":0.75,"position":"after Neutral, before sRGB"},
         "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
-        "output":"linear RGBA16F -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
+        "output":"linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"})
 }
 
@@ -264,9 +264,10 @@ fn capture<B: Backend>(
     conditions: &Conditions,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
+    frame: usize,
 ) -> Result<Value, Error> {
     std::fs::create_dir_all(&options.output)?;
-    let (camera, bytes) = uniform(conditions, options, 0)?;
+    let (camera, bytes) = uniform(conditions, options, frame)?;
     let built = pipeline::build(
         pool,
         workspace,
@@ -289,14 +290,19 @@ fn capture<B: Backend>(
     let pixels = (options.width as usize) * (options.height as usize);
     let mut captures = json!({});
     let mut depth_coverage = 0usize;
-    for (slot, name, format, stride) in [
-        (0, "hdr", "rgba16f-le", 8),
-        (1, "sdr", "rgba8-unorm", 4),
-        (2, "depth", "r32f-le", 4),
-    ] {
+    let planes = [
+        (passes[0], "hdr", "rgba16f-le", 8),
+        (passes[1], "sdr", "rgba8-unorm", 4),
+        (passes[2], "depth", "r32f-le", 4),
+    ];
+    for (pass, name, format, stride) in planes.into_iter().chain(
+        built
+            .bloom_capture
+            .map(|pass| (pass, "bloom_hdr", "rgba16f-le", 8)),
+    ) {
         let mut bytes = vec![0u8; pixels * stride];
-        B::readback(&mut completed, passes[slot], &mut bytes)?;
-        if slot == 2 {
+        B::readback(&mut completed, pass, &mut bytes)?;
+        if name == "depth" {
             for value in bytes.as_chunks::<4>().0 {
                 let value = f32::from_le_bytes(*value);
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
@@ -670,6 +676,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         &conditions,
         &mut pool,
         &mut workspace,
+        0,
     )?;
     if let Some(hits) = captured.get("shadow_reuse_hits") {
         measured["shadow_reuse"]["output_capture_hits"] = hits.clone();
@@ -687,6 +694,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             &conditions,
             &mut pool,
             &mut workspace,
+            0,
         )?)
     } else {
         None
@@ -706,6 +714,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
                 &conditions,
                 &mut pool,
                 &mut workspace,
+                0,
             )?;
             let aa_off = if view.aa {
                 let mut diagnostic = view.clone();
@@ -720,6 +729,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
                     &conditions,
                     &mut pool,
                     &mut workspace,
+                    0,
                 )?)
             } else {
                 None
@@ -729,6 +739,33 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
                 "shadow_captures":captured_view["shadow_captures"],"aa_off":aa_off,
                 "depth_coverage_pixels":captured_view["depth_coverage_pixels"],"draw_count":captured_view["draw_count"],"readback_outside_measurement":true});
             captured_views.push((name.clone(), view.output, report));
+        }
+    }
+    let mut captured_route = Vec::new();
+    if options.capture_route_samples {
+        let mut route = options.clone();
+        route.view = "route".into();
+        let mut route_identity =
+            identity(&route, &cook_hash, &conditions_hash, &environment_identity);
+        for frame in [0, 300, 600, 900, 1200, 1500, 1799] {
+            route.output = options.output.join("route").join(frame.to_string());
+            let mut report = capture(
+                &mut backend,
+                &mut resident,
+                &scene,
+                &route,
+                &conditions,
+                &mut pool,
+                &mut workspace,
+                frame,
+            )?;
+            route_identity["route_frame"] = json!(frame);
+            report["schema_version"] = json!(1);
+            report["identity"] = route_identity.clone();
+            report["runtime"] = runtime.clone();
+            report["scene"] = counts.clone();
+            report["capture_only"] = json!(true);
+            captured_route.push((frame, route.output.clone(), report));
         }
     }
     // No cache registrations survive into the material replacement or
@@ -760,6 +797,14 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             json!({"view":name,"report":std::fs::canonicalize(directory.join("report.json"))?}),
         );
     }
+    let mut route_reports = Vec::with_capacity(captured_route.len());
+    for (frame, directory, mut report) in captured_route {
+        report["validation"] = validation.clone();
+        write_report(&directory, &report)?;
+        route_reports.push(json!({
+            "frame":frame,"report":std::fs::canonicalize(directory.join("report.json"))?
+        }));
+    }
     #[cfg(feature = "memory-profiling")]
     let memory_json = json!({"normal":memory_report(memory),"normal_allocation_free":memory.is_allocation_free(),
         "setup":memory_report(setup_memory),"shutdown":memory_report(renderer::measurement::Snapshot::now().since(shutdown_memory)),
@@ -774,8 +819,8 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "measurement":measured,"memory":memory_json,"validation":validation,"resource_checks":resource_checks,
         "captures":captured["captures"],"depth_coverage_pixels":captured["depth_coverage_pixels"],"draw_count":captured["draw_count"],
         "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
-        "views":view_reports,"readback_outside_measurement":true,
-        "limits":"B3 Forward PBR; offscreen, no frustum/occlusion culling or Bloom/display FPS claim; whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
+        "views":view_reports,"route_samples":route_reports,"readback_outside_measurement":true,
+        "limits":"Forward PBR offscreen; whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
     #[cfg(feature = "tracy")]
     let report = {
         let mut report = report;
