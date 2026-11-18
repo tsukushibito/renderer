@@ -729,10 +729,12 @@ fn record_draws(
         {
             #[cfg(feature = "tracy")]
             let _span = tracy_client::Client::running().map(|client| {
-                client.span(
-                    tracy_client::span_location!("renderer.d3d12.raster.record_draw_command"),
-                    0,
-                )
+                let location = if draw.indexed.is_some() {
+                    tracy_client::span_location!("renderer.d3d12.raster.draw_indexed")
+                } else {
+                    tracy_client::span_location!("renderer.d3d12.raster.draw_fullscreen")
+                };
+                client.span(location, 0)
             });
             // SAFETY: The prepared PSO matches the Graph's draw form and every
             // root argument is set. Indexed draws have bounded, retained input

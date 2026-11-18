@@ -1,10 +1,10 @@
 # Generate consumer-owned Raster fixtures with the repository's pinned SDK.
 # -Verify regenerates and compares every artifact without rewriting the checkout.
 [CmdletBinding()]
-param([string]$SdkRoot = $env:VULKAN_SDK, [switch]$Verify, [switch]$RasterBatches, [switch]$Instancing)
+param([string]$SdkRoot = $env:VULKAN_SDK, [switch]$Verify, [switch]$RasterBatches, [switch]$Instancing, [switch]$Fullscreen)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($RasterBatches -and $Instancing) { throw 'Select one fixture to regenerate.' }
+if ((@($RasterBatches, $Instancing, $Fullscreen) -eq $true).Count -gt 1) { throw 'Select one fixture to regenerate.' }
 
 function Hash([string]$Path) {
     $hasher = [Security.Cryptography.SHA256]::Create()
@@ -71,6 +71,8 @@ try {
         [ordered]@{ 'raster_batches.vert' = $false; 'raster_batches_inline.frag' = $true; 'raster_batches_uniform.frag' = $false }
     } elseif ($Instancing) {
         [ordered]@{ 'indexed_instancing.vert' = $true; 'indexed_instancing.frag' = $false }
+    } elseif ($Fullscreen) {
+        [ordered]@{ 'fullscreen_uniform.vert' = $false }
     } else {
         [ordered]@{ 'custom_raster.vert' = $true; 'custom_raster.frag' = $true }
     }
@@ -126,6 +128,7 @@ try {
     $manifest = [ordered]@{ schema = 1; toolchain_sha256 = Hash $lockPath; inline_dxil_register = 7; inline_dxil_space = 0; artifacts = $artifacts }
     $manifestName = if ($RasterBatches) { 'raster_batches-manifest.json' }
         elseif ($Instancing) { 'indexed_instancing-manifest.json' }
+        elseif ($Fullscreen) { 'fullscreen-manifest.json' }
         else { 'custom_raster-manifest.json' }
     $manifestPath = Join-Path $temporaryRoot $manifestName
     Write-Text $manifestPath (($manifest | ConvertTo-Json -Depth 5 -Compress) + "`n")

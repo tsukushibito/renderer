@@ -132,6 +132,16 @@ impl Graph {
         }
     }
 
+    pub(super) fn capture_fullscreen_bindings(
+        &mut self,
+        program: &ManagedRasterProgram,
+        bindings: &[Binding],
+    ) -> Result<std::ops::Range<usize>, GraphError> {
+        // A fullscreen draw uses its bindings once. Place its shader reads in
+        // the pass directly, without retaining an additional reusable template.
+        self.append_bindings(program.bindings(), program.binding_bytes(), bindings, None)
+    }
+
     pub(super) fn use_raster_bindings(
         &mut self,
         program: &ManagedRasterProgram,
