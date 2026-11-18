@@ -3,7 +3,7 @@ use renderer::engine;
 #[path = "../fixtures/engine_geometry.rs"]
 mod engine_geometry;
 #[cfg(feature = "vulkan")]
-#[path = "../examples/support/engine_workloads.rs"]
+#[path = "../fixtures/engine_workloads.rs"]
 mod engine_workloads;
 
 #[cfg(feature = "vulkan")]

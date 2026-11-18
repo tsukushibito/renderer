@@ -7,6 +7,8 @@
 /crates/renderer/shaders/dxil/*.hlsl text eol=lf
 /crates/renderer/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer/shaders/dxil/*.json text eol=lf
+/crates/renderer/fixtures/shaders/dxil/*.hlsl text eol=lf
+/crates/renderer/fixtures/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer/tests/support/shaders/dxil/*.hlsl text eol=lf
 /crates/renderer/tests/support/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer/tests/support/shaders/dxil/*.json text eol=lf

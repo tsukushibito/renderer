@@ -17,7 +17,7 @@ use super::device::VulkanDevice;
 use super::diagnostics::{Diagnostics, DiagnosticsHandle};
 use super::instance::VulkanInstance;
 use super::memory::{MemoryOwner, VulkanAllocator};
-use super::program::{ShaderNeeds, ShaderPrograms};
+use super::program::ShaderPrograms;
 use super::transfer::staging::SharedStaging;
 use super::transfer::{ExecutionPool, PendingTransfer};
 use crate::graph::{
@@ -66,8 +66,8 @@ pub struct RuntimeConfig {
     pub resource_capacity: usize,
     pub staging_bytes: u64,
     pub staging_ranges: usize,
-    /// Maximum descriptor-bearing operations per Graph: each fixed Compute,
-    /// Composite, textured draw or managed dispatch consumes one slot.
+    /// Maximum descriptor-bearing operations per Graph. Managed Compute
+    /// dispatches count once each, while Raster counts each unique draw binding.
     pub max_shader_bindings: u32,
 }
 
@@ -536,14 +536,9 @@ impl VulkanRuntime {
                 }
             }
         }
-        let needs = ShaderNeeds {
-            compute: color,
-            raster: color && depth,
-            composite: color,
-        };
-        if needs.any() {
+        if color && depth {
             if let Some(programs) = &self.programs {
-                programs.prepare_bindings(needs)?;
+                programs.prepare_implicit_raster()?;
             } else {
                 let programs = ShaderPrograms::new(
                     Arc::clone(&self.owner),
@@ -551,7 +546,7 @@ impl VulkanRuntime {
                     self.config.max_shader_bindings,
                     true,
                 )?;
-                programs.prepare_bindings(needs)?;
+                programs.prepare_implicit_raster()?;
                 self.programs = Some(programs);
             }
         }
@@ -614,13 +609,6 @@ impl VulkanRuntime {
             self.config.max_shader_bindings,
             false,
         )?;
-        let needs = self
-            .programs
-            .as_ref()
-            .map_or(ShaderNeeds::default(), |programs| programs.prepared_needs());
-        if needs.any() {
-            replacement.prepare_fixed(needs)?;
-        }
         let mut depth_samples = vk::SampleCountFlags::empty();
         for physical in self
             .entries
@@ -817,6 +805,10 @@ impl VulkanRuntime {
     pub fn stats(&self) -> RuntimeStats {
         let execution = self.execution.stats();
         let shader = self.programs.as_ref().map(|programs| programs.stats());
+        let (compute_arenas, compute_reuses) = self
+            .compute_programs
+            .as_ref()
+            .map_or((0, 0), |programs| programs.arena_stats());
         RuntimeStats {
             resources_created: self.resources_created,
             resources_reused: self.resources_reused,
@@ -825,8 +817,10 @@ impl VulkanRuntime {
             execution_slots_reused: execution.reuses,
             upload_live_ranges: self.upload.stats().live_ranges,
             readback_live_ranges: self.readback.stats().live_ranges,
-            descriptor_arenas_created: shader.map_or(0, |stats| stats.descriptor_arenas_created),
-            descriptor_arenas_reused: shader.map_or(0, |stats| stats.descriptor_arenas_reused),
+            descriptor_arenas_created: compute_arenas
+                + shader.map_or(0, |stats| stats.descriptor_arenas_created),
+            descriptor_arenas_reused: compute_reuses
+                + shader.map_or(0, |stats| stats.descriptor_arenas_reused),
         }
     }
 
@@ -1400,17 +1394,13 @@ impl VulkanRuntime {
         }
         #[cfg(feature = "tracy")]
         drop(resource_leases);
-        let mut shader_needs = ShaderNeeds::default();
+        let mut uses_raster = false;
         let mut binding_count = 0usize;
         let mut textured_raster = false;
         for &pass in &graph.order {
             let count = match &graph.passes[pass].operation {
-                Operation::Compute { .. } => {
-                    shader_needs.compute = true;
-                    1
-                }
                 Operation::Raster { batches, depth, .. } => {
-                    shader_needs.raster = true;
+                    uses_raster = true;
                     let count = graph
                         .raster_batches(batches)
                         .iter()
@@ -1423,10 +1413,6 @@ impl VulkanRuntime {
                         .count();
                     textured_raster |= count != 0;
                     count
-                }
-                Operation::Composite { .. } => {
-                    shader_needs.composite = true;
-                    1
                 }
                 Operation::Dispatch { .. } => 1,
                 _ => 0,
@@ -1446,7 +1432,7 @@ impl VulkanRuntime {
                     )
                 })?;
         }
-        let programs = if shader_needs.any() {
+        let programs = if uses_raster {
             Some(Arc::clone(self.programs.as_ref().ok_or_else(|| {
                 RuntimeError::capacity_with(
                     "shader working set is not prepared",
@@ -1461,10 +1447,7 @@ impl VulkanRuntime {
         } else {
             None
         };
-        if let Some(programs) = &programs {
-            programs.ensure(shader_needs)?;
-        }
-        let bindings = if shader_needs.compute || shader_needs.composite || textured_raster {
+        let bindings = if textured_raster {
             Some(programs.as_ref().unwrap().acquire_bindings()?)
         } else {
             None

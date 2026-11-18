@@ -1,6 +1,10 @@
 //! Offscreen indexed mesh -> two dependent Compute passes -> sampled composite.
 //! Run with an output path, for example `.tools/m2.ppm`. No window is created.
 
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+use image_transform::Transform;
+
 use renderer::graph::{
     Attachment, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
@@ -8,7 +12,7 @@ use std::{error::Error, io::Write, time::Duration};
 
 use renderer::{
     FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime,
-    graph::{BufferDesc, ComputeTransform, GraphCapacity, GraphPool, ImageDesc},
+    graph::{BufferDesc, GraphCapacity, GraphPool, ImageDesc},
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -59,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let depth = graph.image("mesh depth", ImageDesc::depth32(desc.width, desc.height))?;
     let inverted = graph.image("inverted", desc)?;
     let transformed = graph.image("transformed", desc)?;
-    let final_image = graph.image("final composite", desc)?;
+    let final_image = graph.image("final copy", desc)?;
     graph.raster(
         "indexed mesh and depth",
         RasterAttachments {
@@ -90,14 +94,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             )
         },
     )?;
-    graph.compute("invert", color, inverted, ComputeTransform::Invert)?;
-    graph.compute(
+    image_transform::dispatch(&mut graph, "invert", color, inverted, Transform::Invert)?;
+    image_transform::dispatch(
+        &mut graph,
         "swap red and blue",
         inverted,
         transformed,
-        ComputeTransform::SwapRedBlue,
+        Transform::SwapRedBlue,
     )?;
-    graph.composite("final composite", transformed, final_image)?;
+    graph.copy_image("final copy", transformed, final_image)?;
     graph.export_image(final_image)?;
     let readback = graph.readback_image("final readback", final_image)?;
     // This valid branch has no observable output and must be culled.
@@ -129,6 +134,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             },
         ],
     )?;
+    runtime.prepare_compute_programs(&[
+        image_transform::program(Transform::Invert),
+        image_transform::program(Transform::SwapRedBlue),
+    ])?;
     let mut rgba = vec![0; desc.width as usize * desc.height as usize * 4];
     let mut submission = runtime.submit(&plan)?;
     let mut result = submission
@@ -137,7 +146,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     result.readback_into(readback, &mut rgba)?;
     let center = (desc.height as usize / 2 * desc.width as usize + desc.width as usize / 2) * 4;
     if rgba[center..center + 4] != [255, 255, 0, 255] || rgba[..4] != [255, 255, 255, 255] {
-        return Err("unexpected mesh/depth/Compute/composite output".into());
+        return Err("unexpected mesh/depth/compute/copy output".into());
     }
     let mut file = std::io::BufWriter::new(std::fs::File::create(output)?);
     write!(file, "P6\n{} {}\n255\n", desc.width, desc.height)?;

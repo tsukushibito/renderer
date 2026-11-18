@@ -10,7 +10,7 @@ use renderer::engine;
 
 #[path = "../fixtures/engine_geometry.rs"]
 mod engine_geometry;
-#[path = "support/engine_workloads.rs"]
+#[path = "../fixtures/engine_workloads.rs"]
 mod engine_workloads;
 
 fn main() -> Result<(), Box<dyn Error>> {

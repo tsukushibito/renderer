@@ -1,5 +1,9 @@
 //! Shared executable acceptance scenarios. GPU creation is always explicit.
 
+#[path = "image_transform.rs"]
+mod image_transform;
+use image_transform::Transform;
+
 use std::{
     error::Error,
     fmt::Write as _,
@@ -15,7 +19,7 @@ use renderer::{
         Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MeshHandle, SnapshotPool,
         View,
     },
-    graph::{ComputeTransform, ImageDesc, PassHandle},
+    graph::{ImageDesc, PassHandle},
     standard::graphs::{self, ForwardConfig},
 };
 
@@ -144,6 +148,7 @@ impl Driver {
                 },
             ],
         )?;
+        runtime.prepare_compute_programs(&[image_transform::program(Transform::Invert)])?;
         let renderer = VulkanEngine::new(
             runtime,
             MeshCacheConfig {
@@ -221,11 +226,12 @@ impl Driver {
         let output = if compute {
             let desc = prepared.graph.image_desc(scene.color)?;
             let output = prepared.graph.image("workload Compute output", desc)?;
-            prepared.graph.compute(
+            image_transform::dispatch(
+                &mut prepared.graph,
                 "workload Compute",
                 scene.color,
                 output,
-                ComputeTransform::Invert,
+                Transform::Invert,
             )?;
             output
         } else {

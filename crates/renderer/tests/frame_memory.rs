@@ -6,11 +6,14 @@
 use renderer::measurement::CountingAllocator;
 use std::alloc::System;
 
-#[path = "../examples/support/frame_memory.rs"]
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+
+#[path = "../fixtures/frame_memory.rs"]
 mod frame_memory;
 
 #[cfg(feature = "vulkan")]
-#[path = "../examples/support/frame_memory_image.rs"]
+#[path = "../fixtures/frame_memory_image.rs"]
 mod frame_memory_image;
 
 #[global_allocator]

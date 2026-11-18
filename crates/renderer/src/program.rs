@@ -580,7 +580,10 @@ mod tests {
                     assert_eq!(slot.kind, kind);
                     assert!(!seen.contains(&(slot.group, slot.binding)));
                     seen.push((slot.group, slot.binding));
-                    if kind.buffer_usage().is_some() {
+                    if matches!(
+                        kind,
+                        BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+                    ) {
                         assert_eq!(Some(slot.min_size), resource["block_size"].as_u64());
                         let member =
                             &reflected["types"][resource["type"].as_str().unwrap()]["members"][0];

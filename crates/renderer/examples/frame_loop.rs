@@ -5,6 +5,10 @@
 //! GPU timestamps. Both modes use explicit bounded frame waits and read back every
 //! frame; their timings describe this small offscreen workload, not display FPS.
 
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+use image_transform::Transform;
+
 use std::{
     collections::HashMap,
     error::Error,
@@ -19,7 +23,7 @@ use renderer::{
     engine::{
         Engine, EngineCapacity, FrameSnapshot, Material, MaterialHandle, MeshHandle, SnapshotPool,
     },
-    graph::{ComputeTransform, GraphCapacity, ImageDesc, ImportImage, PassHandle},
+    graph::{GraphCapacity, ImageDesc, ImportImage, PassHandle},
     standard::graphs::{self, ForwardConfig},
 };
 
@@ -551,6 +555,16 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         },
         &resource_classes,
     )?;
+    let mut compute_programs = Vec::new();
+    if options.history {
+        compute_programs.push(image_transform::program(Transform::Invert));
+    }
+    if options.custom {
+        compute_programs.push(image_transform::program(Transform::SwapRedBlue));
+    }
+    if !compute_programs.is_empty() {
+        runtime.prepare_compute_programs(&compute_programs)?;
+    }
     let mut engine = VulkanEngine::new(
         runtime,
         options.mesh_cache_config(geometry.byte_len())?,
@@ -667,9 +681,13 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
             let output = prepared
                 .graph
                 .image("next history", ImageDesc::rgba8(1, 1))?;
-            prepared
-                .graph
-                .compute("history invert", source, output, ComputeTransform::Invert)?;
+            image_transform::dispatch(
+                &mut prepared.graph,
+                "history invert",
+                source,
+                output,
+                Transform::Invert,
+            )?;
             prepared.graph.export_image(output)?;
             let readback = prepared.graph.readback_image("history readback", output)?;
             (Some(output), Some(readback))

@@ -1,3 +1,7 @@
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+use image_transform::Transform;
+
 use renderer::engine::{
     Draw, Engine, EngineCapacity, FrameOutputOwnership, IDENTITY, Material, MeshData, SnapshotPool,
     Vertex, View,
@@ -47,18 +51,20 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
         .build_graph(&mut graphs, true, |graph, color| {
             let desc = graph.image_desc(color)?;
             let transformed = graph.image("external custom output", desc)?;
-            graph.compute(
+            image_transform::dispatch(
+                graph,
                 "external custom transform",
                 color,
                 transformed,
-                renderer::graph::ComputeTransform::SwapRedBlue,
+                Transform::SwapRedBlue,
             )?;
             let unused = graph.image("unused custom output", desc)?;
-            graph.compute(
+            image_transform::dispatch(
+                graph,
                 "unused custom branch",
                 color,
                 unused,
-                renderer::graph::ComputeTransform::Invert,
+                Transform::Invert,
             )?;
             Ok(transformed)
         })

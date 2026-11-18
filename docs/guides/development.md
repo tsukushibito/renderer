@@ -1246,7 +1246,7 @@ cargo run --locked -p renderer --features vulkan,development-validation,graph-di
 
 出力先の親ディレクトリは事前に用意します。
 例は近い赤い三角形と遠い緑の三角形を描き、invertと赤青入れ替えの2つのComputeを経て、
-別の最終画像へ合成します。中央が黄色、背景が白であることを確認してPPMへ保存します。
+同じ形式の最終画像へコピーします。中央が黄色、背景が白であることを確認してPPMへ保存します。
 PPMは表示用のsRGB変換をしていないlinear RGBのデータであり、画面出力の色管理は含みません。
 資源の作成・投入は明示的で、CPUの完了待ちは最後のreadback境界にあります。
 

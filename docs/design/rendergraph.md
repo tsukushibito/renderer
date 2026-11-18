@@ -76,7 +76,7 @@ bufferは半開byte範囲を指定する。
 論理ハンドルと物理資源の識別、内容の有効性と画像layout、
 予定されたGPU状態と実際の完了を別々に管理する。
 
-通常のパスは、管理下のcopy・Compute・Attachment clear・indexed mesh・最終合成という限定した操作を宣言する。
+通常のパスは、copy、管理下Compute、attachment操作、順序付きRasterを宣言する。
 任意の生CommandBuffer、未信頼shader、ネイティブ外部ハンドルは受け入れない。
 利用側のCompute shaderは、レビュー済みの静的descriptorを明示したunsafe境界で取り込む。
 これにより、実行する操作と宣言した用途・範囲・bindingを対応づける。
@@ -85,7 +85,7 @@ bufferは半開byte範囲を指定する。
 
 | 実行基盤 | 現在の範囲 |
 |---|---|
-| Vulkan | buffer／RGBA8・RGBA16F画像copy、owned Compute・Raster、固定Compute、attachment操作、合成、import／export、上限付き再利用 |
+| Vulkan | bufferと画像のupload・copy・readback、owned Compute・Rasterとattachment操作、canonical import／export・履歴と上限付き再利用 |
 | D3D12 | bufferとRGBA8・RGBA16F画像のupload・copy・readback、owned Compute・Rasterとattachment操作、canonical import／export・履歴と上限付き再利用。単一DIRECT queue、committed resource、物理aliasingなし |
 
 両APIともnative未対応の操作や準備済み容量の不足をprepareで明示エラーにする。
@@ -321,7 +321,7 @@ whole-image uploadはRGBA8（UNORM/sRGB）/RGBA16Fを扱う。複数mipはmip0�
 nativeのrow pitch・offset alignmentはbackendのstaging配置へ変換する。
 readbackはmip数1のRGBA8/RGBA16F/D32のpacked bytesを扱う。
 texelはRGBA8/D32が4 byte、RGBA16Fが8 byteであり、native allocation sizeの代用にはしない。
-画像copyは同じextent/formatでmip数1のRGBA8・RGBA16F、固定Compute/compositeはRGBA8_UNORMを受け入れる。
+画像copyは同じextentとformatの1×・1 mipのcolor画像を受け入れる。
 `Rgba8Srgb`はsample/transfer用途で、storage/attachmentへは受け付けない。
 linear filteringの実format能力は作成・準備境界で確認する。
 `NearestClamp`はnearest min/mag/mip、clamp、LOD0、`LinearRepeat`はlinear min/mag/mip、
@@ -473,6 +473,7 @@ Graphは使うインデックス範囲だけに依存を張る。nativeでは現
 maskは各描画のインスタンス数を0または1に決める。公開APIは引数bufferを直接公開せず、
 `RasterPass::draw_indirect` がGraph内の型付き引数を受け取る。範囲保証にはインデックスの実内容とDevice上限を用い、
 Compute書き込みから間接引数の読み取りまでの同期と資源の寿命をGraphが管理する。
+引数の構築に失敗した場合、内部バッファ、exportフラグと追加passを一緒に巻き戻す。同じGraphで容量不足の診断後に構築を続けられる。
 集約用range表に加え、各slotでresource上限分の使用index列を準備する。同じbufferは一度だけ列へ登録し、
 前回触れたrangeだけを消す。今回の使用indexだけをsortして従来のresource昇順でaccessを追加するため、
 非空Rasterごとの全resourceクリア・走査は行わない。draw数D・使用resource数Uに対して
@@ -497,7 +498,7 @@ anchorは再準備でもregistryとともに保持し、通常frameの結果返�
 実Device上限とD3D12の64-DWORD root signature上限も準備時に適合確認する。
 Vulkanは共有Program参照を無効化せず通常読取にlockを増やさないため、
 明示的なRaster集合の準備時に新しい所有者と固定slotを構築し、成功後だけ切り替える。
-既に有効な固定Compute／Compositeも引き継ぎ、未返却consumerのある変更を拒否する。
+Compute Program集合は別の準備操作で指定する。Raster集合の変更は未返却consumerがある場合に拒否する。
 Rasterは渡した集合だけを有効にし、従来の暗黙meshへのfallbackで除外した資産を再び使える状態にしない。
 この準備境界のnative再作成と有限slotの費用を、可変Vecの差替・世代回収の複雑さと比較して選んだ。
 上限はruntime生涯の累積資産数ではなく、集合交換後に空きを回復できる。準備失敗は旧集合を保持する。

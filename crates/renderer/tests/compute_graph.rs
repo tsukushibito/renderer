@@ -218,8 +218,26 @@ fn invalid_image_domain_rolls_back_the_complete_dispatch() {
         ))
     )
 ))]
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+
+#[cfg(all(
+    windows,
+    feature = "vulkan",
+    feature = "d3d12",
+    any(
+        all(feature = "d3d12-diagnostics", feature = "vulkan-diagnostics"),
+        not(any(
+            feature = "development-validation",
+            feature = "d3d12-diagnostics",
+            feature = "vulkan-diagnostics",
+            feature = "graph-diagnostics"
+        ))
+    )
+))]
 mod native {
     use super::fixture;
+    use super::image_transform::{self, Transform};
     use renderer::graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph,
         GraphCapacity, GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, StoreOp,
@@ -557,11 +575,15 @@ mod native {
     }
 
     const BINDING_BUFFER_BYTES: u64 = 832;
-    const BINDING_PROGRAMS: [ManagedProgram; 4] = [
+    const TRANSFORM_IMAGE: ImageDesc = ImageDesc::rgba8(9, 3);
+    const TRANSFORM_BYTES: usize = 9 * 3 * 4;
+    const BINDING_PROGRAMS: [ManagedProgram; 6] = [
         ManagedProgram::uniform_readback(),
         ManagedProgram::storage_readback(),
         ManagedProgram::sampled_readback(),
         ManagedProgram::sampled_float_readback(),
+        image_transform::program(Transform::Invert),
+        image_transform::program(Transform::SwapRedBlue),
     ];
 
     fn binding_image_descriptions() -> [ImageDesc; 3] {
@@ -582,6 +604,8 @@ mod native {
         rgba8: [u8; 16],
         rgba16: [f32; 16],
         depth: f32,
+        transform_pass: PassHandle,
+        transformed: [u8; TRANSFORM_BYTES],
     }
 
     impl BindingReadbacks {
@@ -604,6 +628,10 @@ mod native {
                 let red = u32::from_le_bytes(pixel[..4].try_into().unwrap());
                 assert_eq!(red, self.depth.to_bits());
             }
+
+            let mut transformed = [0; TRANSFORM_BYTES];
+            read(self.transform_pass, &mut transformed);
+            assert_eq!(transformed, self.transformed);
         }
     }
 
@@ -736,6 +764,33 @@ mod native {
             ("sampled D32", 768, 64),
         ]
         .map(|(name, offset, size)| graph.readback_buffer(name, output, offset, size).unwrap());
+        // Odd extents exercise the two fixture shaders' fringe guards on both APIs.
+        let pixels: [u8; TRANSFORM_BYTES] = std::array::from_fn(|index| {
+            if newer {
+                255 - index as u8
+            } else {
+                index as u8
+            }
+        });
+        let [source, inverted, target] = ["transform source", "inverted", "swapped"]
+            .map(|name| graph.image(name, TRANSFORM_IMAGE).unwrap());
+        graph
+            .upload_image("odd size source", source, &pixels)
+            .unwrap();
+        image_transform::dispatch(&mut graph, "invert", source, inverted, Transform::Invert)
+            .unwrap();
+        image_transform::dispatch(&mut graph, "swap", inverted, target, Transform::SwapRedBlue)
+            .unwrap();
+        let transform_pass = graph.readback_image("transformed pixels", target).unwrap();
+        let mut transformed = [0; TRANSFORM_BYTES];
+        for (output, &[red, green, blue, alpha]) in transformed
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(pixels.as_chunks::<4>().0)
+        {
+            *output = [255 - blue, 255 - green, 255 - red, alpha];
+        }
         (
             graph.compile().unwrap(),
             BindingReadbacks {
@@ -744,19 +799,21 @@ mod native {
                 rgba8: rgba8_bytes,
                 rgba16: expanded,
                 depth: depth_value,
+                transform_pass,
+                transformed,
             },
         )
     }
 
     fn binding_readbacks(strict: bool) {
         let graph_capacity = GraphCapacity {
-            resources: 6,
-            passes: 16,
-            accesses: 32,
-            bindings: 16,
+            resources: 9,
+            passes: 20,
+            accesses: 40,
+            bindings: 24,
             attachments: 1,
             draws: 0,
-            upload_bytes: 128,
+            upload_bytes: 256,
             ..GraphCapacity::default()
         };
         let mut pool = GraphPool::new(graph_capacity, 2).unwrap();
@@ -785,6 +842,10 @@ mod native {
             count: 6,
         }];
         classes.extend(descs.map(|desc| ResourceClass::Image { desc, count: 2 }));
+        classes.push(ResourceClass::Image {
+            desc: TRANSFORM_IMAGE,
+            count: 6,
+        });
         vulkan
             .prepare_working_set(
                 FrameCapacity {
@@ -798,6 +859,13 @@ mod native {
             .unwrap();
         vulkan.prepare_compute_programs(&BINDING_PROGRAMS).unwrap();
 
+        let mut image_classes = descs
+            .map(|desc| D3D12ImageClass { desc, count: 2 })
+            .to_vec();
+        image_classes.push(D3D12ImageClass {
+            desc: TRANSFORM_IMAGE,
+            count: 6,
+        });
         let mut d3d12 = D3D12Runtime::new_with_working_set(
             D3D12RuntimeConfig {
                 validation: if strict {
@@ -808,9 +876,9 @@ mod native {
                 capacity: D3D12FrameCapacity {
                     executions: 2,
                     results: 2,
-                    resources: 6,
-                    resource_capacity: 12,
-                    operations: 16,
+                    resources: 9,
+                    resource_capacity: 18,
+                    operations: 20,
                     buffers: 3,
                     buffer_bytes: BINDING_BUFFER_BYTES,
                     upload_bytes: 8192,
@@ -823,7 +891,7 @@ mod native {
                 size: BINDING_BUFFER_BYTES,
                 count: 6,
             }],
-            &descs.map(|desc| D3D12ImageClass { desc, count: 2 }),
+            &image_classes,
             &[],
             &BINDING_PROGRAMS,
         )

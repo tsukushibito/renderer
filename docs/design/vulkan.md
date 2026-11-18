@@ -19,7 +19,7 @@ CPUのテスト・benchmark用依存が要求するツールは開発手順で�
 ネイティブ型や生のハンドルはバックエンド内部に閉じる。
 未使用の公開RHI、汎用encoder、Backend traitを先に固定しない。
 公開Graph APIはGPU非依存で、Vulkanの実行は`VulkanRuntime`から明示的に開始する。
-固定shaderによるCompute、indexed meshと深度、sampled imageの最終合成を扱う。
+管理下Compute、順序付きRasterと深度、表示用のsampled image描画を扱う。
 Graphの宣言・producer・範囲・culling・import/exportは[RenderGraphの契約](rendergraph.md)を参照する。
 Windows表示は`vulkan,presentation`で追加する。`presentation`単独ではbackendを選ばない。
 利用側のレビュー済みCompute shaderは静的descriptorのunsafe取込で扱う。未信頼shaderのsandboxや一般的なPassEncoderは提供しない。
@@ -236,15 +236,12 @@ VMAの配置は実測のbufferImageGranularityを満たしており、原因をa
 Deviceで有効にしていない`maintenance4`の`LocalSizeId`へ暗黙に依存しない。
 再生成とbinary一致確認は[開発手順](../guides/development.md)に従う。
 
-固定の画像変換Computeは8×8のlocal size、set 0のbinding 0／1に各1個のRGBA8 storage imageを使う。
-push constantはoffset 0のu32 1個で変換を選ぶ。端数のinvocationはshader内で除外し、
-hostでもworkgroup size・invocation数・dispatch数・descriptor・push constantの上限を確認する。
-固定の画像合成はset 0 binding 0のcombined image samplerから同じ座標を`texelFetch`し、
-別の同寸画像へfullscreen triangleで書く。filterやsRGB変換はしない。
+Examplesの画像変換は、各8×8のlocal sizeと型付きRGBA8 storage imageを持つ利用側Programを明示準備し、
+`Graph::dispatch`で実行する。端数のinvocationはshader内で除外し、実Deviceのdispatch・descriptor上限を確認する。
+等価な画像転送は`copy_image`を使う。表示のためのfullscreen描画は[Windows Presentation](#windows-presentation)を参照する。
 
-pipeline・layout・samplerは明示したworking setの準備でCompute／Raster／Compositeの必要な種類を作成し、
-成功した不変のProgramをruntimeで保持する。buffer-onlyなら画像用Programを要求せず、
-RGBA8 classでCompute/Composite、RGBA8とD32の組でRasterを準備する。
+pipeline・layout・samplerは明示準備し、成功した不変のProgramをruntimeで保持する。
+Computeは指定したProgram集合を準備する。Rasterの初期既定meshは1× RGBA8とD32の組がある場合に準備する。
 RasterのD32 depth対応を含む形式・ABI上限を、その種類のnative作成前に検査する。
 通常frame中に新しい種類を遅延作成しない。種類や容量の追加は、既存consumerを返却した準備境界で行う。
 作成に失敗したProgramをキャッシュせず、部分作成分を解放して再試行可能な状態を維持する。
@@ -321,7 +318,7 @@ runtime生涯の追加回数ではなく、明示準備した現在の集合に�
 
 RGBA16Fのpacked転送は1 texel8 byteであり、共有stagingのoffset alignmentをatom sizeと8 byte以上にする。
 D32 readbackはDEPTH aspectとTRANSFER_SRC_OPTIMALを使う。画像copyは同extent/formatのRGBA8/RGBA16Fを扱い、
-固定ComputeのRGBA8契約とは分ける。各実format/usage能力の作成時照会とnative失敗処理を維持する。
+各実format/usage能力の作成時照会とnative失敗処理を行う。
 
 公開`standard::passes`と`standard::graphs`は通常のGraph／Program／copy APIだけで構築する。
 利用側の多段Computeも同じ公開`dispatch`で接続し、標準専用のloweringやnative実行分岐を追加しない。
@@ -342,7 +339,7 @@ scalarと同じ内容有効性のままbatch化の効果を比較した。代案
 固定vertex/fragment shaderにはstorage副作用がなく、同じattachmentへのdepth/color操作は
 [rasterization order](https://docs.vulkan.org/spec/latest/chapters/fragops.html#fragops-order)に従う。
 この契約のdraw間へ旧scalarパス間barrierを機械的に残さず、全buffer/imageの必要な依存とlayout遷移を
-描画区間の前へ、後続Compute/composite等への依存を区間の後へ置く。
+描画区間の前へ、後続Computeやcopy等への依存を区間の後へ置く。
 Vulkan 1.3基準のまま、追加featureなしで区間内へ任意のbarrierを挿入しない。
 任意shaderや異なるパスへこの統合条件を自動適用するものではない。
 
@@ -470,6 +467,10 @@ prefix容量不足は要約の追い出しではなく型付きエラーを返�
 `ResourceClass`はbackend非依存のbuffer/image descriptorと同時保持数であり、登録済み入力とは別に
 記録・GPU・exportが保持し得る未登録instance数を含める。変更には既存のframe/result/metadata/range tokenの返却が必要である。
 入力やdraw/pass構成は準備済み上限内で毎frame変更でき、固定planの再生を条件にしない。
+
+再準備は一時索引で資源の再利用・置換先を決め、必要な物理資源、状態、プールと既定mesh pipelineを段階的に準備する。
+最後の失敗し得る操作が成功してからまとめて公開する。準備途中の失敗では旧クラス、世代、登録内容、容量と論理カウンターを保持する。
+元の構成を使い続けられるよう、明示準備の間は旧資源と新資源が同時に存在し得る。通常フレームの取得は既存の索引と容量だけを使う。
 
 workのresource-indexed配列とSnapshot backingは上限全体を事前準備するが、通常のsubmit、
 完了観測、返却時のresetとprovenance mask copyは当該Graphの宣言resource prefixだけを辿る。

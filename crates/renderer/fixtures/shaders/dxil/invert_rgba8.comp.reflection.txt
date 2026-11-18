@@ -14,7 +14,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 1f39d10d5b0aa72ef2a5fd462591c0e0
+; shader hash: 4ad069669a1699e2a29ddc32520c301a
 ;
 ; Pipeline Runtime Information:
 ;
@@ -38,24 +38,11 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _42_44
-; {
-;
-;   struct _42_44
-;   {
-;
-;       uint _44_m0;                                  ; Offset:    0
-;
-;   } _42_44;                                         ; Offset:    0 Size:     4
-;
-; }
-;
 ;
 ; Resource Bindings:
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _42_44                            cbuffer      NA          NA     CB0            cb0     1
 ; _22                                   UAVunorm_f32          2d      U0             u1     1
 ; _35                                   UAVunorm_f32          2d      U1             u0     1
 ;

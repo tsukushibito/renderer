@@ -10,6 +10,13 @@
 //!
 //! Engine-facing and graph APIs remain independent of Vulkan and VMA types.
 
+#[cfg(test)]
+extern crate self as renderer;
+
+#[cfg(test)]
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+
 pub mod capacity;
 pub mod engine;
 pub mod geometry;

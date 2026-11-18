@@ -3,11 +3,14 @@
 use renderer::measurement::CountingAllocator;
 use std::alloc::System;
 
-#[path = "support/frame_memory.rs"]
+#[path = "../fixtures/image_transform.rs"]
+mod image_transform;
+
+#[path = "../fixtures/frame_memory.rs"]
 mod frame_memory;
 
 #[cfg(feature = "vulkan")]
-#[path = "support/frame_memory_image.rs"]
+#[path = "../fixtures/frame_memory_image.rs"]
 mod frame_memory_image;
 
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]

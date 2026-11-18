@@ -6,11 +6,12 @@ use super::frame_memory::{
     Report, capacity_report, counts, features, graph_capacity as base_graph_capacity, phase,
     semantics,
 };
+use super::image_transform::{self, Transform};
 use renderer::engine::{
     Draw, Engine, EngineCapacity, FrameSnapshot, IDENTITY, Material, MaterialHandle, MeshData,
     SnapshotPool, Vertex, View,
 };
-use renderer::graph::{Attachment, ComputeTransform, ImageDesc, LoadOp, PassHandle, StoreOp};
+use renderer::graph::{Attachment, ImageDesc, LoadOp, PassHandle, StoreOp};
 use renderer::measurement::{HostEvent, NativeEvent, RustEvent, Snapshot};
 use renderer::program::ManagedRasterProgram;
 use renderer::standard::{graphs, passes};
@@ -69,11 +70,12 @@ fn build(
         let mut color = scene.color;
         for _ in 0..invert_passes {
             let output = graph.image("memory image transform", ImageDesc::rgba8(WIDTH, HEIGHT))?;
-            graph.compute(
+            image_transform::dispatch(
+                graph,
                 "memory image transform",
                 color,
                 output,
-                ComputeTransform::Invert,
+                Transform::Invert,
             )?;
             color = output;
         }
@@ -472,6 +474,10 @@ pub fn lifecycle(baseline: bool) {
                 },
             ],
         )
+        .unwrap();
+    renderer
+        .runtime_mut()
+        .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
         .unwrap();
     renderer
         .runtime_mut()

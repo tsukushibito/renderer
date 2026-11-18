@@ -179,10 +179,6 @@ pub(super) struct ImageCreation {
 }
 
 impl DeviceImage {
-    pub(super) fn belongs_to(&self, owner: &Arc<MemoryOwner>) -> bool {
-        Arc::ptr_eq(&self.owner, owner)
-    }
-
     pub(super) fn prepare(
         owner: &MemoryOwner,
         desc: ImageDesc,

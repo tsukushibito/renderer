@@ -7,9 +7,9 @@ use std::{ops::Range, sync::Arc};
 
 use super::accesses::conflicting_accesses_in;
 use super::{
-    Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, ComputeTransform, Graph,
-    GraphError, GraphErrorKind, ImageDesc, ImageHandle, MeshUpload, Operation, PassHandle,
-    PassKind, ResourceAccess, ResourceDesc, ResourceHandle, SampleCount, UploadSource, overlaps,
+    Access, AccessKind, AccessPurpose, AccessRange, BufferHandle, Graph, GraphError,
+    GraphErrorKind, ImageDesc, ImageHandle, MeshUpload, Operation, PassHandle, PassKind,
+    ResourceAccess, ResourceDesc, ResourceHandle, SampleCount, UploadSource, overlaps,
 };
 
 /// Roll back unpublished builder storage on a returned error or during an
@@ -297,51 +297,6 @@ impl Graph {
                 Operation::ReadbackImage { src },
                 graph.append_accesses([read(src, 0..1, AccessPurpose::CopySource)])?,
                 true,
-            ))
-        })
-    }
-    pub fn compute(
-        &mut self,
-        name: &str,
-        src: ImageHandle,
-        dst: ImageHandle,
-        transform: ComputeTransform,
-    ) -> Result<PassHandle, GraphError> {
-        self.build_pass(name, |graph| {
-            let src = graph.image_id(src)?;
-            let dst = graph.image_id(dst)?;
-            graph.compatible_color_pair(src, dst)?;
-            Ok((
-                Operation::Compute {
-                    src,
-                    dst,
-                    transform,
-                },
-                graph.append_accesses([
-                    read(src, 0..1, AccessPurpose::StorageRead),
-                    write(dst, 0..1, AccessPurpose::StorageWrite),
-                ])?,
-                false,
-            ))
-        })
-    }
-    pub fn composite(
-        &mut self,
-        name: &str,
-        src: ImageHandle,
-        dst: ImageHandle,
-    ) -> Result<PassHandle, GraphError> {
-        self.build_pass(name, |graph| {
-            let src = graph.image_id(src)?;
-            let dst = graph.image_id(dst)?;
-            graph.compatible_color_pair(src, dst)?;
-            Ok((
-                Operation::Composite { src, dst },
-                graph.append_accesses([
-                    read(src, 0..1, AccessPurpose::Sampled),
-                    write(dst, 0..1, AccessPurpose::ColorAttachment),
-                ])?,
-                false,
             ))
         })
     }

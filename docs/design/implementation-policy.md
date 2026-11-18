@@ -97,7 +97,7 @@ Rustのedition、MSRV、シェーダーコンパイラー、ウィンドウ接�
 `renderer-7ft.1.3`、調査日2026-11-14。**native基盤の改修と上位操作の置換を採用する。**
 Vulkanはash 0.38／vk-mem 0.5、D3D12は現行の生成bindingsとDevice/Fence所有を出発点にする。
 第7章のA（構築時owned命令＋binding/attachment由来アクセス）を両APIへ接続し、
-固定`ComputeTransform`やeffect別`ProgramKind`を一般パスの拡張手段にしない。
+利用側の画像変換やeffectは不変のProgramとGraph命令で記述する。
 この選定比較単独は実装の証拠にせず、現行の一般パスとB2の接続・受入は[最新の検証結果](../verification/current.md#bistro-pbr)で確認する。
 
 判断の順序は、確定要件への適合、保証・製品費用を管理できる境界、Bistroまでの総作業、保守負担とする。
@@ -1719,9 +1719,8 @@ transientと登録済みbuffer／画像のimport/exportを受け入れ、内容r
 不要パス除去後の未使用操作を、そのbackendが未対応であることだけを理由に失敗させない。
 bufferの要求sizeはライブラリの上限2 GiB以内とし、実際のnative割当失敗やVRAM budgetとは区別する。
 
-製品Graphの具体化は`graph/bounded.rs`が行い、画像・graphicsの所有と記録は専用moduleへ分ける。`graph.rs`に残すtest専用処理は管理下shaderの
-実GPU fixtureと、実bufferを一つ作成した直後の失敗注入を残す。失敗注入は命令記録前に終了するため、
-旧buffer Graphの別の計画・upload/copy/readback記録処理は保持しない。
+製品Graphの具体化は`graph/bounded.rs`が行い、画像・graphicsの所有と記録は専用moduleへ分ける。
+管理下shaderの実GPU fixtureも公開Graphを使う。buffer準備の故障注入は実bufferを一つ作成した直後、命令記録前に失敗させる。
 実bufferの部分作成後の解放・エラー原因保持を確認する限定fixtureであり、実ドライバーのOOMや
 製品pool初期化の全ての部分失敗を注入した証拠とは区別する。
 

@@ -6,6 +6,7 @@
 //! Builder contract and ownership regressions.
 
 use super::*;
+use crate::image_transform::{self, Transform};
 use std::sync::Arc;
 
 // Fixture preparation is separate from the normal-frame allocation harness.
@@ -500,17 +501,9 @@ fn fixed_operations_check_binding_formats_extents_and_aliasing() {
     let depth = graph.image("depth", ImageDesc::depth32(2, 2)).unwrap();
     assert!(graph.upload_image("short", a, &[0; 15]).is_err());
     assert!(graph.upload_image("depth bytes", depth, &[0; 16]).is_err());
-    assert!(
-        graph
-            .compute("alias", a, a, ComputeTransform::Invert)
-            .is_err()
-    );
-    assert!(
-        graph
-            .compute("extent", a, b, ComputeTransform::Invert)
-            .is_err()
-    );
-    assert!(graph.composite("depth", depth, a).is_err());
+    assert!(image_transform::dispatch(&mut graph, "alias", a, a, Transform::Invert).is_err());
+    assert!(image_transform::dispatch(&mut graph, "extent", a, b, Transform::Invert).is_err());
+    assert!(graph.copy_image("depth", depth, a).is_err());
     assert!(
         graph
             .declare_pass(

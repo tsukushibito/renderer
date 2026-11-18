@@ -13,7 +13,7 @@ use super::super::super::program::{
 use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
 use super::super::super::transfer::{TransferError, TransferPayload};
-use super::{ComputeTransform, GraphWork, PreparedOperation};
+use super::{GraphWork, PreparedOperation};
 
 impl TransferPayload for GraphWork {
     fn validate(&self) -> Result<(), TransferError> {
@@ -197,17 +197,6 @@ impl TransferPayload for GraphWork {
                             &[image_copy(image, range.offset(), 0)],
                         );
                     }
-                    PreparedOperation::Compute { dst, transform, .. } => {
-                        self.programs.as_ref().unwrap().record_compute(
-                            command,
-                            pass.descriptor.unwrap(),
-                            self.resource(*dst).image(),
-                            match transform {
-                                ComputeTransform::Invert => 0,
-                                ComputeTransform::SwapRedBlue => 1,
-                            },
-                        )
-                    }
                     PreparedOperation::Raster {
                         batches,
                         colors,
@@ -276,13 +265,6 @@ impl TransferPayload for GraphWork {
                             pass.compute.unwrap(),
                             *workgroups,
                         );
-                    }
-                    PreparedOperation::Composite { dst, .. } => {
-                        self.programs.as_ref().unwrap().record_composite(
-                            command,
-                            pass.descriptor.unwrap(),
-                            self.resource(*dst).image(),
-                        )
                     }
                 }
                 #[cfg(feature = "vulkan-diagnostics")]

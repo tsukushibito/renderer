@@ -3,9 +3,8 @@
 use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
-use crate::graph::{
-    BufferDesc, ComputeTransform, Graph, GraphErrorKind, ImageDesc, RasterParameters,
-};
+use crate::graph::{BufferDesc, Graph, GraphErrorKind, ImageDesc, RasterParameters};
+use crate::image_transform::{self, Transform};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -58,10 +57,16 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
                 },
                 ResourceClass::Buffer {
                     desc: BufferDesc { size: 16 },
-                    count: 1,
+                    count: 2,
                 },
             ],
         );
+        runtime
+            .prepare_compute_programs(&[
+                image_transform::program(Transform::Invert),
+                crate::program::ManagedProgram::sampled_readback(),
+            ])
+            .unwrap();
         let pixels = [10, 20, 30, 255].repeat(4);
         let bytes = (0..16).collect::<Vec<u8>>();
         let mut initial = Graph::test_new();
@@ -94,9 +99,14 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
             .import_buffer("compute bytes", &source_buffer)
             .unwrap();
         let inverted = compute.image("inverted", ImageDesc::rgba8(2, 2)).unwrap();
-        compute
-            .compute("invert", compute_image, inverted, ComputeTransform::Invert)
-            .unwrap();
+        image_transform::dispatch(
+            &mut compute,
+            "invert",
+            compute_image,
+            inverted,
+            Transform::Invert,
+        )
+        .unwrap();
         let compute_pixels = compute.readback_image("inverted result", inverted).unwrap();
         let compute_bytes = compute
             .readback_buffer("first bytes", compute_buffer, 0, 16)
@@ -109,10 +119,12 @@ fn vulkan_graph_precompiled_readers_and_writer_rebase_unchanged_contents() {
             .import_buffer("sample bytes", &source_buffer)
             .unwrap();
         let output = sampled
-            .image("sample output", ImageDesc::rgba8(2, 2))
+            .buffer("sample output", BufferDesc { size: 16 })
             .unwrap();
-        sampled.composite("sample", sampled_image, output).unwrap();
-        let sampled_pixels = sampled.readback_image("sample result", output).unwrap();
+        super::tests::sample_rgba8(&mut sampled, "sample", sampled_image, output);
+        let sampled_pixels = sampled
+            .readback_buffer("sample result", output, 0, 16)
+            .unwrap();
         let sampled_bytes = sampled
             .readback_buffer("second bytes", sampled_buffer, 0, 16)
             .unwrap();

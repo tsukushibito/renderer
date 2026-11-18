@@ -166,7 +166,6 @@ liveな未対応操作はruntimeが明示エラーにし、culledな枝だけの
 | buffer upload/copy/readback | 対応 | 対応 | transient bufferで対応 |
 | 画像upload/readback | RGBA8/RGBA16F upload、これらとD32 readback | uploadは全2D mip chain、readbackはmip数1 | 同じnative範囲で対応 |
 | 画像copy | 同extent/formatのRGBA8・RGBA16F | 各1 subresource | 同じ契約のtransient画像で対応 |
-| 固定Compute・composite | 対応 | 限定した管理下操作に対応 | 未対応 |
 | 管理下owned Raster | Programと順序付きdraw、複数color・任意depth | 最大8色、任意D32、1×／4×、color resolve | 同じ形状に対応 |
 | `Graph::dispatch` | 管理下Programとbuffer・sampled/storage画像のbinding、固定または画像extent由来dispatch | 明示準備したpipeline/descriptorで対応 | 同じ契約のtransient資源で対応 |
 | `attachment_pass` | color-only・depth-only・MRT、単一mip/layer View | Rasterと同じattachment形状でclear・load・store・resolve | 同じ形状に対応 |
