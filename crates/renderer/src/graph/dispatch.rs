@@ -59,6 +59,40 @@ pub(crate) enum BindingOperands {
     Sampler(SamplerDescriptor),
 }
 
+#[derive(Clone, Copy)]
+struct BufferGridWrite {
+    group: u32,
+    binding: u32,
+    workgroup_count: u64,
+}
+
+impl BufferGridWrite {
+    fn from_dispatch(
+        domain: DispatchWorkgroups,
+        [x, y, z]: [u32; 3],
+    ) -> Result<Option<Self>, GraphError> {
+        let DispatchWorkgroups::BufferGrid2d {
+            group,
+            binding,
+            max_workgroups: [max_x, max_y],
+        } = domain
+        else {
+            return Ok(None);
+        };
+        if x == 0 || y == 0 || z != 1 || x > max_x || y > max_y {
+            return Err(GraphError::new(
+                GraphErrorKind::Unsupported,
+                "workgroup counts exceed the reviewed 2D buffer grid domain",
+            ));
+        }
+        Ok(Some(Self {
+            group,
+            binding,
+            workgroup_count: u64::from(x) * u64::from(y),
+        }))
+    }
+}
+
 impl Graph {
     /// Validate and capture the complete Program binding layout once into
     /// prepared Graph storage. This does not declare a resource read: each
@@ -70,8 +104,13 @@ impl Graph {
     ) -> Result<RasterBindings, GraphError> {
         let first = self.bindings.len();
         let first_access = self.binding_accesses.len();
-        let result =
-            self.append_bindings_into(program.bindings(), program.binding_bytes(), bindings, true);
+        let result = self.append_bindings_into(
+            program.bindings(),
+            program.binding_bytes(),
+            bindings,
+            true,
+            None,
+        );
         match result {
             Ok(owned) => Ok(RasterBindings {
                 graph: self.id,
@@ -148,8 +187,9 @@ impl Graph {
     }
 
     /// Own a managed Compute dispatch and derive accesses from its reviewed
-    /// shader contract. Buffer footprints are reviewed prefixes; images access
-    /// the whole selected mip/layer. Extra descriptor bytes stay undefined.
+    /// shader contract. Buffer footprints are reviewed prefixes; a buffer grid
+    /// derives its write prefix from its workgroup count. Images access the
+    /// whole selected mip/layer. Bytes outside a write footprint are unchanged.
     /// Image-domain dispatches must cover their output exactly after ceil
     /// division by the local size, with guarded fringe invocations. Native
     /// preparation establishes Device alignment, usage and limit guarantees.
@@ -161,12 +201,11 @@ impl Graph {
         workgroups: [u32; 3],
     ) -> Result<PassHandle, GraphError> {
         self.build_pass(name, |graph| {
+            let contract = program.dispatch_contract();
             let first_access = graph.accesses.len();
-            let owned = graph.append_bindings(
-                program.bindings(),
-                program.dispatch_contract().bytes,
-                bindings,
-            )?;
+            let buffer_grid = BufferGridWrite::from_dispatch(contract.workgroups, workgroups)?;
+            let owned =
+                graph.append_bindings(program.bindings(), contract.bytes, bindings, buffer_grid)?;
             graph.validate_dispatch_domain(program, owned.clone(), workgroups)?;
             let accesses = first_access..graph.accesses.len();
             if let Some(left) = graph.conflicting_pass_access(accesses.clone())? {
@@ -256,6 +295,9 @@ impl Graph {
     ) -> Result<(), GraphError> {
         let expected = match program.dispatch_contract().workgroups {
             DispatchWorkgroups::Fixed(expected) => expected,
+            // The grid dimensions and output footprint were validated while
+            // deriving the buffer access.
+            DispatchWorkgroups::BufferGrid2d { .. } => return Ok(()),
             DispatchWorkgroups::Image2d { group, binding } => {
                 // The trusted descriptor identifies one unique write-only image
                 // and a nonzero local size. Resolve already canonical operands,
@@ -312,13 +354,14 @@ impl Graph {
 
     /// Append canonical owned descriptors and shader-derived accesses using only
     /// prepared storage. The caller's build_pass transaction rolls back failures.
-    pub(super) fn append_bindings(
+    fn append_bindings(
         &mut self,
         layout: &[BindingLayout],
         bytes: &[u64],
         bindings: &[Binding],
+        buffer_grid: Option<BufferGridWrite>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
-        self.append_bindings_into(layout, bytes, bindings, false)
+        self.append_bindings_into(layout, bytes, bindings, false, buffer_grid)
     }
 
     fn append_binding_access(
@@ -347,6 +390,7 @@ impl Graph {
         bytes: &[u64],
         bindings: &[Binding],
         template: bool,
+        buffer_grid: Option<BufferGridWrite>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
         if bindings.len() != layout.len() {
             return Err(GraphError::new(
@@ -399,10 +443,20 @@ impl Graph {
                                 )
                                 .with_range(super::AccessRange::Buffer(descriptor)));
                         }
-                        let end = offset
-                            .checked_add(bytes)
+                        let written = buffer_grid
+                            .filter(|grid| grid.group == slot.group && grid.binding == slot.binding)
+                            .map_or(Some(bytes), |grid| bytes.checked_mul(grid.workgroup_count));
+                        let end = written
+                            .and_then(|bytes| offset.checked_add(bytes))
                             .filter(|&end| end <= descriptor.end)
-                            .expect("reviewed footprint fits the Program minimum descriptor size");
+                            .ok_or_else(|| {
+                                self.resource_error(
+                                    GraphErrorKind::InvalidInput,
+                                    "dispatch footprint exceeds the buffer descriptor",
+                                    resource,
+                                )
+                                .with_range(super::AccessRange::Buffer(descriptor))
+                            })?;
                         let (read, write, purpose) = match slot.kind {
                             BindingType::Uniform => (true, false, AccessPurpose::Uniform),
                             BindingType::StorageRead => (true, false, AccessPurpose::StorageRead),
@@ -757,7 +811,9 @@ mod tests {
                 binding: index as u32,
                 resource: operands[index],
             });
-            let owned = graph.append_bindings(&layout, &[0, 0], &input).unwrap();
+            let owned = graph
+                .append_bindings(&layout, &[0, 0], &input, None)
+                .unwrap();
             let result = graph.validate_dispatch_image_layouts(&layout, owned);
             if accepted {
                 result.unwrap();
@@ -773,7 +829,9 @@ mod tests {
             binding: index as u32,
             resource: BindingResource::ImageView(first),
         });
-        let owned = graph.append_bindings(&layout, &[0, 0], &input).unwrap();
+        let owned = graph
+            .append_bindings(&layout, &[0, 0], &input, None)
+            .unwrap();
         graph
             .validate_dispatch_image_layouts(&layout, owned)
             .unwrap();
@@ -802,6 +860,121 @@ mod tests {
                     | BindingType::Sampler => assert_eq!(bytes, 0),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn buffer_grid_initializes_only_the_active_workgroups() {
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        for (workgroups, read_size, succeeds) in [
+            ([2, 3, 1], 48, true),
+            ([1, 3, 1], 24, true),
+            ([1, 3, 1], 28, false),
+        ] {
+            let mut graph = pool.begin().unwrap();
+            let output = graph.buffer("grid", BufferDesc { size: 80 }).unwrap();
+            let layout = [BindingLayout {
+                group: 1,
+                binding: 2,
+                kind: BindingType::StorageWrite,
+                stages: crate::program::ShaderStages::COMPUTE,
+                min_size: 8,
+            }];
+            let bindings = [Binding {
+                group: 1,
+                binding: 2,
+                resource: BindingResource::Buffer {
+                    buffer: output,
+                    offset: 16,
+                    size: 64,
+                },
+            }];
+            let grid = BufferGridWrite::from_dispatch(
+                DispatchWorkgroups::BufferGrid2d {
+                    group: 1,
+                    binding: 2,
+                    max_workgroups: [2, 3],
+                },
+                workgroups,
+            )
+            .unwrap();
+
+            // Exercise the production access builder without importing a
+            // placeholder native shader that cannot initialize the grid.
+            graph
+                .build_pass("tile lists", |graph| {
+                    let start = graph.accesses.len();
+                    graph.append_bindings(&layout, &[8], &bindings, grid)?;
+                    Ok((
+                        Operation::Declared(crate::graph::PassKind::Compute),
+                        start..graph.accesses.len(),
+                        false,
+                    ))
+                })
+                .unwrap();
+            graph
+                .readback_buffer("active lists", output, 16, read_size)
+                .unwrap();
+            let result = graph.compile();
+            if succeeds {
+                assert_eq!(
+                    result.unwrap().ordered_pass_names().collect::<Vec<_>>(),
+                    ["tile lists", "active lists"]
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    GraphErrorKind::UninitializedRead
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn buffer_grid_rejects_invalid_workgroups_and_an_output_too_small_for_the_grid() {
+        let domain = DispatchWorkgroups::BufferGrid2d {
+            group: 0,
+            binding: 0,
+            max_workgroups: [u32::MAX; 2],
+        };
+        for workgroups in [[0, 1, 1], [1, 0, 1], [1, 1, 2]] {
+            assert!(BufferGridWrite::from_dispatch(domain, workgroups).is_err());
+        }
+        let small_domain = DispatchWorkgroups::BufferGrid2d {
+            group: 0,
+            binding: 0,
+            max_workgroups: [4; 2],
+        };
+        assert!(BufferGridWrite::from_dispatch(small_domain, [1, 5, 1]).is_err());
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let output = graph.buffer("grid", BufferDesc { size: 32 }).unwrap();
+        let layout = [BindingLayout {
+            group: 0,
+            binding: 0,
+            kind: BindingType::StorageWrite,
+            stages: crate::program::ShaderStages::COMPUTE,
+            min_size: 8,
+        }];
+        let bindings = [Binding {
+            group: 0,
+            binding: 0,
+            resource: BindingResource::Buffer {
+                buffer: output,
+                offset: 4,
+                size: 28,
+            },
+        }];
+        for workgroups in [[2, 2, 1], [u32::MAX, u32::MAX, 1]] {
+            let error = graph
+                .append_bindings(
+                    &layout,
+                    &[8],
+                    &bindings,
+                    BufferGridWrite::from_dispatch(domain, workgroups).unwrap(),
+                )
+                .unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
         }
     }
 

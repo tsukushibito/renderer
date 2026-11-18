@@ -101,8 +101,8 @@ Graph外のbinding作成と、Graph内の論理bindingからnative命令へ具�
 ### Program由来bindingとshader stageのowned計画
 
 `Graph::dispatch(name, &program, &bindings, workgroups)`は不変の管理下Compute Programを計画する。
-既存の四readback assetは`[1, 1, 1]`、利用側のProgramはレビュー済みの固定dispatch数、
-または対象画像extentとlocal sizeから求める2D dispatch数を使う。`graph::Binding`はgroup/bindingと
+既存の四readback assetは`[1, 1, 1]`を使う。利用側のProgramは固定dispatch数、
+画像extentとlocal sizeから求める2D dispatch数、または上限付きの`BufferGrid2d`を指定する。`graph::Binding`はgroup/bindingと
 `BindingResource::{Buffer { buffer, offset, size }, ImageView, Sampler}`をまとめる。
 Rasterは`Graph::raster_bindings(&program, &bindings)`で同じ型のsliceを一度検査・所有し、
 各drawが不変な`RasterBindings` handleを共有する。用途・shader stage・実アクセス範囲をProgramから導く。
@@ -118,6 +118,11 @@ sampler設定により、呼出元のProgram変数・binding/draw sliceが変更
 解析にはABI最小sizeから推定した量ではなく、shaderと同時にレビューするfootprintを使う。
 uniform/storage readbackは先頭16 byteだけを読み書きし、sampled readbackの出力は16 byte、
 sampled float readbackは64 byteだけを初期化する。大きなdescriptorの未書込tailは有効にならない。
+`BufferGrid2d`は指定した書き込みバッファのbinding offsetから、XとYのworkgroup数の積に
+1グループ分のバイト数を掛けた範囲を初期化する。構築時にX/Yの非ゼロ条件と上限、Zが1であること、
+積のoverflow、実際のdescriptor範囲を検査する。取込側は受理される入力全体で、
+各workgroupが競合せず、対応する出力を過不足なく書き込むことを保証する。
+他のbindingは固定のfootprintを使い、GPUでのdispatch上限・descriptor適合・同期は既存の実行経路に従う。
 sampled入力は選択したViewのmip範囲/layer全域を読むものとして扱い、sampler自体は資源内容アクセスを作らない。
 LODが特定のmipへ偏ると推測して、選択範囲の未初期化検査やhazardを省略しない。
 shaderやdispatch条件を変える際はfootprintと初期化保証も改訂する。

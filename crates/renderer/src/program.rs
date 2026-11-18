@@ -297,16 +297,18 @@ pub struct ComputeProgramDescriptor {
 }
 
 /// Reviewed execution footprint, separate from the ABI's minimum descriptor
-/// size. Entries follow manifest binding order: buffers access the byte prefix,
-/// images read their complete selected View, and samplers have no content access.
+/// size. Entries follow manifest binding order. A buffer entry is its byte
+/// prefix except for the output of [`DispatchWorkgroups::BufferGrid2d`], where
+/// it is the number of bytes written per workgroup. Image entries are zero and
+/// cover the complete selected View. Samplers have no content access.
 /// Changing shader behavior requires reviewing this contract too.
 pub struct DispatchContract {
     pub workgroups: DispatchWorkgroups,
     pub bytes: &'static [u64],
 }
 
-/// Reviewed dispatch domain. Image dispatches may vary their selected image
-/// extent while preserving the shader's full-view write and bounds guarantees.
+/// Reviewed dispatch domain, including how a variable dispatch establishes its
+/// output footprint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DispatchWorkgroups {
     Fixed([u32; 3]),
@@ -315,6 +317,15 @@ pub enum DispatchWorkgroups {
     Image2d {
         group: u32,
         binding: u32,
+    },
+    /// Dispatch `[x, y, 1]`, with each axis between one and its inclusive
+    /// maximum. The named storage buffer slot writes a tightly packed grid with
+    /// one entry per workgroup, beginning at the binding offset. The
+    /// corresponding [`DispatchContract::bytes`] entry gives the entry stride.
+    BufferGrid2d {
+        group: u32,
+        binding: u32,
+        max_workgroups: [u32; 2],
     },
 }
 
@@ -463,7 +474,9 @@ impl ManagedProgram {
     /// undeclared resources or side effects are not permitted. Buffer minimum
     /// sizes and `dispatch.bytes` must have one entry per binding, with a nonzero
     /// byte prefix no larger than the minimum size for buffers and zero for
-    /// image/sampler bindings. All slots must have only `ShaderStages::COMPUTE`.
+    /// image/sampler bindings. The selected `BufferGrid2d` output uses a nonzero
+    /// per-workgroup stride instead of a fixed prefix. All slots must have only
+    /// `ShaderStages::COMPUTE`.
     /// Non-buffer slots must have minimum size zero. Images must be non-array,
     /// non-multisampled 2D float-component resources; shader arithmetic uses
     /// ordinary FP32 values, not shader Float16 or optional narrow types. Storage
@@ -488,9 +501,17 @@ impl ManagedProgram {
     /// `Image2d` must name a write-only storage image slot, use local Z = 1, and
     /// safely guard rounded-up invocations. The shader must work for every
     /// nonzero accepted image extent, with all storage images sharing that
-    /// extent. Sampled images may have different extents. `Fixed` counts must
-    /// be nonzero, and fixed-domain shaders must safely handle every selected
-    /// image extent. Changing source, compiler options, binaries or metadata
+    /// extent. Sampled images may have different extents. `BufferGrid2d` must
+    /// name a write-only storage buffer slot and use nonzero axis maxima. Each
+    /// workgroup coordinates writes so that its entire entry is initialized
+    /// without racing another workgroup. The shader must write exactly
+    /// `x * y * stride` bytes in the packed grid for every accepted dispatch
+    /// and resource content. In particular, buffer addressing cannot depend on
+    /// caller-provided dimensions unless it remains correct for every value
+    /// those inputs may contain. The shader must safely handle every selected
+    /// image extent with the buffer domain. `Fixed` counts must be nonzero
+    /// and fixed-domain shaders must safely handle every selected image extent.
+    /// Changing source, compiler options, binaries or metadata
     /// requires re-establishing these guarantees; reflection/hash validation
     /// alone does not establish them.
     pub const unsafe fn from_trusted_descriptor(
