@@ -33,7 +33,7 @@ def compare_linear(path, expected, sha256):
             "maximum_srgb_code_error_after_linear_quantization": int(np.max(np.abs(actual - sdr)))}
 
 
-def verify(directory, references):
+def verify(directory, references, route_directory=None):
     reports = {}
     for mode in ("strict", "shipping"):
         for api in APIS:
@@ -59,6 +59,22 @@ def verify(directory, references):
             reports[tag] = {"report_sha256": digest(path), "reference_sdr_sha256": meta["sha256"],
                             "comparison": comparison, "runtime": report["runtime"],
                             "pending_on_exit": report["pending_on_exit"]}
+            if route_directory is not None:
+                route_path = route_directory / tag / "report.json"
+                route = load_json(route_path)
+                require(route["runtime"] == report["runtime"] and route["validation"] == validation,
+                        f"Route changed adapter or validation {tag}")
+                require(route["presentation"] and route["bloom"] == "tent"
+                        and not route["smoke"] and route["warmup"] == 24
+                        and route["accepted"] == 1824 and route["pending_on_exit"] > 0
+                        and (route["initial_width"], route["initial_height"]) == (1920, 1080)
+                        and len(route["timing"]["frame_intervals_ns"]) == 1800,
+                        f"Incomplete Window route {tag}")
+                require(route["steady_memory"]["allocation_free"] is True
+                        and not route["steady_memory"]["overflowed"], f"Route memory gate failed {tag}")
+                reports[tag]["route"] = {"report_sha256": digest(route_path),
+                                         "steady_memory": route["steady_memory"],
+                                         "pending_on_exit": route["pending_on_exit"]}
     return {"passed": True, "runs": reports}
 
 
@@ -66,5 +82,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("image_cohort", type=Path)
+    parser.add_argument("--route-directory", type=Path)
+    parser.add_argument("--output", type=Path, help="write the combined summary to this file")
     args = parser.parse_args()
-    write_json(args.directory / "summary.json", verify(args.directory, args.image_cohort))
+    write_json(args.output or args.directory / "summary.json",
+               verify(args.directory, args.image_cohort, args.route_directory))

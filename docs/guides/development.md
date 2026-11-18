@@ -427,7 +427,7 @@ python -B tools/bistro/b5_images.py accept --strict $strict --shipping $shipping
 メモリの固定計測からresize・設定変更・画像ファイル書出しは外し、別の受入で確認する。
 
 ```powershell
-python -B tools/bistro/b5_window_acceptance.py $windowSmokeDirectory $imageDirectory
+python -B tools/bistro/b5_window_acceptance.py $windowSmokeDirectory $imageDirectory --route-directory $windowRouteDirectory
 python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $manifest --ibl-manifest $iblManifest --output $performanceDirectory
 ```
 
@@ -435,6 +435,7 @@ python -B tools/bistro/b5_benchmark.py --binary $ordinaryRelease --manifest $man
 初回の読込／準備／upload、定常のCPU phase／GPU時間／frame間隔、VSync on/offのpresentを記録する。
 オフスクリーンは3,600 warmup＋5,400測定frame、別枠のウィンドウ計測は120 warmup＋600測定frameとする。
 各API・条件を独立3 processで実行する。
+表示側の計時経路だけを修正した前後の記録には、`--window-binary`でウィンドウ測定用EXEを明示できる。
 実ウィンドウの時刻はアプリとnative APIの観測であり、ディスプレイ走査時刻はこの方法で測定しない。
 
 ### 画像比較と性能値の読み方

@@ -15,7 +15,7 @@ use super::{
 use adapter::{Surface, WindowBackend};
 use renderer::{
     PresentationMetrics, SubmissionMetrics,
-    capacity::CapacityRecovery,
+    capacity::{CapacityRecovery, RuntimeCapacityKind},
     graph::{GraphPool, ImportImage, PassHandle},
     presentation::{PresentOutcome, PresentationConfig},
 };
@@ -252,6 +252,10 @@ impl<B: WindowBackend> State<B> {
             }
             self.frames.pop_front();
         }
+        self.collect_presentation_timings()
+    }
+
+    fn collect_presentation_timings(&mut self) -> Result<(), Error> {
         while let Some(metrics) = self.surface.pop_profile() {
             if self.timings.started.is_some() {
                 push(&mut self.timings.present, metrics)?;
@@ -358,6 +362,7 @@ impl<B: WindowBackend> State<B> {
             self.set_extent((actual.width, actual.height));
         }
         let readiness = self.surface.prepare()?;
+        self.collect_presentation_timings()?;
         if self.finished {
             if self.frames.is_empty() && self.surface.idle()? {
                 self.poll()?;
@@ -606,7 +611,11 @@ fn uniform(camera: Camera, conditions: &Conditions, options: &Options) -> Result
 }
 
 fn backpressure<B: WindowBackend>(error: &Error) -> bool {
-    B::capacity_error(error).is_some_and(|capacity| capacity.recovery == CapacityRecovery::Poll)
+    B::capacity_error(error).is_some_and(|capacity| {
+        capacity.recovery == CapacityRecovery::Poll
+            || (capacity.resource == RuntimeCapacityKind::TimingSamples
+                && capacity.recovery == CapacityRecovery::ReleaseResults)
+    })
 }
 
 fn push<T>(storage: &mut Vec<T>, value: T) -> Result<(), Error> {

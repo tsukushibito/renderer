@@ -2,6 +2,7 @@
 
 import argparse
 from pathlib import Path
+import re
 import statistics
 import subprocess
 import time
@@ -65,10 +66,18 @@ def summarize_window(report, frames):
     return result
 
 
+def input_identity(args):
+    paths = ("binary", "manifest", "ibl_manifest")
+    if args.window_binary is not None:
+        paths += ("window_binary",)
+    return {name: digest(getattr(args, name)) for name in paths}
+
+
 def run(args, policy, api, scenario, timed, destination):
     windowed = scenario != "offscreen"
     frames = WINDOW_FRAMES if windowed else FRAMES
-    command = [str(args.binary), "--api", api, "--manifest", str(args.manifest), "--ibl-manifest",
+    binary = args.window_binary if windowed and args.window_binary is not None else args.binary
+    command = [str(binary), "--api", api, "--manifest", str(args.manifest), "--ibl-manifest",
                str(args.ibl_manifest), "--bloom", "tent", "--output", str(destination)]
     for key, value in frames.items():
         command += [f"--{key}", str(value)]
@@ -101,6 +110,8 @@ def run(args, policy, api, scenario, timed, destination):
     report = load_json(path)
     require(report["runtime"]["api"] == api and report["validation"]["mode"] == "disabled"
             and report["validation"]["clean"], f"Wrong runtime or diagnostics {destination}")
+    require("RTX 3060" in report["runtime"]["name"] and report["runtime"]["device_luid"] is not None,
+            f"Wrong hardware adapter {destination}")
     if windowed:
         require(report["bloom"] == "tent" and report["vsync"] == (scenario == "window-vsync"),
                 "Window quality or pacing request changed")
@@ -119,15 +130,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("binary", "manifest", "ibl-manifest", "output"):
         parser.add_argument(f"--{name}", type=Path, required=True)
+    parser.add_argument("--window-binary", type=Path,
+                        help="use a separate release executable for the Windows timing cohort")
     parser.add_argument("--resume", action="store_true", help="reuse validated completed runs")
     args = parser.parse_args()
     ordinary_host_token()
     policy = host_policy.plan("performance-cores")
     settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
-    identity = {name: digest(getattr(args, name)) for name in ("binary", "manifest", "ibl_manifest")}
+    identity = input_identity(args)
     progress = args.output / "progress.json"
     if args.resume:
         result = load_json(progress)
+        if ("window_binary" in identity and "window_binary" not in result["identity"]
+                and all(label.startswith("offscreen-") for label in result["runs"])):
+            result["identity"]["window_binary"] = identity["window_binary"]
         require(result["identity"] == identity and result["settings"] == settings
                 and result["cpu_policy"] == policy, "Resume identity differs")
         for run_id, record in result["runs"].items():
@@ -135,10 +151,13 @@ def main():
             require(report.resolve().is_relative_to(args.output.resolve())
                     and digest(report) == record["report_sha256"], f"Stored report differs: {run_id}")
     else:
+        power_output = subprocess.check_output(["powercfg", "/getactivescheme"]).replace(b"\0", b"")
+        power_match = re.search(rb"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}",
+                                power_output, re.IGNORECASE)
+        require(power_match is not None, "Active Windows power scheme GUID unavailable")
         args.output.mkdir(exist_ok=False)
-        power_scheme = subprocess.check_output(["powercfg", "/getactivescheme"]).decode("oem").strip()
         result = {"identity": identity, "settings": settings, "cpu_policy": policy,
-                  "power_scheme": power_scheme, "runs": {}}
+                  "power_scheme": power_match[0].decode("ascii").lower(), "runs": {}}
     write_json(progress, result)
     runs = result["runs"]
     for scenario, timed in SCENARIOS:
@@ -155,13 +174,15 @@ def main():
                     destination = args.output / f"{label}-attempt{attempt}"
                 runs[label] = run(args, policy, api, scenario, timed, destination)
                 write_json(progress, result)
+    adapters = {tuple(record["runtime"]["device_luid"]) for record in runs.values()}
+    require(len(adapters) == 1, "Runs must use the same physical adapter")
     result["median_window_wall_ms"] = {
         f"{scenario}/{api}": statistics.median(
             record["metrics"]["mean_wall_ms"] for label, record in runs.items()
             if label.startswith(scenario) and f"-{api}-" in label)
         for scenario in ("window-vsync", "window-tearing") for api in APIS
     }
-    require({name: digest(getattr(args, name)) for name in identity} == identity,
+    require(input_identity(args) == identity,
             "Benchmark executable or input identity changed")
     write_json(args.output / "summary.json", result)
 
