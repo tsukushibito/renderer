@@ -458,8 +458,10 @@ pub(super) fn execute(
     resident.accept_buffer_updates(&retry, retry_updates)?;
     let output = retry.export_image(retry_output)?;
     backend.delete(output.key())?;
-    let retry: Frame = Frame {
-        id: retry.id(),
+    let id = retry.id();
+    drop(retry);
+    let retry = Frame {
+        id,
         plan: retry_plan,
         passes: retry_passes,
     };

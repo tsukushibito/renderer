@@ -518,8 +518,10 @@ impl State {
             self.workspace
                 .accept_shadow_updates(&pending, built.shadow_updates)?;
             let image = pending.export_image(built.output)?;
+            let id = pending.id();
+            drop(pending);
             self.frames.push_back(Frame {
-                id: pending.id(),
+                id,
                 replay: built
                     .present_capture
                     .map(|capture| (self.accepted, capture)),
