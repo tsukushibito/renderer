@@ -16,6 +16,8 @@ pub enum GraphCapacityKind {
     Passes,
     Accesses,
     Draws,
+    /// Packed inline constant words across all recorded Raster draws.
+    RasterConstantWords,
     Bindings,
     Attachments,
     Dependencies,

@@ -237,7 +237,14 @@ mod tests {
 
     #[test]
     fn indirect_draw_retains_encoder_and_exact_mask_range_with_only_real_commands_read() {
-        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut pool = GraphPool::new(
+            GraphCapacity {
+                raster_constant_words: Some(20),
+                ..GraphCapacity::default()
+            },
+            1,
+        )
+        .unwrap();
         let table = IndexedIndirectTable::new(&[template(1, 3); 65]).unwrap();
         let mut graph = pool.begin().unwrap();
         let vertices = graph.buffer("vertices", BufferDesc { size: 84 }).unwrap();
@@ -259,6 +266,7 @@ mod tests {
             .unwrap();
         let output = graph.image("color", ImageDesc::rgba8(2, 2)).unwrap();
         let view = graph.image_view(output, 0, 0).unwrap();
+        let constants = RasterParameters::default().into();
         let pass = graph
             .raster(
                 "draw",
@@ -271,14 +279,7 @@ mod tests {
                     color_resolves: &[],
                     depth: None,
                 },
-                |raster| {
-                    raster.draw_indirect(
-                        &ManagedRasterProgram::mesh(),
-                        args,
-                        None,
-                        RasterParameters::default().into(),
-                    )
-                },
+                |raster| raster.draw_indirect(&ManagedRasterProgram::mesh(), args, None, constants),
             )
             .unwrap();
         graph.readback_image("color pixels", output).unwrap();
@@ -302,6 +303,7 @@ mod tests {
         assert_eq!(indirect.command_count, 65);
         assert_eq!(indirect.buffer, args.buffer.index);
         assert_eq!((plan.raster_draws(&batch.draws)[0]).index_count, 4);
+        assert!(plan.raster_constants(batch).eq([constants.words()]));
         assert!(plan.accesses(pass.index).iter().any(|access| {
             access.purpose == AccessPurpose::Indirect
                 && access.resource == indirect.buffer

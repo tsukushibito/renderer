@@ -569,7 +569,11 @@ fn record_draws(
         let buffer = slot.buffers[slot.resource_map[command.buffer]].raw();
         (signature, buffer, command.command_count)
     });
-    for draw in graph.raster_draws(&batch.draws) {
+    for (draw, parameters) in graph
+        .raster_draws(&batch.draws)
+        .iter()
+        .zip(graph.raster_constants(batch))
+    {
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running().map(|client| {
             client.span(
@@ -635,11 +639,11 @@ fn record_draws(
                 };
                 slot.list.IASetVertexBuffers(0, Some(&[vertices]));
                 slot.list.IASetIndexBuffer(Some(&indices));
-                if !draw.parameters.words().is_empty() {
+                if !parameters.is_empty() {
                     slot.list.SetGraphicsRoot32BitConstants(
                         INLINE_ROOT,
-                        draw.parameters.words().len() as u32,
-                        draw.parameters.words().as_ptr().cast(),
+                        parameters.len() as u32,
+                        parameters.as_ptr().cast(),
                         0,
                     );
                 }

@@ -2,7 +2,8 @@
 
 use super::{
     AttachmentOperand, BindingOperands, Dependency, Graph, GraphCapacityKind, GraphError, Pass,
-    RasterBatchOperands, RasterDrawOperands, Resource, ResourceAccess, ResourceKey, analysis,
+    RasterBatchOperands, RasterConstants, RasterDrawOperands, Resource, ResourceAccess,
+    ResourceKey, analysis,
 };
 use std::{
     cell::UnsafeCell,
@@ -40,6 +41,9 @@ pub struct GraphCapacity {
     /// Indexed draw operands across all Raster passes; attachment-only passes
     /// consume no draw entries.
     pub draws: usize,
+    /// Total inline constant words across all Raster batches. `None` reserves
+    /// 32 words per draw. `Some(0)` permits only draws with empty constants.
+    pub raster_constant_words: Option<usize>,
     /// Descriptor operands across Compute dispatches and distinct Raster binding
     /// sets. Reusing one set in more draws does not duplicate its operands.
     pub bindings: usize,
@@ -78,6 +82,7 @@ impl Default for GraphCapacity {
             passes: 256,
             accesses: 2048,
             draws: 2048,
+            raster_constant_words: None,
             bindings: 2048,
             attachments: 512,
             dependencies: 2048,
@@ -153,6 +158,8 @@ pub struct GraphStorage {
     pub(super) uploads: Vec<u8>,
     pub(super) draws: Vec<RasterDrawOperands>,
     pub(super) raster_batches: Vec<RasterBatchOperands>,
+    pub(super) raster_constant_words: Vec<u32>,
+    pub(super) raster_constant_word_limit: usize,
     pub(super) bindings: Vec<BindingOperands>,
     pub(super) binding_accesses: Vec<ResourceAccess>,
     pub(super) raster_binding_seen: Vec<bool>,
@@ -181,6 +188,19 @@ impl Deref for GraphStorage {
 )]
 impl GraphStorage {
     fn new(capacity: GraphCapacity) -> Result<Self, GraphError> {
+        let raster_constant_word_limit = match capacity.raster_constant_words {
+            Some(limit) => limit,
+            None => capacity
+                .draws
+                .checked_mul(RasterConstants::MAX_WORDS)
+                .ok_or_else(|| {
+                    capacity_error(
+                        GraphCapacityKind::RasterConstantWords,
+                        isize::MAX as usize / size_of::<u32>(),
+                        None,
+                    )
+                })?,
+        };
         let mut raster_ranges = buffer(capacity.resources, GraphCapacityKind::Resources)?;
         raster_ranges.resize(capacity.resources, [0; 2]);
         let mut imports = HashMap::new();
@@ -208,6 +228,11 @@ impl GraphStorage {
             draws: buffer(capacity.draws, GraphCapacityKind::Draws)?,
             // An encoded Program batch contains at least one draw.
             raster_batches: buffer(capacity.draws, GraphCapacityKind::Draws)?,
+            raster_constant_words: buffer(
+                raster_constant_word_limit,
+                GraphCapacityKind::RasterConstantWords,
+            )?,
+            raster_constant_word_limit,
             bindings: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             binding_accesses: buffer(capacity.bindings, GraphCapacityKind::Bindings)?,
             raster_binding_seen,
@@ -253,6 +278,7 @@ impl GraphStorage {
         self.uploads.clear();
         self.draws.clear();
         self.raster_batches.clear();
+        self.raster_constant_words.clear();
         self.bindings.clear();
         self.binding_accesses.clear();
         self.read_accesses.clear();
@@ -319,6 +345,24 @@ impl GraphStorage {
     }
     pub(crate) fn raster_batches(&self, range: &Range<usize>) -> &[RasterBatchOperands] {
         &self.raster_batches[range.clone()]
+    }
+    pub(crate) fn raster_constants(
+        &self,
+        batch: &RasterBatchOperands,
+    ) -> impl ExactSizeIterator<Item = &[u32]> {
+        let stride = batch.program.parameter_size() as usize / size_of::<u32>();
+        let count = batch.draws.len();
+        let mut words = if stride == 0 {
+            &[]
+        } else {
+            // Construction appends exactly one ABI-sized payload per draw.
+            &self.raster_constant_words[batch.constants_start..][..count * stride]
+        };
+        (0..count).map(move |_| {
+            let (parameters, remaining) = words.split_at(stride);
+            words = remaining;
+            parameters
+        })
     }
     #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
     pub(crate) fn raster_bindings(&self, range: &Range<usize>) -> &[BindingOperands] {

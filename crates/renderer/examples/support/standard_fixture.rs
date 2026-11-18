@@ -61,6 +61,7 @@ pub fn capacity() -> GraphCapacity {
         passes: 32,
         accesses: 128,
         draws: 20,
+        raster_constant_words: None,
         bindings: 40,
         attachments: 12,
         dependencies: 64,

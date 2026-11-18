@@ -7,7 +7,7 @@ use ash::vk;
 
 use super::super::resources::DeviceImage;
 use super::ShaderPrograms;
-use crate::graph::{RasterConstants, SampleCount};
+use crate::graph::SampleCount;
 
 const _: () = assert!(
     std::mem::size_of::<vk::DrawIndexedIndirectCommand>() as u64
@@ -31,7 +31,7 @@ pub(in crate::backends::vulkan) struct NativeRasterDraw<'a> {
     pub vertices: vk::Buffer,
     pub indices: vk::Buffer,
     pub command: NativeIndexedDraw,
-    pub parameters: &'a RasterConstants,
+    pub parameters: &'a [u32],
     pub sets: [vk::DescriptorSet; crate::program::MAX_RASTER_BIND_GROUPS],
 }
 
@@ -160,11 +160,8 @@ impl ShaderPrograms {
                 for draw in draws {
                     if size != 0 {
                         let mut bytes = [0_u8; 128];
-                        for (value, output) in draw
-                            .parameters
-                            .words()
-                            .iter()
-                            .zip(bytes.as_chunks_mut::<4>().0)
+                        for (value, output) in
+                            draw.parameters.iter().zip(bytes.as_chunks_mut::<4>().0)
                         {
                             output.copy_from_slice(&value.to_ne_bytes());
                         }

@@ -19,6 +19,7 @@ struct PassTransaction<'a> {
     accesses: usize,
     draws: usize,
     raster_batches: usize,
+    raster_constant_words: usize,
     uploads: usize,
     names: usize,
     bindings: usize,
@@ -32,6 +33,7 @@ impl<'a> PassTransaction<'a> {
             accesses: graph.accesses.len(),
             draws: graph.draws.len(),
             raster_batches: graph.raster_batches.len(),
+            raster_constant_words: graph.raster_constant_words.len(),
             uploads: graph.uploads.len(),
             names: graph.names.len(),
             bindings: graph.bindings.len(),
@@ -51,6 +53,8 @@ impl Drop for PassTransaction<'_> {
         data.accesses.truncate(self.accesses);
         data.draws.truncate(self.draws);
         data.raster_batches.truncate(self.raster_batches);
+        data.raster_constant_words
+            .truncate(self.raster_constant_words);
         data.uploads.truncate(self.uploads);
         data.names.truncate(self.names);
         data.bindings.truncate(self.bindings);
@@ -849,13 +853,26 @@ mod tests {
             .unwrap();
         graph.readback_image("read output", output).unwrap();
         let plan = graph.compile().unwrap();
-        let Operation::Raster { draws: owned, .. } = &plan.passes[pass.index].operation else {
+        let Operation::Raster {
+            batches,
+            draws: owned,
+            ..
+        } = &plan.passes[pass.index].operation
+        else {
             panic!()
         };
+        let [batch] = plan.raster_batches(batches) else {
+            panic!("one Program batch")
+        };
         assert_eq!(plan.bindings.len(), 3);
-        for (actual, expected) in plan.draws[owned.clone()].iter().zip(draws) {
+        for ((actual, words), expected) in plan
+            .raster_draws(owned)
+            .iter()
+            .zip(plan.raster_constants(batch))
+            .zip(draws)
+        {
             assert_eq!(actual.bindings, 0..3);
-            assert_eq!(actual.parameters, expected.parameters);
+            assert_eq!(words, expected.parameters.words());
             assert_eq!(actual.index_count, expected.index_count);
         }
         assert_eq!(
@@ -1192,11 +1209,15 @@ mod tests {
         assert_eq!(&batch.draws, draws);
         let owned = plan.raster_draws(draws);
         assert_eq!(owned.len(), 2);
-        for (actual, expected) in owned.iter().zip([first, second]) {
+        for ((actual, words), expected) in owned
+            .iter()
+            .zip(plan.raster_constants(batch))
+            .zip([first, second])
+        {
             assert_eq!(actual.vertices, expected.vertices.index);
             assert_eq!(actual.indices, expected.indices.index);
             assert_eq!(actual.index_count, expected.index_count);
-            assert_eq!(actual.parameters, expected.parameters);
+            assert_eq!(words, expected.parameters.words());
         }
         assert_eq!(colors.len(), 1);
         let attachment = plan.attachments[colors.start];
@@ -1306,7 +1327,8 @@ mod tests {
     fn callbacks_cannot_publish_failed_draws_and_unwind_restores_capacity() {
         let mut pool = GraphPool::new(
             GraphCapacity {
-                draws: 2,
+                draws: 3,
+                raster_constant_words: Some(40),
                 attachments: 1,
                 ..GraphCapacity::default()
             },
@@ -1328,16 +1350,21 @@ mod tests {
         };
         let program = ManagedRasterProgram::mesh();
         let error = graph
-            .raster("two slots", attachments, |raster| {
+            .raster("constant budget exceeded", attachments, |raster| {
                 raster.draw(&program, [mesh])?;
                 assert!(raster.draw(&program, [mesh, mesh]).is_err());
                 Ok(())
             })
             .unwrap_err();
         assert_eq!(
-            error.capacity().unwrap().kind,
-            crate::graph::GraphCapacityKind::Draws
+            error.capacity(),
+            Some(crate::graph::GraphCapacityError {
+                kind: crate::graph::GraphCapacityKind::RasterConstantWords,
+                limit: 40,
+                required: Some(60),
+            })
         );
+        assert!(graph.raster_constant_words.is_empty());
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = graph.raster("unwound", attachments, |raster| {
@@ -1347,6 +1374,7 @@ mod tests {
             }))
             .is_err()
         );
+        assert!(graph.raster_constant_words.is_empty());
         graph
             .raster("retry", attachments, |raster| {
                 raster.draw(&program, [mesh])?;
@@ -1359,6 +1387,11 @@ mod tests {
             plan.ordered_pass_names()
                 .eq(["geometry", "geometry", "retry", "output pixels"])
         );
+        assert_eq!(plan.raster_constant_words.len(), 40);
+        drop(plan);
+        let reused = pool.begin().unwrap();
+        assert!(reused.raster_constant_words.is_empty());
+        assert_eq!(reused.raster_constant_word_limit, 40);
     }
 
     #[test]
@@ -1408,6 +1441,7 @@ mod tests {
         let mut pool = GraphPool::new(
             GraphCapacity {
                 draws: 2,
+                raster_constant_words: Some(40),
                 attachments: 1,
                 ..GraphCapacity::default()
             },

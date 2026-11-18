@@ -258,6 +258,7 @@ fn d3d12_windowed_resize_cancel_pending_shutdown_and_frame_memory() {
             accesses: 16,
             attachments: 8,
             draws: 1,
+            raster_constant_words: None,
             bindings: 0,
             dependencies: 8,
             initial_ranges: 16,

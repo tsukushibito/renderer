@@ -35,6 +35,7 @@ pub(crate) fn graph_capacity() -> GraphCapacity {
         passes: 8,
         accesses: 32,
         draws: 4,
+        raster_constant_words: None,
         bindings: 16,
         attachments: 16,
         dependencies: 8,

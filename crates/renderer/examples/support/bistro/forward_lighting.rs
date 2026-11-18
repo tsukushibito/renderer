@@ -63,6 +63,7 @@ pub(super) fn initialize_tiles<B: Backend>(
             passes: 2,
             accesses: 4,
             draws: 0,
+            raster_constant_words: Some(0),
             bindings: 3,
             attachments: 0,
             dependencies: 0,

@@ -29,6 +29,7 @@ fn capacity() -> GraphCapacity {
         passes: 16,
         accesses: 64,
         draws: 4,
+        raster_constant_words: None,
         bindings: 16,
         attachments: 8,
         dependencies: 16,

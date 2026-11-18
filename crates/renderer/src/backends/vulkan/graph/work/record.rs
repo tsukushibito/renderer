@@ -247,7 +247,8 @@ impl TransferPayload for GraphWork {
                                 draw_operands
                                     .iter()
                                     .zip(descriptor_sets)
-                                    .map(|(draw, &sets)| NativeRasterDraw {
+                                    .zip(plan.raster_constants(batch))
+                                    .map(|((draw, &sets), parameters)| NativeRasterDraw {
                                         vertices: self.resource(draw.vertices).buffer().handle,
                                         indices: self.resource(draw.indices).buffer().handle,
                                         command: indirect.unwrap_or(NativeIndexedDraw::Direct {
@@ -255,7 +256,7 @@ impl TransferPayload for GraphWork {
                                             index_count: draw.index_count,
                                             instance_count: draw.instance_count,
                                         }),
-                                        parameters: &draw.parameters,
+                                        parameters,
                                         sets,
                                     }),
                             );

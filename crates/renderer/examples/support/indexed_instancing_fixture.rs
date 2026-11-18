@@ -40,6 +40,7 @@ const CAPACITY: GraphCapacity = GraphCapacity {
     passes: 5,
     accesses: 16,
     draws: 2,
+    raster_constant_words: None,
     bindings: 1,
     attachments: 1,
     dependencies: 0,

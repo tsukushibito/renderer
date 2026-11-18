@@ -329,6 +329,19 @@ impl Budget {
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
         let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings + 8 * groups;
+        let shadow_words = scene
+            .primitives
+            .len()
+            .checked_mul(shadow::CASCADE_COUNT)
+            .ok_or("Raster shadow constant budget overflow")?;
+        let instance_words = options
+            .instances
+            .draws()
+            .checked_mul(program::INSTANCE_INLINE_BYTES as usize / size_of::<u32>())
+            .ok_or("Raster instance constant budget overflow")?;
+        let raster_constant_words = shadow_words
+            .checked_add(instance_words)
+            .ok_or("Raster constant budget overflow")?;
         let graph = GraphCapacity {
             resources,
             passes: 24
@@ -340,6 +353,7 @@ impl Budget {
                 + indirect_passes,
             accesses,
             draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
+            raster_constant_words: Some(raster_constant_words),
             bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
                 + 4
                 + bloom_bindings
@@ -454,6 +468,7 @@ impl Budget {
                 passes: 1,
                 accesses: 32,
                 draws: 0,
+                raster_constant_words: Some(0),
                 bindings: 0,
                 attachments: 0,
                 dependencies: 0,
@@ -541,6 +556,7 @@ pub(super) fn upload_buffer<B: Backend>(
             passes: 1,
             accesses: 1,
             draws: 0,
+            raster_constant_words: Some(0),
             bindings: 0,
             attachments: 0,
             dependencies: 0,
@@ -649,6 +665,7 @@ impl Resident {
                 passes: 2,
                 accesses: 2,
                 draws: 0,
+                raster_constant_words: Some(0),
                 bindings: 0,
                 attachments: 0,
                 dependencies: 0,

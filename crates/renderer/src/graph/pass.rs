@@ -135,17 +135,19 @@ impl Default for RasterParameters {
 }
 
 /// Owned per-draw inline words. Construction copies at most 128 bytes without
-/// allocating; Graph captures this immutable value into its prepared draw slot.
+/// allocating. Graph captures only the supplied words in its prepared storage.
 /// Shader-specific values and their interpretation belong to the trusted Program.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RasterConstants {
-    words: [u32; 32],
+    words: [u32; Self::MAX_WORDS],
     len: u8,
 }
 
 impl RasterConstants {
+    pub(super) const MAX_WORDS: usize = 32;
+
     pub fn new(words: &[u32]) -> Result<Self, GraphError> {
-        if words.len() > 32 {
+        if words.len() > Self::MAX_WORDS {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
                 "Raster inline constants exceed 128 bytes",
@@ -162,7 +164,7 @@ impl RasterConstants {
 }
 impl From<RasterParameters> for RasterConstants {
     fn from(parameters: RasterParameters) -> Self {
-        let mut words = [0; 32];
+        let mut words = [0; Self::MAX_WORDS];
         for (word, value) in words.iter_mut().zip(
             parameters
                 .transform
@@ -293,7 +295,7 @@ pub(crate) struct ResourceAccess {
     pub purpose: AccessPurpose,
 }
 
-/// Owned indexed draw operands, including its canonical material descriptors.
+/// Owned indexed draw operands with a range of canonical material descriptors.
 #[derive(Clone, Debug)]
 #[cfg_attr(
     not(feature = "vulkan"),
@@ -313,7 +315,6 @@ pub(crate) struct RasterDrawOperands {
     pub first_index: u32,
     pub index_count: u32,
     pub instance_count: u32,
-    pub parameters: RasterConstants,
 }
 /// Internal provenance for trusted immutable streams. Public byte uploads
 /// cannot establish this metadata.
@@ -336,6 +337,8 @@ pub(crate) enum MeshUpload {
 pub(crate) struct RasterBatchOperands {
     pub program: crate::program::ManagedRasterProgram,
     pub draws: Range<usize>,
+    /// The Program ABI fixes the count of words per draw in this batch.
+    pub constants_start: usize,
     /// When present, the sole draw in `draws` supplies bindings and proves
     /// the index prefix needed by the real commands in the argument buffer.
     pub indirect: Option<IndirectDrawOperands>,

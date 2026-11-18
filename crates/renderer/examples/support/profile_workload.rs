@@ -168,6 +168,7 @@ fn capacity(resources: usize) -> Result<GraphCapacity, Error> {
         passes,
         accesses: resources.checked_mul(2).ok_or("access capacity overflow")?,
         draws: 0,
+        raster_constant_words: Some(0),
         bindings: 0,
         attachments: 0,
         dependencies: 0,

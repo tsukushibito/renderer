@@ -65,6 +65,7 @@ impl RasterPass<'_, '_> {
         let graph = &mut *self.graph;
         let buffer = graph.buffer_id(arguments.buffer)?;
         let first_draw = graph.draws.len();
+        let constants_start = graph.raster_constant_words.len();
         // The templates validate the topology of each actual draw. The
         // representative draw covers their entire prefix for GPU preflight.
         graph.capture_raster_draw(
@@ -87,6 +88,7 @@ impl RasterPass<'_, '_> {
         graph.data_mut().raster_batches.push(RasterBatchOperands {
             program: *program,
             draws: first_draw..first_draw + 1,
+            constants_start,
             indirect: Some(IndirectDrawOperands {
                 buffer,
                 command_count: arguments.command_count,
@@ -103,6 +105,7 @@ impl RasterPass<'_, '_> {
         self.validate_attachments(program)?;
         let graph = &mut *self.graph;
         let first_draw = graph.draws.len();
+        let constants_start = graph.raster_constant_words.len();
         #[cfg(feature = "tracy")]
         let _span = tracy_client::Client::running().map(|client| {
             client.span(
@@ -128,6 +131,7 @@ impl RasterPass<'_, '_> {
             graph.data_mut().raster_batches.push(RasterBatchOperands {
                 program: *program,
                 draws,
+                constants_start,
                 indirect: None,
             });
         }
@@ -185,11 +189,22 @@ impl Graph {
                 self.draws.len().checked_add(1),
             ));
         }
-        if draw.parameters.words().len() * 4 != program.parameter_size() as usize {
+        let words = draw.parameters.words();
+        if size_of_val(words) != program.parameter_size() as usize {
             return Err(GraphError::new(
                 GraphErrorKind::InvalidInput,
                 "Raster inline constants do not match the Program ABI",
             ));
+        }
+        if !words.is_empty() {
+            let required = self.raster_constant_words.len().checked_add(words.len());
+            if required.is_none_or(|required| required > self.raster_constant_word_limit) {
+                return Err(capacity_error(
+                    GraphCapacityKind::RasterConstantWords,
+                    self.raster_constant_word_limit,
+                    required,
+                ));
+            }
         }
         let bindings = self.use_raster_bindings(program, draw.bindings)?;
         let (vertices, indices, index_range) =
@@ -210,8 +225,10 @@ impl Graph {
             first_index: draw.first_index,
             index_count: draw.index_count,
             instance_count: draw.instance_count,
-            parameters: draw.parameters,
         });
+        if !words.is_empty() {
+            data.raster_constant_words.extend_from_slice(words);
+        }
         Ok(())
     }
 
