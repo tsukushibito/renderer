@@ -254,7 +254,11 @@ fn signature(
     let desc = D3D12_ROOT_SIGNATURE_DESC {
         NumParameters: parameters.len() as u32,
         pParameters: parameters.as_ptr(),
-        Flags: D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+        Flags: if managed.is_fullscreen() {
+            D3D12_ROOT_SIGNATURE_FLAG_NONE
+        } else {
+            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+        },
         ..Default::default()
     };
     let mut blob = None;
@@ -480,9 +484,13 @@ impl RasterPipeline {
                 FrontFace: stencil,
                 BackFace: stencil,
             },
-            InputLayout: D3D12_INPUT_LAYOUT_DESC {
-                pInputElementDescs: attributes.as_ptr(),
-                NumElements: attributes.len() as u32,
+            InputLayout: if attributes.is_empty() {
+                D3D12_INPUT_LAYOUT_DESC::default()
+            } else {
+                D3D12_INPUT_LAYOUT_DESC {
+                    pInputElementDescs: attributes.as_ptr(),
+                    NumElements: attributes.len() as u32,
+                }
             },
             IBStripCutValue: D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED,
             PrimitiveTopologyType: D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE,

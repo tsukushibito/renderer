@@ -8,7 +8,8 @@ use ash::vk;
 
 use super::super::super::memory::MemoryOwner;
 use super::super::super::program::{
-    NativeIndexedDraw, NativeRasterDraw, RenderingAttachments, attachment_info,
+    NativeIndexedDraw, NativeRasterDraw, NativeRasterGeometry, RenderingAttachments,
+    attachment_info,
 };
 use super::super::super::resources::DeviceImage;
 use super::super::super::transfer::staging::StagingRange;
@@ -229,25 +230,40 @@ impl TransferPayload for GraphWork {
                                 buffer: self.resource(args.buffer).buffer().handle,
                                 command_count: args.command_count,
                             });
+                            let draws = draw_operands
+                                .iter()
+                                .zip(descriptor_sets)
+                                .zip(plan.raster_constants(batch))
+                                .map(|((draw, &sets), parameters)| {
+                                    let geometry = match &draw.indexed {
+                                        None => NativeRasterGeometry::Fullscreen,
+                                        Some(indexed) => {
+                                            let vertices = self.resource(indexed.vertices).buffer();
+                                            let indices = self.resource(indexed.indices).buffer();
+                                            let command =
+                                                indirect.unwrap_or(NativeIndexedDraw::Direct {
+                                                    first_index: indexed.first_index,
+                                                    index_count: indexed.index_count,
+                                                    instance_count: indexed.instance_count,
+                                                });
+                                            NativeRasterGeometry::Indexed {
+                                                vertices: vertices.handle,
+                                                indices: indices.handle,
+                                                command,
+                                            }
+                                        }
+                                    };
+                                    NativeRasterDraw {
+                                        geometry,
+                                        parameters,
+                                        sets,
+                                    }
+                                });
                             programs.record_raster_batch(
                                 command,
                                 programs.raster_program(slot),
                                 *sample_count,
-                                draw_operands
-                                    .iter()
-                                    .zip(descriptor_sets)
-                                    .zip(plan.raster_constants(batch))
-                                    .map(|((draw, &sets), parameters)| NativeRasterDraw {
-                                        vertices: self.resource(draw.vertices).buffer().handle,
-                                        indices: self.resource(draw.indices).buffer().handle,
-                                        command: indirect.unwrap_or(NativeIndexedDraw::Direct {
-                                            first_index: draw.first_index,
-                                            index_count: draw.index_count,
-                                            instance_count: draw.instance_count,
-                                        }),
-                                        parameters,
-                                        sets,
-                                    }),
+                                draws,
                             );
                         }
                         device.raw().cmd_end_rendering(command);

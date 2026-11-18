@@ -148,6 +148,22 @@
       "d3d12_active_bindings": ["Texture2D<float4> t0/space0"],
       "sampler": "SPIRV-Cross splits the combined sampler declaration, but texelFetch becomes Texture2D.Load. DXC removes unused s0; the checked-in reflection verifies no active sampler.",
       "output": "SV_Target0 float4, source and destination extents must match"
+    },
+    "tone_neutral.frag": {
+      "profile": "ps_6_0",
+      "input": "SV_Position.xy, same-size scene-linear Rec.709 RGBA16F",
+      "vulkan_bindings": ["set0/binding0 float 2D image", "set0/binding1 sampler"],
+      "d3d12_active_bindings": ["Texture2D<float4> t0/space0", "SamplerState s1/space0", "4-byte root constant b0/space0"],
+      "constant_members": [{"name": "exposure", "offset": 0, "size": 4}],
+      "output": "SV_Target0 display-linear float4, alpha 1"
+    },
+    "sdr.frag": {
+      "variants": ["sdr_linear.frag", "sdr_fxaa.frag", "sdr_fxaa_linear.frag"],
+      "profile": "ps_6_0",
+      "input": "SV_Position.xy, same-size display-linear float 2D source mip",
+      "vulkan_bindings": ["set0/binding0 float 2D image", "set0/binding1 sampler"],
+      "d3d12_active_bindings": ["Texture2D<float4> t0/space0", "SamplerState s1/space0"],
+      "output": "SV_Target0 linear or sRGB-encoded RGBA8 UNORM, alpha 1; FXAA runs before encoding"
     }
   },
   "constant_allocation": "Logical member offsets and sizes do not replace D3D12 root-constant/CBV placement and range requirements. Product runtime chooses and validates the binding in later tasks.",

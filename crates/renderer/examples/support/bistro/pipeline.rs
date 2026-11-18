@@ -17,6 +17,7 @@ use renderer::{
         StoreOp,
     },
     program::{ManagedRasterProgram, SamplerDescriptor},
+    standard::passes::{tone_map_neutral, write_sdr},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
@@ -196,7 +197,7 @@ impl Budget {
             .primitives
             .len()
             .checked_mul(2)
-            .and_then(|v| v.checked_add(scene.materials.len() + 3 + packed_buffers))
+            .and_then(|v| v.checked_add(scene.materials.len() + 1 + packed_buffers))
             .ok_or("buffer count overflow")?;
         let mut buffers = Vec::<(u64, usize)>::new();
         let mut add = |size: u64| {
@@ -214,8 +215,6 @@ impl Budget {
             add(program::MATERIAL_BYTES as u64);
         }
         add(program::CAMERA_BYTES as u64);
-        add(24);
-        add(12);
         if let Some(layout) = &packed {
             add(layout.vertex_bytes as u64);
             add(layout.index_bytes() as u64);
@@ -249,21 +248,15 @@ impl Budget {
             .max()
             .ok_or("empty buffer set")?;
         // Both streams are published by one Graph, so both upload reservations
-        // coexist until completion. Resolve uses the same paired-stream path.
-        let resolve_bytes =
-            size_of_val(&program::RESOLVE_VERTICES) + size_of_val(&program::RESOLVE_INDICES);
-        let geometry_upload_bytes =
-            scene
-                .primitives
-                .iter()
-                .try_fold(resolve_bytes, |maximum, primitive| {
-                    primitive
-                        .vertices
-                        .len()
-                        .checked_add(primitive.indices.len())
-                        .map(|bytes| maximum.max(bytes))
-                        .ok_or("geometry upload byte overflow")
-                })?;
+        // coexist until completion.
+        let geometry_upload_bytes = scene.primitives.iter().try_fold(0, |maximum, primitive| {
+            primitive
+                .vertices
+                .len()
+                .checked_add(primitive.indices.len())
+                .map(|bytes| maximum.max(bytes))
+                .ok_or("geometry upload byte overflow")
+        })?;
         let geometry_upload_bytes = if let Some(layout) = &packed {
             geometry_upload_bytes.max(
                 layout
@@ -345,6 +338,7 @@ impl Budget {
             .ok_or("Raster instance constant budget overflow")?;
         let raster_constant_words = shadow_words
             .checked_add(instance_words)
+            .and_then(|words| words.checked_add(1))
             .ok_or("Raster constant budget overflow")?;
         let graph = GraphCapacity {
             resources,
@@ -502,8 +496,6 @@ pub(super) struct Resident {
     pub camera: ImportBuffer,
     local_lights: Option<forward_lighting::LightBytes>,
     tiles: Option<ImportBuffer>,
-    pub resolve_vertices: ImportBuffer,
-    pub resolve_indices: ImportBuffer,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -636,14 +628,10 @@ impl Resident {
         let vertices = take_keys(&mut self.vertices);
         let indices = take_keys(&mut self.indices);
         let materials = take_keys(&mut self.materials);
-        let saved = [
-            self.camera.key(),
-            self.resolve_vertices.key(),
-            self.resolve_indices.key(),
-        ];
+        let camera = self.camera.key();
         let tiles = self.tiles.take().map(|tiles| tiles.key());
         let packed = self.packed.take().map(indirect::Resident::release);
-        drop((self.camera, self.resolve_vertices, self.resolve_indices));
+        drop(self.camera);
         prepare(backend)?;
         let refresh = |keys: Vec<_>| -> Result<Vec<ImportBuffer>, Error> {
             keys.into_iter()
@@ -653,9 +641,7 @@ impl Resident {
         self.vertices = refresh(vertices)?;
         self.indices = refresh(indices)?;
         self.materials = refresh(materials)?;
-        self.camera = backend.refresh_buffer(saved[0])?;
-        self.resolve_vertices = backend.refresh_buffer(saved[1])?;
-        self.resolve_indices = backend.refresh_buffer(saved[2])?;
+        self.camera = backend.refresh_buffer(camera)?;
         self.tiles = tiles.map(|key| backend.refresh_buffer(key)).transpose()?;
         self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
@@ -767,17 +753,6 @@ impl Resident {
         let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
             .then(|| forward_lighting::initialize_tiles(backend, &camera))
             .transpose()?;
-        let resolve_vertices = program::RESOLVE_VERTICES
-            .into_iter()
-            .flat_map(f32::to_le_bytes)
-            .collect::<Vec<_>>();
-        let (resolve_vertices, resolve_indices) = upload_geometry(
-            backend,
-            &mut geometry_pool,
-            8,
-            &resolve_vertices,
-            &program::RESOLVE_INDICES,
-        )?;
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
             // This is the immutable publication boundary. Read/hash one chain,
@@ -844,8 +819,6 @@ impl Resident {
             camera,
             local_lights,
             tiles,
-            resolve_vertices,
-            resolve_indices,
             packed,
             upload_owners,
         })
@@ -1075,7 +1048,7 @@ pub(super) fn build(
     }
     frame_uniform[128..].copy_from_slice(&shadow_data.uniform_bytes());
     let mut graph = pool.begin()?;
-    let (uniform, resolve_vertices, resolve_indices) = {
+    let uniform = {
         #[cfg(feature = "tracy")]
         let _imports = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("bistro.build.imports"), 0));
@@ -1110,10 +1083,7 @@ pub(super) fn build(
         let uniform = graph.import_buffer("camera", &resident.camera)?;
         graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
         graph.export_buffer(uniform)?;
-        let resolve_vertices =
-            graph.import_buffer("resolve vertices", &resident.resolve_vertices)?;
-        let resolve_indices = graph.import_buffer("resolve indices", &resident.resolve_indices)?;
-        (uniform, resolve_vertices, resolve_indices)
+        uniform
     };
     let mut local_light_bindings = [None; 2];
     let mut tile_update = None;
@@ -1516,8 +1486,6 @@ pub(super) fn build(
                 clear: scene_clear,
                 camera: uniform,
                 view_projection: camera_matrix,
-                fullscreen_vertices: resolve_vertices,
-                fullscreen_indices: resolve_indices,
                 lighting: lighting_bindings,
             },
             record_opaque,
@@ -1642,99 +1610,25 @@ pub(super) fn build(
         "Neutral display linear",
         ImageDesc::rgba16_float(options.width, options.height),
     )?;
-    let tone_program = program::tone_program();
-    let tone_bindings = [
-        Binding {
-            group: 0,
-            binding: 0,
-            resource: BindingResource::ImageView(graph.image_view(bloom, 0, 0)?),
-        },
-        Binding {
-            group: 0,
-            binding: 1,
-            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
-        },
-    ];
-    let tone_bindings = graph.raster_bindings(&tone_program, &tone_bindings)?;
-    graph.raster(
+    let bloom_view = graph.image_view(bloom, 0, 0)?;
+    tone_map_neutral(
+        &mut graph,
         "fixed exposure and PBR Neutral",
-        RasterAttachments {
-            color_resolves: &[],
-            colors: &[Attachment {
-                view: graph.image_view(tone, 0, 0)?,
-                load: LoadOp::Clear([0.0; 4]),
-                store: StoreOp::Store,
-            }],
-            depth: None,
-        },
-        |raster| {
-            raster.draw(
-                &tone_program,
-                [RasterDraw {
-                    bindings: Some(tone_bindings),
-                    vertices: resolve_vertices,
-                    indices: resolve_indices,
-                    first_index: 0,
-                    index_count: 3,
-                    instance_count: 1,
-                    parameters: RasterConstants::default(),
-                }],
-            )
-        },
+        bloom_view,
+        tone,
+        2.0,
     )?;
-    let resolve_bindings = [
-        Binding {
-            group: 0,
-            binding: 0,
-            resource: BindingResource::ImageView(graph.image_view(tone, 0, 0)?),
-        },
-        Binding {
-            group: 0,
-            binding: 1,
-            resource: BindingResource::Sampler(if options.aa {
-                SamplerDescriptor::LinearClamp
-            } else {
-                SamplerDescriptor::NearestClamp
-            }),
-        },
-    ];
-    let resolve_program = if options.windowed {
-        program::present_program(options.aa)
-    } else if options.aa {
-        program::resolve_aa_program()
-    } else {
-        program::resolve_program()
-    };
-    let resolve_bindings = graph.raster_bindings(&resolve_program, &resolve_bindings)?;
-    graph.raster(
+    let tone_view = graph.image_view(tone, 0, 0)?;
+    write_sdr(
+        &mut graph,
         if options.windowed {
             "FXAA and linear presentation source"
         } else {
             "FXAA and single sRGB encode"
         },
-        RasterAttachments {
-            color_resolves: &[],
-            colors: &[Attachment {
-                view: graph.image_view(output, 0, 0)?,
-                load: LoadOp::Clear([0.0; 4]),
-                store: StoreOp::Store,
-            }],
-            depth: None,
-        },
-        |raster| {
-            raster.draw(
-                &resolve_program,
-                [RasterDraw {
-                    bindings: Some(resolve_bindings),
-                    vertices: resolve_vertices,
-                    indices: resolve_indices,
-                    first_index: 0,
-                    index_count: 3,
-                    instance_count: 1,
-                    parameters: RasterConstants::default(),
-                }],
-            )
-        },
+        tone_view,
+        output,
+        options.sdr_output(),
     )?;
     graph.export_image(output)?;
     #[cfg(all(windows, feature = "presentation"))]

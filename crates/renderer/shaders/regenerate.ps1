@@ -32,20 +32,27 @@ if ($LASTEXITCODE -ne 0 -or
 
 # Explicit SPIR-V 1.3 avoids LocalSizeId/maintenance4 requirements. The runtime
 # enables synchronization2/dynamicRendering, but does not enable maintenance4.
-# No macros, includes or debug info. Entry point main, GLSL 450 core, optimized.
+# Use entry point main, GLSL 450 core and optimized code without debug info.
 $sources = @('../fixtures/shaders/invert_rgba8.comp', '../fixtures/shaders/swap_red_blue_rgba8.comp', 'mesh.vert', 'mesh.frag', 'textured.vert', 'textured.frag', 'composite.vert', 'composite.frag', 'uniform.comp', 'sampled.comp', 'sampled_float.comp', 'storage_read.comp', 'indexed_indirect.comp',
+    'tone_neutral.frag', 'sdr.frag', 'sdr_linear.frag', 'sdr_fxaa.frag', 'sdr_fxaa_linear.frag',
     '../tests/support/shaders/compute_hdr_sampled.comp', '../tests/support/shaders/compute_hdr_storage.comp')
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) ('renderer-spirv-' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $temporaryRoot
 try {
     foreach ($source in $sources) {
-        $sourcePath = Join-Path $PSScriptRoot $source
+        $variant = @()
+        $sourceFile = $source
+        if ($source -cmatch '^sdr(?:_fxaa)?_linear\.frag$') {
+            $sourceFile = $source -creplace '_linear\.frag$', '.frag'
+            $variant += '-DRENDERER_LINEAR_OUTPUT=1'
+        }
+        $sourcePath = Join-Path $PSScriptRoot $sourceFile
         $outputPath = Join-Path $PSScriptRoot ($source + '.spv')
         # External caller-owned sources have relative path components. Only the
         # basename is used inside the task-owned temporary directory.
         $temporaryPath = Join-Path $temporaryRoot ([IO.Path]::GetFileName($source) + '.spv')
         & $compiler --target-env=vulkan1.3 --target-spv=spv1.3 -std=450core `
-            -fentry-point=main -O -Werror $sourcePath -o $temporaryPath
+            -fentry-point=main -O -Werror @variant $sourcePath -o $temporaryPath
         if ($LASTEXITCODE -ne 0) { throw "glslc failed for $source" }
         & $validator --target-env vulkan1.3 $temporaryPath
         if ($LASTEXITCODE -ne 0) { throw "spirv-val failed for $source" }

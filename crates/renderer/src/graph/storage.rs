@@ -38,8 +38,8 @@ pub struct GraphCapacity {
     /// Encoded resource accesses and per-pass overlap/deduplication scratch.
     /// Include temporary duplicate reads before Raster access compression.
     pub accesses: usize,
-    /// Indexed draw operands across all Raster passes; attachment-only passes
-    /// consume no draw entries.
+    /// Draw operands across all Raster passes. Attachment-only passes consume
+    /// no draw entries.
     pub draws: usize,
     /// Total inline constant words across all Raster batches. `None` reserves
     /// 32 words per draw. `Some(0)` permits only draws with empty constants.

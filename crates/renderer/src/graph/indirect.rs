@@ -303,7 +303,13 @@ mod tests {
         let indirect = batch.indirect.unwrap();
         assert_eq!(indirect.command_count, 65);
         assert_eq!(indirect.buffer, args.buffer.index);
-        assert_eq!((plan.raster_draws(&batch.draws)[0]).index_count, 4);
+        assert_eq!(
+            plan.raster_draws(&batch.draws)[0]
+                .indexed
+                .unwrap()
+                .index_count,
+            4
+        );
         assert!(plan.raster_constants(batch).eq([constants.words()]));
         assert!(plan.accesses(pass.index).iter().any(|access| {
             access.purpose == AccessPurpose::Indirect

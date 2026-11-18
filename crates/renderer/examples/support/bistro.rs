@@ -162,6 +162,18 @@ struct Options {
 }
 
 impl Options {
+    fn sdr_output(&self) -> renderer::standard::passes::SdrOutput {
+        use renderer::standard::passes::{SdrEncoding, SdrOutput};
+        SdrOutput {
+            encoding: if self.windowed {
+                SdrEncoding::Linear
+            } else {
+                SdrEncoding::Srgb
+            },
+            fxaa: self.aa,
+        }
+    }
+
     fn validate_lighting_extent(&self) -> Result<(), Error> {
         if self.pipeline.uses_local_lights() {
             program::forward_plus::active_tile_count(self.width, self.height)?;

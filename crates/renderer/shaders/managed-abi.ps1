@@ -173,12 +173,12 @@ function Get-DxilResourceRows([string]$Section) {
         '(?m)^;[ \t]+(?<name>\S+)[ \t]+(?<kind>\S+)[ \t]+(?<format>\S+)[ \t]+(?<dimension>\S+)[ \t]+(?<id>\S+)[ \t]+(?<slot>\S+)[ \t]+(?<count>\d+)[ \t]*\r?$')
 }
 
-function Assert-TexturedDxilSignature([string]$Dxil, [string]$Heading, [object[]]$Expected) {
+function Assert-RasterDxilSignature([string]$Dxil, [string]$Heading, [object[]]$Expected) {
     $section = [regex]::Match($Dxil.Replace("`r`n", "`n"),
         ('(?m)^; ' + $Heading + ' signature:\n;\n; Name[^\n]*\n; -+[^\n]*\n(?<body>(?:;[^\n]+\n)+)'))
-    if (-not $section.Success) { throw "Textured Raster DXIL $Heading signature is missing." }
+    if (-not $section.Success) { throw "Raster DXIL $Heading signature is missing." }
     $lines = @($section.Groups['body'].Value.TrimEnd("`n") -split "`n")
-    if ($lines.Count -ne $Expected.Count) { throw "Textured Raster DXIL $Heading signature count differs." }
+    if ($lines.Count -ne $Expected.Count) { throw "Raster DXIL $Heading signature count differs." }
     for ($index = 0; $index -lt $Expected.Count; $index++) {
         $row = [regex]::Match($lines[$index],
             '^;[ \t]+(?<name>\S+)[ \t]+(?<index>\d+)[ \t]+(?<mask>\S+)[ \t]+\d+[ \t]+(?<system>\S+)[ \t]+(?<format>\S+)(?:[ \t]+\S+)?[ \t]*$')
@@ -187,7 +187,7 @@ function Assert-TexturedDxilSignature([string]$Dxil, [string]$Heading, [object[]
             $row.Groups['mask'].Value -cne $Expected[$index][2] -or
             $row.Groups['system'].Value -cne $Expected[$index][3] -or
             $row.Groups['format'].Value -cne 'float') {
-            throw "Textured Raster DXIL $Heading signature semantic, type or component count differs."
+            throw "Raster DXIL $Heading signature semantic, type or component count differs."
         }
     }
 }
@@ -374,11 +374,11 @@ function Assert-TexturedRasterAbi([object]$Spirv, [string]$Dxil, [switch]$Vertex
         throw "$asset must bind exactly two non-array native resources."
     }
     if ($Vertex) {
-        Assert-TexturedDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyz', 'NONE'), @('TEXCOORD', '1', 'xyzw', 'NONE'))
-        Assert-TexturedDxilSignature $Dxil 'Output' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'), @('SV_Position', '0', 'xyzw', 'POS'))
+        Assert-RasterDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyz', 'NONE'), @('TEXCOORD', '1', 'xyzw', 'NONE'))
+        Assert-RasterDxilSignature $Dxil 'Output' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'), @('SV_Position', '0', 'xyzw', 'POS'))
     } else {
-        Assert-TexturedDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'))
-        Assert-TexturedDxilSignature $Dxil 'Output' @(,@('SV_Target', '0', 'xyzw', 'TARGET'))
+        Assert-RasterDxilSignature $Dxil 'Input' @(@('TEXCOORD', '0', 'xyzw', 'NONE'), @('TEXCOORD', '1', 'xy', 'NONE'))
+        Assert-RasterDxilSignature $Dxil 'Output' @(,@('SV_Target', '0', 'xyzw', 'TARGET'))
     }
     $input = @($Spirv.inputs | Sort-Object location)
     $output = @($Spirv.outputs | Sort-Object location)
@@ -453,6 +453,77 @@ function Assert-TexturedRasterAbi([object]$Spirv, [string]$Dxil, [switch]$Vertex
             $images[0].Groups['format'].Value -cne 'f32' -or $images[0].Groups['dimension'].Value -cne '2d' -or
             $samplers[0].Groups['slot'].Value -cne 's1,space1') {
             throw 'textured.frag DXIL must retain the active float texture and separate sampler in space 1.'
+        }
+    }
+}
+
+# All standard SDR fragments sample one source mip and write one color. Only
+# Neutral takes a float exposure word, mapped to a DXIL root constant.
+function Assert-SdrOutputAbi([object]$Spirv, [string]$Dxil, [switch]$Exposure) {
+    $entries = @($Spirv.entryPoints)
+    if ($entries.Count -ne 1 -or $entries[0].name -cne 'main' -or $entries[0].mode -cne 'frag' -or
+        $Dxil -cnotmatch '(?m)^; Pixel Shader\s*$' -or
+        $Dxil -cnotmatch '(?m)^; EntryFunctionName: main\s*$') {
+        throw 'Standard output shader stage or entry point differs.'
+    }
+    $forbidden = @('inputs', 'textures', 'images', 'ssbos', 'ubos', 'sampled_images',
+        'subpass_inputs', 'acceleration_structures')
+    if (-not $Exposure) { $forbidden += 'push_constants' }
+    foreach ($category in $forbidden) {
+        $property = $Spirv.PSObject.Properties[$category]
+        if ($null -ne $property -and @($property.Value).Count -ne 0) {
+            throw "Standard output shader has unexpected resources or varyings: $category"
+        }
+    }
+    $outputs = @($Spirv.outputs)
+    if ($outputs.Count -ne 1 -or $outputs[0].type -cne 'vec4' -or $outputs[0].location -ne 0 -or
+        $null -ne $outputs[0].PSObject.Properties['array']) {
+        throw 'Standard output shader requires one float4 color output at location zero.'
+    }
+    foreach ($expected in @(@('separate_images', 'texture2D', 0), @('separate_samplers', 'sampler', 1))) {
+        $slots = @($Spirv.PSObject.Properties[$expected[0]].Value)
+        if ($slots.Count -ne 1 -or $slots[0].type -cne $expected[1] -or
+            $slots[0].set -ne 0 -or $slots[0].binding -ne $expected[2] -or
+            $null -ne $slots[0].PSObject.Properties['array']) {
+            throw 'Standard output shader requires separate float 2D image and sampler slots.'
+        }
+    }
+    Assert-RasterDxilSignature $Dxil 'Input' @(,@('SV_Position', '0', 'xyzw', 'POS'))
+    Assert-RasterDxilSignature $Dxil 'Output' @(,@('SV_Target', '0', 'xyzw', 'TARGET'))
+    $sections = @($Dxil.Replace("`r`n", "`n") -split '; Resource Bindings:')
+    if ($sections.Count -ne 2) { throw 'Standard output DXIL resource reflection is missing.' }
+    $rows = @(Get-DxilResourceRows $sections[1])
+    if ($rows.Count -ne (2 + [int][bool]$Exposure) -or
+        @($rows | Where-Object { $_.Groups['count'].Value -cne '1' }).Count -ne 0) {
+        throw 'Standard output DXIL resource count differs.'
+    }
+    $textures = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'texture' })
+    $samplers = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'sampler' })
+    if ($textures.Count -ne 1 -or $samplers.Count -ne 1 -or
+        $textures[0].Groups['slot'].Value -cnotmatch '^t0(?:,space0)?$' -or
+        $textures[0].Groups['format'].Value -cne 'f32' -or
+        $textures[0].Groups['dimension'].Value -cne '2d' -or
+        $samplers[0].Groups['slot'].Value -cnotmatch '^s1(?:,space0)?$') {
+        throw 'Standard output DXIL texture or sampler slot differs.'
+    }
+    if ($Exposure) {
+        $push = @($Spirv.push_constants)
+        if ($push.Count -ne 1) { throw 'Neutral requires one SPIR-V push constant block.' }
+        $members = @($Spirv.types.PSObject.Properties[$push[0].type].Value.members)
+        if ($members.Count -ne 1 -or $members[0].type -cne 'float' -or $members[0].offset -ne 0 -or
+            $null -ne $members[0].PSObject.Properties['array']) {
+            throw 'Neutral requires one float exposure word at byte zero.'
+        }
+        $constants = @($rows | Where-Object { $_.Groups['kind'].Value -ceq 'cbuffer' })
+        if ($constants.Count -ne 1 -or $constants[0].Groups['slot'].Value -cnotmatch '^cb0(?:,space0)?$') {
+            throw 'Neutral DXIL exposure register differs.'
+        }
+        $name = [regex]::Escape($constants[0].Groups['name'].Value)
+        $body = [regex]::Match($sections[0], ('(?s); cbuffer ' + $name + '\s*\n; \{(?<body>.*?)\n; \}'))
+        $layout = $body.Groups['body'].Value
+        if (-not $body.Success -or $layout -cnotmatch '(?m)^;\s+float\s+\w+;\s*;\s*Offset:\s*0\s*$' -or
+            $layout -cnotmatch ('(?m)^;\s+\}\s+' + $name + ';\s*;\s*Offset:\s*0\s+Size:\s*4\s*$')) {
+            throw 'Neutral DXIL exposure word layout differs.'
         }
     }
 }

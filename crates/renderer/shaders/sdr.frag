@@ -7,7 +7,7 @@ void main() {
     // mapping. Sampling uses the selected mip-zero View and nearest clamp.
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(sampler2D(linear_image, source_sampler), 0));
     vec3 linear_color = clamp(textureLod(sampler2D(linear_image, source_sampler), uv, 0.0).rgb, 0.0, 1.0);
-#ifdef BISTRO_LINEAR_OUTPUT
+#ifdef RENDERER_LINEAR_OUTPUT
     output_color = vec4(linear_color, 1.0);
 #else
     vec3 encoded = mix(12.92 * linear_color,

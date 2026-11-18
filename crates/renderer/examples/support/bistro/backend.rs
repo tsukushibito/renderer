@@ -8,6 +8,7 @@ use renderer::{
         ExecutionError, FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeConfig,
         RuntimeLimits, WorkingSet,
     },
+    standard::passes::tone_map_neutral_pipeline,
 };
 
 pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
@@ -36,15 +37,18 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
             sample_count: options.sample_count,
         });
     }
-    requests.extend(
-        [program::shadow_program(), program::tone_program()].map(RasterPipelineRequest::from),
-    );
-    if options.windowed {
-        requests.push(program::present_program(options.aa).into());
-    } else {
-        requests.extend(
-            [program::resolve_program(), program::resolve_aa_program()]
-                .map(RasterPipelineRequest::from),
+    requests.push(program::shadow_program().into());
+    requests.push(tone_map_neutral_pipeline());
+    let sdr = options.sdr_output();
+    requests.push(sdr.pipeline());
+    if !options.windowed {
+        // Offscreen capture includes an AA-off diagnostic.
+        requests.push(
+            renderer::standard::passes::SdrOutput {
+                fxaa: !sdr.fxaa,
+                ..sdr
+            }
+            .pipeline(),
         );
     }
     requests
