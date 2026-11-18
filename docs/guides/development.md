@@ -1677,7 +1677,27 @@ import出力の解放権限、少ない物理枠での常駐入れ替えは内�
 通常submitの計測は既定無効で、`set_profiling(true)`を明示した場合だけ採取します。
 正しさのverify runと性能runを分け、条件・commit・clock／負荷等の制約も比較時に揃えます。
 
+<a id="raster-draw-scaling"></a>
+
 ### 描画数を変えた比較計測
+
+`raster_draw_scaling`は同じWindows GPU上でVulkanとD3D12の直接描画を比較する。
+512×512に1,024、10,000、50,000個の可視オブジェクトを配置し、1個につき1件のindexed drawを記録する。
+`--words 0`は共有Uniformと常駐の頂点・インデックス範囲を使う。`--words 20`は標準Meshとオブジェクトごとの
+変換・色を使い、事前生成した二つの入力を交互に描く。両条件とも2 in-flightで、既定は120 warmup＋600測定frame。
+
+```powershell
+cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12 --example raster_draw_scaling
+target/release/examples/raster_draw_scaling.exe --api vulkan --draws 50000 --words 0 --report .tools/raster-50000-vulkan.json
+target/release/examples/raster_draw_scaling.exe --api d3d12 --draws 50000 --words 20 --report .tools/raster-50000-d3d12.json
+```
+
+`active_ns`は枠が空いた後のGraph構築開始からsubmit復帰までを直接測る。`interval_ns`は回収を含むframe開始間隔で、
+先頭の0を集計から外す。`wall_ns`は最後の回収も含む。`--profile`を付けた別runでnative prepare・recordとGPU時間も収集する。
+画像比較は別runで`--warmup 0 --frames 0 --capture <stem>`を指定し、同じAPI・入力・出力番号のRGBAをバイト照合する。
+実機検証には`development-validation`を有効にした実行物を使う。性能比較の実行物は同じfeatureで作り、
+PコアとHighQoSを読戻した独立processを変更前後交互に起動する。build・画像照合・他のGPU試験が重ならないようにする。
+[計測結果](../verification/current.md#raster-constant-storage)を参照する。
 
 `frame_loop`は`--draws 0..1024`、`--layout overlap|grid`、`--extent WIDTHxHEIGHT`、
 `--mesh-layout shared|distinct`を受け付けます。

@@ -5,6 +5,62 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="raster-constant-storage"></a>
+
+## Rasterの定数分離と大量描画
+
+`renderer-7ft.14`。Rendererの比較元は`2d71116`、定数分離は`b9e75069`、計測用exampleを含む比較先は`0689ae2`。
+大量シーンの比較元にも、`0689ae2`の計測用exampleだけを追加した。
+Windows 11／Core i5-14600KF／RTX 3060（610.88）で、PコアとHighQoSを実行前に読戻した。
+同じ設定の独立processを6組、変更前後の順を交互にして逐次実行した。各runは120 warmup＋600測定frame、2 in-flight。
+大量シーンの主測定は詳細計時を無効にした最適化済み製品構成で、Graph構築からsubmit復帰までを直接測った。
+Bistroの1080p実ウィンドウはForward 1×、Bloom tent、共有ジオメトリ直接描画、VSync off、計時ありで比較した。
+[再現手順](../guides/development.md#raster-draw-scaling)を参照する。
+
+| 可視オブジェクト数 | 定数ワード数 | Vulkan CPU差（ms/frame） | D3D12 CPU差（ms/frame） |
+|---:|---:|---:|---:|
+| 1,024 | 0 | −0.006 | −0.002 |
+| 10,000 | 0 | −0.034 | −0.033 |
+| 50,000 | 0 | **−0.795** | **−0.440** |
+| 1,024 | 20 | +0.008 | 0.000 |
+| 10,000 | 20 | −0.019 | +0.028 |
+| 50,000 | 20 | −0.241 | −0.205 |
+
+表は、組ごとのrun平均について変更後から変更前を引いた差の中央値を示す。主判定の50,000個・0ワードは
+Vulkanで13.57%、D3D12で10.64%短縮し、どちらも6組すべてで短縮した。
+このCPU区間の短縮率をGPU時間やBistro全体のFPSへ換算しない。
+詳細計時では同条件のGraph構築がVulkanで0.350 ms、D3D12で0.197 ms短縮した。
+native prepareも0.318 ms、0.086 ms短縮した。詳細計時の値は主判定の直接計測値と合算しない。
+
+| Bistroの変更前後の差（ms/frame） | Vulkan | D3D12 |
+|---|---:|---:|
+| Graph構築平均 | −0.020 | −0.024 |
+| Compile平均 | −0.005 | +0.005 |
+| Native prepare平均 | −0.014 | −0.003 |
+| Native record平均 | −0.002 | +0.028 |
+| フレーム間隔p95 | +0.109 | +0.062 |
+| フレーム間隔p99 | +0.012 | +0.106 |
+| Graph GPU p95 | +0.006 | −0.002 |
+
+全26条件・312 processで追試が必要な指標はなかった。CPU各区間の許容幅は0.05 msと基準値の5%の大きい方、
+フレーム間隔はp95で0.20 ms、p99で0.30 msとした。主判定は組ごとの差の中央値で5%かつ0.10 ms以上の短縮と、
+6組すべてでの短縮を求めた。
+
+Windows x64ではdrawレコードが176→48 byte、バッチが48→56 byteになった。
+Bistroの対象構成では7,957 drawを予約し、候補は6,364定数ワードを予約する。
+対象の配列に予約する容量は1,782,368→852,984 byteで、スロットあたり約0.886 MiB減る。固定メタデータは別計上とする。
+フルABI幅を既定で予約する一般入力にはこの削減率を適用しない。
+
+同APIの変更前後で全Bistroの各96画像面は製品構成と検証付き構成ともバイト一致した。
+大量シーンの50,000個についても、0／20ワードの合計12画像面が同APIで製品構成・検証付き構成ともバイト一致した。
+両構成の`raster_batches`、`indexed_indirect`、`indexed_instancing`、`custom_raster`を実GPUで実行し、
+検証付きではVulkan Core/SyncValとD3D12 Debug Layer/GBVが有効で、warning/errorはゼロだった。
+同じ両構成の`frame_memory`では、可変draw/Program/attachment、取消、readbackとスロット返却を含む通常窓で、
+Rust・VMAホストの確保／再確保／解放とRenderer発行のnative作成／破棄はゼロだった。resetは別計上した。
+個別frame、実行条件、実行物のhashは`.tools/raster-constant-evaluation/performance/`に保存した。
+集計`summary.json`のSHA-256は`bf1a99a6bad80bb50bcab4f14931c3882fc8cf4113a7e523cbad7ffdf723226a`。
+他の機材やGPUでの性能、driver／OS内部の確保は未確認である。
+
 <a id="rendergraph-hotspot-optimization"></a>
 
 ## 現行RenderGraphの構築hotspotと削減

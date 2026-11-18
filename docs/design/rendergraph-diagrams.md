@@ -74,12 +74,13 @@ handleはidentityとindexの値で、GPU資源やslotへの強い参照ではあ
 ```
 
 配列を実所有するのは`GraphStorage`です。`Pass`は`Operation`を値で持ち、
-Operation内の`draws`・`colors`、Dispatchの`bindings`はarenaの範囲、`depth`は任意のindexです。
-各`RasterDrawOperands`もdrawごとの`bindings`範囲を持ち、descriptorを共有のarenaへ保持します。
+Operation内の`batches`・`draws`・`colors`、Dispatchの`bindings`はarenaの範囲で、`depth`は任意のindexです。
+RasterバッチはProgramと定数の開始位置を持ち、Programが定める幅で各drawの定数を参照します。
+`RasterDrawOperands`はdrawごとの`bindings`範囲を持ち、descriptorを共有のarenaへ保持します。
 したがって、Operationがdraw用Vecやattachment用Vecを個別に所有する図にはしません。
 借用した入力sliceから必要な値を構築時にcaptureし、短命な呼出元をplanの寿命へ持ち込みません。
 
-Rasterは`ManagedRasterProgram`、Dispatchは別の`ManagedProgram`の値を持ちます。
+Rasterバッチは`ManagedRasterProgram`、Dispatchは別の`ManagedProgram`の値を持ちます。
 どちらも不変static descriptorに結び付くCPU契約で、native PSOの所有型ではありません。
 `BindingOperands`はBuffer・ImageView・Samplerの列挙型です。Bufferは論理資源indexと完全なdescriptor範囲、
 Viewは論理画像のsubresource値、Samplerは不変設定を持ち、native資源の所有型ではありません。
@@ -90,9 +91,9 @@ Viewは論理画像のsubresource値、Samplerは不変設定を持ち、native�
 指定Load/Storeは保持し、空drawはattachment-onlyへ正規化します。
 `textured_mesh()`のdraw別bindingも明示準備したnative PSO/descriptorへ接続します。
 `Graph::dispatch`も明示準備したCompute pipeline/descriptorから実行します。一般encoderと未信頼shaderは未対応です。
-ソース：[GraphStorage](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer/src/graph/storage.rs)、
-[OperationとPass](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer/src/graph/pass.rs)、
-[Raster builder](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer/src/graph/builder.rs)、
+ソース：[GraphStorage](https://github.com/tsukushibito/renderer/blob/b9e75069d580d61833504fd3013658dabcfe0e58/crates/renderer/src/graph/storage.rs)、
+[OperationとPass](https://github.com/tsukushibito/renderer/blob/b9e75069d580d61833504fd3013658dabcfe0e58/crates/renderer/src/graph/pass.rs)、
+[Raster builder](https://github.com/tsukushibito/renderer/blob/b9e75069d580d61833504fd3013658dabcfe0e58/crates/renderer/src/graph/raster.rs)、
 [Raster Program](https://github.com/tsukushibito/renderer/blob/adb51d17e3c1f43b380163a444f750ee9ff9edf5/crates/renderer/src/program/raster.rs)。
 
 <a id="binding-stages"></a>

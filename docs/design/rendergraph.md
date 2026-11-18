@@ -246,7 +246,8 @@ native作成・破棄や表示・結果消費を含む全体のゼロ達成を�
 |---|---|
 | `resources` / `passes` | 宣言した論理資源とpass。compileで消える枝も構築時には容量を使う |
 | `accesses` | passが持つ資源アクセス。Rasterの重複read圧縮前の作業領域も覆う |
-| `draws` | 全Raster passのdraw合計。bindingの共有とは別に命令・定数を保持する |
+| `draws` | 全Raster passのdrawレコードの合計。間接描画はバッチごとに代表drawを1件保持する |
+| `raster_constant_words` | 全Raster passで保持するインライン定数の`u32`ワード数。`Some(n)`は明示上限、`None`は`draws × 32`を上限とする |
 | `bindings` | ComputeのoperandとRaster setのoperandの合計。同じsetを使うdraw数ではない |
 | `attachments` | 各passのcolorとdepth attachment operandの合計 |
 | `dependencies` | `depends_on`で明示した重複しない依存 |
@@ -416,6 +417,13 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 `.into()`で80-byteの`RasterConstants`へ変換する。独自shaderの定数は
 `RasterConstants::new(&[u32])`で最大128 byteの不変なword列として所有する。
 Graph構築ではProgramの定数byte数と一致することを確認し、保証済みのmesh値を再走査しない。
+Graphは使用するwordだけをslotの定数配列へコピーする。drawレコードはgeometry、描画引数、binding範囲を保持し、
+Programバッチの開始位置とProgram ABIの固定幅で定数を参照する。0ワードのdrawは定数容量を消費しない。
+この配置により、indexやbindingを調べる準備処理は小さなdrawレコードを走査できる。
+記録は定数を使うバッチで定数配列も順に読み、失敗・unwindはdrawと定数を同時に巻き戻す。
+各slotは定数の容量を準備時に予約し、`RasterConstantWords`の容量不足は型付きエラーとして返す。
+定数の多い入力では記録時の追加読み取りとバッチの開始位置も費用に含める。
+前後比較は[現行検証](../verification/current.md#raster-constant-storage)を参照する。
 公開iteratorのsize_hintやExactSizeIteratorの長さを容量の保証には使わず、実際の要素ごとに準備済みdraw容量を確認する。
 
 `renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。

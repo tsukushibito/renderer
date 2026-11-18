@@ -1,10 +1,12 @@
 classDiagram
     direction TB
     accTitle: owned passとflat arenaの所有・参照
-    accDescr: GraphStorageがPass、draw、attachment、binding、accessの配列を実所有する。PassはOperationを内包し、access配列へは範囲で参照する。Raster OperationはManagedRasterProgramを値で所有し、drawとattachment配列を範囲またはindexで参照する。各drawとDispatchはBindingOperandsの範囲を持つ。BindingOperandsはBuffer、ImageView、Samplerの列挙型で、ResourceAccessは別途shader stageを保持する。これは論理命令の図でありnative PSOの所有図ではない。
+    accDescr: GraphStorageがpass、Rasterバッチ、draw、定数、attachment、binding、accessの配列を所有する。Raster Operationはバッチとdrawを範囲で参照する。バッチはProgram、draw範囲、定数開始位置を持つ。各drawとDispatchはbindingの範囲を持つ。
     class GraphStorage {
         -passes
+        -raster_batches
         -draws
+        -raster_constant_words
         -attachments
         -bindings
         -accesses
@@ -32,7 +34,13 @@ classDiagram
         -vertices: resource_index
         -indices: resource_index
         -index_count
-        -parameters
+    }
+    class RasterBatchOperands {
+        -draws: Range
+        -constants_start: usize
+    }
+    class RasterConstantWords {
+        <<u32_words>>
     }
     class AttachmentOperand {
         -view: ImageView
@@ -52,13 +60,18 @@ classDiagram
         -stages: ShaderStages
     }
     GraphStorage *-- Pass : 配列を実所有
+    GraphStorage *-- RasterBatchOperands : batches arena
     GraphStorage *-- RasterDrawOperands : draws arena
+    GraphStorage *-- RasterConstantWords : constants arena
     GraphStorage *-- AttachmentOperand : attachments arena
     GraphStorage *-- BindingOperands : bindings arena
     GraphStorage *-- ResourceAccess : accesses arena
     Pass *-- Operation : 値を内包
     Pass ..> ResourceAccess : accesses範囲
-    Operation *-- ManagedRasterProgram : Rasterの値
+    Operation ..> RasterBatchOperands : Rasterのbatches範囲
+    RasterBatchOperands *-- ManagedRasterProgram : Rasterの値
+    RasterBatchOperands ..> RasterDrawOperands : バッチのdraws範囲
+    RasterBatchOperands ..> RasterConstantWords : 定数開始位置とProgramの幅
     Operation *-- ManagedProgram : Dispatchの値
     Operation ..> RasterDrawOperands : Rasterのdraws範囲
     Operation ..> AttachmentOperand : colors範囲とdepth index
