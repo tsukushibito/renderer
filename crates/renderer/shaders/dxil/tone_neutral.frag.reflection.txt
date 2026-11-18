@@ -12,7 +12,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 1dd4e30d3b84dcbb6a1c259e2cb3928b
+; shader hash: d3f4ba2171685949898af32bbc39e372
 ;
 ; Pipeline Runtime Information:
 ;
@@ -48,11 +48,24 @@
 ;
 ; Buffer Definitions:
 ;
+; cbuffer _140_142
+; {
+;
+;   struct _140_142
+;   {
+;
+;       float _142_m0;                                ; Offset:    0
+;
+;   } _140_142;                                       ; Offset:    0 Size:     4
+;
+; }
+;
 ;
 ; Resource Bindings:
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; _140_142                          cbuffer      NA          NA     CB0            cb0     1
 ; _116                              sampler      NA          NA      S0             s1     1
 ; _112                              texture     f32          2d      T0             t0     1
 ;

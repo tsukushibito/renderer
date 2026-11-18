@@ -1,7 +1,7 @@
 use super::{
     BindingLayout, BindingType, CAMERA, CAMERA_BYTES, ImageFormat, MATERIAL, MATERIAL_BYTES,
-    ManagedRasterProgram, OPAQUE, RESOLVE, RasterProgramDescriptor, ShaderStages, image, pair,
-    sampler,
+    ManagedRasterProgram, NO_PARAMETERS, OPAQUE, RasterProgramDescriptor, ShaderStages, image,
+    pair, sampler,
 };
 
 pub const DEFERRED_RECONSTRUCTION_BYTES: usize = 64;
@@ -91,7 +91,14 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     ],
     fragment_spirv: include_bytes!("../shaders/deferred_lighting.frag.spv"),
     fragment_dxil: include_bytes!("../shaders/dxil/deferred_lighting.frag.dxil"),
-    ..RESOLVE
+    entry: "main",
+    vertex_stride: 0,
+    vertex_attributes: &[],
+    parameters: NO_PARAMETERS,
+    blend: renderer::program::BlendState::Replace,
+    depth: renderer::program::DepthState::Disabled,
+    vertex_spirv: include_bytes!("../../../../shaders/composite.vert.spv"),
+    vertex_dxil: include_bytes!("../../../../shaders/dxil/composite.vert.dxil"),
 };
 
 pub const fn gbuffer_program() -> ManagedRasterProgram {
@@ -103,7 +110,7 @@ pub const fn gbuffer_program() -> ManagedRasterProgram {
 }
 
 pub const fn deferred_lighting_program() -> ManagedRasterProgram {
-    // SAFETY: Validated VS/FS use the declared vec2 stream and match all
+    // SAFETY: Validated VS generates vertices for IDs 0..2 and FS matches all
     // bindings. The fragment shader uses bounded, normalized image samples,
     // explicit LOD and guards inverse projection division. Dynamic indices
     // stay under four shadow entries. It writes only one float4 output.

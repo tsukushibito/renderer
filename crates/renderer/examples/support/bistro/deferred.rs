@@ -7,7 +7,7 @@ use super::{
 use renderer::{
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError,
-        ImageView, LoadOp, RasterAttachments, RasterConstants, RasterDraw, RasterPass, StoreOp,
+        ImageView, LoadOp, RasterAttachments, RasterConstants, RasterPass, StoreOp,
     },
     program::{ManagedRasterProgram, SamplerDescriptor},
 };
@@ -24,8 +24,6 @@ pub(super) struct Inputs {
     pub clear: [f32; 4],
     pub camera: BufferHandle,
     pub view_projection: [[f32; 4]; 4],
-    pub fullscreen_vertices: BufferHandle,
-    pub fullscreen_indices: BufferHandle,
     pub lighting: [Binding; 9],
 }
 
@@ -92,7 +90,6 @@ pub(super) fn append(
     bindings[..gbuffer.len()].copy_from_slice(&gbuffer);
     bindings[gbuffer.len()..].copy_from_slice(&scene.lighting);
     let program = program::deferred::deferred_lighting_program();
-    let bindings = graph.raster_bindings(&program, &bindings)?;
     graph.raster(
         "deferred PBR lighting",
         RasterAttachments {
@@ -104,20 +101,7 @@ pub(super) fn append(
             }],
             depth: None,
         },
-        |raster| {
-            raster.draw(
-                &program,
-                [RasterDraw {
-                    vertices: scene.fullscreen_vertices,
-                    indices: scene.fullscreen_indices,
-                    first_index: 0,
-                    index_count: 3,
-                    instance_count: 1,
-                    parameters: RasterConstants::default(),
-                    bindings: Some(bindings),
-                }],
-            )
-        },
+        |raster| raster.draw_fullscreen(&program, &bindings, RasterConstants::default()),
     )?;
     Ok(())
 }
