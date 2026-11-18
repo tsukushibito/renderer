@@ -1,28 +1,20 @@
-//! Managed buffer resources and immutable bindings, independent of Graph state.
+//! Native pipeline and layout ownership for Graph Compute programs.
 
-use super::buffer::host_access::{self, VmaAccess};
 use super::error::RuntimeError;
 use super::memory::MemoryOwner;
-use crate::program::{
-    Binding, BindingLayout, BindingResource, BindingType, BufferDescriptor, BufferRange,
-    BufferUsage, ManagedProgram, resolve_bindings, validate_buffer_binding,
-};
+use crate::program::{BindingType, ManagedProgram};
 use ash::vk;
 use std::ffi::CString;
 use std::sync::Arc;
-use vk_mem::Alloc;
 
-mod image;
 mod sampler;
-pub use image::{VulkanImage, VulkanImageView};
-pub use sampler::VulkanSampler;
 pub(super) use sampler::sampler_info;
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
     RuntimeError::native(operation, owner.device.name(), result)
 }
-fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
+pub(super) fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
     match kind {
         BindingType::Uniform => vk::DescriptorType::UNIFORM_BUFFER,
         BindingType::StorageRead | BindingType::StorageWrite => vk::DescriptorType::STORAGE_BUFFER,
@@ -34,13 +26,14 @@ fn descriptor_type(kind: BindingType) -> vk::DescriptorType {
     }
 }
 
-/// An immutable managed compute pipeline and its complete layout ownership.
-#[derive(Clone)]
-pub struct VulkanProgram(pub(super) Arc<Program>);
-impl VulkanProgram {
-    pub fn layout(&self) -> &'static [BindingLayout] {
-        self.0.bindings
-    }
+pub(super) struct ComputePipeline {
+    owner: Arc<MemoryOwner>,
+    pub(super) set_layouts: Vec<vk::DescriptorSetLayout>,
+    pub(super) layout: vk::PipelineLayout,
+    pub(super) pipeline: vk::Pipeline,
+}
+
+impl ComputePipeline {
     pub(super) fn create(
         owner: Arc<MemoryOwner>,
         managed: &ManagedProgram,
@@ -159,53 +152,23 @@ impl VulkanProgram {
                 }
             }
         }
-        let mut program = Program {
+        let mut program = Self {
             owner,
-            bindings,
-            #[cfg(test)]
-            managed: *managed,
             set_layouts: Vec::new(),
             layout: vk::PipelineLayout::null(),
             pipeline: vk::Pipeline::null(),
         };
-        program.initialize(managed.spirv(), group_count, managed.entry_point())?;
-        Ok(Self(Arc::new(program)))
+        program.initialize(managed, group_count)?;
+        Ok(program)
     }
-}
-pub(super) struct Program {
-    owner: Arc<MemoryOwner>,
-    bindings: &'static [BindingLayout],
-    #[cfg(test)]
-    managed: ManagedProgram,
-    pub(super) set_layouts: Vec<vk::DescriptorSetLayout>,
-    pub(super) layout: vk::PipelineLayout,
-    pub(super) pipeline: vk::Pipeline,
-}
-struct ShaderModule<'a> {
-    owner: &'a MemoryOwner,
-    handle: vk::ShaderModule,
-}
-impl Drop for ShaderModule<'_> {
-    fn drop(&mut self) {
-        #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
-        // SAFETY: Synchronous pipeline creation no longer uses this module.
-        unsafe {
-            self.owner
-                .device
-                .raw()
-                .destroy_shader_module(self.handle, None)
-        };
-    }
-}
-impl Program {
+
     fn initialize(
         &mut self,
-        bytes: &[u8],
+        managed: &ManagedProgram,
         group_count: u32,
-        entry: &str,
     ) -> Result<(), RuntimeError> {
-        let entry = CString::new(entry)
+        let bytes = managed.spirv();
+        let entry = CString::new(managed.entry_point())
             .map_err(|_| RuntimeError::invalid("Compute entry point contains NUL"))?;
         if bytes.len() < 20 || !bytes.len().is_multiple_of(4) {
             return Err(RuntimeError::invalid("invalid managed SPIR-V length"));
@@ -221,8 +184,8 @@ impl Program {
         }
         let device = self.owner.device.raw();
         for group in 0..group_count {
-            let bindings = self
-                .bindings
+            let bindings = managed
+                .bindings()
                 .iter()
                 .filter(|b| b.group == group)
                 .map(|b| {
@@ -301,7 +264,7 @@ impl Program {
         Ok(())
     }
 }
-impl Drop for Program {
+impl Drop for ComputePipeline {
     fn drop(&mut self) {
         // SAFETY: Binding/recording owners retain all pipeline dependencies.
         // Drop occurs before recording, after cancel or actual GPU retirement.
@@ -335,388 +298,20 @@ impl Drop for Program {
     }
 }
 
-/// An owned buffer with fixed usage and size. Uniform bytes are copied once;
-/// storage contents may change through GPU work while descriptors stay immutable.
-/// No native mapping or CPU mutation escapes this owner.
-#[derive(Clone)]
-pub struct VulkanBuffer(Arc<Buffer>);
-impl VulkanBuffer {
-    pub fn len(&self) -> u64 {
-        self.0.size
-    }
-    pub fn is_empty(&self) -> bool {
-        false
-    }
-    pub fn usage(&self) -> BufferUsage {
-        self.0.usage
-    }
-    pub(super) fn create(
-        owner: Arc<MemoryOwner>,
-        desc: BufferDescriptor<'_>,
-    ) -> Result<Self, RuntimeError> {
-        owner
-            .device
-            .ensure_active()
-            .map_err(RuntimeError::device_unavailable)?;
-        let (size, usage, initial) = match desc {
-            BufferDescriptor::Uniform { bytes } => {
-                (bytes.len() as u64, BufferUsage::Uniform, Some(bytes))
-            }
-            BufferDescriptor::Storage { size } => (size, BufferUsage::Storage, None),
-        };
-        if size == 0 || size > owner.device.max_buffer_size() {
-            return Err(RuntimeError::invalid(
-                "managed buffer size must be nonzero and within maxBufferSize",
-            ));
-        }
-        let flags = match usage {
-            BufferUsage::Uniform => vk::BufferUsageFlags::UNIFORM_BUFFER,
-            BufferUsage::Storage => {
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC
-            }
-        };
-        let info = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(flags)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        let allocation_info = match usage {
-            BufferUsage::Uniform => vk_mem::AllocationCreateInfo {
-                usage: vk_mem::MemoryUsage::AutoPreferHost,
-                flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            BufferUsage::Storage => vk_mem::AllocationCreateInfo {
-                usage: vk_mem::MemoryUsage::AutoPreferDevice,
-                ..Default::default()
-            },
-        };
-        #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceCreate, 1);
-        // SAFETY: Exact nonzero request, retained VMA/Device, no escaped mapping.
-        let (handle, allocation) = unsafe { owner.raw.create_buffer(&info, &allocation_info) }
-            .map_err(|r| native(&owner, "vmaCreateBuffer(managed)", r))?;
-        let mut buffer = Buffer {
-            owner,
-            handle,
-            allocation,
-            size,
-            usage,
-            #[cfg(test)]
-            storage: StorageState::default(),
-        };
-        if let Some(bytes) = initial {
-            let info = buffer.owner.raw.get_allocation_info(&buffer.allocation);
-            // SAFETY: The retained allocator owns this immutable properties table.
-            let properties = unsafe { buffer.owner.raw.get_memory_properties() };
-            let coherent = properties.memory_types[info.memory_type as usize]
-                .property_flags
-                .contains(vk::MemoryPropertyFlags::HOST_COHERENT);
-            let mut access = VmaAccess::new(&buffer.owner.raw, &mut buffer.allocation);
-            // SAFETY: Fresh exclusive allocation, exact addressable byte length,
-            // no GPU references. The scoped map is flushed before publication.
-            unsafe { host_access::write(&mut access, coherent, 0, bytes) }
-                .map_err(|error| native(&buffer.owner, error.operation, error.result))?;
-        }
-        Ok(Self(Arc::new(buffer)))
-    }
+struct ShaderModule<'a> {
+    owner: &'a MemoryOwner,
+    handle: vk::ShaderModule,
 }
-struct Buffer {
-    owner: Arc<MemoryOwner>,
-    handle: vk::Buffer,
-    allocation: vk_mem::Allocation,
-    size: u64,
-    usage: BufferUsage,
-    // Only the private acceptance executor runs these resources today. Its
-    // actual exclusion/state stays out of production until general execution.
-    #[cfg(test)]
-    storage: StorageState,
-}
-#[cfg(test)]
-#[derive(Default)]
-struct StorageState {
-    busy: std::sync::atomic::AtomicBool,
-    used: std::sync::atomic::AtomicBool,
-}
-impl Drop for Buffer {
+impl Drop for ShaderModule<'_> {
     fn drop(&mut self) {
         #[cfg(feature = "memory-profiling")]
-        crate::measurement::record_native(crate::measurement::NativeEvent::ResourceDestroy, 1);
-        // SAFETY: Bindings/GPU owners retain the allocation through every
-        // recorded use, completion or cancellation; no mapping escapes.
+        crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
+        // SAFETY: Synchronous pipeline creation no longer uses this module.
         unsafe {
             self.owner
-                .raw
-                .destroy_buffer(self.handle, &mut self.allocation)
+                .device
+                .raw()
+                .destroy_shader_module(self.handle, None)
         };
     }
 }
-
-/// Descriptor sets written once, retaining all resources and the Program.
-#[derive(Clone)]
-pub struct VulkanBindings(Arc<Bindings>);
-impl VulkanBindings {
-    pub fn layout(&self) -> &'static [BindingLayout] {
-        self.0.program.layout()
-    }
-    pub(super) fn create(
-        owner: &Arc<MemoryOwner>,
-        program: &VulkanProgram,
-        input: &[Binding<'_, VulkanBuffer, VulkanImageView, VulkanSampler>],
-    ) -> Result<Self, RuntimeError> {
-        owner
-            .device
-            .ensure_active()
-            .map_err(RuntimeError::device_unavailable)?;
-        if !Arc::ptr_eq(owner, &program.0.owner)
-            || input.iter().any(|b| {
-                !Arc::ptr_eq(
-                    owner,
-                    match &b.resource {
-                        BindingResource::Buffer { buffer, .. } => &buffer.0.owner,
-                        BindingResource::ImageView(view) => &view.0.image.0.owner,
-                        BindingResource::Sampler(sampler) => &sampler.0.owner,
-                    },
-                )
-            })
-        {
-            return Err(RuntimeError::wrong_owner(
-                "managed Program/resource belongs to another Device",
-            ));
-        }
-        let resolved = resolve_bindings(program.0.bindings, input)
-            .map_err(|e| RuntimeError::invalid(e.to_string()))?;
-        // A trusted shader may pair any image and sampler in its interface.
-        // Establish linear-filter validity once for this immutable collection.
-        if input.iter().any(|binding| {
-            matches!(
-                binding.resource,
-                BindingResource::Sampler(sampler)
-                    if sampler.desc().is_linear()
-            )
-        }) && input.iter().any(|binding| {
-            matches!(
-                binding.resource,
-                BindingResource::ImageView(view) if !view.0.image.0.supports_linear_filtering
-            )
-        }) {
-            return Err(RuntimeError::unsupported(
-                "linear sampler requires linear-filterable sampled image formats",
-            ));
-        }
-        let limits = owner.device.limits();
-        let mut resources = Vec::with_capacity(input.len());
-        for entry in resolved {
-            let (layout, binding) = entry.map_err(|e| RuntimeError::invalid(e.to_string()))?;
-            let resource = match &binding.resource {
-                BindingResource::Buffer {
-                    buffer,
-                    offset,
-                    size,
-                } => {
-                    let (alignment, maximum) = match layout.kind {
-                        BindingType::Uniform => (
-                            limits.min_uniform_buffer_offset_alignment,
-                            limits.max_uniform_buffer_range,
-                        ),
-                        BindingType::StorageRead | BindingType::StorageWrite => (
-                            limits.min_storage_buffer_offset_alignment,
-                            limits.max_storage_buffer_range,
-                        ),
-                        BindingType::SampledImage
-                        | BindingType::Sampler
-                        | BindingType::StorageImageRead(_)
-                        | BindingType::StorageImageWrite(_) => (1, 0),
-                    };
-                    let range = BufferRange {
-                        offset: *offset,
-                        size: *size,
-                    };
-                    validate_buffer_binding(
-                        layout,
-                        buffer.usage(),
-                        buffer.len(),
-                        range,
-                        alignment,
-                        u64::from(maximum),
-                    )
-                    .map_err(|e| RuntimeError::invalid(e.to_string()))?;
-                    BoundResource::Buffer {
-                        buffer: (*buffer).clone(),
-                        range,
-                    }
-                }
-                BindingResource::ImageView(view)
-                    if layout.kind == BindingType::SampledImage
-                        && view.desc().usage == crate::program::ImageViewUsage::Sampled =>
-                {
-                    BoundResource::ImageView((*view).clone())
-                }
-                BindingResource::Sampler(sampler) if layout.kind == BindingType::Sampler => {
-                    BoundResource::Sampler((*sampler).clone())
-                }
-                _ => {
-                    return Err(RuntimeError::invalid(
-                        "resource kind does not match the Program slot",
-                    ));
-                }
-            };
-            resources.push(resource);
-        }
-        let mut bindings = Bindings {
-            program: program.clone(),
-            resources,
-            pool: vk::DescriptorPool::null(),
-            sets: Vec::new(),
-        };
-        let sizes = [
-            vk::DescriptorType::UNIFORM_BUFFER,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::DescriptorType::SAMPLED_IMAGE,
-            vk::DescriptorType::SAMPLER,
-        ]
-        .into_iter()
-        .filter_map(|ty| {
-            let count = program
-                .0
-                .bindings
-                .iter()
-                .filter(|b| descriptor_type(b.kind) == ty)
-                .count() as u32;
-            (count != 0).then_some(vk::DescriptorPoolSize {
-                ty,
-                descriptor_count: count,
-            })
-        })
-        .collect::<Vec<_>>();
-        // SAFETY: The whole input resolved and passed ownership/kind/range checks
-        // before allocation. New sets are updated once, retain all resources and
-        // are never changed while referenced by recorded/pending commands.
-        unsafe {
-            #[cfg(feature = "memory-profiling")]
-            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectCreate, 1);
-            bindings.pool = owner
-                .device
-                .raw()
-                .create_descriptor_pool(
-                    &vk::DescriptorPoolCreateInfo::default()
-                        .max_sets(program.0.set_layouts.len() as u32)
-                        .pool_sizes(&sizes),
-                    None,
-                )
-                .map_err(|r| native(owner, "vkCreateDescriptorPool(managed)", r))?;
-            #[cfg(feature = "memory-profiling")]
-            crate::measurement::record_native(
-                crate::measurement::NativeEvent::DescriptorAllocate,
-                program.0.set_layouts.len() as u64,
-            );
-            bindings.sets = owner
-                .device
-                .raw()
-                .allocate_descriptor_sets(
-                    &vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(bindings.pool)
-                        .set_layouts(&program.0.set_layouts),
-                )
-                .map_err(|r| native(owner, "vkAllocateDescriptorSets(managed)", r))?;
-            let infos = bindings
-                .resources
-                .iter()
-                .map(|resource| match resource {
-                    BoundResource::Buffer { buffer, range } => NativeBindingInfo::Buffer(
-                        vk::DescriptorBufferInfo::default()
-                            .buffer(buffer.0.handle)
-                            .offset(range.offset)
-                            .range(range.size),
-                    ),
-                    BoundResource::ImageView(view) => NativeBindingInfo::Image(
-                        vk::DescriptorImageInfo::default()
-                            .image_view(view.0.handle)
-                            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL),
-                    ),
-                    BoundResource::Sampler(sampler) => NativeBindingInfo::Image(
-                        vk::DescriptorImageInfo::default().sampler(sampler.0.handle),
-                    ),
-                })
-                .collect::<Vec<_>>();
-            let writes = program
-                .0
-                .bindings
-                .iter()
-                .zip(&infos)
-                .map(|(layout, info)| {
-                    let write = vk::WriteDescriptorSet::default()
-                        .dst_set(bindings.sets[layout.group as usize])
-                        .dst_binding(layout.binding)
-                        .descriptor_type(descriptor_type(layout.kind));
-                    match info {
-                        NativeBindingInfo::Buffer(info) => {
-                            write.buffer_info(std::slice::from_ref(info))
-                        }
-                        NativeBindingInfo::Image(info) => {
-                            write.image_info(std::slice::from_ref(info))
-                        }
-                    }
-                })
-                .collect::<Vec<_>>();
-            owner.device.raw().update_descriptor_sets(&writes, &[]);
-        }
-        Ok(Self(Arc::new(bindings)))
-    }
-}
-enum BoundResource {
-    Buffer {
-        buffer: VulkanBuffer,
-        range: BufferRange,
-    },
-    ImageView(VulkanImageView),
-    Sampler(VulkanSampler),
-}
-enum NativeBindingInfo {
-    Buffer(vk::DescriptorBufferInfo),
-    Image(vk::DescriptorImageInfo),
-}
-struct Bindings {
-    program: VulkanProgram,
-    resources: Vec<BoundResource>,
-    pool: vk::DescriptorPool,
-    sets: Vec<vk::DescriptorSet>,
-}
-impl Bindings {
-    #[cfg(test)]
-    fn buffer(&self, index: usize) -> (&VulkanBuffer, BufferRange) {
-        match &self.resources[index] {
-            BoundResource::Buffer { buffer, range } => (buffer, *range),
-            _ => unreachable!("reviewed shader buffer slot"),
-        }
-    }
-}
-impl Drop for Bindings {
-    fn drop(&mut self) {
-        if self.pool == vk::DescriptorPool::null() {
-            return;
-        }
-        #[cfg(feature = "memory-profiling")]
-        {
-            crate::measurement::record_native(
-                crate::measurement::NativeEvent::DescriptorFree,
-                self.sets.len() as u64,
-            );
-            crate::measurement::record_native(crate::measurement::NativeEvent::ObjectDestroy, 1);
-        }
-        // SAFETY: Execution owners retain the sets through retirement/cancel.
-        // Destroy their pool before the retained Program and resources drop.
-        unsafe {
-            self.program
-                .0
-                .owner
-                .device
-                .raw()
-                .destroy_descriptor_pool(self.pool, None)
-        };
-    }
-}
-
-#[cfg(test)]
-mod sampled_tests;
-#[cfg(test)]
-mod tests;

@@ -1,11 +1,9 @@
-//! Immutable sampler ownership using the Device-wide allocation quota.
+//! Sampler configurations shared by Graph pipelines.
 
-use super::{MemoryOwner, RuntimeError};
 use crate::program::SamplerDescriptor;
 use ash::vk;
-use std::sync::Arc;
 
-/// Reviewed feature-free sampler state, shared by managed and Graph ownership.
+/// Reviewed feature-free sampler state, shared by Compute and Raster.
 pub(in crate::backends::vulkan) fn sampler_info(
     desc: SamplerDescriptor,
 ) -> vk::SamplerCreateInfo<'static> {
@@ -48,44 +46,6 @@ pub(in crate::backends::vulkan) fn sampler_info(
         })
         .min_lod(0.0)
         .max_lod(if linear { vk::LOD_CLAMP_NONE } else { 0.0 })
-}
-
-#[derive(Clone)]
-pub struct VulkanSampler(pub(super) Arc<Sampler>);
-impl VulkanSampler {
-    pub fn desc(&self) -> SamplerDescriptor {
-        self.0.desc
-    }
-    pub(in crate::backends::vulkan) fn create(
-        owner: Arc<MemoryOwner>,
-        desc: SamplerDescriptor,
-    ) -> Result<Self, RuntimeError> {
-        owner
-            .device
-            .ensure_active()
-            .map_err(RuntimeError::device_unavailable)?;
-        let info = sampler_info(desc);
-        // SAFETY: Reviewed fixed configuration uses no optional features. The
-        // Device helper reserves its quota before creation, with error rollback.
-        let handle = unsafe { owner.device.create_sampler(&info) }?;
-        Ok(Self(Arc::new(Sampler {
-            owner,
-            handle,
-            desc,
-        })))
-    }
-}
-pub(super) struct Sampler {
-    pub(super) owner: Arc<MemoryOwner>,
-    pub(super) handle: vk::Sampler,
-    desc: SamplerDescriptor,
-}
-impl Drop for Sampler {
-    fn drop(&mut self) {
-        // SAFETY: Bindings/work retain the sampler through native use. The
-        // helper destroys the native object before returning quota capacity.
-        unsafe { self.owner.device.destroy_sampler(self.handle) };
-    }
 }
 
 #[cfg(test)]
