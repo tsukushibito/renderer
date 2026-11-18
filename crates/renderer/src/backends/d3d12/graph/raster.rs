@@ -1174,17 +1174,17 @@ mod tests {
     }
 
     fn srv_creations(prepared: &super::super::D3D12PreparedGraph) -> usize {
-        let super::super::PreparedWork::Pooled(work) = &prepared.kind else {
-            panic!("pooled Graph expected")
-        };
-        work.slot().raster.as_ref().unwrap().srv_creations
+        prepared.work.slot().raster.as_ref().unwrap().srv_creations
     }
 
     fn target_view_creations(prepared: &super::super::D3D12PreparedGraph) -> [usize; 2] {
-        let super::super::PreparedWork::Pooled(work) = &prepared.kind else {
-            panic!("pooled Graph expected")
-        };
-        work.slot().raster.as_ref().unwrap().target_view_creations
+        prepared
+            .work
+            .slot()
+            .raster
+            .as_ref()
+            .unwrap()
+            .target_view_creations
     }
 
     #[test]
@@ -1253,12 +1253,12 @@ mod tests {
         // All four passes share one target. The two sampled-only color images
         // must not receive unused RTVs (including the multi-mip texture).
         assert_eq!(target_view_creations(&cancelled), [1, 0]);
-        let super::super::PreparedWork::Pooled(work) = &cancelled.kind else {
-            panic!("pooled Graph expected")
-        };
         // The final batch contains three uploaded buffers, the local image
         // and the readback target. The imported mip chain decays implicitly.
-        assert_eq!(work.slot().common_barriers.recorded_transitions, 5);
+        assert_eq!(
+            cancelled.work.slot().common_barriers.recorded_transitions,
+            5
+        );
         assert!(
             runtime.prepare(&graph).is_err(),
             "recorded descriptors remain exclusively leased"

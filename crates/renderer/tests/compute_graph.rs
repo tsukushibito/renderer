@@ -221,12 +221,14 @@ fn invalid_image_domain_rolls_back_the_complete_dispatch() {
 mod native {
     use super::fixture;
     use renderer::graph::{
-        Binding, BindingResource, BufferDesc, CompiledGraph, GraphPool, PassHandle,
+        Attachment, Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph,
+        GraphCapacity, GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, StoreOp,
     };
+    use renderer::program::{ManagedProgram, SamplerDescriptor};
     use renderer::{
-        D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
-        D3D12RuntimeErrorKind, D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig,
-        RuntimeErrorKind, ValidationMode, VulkanRuntime,
+        D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
+        D3D12RuntimeErrorKind, D3D12ValidationMode, FrameCapacity, ImageFormat, ResourceClass,
+        RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime,
     };
     use serde_json::{Value, json};
     use std::time::Duration;
@@ -552,6 +554,370 @@ mod native {
             assert_eq!(vk_report.synchronization_validation, None);
             assert!(!dx_report.debug_layer_enabled && !dx_report.gpu_based_validation_enabled);
         }
+    }
+
+    const BINDING_BUFFER_BYTES: u64 = 832;
+    const BINDING_PROGRAMS: [ManagedProgram; 4] = [
+        ManagedProgram::uniform_readback(),
+        ManagedProgram::storage_readback(),
+        ManagedProgram::sampled_readback(),
+        ManagedProgram::sampled_float_readback(),
+    ];
+
+    fn binding_image_descriptions() -> [ImageDesc; 3] {
+        let rgba8 = ImageDesc::rgba8(2, 2);
+        [
+            rgba8,
+            ImageDesc {
+                format: ImageFormat::Rgba16Float,
+                ..rgba8
+            },
+            ImageDesc::depth32(2, 2),
+        ]
+    }
+
+    struct BindingReadbacks {
+        passes: [PassHandle; 4],
+        uniform: [u8; 16],
+        rgba8: [u8; 16],
+        rgba16: [f32; 16],
+        depth: f32,
+    }
+
+    impl BindingReadbacks {
+        fn verify(&self, mut read: impl FnMut(PassHandle, &mut [u8])) {
+            let [storage, rgba8, rgba16, depth] = self.passes;
+            let mut short = [0; 16];
+            read(storage, &mut short);
+            assert_eq!(short, self.uniform);
+            read(rgba8, &mut short);
+            assert_eq!(short, self.rgba8);
+
+            let mut float = [0; 64];
+            read(rgba16, &mut float);
+            let rgba16_bits: [u32; 16] =
+                std::array::from_fn(|index| u32::from_le_bytes(float.as_chunks::<4>().0[index]));
+            assert_eq!(rgba16_bits, self.rgba16.map(f32::to_bits));
+
+            read(depth, &mut float);
+            for pixel in float.as_chunks::<16>().0 {
+                let red = u32::from_le_bytes(pixel[..4].try_into().unwrap());
+                assert_eq!(red, self.depth.to_bits());
+            }
+        }
+    }
+
+    fn binding_plan(pool: &mut GraphPool, newer: bool) -> (CompiledGraph, BindingReadbacks) {
+        let mut graph = pool.begin().unwrap();
+        let [uniform, intermediate, output] = ["uniform", "intermediate", "output"].map(|name| {
+            graph
+                .buffer(
+                    name,
+                    BufferDesc {
+                        size: BINDING_BUFFER_BYTES,
+                    },
+                )
+                .unwrap()
+        });
+        let uniform_bytes: [u8; 16] = std::array::from_fn(|index| {
+            if newer {
+                251 - index as u8
+            } else {
+                3 * index as u8
+            }
+        });
+        graph
+            .upload_buffer("uniform at offset", uniform, 256, &uniform_bytes)
+            .unwrap();
+        let buffer = |group, buffer: BufferHandle, offset, size| Binding {
+            group,
+            binding: 0,
+            resource: BindingResource::Buffer {
+                buffer,
+                offset,
+                size,
+            },
+        };
+        graph
+            .dispatch(
+                "produce storage range",
+                &BINDING_PROGRAMS[0],
+                &[
+                    buffer(0, uniform, 256, 16),
+                    buffer(1, intermediate, 256, 16),
+                ],
+                [1; 3],
+            )
+            .unwrap();
+        graph
+            .dispatch(
+                "consume produced storage range",
+                &BINDING_PROGRAMS[1],
+                &[buffer(0, intermediate, 256, 16), buffer(1, output, 256, 16)],
+                [1; 3],
+            )
+            .unwrap();
+
+        let [rgba8_desc, rgba16_desc, depth_desc] = binding_image_descriptions();
+        let rgba8 = graph.image("RGBA8 sample source", rgba8_desc).unwrap();
+        let rgba16 = graph.image("RGBA16F sample source", rgba16_desc).unwrap();
+        let depth = graph.image("D32 sample source", depth_desc).unwrap();
+        let mut rgba8_bytes = [
+            5, 17, 29, 43, 61, 79, 97, 113, 127, 149, 173, 199, 211, 223, 239, 251,
+        ];
+        // Exact finite binary16 values. The expected binary32 values below are independent.
+        let mut half: [u16; 16] = [
+            0xc000, 0xbc00, 0xb800, 0xb400, 0x0000, 0x3400, 0x3800, 0x3c00, 0x3e00, 0x4000, 0x4200,
+            0x4400, 0x4800, 0x4c00, 0x5000, 0x5400,
+        ];
+        let mut expanded = [
+            -2.0, -1.0, -0.5, -0.25, 0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 8.0, 16.0, 32.0, 64.0,
+        ];
+        if newer {
+            rgba8_bytes.reverse();
+            half.reverse();
+            expanded.reverse();
+        }
+        let half_bytes: Vec<u8> = half.into_iter().flat_map(u16::to_le_bytes).collect();
+        let depth_value = if newer { 0.75 } else { 0.25 };
+        graph
+            .upload_image("upload RGBA8", rgba8, &rgba8_bytes)
+            .unwrap();
+        graph
+            .upload_image("upload RGBA16F", rgba16, &half_bytes)
+            .unwrap();
+        graph
+            .attachment_pass(
+                "clear depth",
+                RasterAttachments {
+                    colors: &[],
+                    color_resolves: &[],
+                    depth: Some(Attachment {
+                        view: graph.image_view(depth, 0, 0).unwrap(),
+                        load: LoadOp::Clear(depth_value),
+                        store: StoreOp::Store,
+                    }),
+                },
+            )
+            .unwrap();
+
+        for (name, image, program, offset, size) in [
+            ("sample RGBA8", rgba8, BINDING_PROGRAMS[2], 0, 16),
+            ("sample RGBA16F", rgba16, BINDING_PROGRAMS[3], 512, 64),
+            ("sample D32", depth, BINDING_PROGRAMS[3], 768, 64),
+        ] {
+            graph
+                .dispatch(
+                    name,
+                    &program,
+                    &[
+                        buffer(1, output, offset, size),
+                        Binding {
+                            group: 0,
+                            binding: 0,
+                            resource: BindingResource::ImageView(
+                                graph.image_view(image, 0, 0).unwrap(),
+                            ),
+                        },
+                        Binding {
+                            group: 0,
+                            binding: 1,
+                            resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                        },
+                    ],
+                    [1; 3],
+                )
+                .unwrap();
+        }
+        let passes = [
+            ("storage at offset", 256, 16),
+            ("packed RGBA8", 0, 16),
+            ("expanded RGBA16F", 512, 64),
+            ("sampled D32", 768, 64),
+        ]
+        .map(|(name, offset, size)| graph.readback_buffer(name, output, offset, size).unwrap());
+        (
+            graph.compile().unwrap(),
+            BindingReadbacks {
+                passes,
+                uniform: uniform_bytes,
+                rgba8: rgba8_bytes,
+                rgba16: expanded,
+                depth: depth_value,
+            },
+        )
+    }
+
+    fn binding_readbacks(strict: bool) {
+        let graph_capacity = GraphCapacity {
+            resources: 6,
+            passes: 16,
+            accesses: 32,
+            bindings: 16,
+            attachments: 1,
+            draws: 0,
+            upload_bytes: 128,
+            ..GraphCapacity::default()
+        };
+        let mut pool = GraphPool::new(graph_capacity, 2).unwrap();
+        let (older, older_readbacks) = binding_plan(&mut pool, false);
+        let (newer, newer_readbacks) = binding_plan(&mut pool, true);
+        let descs = binding_image_descriptions();
+
+        let mut vulkan = VulkanRuntime::new_with_validation(
+            RuntimeConfig {
+                execution_slots: 2,
+                max_shader_bindings: 16,
+                ..Default::default()
+            },
+            if strict {
+                ValidationMode::Required
+            } else {
+                ValidationMode::Disabled
+            },
+        )
+        .expect("Vulkan hardware and requested validation");
+        let monitor = vulkan.validation_monitor();
+        let mut classes = vec![ResourceClass::Buffer {
+            desc: BufferDesc {
+                size: BINDING_BUFFER_BYTES,
+            },
+            count: 6,
+        }];
+        classes.extend(descs.map(|desc| ResourceClass::Image { desc, count: 2 }));
+        vulkan
+            .prepare_working_set(
+                FrameCapacity {
+                    graph: graph_capacity,
+                    work_slots: 2,
+                    result_slots: 2,
+                    ..Default::default()
+                },
+                &classes,
+            )
+            .unwrap();
+        vulkan.prepare_compute_programs(&BINDING_PROGRAMS).unwrap();
+
+        let mut d3d12 = D3D12Runtime::new_with_working_set(
+            D3D12RuntimeConfig {
+                validation: if strict {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                capacity: D3D12FrameCapacity {
+                    executions: 2,
+                    results: 2,
+                    resources: 6,
+                    resource_capacity: 12,
+                    operations: 16,
+                    buffers: 3,
+                    buffer_bytes: BINDING_BUFFER_BYTES,
+                    upload_bytes: 8192,
+                    readback_bytes: 4096,
+                    scratch_bytes: BINDING_BUFFER_BYTES,
+                    ..Default::default()
+                },
+            },
+            &[D3D12BufferClass {
+                size: BINDING_BUFFER_BYTES,
+                count: 6,
+            }],
+            &descs.map(|desc| D3D12ImageClass { desc, count: 2 }),
+            &[],
+            &BINDING_PROGRAMS,
+        )
+        .expect("D3D12 hardware and requested validation");
+        assert_ne!(vulkan.device_info().device_type, "CPU");
+        assert_eq!(
+            vulkan.device_info().device_luid,
+            Some(d3d12.device_info().luid)
+        );
+        let dx_monitor = d3d12.validation_monitor();
+
+        // Submit both content versions before waiting, then return the newer
+        // result first. Its resources can be reused while the older result is held.
+        let mut old_vk = vulkan.submit(&older).unwrap();
+        let mut new_vk = vulkan.submit(&newer).unwrap();
+        {
+            let mut result = new_vk.wait(WAIT).unwrap().expect("new Vulkan result");
+            newer_readbacks.verify(|pass, bytes| result.readback_into(pass, bytes).unwrap());
+        }
+        drop(new_vk);
+        let mut reused_vk = vulkan.submit(&newer).unwrap();
+
+        let mut old_dx = d3d12.submit(&older).unwrap();
+        let mut new_dx = d3d12.submit(&newer).unwrap();
+        {
+            let mut result = new_dx.wait(WAIT).unwrap().expect("new D3D12 result");
+            newer_readbacks.verify(|pass, bytes| result.readback_into(pass, bytes).unwrap());
+        }
+        drop(new_dx);
+        let mut reused_dx = d3d12.submit(&newer).unwrap();
+
+        drop((older, newer, pool, vulkan));
+        d3d12.shutdown().unwrap();
+        for (submission, expected) in [
+            (&mut old_vk, &older_readbacks),
+            (&mut reused_vk, &newer_readbacks),
+        ] {
+            let mut result = submission
+                .wait(WAIT)
+                .unwrap()
+                .expect("escaped Vulkan result");
+            expected.verify(|pass, bytes| result.readback_into(pass, bytes).unwrap());
+        }
+        for (submission, expected) in [
+            (&mut old_dx, &older_readbacks),
+            (&mut reused_dx, &newer_readbacks),
+        ] {
+            let mut result = submission
+                .wait(WAIT)
+                .unwrap()
+                .expect("escaped D3D12 result");
+            expected.verify(|pass, bytes| result.readback_into(pass, bytes).unwrap());
+        }
+        drop((old_vk, reused_vk, old_dx, reused_dx));
+
+        let vk = monitor.report();
+        let dx = dx_monitor.snapshot();
+        assert!(vk.is_clean(), "{vk:?}");
+        assert!(dx.is_clean(), "{dx:?}");
+        if strict {
+            assert_eq!(vk.core_validation, Some(true), "{vk:?}");
+            assert_eq!(vk.synchronization_validation, Some(true), "{vk:?}");
+            assert!(
+                dx.debug_layer_enabled && dx.gpu_based_validation_enabled,
+                "{dx:?}"
+            );
+            assert!(dx.teardown_checked, "{dx:?}");
+        } else {
+            assert_eq!(vk.requested, ValidationMode::Disabled);
+            assert!(!dx.debug_layer_enabled && !dx.gpu_based_validation_enabled);
+        }
+    }
+
+    #[cfg(all(feature = "d3d12-diagnostics", feature = "vulkan-diagnostics"))]
+    #[test]
+    #[ignore = "requires Vulkan Core/SyncVal and D3D12 Debug Layer/GBV on the same hardware adapter"]
+    fn managed_binding_graph_readbacks_strict() {
+        binding_readbacks(true);
+    }
+
+    #[cfg(not(any(
+        feature = "development-validation",
+        feature = "d3d12-diagnostics",
+        feature = "vulkan-diagnostics",
+        feature = "graph-diagnostics"
+    )))]
+    #[test]
+    #[ignore = "requires optimized Vulkan/D3D12 hardware without diagnostics"]
+    fn managed_binding_graph_readbacks_shipping() {
+        assert!(
+            !cfg!(debug_assertions),
+            "shipping acceptance requires --release"
+        );
+        binding_readbacks(false);
     }
 
     #[cfg(all(feature = "d3d12-diagnostics", feature = "vulkan-diagnostics"))]

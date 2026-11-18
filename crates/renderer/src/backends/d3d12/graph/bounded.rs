@@ -138,7 +138,7 @@ fn requirements_inner(
     capacity: D3D12FrameCapacity,
     mut raster: Option<&mut super::super::raster_storage::RasterStorage>,
     programs: &[super::super::raster::RasterPipeline],
-    compute_programs: &[super::super::program::D3D12Program],
+    compute_programs: &[super::super::program::ComputePipeline],
 ) -> Result<usize, D3D12RuntimeError> {
     #[cfg(feature = "tracy")]
     let _span = tracy_client::Client::running().map(|client| {

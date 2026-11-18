@@ -352,22 +352,15 @@ mod tests {
             assert_eq!(committed.upload_heap.resource_count, 1);
             assert_eq!(committed.readback_heap.resource_count, 1);
             assert!(committed.default_heap.allocation_bytes >= 12);
-            let buffer = runtime
-                .create_managed_buffer(crate::program::BufferDescriptor::Storage { size: 17 })
-                .expect("managed DEFAULT resource outside Graph registry");
-            let clone = buffer.clone();
-            let with_managed = runtime.memory_stats().unwrap();
-            assert_eq!(with_managed.registered_logical_bytes, 0);
+            let buffer = super::super::resources::DeviceBuffer::storage(&runtime.device, 17)
+                .expect("DEFAULT resource outside Graph registry");
+            let with_buffer = runtime.memory_stats().unwrap();
+            assert_eq!(with_buffer.registered_logical_bytes, 0);
             assert_eq!(
-                with_managed.committed.unwrap().default_heap.resource_count,
+                with_buffer.committed.unwrap().default_heap.resource_count,
                 committed.default_heap.resource_count + 1
             );
             drop(buffer);
-            assert_eq!(
-                runtime.memory_stats().unwrap().committed,
-                with_managed.committed
-            );
-            drop(clone);
             assert_eq!(runtime.memory_stats().unwrap().committed, before.committed);
         }
         #[cfg(not(feature = "memory-profiling"))]
