@@ -6,10 +6,10 @@ use super::{
 };
 use renderer::{
     graph::{
-        Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, ImageView, LoadOp,
-        RasterAttachments, RasterConstants, RasterDraw, StoreOp,
+        Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError,
+        ImageView, LoadOp, RasterAttachments, RasterConstants, RasterDraw, RasterPass, StoreOp,
     },
-    program::SamplerDescriptor,
+    program::{ManagedRasterProgram, SamplerDescriptor},
 };
 
 pub(super) const PLANES: [&str; 3] = [
@@ -32,7 +32,7 @@ pub(super) struct Inputs {
 pub(super) fn append(
     graph: &mut Graph,
     scene: Inputs,
-    draws: impl IntoIterator<Item = RasterDraw>,
+    draws: impl FnOnce(&mut RasterPass<'_, '_>, &ManagedRasterProgram) -> Result<(), GraphError>,
 ) -> Result<(), Error> {
     let desc = graph.image_desc(scene.hdr.image())?;
     let base = graph.image(PLANES[0], desc)?;
@@ -48,10 +48,8 @@ pub(super) fn append(
         load: LoadOp::Clear([0.0; 4]),
         store: StoreOp::Store,
     });
-    graph.raster(
+    graph.raster_pass(
         "G-buffer opaque and mask",
-        &program::deferred::gbuffer_program(),
-        draws,
         RasterAttachments {
             color_resolves: &[],
             colors: &colors,
@@ -61,6 +59,7 @@ pub(super) fn append(
                 store: StoreOp::Store,
             }),
         },
+        |raster| draws(raster, &program::deferred::gbuffer_program()),
     )?;
 
     let reconstruction = graph.buffer(

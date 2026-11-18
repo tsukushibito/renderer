@@ -572,6 +572,8 @@ impl<B: WindowBackend> State<B> {
             "local_lights":options.pipeline.uses_local_lights()
                 .then(|| super::forward_lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
+            "submission": options.submission.name(),
+            "packed_opaque": self.budget.packed_counts().map(|(groups, draws)| json!({"groups":groups,"primitives":draws})),
             "warmup": options.warmup, "accepted": self.accepted, "pending_on_exit": self.pending_on_exit,
             "setup_ns": self.setup_ns, "native_memory": memory, "steady_memory": steady_memory,
             "setup_phases_ns": {"asset_load": asset_load_ns, "native_prepare": self.preparation_ns,

@@ -93,7 +93,9 @@ impl WindowBackend for super::super::backend::Vulkan {
     }
 
     fn reprepare(&mut self, options: &Options, budget: &Budget) -> Result<(), Error> {
-        let classes = Budget::frame_buffers(options)
+        let classes = budget
+            .resized_buffers(options)
+            .into_iter()
             .map(|(size, count)| renderer::ResourceClass::Buffer {
                 desc: renderer::graph::BufferDesc { size },
                 count,
@@ -133,8 +135,10 @@ impl WindowBackend for super::super::backend::D3d12 {
         Ok(self.runtime.present(surface, image)?)
     }
 
-    fn reprepare(&mut self, options: &Options, _: &Budget) -> Result<(), Error> {
-        let buffers = Budget::frame_buffers(options)
+    fn reprepare(&mut self, options: &Options, budget: &Budget) -> Result<(), Error> {
+        let buffers = budget
+            .resized_buffers(options)
+            .into_iter()
             .map(|(size, count)| renderer::D3D12BufferClass { size, count })
             .collect::<Vec<_>>();
         let images = Budget::frame_images(options)

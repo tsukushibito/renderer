@@ -1,6 +1,6 @@
 //! Small acceptance adapter; all assets and Graph construction are API-neutral.
 
-use super::{Error, Options, PipelineMode, pipeline::Budget, program};
+use super::{Error, Options, PipelineMode, SubmissionMode, pipeline::Budget, program};
 use renderer::{
     graph::{
         BufferHandle, CompiledGraph, ImageHandle, ImportBuffer, ImportImage, PassHandle,
@@ -59,6 +59,17 @@ pub(super) fn compute_requests(options: &Options) -> Vec<ManagedProgram> {
         .chain(
             (options.pipeline == PipelineMode::ForwardPlus)
                 .then(program::forward_plus::compute_program),
+        )
+        .chain(
+            (options.submission == SubmissionMode::Indirect)
+                .then(|| {
+                    [
+                        super::program::visibility::visibility_program(),
+                        ManagedProgram::indexed_indirect_encoder(),
+                    ]
+                })
+                .into_iter()
+                .flatten(),
         )
         .collect()
 }

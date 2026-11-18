@@ -1,7 +1,7 @@
 //! Public Graph composition and explicit working-set budgets for this consumer.
 
 use super::{
-    Error, Options, PipelineMode,
+    Error, Options, PipelineMode, SubmissionMode,
     asset::Scene,
     backend::Backend,
     camera::{Camera, Frustum},
@@ -13,11 +13,16 @@ use renderer::{
     ImageFormat,
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity,
-        GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, LoadOp, PassHandle,
-        RasterAttachments, RasterBindings, RasterConstants, RasterDraw, SampleCount, StoreOp,
+        GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp,
+        PassHandle, RasterAttachments, RasterBindings, RasterConstants, RasterDraw, RasterPass,
+        SampleCount, StoreOp,
     },
-    program::SamplerDescriptor,
+    program::{ManagedRasterProgram, SamplerDescriptor},
 };
+use std::sync::Arc;
+
+#[path = "pipeline/indirect.rs"]
+mod indirect;
 
 pub(super) struct Budget {
     pub graph: GraphCapacity,
@@ -31,6 +36,8 @@ pub(super) struct Budget {
     pub ranges: usize,
     pipeline: PipelineMode,
     fixture: bool,
+    packed: Option<Arc<indirect::Layout>>,
+    indirect: bool,
 }
 
 pub(super) fn image_desc(image: &super::asset::TextureImage) -> ImageDesc {
@@ -62,6 +69,29 @@ impl Budget {
             PipelineMode::Forward => None,
         };
         bytes.map(|size| (size, options.inflight)).into_iter()
+    }
+
+    #[cfg(all(windows, feature = "presentation"))]
+    pub fn resized_buffers(&self, options: &Options) -> Vec<(u64, usize)> {
+        let mut classes = Vec::new();
+        let temporary = self
+            .packed
+            .iter()
+            .flat_map(|layout| layout.transient_buffers(options));
+        for (size, count) in Self::frame_buffers(options).chain(temporary) {
+            if let Some((_, available)) = classes.iter_mut().find(|(old, _)| *old == size) {
+                *available += count;
+            } else {
+                classes.push((size, count));
+            }
+        }
+        classes
+    }
+
+    pub fn packed_counts(&self) -> Option<(usize, usize)> {
+        self.packed
+            .as_ref()
+            .map(|layout| (layout.group_count(), layout.draw_count()))
     }
 
     pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
@@ -115,11 +145,23 @@ impl Budget {
         let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
         let local_lights = usize::from(options.pipeline.uses_local_lights());
         let tiled_lights = usize::from(options.pipeline == PipelineMode::ForwardPlus);
+        let packed = if options.submission == SubmissionMode::Direct {
+            None
+        } else {
+            indirect::Layout::new(scene)?.map(Arc::new)
+        };
+        let indirect = options.submission == SubmissionMode::Indirect;
+        let groups = packed
+            .as_ref()
+            .filter(|_| indirect)
+            .map_or(0, |layout| layout.group_count());
+        let packed_buffers = packed.as_ref().map_or(0, |_| 2 + usize::from(indirect));
+        let indirect_passes = if groups == 0 { 0 } else { 1 + 2 * groups };
         let buffer_count = scene
             .primitives
             .len()
             .checked_mul(2)
-            .and_then(|v| v.checked_add(scene.materials.len() + 3))
+            .and_then(|v| v.checked_add(scene.materials.len() + 3 + packed_buffers))
             .ok_or("buffer count overflow")?;
         let mut buffers = Vec::<(u64, usize)>::new();
         let mut add = |size: u64| {
@@ -139,8 +181,18 @@ impl Budget {
         add(program::CAMERA_BYTES as u64);
         add(24);
         add(12);
+        if let Some(layout) = &packed {
+            add(layout.vertex_bytes as u64);
+            add(layout.index_bytes() as u64);
+            if indirect {
+                add(layout.aabb_bytes() as u64);
+            }
+        }
         let mut frame_buffers = 0;
-        for (size, count) in Self::frame_buffers(options) {
+        let temporary = packed
+            .iter()
+            .flat_map(|layout| layout.transient_buffers(options));
+        for (size, count) in Self::frame_buffers(options).chain(temporary) {
             for _ in 0..count {
                 add(size);
             }
@@ -177,6 +229,16 @@ impl Budget {
                         .map(|bytes| maximum.max(bytes))
                         .ok_or("geometry upload byte overflow")
                 })?;
+        let geometry_upload_bytes = if let Some(layout) = &packed {
+            geometry_upload_bytes.max(
+                layout
+                    .vertex_bytes
+                    .checked_add(layout.index_bytes())
+                    .ok_or("packed upload byte overflow")?,
+            )
+        } else {
+            geometry_upload_bytes
+        };
         let mut images = Vec::<(ImageDesc, usize)>::new();
         let mut add_image = |desc: ImageDesc, count: usize| {
             if let Some((_, total)) = images.iter_mut().find(|(old, _)| *old == desc) {
@@ -224,7 +286,8 @@ impl Budget {
             + deferred * (1 + deferred::PLANES.len())
             + local_lights
             + tiled_lights
-            + usize::from(options.sample_count == SampleCount::X4);
+            + usize::from(options.sample_count == SampleCount::X4)
+            + indirect_passes;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
@@ -234,7 +297,7 @@ impl Budget {
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
-        let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings;
+        let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings + 8 * groups;
         let graph = GraphCapacity {
             resources,
             passes: 24
@@ -242,7 +305,8 @@ impl Budget {
                 + usize::from(bloom_passes != 0)
                 + deferred * 2
                 + local_lights
-                + tiled_lights,
+                + tiled_lights
+                + indirect_passes,
             accesses,
             draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
             bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
@@ -250,7 +314,9 @@ impl Budget {
                 + bloom_bindings
                 + deferred * 16
                 + tiled_lights * 3
-                + usize::from(options.instances.enabled()) * 16,
+                + usize::from(options.instances.enabled()) * 16
+                + 3 * groups
+                + 3 * usize::from(groups != 0),
             attachments: 24 + deferred * deferred::PLANES.len(),
             dependencies: 32,
             initial_ranges: resources * 2,
@@ -303,6 +369,11 @@ impl Budget {
                 // compute. Geometry streams above still size cold CPU uploads.
                 forward_plus::LIGHT_BUFFER_BYTES as usize
             })
+            .max(packed.as_ref().filter(|_| indirect).map_or(0, |layout| {
+                layout.template_upload_bytes()
+                    + program::CAMERA_BYTES
+                    + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize
+            }))
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
@@ -341,6 +412,8 @@ impl Budget {
             ranges: resources * (options.inflight + 3) + 32,
             pipeline: options.pipeline,
             fixture: options.fixture,
+            packed,
+            indirect,
         })
     }
     pub fn upload_pool(&self) -> Result<GraphPool, Error> {
@@ -381,6 +454,7 @@ pub(super) struct Resident {
     tiles: Option<ImportBuffer>,
     pub resolve_vertices: ImportBuffer,
     pub resolve_indices: ImportBuffer,
+    packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
     pub upload_owners: Vec<GraphPool>,
@@ -511,6 +585,7 @@ impl Resident {
             self.resolve_indices.key(),
         ];
         let tiles = self.tiles.take().map(|tiles| tiles.key());
+        let packed = self.packed.take().map(indirect::Resident::release);
         drop((self.camera, self.resolve_vertices, self.resolve_indices));
         prepare(backend)?;
         let refresh = |keys: Vec<_>| -> Result<Vec<ImportBuffer>, Error> {
@@ -525,6 +600,7 @@ impl Resident {
         self.resolve_vertices = backend.refresh_buffer(saved[1])?;
         self.resolve_indices = backend.refresh_buffer(saved[2])?;
         self.tiles = tiles.map(|key| backend.refresh_buffer(key)).transpose()?;
+        self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
     }
 
@@ -599,6 +675,21 @@ impl Resident {
             }
         }
         let mut materials = Vec::with_capacity(scene.materials.len());
+        let packed = budget
+            .packed
+            .as_ref()
+            .map(|layout| {
+                indirect::Resident::upload(
+                    backend,
+                    &mut geometry_pool,
+                    &mut upload_owners,
+                    scene,
+                    layout,
+                    &primitive_bounds,
+                    budget.indirect,
+                )
+            })
+            .transpose()?;
         for material in &scene.materials {
             materials.push(upload_buffer(
                 backend,
@@ -696,6 +787,7 @@ impl Resident {
             tiles,
             resolve_vertices,
             resolve_indices,
+            packed,
             upload_owners,
         })
     }
@@ -711,6 +803,7 @@ pub(super) struct Workspace {
     shadow_cache: Option<ShadowCache>,
     pub(super) placements: Option<instancing::Placements>,
     opaque: Vec<usize>,
+    indirect: Vec<IndexedIndirectArgs>,
     blended: Vec<usize>,
 }
 
@@ -762,6 +855,7 @@ impl Workspace {
             shadow_cache: None,
             placements: None,
             opaque: Vec::with_capacity(scene.primitives.len()),
+            indirect: Vec::with_capacity(scene.materials.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
         }
     }
@@ -1300,15 +1394,24 @@ pub(super) fn build(
     let camera_matrix =
         std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
     let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
-    for (index, primitive) in scene.primitives.iter().enumerate() {
+    let include_material = |index: usize| {
         #[cfg(feature = "development-validation")]
-        if options.omit_material == Some(primitive.material) {
+        if options.omit_material == Some(index) {
+            return false;
+        }
+        !options.alpha_only || scene.materials[index].alpha_zero
+    };
+    let packed = resident
+        .packed
+        .as_ref()
+        .map(|packed| packed.prepare_frame(&mut graph, uniform, &mut workspace.indirect))
+        .transpose()?;
+    for (index, primitive) in scene.primitives.iter().enumerate() {
+        let material = &scene.materials[primitive.material];
+        if (packed.is_some() && !material.blend) || !include_material(primitive.material) {
             continue;
         }
-        let material = &scene.materials[primitive.material];
-        if (!options.alpha_only || material.alpha_zero)
-            && frustum.overlaps(resident.primitive_bounds[index])
-        {
+        if frustum.overlaps(resident.primitive_bounds[index]) {
             if material.blend {
                 workspace.blended.push(index);
             } else {
@@ -1328,6 +1431,20 @@ pub(super) fn build(
             parameters: RasterConstants::default(),
         }
     };
+    let record_opaque = |raster: &mut RasterPass<'_, '_>, program: &ManagedRasterProgram| {
+        if let Some(packed) = &packed {
+            packed.draw(
+                raster,
+                program,
+                &workspace.bindings,
+                &frustum,
+                &resident.primitive_bounds,
+                include_material,
+            )
+        } else {
+            raster.draw(program, workspace.opaque.iter().copied().map(draw))
+        }
+    };
     let final_resolve = resolve_view.map(Some);
     if deferred {
         deferred::append(
@@ -1342,7 +1459,7 @@ pub(super) fn build(
                 fullscreen_indices: resolve_indices,
                 lighting: lighting_bindings,
             },
-            workspace.opaque.iter().copied().map(draw),
+            record_opaque,
         )?;
     } else {
         #[cfg(feature = "tracy")]
@@ -1385,10 +1502,7 @@ pub(super) fn build(
                 }),
             },
             |raster| {
-                raster.draw(
-                    &options.pipeline.forward_program(false),
-                    workspace.opaque.iter().copied().map(draw),
-                )?;
+                record_opaque(raster, &options.pipeline.forward_program(false))?;
                 if let Some(placements) = &workspace.placements {
                     let instance = RasterDraw {
                         bindings: instance_bindings,

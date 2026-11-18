@@ -234,6 +234,7 @@ fn identity(
         "local_lights":options.pipeline.uses_local_lights()
             .then(|| super::forward_lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),
+        "submission":options.submission.name(),
         "shadow_profile":{"cascades":4,"resolution":shadow.resolution,"distance_m":shadow.distance,
             "split_lambda":shadow.split_lambda,"blend_fraction":shadow.blend_fraction,
             "depth_bias_texels":shadow.depth_bias_texels,"slope_bias_texels":shadow.slope_bias_texels,
@@ -570,6 +571,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         "max_buffer_bytes":budget.max_buffer_bytes,"upload_capacity_bytes":budget.upload_bytes,"readback_capacity_bytes":budget.readback_bytes,
         "buffer_logical_bytes":budget.buffers.iter().map(|(bytes,count)|*bytes*(*count as u64)).sum::<u64>(),
         "image_logical_bytes":budget.images.iter().map(|(desc,count)|desc.byte_len().unwrap()*(*count as u64)).sum::<u64>(),
+        "packed_opaque": budget.packed_counts().map(|(groups, draws)| json!({"groups":groups,"primitives":draws})),
         "retained_uniform_upload_pools":resident.upload_owners.len(),"geometry_validation_cpu_bytes_retained":0,
         "scope":"packed logical resource bytes and prepared copy budgets; not actual native allocation size or VRAM residency"});
     // Typed geometry publication transfers scalar index guarantees to native

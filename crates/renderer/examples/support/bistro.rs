@@ -101,6 +101,23 @@ impl PipelineMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SubmissionMode {
+    Direct,
+    Packed,
+    Indirect,
+}
+
+impl SubmissionMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Packed => "packed",
+            Self::Indirect => "indirect",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Options {
     api: String,
@@ -129,6 +146,7 @@ struct Options {
     sample_count: renderer::graph::SampleCount,
     pipeline: PipelineMode,
     instances: instancing::Mode,
+    submission: SubmissionMode,
     #[cfg(feature = "development-validation")]
     omit_material: Option<usize>,
     #[cfg(feature = "development-validation")]
@@ -178,6 +196,7 @@ impl Options {
             sample_count: renderer::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
             instances: instancing::Mode::Off,
+            submission: SubmissionMode::Direct,
             #[cfg(feature = "development-validation")]
             omit_material: None,
             #[cfg(feature = "development-validation")]
@@ -242,6 +261,14 @@ impl Options {
                         ),
                     };
                 }
+                "--submission" => {
+                    result.submission = match args.next().as_deref() {
+                        Some("direct") => SubmissionMode::Direct,
+                        Some("packed") => SubmissionMode::Packed,
+                        Some("indirect") => SubmissionMode::Indirect,
+                        _ => return Err("--submission needs direct, packed or indirect".into()),
+                    };
+                }
                 "--msaa" => {
                     use renderer::graph::SampleCount;
                     result.sample_count = match args.next().as_deref() {
@@ -296,7 +323,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|forward-plus|forward-reference|deferred] [--msaa 1|4] [--instances off|individual|instanced] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--windowed|--window-smoke] [--vsync on|off] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--bloom off|tent|box] [--capture-all-views] [--capture-route-samples (requires full scene)] [--capture-bloom-bypass] [--capture-shadow-maps] [--pipeline forward|forward-plus|forward-reference|deferred] [--msaa 1|4] [--instances off|individual|instanced] [--submission direct|packed|indirect] [--aa-off] [--shadows-off] [--redraw-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]
@@ -318,11 +345,12 @@ impl Options {
         }
         if result.instances.enabled()
             && (result.pipeline != PipelineMode::Forward
+                || result.submission != SubmissionMode::Direct
                 || result.alpha_only
                 || result.force_opaque
                 || result.resource_checks)
         {
-            return Err("--instances requires the Forward pipeline and original material inputs without resource probes".into());
+            return Err("--instances requires Forward, direct submission and original material inputs without resource probes".into());
         }
         #[cfg(feature = "development-validation")]
         if result.instances.enabled() && result.omit_material.is_some() {
@@ -467,6 +495,37 @@ mod tests {
             );
         }
         assert!(options(&["--fixture", "--instances", "wrong"]).is_err());
+    }
+
+    #[test]
+    fn submission_modes_are_explicit() {
+        assert_eq!(
+            options(&["--fixture"]).unwrap().submission,
+            SubmissionMode::Direct
+        );
+        assert_eq!(
+            options(&["--fixture", "--submission", "packed"])
+                .unwrap()
+                .submission,
+            SubmissionMode::Packed
+        );
+        assert_eq!(
+            options(&["--fixture", "--submission", "indirect"])
+                .unwrap()
+                .submission,
+            SubmissionMode::Indirect
+        );
+        assert!(options(&["--fixture", "--submission", "unknown"]).is_err());
+        assert!(
+            options(&[
+                "--fixture",
+                "--submission",
+                "packed",
+                "--instances",
+                "instanced"
+            ])
+            .is_err()
+        );
     }
 
     #[test]
