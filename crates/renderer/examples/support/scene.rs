@@ -1,8 +1,10 @@
 //! The same small scene and external Graph extension for headless and display.
 
+use super::image_transform::{self, Transform};
+
 use renderer::{
     engine::{Draw, EngineError, IDENTITY, MaterialHandle, MeshData, MeshHandle, Vertex, View},
-    graph::{ComputeTransform, Graph, GraphError, ImageHandle},
+    graph::{Graph, GraphError, ImageHandle},
 };
 
 pub fn triangle(color: [f32; 4]) -> Result<MeshData, EngineError> {
@@ -54,11 +56,12 @@ pub fn custom_pass(
     }
     let desc = graph.image_desc(color)?;
     let output = graph.image("external custom output", desc)?;
-    graph.compute(
+    image_transform::dispatch(
+        graph,
         "external custom SwapRedBlue",
         color,
         output,
-        ComputeTransform::SwapRedBlue,
+        Transform::SwapRedBlue,
     )?;
     Ok(output)
 }

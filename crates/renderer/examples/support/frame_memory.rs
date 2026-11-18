@@ -1,12 +1,14 @@
 //! Fixed-storage measurement driver. Report construction is outside the window.
 
+use super::image_transform::{self, Transform};
+
 use renderer::engine::{
     Draw, Engine, EngineCapacity, EngineErrorKind, FrameSnapshot, IDENTITY, Material, MeshData,
     SnapshotPool, Vertex, View,
 };
 use renderer::graph::{
     Access, AccessKind, AccessPurpose, AccessRange, Attachment, Binding, BufferDesc, CompiledGraph,
-    ComputeTransform, Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, LoadOp, PassKind,
+    Graph, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, LoadOp, PassKind,
     RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::measurement::Snapshot;
@@ -164,11 +166,12 @@ fn cpu_frames(
                     let mut color = scene.color;
                     for _ in 0..extra_passes {
                         let output = graph.image("memory transform", ImageDesc::rgba8(16, 16))?;
-                        graph.compute(
+                        image_transform::dispatch(
+                            graph,
                             "memory transform",
                             color,
                             output,
-                            ComputeTransform::Invert,
+                            Transform::Invert,
                         )?;
                         color = output;
                     }

@@ -7,9 +7,10 @@ use super::super::{
 use super::measurement::{Measurements, Observations, Phase};
 use super::{PresentOutcome, PresentationConfig, Presenter};
 use crate::graph::{
-    Attachment, BufferDesc, ComputeTransform, GraphCapacity, GraphPool, ImageDesc, ImportImage,
-    LoadOp, PassHandle, RasterAttachments, RasterDraw, RasterParameters, ResourceKey, StoreOp,
+    Attachment, BufferDesc, GraphCapacity, GraphPool, ImageDesc, ImportImage, LoadOp, PassHandle,
+    RasterAttachments, RasterDraw, RasterParameters, ResourceKey, StoreOp,
 };
+use crate::image_transform::{self, Transform};
 use ash::vk;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -142,6 +143,9 @@ fn prepare(runtime: &mut VulkanRuntime) {
     runtime
         .prepare_working_set(frame_capacity(), &classes)
         .unwrap();
+    runtime
+        .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
+        .unwrap();
 }
 
 fn mesh(runtime: &mut VulkanRuntime, pool: &mut GraphPool) -> (ResourceKey, ResourceKey) {
@@ -256,23 +260,23 @@ fn image_frame(
                 desc,
             )
             .unwrap();
-        graph
-            .compute(
-                if index == 0 {
-                    "wsi.custom.0"
-                } else {
-                    "wsi.custom.1"
-                },
-                sampled,
-                next,
-                ComputeTransform::Invert,
-            )
-            .unwrap();
+        image_transform::dispatch(
+            &mut graph,
+            if index == 0 {
+                "wsi.custom.0"
+            } else {
+                "wsi.custom.1"
+            },
+            sampled,
+            next,
+            Transform::Invert,
+        )
+        .unwrap();
         sampled = next;
     }
     let output = graph.image("wsi.output", desc).unwrap();
     graph
-        .composite("wsi.standard.composite", sampled, output)
+        .copy_image("wsi.output.copy", sampled, output)
         .unwrap();
     graph.export_image(output).unwrap();
     let pass = graph

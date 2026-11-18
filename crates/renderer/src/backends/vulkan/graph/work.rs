@@ -19,8 +19,7 @@ use super::provenance::IndexError;
 use super::storage::{StorageLease, StoragePool};
 use super::{NativeResource, Physical, RuntimeError, Snapshot};
 use crate::graph::{
-    AccessPurpose, CompiledGraph, ComputeTransform, MeshUpload, Operation, ResourceDesc,
-    SampleCount,
+    AccessPurpose, CompiledGraph, MeshUpload, Operation, ResourceDesc, SampleCount,
 };
 
 #[cfg(feature = "graph-diagnostics")]
@@ -261,10 +260,6 @@ enum PreparedOperation {
     ReadbackImage {
         src: usize,
     },
-    Compute {
-        dst: usize,
-        transform: ComputeTransform,
-    },
     Dispatch {
         workgroups: [u32; 3],
     },
@@ -277,9 +272,6 @@ enum PreparedOperation {
     ClearAttachments {
         colors: Range<usize>,
         depth: Option<usize>,
-    },
-    Composite {
-        dst: usize,
     },
 }
 
@@ -310,7 +302,6 @@ impl PreparedOperation {
                 Self::ReadbackBuffer { src, offset, size }
             }
             Operation::ReadbackImage { src } => Self::ReadbackImage { src },
-            Operation::Compute { dst, transform, .. } => Self::Compute { dst, transform },
             Operation::Dispatch { workgroups, .. } => Self::Dispatch { workgroups },
             Operation::Raster {
                 ref batches,
@@ -329,7 +320,6 @@ impl PreparedOperation {
                 colors: colors.clone(),
                 depth,
             },
-            Operation::Composite { dst, .. } => Self::Composite { dst },
             Operation::Declared(_) => {
                 return Err(RuntimeError::unsupported(
                     "pass has no supported native operation",
@@ -403,7 +393,6 @@ struct PreparedPass {
     buffers: Range<usize>,
     images: Range<usize>,
     staging: Option<usize>,
-    descriptor: Option<vk::DescriptorSet>,
     compute: Option<ComputeDispatch>,
     raster_programs: Range<usize>,
     raster_descriptors: Range<usize>,
@@ -596,7 +585,6 @@ impl GraphWork {
                 buffers: buffers.len()..buffers.len(),
                 images: images.len()..images.len(),
                 staging: None,
-                descriptor: None,
                 compute: None,
                 raster_programs: raster_program_cursor..raster_program_cursor,
                 raster_descriptors: raster_descriptors.len()..raster_descriptors.len(),
@@ -841,12 +829,6 @@ impl GraphWork {
                                 })?;
                         readbacks.push((index, Some(range)));
                     }
-                    Operation::Compute { src, dst, .. } => {
-                        prepared.descriptor = Some(bindings.as_mut().unwrap().compute(
-                            physical[*src].as_ref().unwrap().image(),
-                            physical[*dst].as_ref().unwrap().image(),
-                        )?);
-                    }
                     Operation::Dispatch {
                         program,
                         bindings,
@@ -886,14 +868,6 @@ impl GraphWork {
                                     })?;
                             }
                         }
-                    }
-                    Operation::Composite { src, .. } => {
-                        prepared.descriptor = Some(
-                            bindings
-                                .as_mut()
-                                .unwrap()
-                                .composite(physical[*src].as_ref().unwrap().image())?,
-                        );
                     }
                     Operation::Raster {
                         batches,
@@ -1913,14 +1887,17 @@ mod tests {
                     &[
                         super::super::ResourceClass::Image {
                             desc: ImageDesc::rgba8(2, 2),
-                            count: 4,
+                            count: 1,
                         },
                         super::super::ResourceClass::Buffer {
                             desc: BufferDesc { size: 16 },
-                            count: 1,
+                            count: 4,
                         },
                     ],
                 )
+                .unwrap();
+            runtime
+                .prepare_compute_programs(&[crate::program::ManagedProgram::sampled_readback()])
                 .unwrap();
             let diagnostics = runtime.diagnostics.clone();
             #[cfg(feature = "development-validation")]
@@ -1953,14 +1930,17 @@ mod tests {
             let mut reads = Vec::new();
             for index in 0..3 {
                 let output = graph
-                    .image(&format!("output.{index}"), ImageDesc::rgba8(2, 2))
+                    .buffer(&format!("output.{index}"), BufferDesc { size: 16 })
                     .unwrap();
-                graph
-                    .composite(&format!("sample.{index}"), source, output)
-                    .unwrap();
+                super::super::tests::sample_rgba8(
+                    &mut graph,
+                    &format!("sample.{index}"),
+                    source,
+                    output,
+                );
                 reads.push(
                     graph
-                        .readback_image(&format!("read.{index}"), output)
+                        .readback_buffer(&format!("read.{index}"), output, 0, 16)
                         .unwrap(),
                 );
             }

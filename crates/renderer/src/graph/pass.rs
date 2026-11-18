@@ -77,13 +77,6 @@ pub(crate) struct AttachmentOps {
     pub store: StoreOp,
 }
 
-/// Trusted built-in shader transformations; no arbitrary SPIR-V is accepted.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ComputeTransform {
-    Invert,
-    SwapRedBlue,
-}
-
 /// Immutable per-draw values for the built-in mesh pipeline. Matrices are
 /// column-major and multiply a column vector: `clip = transform * position`.
 /// This parameter block is independent of asset handles and frame ownership.
@@ -395,11 +388,6 @@ pub(crate) enum Operation {
     ReadbackImage {
         src: usize,
     },
-    Compute {
-        src: usize,
-        dst: usize,
-        transform: ComputeTransform,
-    },
     #[cfg_attr(
         not(test),
         allow(dead_code, reason = "native managed dispatch is subsequent work")
@@ -419,10 +407,6 @@ pub(crate) enum Operation {
     AttachmentPass {
         colors: Range<usize>,
         depth: Option<usize>,
-    },
-    Composite {
-        src: usize,
-        dst: usize,
     },
     Declared(PassKind),
 }

@@ -1,5 +1,6 @@
 //! Real engine-input contracts, including pending versions and external passes.
 
+use crate::image_transform::{self, Transform};
 use std::time::{Duration, Instant};
 
 use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
@@ -11,7 +12,7 @@ use crate::{
     EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
     RenderedFrame, VulkanEngine,
     engine::{Draw, FrameSnapshot, IDENTITY, Material, MeshData, Vertex, View},
-    graph::{BufferDesc, ComputeTransform, Graph, GraphError, ImageDesc, PassHandle},
+    graph::{BufferDesc, Graph, GraphError, ImageDesc, PassHandle},
 };
 
 fn mesh(color: [f32; 4]) -> MeshData {
@@ -67,6 +68,12 @@ fn with_engine(test: impl FnOnce(&mut VulkanEngine, &mut Engine)) {
                     },
                 ],
             )
+            .unwrap();
+        runtime
+            .prepare_compute_programs(&[
+                image_transform::program(Transform::Invert),
+                image_transform::program(Transform::SwapRedBlue),
+            ])
             .unwrap();
         let mut engine = VulkanEngine::new(
             runtime,
@@ -310,11 +317,12 @@ fn vulkan_engine_opaque_batch_keeps_pending_draws_and_each_mesh_alive() {
         };
         let extension = |graph: &mut Graph, color| {
             let output = graph.image("custom swap", graph.image_desc(color)?)?;
-            graph.compute(
+            image_transform::dispatch(
+                graph,
                 "swap after opaque",
                 color,
                 output,
-                ComputeTransform::SwapRedBlue,
+                Transform::SwapRedBlue,
             )?;
             Ok(output)
         };
@@ -372,11 +380,12 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         };
         let mut frame = render_frame(engine, assets, &view, &[], true, |graph, color| {
             let target = graph.image("external custom invert", ImageDesc::rgba8(8, 8))?;
-            graph.compute(
+            image_transform::dispatch(
+                graph,
                 "external inversion",
                 color,
                 target,
-                ComputeTransform::Invert,
+                Transform::Invert,
             )?;
             Ok(target)
         })

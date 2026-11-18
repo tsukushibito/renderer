@@ -3,6 +3,9 @@
 use renderer::measurement::CountingAllocator;
 use std::alloc::System;
 
+#[path = "support/image_transform.rs"]
+mod image_transform;
+
 #[path = "support/frame_memory.rs"]
 mod frame_memory;
 

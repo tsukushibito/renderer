@@ -724,17 +724,6 @@ impl Graph {
             _ => Err(self.resource_error(GraphErrorKind::InvalidHandle, "expected image", id)),
         }
     }
-    pub(super) fn color(&self, id: usize) -> Result<(), GraphError> {
-        self.single_image(id)?;
-        if self.image_desc_at(id)?.format != ImageFormat::Rgba8Unorm {
-            return Err(self.resource_error(
-                GraphErrorKind::InvalidInput,
-                "operation requires RGBA8_UNORM",
-                id,
-            ));
-        }
-        Ok(())
-    }
     /// Fixed whole-image operations currently encode only one mip/layer.
     pub(super) fn single_image(&self, id: usize) -> Result<(), GraphError> {
         self.single_sample_image(id)?;
@@ -758,19 +747,6 @@ impl Graph {
         }
         Ok(())
     }
-    pub(super) fn compatible_color_pair(&self, src: usize, dst: usize) -> Result<(), GraphError> {
-        self.color(src)?;
-        self.color(dst)?;
-        if src == dst || self.image_desc_at(src)? != self.image_desc_at(dst)? {
-            return Err(self.resource_error(
-                GraphErrorKind::InvalidInput,
-                "image operation requires distinct images with equal RGBA8 descriptions",
-                dst,
-            ));
-        }
-        Ok(())
-    }
-
     pub(super) fn compatible_image_copy_pair(
         &self,
         src: usize,

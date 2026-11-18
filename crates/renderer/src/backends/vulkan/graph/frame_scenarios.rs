@@ -2,10 +2,11 @@
 
 use super::tests::prepare_scenario;
 use super::*;
+use crate::image_transform::{self, Transform};
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::graph::{BufferDesc, ComputeTransform, Graph, ImageDesc};
+use crate::graph::{BufferDesc, Graph, ImageDesc};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -47,14 +48,14 @@ fn completion(runtime: &mut VulkanRuntime) -> FrameCompletion {
     }
 }
 
-fn transformed(bytes: &[u8], operation: ComputeTransform) -> Vec<u8> {
+fn transformed(bytes: &[u8], operation: Transform) -> Vec<u8> {
     bytes
         .as_chunks::<4>()
         .0
         .iter()
         .flat_map(|pixel| match operation {
-            ComputeTransform::Invert => [255 - pixel[0], 255 - pixel[1], 255 - pixel[2], pixel[3]],
-            ComputeTransform::SwapRedBlue => [pixel[2], pixel[1], pixel[0], pixel[3]],
+            Transform::Invert => [255 - pixel[0], 255 - pixel[1], 255 - pixel[2], pixel[3]],
+            Transform::SwapRedBlue => [pixel[2], pixel[1], pixel[0], pixel[3]],
         })
         .collect()
 }
@@ -84,6 +85,9 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
                     },
                 ],
             );
+            runtime
+                .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
+                .unwrap();
             let mut retained = Vec::new();
             let mut warm = None;
             for round in 0..4 {
@@ -106,9 +110,14 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
                     graph
                         .upload_image("frame image upload", source, &image_bytes)
                         .unwrap();
-                    graph
-                        .compute("frame invert", source, target, ComputeTransform::Invert)
-                        .unwrap();
+                    image_transform::dispatch(
+                        &mut graph,
+                        "frame invert",
+                        source,
+                        target,
+                        Transform::Invert,
+                    )
+                    .unwrap();
                     let buffer_read = graph
                         .readback_buffer("frame byte result", buffer, 0, 64)
                         .unwrap();
@@ -120,7 +129,7 @@ fn vulkan_frames_reuse_resources_while_cpu_keeps_old_readbacks() {
                             buffer_read,
                             buffer_bytes,
                             image_read,
-                            transformed(&image_bytes, ComputeTransform::Invert),
+                            transformed(&image_bytes, Transform::Invert),
                         ),
                     );
                     drop(submitted);
@@ -311,6 +320,12 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                     },
                 ],
             );
+            runtime
+                .prepare_compute_programs(&[
+                    image_transform::program(Transform::Invert),
+                    image_transform::program(Transform::SwapRedBlue),
+                ])
+                .unwrap();
             let mut previous: Option<ImportImage> = None;
             for (phase, desc) in [
                 ImageDesc::rgba8(8, 8),
@@ -342,13 +357,18 @@ fn vulkan_frames_history_chains_pending_frames_and_invalidates_old_extents() {
                         };
                         let target = graph.image("next history", desc).unwrap();
                         let operation = if (batch * 3 + lane) % 2 == 0 {
-                            ComputeTransform::Invert
+                            Transform::Invert
                         } else {
-                            ComputeTransform::SwapRedBlue
+                            Transform::SwapRedBlue
                         };
-                        graph
-                            .compute("history transform", source, target, operation)
-                            .unwrap();
+                        image_transform::dispatch(
+                            &mut graph,
+                            "history transform",
+                            source,
+                            target,
+                            operation,
+                        )
+                        .unwrap();
                         graph.export_image(target).unwrap();
                         let read = graph.readback_image("history result", target).unwrap();
                         let submitted = runtime.submit_frame(&graph.compile().unwrap()).unwrap();

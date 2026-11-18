@@ -1,7 +1,11 @@
+#[path = "../examples/support/image_transform.rs"]
+mod image_transform;
+use image_transform::Transform;
+
 use renderer::graph::{
-    Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, ComputeTransform, Graph,
-    GraphCapacity, GraphCapacityKind, GraphError, GraphErrorKind, GraphPool, ImageAspect,
-    ImageDesc, ImageHandle, PassKind,
+    Access, AccessKind, AccessPurpose, AccessRange, BufferDesc, Graph, GraphCapacity,
+    GraphCapacityKind, GraphError, GraphErrorKind, GraphPool, ImageAspect, ImageDesc, ImageHandle,
+    PassKind,
 };
 use renderer::graph::{
     Attachment, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
@@ -58,16 +62,16 @@ fn offscreen_pipeline(graph: &mut Graph) {
             },
         )
         .unwrap();
+    image_transform::dispatch(
+        graph,
+        "image transform",
+        color,
+        transformed,
+        Transform::Invert,
+    )
+    .unwrap();
     graph
-        .compute(
-            "image transform",
-            color,
-            transformed,
-            ComputeTransform::Invert,
-        )
-        .unwrap();
-    graph
-        .composite("composite", transformed, final_image)
+        .copy_image("composite", transformed, final_image)
         .unwrap();
     graph.export_image(final_image).unwrap();
     graph.readback_image("final readback", final_image).unwrap();
@@ -127,7 +131,7 @@ fn public_handles_preserve_graph_ownership() {
 fn reusable_image_extension_discovers_each_input_description() {
     fn transform(graph: &mut Graph, input: ImageHandle) -> Result<ImageHandle, GraphError> {
         let output = graph.image("compatible output", graph.image_desc(input)?)?;
-        graph.compute("transform", input, output, ComputeTransform::Invert)?;
+        image_transform::dispatch(graph, "transform", input, output, Transform::Invert)?;
         Ok(output)
     }
     let mut pool = GraphPool::new(GraphCapacity::default(), 2).unwrap();

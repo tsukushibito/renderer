@@ -3,9 +3,8 @@
 use super::tests::prepare_scenario;
 use super::*;
 use crate::graph::{Attachment, LoadOp, RasterAttachments, RasterDraw, StoreOp};
-use crate::graph::{
-    BufferDesc, BufferHandle, ComputeTransform, Graph, ImageDesc, RasterParameters,
-};
+use crate::graph::{BufferDesc, BufferHandle, Graph, ImageDesc, RasterParameters};
+use crate::image_transform::{self, Transform};
 
 const WAIT: Duration = Duration::from_secs(10);
 
@@ -541,14 +540,14 @@ fn real_gpu_config(config: RuntimeConfig, test: impl FnOnce(&mut VulkanRuntime))
     });
 }
 
-fn transform(bytes: &[u8], operation: ComputeTransform) -> Vec<u8> {
+fn transform(bytes: &[u8], operation: Transform) -> Vec<u8> {
     bytes
         .as_chunks::<4>()
         .0
         .iter()
         .flat_map(|p| match operation {
-            ComputeTransform::Invert => [255 - p[0], 255 - p[1], 255 - p[2], p[3]],
-            ComputeTransform::SwapRedBlue => [p[2], p[1], p[0], p[3]],
+            Transform::Invert => [255 - p[0], 255 - p[1], 255 - p[2], p[3]],
+            Transform::SwapRedBlue => [p[2], p[1], p[0], p[3]],
         })
         .collect()
 }
@@ -693,17 +692,17 @@ fn opaque_batch_comparison(
         }
     }
     let inverted = graph.image("inverted", ImageDesc::rgba8(64, 64)).unwrap();
-    graph
-        .compute(
-            "invert after opaque",
-            color,
-            inverted,
-            ComputeTransform::Invert,
-        )
-        .unwrap();
+    image_transform::dispatch(
+        &mut graph,
+        "invert after opaque",
+        color,
+        inverted,
+        Transform::Invert,
+    )
+    .unwrap();
     let output = graph.image("composite", ImageDesc::rgba8(64, 64)).unwrap();
     graph
-        .composite("composite after compute", inverted, output)
+        .copy_image("copy after compute", inverted, output)
         .unwrap();
     let readback = graph.readback_image("output", output).unwrap();
     (graph.compile().unwrap(), readback)
@@ -737,6 +736,9 @@ fn prepare_opaque_scenario(runtime: &mut VulkanRuntime, additional: &[ResourceCl
 fn vulkan_graph_batch_matches_scalar_draw_order_depth_parameters_and_compute() {
     real_gpu(|runtime| {
         prepare_opaque_scenario(runtime, &[]);
+        runtime
+            .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
+            .unwrap();
         for empty in [false, true] {
             for reverse in [false, true] {
                 let mut reference = None;
@@ -985,6 +987,9 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                     },
                 ],
             );
+            runtime
+                .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
+                .unwrap();
             let mut graph = Graph::test_new();
             let source = graph
                 .image("capacity-source", ImageDesc::rgba8(8, 8))
@@ -999,12 +1004,22 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             graph
                 .upload_image("capacity-upload", source, &bytes)
                 .unwrap();
-            graph
-                .compute("first-binding", source, first, ComputeTransform::Invert)
-                .unwrap();
-            graph
-                .compute("exhausted-binding", first, second, ComputeTransform::Invert)
-                .unwrap();
+            image_transform::dispatch(
+                &mut graph,
+                "first-binding",
+                source,
+                first,
+                Transform::Invert,
+            )
+            .unwrap();
+            image_transform::dispatch(
+                &mut graph,
+                "exhausted-binding",
+                first,
+                second,
+                Transform::Invert,
+            )
+            .unwrap();
             graph.readback_image("capacity-output", second).unwrap();
             let error = match runtime.submit(&graph.compile().unwrap()) {
                 Ok(_) => panic!("descriptor capacity must fail before submission"),
@@ -1029,14 +1044,14 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
             graph
                 .upload_image("recovered-upload", source, &bytes)
                 .unwrap();
-            graph
-                .compute(
-                    "recovered-compute",
-                    source,
-                    destination,
-                    ComputeTransform::Invert,
-                )
-                .unwrap();
+            image_transform::dispatch(
+                &mut graph,
+                "recovered-compute",
+                source,
+                destination,
+                Transform::Invert,
+            )
+            .unwrap();
             let read = graph.readback_image("recovered-read", destination).unwrap();
             let mut pending = runtime.submit(&graph.compile().unwrap()).unwrap();
             let mut result = pending
@@ -1045,7 +1060,7 @@ fn vulkan_graph_descriptor_exhaustion_releases_unsubmitted_leases() {
                 .expect("recovered graph must complete");
             assert_eq!(
                 result.test_readback(read).unwrap(),
-                transform(&bytes, ComputeTransform::Invert)
+                transform(&bytes, Transform::Invert)
             );
             let recovered = runtime.stats();
             assert_eq!(
@@ -1134,6 +1149,12 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
                 count: 3,
             }],
         );
+        runtime
+            .prepare_compute_programs(&[
+                image_transform::program(Transform::Invert),
+                image_transform::program(Transform::SwapRedBlue),
+            ])
+            .unwrap();
         let mut graph = Graph::test_new();
         let desc = ImageDesc::rgba8(17, 13); // dispatch tail requires shader bounds guard
         let source = graph.image("compute-source", desc).unwrap();
@@ -1150,31 +1171,23 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
             })
             .collect();
         graph.upload_image("upload", source, &bytes).unwrap();
-        graph
-            .compute("invert", source, first, ComputeTransform::Invert)
-            .unwrap();
-        graph
-            .compute(
-                "swizzle-dependent",
-                first,
-                second,
-                ComputeTransform::SwapRedBlue,
-            )
-            .unwrap();
+        image_transform::dispatch(&mut graph, "invert", source, first, Transform::Invert).unwrap();
+        image_transform::dispatch(
+            &mut graph,
+            "swizzle-dependent",
+            first,
+            second,
+            Transform::SwapRedBlue,
+        )
+        .unwrap();
         let first_read = graph.readback_image("read-inverted", first).unwrap();
         let second_read = graph.readback_image("read-swizzled", second).unwrap();
         let compiled = graph.compile().unwrap();
-        let expected_first = transform(&bytes, ComputeTransform::Invert);
-        let expected_second = transform(&expected_first, ComputeTransform::SwapRedBlue);
-        let prepared_programs = runtime.programs.as_ref().unwrap().handles();
-        assert_ne!(prepared_programs[0], vk::Pipeline::null());
-        assert_eq!(prepared_programs[1], vk::Pipeline::null());
-        assert_ne!(prepared_programs[2], vk::Pipeline::null());
+        let expected_first = transform(&bytes, Transform::Invert);
+        let expected_second = transform(&expected_first, Transform::SwapRedBlue);
         for _ in 0..4 {
             let mut submission = runtime.submit(&compiled).unwrap();
             assert_eq!(runtime.execution.stats().leased, 1);
-            let handles = runtime.programs.as_ref().unwrap().handles();
-            assert_eq!(handles, prepared_programs);
             let mut result = submission
                 .wait(WAIT)
                 .unwrap()
@@ -1205,7 +1218,7 @@ fn vulkan_graph_dependent_compute_and_descriptor_reuse() {
 
 #[test]
 #[ignore = "explicit real-GPU prepared program selection with pending work; requires Core/SyncVal"]
-fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
+fn vulkan_graph_prepared_programs_survive_pending_work() {
     real_gpu(|runtime| {
         prepare_scenario(
             runtime,
@@ -1234,12 +1247,9 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
                 },
             ],
         );
-        let prepared_programs = runtime.programs.as_ref().unwrap().handles();
-        assert!(
-            prepared_programs
-                .iter()
-                .all(|&handle| handle != vk::Pipeline::null())
-        );
+        runtime
+            .prepare_compute_programs(&[image_transform::program(Transform::Invert)])
+            .unwrap();
         let prepared_resources = runtime.stats().resources_created;
         let mut producer = Graph::test_new();
         let source = producer
@@ -1252,14 +1262,24 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
         producer
             .upload_image("lazy-upload", source, &bytes)
             .unwrap();
-        producer
-            .compute("lazy-compute", source, output, ComputeTransform::Invert)
-            .unwrap();
+        image_transform::dispatch(
+            &mut producer,
+            "lazy-compute",
+            source,
+            output,
+            Transform::Invert,
+        )
+        .unwrap();
         producer.export_image(output).unwrap();
         let mut pending_compute = runtime.submit(&producer.compile().unwrap()).unwrap();
+        assert_eq!(
+            runtime
+                .prepare_compute_programs(&[image_transform::program(Transform::SwapRedBlue)])
+                .unwrap_err()
+                .kind(),
+            RuntimeErrorKind::CapacityExhausted,
+        );
         let exported = pending_compute.export_image(output).unwrap();
-        let first = runtime.programs.as_ref().unwrap().handles();
-        assert_eq!(first, prepared_programs);
         assert_eq!(
             runtime
                 .prepare_working_set(FrameCapacity::default(), &[])
@@ -1269,22 +1289,20 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
             "pending work prevents replacing the prepared backing"
         );
 
-        // Select composite while the Compute submission still owns its program.
+        // Consume the export while the Compute submission still owns its program.
         let mut consumer = Graph::test_new();
         let source = consumer.import_image("lazy-import", &exported).unwrap();
         let output = consumer
             .image("lazy-composite", ImageDesc::rgba8(4, 4))
             .unwrap();
-        consumer.composite("lazy-compose", source, output).unwrap();
+        consumer.copy_image("lazy-compose", source, output).unwrap();
         let read = consumer
             .readback_image("lazy-read-composite", output)
             .unwrap();
         let mut pending_composite = runtime.submit(&consumer.compile().unwrap()).unwrap();
-        let second = runtime.programs.as_ref().unwrap().handles();
-        assert_eq!(second, prepared_programs);
 
-        // Select mesh without replacing either earlier program. All three kinds
-        // coexist while the prior submissions still retain their leases.
+        // Raster coexists with Compute and copy while the prior submissions
+        // still retain their leases.
         let mut mesh = Graph::test_new();
         let (vertices, indices) = add_mesh(&mut mesh, false);
         let color = mesh.image("lazy-color", ImageDesc::rgba8(16, 16)).unwrap();
@@ -1324,8 +1342,6 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
         .unwrap();
         let mesh_read = mesh.readback_image("lazy-read-mesh", color).unwrap();
         let mut pending_mesh = runtime.submit(&mesh.compile().unwrap()).unwrap();
-        let third = runtime.programs.as_ref().unwrap().handles();
-        assert_eq!(third, prepared_programs);
         assert_eq!(runtime.stats().resources_created, prepared_resources);
         let mut mesh_result = pending_mesh.wait(WAIT).unwrap().expect("mesh must finish");
         assert_eq!(
@@ -1338,7 +1354,7 @@ fn vulkan_graph_prepared_program_kinds_survive_pending_work() {
             .expect("composite must finish");
         assert_eq!(
             composite_result.test_readback(read).unwrap(),
-            transform(&bytes, ComputeTransform::Invert)
+            transform(&bytes, Transform::Invert)
         );
         assert!(pending_compute.wait(WAIT).unwrap().is_some());
         runtime.delete(exported.key()).unwrap();
@@ -1595,7 +1611,7 @@ fn vulkan_graph_depth_occlusion_and_attachment_load() {
 
 #[test]
 #[ignore = "explicit real-GPU full M2 flow and pending export handoff; requires Core/SyncVal"]
-fn vulkan_graph_full_m2_composite_and_pending_handoff() {
+fn vulkan_graph_compute_copy_and_pending_handoff() {
     real_gpu(|runtime| {
         prepare_scenario(
             runtime,
@@ -1620,12 +1636,18 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                 },
             ],
         );
+        runtime
+            .prepare_compute_programs(&[
+                image_transform::program(Transform::Invert),
+                image_transform::program(Transform::SwapRedBlue),
+            ])
+            .unwrap();
         let expected_scene = expected_mesh([0, 0, 0, 255]);
         let expected = transform(
-            &transform(&expected_scene, ComputeTransform::Invert),
-            ComputeTransform::SwapRedBlue,
+            &transform(&expected_scene, Transform::Invert),
+            Transform::SwapRedBlue,
         );
-        let expected_consumer = transform(&expected, ComputeTransform::Invert);
+        let expected_consumer = transform(&expected, Transform::Invert);
         for reverse in [false, true] {
             let mut graph = Graph::test_new();
             let (vertices, indices) = add_mesh(&mut graph, reverse);
@@ -1641,9 +1663,7 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let swizzled = graph
                 .image("swizzled-color", ImageDesc::rgba8(16, 16))
                 .unwrap();
-            let final_image = graph
-                .image("final-composite", ImageDesc::rgba8(16, 16))
-                .unwrap();
+            let final_image = graph.image("final-copy", ImageDesc::rgba8(16, 16)).unwrap();
             let unused = graph
                 .image("unused-image", ImageDesc::rgba8(16, 16))
                 .unwrap();
@@ -1679,22 +1699,32 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                     },
                 )
                 .unwrap();
+            image_transform::dispatch(
+                &mut graph,
+                "unused-branch",
+                color,
+                unused,
+                Transform::Invert,
+            )
+            .unwrap();
+            image_transform::dispatch(
+                &mut graph,
+                "invert-scene",
+                color,
+                inverted,
+                Transform::Invert,
+            )
+            .unwrap();
+            image_transform::dispatch(
+                &mut graph,
+                "swizzle-scene",
+                inverted,
+                swizzled,
+                Transform::SwapRedBlue,
+            )
+            .unwrap();
             graph
-                .compute("unused-branch", color, unused, ComputeTransform::Invert)
-                .unwrap();
-            graph
-                .compute("invert-scene", color, inverted, ComputeTransform::Invert)
-                .unwrap();
-            graph
-                .compute(
-                    "swizzle-scene",
-                    inverted,
-                    swizzled,
-                    ComputeTransform::SwapRedBlue,
-                )
-                .unwrap();
-            graph
-                .composite("sample-final", swizzled, final_image)
+                .copy_image("copy-final", swizzled, final_image)
                 .unwrap();
             graph.export_image(final_image).unwrap();
             let final_read = graph.readback_image("read-final", final_image).unwrap();
@@ -1717,12 +1747,12 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
                 "purpose=Vertex",
                 "purpose=Index",
                 "purpose=StorageRead",
-                "purpose=Sampled",
+                "purpose=CopySource",
                 "dst_stage=VERTEX_ATTRIBUTE_INPUT",
                 "dst_stage=INDEX_INPUT",
                 "new_layout=COLOR_ATTACHMENT_OPTIMAL",
                 "new_layout=GENERAL",
-                "new_layout=SHADER_READ_ONLY_OPTIMAL",
+                "new_layout=TRANSFER_SRC_OPTIMAL",
                 "dst_stage=HOST dst_access=HOST_READ",
                 "accepted_on_submit revision=",
             ] {
@@ -1738,14 +1768,14 @@ fn vulkan_graph_full_m2_composite_and_pending_handoff() {
             let destination = consumer
                 .image("consumer-inverted", ImageDesc::rgba8(16, 16))
                 .unwrap();
-            consumer
-                .compute(
-                    "consumer-invert",
-                    source,
-                    destination,
-                    ComputeTransform::Invert,
-                )
-                .unwrap();
+            image_transform::dispatch(
+                &mut consumer,
+                "consumer-invert",
+                source,
+                destination,
+                Transform::Invert,
+            )
+            .unwrap();
             let consumer_read = consumer
                 .readback_image("consumer-read", destination)
                 .unwrap();

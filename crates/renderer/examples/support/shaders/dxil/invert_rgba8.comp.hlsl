@@ -1,10 +1,5 @@
 static const uint3 gl_WorkGroupSize = uint3(8u, 8u, 1u);
 
-cbuffer _42_44
-{
-    uint _44_m0 : packoffset(c0);
-};
-
 RWTexture2D<unorm float4> _22 : register(u1, space0);
 RWTexture2D<unorm float4> _35 : register(u0, space0);
 
@@ -34,16 +29,7 @@ void comp_main()
             break;
         }
         float4 _38 = _35[_17];
-        float3 _84;
-        if (_44_m0 == 0u)
-        {
-            _84 = 1.0f.xxx - _38.xyz;
-        }
-        else
-        {
-            _84 = _38.zyx;
-        }
-        _22[_17] = float4(_84, _38.w);
+        _22[_17] = float4(1.0f.xxx - _38.xyz, _38.w);
         break;
     } while(false);
 }

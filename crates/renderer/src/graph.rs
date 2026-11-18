@@ -58,9 +58,8 @@ pub use dispatch::{Binding, BindingResource, RasterBindings};
 pub use error::{GraphCapacityError, GraphCapacityKind, GraphError, GraphErrorKind};
 pub use indirect::{IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate};
 pub use pass::{
-    Access, AccessKind, AccessPurpose, AccessRange, Attachment, ComputeTransform, ImageAspect,
-    LoadOp, PassKind, RasterAttachments, RasterConstants, RasterDraw, RasterParameters,
-    ResourceHandle, StoreOp,
+    Access, AccessKind, AccessPurpose, AccessRange, Attachment, ImageAspect, LoadOp, PassKind,
+    RasterAttachments, RasterConstants, RasterDraw, RasterParameters, ResourceHandle, StoreOp,
 };
 pub(crate) use pass::{
     AttachmentOperand, Dependency, DependencyList, IndirectDrawOperands, LoadAction, MeshUpload,

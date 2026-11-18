@@ -161,10 +161,6 @@ pub(super) struct DeviceImage {
 }
 
 impl DeviceImage {
-    pub(super) fn belongs_to(&self, owner: &Arc<MemoryOwner>) -> bool {
-        Arc::ptr_eq(&self.owner, owner)
-    }
-
     pub(super) fn new(
         owner: Arc<MemoryOwner>,
         desc: ImageDesc,

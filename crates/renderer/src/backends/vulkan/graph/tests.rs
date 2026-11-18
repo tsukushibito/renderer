@@ -667,3 +667,43 @@ fn image_reuse_keys_preserve_mip_count_srgb_and_sample_identity() {
     assert!(mipped != srgb);
     assert!(key != multisampled);
 }
+
+pub(super) fn sample_rgba8(
+    graph: &mut crate::graph::Graph,
+    name: &str,
+    source: crate::graph::ImageHandle,
+    destination: crate::graph::BufferHandle,
+) {
+    use crate::graph::{Binding, BindingResource};
+    use crate::program::{ManagedProgram, SamplerDescriptor};
+
+    let view = graph.image_view(source, 0, 0).unwrap();
+    graph
+        .dispatch(
+            name,
+            &ManagedProgram::sampled_readback(),
+            &[
+                Binding {
+                    group: 0,
+                    binding: 0,
+                    resource: BindingResource::ImageView(view),
+                },
+                Binding {
+                    group: 0,
+                    binding: 1,
+                    resource: BindingResource::Sampler(SamplerDescriptor::NearestClamp),
+                },
+                Binding {
+                    group: 1,
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: destination,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+            ],
+            [1; 3],
+        )
+        .unwrap();
+}

@@ -164,6 +164,7 @@ impl Drop for Arena {
 struct Cache {
     idle: Vec<Arena>,
     leased: usize,
+    reuses: usize,
 }
 
 pub(super) struct ComputePrograms {
@@ -190,6 +191,7 @@ impl ComputePrograms {
             cache: Mutex::new(Cache {
                 idle: Vec::with_capacity(slots),
                 leased: 0,
+                reuses: 0,
             }),
             programs: Vec::with_capacity(programs.len()),
             sampler: vk::Sampler::null(),
@@ -267,6 +269,11 @@ impl ComputePrograms {
         Ok(Arc::new(result))
     }
 
+    pub(super) fn arena_stats(&self) -> (usize, usize) {
+        let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        (cache.idle.len() + cache.leased, cache.reuses)
+    }
+
     pub(super) fn is_idle(&self) -> bool {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).leased == 0
     }
@@ -294,6 +301,7 @@ impl ComputePrograms {
             )
         })?;
         cache.leased += 1;
+        cache.reuses += 1;
         Ok(ComputeLease {
             programs: Arc::clone(self),
             arena: Some(arena),
