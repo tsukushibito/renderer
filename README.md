@@ -11,9 +11,8 @@ indexed meshと深度、利用側shaderによるRaster/Compute、import/export�
 
 標準構成は`standard::graphs`、部分交換は`standard::passes`、独自構成は`graph`を使います。
 いずれも同じGraphの同期・寿命・不要パス除去を通り、標準構成の使用は必須ではありません。
-現在の標準forwardはunlit描画です。利用側の`bistro`例はcook済みのBistroを
-テクスチャ付きForward PBRで描画し、同じ公開Graphを二APIへ接続します。
-IBL・影・最終tone mapping・Bloomは後続段階です。
+標準forwardはunlit描画です。`bistro`は利用側でPBR、IBL、カスケード影、トーンマッピング、
+任意のBloomを組み立て、同じ公開GraphをVulkanとD3D12で実行する例です。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。
 
@@ -24,6 +23,7 @@ native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md
 - [ドキュメント一覧](docs/README.md)
 - [図で読むRenderGraph設計](docs/design/rendergraph-overview.md)・[HTML版の生成](docs/guides/html-docs.md)
 - [Mermaidで読む型・依存・寿命の設計図集](docs/design/rendergraph-diagrams.md)
+- [Examplesの実行と選び方](docs/guides/examples.md)
 - [開発・ビルド・試験](docs/guides/development.md)
 - [開発ツール](docs/guides/tooling.md)
 - [Vulkanベストプラクティス](docs/guides/vulkan-best-practices.md)
@@ -38,28 +38,7 @@ native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md
 cargo run --locked -p renderer --no-default-features --example graph_composition
 ```
 
-ヘッドレスの描画例は、Validation Layerを使えるVulkan環境で実行します。
-
-```powershell
-New-Item -ItemType Directory -Force .tools | Out-Null
-cargo run --locked -p renderer --features vulkan,development-validation,graph-diagnostics --example headless -- .tools/m2.ppm
-```
-
-引数は出力先PPMファイルです。Windows表示は次の例を使います。
-
-```powershell
-cargo run --locked -p renderer --no-default-features --features vulkan,presentation --example windowed -- --api vulkan
-cargo run --locked -p renderer --no-default-features --features d3d12,presentation --example windowed -- --api d3d12
-```
-
-準備容量、検証の切替、操作・受入手順は[開発ガイド](docs/guides/development.md)を参照してください。
-
-Bistroのcookと材質描画は[専用の手順](docs/guides/development.md#bistro-pbr)へ進んでください。
-原本素材を使わない小fixtureも同じ例で実行できます。
-
-```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro -- --api vulkan --fixture --output .tools/bistro-pbr/fixture-vulkan
-```
+ヘッドレス描画、Windows表示、Bistroの小さなfixtureは[Examplesガイド](docs/guides/examples.md)から実行できます。
 
 課題管理には [Beads](https://github.com/gastownhall/beads) を使用します。
 導入・日常操作・同期の手順は [.beads/README.md](.beads/README.md) を参照してください。

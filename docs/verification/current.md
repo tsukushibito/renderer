@@ -2443,7 +2443,7 @@ B0の設計確認ではRenderer本体・管理下shader・native経路を変更�
 CPU／GPU速度の優位を実測した判断ではない。基盤選定の`.1.3`でもAを維持した。
 一般owned命令は現行Graphへ接続済みで、B2の二API PBR受入も[本書冒頭](#bistro-pbr)へ記録した。
 
-[Rust試作](../../crates/renderer/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較する。
+[当時のRust試作](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/crates/renderer/examples/graph_api_comparison.rs)はGPU非依存のCPU意図を比較した。
 複数draw、depth-only／color-only、独自Compute、module内の多段Bloom、履歴初回／継続／resize、
 このCPU試作で扱ったMRT／mip Viewを同じ入力で書き、ownerだけを正規化した命令とアクセス用途を照合する。
 短命なdraw slice終了後のAの命令保持、Bのframe借用と不要callback非実行、
@@ -2484,7 +2484,7 @@ safe wgpuのnative実装負担の小ささとRenderBundleによる事前検査�
 現AGENTSの保証済み内容の反復検査を製品経路から外す規約を維持する判断とした。
 nativeの速度優位や工数実績を証明したものではない。B1〜B5に受入条件・依存を持つ17子課題を作成した。
 
-[独立試作](../../tools/foundation-probe/src/main.rs)はwgpu 30.0.2を固定し、Rendererのruntimeへ接続しない。
+[当時の独立試作](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/tools/foundation-probe/src/main.rs)はwgpu 30.0.2を固定し、独立したruntimeで実行した。
 短命draw Vecを即時closureからowned planへ移し、depth-only／color-only各2draw、
 利用側WGSL Computeでcolor/depthを読む3passを8×4で記録した。
 submit直後にplanと呼出側textureをDropし、実submissionとmap callbackの完了を待って128byteを照合した。

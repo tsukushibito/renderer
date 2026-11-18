@@ -12,6 +12,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 読みたいこと | 入口 |
 |---|---|
+| Examplesを動かしたい | [Examplesの実行と選び方](guides/examples.md) |
 | 全体像をつかみたい | [図で読むRenderGraph](design/rendergraph-overview.md)：短いコード例、依存関係の図、処理と資源の寿命 |
 | 型や処理の関係を図で追いたい | [設計図集](design/rendergraph-diagrams.md)：型の関係、owned命令、compile、producer/hazard、範囲、投入・完了、import、容量 |
 | APIの正確な動作を確認したい | [RenderGraphの契約](design/rendergraph.md)：宣言、初期化、不要パス除去、owned Raster/Computeと画像copy、所有と容量 |
@@ -33,6 +34,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 
 | 分類 | 文書 | 内容 |
 |---|---|---|
+| 利用手順 | [Examples](guides/examples.md) | 各ターゲットの前提、入門コマンド、比較・計測の導線 |
 | 利用手順 | [開発手順](guides/development.md) | 環境構築、Bistro素材と再現条件の準備、ビルド、試験、性能測定 |
 | 利用手順 | [開発ツール](guides/tooling.md) | 依存監査、D3D12 bindings生成、SPIR-V／DXIL検証、[Bistro cook・shader・比較](guides/tooling.md#bistro-tools)、[Tracy zone](guides/tooling.md#tracy-profiling)・[WPR CPUプロファイル](guides/tooling.md#cpu-profiling)、RenderDoc |
 | 利用手順 | [HTML文書](guides/html-docs.md) | フレームワーク比較とmdBook選定、ビルド、閲覧、配布・更新 |

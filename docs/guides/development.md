@@ -808,60 +808,13 @@ Windowsではbackendを選ばない`presentation`単独と、`vulkan,presentatio
 依存更新ではlockfile差分と両feature構成を確認します。
 
 <a id="public-api-comparison"></a>
-
-## 公開APIのCPU比較試作
-
-[設計比較と第一案](../design/implementation-policy.md#public-api-comparison)の利用コードは
-[graph_api_comparison](../../crates/renderer/examples/graph_api_comparison.rs)で再現する。
-GPU・Vulkan SDK・Bistro素材の取得は不要で、workspaceの通常のRust開発環境を使う。
-
-```powershell
-cargo run --locked -p renderer --example graph_api_comparison --no-default-features
-cargo test --locked -p renderer --example graph_api_comparison --no-default-features
-cargo test --locked -p renderer --example graph_api_comparison --release --no-default-features
-```
-
-命令所有案とframe内遅延callback案を同じ代表入力で組み立て、正規化した資源用途・命令の一致と
-構造的な件数を確認する。試作の型はRendererの公開APIではなく、GPUのrecord／submitも行わない。
-exportは次frameの内容・同期・寿命の実機検証ではない。件数を処理時間・確保量の測定へ読み替えない。
-通常の`cargo test --workspace`はexample内の試験を実行しないため、上記の明示指定を使う。
-CIもCPU構成でこの試験と実行を行い、その他の構成では全target check／Clippyを適用する。
-
 <a id="foundation-comparison"></a>
 
-## 採用基盤を比較する独立試作
+## 設計比較の再現
 
-[基盤比較と採用理由](../design/implementation-policy.md#foundation-selection)の外部案は
-[tools/foundation-probe](../../tools/foundation-probe/Cargo.toml)で再現する。
-wgpu 30.0.2の独立workspaceであり、Rendererの依存・featureへ追加しない。
-Windowsの物理GPUとVulkan/D3D12の両runtimeが必要。backend欠落やsoftware adapterは失敗し、skip/fallbackしない。
-GPU作業は他のprobeと並行実行しない。
-
-```powershell
-cargo fmt --manifest-path tools/foundation-probe/Cargo.toml -- --check
-cargo check --locked --manifest-path tools/foundation-probe/Cargo.toml --all-targets
-cargo clippy --locked --manifest-path tools/foundation-probe/Cargo.toml --all-targets -- -D warnings
-cargo test --locked --manifest-path tools/foundation-probe/Cargo.toml
-cargo run --locked --release --manifest-path tools/foundation-probe/Cargo.toml
-cargo run --locked --release --manifest-path tools/foundation-probe/Cargo.toml -- --native-validation
-cargo deny --manifest-path tools/foundation-probe/Cargo.toml --locked --config tools/foundation-probe/deny.toml check
-```
-
-各runはVulkan→D3D12を逐次実行し、8×4のdepth-only/color-only Raster→利用側Compute→readbackと
-期待128byte／二APIの一致を確認する。通常testは実GPU試験をignoreし、明示実行は
-`cargo test --locked --release --manifest-path tools/foundation-probe/Cargo.toml -- --ignored`を使う。
-CIは両OSのbuild/Clippy、format、依存監査を担当し、実GPUを実行しない。
-独立監査設定はfoldhash 0.2.0のZlibを対象packageだけ許可し、ライセンス本文の条件を確認した。
-Rendererのruntime allowlistとadvisory除外は変更していない。
-
-flags空と`--native-validation`（DEBUG＋VALIDATION要求）を区別し、
-両方でpipelineなしdrawをcoreが拒否する負の対照も実行する。無効命令はsubmitしない。
-この要求はnative検証の実効や破棄後の診断ゼロを証明しない。結果の該当値は未観測のnullであり、
-既存のCore/SyncVal・D3D12 Debug Layer/GBVの厳格受入を代替しない。
-CPUの全`Study::scenario`は従来の比較試作で確認し、この実機fixtureでは多段Bloom/MRT/mip/履歴等を実行しない。
-Windows表示・自由camera・resize／最小化・pending終了は[二API表示の受入](#windows-presentation)へ接続する。実OOM／Device lossなどの未実行範囲は検証記録で区別する。
-source/lock/shader/exe hashと4runの原byteは[共有結果](../verification/foundation-comparison.json)を参照する。
-試作の計時・性能比較・全Bistro常駐の合否は取得しない。
+公開APIと実装基盤の採用時に使った試作は、[実行手順を記録したコミット](https://github.com/tsukushibito/renderer/blob/3fee62930ed59a01d2fdee902a9a11542fdd6de1/docs/guides/development.md#公開apiのcpu比較試作)から再現できる。
+[公開APIの比較結果](../verification/current.md#public-api-comparison)と[実装基盤の比較結果](../verification/current.md#foundation-comparison)に実行条件を記録している。
+現行の公開APIを動かすには[Examplesガイド](examples.md)を参照する。
 
 <a id="管理下uniform-programの作成と受入"></a>
 
@@ -940,6 +893,8 @@ cargo test --locked --release -p renderer --lib --no-default-features --features
 
 製品構成の成功をnative診断の実効確認へ流用しない。結果・限界は
 [現在の検証状況](../verification/current.md#managed-uniform)へ記録する。
+
+<a id="validation-settings"></a>
 
 ## 製品・開発用の検証設定
 
@@ -1377,6 +1332,8 @@ Ready/Standby/DeferredReadyとWaitingを混同せず、Old/Newの同じprocess/t
 通常のwindowed captureは生存期間表を基にETL相対ROIを明示し、UTCからQPC窓を推定しない。
 実ETLの欠落、stack/symbol帰属、最適化構成の費用比較は実収集後の別受入とする。
 
+<a id="frame-loop"></a>
+
 ### フレーム進行・エンジン入力
 
 持続的なフレームループには`VulkanRuntime::submit_frame`と`poll_frame`を使います。
@@ -1524,6 +1481,8 @@ cargo test --locked --release -p renderer --lib --no-default-features --features
 共通の契約は[Graphの表示接続](../design/rendergraph.md#windows-presentation)、nativeの根拠は
 [Vulkan](../design/vulkan.md#windows-presentation)と[D3D12](../design/implementation-policy.md#d3d12-presentation)を参照します。
 
+<a id="frame-memory"></a>
+
 ### 通常フレームのメモリ計測
 
 `memory-profiling`は追加検証から独立した計測featureで、offでは専用counter moduleを除外する。
@@ -1653,6 +1612,8 @@ CPU asset更新・snapshot・mesh upload準備とupload待機は別項目です�
 `cpu_caller_active`はそれらのCPU処理と`cpu_active`を足し、明示待機を除いた利用側の費用を表します。
 startup uploadは測定loopの前に完了させ、そのbyte数とCPU・待機時間を別に記録します。
 以前のschema1にあるpoll費用の数値と、名前だけを合わせて比較しないでください。
+
+<a id="engine-workloads"></a>
 
 ### 大メッシュ・アセット入れ替え・複数View
 
