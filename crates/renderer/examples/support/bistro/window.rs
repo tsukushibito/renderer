@@ -612,9 +612,18 @@ fn uniform(camera: Camera, conditions: &Conditions, options: &Options) -> Result
 
 fn backpressure<B: WindowBackend>(error: &Error) -> bool {
     B::capacity_error(error).is_some_and(|capacity| {
-        capacity.recovery == CapacityRecovery::Poll
-            || (capacity.resource == RuntimeCapacityKind::TimingSamples
-                && capacity.recovery == CapacityRecovery::ReleaseResults)
+        matches!(
+            (capacity.resource, capacity.recovery),
+            (_, CapacityRecovery::Poll)
+                | (
+                    RuntimeCapacityKind::TimingSamples,
+                    CapacityRecovery::ReleaseResults
+                )
+                | (
+                    RuntimeCapacityKind::ExecutionSlots,
+                    CapacityRecovery::ReleaseOwners
+                )
+        )
     })
 }
 
