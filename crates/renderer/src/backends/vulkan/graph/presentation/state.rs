@@ -22,6 +22,10 @@ pub(super) struct Inner {
     pub(super) config: PresentationConfig,
     #[cfg(test)]
     pub(super) cancel_next_acquire: bool,
+    #[cfg(test)]
+    pub(super) fail_after_spare_binding: bool,
+    #[cfg(test)]
+    pub(super) fail_after_swapchain_create: bool,
 }
 
 impl Inner {
@@ -134,7 +138,6 @@ impl Inner {
             return Ok(Some(PresentOutcome::Suspended));
         }
         if !self.dirty && self.current.is_some() {
-            self.prepare_slots(self.current.as_ref().unwrap().format)?;
             return Ok(None);
         }
         // The public prepare/present entry points already poll before calling
@@ -148,9 +151,16 @@ impl Inner {
         // suspended paths. Reclaim completed generations before reserving the
         // next bounded retirement entry, including capacity-error retries.
         self.collect_retired_swapchains();
-        if self.current.is_some() && self.retired.len() >= self.config.max_retired_swapchains {
+        let retirement_blocked = if self.current.is_some() {
+            self.retired.len() >= self.config.max_retired_swapchains
+        } else {
+            // Creating with a null oldSwapchain requires that no Swapchain
+            // remains associated with the Window, even if it was retired.
+            !self.retired.is_empty()
+        };
+        if retirement_blocked {
             return Err(RuntimeError::capacity_with(
-                "retired Swapchain capacity exhausted; poll/wait before retry",
+                "retired Swapchain generations must drain; poll/wait before retry",
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::RetiredSwapchains,
                     CapacityRecovery::Poll,
@@ -159,6 +169,7 @@ impl Inner {
                 ),
             ));
         }
+        self.prepare_slots(plan.format())?;
         // Retire the old owner before the native create: even a failed create
         // retires oldSwapchain. No subsequent acquire may use that old handle.
         let old = self.current.take();
@@ -173,22 +184,34 @@ impl Inner {
             Arc::clone(&self.surface),
             plan,
             old_handle,
+            #[cfg(test)]
+            std::mem::take(&mut self.fail_after_swapchain_create),
         )?);
         self.dirty = false;
-        self.prepare_slots(self.current.as_ref().unwrap().format)?;
         Ok(Some(PresentOutcome::Recreated))
     }
 
-    fn prepare_slots(&mut self, format: vk::Format) -> Result<(), RuntimeError> {
+    pub(super) fn prepare_slots(&mut self, format: vk::Format) -> Result<(), RuntimeError> {
         if self.prepared_format == Some(format) {
             return Ok(());
         }
-        let program = self.program(format)?;
-        for slot in &mut self.slots {
-            slot.prepare_format(Arc::clone(&program))?;
-        }
-        while self.slots.len() < self.config.max_frames {
-            self.slots.push(SlotRecord::new(Arc::clone(&program))?);
+        let cached = self
+            .programs
+            .iter()
+            .find(|program| program.format == format);
+        let program = match cached {
+            Some(program) => Arc::clone(program),
+            None => Program::new(Arc::clone(&self.owner), format)?,
+        };
+        SlotRecord::prepare_format(
+            &mut self.slots,
+            self.config.max_frames,
+            &program,
+            #[cfg(test)]
+            std::mem::take(&mut self.fail_after_spare_binding),
+        )?;
+        if cached.is_none() {
+            self.programs.push(program);
         }
         self.prepared_format = Some(format);
         Ok(())
@@ -213,18 +236,6 @@ impl Inner {
         // Cached programs and source images belong to this runtime's Device.
         unsafe { self.slots[index].prepare(program, source) }?;
         Ok(Some(index))
-    }
-    fn program(&mut self, format: vk::Format) -> Result<Arc<Program>, RuntimeError> {
-        if let Some(program) = self
-            .programs
-            .iter()
-            .find(|program| program.format == format)
-        {
-            return Ok(Arc::clone(program));
-        }
-        let program = Program::new(Arc::clone(&self.owner), format)?;
-        self.programs.push(Arc::clone(&program));
-        Ok(program)
     }
     pub(super) fn idle(&self) -> bool {
         self.pending.is_empty() && self.slots.iter().all(SlotRecord::idle)

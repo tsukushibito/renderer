@@ -67,6 +67,10 @@ impl VulkanRuntime {
             config: presentation,
             #[cfg(test)]
             cancel_next_acquire: false,
+            #[cfg(test)]
+            fail_after_spare_binding: false,
+            #[cfg(test)]
+            fail_after_swapchain_create: false,
         };
         // Reject an unsupported initial request even for a minimized Window.
         inner.query_present_mode(presentation.vsync)?;

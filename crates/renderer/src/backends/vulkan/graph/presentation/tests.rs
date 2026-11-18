@@ -6,6 +6,7 @@ use super::super::{
 };
 use super::measurement::{Measurements, Observations, Phase};
 use super::{PresentOutcome, PresentationConfig, Presenter};
+use crate::capacity::{CapacityRecovery, RuntimeCapacityKind};
 use crate::graph::{
     Attachment, BufferDesc, ComputeTransform, GraphCapacity, GraphPool, ImageDesc, ImportImage,
     LoadOp, PassHandle, RasterAttachments, RasterDraw, RasterParameters, ResourceKey, StoreOp,
@@ -486,6 +487,62 @@ fn set_vsync_pending(presenter: &mut Presenter, enabled: bool) {
     );
 }
 
+fn check_recreation_failure_recovery(presenter: &mut Presenter) {
+    let old_extent = presenter.extent().expect("ready extent");
+    let old = {
+        let inner = presenter.inner.as_mut().unwrap();
+        let old = Arc::clone(inner.current.as_ref().unwrap());
+        let alternative = if old.format == vk::Format::B8G8R8A8_SRGB {
+            vk::Format::R8G8B8A8_SRGB
+        } else {
+            vk::Format::B8G8R8A8_SRGB
+        };
+        let old_programs = inner.programs.len();
+        assert!(inner.slots.iter().all(|slot| !slot.has_format(alternative)));
+        inner.fail_after_spare_binding = true;
+        let error = inner.prepare_slots(alternative).unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Native);
+        assert!(
+            error
+                .message
+                .contains("injected presentation binding setup")
+        );
+        assert_eq!(inner.programs.len(), old_programs);
+        assert_eq!(inner.prepared_format, Some(old.format));
+        assert!(inner.slots.iter().all(|slot| slot.has_format(old.format)));
+        assert!(inner.slots.iter().all(|slot| !slot.has_format(alternative)));
+        assert!(Arc::ptr_eq(inner.current.as_ref().unwrap(), &old));
+
+        inner.fail_after_swapchain_create = true;
+        old
+    };
+    assert_eq!(presenter.extent(), Some(old_extent));
+    let failure = presenter.prepare().unwrap_err();
+    assert_eq!(failure.kind(), RuntimeErrorKind::Native);
+    assert!(failure.message.contains("injected Swapchain image setup"));
+    assert_eq!(presenter.extent(), None);
+    {
+        let inner = presenter.inner.as_ref().unwrap();
+        assert!(inner.current.is_none());
+        assert!(inner.retired.iter().any(|chain| Arc::ptr_eq(chain, &old)));
+    }
+
+    // Keep a generation owner through the next prepare even if polling has
+    // already observed both of its native completion signals.
+    let retry = presenter.prepare().unwrap_err().capacity().unwrap();
+    assert_eq!(retry.resource, RuntimeCapacityKind::RetiredSwapchains);
+    assert_eq!(retry.recovery, CapacityRecovery::Poll);
+    assert_eq!(presenter.extent(), None);
+    drop(old);
+    assert!(presenter.wait_idle(WAIT).unwrap());
+    assert_eq!(
+        presenter.prepare().unwrap(),
+        Some(PresentOutcome::Recreated)
+    );
+    assert_eq!(presenter.extent(), Some(old_extent));
+    assert_eq!(presenter.prepare().unwrap(), None);
+}
+
 fn observe(
     runtime: &mut VulkanRuntime,
     reads: &mut [Option<PixelCheck>; IN_FLIGHT],
@@ -652,10 +709,7 @@ fn vulkan_presentation_graph_resize_cancel_and_pending_shutdown() {
             // owners and emit all completed samples without another GPU wait.
             presenter.set_profiling(false).unwrap();
             set_vsync_pending(&mut presenter, false);
-            assert_eq!(
-                presenter.prepare().unwrap(),
-                Some(PresentOutcome::Recreated)
-            );
+            check_recreation_failure_recovery(&mut presenter);
             finish_setup_source(&mut runtime, &mut presenter, first, &mut pixels);
             for _ in 0..IN_FLIGHT {
                 let metrics = presenter.take_profile().expect("completed present timing");
