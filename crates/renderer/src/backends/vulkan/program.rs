@@ -165,6 +165,18 @@ impl ShaderPrograms {
     /// Explicit preparation/change boundary. Existing leases must retire before
     /// extending the descriptor working set; ordinary ensure/acquire never grow.
     pub(super) fn prepare_fixed(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
+        self.prepare_fixed_programs(needs, false)
+    }
+
+    pub(super) fn prepare_bindings(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
+        self.prepare_fixed_programs(needs, true)
+    }
+
+    fn prepare_fixed_programs(
+        &self,
+        needs: ShaderNeeds,
+        prepare_bindings: bool,
+    ) -> Result<(), RuntimeError> {
         self.owner
             .device
             .ensure_active()
@@ -173,7 +185,7 @@ impl ShaderPrograms {
             .initialization
             .lock()
             .map_err(|_| RuntimeError::invalid("Graph program initialization lock poisoned"))?;
-        for (needed, slot, kind) in [
+        let requests = [
             (needs.compute, &self.compute, ProgramKind::Compute),
             (
                 needs.raster && self.implicit_raster,
@@ -181,28 +193,34 @@ impl ShaderPrograms {
                 ProgramKind::Raster,
             ),
             (needs.composite, &self.composite, ProgramKind::Composite),
-        ] {
+        ];
+        let mut staged = [None, None, None];
+        for ((needed, slot, kind), program) in requests.into_iter().zip(&mut staged) {
             if needed && slot.get().is_none() {
-                // Cache only successful creation; a transient OOM can be retried.
-                let program = Program::new(Arc::clone(&self.owner), kind, &self.limits)?;
-                slot.set(program).map_err(|_| {
-                    RuntimeError::invalid(
-                        "Graph program was unexpectedly published during initialization",
-                    )
-                })?;
+                *program = Some(Program::new(Arc::clone(&self.owner), kind, &self.limits)?);
+            }
+        }
+        if prepare_bindings {
+            // The descriptor pool prepares its full replacement before
+            // publishing it, while staged programs still own its layouts.
+            let layout = |index: usize| {
+                staged[index]
+                    .as_ref()
+                    .or_else(|| requests[index].1.get())
+                    .map(|program| program.set_layout)
+            };
+            self.bindings
+                .prepare(&self.owner, layout(0), layout(2), self.raster_layouts())?;
+        }
+        for ((_, slot, _), program) in requests.into_iter().zip(staged) {
+            if let Some(program) = program {
+                assert!(
+                    slot.set(program).is_ok(),
+                    "locked Graph program publication"
+                );
             }
         }
         Ok(())
-    }
-
-    pub(super) fn prepare_bindings(&self, needs: ShaderNeeds) -> Result<(), RuntimeError> {
-        self.prepare_fixed(needs)?;
-        self.bindings.prepare(
-            &self.owner,
-            self.compute.get().map(|program| program.set_layout),
-            self.composite.get().map(|program| program.set_layout),
-            self.raster_layouts(),
-        )
     }
 
     fn raster_layouts(&self) -> [Option<RasterLayout>; RASTER_VARIANT_COUNT] {

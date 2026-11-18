@@ -77,6 +77,138 @@ fn prepare_images(runtime: &mut VulkanRuntime, sizes: &[u32]) {
     prepare_scenario(runtime, 1, 2, &classes);
 }
 
+#[test]
+#[ignore = "explicit real-GPU working-set failure recovery in strict and shipping builds"]
+fn vulkan_graph_working_set_failure_preserves_committed_resources() {
+    real_gpu(3, 1, |runtime| {
+        let class = |size| ResourceClass::Buffer {
+            desc: BufferDesc { size },
+            count: 1,
+        };
+        prepare_scenario(runtime, 1, 4, &[class(4), class(8)]);
+        let capacity = runtime.frame_capacity.unwrap();
+        let key = {
+            let imported = runtime
+                .create_buffer("registered", BufferDesc { size: 12 })
+                .unwrap();
+            let mut graph = Graph::test_new();
+            let buffer = graph.import_buffer("registered", &imported).unwrap();
+            graph
+                .upload_buffer("first", buffer, 0, &[1, 2, 3, 4])
+                .unwrap();
+            graph
+                .upload_buffer("second", buffer, 8, &[5, 6, 7, 8])
+                .unwrap();
+            let first = graph.readback_buffer("first result", buffer, 0, 4).unwrap();
+            let second = graph
+                .readback_buffer("second result", buffer, 8, 4)
+                .unwrap();
+            let plan = graph.compile().unwrap();
+            let mut submission = runtime.submit(&plan).unwrap();
+            let mut result = submission.wait(WAIT).unwrap().unwrap();
+            assert_eq!(result.test_readback(first).unwrap(), [1, 2, 3, 4]);
+            assert_eq!(result.test_readback(second).unwrap(), [5, 6, 7, 8]);
+            imported.key()
+        };
+        let before = runtime.stats();
+        let baseline = runtime.memory_stats().unwrap();
+        let invalid = runtime.prepare_working_set(capacity, &[class(16), class(0)]);
+        assert_eq!(invalid.unwrap_err().kind(), RuntimeErrorKind::InvalidInput);
+
+        let insufficient = FrameCapacity {
+            initialized_ranges_per_resource: 1,
+            ..capacity
+        };
+        let error = runtime
+            .prepare_working_set(insufficient, &[class(16)])
+            .unwrap_err();
+        let exhausted = error.capacity().unwrap();
+        assert_eq!(exhausted.resource, RuntimeCapacityKind::GraphMetadata);
+        assert_eq!(exhausted.recovery, CapacityRecovery::Reconfigure);
+
+        let mut overlap = None;
+        let error = runtime
+            .prepare_working_set_with(
+                capacity,
+                &[class(16), class(20)],
+                |plan, owner, name, snapshot| {
+                    if overlap.is_some() {
+                        return Err(RuntimeError::native(
+                            "injected allocation failure",
+                            owner.device.name(),
+                            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                        ));
+                    }
+                    let staged = plan.create(owner, name, snapshot)?;
+                    overlap = Some(owner.raw.calculate_statistics().unwrap().total.statistics);
+                    Ok(staged)
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), RuntimeErrorKind::Native);
+        assert!(error.to_string().contains("injected allocation failure"));
+        let overlap = overlap.expect("first replacement was allocated before the failure");
+        assert_eq!(overlap.allocationCount, baseline.vma_allocation_count + 1);
+        assert!(overlap.allocationBytes > baseline.vma_allocation_bytes);
+        let after = runtime.memory_stats().unwrap();
+        assert_eq!(after.vma_allocation_count, baseline.vma_allocation_count);
+        assert_eq!(after.vma_allocation_bytes, baseline.vma_allocation_bytes);
+        println!(
+            "working set VMA allocations before/overlap/after: {} ({}) / {} ({}) / {} ({})",
+            baseline.vma_allocation_count,
+            baseline.vma_allocation_bytes,
+            overlap.allocationCount,
+            overlap.allocationBytes,
+            after.vma_allocation_count,
+            after.vma_allocation_bytes,
+        );
+        let after = runtime.stats();
+        assert_eq!(after.resources_created, before.resources_created);
+        assert_eq!(after.resources_reused, before.resources_reused);
+        assert_eq!(after.registered_resources, before.registered_resources);
+
+        let read_class = |runtime: &mut VulkanRuntime, size: usize| {
+            let mut graph = Graph::test_new();
+            let buffer = graph
+                .buffer("prepared class", BufferDesc { size: size as u64 })
+                .unwrap();
+            let bytes = [19; 20];
+            graph
+                .upload_buffer("upload", buffer, 0, &bytes[..size])
+                .unwrap();
+            let read = graph
+                .readback_buffer("read", buffer, 0, size as u64)
+                .unwrap();
+            let plan = graph.compile().unwrap();
+            let mut submission = runtime.submit(&plan).unwrap();
+            let mut result = submission.wait(WAIT).unwrap().unwrap();
+            assert_eq!(result.test_readback(read).unwrap(), bytes[..size]);
+        };
+        read_class(runtime, 4);
+        read_class(runtime, 8);
+        {
+            let imported = runtime.refresh_buffer(key).unwrap();
+            let mut graph = Graph::test_new();
+            let buffer = graph
+                .import_buffer("retained registration", &imported)
+                .unwrap();
+            let first = graph.readback_buffer("first", buffer, 0, 4).unwrap();
+            let second = graph.readback_buffer("second", buffer, 8, 4).unwrap();
+            let plan = graph.compile().unwrap();
+            let mut submission = runtime.submit(&plan).unwrap();
+            let mut result = submission.wait(WAIT).unwrap().unwrap();
+            assert_eq!(result.test_readback(first).unwrap(), [1, 2, 3, 4]);
+            assert_eq!(result.test_readback(second).unwrap(), [5, 6, 7, 8]);
+        }
+        runtime
+            .prepare_working_set(capacity, &[class(16), class(20)])
+            .unwrap();
+        read_class(runtime, 16);
+        read_class(runtime, 20);
+        runtime.delete(key).unwrap();
+    });
+}
+
 /// Asset replacement is explicit even while other prepared frames are pending.
 fn replace_image_asset(runtime: &mut VulkanRuntime, size: u32) {
     let (_, lease) = runtime
