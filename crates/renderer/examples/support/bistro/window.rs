@@ -10,7 +10,7 @@ use super::{
     ibl::Environment,
     pipeline::{self, Budget, Resident, Workspace},
     window_camera::Motion,
-    window_input::{CameraInput, REPLAY_DT},
+    window_input::{CameraInput, REPLAY_DT, REPLAY_STEPS},
 };
 use adapter::{Surface, WindowBackend};
 use renderer::{
@@ -40,7 +40,7 @@ const TOUR_FRAMES: usize = 1800;
 
 struct Frame<B: WindowBackend> {
     pending: B::Pending,
-    replay: Option<(usize, PassHandle)>,
+    replay: Option<ReplayReadback>,
     survey: bool,
 }
 
@@ -100,6 +100,51 @@ impl Timings {
     }
 }
 
+type ReplayReadback = (usize, PassHandle);
+
+#[derive(Default)]
+struct ReplayCaptures {
+    hashes: [Option<[u8; 32]>; REPLAY_STEPS],
+    first_pixels: Vec<u8>,
+}
+
+impl ReplayCaptures {
+    fn record(&mut self, ordinal: usize, pixels: &[u8]) {
+        if ordinal == 0 {
+            self.first_pixels.copy_from_slice(pixels);
+        }
+        self.hashes[ordinal] = Some(Sha256::digest(pixels).into());
+    }
+
+    fn discard(&mut self, ordinal: usize, pending: Option<&mut Option<ReplayReadback>>) {
+        if let Some(hash) = self.hashes.get_mut(ordinal)
+            && hash.take().is_some()
+            && ordinal == 0
+        {
+            self.first_pixels.fill(0);
+        }
+        if let Some(pending) = pending
+            && pending.is_some_and(|(queued, _)| queued == ordinal)
+        {
+            *pending = None;
+        }
+    }
+
+    fn passed(&self) -> bool {
+        let [
+            Some(seed),
+            Some(moved),
+            Some(looked),
+            Some(released),
+            Some(stopped),
+        ] = self.hashes
+        else {
+            return false;
+        };
+        seed != moved && moved != looked && looked != released && released == stopped
+    }
+}
+
 #[derive(Default)]
 struct Smoke {
     resize_requested: bool,
@@ -108,8 +153,7 @@ struct Smoke {
     minimized: bool,
     restored: bool,
     restore_at: Option<Instant>,
-    replay: [[u8; 32]; 5],
-    replay_count: usize,
+    replay: ReplayCaptures,
     replay_step: usize,
 }
 
@@ -125,7 +169,6 @@ struct State<B: WindowBackend> {
     awaiting_present: Option<ImportImage>,
     frame_phases: [u64; 3],
     pixels: Vec<u8>,
-    first_pixels: Vec<u8>,
     accepted: usize,
     finished: bool,
     tour: bool,
@@ -193,7 +236,10 @@ impl<B: WindowBackend> State<B> {
         } else {
             Vec::new()
         };
-        let first_pixels = vec![0; pixels.len()];
+        let replay = ReplayCaptures {
+            first_pixels: vec![0; pixels.len()],
+            ..ReplayCaptures::default()
+        };
         Ok(Self {
             window,
             surface,
@@ -206,7 +252,6 @@ impl<B: WindowBackend> State<B> {
             awaiting_present: None,
             frame_phases: [0; 3],
             pixels,
-            first_pixels,
             accepted: 0,
             finished: false,
             tour: options.view == "route" && !options.window_smoke,
@@ -216,7 +261,10 @@ impl<B: WindowBackend> State<B> {
             seed_dimensions: (size.width, size.height),
             last_camera_tick: Instant::now(),
             last_progress: Instant::now(),
-            smoke: Smoke::default(),
+            smoke: Smoke {
+                replay,
+                ..Smoke::default()
+            },
             timings: Timings::new(options.frame_limit.unwrap_or(0)),
             setup_ns: ns(setup.elapsed()),
             preparation_ns,
@@ -232,11 +280,23 @@ impl<B: WindowBackend> State<B> {
         }
     }
 
-    fn discard_presentation_source(&mut self) -> Result<(), Error> {
+    fn release_presentation_source(&mut self) -> Result<(), Error> {
         if let Some(image) = self.awaiting_present.take() {
             self.backend.delete(image.key())?;
         }
         Ok(())
+    }
+
+    fn discard_presentation_source(&mut self) -> Result<(), Error> {
+        if !self.pixels.is_empty() && self.awaiting_present.is_some() && self.accepted < REPLAY_STEPS {
+            // Only the current source can be retried at this ordinal. It is
+            // either the last pending frame or was already read back by poll.
+            self.smoke.replay.discard(
+                self.accepted,
+                self.frames.back_mut().map(|frame| &mut frame.replay),
+            );
+        }
+        self.release_presentation_source()
     }
 
     fn poll(&mut self) -> Result<(), Error> {
@@ -246,11 +306,7 @@ impl<B: WindowBackend> State<B> {
             };
             if let Some((ordinal, pass)) = frame.replay {
                 B::readback(&mut result, pass, &mut self.pixels)?;
-                if ordinal == 0 {
-                    self.first_pixels.copy_from_slice(&self.pixels);
-                }
-                self.smoke.replay[ordinal] = Sha256::digest(&self.pixels).into();
-                self.smoke.replay_count += 1;
+                self.smoke.replay.record(ordinal, &self.pixels);
             }
             if frame.survey
                 && let Some(metrics) = B::metrics(&result)
@@ -311,7 +367,7 @@ impl<B: WindowBackend> State<B> {
                 return Ok(self.seed);
             }
             // Repeat calls on a backpressured frame don't advance replay input.
-            if self.smoke.replay_step == self.accepted && self.accepted < self.smoke.replay.len() {
+            if self.smoke.replay_step == self.accepted && self.accepted < REPLAY_STEPS {
                 self.smoke.replay_step += 1;
                 match self.accepted {
                     1 => self.input.motion(Motion::Forward, true),
@@ -439,7 +495,7 @@ impl<B: WindowBackend> State<B> {
             let camera = self.camera(conditions, options)?;
             let bytes = uniform(camera, conditions, options)?;
             let resident = self.resident.as_mut().unwrap();
-            let replay = options.window_smoke && self.accepted < self.smoke.replay.len();
+            let replay = options.window_smoke && self.accepted < REPLAY_STEPS;
             let started = Instant::now();
             let built = pipeline::build(
                 &mut self.pool,
@@ -491,7 +547,7 @@ impl<B: WindowBackend> State<B> {
         }
         match outcome {
             PresentOutcome::Presented { .. } => {
-                self.discard_presentation_source()?;
+                self.release_presentation_source()?;
                 self.accepted += 1;
                 self.last_progress = Instant::now();
                 if self.smoke.minimized && self.smoke.restore_at.is_none() {
@@ -550,11 +606,7 @@ impl<B: WindowBackend> State<B> {
         let steady_memory = self.timings.memory.map(super::run::memory_report);
         #[cfg(not(feature = "memory-profiling"))]
         let steady_memory: Option<Value> = None;
-        let replay = self.smoke.replay_count == self.smoke.replay.len()
-            && self.smoke.replay[..4]
-                .windows(2)
-                .all(|pair| pair[0] != pair[1])
-            && self.smoke.replay[3] == self.smoke.replay[4];
+        let replay = self.smoke.replay.passed();
         let smoke_passed = self.smoke.resized
             && self.smoke.minimized
             && self.smoke.restored
@@ -562,7 +614,10 @@ impl<B: WindowBackend> State<B> {
             && self.pending_on_exit > 0;
         if options.window_smoke {
             std::fs::create_dir_all(&options.output)?;
-            std::fs::write(options.output.join("linear-first.bin"), &self.first_pixels)?;
+            std::fs::write(
+                options.output.join("linear-first.bin"),
+                &self.smoke.replay.first_pixels,
+            )?;
         }
         let report = json!({
             "schema_version": 1, "presentation": true, "runtime": runtime, "validation": validation,
@@ -582,7 +637,7 @@ impl<B: WindowBackend> State<B> {
             "smoke": options.window_smoke.then(|| json!({
                 "passed": smoke_passed, "resized": self.smoke.resized, "minimized": self.smoke.minimized,
                 "restored": self.smoke.restored, "rendered_camera_replay": replay,
-                "linear_first_sha256": super::digest(&self.first_pixels),
+                "linear_first_sha256": super::digest(&self.smoke.replay.first_pixels),
             })),
             "timing": {
                 "wall_ns": ns(self.timings.duration), "frame_intervals_ns": self.timings.accepted,
@@ -721,17 +776,18 @@ impl<B: WindowBackend> ApplicationHandler for App<B> {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Focused(false) => state.input.focus_lost(),
+            WindowEvent::Focused(false) if !self.options.window_smoke => state.input.focus_lost(),
             WindowEvent::MouseInput {
                 state: button,
                 button: MouseButton::Right,
                 ..
-            } => state.input.capture(button == ElementState::Pressed),
+            } if !self.options.window_smoke => state.input.capture(button == ElementState::Pressed),
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
                     match code {
                         KeyCode::Escape if pressed => event_loop.exit(),
+                        _ if self.options.window_smoke => {}
                         KeyCode::KeyT if pressed && !event.repeat => {
                             state.tour = !state.tour;
                             state.input.clear_motion();
@@ -763,7 +819,8 @@ impl<B: WindowBackend> ApplicationHandler for App<B> {
     }
 
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        if let Some(state) = &mut self.state
+        if !self.options.window_smoke
+            && let Some(state) = &mut self.state
             && let DeviceEvent::MouseMotion { delta } = event
         {
             state.input.relative_motion(delta.0, delta.1, !state.tour);
@@ -853,4 +910,50 @@ pub(super) fn execute<B: WindowBackend>(mut options: Options) -> Result<(), Erro
         return Err(error);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use renderer::graph::BufferDesc;
+
+    #[test]
+    fn replay_discards_attempts_before_and_after_readback() {
+        let mut pool = GraphPool::new(Default::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let buffer = graph.buffer("pixels", BufferDesc { size: 4 }).unwrap();
+        let pass = graph.readback_buffer("capture", buffer, 0, 4).unwrap();
+        let mut replay = ReplayCaptures {
+            first_pixels: vec![0; 4],
+            ..ReplayCaptures::default()
+        };
+
+        // A rejected first present may already have returned its readback.
+        replay.record(0, &[9; 4]);
+        replay.discard(0, None);
+        assert_eq!(replay.hashes[0], None);
+        assert_eq!(replay.first_pixels, [0; 4]);
+        replay.record(0, &[1; 4]);
+        let first_hash = replay.hashes[0];
+
+        // Leave earlier accepted captures intact while canceling a retry.
+        let mut older = Some((0, pass));
+        replay.discard(1, Some(&mut older));
+        assert_eq!(older, Some((0, pass)));
+        assert_eq!(replay.hashes[0], first_hash);
+        let mut pending = Some((1, pass));
+        replay.discard(1, Some(&mut pending));
+        assert_eq!(pending, None);
+
+        // A later rejected readback cannot stand in for the accepted retry.
+        replay.record(1, &[8; 4]);
+        replay.discard(1, None);
+        for (ordinal, value) in [(2, 3), (3, 4), (4, 4)] {
+            replay.record(ordinal, &[value; 4]);
+        }
+        assert!(!replay.passed());
+        replay.record(1, &[2; 4]);
+        assert!(replay.passed());
+        assert_eq!(replay.first_pixels, [1; 4]);
+    }
 }
