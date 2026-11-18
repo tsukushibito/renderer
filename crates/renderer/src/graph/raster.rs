@@ -92,8 +92,7 @@ impl RasterPass<'_, '_> {
         let constants_start = graph.raster_constant_words.len();
         let words = parameters.words();
         graph.check_raster_draw_storage(program, words)?;
-        let bindings = graph.raster_bindings(program, bindings)?;
-        let bindings = graph.use_raster_bindings(program, Some(bindings))?;
+        let bindings = graph.capture_fullscreen_bindings(program, bindings)?;
         let data = graph.data_mut();
         data.draws.push(RasterDrawOperands {
             bindings,

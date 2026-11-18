@@ -23,7 +23,6 @@ struct PassTransaction<'a> {
     uploads: usize,
     names: usize,
     bindings: usize,
-    binding_accesses: usize,
     attachments: usize,
     committed: bool,
 }
@@ -38,7 +37,6 @@ impl<'a> PassTransaction<'a> {
             uploads: graph.uploads.len(),
             names: graph.names.len(),
             bindings: graph.bindings.len(),
-            binding_accesses: graph.binding_accesses.len(),
             attachments: graph.attachments.len(),
             graph,
             committed: false,
@@ -60,7 +58,6 @@ impl Drop for PassTransaction<'_> {
         data.uploads.truncate(self.uploads);
         data.names.truncate(self.names);
         data.bindings.truncate(self.bindings);
-        data.binding_accesses.truncate(self.binding_accesses);
         data.attachments.truncate(self.attachments);
     }
 }

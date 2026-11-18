@@ -409,6 +409,9 @@ private asset参照の明示保守は`GraphPool::release_idle()`で行い、使�
 `RasterPass::draw(&program, draws)`へ`ManagedRasterProgram`とdrawのiteratorを渡す。
 配列・sliceと`SnapshotInputs::draws()`は同じ入口を使い、要素は値または`Borrow<RasterDraw>`とする。
 各`RasterDraw`はvertex／index buffer・範囲とinstance count・`RasterConstants`・`Option<RasterBindings>`を持つ。
+`RasterPass::draw_fullscreen(&program, bindings, constants)`は、頂点・index資源なしで3頂点・1 instanceを記録する。
+Programのvertex shaderが頂点ID 0〜2から位置を生成する。Graphがそのdraw専用のbindingと定数を所有し、
+shader readsを同じパスへ追加する。attachment、順序、draw容量と未確定のoperandの巻き戻しはindexed drawと共有する。
 各Programの色出力形式は`RasterAttachments::colors`のスロット順と一致させる。
 `RasterAttachments::depth`は深度アタッチメント、`color_resolves`は色スロットごとのresolve先を指定する。
 `depth_only()`はcolorを持たず、depthを要求する。native実行は単一subresource画像を扱う。
@@ -446,10 +449,11 @@ meshのinline `b0`と同じnative layoutを流用できる契約ではない。
 利用側のtrusted descriptorはcolor出力なしでもdiscard用fragment shaderを持てる。
 shaderによるdepth/stencil/sample-mask出力やstorage副作用は引き続き禁止する。
 これらのProgram identityとcolor/depthの有無・形式をnative pipelineの識別に含める。
-独自descriptorは単一vertex streamのstrideと属性location／offset／Float32x2・x3・x4、
+独自descriptorは単一vertex streamのstrideと属性location／offset／Float32x2・x3・x4、または
+stride 0と空の属性から成る全画面描画の入力契約を指定する。いずれも
 inline定数のbyte数・VS／FS stageとDXIL register／space、読み取りbindingとそのbyte footprint、
-color形式、blend、depth状態、両APIのVS／FS binaryを定める。DXILの頂点semanticは
-`TEXCOORD`＋location番号とし、entryは`main`、cullingなしのu32 indexed triangleとする。
+color形式、blend、depth状態、両APIのVS／FS binaryを定める。indexed描画のDXILの頂点semanticは
+`TEXCOORD`＋location番号とし、indexはu32とする。entryは`main`、どちらもcullingなしのtriangleを使う。
 Uniform／StorageRead／SampledImage／SamplerをVS・FSから利用でき、storage書き込みやattachment feedbackは扱わない。
 resource descriptorの配列は扱わず、各slotは一個とする。
 [D3D12 root constantsの契約](https://microsoft.github.io/DirectX-Specs/d3d/ResourceBinding.html#using-constants-directly-in-the-root-arguments)に従い

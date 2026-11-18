@@ -1101,6 +1101,15 @@ cargo test --locked --release -p renderer --test raster_graph --no-default-featu
 strictはCore＋SyncVal／Debug Layer＋GBV、shippingはRenderer追加検証と専用診断を除外しnative `Disabled`を要求します。
 設定は別processで切り替え、前提不足をskipしません。診断なしの件数0は外部Layer注入不在の証明には使いません。
 
+全画面描画は、頂点資源なしのProgramをindexed描画と同一パスに混ぜ、7×5の全画素と描画順を両APIで照合します。
+テストのvertex shaderを更新する場合は、固定SDKの生成手順に`-Fullscreen`を指定します。
+
+```powershell
+./crates/renderer/tests/support/shaders/custom_raster-regenerate.ps1 -Fullscreen -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --test fullscreen -- --ignored --nocapture --test-threads=1
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12 --test fullscreen -- --ignored --nocapture --test-threads=1
+```
+
 独自Rasterの公開契約は[`custom_raster`](../../crates/renderer/tests/custom_raster.rs)と
 [利用側fixture](../../crates/renderer/fixtures/custom_raster_fixture.rs)で確認します。
 shaderはRenderer本体のeffect列挙へ追加せず、staticな`RasterProgramDescriptor`をtrusted取込します。
