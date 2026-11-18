@@ -143,6 +143,7 @@ fn vulkan_graph_working_set_failure_preserves_committed_resources() {
             .prepare_working_set_with(
                 capacity,
                 &[class(16), class(20)],
+                None,
                 |plan, owner, name, snapshot| {
                     if overlap.is_some() {
                         return Err(RuntimeError::native(
@@ -218,6 +219,80 @@ fn vulkan_graph_working_set_failure_preserves_committed_resources() {
         read_class(runtime, 16);
         read_class(runtime, 20);
         runtime.delete(key).unwrap();
+    });
+}
+
+#[test]
+#[ignore = "explicit real-GPU transaction covering an invalid Raster working-set replacement"]
+fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
+    use crate::program::{MAX_RASTER_PROGRAMS, ManagedRasterProgram, RasterProgramDescriptor};
+
+    static DESCRIPTORS: [RasterProgramDescriptor; MAX_RASTER_PROGRAMS + 1] = [const {
+        let original = ManagedRasterProgram::mesh().descriptor();
+        RasterProgramDescriptor {
+            entry: original.entry,
+            vertex_stride: original.vertex_stride,
+            vertex_attributes: original.vertex_attributes,
+            parameters: original.parameters,
+            color_outputs: original.color_outputs,
+            bindings: original.bindings,
+            binding_bytes: original.binding_bytes,
+            sampling_pairs: original.sampling_pairs,
+            blend: original.blend,
+            depth: original.depth,
+            vertex_spirv: original.vertex_spirv,
+            fragment_spirv: original.fragment_spirv,
+            vertex_dxil: original.vertex_dxil,
+            fragment_dxil: original.fragment_dxil,
+        }
+    };
+        MAX_RASTER_PROGRAMS + 1];
+
+    real_gpu(2, 1, ValidationMode::default(), |runtime| {
+        let class = |size| ResourceClass::Image {
+            desc: ImageDesc::rgba8(size, size),
+            count: 1,
+        };
+        prepare_scenario(runtime, 1, 2, &[class(4)]);
+        runtime
+            .prepare_graph_working_set(
+                None,
+                WorkingSet {
+                    resources: &[class(4)],
+                    raster: &[ManagedRasterProgram::mesh().into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let raster = Arc::clone(runtime.programs.as_ref().unwrap());
+        let before = runtime.stats();
+        let memory = runtime.memory_stats().unwrap();
+        let invalid = DESCRIPTORS.each_ref().map(|descriptor| {
+            // SAFETY: Each descriptor reproduces the complete immutable
+            // built-in mesh Program byte-for-byte, differing in identity only.
+            unsafe { ManagedRasterProgram::from_trusted_descriptor(descriptor) }.into()
+        });
+        let error = runtime
+            .prepare_graph_working_set(
+                None,
+                WorkingSet {
+                    resources: &[class(8)],
+                    raster: &invalid,
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.capacity().unwrap().recovery,
+            CapacityRecovery::Reconfigure
+        );
+        assert!(Arc::ptr_eq(&raster, runtime.programs.as_ref().unwrap()));
+        assert_eq!(runtime.stats().resources_created, before.resources_created);
+        assert_eq!(
+            runtime.memory_stats().unwrap().vma_allocation_count,
+            memory.vma_allocation_count
+        );
+        complete_image(runtime, 4, 23);
     });
 }
 
