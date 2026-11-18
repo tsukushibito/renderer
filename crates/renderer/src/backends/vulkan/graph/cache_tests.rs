@@ -248,22 +248,26 @@ fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
     };
         MAX_RASTER_PROGRAMS + 1];
 
-    real_gpu(2, 1, ValidationMode::default(), |runtime| {
+    real_gpu(4, 1, ValidationMode::default(), |runtime| {
         let class = |size| ResourceClass::Image {
             desc: ImageDesc::rgba8(size, size),
             count: 1,
         };
-        prepare_scenario(runtime, 1, 2, &[class(4)]);
+        prepare_scenario(runtime, 1, 2, &[class(4), class(6)]);
         runtime
             .prepare_graph_working_set(
                 None,
                 WorkingSet {
-                    resources: &[class(4)],
+                    resources: &[class(4), class(6)],
                     raster: &[ManagedRasterProgram::mesh().into()],
                     ..Default::default()
                 },
             )
             .unwrap();
+        let registered = runtime
+            .create_buffer("registered before resize", BufferDesc { size: 4 })
+            .unwrap()
+            .key();
         let raster = Arc::clone(runtime.programs.as_ref().unwrap());
         let before = runtime.stats();
         let memory = runtime.memory_stats().unwrap();
@@ -293,6 +297,34 @@ fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
             memory.vma_allocation_count
         );
         complete_image(runtime, 4, 23);
+        complete_image(runtime, 6, 27);
+
+        let before = runtime.stats();
+        runtime
+            .prepare_graph_working_set(
+                None,
+                WorkingSet {
+                    resources: &[class(4), class(8)],
+                    raster: &[ManagedRasterProgram::mesh().into()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let after = runtime.stats();
+        assert_eq!(after.resources_reused, before.resources_reused + 1);
+        assert_eq!(after.resources_created, before.resources_created + 1);
+        assert_eq!(
+            runtime.memory_stats().unwrap().vma_allocation_count,
+            memory.vma_allocation_count,
+            "the old extent must be released when the replacement commits"
+        );
+        assert_eq!(
+            runtime.refresh_buffer(registered).unwrap().key(),
+            registered
+        );
+        runtime.delete(registered).unwrap();
+        complete_image(runtime, 4, 23);
+        complete_image(runtime, 8, 31);
     });
 }
 

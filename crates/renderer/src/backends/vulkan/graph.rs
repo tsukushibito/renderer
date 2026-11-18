@@ -529,7 +529,13 @@ impl VulkanRuntime {
                 ),
             ));
         }
-        let prepared = self.stage_resources(capacity, resources, instances, create)?;
+        let prepared = self.stage_resources(
+            capacity,
+            resources,
+            instances,
+            working_set.is_some(),
+            create,
+        )?;
         self.owner
             .device
             .ensure_active()
@@ -952,22 +958,28 @@ impl VulkanRuntime {
     pub fn trim_idle_resources(&mut self) -> usize {
         self.collect_recycled();
         let mut released = 0;
-        for (index, entry) in self.entries.iter_mut().enumerate() {
-            if !entry.idle() {
+        for index in 0..self.entries.len() {
+            if !self.entries[index].idle() {
                 continue;
             }
-            self.available.remove(index);
-            // The registry is the sole owner. Dropping its Arc destroys the
-            // native allocation and any content metadata, without a GPU wait.
-            entry.physical = None;
-            if entry.generation < u32::MAX
-                && let Err(position) = self.vacant.binary_search(&index)
-            {
-                self.vacant.insert(position, index);
-            }
+            self.release_idle_physical(index);
             released += 1;
         }
         released
+    }
+
+    fn release_idle_physical(&mut self, index: usize) {
+        let entry = &mut self.entries[index];
+        debug_assert!(entry.idle());
+        self.available.remove(index);
+        // The registry is the sole owner. Dropping its Arc destroys the
+        // native allocation and any content metadata, without a GPU wait.
+        entry.physical = None;
+        if entry.generation < u32::MAX
+            && let Err(position) = self.vacant.binary_search(&index)
+        {
+            self.vacant.insert(position, index);
+        }
     }
 
     /// Exposing a logical resource name removes it from every reuse index.

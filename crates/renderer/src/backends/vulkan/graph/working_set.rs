@@ -57,6 +57,7 @@ enum ResourceChange {
 
 enum PreparedResource {
     Vacant,
+    ReleaseIdle,
     Keep(Snapshot),
     Reuse(Snapshot),
     Create(Arc<Physical>),
@@ -73,7 +74,7 @@ impl PreparedResources {
             .iter()
             .enumerate()
             .filter_map(move |(index, resource)| match resource {
-                PreparedResource::Vacant => None,
+                PreparedResource::Vacant | PreparedResource::ReleaseIdle => None,
                 PreparedResource::Keep(_) | PreparedResource::Reuse(_) => {
                     Some(runtime.entries[index].physical().desc)
                 }
@@ -85,6 +86,7 @@ impl PreparedResources {
         for (index, resource) in self.0.into_iter().enumerate() {
             match resource {
                 PreparedResource::Vacant => (),
+                PreparedResource::ReleaseIdle => runtime.release_idle_physical(index),
                 PreparedResource::Keep(snapshot) => {
                     runtime.entries[index].physical().lock().scheduled = snapshot;
                 }
@@ -173,6 +175,7 @@ impl VulkanRuntime {
         capacity: FrameCapacity,
         resources: &[ResourceClass],
         instances: usize,
+        replace_idle: bool,
         mut create: impl FnMut(
             PhysicalPlan,
             &Arc<MemoryOwner>,
@@ -194,6 +197,12 @@ impl VulkanRuntime {
         let mut prepared = storage::reserved(changes.len())?;
         for (index, change) in changes.into_iter().enumerate() {
             let resource = match change {
+                // Reused and replaced entries have already been selected.
+                // Only the common explicit replacement discards unused cached
+                // resources. The raw Vulkan preparation keeps its cache.
+                ResourceChange::Keep if replace_idle && self.entries[index].idle() => {
+                    PreparedResource::ReleaseIdle
+                }
                 ResourceChange::Keep => match &self.entries[index].physical {
                     Some(physical) => {
                         let mut snapshot = Snapshot::for_working_set(capacity)?;

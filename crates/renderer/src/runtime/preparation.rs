@@ -227,7 +227,8 @@ impl Runtime {
     /// Return all Graph execution, result, export, and import-range leases
     /// before replacing the set. Registered resources retain keys and contents;
     /// refresh buffer snapshots with the retained keys after preparation.
-    /// Failed replacements preserve the previously prepared set.
+    /// Unused idle resources from the previous set are released when the
+    /// replacement commits. Failed replacements preserve the previous set.
     pub fn prepare_working_set(
         &mut self,
         working_set: WorkingSet<'_>,
