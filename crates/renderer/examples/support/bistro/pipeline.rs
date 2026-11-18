@@ -539,9 +539,47 @@ pub(super) struct Workspace {
     images: Vec<ImageHandle>,
     bindings: Vec<RasterBindings>,
     shadow_bindings: Vec<RasterBindings>,
+    shadow_cache: Option<ShadowCache>,
     opaque: Vec<usize>,
     blended: Vec<usize>,
 }
+
+/// The shadow shader uses the selected packed matrix from the camera constants.
+/// Geometry, materials, textures, shadow extent and shader program are fixed
+/// for the lifetime of this cache.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ShadowKey {
+    matrix: [[u32; 4]; 4],
+    alpha_only: bool,
+}
+
+impl ShadowKey {
+    fn new(matrix: [[f32; 4]; 4], alpha_only: bool) -> Self {
+        Self {
+            matrix: matrix.map(|column| column.map(f32::to_bits)),
+            alpha_only,
+        }
+    }
+}
+
+struct ShadowEntry {
+    key: ShadowKey,
+    image: ImportImage,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct ShadowUpdate {
+    key: ShadowKey,
+    handle: ImageHandle,
+}
+
+#[derive(Default)]
+struct ShadowCache {
+    entries: [Option<ShadowEntry>; shadow::CASCADE_COUNT],
+    hits: [u64; shadow::CASCADE_COUNT],
+    misses: [u64; shadow::CASCADE_COUNT],
+}
+
 impl Workspace {
     pub fn new(scene: &Scene) -> Self {
         Self {
@@ -551,9 +589,75 @@ impl Workspace {
             images: Vec::with_capacity(scene.images.len()),
             bindings: Vec::with_capacity(scene.materials.len()),
             shadow_bindings: Vec::with_capacity(scene.materials.len()),
+            shadow_cache: None,
             opaque: Vec::with_capacity(scene.primitives.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
         }
+    }
+
+    /// The scene and resident caster inputs must stay fixed until the caller
+    /// clears reuse. The resource mutation probes use a separate Workspace.
+    pub fn enable_shadow_reuse(&mut self) {
+        self.shadow_cache.get_or_insert_with(ShadowCache::default);
+    }
+
+    pub fn accept_shadow_updates<B: Backend>(
+        &mut self,
+        pending: &B::Pending,
+        updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
+    ) -> Result<(), Error> {
+        let (Some(cache), Some(updates)) = (&mut self.shadow_cache, updates) else {
+            return Ok(());
+        };
+        // Publish the complete set of accepted revisions together. Importing
+        // the scheduled state on the same queue does not require a CPU wait.
+        let mut incoming: [Option<ShadowEntry>; shadow::CASCADE_COUNT] =
+            std::array::from_fn(|_| None);
+        for (destination, update) in incoming.iter_mut().zip(updates) {
+            if let Some(update) = update {
+                *destination = Some(ShadowEntry {
+                    key: update.key,
+                    image: B::export_image(pending, update.handle)?,
+                });
+            }
+        }
+        for (cascade, entry) in incoming.into_iter().enumerate() {
+            if let Some(entry) = entry {
+                cache.entries[cascade] = Some(entry);
+                cache.misses[cascade] += 1;
+            } else {
+                cache.hits[cascade] += 1;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn reset_shadow_reuse_counts(&mut self) {
+        if let Some(cache) = &mut self.shadow_cache {
+            cache.hits.fill(0);
+            cache.misses.fill(0);
+        }
+    }
+
+    pub fn shadow_reuse_counts(
+        &self,
+    ) -> Option<([u64; shadow::CASCADE_COUNT], [u64; shadow::CASCADE_COUNT])> {
+        self.shadow_cache
+            .as_ref()
+            .map(|cache| (cache.hits, cache.misses))
+    }
+
+    pub fn clear_shadow_reuse<B: Backend>(&mut self, backend: &mut B) -> Result<(), Error> {
+        if let Some(cache) = &mut self.shadow_cache {
+            for entry in &mut cache.entries {
+                if let Some(old) = entry {
+                    backend.delete(old.image.key())?;
+                    *entry = None;
+                }
+            }
+        }
+        self.shadow_cache = None;
+        Ok(())
     }
 }
 pub(super) struct Built {
@@ -562,6 +666,7 @@ pub(super) struct Built {
     pub camera: BufferHandle,
     pub captures: Option<[PassHandle; 3]>,
     pub shadow_captures: Option<[PassHandle; 4]>,
+    pub shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
     pub draws: usize,
 }
 
@@ -648,20 +753,34 @@ pub(super) fn build(
         graph.import_image("specular environment", &resident.environment[1])?,
         graph.import_image("BRDF integration", &resident.environment[2])?,
     ];
-    let mut make_shadow = || {
-        graph.image(
-            "sun cascade",
-            ImageDesc::depth32(
-                resident.shadow_parameters.resolution,
-                resident.shadow_parameters.resolution,
-            ),
-        )
+    let resolution = resident.shadow_parameters.resolution;
+    let shadow_desc = ImageDesc::depth32(resolution, resolution);
+    let shadow_cache = workspace.shadow_cache.as_ref();
+    let mut shadow_updates = shadow_cache.map(|_| [None; shadow::CASCADE_COUNT]);
+    let mut redraw = [true; shadow::CASCADE_COUNT];
+    let mut make_shadow = |cascade: usize| -> Result<ImageHandle, Error> {
+        let (Some(cache), Some(updates)) = (shadow_cache, &mut shadow_updates) else {
+            return Ok(graph.image("sun cascade", shadow_desc)?);
+        };
+        let key = ShadowKey::new(shadow_data.matrices[cascade], options.alpha_only);
+        let old = cache.entries[cascade].as_ref();
+        let handle = match old {
+            Some(entry) => graph.import_image("sun cascade", &entry.image)?,
+            None => graph.image("sun cascade", shadow_desc)?,
+        };
+        if old.is_some_and(|entry| entry.key == key) {
+            redraw[cascade] = false;
+        } else {
+            graph.export_image(handle)?;
+            updates[cascade] = Some(ShadowUpdate { key, handle });
+        }
+        Ok(handle)
     };
     let shadows = [
-        make_shadow()?,
-        make_shadow()?,
-        make_shadow()?,
-        make_shadow()?,
+        make_shadow(0)?,
+        make_shadow(1)?,
+        make_shadow(2)?,
+        make_shadow(3)?,
     ];
     let shadow_views = [
         graph.image_view(shadows[0], 0, 0)?,
@@ -670,7 +789,8 @@ pub(super) fn build(
         graph.image_view(shadows[3], 0, 0)?,
     ];
     let shadow_program = program::shadow_program();
-    for (index, material) in scene.materials.iter().enumerate() {
+    let redraw_any = redraw.into_iter().any(|value| value);
+    for (index, material) in scene.materials.iter().enumerate().filter(|_| redraw_any) {
         let base = material.textures[0];
         let bindings = [
             Binding {
@@ -711,6 +831,9 @@ pub(super) fn build(
             .push(graph.raster_bindings(&shadow_program, &bindings)?);
     }
     for (cascade, view) in shadow_views.into_iter().enumerate() {
+        if !redraw[cascade] {
+            continue;
+        }
         let parameters = RasterConstants::new(&[cascade as u32])?;
         let clip = shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.scene_bounds);
         let draws = (0..scene.primitives.len())
@@ -1106,6 +1229,7 @@ pub(super) fn build(
         camera: uniform,
         captures,
         shadow_captures,
+        shadow_updates,
         draws,
     })
 }
@@ -1113,6 +1237,18 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadow_reuse_keys_use_exact_cascade_bits_and_caster_policy() {
+        let matrix = [[0.0; 4]; 4];
+        let original = ShadowKey::new(matrix, false);
+        assert!(original == ShadowKey::new(matrix, false));
+        assert!(original != ShadowKey::new(matrix, true));
+        let mut changed = matrix;
+        changed[3][0] = -0.0;
+        assert!(original != ShadowKey::new(changed, false));
+    }
+
     #[test]
     fn in_flight_budget_replicates_targets_and_keeps_assets_global() {
         let scene = Scene::fixture(false);

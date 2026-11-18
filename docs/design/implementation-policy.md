@@ -1444,6 +1444,12 @@ Bistroのcaster選別は、resident準備時に実際のupload頂点から求め
 毎frameは準備済み境界を読む。
 [VulkanのSPIR-V演算精度](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html)と
 [Direct3DのFP32演算規則](https://learn.microsoft.com/en-us/windows/uwp/graphics-concepts/floating-point-rules)を参照する。
+Bistroの`--reuse-shadows`は、固定のresident geometry・材質・texture・影設定の範囲で、各cascadeの
+行列16要素のFP32 bit列とcasterのalpha絞り込みが一致する間、前回のD32を読む。
+初回と不一致時は従来と同じclear・描画を行い、投入成功後のsnapshotを保持する。
+同一queueの予定状態を引き継ぎ、read-onlyのhitではrevisionを変更しない。
+既存の準備済みD32を使い、ファイルcapture後の資源差し替え試験に入る前に全登録を解除する。
+再利用の頻度を確認できるよう、測定区間で受理したhitとmissをcascadeごとに集計する。
 通常Zと既定near/farを維持し、画質・費用と未確認範囲は実GPU受入の記録へ分ける。
 
 Bistroの主cameraは同じworld AABBと、PBRの頂点shaderに渡すFP32行列を再利用する。

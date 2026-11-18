@@ -57,6 +57,7 @@ struct Options {
     resource_checks: bool,
     aa: bool,
     shadows: bool,
+    reuse_shadows: bool,
     capture_shadows: bool,
     #[cfg(feature = "tracy")]
     capture_handshake: bool,
@@ -84,6 +85,7 @@ impl Options {
             resource_checks: false,
             aa: true,
             shadows: true,
+            reuse_shadows: false,
             capture_shadows: false,
             #[cfg(feature = "tracy")]
             capture_handshake: false,
@@ -101,6 +103,7 @@ impl Options {
                 "--resource-checks" => result.resource_checks = true,
                 "--aa-off" => result.aa = false,
                 "--shadows-off" => result.shadows = false,
+                "--reuse-shadows" => result.reuse_shadows = true,
                 "--capture-shadow-maps" => result.capture_shadows = true,
                 #[cfg(feature = "tracy")]
                 "--capture-handshake" => result.capture_handshake = true,
@@ -134,7 +137,7 @@ impl Options {
                     result.force_opaque = true;
                 }
                 "--help" | "-h" => {
-                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
+                    let usage = "usage: bistro --api vulkan|d3d12 (--manifest manifest.json --ibl-manifest ibl/manifest.json | --fixture) [--view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route] [--width N --height N] [--frames N --warmup N --inflight 1..4] [--gpu-timing] [--steady-state-cpu (warmup >= inflight)] [--capture-all-views] [--capture-shadow-maps] [--aa-off] [--shadows-off] [--reuse-shadows] [--resource-checks (requires memory-profiling, inflight >= 2)] [--alpha-only --alpha-override opaque] --output DIR";
                     #[cfg(feature = "tracy")]
                     return Err(format!("{usage} [--capture-handshake]").into());
                     #[cfg(not(feature = "tracy"))]

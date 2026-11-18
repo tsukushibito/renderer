@@ -175,6 +175,7 @@ fn frames<B: Backend>(
                 client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
             });
             resident.camera = B::export_buffer(&work, built.camera)?;
+            workspace.accept_shadow_updates::<B>(&work, built.shadow_updates)?;
             let output = B::export_image(&work, built.output)?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
             // name is not early GPU release: pending work owns its prepared lease.
@@ -280,6 +281,7 @@ fn capture<B: Backend>(
     let plan = built.graph.compile()?;
     let mut pending = backend.submit(&plan)?;
     resident.camera = B::export_buffer(&pending, built.camera)?;
+    workspace.accept_shadow_updates::<B>(&pending, built.shadow_updates)?;
     let output = B::export_image(&pending, built.output)?;
     backend.delete(output.key())?;
     let mut completed = B::wait(&mut pending, super::WAIT)?;
@@ -328,10 +330,12 @@ fn capture<B: Backend>(
                 "sha256":super::digest(&bytes),"byte_length":bytes.len()});
         }
     }
-    Ok(
-        json!({"captures":captures,"shadow_captures":shadow_captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
-        "readback_outside_measurement":true}),
-    )
+    let mut report = json!({"captures":captures,"shadow_captures":shadow_captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
+        "readback_outside_measurement":true});
+    if let Some(updates) = built.shadow_updates {
+        report["shadow_reuse_hits"] = json!(updates.map(|update| update.is_none()));
+    }
+    Ok(report)
 }
 
 fn measurement(
@@ -515,6 +519,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     // when all execution slots have otherwise completed (including inflight=1).
     let mut pool = GraphPool::new(budget.graph, options.inflight + 1)?;
     let mut workspace = Workspace::new(&scene);
+    if options.reuse_shadows && options.shadows {
+        workspace.enable_shadow_reuse();
+    }
     let mut queue = VecDeque::with_capacity(options.inflight);
     let mut samples = Vec::with_capacity(options.frames);
     let frame_storage_and_profiling_prepare_ns = stage.elapsed().as_nanos() as u64;
@@ -557,6 +564,7 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     let tracy_connected_start = tracy_client::Client::is_connected();
     #[cfg(windows)]
     let frequency = super::clock::frequency()?;
+    workspace.reset_shadow_reuse_counts();
     let steady_pending_start = queue.len();
     #[cfg(windows)]
     let cpu_start = super::clock::Boundary::capture()?;
@@ -626,6 +634,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
     #[cfg(feature = "tracy")]
     let tracy_connected_end = tracy_client::Client::is_connected();
     let mut measured = measurement(&samples, options, wall, cpu)?;
+    if let Some((hits, misses)) = workspace.shadow_reuse_counts() {
+        measured["shadow_reuse"] = json!({"hits":hits,"misses":misses});
+    }
     measured["steady_state_window"] = if options.steady_state_cpu {
         json!({"frames":options.frames,"wall_ns":steady_wall,"cpu":steady_cpu,
             "host_pending_at_start":steady_pending_start,"host_pending_at_end":steady_pending_end,
@@ -660,6 +671,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
         &mut pool,
         &mut workspace,
     )?;
+    if let Some(hits) = captured.get("shadow_reuse_hits") {
+        measured["shadow_reuse"]["output_capture_hits"] = hits.clone();
+    }
     let aa_off = if options.aa {
         let mut diagnostic = options.clone();
         diagnostic.aa = false;
@@ -717,6 +731,9 @@ pub(super) fn execute<B: Backend>(options: &Options) -> Result<(), Error> {
             captured_views.push((name.clone(), view.output, report));
         }
     }
+    // No cache registrations survive into the material replacement or
+    // overlapping View probes.
+    workspace.clear_shadow_reuse(&mut backend)?;
     let resource_checks = if options.resource_checks {
         eprintln!("Bistro resource lifetime, capacity and memory checks (outside ROI)");
         super::lifecycle::execute(
