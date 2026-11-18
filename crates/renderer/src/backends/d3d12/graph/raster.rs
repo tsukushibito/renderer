@@ -14,7 +14,10 @@ use super::super::{
 };
 use super::transition;
 use crate::{
-    graph::{AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, ResourceDesc},
+    graph::{
+        AccessPurpose, BindingOperands, CompiledGraph, LoadAction, Operation, ResourceDesc,
+        SampleCount,
+    },
     program::{BindingType, ManagedRasterProgram, ShaderStages},
 };
 
@@ -122,6 +125,23 @@ pub(super) fn validate_targets(colors: &Range<usize>) -> Result<(), D3D12Runtime
     Ok(())
 }
 
+pub(super) fn target_samples(
+    graph: &CompiledGraph,
+    colors: &Range<usize>,
+    depth: Option<usize>,
+) -> SampleCount {
+    let attachment = graph
+        .raster_attachments(colors)
+        .first()
+        .or_else(|| depth.map(|index| graph.raster_attachment(index)))
+        .expect("Raster has at least one target");
+    let resource = &graph.resources[attachment.view.image().index];
+    let ResourceDesc::Image(desc) = resource.desc else {
+        unreachable!("Raster target is an image");
+    };
+    desc.sample_count
+}
+
 fn pass_scopes(
     graph: &CompiledGraph,
     pass: usize,
@@ -156,6 +176,7 @@ fn pass_scopes(
                 index,
                 match access.purpose {
                     AccessPurpose::ColorAttachment => D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    AccessPurpose::ColorResolve => D3D12_RESOURCE_STATE_RESOLVE_DEST,
                     AccessPurpose::DepthAttachment => D3D12_RESOURCE_STATE_DEPTH_WRITE,
                     AccessPurpose::Sampled => shader_read_state(access.stages),
                     _ => unreachable!("trusted Raster image purposes"),
@@ -378,6 +399,7 @@ pub(super) fn record(
         Operation::AttachmentPass { colors, depth, .. } => (None, None, colors, depth),
         _ => unreachable!(),
     };
+    let sample_count = target_samples(graph, colors, *depth);
     let storage = slot.raster.as_mut().unwrap();
     pass_scopes(
         graph,
@@ -458,11 +480,12 @@ pub(super) fn record(
         }
     }
     let Some(program) = program else {
+        record_resolves(graph, colors, &slot.resource_map, &slot.list, storage);
         return Ok(());
     };
     let pipeline = programs
         .iter()
-        .find(|pipeline| pipeline.matches(program, depth.is_some()))
+        .find(|pipeline| pipeline.matches(program, depth.is_some(), sample_count))
         .unwrap();
     let viewport = D3D12_VIEWPORT {
         TopLeftX: 0.0,
@@ -658,7 +681,47 @@ pub(super) fn record(
             unsafe { slot.list.DrawIndexedInstanced(draw.index_count, 1, 0, 0, 0) };
         }
     }
+    record_resolves(graph, colors, &slot.resource_map, &slot.list, storage);
     Ok(())
+}
+
+fn record_resolves(
+    graph: &CompiledGraph,
+    colors: &Range<usize>,
+    resource_map: &[usize],
+    list: &ID3D12GraphicsCommandList,
+    storage: &mut RasterStorage,
+) {
+    for attachment in graph.raster_attachments(colors) {
+        let Some(resolve) = attachment.resolve else {
+            continue;
+        };
+        let source_index = resource_map[attachment.view.image().index];
+        let target_index = resource_map[resolve.image().index];
+        let source = &mut storage.images[source_index];
+        transition(
+            list,
+            source.native.raw(),
+            &mut source.state,
+            D3D12_RESOURCE_STATE_RESOLVE_SOURCE,
+        );
+        let source = &storage.images[source_index];
+        let target = &storage.images[target_index];
+        // SAFETY: Graph construction establishes equal-format, equal-extent
+        // distinct single-subresource images, with a multisampled source and
+        // single-sample destination. Preparation validates format capabilities.
+        // Both resources remain leased, and their tracked states are RESOLVE_SOURCE
+        // after rendering and RESOLVE_DEST from the start of this pass.
+        unsafe {
+            list.ResolveSubresource(
+                target.native.raw(),
+                0,
+                source.native.raw(),
+                0,
+                super::super::resources::image_format(source.desc.format),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1078,7 +1141,7 @@ mod tests {
                         count: 2,
                     },
                 ],
-                &[ManagedRasterProgram::textured_mesh()],
+                &[ManagedRasterProgram::textured_mesh().into()],
                 &[],
             )
             .unwrap();
@@ -1242,7 +1305,7 @@ mod tests {
                     desc: ImageDesc::rgba8(1, 1),
                     count: 2,
                 }],
-                &[ManagedRasterProgram::textured_mesh()],
+                &[ManagedRasterProgram::textured_mesh().into()],
                 &[],
             )
             .unwrap();

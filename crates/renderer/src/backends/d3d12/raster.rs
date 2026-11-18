@@ -1,6 +1,6 @@
 //! Immutable native graphics programs, created only at working-set preparation.
 
-use crate::ImageFormat;
+use crate::{ImageFormat, graph::SampleCount};
 use std::mem::ManuallyDrop;
 
 use crate::program::{
@@ -83,6 +83,7 @@ pub(super) struct RasterPipeline {
     pub(super) signature: NativeObject<ID3D12RootSignature>,
     pub(super) managed: ManagedRasterProgram,
     pub(super) depth: bool,
+    sample_count: SampleCount,
     clear: bool,
 }
 // SAFETY: Native pipeline/signature interfaces are free-threaded. Their immutable
@@ -245,16 +246,25 @@ fn signature(
 }
 
 impl RasterPipeline {
-    pub(super) fn matches(&self, managed: &ManagedRasterProgram, depth: bool) -> bool {
-        !self.clear && self.depth == depth && self.managed.same(managed)
+    pub(super) fn matches(
+        &self,
+        managed: &ManagedRasterProgram,
+        depth: bool,
+        sample_count: SampleCount,
+    ) -> bool {
+        !self.clear
+            && self.depth == depth
+            && self.sample_count == sample_count
+            && self.managed.same(managed)
     }
 
     pub(super) fn new(
         owner: &DeviceOwner,
         managed: &ManagedRasterProgram,
         depth: bool,
+        sample_count: SampleCount,
     ) -> Result<Self, D3D12RuntimeError> {
-        Self::new_inner(owner, managed, depth, false)
+        Self::new_inner(owner, managed, depth, sample_count, false)
     }
 
     /// Prepares an untextured fullscreen clear program. Depth writes replace
@@ -264,19 +274,21 @@ impl RasterPipeline {
         owner: &DeviceOwner,
         managed: &ManagedRasterProgram,
         depth: bool,
+        sample_count: SampleCount,
     ) -> Result<Self, D3D12RuntimeError> {
         if !managed.bindings().is_empty() {
             return Err(D3D12RuntimeError::invalid(
                 "fullscreen clear requires an untextured Raster program",
             ));
         }
-        Self::new_inner(owner, managed, depth, true)
+        Self::new_inner(owner, managed, depth, sample_count, true)
     }
 
     fn new_inner(
         owner: &DeviceOwner,
         managed: &ManagedRasterProgram,
         depth: bool,
+        sample_count: SampleCount,
         clear: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
@@ -333,6 +345,7 @@ impl RasterPipeline {
                 DXGI_FORMAT_D32_FLOAT,
                 D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL,
             )?;
+            super::raster_storage::require_multisample(owner, DXGI_FORMAT_D32_FLOAT, sample_count)?;
         }
         let mut formats = [DXGI_FORMAT_UNKNOWN; 8];
         for (destination, format) in formats.iter_mut().zip(managed.color_outputs()) {
@@ -356,6 +369,7 @@ impl RasterPipeline {
                         0
                     },
             )?;
+            super::raster_storage::require_multisample(owner, *destination, sample_count)?;
         }
         let signature = signature(owner, managed)?;
         let target_blend = blend(if clear {
@@ -431,13 +445,13 @@ impl RasterPipeline {
                 DXGI_FORMAT_UNKNOWN
             },
             SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
+                Count: sample_count.as_u32(),
                 Quality: 0,
             },
             ..Default::default()
         };
         // SAFETY: The reviewed shader ABI, input layout, signature, attachment
-        // capabilities and single-sample fixed state agree. All input bytecode
+        // capabilities and attachment sample count agree. All input bytecode
         // and native references outlive this synchronous creation operation.
         let pipeline = object(
             owner,
@@ -452,6 +466,7 @@ impl RasterPipeline {
             signature,
             managed: *managed,
             depth,
+            sample_count,
             clear,
         })
     }
@@ -474,7 +489,7 @@ mod tests {
         .expect("hardware D3D12 Device and requested native diagnostics");
         let monitor = owner.monitor.clone();
         let depth_only = ManagedRasterProgram::depth_only();
-        match RasterPipeline::new(&owner, &depth_only, false) {
+        match RasterPipeline::new(&owner, &depth_only, false, SampleCount::X1) {
             Err(error) => assert_eq!(error.kind(), D3D12RuntimeErrorKind::InvalidInput),
             Ok(_) => panic!("depth-only pipeline requires a depth attachment"),
         }
@@ -491,12 +506,16 @@ mod tests {
                 if program.requires_depth() && !depth {
                     continue;
                 }
-                let pipeline = RasterPipeline::new(&owner, &program, depth)
+                let pipeline = RasterPipeline::new(&owner, &program, depth, SampleCount::X1)
                     .expect("reviewed graphics shader ABI and attachment capabilities");
-                assert!(pipeline.matches(&program, depth));
-                assert!(!pipeline.matches(&program, !depth));
+                assert!(pipeline.matches(&program, depth, SampleCount::X1));
+                assert!(!pipeline.matches(&program, !depth, SampleCount::X1));
                 if !program.same(&ManagedRasterProgram::mesh()) {
-                    assert!(!pipeline.matches(&ManagedRasterProgram::mesh(), depth));
+                    assert!(!pipeline.matches(
+                        &ManagedRasterProgram::mesh(),
+                        depth,
+                        SampleCount::X1
+                    ));
                 }
                 drop(pipeline);
             }
@@ -506,9 +525,9 @@ mod tests {
             (ManagedRasterProgram::mesh_hdr(), false),
             (depth_only, true),
         ] {
-            let pipeline = RasterPipeline::clear(&owner, &program, depth)
+            let pipeline = RasterPipeline::clear(&owner, &program, depth, SampleCount::X1)
                 .expect("reviewed fullscreen color/depth clear program");
-            assert!(!pipeline.matches(&program, depth));
+            assert!(!pipeline.matches(&program, depth, SampleCount::X1));
             drop(pipeline);
         }
         drop(owner);

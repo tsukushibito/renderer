@@ -11,7 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{graph::provenance::BufferProvenance, program::ManagedRasterProgram};
+use crate::{
+    graph::provenance::BufferProvenance,
+    program::{ManagedRasterProgram, RasterPipelineRequest},
+};
 
 use super::{
     D3D12RuntimeError,
@@ -527,13 +530,14 @@ impl FramePool {
         buffers: &[D3D12BufferClass],
         classes: &[D3D12ImageClass],
         registered_images: &[crate::graph::ImageDesc],
-        programs: &[ManagedRasterProgram],
+        programs: &[RasterPipelineRequest],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
         let mut unique_programs =
             [None::<ManagedRasterProgram>; crate::program::MAX_RASTER_PROGRAMS];
         let mut program_count = 0;
-        for program in programs {
+        for request in programs {
+            let program = &request.program;
             if unique_programs[..program_count]
                 .iter()
                 .flatten()
@@ -581,7 +585,7 @@ impl FramePool {
         pool_mut.clear_programs = Some(ClearPrograms::new(&pool_mut.owner, &all_classes)?);
         pool_mut
             .raster_programs
-            .try_reserve_exact(program_count * 2)
+            .try_reserve_exact(program_count * 4)
             .map_err(|_| {
                 D3D12RuntimeError::capacity_with(
                     "Raster pipeline capacity reservation failed",
@@ -594,7 +598,11 @@ impl FramePool {
                 )
             })?;
         let mut raster_images = 0;
-        for program in unique_programs[..program_count].iter().flatten() {
+        for RasterPipelineRequest {
+            program,
+            sample_count,
+        } in programs
+        {
             raster_images = raster_images.max(
                 program
                     .bindings()
@@ -609,12 +617,13 @@ impl FramePool {
                 if !pool_mut
                     .raster_programs
                     .iter()
-                    .any(|pipeline| pipeline.matches(program, depth))
+                    .any(|pipeline| pipeline.matches(program, depth, *sample_count))
                 {
                     pool_mut.raster_programs.push(RasterPipeline::new(
                         &pool_mut.owner,
                         program,
                         depth,
+                        *sample_count,
                     )?);
                 }
             }
@@ -1690,7 +1699,7 @@ mod tests {
                         desc: ImageDesc::rgba8(1, 1),
                         count: 1,
                     }],
-                    &[ManagedRasterProgram::mesh()],
+                    &[ManagedRasterProgram::mesh().into()],
                     &[],
                 )
                 .unwrap();

@@ -491,6 +491,14 @@ pub struct D3D12_FEATURE_DATA_FORMAT_SUPPORT {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS {
+    pub Format: DXGI_FORMAT,
+    pub SampleCount: u32,
+    pub Flags: D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS,
+    pub NumQualityLevels: u32,
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3D12_FEATURE_DATA_ROOT_SIGNATURE {
     pub HighestVersion: D3D_ROOT_SIGNATURE_VERSION,
 }
@@ -776,6 +784,10 @@ pub const D3D12_MESSAGE_SEVERITY_ERROR: D3D12_MESSAGE_SEVERITY = 1;
 pub const D3D12_MESSAGE_SEVERITY_INFO: D3D12_MESSAGE_SEVERITY = 3;
 pub const D3D12_MESSAGE_SEVERITY_MESSAGE: D3D12_MESSAGE_SEVERITY = 4;
 pub const D3D12_MESSAGE_SEVERITY_WARNING: D3D12_MESSAGE_SEVERITY = 2;
+pub const D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE: D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS = 0;
+pub const D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_TILED_RESOURCE:
+    D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS = 1;
+pub type D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS = u32;
 pub type D3D12_PIPELINE_STATE_FLAGS = u32;
 pub const D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS: D3D12_PIPELINE_STATE_FLAGS = 4;
 pub const D3D12_PIPELINE_STATE_FLAG_DYNAMIC_INDEX_BUFFER_STRIP_CUT: D3D12_PIPELINE_STATE_FLAGS = 8;
@@ -2875,6 +2887,28 @@ impl ID3D12GraphicsCommandList {
             );
         }
     }
+    pub unsafe fn ResolveSubresource<P0, P2>(
+        &self,
+        pdstresource: P0,
+        dstsubresource: u32,
+        psrcresource: P2,
+        srcsubresource: u32,
+        format: DXGI_FORMAT,
+    ) where
+        P0: windows_core::Param<ID3D12Resource>,
+        P2: windows_core::Param<ID3D12Resource>,
+    {
+        unsafe {
+            (windows_core::Interface::vtable(self).ResolveSubresource)(
+                windows_core::Interface::as_raw(self),
+                pdstresource.param().abi(),
+                dstsubresource,
+                psrcresource.param().abi(),
+                srcsubresource,
+                format,
+            );
+        }
+    }
     pub unsafe fn IASetPrimitiveTopology(&self, primitivetopology: D3D12_PRIMITIVE_TOPOLOGY) {
         unsafe {
             (windows_core::Interface::vtable(self).IASetPrimitiveTopology)(
@@ -3221,7 +3255,14 @@ pub struct ID3D12GraphicsCommandList_Vtbl {
     ),
     CopyResource: usize,
     CopyTiles: usize,
-    ResolveSubresource: usize,
+    pub ResolveSubresource: unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *mut core::ffi::c_void,
+        u32,
+        *mut core::ffi::c_void,
+        u32,
+        DXGI_FORMAT,
+    ),
     pub IASetPrimitiveTopology:
         unsafe extern "system" fn(*mut core::ffi::c_void, D3D12_PRIMITIVE_TOPOLOGY),
     pub RSSetViewports:

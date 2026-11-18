@@ -361,9 +361,10 @@ fn requirements_inner(
                 depth,
                 ..
             } => {
+                let sample_count = super::raster::target_samples(graph, colors, *depth);
                 if !programs
                     .iter()
-                    .any(|pipeline| pipeline.matches(program, depth.is_some()))
+                    .any(|pipeline| pipeline.matches(program, depth.is_some(), sample_count))
                 {
                     return Err(D3D12RuntimeError::capacity_with(
                         "Raster pipeline working set has not been prepared",
@@ -463,7 +464,12 @@ fn requirements_inner(
                 })?;
                 for access in graph.accesses(pass) {
                     super::raster::use_image(graph, access.resource, resource_map, storage)?;
-                    storage.require_target_view(resource_map[access.resource]);
+                    if matches!(
+                        access.purpose,
+                        AccessPurpose::ColorAttachment | AccessPurpose::DepthAttachment
+                    ) {
+                        storage.require_target_view(resource_map[access.resource]);
+                    }
                 }
                 super::raster::validate_targets(colors)?;
             }

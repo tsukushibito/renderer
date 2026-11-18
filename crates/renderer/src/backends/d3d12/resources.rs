@@ -355,14 +355,14 @@ impl DeviceImage {
         owner: &DeviceOwner,
         desc: crate::program::ImageDescriptor,
     ) -> Result<Self, D3D12RuntimeError> {
-        Self::with_description(owner, desc, false)
+        Self::with_description(owner, desc, false, crate::graph::SampleCount::X1)
     }
 
     pub(super) fn graph(
         owner: &DeviceOwner,
         desc: crate::graph::ImageDesc,
     ) -> Result<Self, D3D12RuntimeError> {
-        Self::with_description(owner, Self::graph_descriptor(desc), true)
+        Self::with_description(owner, Self::graph_descriptor(desc), true, desc.sample_count)
     }
 
     fn graph_descriptor(desc: crate::graph::ImageDesc) -> crate::program::ImageDescriptor {
@@ -376,17 +376,25 @@ impl DeviceImage {
     }
 
     pub(super) fn graph_resource_desc(desc: crate::graph::ImageDesc) -> D3D12_RESOURCE_DESC {
-        Self::resource_desc(Self::graph_descriptor(desc), true)
+        Self::resource_desc(Self::graph_descriptor(desc), true, desc.sample_count)
     }
 
-    fn resource_desc(desc: crate::program::ImageDescriptor, graph: bool) -> D3D12_RESOURCE_DESC {
+    fn resource_desc(
+        desc: crate::program::ImageDescriptor,
+        graph: bool,
+        sample_count: crate::graph::SampleCount,
+    ) -> D3D12_RESOURCE_DESC {
         let mut native = image_desc(desc);
+        native.SampleDesc.Count = sample_count.as_u32();
         if graph
             && desc.format != crate::ImageFormat::Rgba8Srgb
             && native.Flags == D3D12_RESOURCE_FLAG_NONE
         {
-            native.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET
-                | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            native.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+            // Native multisampled render targets do not support UAV use.
+            if sample_count == crate::graph::SampleCount::X1 {
+                native.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            }
         }
         native
     }
@@ -395,6 +403,7 @@ impl DeviceImage {
         owner: &DeviceOwner,
         desc: crate::program::ImageDescriptor,
         graph: bool,
+        sample_count: crate::graph::SampleCount,
     ) -> Result<Self, D3D12RuntimeError> {
         let properties = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_DEFAULT,
@@ -435,10 +444,10 @@ impl DeviceImage {
                 },
             })
         };
-        let desc = Self::resource_desc(desc, graph);
+        let desc = Self::resource_desc(desc, graph, sample_count);
         let mut raw = None;
         // SAFETY: The managed creation boundary establishes the sampled mip-chain
-        // single-layer/sample description and format support. COMMON has no valid
+        // single-layer description, sample count and format support. COMMON has no valid
         // contents yet. The owned COM output is released on every failure path.
         unsafe {
             #[cfg(feature = "memory-profiling")]

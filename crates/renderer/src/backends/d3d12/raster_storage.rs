@@ -2,7 +2,7 @@
 
 use crate::ImageFormat;
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
-use crate::graph::ImageDesc;
+use crate::graph::{ImageDesc, SampleCount};
 use windows_core::Interface;
 
 use super::{
@@ -129,7 +129,7 @@ pub(super) struct RasterStorage {
     pub(super) target_view_creations: [usize; 2],
 }
 
-type ImageClassKey = (u32, u32, u32, u32, u32);
+type ImageClassKey = (u32, u32, u32, u32, u32, u32);
 
 fn image_class_key(desc: ImageDesc) -> ImageClassKey {
     (
@@ -138,6 +138,7 @@ fn image_class_key(desc: ImageDesc) -> ImageClassKey {
         desc.format as u32,
         desc.mip_levels,
         desc.array_layers,
+        desc.sample_count.as_u32(),
     )
 }
 
@@ -477,8 +478,72 @@ pub(super) fn require_format(
     Ok(())
 }
 
-fn require_image_format(owner: &DeviceOwner, format: ImageFormat) -> Result<(), D3D12RuntimeError> {
-    match format {
+pub(super) fn require_multisample(
+    owner: &DeviceOwner,
+    format: DXGI_FORMAT,
+    sample_count: SampleCount,
+) -> Result<(), D3D12RuntimeError> {
+    if sample_count == SampleCount::X1 {
+        return Ok(());
+    }
+    let mut levels = D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS {
+        Format: format,
+        SampleCount: sample_count.as_u32(),
+        Flags: D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE,
+        NumQualityLevels: 0,
+    };
+    // SAFETY: The feature, initialized output structure and its byte count match.
+    unsafe {
+        owner.raw.CheckFeatureSupport(
+            D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+            std::ptr::from_mut(&mut levels).cast(),
+            size_of_val(&levels) as u32,
+        )
+    }
+    .ok()
+    .map_err(|error| owner.native("CheckFeatureSupport(multisampled Graph image)", error))?;
+    if levels.NumQualityLevels == 0 {
+        return Err(D3D12RuntimeError::unsupported(
+            "Graph image format does not support the requested sample count",
+        ));
+    }
+    Ok(())
+}
+
+fn require_image_format(owner: &DeviceOwner, desc: ImageDesc) -> Result<(), D3D12RuntimeError> {
+    if desc.sample_count != SampleCount::X1 {
+        if !desc.is_single_subresource() || desc.format == ImageFormat::Rgba8Srgb {
+            return Err(D3D12RuntimeError::unsupported(
+                "multisampled Graph images require a single linear-color or depth attachment",
+            ));
+        }
+        let format = if desc.format == ImageFormat::Depth32Float {
+            require_format(
+                owner,
+                DXGI_FORMAT_R32_TYPELESS,
+                D3D12_FORMAT_SUPPORT1_TEXTURE2D,
+            )?;
+            require_format(
+                owner,
+                DXGI_FORMAT_D32_FLOAT,
+                D3D12_FORMAT_SUPPORT1_TEXTURE2D | D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL,
+            )?;
+            DXGI_FORMAT_D32_FLOAT
+        } else {
+            let format = super::resources::image_format(desc.format);
+            require_format(
+                owner,
+                format,
+                D3D12_FORMAT_SUPPORT1_TEXTURE2D
+                    | D3D12_FORMAT_SUPPORT1_RENDER_TARGET
+                    | D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RENDERTARGET
+                    | D3D12_FORMAT_SUPPORT1_MULTISAMPLE_RESOLVE,
+            )?;
+            format
+        };
+        return require_multisample(owner, format, desc.sample_count);
+    }
+    match desc.format {
         ImageFormat::Rgba8Srgb => require_format(
             owner,
             DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
@@ -505,11 +570,7 @@ fn require_image_format(owner: &DeviceOwner, format: ImageFormat) -> Result<(), 
         }
         ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float => require_format(
             owner,
-            match format {
-                ImageFormat::Rgba8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
-                ImageFormat::Rgba16Float => DXGI_FORMAT_R16G16B16A16_FLOAT,
-                ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb => unreachable!(),
-            },
+            super::resources::image_format(desc.format),
             D3D12_FORMAT_SUPPORT1_TEXTURE2D
                 | D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE
                 | D3D12_FORMAT_SUPPORT1_RENDER_TARGET
@@ -612,6 +673,30 @@ fn copy_layout(
     Ok((layouts, total_bytes))
 }
 
+fn depth_view(desc: ImageDesc) -> D3D12_DEPTH_STENCIL_VIEW_DESC {
+    let (dimension, operand) = if desc.sample_count == SampleCount::X1 {
+        (
+            D3D12_DSV_DIMENSION_TEXTURE2D,
+            D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+                Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
+            },
+        )
+    } else {
+        (
+            D3D12_DSV_DIMENSION_TEXTURE2DMS,
+            D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
+                Texture2DMS: D3D12_TEX2DMS_DSV::default(),
+            },
+        )
+    };
+    D3D12_DEPTH_STENCIL_VIEW_DESC {
+        Format: DXGI_FORMAT_D32_FLOAT,
+        ViewDimension: dimension,
+        Flags: D3D12_DSV_FLAG_NONE,
+        Anonymous: operand,
+    }
+}
+
 impl RasterStorage {
     pub(super) fn raster_srv(
         &mut self,
@@ -699,14 +784,7 @@ impl RasterStorage {
                 }
             }
             if let Some(handle) = image.dsv {
-                let view = D3D12_DEPTH_STENCIL_VIEW_DESC {
-                    Format: DXGI_FORMAT_D32_FLOAT,
-                    ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
-                    Flags: D3D12_DSV_FLAG_NONE,
-                    Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
-                        Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
-                    },
-                };
+                let view = depth_view(image.desc);
                 // SAFETY: The exclusive descriptor and retained single-mip/layer
                 // typeless depth resource match the concrete D32 view.
                 unsafe {
@@ -762,7 +840,7 @@ impl RasterStorage {
         let mut depth_count = 0usize;
         for (class, _) in classes.clone() {
             validate_class(class)?;
-            require_image_format(owner, class.desc.format)?;
+            require_image_format(owner, class.desc)?;
             if class.desc.mip_levels > 1 {
                 require_format(
                     owner,
@@ -862,22 +940,21 @@ impl RasterStorage {
                 } else {
                     super::registry::PhysicalRef::default()
                 };
-                let (mips, total_bytes) = copy_layout(owner, class.desc)?;
-                let footprint = mips[0].footprint;
-                let row_bytes = mips[0].row_bytes;
-                let rows = mips[0].rows;
+                let (mips, total_bytes) = if class.desc.sample_count == SampleCount::X1 {
+                    copy_layout(owner, class.desc)?
+                } else {
+                    // Graph restricts multisampled images to attachment use.
+                    (Vec::new(), 0)
+                };
+                let (footprint, row_bytes, rows) = mips
+                    .first()
+                    .map(|mip| (mip.footprint, mip.row_bytes, mip.rows))
+                    .unwrap_or_default();
                 let (rtv, dsv) = if class.desc.format == ImageFormat::Depth32Float {
                     let handle = D3D12_CPU_DESCRIPTOR_HANDLE {
                         ptr: dsv_start.unwrap().ptr + depth_index * dsv_step as usize,
                     };
-                    let view = D3D12_DEPTH_STENCIL_VIEW_DESC {
-                        Format: DXGI_FORMAT_D32_FLOAT,
-                        ViewDimension: D3D12_DSV_DIMENSION_TEXTURE2D,
-                        Flags: D3D12_DSV_FLAG_NONE,
-                        Anonymous: D3D12_DEPTH_STENCIL_VIEW_DESC_0 {
-                            Texture2D: D3D12_TEX2D_DSV { MipSlice: 0 },
-                        },
-                    };
+                    let view = depth_view(class.desc);
                     if allocate && allocate_images {
                         // SAFETY: The checked single-subresource typeless image
                         // is depth-capable. Its concrete D32 view occupies this
@@ -1051,14 +1128,26 @@ mod tests {
         let small = ImageDesc::rgba8(1, 1);
         let large = ImageDesc::rgba8(128, 64);
         let depth = ImageDesc::depth32(1, 1);
+        let multisampled = small.with_sample_count(SampleCount::X4);
         let mut mipped = small;
         mipped.mip_levels = 2;
         // Registered images may repeat any earlier working-set class, and the
         // caller's preparation order need not be sorted by description.
-        let descriptions = [large, small, depth, small, mipped, large, small];
+        let descriptions = [
+            large,
+            small,
+            depth,
+            small,
+            mipped,
+            large,
+            small,
+            multisampled,
+        ];
         let mut slots = ImageSlots::new(descriptions.into_iter()).unwrap();
         let capacity = (slots.classes.capacity(), slots.candidates.capacity());
         for _ in 0..3 {
+            assert_eq!(slots.take(multisampled).unwrap(), 7);
+            assert!(slots.take(multisampled).is_err());
             assert_eq!(slots.take(small).unwrap(), 1);
             assert_eq!(slots.take(large).unwrap(), 0);
             assert_eq!(slots.take(small).unwrap(), 3);

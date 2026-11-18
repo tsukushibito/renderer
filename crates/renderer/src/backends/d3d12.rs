@@ -209,7 +209,7 @@ impl D3D12Runtime {
         config: D3D12RuntimeConfig,
         buffers: &[D3D12BufferClass],
         images: &[D3D12ImageClass],
-        programs: &[crate::program::ManagedRasterProgram],
+        programs: &[crate::program::RasterPipelineRequest],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Self, D3D12RuntimeError> {
         let device = DeviceOwner::new(config.validation)?;
@@ -235,6 +235,7 @@ impl D3D12Runtime {
     /// `Some(classes)` replaces it, including `Some(&[])` for no free buffers.
     /// Registered resources remain in addition to this free working set.
     /// Physical class counts are global, independent of execution-slot count.
+    /// Raster requests select the exact Program and attachment sample count.
     /// Empty image and Program lists are allowed. Image descriptors reserve
     /// `operations` Raster slots plus `operations * max_compute_image_bindings`
     /// Compute slots; the entire shader-visible heap must fit its native limit.
@@ -242,7 +243,7 @@ impl D3D12Runtime {
         &mut self,
         buffers: Option<&[D3D12BufferClass]>,
         images: &[D3D12ImageClass],
-        programs: &[crate::program::ManagedRasterProgram],
+        programs: &[crate::program::RasterPipelineRequest],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<(), D3D12RuntimeError> {
         self.device.ensure_active()?;

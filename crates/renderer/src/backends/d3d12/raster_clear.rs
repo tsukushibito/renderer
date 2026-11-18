@@ -13,11 +13,11 @@ use super::{
     raster_storage::{D3D12ImageClass, GraphImage},
     resources::DeviceBuffer,
 };
-use crate::ImageFormat;
 use crate::program::ManagedRasterProgram;
+use crate::{ImageFormat, graph::SampleCount};
 
 pub(super) struct ClearPrograms {
-    pipelines: [Option<RasterPipeline>; 3],
+    pipelines: [Option<RasterPipeline>; 6],
     vertices: DeviceBuffer,
     indices: DeviceBuffer,
 }
@@ -28,13 +28,14 @@ unsafe impl Send for ClearPrograms {}
 // SAFETY: Concurrent readers only bind immutable geometry and native PSOs.
 unsafe impl Sync for ClearPrograms {}
 
-fn format_index(format: ImageFormat) -> usize {
-    match format {
+fn pipeline_index(format: ImageFormat, samples: SampleCount) -> usize {
+    let format = match format {
         ImageFormat::Rgba8Unorm => 0,
         ImageFormat::Rgba16Float => 1,
         ImageFormat::Depth32Float => 2,
         ImageFormat::Rgba8Srgb => unreachable!("sRGB is sampled-only"),
-    }
+    };
+    format * 2 + usize::from(samples != SampleCount::X1)
 }
 
 impl ClearPrograms {
@@ -47,7 +48,7 @@ impl ClearPrograms {
             if class.desc.format == ImageFormat::Rgba8Srgb {
                 continue;
             }
-            let index = format_index(class.desc.format);
+            let index = pipeline_index(class.desc.format, class.desc.sample_count);
             if pipelines[index].is_none() {
                 let (program, depth) = match class.desc.format {
                     ImageFormat::Rgba8Unorm => (ManagedRasterProgram::mesh(), false),
@@ -55,10 +56,15 @@ impl ClearPrograms {
                     ImageFormat::Depth32Float => (ManagedRasterProgram::depth_only(), true),
                     ImageFormat::Rgba8Srgb => unreachable!("sRGB is sampled-only"),
                 };
-                pipelines[index] = Some(RasterPipeline::clear(owner, &program, depth)?);
+                pipelines[index] = Some(RasterPipeline::clear(
+                    owner,
+                    &program,
+                    depth,
+                    class.desc.sample_count,
+                )?);
             }
         }
-        // One oversized triangle covers the viewport with one sample and no
+        // One oversized triangle covers every viewport sample without a
         // diagonal seam. All vertices have the same color, w=1 and depth=0;
         // the inline matrix selects the exact requested normal/zero depth.
         let floats: [f32; 21] = [
@@ -100,7 +106,7 @@ impl ClearPrograms {
         color: [f32; 4],
         depth: Option<f32>,
     ) {
-        let pipeline = self.pipelines[format_index(image.desc.format)]
+        let pipeline = self.pipelines[pipeline_index(image.desc.format, image.desc.sample_count)]
             .as_ref()
             .unwrap();
         let mut words = [0u32; 20];
