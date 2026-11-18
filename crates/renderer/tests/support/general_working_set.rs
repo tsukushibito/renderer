@@ -1,6 +1,6 @@
 //! Explicit working-set boundary regressions; normal token return is measured separately.
 
-use super::{Backend, fixture, raster_imports};
+use super::{Backend, fixture, raster_capacity, raster_imports};
 use renderer::{
     D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
     FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime,
@@ -323,11 +323,7 @@ pub(super) fn reconfiguration(strict: bool) {
     let dm = dx.validation_monitor();
     vk.prepare_working_set(
         FrameCapacity {
-            graph: renderer::graph::GraphCapacity {
-                draws: 1,
-                attachments: 1,
-                ..fixture::capacity()
-            },
+            graph: raster_capacity(),
             ..Default::default()
         },
         &[

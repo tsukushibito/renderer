@@ -12,8 +12,8 @@ use renderer::{
     D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode,
     FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode, VulkanRuntime,
     graph::{
-        Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph, GraphPool, ImageDesc,
-        ImageHandle, ImportBuffer, ImportImage, PassHandle, ResourceKey,
+        Binding, BindingResource, BufferDesc, BufferHandle, CompiledGraph, GraphCapacity,
+        GraphPool, ImageDesc, ImageHandle, ImportBuffer, ImportImage, PassHandle, ResourceKey,
     },
 };
 use std::time::Duration;
@@ -22,6 +22,15 @@ use std::time::Duration;
 #[global_allocator]
 static ALLOCATOR: renderer::measurement::CountingAllocator<std::alloc::System> =
     renderer::measurement::CountingAllocator::new(std::alloc::System);
+
+fn raster_capacity() -> GraphCapacity {
+    GraphCapacity {
+        draws: 1,
+        raster_constant_words: None,
+        attachments: 1,
+        ..fixture::capacity()
+    }
+}
 
 trait Backend {
     type Pending;
@@ -78,11 +87,7 @@ impl Backend for VulkanRuntime {
     fn reconfigure(&mut self, classes: &[ResourceClass]) -> Result<(), String> {
         self.prepare_working_set(
             FrameCapacity {
-                graph: renderer::graph::GraphCapacity {
-                    draws: 1,
-                    attachments: 1,
-                    ..fixture::capacity()
-                },
+                graph: raster_capacity(),
                 ..Default::default()
             },
             classes,
@@ -418,18 +423,8 @@ fn recording_transactions(dx: &mut D3D12Runtime) {
 }
 
 fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
-    use renderer::graph::{
-        Attachment, GraphCapacity, LoadOp, RasterDraw, RasterParameters, StoreOp,
-    };
-    let mut pool = GraphPool::new(
-        GraphCapacity {
-            draws: 1,
-            attachments: 1,
-            ..fixture::capacity()
-        },
-        3,
-    )
-    .unwrap();
+    use renderer::graph::{Attachment, LoadOp, RasterDraw, RasterParameters, StoreOp};
+    let mut pool = GraphPool::new(raster_capacity(), 3).unwrap();
     let mut seed = pool.begin().unwrap();
     let vertices = seed
         .buffer("persistent vertices", BufferDesc { size: 84 })
@@ -646,11 +641,7 @@ fn run(strict: bool) {
     let dm = dx.validation_monitor();
     vk.prepare_working_set(
         FrameCapacity {
-            graph: renderer::graph::GraphCapacity {
-                draws: 1,
-                attachments: 1,
-                ..fixture::capacity()
-            },
+            graph: raster_capacity(),
             work_slots: 4,
             ..Default::default()
         },
