@@ -152,6 +152,14 @@ pub struct D3D12Submission {
     submission: FrameSubmission,
 }
 impl D3D12Submission {
+    pub(super) fn take_exports(&mut self) -> Option<super::registry::ExportLease> {
+        self.submission.exports.take()
+    }
+
+    pub(super) fn is_pending(&self) -> bool {
+        self.submission.is_pending()
+    }
+
     /// Snapshot of accepted scheduled contents; completion is observed separately.
     /// Dropping it does not unregister the resource; use [`D3D12Runtime::delete`].
     /// Return this snapshot and all clones before changing the working set, then

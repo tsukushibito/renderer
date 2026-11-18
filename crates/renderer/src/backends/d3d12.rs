@@ -8,6 +8,7 @@ mod compute;
 mod device;
 mod diagnostics;
 mod frame;
+mod frames;
 mod graph;
 mod memory;
 mod metrics;
@@ -24,6 +25,7 @@ pub use device::D3D12DeviceInfo;
 use device::DeviceOwner;
 pub use diagnostics::{D3D12ValidationMessage, D3D12ValidationMonitor, D3D12ValidationReport};
 pub use frame::{D3D12BufferClass, D3D12FrameCapacity};
+pub(crate) use frames::{QueuedFrameCompletion, QueuedFrameSubmission};
 pub use graph::{D3D12PreparedGraph, D3D12Submission, D3D12SubmissionResult};
 pub use memory::{
     D3D12CommittedHeapStats, D3D12CommittedMemoryStats, D3D12MemoryStats, D3D12StagingMemoryStats,
@@ -190,6 +192,9 @@ impl std::error::Error for NativeCause {
 /// validation, create this runtime before creating D3D12 devices through other
 /// libraries: enabling native debug controls after any Device exists removes it.
 pub struct D3D12Runtime {
+    // Drop pending frames before the last runtime pool owner. Their existing
+    // Drop path detaches any unresolved work for conservative pool teardown.
+    frames: frames::QueuedFrames,
     device: Arc<DeviceOwner>,
     pool: Arc<frame::FramePool>,
 }
@@ -197,7 +202,7 @@ impl D3D12Runtime {
     pub fn new(config: D3D12RuntimeConfig) -> Result<Self, D3D12RuntimeError> {
         let device = DeviceOwner::new(config.validation)?;
         let pool = frame::FramePool::new(Arc::clone(&device), config.capacity)?;
-        Ok(Self { device, pool })
+        Self::from_pool(device, pool)
     }
     /// Creates a runtime with exact global physical buffer/image classes and
     /// prepared pipelines, without first allocating a uniform buffer pool.
@@ -220,7 +225,18 @@ impl D3D12Runtime {
             programs,
             compute_programs,
         )?;
-        Ok(Self { device, pool })
+        Self::from_pool(device, pool)
+    }
+    fn from_pool(
+        device: Arc<DeviceOwner>,
+        pool: Arc<frame::FramePool>,
+    ) -> Result<Self, D3D12RuntimeError> {
+        let frames = frames::QueuedFrames::new(pool.capacity().executions)?;
+        Ok(Self {
+            frames,
+            device,
+            pool,
+        })
     }
     /// Reserves exact image classes, descriptor arenas and immutable Raster and
     /// Compute pipelines at an explicit change boundary. All execution and result
