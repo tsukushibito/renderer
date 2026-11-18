@@ -7,22 +7,12 @@ use std::time::Instant;
 use super::exports::ExportLease;
 use super::{
     BufferHandle, CompiledGraph, Duration, Export, GraphWork, ImageHandle, ImportBuffer,
-    ImportImage, PendingTransfer, RuntimeError, RuntimeErrorKind, Submission, SubmissionResult,
-    VulkanRuntime,
+    ImportImage, PendingTransfer, RuntimeError, Submission, SubmissionResult, VulkanRuntime,
 };
 
-/// Identity of one accepted submission, scoped to its originating runtime.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct FrameId {
-    owner: u64,
-    serial: u64,
-}
-
-impl FrameId {
-    pub(super) fn new(owner: u64, serial: u64) -> Self {
-        Self { owner, serial }
-    }
-}
+pub use crate::runtime::FrameId;
+pub(super) use crate::runtime::FrameQueue;
+use crate::runtime::Observation;
 
 /// Accepted frame metadata. Dropping this value does not wait or cancel work:
 /// the runtime owns that work until explicit completion observation or shutdown.
@@ -112,100 +102,6 @@ impl PendingFrame {
     }
 }
 
-enum Observation<R, E> {
-    Pending,
-    Complete(R),
-    Failed { error: E, retired: bool },
-}
-
-/// The probe is the only external completion boundary. Keeping this collection
-/// independent of a driver lets ownership/error transitions be tested on CPU.
-pub(super) struct FrameQueue<T> {
-    entries: Vec<T>,
-    limit: usize,
-}
-
-impl<T> FrameQueue<T> {
-    pub(super) fn new(limit: usize) -> Result<Self, RuntimeError> {
-        let mut entries = Vec::new();
-        entries.try_reserve_exact(limit).map_err(|error| {
-            RuntimeError::with_source(RuntimeErrorKind::Native, error)
-                .context("reserving bounded frame bookkeeping")
-        })?;
-        Ok(Self { entries, limit })
-    }
-
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    fn is_full(&self) -> bool {
-        self.len() == self.limit
-    }
-
-    fn push(&mut self, value: T) {
-        // Capacity is checked before accepting GPU work, and the pre-reserved
-        // collection is uniquely borrowed for the whole submit transaction.
-        assert!(!self.is_full(), "frame capacity reserved before submit");
-        self.entries.push(value);
-    }
-
-    fn observe<R, E>(
-        &mut self,
-        mut probe: impl FnMut(&mut T) -> Observation<R, E>,
-    ) -> Result<Option<R>, E> {
-        for index in 0..self.entries.len() {
-            match probe(&mut self.entries[index]) {
-                Observation::Pending => {}
-                Observation::Complete(result) => {
-                    self.entries.remove(index);
-                    return Ok(Some(result));
-                }
-                Observation::Failed { error, retired } => {
-                    if retired {
-                        self.entries.remove(index);
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        Ok(None)
-    }
-
-    fn wait_one<R, E>(
-        &mut self,
-        timeout: Duration,
-        mut probe: impl FnMut(&mut T, Duration) -> Observation<R, E>,
-    ) -> Result<Option<R>, E> {
-        let start = Instant::now();
-        // Prefer any result already available, including a later frame, before
-        // blocking on the oldest pending submission from this single queue.
-        let completed = self.observe(|frame| probe(frame, Duration::ZERO))?;
-        if completed.is_some() || self.entries.is_empty() {
-            return Ok(completed);
-        }
-        let remaining = timeout.saturating_sub(start.elapsed());
-        if remaining.is_zero() {
-            return Ok(None);
-        }
-        // Only one native wait receives the remaining budget. Waiting on every
-        // pending frame with the original timeout would multiply the API wait.
-        match probe(&mut self.entries[0], remaining) {
-            Observation::Pending => Ok(None),
-            Observation::Complete(result) => {
-                self.entries.remove(0);
-                Ok(Some(result))
-            }
-            Observation::Failed { error, retired } => {
-                if retired {
-                    self.entries.remove(0);
-                }
-                Err(error)
-            }
-        }
-    }
-}
-
 impl VulkanRuntime {
     /// Submit a frame without transferring pending GPU ownership to the caller.
     /// Exhaustion is reported before submission; completed work is reclaimed by
@@ -216,6 +112,15 @@ impl VulkanRuntime {
         Ok(self.enqueue_frame(submission))
     }
 
+    pub(crate) fn set_frame_limit(&mut self, limit: usize) -> Result<(), RuntimeError> {
+        if limit > self.config.execution_slots || !self.frames.set_limit(limit) {
+            return Err(RuntimeError::invalid(
+                "invalid or busy Graph frame queue limit",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn ensure_frame_capacity(&self) -> Result<(), RuntimeError> {
         if self.frames.is_full() {
             Err(RuntimeError::capacity_with(
@@ -223,7 +128,7 @@ impl VulkanRuntime {
                 RuntimeCapacityError::new(
                     RuntimeCapacityKind::ExecutionSlots,
                     CapacityRecovery::Poll,
-                    Some(self.config.execution_slots as u64),
+                    Some(self.frames.limit() as u64),
                     None,
                 ),
             ))
@@ -280,6 +185,25 @@ impl VulkanRuntime {
         result
     }
 
+    pub(crate) fn wait_for_frame(
+        &mut self,
+        id: FrameId,
+        timeout: Duration,
+    ) -> Result<Option<FrameCompletion>, RuntimeError> {
+        if id.owner != self.id {
+            return Err(RuntimeError::wrong_owner(
+                "frame belongs to another runtime",
+            ));
+        }
+        let result = self.frames.wait_for(
+            |frame| frame.id == id,
+            |frame| frame.observe(timeout),
+            || RuntimeError::invalid("frame is no longer pending"),
+        );
+        self.collect_recycled();
+        result
+    }
+
     /// Explicit shutdown/backpressure wait, discarding completed frame results.
     /// Returns false on budget expiry and preserves all unproven pending work.
     /// The budget is shared across frames, subject to Vulkan timeout precision;
@@ -300,6 +224,7 @@ impl VulkanRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RuntimeErrorKind;
 
     #[test]
     fn exported_snapshots_are_indexed_and_still_check_graph_and_resource_kind() {
@@ -374,160 +299,6 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             RuntimeErrorKind::InvalidInput
-        );
-    }
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    struct Work(Rc<Cell<usize>>);
-
-    impl Drop for Work {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
-    }
-
-    #[test]
-    fn bounded_queue_retains_unresolved_work_and_releases_only_retired_entries() {
-        let drops = Rc::new(Cell::new(0));
-        let mut frames = FrameQueue::new(2).unwrap();
-        frames.push(Work(Rc::clone(&drops)));
-        frames.push(Work(Rc::clone(&drops)));
-        assert!(frames.is_full());
-        assert_eq!(
-            frames.observe::<(), &str>(|_| Observation::Pending),
-            Ok(None)
-        );
-        assert_eq!(drops.get(), 0);
-        assert_eq!(
-            frames.observe::<(), _>(|_| Observation::Failed {
-                error: "completion unproven",
-                retired: false,
-            }),
-            Err("completion unproven")
-        );
-        assert_eq!(frames.len(), 2);
-        assert_eq!(drops.get(), 0);
-        assert_eq!(
-            frames.observe::<_, &str>(|_| Observation::Complete(17)),
-            Ok(Some(17))
-        );
-        assert_eq!(frames.len(), 1);
-        assert_eq!(drops.get(), 1);
-        frames.push(Work(Rc::clone(&drops)));
-        assert_eq!(
-            frames.observe::<(), _>(|_| Observation::Failed {
-                error: "device lost; no valid output",
-                retired: true,
-            }),
-            Err("device lost; no valid output")
-        );
-        assert_eq!(frames.len(), 1);
-        assert_eq!(drops.get(), 2);
-        drop(frames);
-        assert_eq!(drops.get(), 3);
-    }
-
-    #[test]
-    fn pending_front_does_not_hide_an_independently_observed_completion() {
-        let mut frames = FrameQueue::new(2).unwrap();
-        frames.push(false);
-        frames.push(true);
-        assert_eq!(
-            frames.wait_one::<_, ()>(Duration::from_secs(1), |ready, budget| {
-                assert!(budget.is_zero(), "ready results must avoid blocking");
-                if *ready {
-                    Observation::Complete(23)
-                } else {
-                    Observation::Pending
-                }
-            }),
-            Ok(Some(23))
-        );
-        assert_eq!(frames.entries, [false]);
-    }
-
-    #[test]
-    fn zero_timeout_polls_all_frames_and_timeout_waits_only_the_oldest() {
-        let mut frames = FrameQueue::new(2).unwrap();
-        frames.push(10);
-        frames.push(20);
-        let mut probes = Vec::new();
-        assert_eq!(
-            frames.wait_one::<(), ()>(Duration::ZERO, |frame, budget| {
-                probes.push((*frame, budget));
-                Observation::Pending
-            }),
-            Ok(None)
-        );
-        assert_eq!(probes, [(10, Duration::ZERO), (20, Duration::ZERO)]);
-        assert!(frames.is_full());
-
-        probes.clear();
-        let timeout = Duration::from_secs(1);
-        assert_eq!(
-            frames.wait_one::<(), ()>(timeout, |frame, budget| {
-                probes.push((*frame, budget));
-                Observation::Pending
-            }),
-            Ok(None)
-        );
-        assert_eq!(probes.len(), 3);
-        assert_eq!(probes[..2], [(10, Duration::ZERO), (20, Duration::ZERO)]);
-        assert_eq!(probes[2].0, 10);
-        assert!(!probes[2].1.is_zero());
-        assert!(probes[2].1 <= timeout);
-        assert_eq!(frames.entries, [10, 20], "timeout retains all ownership");
-    }
-
-    #[test]
-    fn blocking_wait_returns_one_result_and_preserves_unproven_errors() {
-        let mut frames = FrameQueue::new(2).unwrap();
-        frames.push(10);
-        frames.push(20);
-        let timeout = Duration::from_secs(1);
-        assert_eq!(
-            frames.wait_one::<(), _>(timeout, |_, budget| {
-                if budget.is_zero() {
-                    Observation::Pending
-                } else {
-                    Observation::Failed {
-                        error: "completion unproven",
-                        retired: false,
-                    }
-                }
-            }),
-            Err("completion unproven")
-        );
-        assert_eq!(frames.entries, [10, 20]);
-        assert_eq!(
-            frames.wait_one::<_, ()>(timeout, |frame, budget| {
-                if budget.is_zero() {
-                    Observation::Pending
-                } else {
-                    Observation::Complete(*frame + 1)
-                }
-            }),
-            Ok(Some(11))
-        );
-        assert_eq!(frames.entries, [20]);
-        assert_eq!(
-            frames.wait_one::<(), _>(timeout, |_, budget| {
-                if budget.is_zero() {
-                    Observation::Pending
-                } else {
-                    Observation::Failed {
-                        error: "retired without valid output",
-                        retired: true,
-                    }
-                }
-            }),
-            Err("retired without valid output")
-        );
-        assert!(frames.entries.is_empty());
-        assert_eq!(
-            frames.wait_one::<(), ()>(timeout, |_, _| panic!("empty queue must not wait")),
-            Ok(None)
         );
     }
 }

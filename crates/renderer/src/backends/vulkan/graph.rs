@@ -787,7 +787,10 @@ impl VulkanRuntime {
             available,
             recycle,
             recycle_pending,
-            frames: frames::FrameQueue::new(config.execution_slots)?,
+            frames: frames::FrameQueue::new(config.execution_slots).map_err(|error| {
+                RuntimeError::with_source(RuntimeErrorKind::Native, error)
+                    .context("reserving bounded frame bookkeeping")
+            })?,
             timestamp_pool: None,
             profiling_enabled: false,
             id,

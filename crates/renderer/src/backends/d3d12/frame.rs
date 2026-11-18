@@ -1234,6 +1234,12 @@ pub(super) struct FrameSubmission {
     work: Option<FrameWork>,
 }
 impl FrameSubmission {
+    pub(super) fn is_pending(&self) -> bool {
+        self.work
+            .as_ref()
+            .is_some_and(|work| work.phase == Phase::Pending)
+    }
+
     pub(super) fn poll(&mut self) -> Result<Option<FrameResult>, D3D12RuntimeError> {
         self.wait(Duration::ZERO)
     }
