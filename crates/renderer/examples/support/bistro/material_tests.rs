@@ -615,7 +615,7 @@ fn capture_lighting<B: Backend>(
         true,
     )
     .unwrap();
-    assert_eq!(built.draws, scene.primitives.len());
+    assert_eq!(built.draws, Some(scene.primitives.len()));
     let plan = built.graph.compile().unwrap();
     let mut pending = backend.submit(&plan).unwrap();
     let mut completed = B::wait(&mut pending, crate::bistro::WAIT).unwrap();

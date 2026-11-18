@@ -459,6 +459,12 @@ Load/Storeとresolveは区間全体に適用する。Programを切り替えて�
 `first_index` と正の `instance_count` を指定でき、base vertexと開始instanceは0とする。
 Graphは使うインデックス範囲だけに依存を張る。nativeでは現行内容の範囲保証とDevice上限を確認し、
 不変な共有ストリームの全体上限で安全に証明できる場合は毎回の走査を省く。
+
+`IndexedIndirectTable` はインデックス範囲を準備時に確認し、不変のテンプレートとして保持する。
+`Graph::encode_indexed_indirect` はテンプレートとGPUの可視性maskを使い、Graph内に20 byteのIndexed Indirect引数を生成する。
+maskは各描画のインスタンス数を0または1に決める。公開APIは引数bufferを直接公開せず、
+`RasterPass::draw_indirect` がGraph内の型付き引数を受け取る。範囲保証にはインデックスの実内容とDevice上限を用い、
+Compute書き込みから間接引数の読み取りまでの同期と資源の寿命をGraphが管理する。
 集約用range表に加え、各slotでresource上限分の使用index列を準備する。同じbufferは一度だけ列へ登録し、
 前回触れたrangeだけを消す。今回の使用indexだけをsortして従来のresource昇順でaccessを追加するため、
 非空Rasterごとの全resourceクリア・走査は行わない。draw数D・使用resource数Uに対して

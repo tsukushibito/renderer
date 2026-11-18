@@ -31,6 +31,18 @@ struct Group {
     mask_offset: u32,
 }
 
+impl Group {
+    fn visible_draws<'a>(
+        &'a self,
+        frustum: &'a Frustum,
+        bounds: &'a [Bounds],
+    ) -> impl Iterator<Item = &'a Draw> {
+        self.draws
+            .iter()
+            .filter(|draw| frustum.overlaps(bounds[draw.primitive]))
+    }
+}
+
 pub(super) struct Layout {
     groups: Vec<Group>,
     pub vertex_bytes: usize,
@@ -322,6 +334,22 @@ pub(super) struct Frame<'a> {
 }
 
 impl Frame<'_> {
+    pub fn visible_direct_draws(
+        &self,
+        frustum: &Frustum,
+        bounds: &[Bounds],
+        filter: impl Fn(usize) -> bool,
+    ) -> Option<usize> {
+        self.commands.is_empty().then(|| {
+            self.layout
+                .groups
+                .iter()
+                .filter(|group| filter(group.material))
+                .map(|group| group.visible_draws(frustum, bounds).count())
+                .sum()
+        })
+    }
+
     pub fn draw(
         &self,
         raster: &mut RasterPass<'_, '_>,
@@ -341,18 +369,14 @@ impl Frame<'_> {
             } else {
                 raster.draw(
                     program,
-                    group.draws.iter().filter_map(|draw| {
-                        frustum
-                            .overlaps(bounds[draw.primitive])
-                            .then_some(RasterDraw {
-                                bindings,
-                                vertices: self.vertices,
-                                indices: self.indices,
-                                first_index: draw.range.first_index,
-                                index_count: draw.range.index_count,
-                                instance_count: 1,
-                                parameters: RasterConstants::default(),
-                            })
+                    group.visible_draws(frustum, bounds).map(|draw| RasterDraw {
+                        bindings,
+                        vertices: self.vertices,
+                        indices: self.indices,
+                        first_index: draw.range.first_index,
+                        index_count: draw.range.index_count,
+                        instance_count: 1,
+                        parameters: RasterConstants::default(),
                     }),
                 )?;
             }

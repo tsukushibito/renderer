@@ -121,8 +121,8 @@ impl Vulkan {
         renderer::RuntimeConfig {
             execution_slots: options.inflight * if options.windowed { 2 } else { 1 },
             resource_capacity: budget.physical_resources,
-            staging_bytes: (budget.upload_bytes as u64).max(budget.readback_bytes) + 8192,
-            staging_ranges: 64 + options.inflight * 4,
+            staging_bytes: budget.vulkan_staging_bytes(options.inflight),
+            staging_ranges: budget.vulkan_staging_ranges(options.inflight),
             max_shader_bindings: budget.graph.draws as u32,
         }
     }

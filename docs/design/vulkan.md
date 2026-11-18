@@ -59,7 +59,10 @@ InstanceとVMAが要求するAPIはVulkan 1.3とする。
 
 物理デバイスにはAPI variant 0のVulkan 1.3以上、Graphics＋Compute対応キュー、
 `timelineSemaphore`、`synchronization2`、`dynamicRendering`を要求する。
-対応確認とDevice作成用のfeature構造体を分け、必要な3 featureだけを有効化する。
+対応確認とDevice作成用のfeature構造体を分け、必要な3 featureを有効化する。
+Indexed Indirect Drawでは、照会で対応した場合に `multiDrawIndirect` を追加で有効化する。
+対応時は実Deviceの `maxDrawIndirectCount`、非対応時は1をコマンド数上限とする。
+引数bufferにINDIRECT_BUFFER用途を持たせ、Computeの書き込みからDRAW_INDIRECT／INDIRECT_COMMAND_READへ同期する。
 初期化で取得した不変な`VkPhysicalDeviceLimits`をDevice所有者に保持し、画像/Program作成でも再利用する。
 実際のformat/type/usage/extentの対応確認とnative作成失敗は別に処理する。
 
@@ -648,6 +651,11 @@ reset失敗やDevice停止・lossでは再貸出しない。通常予約で失�
 `TransferPool`はUpload／Readback各1本の固定容量bufferを共有する。
 実buffer/allocationの所有はVMAへ任せ、内部領域は準備済みfree-range配列で配置・分割・結合する。
 `RuntimeConfig::staging_ranges`は同時range lease数の上限（既定256）で、byte容量と独立に不足を返す。
+全Bistroの間接描画では、材質グループごとのテンプレート転送が同時実行フレーム数だけ重なる。
+サンプルは通常の転送枠にその件数を加え、共有byte容量には初期アップロード、
+同時実行フレームの整列済みアップロード、readbackの最大値を使う。
+頂点とインデックスをまとめた初期転送の末尾も、Vulkanの上限である256 byteのcache atomに合わせる。
+[Vulkanの必須上限](https://docs.vulkan.org/refpages/latest/refpages/source/Required_Limits.html)
 N個のlive rangeが作る空隙は最大N+1個であり、返却前に隣接空隙を結合して一時的な配列増設も避ける。
 従来のVMA Virtual allocatorはmetadata nodeの成長を持つため、通常frameのhost確保ゼロ目標に対し、
 準備済み配列で上限を保証できる方式へ変更した。代案はVMA側のhost metadata poolを独立に準備・検証する方式。

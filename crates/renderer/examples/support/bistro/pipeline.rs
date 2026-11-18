@@ -94,6 +94,37 @@ impl Budget {
             .map(|layout| (layout.group_count(), layout.draw_count()))
     }
 
+    #[cfg(feature = "vulkan")]
+    pub fn vulkan_staging_bytes(&self, inflight: usize) -> u64 {
+        // Vulkan's required limit for nonCoherentAtomSize is 256 bytes.
+        const ALIGNMENT: u64 = 256;
+        let templates = self
+            .packed
+            .as_ref()
+            .filter(|_| self.indirect)
+            // Each template upload is already a multiple of one aligned block.
+            .map_or(0, |layout| layout.template_upload_bytes() as u64);
+        // Camera, Deferred reconstruction and local light uploads use at most
+        // three independently aligned reservations in each in-flight Graph.
+        let frame = templates + self.graph.upload_bytes as u64 + 3 * (ALIGNMENT - 1);
+        (self.upload_bytes as u64)
+            .max(frame * inflight as u64)
+            .max(self.readback_bytes)
+            .next_multiple_of(ALIGNMENT)
+            + 8192
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub fn vulkan_staging_ranges(&self, inflight: usize) -> usize {
+        let indirect_groups = self
+            .packed
+            .as_ref()
+            .filter(|_| self.indirect)
+            .map_or(0, |layout| layout.group_count());
+        // Each indirect group contributes one template upload per in-flight Graph.
+        64 + inflight * (4 + indirect_groups)
+    }
+
     pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
         let mut images = Vec::new();
         let mut add = |desc, count| {
@@ -935,7 +966,7 @@ pub(super) struct Built {
     pub present_capture: Option<PassHandle>,
     pub shadow_captures: Option<[PassHandle; 4]>,
     pub shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
-    pub draws: usize,
+    pub draws: Option<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -1710,7 +1741,15 @@ pub(super) fn build(
     } else {
         None
     };
-    let draws = workspace.opaque.len() + workspace.blended.len() + options.instances.draws();
+    let opaque_draws = match (capture, &packed) {
+        (true, Some(packed)) => {
+            packed.visible_direct_draws(&frustum, &resident.primitive_bounds, include_material)
+        }
+        (true, None) => Some(workspace.opaque.len()),
+        (false, _) => None,
+    };
+    let draws =
+        opaque_draws.map(|count| count + workspace.blended.len() + options.instances.draws());
     Ok(Built {
         graph,
         output,

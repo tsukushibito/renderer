@@ -435,6 +435,22 @@ python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile
 実GPU試験は固定の投影でタイルごとの一覧をCPU参照と照合する。製品構成には`development-validation`を外す。
 画像照合で`--forward-plus-reference`を使うと、局所光プロファイル、視点、サンプル数等の一致を要求した上で両描画経路を比較できる。
 
+`--instances individual` と `--instances instanced` は、Forwardの同じBistro小物を24か所に同じ条件で配置して、
+24回の直接描画と1回のインスタンス描画を比較する。既定値は `off` で、比較時も `--msaa 1|4` を使える。
+`--submission packed` と `--submission indirect` は、同じ共有頂点・インデックスと同じ不透明／MASKの材質グループを使う。
+`packed` ではCPU、`indirect` ではGPUが可視性を判定する。間接経路でも半透明はCPUが奥から手前に並べる。
+レポートの `packed_opaque` は準備したグループ数とプリミティブ候補数を示す。
+オフスクリーンの `draw_count` はカメラパスに発行した直接描画数で、GPUで可視数が決まる間接経路では `null` になる。
+インスタンス比較はForwardの `--submission direct` で実行する。
+
+```powershell
+cargo test --locked --release -p renderer --test raster_batches --test indexed_instancing --test indexed_indirect --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture --test-threads=1
+python -B tools/bistro/b5_benchmark.py --scenario window-tearing --binary $ordinaryRelease --manifest $manifest --ibl-manifest $iblManifest --submission indirect --output $performanceDirectory
+```
+
+`--scenario window-tearing` は各APIのVSync off実ウィンドウを3回ずつ計測する。サンプル数、パイプライン、
+描画の方法を変える場合は、出力先を分けて各比較で同じカメラ巡回と画質条件を使う。
+
 ```powershell
 cargo run --locked --release -p renderer --example msaa --no-default-features --features vulkan,d3d12
 cargo test --locked --release -p renderer --test msaa --no-default-features --features vulkan,d3d12,development-validation -- --ignored --nocapture

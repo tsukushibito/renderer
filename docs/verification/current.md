@@ -480,9 +480,34 @@ B5の画像閾値を超えた画素は、各2,073,600画素のうちHDRとBloom 
 実ウィンドウ4実行はresize・最小化・復帰・pending終了に成功し、表示元とoffscreen SDRの比較も量子化許容区間内だった。
 `.tools/pipeline-expansion/msaa/smoke-summary.json` のSHA-256は
 `592b67f38069889a54a6a4ddd60cfeeec8b7709e8bd6e24c5fc9437f4599fbed`。
+別実行で24 warmup後に1,800フレームずつ巡回した。両API・両構成の確保・再確保・解放と
+native資源作成・破棄はゼロだった。巡回要約のSHA-256は `0af0169819ab1b3603984e214e3fc5ba86b33d8e03cfe6c8f38eda3d9f79aaa1`。
 
 MRT専用例は異なる形式の2色出力と深度を検証した。同一パスでinline定数のProgram → uniform bufferのProgram → inline定数のProgramを順に描き、
 ブレンド順と深度の期待画素をVulkan／D3D12の両構成で照合した。
+全BistroのDeferredとForwardの1080p比較では、同一APIのD32がバイト一致した。B5閾値を超えた画素は
+HDRの485画素とSDRのVulkan 1,871画素／D3D12 1,861画素で、各2,073,600画素の許容範囲内だった。
+DeferredのAPI間比較と同一APIの検証あり／製品構成も照合した。実ウィンドウではresize・最小化・復帰・pending終了と
+表示元／offscreen出力の量子化区間を確認した。要約のSHA-256は `d42c59224b84e9fadbe2c110db1a8f5c4981bc1bee2b3d63461bd61695c51f84`。
+
+Forward+のタイル一覧とGPUの視野カリングはCPU参照の境界ケースと照合した。直接インスタンシングは
+先頭以外から描画するインデックス範囲と左右の材質を確認し、間接描画は全可視・全不可視・混在とグループ境界を直接描画と比較した。
+いずれもRTX 3060のVulkan／D3D12で開発検証ありと製品構成の実GPU試験が通過した。
+
+全BistroのForward+と全ライト参照、同じ24配置のインスタンシングと個別描画を、1×／4×の両方で比較した。
+Vulkan／D3D12、開発検証あり／製品構成の各組でHDR、Bloom HDR、SDRと1×のdepthがバイト一致した。
+32回のオフスクリーン実行の通常区間は確保・再確保・解放とnative資源の作成・破棄がゼロだった。
+Forward+とインスタンシングの実ウィンドウ16実行は、リサイズ、最小化、復帰、処理中の終了と
+1080p出力のsRGB許容量内の一致を確認した。全48実行でnative診断はゼロだった。
+`.tools/pipeline-expansion/staged/staged-comparisons.json`のSHA-256は
+`c522cccbfcd76888773796957706bcb45628e36f0877aa7dcf7149389036cb5f`。
+
+全Bistroに用意した127グループ、1,476プリミティブについて、共有ジオメトリの直接描画とGPUカリング後の間接描画を比較した。
+Forward 1×のHDR、Bloom HDR、SDR、深度は、両API・両構成の各組でバイト一致した。
+オフスクリーン8実行の通常区間はRust／nativeの確保・解放ゼロだった。
+間接描画の実ウィンドウ4実行は同じ表示とライフサイクルの条件を満たし、全12実行でnative診断はゼロだった。
+`.tools/pipeline-expansion/combined/combined-comparisons.json`のSHA-256は
+`c901e4374cfa64c48051eb7b259b5627bc9e861b1ef9f333a8fe953b0c968957`。
 
 ## Bistro B3の120 FPS目標と高速化
 
