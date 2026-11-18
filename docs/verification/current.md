@@ -394,6 +394,78 @@ Rust／VMA host／Renderer発行native作成・破棄の観測値はゼロだっ
 コマンド、EXE、各reportと画像は`.tools/b4/`。比較要約のSHA-256は
 `15be0ad2f29e04d5827c61f5c0a43ec8c3a6419ba77310b6f6cc942a48bd6c2b`。
 
+<a id="bistro-b5-acceptance"></a>
+
+## 全Bistroの画像・実ウィンドウ・組込受入（B5）
+
+実装は`6d63696`。Windows／RTX 3060で`full-a3`、`ibl-final`、1080p、外部Bloomのテントを使う。
+画像の予備校正では両APIのstrict各3 processで7固定視点と巡回7点を取得し、9 planeと名前付きROIで照合した。
+予備計測のB3既存許容範囲は正しい二API画像を受理し、路面付近の材質欠落、receiverのnormal offset増加、
+二重sRGB、glass・labelの不透明化を検出した。元のalpha 0によるcolor／depth／shadow被覆はゼロだった。
+正式受入前に設定hashを`630a69ae5cfe9f793f5b22014f70d30090de1d4529bfab97522cedd06baceda7`へ固定した。
+同じEXE・入力で両API×strict／shipping×独立3 processの正式受入に進み、9 plane×14サンプルと
+15 ROIのAPI間比較、計141件がすべて通過した。同APIの反復およびstrict／shippingはbyte一致した。
+14点のSDR差分画像を保存した。校正結果のSHA-256は
+`b9e128401cade2ae7b5eae5fb43bf9a04d99fc8ba2d02e6903a6498e2d8532a0`、
+正式受入要約のSHA-256は`05dbef12614f1f9fd4e9111b7891a472689ebcd972f589635d0f99e078db4bd8`。
+
+実ウィンドウではstrict／shipping×両APIの4 processでカメラ移動と視点操作、resize、最小化と復帰、
+Graphが1〜2件pendingの状態からの終了を確認した。カメラ操作は実イベントと同じcontrollerへのアプリ内再生を使った。
+1080pのlinear RGBA8表示元と、同視点のoffscreen SDRを各processで2,073,600画素比較した。
+linearの8 bit量子化から導くsRGB許容区間に全画素が入り、丸め後の最大差は7 codeだった。
+display scanoutの時刻は観測していない。最終native解放後まで診断はゼロだった。
+別の4 processで24 warmup後に固定巡回1,800 frameを表示要求まで進め、GPUと表示を退役させた。
+全構成で通常窓のRust確保・再確保・解放、VMA host、Renderer発行のnative作成・破棄はゼロで、
+既存資源のresetは別計上した。全構成で最終native解放後の診断はゼロだった。
+同じ全Bistroのoffscreen経路で素材差し替えと復元、同時View、容量拒否と再試行を
+両API・両構成の4 processで再実行した。一般資源の実GPU試験もstrict／shipping各1件で、
+可変入力・履歴、準備変更とmetadata返却を確認した。
+保存したrawとreportは`.tools/b5/`、表示比較と巡回を合わせた要約SHA-256は
+`68972f48120a86c2acea36e594fc33ce731b6d9d107236bb2e4d41d72a58c285`。
+[再現手順](../guides/development.md#bistro-b5)。
+
+### B5の性能・メモリ計測
+
+既存の原本とMikkTSpaceライブラリから全量cookを新しい出力先に再生成した。1回の経過時間は251.35秒で、
+405画像・全3,529 mipとgeometryを含むmanifestは、測定入力の`full-a3`とSHA-256が一致した。
+実行時の初回読込、native準備、uploadは各processの別区間として記録する。
+
+計測はWindows 11／Core i5-14600KF／RTX 3060・driver 610.88、Balanced電源planで実施した。
+起動前に各childのPコアmask 4095とHighQoSを設定し、native読戻し後に起動した。
+両APIを逐次実行し、1080p・同じ全素材、外部Bloomのテント、2 in-flightで、各条件を独立3 processとした。
+通常releaseは`vulkan,d3d12,presentation`。offscreenのGPU計時off／onは各3,600 warmup＋5,400測定frame、
+別枠の実ウィンドウのVSync on／offは各120 warmup＋600測定frameとし、計24 processが完了した。
+
+| 測定項目 | Vulkan | D3D12 |
+|---|---:|---:|
+| 通常offscreen、process CPU平均のrun中央値 | 4.714 ms/frame | 4.277 ms/frame |
+| 通常offscreen、frame間隔p95のrun中央値 | 6.260 ms | 5.750 ms |
+| 通常offscreen、frame間隔p99のrun間範囲 | 6.901〜7.134 ms | 6.381〜6.550 ms |
+| offscreen計時あり、Graph GPU p95のrun中央値 | 5.922 ms | 5.459 ms |
+| 実ウィンドウ VSync off、frame間隔p95のrun中央値 | 6.295 ms | 5.975 ms |
+| 実ウィンドウ VSync off、frame間隔p99のrun間範囲 | 7.028〜7.638 ms | 6.724〜6.934 ms |
+| 実ウィンドウ VSync on、平均frame間隔のrun中央値 | 16.670 ms | 16.668 ms |
+| 実ウィンドウ VSync on、frame間隔p99のrun間範囲 | 26.534〜26.607 ms | 16.941〜17.253 ms |
+
+通常offscreenの初回asset読込／native準備／uploadのrun中央値は、Vulkan 0.390／0.390／4.817秒、
+D3D12 0.398／1.149／5.136秒だった。計時ありoffscreenの終了前OS GPU usageは
+Vulkan 5,614.4 MiB、D3D12 5,315.8 MiBで、同境界のOS budgetは11,340.0 MiB。
+定常使用量の比較には、この境界で取得したOSの値、準備済みクラスの容量と上のゼロメモリ受入を使う。
+今後の同条件比較では、両API共通の初期基準にoffscreen CPU側frame p95 6.5 ms、Graph GPU p95 6.0 ms、
+VSync offのウィンドウframe p95 6.5 msを用いる。VSync onの分布は表示ペーシングの基準として保持する。
+
+offscreen実行は`6d63696`のEXEを使用した。ウィンドウ計時で、回収前の計時枠とGPU処理中の実行枠が埋まる
+ケースを観測した。完了済みsampleを回収し、該当する一時不足はpollで進める修正後の`2936ba0`で、
+両API・VSync on/offの小実機試験と全ウィンドウ計測を実行した。発行済みのGraphと表示元の所有は再試行まで保持する。
+同修正後に全Bistroの24 frame表示smokeと8 warmup＋48 frameの通常メモリを両API・両構成で再確認した。
+全8 processで最終解放後の診断はゼロで、定常メモリを計測した4 processは確保・解放とnative作成・破棄のゼロ条件を満たした。
+再確認した表示比較の要約SHA-256は
+`3c801e73fa015628969be9b0898de9b6fd14daa9fde6eeae4eb78c1d4d61700e`。
+cpu setの生情報は再開前後で記録し、変動したparked bit以外のトポロジーとCPU policy、電源planを照合した。
+全runのcommand、EXE・入力・reportのhash、生sample、p50/p95/p99、GPU・presentとCPU phase、
+冷間区間・記録境界のメモリは`.tools/b5/performance/`に保存した。比較要約のSHA-256は
+`84f66641492f34a2881d486e5a738f5db477e282b54c88383eaf7ebea6998ec5`。
+
 <a id="bistro-120-performance"></a>
 
 ## Bistro B3の120 FPS目標と高速化

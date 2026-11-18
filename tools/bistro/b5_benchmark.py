@@ -73,6 +73,22 @@ def input_identity(args):
     return {name: digest(getattr(args, name)) for name in paths}
 
 
+def policy_identity(policy):
+    # Bit 0 is the current Parked state. CPU selection ignores it and the
+    # state may change while a valid cohort is stopped. Preserve every other
+    # topology/allocation field and the actual affinity and QoS contract.
+    return {**policy, "cpu_sets": [
+        {**record, "flags": record["flags"] & ~1} for record in policy["cpu_sets"]
+    ]}
+
+
+def active_power_scheme():
+    raw = subprocess.check_output(["powercfg", "/getactivescheme"]).replace(b"\0", b"")
+    match = re.search(rb"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", raw, re.IGNORECASE)
+    require(match is not None, "Active Windows power scheme GUID unavailable")
+    return match[0].decode("ascii").lower()
+
+
 def run(args, policy, api, scenario, timed, destination):
     windowed = scenario != "offscreen"
     frames = WINDOW_FRAMES if windowed else FRAMES
@@ -138,6 +154,7 @@ def main():
     policy = host_policy.plan("performance-cores")
     settings = {"offscreen": FRAMES, "window": WINDOW_FRAMES}
     identity = input_identity(args)
+    power_scheme = active_power_scheme()
     progress = args.output / "progress.json"
     if args.resume:
         result = load_json(progress)
@@ -145,19 +162,18 @@ def main():
                 and all(label.startswith("offscreen-") for label in result["runs"])):
             result["identity"]["window_binary"] = identity["window_binary"]
         require(result["identity"] == identity and result["settings"] == settings
-                and result["cpu_policy"] == policy, "Resume identity differs")
+                and result["power_scheme"] == power_scheme
+                and policy_identity(result["cpu_policy"]) == policy_identity(policy),
+                "Resume identity differs")
+        result.setdefault("resume_cpu_policies", []).append(policy)
         for run_id, record in result["runs"].items():
             report = Path(record["report"])
             require(report.resolve().is_relative_to(args.output.resolve())
                     and digest(report) == record["report_sha256"], f"Stored report differs: {run_id}")
     else:
-        power_output = subprocess.check_output(["powercfg", "/getactivescheme"]).replace(b"\0", b"")
-        power_match = re.search(rb"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}",
-                                power_output, re.IGNORECASE)
-        require(power_match is not None, "Active Windows power scheme GUID unavailable")
         args.output.mkdir(exist_ok=False)
         result = {"identity": identity, "settings": settings, "cpu_policy": policy,
-                  "power_scheme": power_match[0].decode("ascii").lower(), "runs": {}}
+                  "power_scheme": power_scheme, "runs": {}}
     write_json(progress, result)
     runs = result["runs"]
     for scenario, timed in SCENARIOS:

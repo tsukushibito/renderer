@@ -841,6 +841,8 @@ vendor依存の高速化や高度なパス統合は採用しておらず、性�
 `VulkanRuntime::for_window`と`D3D12Runtime::for_window`は`Arc<winit::window::Window>`と
 共通の`PresentationConfig`を受け取り、runtimeと`Presenter`／`D3D12Presenter`を返す。
 event loop、camera、入力は利用側が所有し、Presenterは必要なWindow寿命を強く保持する。
+`D3D12Runtime::create_presenter`は、厳密な資源クラスで準備した既存Runtimeにも同じ表示契約を接続する。
+PresenterはそのRuntimeのDevice・queue・登録簿の所有を参照し、再準備後も同じ登録簿に結び付く。
 configは同時表示枠`max_frames`、退役世代上限`max_retired_swapchains`、
 2〜16の希望画像数`desired_images`とVSync要求を持つ。
 実Surfaceの制限に合わせた画像数と、Graph実行枠・表示slot・image indexは別概念である。
