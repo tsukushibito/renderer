@@ -105,23 +105,12 @@ static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
 };
 
 fn programs() -> [ManagedRasterProgram; 3] {
-    // SAFETY: Both pinned vertex binaries read only the declared vec3 vertex
-    // input. Fragment binaries read only the four inline words or the exact
-    // 16-byte uniform prefix respectively, then write two float4 outputs.
-    // No dynamic indexing, descriptor arrays, optional features or side effects.
-    [&INLINE_COLOR, &UNIFORM_COLOR, &OPAQUE]
-        .map(|descriptor| unsafe { ManagedRasterProgram::from_trusted_descriptor(descriptor) })
-}
-
-fn floats_to_bytes<const N: usize, const M: usize>(values: [f32; N]) -> [u8; M] {
-    let mut output = [0; M];
-    let (words, rest) = output.as_chunks_mut::<4>();
-    assert!(rest.is_empty());
-    assert_eq!(words.len(), values.len());
-    for (word, value) in words.iter_mut().zip(values) {
-        *word = value.to_le_bytes();
-    }
-    output
+    [&INLINE_COLOR, &UNIFORM_COLOR, &OPAQUE].map(|descriptor| {
+        // SAFETY: Both pinned vertex binaries read only the declared vec3 input.
+        // Fragment binaries read only the four inline words or the exact 16-byte
+        // uniform prefix, and write two float4 outputs without other effects.
+        unsafe { ManagedRasterProgram::from_trusted_descriptor(descriptor) }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -149,8 +138,8 @@ fn build(
         &[0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0],
     )?;
     let front = graph.buffer("front triangle", VERTICES)?;
-    let triangle = |z| floats_to_bytes::<9, 36>([-1.0, -1.0, z, 3.0, -1.0, z, -1.0, 3.0, z]);
-    graph.upload_buffer("front vertices", front, 0, &triangle(0.5))?;
+    let triangle = |z| [-1.0, -1.0, z, 3.0, -1.0, z, -1.0, 3.0, z].map(f32::to_le_bytes);
+    graph.upload_buffer("front vertices", front, 0, triangle(0.5).as_flattened())?;
 
     let hdr = ImageDesc::rgba16_float(WIDTH, HEIGHT);
     let first = graph.image(
@@ -202,13 +191,13 @@ fn build(
         }
         Scene::Ordered => {
             let far = graph.buffer("occluded triangle", VERTICES)?;
-            graph.upload_buffer("far vertices", far, 0, &triangle(0.75))?;
+            graph.upload_buffer("far vertices", far, 0, triangle(0.75).as_flattened())?;
             let uniform_color = graph.buffer("uniform color", UNIFORM)?;
             graph.upload_buffer(
                 "uniform bytes",
                 uniform_color,
                 0,
-                &floats_to_bytes::<4, 16>([0.0, 1.0, 0.0, 0.5]),
+                [0.0, 1.0, 0.0, 0.5].map(f32::to_le_bytes).as_flattened(),
             )?;
             let binding = graph.raster_bindings(
                 &uniform,

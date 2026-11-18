@@ -5,10 +5,12 @@
 #[path = "support/raster_batch_fixture.rs"]
 mod fixture;
 
+#[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(all(windows, feature = "vulkan", feature = "d3d12"))]
-    return fixture::run();
+    fixture::run()
+}
 
-    #[cfg(not(all(windows, feature = "vulkan", feature = "d3d12")))]
+#[cfg(not(all(windows, feature = "vulkan", feature = "d3d12")))]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     Err("raster_batches requires Windows with the vulkan and d3d12 features".into())
 }
