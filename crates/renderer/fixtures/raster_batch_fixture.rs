@@ -1,15 +1,15 @@
 //! Verify two color outputs and ordered pipeline switches through the public API.
 
+include!("shader_binaries.rs");
+
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, CompiledGraph, GraphCapacity, GraphError,
     GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterConstants, RasterDraw,
     StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, CompareOp, D3D12InlineConstantBinding,
-    D3D12RasterShaders, DepthState, ManagedRasterProgram, RasterParameterLayout,
-    RasterProgramDescriptor, RasterShaderStages, ShaderBinaries, ShaderStages, VertexAttribute,
-    VertexFormat,
+    BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
+    RasterParameterLayout, RasterProgramDescriptor, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer::{
     D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
@@ -64,21 +64,21 @@ static INLINE_COLOR: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    shaders: ShaderBinaries::both(
-        RasterShaderStages {
+    shaders: fixture_shaders!(
+        renderer::program::RasterShaderStages {
             vertex: include_bytes!("../tests/support/shaders/raster_batches.vert.spv"),
             fragment: Some(include_bytes!(
                 "../tests/support/shaders/raster_batches_inline.frag.spv"
             )),
         },
-        D3D12RasterShaders {
-            stages: RasterShaderStages {
+        renderer::program::D3D12RasterShaders {
+            stages: renderer::program::RasterShaderStages {
                 vertex: include_bytes!("../tests/support/shaders/dxil/raster_batches.vert.dxil"),
                 fragment: Some(include_bytes!(
                     "../tests/support/shaders/dxil/raster_batches_inline.frag.dxil"
                 )),
             },
-            inline_constants: Some(D3D12InlineConstantBinding {
+            inline_constants: Some(renderer::program::D3D12InlineConstantBinding {
                 register: 7,
                 space: 0,
             }),
@@ -104,15 +104,15 @@ static UNIFORM_COLOR: RasterProgramDescriptor = RasterProgramDescriptor {
         write: false,
         require_load: false,
     },
-    shaders: ShaderBinaries::both(
-        RasterShaderStages {
+    shaders: fixture_shaders!(
+        renderer::program::RasterShaderStages {
             vertex: include_bytes!("../tests/support/shaders/raster_batches.vert.spv"),
             fragment: Some(include_bytes!(
                 "../tests/support/shaders/raster_batches_uniform.frag.spv"
             )),
         },
-        D3D12RasterShaders {
-            stages: RasterShaderStages {
+        renderer::program::D3D12RasterShaders {
+            stages: renderer::program::RasterShaderStages {
                 vertex: include_bytes!("../tests/support/shaders/dxil/raster_batches.vert.dxil"),
                 fragment: Some(include_bytes!(
                     "../tests/support/shaders/dxil/raster_batches_uniform.frag.dxil"

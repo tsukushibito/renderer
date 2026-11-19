@@ -1,14 +1,15 @@
 //! Verify absolute indices and two shader-visible instance IDs on both APIs.
 
+include!("shader_binaries.rs");
+
 use renderer::graph::{
     Attachment, Binding, BindingResource, BufferDesc, CompiledGraph, GraphCapacity, GraphError,
     GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterConstants, RasterDraw,
     StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, D3D12InlineConstantBinding, D3D12RasterShaders,
-    DepthState, ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor,
-    RasterShaderStages, ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
+    BindingLayout, BindingType, BlendState, DepthState, ManagedRasterProgram,
+    RasterParameterLayout, RasterProgramDescriptor, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer::{
     D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
@@ -77,15 +78,15 @@ static SHADER: RasterProgramDescriptor = RasterProgramDescriptor {
     sampling_pairs: &[],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
-    shaders: ShaderBinaries::both(
-        RasterShaderStages {
+    shaders: fixture_shaders!(
+        renderer::program::RasterShaderStages {
             vertex: include_bytes!("../tests/support/shaders/indexed_instancing.vert.spv"),
             fragment: Some(include_bytes!(
                 "../tests/support/shaders/indexed_instancing.frag.spv"
             )),
         },
-        D3D12RasterShaders {
-            stages: RasterShaderStages {
+        renderer::program::D3D12RasterShaders {
+            stages: renderer::program::RasterShaderStages {
                 vertex: include_bytes!(
                     "../tests/support/shaders/dxil/indexed_instancing.vert.dxil"
                 ),
@@ -93,7 +94,7 @@ static SHADER: RasterProgramDescriptor = RasterProgramDescriptor {
                     "../tests/support/shaders/dxil/indexed_instancing.frag.dxil"
                 )),
             },
-            inline_constants: Some(D3D12InlineConstantBinding {
+            inline_constants: Some(renderer::program::D3D12InlineConstantBinding {
                 register: 7,
                 space: 0,
             }),

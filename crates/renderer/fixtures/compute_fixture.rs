@@ -1,6 +1,8 @@
 //! Consumer-owned Compute assets and an exact, allocation-free HDR workload.
 //! This module is shared by public-API acceptance and the standalone memory probe.
 
+include!("shader_binaries.rs");
+
 use renderer::ImageFormat;
 use renderer::graph::{
     Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphCapacity, GraphPool, ImageDesc,
@@ -8,7 +10,7 @@ use renderer::graph::{
 };
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
-    ManagedProgram, SamplerDescriptor, ShaderBinaries, ShaderStages,
+    ManagedProgram, SamplerDescriptor, ShaderStages,
 };
 
 pub const WIDTH: u32 = 3;
@@ -39,7 +41,7 @@ static SAMPLED: ComputeProgramDescriptor = ComputeProgramDescriptor {
         },
         bytes: &[0, 0, 16, 0],
     },
-    shaders: ShaderBinaries::both(
+    shaders: fixture_shaders!(
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/support/shaders/compute_hdr_sampled.comp.spv"
@@ -76,7 +78,7 @@ static STORAGE: ComputeProgramDescriptor = ComputeProgramDescriptor {
         },
         bytes: &[0, 16, 0],
     },
-    shaders: ShaderBinaries::both(
+    shaders: fixture_shaders!(
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/support/shaders/compute_hdr_storage.comp.spv"

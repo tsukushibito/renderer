@@ -1,5 +1,7 @@
 //! Consumer-owned RGBA8 effects shared with the acceptance workloads.
 
+include!("shader_binaries.rs");
+
 use renderer::{
     ImageFormat,
     graph::{Binding, BindingResource, Graph, GraphError, ImageHandle, PassHandle},
@@ -38,7 +40,7 @@ const BINDINGS: &[BindingLayout] = &[
     },
 ];
 
-const fn descriptor(spirv: &'static [u8], dxil: &'static [u8]) -> ComputeProgramDescriptor {
+const fn descriptor(shaders: ShaderBinaries<&'static [u8]>) -> ComputeProgramDescriptor {
     ComputeProgramDescriptor {
         entry: "main",
         workgroup_size: [LOCAL_SIZE, LOCAL_SIZE, 1],
@@ -50,18 +52,18 @@ const fn descriptor(spirv: &'static [u8], dxil: &'static [u8]) -> ComputeProgram
             },
             bytes: &[0, 0],
         },
-        shaders: ShaderBinaries::both(spirv, dxil),
+        shaders,
     }
 }
 
-static INVERT: ComputeProgramDescriptor = descriptor(
+static INVERT: ComputeProgramDescriptor = descriptor(fixture_shaders!(
     include_bytes!("shaders/invert_rgba8.comp.spv"),
     include_bytes!("shaders/dxil/invert_rgba8.comp.dxil"),
-);
-static SWAP_RED_BLUE: ComputeProgramDescriptor = descriptor(
+));
+static SWAP_RED_BLUE: ComputeProgramDescriptor = descriptor(fixture_shaders!(
     include_bytes!("shaders/swap_red_blue_rgba8.comp.spv"),
     include_bytes!("shaders/dxil/swap_red_blue_rgba8.comp.dxil"),
-);
+));
 
 pub(crate) const fn program(transform: Transform) -> ManagedProgram {
     let descriptor = match transform {
