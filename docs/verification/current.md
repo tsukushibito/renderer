@@ -5,6 +5,32 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 配布ビルドと起動時のバックエンド選択
+
+`renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`bistro`のreleaseビルドを
+Vulkan専用、D3D12専用、両対応で作成した。EXE中の既知のSPIR-V／DXILを元ファイルの全byte列と照合した。
+
+| releaseビルド | `windowed`のSPIR-V／DXIL | `bistro`のSPIR-V／DXIL |
+| --- | --- | --- |
+| Vulkan専用 | 4／0 | 27／0 |
+| D3D12専用 | 0／5 | 0／27 |
+| 両対応 | 5／5 | 27／27 |
+
+`windowed --smoke`は両単独版と同じ両対応EXEの両APIで成功した。両単独版は対象外の`--api`を
+Window作成前に拒否した。両対応の厳格構成でも両APIで成功し、各runは24フレームと6遷移、
+最終解放後のVulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは0だった。
+APIごとに単独版・両対応版・厳格版の24サンプルの寸法、出力digest、geometry画素数は一致した。
+Vulkan専用の`headless`と`frame_loop`も各2本のSPIR-Vと0本のDXILを確認した。
+D3D12専用の`bistro --fixture`は`--api`なしでD3D12を選び、64×48の描画を2フレーム完了した。
+
+選択した形式がないCompute・Rasterを準備時に拒否し、既存の作業セットを維持することを両APIで確認した。
+利用側Raster、fullscreenとindexedの混在、Vulkan単独形式のサンプリング同期も合わせ、
+最適化した製品・厳格構成で各5件の実GPU回帰が成功した。CPU試験はGPU featureなし275件、
+両対応の製品469件と厳格482件が成功し、CPU専用・両単独・両対応の全target Clippyとfmtも通過した。
+警告をエラー扱いにしたRustdocと、mdBookのHTML・リンク検査も通過した。
+検証したのは配布EXEに含まれるバイト列と、選択したAPIの準備・描画である。
+物理RAMのページ常駐はこの検証の対象外とした。実行ログと実行ファイルは`.tools/backend-release/`に保存した。
+
 <a id="shared-runtime-and-standard-output"></a>
 
 ## 共通Runtimeと標準HDR出力
