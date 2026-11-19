@@ -1,6 +1,8 @@
 //! Consumer-owned graphics assets and a changing, allocation-free composition.
 //! Standard recipes, semantic post insertion and direct parts use the same inputs.
 
+include!("shader_binaries.rs");
+
 use super::compute_fixture as compute;
 pub use compute::{Expected, HEIGHT, IMAGE_BYTES, PIXELS, Readback, WIDTH, hdr};
 use renderer::ImageFormat;
@@ -10,9 +12,8 @@ use renderer::graph::{
     RasterParameters, StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, CompareOp, D3D12InlineConstantBinding,
-    D3D12RasterShaders, DepthState, ManagedRasterProgram, RasterParameterLayout,
-    RasterProgramDescriptor, RasterShaderStages, SamplerDescriptor, ShaderBinaries, ShaderStages,
+    BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
+    RasterParameterLayout, RasterProgramDescriptor, SamplerDescriptor, ShaderStages,
     VertexAttribute, VertexFormat,
 };
 use renderer::standard::{graphs, passes};
@@ -85,21 +86,21 @@ static ALPHA: RasterProgramDescriptor = RasterProgramDescriptor {
         write: false,
         require_load: true,
     },
-    shaders: ShaderBinaries::both(
-        RasterShaderStages {
+    shaders: fixture_shaders!(
+        renderer::program::RasterShaderStages {
             vertex: include_bytes!("../tests/support/shaders/custom_raster.vert.spv"),
             fragment: Some(include_bytes!(
                 "../tests/support/shaders/custom_raster.frag.spv"
             )),
         },
-        D3D12RasterShaders {
-            stages: RasterShaderStages {
+        renderer::program::D3D12RasterShaders {
+            stages: renderer::program::RasterShaderStages {
                 vertex: include_bytes!("../tests/support/shaders/dxil/custom_raster.vert.dxil"),
                 fragment: Some(include_bytes!(
                     "../tests/support/shaders/dxil/custom_raster.frag.dxil"
                 )),
             },
-            inline_constants: Some(D3D12InlineConstantBinding {
+            inline_constants: Some(renderer::program::D3D12InlineConstantBinding {
                 register: 7,
                 space: 0,
             }),
