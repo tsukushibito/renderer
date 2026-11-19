@@ -12,7 +12,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: d558455e4d41d3ffb9af163c914b52e1
+; shader hash: e63973fbf9072e1309274fa5f4042ee0
 ;
 ; Pipeline Runtime Information:
 ;
@@ -43,18 +43,24 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _21_23
+; cbuffer material
 ; {
 ;
-;   struct _21_23
+;   struct material
 ;   {
 ;
-;       float4 _23_m0;                                ; Offset:    0
-;       float4 _23_m1;                                ; Offset:   16
-;       float4 _23_m2;                                ; Offset:   32
-;       uint4 _23_m3;                                 ; Offset:   48
+;       struct struct.MaterialData
+;       {
 ;
-;   } _21_23;                                         ; Offset:    0 Size:    64
+;           float4 base_factor;                       ; Offset:    0
+;           float4 emissive_normal_scale;             ; Offset:   16
+;           float4 metallic_roughness_occlusion_cutoff;; Offset:   32
+;           uint4 flags;                              ; Offset:   48
+;
+;       } material;                                   ; Offset:    0
+;
+;
+;   } material;                                       ; Offset:    0 Size:    64
 ;
 ; }
 ;
@@ -63,9 +69,9 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _21_23                            cbuffer      NA          NA     CB0            cb1     1
-; _63                               sampler      NA          NA      S0      s4,space1     1
-; _59                               texture     f32          2d      T0      t0,space1     1
+; material                          cbuffer      NA          NA     CB0            cb1     1
+; material_sampler                  sampler      NA          NA      S0      s4,space1     1
+; base_image                        texture     f32          2d      T0      t0,space1     1
 ;
 ;
 ; ViewId state:

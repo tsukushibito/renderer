@@ -16,38 +16,38 @@
         }
     ],
     "types" : {
-        "_107" : {
-            "name" : "_107",
+        "_4" : {
+            "name" : "type.Camera",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "view_projection",
                     "type" : "mat4",
                     "offset" : 0,
                     "matrix_stride" : 16
                 }
             ]
         },
-        "_429" : {
-            "name" : "_429",
+        "_7" : {
+            "name" : "Bounds",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "minimum_enabled",
                     "type" : "uvec4",
                     "offset" : 0
                 },
                 {
-                    "name" : "_m1",
+                    "name" : "maximum_padded",
                     "type" : "uvec4",
                     "offset" : 16
                 }
             ]
         },
-        "_431" : {
-            "name" : "_431",
+        "_6" : {
+            "name" : "type.StructuredBuffer.Bounds",
             "members" : [
                 {
                     "name" : "_m0",
-                    "type" : "_429",
+                    "type" : "_7",
                     "array" : [
                         0
                     ],
@@ -59,8 +59,8 @@
                 }
             ]
         },
-        "_460" : {
-            "name" : "_460",
+        "_9" : {
+            "name" : "type.RWStructuredBuffer.uint",
             "members" : [
                 {
                     "name" : "_m0",
@@ -79,16 +79,16 @@
     },
     "ssbos" : [
         {
-            "type" : "_431",
-            "name" : "_431_433",
+            "type" : "_6",
+            "name" : "world",
             "readonly" : true,
             "block_size" : 0,
             "set" : 0,
             "binding" : 1
         },
         {
-            "type" : "_460",
-            "name" : "_460_462",
+            "type" : "_9",
+            "name" : "visibility",
             "writeonly" : true,
             "block_size" : 0,
             "set" : 0,
@@ -97,8 +97,8 @@
     ],
     "ubos" : [
         {
-            "type" : "_107",
-            "name" : "_107_109",
+            "type" : "_4",
+            "name" : "type.Camera",
             "block_size" : 64,
             "set" : 0,
             "binding" : 0

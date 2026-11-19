@@ -39,6 +39,6 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _35                               texture     f32          2d      T0             t0     1
-; _22                                   UAV     f32          2d      U0      u0,space1     1
+; source_image                      texture     f32          2d      T0             t0     1
+; destination_image                     UAV     f32          2d      U0      u0,space1     1
 ;

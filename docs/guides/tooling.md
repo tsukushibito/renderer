@@ -77,21 +77,29 @@ SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view
 zlib-style licenseの所在は[provenance](../../tools/bistro/mikktspace/provenance.json)へ記録する。
 ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 
-利用側のPBR、影、Bloom shaderは`examples/support/bistro/shaders/`に置く。
+利用側のPBR、影、Bloom、Deferred、Forward+、可視性判定の正本は
+`crates/renderer/examples/support/bistro/shaders/`の`.hlsl`と共通`.hlsli`に置く。
+既存の[生成スクリプト](../../crates/renderer/examples/support/bistro/shaders/regenerate.ps1)から
+固定版DXCを呼び、同じ正本をSPIR-VとDXILに直接コンパイルする。
 標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer/shaders/`に置く。
 通常buildは生成済みSPIR-V／DXILを使う。標準shaderを変更したときは共通のSPIR-V／DXILを再生成してから、
 それらのmanifestを参照するBistroのmanifestも再生成する。
 
 ```powershell
+& ./crates/renderer/examples/support/bistro/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
 & ./crates/renderer/examples/support/bistro/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
-Windowsでも生成HLSLをUTF-8/BOMなし・LFへ揃えてからDXCへ渡し、同じcanonical textをhashへ使う。
-PBR vertexのclip変換は明示したFP32演算順序と`NoContraction`を保ち、DXILのfast演算やFMA等への
+UTF-8/BOMなし・LFへ揃えたHLSLとincludeを両ターゲットで使い、同じbyte列をhashへ使う。
+両形式のentry pointは`main`、shader modelは6.0、HLSLは2021、最適化は`-O3`。
+`BISTRO_LOCAL_LIGHTS`と`BISTRO_INSTANCING`でバリアントを選ぶ。SPIR-V 1.3の出力に
+`-spirv -fspv-target-env=vulkan1.1`を指定し、`spirv-val --target-env vulkan1.3`で実行環境の契約を確認する。
+SPIRV-CrossはSPIR-Vのreflectionに使い、DXILはDXCの内部validatorと`-dumpbin`を使う。
+PBRとGBufferの頂点clip変換は明示したFP32演算順序と`NoContraction`を保ち、DXILのfast演算やFMA等への
 縮約・再結合を生成時に拒否する。camera/ABIやfragment最適化を変えず、対象をclip演算へ限定した
 [採用理由とリスク](../design/implementation-policy.md#bistro-runtime-cook)に従う。
-更新を意図する場合は`-Verify`を外し、shaderとRust descriptorのABI、footprintと安全性契約をレビューする。
+更新時はshaderとRust descriptorのABI、footprintと安全性契約をレビューする。
 hash/reflectionの一致だけで未信頼shaderを安全とみなさない。
 
 `compare_runtime.py`はrunnerの`report.json`とHDR/SDR/depthを読み、固定profileと全画素・ROIの誤差を集計する。
@@ -156,7 +164,8 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 
 ## D3D12の固定shader生成
 
-toolchain定義に列挙した管理下GLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
+標準shaderとfixtureのうちtoolchain定義に列挙した管理下GLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
+Bistro専用shaderは[HLSLからの直接生成](#bistro-tools)を使う。
 入力のSPIR-Vは既存のVulkan基準を維持し、この手順では書き換えない。
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 

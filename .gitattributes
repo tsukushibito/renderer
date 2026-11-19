@@ -13,7 +13,8 @@
 /crates/renderer/tests/support/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer/tests/support/shaders/dxil/*.json text eol=lf
 /crates/renderer/tests/support/shaders/*-manifest.json text eol=lf
-/crates/renderer/examples/support/bistro/shaders/dxil/*.hlsl text eol=lf
+/crates/renderer/examples/support/bistro/shaders/*.hlsl text eol=lf
+/crates/renderer/examples/support/bistro/shaders/*.hlsli text eol=lf
 /crates/renderer/examples/support/bistro/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer/examples/support/bistro/shaders/dxil/*.json text eol=lf
 /crates/renderer/examples/support/bistro/shaders/manifest.json text eol=lf

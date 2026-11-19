@@ -5,6 +5,29 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## BistroのHLSL正本
+
+`renderer-w6d`。移行前の比較元は`44451a4`。固定SDKのDXCで17バリアントをSPIR-V 1.3／DXILへ
+直接生成し、`-Verify`で全バイナリ・reflection・manifestの再生成一致を確認した。
+Vulkan 1.3の`spirv-val`、既存のbuffer範囲・定数配置・shader入出力の照合、PBR／GBuffer頂点の
+非縮約FP32演算を確認した。生成手順は[ツールガイド](../guides/tooling.md#bistro-tools)に記録した。
+
+Windowsの同一RTX 3060（610.88）で、最適化済みの移行前後の二API版を比較した。小fixtureと
+`full-a3`／`ibl-final`の1080pシーンで、Forward＋tent Bloom、Deferred＋box Bloom、Forward+、
+全灯参照、インスタンシング、間接描画を、各2 warm-up＋2測定フレームで実行した。
+各APIの前後比較で、shader manifest以外の描画条件が一致することを確認した。
+
+- VulkanではHDR・Bloom後HDR・SDR・D32深度と取得した影マップの全48ファイルで、移行前後のSHA-256が一致した。
+- D3D12では小fixtureの全出力と全シーンの深度・影マップが一致した。全シーンの最大差はHDRが`0.0009765625`、
+  SDRが4コード値。既存の画素閾値を外れたSDR画素は1画像あたり最大1画素で、`scene`の許容量内だった。
+- 移行後のAPI間比較も、HDR・Bloom後HDR・SDR・深度の全比較で既存の`fixture`／`scene`閾値を満たした。
+
+最適化済みのBistro CPU試験71件、材質・影・可視性を含むBistroの実GPU試験6件と、
+BloomおよびForward+の実GPU試験各1件が成功した。小fixtureの6構成を両APIの厳格設定でも再実行し、
+Vulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは全12 runで0だった。
+この比較は固定視点の描画出力を対象とする。実行ログ、元のreportと画像、画素比較結果は
+`.tools/bistro-hlsl/`に保存した。
+
 ## 配布ビルドと起動時のバックエンド選択
 
 `renderer-6yh`。WindowsのRTX 3060（610.88）で`windowed`と`bistro`のreleaseビルドを

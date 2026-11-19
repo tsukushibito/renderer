@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 13b7da72ef29ca523cfc238d35b32e86
+; shader hash: bde54517bd0a5a1a4fb155d8244c7482
 ;
 ; Pipeline Runtime Information:
 ;
@@ -34,15 +34,15 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _195_197
+; cbuffer CullCamera
 ; {
 ;
-;   struct hostlayout._195_197
+;   struct hostlayout.CullCamera
 ;   {
 ;
-;       row_major float4x4 _197_m0;                   ; Offset:    0
+;       row_major float4x4 view_projection;           ; Offset:    0
 ;
-;   } _195_197;                                       ; Offset:    0 Size:    64
+;   } CullCamera;                                     ; Offset:    0 Size:    64
 ;
 ; }
 ;
@@ -51,7 +51,7 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _195_197                          cbuffer      NA          NA     CB0            cb0     1
-; _47                               texture    byte         r/o      T0             t2     1
-; _352                                  UAV    byte         r/w      U0             u3     1
+; CullCamera                        cbuffer      NA          NA     CB0            cb0     1
+; local_lights                      texture    byte         r/o      T0             t2     1
+; tile_lists                            UAV    byte         r/w      U0             u3     1
 ;

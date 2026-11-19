@@ -17,7 +17,7 @@
 ; SV_Target                1   xyzw        1   TARGET   float   xyzw
 ; SV_Target                2   xyzw        2   TARGET   float   xyzw
 ;
-; shader hash: adff3965f368ae2da267a16e4c23177f
+; shader hash: a19832f726b65a7789fb5cadef0ee934
 ;
 ; Pipeline Runtime Information:
 ;
@@ -58,18 +58,24 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _161_163
+; cbuffer material
 ; {
 ;
-;   struct _161_163
+;   struct material
 ;   {
 ;
-;       float4 _163_m0;                               ; Offset:    0
-;       float4 _163_m1;                               ; Offset:   16
-;       float4 _163_m2;                               ; Offset:   32
-;       uint4 _163_m3;                                ; Offset:   48
+;       struct struct.MaterialData
+;       {
 ;
-;   } _161_163;                                       ; Offset:    0 Size:    64
+;           float4 base_factor;                       ; Offset:    0
+;           float4 emissive_normal_scale;             ; Offset:   16
+;           float4 metallic_roughness_occlusion_cutoff;; Offset:   32
+;           uint4 flags;                              ; Offset:   48
+;
+;       } material;                                   ; Offset:    0
+;
+;
+;   } material;                                       ; Offset:    0 Size:    64
 ;
 ; }
 ;
@@ -78,12 +84,12 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _161_163                          cbuffer      NA          NA     CB0            cb1     1
-; _186                              sampler      NA          NA      S0      s4,space1     1
-; _182                              texture     f32          2d      T0      t0,space1     1
-; _227                              texture     f32          2d      T1      t2,space1     1
-; _323                              texture     f32          2d      T2      t1,space1     1
-; _374                              texture     f32          2d      T3      t3,space1     1
+; material                          cbuffer      NA          NA     CB0            cb1     1
+; material_sampler                  sampler      NA          NA      S0      s4,space1     1
+; base_image                        texture     f32          2d      T0      t0,space1     1
+; normal_image                      texture     f32          2d      T1      t1,space1     1
+; orm_image                         texture     f32          2d      T2      t2,space1     1
+; emissive_image                    texture     f32          2d      T3      t3,space1     1
 ;
 ;
 ; ViewId state:

@@ -6,67 +6,37 @@
         }
     ],
     "types" : {
-        "_24" : {
-            "name" : "_24",
+        "_13" : {
+            "name" : "type.ConstantBuffer.CameraData",
             "members" : [
                 {
-                    "name" : "_m0",
-                    "type" : "vec4",
-                    "offset" : 0
-                },
-                {
-                    "name" : "_m1",
-                    "type" : "vec4",
-                    "offset" : 16
-                },
-                {
-                    "name" : "_m2",
-                    "type" : "vec4",
-                    "offset" : 32
-                },
-                {
-                    "name" : "_m3",
-                    "type" : "vec4",
-                    "offset" : 48
-                },
-                {
-                    "name" : "_m4",
-                    "type" : "uint",
-                    "offset" : 64
-                }
-            ]
-        },
-        "_91" : {
-            "name" : "_91",
-            "members" : [
-                {
-                    "name" : "_m0",
+                    "name" : "view_projection",
                     "type" : "mat4",
                     "offset" : 0,
                     "matrix_stride" : 16
                 },
                 {
-                    "name" : "_m1",
+                    "name" : "eye",
                     "type" : "vec4",
                     "offset" : 64
                 },
                 {
-                    "name" : "_m2",
+                    "name" : "light_direction",
                     "type" : "vec4",
                     "offset" : 80
                 },
                 {
-                    "name" : "_m3",
+                    "name" : "light_color",
                     "type" : "vec4",
                     "offset" : 96
                 },
                 {
-                    "name" : "_m4",
+                    "name" : "environment",
                     "type" : "vec4",
                     "offset" : 112
                 },
                 {
-                    "name" : "_m5",
+                    "name" : "shadow_view_projection",
                     "type" : "mat4",
                     "array" : [
                         4
@@ -79,62 +49,59 @@
                     "matrix_stride" : 16
                 },
                 {
-                    "name" : "_m6",
+                    "name" : "shadow_splits",
                     "type" : "vec4",
                     "offset" : 384
                 },
                 {
-                    "name" : "_m7",
+                    "name" : "shadow_texel_world",
                     "type" : "vec4",
                     "offset" : 400
                 },
                 {
-                    "name" : "_m8",
+                    "name" : "shadow_depth_scale",
                     "type" : "vec4",
                     "offset" : 416
                 },
                 {
-                    "name" : "_m9",
+                    "name" : "camera_forward_blend",
                     "type" : "vec4",
                     "offset" : 432
                 },
                 {
-                    "name" : "_m10",
+                    "name" : "shadow_bias",
                     "type" : "vec4",
                     "offset" : 448
                 }
             ]
         },
-        "_130" : {
-            "name" : "_130",
+        "_15" : {
+            "name" : "type.ConstantBuffer.Placements",
             "members" : [
                 {
-                    "name" : "_m0",
-                    "type" : "vec4"
+                    "name" : "source_scale",
+                    "type" : "vec4",
+                    "offset" : 0
                 },
                 {
-                    "name" : "_m1",
-                    "type" : "float"
+                    "name" : "origin",
+                    "type" : "vec4",
+                    "offset" : 16
                 },
                 {
-                    "name" : "_m2",
-                    "type" : "float",
-                    "array" : [
-                        1
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ]
+                    "name" : "column_step",
+                    "type" : "vec4",
+                    "offset" : 32
                 },
                 {
-                    "name" : "_m3",
-                    "type" : "float",
-                    "array" : [
-                        1
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ]
+                    "name" : "row_step",
+                    "type" : "vec4",
+                    "offset" : 48
+                },
+                {
+                    "name" : "instance_offset",
+                    "type" : "uint",
+                    "offset" : 64
                 }
             ]
         }
@@ -142,51 +109,51 @@
     "inputs" : [
         {
             "type" : "vec3",
-            "name" : "_82",
+            "name" : "in.var.TEXCOORD0",
             "location" : 0
         },
         {
             "type" : "vec3",
-            "name" : "_140",
+            "name" : "in.var.TEXCOORD1",
             "location" : 1
         },
         {
             "type" : "vec4",
-            "name" : "_144",
+            "name" : "in.var.TEXCOORD2",
             "location" : 2
         },
         {
             "type" : "vec2",
-            "name" : "_150",
+            "name" : "in.var.TEXCOORD3",
             "location" : 3
         }
     ],
     "outputs" : [
         {
             "type" : "vec3",
-            "name" : "_137",
+            "name" : "out.var.TEXCOORD0",
             "location" : 0
         },
         {
             "type" : "vec3",
-            "name" : "_139",
+            "name" : "out.var.TEXCOORD1",
             "location" : 1
         },
         {
             "type" : "vec4",
-            "name" : "_142",
+            "name" : "out.var.TEXCOORD2",
             "location" : 2
         },
         {
             "type" : "vec2",
-            "name" : "_148",
+            "name" : "out.var.TEXCOORD3",
             "location" : 3
         }
     ],
     "ubos" : [
         {
-            "type" : "_91",
-            "name" : "_91_93",
+            "type" : "_13",
+            "name" : "type.ConstantBuffer.CameraData",
             "block_size" : 464,
             "set" : 0,
             "binding" : 0
@@ -194,8 +161,8 @@
     ],
     "push_constants" : [
         {
-            "type" : "_24",
-            "name" : "_26",
+            "type" : "_15",
+            "name" : "placements",
             "push_constant" : true
         }
     ]

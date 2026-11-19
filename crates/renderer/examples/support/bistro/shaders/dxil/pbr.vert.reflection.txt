@@ -19,7 +19,7 @@
 ; TEXCOORD                 3   xy          3     NONE   float   xy
 ; SV_Position              0   xyzw        4      POS   float   xyzw
 ;
-; shader hash: 97c7ea3d006eb37967bee4a92c573143
+; shader hash: 309f664680f0a6500e0e4d6171bab17c
 ;
 ; Pipeline Runtime Information:
 ;
@@ -61,25 +61,31 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _14_16
+; cbuffer camera
 ; {
 ;
-;   struct hostlayout._14_16
+;   struct hostlayout.camera
 ;   {
 ;
-;       row_major float4x4 _16_m0;                    ; Offset:    0
-;       float4 _16_m1;                                ; Offset:   64
-;       float4 _16_m2;                                ; Offset:   80
-;       float4 _16_m3;                                ; Offset:   96
-;       float4 _16_m4;                                ; Offset:  112
-;       row_major float4x4 _16_m5[4];                 ; Offset:  128
-;       float4 _16_m6;                                ; Offset:  384
-;       float4 _16_m7;                                ; Offset:  400
-;       float4 _16_m8;                                ; Offset:  416
-;       float4 _16_m9;                                ; Offset:  432
-;       float4 _16_m10;                               ; Offset:  448
+;       struct hostlayout.struct.CameraData
+;       {
 ;
-;   } _14_16;                                         ; Offset:    0 Size:   464
+;           row_major float4x4 view_projection;       ; Offset:    0
+;           float4 eye;                               ; Offset:   64
+;           float4 light_direction;                   ; Offset:   80
+;           float4 light_color;                       ; Offset:   96
+;           float4 environment;                       ; Offset:  112
+;           row_major float4x4 shadow_view_projection[4];; Offset:  128
+;           float4 shadow_splits;                     ; Offset:  384
+;           float4 shadow_texel_world;                ; Offset:  400
+;           float4 shadow_depth_scale;                ; Offset:  416
+;           float4 camera_forward_blend;              ; Offset:  432
+;           float4 shadow_bias;                       ; Offset:  448
+;
+;       } camera;                                     ; Offset:    0
+;
+;
+;   } camera;                                         ; Offset:    0 Size:   464
 ;
 ; }
 ;
@@ -88,7 +94,7 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _14_16                            cbuffer      NA          NA     CB0            cb0     1
+; camera                            cbuffer      NA          NA     CB0            cb0     1
 ;
 ;
 ; ViewId state:

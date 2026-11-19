@@ -16,32 +16,32 @@
         }
     ],
     "types" : {
-        "_42" : {
-            "name" : "_42",
+        "_5" : {
+            "name" : "PointLight",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "position_radius",
                     "type" : "vec4",
                     "offset" : 0
                 },
                 {
-                    "name" : "_m1",
+                    "name" : "color_intensity",
                     "type" : "vec4",
                     "offset" : 16
                 }
             ]
         },
-        "_45" : {
-            "name" : "_45",
+        "_4" : {
+            "name" : "type.TextureBuffer.LocalLightsData",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "extent_count",
                     "type" : "uvec4",
                     "offset" : 0
                 },
                 {
-                    "name" : "_m1",
-                    "type" : "_42",
+                    "name" : "lights",
+                    "type" : "_5",
                     "array" : [
                         64
                     ],
@@ -53,19 +53,19 @@
                 }
             ]
         },
-        "_195" : {
-            "name" : "_195",
+        "_7" : {
+            "name" : "type.CullCamera",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "view_projection",
                     "type" : "mat4",
                     "offset" : 0,
                     "matrix_stride" : 16
                 }
             ]
         },
-        "_350" : {
-            "name" : "_350",
+        "_9" : {
+            "name" : "type.RWByteAddressBuffer",
             "members" : [
                 {
                     "name" : "_m0",
@@ -84,16 +84,16 @@
     },
     "ssbos" : [
         {
-            "type" : "_45",
-            "name" : "_45_47",
+            "type" : "_4",
+            "name" : "local_lights",
             "readonly" : true,
             "block_size" : 2064,
             "set" : 0,
             "binding" : 2
         },
         {
-            "type" : "_350",
-            "name" : "_350_352",
+            "type" : "_9",
+            "name" : "tile_lists",
             "writeonly" : true,
             "block_size" : 0,
             "set" : 0,
@@ -102,8 +102,8 @@
     ],
     "ubos" : [
         {
-            "type" : "_195",
-            "name" : "_195_197",
+            "type" : "_7",
+            "name" : "type.CullCamera",
             "block_size" : 64,
             "set" : 0,
             "binding" : 0

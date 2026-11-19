@@ -18,7 +18,7 @@
     "separate_images" : [
         {
             "type" : "texture2D",
-            "name" : "_35",
+            "name" : "source_image",
             "set" : 0,
             "binding" : 0
         }
@@ -26,7 +26,7 @@
     "images" : [
         {
             "type" : "image2D",
-            "name" : "_22",
+            "name" : "destination_image",
             "writeonly" : true,
             "set" : 1,
             "binding" : 0,

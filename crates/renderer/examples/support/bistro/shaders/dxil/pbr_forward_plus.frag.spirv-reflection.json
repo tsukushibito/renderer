@@ -6,32 +6,126 @@
         }
     ],
     "types" : {
-        "_92" : {
-            "name" : "_92",
+        "_10" : {
+            "name" : "type.ConstantBuffer.MaterialData",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "base_factor",
                     "type" : "vec4",
                     "offset" : 0
                 },
                 {
-                    "name" : "_m1",
+                    "name" : "emissive_normal_scale",
+                    "type" : "vec4",
+                    "offset" : 16
+                },
+                {
+                    "name" : "metallic_roughness_occlusion_cutoff",
+                    "type" : "vec4",
+                    "offset" : 32
+                },
+                {
+                    "name" : "flags",
+                    "type" : "uvec4",
+                    "offset" : 48
+                }
+            ]
+        },
+        "_19" : {
+            "name" : "type.ConstantBuffer.CameraData",
+            "members" : [
+                {
+                    "name" : "view_projection",
+                    "type" : "mat4",
+                    "offset" : 0,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "eye",
+                    "type" : "vec4",
+                    "offset" : 64
+                },
+                {
+                    "name" : "light_direction",
+                    "type" : "vec4",
+                    "offset" : 80
+                },
+                {
+                    "name" : "light_color",
+                    "type" : "vec4",
+                    "offset" : 96
+                },
+                {
+                    "name" : "environment",
+                    "type" : "vec4",
+                    "offset" : 112
+                },
+                {
+                    "name" : "shadow_view_projection",
+                    "type" : "mat4",
+                    "array" : [
+                        4
+                    ],
+                    "array_size_is_literal" : [
+                        true
+                    ],
+                    "offset" : 128,
+                    "array_stride" : 64,
+                    "matrix_stride" : 16
+                },
+                {
+                    "name" : "shadow_splits",
+                    "type" : "vec4",
+                    "offset" : 384
+                },
+                {
+                    "name" : "shadow_texel_world",
+                    "type" : "vec4",
+                    "offset" : 400
+                },
+                {
+                    "name" : "shadow_depth_scale",
+                    "type" : "vec4",
+                    "offset" : 416
+                },
+                {
+                    "name" : "camera_forward_blend",
+                    "type" : "vec4",
+                    "offset" : 432
+                },
+                {
+                    "name" : "shadow_bias",
+                    "type" : "vec4",
+                    "offset" : 448
+                }
+            ]
+        },
+        "_31" : {
+            "name" : "PointLight",
+            "members" : [
+                {
+                    "name" : "position_radius",
+                    "type" : "vec4",
+                    "offset" : 0
+                },
+                {
+                    "name" : "color_intensity",
                     "type" : "vec4",
                     "offset" : 16
                 }
             ]
         },
-        "_95" : {
-            "name" : "_95",
+        "_30" : {
+            "name" : "type.TextureBuffer.LocalLightsData",
             "members" : [
                 {
-                    "name" : "_m0",
+                    "name" : "extent_count",
                     "type" : "uvec4",
                     "offset" : 0
                 },
                 {
-                    "name" : "_m1",
-                    "type" : "_92",
+                    "name" : "lights",
+                    "type" : "_31",
                     "array" : [
                         64
                     ],
@@ -43,8 +137,8 @@
                 }
             ]
         },
-        "_378" : {
-            "name" : "_378",
+        "_33" : {
+            "name" : "type.ByteAddressBuffer",
             "members" : [
                 {
                     "name" : "_m0",
@@ -59,231 +153,137 @@
                     "array_stride" : 4
                 }
             ]
-        },
-        "_432" : {
-            "name" : "_432",
-            "members" : [
-                {
-                    "name" : "_m0",
-                    "type" : "mat4",
-                    "offset" : 0,
-                    "matrix_stride" : 16
-                },
-                {
-                    "name" : "_m1",
-                    "type" : "vec4",
-                    "offset" : 64
-                },
-                {
-                    "name" : "_m2",
-                    "type" : "vec4",
-                    "offset" : 80
-                },
-                {
-                    "name" : "_m3",
-                    "type" : "vec4",
-                    "offset" : 96
-                },
-                {
-                    "name" : "_m4",
-                    "type" : "vec4",
-                    "offset" : 112
-                },
-                {
-                    "name" : "_m5",
-                    "type" : "mat4",
-                    "array" : [
-                        4
-                    ],
-                    "array_size_is_literal" : [
-                        true
-                    ],
-                    "offset" : 128,
-                    "array_stride" : 64,
-                    "matrix_stride" : 16
-                },
-                {
-                    "name" : "_m6",
-                    "type" : "vec4",
-                    "offset" : 384
-                },
-                {
-                    "name" : "_m7",
-                    "type" : "vec4",
-                    "offset" : 400
-                },
-                {
-                    "name" : "_m8",
-                    "type" : "vec4",
-                    "offset" : 416
-                },
-                {
-                    "name" : "_m9",
-                    "type" : "vec4",
-                    "offset" : 432
-                },
-                {
-                    "name" : "_m10",
-                    "type" : "vec4",
-                    "offset" : 448
-                }
-            ]
-        },
-        "_874" : {
-            "name" : "_874",
-            "members" : [
-                {
-                    "name" : "_m0",
-                    "type" : "vec4",
-                    "offset" : 0
-                },
-                {
-                    "name" : "_m1",
-                    "type" : "vec4",
-                    "offset" : 16
-                },
-                {
-                    "name" : "_m2",
-                    "type" : "vec4",
-                    "offset" : 32
-                },
-                {
-                    "name" : "_m3",
-                    "type" : "uvec4",
-                    "offset" : 48
-                }
-            ]
         }
     },
     "inputs" : [
         {
             "type" : "vec3",
-            "name" : "_563",
+            "name" : "in.var.TEXCOORD0",
             "location" : 0
         },
         {
-            "type" : "vec2",
-            "name" : "_862",
-            "location" : 3
-        },
-        {
             "type" : "vec3",
-            "name" : "_960",
+            "name" : "in.var.TEXCOORD1",
             "location" : 1
         },
         {
             "type" : "vec4",
-            "name" : "_977",
+            "name" : "in.var.TEXCOORD2",
             "location" : 2
+        },
+        {
+            "type" : "vec2",
+            "name" : "in.var.TEXCOORD3",
+            "location" : 3
         }
     ],
     "outputs" : [
         {
             "type" : "vec4",
-            "name" : "_1350",
+            "name" : "out.var.SV_Target0",
             "location" : 0
         }
     ],
     "separate_images" : [
         {
             "type" : "texture2D",
-            "name" : "_503",
-            "set" : 3,
-            "binding" : 0
-        },
-        {
-            "type" : "texture2D",
-            "name" : "_519",
-            "set" : 3,
-            "binding" : 1
-        },
-        {
-            "type" : "texture2D",
-            "name" : "_531",
-            "set" : 3,
-            "binding" : 2
-        },
-        {
-            "type" : "texture2D",
-            "name" : "_539",
-            "set" : 3,
-            "binding" : 3
-        },
-        {
-            "type" : "texture2D",
-            "name" : "_889",
+            "name" : "base_image",
             "set" : 1,
             "binding" : 0
         },
         {
             "type" : "texture2D",
-            "name" : "_929",
-            "set" : 1,
-            "binding" : 2
-        },
-        {
-            "type" : "texture2D",
-            "name" : "_1023",
+            "name" : "normal_image",
             "set" : 1,
             "binding" : 1
         },
         {
             "type" : "texture2D",
-            "name" : "_1213",
+            "name" : "orm_image",
+            "set" : 1,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "emissive_image",
             "set" : 1,
             "binding" : 3
         },
         {
             "type" : "texture2D",
-            "name" : "_1224",
+            "name" : "irradiance_image",
             "set" : 2,
             "binding" : 0
         },
         {
             "type" : "texture2D",
-            "name" : "_1246",
+            "name" : "reflection_image",
             "set" : 2,
             "binding" : 1
         },
         {
             "type" : "texture2D",
-            "name" : "_1257",
+            "name" : "brdf_image",
             "set" : 2,
             "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image0",
+            "set" : 3,
+            "binding" : 0
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image1",
+            "set" : 3,
+            "binding" : 1
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image2",
+            "set" : 3,
+            "binding" : 2
+        },
+        {
+            "type" : "texture2D",
+            "name" : "shadow_image3",
+            "set" : 3,
+            "binding" : 3
         }
     ],
     "separate_samplers" : [
         {
             "type" : "sampler",
-            "name" : "_507",
-            "set" : 3,
-            "binding" : 4
-        },
-        {
-            "type" : "sampler",
-            "name" : "_891",
+            "name" : "material_sampler",
             "set" : 1,
             "binding" : 4
         },
         {
             "type" : "sampler",
-            "name" : "_1226",
+            "name" : "environment_sampler",
             "set" : 2,
             "binding" : 3
+        },
+        {
+            "type" : "sampler",
+            "name" : "shadow_sampler",
+            "set" : 3,
+            "binding" : 4
         }
     ],
     "ssbos" : [
         {
-            "type" : "_95",
-            "name" : "_95_97",
+            "type" : "_30",
+            "name" : "local_lights",
             "readonly" : true,
             "block_size" : 2064,
             "set" : 0,
             "binding" : 2
         },
         {
-            "type" : "_378",
-            "name" : "_378_380",
+            "type" : "_33",
+            "name" : "tile_lists",
             "readonly" : true,
             "block_size" : 0,
             "set" : 0,
@@ -292,18 +292,18 @@
     ],
     "ubos" : [
         {
-            "type" : "_432",
-            "name" : "_432_434",
-            "block_size" : 464,
-            "set" : 0,
-            "binding" : 0
-        },
-        {
-            "type" : "_874",
-            "name" : "_874_876",
+            "type" : "_10",
+            "name" : "type.ConstantBuffer.MaterialData",
             "block_size" : 64,
             "set" : 0,
             "binding" : 1
+        },
+        {
+            "type" : "_19",
+            "name" : "type.ConstantBuffer.CameraData",
+            "block_size" : 464,
+            "set" : 0,
+            "binding" : 0
         }
     ]
 }

@@ -17,7 +17,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: ecf9320d46d4f1c503cc0ff9ea64a833
+; shader hash: 74c975deecb98646057d3c36d909257d
 ;
 ; Pipeline Runtime Information:
 ;
@@ -58,40 +58,52 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _432_434
+; cbuffer material
 ; {
 ;
-;   struct hostlayout._432_434
+;   struct material
 ;   {
 ;
-;       row_major float4x4 _434_m0;                   ; Offset:    0
-;       float4 _434_m1;                               ; Offset:   64
-;       float4 _434_m2;                               ; Offset:   80
-;       float4 _434_m3;                               ; Offset:   96
-;       float4 _434_m4;                               ; Offset:  112
-;       row_major float4x4 _434_m5[4];                ; Offset:  128
-;       float4 _434_m6;                               ; Offset:  384
-;       float4 _434_m7;                               ; Offset:  400
-;       float4 _434_m8;                               ; Offset:  416
-;       float4 _434_m9;                               ; Offset:  432
-;       float4 _434_m10;                              ; Offset:  448
+;       struct struct.MaterialData
+;       {
 ;
-;   } _432_434;                                       ; Offset:    0 Size:   464
+;           float4 base_factor;                       ; Offset:    0
+;           float4 emissive_normal_scale;             ; Offset:   16
+;           float4 metallic_roughness_occlusion_cutoff;; Offset:   32
+;           uint4 flags;                              ; Offset:   48
+;
+;       } material;                                   ; Offset:    0
+;
+;
+;   } material;                                       ; Offset:    0 Size:    64
 ;
 ; }
 ;
-; cbuffer _874_876
+; cbuffer camera
 ; {
 ;
-;   struct _874_876
+;   struct hostlayout.camera
 ;   {
 ;
-;       float4 _876_m0;                               ; Offset:    0
-;       float4 _876_m1;                               ; Offset:   16
-;       float4 _876_m2;                               ; Offset:   32
-;       uint4 _876_m3;                                ; Offset:   48
+;       struct hostlayout.struct.CameraData
+;       {
 ;
-;   } _874_876;                                       ; Offset:    0 Size:    64
+;           row_major float4x4 view_projection;       ; Offset:    0
+;           float4 eye;                               ; Offset:   64
+;           float4 light_direction;                   ; Offset:   80
+;           float4 light_color;                       ; Offset:   96
+;           float4 environment;                       ; Offset:  112
+;           row_major float4x4 shadow_view_projection[4];; Offset:  128
+;           float4 shadow_splits;                     ; Offset:  384
+;           float4 shadow_texel_world;                ; Offset:  400
+;           float4 shadow_depth_scale;                ; Offset:  416
+;           float4 camera_forward_blend;              ; Offset:  432
+;           float4 shadow_bias;                       ; Offset:  448
+;
+;       } camera;                                     ; Offset:    0
+;
+;
+;   } camera;                                         ; Offset:    0 Size:   464
 ;
 ; }
 ;
@@ -100,24 +112,24 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _432_434                          cbuffer      NA          NA     CB0            cb0     1
-; _874_876                          cbuffer      NA          NA     CB1            cb1     1
-; _507                              sampler      NA          NA      S0      s4,space3     1
-; _891                              sampler      NA          NA      S1      s4,space1     1
-; _1226                             sampler      NA          NA      S2      s3,space2     1
-; _97                               texture    byte         r/o      T0             t2     1
-; _380                              texture    byte         r/o      T1             t3     1
-; _503                              texture     f32          2d      T2      t0,space3     1
-; _519                              texture     f32          2d      T3      t1,space3     1
-; _531                              texture     f32          2d      T4      t2,space3     1
-; _539                              texture     f32          2d      T5      t3,space3     1
-; _889                              texture     f32          2d      T6      t0,space1     1
-; _929                              texture     f32          2d      T7      t2,space1     1
-; _1023                             texture     f32          2d      T8      t1,space1     1
-; _1213                             texture     f32          2d      T9      t3,space1     1
-; _1224                             texture     f32          2d     T10      t0,space2     1
-; _1246                             texture     f32          2d     T11      t1,space2     1
-; _1257                             texture     f32          2d     T12      t2,space2     1
+; material                          cbuffer      NA          NA     CB0            cb1     1
+; camera                            cbuffer      NA          NA     CB1            cb0     1
+; material_sampler                  sampler      NA          NA      S0      s4,space1     1
+; environment_sampler               sampler      NA          NA      S1      s3,space2     1
+; shadow_sampler                    sampler      NA          NA      S2      s4,space3     1
+; base_image                        texture     f32          2d      T0      t0,space1     1
+; normal_image                      texture     f32          2d      T1      t1,space1     1
+; orm_image                         texture     f32          2d      T2      t2,space1     1
+; emissive_image                    texture     f32          2d      T3      t3,space1     1
+; irradiance_image                  texture     f32          2d      T4      t0,space2     1
+; reflection_image                  texture     f32          2d      T5      t1,space2     1
+; brdf_image                        texture     f32          2d      T6      t2,space2     1
+; shadow_image0                     texture     f32          2d      T7      t0,space3     1
+; shadow_image1                     texture     f32          2d      T8      t1,space3     1
+; shadow_image2                     texture     f32          2d      T9      t2,space3     1
+; shadow_image3                     texture     f32          2d     T10      t3,space3     1
+; local_lights                      texture    byte         r/o     T11             t2     1
+; tile_lists                        texture    byte         r/o     T12             t3     1
 ;
 ;
 ; ViewId state:

@@ -340,9 +340,6 @@ mod tests {
         assert_eq!(additions[0].1, [products[0], products[1]]);
         assert_eq!(additions[1].1, [additions[0].0, products[2]]);
         assert_eq!(additions[2].1[0], additions[1].0);
-        let hlsl = include_str!("shaders/dxil/pbr.vert.hlsl");
-        assert_eq!(hlsl.matches("precise float4 ").count(), 6);
-        assert!(!hlsl.contains("mul("));
     }
 
     #[test]

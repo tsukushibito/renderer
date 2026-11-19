@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: e39db886390be56caf01ac2b7d631ca1
+; shader hash: 94edcbb36409f994c95b166b4e34ba92
 ;
 ; Pipeline Runtime Information:
 ;
@@ -39,7 +39,7 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _48                               texture     f32          2d      T0             t1     1
-; _138                              texture     f32          2d      T1             t0     1
-; _108                                  UAV     f32          2d      U0      u0,space1     1
+; source_image                      texture     f32          2d      T0             t0     1
+; blur_image                        texture     f32          2d      T1             t1     1
+; destination_image                     UAV     f32          2d      U0      u0,space1     1
 ;

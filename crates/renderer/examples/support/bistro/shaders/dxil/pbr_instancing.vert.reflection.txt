@@ -20,7 +20,7 @@
 ; TEXCOORD                 3   xy          3     NONE   float   xy
 ; SV_Position              0   xyzw        4      POS   float   xyzw
 ;
-; shader hash: 560a17a6e60b32e885716b447034d6c4
+; shader hash: ab623473cfe8077ad670c10e979927fe
 ;
 ; Pipeline Runtime Information:
 ;
@@ -63,41 +63,53 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _91_93
+; cbuffer camera
 ; {
 ;
-;   struct hostlayout._91_93
+;   struct hostlayout.camera
 ;   {
 ;
-;       row_major float4x4 _93_m0;                    ; Offset:    0
-;       float4 _93_m1;                                ; Offset:   64
-;       float4 _93_m2;                                ; Offset:   80
-;       float4 _93_m3;                                ; Offset:   96
-;       float4 _93_m4;                                ; Offset:  112
-;       row_major float4x4 _93_m5[4];                 ; Offset:  128
-;       float4 _93_m6;                                ; Offset:  384
-;       float4 _93_m7;                                ; Offset:  400
-;       float4 _93_m8;                                ; Offset:  416
-;       float4 _93_m9;                                ; Offset:  432
-;       float4 _93_m10;                               ; Offset:  448
+;       struct hostlayout.struct.CameraData
+;       {
 ;
-;   } _91_93;                                         ; Offset:    0 Size:   464
+;           row_major float4x4 view_projection;       ; Offset:    0
+;           float4 eye;                               ; Offset:   64
+;           float4 light_direction;                   ; Offset:   80
+;           float4 light_color;                       ; Offset:   96
+;           float4 environment;                       ; Offset:  112
+;           row_major float4x4 shadow_view_projection[4];; Offset:  128
+;           float4 shadow_splits;                     ; Offset:  384
+;           float4 shadow_texel_world;                ; Offset:  400
+;           float4 shadow_depth_scale;                ; Offset:  416
+;           float4 camera_forward_blend;              ; Offset:  432
+;           float4 shadow_bias;                       ; Offset:  448
+;
+;       } camera;                                     ; Offset:    0
+;
+;
+;   } camera;                                         ; Offset:    0 Size:   464
 ;
 ; }
 ;
-; cbuffer _24_26
+; cbuffer placements
 ; {
 ;
-;   struct _24_26
+;   struct placements
 ;   {
 ;
-;       float4 _26_m0;                                ; Offset:    0
-;       float4 _26_m1;                                ; Offset:   16
-;       float4 _26_m2;                                ; Offset:   32
-;       float4 _26_m3;                                ; Offset:   48
-;       uint _26_m4;                                  ; Offset:   64
+;       struct struct.Placements
+;       {
 ;
-;   } _24_26;                                         ; Offset:    0 Size:    68
+;           float4 source_scale;                      ; Offset:    0
+;           float4 origin;                            ; Offset:   16
+;           float4 column_step;                       ; Offset:   32
+;           float4 row_step;                          ; Offset:   48
+;           uint instance_offset;                     ; Offset:   64
+;
+;       } placements;                                 ; Offset:    0
+;
+;
+;   } placements;                                     ; Offset:    0 Size:    68
 ;
 ; }
 ;
@@ -106,8 +118,8 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _91_93                            cbuffer      NA          NA     CB0            cb0     1
-; _24_26                            cbuffer      NA          NA     CB1            cb7     1
+; camera                            cbuffer      NA          NA     CB0            cb0     1
+; placements                        cbuffer      NA          NA     CB1            cb7     1
 ;
 ;
 ; ViewId state:

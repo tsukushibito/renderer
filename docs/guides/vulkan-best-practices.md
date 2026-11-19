@@ -455,7 +455,7 @@ lossを返すAPIの`VK_ERROR_DEVICE_LOST`は、pending/in-useの判定に限っ�
 ### 再現可能な入力と実行環境
 
 - **仕様要件:** SPIR-Vのversion、capability、extension、entry point、stageを、使用DeviceのAPI・有効feature・extensionへ照合する。新しいSDKでコンパイルできたことだけでは、Vulkan 1.3の実行環境で使用可能とは判断しない。[SPIR-V拡張の使用手順](https://docs.vulkan.org/guide/latest/spirv_extensions.html)、[ShaderModuleのValid Usage](https://docs.vulkan.org/refpages/latest/refpages/source/VkShaderModuleCreateInfo.html)
-- **本Rendererの初期方針:** 固定toolchain、ソースとinclude依存、マクロ、entry point、stage、最適化・debug設定、target environmentを生成条件へ含める。`glslc --target-env=vulkan1.3`で生成し、同じ環境の`spirv-val`を生成・変換の後に実行する。実行手順は既存のtoolingガイドを維持する。[glslcのオプション](https://github.com/google/shaderc/blob/main/glslc/README.asciidoc)、[SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools)
+- **本Rendererの方針:** 固定toolchain、ソースとinclude依存、マクロ、entry point、stage、最適化・debug設定、target environmentを生成条件へ含める。標準のGLSLは`glslc --target-env=vulkan1.3`で生成し、[BistroのHLSL](tooling.md#bistro-tools)は固定版DXCで直接コンパイルする。どちらも生成後に`spirv-val --target-env vulkan1.3`を実行する。[glslcのオプション](https://github.com/google/shaderc/blob/main/glslc/README.asciidoc)、[SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools)
 - **仕様要件:** `VkShaderModuleCreateInfo`へ非ゼロ・4の倍数のSPIR-V byte数と、有効な32-bit word列を渡す。任意のbyte sliceをアラインメント確認なしで`u32`ポインターへcastしない。読み込み・形式・検証失敗はpipeline作成前に原因を付けて返す。[ShaderModuleの入力契約](https://docs.vulkan.org/refpages/latest/refpages/source/VkShaderModuleCreateInfo.html)
 - **一般推奨:** GLSL/HLSLの選択とAPI間のbinding・座標変換は別に決める。HLSL→SPIR-Vを選んでも、DX側のdata layoutやregister番号が自動的に既存Graph契約と一致するとは仮定しない。[HLSL in Vulkan](https://docs.vulkan.org/guide/latest/hlsl.html)
 

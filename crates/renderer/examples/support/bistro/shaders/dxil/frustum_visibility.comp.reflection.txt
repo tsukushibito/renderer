@@ -10,7 +10,7 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: 9b13720ba993730556884babe539cc65
+; shader hash: 5838c220bb1650f1b1da30fe62d3a941
 ;
 ; Pipeline Runtime Information:
 ;
@@ -34,15 +34,35 @@
 ;
 ; Buffer Definitions:
 ;
-; cbuffer _107_109
+; cbuffer Camera
 ; {
 ;
-;   struct hostlayout._107_109
+;   struct hostlayout.Camera
 ;   {
 ;
-;       row_major float4x4 _109_m0;                   ; Offset:    0
+;       row_major float4x4 view_projection;           ; Offset:    0
 ;
-;   } _107_109;                                       ; Offset:    0 Size:    64
+;   } Camera;                                         ; Offset:    0 Size:    64
+;
+; }
+;
+; Resource bind info for world
+; {
+;
+;   struct struct.Bounds
+;   {
+;
+;       uint4 minimum_enabled;                        ; Offset:    0
+;       uint4 maximum_padded;                         ; Offset:   16
+;
+;   } $Element;                                       ; Offset:    0 Size:    32
+;
+; }
+;
+; Resource bind info for visibility
+; {
+;
+;   uint $Element;                                    ; Offset:    0 Size:     4
 ;
 ; }
 ;
@@ -51,7 +71,7 @@
 ;
 ; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
-; _107_109                          cbuffer      NA          NA     CB0            cb0     1
-; _433                              texture    byte         r/o      T0             t1     1
-; _462                                  UAV    byte         r/w      U0             u2     1
+; Camera                            cbuffer      NA          NA     CB0            cb0     1
+; world                             texture  struct         r/o      T0             t1     1
+; visibility                            UAV  struct         r/w      U0             u2     1
 ;

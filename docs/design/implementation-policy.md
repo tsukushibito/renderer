@@ -1367,6 +1367,15 @@ B2の照明はsunと明示した一定ambientであり、B3のIBL・影・固定
 SDR確認用のclampとsRGB OETFは利用側の別passで一度だけ行う。
 標準forwardのunlit recipeへPBR固有のeffect列挙やasset読込を追加しない。
 
+Bistro専用shaderはHLSLを正本とし、固定版DXCの同じ入力からSPIR-V 1.3とDXILを生成する。
+同じソースで二APIの材質処理・Compute・頂点変換を保守し、手書きのregisterとspaceをRust descriptorの
+bindingとgroupに対応させる。API固有の宣言とclip出力Yの符号はHLSLの`__spirv__`分岐に置く。
+影cascade番号とinstance配置はそれぞれ4／68 byteで、Vulkanのpush constantとD3D12の`b7, space0`のroot constantsに対応する。
+既存の生成スクリプトでソース・include・バリアント・出力を固定し、SPIRV-Crossはreflectionに使う。
+Vulkanのbuffer配置はDXCの既定規則を使い、追加Device featureを前提にしない。
+生成compilerの変更は描画の丸めにも影響するため、ABI、両APIの画像、同じAPIの移行前後を
+[既存の比較閾値](../guides/development.md#bistro-pbr)で再確認する。
+
 clip座標の計算は、world-space positionと同じFP32のview-projectionから、各列の積を
 `((x + y) + z) + translation`の順に加える。固定1080pのlabel近景では、compilerごとの
 matrix積の再結合・縮約によりdepth差が最大約`2.98e-6`となり、既定の`2e-6`閾値を超えた。
@@ -1654,7 +1663,7 @@ D3D12での表示経路を、共通契約の検証に先立つ必須条件には
 shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を採用した。[^spirvcross][^dxc]
 固定5種類の再生成一致とreflectionを確認し、tool版・hash・引数・ABIを[ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記す。
 binding、combined sampler、行列・座標・データ配置の等価性は生成成功だけで判断せず、実出力と照合する。
-HLSLを単一ソースへ移す案は代案とし、既存Vulkan基準の再生成一致と変更量を比較してから判断する。
+この初期経路は標準shaderとfixtureで使う。Bistro専用shaderの現行経路は[利用側のshader設計](#bistro-runtime-cook)を参照する。
 Rust bindingsはMicrosoftの`windows-bindgen`によるbackend-private生成を採用する。
 D3D12・DXGIと必要なWin32 APIだけを生成し、生成型はD3D12バックエンド内部に閉じる。
 準備範囲ではDXCのnative APIを使わず、固定CLIでshaderを事前生成する。
