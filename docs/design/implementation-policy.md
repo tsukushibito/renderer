@@ -891,7 +891,7 @@ GraphとWorkingSetを使う。構成をYAMLで記述する場合は同じワー�
 |---|---|
 | シェーダーのアセットビルド | HLSLなどのソースを配布対象に応じてSPIR-V、DXIL、または両方へコンパイルする。entry point、stage、bindingとアクセス契約などのメタデータを対応するバイナリと組にして配布する。 |
 | アプリのアセット層 | 起動時にアプリが選んだバックエンドに対し、シェーダーの論理名を対応するアセットへ解決する。両形式を配布した場合も、選択したバックエンド用のバイナリと対応するメタデータを読む。 |
-| `renderer-pipeline` | YAMLのパス、描画リスト、リソース接続を解決する。`shader: post/tonemap`のような論理名を準備時にアプリへ渡し、型付きProgramを受け取る。毎フレームはアプリから渡された名前付きビューの候補を選び、公開Graph APIでパスを追加する。 |
+| `renderer-pipeline` | YAMLのパス、描画リスト、リソース接続を解決する。準備時に`shader`の論理名または`shader_template`と材質型の組をアプリに渡し、型付きProgramを受け取る。毎フレームはアプリから渡された名前付きビューの候補を選び、公開Graph APIでパスを追加する。 |
 | `renderer` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
 
 取込時に、バイナリ形式・版・サイズ・ステージと、記述子の構造・宣言したABIの整合を確認する。
@@ -922,10 +922,19 @@ YAMLは順序付きのRaster／Computeパス、名前付き資源・描画リス
 可変のハンドル・候補数は各フレームで確認し、上限内の入力には予約済み領域を使う。
 Graphを消費する`build`が成功したら、利用側が返された出力画像のexport、readback、後段パスなどを選ぶ。
 
+indexed Rasterは`shader_template`と材質型を宣言できる。アセットビルドがパスのHLSLテンプレートと
+材質関数を組み合わせ、バイナリと反射情報を出力する。アプリが対応するABIを確認して管理下Programを提供する。
+テンプレートの各Programは準備時にパスのattachmentとbindingに照合し、WorkingSetに含める。
+フレーム入力は材質インスタンスの型とGraph上の資源を渡す。パス共通のbindingと材質ごとのbindingを合わせ、
+使用された材質インスタンスごとにGraph内のbinding setを再利用する。Programを切り替える場合も入力の描画順を保持し、
+連続する同一Programの描画をまとめる。通常フレームでは予約済み領域で選択し、コード生成とGPUパイプライン作成は準備境界で行う。
+[テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
+
 構成の差し替えは、新しい`PreparedPipeline`を作り、以前のフレームと結果の貸し出しを返却してから
 実RuntimeのWorkingSetを更新する。更新が成功した版で後続フレームを組み立てる。
-初版の資源はbufferと1×・単一mip／layerの2D画像で、Rasterはindexed draw listまたは全画面三角形、
-ComputeはProgramのdispatch契約に従う。操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
+YAMLで宣言する資源はbufferと1×・単一mip／layerの2D画像で、材質のbindingには複数mipを含むGraphのsampled Viewも渡せる。
+Rasterはindexed draw listまたは全画面三角形、ComputeはProgramのdispatch契約に従う。
+操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
 
 ## 12. エンジン統合とPresentation
 

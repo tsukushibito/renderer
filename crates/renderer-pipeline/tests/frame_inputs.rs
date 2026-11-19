@@ -1,7 +1,10 @@
-use renderer::graph::{GraphCapacity, GraphPool, ImageDesc};
+use renderer::graph::{
+    BufferDesc, GraphCapacity, GraphPool, ImageDesc, RasterDraw, RasterParameters,
+};
 use renderer::program::ManagedRasterProgram;
 use renderer_pipeline::{
-    DrawCandidate, FrameInputs, FrameResource, FrameView, PrepareOptions, PreparedPipeline, Program,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, PrepareOptions,
+    PreparedPipeline, Program,
 };
 
 const PIPELINE: &str = "
@@ -26,6 +29,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
         PrepareOptions {
             frames_in_flight: 1,
             max_draws_per_list: 1,
+            max_materials: 0,
         },
         |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
     )
@@ -46,6 +50,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
                 resource: wrong.into(),
             }],
             views: &[view],
+            ..FrameInputs::default()
         },
     );
     assert!(
@@ -66,6 +71,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
                 resource: image.into(),
             }],
             views: &[view, view],
+            ..FrameInputs::default()
         },
     );
     assert!(
@@ -87,6 +93,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
                     resource: image.into(),
                 }],
                 views: &[view],
+                ..FrameInputs::default()
             },
         )
         .unwrap();
@@ -104,13 +111,12 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
 
 #[test]
 fn draw_list_overflow_returns_capacity_error_before_capturing_draws() {
-    use renderer::graph::{BufferDesc, RasterDraw, RasterParameters};
-
     let mut pipeline = PreparedPipeline::from_yaml(
         PIPELINE,
         PrepareOptions {
             frames_in_flight: 1,
             max_draws_per_list: 1,
+            max_materials: 0,
         },
         |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
     )
@@ -121,6 +127,7 @@ fn draw_list_overflow_returns_capacity_error_before_capturing_draws() {
     let image = graph.image("output", ImageDesc::rgba8(8, 4)).unwrap();
     let candidate = DrawCandidate {
         queue: "opaque",
+        material: None,
         draw: RasterDraw {
             bindings: None,
             vertices: buffer,
@@ -143,6 +150,7 @@ fn draw_list_overflow_returns_capacity_error_before_capturing_draws() {
                 name: "main",
                 candidates: &[candidate, candidate],
             }],
+            ..FrameInputs::default()
         },
     );
     assert!(
@@ -151,6 +159,73 @@ fn draw_list_overflow_returns_capacity_error_before_capturing_draws() {
             .unwrap()
             .to_string()
             .contains("exceeds prepared capacity 1")
+    );
+    assert!(pool.begin().is_ok());
+}
+
+#[test]
+fn missing_material_binding_identifies_the_pass_and_releases_the_slot() {
+    let definition = PIPELINE.replace(
+        "shader: mesh",
+        "shader_template: mesh
+    material_types: [paint]
+    bindings:
+      - {kind: material, group: 0, binding: 0, resource: offset}
+      - {kind: material, group: 1, binding: 0, resource: base_color}
+      - {kind: sampler, group: 1, binding: 1, sampler: nearest_clamp}",
+    );
+    let mut pipeline = PreparedPipeline::from_yaml(
+        &definition,
+        PrepareOptions {
+            frames_in_flight: 1,
+            max_draws_per_list: 1,
+            max_materials: 1,
+        },
+        |_| Ok(Program::Raster(ManagedRasterProgram::textured_mesh())),
+    )
+    .unwrap();
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let geometry = graph.buffer("geometry", BufferDesc { size: 16 }).unwrap();
+    let image = graph.image("output", ImageDesc::rgba8(8, 4)).unwrap();
+    let candidate = DrawCandidate {
+        queue: "opaque",
+        material: Some(0),
+        draw: RasterDraw {
+            bindings: None,
+            vertices: geometry,
+            indices: geometry,
+            first_index: 0,
+            index_count: 3,
+            instance_count: 1,
+            parameters: RasterParameters::default().into(),
+        },
+    };
+    let result = pipeline.build(
+        graph,
+        FrameInputs {
+            resources: &[FrameResource {
+                name: "output",
+                resource: image.into(),
+            }],
+            views: &[FrameView {
+                name: "main",
+                candidates: &[candidate],
+            }],
+            materials: &[FrameMaterial {
+                material_type: "paint",
+                bindings: &[],
+            }],
+        },
+    );
+    let message = result.err().unwrap().to_string();
+    assert!(
+        message.contains("pass 'opaque', material 0 ('paint')"),
+        "{message}"
+    );
+    assert!(
+        message.contains("missing material binding 'offset'"),
+        "{message}"
     );
     assert!(pool.begin().is_ok());
 }

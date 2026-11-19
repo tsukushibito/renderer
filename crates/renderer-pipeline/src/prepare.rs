@@ -14,14 +14,16 @@ use crate::schema::{
     self, AttachmentSpec, BindingSpec, Config, LoadAction, PassSpec, ResourceSource, ResourceSpec,
 };
 use crate::{
-    BindingSource, FrameScratch, Pass, PassKind, PipelineError, PrepareOptions, PreparedAttachment,
-    PreparedBinding, PreparedPipeline, Program, RasterDrawKind, Resource, ResourceDesc,
+    BindingSource, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError, PrepareOptions,
+    PreparedAttachment, PreparedBinding, PreparedPipeline, Program, RasterDrawKind, RasterPrograms,
+    Resource, ResourceDesc, ShaderRequest,
 };
 
 type ResolverError = Box<dyn Error + Send + Sync>;
 
 impl PreparedPipeline {
-    /// Parse and prepare a version 1 pipeline, resolving each logical shader name once.
+    /// Parse and prepare a version 1 pipeline, resolving each Program name or
+    /// template and material type pair once.
     ///
     /// Return the Program for the backend or backends selected by the application.
     /// Import shader assets through the renderer's trusted Program constructors before
@@ -30,7 +32,7 @@ impl PreparedPipeline {
     pub fn from_yaml(
         yaml: &str,
         options: PrepareOptions,
-        resolve: impl FnMut(&str) -> Result<Program, ResolverError>,
+        resolve: impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
     ) -> Result<Self, PipelineError> {
         let Config {
             version,
@@ -114,6 +116,7 @@ impl PreparedPipeline {
             options.max_draws_per_list,
             max_bindings,
             max_colors,
+            options.max_materials,
         )?;
         #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
         let classes = prepare_classes(&resources, options.frames_in_flight)?;
@@ -197,9 +200,18 @@ enum ProgramRef {
     Compute(usize),
 }
 
+#[derive(Eq, Hash, PartialEq)]
+enum ProgramKey {
+    Program(String),
+    Template {
+        template: String,
+        material_type: String,
+    },
+}
+
 #[derive(Default)]
 struct Programs {
-    by_name: HashMap<String, ProgramRef>,
+    by_key: HashMap<ProgramKey, ProgramRef>,
     raster: Vec<RasterPipelineRequest>,
     compute: Vec<ManagedProgram>,
 }
@@ -208,17 +220,33 @@ impl Programs {
     fn resolve(
         &mut self,
         pass: &str,
-        name: String,
-        resolve: &mut impl FnMut(&str) -> Result<Program, ResolverError>,
+        key: ProgramKey,
+        resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
     ) -> Result<ProgramRef, PipelineError> {
-        if name.trim().is_empty() {
-            return Err(pass_error(pass, "shader name must be nonempty"));
-        }
-        if let Some(program) = self.by_name.get(&name) {
+        if let Some(program) = self.by_key.get(&key) {
             return Ok(*program);
         }
-        let program = match resolve(&name).map_err(|source| PipelineError::Resolve {
-            name: name.clone(),
+        let request = match &key {
+            ProgramKey::Program(name) if name.trim().is_empty() => {
+                return Err(pass_error(pass, "shader name must be nonempty"));
+            }
+            ProgramKey::Program(name) => ShaderRequest::Program(name),
+            ProgramKey::Template {
+                template,
+                material_type,
+            } => ShaderRequest::Template {
+                template,
+                material_type,
+            },
+        };
+        let program = match resolve(request).map_err(|source| PipelineError::Resolve {
+            name: match request {
+                ShaderRequest::Program(name) => name.to_owned(),
+                ShaderRequest::Template {
+                    template,
+                    material_type,
+                } => format!("template {template:?}, material type {material_type:?}"),
+            },
             source,
         })? {
             Program::Raster(program) => {
@@ -232,7 +260,7 @@ impl Programs {
                 ProgramRef::Compute(index)
             }
         };
-        self.by_name.insert(name, program);
+        self.by_key.insert(key, program);
         Ok(program)
     }
 }
@@ -243,34 +271,38 @@ fn prepare_pass(
     resource_ids: &HashMap<&str, usize>,
     draw_list_ids: &HashMap<&str, usize>,
     programs: &mut Programs,
-    resolve: &mut impl FnMut(&str) -> Result<Program, ResolverError>,
+    resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
 ) -> Result<Pass, PipelineError> {
     match spec {
         PassSpec::Raster {
             id,
             shader,
+            shader_template,
+            material_types,
             colors,
             depth,
             draw_list,
             constants,
             bindings,
         } => {
-            let ProgramRef::Raster(index) = programs.resolve(&id, shader, resolve)? else {
+            let draw_list = draw_list
+                .map(|list| {
+                    draw_list_ids
+                        .get(list.as_str())
+                        .copied()
+                        .ok_or_else(|| pass_error(&id, format!("unknown draw list {list:?}")))
+                })
+                .transpose()?;
+            let bindings = prepare_bindings(&id, bindings, resource_ids)?;
+            let has_material_bindings = bindings
+                .iter()
+                .any(|binding| matches!(binding.source, BindingSource::Material(_)));
+            if draw_list.is_none() && has_material_bindings {
                 return Err(pass_error(
                     &id,
-                    "shader is a Compute Program, expected Raster",
+                    "material bindings require an indexed Raster pass",
                 ));
-            };
-            let program = &programs.raster[index].program;
-            let bindings = prepare_bindings(&id, bindings, resource_ids)?;
-            validate_bindings(
-                &id,
-                resources,
-                &bindings,
-                program.bindings(),
-                program.binding_bytes(),
-                None,
-            )?;
+            }
             let colors = colors
                 .into_iter()
                 .map(|attachment| prepare_attachment(&id, attachment, resource_ids))
@@ -278,40 +310,112 @@ fn prepare_pass(
             let depth = depth
                 .map(|attachment| prepare_attachment(&id, attachment, resource_ids))
                 .transpose()?;
-            validate_attachments(&id, resources, program, &colors, depth.as_ref())?;
-            let draw = match draw_list {
-                Some(list) => {
-                    if program.vertex_stride() == 0 || !constants.is_empty() {
+            let program = match (shader, shader_template) {
+                (Some(shader), None) => {
+                    if !material_types.is_empty() {
+                        return Err(pass_error(&id, "material_types requires shader_template"));
+                    }
+                    let ProgramRef::Raster(index) =
+                        programs.resolve(&id, ProgramKey::Program(shader), resolve)?
+                    else {
                         return Err(pass_error(
                             &id,
+                            "shader is a Compute Program, expected Raster",
+                        ));
+                    };
+                    RasterPrograms::Fixed(index)
+                }
+                (None, Some(template)) => {
+                    if draw_list.is_none() {
+                        return Err(pass_error(
+                            &id,
+                            "shader_template requires an indexed draw list",
+                        ));
+                    }
+                    if template.trim().is_empty() || material_types.is_empty() {
+                        return Err(pass_error(
+                            &id,
+                            "shader_template and material_types must be nonempty",
+                        ));
+                    }
+                    index_names(material_types.iter().map(String::as_str), "material type")
+                        .map_err(|error| pass_error(&id, error))?;
+                    let variants = material_types
+                        .into_iter()
+                        .map(|name| {
+                            let key = ProgramKey::Template {
+                                template: template.clone(),
+                                material_type: name.clone(),
+                            };
+                            let ProgramRef::Raster(index) = programs.resolve(&id, key, resolve)? else {
+                                return Err(pass_error(&id, format!("template {template:?} with material type {name:?} resolved to a Compute Program")));
+                            };
+                            Ok(MaterialVariant { name, program: index })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    RasterPrograms::Material(variants)
+                }
+                _ => {
+                    return Err(pass_error(
+                        &id,
+                        "specify exactly one of shader and shader_template",
+                    ));
+                }
+            };
+            let uses_materials =
+                has_material_bindings || matches!(&program, RasterPrograms::Material(_));
+            let validate_program = |label: &str, index: usize| {
+                let program = &programs.raster[index].program;
+                validate_bindings(
+                    label,
+                    resources,
+                    &bindings,
+                    program.bindings(),
+                    program.binding_bytes(),
+                    None,
+                )?;
+                validate_attachments(label, resources, program, &colors, depth.as_ref())?;
+                if draw_list.is_some() {
+                    if program.vertex_stride() == 0 || !constants.is_empty() {
+                        return Err(pass_error(
+                            label,
                             "indexed Raster requires a vertex stream and draw-list constants",
                         ));
                     }
-                    let index = *draw_list_ids
-                        .get(list.as_str())
-                        .ok_or_else(|| pass_error(&id, format!("unknown draw list {list:?}")))?;
-                    RasterDrawKind::Indexed(index)
+                } else if program.vertex_stride() != 0
+                    || size_of_val(constants.as_slice()) != program.parameter_size() as usize
+                {
+                    return Err(pass_error(
+                        label,
+                        "fullscreen Raster requires a generated-vertex program and matching inline constants",
+                    ));
                 }
-                None => {
-                    if program.vertex_stride() != 0
-                        || size_of_val(constants.as_slice()) != program.parameter_size() as usize
-                    {
-                        return Err(pass_error(
-                            &id,
-                            "fullscreen Raster requires a generated-vertex program and matching inline constants",
-                        ));
+                Ok(())
+            };
+            match &program {
+                RasterPrograms::Fixed(index) => validate_program(&id, *index)?,
+                RasterPrograms::Material(variants) => {
+                    for variant in variants {
+                        validate_program(
+                            &format!("{id} (material type {:?})", variant.name),
+                            variant.program,
+                        )?;
                     }
-                    RasterDrawKind::Fullscreen(RasterConstants::new(&constants)?)
                 }
+            }
+            let draw = match draw_list {
+                Some(index) => RasterDrawKind::Indexed(index),
+                None => RasterDrawKind::Fullscreen(RasterConstants::new(&constants)?),
             };
             Ok(Pass {
                 id,
                 bindings,
                 kind: PassKind::Raster {
-                    program: index,
+                    program,
                     colors,
                     depth,
                     draw,
+                    uses_materials,
                 },
             })
         }
@@ -321,7 +425,9 @@ fn prepare_pass(
             bindings,
             grid,
         } => {
-            let ProgramRef::Compute(index) = programs.resolve(&id, shader, resolve)? else {
+            let ProgramRef::Compute(index) =
+                programs.resolve(&id, ProgramKey::Program(shader), resolve)?
+            else {
                 return Err(pass_error(
                     &id,
                     "shader is a Raster Program, expected Compute",
@@ -329,6 +435,15 @@ fn prepare_pass(
             };
             let program = &programs.compute[index];
             let bindings = prepare_bindings(&id, bindings, resource_ids)?;
+            if bindings
+                .iter()
+                .any(|binding| matches!(binding.source, BindingSource::Material(_)))
+            {
+                return Err(pass_error(
+                    &id,
+                    "material bindings require an indexed Raster pass",
+                ));
+            }
             let contract = program.dispatch_contract();
             validate_bindings(
                 &id,
@@ -500,6 +615,19 @@ fn prepare_bindings(
                     binding,
                     sampler,
                 } => (group, binding, BindingSource::Sampler(sampler.into())),
+                BindingSpec::Material {
+                    group,
+                    binding,
+                    resource,
+                } => {
+                    if resource.trim().is_empty() {
+                        return Err(pass_error(
+                            pass,
+                            "material binding resource must be nonempty",
+                        ));
+                    }
+                    (group, binding, BindingSource::Material(resource))
+                }
             };
             Ok(PreparedBinding {
                 group,
@@ -629,6 +757,8 @@ fn validate_bindings(
                 }
             }
             (BindingSource::Sampler(_), BindingType::Sampler) => {}
+            // Graph validates the concrete material operand when the frame is built.
+            (BindingSource::Material(_), _) => {}
             _ => return Err(error("resource kind differs from the Program slot")),
         }
     }
@@ -684,6 +814,7 @@ mod tests {
     const OPTIONS: PrepareOptions = PrepareOptions {
         frames_in_flight: 2,
         max_draws_per_list: 4,
+        max_materials: 2,
     };
 
     const DRAW_PIPELINE: &str = r#"
@@ -706,6 +837,126 @@ output: final
         PreparedPipeline::from_yaml(yaml, OPTIONS, |_| {
             Ok(Program::Raster(ManagedRasterProgram::mesh()))
         })
+    }
+
+    const TEMPLATE_SELECTION: &str = "shader_template: mesh\n    material_types: [wall, leaf]";
+
+    #[test]
+    fn raster_requires_one_shader_selection_and_valid_template_material_types() {
+        for (selection, reason) in [
+            ("", "exactly one"),
+            ("shader: mesh\n    shader_template: mesh", "exactly one"),
+            (
+                "shader: mesh\n    material_types: [wall]",
+                "requires shader_template",
+            ),
+            ("shader_template: mesh", "must be nonempty"),
+            (
+                "shader_template: mesh\n    material_types: [wall, wall]",
+                "duplicate material type",
+            ),
+        ] {
+            let yaml = DRAW_PIPELINE.replace("shader: mesh", selection);
+            let result = PreparedPipeline::from_yaml(&yaml, OPTIONS, |_| {
+                panic!("malformed shader selection must be rejected before resolution");
+            });
+            assert!(
+                matches!(result, Err(PipelineError::Invalid(message)) if message.contains(reason))
+            );
+        }
+        let fullscreen = DRAW_PIPELINE
+            .replace("shader: mesh", TEMPLATE_SELECTION)
+            .replace("    draw_list: scene\n", "");
+        assert!(
+            matches!(prepare_draw(&fullscreen), Err(PipelineError::Invalid(message)) if message.contains("requires an indexed draw list"))
+        );
+    }
+
+    #[test]
+    fn template_materials_resolve_once_per_pair_and_validate_every_variant() {
+        let yaml = DRAW_PIPELINE
+            .replace("shader: mesh", TEMPLATE_SELECTION)
+            .replace(
+                "output: final",
+                r#"  - id: draw_again
+    kind: raster
+    shader_template: mesh
+    material_types: [leaf, wall]
+    draw_list: scene
+    colors: [{image: final, load: load}]
+  - id: direct
+    kind: raster
+    shader: mesh
+    draw_list: scene
+    colors: [{image: final, load: load}]
+output: final"#,
+            );
+        let mut requests = Vec::new();
+        let pipeline = PreparedPipeline::from_yaml(&yaml, OPTIONS, |request| {
+            requests.push(match request {
+                ShaderRequest::Program(name) => (name.to_owned(), None),
+                ShaderRequest::Template {
+                    template,
+                    material_type,
+                } => (template.to_owned(), Some(material_type.to_owned())),
+            });
+            Ok(Program::Raster(ManagedRasterProgram::mesh()))
+        })
+        .unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(name, material)| (name.as_str(), material.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("mesh", Some("wall")),
+                ("mesh", Some("leaf")),
+                ("mesh", None)
+            ]
+        );
+        assert_eq!(pipeline.raster.len(), 3);
+
+        let result = PreparedPipeline::from_yaml(&yaml, OPTIONS, |request| {
+            let program = match request {
+                ShaderRequest::Template {
+                    material_type: "leaf",
+                    ..
+                } => ManagedRasterProgram::mesh_hdr(),
+                _ => ManagedRasterProgram::mesh(),
+            };
+            Ok(Program::Raster(program))
+        });
+        assert!(
+            matches!(result, Err(PipelineError::Invalid(message)) if message.contains("material type") && message.contains("leaf") && message.contains("format or extent"))
+        );
+    }
+
+    #[test]
+    fn validates_declared_material_slots_for_direct_and_template_programs() {
+        let yaml = DRAW_PIPELINE.replace(
+            "    draw_list: scene\n",
+            r#"    draw_list: scene
+    bindings:
+      - {kind: material, group: 0, binding: 0, resource: transform}
+      - {kind: material, group: 1, binding: 0, resource: base_color}
+      - {kind: sampler, group: 1, binding: 1, sampler: nearest_clamp}
+"#,
+        );
+        let prepare = |yaml: &str| {
+            PreparedPipeline::from_yaml(yaml, OPTIONS, |_| {
+                Ok(Program::Raster(ManagedRasterProgram::textured_mesh()))
+            })
+        };
+        assert!(prepare(&yaml).is_ok());
+        assert!(prepare(&yaml.replace("shader: mesh", TEMPLATE_SELECTION)).is_ok());
+        let duplicate = yaml.replace("group: 1, binding: 1", "group: 1, binding: 0");
+        assert!(
+            matches!(prepare(&duplicate), Err(PipelineError::Invalid(message)) if message.contains("duplicate Program slot"))
+        );
+        let fullscreen = yaml.replace("    draw_list: scene\n", "");
+        assert!(
+            matches!(prepare(&fullscreen), Err(PipelineError::Invalid(message)) if message.contains("material bindings require an indexed Raster pass"))
+        );
     }
 
     #[test]

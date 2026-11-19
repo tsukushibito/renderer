@@ -1143,7 +1143,7 @@ pub(super) fn build(
         graph.image_view(shadows[2], 0, 0)?,
         graph.image_view(shadows[3], 0, 0)?,
     ];
-    let shadow_program = program::shadow_program();
+    let shadow_program = options.shadow_program();
     let redraw_any = redraw.into_iter().any(|value| value);
     for (index, material) in scene.materials.iter().enumerate().filter(|_| redraw_any) {
         let base = material.textures[0];
@@ -1290,6 +1290,8 @@ pub(super) fn build(
         .placements
         .as_ref()
         .map(|placement| placement.material);
+    let opaque_program = options.forward_program(false);
+    let blend_program = options.forward_program(true);
     {
         #[cfg(feature = "tracy")]
         let _bindings = tracy_client::Client::running()
@@ -1350,7 +1352,11 @@ pub(super) fn build(
             let bindings = if deferred && !material.blend {
                 graph.raster_bindings(&program::deferred::gbuffer_program(), &material_bindings)?
             } else {
-                let program = options.pipeline.forward_program(material.blend);
+                let program = if material.blend {
+                    &blend_program
+                } else {
+                    &opaque_program
+                };
                 let mut bindings = [material_bindings[0]; renderer::program::MAX_RASTER_BINDINGS];
                 let shared = material_bindings.len() + lighting_bindings.len();
                 bindings[..material_bindings.len()].copy_from_slice(&material_bindings);
@@ -1367,7 +1373,7 @@ pub(super) fn build(
                             .raster_bindings(&program::instancing_program(), &bindings[..shared])?,
                     );
                 }
-                graph.raster_bindings(&program, &bindings[..program.bindings().len()])?
+                graph.raster_bindings(program, &bindings[..program.bindings().len()])?
             };
             workspace.bindings.push(bindings);
         }
@@ -1531,7 +1537,7 @@ pub(super) fn build(
                 }),
             },
             |raster| {
-                record_opaque(raster, &options.pipeline.forward_program(false))?;
+                record_opaque(raster, &opaque_program)?;
                 if let Some(placements) = &workspace.placements {
                     let instance = RasterDraw {
                         bindings: instance_bindings,
@@ -1589,12 +1595,7 @@ pub(super) fn build(
                         store,
                     }),
                 },
-                |raster| {
-                    raster.draw(
-                        &options.pipeline.forward_program(true),
-                        workspace.blended.iter().copied().map(draw),
-                    )
-                },
+                |raster| raster.draw(&blend_program, workspace.blended.iter().copied().map(draw)),
             )?;
         }
     }

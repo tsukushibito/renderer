@@ -2,13 +2,17 @@ use std::{error::Error, fs, path::Path, time::Duration};
 
 use renderer::{
     D3D12ValidationMode, ValidationMode,
-    graph::{BufferDesc, Graph, GraphError, GraphPool, ImageDesc, RasterDraw, RasterParameters},
+    graph::{
+        BindingResource, BufferDesc, Graph, GraphError, GraphPool, ImageDesc, RasterDraw,
+        RasterParameters,
+    },
     runtime::{
         D3D12Config, ResourceClass, Runtime, RuntimeConfig, RuntimeLimits, VulkanConfig, WorkingSet,
     },
 };
 use renderer_pipeline::{
-    DrawCandidate, FrameInputs, FrameResource, FrameView, PrepareOptions, PreparedPipeline,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, MaterialBinding,
+    PrepareOptions, PreparedPipeline,
 };
 
 use super::pipeline_shaders::{self, Backend};
@@ -31,6 +35,10 @@ const MEASURED_FRAMES: usize = 24;
 
 const VERTICES: BufferDesc = BufferDesc { size: 112 };
 const INDICES: BufferDesc = BufferDesc { size: 24 };
+const OFFSET: BufferDesc = BufferDesc { size: 16 };
+const MATERIAL_TYPES: [&str; 3] = ["replace", "additive", "replace"];
+const MATERIAL_COLORS: [[u8; 4]; 3] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
+
 fn target_desc() -> ImageDesc {
     ImageDesc::rgba8(WIDTH, HEIGHT)
 }
@@ -41,21 +49,33 @@ enum Route {
     DepthPrepass,
     Invert,
     SwapRedBlue,
+    MaterialTemplate,
 }
 
 impl Route {
-    fn expected_color(self, [r, g, b, a]: [u8; 4]) -> [u8; 4] {
+    fn expected_color(self, variant: usize) -> [u8; 4] {
+        let [r, g, b, a] = COLORS[variant];
         match self {
             Self::DepthPrepass => [r, g, b, a],
             Self::Invert => [255 - r, 255 - g, 255 - b, a],
             Self::SwapRedBlue => [b, g, r, a],
+            // Replace red, add green, then replace with blue. Regrouping the
+            // draws by type would put additive last and end with cyan.
+            Self::MaterialTemplate => {
+                [[255, 0, 0, 255], [255, 255, 0, 255], [0, 0, 255, 255]][variant]
+            }
         }
     }
 }
 
 type Pixels = [u8; IMAGE_BYTES];
 type Frames = [Pixels; FRAME_VARIANTS];
-const ROUTES: [Route; 3] = [Route::DepthPrepass, Route::Invert, Route::SwapRedBlue];
+const ROUTES: [Route; 4] = [
+    Route::DepthPrepass,
+    Route::Invert,
+    Route::SwapRedBlue,
+    Route::MaterialTemplate,
+];
 type Output = [Frames; ROUTES.len()];
 
 pub(super) fn run() -> Result<(), Box<dyn Error>> {
@@ -63,10 +83,12 @@ pub(super) fn run() -> Result<(), Box<dyn Error>> {
     let depth_prepass = fs::read_to_string(directory.join("depth_prepass.yaml"))?;
     let invert = fs::read_to_string(directory.join("compute_post.yaml"))?;
     let swap_red_blue = invert.replace("post/invert", "post/swap-red-blue");
+    let material = fs::read_to_string(directory.join("material_template.yaml"))?;
     let definitions = [
         depth_prepass.as_str(),
         invert.as_str(),
         swap_red_blue.as_str(),
+        material.as_str(),
     ];
     let (vk_luid, vk_output) = run_backend(Backend::Vulkan, definitions)?;
     let (dx_luid, dx_output) = run_backend(Backend::D3D12, definitions)?;
@@ -111,7 +133,8 @@ fn run_backend(
             yaml,
             PrepareOptions {
                 frames_in_flight: limits.frames,
-                max_draws_per_list: 2,
+                max_draws_per_list: 3,
+                max_materials: 3,
             },
             |shader| pipeline_shaders::resolve(backend, shader),
         )
@@ -207,9 +230,17 @@ fn with_app_resources<T>(
             desc: INDICES,
             count: 1,
         },
+        ResourceClass::Buffer {
+            desc: OFFSET,
+            count: 1,
+        },
         ResourceClass::Image {
             desc: target_desc(),
             count: 1,
+        },
+        ResourceClass::Image {
+            desc: ImageDesc::rgba8(1, 1),
+            count: MATERIAL_TYPES.len(),
         },
     ]);
     prepare(WorkingSet {
@@ -227,19 +258,27 @@ fn run_frame(
 ) -> Result<Pixels, Box<dyn Error>> {
     let mut graph = pool.begin()?;
     let candidates = geometry(&mut graph)?;
+    let (offset, bindings) = material_resources(&mut graph)?;
+    let materials: [_; MATERIAL_TYPES.len()] = std::array::from_fn(|index| FrameMaterial {
+        material_type: MATERIAL_TYPES[index],
+        bindings: std::slice::from_ref(&bindings[index]),
+    });
     let target = graph.image("application target", target_desc())?;
     let variant = frame % FRAME_VARIANTS;
+    let target_resource = FrameResource {
+        name: "final",
+        resource: target.into(),
+    };
+    let view = FrameView {
+        name: "main",
+        candidates: &candidates[..(variant + 1) * 2],
+    };
     let (mut graph, output) = pipeline.build(
         graph,
         FrameInputs {
-            resources: &[FrameResource {
-                name: "final",
-                resource: target.into(),
-            }],
-            views: &[FrameView {
-                name: "main",
-                candidates: &candidates[2 - variant..],
-            }],
+            resources: &[target_resource, offset],
+            views: &[view],
+            materials: &materials,
         },
     )?;
     assert_eq!(output, target);
@@ -254,7 +293,7 @@ fn run_frame(
     );
     assert_eq!(
         passes().any(|pass| pass == "filter"),
-        !matches!(route, Route::DepthPrepass),
+        matches!(route, Route::Invert | Route::SwapRedBlue),
         "{route:?}"
     );
 
@@ -264,7 +303,7 @@ fn run_frame(
     let mut completion = runtime.wait_for_frame(id, WAIT)?.ok_or("GPU timeout")?;
     let mut pixels = [0; IMAGE_BYTES];
     completion.readback_into(readback, &mut pixels)?;
-    let expected = route.expected_color(COLORS[variant]);
+    let expected = route.expected_color(variant);
     for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(*pixel, expected, "{route:?}, frame {frame}, pixel {index}");
     }
@@ -274,7 +313,7 @@ fn run_frame(
     Ok(pixels)
 }
 
-fn geometry(graph: &mut Graph) -> Result<[DrawCandidate<'static>; 3], GraphError> {
+fn geometry(graph: &mut Graph) -> Result<[DrawCandidate<'static>; 6], GraphError> {
     let vertices = graph.buffer("quad vertices", VERTICES)?;
     let indices = graph.buffer("quad indices", INDICES)?;
     let vertex_bytes = [[-1.0_f32, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]]
@@ -287,11 +326,12 @@ fn geometry(graph: &mut Graph) -> Result<[DrawCandidate<'static>; 3], GraphError
         vertex_bytes.as_flattened().as_flattened(),
     )?;
     graph.upload_buffer("quad index bytes", indices, 0, index_bytes.as_flattened())?;
-    let candidate = |depth, tint, queue| {
+    let candidate = |depth, tint, queue, material| {
         let mut transform = *RasterParameters::default().transform();
         transform[3][2] = depth;
         Ok::<_, GraphError>(DrawCandidate {
             queue,
+            material,
             draw: RasterDraw {
                 bindings: None,
                 vertices,
@@ -303,9 +343,42 @@ fn geometry(graph: &mut Graph) -> Result<[DrawCandidate<'static>; 3], GraphError
             },
         })
     };
+    // Each frame adds one pair. The YAML chooses the queue to draw from the
+    // same view, so the application's inputs stay identical across routes.
     Ok([
-        candidate(0.25, [1.0, 0.0, 0.0, 1.0], "opaque")?,
-        candidate(0.75, [0.0, 1.0, 0.0, 1.0], "opaque")?,
-        candidate(0.1, [0.0, 0.0, 1.0, 1.0], "transparent")?,
+        candidate(0.1, [0.0, 0.0, 1.0, 1.0], "transparent", None)?,
+        candidate(0.5, [1.0; 4], "layered", Some(0))?,
+        candidate(0.75, [0.0, 1.0, 0.0, 1.0], "opaque", None)?,
+        candidate(0.5, [1.0; 4], "layered", Some(1))?,
+        candidate(0.25, [1.0, 0.0, 0.0, 1.0], "opaque", None)?,
+        candidate(0.5, [1.0; 4], "layered", Some(2))?,
     ])
+}
+
+fn material_resources(
+    graph: &mut Graph,
+) -> Result<(FrameResource<'static>, [MaterialBinding<'static>; 3]), GraphError> {
+    let offset = graph.buffer("material vertex offset", OFFSET)?;
+    graph.upload_buffer("upload vertex offset", offset, 0, &[0; 16])?;
+    let offset = FrameResource {
+        name: "vertex_offset",
+        resource: offset.into(),
+    };
+    let mut color_texture = |pixels: [u8; 4]| {
+        let image = graph.image("material color", ImageDesc::rgba8(1, 1))?;
+        graph.upload_image("upload material color", image, &pixels)?;
+        Ok::<_, GraphError>(MaterialBinding {
+            name: "color",
+            resource: BindingResource::ImageView(graph.image_view(image, 0, 0)?),
+        })
+    };
+    let [red, green, blue] = MATERIAL_COLORS;
+    Ok((
+        offset,
+        [
+            color_texture(red)?,
+            color_texture(green)?,
+            color_texture(blue)?,
+        ],
+    ))
 }

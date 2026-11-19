@@ -244,6 +244,8 @@ fn identity(
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
+        "shader_pipeline":options.shader_assets.as_ref().map(|selection| &selection.pipeline),
+        "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
         "local_lights":options.pipeline.uses_local_lights()
             .then(|| super::forward_lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),

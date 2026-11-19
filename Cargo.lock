@@ -1203,6 +1203,7 @@ dependencies = [
  "ash",
  "criterion",
  "raw-window-handle",
+ "renderer-pipeline",
  "serde_json",
  "sha2",
  "tracing",

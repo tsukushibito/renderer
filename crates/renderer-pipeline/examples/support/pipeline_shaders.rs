@@ -5,13 +5,14 @@ use std::{error::Error, fs, io, path::Path};
 use renderer::{
     ImageFormat,
     program::{
-        BindingLayout, BindingType, ComputeProgramDescriptor, D3D12RasterShaders, DispatchContract,
-        DispatchWorkgroups, ManagedProgram, ManagedRasterProgram, RasterProgramDescriptor,
-        RasterShaderStages, ShaderBinaries, ShaderStages,
+        BindingLayout, BindingType, BlendState, ComputeProgramDescriptor,
+        D3D12InlineConstantBinding, D3D12RasterShaders, DispatchContract, DispatchWorkgroups,
+        ManagedProgram, ManagedRasterProgram, RasterProgramDescriptor, RasterShaderStages,
+        ShaderBinaries, ShaderStages,
     },
     standard::passes::{SdrEncoding, SdrOutput},
 };
-use renderer_pipeline::Program;
+use renderer_pipeline::{Program, ShaderRequest};
 
 type AssetError = Box<dyn Error + Send + Sync>;
 
@@ -21,18 +22,32 @@ pub(super) enum Backend {
     D3D12,
 }
 
-pub(super) fn resolve(backend: Backend, name: &str) -> Result<Program, AssetError> {
-    let program = match name {
-        "scene/depth" => Program::Raster(ManagedRasterProgram::depth_only()),
-        "scene/opaque" => Program::Raster(ManagedRasterProgram::mesh()),
-        "scene/prepassed" => Program::Raster(ManagedRasterProgram::mesh_prepassed()),
-        "post/copy" => Program::Raster(load_fullscreen(backend)?),
-        "post/invert" => Program::Compute(load_transform(backend, true)?),
-        "post/swap-red-blue" => Program::Compute(load_transform(backend, false)?),
+pub(super) fn resolve(backend: Backend, request: ShaderRequest<'_>) -> Result<Program, AssetError> {
+    let program = match request {
+        ShaderRequest::Program("scene/depth") => {
+            Program::Raster(ManagedRasterProgram::depth_only())
+        }
+        ShaderRequest::Program("scene/opaque") => Program::Raster(ManagedRasterProgram::mesh()),
+        ShaderRequest::Program("scene/prepassed") => {
+            Program::Raster(ManagedRasterProgram::mesh_prepassed())
+        }
+        ShaderRequest::Program("post/copy") => Program::Raster(load_fullscreen(backend)?),
+        ShaderRequest::Program("post/invert") => Program::Compute(load_transform(backend, true)?),
+        ShaderRequest::Program("post/swap-red-blue") => {
+            Program::Compute(load_transform(backend, false)?)
+        }
+        ShaderRequest::Template {
+            template: "scene/layers",
+            material_type: "replace",
+        } => Program::Raster(load_layer(backend, BlendState::Replace)?),
+        ShaderRequest::Template {
+            template: "scene/layers",
+            material_type: "additive",
+        } => Program::Raster(load_layer(backend, BlendState::Additive)?),
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("unknown shader asset {name:?}"),
+                format!("unknown shader request {request:?}"),
             )
             .into());
         }
@@ -80,10 +95,46 @@ fn load_fullscreen(backend: Backend) -> Result<ManagedRasterProgram, AssetError>
     }
     .pipeline()
     .program;
-    let desc = standard.descriptor();
     // SAFETY: These files were checked byte-for-byte against the reviewed
     // fullscreen program. It uses vertex IDs 0..2, reads only the declared
     // image through the supplied clamp sampler at LOD 0, and writes color 0.
+    unsafe { import_raster(standard.descriptor(), shaders) }
+}
+
+fn load_layer(backend: Backend, blend: BlendState) -> Result<ManagedRasterProgram, AssetError> {
+    let shaders = match backend {
+        Backend::Vulkan => ShaderBinaries::vulkan(RasterShaderStages {
+            vertex: load!("shaders/textured.vert.spv")?,
+            fragment: Some(load!("shaders/textured.frag.spv")?),
+        }),
+        Backend::D3D12 => ShaderBinaries::d3d12(D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: load!("shaders/dxil/textured.vert.dxil")?,
+                fragment: Some(load!("shaders/dxil/textured.frag.dxil")?),
+            },
+            inline_constants: Some(D3D12InlineConstantBinding {
+                register: 1,
+                space: 0,
+            }),
+        }),
+    };
+    let standard = ManagedRasterProgram::textured_mesh();
+    let mut desc = standard.descriptor();
+    desc.blend = blend;
+    // SAFETY: Both shader files match the reviewed textured mesh bytes, with
+    // the same vertex/inline-constant layout, uniform and full selected-mip
+    // sample footprint. Fixed-function blending leaves that contract intact.
+    unsafe { import_raster(desc, shaders) }
+}
+
+/// Import exact reviewed variants with the supplied descriptor's ABI and
+/// execution contract. The caller establishes the same trust guarantees as
+/// ManagedRasterProgram::from_trusted_owned_descriptor.
+unsafe fn import_raster(
+    desc: RasterProgramDescriptor<'_>,
+    shaders: ShaderBinaries<RasterShaderStages<Vec<u8>>, D3D12RasterShaders<Vec<u8>>>,
+) -> Result<ManagedRasterProgram, AssetError> {
+    // SAFETY: Delegated to the caller at this application asset boundary.
     let program = unsafe {
         ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
             entry: desc.entry,

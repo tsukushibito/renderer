@@ -23,12 +23,12 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
         );
     } else {
         requests.push(RasterPipelineRequest {
-            program: options.pipeline.forward_program(false),
+            program: options.forward_program(false).into_owned(),
             sample_count: options.sample_count,
         });
     }
     requests.push(RasterPipelineRequest {
-        program: options.pipeline.forward_program(true),
+        program: options.forward_program(true).into_owned(),
         sample_count: options.sample_count,
     });
     if options.instances.enabled() {
@@ -37,7 +37,7 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
             sample_count: options.sample_count,
         });
     }
-    requests.push(program::shadow_program().into());
+    requests.push(options.shadow_program().into_owned().into());
     requests.push(tone_map_neutral_pipeline());
     let sdr = options.sdr_output();
     requests.push(sdr.pipeline());

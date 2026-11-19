@@ -1,4 +1,7 @@
-#include "material_sampling.hlsli"
+#ifndef RENDERER_MATERIAL_INCLUDE
+#define RENDERER_MATERIAL_INCLUDE "material_sampling.hlsli"
+#endif
+#include RENDERER_MATERIAL_INCLUDE
 #include "pbr_lighting.hlsli"
 
 #if defined(BISTRO_LOCAL_LIGHTS)

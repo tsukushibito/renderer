@@ -95,7 +95,10 @@ impl From<Format> for ImageFormat {
 pub(super) enum PassSpec {
     Raster {
         id: String,
-        shader: String,
+        shader: Option<String>,
+        shader_template: Option<String>,
+        #[serde(default)]
+        material_types: Vec<String>,
         #[serde(default)]
         colors: Vec<AttachmentSpec<[f32; 4]>>,
         depth: Option<AttachmentSpec<f32>>,
@@ -168,6 +171,11 @@ pub(super) enum BindingSpec {
         group: u32,
         binding: u32,
         sampler: Sampler,
+    },
+    Material {
+        group: u32,
+        binding: u32,
+        resource: String,
     },
 }
 

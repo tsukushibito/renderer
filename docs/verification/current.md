@@ -1,9 +1,32 @@
 # 現行実装の検証状況
 
-最終確認日は2026-11-19。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
+最終確認日は2026-11-20。以下の比較元と実行範囲は各記録に従う。実行手順は[開発ガイド](../guides/development.md)、
 現在の契約は[RenderGraph](../design/rendergraph.md)と[Vulkan設計](../design/vulkan.md)、
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
+
+<a id="material-shader-verification"></a>
+
+## 材質テンプレートとBistroのForward・シャドウ
+
+`renderer-6sm`。固定版DXCを使ったアセットビルドで、BistroのForwardとシャドウの頂点・fragmentを各API向けに生成した。
+SPIR-V／DXILの全8バイナリは既存のレビュー済みバイナリと一致し、既存17バリアントの`regenerate.ps1 -Verify`も成功した。
+別のユーザー定義テンプレートと2つの材質入力では、両APIで異なるfragmentバイナリを生成し、再ビルドの一致を確認した。
+
+RTX 3060（610.88）のVulkan／D3D12で、Bistroの128×96 fixtureと全量`full-a3`／`ibl-final`の640×480を比較した。
+Forward 1×・直接描画で、組み込みProgramと、YAMLから選んだテンプレート生成物を読み込むProgramを製品・厳格の両release構成で実行した。
+8組の比較でHDR、SDR、カメラD32、4枚のシャドウの計56出力のSHA-256が一致した。シャドウは各試行で再描画した。
+YAMLから材質型のProgramを解決し、カスケード・材質資源・カリングはBistroのGraphで構築した。
+テンプレート選択側は各条件4 warm-up＋4通常フレームを同時2枠で計測し、32フレームの観測対象の確保・解放／native作成・破棄は0件だった。
+計測区間はGraph構築から結果返却までとした。厳格構成のnative warning/errorとD3D12 corruptionは0件だった。
+別のステージを指すようにbundleとハッシュを改変した試行では、Bistroのレビュー済みバイナリとの照合でフレーム実行前に拒否した。
+
+`renderer-pipeline`の`yaml_pipeline`も同じGPUで、`build`から一つのRasterパスへ二つのProgramと材質別textureを設定した。
+入力順を保った描画が1／2／3件のとき、9×7画像の全画素は順に赤／黄／青になった。
+製品・厳格の両release構成で、4経路×2API×2構成×24回の合計384通常フレームを計測し、
+Rustの確保・再確保・解放、VMAのhostイベント、nativeの作成・破棄とdescriptorの確保・解放は0件だった。
+厳格構成はCore／SyncValとDebug Layer／GBVが有効で、終了までwarning/errorが0件だった。
+[ビルドと再現手順](../guides/tooling.md#material-shader-build)を参照する。
 
 <a id="yaml-pipeline-verification"></a>
 

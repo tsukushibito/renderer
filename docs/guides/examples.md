@@ -68,10 +68,10 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | ターゲット | 確認できること | 実行条件 |
 | --- | --- | --- |
 | `graph_composition` | 利用側のRasterパスの合成と不要分岐の除去 | CPU。追加feature不要 |
-| `yaml_pipeline` | [YAMLでのパス合成](tooling.md#yaml-pipeline)、描画リストの共有、外部Computeの差し替え | Windows。`renderer-pipeline`の`vulkan,d3d12`。フレーム計測には`memory-profiling`を追加 |
+| `yaml_pipeline` | [YAMLでのパス合成](tooling.md#yaml-pipeline)、描画リストの共有、外部Computeの差し替え、材質別Programとbindingの切り替え | Windows。`renderer-pipeline`の`vulkan,d3d12`。フレーム計測には`memory-profiling`を追加 |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
-| `bistro` | 利用側のPBR、IBL、影、トーンマッピング、Bloomの合成 | `vulkan` またはWindowsの `d3d12`。ウィンドウ表示はWindowsと `presentation`。全シーンはcook済み素材とIBLが必要 |
+| `bistro` | 利用側のPBR、IBL、影、トーンマッピング、Bloomの合成と、[Forward・シャドウのテンプレート選択](tooling.md#material-shader-build) | `vulkan` またはWindowsの `d3d12`。ウィンドウ表示はWindowsと `presentation`。全シーンはcook済み素材とIBLが必要 |
 | `frame_loop` | [フレーム進行、履歴、アセット更新](development.md#frame-loop) | `vulkan`。計測モードはrelease |
 | `engine_workloads` | [大メッシュ、マルチView、アセット差し替え](development.md#engine-workloads) | `vulkan`。計測モードはrelease |
 | `profile_workload` | [CPUプロファイル用のヘッドレス転送負荷](development.md#cpu-profile-workload) | Windows、`vulkan` または `d3d12` |

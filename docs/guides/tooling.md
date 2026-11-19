@@ -137,8 +137,10 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
 
 アプリから`renderer-pipeline`に依存し、実行するバックエンドに応じて`vulkan`または`d3d12` featureを選ぶ。
 YAMLのテキストを`PreparedPipeline::from_yaml`に渡す。第2引数の`PrepareOptions`で、同時処理する最大フレーム数
-`frames_in_flight`と、各描画リストの候補を選別した後の上限`max_draws_per_list`を指定する。
-第3引数は論理シェーダー名から`Program::Raster`または`Program::Compute`を返す関数である。
+`frames_in_flight`、各描画リストの選別後の上限`max_draws_per_list`、フレームの材質インスタンス数上限`max_materials`を指定する。
+第3引数は`ShaderRequest`に対して`Program::Raster`または`Program::Compute`を返す関数である。
+`ShaderRequest::Program(name)`は完成済みProgramの論理名を渡し、`ShaderRequest::Template { template, material_type }`
+は[ビルド済みのテンプレートと材質型の組](#material-shader-build)を指定する。
 アプリのアセット層が、対象APIのバイナリと対応するABIを[外部取込](#runtime-shader-import)の契約に従って読み込む。
 同じ論理名には、両APIで同じ用途と入出力契約を持つProgramを用意する。
 
@@ -149,9 +151,9 @@ YAMLのキーの重複、未知の項目、アンカー、エイリアス、merg
 |---|---|
 | `resources` | 名前`id`付きのリスト。`kind: image`は`width`、`height`と`format`を宣言する。形式は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
 | `draw_lists` | 任意のリスト。各項目に`id`、`view`、`queue`を指定する。対応するビューの候補からqueueが一致する描画を入力順で選ぶ。 |
-| `passes` | 宣言順のパス列。各項目に`id`、`kind`、`shader`を指定する。`kind: raster`は`colors`、任意の`depth`、indexed描画用の`draw_list`を指定する。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`には必要に応じて`bindings`を指定し、呼出側指定のbuffer gridを持つProgramだけに`grid: [x, y]`を与える。 |
+| `passes` | 宣言順のパス列。各項目に`id`と`kind`を指定する。`kind: raster`は`shader`か`shader_template`の一方と、色・深度のattachmentを指定する。テンプレート指定には`draw_list`と必要な`material_types`の一覧を与える。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`は`shader`を指定し、呼出側指定のbuffer gridを持つProgramには`grid: [x, y]`を与える。 |
 | attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。 |
-| `bindings` | 各パスで、Programが要求する`group`と`binding`に`kind: image`、`buffer`、`sampler`のいずれかを指定する。画像は`resource`、bufferは`resource`、`offset`、`size`を指定する。samplerは`sampler`に`nearest_clamp`、`linear_clamp`、`linear_repeat`、`linear_repeat_u_clamp_v`のいずれかを指定する。 |
+| `bindings` | 各パスで、Programが要求する`group`と`binding`に`kind`を指定する。`image`は`resource`、`buffer`は`resource`、`offset`、`size`を指定する。`sampler`は`sampler`に`nearest_clamp`、`linear_clamp`、`linear_repeat`、`linear_repeat_u_clamp_v`のいずれかを指定する。indexed Rasterの`kind: material`は`resource`でフレームの材質binding名を指定する。 |
 | `output` | 出力する画像の`id`。 |
 
 たとえば、アプリが供給するRGBA8画像にComputeを掛け、全画面Rasterへつなぐ構成を次のように書ける。
@@ -190,16 +192,50 @@ output: final
    `FrameInputs::views`には`FrameView`で名前付きビューと候補を渡す。各`DrawCandidate`に`queue`とジオメトリ・
    定数を持つ`RasterDraw`を指定し、その`bindings`は`None`にする。同じリストを使うパスは候補のジオメトリと定数のABIを共有する。
    パス別のbindingはYAMLが指定する。宣言した外部資源とビューは名前ごとに一つずつ渡す。
+   材質を使う描画候補には`DrawCandidate::material`に`FrameInputs::materials`の添字を指定する。
+   各`FrameMaterial`の`material_type`をテンプレートパスの宣言に合わせ、`MaterialBinding`でGraph上の資源を名前付きで渡す。
+   材質のtextureは`Graph::sampled_image_view`で複数mipを参照できる。
 3. `pipeline.build(graph, inputs)`でパスを追加する。成功時の戻り値はGraphと出力の`ImageHandle`である。
    出力を使用する後段、export、readbackなどを追加し、`Graph::compile`とRuntimeへの投入を行う。
    構成を変更するときは新しいYAML／Programから新たに準備し、Runtimeの貸し出しを返却してWorkingSetを更新する。
 
-Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リストを深度プリパスと本描画が共有する構成と、
-Computeの出力をRasterにつなぐ構成を実行する。`development-validation`を追加するとネイティブ検証を有効にできる。
+Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リストを共有する深度プリパス、ComputeからRasterへの接続、
+同じRasterパスで材質ごとにProgramとテクスチャを切り替える構成を実行する。
+`development-validation`を追加するとネイティブ検証を有効にできる。
 
 ```powershell
 cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,memory-profiling --example yaml_pipeline
 ```
+
+<a id="material-shader-build"></a>
+
+## パステンプレートと材質関数をビルドする
+
+パスの頂点・fragmentテンプレートと材質型のHLSL includeをアセット側で用意する。
+テンプレートはパス固有の`main`と入出力を定義し、必要なステージで`#include RENDERER_MATERIAL_INCLUDE`を使って材質関数を呼ぶ。
+ビルド入力はJSONで、`schema_version: 1`、名前付きの`templates`と`materials`、コンパイルする組を並べた`programs`を指定する。
+ソースと任意の`include_dirs`は入力ファイルからの相対パスで指定できる。
+
+Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/renderer/examples/support/bistro/shaders/material-programs.json)を次のようにビルドする。
+出力先には新しいディレクトリを指定する。SDKの場所は`VULKAN_SDK`または`--sdk-root`で指定できる。
+
+```powershell
+python -B tools/shaders/build_material_programs.py --manifest crates/renderer/examples/support/bistro/shaders/material-programs.json --output .tools/bistro-material-programs
+```
+
+`manifest.json`はテンプレート・材質型の組と、各ステージのSPIR-V／DXIL、反射情報とhashを結ぶ。
+テンプレートや材質の変更時は該当する組をビルドし直す。実行時のresolverはその組のバイナリと、レビュー済みの
+頂点・定数・リソースのABIおよびアクセス契約を[既存の取込境界](#runtime-shader-import)で照合してProgramを返す。
+
+Bistroの検証経路では、[YAML](../../crates/renderer/examples/support/bistro/forward-shadow.yaml)からForward不透明描画とシャドウの
+テンプレートを選び、半透明には完成済みProgramを指定する。既存のBistro Graphが材質資源、描画順、4つのシャドウカスケードを構築する。
+サンプルのresolverはForward 1×、直接描画、インスタンシングなしを対象とし、ビルドしたバイト列をレビュー済みのBistroバイナリと照合する。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --capture-shadow-maps --shader-pipeline crates/renderer/examples/support/bistro/forward-shadow.yaml --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
+```
+
+D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加の表示手順は[開発ガイド](development.md#bistro-b5)を参照する。
 
 <a id="bistro-tools"></a>
 

@@ -1,12 +1,12 @@
 use renderer::graph::{
     Attachment, Binding, BindingResource, Graph, GraphError, ImageHandle, RasterAttachments,
-    RasterDraw, ResourceHandle,
+    RasterBindings, RasterDraw, ResourceHandle,
 };
 use renderer::program::{ManagedProgram, RasterPipelineRequest};
 
 use crate::{
     BindingSource, Pass, PassKind, PipelineError, PreparedAttachment, PreparedPipeline,
-    RasterDrawKind, Resource, ResourceDesc,
+    RasterDrawKind, RasterPrograms, Resource, ResourceDesc,
 };
 
 /// A graph-local image or buffer for one `source: external` declaration.
@@ -17,11 +17,13 @@ pub struct FrameResource<'a> {
 }
 
 /// Indexed geometry and per-draw constants for a view. Leave `draw.bindings`
-/// empty. Each Raster pass supplies its own bindings from the YAML.
+/// empty. Pass-shared and material bindings are selected by the YAML.
 #[derive(Clone, Copy)]
 pub struct DrawCandidate<'a> {
     pub queue: &'a str,
     pub draw: RasterDraw,
+    /// Index into [`FrameInputs::materials`] for a pass that uses materials.
+    pub material: Option<usize>,
 }
 
 /// The application's candidates for one named view, in draw order.
@@ -31,19 +33,51 @@ pub struct FrameView<'a> {
     pub candidates: &'a [DrawCandidate<'a>],
 }
 
+/// A graph-local resource for a named material slot declared in the YAML.
+/// An image binding may use a sampled View covering multiple mip levels.
+#[derive(Clone, Copy)]
+pub struct MaterialBinding<'a> {
+    pub name: &'a str,
+    pub resource: BindingResource,
+}
+
+/// Resources of a single material instance for this frame.
+#[derive(Clone, Copy)]
+pub struct FrameMaterial<'a> {
+    /// The name declared in the template pass's `material_types`.
+    pub material_type: &'a str,
+    pub bindings: &'a [MaterialBinding<'a>],
+}
+
 /// Borrowed inputs for one Graph checkout. Supply each required name once.
 #[derive(Clone, Copy, Default)]
 pub struct FrameInputs<'a> {
     pub resources: &'a [FrameResource<'a>],
     pub views: &'a [FrameView<'a>],
+    pub materials: &'a [FrameMaterial<'a>],
+}
+
+#[derive(Clone, Copy)]
+struct SelectedDraw {
+    draw: RasterDraw,
+    material: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct MaterialSet {
+    program: usize,
+    bindings: Option<RasterBindings>,
 }
 
 pub(super) struct FrameScratch {
     handles: Vec<ResourceHandle>,
-    draws: Vec<Vec<RasterDraw>>,
+    draws: Vec<Vec<SelectedDraw>>,
     max_draws_per_list: usize,
     bindings: Vec<Binding>,
     colors: Vec<Attachment<[f32; 4]>>,
+    max_materials: usize,
+    material_sets: Vec<Option<MaterialSet>>,
+    material_draws: Vec<(usize, RasterDraw)>,
 }
 
 impl FrameScratch {
@@ -53,6 +87,7 @@ impl FrameScratch {
         max_draws_per_list: usize,
         max_bindings: usize,
         max_colors: usize,
+        max_materials: usize,
     ) -> Result<Self, PipelineError> {
         let mut draws = reserve(draw_lists)?;
         for _ in 0..draw_lists {
@@ -64,6 +99,13 @@ impl FrameScratch {
             max_draws_per_list,
             bindings: reserve(max_bindings)?,
             colors: reserve(max_colors)?,
+            max_materials,
+            material_sets: reserve(max_materials)?,
+            material_draws: reserve(if max_materials == 0 {
+                0
+            } else {
+                max_draws_per_list
+            })?,
         })
     }
 
@@ -73,7 +115,8 @@ impl FrameScratch {
         pass: &Pass,
         raster: &[RasterPipelineRequest],
         compute: &[ManagedProgram],
-    ) -> Result<(), GraphError> {
+        materials: &[FrameMaterial<'_>],
+    ) -> Result<(), PipelineError> {
         self.bindings.clear();
         for binding in &pass.bindings {
             let resource = match binding.source {
@@ -95,6 +138,7 @@ impl FrameScratch {
                     }
                 }
                 BindingSource::Sampler(sampler) => BindingResource::Sampler(sampler),
+                BindingSource::Material(_) => continue,
             };
             self.bindings.push(Binding {
                 group: binding.group,
@@ -117,8 +161,14 @@ impl FrameScratch {
                 colors,
                 depth,
                 draw,
+                uses_materials,
             } => {
-                let program = &raster[*program].program;
+                if *uses_materials {
+                    let RasterDrawKind::Indexed(list) = draw else {
+                        unreachable!("prepared material draws are indexed")
+                    };
+                    self.select_material_draws(graph, pass, *list, program, raster, materials)?;
+                }
                 self.colors.clear();
                 for color in colors {
                     let attachment = self.attachment(graph, color)?;
@@ -133,6 +183,20 @@ impl FrameScratch {
                     color_resolves: &[],
                     depth,
                 };
+                if *uses_materials {
+                    graph.raster(&pass.id, attachments, |encoder| {
+                        for batch in self.material_draws.chunk_by(|a, b| a.0 == b.0) {
+                            let program = &raster[batch[0].0].program;
+                            encoder.draw(program, batch.iter().map(|(_, draw)| draw))?;
+                        }
+                        Ok(())
+                    })?;
+                    return Ok(());
+                }
+                let RasterPrograms::Fixed(program) = program else {
+                    unreachable!("prepared pass with no material inputs has a fixed Program")
+                };
+                let program = &raster[*program].program;
                 match draw {
                     RasterDrawKind::Fullscreen(constants) => {
                         graph.raster(&pass.id, attachments, |raster| {
@@ -149,12 +213,88 @@ impl FrameScratch {
                         graph.raster(&pass.id, attachments, |raster| {
                             raster.draw(
                                 program,
-                                draws.iter().map(|draw| RasterDraw { bindings, ..*draw }),
+                                draws.iter().map(|selected| RasterDraw {
+                                    bindings,
+                                    ..selected.draw
+                                }),
                             )
                         })?;
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    fn select_material_draws(
+        &mut self,
+        graph: &mut Graph,
+        pass: &Pass,
+        list: usize,
+        programs: &RasterPrograms,
+        raster: &[RasterPipelineRequest],
+        materials: &[FrameMaterial<'_>],
+    ) -> Result<(), PipelineError> {
+        self.material_draws.clear();
+        self.material_sets.clear();
+        self.material_sets.resize(materials.len(), None);
+        let shared_bindings = self.bindings.len();
+        for selected in &self.draws[list] {
+            let index = selected
+                .material
+                .filter(|&index| index < materials.len())
+                .ok_or_else(|| {
+                    PipelineError::Invalid(format!(
+                        "pass '{}': draw has no valid material index",
+                        pass.id
+                    ))
+                })?;
+            let set = match self.material_sets[index] {
+                Some(set) => set,
+                None => {
+                    let material = materials[index];
+                    let program = programs.select(material.material_type).ok_or_else(|| {
+                        PipelineError::Invalid(format!(
+                            "pass '{}': material type '{}' has no prepared Program",
+                            pass.id, material.material_type
+                        ))
+                    })?;
+                    for binding in &pass.bindings {
+                        if let BindingSource::Material(ref name) = binding.source {
+                            let resource =
+                                named(material.bindings, name, "material binding", |b| b.name)
+                                    .map_err(|error| {
+                                        PipelineError::Invalid(format!(
+                                            "pass '{}', material {index} ('{}'): {error}",
+                                            pass.id, material.material_type
+                                        ))
+                                    })?
+                                    .resource;
+                            self.bindings.push(Binding {
+                                group: binding.group,
+                                binding: binding.binding,
+                                resource,
+                            });
+                        }
+                    }
+                    let bindings = if self.bindings.is_empty() {
+                        None
+                    } else {
+                        Some(graph.raster_bindings(&raster[program].program, &self.bindings)?)
+                    };
+                    self.bindings.truncate(shared_bindings);
+                    let set = MaterialSet { program, bindings };
+                    self.material_sets[index] = Some(set);
+                    set
+                }
+            };
+            self.material_draws.push((
+                set.program,
+                RasterDraw {
+                    bindings: set.bindings,
+                    ..selected.draw
+                },
+            ));
         }
         Ok(())
     }
@@ -198,6 +338,13 @@ impl PreparedPipeline {
         inputs: FrameInputs<'_>,
     ) -> Result<(Graph, ImageHandle), PipelineError> {
         let scratch = &mut self.scratch;
+        if inputs.materials.len() > scratch.max_materials {
+            return Err(PipelineError::Invalid(format!(
+                "frame has {} materials, exceeding prepared capacity {}",
+                inputs.materials.len(),
+                scratch.max_materials
+            )));
+        }
         scratch.handles.clear();
         for resource in &self.resources {
             scratch
@@ -224,15 +371,27 @@ impl PreparedPipeline {
                         spec.id
                     )));
                 }
-                draws.push(candidate.draw);
+                draws.push(SelectedDraw {
+                    draw: candidate.draw,
+                    material: candidate.material,
+                });
             }
         }
         for pass in &self.passes {
             scratch
-                .append_pass(&mut graph, pass, &self.raster, &self.compute)
-                .map_err(|source| PipelineError::PassGraph {
-                    id: pass.id.clone(),
-                    source,
+                .append_pass(
+                    &mut graph,
+                    pass,
+                    &self.raster,
+                    &self.compute,
+                    inputs.materials,
+                )
+                .map_err(|error| match error {
+                    PipelineError::Graph(source) => PipelineError::PassGraph {
+                        id: pass.id.clone(),
+                        source,
+                    },
+                    other => other,
                 })?;
         }
         let output = scratch.image(self.output);

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "templates": {
+    "bistro/forward": { "vertex": "pbr.vert.hlsl", "fragment": "pbr.frag.hlsl" },
+    "bistro/shadow": { "vertex": "shadow.vert.hlsl", "fragment": "shadow.frag.hlsl" }
+  },
+  "materials": { "bistro/pbr": "material_sampling.hlsli" },
+  "programs": [
+    { "template": "bistro/forward", "material": "bistro/pbr" },
+    { "template": "bistro/shadow", "material": "bistro/pbr" }
+  ]
+}

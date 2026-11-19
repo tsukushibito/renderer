@@ -16,9 +16,23 @@ use renderer::program::{
     ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
 };
 
-pub use frame::{DrawCandidate, FrameInputs, FrameResource, FrameView};
+pub use frame::{
+    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, MaterialBinding,
+};
 
 use frame::FrameScratch;
+
+/// Logical asset keys resolved once when a YAML configuration is prepared.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ShaderRequest<'a> {
+    /// A complete Program with a logical asset name.
+    Program(&'a str),
+    /// A Program previously built from the named template and material type.
+    Template {
+        template: &'a str,
+        material_type: &'a str,
+    },
+}
 
 /// A trusted Renderer Program returned by the application's logical-name resolver.
 pub enum Program {
@@ -33,6 +47,8 @@ pub struct PrepareOptions {
     pub frames_in_flight: usize,
     /// Maximum selected draws stored for each configured draw list.
     pub max_draws_per_list: usize,
+    /// Maximum frame material instances referenced by indexed draws.
+    pub max_materials: usize,
 }
 
 /// The source of a pipeline preparation or per-frame construction error.
@@ -95,6 +111,20 @@ pub struct PreparedPipeline {
 }
 
 impl PreparedPipeline {
+    /// Look up a prepared Raster Program for application-owned Graph assembly.
+    /// A pass with a directly named Program uses that Program for any material type.
+    pub fn raster_program(
+        &self,
+        pass_id: &str,
+        material_type: &str,
+    ) -> Option<&ManagedRasterProgram> {
+        let pass = self.passes.iter().find(|pass| pass.id == pass_id)?;
+        let PassKind::Raster { program, .. } = &pass.kind else {
+            return None;
+        };
+        Some(&self.raster[program.select(material_type)?].program)
+    }
+
     /// The transient classes and Program versions required by this pipeline.
     /// Include application-owned frame setup requirements in the runtime's full
     /// working set. Apply a new set at Renderer’s explicit preparation boundary.
@@ -128,15 +158,38 @@ struct Pass {
 
 enum PassKind {
     Raster {
-        program: usize,
+        program: RasterPrograms,
         colors: Vec<PreparedAttachment<[f32; 4]>>,
         depth: Option<PreparedAttachment<f32>>,
         draw: RasterDrawKind,
+        uses_materials: bool,
     },
     Compute {
         program: usize,
         grid: Option<[u32; 2]>,
     },
+}
+
+enum RasterPrograms {
+    Fixed(usize),
+    Material(Vec<MaterialVariant>),
+}
+
+impl RasterPrograms {
+    fn select(&self, material_type: &str) -> Option<usize> {
+        match self {
+            Self::Fixed(program) => Some(*program),
+            Self::Material(variants) => variants
+                .iter()
+                .find(|variant| variant.name == material_type)
+                .map(|variant| variant.program),
+        }
+    }
+}
+
+struct MaterialVariant {
+    name: String,
+    program: usize,
 }
 
 enum RasterDrawKind {
@@ -164,4 +217,5 @@ enum BindingSource {
         size: u64,
     },
     Sampler(SamplerDescriptor),
+    Material(String),
 }
