@@ -138,6 +138,7 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
 アプリから`renderer-pipeline`に依存し、実行するバックエンドに応じて`vulkan`または`d3d12` featureを選ぶ。
 YAMLのテキストを`PreparedPipeline::from_yaml`に渡す。第2引数の`PrepareOptions`で、同時処理する最大フレーム数
 `frames_in_flight`、各描画リストの選別後の上限`max_draws_per_list`、フレームの材質インスタンス数上限`max_materials`を指定する。
+`extent: frame`の画像がある場合は、`frame_extent`に準備対象の`[width, height]`を渡す。
 第3引数は`ShaderRequest`に対して`Program::Raster`または`Program::Compute`を返す関数である。
 `ShaderRequest::Program(name)`は完成済みProgramの論理名を渡し、`ShaderRequest::Template { template, material_type }`
 は[ビルド済みのテンプレートと材質型の組](#material-shader-build)を指定する。
@@ -149,7 +150,7 @@ YAMLのキーの重複、未知の項目、アンカー、エイリアス、merg
 
 | 項目 | 書式 |
 |---|---|
-| `resources` | 名前`id`付きのリスト。`kind: image`は`width`、`height`と`format`を宣言する。形式は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
+| `resources` | 名前`id`付きのリスト。`kind: image`は`width`と`height`の組、または`extent: frame`を指定する。`format`は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
 | `draw_lists` | 任意のリスト。各項目に`id`、`view`、`queue`を指定する。対応するビューの候補からqueueが一致する描画を入力順で選ぶ。 |
 | `passes` | 宣言順のパス列。各項目に`id`と`kind`を指定する。`kind: raster`は`shader`か`shader_template`の一方と、色・深度のattachmentを指定する。テンプレート指定には`draw_list`と必要な`material_types`の一覧を与える。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`は`shader`を指定し、呼出側指定のbuffer gridを持つProgramには`grid: [x, y]`を与える。 |
 | attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。 |
@@ -198,6 +199,7 @@ output: final
 3. `pipeline.build(graph, inputs)`でパスを追加する。成功時の戻り値はGraphと出力の`ImageHandle`である。
    出力を使用する後段、export、readbackなどを追加し、`Graph::compile`とRuntimeへの投入を行う。
    構成を変更するときは新しいYAML／Programから新たに準備し、Runtimeの貸し出しを返却してWorkingSetを更新する。
+   `extent: frame`を使う構成は、描画サイズが変わるときも新しい寸法で準備する。
 
 Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リストを共有する深度プリパス、ComputeからRasterへの接続、
 同じRasterパスで材質ごとにProgramとテクスチャを切り替える構成を実行する。
@@ -206,6 +208,29 @@ Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リスト�
 ```powershell
 cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,memory-profiling --example yaml_pipeline
 ```
+
+<a id="bistro-post-pipeline"></a>
+
+### BistroのHDRからSDRをYAMLでつなぐ
+
+Bistroの`--post-pipeline PATH`に[ポスト処理のYAML](../../crates/renderer/examples/support/bistro/post.yaml)を渡す。
+BistroはBloom後のシーン線形RGBA16F画像を唯一の外部入力`hdr`として渡し、YAMLの`output`に指定されたフレーム寸法の
+RGBA8 UNORM画像をキャプチャまたは表示に使う。Bloomを無効にした場合はシーンのHDRが`hdr`になる。
+サンプルは`post/neutral`で露出倍率2.0とPBR Neutralを適用し、その中間画像を`post/sdr`で処理する。
+中間画像、パス順、attachment、画像とサンプラーのbindingはYAML内で編集できる。
+この例は全画面Rasterを対象にし、YAML resolverはこの2つの組み込みProgramを解決する。`post/sdr`はオフスクリーンではsRGB、
+ウィンドウではPresenterで一度だけsRGBへ変換するための線形出力を使う。
+FXAAを外す場合は`--aa-off`と[最近傍サンプリング用のYAML](../../crates/renderer/examples/support/bistro/post-aa-off.yaml)を使う。
+通常のキャプチャが追加で保存する`aa-off`診断画像は従来のRust構成を使う。編集したYAMLでFXAAの差を比較する場合は別々に実行する。
+YAMLファイルは起動時に読み込み、ウィンドウのサイズ変更には同じ定義を新しい描画寸法で準備する。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation --example bistro -- --api vulkan --fixture --bloom tent --post-pipeline crates/renderer/examples/support/bistro/post.yaml --output .tools/bistro-post-vulkan
+```
+
+D3D12で実行する場合は`--api d3d12`を指定する。同じAPI・描画条件で`--post-pipeline`を省略すると、従来のRust構成と比較できる。
+YAMLで接続を変更するには、たとえば`post/sdr`の画像bindingを`neutral`から`hdr`に変更し、`tone_map`パスと`neutral`の宣言を除く。
+この構成ではBloom後のHDRが直接SDRパスに入る。結果は[二APIでの検証](../verification/current.md#bistro-post-pipeline-verification)を参照する。
 
 <a id="material-shader-build"></a>
 

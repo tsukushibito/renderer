@@ -1,6 +1,6 @@
 //! Explicit preparation budgets and backend-specific acceptance diagnostics.
 
-use super::{Error, Options, PipelineMode, SubmissionMode, pipeline::Budget, program};
+use super::{Error, Options, PipelineMode, SubmissionMode, pipeline::Budget, post, program};
 use renderer::{
     graph::{BufferDesc, ImageDesc, PassHandle},
     program::{ManagedProgram, RasterPipelineRequest},
@@ -11,7 +11,7 @@ use renderer::{
     standard::passes::tone_map_neutral_pipeline,
 };
 
-pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
+fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<RasterPipelineRequest> {
     let mut requests = Vec::with_capacity(7 + usize::from(options.instances.enabled()));
     if options.pipeline == PipelineMode::Deferred {
         requests.extend(
@@ -38,18 +38,28 @@ pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
         });
     }
     requests.push(options.shadow_program().into_owned().into());
-    requests.push(tone_map_neutral_pipeline());
     let sdr = options.sdr_output();
-    requests.push(sdr.pipeline());
-    if !options.windowed {
-        // Offscreen capture includes an AA-off diagnostic.
-        requests.push(
-            renderer::standard::passes::SdrOutput {
-                fxaa: !sdr.fxaa,
-                ..sdr
-            }
-            .pipeline(),
-        );
+    if let Some(post) = post {
+        requests.extend_from_slice(post.working_set().raster);
+        if !options.windowed && options.aa {
+            requests.push(tone_map_neutral_pipeline());
+        }
+        if !options.windowed && (options.aa || options.resource_checks) {
+            // The AA-off diagnostic and the replacement mip probe use this.
+            requests.push(renderer::standard::passes::SdrOutput { fxaa: false, ..sdr }.pipeline());
+        }
+    } else {
+        requests.push(tone_map_neutral_pipeline());
+        requests.push(sdr.pipeline());
+        if !options.windowed {
+            requests.push(
+                renderer::standard::passes::SdrOutput {
+                    fxaa: !sdr.fxaa,
+                    ..sdr
+                }
+                .pipeline(),
+            );
+        }
     }
     requests
 }
@@ -117,6 +127,7 @@ fn with_working_set<T>(
     options: &Options,
     buffers: &[(u64, usize)],
     images: &[(ImageDesc, usize)],
+    post: Option<&post::Prepared>,
     prepare: impl FnOnce(WorkingSet<'_>) -> Result<T, ExecutionError>,
 ) -> Result<T, Error> {
     let resources = buffers
@@ -133,7 +144,7 @@ fn with_working_set<T>(
         .collect::<Vec<_>>();
     Ok(prepare(WorkingSet {
         resources: &resources,
-        raster: &raster_requests(options),
+        raster: &raster_requests(options, post),
         compute: &compute_requests(options),
     })?)
 }
@@ -148,9 +159,13 @@ fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
     Ok(())
 }
 
-pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Error> {
+pub(super) fn create(
+    options: &Options,
+    budget: &Budget,
+    post: Option<&post::Prepared>,
+) -> Result<Runtime, Error> {
     let config = config(options, budget)?;
-    let runtime = with_working_set(options, &budget.buffers, &budget.images, |set| {
+    let runtime = with_working_set(options, &budget.buffers, &budget.images, post, |set| {
         Runtime::new(config, limits(options, budget), set)
     })?;
     require_hardware(&runtime)?;
@@ -161,13 +176,15 @@ pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Erro
 pub(super) fn open(
     options: &Options,
     budget: &Budget,
+    post: Option<&post::Prepared>,
     window: std::sync::Arc<winit::window::Window>,
     presentation: renderer::PresentationConfig,
 ) -> Result<(Runtime, renderer::runtime::WindowPresenter), Error> {
     let config = config(options, budget)?;
-    let (runtime, presenter) = with_working_set(options, &budget.buffers, &budget.images, |set| {
-        Runtime::for_window(config, limits(options, budget), set, window, presentation)
-    })?;
+    let (runtime, presenter) =
+        with_working_set(options, &budget.buffers, &budget.images, post, |set| {
+            Runtime::for_window(config, limits(options, budget), set, window, presentation)
+        })?;
     require_hardware(&runtime)?;
     Ok((runtime, presenter))
 }
@@ -177,11 +194,13 @@ pub(super) fn resize(
     runtime: &mut Runtime,
     options: &Options,
     budget: &Budget,
+    post: Option<&post::Prepared>,
 ) -> Result<(), Error> {
     with_working_set(
         options,
         &budget.resized_buffers(options),
-        &Budget::frame_images(options),
+        &Budget::frame_images(options, post),
+        post,
         |set| runtime.prepare_working_set(set),
     )
 }

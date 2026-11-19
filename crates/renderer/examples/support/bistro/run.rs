@@ -4,6 +4,8 @@
 use super::backend;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::pipeline::{self, Budget, Resident, Workspace};
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use super::post;
 use super::{
     Error, Options,
     asset::Scene,
@@ -246,6 +248,7 @@ fn identity(
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "shader_pipeline":options.shader_assets.as_ref().map(|selection| &selection.pipeline),
         "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
+        "post_pipeline":options.post_pipeline,
         "local_lights":options.pipeline.uses_local_lights()
             .then(|| super::forward_lighting::identity(options.fixture)),
         "instances":options.instances.name(),"instance_draws":options.instances.draws(),
@@ -256,9 +259,17 @@ fn identity(
             "normal_offset_texels":shadow.normal_offset_texels,"depth_padding_m":shadow.depth_padding,
             "filter":"manual nearest 3x3 PCF"},
         "aa_profile":{"edge_threshold_min":0.0312,"edge_threshold_max":0.125,"iterations":12,
-            "subpixel_quality":0.75,"position":"after Neutral, before sRGB"},
+            "subpixel_quality":0.75,"position":if options.post_pipeline.is_some() {
+                "configured by YAML"
+            } else {
+                "after Neutral, before sRGB"
+            }},
         "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
-        "output":"linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1",
+        "output":if options.post_pipeline.is_some() {
+            "linear RGBA16F -> optional Bloom -> YAML post graph -> RGBA8 UNORM"
+        } else {
+            "linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1"
+        },
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"});
     #[cfg(feature = "development-validation")]
     let identity = {
@@ -377,6 +388,15 @@ fn capture_planes(
     }
     let mut report = json!({"captures":captures,"shadow_captures":shadow_captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
         "readback_outside_measurement":true});
+    if options.post_pipeline.is_some() {
+        report["post_pipeline_sha256"] = json!(
+            workspace
+                .post
+                .as_ref()
+                .filter(|post| post.uses_options(options))
+                .map(post::Prepared::sha256)
+        );
+    }
     if let Some(updates) = built.shadow_updates {
         report["shadow_reuse_hits"] = json!(updates.map(|update| update.is_none()));
     }
@@ -558,7 +578,8 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "source":source,"resident_images_with_defaults":scene.images.len(),
         "alpha_zero_materials":scene.materials.iter().filter(|material|material.alpha_zero).count()});
     let stage = Instant::now();
-    let budget = Budget::new(&scene, &environment, options)?;
+    let post = post::Prepared::load(options)?;
+    let budget = Budget::new(&scene, &environment, options, post.as_ref())?;
     let budget_ns = stage.elapsed().as_nanos() as u64;
     let (first_camera, first_uniform) = uniform(&conditions, options, 0)?;
     eprintln!(
@@ -566,7 +587,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         budget.physical_resources
     );
     let stage = Instant::now();
-    let mut backend = backend::create(options, &budget)?;
+    let mut backend = backend::create(options, &budget, post.as_ref())?;
     let native_prepare_ns = stage.elapsed().as_nanos() as u64;
     let mut resource_stages = json!({});
     if options.resource_checks {
@@ -608,7 +629,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     // One additional Graph backing covers the latest mutable camera provenance
     // when all execution slots have otherwise completed (including inflight=1).
     let mut pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-    let mut workspace = Workspace::new(&scene);
+    let mut workspace = Workspace::new(&scene, post);
     workspace.placements = placements;
     if options.reuse_shadows && options.shadows {
         workspace.enable_shadow_reuse();
@@ -877,6 +898,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             options,
             &conditions,
             &budget,
+            workspace.post.take(),
             resource_stages,
         )?
     } else {
@@ -919,6 +941,13 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
         "views":view_reports,"route_samples":route_reports,"readback_outside_measurement":true,
         "limits":"Whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
+    let report = if options.post_pipeline.is_some() {
+        let mut report = report;
+        report["post_pipeline_sha256"] = captured["post_pipeline_sha256"].clone();
+        report
+    } else {
+        report
+    };
     #[cfg(feature = "tracy")]
     let report = {
         let mut report = report;

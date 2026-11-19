@@ -11,6 +11,7 @@ mod schema;
 
 use std::{error::Error, fmt};
 
+use renderer::capacity::{ResourceClass, WorkingSet};
 use renderer::graph::{BufferDesc, GraphError, ImageDesc, LoadOp, RasterConstants, StoreOp};
 use renderer::program::{
     ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
@@ -43,12 +44,34 @@ pub enum Program {
 /// Limits determined at an application preparation boundary.
 #[derive(Clone, Copy, Debug)]
 pub struct PrepareOptions {
+    /// Width and height for images declared with `extent: frame`.
+    pub frame_extent: Option<[u32; 2]>,
     /// Maximum concurrent frames using the transient classes in this configuration.
     pub frames_in_flight: usize,
     /// Maximum selected draws stored for each configured draw list.
     pub max_draws_per_list: usize,
     /// Maximum frame material instances referenced by indexed draws.
     pub max_materials: usize,
+}
+
+/// Graph declarations added by a pipeline of fullscreen Raster passes.
+///
+/// Each pass adds one draw. Size Graph analysis and app-owned resources and
+/// passes separately from these declaration counts.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FullscreenRequirements {
+    /// Transient resource declarations.
+    pub resources: usize,
+    pub passes: usize,
+    pub bindings: usize,
+    pub attachments: usize,
+    pub raster_constant_words: usize,
+    /// UTF-8 bytes of pass names and transient resource names.
+    pub name_bytes: usize,
+    /// An external image is declared as a color or depth attachment.
+    /// The Graph treats attachments as writes regardless of load/store ops
+    /// or depth state. This includes passes that the Graph may cull.
+    pub writes_external_attachments: bool,
 }
 
 /// The source of a pipeline preparation or per-frame construction error.
@@ -105,12 +128,66 @@ pub struct PreparedPipeline {
     output: usize,
     raster: Vec<RasterPipelineRequest>,
     compute: Vec<ManagedProgram>,
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    classes: Vec<renderer::runtime::ResourceClass>,
+    classes: Vec<ResourceClass>,
     scratch: FrameScratch,
 }
 
 impl PreparedPipeline {
+    /// External resource names and their required descriptors in declaration order.
+    pub fn external_resources(&self) -> impl Iterator<Item = (&str, ResourceDesc)> {
+        self.resources
+            .iter()
+            .filter(|resource| resource.external)
+            .map(|resource| (resource.id.as_str(), resource.desc))
+    }
+
+    /// The declared output image name and its prepared descriptor.
+    pub fn output_resource(&self) -> (&str, ImageDesc) {
+        let output = &self.resources[self.output];
+        let ResourceDesc::Image(desc) = output.desc else {
+            unreachable!("pipeline preparation requires an output image")
+        };
+        (&output.id, desc)
+    }
+
+    /// Count Graph declarations for a pipeline containing only fullscreen
+    /// Raster passes, with no draw list inputs.
+    pub fn fullscreen_requirements(&self) -> Option<FullscreenRequirements> {
+        if !self.draw_lists.is_empty() {
+            return None;
+        }
+
+        let mut requirements = FullscreenRequirements {
+            passes: self.passes.len(),
+            ..FullscreenRequirements::default()
+        };
+        for resource in self.resources.iter().filter(|resource| !resource.external) {
+            requirements.resources += 1;
+            requirements.name_bytes += resource.id.len();
+        }
+        for pass in &self.passes {
+            let PassKind::Raster {
+                colors,
+                depth,
+                draw: RasterDrawKind::Fullscreen(constants),
+                ..
+            } = &pass.kind
+            else {
+                return None;
+            };
+            requirements.bindings += pass.bindings.len();
+            requirements.attachments += colors.len() + usize::from(depth.is_some());
+            requirements.raster_constant_words += constants.words().len();
+            requirements.name_bytes += pass.id.len();
+            requirements.writes_external_attachments |= colors
+                .iter()
+                .map(|color| color.resource)
+                .chain(depth.iter().map(|depth| depth.resource))
+                .any(|resource| self.resources[resource].external);
+        }
+        Some(requirements)
+    }
+
     /// Look up a prepared Raster Program for application-owned Graph assembly.
     /// A pass with a directly named Program uses that Program for any material type.
     pub fn raster_program(
@@ -128,9 +205,8 @@ impl PreparedPipeline {
     /// The transient classes and Program versions required by this pipeline.
     /// Include application-owned frame setup requirements in the runtime's full
     /// working set. Apply a new set at Renderer’s explicit preparation boundary.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn working_set(&self) -> renderer::runtime::WorkingSet<'_> {
-        renderer::runtime::WorkingSet {
+    pub fn working_set(&self) -> WorkingSet<'_> {
+        WorkingSet {
             resources: &self.classes,
             raster: &self.raster,
             compute: &self.compute,
@@ -144,8 +220,9 @@ struct Resource {
     desc: ResourceDesc,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ResourceDesc {
+/// Descriptor of a prepared external pipeline resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceDesc {
     Image(ImageDesc),
     Buffer(BufferDesc),
 }

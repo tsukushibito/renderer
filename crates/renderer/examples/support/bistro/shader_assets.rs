@@ -54,6 +54,7 @@ impl Selection {
         let pipeline = PreparedPipeline::from_yaml(
             &yaml,
             PrepareOptions {
+                frame_extent: None,
                 frames_in_flight: frames,
                 max_draws_per_list: 0,
                 max_materials: 0,

@@ -933,7 +933,12 @@ indexed Rasterは`shader_template`と材質型を宣言できる。アセット�
 構成の差し替えは、新しい`PreparedPipeline`を作り、以前のフレームと結果の貸し出しを返却してから
 実RuntimeのWorkingSetを更新する。更新が成功した版で後続フレームを組み立てる。
 YAMLで宣言する資源はbufferと1×・単一mip／layerの2D画像で、材質のbindingには複数mipを含むGraphのsampled Viewも渡せる。
+画像寸法は固定値の組か`extent: frame`で指定する。後者は呼出側が準備時に渡す描画寸法に解決し、
+サイズ変更時には新しいWorkingSetとGraph容量を準備する。
 Rasterはindexed draw listまたは全画面三角形、ComputeはProgramのdispatch契約に従う。
+Bistroの[ポスト処理](../guides/tooling.md#bistro-post-pipeline)では、既存GraphにあるBloom後のHDRを読み取り専用の外部入力とし、
+YAMLがトーンマッピングとSDRパス、および最終画像を定義する。Bistroは出力を既存のキャプチャ／Presenterに渡す。
+同じGraph内で接続するため、HDRを渡すための転送や同期は追加せず、既存のGraphとRuntimeで寿命、hazardとGPU同期を扱う。
 操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
 
 ## 12. エンジン統合とPresentation

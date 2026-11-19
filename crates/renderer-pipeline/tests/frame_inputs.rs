@@ -1,16 +1,17 @@
+use renderer::capacity::ResourceClass;
 use renderer::graph::{
     BufferDesc, GraphCapacity, GraphPool, ImageDesc, RasterDraw, RasterParameters,
 };
 use renderer::program::ManagedRasterProgram;
 use renderer_pipeline::{
-    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, PrepareOptions,
-    PreparedPipeline, Program,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, FullscreenRequirements,
+    PrepareOptions, PreparedPipeline, Program, ResourceDesc,
 };
 
 const PIPELINE: &str = "
 version: 1
 resources:
-  - {id: output, kind: image, source: external, width: 8, height: 4, format: rgba8_unorm}
+  - {id: output, kind: image, source: external, extent: frame, format: rgba8_unorm}
 draw_lists:
   - {id: main.opaque, view: main, queue: opaque}
 passes:
@@ -27,6 +28,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
     let mut pipeline = PreparedPipeline::from_yaml(
         PIPELINE,
         PrepareOptions {
+            frame_extent: Some([8, 4]),
             frames_in_flight: 1,
             max_draws_per_list: 1,
             max_materials: 0,
@@ -34,6 +36,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
         |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
     )
     .unwrap();
+    assert!(pipeline.fullscreen_requirements().is_none());
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let view = FrameView {
         name: "main",
@@ -110,10 +113,84 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
 }
 
 #[test]
+fn fullscreen_requirements_and_descriptors_resolve_for_each_extent() {
+    let yaml = "
+version: 1
+resources:
+  - {id: hdr, kind: image, source: external, extent: frame, format: rgba16_float}
+  - {id: mapped, kind: image, extent: frame, format: rgba16_float}
+passes:
+  - id: neutral
+    kind: raster
+    shader: tone
+    constants: [1073741824]
+    colors: [{image: mapped, load: clear, clear: [0, 0, 0, 0]}]
+    bindings:
+      - {group: 0, binding: 0, kind: image, resource: hdr}
+      - {group: 0, binding: 1, kind: sampler, sampler: nearest_clamp}
+output: mapped
+";
+    let external_output = yaml.replace(
+        "id: mapped, kind: image,",
+        "id: mapped, kind: image, source: external,",
+    );
+    for [width, height] in [[8, 4], [17, 11]] {
+        let tone = renderer::standard::passes::tone_map_neutral_pipeline();
+        let prepare = |yaml: &str| {
+            PreparedPipeline::from_yaml(
+                yaml,
+                PrepareOptions {
+                    frame_extent: Some([width, height]),
+                    frames_in_flight: 2,
+                    max_draws_per_list: 0,
+                    max_materials: 0,
+                },
+                |_| Ok(Program::Raster(tone.program.clone())),
+            )
+            .unwrap()
+        };
+        let pipeline = prepare(yaml);
+        let desc = ImageDesc::rgba16_float(width, height);
+        assert!(
+            pipeline
+                .external_resources()
+                .eq([("hdr", ResourceDesc::Image(desc))])
+        );
+        assert_eq!(pipeline.output_resource(), ("mapped", desc));
+        let working_set = pipeline.working_set();
+        assert!(matches!(
+            working_set.resources,
+            [ResourceClass::Image { desc: prepared, count: 2 }] if *prepared == desc
+        ));
+        assert_eq!(working_set.raster.len(), 1);
+        assert!(working_set.compute.is_empty());
+        assert_eq!(
+            pipeline.fullscreen_requirements(),
+            Some(FullscreenRequirements {
+                resources: 1,
+                passes: 1,
+                bindings: 2,
+                attachments: 1,
+                raster_constant_words: 1,
+                name_bytes: "mapped".len() + "neutral".len(),
+                writes_external_attachments: false,
+            }),
+        );
+        assert!(
+            prepare(&external_output)
+                .fullscreen_requirements()
+                .unwrap()
+                .writes_external_attachments
+        );
+    }
+}
+
+#[test]
 fn draw_list_overflow_returns_capacity_error_before_capturing_draws() {
     let mut pipeline = PreparedPipeline::from_yaml(
         PIPELINE,
         PrepareOptions {
+            frame_extent: Some([8, 4]),
             frames_in_flight: 1,
             max_draws_per_list: 1,
             max_materials: 0,
@@ -177,6 +254,7 @@ fn missing_material_binding_identifies_the_pass_and_releases_the_slot() {
     let mut pipeline = PreparedPipeline::from_yaml(
         &definition,
         PrepareOptions {
+            frame_extent: Some([8, 4]),
             frames_in_flight: 1,
             max_draws_per_list: 1,
             max_materials: 1,

@@ -7,6 +7,7 @@ use super::{
     camera::{Camera, Conditions},
     ibl::Environment,
     pipeline::{self, Budget, Resident, Workspace},
+    post,
     window_camera::Motion,
     window_input::{CameraInput, REPLAY_DT, REPLAY_STEPS},
 };
@@ -196,7 +197,8 @@ impl State {
         let size = window.inner_size();
         options.width = size.width;
         options.height = size.height;
-        let budget = Budget::new(scene, environment, options)?;
+        let post = post::Prepared::load(options)?;
+        let budget = Budget::new(scene, environment, options, post.as_ref())?;
         let config = PresentationConfig {
             max_frames: options.inflight,
             vsync: options.vsync,
@@ -204,7 +206,7 @@ impl State {
         };
         let started = Instant::now();
         let (mut backend, mut surface) =
-            backend::open(options, &budget, Arc::clone(&window), config)?;
+            backend::open(options, &budget, post.as_ref(), Arc::clone(&window), config)?;
         let preparation_ns = ns(started.elapsed());
         let seed = camera_seed(conditions, options)?;
         let initial = uniform(seed, conditions, options)?;
@@ -223,7 +225,7 @@ impl State {
         backend.set_profiling(options.gpu_timing)?;
         surface.set_profiling(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-        let mut workspace = Workspace::new(scene);
+        let mut workspace = Workspace::new(scene, post);
         workspace.placements = placements;
         if options.reuse_shadows && options.shadows {
             workspace.enable_shadow_reuse();
@@ -455,15 +457,22 @@ impl State {
             self.workspace.clear_shadow_reuse(&mut self.backend)?;
             (options.width, options.height) = extent;
             options.validate_lighting_extent()?;
+            let post = self
+                .workspace
+                .post
+                .as_ref()
+                .map(|post| post.resize(options))
+                .transpose()?;
             let budget = &self.budget;
             self.resident = Some(
                 self.resident
                     .take()
                     .unwrap()
                     .reprepare(&mut self.backend, |backend| {
-                        backend::resize(backend, options, budget)
+                        backend::resize(backend, options, budget, post.as_ref())
                     })?,
             );
+            self.workspace.post = post;
             if options.reuse_shadows && options.shadows {
                 self.workspace.enable_shadow_reuse();
             }
@@ -625,6 +634,8 @@ impl State {
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
             "shader_pipeline":options.shader_assets.as_ref().map(|selection| &selection.pipeline),
             "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
+            "post_pipeline":options.post_pipeline,
+            "post_pipeline_sha256":self.workspace.post.as_ref().map(post::Prepared::sha256),
             "local_lights":options.pipeline.uses_local_lights()
                 .then(|| super::forward_lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),

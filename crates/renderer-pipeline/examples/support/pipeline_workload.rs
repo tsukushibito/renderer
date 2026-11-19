@@ -132,6 +132,7 @@ fn run_backend(
         PreparedPipeline::from_yaml(
             yaml,
             PrepareOptions {
+                frame_extent: None,
                 frames_in_flight: limits.frames,
                 max_draws_per_list: 3,
                 max_materials: 3,

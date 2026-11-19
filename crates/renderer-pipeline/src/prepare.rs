@@ -2,13 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
 use renderer::ImageFormat;
+use renderer::capacity::ResourceClass;
 use renderer::graph::{BufferDesc, ImageDesc, LoadOp, RasterConstants, SampleCount};
 use renderer::program::{
     BindingLayout, BindingType, DispatchContract, DispatchWorkgroups, ManagedProgram,
     ManagedRasterProgram, RasterPipelineRequest,
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::runtime::ResourceClass;
 
 use crate::schema::{
     self, AttachmentSpec, BindingSpec, Config, LoadAction, PassSpec, ResourceSource, ResourceSpec,
@@ -53,7 +52,7 @@ impl PreparedPipeline {
 
         let resources = resources
             .into_iter()
-            .map(prepare_resource)
+            .map(|spec| prepare_resource(spec, options.frame_extent))
             .collect::<Result<Vec<_>, _>>()?;
         let resource_ids = index_names(
             resources.iter().map(|resource| resource.id.as_str()),
@@ -118,7 +117,6 @@ impl PreparedPipeline {
             max_colors,
             options.max_materials,
         )?;
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
         let classes = prepare_classes(&resources, options.frames_in_flight)?;
 
         Ok(Self {
@@ -128,7 +126,6 @@ impl PreparedPipeline {
             output,
             raster: programs.raster,
             compute: programs.compute,
-            #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
             classes,
             scratch,
         })
@@ -158,15 +155,29 @@ fn index_names<'a>(
     Ok(indices)
 }
 
-fn prepare_resource(spec: ResourceSpec) -> Result<Resource, PipelineError> {
+fn prepare_resource(
+    spec: ResourceSpec,
+    frame_extent: Option<[u32; 2]>,
+) -> Result<Resource, PipelineError> {
     let (id, source, desc) = match spec {
         ResourceSpec::Image {
             id,
             source,
             width,
             height,
+            extent,
             format,
         } => {
+            let [width, height] = match (width, height, extent) {
+                (Some(width), Some(height), None) => [width, height],
+                (None, None, Some(schema::ImageExtent::Frame)) => frame_extent
+                    .ok_or_else(|| invalid(format!("image {id:?} requires a frame_extent")))?,
+                _ => {
+                    return Err(invalid(format!(
+                        "image {id:?} requires either width and height or extent: frame"
+                    )));
+                }
+            };
             let desc = ImageDesc {
                 width,
                 height,
@@ -765,7 +776,6 @@ fn validate_bindings(
     Ok(())
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn prepare_classes(
     resources: &[Resource],
     frames: usize,
@@ -812,6 +822,7 @@ mod tests {
     use super::*;
 
     const OPTIONS: PrepareOptions = PrepareOptions {
+        frame_extent: None,
         frames_in_flight: 2,
         max_draws_per_list: 4,
         max_materials: 2,
@@ -837,6 +848,33 @@ output: final
         PreparedPipeline::from_yaml(yaml, OPTIONS, |_| {
             Ok(Program::Raster(ManagedRasterProgram::mesh()))
         })
+    }
+
+    #[test]
+    fn image_extent_requires_exactly_one_valid_size_source() {
+        for (declaration, frame_extent, reason) in [
+            ("extent: frame", None, "requires a frame_extent"),
+            ("extent: frame", Some([2, 0]), "invalid dimensions"),
+            ("width: 2", None, "requires either"),
+            (
+                "width: 2, height: 2, extent: frame",
+                Some([2, 2]),
+                "requires either",
+            ),
+        ] {
+            let yaml = DRAW_PIPELINE.replace("width: 2, height: 2", declaration);
+            let result = PreparedPipeline::from_yaml(
+                &yaml,
+                PrepareOptions {
+                    frame_extent,
+                    ..OPTIONS
+                },
+                |_| panic!("invalid extent must be rejected before shader resolution"),
+            );
+            assert!(
+                matches!(result, Err(PipelineError::Invalid(message)) if message.contains(reason))
+            );
+        }
     }
 
     const TEMPLATE_SELECTION: &str = "shader_template: mesh\n    material_types: [wall, leaf]";

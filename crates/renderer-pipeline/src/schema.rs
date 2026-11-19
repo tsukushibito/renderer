@@ -58,8 +58,9 @@ pub(super) enum ResourceSpec {
         id: String,
         #[serde(default)]
         source: ResourceSource,
-        width: u32,
-        height: u32,
+        width: Option<u32>,
+        height: Option<u32>,
+        extent: Option<ImageExtent>,
         format: Format,
     },
     Buffer {
@@ -68,6 +69,12 @@ pub(super) enum ResourceSpec {
         source: ResourceSource,
         bytes: u64,
     },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ImageExtent {
+    Frame,
 }
 
 #[derive(Clone, Copy, Deserialize)]

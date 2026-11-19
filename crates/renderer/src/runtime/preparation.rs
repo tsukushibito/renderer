@@ -1,6 +1,7 @@
-use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
-use crate::graph::{BufferDesc, GraphCapacity, ImageDesc};
-use crate::program::{ManagedProgram, RasterPipelineRequest};
+#[cfg(all(windows, feature = "d3d12"))]
+use crate::capacity::ResourceClass;
+use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind, WorkingSet};
+use crate::graph::GraphCapacity;
 
 use super::{ExecutionError, Runtime, RuntimeInner};
 
@@ -174,23 +175,6 @@ impl RuntimeLimits {
             },
         }
     }
-}
-
-/// A resource class and its globally reserved instance count. The count
-/// already includes the caller's needed concurrency across all frames.
-#[derive(Clone, Copy, Debug)]
-pub enum ResourceClass {
-    Buffer { desc: BufferDesc, count: usize },
-    Image { desc: ImageDesc, count: usize },
-}
-
-/// Resources and exact Program variants to prepare at a startup or change
-/// boundary. Registered resources occupy additional physical registry entries.
-#[derive(Clone, Copy, Default)]
-pub struct WorkingSet<'a> {
-    pub resources: &'a [ResourceClass],
-    pub raster: &'a [RasterPipelineRequest],
-    pub compute: &'a [ManagedProgram],
 }
 
 impl Runtime {

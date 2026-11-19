@@ -1,7 +1,27 @@
-//! Allocation-free runtime capacity details shared by native backends.
+//! Runtime resource reservations and allocation-free capacity details.
 //!
 //! Capacity failures do not imply that waiting for the GPU will help. Inspect
 //! [`RuntimeCapacityError::recovery`] before retrying the same request.
+
+use crate::graph::{BufferDesc, ImageDesc};
+use crate::program::{ManagedProgram, RasterPipelineRequest};
+
+/// A resource class and its globally reserved instance count. The count
+/// already includes the caller's needed concurrency across all frames.
+#[derive(Clone, Copy, Debug)]
+pub enum ResourceClass {
+    Buffer { desc: BufferDesc, count: usize },
+    Image { desc: ImageDesc, count: usize },
+}
+
+/// Resources and exact Program variants to prepare at a startup or change
+/// boundary. Registered resources occupy additional physical registry entries.
+#[derive(Clone, Copy, Default)]
+pub struct WorkingSet<'a> {
+    pub resources: &'a [ResourceClass],
+    pub raster: &'a [RasterPipelineRequest],
+    pub compute: &'a [ManagedProgram],
+}
 
 /// The prepared runtime resource that prevented an operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

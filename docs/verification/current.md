@@ -5,6 +5,35 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="bistro-post-pipeline-verification"></a>
+
+## BistroのHDRからSDRをつなぐYAML
+
+`renderer-ttx`。BistroからBloom後のHDRを名前付きの外部画像として渡し、`PreparedPipeline::build`で
+トーンマッピングとSDR出力を同じGraphに追加した。起動時とサイズ変更時に寸法を解決し、必要な一時画像とProgramを
+準備した。CPU試験で付属YAMLの準備を2つの寸法で確認し、入力HDRを書き換える定義が準備時に拒否されることを確認した。
+
+WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化済み製品・厳格構成を比較した。
+厳格構成は同じ実行ファイルで従来とYAMLを切り替え、製品構成は変更前の実行ファイルを比較元に使った。
+
+| 条件 | 各API・構成での比較結果 |
+|---|---|
+| 全量Bistro `full-a3`／`ibl-final`、street、640×480、tent Bloom、FXAA、シャドウ再描画 | HDR、Bloom後HDR、sRGB SDR、D32深度がすべてバイト一致。追加の従来AA-off診断画像も一致。 |
+| 128×96 fixture、BloomとFXAAを無効化 | HDR、sRGB SDR、D32深度がすべてバイト一致。 |
+| ウィンドウの800×600 fixture、tent Bloom、FXAA | 初回の線形RGBA8画像がバイト一致。YAMLで各24フレームを表示し、リサイズ・最小化・復帰後も描画。 |
+
+オフスクリーンとウィンドウを合わせた48画像比較が一致した。別の128×96 fixtureでは、YAMLだけを編集してSDRの入力を
+Bloom後HDRに直結すると、両API・構成でSDRの12,288画素が変化し、HDR・Bloom後HDR・深度は一致した。さらにYAMLから
+トーンマッピングパスと中間画像を除いても、直結時の全出力と一致した。
+
+オフスクリーンでは各条件4 warm-up＋4通常フレームを同時2枠で実行した。付属YAMLと接続変更を合わせた80通常フレームで、
+観測したRust／VMA hostの確保・再確保・解放、Renderer発行のnative作成・破棄とdescriptorの確保・解放は0件だった。
+Vulkan Core／SyncVal、D3D12 Debug Layer／GBVの警告とエラーは0件だった。メモリ計測の対象はオフスクリーンの通常フレーム。
+ウィンドウの比較画像は初回の表示元であり、サイズ変更後は描画の継続を確認した。
+製品D3D12のYAML側で初回だけ終了時の未完了フレームが0件となり、既存のスモーク条件を満たさなかった。
+同じ条件の再実行では両経路とも未完了が1件の状態から終了し、表示元画像の一致とスモークの成功を確認した。
+ログとキャプチャは`.tools/bistro-post-validation/`、[YAMLと実行手順](../guides/tooling.md#bistro-post-pipeline)を参照する。
+
 <a id="material-shader-verification"></a>
 
 ## 材質テンプレートとBistroのForward・シャドウ

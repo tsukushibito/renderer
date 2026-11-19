@@ -4,12 +4,13 @@ use super::{
     Error, Options, PipelineMode, SubmissionMode,
     asset::Scene,
     camera::{Camera, Frustum},
-    deferred, forward_lighting, ibl, instancing,
+    deferred, forward_lighting, ibl, instancing, post,
     program::{self, forward_plus},
     shadow,
 };
 use renderer::{
     ImageFormat,
+    capacity::ResourceClass,
     graph::{
         Attachment, Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphPool,
         ImageDesc, ImageHandle, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp, PassHandle,
@@ -130,7 +131,10 @@ impl Budget {
         64 + inflight * (4 + indirect_groups)
     }
 
-    pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
+    pub fn frame_images(
+        options: &Options,
+        post: Option<&post::Prepared>,
+    ) -> Vec<(ImageDesc, usize)> {
         let mut images = Vec::new();
         let mut add = |desc, count| {
             if let Some((_, available)) = images.iter_mut().find(|(item, _)| *item == desc) {
@@ -140,7 +144,23 @@ impl Budget {
             }
         };
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
-        add(hdr, options.inflight * 2);
+        let sdr = ImageDesc::rgba8(options.width, options.height);
+        add(hdr, options.inflight);
+        if let Some(post) = post {
+            let mut has_tone_class = false;
+            for &class in post.working_set().resources {
+                if let ResourceClass::Image { desc, count } = class {
+                    add(desc, count);
+                    has_tone_class |= desc == hdr;
+                }
+            }
+            if !has_tone_class && !options.windowed && options.aa {
+                // The separate AA-off diagnostic uses the builtin tone target.
+                add(hdr, options.inflight);
+            }
+        } else {
+            add(hdr, options.inflight);
+        }
         if options.pipeline == PipelineMode::Deferred {
             add(hdr, options.inflight * deferred::PLANES.len());
         }
@@ -158,15 +178,10 @@ impl Budget {
             options.inflight,
         );
         // Presented images remain owned by the Presenter after Graph completion.
-        let presentation_slots = if options.windowed {
-            options.inflight
-        } else {
-            0
-        };
-        add(
-            ImageDesc::rgba8(options.width, options.height),
-            options.inflight + presentation_slots,
-        );
+        let sdr_slots = usize::from(post.is_none()) + usize::from(options.windowed);
+        if sdr_slots != 0 {
+            add(sdr, sdr_slots * options.inflight);
+        }
         let shadow = shadow::Parameters::default().resolution;
         add(ImageDesc::depth32(shadow, shadow), options.inflight * 4);
         images
@@ -176,6 +191,7 @@ impl Budget {
         scene: &Scene,
         environment: &ibl::Environment,
         options: &Options,
+        post: Option<&post::Prepared>,
     ) -> Result<Self, Error> {
         options.validate_lighting_extent()?;
         let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
@@ -303,10 +319,11 @@ impl Budget {
             5
         };
         let mut frame_instances = 0;
-        for (desc, count) in Self::frame_images(options) {
+        for (desc, count) in Self::frame_images(options, post) {
             add_image(desc, count);
             frame_instances += count;
         }
+        let post = post.map(post::Prepared::graph_capacity);
         let resources = buffer_count
             + scene.images.len()
             + 11
@@ -315,7 +332,8 @@ impl Budget {
             + local_lights
             + tiled_lights
             + usize::from(options.sample_count == SampleCount::X4)
-            + indirect_passes;
+            + indirect_passes
+            + post.map_or(0, |graph| graph.resources);
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
@@ -325,7 +343,11 @@ impl Budget {
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
-        let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings + 8 * groups;
+        let accesses = scene.primitives.len() * 64
+            + 256
+            + bloom_bindings
+            + 8 * groups
+            + post.map_or(0, |graph| graph.accesses);
         let shadow_words = scene
             .primitives
             .len()
@@ -338,7 +360,13 @@ impl Budget {
             .ok_or("Raster instance constant budget overflow")?;
         let raster_constant_words = shadow_words
             .checked_add(instance_words)
-            .and_then(|words| words.checked_add(1))
+            .and_then(|words| {
+                words.checked_add(
+                    1 + post
+                        .and_then(|graph| graph.raster_constant_words)
+                        .unwrap_or(0),
+                )
+            })
             .ok_or("Raster constant budget overflow")?;
         let graph = GraphCapacity {
             resources,
@@ -348,9 +376,14 @@ impl Budget {
                 + deferred * 2
                 + local_lights
                 + tiled_lights
-                + indirect_passes,
+                + indirect_passes
+                + post.map_or(0, |graph| graph.passes),
             accesses,
-            draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
+            draws: scene.primitives.len() * 5
+                + 2
+                + deferred
+                + options.instances.draws()
+                + post.map_or(0, |graph| graph.draws),
             raster_constant_words: Some(raster_constant_words),
             bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
                 + 4
@@ -359,11 +392,14 @@ impl Budget {
                 + tiled_lights * 3
                 + usize::from(options.instances.enabled()) * 16
                 + 3 * groups
-                + 3 * usize::from(groups != 0),
-            attachments: 24 + deferred * deferred::PLANES.len(),
+                + 3 * usize::from(groups != 0)
+                + post.map_or(0, |graph| graph.bindings),
+            attachments: 24
+                + deferred * deferred::PLANES.len()
+                + post.map_or(0, |graph| graph.attachments),
             dependencies: 32,
             initial_ranges: resources * 2,
-            name_bytes: resources * 32 + 2048,
+            name_bytes: resources * 32 + 2048 + post.map_or(0, |graph| graph.name_bytes),
             upload_bytes: program::CAMERA_BYTES
                 + deferred * program::deferred::DEFERRED_RECONSTRUCTION_BYTES
                 + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize,
@@ -834,6 +870,7 @@ pub(super) struct Workspace {
     shadow_bindings: Vec<RasterBindings>,
     shadow_cache: Option<ShadowCache>,
     pub(super) placements: Option<instancing::Placements>,
+    pub(super) post: Option<post::Prepared>,
     opaque: Vec<usize>,
     indirect: Vec<IndexedIndirectArgs>,
     blended: Vec<usize>,
@@ -876,7 +913,7 @@ struct ShadowCache {
 }
 
 impl Workspace {
-    pub fn new(scene: &Scene) -> Self {
+    pub fn new(scene: &Scene, post: Option<post::Prepared>) -> Self {
         Self {
             vertices: Vec::with_capacity(scene.primitives.len()),
             indices: Vec::with_capacity(scene.primitives.len()),
@@ -886,6 +923,7 @@ impl Workspace {
             shadow_bindings: Vec::with_capacity(scene.materials.len()),
             shadow_cache: None,
             placements: None,
+            post,
             opaque: Vec::with_capacity(scene.primitives.len()),
             indirect: Vec::with_capacity(scene.materials.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
@@ -1380,7 +1418,11 @@ pub(super) fn build(
     }
     let multisampled = options.sample_count == SampleCount::X4;
     let scene_clear = [background[0], background[1], background[2], 1.0];
-    let (color, depth, output, color_view, depth_view, resolve_view) = {
+    enum PostRoute<'a> {
+        Yaml(&'a mut post::Prepared),
+        Builtin(ImageHandle),
+    }
+    let (color, depth, post_route, color_view, depth_view, resolve_view) = {
         #[cfg(feature = "tracy")]
         let _targets = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("bistro.build.targets"), 0));
@@ -1403,10 +1445,18 @@ pub(super) fn build(
             ImageDesc::depth32(options.width, options.height)
                 .with_sample_count(options.sample_count),
         )?;
-        let output = graph.image(
-            "B2 sRGB output",
-            ImageDesc::rgba8(options.width, options.height),
-        )?;
+        let post_route = if let Some(post) = workspace
+            .post
+            .as_mut()
+            .filter(|post| post.uses_options(options))
+        {
+            PostRoute::Yaml(post)
+        } else {
+            PostRoute::Builtin(graph.image(
+                "B2 sRGB output",
+                ImageDesc::rgba8(options.width, options.height),
+            )?)
+        };
         let depth_view = graph.image_view(depth, 0, 0)?;
         if !multisampled && !deferred {
             graph.attachment_pass(
@@ -1426,7 +1476,14 @@ pub(super) fn build(
                 },
             )?;
         }
-        (color, depth, output, color_view, depth_view, resolve_view)
+        (
+            color,
+            depth,
+            post_route,
+            color_view,
+            depth_view,
+            resolve_view,
+        )
     };
     let camera_matrix =
         std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
@@ -1607,30 +1664,36 @@ pub(super) fn build(
         )
     });
     let bloom = options.bloom.append(&mut graph, color)?;
-    let tone = graph.image(
-        "Neutral display linear",
-        ImageDesc::rgba16_float(options.width, options.height),
-    )?;
-    let bloom_view = graph.image_view(bloom, 0, 0)?;
-    tone_map_neutral(
-        &mut graph,
-        "fixed exposure and PBR Neutral",
-        bloom_view,
-        tone,
-        2.0,
-    )?;
-    let tone_view = graph.image_view(tone, 0, 0)?;
-    write_sdr(
-        &mut graph,
-        if options.windowed {
-            "FXAA and linear presentation source"
-        } else {
-            "FXAA and single sRGB encode"
-        },
-        tone_view,
-        output,
-        options.sdr_output(),
-    )?;
+    let (mut graph, output) = match post_route {
+        PostRoute::Yaml(post) => post.append(graph, bloom)?,
+        PostRoute::Builtin(output) => {
+            let tone = graph.image(
+                "Neutral display linear",
+                ImageDesc::rgba16_float(options.width, options.height),
+            )?;
+            let bloom_view = graph.image_view(bloom, 0, 0)?;
+            tone_map_neutral(
+                &mut graph,
+                "fixed exposure and PBR Neutral",
+                bloom_view,
+                tone,
+                2.0,
+            )?;
+            let tone_view = graph.image_view(tone, 0, 0)?;
+            write_sdr(
+                &mut graph,
+                if options.windowed {
+                    "FXAA and linear presentation source"
+                } else {
+                    "FXAA and single sRGB encode"
+                },
+                tone_view,
+                output,
+                options.sdr_output(),
+            )?;
+            (graph, output)
+        }
+    };
     graph.export_image(output)?;
     #[cfg(all(windows, feature = "presentation"))]
     let present_capture = if capture && options.windowed {
@@ -1719,9 +1782,9 @@ mod tests {
         .unwrap();
         options.inflight = 1;
         let environment = ibl::Environment::fixture();
-        let one = Budget::new(&scene, &environment, &options).unwrap();
+        let one = Budget::new(&scene, &environment, &options, None).unwrap();
         options.inflight = 4;
-        let four = Budget::new(&scene, &environment, &options).unwrap();
+        let four = Budget::new(&scene, &environment, &options, None).unwrap();
         assert_eq!(one.buffers, four.buffers);
         assert_eq!(four.physical_resources - one.physical_resources, 24);
         assert_eq!(four.graph.resources, one.graph.resources);
@@ -1730,7 +1793,7 @@ mod tests {
             "odd output rows need padding beyond packed texels"
         );
         options.sample_count = SampleCount::X4;
-        let multisampled = Budget::new(&scene, &environment, &options).unwrap();
+        let multisampled = Budget::new(&scene, &environment, &options, None).unwrap();
         assert_eq!(multisampled.physical_resources - four.physical_resources, 4);
         for format in [ImageFormat::Rgba16Float, ImageFormat::Depth32Float] {
             assert!(multisampled.images.iter().any(|&(desc, count)| {
@@ -1739,7 +1802,7 @@ mod tests {
         }
         options.sample_count = SampleCount::X1;
         options.pipeline = PipelineMode::Deferred;
-        let deferred = Budget::new(&scene, &environment, &options).unwrap();
+        let deferred = Budget::new(&scene, &environment, &options, None).unwrap();
         assert_eq!(deferred.physical_resources - four.physical_resources, 16);
         assert_eq!(deferred.graph.resources - four.graph.resources, 4);
         assert_eq!(deferred.graph.upload_bytes - four.graph.upload_bytes, 64);
@@ -1794,9 +1857,14 @@ mod tests {
             "the second stream exceeds ordinary alignment slack"
         );
         assert!(
-            Budget::new(&scene, &ibl::Environment::fixture(), &tiny_output_options())
-                .unwrap()
-                .upload_bytes
+            Budget::new(
+                &scene,
+                &ibl::Environment::fixture(),
+                &tiny_output_options(),
+                None
+            )
+            .unwrap()
+            .upload_bytes
                 >= pair_bytes
         );
     }
@@ -1809,8 +1877,8 @@ mod tests {
         let mut options = tiny_output_options();
         options.api = "d3d12".into();
         let environment = ibl::Environment::fixture();
-        let budget = Budget::new(&scene, &environment, &options).unwrap();
-        let mut backend = super::super::backend::create(&options, &budget).unwrap();
+        let budget = Budget::new(&scene, &environment, &options, None).unwrap();
+        let mut backend = super::super::backend::create(&options, &budget, None).unwrap();
         let resident =
             Resident::upload(&mut backend, &scene, &environment, &budget, &[0; 128]).unwrap();
         drop(resident);

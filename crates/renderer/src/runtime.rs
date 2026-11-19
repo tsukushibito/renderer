@@ -8,6 +8,7 @@ mod queue;
 #[cfg(all(feature = "presentation", windows))]
 mod window;
 
+pub use crate::capacity::{ResourceClass, WorkingSet};
 pub use error::{ExecutionError, ExecutionErrorKind};
 pub use frames::{FrameCompletion, FrameSubmission};
 pub use id::FrameId;
@@ -15,7 +16,7 @@ pub use id::FrameId;
 pub use preparation::D3D12Config;
 #[cfg(feature = "vulkan")]
 pub use preparation::VulkanConfig;
-pub use preparation::{ResourceClass, RuntimeConfig, RuntimeLimits, WorkingSet};
+pub use preparation::{RuntimeConfig, RuntimeLimits};
 pub(crate) use queue::{FrameQueue, Observation};
 #[cfg(all(feature = "presentation", windows))]
 pub use window::{WindowPresenter, WindowReadiness};

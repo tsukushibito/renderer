@@ -10,7 +10,7 @@ use super::{
     Options, backend,
     camera::{Camera, Conditions},
     pipeline::{self, Budget, Captures, Resident, Workspace},
-    program,
+    post, program,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
@@ -327,6 +327,7 @@ pub(super) fn execute(
     options: &Options,
     conditions: &Conditions,
     budget: &Budget,
+    post: Option<post::Prepared>,
     stages: Value,
 ) -> Result<Value, Error> {
     let directory = options.output.join("resource-checks");
@@ -347,7 +348,7 @@ pub(super) fn execute(
         ["street", "material-detail"]
     };
     let mut pool = GraphPool::new(budget.graph, options.inflight + 3)?;
-    let mut workspace = Workspace::new(scene);
+    let mut workspace = Workspace::new(scene, post);
     let mut references = Vec::new();
     let mut reference_reports = Vec::new();
     for index in 0..2 {

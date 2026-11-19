@@ -31,6 +31,8 @@ mod lifecycle;
 mod memory;
 #[path = "bistro/pipeline.rs"]
 mod pipeline;
+#[path = "bistro/post.rs"]
+mod post;
 #[path = "bistro/program.rs"]
 mod program;
 #[path = "bistro/run.rs"]
@@ -155,6 +157,7 @@ struct Options {
     sample_count: renderer::graph::SampleCount,
     pipeline: PipelineMode,
     shader_assets: Option<shader_assets::Selection>,
+    post_pipeline: Option<PathBuf>,
     instances: instancing::Mode,
     submission: SubmissionMode,
     #[cfg(feature = "development-validation")]
@@ -244,6 +247,7 @@ impl Options {
             sample_count: renderer::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
             shader_assets: None,
+            post_pipeline: None,
             instances: instancing::Mode::Off,
             submission: SubmissionMode::Direct,
             #[cfg(feature = "development-validation")]
@@ -319,6 +323,10 @@ impl Options {
                 "--shader-manifest" => {
                     shader_manifest =
                         Some(args.next().ok_or("--shader-manifest needs a path")?.into());
+                }
+                "--post-pipeline" => {
+                    result.post_pipeline =
+                        Some(args.next().ok_or("--post-pipeline needs a path")?.into());
                 }
                 "--submission" => {
                     result.submission = match args.next().as_deref() {
@@ -500,6 +508,7 @@ Rendering
   --pipeline forward|forward-plus|forward-reference|deferred
   --shader-pipeline YAML --shader-manifest JSON
                                  Forward 1x with direct submission
+  --post-pipeline YAML           Post-Bloom HDR to SDR pass graph
   --msaa 1|4
   --bloom off|tent|box
   --instances off|individual|instanced
