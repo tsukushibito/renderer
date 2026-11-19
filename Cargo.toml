@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/renderer"]
+members = ["crates/renderer", "crates/renderer-pipeline"]
 resolver = "3"
 
 [workspace.package]

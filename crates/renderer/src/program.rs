@@ -853,7 +853,8 @@ impl ManagedProgram {
         }
     }
 
-    pub(crate) fn dispatch_contract(&self) -> DispatchContract<'_> {
+    /// The immutable, reviewed dispatch domain and resource footprints for this Program.
+    pub fn dispatch_contract(&self) -> DispatchContract<'_> {
         match &self.manifest {
             ProgramAsset::Embedded(descriptor) => descriptor.dispatch,
             ProgramAsset::Loaded(program) => DispatchContract {

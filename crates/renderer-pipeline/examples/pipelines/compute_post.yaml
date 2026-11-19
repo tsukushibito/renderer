@@ -1,0 +1,34 @@
+version: 1
+resources:
+  - { id: scene, kind: image, width: 9, height: 7, format: rgba8_unorm }
+  - { id: depth, kind: image, width: 9, height: 7, format: depth32_float }
+  - { id: filtered, kind: image, width: 9, height: 7, format: rgba8_unorm }
+  - { id: final, kind: image, source: external, width: 9, height: 7, format: rgba8_unorm }
+
+draw_lists:
+  - { id: opaque, view: main, queue: opaque }
+
+passes:
+  - id: opaque_color
+    kind: raster
+    shader: scene/opaque
+    draw_list: opaque
+    colors:
+      - { image: scene, load: clear, clear: [0.0, 0.0, 0.0, 1.0] }
+    depth: { image: depth, load: clear, clear: 1.0 }
+  - id: filter
+    kind: compute
+    shader: post/invert
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: scene }
+      - { kind: image, group: 0, binding: 1, resource: filtered }
+  - id: final_image
+    kind: raster
+    shader: post/copy
+    colors:
+      - { image: final, load: clear, clear: [0.0, 0.0, 0.0, 1.0] }
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: filtered }
+      - { kind: sampler, group: 0, binding: 1, sampler: nearest_clamp }
+
+output: final

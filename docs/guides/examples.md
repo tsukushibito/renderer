@@ -68,6 +68,7 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | ターゲット | 確認できること | 実行条件 |
 | --- | --- | --- |
 | `graph_composition` | 利用側のRasterパスの合成と不要分岐の除去 | CPU。追加feature不要 |
+| `yaml_pipeline` | [YAMLでのパス合成](tooling.md#yaml-pipeline)、描画リストの共有、外部Computeの差し替え | Windows。`renderer-pipeline`の`vulkan,d3d12`。フレーム計測には`memory-profiling`を追加 |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
 | `bistro` | 利用側のPBR、IBL、影、トーンマッピング、Bloomの合成 | `vulkan` またはWindowsの `d3d12`。ウィンドウ表示はWindowsと `presentation`。全シーンはcook済み素材とIBLが必要 |
@@ -85,5 +86,5 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 二APIの受入条件と測定コマンドは[開発手順](development.md)に、
 実行済みの結果は[検証状況](../verification/current.md)に置いています。
 
-実行入口は `crates/renderer/examples/` にあり、試験や計測と共用するfixtureのRustコードは
-`crates/renderer/fixtures/` にあります。
+`yaml_pipeline`の入口と設定は`crates/renderer-pipeline/examples/`にあります。
+ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。

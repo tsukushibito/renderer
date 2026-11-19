@@ -131,6 +131,76 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
 バイナリの検査は取込時に行う。コードの妥当性、ABIとの一致、範囲や出力初期化などの挙動は
 アセットを渡す側が保証する。[取込と寿命の設計](../design/implementation-policy.md#external-shader-assets)を参照する。
 
+<a id="yaml-pipeline"></a>
+
+## YAMLで描画パイプラインを組み立てる
+
+アプリから`renderer-pipeline`に依存し、実行するバックエンドに応じて`vulkan`または`d3d12` featureを選ぶ。
+YAMLのテキストを`PreparedPipeline::from_yaml`に渡す。第2引数の`PrepareOptions`で、同時処理する最大フレーム数
+`frames_in_flight`と、各描画リストの候補を選別した後の上限`max_draws_per_list`を指定する。
+第3引数は論理シェーダー名から`Program::Raster`または`Program::Compute`を返す関数である。
+アプリのアセット層が、対象APIのバイナリと対応するABIを[外部取込](#runtime-shader-import)の契約に従って読み込む。
+同じ論理名には、両APIで同じ用途と入出力契約を持つProgramを用意する。
+
+`version: 1`は最大1 MiBの単一文書で次の項目を受け付ける。
+YAMLのキーの重複、未知の項目、アンカー、エイリアス、merge keyは構成エラーになる。
+
+| 項目 | 書式 |
+|---|---|
+| `resources` | 名前`id`付きのリスト。`kind: image`は`width`、`height`と`format`を宣言する。形式は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
+| `draw_lists` | 任意のリスト。各項目に`id`、`view`、`queue`を指定する。対応するビューの候補からqueueが一致する描画を入力順で選ぶ。 |
+| `passes` | 宣言順のパス列。各項目に`id`、`kind`、`shader`を指定する。`kind: raster`は`colors`、任意の`depth`、indexed描画用の`draw_list`を指定する。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`には必要に応じて`bindings`を指定し、呼出側指定のbuffer gridを持つProgramだけに`grid: [x, y]`を与える。 |
+| attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。 |
+| `bindings` | 各パスで、Programが要求する`group`と`binding`に`kind: image`、`buffer`、`sampler`のいずれかを指定する。画像は`resource`、bufferは`resource`、`offset`、`size`を指定する。samplerは`sampler`に`nearest_clamp`、`linear_clamp`、`linear_repeat`、`linear_repeat_u_clamp_v`のいずれかを指定する。 |
+| `output` | 出力する画像の`id`。 |
+
+たとえば、アプリが供給するRGBA8画像にComputeを掛け、全画面Rasterへつなぐ構成を次のように書ける。
+この例の論理名を解決するアセット層は、`post/invert`に入力と出力のstorage画像、`post/display`にsampled画像とsamplerを持つProgramを返す。
+
+```yaml
+version: 1
+resources:
+  - { id: scene, kind: image, source: external, width: 16, height: 16, format: rgba8_unorm }
+  - { id: effect, kind: image, width: 16, height: 16, format: rgba8_unorm }
+  - { id: final, kind: image, width: 16, height: 16, format: rgba8_unorm }
+passes:
+  - id: invert
+    kind: compute
+    shader: post/invert
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: scene }
+      - { kind: image, group: 0, binding: 1, resource: effect }
+  - id: display
+    kind: raster
+    shader: post/display
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: effect }
+      - { kind: sampler, group: 0, binding: 1, sampler: nearest_clamp }
+    colors:
+      - { image: final, load: clear, clear: [0, 0, 0, 1] }
+output: final
+```
+
+1. `pipeline.working_set()`で必要なtransient資源とProgramを取得し、`Runtime::new`または
+   `Runtime::prepare_working_set`へ渡す。アプリ側でGraphに作る外部入力やジオメトリのtransient資源は、
+   その要求を合わせて準備する。永続的な外部深度画像は、深度付きRasterの最終WorkingSet準備までにRuntimeへ登録する。
+   Graph本体はアプリが十分な`GraphCapacity`とslotを備えた`GraphPool`で用意する。
+2. 毎フレーム、`GraphPool::begin`でGraphを取得し、入力のimportやuploadを追加する。`FrameInputs::resources`に
+   `source: external`の名前と同じGraphのハンドルを`FrameResource`で渡す。資源の記述子はYAMLの宣言と一致させる。
+   `FrameInputs::views`には`FrameView`で名前付きビューと候補を渡す。各`DrawCandidate`に`queue`とジオメトリ・
+   定数を持つ`RasterDraw`を指定し、その`bindings`は`None`にする。同じリストを使うパスは候補のジオメトリと定数のABIを共有する。
+   パス別のbindingはYAMLが指定する。宣言した外部資源とビューは名前ごとに一つずつ渡す。
+3. `pipeline.build(graph, inputs)`でパスを追加する。成功時の戻り値はGraphと出力の`ImageHandle`である。
+   出力を使用する後段、export、readbackなどを追加し、`Graph::compile`とRuntimeへの投入を行う。
+   構成を変更するときは新しいYAML／Programから新たに準備し、Runtimeの貸し出しを返却してWorkingSetを更新する。
+
+Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リストを深度プリパスと本描画が共有する構成と、
+Computeの出力をRasterにつなぐ構成を実行する。`development-validation`を追加するとネイティブ検証を有効にできる。
+
+```powershell
+cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,memory-profiling --example yaml_pipeline
+```
+
 <a id="bistro-tools"></a>
 
 ## Bistroのcook・材質shader・比較

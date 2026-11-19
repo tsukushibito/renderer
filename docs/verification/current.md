@@ -5,6 +5,23 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="yaml-pipeline-verification"></a>
+
+## YAMLによるRaster／Computeの合成
+
+`renderer-eek`。Windowsの同一RTX 3060（610.88）で、`yaml_pipeline`がYAMLと選択APIのシェーダーを実ファイルから読み込んだ。
+同じアプリとRuntimeで、深度プリパスと本描画で不透明リストを共有する構成、Compute反転から全画面Rasterへつなぐ構成、
+同じCompute接続でシェーダーを赤青交換に替えた構成を順に準備した。各構成は外部から渡した9×7の出力画像を使い、
+opaqueの候補数を0／1／2件に変え、別queueの候補を除外した。Vulkan／D3D12の全出力画素を参照値と照合した。
+
+`--release`の製品構成と厳格構成（`development-validation`）にそれぞれ`memory-profiling`を追加し、
+各API・構成のwarm-up後に通常フレームを24回、合計288回計測した。YAMLの解析とWorkingSetの変更は計測外。
+Graph構築・compile、GPU投入と退役、readbackの受取と返却を含む区間で、Rustの確保・ゼロ初期化確保・再確保・解放、
+VMA host callbackの確保・再確保・解放、Renderer発行のnative資源・メモリ作成／破棄とdescriptorの確保／解放は0件だった。
+既存領域のpool resetは各計測で48回観測した。厳格構成ではVulkan Core／SyncValとD3D12 Debug Layer／GBVが有効で、
+終了処理までwarningとerrorは0件だった。表示・複数同時frame・再構成時間はこの計測の対象外。
+[利用手順と実行コマンド](../guides/tooling.md#yaml-pipeline)を参照する。
+
 <a id="runtime-shader-verification"></a>
 
 ## 実行時に読み込んだRaster・Compute

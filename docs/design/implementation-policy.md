@@ -883,15 +883,15 @@ pipeline、binding layout、sampler、ImageViewなどは、それぞれを導入
 実行ファイルを再ビルドせず、起動や明示的な構成変更でRasterとComputeのシェーダーを選べる。
 アプリがロードしたバイナリとABIは`ManagedRasterProgram::from_trusted_owned_descriptor`と
 `ManagedProgram::from_trusted_owned_descriptor`で取り込む。埋め込みアセットと同じ
-GraphとWorkingSetを使う。YAMLで描画パイプラインを定義する層は後続の設計案とする。
-[利用例](../guides/tooling.md#runtime-shader-import)と
+GraphとWorkingSetを使う。構成をYAMLで記述する場合は同じワークスペースの`renderer-pipeline`を使う。
+[外部取込の利用例](../guides/tooling.md#runtime-shader-import)と
 [Program契約](rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
 
 | 層 | 責務 |
 |---|---|
 | シェーダーのアセットビルド | HLSLなどのソースを配布対象に応じてSPIR-V、DXIL、または両方へコンパイルする。entry point、stage、bindingとアクセス契約などのメタデータを対応するバイナリと組にして配布する。 |
 | アプリのアセット層 | 起動時にアプリが選んだバックエンドに対し、シェーダーの論理名を対応するアセットへ解決する。両形式を配布した場合も、選択したバックエンド用のバイナリと対応するメタデータを読む。 |
-| `renderer-pipeline`（後続案） | 同じワークスペースの別クレートとしてYAMLのパス、描画リスト、リソース接続を解決する。`shader: post/tonemap`のような論理名を構成の準備時にアプリのアセット層へ渡す。毎フレームはアプリから渡された描画候補とビューを使い、Rendererの公開Graph APIで組み立てる。 |
+| `renderer-pipeline` | YAMLのパス、描画リスト、リソース接続を解決する。`shader: post/tonemap`のような論理名を準備時にアプリへ渡し、型付きProgramを受け取る。毎フレームはアプリから渡された名前付きビューの候補を選び、公開Graph APIでパスを追加する。 |
 | `renderer` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
 
 取込時に、バイナリ形式・版・サイズ・ステージと、記述子の構造・宣言したABIの整合を確認する。
@@ -907,6 +907,25 @@ GPUが使うパイプラインと対応するProgramは既存の実行所有者�
 通常フレームに取込・所有データのクローン・最終解放の処理を追加せず、
 ロードやWorkingSetの置換は[準備・構成変更の境界](#steady-state-memory)で行う。
 描画を継続したままのホットリロードとアセットパックの格納形式は後続の検討とする。
+
+#### YAMLによるパス合成
+
+依存は`アプリ → renderer-pipeline → renderer`の向きとする。アプリがYAMLとバックエンドを選び、
+シェーダーの取込時にコードとABIの一致を保証する。`renderer-pipeline`が扱うのは論理名と信頼済みProgramである。
+YAMLは順序付きのRaster／Computeパス、名前付き資源・描画リスト、出力画像を宣言する。
+パスは宣言順でGraphへ追加し、producer・hazard・初期化の解析とGPU同期は[RenderGraph](rendergraph.md)に委ねる。
+
+構成の準備時にYAMLを解析し、参照・Programの種別・binding・attachmentを照合して、Graphへ渡す順序と引数を確定する。
+`PreparedPipeline`が同じProgram版を`WorkingSet`とGraph構築の両方に使い、transient資源の枠数と作業領域を予約する。
+毎フレームはアプリが提供したGraph上の外部資源と描画候補を使う。
+名前付きビュー内の候補をqueueで選び、複数パスで共有される描画リストも一度構築する。
+可変のハンドル・候補数は各フレームで確認し、上限内の入力には予約済み領域を使う。
+Graphを消費する`build`が成功したら、利用側が返された出力画像のexport、readback、後段パスなどを選ぶ。
+
+構成の差し替えは、新しい`PreparedPipeline`を作り、以前のフレームと結果の貸し出しを返却してから
+実RuntimeのWorkingSetを更新する。更新が成功した版で後続フレームを組み立てる。
+初版の資源はbufferと1×・単一mip／layerの2D画像で、Rasterはindexed draw listまたは全画面三角形、
+ComputeはProgramのdispatch契約に従う。操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
 
 ## 12. エンジン統合とPresentation
 

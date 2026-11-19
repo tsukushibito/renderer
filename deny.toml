@@ -26,6 +26,13 @@ name = "tracy-client-sys"
 version = "=0.30.1"
 allow = ["BSD-3-Clause"]
 
+# The YAML reader's encoding_rs includes WHATWG-derived encoding tables under
+# BSD-3-Clause in addition to its Apache-2.0 or MIT implementation.
+[[licenses.exceptions]]
+name = "encoding_rs"
+version = "=0.8.44"
+allow = ["BSD-3-Clause"]
+
 [bans]
 # Incompatible transitive major versions (currently syn 2 and 3) may coexist.
 # Review these warnings rather than forcing unsupported dependency upgrades.
