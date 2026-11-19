@@ -364,11 +364,11 @@ pub struct VulkanRuntime {
 }
 
 fn validate_raster_shader_formats(
-    programs: &[impl Copy + Into<crate::program::RasterPipelineRequest>],
+    programs: &[impl Clone + Into<crate::program::RasterPipelineRequest>],
 ) -> Result<(), RuntimeError> {
     if programs
         .iter()
-        .any(|&request| request.into().program.spirv().is_none())
+        .any(|request| request.clone().into().program.spirv().is_none())
     {
         return Err(RuntimeError::unsupported(
             "Raster Program has no SPIR-V shaders",
@@ -646,7 +646,7 @@ impl VulkanRuntime {
 
     fn stage_raster_programs(
         &self,
-        programs: &[impl Copy + Into<crate::program::RasterPipelineRequest>],
+        programs: &[impl Clone + Into<crate::program::RasterPipelineRequest>],
         depth_samples: vk::SampleCountFlags,
     ) -> Result<Arc<ShaderPrograms>, RuntimeError> {
         let replacement = ShaderPrograms::new(
@@ -669,7 +669,7 @@ impl VulkanRuntime {
     /// all native preparation succeeds; failure preserves the previous set.
     pub fn prepare_raster_programs(
         &mut self,
-        programs: &[impl Copy + Into<crate::program::RasterPipelineRequest>],
+        programs: &[impl Clone + Into<crate::program::RasterPipelineRequest>],
     ) -> Result<(), RuntimeError> {
         self.owner
             .device
@@ -1504,8 +1504,10 @@ impl VulkanRuntime {
                     let count = graph
                         .raster_batches(batches)
                         .iter()
-                        .filter(|batch| !batch.program.bindings().is_empty())
-                        .flat_map(|batch| graph.raster_draws(&batch.draws))
+                        .map(|batch| graph.raster_draws(&batch.draws))
+                        // A batch contains at least one draw and uses one Program ABI.
+                        .filter(|draws| !draws[0].bindings.is_empty())
+                        .flatten()
                         .filter(|draw| {
                             work.raster_bindings
                                 .require(&draw.bindings, depth.is_some())

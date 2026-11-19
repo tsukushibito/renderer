@@ -341,10 +341,11 @@ pub(crate) enum MeshUpload {
     )
 )]
 pub(crate) struct RasterBatchOperands {
-    pub program: crate::program::ManagedRasterProgram,
+    pub program: crate::program::ProgramId,
     pub draws: Range<usize>,
-    /// The Program ABI fixes the count of words per draw in this batch.
+    /// The draw constants use the size established during Graph construction.
     pub constants_start: usize,
+    pub constant_words_per_draw: usize,
     /// When present, the sole draw in `draws` supplies bindings and proves
     /// the index prefix needed by the real commands in the argument buffer.
     pub indirect: Option<IndirectDrawOperands>,
@@ -406,7 +407,7 @@ pub(crate) enum Operation {
         allow(dead_code, reason = "native managed dispatch is subsequent work")
     )]
     Dispatch {
-        program: crate::program::ManagedProgram,
+        program: crate::program::ProgramId,
         bindings: Range<usize>,
         workgroups: [u32; 3],
     },

@@ -175,7 +175,7 @@ pub fn run() {
     .unwrap();
     let program = ManagedRasterProgram::mesh_hdr();
     let requests = [
-        program.into(),
+        program.clone().into(),
         RasterPipelineRequest {
             program,
             sample_count: SampleCount::X4,

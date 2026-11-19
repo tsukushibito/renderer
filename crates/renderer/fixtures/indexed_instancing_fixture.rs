@@ -118,7 +118,7 @@ enum DrawMode {
 
 fn build(
     pool: &mut GraphPool,
-    program: ManagedRasterProgram,
+    program: &ManagedRasterProgram,
     mode: DrawMode,
 ) -> Result<(CompiledGraph, PassHandle), GraphError> {
     let mut graph = pool.begin()?;
@@ -145,7 +145,7 @@ fn build(
     )?;
 
     let bindings = graph.raster_bindings(
-        &program,
+        program,
         &[Binding {
             group: 0,
             binding: 2,
@@ -177,7 +177,7 @@ fn build(
     };
     graph.raster("ranged indexed draws", targets, |raster| match mode {
         DrawMode::Separate => raster.draw(
-            &program,
+            program,
             [
                 draw,
                 RasterDraw {
@@ -187,7 +187,7 @@ fn build(
             ],
         ),
         DrawMode::Instanced => raster.draw(
-            &program,
+            program,
             [RasterDraw {
                 instance_count: 2,
                 ..draw
@@ -252,7 +252,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             },
         ],
     )?;
-    vk.prepare_raster_programs(&[shader])?;
+    vk.prepare_raster_programs(std::slice::from_ref(&shader))?;
     let mut dx = D3D12Runtime::new_with_working_set(
         D3D12RuntimeConfig {
             validation: if strict {
@@ -278,7 +278,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             desc: color,
             count: 1,
         }],
-        &[shader.into()],
+        &[shader.clone().into()],
         &[],
     )?;
     let adapter = vk.device_info();
@@ -288,7 +288,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let dx_monitor = dx.validation_monitor();
     let mut pool = GraphPool::new(CAPACITY, 1)?;
     for mode in [DrawMode::Separate, DrawMode::Instanced] {
-        let (plan, output) = build(&mut pool, shader, mode)?;
+        let (plan, output) = build(&mut pool, &shader, mode)?;
         let mut bytes = [0; BYTES];
         let mut vk_pending = vk.submit(&plan)?;
         let mut vk_result = vk_pending.wait(WAIT)?.expect("Vulkan completion");

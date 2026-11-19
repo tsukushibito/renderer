@@ -152,7 +152,7 @@ struct Capture {
 
 fn build(
     pool: &mut GraphPool,
-    [inline, uniform, opaque]: [ManagedRasterProgram; 3],
+    [inline, uniform, opaque]: &[ManagedRasterProgram; 3],
     scene: Scene,
 ) -> Result<(CompiledGraph, [Capture; 3]), GraphError> {
     let mut graph = pool.begin()?;
@@ -212,7 +212,7 @@ fn build(
     match scene {
         Scene::Opaque => {
             graph.raster("mixed-format MRT", targets, |raster| {
-                raster.draw(&opaque, [draw])
+                raster.draw(opaque, [draw])
             })?;
             first_pixel = &[255, 0, 0, 255];
             second_pixel = &[0, 0, 0, 0x3c, 0, 0, 0, 0x3c];
@@ -228,7 +228,7 @@ fn build(
                 [0.0, 1.0, 0.0, 0.5].map(f32::to_le_bytes).as_flattened(),
             )?;
             let binding = graph.raster_bindings(
-                &uniform,
+                uniform,
                 &[Binding {
                     group: 0,
                     binding: 2,
@@ -248,14 +248,14 @@ fn build(
             let one = 1.0_f32.to_bits();
             graph.raster("inline, uniform, inline", targets, |raster| {
                 raster.draw(
-                    &inline,
+                    inline,
                     [RasterDraw {
                         parameters: RasterConstants::new(&[one, 0, 0, alpha])?,
                         ..draw
                     }],
                 )?;
                 raster.draw(
-                    &uniform,
+                    uniform,
                     [
                         RasterDraw {
                             vertices: far,
@@ -265,7 +265,7 @@ fn build(
                     ],
                 )?;
                 raster.draw(
-                    &inline,
+                    inline,
                     [RasterDraw {
                         parameters: RasterConstants::new(&[0, 0, one, alpha])?,
                         ..draw
@@ -350,7 +350,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             count,
         }),
         &images.map(|(desc, count)| D3D12ImageClass { desc, count }),
-        &programs.map(Into::into),
+        &programs.clone().map(Into::into),
         &[],
     )?;
     let adapter = vk.device_info();
@@ -378,7 +378,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     vk.prepare_raster_programs(&programs)?;
     let mut pool = GraphPool::new(CAPACITY, 1)?;
     for scene in [Scene::Opaque, Scene::Ordered] {
-        let (plan, captures) = build(&mut pool, programs, scene)?;
+        let (plan, captures) = build(&mut pool, &programs, scene)?;
         let raster_name = match scene {
             Scene::Opaque => "mixed-format MRT",
             Scene::Ordered => "inline, uniform, inline",

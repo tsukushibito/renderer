@@ -4,7 +4,7 @@ use std::{mem::ManuallyDrop, sync::Arc};
 
 use super::frame::{NativeObject, object};
 use super::{D3D12RuntimeError, bindings::*, device::DeviceOwner};
-use crate::program::ManagedProgram;
+use crate::program::{ManagedProgram, ProgramId};
 
 mod descriptors;
 use descriptors::root_parameters;
@@ -24,8 +24,11 @@ unsafe impl Send for ComputePipeline {}
 unsafe impl Sync for ComputePipeline {}
 
 impl ComputePipeline {
-    pub(super) fn matches(&self, managed: &ManagedProgram) -> bool {
-        self.managed.same_asset(managed)
+    pub(super) fn matches(&self, program: ProgramId) -> bool {
+        self.managed.identity() == program
+    }
+    pub(super) fn managed(&self) -> &ManagedProgram {
+        &self.managed
     }
     pub(super) fn pipeline(&self) -> &ID3D12PipelineState {
         &self.pipeline
@@ -112,7 +115,7 @@ impl ComputePipeline {
         Ok(Self {
             pipeline,
             signature,
-            managed: *managed,
+            managed: managed.clone(),
             _owner: Arc::clone(owner),
         })
     }

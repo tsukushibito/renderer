@@ -890,10 +890,10 @@ impl GraphWork {
                         });
                         let programs = programs.as_ref().unwrap();
                         for batch in graph.raster_batches(batches) {
-                            let program = batch.program;
                             let slot = raster_programs[raster_program_cursor];
                             raster_program_cursor += 1;
                             let native_program = programs.raster_program(slot);
+                            let program = &native_program.raster_asset;
                             let binding_layout = (!program.bindings().is_empty()).then(|| {
                                 let RasterProgramSlot::Managed(key) = slot else {
                                     unreachable!("fixed Raster Program has no bindings")

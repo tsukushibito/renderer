@@ -227,29 +227,19 @@ fn vulkan_graph_working_set_failure_preserves_committed_resources() {
 fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
     use crate::program::{
         ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups, MAX_RASTER_PROGRAMS,
-        ManagedProgram, ManagedRasterProgram, RasterProgramDescriptor, ShaderBinaries,
+        MESH_RASTER_DESCRIPTOR, ManagedProgram, ManagedRasterProgram, RasterProgramDescriptor,
+        ShaderBinaries,
     };
 
     static DESCRIPTORS: [RasterProgramDescriptor; MAX_RASTER_PROGRAMS + 1] = [const {
-        let original = ManagedRasterProgram::mesh().descriptor();
         RasterProgramDescriptor {
-            entry: original.entry,
-            vertex_stride: original.vertex_stride,
-            vertex_attributes: original.vertex_attributes,
-            parameters: original.parameters,
-            color_outputs: original.color_outputs,
-            bindings: original.bindings,
-            binding_bytes: original.binding_bytes,
-            sampling_pairs: original.sampling_pairs,
-            blend: original.blend,
-            depth: original.depth,
-            shaders: original.shaders,
+            ..MESH_RASTER_DESCRIPTOR
         }
     };
         MAX_RASTER_PROGRAMS + 1];
     static RASTER_METADATA: RasterProgramDescriptor = RasterProgramDescriptor {
         shaders: ShaderBinaries::metadata_only(),
-        ..*ManagedRasterProgram::mesh().descriptor()
+        ..MESH_RASTER_DESCRIPTOR
     };
     static COMPUTE_METADATA: ComputeProgramDescriptor = ComputeProgramDescriptor {
         entry: "main",
@@ -291,13 +281,13 @@ fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
         // SAFETY: The immutable metadata describes a one-workgroup dispatch with no resources.
         let missing_compute = unsafe { ManagedProgram::from_trusted_descriptor(&COMPUTE_METADATA) };
         let compute = Arc::clone(runtime.compute_programs.as_ref().unwrap());
-        let missing_raster_request = missing_raster.into();
+        let missing_raster_request = missing_raster.clone().into();
         for error in [
             runtime
                 .prepare_raster_programs(&[missing_raster])
                 .unwrap_err(),
             runtime
-                .prepare_compute_programs(&[missing_compute])
+                .prepare_compute_programs(std::slice::from_ref(&missing_compute))
                 .unwrap_err(),
             runtime
                 .prepare_graph_working_set(

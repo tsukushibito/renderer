@@ -1163,7 +1163,7 @@ mod tests {
         let [batch] = plan.raster_batches(batches) else {
             panic!("one Program batch")
         };
-        assert!(batch.program.same(&ManagedRasterProgram::mesh()));
+        assert_eq!(batch.program, ManagedRasterProgram::mesh().identity());
         assert_eq!(&batch.draws, draws);
         let owned = plan.raster_draws(draws);
         assert_eq!(owned.len(), 2);
@@ -1258,9 +1258,12 @@ mod tests {
         let [first, second, third] = plan.raster_batches(batches) else {
             panic!("three ordered batches");
         };
-        assert!(first.program.same(&ManagedRasterProgram::mesh()));
-        assert!(second.program.same(&ManagedRasterProgram::textured_mesh()));
-        assert!(third.program.same(&first.program));
+        assert_eq!(first.program, ManagedRasterProgram::mesh().identity());
+        assert_eq!(
+            second.program,
+            ManagedRasterProgram::textured_mesh().identity()
+        );
+        assert_eq!(third.program, first.program);
         assert_eq!(first.draws.start, draws.start);
         assert_eq!(first.draws.end, second.draws.start);
         assert_eq!(second.draws.end, third.draws.start);

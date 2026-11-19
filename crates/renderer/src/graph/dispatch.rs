@@ -6,7 +6,7 @@ use super::{
 };
 use crate::program::{
     BindingLayout, BindingType, BufferRange, DispatchWorkgroups, ManagedProgram,
-    ManagedRasterProgram, SamplerDescriptor,
+    ManagedRasterProgram, ProgramId, SamplerDescriptor,
 };
 
 /// Immutable descriptors validated for one Graph and one Raster Program.
@@ -15,7 +15,7 @@ use crate::program::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RasterBindings {
     graph: u64,
-    program: usize,
+    program: ProgramId,
     first: usize,
     len: usize,
     first_access: usize,
@@ -60,16 +60,16 @@ pub(crate) enum BindingOperands {
 }
 
 #[derive(Clone, Copy)]
-struct BufferGrid {
+struct BufferGrid<'a> {
     group: u32,
     binding: u32,
-    read_bindings: &'static [(u32, u32)],
+    read_bindings: &'a [(u32, u32)],
     workgroup_count: u64,
 }
 
-impl BufferGrid {
+impl<'a> BufferGrid<'a> {
     fn from_dispatch(
-        domain: DispatchWorkgroups,
+        domain: DispatchWorkgroups<'a>,
         workgroups: Option<[u32; 2]>,
     ) -> Result<Option<Self>, GraphError> {
         let DispatchWorkgroups::BufferGrid2d {
@@ -280,7 +280,7 @@ impl Graph {
             }
             Ok((
                 Operation::Dispatch {
-                    program: *program,
+                    program: program.identity(),
                     bindings: owned,
                     workgroups,
                 },
@@ -392,7 +392,7 @@ impl Graph {
         layout: &[BindingLayout],
         bytes: &[u64],
         bindings: &[Binding],
-        buffer_grid: Option<BufferGrid>,
+        buffer_grid: Option<BufferGrid<'_>>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
         self.append_bindings_into(layout, bytes, bindings, false, buffer_grid)
     }
@@ -423,7 +423,7 @@ impl Graph {
         bytes: &[u64],
         bindings: &[Binding],
         template: bool,
-        buffer_grid: Option<BufferGrid>,
+        buffer_grid: Option<BufferGrid<'_>>,
     ) -> Result<std::ops::Range<usize>, GraphError> {
         if bindings.len() != layout.len() {
             return Err(GraphError::new(
@@ -705,6 +705,52 @@ mod tests {
             graph.accesses.len(),
             2,
             "each pass consumes a set only once"
+        );
+    }
+
+    #[test]
+    fn raster_binding_set_expires_with_its_loaded_program_version() {
+        use crate::program::{RasterProgramDescriptor, RasterShaderStages, ShaderBinaries};
+
+        let embedded = ManagedRasterProgram::mesh();
+        let load_mesh = || {
+            // SAFETY: These are the unchanged Vulkan mesh shaders and use the
+            // exact ABI and behavior of the embedded mesh Program.
+            unsafe {
+                ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
+                    shaders: ShaderBinaries::vulkan(RasterShaderStages {
+                        vertex: include_bytes!("../../shaders/mesh.vert.spv").as_slice(),
+                        fragment: Some(include_bytes!("../../shaders/mesh.frag.spv").as_slice()),
+                    }),
+                    ..embedded.descriptor()
+                })
+            }
+            .unwrap()
+        };
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let first_program = load_mesh();
+        let bindings = graph.raster_bindings(&first_program, &[]).unwrap();
+        assert!(
+            graph
+                .use_raster_bindings(&first_program.clone(), Some(bindings))
+                .is_ok()
+        );
+        drop(first_program);
+
+        let next_program = load_mesh();
+        assert_eq!(
+            graph
+                .use_raster_bindings(&next_program, Some(bindings))
+                .unwrap_err()
+                .kind(),
+            GraphErrorKind::InvalidInput
+        );
+        let next_bindings = graph.raster_bindings(&next_program, &[]).unwrap();
+        assert!(
+            graph
+                .use_raster_bindings(&next_program, Some(next_bindings))
+                .is_ok()
         );
     }
 
@@ -1057,7 +1103,7 @@ mod tests {
         else {
             panic!("expected the owned dispatch operation");
         };
-        assert_eq!(program.bindings()[0].kind, BindingType::Uniform);
+        assert_eq!(*program, ManagedProgram::uniform_readback().identity());
         assert_eq!(*workgroups, [1, 1, 1]);
         let operands = &plan.bindings[bindings.clone()];
         assert_eq!(operands.len(), 2);

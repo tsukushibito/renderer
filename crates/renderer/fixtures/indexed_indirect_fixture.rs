@@ -50,17 +50,6 @@ const MASK_WORDS: usize = MASK_OFFSET + 128;
 const MASK: BufferDesc = BufferDesc {
     size: (MASK_WORDS * size_of::<u32>()) as u64,
 };
-static ADDITIVE_MESH: RasterProgramDescriptor = RasterProgramDescriptor {
-    blend: BlendState::Additive,
-    ..*ManagedRasterProgram::mesh().descriptor()
-};
-
-fn program() -> ManagedRasterProgram {
-    // SAFETY: The built-in mesh shader binaries and their ABI are unchanged.
-    // Additive blending makes extra instances observable in the readback.
-    unsafe { ManagedRasterProgram::from_trusted_descriptor(&ADDITIVE_MESH) }
-}
-
 fn vertices() -> [[f32; 7]; 15] {
     let mut vertices = [[0.0; 7]; 15];
     vertices[..3].copy_from_slice(&[
@@ -118,6 +107,7 @@ fn build(
     pool: &mut GraphPool,
     table: &IndexedIndirectTable,
     visibility: Visibility,
+    program: &ManagedRasterProgram,
 ) -> Result<(CompiledGraph, [PassHandle; 2]), GraphError> {
     let mut graph = pool.begin()?;
     let vertices_buffer = graph.buffer("packed vertices", VERTICES)?;
@@ -158,7 +148,6 @@ fn build(
     let indirect = graph.image("indirect image", color)?;
     let direct_view = graph.image_view(direct, 0, 0)?;
     let indirect_view = graph.image_view(indirect, 0, 0)?;
-    let program = program();
     let parameters = RasterParameters::default().into();
     let reference = TEMPLATES
         .into_iter()
@@ -184,7 +173,7 @@ fn build(
             color_resolves: &[],
             depth: None,
         },
-        |raster| raster.draw(&program, reference),
+        |raster| raster.draw(program, reference),
     )?;
     graph.raster(
         "indirect draws",
@@ -197,7 +186,7 @@ fn build(
             color_resolves: &[],
             depth: None,
         },
-        |raster| raster.draw_indirect(&program, args, None, parameters),
+        |raster| raster.draw_indirect(program, args, None, parameters),
     )?;
     let outputs = [
         graph.readback_image("direct pixels", direct)?,
@@ -242,7 +231,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         upload_bytes: 4096,
         ..GraphCapacity::default()
     };
-    let program = program();
+    let mesh = ManagedRasterProgram::mesh();
+    // SAFETY: The built-in mesh shader binaries and their ABI are unchanged.
+    // Additive blending makes extra instances observable in the readback.
+    let program = unsafe {
+        ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
+            blend: BlendState::Additive,
+            ..mesh.descriptor()
+        })
+    }?;
     let encoder = ManagedProgram::indexed_indirect_encoder();
     let color = ImageDesc::rgba8(WIDTH, HEIGHT);
     let mut vk = VulkanRuntime::new_with_validation(
@@ -271,8 +268,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         },
         &classes,
     )?;
-    vk.prepare_raster_programs(&[program])?;
-    vk.prepare_compute_programs(&[encoder])?;
+    vk.prepare_raster_programs(std::slice::from_ref(&program))?;
+    vk.prepare_compute_programs(std::slice::from_ref(&encoder))?;
     let dx_config = D3D12RuntimeConfig {
         validation: if strict {
             D3D12ValidationMode::Required
@@ -299,7 +296,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             desc: color,
             count: 2,
         }],
-        &[program.into()],
+        &[program.clone().into()],
         &[encoder],
     )?;
     let adapter = vk.device_info();
@@ -314,7 +311,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         (Visibility::None, &small_table),
         (Visibility::Mixed, &small_table),
     ] {
-        let (plan, outputs) = build(&mut pool, table, visibility)?;
+        let (plan, outputs) = build(&mut pool, table, visibility, &program)?;
         let mut pixels = [[0; PIXEL_BYTES]; 2];
         let mut vk_pending = vk
             .submit(&plan)

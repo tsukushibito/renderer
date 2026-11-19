@@ -350,7 +350,7 @@ impl GraphStorage {
         &self,
         batch: &RasterBatchOperands,
     ) -> impl ExactSizeIterator<Item = &[u32]> {
-        let stride = batch.program.parameter_size() as usize / size_of::<u32>();
+        let stride = batch.constant_words_per_draw;
         let count = batch.draws.len();
         let mut words = if stride == 0 {
             &[]

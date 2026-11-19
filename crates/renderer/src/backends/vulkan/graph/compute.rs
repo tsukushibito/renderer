@@ -12,7 +12,7 @@ use crate::backends::vulkan::{
     memory::MemoryOwner,
 };
 use crate::graph::BindingOperands;
-use crate::program::{BindingType, ManagedProgram};
+use crate::program::{BindingType, ManagedProgram, ProgramId};
 
 fn native(owner: &MemoryOwner, operation: &str, result: vk::Result) -> RuntimeError {
     owner.device.observe_result(result);
@@ -203,16 +203,15 @@ impl ComputePrograms {
             linear_u_repeat_sampler: vk::Sampler::null(),
             capacity: capacity as usize,
         };
-        for &managed in programs {
-            if result
-                .programs
-                .iter()
-                .any(|program| program.managed.same_asset(&managed))
-            {
+        for managed in programs {
+            if result.supports(managed.identity()) {
                 continue;
             }
-            let native = ComputePipeline::create(Arc::clone(&result.owner), &managed)?;
-            result.programs.push(PreparedProgram { managed, native });
+            let native = ComputePipeline::create(Arc::clone(&result.owner), managed)?;
+            result.programs.push(PreparedProgram {
+                managed: managed.clone(),
+                native,
+            });
         }
         if result.programs.iter().any(|program| {
             program
@@ -281,10 +280,14 @@ impl ComputePrograms {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).leased == 0
     }
 
-    pub(super) fn supports(&self, managed: ManagedProgram) -> bool {
+    pub(super) fn supports(&self, id: ProgramId) -> bool {
+        self.program_index(id).is_some()
+    }
+
+    fn program_index(&self, id: ProgramId) -> Option<usize> {
         self.programs
             .iter()
-            .any(|program| program.managed.same_asset(&managed))
+            .position(|program| program.managed.identity() == id)
     }
 
     pub(super) fn acquire(self: &Arc<Self>) -> Result<ComputeLease, RuntimeError> {
@@ -352,27 +355,22 @@ pub(super) struct ComputeLease {
 impl ComputeLease {
     pub(super) fn prepare(
         &mut self,
-        managed: ManagedProgram,
+        id: ProgramId,
         operands: &[BindingOperands],
         physical: &[Option<PhysicalLease>],
         workgroups: [u32; 3],
     ) -> Result<ComputeDispatch, RuntimeError> {
-        let index = self
-            .programs
-            .programs
-            .iter()
-            .position(|program| program.managed.same_asset(&managed))
-            .ok_or_else(|| {
-                RuntimeError::capacity_with(
-                    "Compute Program is not prepared",
-                    RuntimeCapacityError::new(
-                        RuntimeCapacityKind::Programs,
-                        CapacityRecovery::Prepare,
-                        None,
-                        None,
-                    ),
-                )
-            })?;
+        let index = self.programs.program_index(id).ok_or_else(|| {
+            RuntimeError::capacity_with(
+                "Compute Program is not prepared",
+                RuntimeCapacityError::new(
+                    RuntimeCapacityKind::Programs,
+                    CapacityRecovery::Prepare,
+                    None,
+                    None,
+                ),
+            )
+        })?;
         let limits = self.programs.owner.device.limits();
         validate_workgroups(workgroups, limits.max_compute_work_group_count)?;
         let arena = self.arena.as_mut().unwrap();
@@ -387,11 +385,13 @@ impl ComputeLease {
                 ),
             ));
         }
-        super::work::validate_sampled_operands(managed.bindings(), operands, physical, None)?;
-        let native_program = &self.programs.programs[index].native;
+        let program = &self.programs.programs[index];
+        let bindings = program.managed.bindings();
+        super::work::validate_sampled_operands(bindings, operands, physical, None)?;
+        let native_program = &program.native;
         let groups = native_program.set_layouts.len();
         let sets = &arena.sets[index][arena.used * groups..(arena.used + 1) * groups];
-        for (slot, operand) in managed.bindings().iter().zip(operands) {
+        for (slot, operand) in bindings.iter().zip(operands) {
             let mut buffer_info = vk::DescriptorBufferInfo::default();
             let mut image_info = vk::DescriptorImageInfo::default();
             let mut write = vk::WriteDescriptorSet::default()

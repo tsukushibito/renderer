@@ -287,7 +287,7 @@ mod native {
             .programs()
             .iter()
             .chain(Bloom::Box.programs())
-            .copied()
+            .cloned()
             .collect::<Vec<_>>();
         vk.prepare_compute_programs(&programs).unwrap();
         dx.prepare_graph_working_set(None, &dx_images, &[], &programs)

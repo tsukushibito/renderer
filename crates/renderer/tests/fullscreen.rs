@@ -153,6 +153,7 @@ mod native {
         D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, ValidationMode,
         VulkanRuntime,
     };
+    use std::path::Path;
     use std::time::Duration;
 
     const VERTICES: BufferDesc = BufferDesc { size: 84 };
@@ -161,7 +162,63 @@ mod native {
     const PIXEL_BYTES: usize = TARGET.width as usize * TARGET.height as usize * 4;
     const WAIT: Duration = Duration::from_secs(30);
 
-    fn build(pool: &mut GraphPool) -> (CompiledGraph, PassHandle) {
+    fn load_fullscreen(vulkan: bool) -> ManagedRasterProgram {
+        let load = |path: &str, reviewed: &[u8]| {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+            let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+            assert_eq!(bytes.as_slice(), reviewed, "unreviewed fixture: {path:?}");
+            bytes
+        };
+        let shaders = if vulkan {
+            ShaderBinaries::vulkan(RasterShaderStages {
+                vertex: load(
+                    "tests/support/shaders/fullscreen_uniform.vert.spv",
+                    include_bytes!("support/shaders/fullscreen_uniform.vert.spv"),
+                ),
+                fragment: Some(load(
+                    "shaders/mesh.frag.spv",
+                    include_bytes!("../shaders/mesh.frag.spv"),
+                )),
+            })
+        } else {
+            ShaderBinaries::d3d12(D3D12RasterShaders {
+                stages: RasterShaderStages {
+                    vertex: load(
+                        "tests/support/shaders/dxil/fullscreen_uniform.vert.dxil",
+                        include_bytes!("support/shaders/dxil/fullscreen_uniform.vert.dxil"),
+                    ),
+                    fragment: Some(load(
+                        "shaders/dxil/mesh.frag.dxil",
+                        include_bytes!("../shaders/dxil/mesh.frag.dxil"),
+                    )),
+                },
+                inline_constants: None,
+            })
+        };
+        let entry = FULLSCREEN.entry.to_string();
+        let bindings = FULLSCREEN.bindings.to_vec();
+        // SAFETY: The loaded files were compared with the reviewed fullscreen
+        // fixture bytecode. The descriptor supplies that same resource and stage
+        // contract, including the vertex-stage vec4 and no other accesses.
+        unsafe {
+            ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
+                entry: &entry,
+                vertex_stride: FULLSCREEN.vertex_stride,
+                vertex_attributes: FULLSCREEN.vertex_attributes,
+                parameters: FULLSCREEN.parameters,
+                color_outputs: FULLSCREEN.color_outputs,
+                bindings: &bindings,
+                binding_bytes: FULLSCREEN.binding_bytes,
+                sampling_pairs: FULLSCREEN.sampling_pairs,
+                blend: FULLSCREEN.blend,
+                depth: FULLSCREEN.depth,
+                shaders,
+            })
+        }
+        .unwrap()
+    }
+
+    fn build(pool: &mut GraphPool, program: ManagedRasterProgram) -> (CompiledGraph, PassHandle) {
         let mut graph = pool.begin().unwrap();
         let colors = [BACKGROUND, OVERLAY].map(|value| {
             let buffer = graph.buffer("generated triangle color", COLOR).unwrap();
@@ -210,7 +267,6 @@ mod native {
                     depth: None,
                 },
                 |raster| {
-                    let program = program();
                     let constants = RasterConstants::default();
                     raster.draw_fullscreen(&program, &colors[..1], constants)?;
                     raster.draw(
@@ -230,15 +286,28 @@ mod native {
             )
             .unwrap();
         let readback = graph.readback_image("mixed Raster pixels", target).unwrap();
+        drop(program);
         (graph.compile().unwrap(), readback)
     }
 
     #[test]
     #[ignore = "requires one physical adapter available to Vulkan and D3D12"]
     fn mixed_fullscreen_and_indexed_order() {
+        run_mixed_fullscreen_and_indexed_order(program(), None);
+    }
+
+    #[test]
+    #[ignore = "requires one physical adapter available to Vulkan and D3D12"]
+    fn runtime_loaded_raster_preserves_mixed_draw_order() {
+        run_mixed_fullscreen_and_indexed_order(load_fullscreen(true), Some(load_fullscreen(false)));
+    }
+
+    fn run_mixed_fullscreen_and_indexed_order(
+        vk_program: ManagedRasterProgram,
+        dx_program: Option<ManagedRasterProgram>,
+    ) {
         let strict = cfg!(feature = "development-validation");
         let capacity = GraphCapacity::default();
-        let requests = [program().into(), ManagedRasterProgram::mesh().into()];
         let mut vk = VulkanRuntime::new_with_validation(
             RuntimeConfig {
                 execution_slots: 1,
@@ -278,7 +347,8 @@ mod native {
             ],
         )
         .unwrap();
-        vk.prepare_raster_programs(&requests).unwrap();
+        vk.prepare_raster_programs(&[vk_program.clone(), ManagedRasterProgram::mesh()])
+            .unwrap();
 
         let mut dx = D3D12Runtime::new_with_working_set(
             D3D12RuntimeConfig {
@@ -318,7 +388,10 @@ mod native {
                 desc: TARGET,
                 count: 1,
             }],
-            &requests,
+            &[
+                dx_program.as_ref().unwrap_or(&vk_program).clone().into(),
+                ManagedRasterProgram::mesh().into(),
+            ],
             &[],
         )
         .unwrap();
@@ -326,19 +399,23 @@ mod native {
         assert_ne!(adapter.device_type, "CPU");
         assert_eq!(adapter.device_luid, Some(dx.device_info().luid));
         let vk_monitor = vk.validation_monitor();
-        let mut pool = GraphPool::new(capacity, 1).unwrap();
-        let (plan, readback) = build(&mut pool);
+        let mut pool = GraphPool::new(capacity, 2).unwrap();
+        let (vk_plan, vk_readback) = build(&mut pool, vk_program);
+        let dx_recorded = dx_program.map(|program| build(&mut pool, program));
+        let (dx_plan, dx_readback) = dx_recorded
+            .as_ref()
+            .map_or((&vk_plan, vk_readback), |(plan, pass)| (plan, *pass));
         let mut vk_pixels = [0; PIXEL_BYTES];
         let mut dx_pixels = [0; PIXEL_BYTES];
         {
-            let mut pending = vk.submit(&plan).unwrap();
+            let mut pending = vk.submit(&vk_plan).unwrap();
             let mut result = pending.wait(WAIT).unwrap().expect("Vulkan completion");
-            result.readback_into(readback, &mut vk_pixels).unwrap();
+            result.readback_into(vk_readback, &mut vk_pixels).unwrap();
         }
         {
-            let mut pending = dx.submit(&plan).unwrap();
+            let mut pending = dx.submit(dx_plan).unwrap();
             let mut result = pending.wait(WAIT).unwrap().expect("D3D12 completion");
-            result.readback_into(readback, &mut dx_pixels).unwrap();
+            result.readback_into(dx_readback, &mut dx_pixels).unwrap();
         }
         assert_eq!(vk_pixels, dx_pixels);
         for y in 0..TARGET.height {
@@ -356,7 +433,7 @@ mod native {
                 assert_eq!(vk_pixels[i..i + 4], expected, "pixel ({x}, {y})");
             }
         }
-        drop(plan);
+        drop((vk_plan, dx_recorded));
         assert!(pool.is_idle());
         drop(vk);
         let vk_report = vk_monitor.report();
@@ -368,6 +445,9 @@ mod native {
             assert_eq!(vk_report.synchronization_validation, Some(true));
             assert!(dx_report.debug_layer_enabled && dx_report.gpu_based_validation_enabled);
             assert!(dx_report.teardown_checked);
+        } else {
+            assert_eq!(vk_report.requested, ValidationMode::Disabled);
+            assert!(!dx_report.debug_layer_enabled && !dx_report.gpu_based_validation_enabled);
         }
     }
 }

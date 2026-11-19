@@ -281,13 +281,21 @@ mod native {
         GraphCapacity, GraphPool, ImageDesc, LoadOp, PassHandle, RasterAttachments, SampleCount,
         StoreOp,
     };
-    use renderer::program::{ManagedProgram, SamplerDescriptor};
+    use renderer::program::{
+        ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups, ManagedProgram,
+        SamplerDescriptor, ShaderBinaries,
+    };
+    use renderer::runtime::{
+        D3D12Config, ExecutionErrorKind, ResourceClass as WorkingSetResource, Runtime,
+        RuntimeConfig as BackendConfig, RuntimeLimits, VulkanConfig, WorkingSet,
+    };
     use renderer::{
         D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
         D3D12RuntimeErrorKind, D3D12ValidationMode, FrameCapacity, ImageFormat, ResourceClass,
         RuntimeConfig, RuntimeErrorKind, ValidationMode, VulkanRuntime,
     };
     use serde_json::{Value, json};
+    use std::path::Path;
     use std::time::Duration;
 
     const WAIT: Duration = Duration::from_secs(30);
@@ -631,6 +639,218 @@ mod native {
         image_transform::program(Transform::SwapRedBlue),
     ];
 
+    fn load_transform(transform: Transform, vulkan: bool) -> ManagedProgram {
+        let (path, reviewed): (&str, &[u8]) = match (transform, vulkan) {
+            (Transform::Invert, true) => (
+                "fixtures/shaders/invert_rgba8.comp.spv",
+                include_bytes!("../fixtures/shaders/invert_rgba8.comp.spv"),
+            ),
+            (Transform::Invert, false) => (
+                "fixtures/shaders/dxil/invert_rgba8.comp.dxil",
+                include_bytes!("../fixtures/shaders/dxil/invert_rgba8.comp.dxil"),
+            ),
+            (Transform::SwapRedBlue, true) => (
+                "fixtures/shaders/swap_red_blue_rgba8.comp.spv",
+                include_bytes!("../fixtures/shaders/swap_red_blue_rgba8.comp.spv"),
+            ),
+            (Transform::SwapRedBlue, false) => (
+                "fixtures/shaders/dxil/swap_red_blue_rgba8.comp.dxil",
+                include_bytes!("../fixtures/shaders/dxil/swap_red_blue_rgba8.comp.dxil"),
+            ),
+        };
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{path:?}: {error}"));
+        assert_eq!(bytes.as_slice(), reviewed, "unreviewed fixture: {path:?}");
+        let shaders = if vulkan {
+            ShaderBinaries::vulkan(bytes)
+        } else {
+            ShaderBinaries::d3d12(bytes)
+        };
+        let embedded = image_transform::program(transform);
+        let entry = embedded.entry_point().to_string();
+        let bindings = embedded.bindings().to_vec();
+        let binding_bytes = vec![0; bindings.len()];
+        // SAFETY: The file matches the reviewed fixture exactly. The fixture
+        // uses only its two typed image bindings, guards the rounded-up domain,
+        // and writes each destination texel once without other side effects.
+        unsafe {
+            ManagedProgram::from_trusted_owned_descriptor(ComputeProgramDescriptor {
+                entry: &entry,
+                workgroup_size: embedded.workgroup_size(),
+                bindings: &bindings,
+                dispatch: DispatchContract {
+                    workgroups: DispatchWorkgroups::Image2d {
+                        group: 0,
+                        binding: 1,
+                    },
+                    bytes: &binding_bytes,
+                },
+                shaders,
+            })
+        }
+        .unwrap()
+    }
+
+    fn run_runtime_loaded_compute(
+        config: BackendConfig,
+        input: &[u8; TRANSFORM_BYTES],
+    ) -> (Runtime, [[u8; TRANSFORM_BYTES]; 2]) {
+        let vulkan = matches!(config, BackendConfig::Vulkan(_));
+        let programs = [Transform::Invert, Transform::SwapRedBlue]
+            .map(|transform| load_transform(transform, vulkan));
+        let limits = RuntimeLimits {
+            frames: 1,
+            results: 1,
+            ..Default::default()
+        };
+        let resources = [WorkingSetResource::Image {
+            desc: TRANSFORM_IMAGE,
+            count: 3,
+        }];
+        let mut runtime = Runtime::new(
+            config,
+            limits,
+            WorkingSet {
+                resources: &resources,
+                compute: &programs,
+                ..Default::default()
+            },
+        )
+        .expect("hardware, requested validation, and selected shader format");
+        let mut pool = GraphPool::new(limits.graph, 1).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let source = graph.image("source", TRANSFORM_IMAGE).unwrap();
+        graph.upload_image("source pixels", source, input).unwrap();
+        let mut dispatch = |name, program| {
+            let output = graph.image(name, TRANSFORM_IMAGE).unwrap();
+            let bindings = [source, output].map(|image| graph.image_view(image, 0, 0).unwrap());
+            let [source, output_view] = bindings;
+            graph
+                .dispatch(
+                    name,
+                    program,
+                    &[
+                        Binding {
+                            group: 0,
+                            binding: 0,
+                            resource: BindingResource::ImageView(source),
+                        },
+                        Binding {
+                            group: 0,
+                            binding: 1,
+                            resource: BindingResource::ImageView(output_view),
+                        },
+                    ],
+                )
+                .unwrap();
+            graph.readback_image(name, output).unwrap()
+        };
+        let readbacks = [
+            dispatch("inverted pixels", &programs[0]),
+            dispatch("swapped pixels", &programs[1]),
+        ];
+        drop(programs);
+        let plan = graph.compile().unwrap();
+        let wrong_backend = load_transform(Transform::Invert, !vulkan);
+        let missing_format = runtime.prepare_working_set(WorkingSet {
+            resources: &resources,
+            compute: std::slice::from_ref(&wrong_backend),
+            ..Default::default()
+        });
+        assert_eq!(
+            missing_format.unwrap_err().kind(),
+            ExecutionErrorKind::Unsupported
+        );
+        let submission = runtime.submit(&plan).unwrap();
+        let id = submission.id();
+        drop(submission);
+        let mut result = runtime.wait_for_frame(id, WAIT).unwrap().unwrap();
+        let outputs = readbacks.map(|pass| {
+            let mut bytes = [0; TRANSFORM_BYTES];
+            result.readback_into(pass, &mut bytes).unwrap();
+            bytes
+        });
+        drop(result);
+        let replacement = load_transform(Transform::Invert, vulkan);
+        runtime
+            .prepare_working_set(WorkingSet {
+                resources: &resources,
+                compute: std::slice::from_ref(&replacement),
+                ..Default::default()
+            })
+            .unwrap();
+        let stale = runtime
+            .submit(&plan)
+            .err()
+            .expect("old Program versions are unprepared");
+        assert_eq!(stale.kind(), ExecutionErrorKind::CapacityExhausted);
+        drop(plan);
+        assert!(pool.is_idle());
+        (runtime, outputs)
+    }
+
+    #[test]
+    #[ignore = "requires same-adapter Vulkan/D3D12 hardware and requested validation"]
+    fn runtime_loaded_compute_programs_keep_distinct_versions() {
+        let strict = cfg!(all(
+            feature = "vulkan-diagnostics",
+            feature = "d3d12-diagnostics"
+        ));
+        let input = std::array::from_fn(|index| index as u8);
+        let (vk, vk_output) = run_runtime_loaded_compute(
+            BackendConfig::Vulkan(VulkanConfig {
+                validation: if strict {
+                    ValidationMode::Required
+                } else {
+                    ValidationMode::Disabled
+                },
+                ..Default::default()
+            }),
+            &input,
+        );
+        let (dx, dx_output) = run_runtime_loaded_compute(
+            BackendConfig::D3D12(D3D12Config {
+                validation: if strict {
+                    D3D12ValidationMode::Required
+                } else {
+                    D3D12ValidationMode::Disabled
+                },
+                ..Default::default()
+            }),
+            &input,
+        );
+        let vk_device = vk.as_vulkan().unwrap();
+        let dx_device = dx.as_d3d12().unwrap();
+        let vk_info = vk_device.device_info();
+        assert_ne!(vk_info.device_type, "CPU");
+        assert_eq!(vk_info.device_luid, Some(dx_device.device_info().luid));
+        let vk_monitor = vk_device.validation_monitor();
+        let dx_monitor = dx_device.validation_monitor();
+        assert_eq!(vk_output, dx_output);
+        let [inverted, swapped] = vk_output;
+        for (index, &[r, g, b, a]) in input.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(
+                inverted.as_chunks::<4>().0[index],
+                [255 - r, 255 - g, 255 - b, a]
+            );
+            assert_eq!(swapped.as_chunks::<4>().0[index], [b, g, r, a]);
+        }
+        drop((vk, dx));
+        let vk_report = vk_monitor.report();
+        let dx_report = dx_monitor.snapshot();
+        assert!(vk_report.is_clean(), "{vk_report:?}");
+        assert!(dx_report.is_clean(), "{dx_report:?}");
+        if strict {
+            assert_eq!(vk_report.core_validation, Some(true));
+            assert_eq!(vk_report.synchronization_validation, Some(true));
+            assert!(dx_report.debug_layer_enabled && dx_report.gpu_based_validation_enabled);
+            assert!(dx_report.teardown_checked);
+        } else {
+            assert_eq!(vk_report.requested, ValidationMode::Disabled);
+            assert!(!dx_report.debug_layer_enabled && !dx_report.gpu_based_validation_enabled);
+        }
+    }
+
     fn binding_image_descriptions() -> [ImageDesc; 3] {
         let rgba8 = ImageDesc::rgba8(2, 2);
         [
@@ -682,6 +902,7 @@ mod native {
 
     fn binding_plan(pool: &mut GraphPool, newer: bool) -> (CompiledGraph, BindingReadbacks) {
         let mut graph = pool.begin().unwrap();
+        let programs = BINDING_PROGRAMS;
         let [uniform, intermediate, output] = ["uniform", "intermediate", "output"].map(|name| {
             graph
                 .buffer(
@@ -714,7 +935,7 @@ mod native {
         graph
             .dispatch(
                 "produce storage range",
-                &BINDING_PROGRAMS[0],
+                &programs[0],
                 &[
                     buffer(0, uniform, 256, 16),
                     buffer(1, intermediate, 256, 16),
@@ -724,7 +945,7 @@ mod native {
         graph
             .dispatch(
                 "consume produced storage range",
-                &BINDING_PROGRAMS[1],
+                &programs[1],
                 &[buffer(0, intermediate, 256, 16), buffer(1, output, 256, 16)],
             )
             .unwrap();
@@ -773,14 +994,14 @@ mod native {
             .unwrap();
 
         for (name, image, program, offset, size) in [
-            ("sample RGBA8", rgba8, BINDING_PROGRAMS[2], 0, 16),
-            ("sample RGBA16F", rgba16, BINDING_PROGRAMS[3], 512, 64),
-            ("sample D32", depth, BINDING_PROGRAMS[3], 768, 64),
+            ("sample RGBA8", rgba8, &programs[2], 0, 16),
+            ("sample RGBA16F", rgba16, &programs[3], 512, 64),
+            ("sample D32", depth, &programs[3], 768, 64),
         ] {
             graph
                 .dispatch(
                     name,
-                    &program,
+                    program,
                     &[
                         buffer(1, output, offset, size),
                         Binding {

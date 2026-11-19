@@ -49,7 +49,7 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 検証対象のファイルを明示して渡す。
 
 ```powershell
-& C:/VulkanSDK/1.4.341.1/Bin/glslc.exe --target-env=vulkan1.3 -fshader-stage=compute example.comp -o target/example.spv
+& C:/VulkanSDK/1.4.341.1/Bin/glslc.exe --target-env=vulkan1.3 --target-spv=spv1.3 -fshader-stage=compute example.comp -o target/example.spv
 & ./scripts/validate-spirv.ps1 -Path target/example.spv -Validator C:/VulkanSDK/1.4.341.1/Bin/spirv-val.exe
 ```
 
@@ -66,6 +66,70 @@ Vulkan SDK **1.4.341.1**の`glslc`と`spirv-val`を使う。
 固定compilerでの再生成・validator・binary一致確認は[開発手順](development.md#rendergraphとヘッドレス描画)を参照する。
 通常のCPU試験やCPUだけのCriterion測定にVulkan SDKを要求しない。
 SDKの構成は[固定版のSPIR-V toolchain](https://vulkan.lunarg.com/doc/view/1.4.341.1/windows/spirv_toolchain.html)を参照する。
+
+<a id="runtime-shader-import"></a>
+
+## 実行時に外部シェーダーを読み込む
+
+アプリのアセット層で、選んだバックエンドのバイナリと、同じビルドで確認したABIを読み込む。
+Vulkan向けはlittle-endian SPIR-V 1.3以下、D3D12向けはDXIL SM6.0で、entryは`main`を使う。
+次の例は頂点IDで全画面三角形を作り、RGBA8のcolor attachmentへ書くVulkan用のRaster Programを
+読み込む。アプリ側でこの契約を満たすと確認したアセットを渡す。
+
+```rust
+use renderer::{
+    ImageFormat,
+    program::{
+        BlendState, DepthState, ManagedRasterProgram, RasterParameterLayout,
+        RasterProgramDescriptor, RasterShaderStages, ShaderBinaries, ShaderStages,
+    },
+};
+use std::{error::Error, fs, path::Path};
+
+/// # Safety
+/// The files must contain reviewed fullscreen shaders that match this
+/// descriptor and all of ManagedRasterProgram's trusted shader requirements.
+unsafe fn load_fullscreen(
+    vertex_path: &Path,
+    fragment_path: &Path,
+) -> Result<ManagedRasterProgram, Box<dyn Error>> {
+    let shaders = ShaderBinaries::vulkan(RasterShaderStages {
+        vertex: fs::read(vertex_path)?,
+        fragment: Some(fs::read(fragment_path)?),
+    });
+    // SAFETY: The caller establishes the complete shader and ABI contract.
+    Ok(unsafe {
+        ManagedRasterProgram::from_trusted_owned_descriptor(RasterProgramDescriptor {
+            entry: "main",
+            vertex_stride: 0,
+            vertex_attributes: &[],
+            parameters: RasterParameterLayout { size: 0, stages: ShaderStages::EMPTY },
+            color_outputs: &[ImageFormat::Rgba8Unorm],
+            bindings: &[],
+            binding_bytes: &[],
+            sampling_pairs: &[],
+            blend: BlendState::Replace,
+            depth: DepthState::Disabled,
+            shaders,
+        })?
+    })
+}
+```
+
+D3D12用Rasterでは`ShaderBinaries::d3d12(D3D12RasterShaders { stages, inline_constants })`を使う。
+Computeでは`ManagedProgram::from_trusted_owned_descriptor`へ、該当バイナリを含む
+`ComputeProgramDescriptor`と、そのシェーダーに対応する`DispatchContract`を渡す。
+両APIのバイナリを一つのProgramで使う場合は、共通ABIを持つ両形式を`ShaderBinaries::both`へ渡す。
+取込後に元のメタデータを手放せる。
+
+Rasterは`program.clone().into()`で1×の`RasterPipelineRequest`を作り、`WorkingSet::raster`へ渡す。
+Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または停止中の
+`Runtime::prepare_working_set`でGPUパイプラインを準備し、Graphでは通常の`draw_fullscreen`、
+`draw`、`dispatch`などに同じProgramの参照を渡す。差し替え時は再取込してWorkingSetを準備し、
+置換した版に依存するGraphを組み直す。
+
+バイナリの検査は取込時に行う。コードの妥当性、ABIとの一致、範囲や出力初期化などの挙動は
+アセットを渡す側が保証する。[取込と寿命の設計](../design/implementation-policy.md#external-shader-assets)を参照する。
 
 <a id="bistro-tools"></a>
 

@@ -100,9 +100,10 @@ impl RasterPass<'_, '_> {
         });
         data.raster_constant_words.extend_from_slice(words);
         data.raster_batches.push(RasterBatchOperands {
-            program: *program,
+            program: program.identity(),
             draws: first_draw..first_draw + 1,
             constants_start,
+            constant_words_per_draw: words.len(),
             indirect: None,
         });
         Ok(())
@@ -141,9 +142,10 @@ impl RasterPass<'_, '_> {
             AccessPurpose::Indirect,
         ))?;
         graph.data_mut().raster_batches.push(RasterBatchOperands {
-            program: *program,
+            program: program.identity(),
             draws: first_draw..first_draw + 1,
             constants_start,
+            constant_words_per_draw: program.parameter_size() as usize / size_of::<u32>(),
             indirect: Some(IndirectDrawOperands {
                 buffer,
                 command_count: arguments.command_count,
@@ -185,9 +187,10 @@ impl RasterPass<'_, '_> {
             // Each stored batch owns at least one draw, so the batch arena
             // reserved at the draw limit always has capacity here.
             graph.data_mut().raster_batches.push(RasterBatchOperands {
-                program: *program,
+                program: program.identity(),
                 draws,
                 constants_start,
+                constant_words_per_draw: program.parameter_size() as usize / size_of::<u32>(),
                 indirect: None,
             });
         }

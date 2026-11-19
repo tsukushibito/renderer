@@ -1,6 +1,9 @@
 //! Immutable graphics shader contracts retained by owned Raster commands.
 
-use super::{BindingLayout, BindingType, ShaderBinaries, ShaderStages, embedded_raster_shaders};
+use super::{
+    BindingLayout, BindingType, ProgramAsset, ProgramId, ShaderBinaries, ShaderImportError,
+    ShaderStages, binary, embedded_raster_shaders, validate_binding_shape,
+};
 use crate::ImageFormat;
 
 /// Maximum distinct assets in one prepared Raster working set.
@@ -46,15 +49,33 @@ pub struct RasterParameterLayout {
 /// The shader stages for one raster backend. A depth-only program may omit
 /// its fragment stage or supply one for alpha discard.
 #[derive(Clone, Copy)]
-pub struct RasterShaderStages {
-    pub vertex: &'static [u8],
-    pub fragment: Option<&'static [u8]>,
+pub struct RasterShaderStages<B = &'static [u8]> {
+    pub vertex: B,
+    pub fragment: Option<B>,
+}
+
+impl<B> RasterShaderStages<B> {
+    fn map<T>(self, mut stage: impl FnMut(B) -> T) -> RasterShaderStages<T> {
+        RasterShaderStages {
+            vertex: stage(self.vertex),
+            fragment: self.fragment.map(stage),
+        }
+    }
+}
+
+impl RasterShaderStages<Box<[u8]>> {
+    fn as_view(&self) -> RasterShaderStages<&[u8]> {
+        RasterShaderStages {
+            vertex: &self.vertex,
+            fragment: self.fragment.as_deref(),
+        }
+    }
 }
 
 /// Shader stages and the root-constant binding for a D3D12 raster program.
 #[derive(Clone, Copy)]
-pub struct D3D12RasterShaders {
-    pub stages: RasterShaderStages,
+pub struct D3D12RasterShaders<B = &'static [u8]> {
+    pub stages: RasterShaderStages<B>,
     pub inline_constants: Option<D3D12InlineConstantBinding>,
 }
 
@@ -130,34 +151,150 @@ pub struct SampledImageSamplerPair {
     pub sampler_binding: u32,
 }
 
-/// Immutable graphics assets and their complete ABI. Slices are static so
-/// frame plans retain the contract without allocating or borrowing frame input.
-pub struct RasterProgramDescriptor {
-    pub entry: &'static str,
+/// Graphics shader assets and their complete ABI.
+#[derive(Clone, Copy)]
+pub struct RasterProgramDescriptor<'a, B = &'a [u8]> {
+    pub entry: &'a str,
     /// Zero selects a generated fullscreen triangle and requires no attributes.
     pub vertex_stride: u32,
-    pub vertex_attributes: &'static [VertexAttribute],
+    pub vertex_attributes: &'a [VertexAttribute],
     pub parameters: RasterParameterLayout,
-    pub color_outputs: &'static [ImageFormat],
-    pub bindings: &'static [BindingLayout],
+    pub color_outputs: &'a [ImageFormat],
+    pub bindings: &'a [BindingLayout],
     /// Buffer-prefix footprints in binding order; zero for images/samplers.
-    pub binding_bytes: &'static [u64],
+    pub binding_bytes: &'a [u64],
     /// Complete possible sampling combinations in both shader stages.
-    pub sampling_pairs: &'static [SampledImageSamplerPair],
+    pub sampling_pairs: &'a [SampledImageSamplerPair],
     pub blend: BlendState,
     pub depth: DepthState,
-    pub shaders: ShaderBinaries<RasterShaderStages, D3D12RasterShaders>,
+    pub shaders: ShaderBinaries<RasterShaderStages<B>, D3D12RasterShaders<B>>,
+}
+
+impl<B> RasterProgramDescriptor<'_, B> {
+    fn validate_layout(&self) -> Result<(), ShaderImportError> {
+        let graphics = ShaderStages::VERTEX.union(ShaderStages::FRAGMENT);
+        if !self.vertex_stride.is_multiple_of(4)
+            || self.vertex_attributes.len() > MAX_RASTER_ATTRIBUTES
+            || (self.vertex_stride == 0 && !self.vertex_attributes.is_empty())
+        {
+            return Err(ShaderImportError::InvalidDescriptor("raster vertex layout"));
+        }
+        for (index, attribute) in self.vertex_attributes.iter().enumerate() {
+            if attribute.location >= MAX_RASTER_ATTRIBUTES as u32
+                || !attribute.offset.is_multiple_of(4)
+                || attribute
+                    .offset
+                    .checked_add(attribute.format.size())
+                    .is_none_or(|end| end > self.vertex_stride)
+                || self.vertex_attributes[..index]
+                    .iter()
+                    .any(|other| other.location == attribute.location)
+            {
+                return Err(ShaderImportError::InvalidDescriptor(
+                    "raster vertex attribute",
+                ));
+            }
+        }
+        if !self.parameters.size.is_multiple_of(4)
+            || self.parameters.size > 128
+            || self.parameters.stages.is_empty() != (self.parameters.size == 0)
+            || !graphics.contains(self.parameters.stages)
+        {
+            return Err(ShaderImportError::InvalidDescriptor(
+                "raster inline parameters",
+            ));
+        }
+        if self.color_outputs.len() > MAX_RASTER_COLOR_ATTACHMENTS
+            || self
+                .color_outputs
+                .iter()
+                .any(|format| !matches!(format, ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float))
+        {
+            return Err(ShaderImportError::InvalidDescriptor("raster color outputs"));
+        }
+        if self.bindings.len() > MAX_RASTER_BINDINGS
+            || self.bindings.iter().any(|slot| {
+                slot.group >= MAX_RASTER_BIND_GROUPS as u32
+                    || !matches!(
+                        slot.kind,
+                        BindingType::Uniform
+                            | BindingType::StorageRead
+                            | BindingType::SampledImage
+                            | BindingType::Sampler
+                    )
+            })
+        {
+            return Err(ShaderImportError::InvalidDescriptor("raster bindings"));
+        }
+        let has_slot = |group, binding, kind| {
+            self.bindings
+                .iter()
+                .any(|slot| (slot.group, slot.binding, slot.kind) == (group, binding, kind))
+        };
+        if self.sampling_pairs.iter().any(|pair| {
+            !has_slot(
+                pair.image_group,
+                pair.image_binding,
+                BindingType::SampledImage,
+            ) || !has_slot(
+                pair.sampler_group,
+                pair.sampler_binding,
+                BindingType::Sampler,
+            )
+        }) {
+            return Err(ShaderImportError::InvalidDescriptor(
+                "raster sampling pairs",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn validate_stages(
+    shaders: &RasterShaderStages<Box<[u8]>>,
+    requires_fragment: bool,
+    valid: impl Fn(&[u8], binary::Stage) -> bool,
+    error: impl Fn(ShaderStages) -> ShaderImportError,
+) -> Result<(), ShaderImportError> {
+    if !valid(&shaders.vertex, binary::Stage::Vertex) {
+        return Err(error(ShaderStages::VERTEX));
+    }
+    if let Some(fragment) = &shaders.fragment {
+        if !valid(fragment, binary::Stage::Fragment) {
+            return Err(error(ShaderStages::FRAGMENT));
+        }
+    } else if requires_fragment {
+        return Err(ShaderImportError::InvalidDescriptor(
+            "raster fragment stage is required",
+        ));
+    }
+    Ok(())
 }
 
 /// An immutable trusted vertex/fragment shader pair, independent of a native
 /// pipeline. Device limits and format capabilities are established at preparation.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct ManagedRasterProgram {
-    manifest: &'static RasterProgramDescriptor,
+    manifest: ProgramAsset<RasterProgramDescriptor<'static>, OwnedRasterProgram>,
+}
+
+type RasterBinaries<B> = ShaderBinaries<RasterShaderStages<B>, D3D12RasterShaders<B>>;
+
+struct OwnedRasterProgram {
+    vertex_stride: u32,
+    vertex_attributes: Box<[VertexAttribute]>,
+    parameters: RasterParameterLayout,
+    color_outputs: Box<[ImageFormat]>,
+    bindings: Box<[BindingLayout]>,
+    binding_bytes: Box<[u64]>,
+    sampling_pairs: Box<[SampledImageSamplerPair]>,
+    blend: BlendState,
+    depth: DepthState,
+    shaders: RasterBinaries<Box<[u8]>>,
 }
 
 /// A raster pipeline variant to prepare before frame processing.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RasterPipelineRequest {
     pub program: ManagedRasterProgram,
     pub sample_count: crate::graph::SampleCount,
@@ -184,7 +321,7 @@ const MESH_ATTRIBUTES: &[VertexAttribute] = &[
         format: VertexFormat::Float32x4,
     },
 ];
-static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
+pub(crate) static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 28,
     vertex_attributes: MESH_ATTRIBUTES,
@@ -373,95 +510,206 @@ impl ManagedRasterProgram {
     /// Replacing source, compiler options, binaries or metadata requires reviewing
     /// the guarantees again and importing a new immutable descriptor.
     pub const unsafe fn from_trusted_descriptor(
-        descriptor: &'static RasterProgramDescriptor,
+        descriptor: &'static RasterProgramDescriptor<'static>,
     ) -> Self {
         Self {
-            manifest: descriptor,
+            manifest: ProgramAsset::Embedded(descriptor),
         }
     }
 
+    /// Import raster shader bytes loaded by the application. Moves the binary
+    /// storage into the Program and copies the ABI slices at this boundary.
+    /// Cloning a Program shares the same immutable version.
+    ///
+    /// # Safety
+    ///
+    /// The complete shader, ABI and execution requirements of
+    /// [`Self::from_trusted_descriptor`] apply to the loaded bytes. Import checks
+    /// the descriptor shape and selected binary headers. The caller must
+    /// establish the bytecode validity, its exact match to the declared ABI and
+    /// pipeline state, and all documented shader behavior before import.
+    pub unsafe fn from_trusted_owned_descriptor<B: Into<Box<[u8]>>>(
+        descriptor: RasterProgramDescriptor<'_, B>,
+    ) -> Result<Self, ShaderImportError> {
+        if descriptor.entry != "main" {
+            return Err(ShaderImportError::InvalidDescriptor("raster entry point"));
+        }
+        descriptor.validate_layout()?;
+        validate_binding_shape(
+            descriptor.bindings,
+            descriptor.binding_bytes,
+            ShaderStages::VERTEX.union(ShaderStages::FRAGMENT),
+        )?;
+        let shaders = descriptor.shaders.map(
+            |spirv| spirv.map(Into::into),
+            |dxil| D3D12RasterShaders {
+                stages: dxil.stages.map(Into::into),
+                inline_constants: dxil.inline_constants,
+            },
+        );
+        if shaders.vulkan.is_none() && shaders.d3d12.is_none() {
+            return Err(ShaderImportError::MissingBinaries);
+        }
+        let requires_fragment = !descriptor.color_outputs.is_empty()
+            || descriptor
+                .parameters
+                .stages
+                .contains(ShaderStages::FRAGMENT)
+            || descriptor
+                .bindings
+                .iter()
+                .any(|slot| slot.stages.contains(ShaderStages::FRAGMENT));
+        if let Some(spirv) = &shaders.vulkan {
+            validate_stages(
+                spirv,
+                requires_fragment,
+                binary::valid_spirv,
+                ShaderImportError::InvalidSpirv,
+            )?;
+        }
+        if let Some(dxil) = &shaders.d3d12 {
+            if dxil.inline_constants.is_some() != (descriptor.parameters.size != 0)
+                || dxil.inline_constants.is_some_and(|constants| {
+                    descriptor.bindings.iter().any(|slot| {
+                        slot.kind == BindingType::Uniform
+                            && (slot.group, slot.binding) == (constants.space, constants.register)
+                    })
+                })
+            {
+                return Err(ShaderImportError::InvalidDescriptor("D3D12 root constants"));
+            }
+            validate_stages(
+                &dxil.stages,
+                requires_fragment,
+                binary::valid_dxil,
+                ShaderImportError::InvalidDxil,
+            )?;
+        }
+        Ok(Self {
+            manifest: ProgramAsset::loaded(OwnedRasterProgram {
+                vertex_stride: descriptor.vertex_stride,
+                vertex_attributes: descriptor.vertex_attributes.into(),
+                parameters: descriptor.parameters,
+                color_outputs: descriptor.color_outputs.into(),
+                bindings: descriptor.bindings.into(),
+                binding_bytes: descriptor.binding_bytes.into(),
+                sampling_pairs: descriptor.sampling_pairs.into(),
+                blend: descriptor.blend,
+                depth: descriptor.depth,
+                shaders,
+            }),
+        })
+    }
+
     pub const fn mesh() -> Self {
-        Self { manifest: &MESH }
+        Self {
+            manifest: ProgramAsset::Embedded(&MESH),
+        }
     }
     pub const fn mesh_hdr() -> Self {
         Self {
-            manifest: &MESH_HDR,
+            manifest: ProgramAsset::Embedded(&MESH_HDR),
         }
     }
     /// Read-only LESS_EQUAL depth after the same geometry's depth prepass.
     pub const fn mesh_prepassed() -> Self {
         Self {
-            manifest: &MESH_PREPASSED,
+            manifest: ProgramAsset::Embedded(&MESH_PREPASSED),
         }
     }
     pub const fn mesh_hdr_prepassed() -> Self {
         Self {
-            manifest: &MESH_HDR_PREPASSED,
+            manifest: ProgramAsset::Embedded(&MESH_HDR_PREPASSED),
         }
     }
     pub const fn depth_only() -> Self {
         Self {
-            manifest: &DEPTH_ONLY,
+            manifest: ProgramAsset::Embedded(&DEPTH_ONLY),
         }
     }
     /// Mesh with a vertex Uniform offset and fragment image/sampler bindings.
     pub const fn textured_mesh() -> Self {
         Self {
-            manifest: &TEXTURED_MESH,
+            manifest: ProgramAsset::Embedded(&TEXTURED_MESH),
         }
     }
     pub const fn textured_mesh_hdr() -> Self {
         Self {
-            manifest: &TEXTURED_MESH_HDR,
+            manifest: ProgramAsset::Embedded(&TEXTURED_MESH_HDR),
         }
     }
-    pub const fn descriptor(&self) -> &'static RasterProgramDescriptor {
-        self.manifest
+    /// Borrow the complete immutable ABI and any supplied backend binaries.
+    pub fn descriptor(&self) -> RasterProgramDescriptor<'_> {
+        match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => **descriptor,
+            ProgramAsset::Loaded(program) => {
+                let owned = &program.descriptor;
+                RasterProgramDescriptor {
+                    entry: "main",
+                    vertex_stride: owned.vertex_stride,
+                    vertex_attributes: &owned.vertex_attributes,
+                    parameters: owned.parameters,
+                    color_outputs: &owned.color_outputs,
+                    bindings: &owned.bindings,
+                    binding_bytes: &owned.binding_bytes,
+                    sampling_pairs: &owned.sampling_pairs,
+                    blend: owned.blend,
+                    depth: owned.depth,
+                    shaders: owned
+                        .shaders
+                        .as_ref()
+                        .map(RasterShaderStages::as_view, |dxil| D3D12RasterShaders {
+                            stages: dxil.stages.as_view(),
+                            inline_constants: dxil.inline_constants,
+                        }),
+                }
+            }
+        }
     }
     /// Identity of this immutable asset, including all fixed pipeline states.
-    pub fn identity(&self) -> usize {
-        std::ptr::from_ref(self.manifest) as usize
+    pub(crate) fn identity(&self) -> ProgramId {
+        self.manifest.identity()
     }
     pub fn same(&self, other: &Self) -> bool {
-        std::ptr::eq(self.manifest, other.manifest)
+        self.identity() == other.identity()
     }
-    pub const fn vertex_stride(&self) -> u32 {
-        self.manifest.vertex_stride
+    pub fn vertex_stride(&self) -> u32 {
+        self.descriptor().vertex_stride
     }
-    pub(crate) const fn is_fullscreen(&self) -> bool {
+    pub(crate) fn is_fullscreen(&self) -> bool {
         self.vertex_stride() == 0
     }
-    pub const fn vertex_attributes(&self) -> &'static [VertexAttribute] {
-        self.manifest.vertex_attributes
+    pub fn vertex_attributes(&self) -> &[VertexAttribute] {
+        self.descriptor().vertex_attributes
     }
-    pub const fn parameter_size(&self) -> u32 {
-        self.manifest.parameters.size
+    pub fn parameter_size(&self) -> u32 {
+        self.descriptor().parameters.size
     }
-    pub const fn parameter_layout(&self) -> RasterParameterLayout {
-        self.manifest.parameters
+    pub fn parameter_layout(&self) -> RasterParameterLayout {
+        self.descriptor().parameters
     }
-    pub const fn color_outputs(&self) -> &'static [ImageFormat] {
-        self.manifest.color_outputs
+    pub fn color_outputs(&self) -> &[ImageFormat] {
+        self.descriptor().color_outputs
     }
-    pub const fn bindings(&self) -> &'static [BindingLayout] {
-        self.manifest.bindings
+    pub fn bindings(&self) -> &[BindingLayout] {
+        self.descriptor().bindings
     }
-    pub const fn binding_bytes(&self) -> &'static [u64] {
-        self.manifest.binding_bytes
+    pub fn binding_bytes(&self) -> &[u64] {
+        self.descriptor().binding_bytes
     }
-    pub const fn sampling_pairs(&self) -> &'static [SampledImageSamplerPair] {
-        self.manifest.sampling_pairs
+    pub fn sampling_pairs(&self) -> &[SampledImageSamplerPair] {
+        self.descriptor().sampling_pairs
     }
-    pub const fn blend(&self) -> BlendState {
-        self.manifest.blend
+    pub fn blend(&self) -> BlendState {
+        self.descriptor().blend
     }
-    pub const fn depth(&self) -> DepthState {
-        self.manifest.depth
+    pub fn depth(&self) -> DepthState {
+        self.descriptor().depth
     }
-    pub const fn requires_depth(&self) -> bool {
+    pub fn requires_depth(&self) -> bool {
         matches!(self.depth(), DepthState::Required { .. })
     }
-    pub const fn requires_depth_load(&self) -> bool {
+    pub fn requires_depth_load(&self) -> bool {
         matches!(
             self.depth(),
             DepthState::Required {
@@ -488,12 +736,12 @@ impl ManagedRasterProgram {
         self.requires_depth_load()
     }
     #[cfg(feature = "vulkan")]
-    pub(crate) fn spirv(&self) -> Option<RasterShaderStages> {
-        self.manifest.shaders.vulkan
+    pub(crate) fn spirv(&self) -> Option<RasterShaderStages<&[u8]>> {
+        self.descriptor().shaders.vulkan
     }
     #[cfg(all(feature = "d3d12", windows))]
-    pub(crate) fn dxil(&self) -> Option<D3D12RasterShaders> {
-        self.manifest.shaders.d3d12
+    pub(crate) fn dxil(&self) -> Option<D3D12RasterShaders<&[u8]>> {
+        self.descriptor().shaders.d3d12
     }
 }
 
@@ -512,10 +760,10 @@ mod tests {
             ManagedRasterProgram::mesh_prepassed(),
             ManagedRasterProgram::mesh_hdr_prepassed(),
         ];
-        let mut ids = all.map(|program| program.identity());
-        ids.sort_unstable();
         assert!(
-            ids.windows(2).all(|pair| pair[0] != pair[1]),
+            all.iter().enumerate().all(|(index, program)| {
+                all[..index].iter().all(|earlier| !earlier.same(program))
+            }),
             "native pipeline identities must not alias"
         );
         for (program, original) in [

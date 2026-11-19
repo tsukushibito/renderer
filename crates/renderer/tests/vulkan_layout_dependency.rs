@@ -269,7 +269,9 @@ fn vulkan_layout_transition_orders_different_sampled_stages() {
     // sampler only. The vertex shader produces constant depth. The fragment
     // shader samples normalized coordinates at LOD zero and may discard.
     let mask = unsafe { ManagedRasterProgram::from_trusted_descriptor(&ALPHA_MASK) };
-    runtime.prepare_raster_programs(&[mask]).unwrap();
+    runtime
+        .prepare_raster_programs(std::slice::from_ref(&mask))
+        .unwrap();
     runtime
         .prepare_compute_programs(&[ManagedProgram::sampled_readback()])
         .unwrap();

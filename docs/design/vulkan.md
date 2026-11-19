@@ -22,7 +22,7 @@ CPUのテスト・benchmark用依存が要求するツールは開発手順で�
 管理下Compute、順序付きRasterと深度、表示用のsampled image描画を扱う。
 Graphの宣言・producer・範囲・culling・import/exportは[RenderGraphの契約](rendergraph.md)を参照する。
 Windows表示は`vulkan,presentation`で追加する。`presentation`単独ではbackendを選ばない。
-利用側のレビュー済みCompute shaderは静的descriptorのunsafe取込で扱う。未信頼shaderのsandboxや一般的なPassEncoderは提供しない。
+利用側のレビュー済みCompute shaderは静的descriptorまたはロードしたバイナリとABIのunsafe取込で扱う。
 Deviceで機能を有効にしていることと、その機能を使う処理が実装済みであることを区別する。
 
 これは現行実装の境界であり、基盤の維持義務ではない。
@@ -282,7 +282,7 @@ pipelineとviewportを設定してから、owned draw列の順にbuffer binding�
 空listにはclear-onlyの既存経路を使い、Raster Programの作成を要求しない。
 単一drawも同じ列で記録する。Engineの標準opaqueは従来どおりClear/Storeを明示する。
 ProgramのSPIR-Vは管理下manifestからfactoryへ渡し、native pipelineは準備済み`ShaderPrograms`が保持する。
-CPUのstatic Program identityだけでnative所有者を代替せず、WorkのProgram/資源保持とplan pinをGPU完了まで維持する。
+GraphのProgram IDから準備済みのnative Programを選び、WorkのProgram・資源とplanをGPU完了まで保持する。
 color-only、depth-only、RGBA16Fとdescriptor-bound Programも同じowned列を使う。
 MRTは最大8色と任意のD32を一つのDynamic Rendering区間に設定し、Program切り替えも同じ区間で記録する。
 色形式と個数はDevice上限と照合し、共通のblend状態を各カラー出力に使う。
@@ -309,7 +309,7 @@ Uniformの実Device alignment/range上限は記録前のnative適合境界で保
 draw別のset複製・更新とDevice適合の再検査を減らすために採用した。全域的なcacheや通常frameでの増設は行わない。
 Program、pool/layout、View、samplerと画像/bufferはWork/leaseの所有へ含め、cancelまたは実GPU完了後だけ再利用する。
 
-static `RasterProgramDescriptor`の取込は明示したunsafe境界であり、binaryの有効性だけでなく
+`RasterProgramDescriptor`の取込は埋め込み・ロード済みの両方で明示したunsafe境界であり、binaryの有効性だけでなく
 全許容定数・入力に対する範囲安全、宣言外アクセス／storage副作用の不在を呼出側が保証する。
 通常Graphはdraw定数のbyte数と資源範囲・初期化を保証する。genericなword列にfiniteの制約は付けず、
 `RasterParameters`の有限値保証をその便利変換以外へ一般化しない。
@@ -385,12 +385,16 @@ RGBA16FのsampleはFP32 bit列に戻し、shader内の16-bit演算型を必要�
 D32はdepth attachmentとして初期化でき、depth aspectのsampled Viewを使う。
 実行するfootprintとリソース上の論理descriptor範囲は[Graphの契約](rendergraph.md#program由来bindingとshader-stageのowned計画)に従う。
 
-利用側は静的な`ComputeProgramDescriptor`を`ManagedProgram::from_trusted_descriptor`のunsafe境界で取り込む。
-binary・entry・local size・binding ABI・format、範囲、dispatchと全域write、競合とshader内同期を取込側がレビューする。
+利用側は静的な`ComputeProgramDescriptor`を`ManagedProgram::from_trusted_descriptor`で、
+ロードしたバイナリとABIを`from_trusted_owned_descriptor`で取り込む。Rasterも同じ取込境界を持つ。
+ロードしたSPIR-Vは取込時に版・命令サイズ・ステージと`main`を照合し、ネイティブでは準備時に
+有効なDevice機能と上限に沿ってパイプライン化する。binary・entry・local size・binding ABI・format、
+範囲、dispatchと全域write、競合とshader内同期は取込側がレビューする。
 反射はABIを照合する。データ依存アクセスや全域writeはshader本体と宣言を合わせて確認する。
 Computeの画像は非配列・非MSのfloat 2Dとし、固定descriptor表を使う。
 root bufferに対応するraw／structured ABIを使い、typed buffer、push constant、descriptor配列、Workgroup/shared storageは対象外とする。
-生成条件とRust側ABIは固定ツールの反射結果に照合する。
+生成条件とRust側ABIは固定ツールの反射結果に照合する。パイプラインの準備・完了後回収とABIの事前照合は
+[VulkanガイドのShader・ABIとPipelineの方針](../guides/vulkan-best-practices.md#shaderspir-vcpugpu-abi)に従う。
 
 `NearestClamp`、`LinearRepeat`、`LinearClamp`、`LinearRepeatUClampV`をProgramのsampler設定へ対応づける。
 compareやanisotropyは使わず、実Deviceの生存sampler数をnative作成前に予約し、失敗時または破棄後に返す。

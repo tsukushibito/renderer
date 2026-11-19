@@ -6,9 +6,13 @@
 //! through an explicit unsafe descriptor boundary.
 
 use crate::ImageFormat;
+use std::sync::Arc;
 
+mod binary;
 mod raster;
 
+#[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]
+pub(crate) use raster::MESH as MESH_RASTER_DESCRIPTOR;
 pub use raster::{
     BlendState, CompareOp, D3D12InlineConstantBinding, D3D12RasterShaders, DepthState,
     MAX_RASTER_ATTRIBUTES, MAX_RASTER_BIND_GROUPS, MAX_RASTER_BINDINGS,
@@ -24,15 +28,7 @@ pub use raster::{
 /// that format is unavailable.
 #[derive(Clone, Copy)]
 pub struct ShaderBinaries<V, D = V> {
-    #[cfg_attr(
-        not(feature = "vulkan"),
-        expect(dead_code, reason = "Vulkan preparation is disabled")
-    )]
     vulkan: Option<V>,
-    #[cfg_attr(
-        not(all(feature = "d3d12", windows)),
-        expect(dead_code, reason = "D3D12 preparation is disabled")
-    )]
     d3d12: Option<D>,
 }
 
@@ -65,6 +61,119 @@ impl<V, D> ShaderBinaries<V, D> {
             d3d12: None,
         }
     }
+
+    fn map<U, E>(
+        self,
+        vulkan: impl FnOnce(V) -> U,
+        d3d12: impl FnOnce(D) -> E,
+    ) -> ShaderBinaries<U, E> {
+        ShaderBinaries {
+            vulkan: self.vulkan.map(vulkan),
+            d3d12: self.d3d12.map(d3d12),
+        }
+    }
+
+    fn as_ref(&self) -> ShaderBinaries<&V, &D> {
+        ShaderBinaries {
+            vulkan: self.vulkan.as_ref(),
+            d3d12: self.d3d12.as_ref(),
+        }
+    }
+}
+
+/// Rejection at the runtime shader import boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShaderImportError {
+    MissingBinaries,
+    InvalidDescriptor(&'static str),
+    InvalidSpirv(ShaderStages),
+    InvalidDxil(ShaderStages),
+}
+
+impl std::fmt::Display for ShaderImportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingBinaries => f.write_str("runtime Program has no shader binaries"),
+            Self::InvalidDescriptor(reason) => write!(f, "invalid Program descriptor: {reason}"),
+            Self::InvalidSpirv(stage) => write!(f, "invalid {stage:?} SPIR-V module"),
+            Self::InvalidDxil(stage) => write!(f, "invalid {stage:?} DXIL container"),
+        }
+    }
+}
+
+impl std::error::Error for ShaderImportError {}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProgramId {
+    Embedded(usize),
+    Loaded(u64),
+}
+
+enum ProgramAsset<S: 'static, O> {
+    Embedded(&'static S),
+    Loaded(Arc<LoadedProgram<O>>),
+}
+
+struct LoadedProgram<O> {
+    id: u64,
+    descriptor: O,
+}
+
+impl<S, O> Clone for ProgramAsset<S, O> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Embedded(descriptor) => Self::Embedded(descriptor),
+            Self::Loaded(program) => Self::Loaded(Arc::clone(program)),
+        }
+    }
+}
+
+impl<S, O> ProgramAsset<S, O> {
+    fn loaded(descriptor: O) -> Self {
+        Self::Loaded(Arc::new(LoadedProgram {
+            id: crate::graph::next_id(),
+            descriptor,
+        }))
+    }
+
+    fn identity(&self) -> ProgramId {
+        match self {
+            Self::Embedded(descriptor) => {
+                ProgramId::Embedded(std::ptr::from_ref(*descriptor) as usize)
+            }
+            Self::Loaded(program) => ProgramId::Loaded(program.id),
+        }
+    }
+}
+
+fn validate_binding_shape(
+    bindings: &[BindingLayout],
+    footprints: &[u64],
+    stages: ShaderStages,
+) -> Result<(), ShaderImportError> {
+    if bindings.len() != footprints.len() {
+        return Err(ShaderImportError::InvalidDescriptor("binding footprints"));
+    }
+    for (index, (slot, &bytes)) in bindings.iter().zip(footprints).enumerate() {
+        let buffer = matches!(
+            slot.kind,
+            BindingType::Uniform | BindingType::StorageRead | BindingType::StorageWrite
+        );
+        if slot.stages.is_empty()
+            || !stages.contains(slot.stages)
+            || bindings[..index]
+                .iter()
+                .any(|other| (other.group, other.binding) == (slot.group, slot.binding))
+            || if buffer {
+                bytes == 0 || bytes > slot.min_size
+            } else {
+                bytes != 0 || slot.min_size != 0
+            }
+        {
+            return Err(ShaderImportError::InvalidDescriptor("binding layout"));
+        }
+    }
+    Ok(())
 }
 
 // Attribute gates omit the inactive include_bytes! expression from the build.
@@ -213,21 +322,121 @@ impl SamplerDescriptor {
 }
 
 /// A reviewed shader asset. Ordinary builds use checked-in artifacts and need
-/// no compiler. Caller-defined assets use [`Self::from_trusted_descriptor`].
-#[derive(Clone, Copy)]
+/// no compiler. Caller-defined assets use [`Self::from_trusted_descriptor`] for
+/// embedded shaders or [`Self::from_trusted_owned_descriptor`] for loaded shaders.
+#[derive(Clone)]
 pub struct ManagedProgram {
-    manifest: &'static ComputeProgramDescriptor,
+    manifest: ProgramAsset<ComputeProgramDescriptor<'static>, OwnedComputeProgram>,
 }
 
 /// Immutable compute asset inputs. The constructor's safety contract establishes
 /// the relationship between these metadata and each supplied shader binary.
-/// The slices must be static so frame plans retain them without allocating.
-pub struct ComputeProgramDescriptor {
-    pub entry: &'static str,
+#[derive(Clone, Copy)]
+pub struct ComputeProgramDescriptor<'a, B = &'a [u8]> {
+    pub entry: &'a str,
     pub workgroup_size: [u32; 3],
-    pub bindings: &'static [BindingLayout],
-    pub dispatch: DispatchContract,
-    pub shaders: ShaderBinaries<&'static [u8]>,
+    pub bindings: &'a [BindingLayout],
+    pub dispatch: DispatchContract<'a>,
+    pub shaders: ShaderBinaries<B>,
+}
+
+struct OwnedComputeProgram {
+    workgroup_size: [u32; 3],
+    bindings: Box<[BindingLayout]>,
+    workgroups: OwnedDispatchWorkgroups,
+    bytes: Box<[u64]>,
+    #[cfg_attr(
+        not(any(feature = "vulkan", all(feature = "d3d12", windows))),
+        expect(
+            dead_code,
+            reason = "the CPU-only build retains but never prepares shader bytes"
+        )
+    )]
+    shaders: ShaderBinaries<Box<[u8]>>,
+}
+
+// Only the buffer-grid dispatch carries variable-length metadata.
+enum OwnedDispatchWorkgroups {
+    Fixed([u32; 3]),
+    Image2d {
+        group: u32,
+        binding: u32,
+    },
+    BufferGrid2d {
+        group: u32,
+        binding: u32,
+        read_bindings: Box<[(u32, u32)]>,
+        max_workgroups: [u32; 2],
+    },
+}
+
+impl OwnedDispatchWorkgroups {
+    fn import(
+        domain: DispatchWorkgroups<'_>,
+        bindings: &[BindingLayout],
+        local_size: [u32; 3],
+    ) -> Result<Self, ShaderImportError> {
+        let kind = |group, binding| {
+            bindings
+                .iter()
+                .find(|slot| (slot.group, slot.binding) == (group, binding))
+                .map(|slot| slot.kind)
+        };
+        let error = ShaderImportError::InvalidDescriptor("compute dispatch domain");
+        match domain {
+            DispatchWorkgroups::Fixed(counts) if !counts.contains(&0) => Ok(Self::Fixed(counts)),
+            DispatchWorkgroups::Image2d { group, binding }
+                if local_size[2] == 1
+                    && matches!(
+                        kind(group, binding),
+                        Some(BindingType::StorageImageWrite(_))
+                    ) =>
+            {
+                Ok(Self::Image2d { group, binding })
+            }
+            DispatchWorkgroups::BufferGrid2d {
+                group,
+                binding,
+                read_bindings,
+                max_workgroups,
+            } if !max_workgroups.contains(&0)
+                && kind(group, binding) == Some(BindingType::StorageWrite) =>
+            {
+                for (index, &(read_group, read_binding)) in read_bindings.iter().enumerate() {
+                    if kind(read_group, read_binding) != Some(BindingType::StorageRead)
+                        || read_bindings[..index].contains(&(read_group, read_binding))
+                    {
+                        return Err(error);
+                    }
+                }
+                Ok(Self::BufferGrid2d {
+                    group,
+                    binding,
+                    read_bindings: read_bindings.into(),
+                    max_workgroups,
+                })
+            }
+            _ => Err(error),
+        }
+    }
+
+    fn as_view(&self) -> DispatchWorkgroups<'_> {
+        match *self {
+            Self::Fixed(counts) => DispatchWorkgroups::Fixed(counts),
+            Self::Image2d { group, binding } => DispatchWorkgroups::Image2d { group, binding },
+            Self::BufferGrid2d {
+                group,
+                binding,
+                ref read_bindings,
+                max_workgroups,
+            } => DispatchWorkgroups::BufferGrid2d {
+                group,
+                binding,
+                read_bindings,
+                max_workgroups,
+            },
+        }
+    }
 }
 
 /// Reviewed execution footprint, separate from the ABI's minimum descriptor
@@ -236,15 +445,16 @@ pub struct ComputeProgramDescriptor {
 /// where it is the number of bytes accessed per workgroup. Image entries are zero and
 /// cover the complete selected View. Samplers have no content access.
 /// Changing shader behavior requires reviewing this contract too.
-pub struct DispatchContract {
-    pub workgroups: DispatchWorkgroups,
-    pub bytes: &'static [u64],
+#[derive(Clone, Copy)]
+pub struct DispatchContract<'a> {
+    pub workgroups: DispatchWorkgroups<'a>,
+    pub bytes: &'a [u64],
 }
 
 /// Reviewed dispatch domain, including how a variable dispatch establishes its
 /// output footprint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DispatchWorkgroups {
+pub enum DispatchWorkgroups<'a> {
     Fixed([u32; 3]),
     /// Ceil-divide this write-only storage image View's extent by the Program's
     /// local size. Every storage image binding must have that same extent.
@@ -261,7 +471,7 @@ pub enum DispatchWorkgroups {
         binding: u32,
         /// Distinct read-only storage slots whose packed footprint also scales
         /// with the workgroup count, starting at each binding offset.
-        read_bindings: &'static [(u32, u32)],
+        read_bindings: &'a [(u32, u32)],
         max_workgroups: [u32; 2],
     },
 }
@@ -513,18 +723,76 @@ impl ManagedProgram {
     /// requires re-establishing these guarantees; reflection/hash validation
     /// alone does not establish them.
     pub const unsafe fn from_trusted_descriptor(
-        descriptor: &'static ComputeProgramDescriptor,
+        descriptor: &'static ComputeProgramDescriptor<'static>,
     ) -> Self {
         Self {
-            manifest: descriptor,
+            manifest: ProgramAsset::Embedded(descriptor),
         }
+    }
+
+    /// Import compute shader bytes loaded by the application. Moves the binary
+    /// storage into the Program and copies the ABI slices at this boundary.
+    /// Cloning a Program shares the same immutable version.
+    ///
+    /// # Safety
+    ///
+    /// The complete shader, ABI and execution requirements of
+    /// [`Self::from_trusted_descriptor`] apply to the loaded bytes. Import checks
+    /// the descriptor shape and selected binary headers. The caller must
+    /// establish the bytecode validity, its exact match to the declared ABI and
+    /// dispatch footprint, and all documented shader behavior before import.
+    pub unsafe fn from_trusted_owned_descriptor<B: Into<Box<[u8]>>>(
+        descriptor: ComputeProgramDescriptor<'_, B>,
+    ) -> Result<Self, ShaderImportError> {
+        if descriptor.entry != "main" || descriptor.workgroup_size.contains(&0) {
+            return Err(ShaderImportError::InvalidDescriptor(
+                "compute entry or local size",
+            ));
+        }
+        validate_binding_shape(
+            descriptor.bindings,
+            descriptor.dispatch.bytes,
+            ShaderStages::COMPUTE,
+        )?;
+        let workgroups = OwnedDispatchWorkgroups::import(
+            descriptor.dispatch.workgroups,
+            descriptor.bindings,
+            descriptor.workgroup_size,
+        )?;
+        let shaders = descriptor.shaders.map(Into::into, Into::into);
+        if shaders.vulkan.is_none() && shaders.d3d12.is_none() {
+            return Err(ShaderImportError::MissingBinaries);
+        }
+        if shaders
+            .vulkan
+            .as_deref()
+            .is_some_and(|bytes| !binary::valid_spirv(bytes, binary::Stage::Compute))
+        {
+            return Err(ShaderImportError::InvalidSpirv(ShaderStages::COMPUTE));
+        }
+        if shaders
+            .d3d12
+            .as_deref()
+            .is_some_and(|bytes| !binary::valid_dxil(bytes, binary::Stage::Compute))
+        {
+            return Err(ShaderImportError::InvalidDxil(ShaderStages::COMPUTE));
+        }
+        Ok(Self {
+            manifest: ProgramAsset::loaded(OwnedComputeProgram {
+                workgroup_size: descriptor.workgroup_size,
+                bindings: descriptor.bindings.into(),
+                workgroups,
+                bytes: descriptor.dispatch.bytes.into(),
+                shaders,
+            }),
+        })
     }
 
     /// Portable compute encoder used by [`crate::graph::Graph::encode_indexed_indirect`].
     /// Include it in the prepared Compute program set before submitting those graphs.
     pub const fn indexed_indirect_encoder() -> Self {
         Self {
-            manifest: &INDEXED_INDIRECT_ENCODER,
+            manifest: ProgramAsset::Embedded(&INDEXED_INDIRECT_ENCODER),
         }
     }
 
@@ -532,7 +800,7 @@ impl ManagedProgram {
     /// uniform slot into the storage slot. Extra descriptor bytes are untouched.
     pub const fn uniform_readback() -> Self {
         Self {
-            manifest: &UNIFORM_READBACK,
+            manifest: ProgramAsset::Embedded(&UNIFORM_READBACK),
         }
     }
 
@@ -541,7 +809,7 @@ impl ManagedProgram {
     /// bytes are untouched. The input must be initialized before execution.
     pub const fn storage_readback() -> Self {
         Self {
-            manifest: &STORAGE_READBACK,
+            manifest: ProgramAsset::Embedded(&STORAGE_READBACK),
         }
     }
 
@@ -549,7 +817,7 @@ impl ManagedProgram {
     /// into exactly 16 storage bytes. Dispatch executes one invocation.
     pub const fn sampled_readback() -> Self {
         Self {
-            manifest: &SAMPLED_READBACK,
+            manifest: ProgramAsset::Embedded(&SAMPLED_READBACK),
         }
     }
 
@@ -560,39 +828,64 @@ impl ManagedProgram {
     /// Dispatch executes one invocation.
     pub const fn sampled_float_readback() -> Self {
         Self {
-            manifest: &SAMPLED_FLOAT_READBACK,
+            manifest: ProgramAsset::Embedded(&SAMPLED_FLOAT_READBACK),
         }
     }
 
     pub const fn entry_point(&self) -> &'static str {
-        self.manifest.entry
+        match self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.entry,
+            ProgramAsset::Loaded(_) => "main",
+        }
     }
 
-    pub const fn workgroup_size(&self) -> [u32; 3] {
-        self.manifest.workgroup_size
+    pub fn workgroup_size(&self) -> [u32; 3] {
+        match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.workgroup_size,
+            ProgramAsset::Loaded(program) => program.descriptor.workgroup_size,
+        }
     }
 
-    pub const fn bindings(&self) -> &'static [BindingLayout] {
-        self.manifest.bindings
+    pub fn bindings(&self) -> &[BindingLayout] {
+        match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.bindings,
+            ProgramAsset::Loaded(program) => &program.descriptor.bindings,
+        }
     }
 
-    pub(crate) const fn dispatch_contract(&self) -> &'static DispatchContract {
-        &self.manifest.dispatch
+    pub(crate) fn dispatch_contract(&self) -> DispatchContract<'_> {
+        match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.dispatch,
+            ProgramAsset::Loaded(program) => DispatchContract {
+                workgroups: program.descriptor.workgroups.as_view(),
+                bytes: &program.descriptor.bytes,
+            },
+        }
     }
 
-    #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
-    pub(crate) fn same_asset(&self, other: &Self) -> bool {
-        std::ptr::eq(self.manifest, other.manifest)
-    }
-
-    #[cfg(feature = "vulkan")]
-    pub(crate) fn spirv(&self) -> Option<&'static [u8]> {
-        self.manifest.shaders.vulkan
+    pub(crate) fn identity(&self) -> ProgramId {
+        self.manifest.identity()
     }
 
     #[cfg(all(feature = "d3d12", windows))]
-    pub(crate) fn dxil(&self) -> Option<&'static [u8]> {
-        self.manifest.shaders.d3d12
+    pub(crate) fn same_asset(&self, other: &Self) -> bool {
+        self.identity() == other.identity()
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn spirv(&self) -> Option<&[u8]> {
+        match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.shaders.vulkan,
+            ProgramAsset::Loaded(program) => program.descriptor.shaders.vulkan.as_deref(),
+        }
+    }
+
+    #[cfg(all(feature = "d3d12", windows))]
+    pub(crate) fn dxil(&self) -> Option<&[u8]> {
+        match &self.manifest {
+            ProgramAsset::Embedded(descriptor) => descriptor.shaders.d3d12,
+            ProgramAsset::Loaded(program) => program.descriptor.shaders.d3d12.as_deref(),
+        }
     }
 }
 

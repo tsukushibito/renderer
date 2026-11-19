@@ -40,7 +40,7 @@ const BINDINGS: &[BindingLayout] = &[
     },
 ];
 
-const fn descriptor(shaders: ShaderBinaries<&'static [u8]>) -> ComputeProgramDescriptor {
+const fn descriptor(shaders: ShaderBinaries<&'static [u8]>) -> ComputeProgramDescriptor<'static> {
     ComputeProgramDescriptor {
         entry: "main",
         workgroup_size: [LOCAL_SIZE, LOCAL_SIZE, 1],

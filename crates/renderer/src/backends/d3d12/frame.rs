@@ -13,7 +13,7 @@ use std::{
 
 use crate::{
     graph::provenance::BufferProvenance,
-    program::{ManagedRasterProgram, RasterPipelineRequest},
+    program::{ProgramId, RasterPipelineRequest},
 };
 
 use super::{
@@ -551,16 +551,11 @@ impl FramePool {
                 "Raster Program has no DXIL shaders",
             ));
         }
-        let mut unique_programs =
-            [None::<ManagedRasterProgram>; crate::program::MAX_RASTER_PROGRAMS];
+        let mut unique_programs = [None::<ProgramId>; crate::program::MAX_RASTER_PROGRAMS];
         let mut program_count = 0;
         for request in programs {
-            let program = &request.program;
-            if unique_programs[..program_count]
-                .iter()
-                .flatten()
-                .any(|previous| previous.same(program))
-            {
+            let program = request.program.identity();
+            if unique_programs[..program_count].contains(&Some(program)) {
                 continue;
             }
             if program_count == unique_programs.len() {
@@ -574,7 +569,7 @@ impl FramePool {
                     ),
                 ));
             }
-            unique_programs[program_count] = Some(*program);
+            unique_programs[program_count] = Some(program);
             program_count += 1;
         }
         let mut pool = Self::with_buffers(owner, capacity, buffers)?;
@@ -635,7 +630,7 @@ impl FramePool {
                 if !pool_mut
                     .raster_programs
                     .iter()
-                    .any(|pipeline| pipeline.matches(program, depth, *sample_count))
+                    .any(|pipeline| pipeline.matches(program.identity(), depth, *sample_count))
                 {
                     pool_mut.raster_programs.push(RasterPipeline::new(
                         &pool_mut.owner,
@@ -670,7 +665,7 @@ impl FramePool {
             if !pool_mut
                 .compute_programs
                 .iter()
-                .any(|native| native.matches(program))
+                .any(|native| native.matches(program.identity()))
             {
                 pool_mut
                     .compute_programs
@@ -1462,7 +1457,7 @@ mod tests {
 
         static RASTER_METADATA: RasterProgramDescriptor = RasterProgramDescriptor {
             shaders: ShaderBinaries::metadata_only(),
-            ..*ManagedRasterProgram::mesh().descriptor()
+            ..crate::program::MESH_RASTER_DESCRIPTOR
         };
         static COMPUTE_METADATA: ComputeProgramDescriptor = ComputeProgramDescriptor {
             entry: "main",

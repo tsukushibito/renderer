@@ -751,7 +751,7 @@ pub fn run() -> Result<(), Failure> {
     };
     let scene = Scene::new(&options)?;
     let buffers = scene.buffers();
-    let mut runtime = Runtime::new(&options, capacity, scene.program, &buffers)?;
+    let mut runtime = Runtime::new(&options, capacity, scene.program.clone(), &buffers)?;
     let identity = runtime.identity();
     let resident = scene.upload(&mut runtime, &buffers)?;
     let mut pool = GraphPool::new(capacity, IN_FLIGHT)?;

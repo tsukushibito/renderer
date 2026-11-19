@@ -5,7 +5,7 @@ use std::mem::ManuallyDrop;
 
 use crate::program::{
     BindingType, BlendState, CompareOp, D3D12InlineConstantBinding, INDIRECT_COMMAND_BYTES,
-    MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram, ShaderStages, VertexFormat,
+    MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram, ProgramId, ShaderStages, VertexFormat,
 };
 
 use super::{
@@ -297,14 +297,14 @@ fn signature(
 impl RasterPipeline {
     pub(super) fn matches(
         &self,
-        managed: &ManagedRasterProgram,
+        program: ProgramId,
         depth: bool,
         sample_count: SampleCount,
     ) -> bool {
         !self.clear
             && self.depth == depth
             && self.sample_count == sample_count
-            && self.managed.same(managed)
+            && self.managed.identity() == program
     }
 
     pub(super) fn new(
@@ -532,7 +532,7 @@ impl RasterPipeline {
         Ok(Self {
             pipeline: pipeline?,
             signature,
-            managed: *managed,
+            managed: managed.clone(),
             depth,
             sample_count,
             clear,
@@ -568,7 +568,7 @@ mod tests {
             ManagedRasterProgram::textured_mesh_hdr(),
             ManagedRasterProgram::mesh_prepassed(),
             ManagedRasterProgram::mesh_hdr_prepassed(),
-            depth_only,
+            depth_only.clone(),
         ] {
             for depth in [false, true] {
                 if program.requires_depth() && !depth {
@@ -576,11 +576,11 @@ mod tests {
                 }
                 let pipeline = RasterPipeline::new(&owner, &program, depth, SampleCount::X1)
                     .expect("reviewed graphics shader ABI and attachment capabilities");
-                assert!(pipeline.matches(&program, depth, SampleCount::X1));
-                assert!(!pipeline.matches(&program, !depth, SampleCount::X1));
+                assert!(pipeline.matches(program.identity(), depth, SampleCount::X1));
+                assert!(!pipeline.matches(program.identity(), !depth, SampleCount::X1));
                 if !program.same(&ManagedRasterProgram::mesh()) {
                     assert!(!pipeline.matches(
-                        &ManagedRasterProgram::mesh(),
+                        ManagedRasterProgram::mesh().identity(),
                         depth,
                         SampleCount::X1
                     ));
@@ -595,7 +595,7 @@ mod tests {
         ] {
             let pipeline = RasterPipeline::clear(&owner, &program, depth, SampleCount::X1)
                 .expect("reviewed fullscreen color/depth clear program");
-            assert!(!pipeline.matches(&program, depth, SampleCount::X1));
+            assert!(!pipeline.matches(program.identity(), depth, SampleCount::X1));
             drop(pipeline);
         }
         drop(owner);

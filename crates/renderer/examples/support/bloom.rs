@@ -87,10 +87,12 @@ impl Bloom {
     }
 
     pub fn programs(self) -> &'static [ManagedProgram] {
+        static TENT: [ManagedProgram; 4] = [EXTRACT, DOWNSAMPLE, BLUR_TENT, COMBINE];
+        static BOX: [ManagedProgram; 4] = [EXTRACT, DOWNSAMPLE, BLUR_BOX, COMBINE];
         match self {
             Self::Off => &[],
-            Self::Tent => &[EXTRACT, DOWNSAMPLE, BLUR_TENT, COMBINE],
-            Self::Box => &[EXTRACT, DOWNSAMPLE, BLUR_BOX, COMBINE],
+            Self::Tent => &TENT,
+            Self::Box => &BOX,
         }
     }
 

@@ -131,7 +131,7 @@ fn d3d12_compute_pipeline_creation_failure_releases_root_signature() {
     assert_eq!(Arc::strong_count(&runtime.device), owners);
 
     let pipeline = ComputePipeline::new(&runtime.device, &managed, false).unwrap();
-    assert!(pipeline.matches(&managed));
+    assert!(pipeline.matches(managed.identity()));
     drop(pipeline);
     runtime.shutdown().unwrap();
     let report = monitor.snapshot();

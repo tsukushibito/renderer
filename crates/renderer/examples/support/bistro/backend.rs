@@ -59,7 +59,7 @@ pub(super) fn compute_requests(options: &Options) -> Vec<ManagedProgram> {
         .bloom
         .programs()
         .iter()
-        .copied()
+        .cloned()
         .chain(
             (options.pipeline == PipelineMode::ForwardPlus)
                 .then(program::forward_plus::compute_program),

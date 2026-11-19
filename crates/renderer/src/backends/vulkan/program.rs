@@ -6,7 +6,7 @@
 
 use crate::capacity::{CapacityRecovery, RuntimeCapacityError, RuntimeCapacityKind};
 use crate::graph::SampleCount;
-use crate::program::{ManagedRasterProgram, RasterPipelineRequest};
+use crate::program::{ManagedRasterProgram, ProgramId, RasterPipelineRequest};
 
 #[cfg(feature = "vulkan-diagnostics")]
 use std::ffi::CStr;
@@ -121,7 +121,7 @@ impl ShaderPrograms {
         if self.raster.get().is_none() {
             let program = Program::new_raster(
                 Arc::clone(&self.owner),
-                ManagedRasterProgram::mesh(),
+                &ManagedRasterProgram::mesh(),
                 true,
                 vk::SampleCountFlags::TYPE_1,
             )?;
@@ -139,7 +139,7 @@ impl ShaderPrograms {
                 .filter(|program| program.raster_groups != 0)
                 .map(|program| {
                     let mut descriptors = [0; 4];
-                    for slot in program.raster_asset.unwrap().bindings() {
+                    for slot in program.raster_asset.bindings() {
                         descriptors[match slot.kind {
                             crate::program::BindingType::Uniform => 0,
                             crate::program::BindingType::StorageRead => 1,
@@ -157,27 +157,20 @@ impl ShaderPrograms {
         })
     }
 
-    fn raster_key(
-        &self,
-        managed: crate::program::ManagedRasterProgram,
-        depth: bool,
-    ) -> Option<usize> {
+    fn raster_key(&self, id: ProgramId, depth: bool) -> Option<usize> {
         self.rasters.iter().position(|slot| {
             slot.get().is_some_and(|program| {
-                program
-                    .raster_asset
-                    .is_some_and(|asset| asset.same(&managed))
-                    && program.raster_depth == depth
+                program.raster_asset.identity() == id && program.raster_depth == depth
             })
         })
     }
 
     pub(super) fn prepare_rasters(
         &self,
-        programs: &[impl Copy + Into<RasterPipelineRequest>],
+        programs: &[impl Clone + Into<RasterPipelineRequest>],
         depth_samples: vk::SampleCountFlags,
     ) -> Result<(), RuntimeError> {
-        let requests: Vec<_> = programs.iter().copied().map(Into::into).collect();
+        let requests: Vec<_> = programs.iter().cloned().map(Into::into).collect();
         let distinct_programs = requests.iter().enumerate().filter(|(index, program)| {
             !requests[..*index]
                 .iter()
@@ -199,9 +192,9 @@ impl ShaderPrograms {
             .lock()
             .map_err(|_| RuntimeError::invalid("Graph program initialization lock poisoned"))?;
         for (_, request) in distinct_programs {
-            let managed = request.program;
+            let managed = &request.program;
             let mut requested_samples = vk::SampleCountFlags::empty();
-            for compatible in requests.iter().filter(|other| other.program.same(&managed)) {
+            for compatible in requests.iter().filter(|other| other.program.same(managed)) {
                 requested_samples |= sample_count_flags(compatible.sample_count);
             }
             for depth in [false, true] {
@@ -247,18 +240,18 @@ impl ShaderPrograms {
 
     pub(super) fn select_raster_program(
         &self,
-        managed: crate::program::ManagedRasterProgram,
+        id: ProgramId,
         depth: bool,
         sample_count: SampleCount,
     ) -> Result<RasterProgramSlot, RuntimeError> {
         if sample_count == SampleCount::X1
-            && managed.same(&ManagedRasterProgram::mesh())
+            && id == ManagedRasterProgram::mesh().identity()
             && depth
             && self.raster.get().is_some()
         {
             return Ok(RasterProgramSlot::FixedMesh);
         }
-        self.raster_key(managed, depth)
+        self.raster_key(id, depth)
             .filter(|&slot| {
                 self.rasters[slot]
                     .get()

@@ -516,24 +516,30 @@ pub(super) fn record(
             D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
         ));
     }
-    let mut bound_program: Option<&ManagedRasterProgram> = None;
+    let mut bound_pipeline: Option<&RasterPipeline> = None;
     let mut bound_heaps = false;
     for batch in batches {
-        let program = &batch.program;
-        if bound_program.is_none_or(|previous| !program.same(previous)) {
-            let pipeline = programs
-                .iter()
-                .find(|pipeline| pipeline.matches(program, depth_handle.is_some(), sample_count))
-                .expect("prepared Raster pipeline");
-            // SAFETY: Every prepared PSO matches these shared attachments and
-            // its own root signature. Changing the signature invalidates prior
-            // root arguments. record_draws sets all the current Program's roots.
-            unsafe {
-                slot.list.SetPipelineState(&*pipeline.pipeline);
-                slot.list.SetGraphicsRootSignature(&*pipeline.signature);
+        let pipeline = match bound_pipeline {
+            Some(pipeline) if pipeline.managed.identity() == batch.program => pipeline,
+            _ => {
+                let pipeline = programs
+                    .iter()
+                    .find(|pipeline| {
+                        pipeline.matches(batch.program, depth_handle.is_some(), sample_count)
+                    })
+                    .expect("prepared Raster pipeline");
+                // SAFETY: Every prepared PSO matches these shared attachments and
+                // its own root signature. Changing the signature invalidates prior
+                // root arguments. record_draws sets all the current Program's roots.
+                unsafe {
+                    slot.list.SetPipelineState(&*pipeline.pipeline);
+                    slot.list.SetGraphicsRootSignature(&*pipeline.signature);
+                }
+                bound_pipeline = Some(pipeline);
+                pipeline
             }
-            bound_program = Some(program);
-        }
+        };
+        let program = &pipeline.managed;
         if !bound_heaps && !program.bindings().is_empty() {
             let storage = slot.raster.as_ref().unwrap();
             // SAFETY: The execution owns both heaps and keeps them leased
@@ -546,7 +552,7 @@ pub(super) fn record(
             }
             bound_heaps = true;
         }
-        record_draws(slot, owner, graph, batch, indexed_indirect)?;
+        record_draws(slot, owner, graph, batch, program, indexed_indirect)?;
     }
     record_resolves(
         graph,
@@ -563,9 +569,9 @@ fn record_draws(
     owner: &DeviceOwner,
     graph: &CompiledGraph,
     batch: &RasterBatchOperands,
+    program: &ManagedRasterProgram,
     indexed_indirect: Option<&IndexedIndirectSignature>,
 ) -> Result<(), D3D12RuntimeError> {
-    let program = &batch.program;
     let storage = slot.raster.as_mut().unwrap();
     let indirect = batch.indirect.as_ref().map(|command| {
         let signature = indexed_indirect

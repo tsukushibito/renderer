@@ -78,7 +78,7 @@ impl ShaderModule {
 
 fn spirv_words(bytes: &[u8]) -> Result<Vec<u32>, RuntimeError> {
     if !bytes.len().is_multiple_of(4) || bytes.len() < 20 {
-        return Err(RuntimeError::invalid("invalid embedded SPIR-V word length"));
+        return Err(RuntimeError::invalid("invalid Raster SPIR-V word length"));
     }
     let words: Vec<u32> = bytes
         .as_chunks::<4>()
@@ -87,7 +87,7 @@ fn spirv_words(bytes: &[u8]) -> Result<Vec<u32>, RuntimeError> {
         .map(|b| u32::from_le_bytes(*b))
         .collect();
     if words[0] != 0x0723_0203 {
-        return Err(RuntimeError::invalid("invalid embedded SPIR-V magic"));
+        return Err(RuntimeError::invalid("invalid Raster SPIR-V magic"));
     }
     Ok(words)
 }
@@ -120,7 +120,7 @@ pub(in crate::backends::vulkan) struct Program {
     linear_u_repeat_sampler: vk::Sampler,
     pub(super) raster_layouts: [vk::DescriptorSetLayout; RASTER_GROUP_COUNT],
     pub(super) raster_groups: usize,
-    pub(super) raster_asset: Option<ManagedRasterProgram>,
+    pub(in crate::backends::vulkan) raster_asset: ManagedRasterProgram,
     pub(super) raster_depth: bool,
 }
 
@@ -152,7 +152,7 @@ impl Program {
     /// owned immediately, including partial layout/pipeline failures.
     pub(super) fn new_raster(
         owner: Arc<MemoryOwner>,
-        managed: crate::program::ManagedRasterProgram,
+        managed: &ManagedRasterProgram,
         depth: bool,
         samples: vk::SampleCountFlags,
     ) -> Result<Self, RuntimeError> {
@@ -310,13 +310,10 @@ impl Program {
             linear_clamp_sampler: vk::Sampler::null(),
             linear_u_repeat_sampler: vk::Sampler::null(),
             raster_layouts: [vk::DescriptorSetLayout::null(); RASTER_GROUP_COUNT],
-            raster_groups: 0,
-            raster_asset: None,
-            raster_depth: false,
+            raster_groups: groups,
+            raster_asset: managed.clone(),
+            raster_depth: depth,
         };
-        result.raster_asset = Some(managed);
-        result.raster_depth = depth;
-        result.raster_groups = groups;
         for group in 0..groups {
             let bindings: Vec<_> = managed
                 .bindings()
@@ -411,22 +408,20 @@ impl Program {
         }
         .map_err(|r| native(&result.owner, "vkCreatePipelineLayout(Raster)", r))?;
         if samples.contains(vk::SampleCountFlags::TYPE_1) {
-            result.pipeline =
-                result.graphics_pipeline(managed, depth, vk::SampleCountFlags::TYPE_1)?;
+            result.pipeline = result.graphics_pipeline(vk::SampleCountFlags::TYPE_1)?;
         }
         if samples.contains(vk::SampleCountFlags::TYPE_4) {
-            result.multisample_pipeline =
-                result.graphics_pipeline(managed, depth, vk::SampleCountFlags::TYPE_4)?;
+            result.multisample_pipeline = result.graphics_pipeline(vk::SampleCountFlags::TYPE_4)?;
         }
         Ok(result)
     }
 
     fn graphics_pipeline(
         &self,
-        program: ManagedRasterProgram,
-        depth_attached: bool,
         samples: vk::SampleCountFlags,
     ) -> Result<vk::Pipeline, RuntimeError> {
+        let program = &self.raster_asset;
+        let depth_attached = self.raster_depth;
         let depth_state = program.depth();
         let depth_enabled = depth_attached && depth_state.compare().is_some();
         let mut formats = [vk::Format::UNDEFINED; crate::program::MAX_RASTER_COLOR_ATTACHMENTS];

@@ -210,8 +210,8 @@ pub(super) fn record(
     };
     let pipeline = programs
         .iter()
-        .find(|native| native.matches(program))
-        .unwrap();
+        .find(|native| native.matches(*program))
+        .expect("prepared Compute pipeline");
     for access in graph.accesses(pass) {
         let physical = slot.resource_map[access.resource];
         match graph.resources[access.resource].desc {
@@ -308,7 +308,8 @@ pub(super) fn record(
             Some(storage.sampler_heap().clone()),
         ]);
     }
-    for (root, (layout, operand)) in program
+    for (root, (layout, operand)) in pipeline
+        .managed()
         .bindings()
         .iter()
         .zip(graph.raster_bindings(bindings))
@@ -400,7 +401,7 @@ mod tests {
     use super::*;
     use crate::graph::{Binding, BindingResource, BufferDesc, GraphCapacity, GraphPool, Operation};
 
-    fn dispatch_graph(shared: bool, read_only_shared: bool) -> CompiledGraph {
+    fn dispatch_graph(shared: bool, program: &ManagedProgram) -> CompiledGraph {
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let source = graph.buffer("input", BufferDesc { size: 512 }).unwrap();
@@ -410,15 +411,10 @@ mod tests {
             graph.buffer("output", BufferDesc { size: 512 }).unwrap()
         };
         graph.upload_buffer("input", source, 0, &[0; 512]).unwrap();
-        let program = if read_only_shared {
-            ManagedProgram::storage_readback()
-        } else {
-            ManagedProgram::uniform_readback()
-        };
         graph
             .dispatch(
                 "dispatch",
-                &program,
+                program,
                 &[
                     Binding {
                         group: 0,
@@ -447,14 +443,12 @@ mod tests {
         graph.compile().unwrap()
     }
 
-    fn dispatch(graph: &CompiledGraph) -> (usize, &ManagedProgram, &Range<usize>) {
+    fn dispatch(graph: &CompiledGraph) -> (usize, &Range<usize>) {
         graph
             .order
             .iter()
             .find_map(|&pass| match &graph.passes[pass].operation {
-                Operation::Dispatch {
-                    program, bindings, ..
-                } => Some((pass, program, bindings)),
+                Operation::Dispatch { bindings, .. } => Some((pass, bindings)),
                 _ => None,
             })
             .unwrap()
@@ -462,17 +456,18 @@ mod tests {
 
     #[test]
     fn compute_native_limits_preserve_logical_graph_and_reject_shared_uav_read_states() {
-        let graph = dispatch_graph(false, false);
-        let (pass, program, bindings) = dispatch(&graph);
+        let uniform = ManagedProgram::uniform_readback();
+        let graph = dispatch_graph(false, &uniform);
+        let (pass, bindings) = dispatch(&graph);
         assert_eq!(
-            requirements(&graph, pass, program, bindings, [1, 1, 1]).unwrap(),
+            requirements(&graph, pass, &uniform, bindings, [1, 1, 1]).unwrap(),
             0
         );
-        assert!(requirements(&graph, pass, program, bindings, [65536, 1, 1]).is_err());
-        for storage_read in [false, true] {
-            let graph = dispatch_graph(true, storage_read);
-            let (pass, program, bindings) = dispatch(&graph);
-            let error = requirements(&graph, pass, program, bindings, [1, 1, 1]).unwrap_err();
+        assert!(requirements(&graph, pass, &uniform, bindings, [65536, 1, 1]).is_err());
+        for program in [uniform, ManagedProgram::storage_readback()] {
+            let graph = dispatch_graph(true, &program);
+            let (pass, bindings) = dispatch(&graph);
+            let error = requirements(&graph, pass, &program, bindings, [1, 1, 1]).unwrap_err();
             assert!(error.to_string().contains("both UAV and CBV/SRV"));
         }
     }
@@ -521,7 +516,12 @@ mod texture_tests {
         };
         let program = ManagedProgram::sampled_float_readback();
         runtime
-            .prepare_graph_working_set(None, &[D3D12ImageClass { desc, count: 1 }], &[], &[program])
+            .prepare_graph_working_set(
+                None,
+                &[D3D12ImageClass { desc, count: 1 }],
+                &[],
+                std::slice::from_ref(&program),
+            )
             .unwrap();
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();

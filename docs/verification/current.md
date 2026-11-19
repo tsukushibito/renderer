@@ -5,6 +5,24 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="runtime-shader-verification"></a>
+
+## 実行時に読み込んだRaster・Compute
+
+`renderer-6yv`。Windowsの同一RTX 3060（610.88）で、Vulkan／D3D12を含む最適化済みの製品構成と
+厳格構成で実GPU回帰を各9件実行した。GPU試験は対象APIのSPIR-VまたはDXILだけを実ファイルから読み込んだ。
+外部Rasterと埋め込みindexed描画を同じ区間に混ぜた全画素を照合した。Computeは同じABIで出力の異なる2版を
+識別し、反転・色チャンネル交換の全画素を両APIで確認した。呼出元のロード時メタデータとProgramを解放した後も
+準備済みの版が実行できた。対象形式が欠けたWorkingSetの置換失敗後は旧版を実行でき、置換成功後は旧版のGraphを拒否した。
+Vulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは0件だった。
+
+CPU試験で形式・ステージ・境界が不正なバイナリの拒否と別版へのRaster binding再利用拒否を確認した。
+従来のComputeと独自Rasterの`frame_memory`は両API・両構成の8 runで、通常フレームに観測されたRust heap
+確保・再確保・解放、VMA host callbackの確保／解放、Rendererのnative作成・破棄がいずれも0だった。
+この計測は共通の実行経路を通る埋め込みshader fixtureによる。外部アセットのロード・構成変更の費用と
+外部アセット版での独立したフレーム計測は対象外とした。取込時の検査範囲と寿命は
+[実装方針](../design/implementation-policy.md#external-shader-assets)を参照する。
+
 ## BistroのHLSL正本
 
 `renderer-w6d`。移行前の比較元は`44451a4`。固定SDKのDXCで17バリアントをSPIR-V 1.3／DXILへ

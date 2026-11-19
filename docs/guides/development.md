@@ -1114,12 +1114,20 @@ cargo test --locked --release -p renderer --no-default-features --features vulka
 
 独自Rasterの公開契約は[`custom_raster`](../../crates/renderer/tests/custom_raster.rs)と
 [利用側fixture](../../crates/renderer/fixtures/custom_raster_fixture.rs)で確認します。
-shaderはRenderer本体のeffect列挙へ追加せず、staticな`RasterProgramDescriptor`をtrusted取込します。
+この試験は`RasterProgramDescriptor`の静的取込を使います。外部ファイルから読み込む場合は
+[実行時の取込手順](tooling.md#runtime-shader-import)を参照してください。
 24-byte頂点、32-byteのVS／FS inline定数、三groupの疎なUniform／StorageRead／画像／sampler bindingを使い、
 標準forward直接・postの独自Raster交換・標準opaque＋独自半透明＋標準出力copyを同じ入力で比較します。
 straight／premultiplied alpha・加算・置換、draw順、depth testとwriteなしを独立の全画素期待値で照合します。
 標準meshの定数は`RasterParameters::new(...).unwrap().into()`、独自定数は
 `RasterConstants::new(&words)`を使います。後者は有限値の意味検証を行わず、trusted shaderは全許容word値で範囲安全である必要があります。
+
+外部ファイルのRasterとComputeを実GPUで確認するには、次のテストを両構成で逐次実行します。
+
+```powershell
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation,graph-diagnostics --test fullscreen --test compute_graph runtime_loaded_ -- --ignored --test-threads=1
+cargo test --locked --release -p renderer --no-default-features --features vulkan,d3d12 --test fullscreen --test compute_graph runtime_loaded_ -- --ignored --test-threads=1
+```
 
 通常ビルドはチェックイン済みartifactを使い、shader compilerを要求しません。
 shader変更時は[固定SDKの生成手順](tooling.md)に加え、利用側fixtureの全artifactを再生成・照合します。

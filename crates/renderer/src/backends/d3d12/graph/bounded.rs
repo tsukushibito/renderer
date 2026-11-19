@@ -10,6 +10,7 @@ use super::super::{
     D3D12RuntimeError,
     bindings::*,
     frame::{D3D12FrameCapacity, FramePool, FrameWork, ReadbackMeta},
+    raster::RasterPipeline,
     resources::MAX_BUFFER_BYTES,
 };
 use super::transition;
@@ -293,20 +294,20 @@ fn requirements_inner(
                 bindings,
                 workgroups,
             } => {
-                if !compute_programs
+                let pipeline = compute_programs
                     .iter()
-                    .any(|native| native.matches(program))
-                {
-                    return Err(D3D12RuntimeError::capacity_with(
-                        "Compute pipeline working set has not been prepared",
-                        RuntimeCapacityError::new(
-                            RuntimeCapacityKind::WorkingSet,
-                            CapacityRecovery::Prepare,
-                            None,
-                            None,
-                        ),
-                    ));
-                }
+                    .find(|native| native.matches(*program))
+                    .ok_or_else(|| {
+                        D3D12RuntimeError::capacity_with(
+                            "Compute pipeline working set has not been prepared",
+                            RuntimeCapacityError::new(
+                                RuntimeCapacityKind::WorkingSet,
+                                CapacityRecovery::Prepare,
+                                None,
+                                None,
+                            ),
+                        )
+                    })?;
                 let storage = raster.as_deref_mut().ok_or_else(|| {
                     D3D12RuntimeError::capacity_with(
                         "Graph working set has not been prepared",
@@ -337,7 +338,7 @@ fn requirements_inner(
                     .checked_add(super::super::compute::requirements(
                         graph,
                         pass,
-                        program,
+                        pipeline.managed(),
                         bindings,
                         *workgroups,
                     )?)
@@ -415,13 +416,17 @@ fn requirements_inner(
                         }
                     }
                 }
-                let mut last_program: Option<&crate::program::ManagedRasterProgram> = None;
+                let mut last_pipeline: Option<&RasterPipeline> = None;
                 for batch in graph.raster_batches(batches) {
-                    if last_program.is_none_or(|previous| !batch.program.same(previous)) {
-                        if !programs.iter().any(|pipeline| {
-                            pipeline.matches(&batch.program, depth.is_some(), sample_count)
-                        }) {
-                            return Err(D3D12RuntimeError::capacity_with(
+                    let pipeline = last_pipeline
+                        .filter(|pipeline| pipeline.managed.identity() == batch.program)
+                        .or_else(|| {
+                            programs.iter().find(|pipeline| {
+                                pipeline.matches(batch.program, depth.is_some(), sample_count)
+                            })
+                        })
+                        .ok_or_else(|| {
+                            D3D12RuntimeError::capacity_with(
                                 "Raster pipeline working set has not been prepared",
                                 RuntimeCapacityError::new(
                                     RuntimeCapacityKind::WorkingSet,
@@ -429,15 +434,14 @@ fn requirements_inner(
                                     None,
                                     None,
                                 ),
-                            ));
-                        }
-                        last_program = Some(&batch.program);
-                    }
+                            )
+                        })?;
+                    last_pipeline = Some(pipeline);
                     for draw in graph.raster_draws(&batch.draws) {
                         raster_descriptors = raster_descriptors
                             .checked_add(super::raster::binding_requirements(
                                 graph,
-                                &batch.program,
+                                &pipeline.managed,
                                 &draw.bindings,
                             )?)
                             .filter(|count| *count <= storage.raster_descriptor_capacity)

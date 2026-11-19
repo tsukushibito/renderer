@@ -105,9 +105,7 @@ impl ShaderPrograms {
         let pipeline = program
             .raster_pipeline(sample_count)
             .expect("prepared Raster pipeline for attachment sample count");
-        let managed = program
-            .raster_asset
-            .unwrap_or_else(crate::program::ManagedRasterProgram::mesh);
+        let managed = &program.raster_asset;
         let size = managed.parameter_size() as usize;
         let stages = super::creation::shader_stages(managed.parameter_layout().stages);
         // SAFETY: Dependencies, interface compatibility and retention were

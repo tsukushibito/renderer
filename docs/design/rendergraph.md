@@ -78,7 +78,7 @@ bufferは半開byte範囲を指定する。
 
 通常のパスは、copy、管理下Compute、attachment操作、順序付きRasterを宣言する。
 任意の生CommandBuffer、未信頼shader、ネイティブ外部ハンドルは受け入れない。
-利用側のCompute shaderは、レビュー済みの静的descriptorを明示したunsafe境界で取り込む。
+利用側のCompute shaderは、静的descriptorまたはロードしたバイナリとABIを明示したunsafe境界で取り込む。
 これにより、実行する操作と宣言した用途・範囲・bindingを対応づける。
 汎用RHIや未信頼shaderのサンドボックスを提供する契約ではない。
 依存するCompute処理は別ノードとし、パス間の同期を実行基盤が記録する。
@@ -110,9 +110,12 @@ Rasterは`Graph::raster_bindings(&program, &bindings)`で同じ型のsliceを一
 各drawが不変な`RasterBindings` handleを共有する。用途・shader stage・実アクセス範囲をProgramから導く。
 利用側に別のread/write一覧を要求せず、旧buffer専用入口は残さない。
 
-命令は不変な管理下Program identity、dispatch数、manifest順のbindingを所有する。
-Programの不変static descriptorと準備済みarenaへコピーしたbuffer descriptor・subresource View・
+命令は管理下Programの不変な版ID、dispatch数、manifest順のbindingを保持する。Rasterでは
+drawごとの定数ワード数も記録する。準備済みarenaへコピーしたbuffer descriptor・subresource View・
 sampler設定により、呼出元のProgram変数・binding/draw sliceが変更・破棄されてもplanは変わらない。
+実行時はWorkingSetが所有する同じ版IDのネイティブパイプラインとABIを参照する。
+Graphの返却や構築失敗ではProgramを解放する処理が発生しない。版が準備済みでないplanは投入前に拒否する。
+[外部シェーダーの取込契約](implementation-policy.md#external-shader-assets)を参照する。
 同じRaster内のdrawごとに異なるmaterialのhandleを指定できる。命令は論理Graph資源を参照する。
 
 全slotの過不足・重複・種別・owner、非ゼロのbuffer範囲・ABI最小size・論理境界を構築時に確認する。
@@ -433,8 +436,8 @@ Programバッチの開始位置とProgram ABIの固定幅で定数を参照す�
 `renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
 `ManagedRasterProgram::mesh()`はビルドに含まれるAPIのmesh VS/FSに結び付き、static descriptorが
 頂点stride 28、vertex段のcolumn-major行列＋tint 80 byte、fragment出力location 0を定める。
-これはnative PSO作成やDevice能力の保証ではない。独自shaderはComputeと同じ
-`unsafe from_trusted_descriptor(&'static RasterProgramDescriptor)`で取り込む。
+Device能力はnative PSO作成時に確認する。独自shaderは
+`from_trusted_descriptor`で埋め込み記述子を参照するか、`from_trusted_owned_descriptor`でロード済みデータを所有する。
 通常のGraph構築・compile・submitはsafeなAPIであり、shader取込の安全性責任とは区別する。
 このshaderはdescriptor bindingとstorage副作用を持たない。DXILのb0は同じinline描画定数の表現であり、
 このmeshだけから一般graphicsのUniform bindingを推定しない。
@@ -492,8 +495,8 @@ Engineと利用側は同じ不変`RasterConstants`と公開Raster構築APIを使
 native Programを使わないattachment-onlyへ正規化する。一般形のclear-onlyは`Graph::attachment_pass`を直接使う。
 旧single-draw/batch APIの互換入口は残さない。複数drawも同じLoad/Storeを共有し、Clear/Storeへ暗黙に置き換えない。
 
-Programのidentityはstatic descriptorの同一性であり、shader・ABI・固定状態を含む不変の版を表す。
-reloadは新しいdescriptorの版を明示準備する。既存Programを書き換えるAPIや、pendingの版を破棄するAPIは設けない。
+Programのidentityはshader・ABI・固定状態を含む不変の版を表す。埋め込み版は静的descriptorの同一性を使い、
+ロードした版は取込ごとに再利用しないIDを割り当てる。差し替える際は新しい版を明示準備する。
 runtimeのpipeline／layoutとdescriptor leaseは記録・未投入cancel・実GPU完了まで保持する。
 Program集合を変更する前には、GPU完了だけでなく結果ハンドルをDropし、export／refreshした
 buffer snapshotも返却する。D3D12は最後のreadback消費時にnative readback枠を返すが、

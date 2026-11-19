@@ -909,17 +909,32 @@ fn wrong_constant_length_returns_draw_capacity_for_a_correct_retry() {
 
 #[test]
 fn empty_draws_enforce_custom_depth_and_output_contracts() {
-    use renderer::program::{CompareOp, DepthState, RasterProgramDescriptor};
+    use renderer::program::{
+        BlendState, CompareOp, DepthState, RasterParameterLayout, RasterProgramDescriptor,
+        ShaderBinaries, ShaderStages,
+    };
     static REQUIRED: RasterProgramDescriptor = RasterProgramDescriptor {
+        entry: "main",
+        vertex_stride: 4,
+        vertex_attributes: &[],
+        parameters: RasterParameterLayout {
+            size: 0,
+            stages: ShaderStages::EMPTY,
+        },
+        color_outputs: &[ImageFormat::Rgba8Unorm],
+        bindings: &[],
+        binding_bytes: &[],
+        sampling_pairs: &[],
+        blend: BlendState::Replace,
         depth: DepthState::Required {
             compare: CompareOp::Greater,
             write: false,
             require_load: false,
         },
-        ..*ManagedRasterProgram::mesh().descriptor()
+        shaders: ShaderBinaries::metadata_only(),
     };
-    // SAFETY: The unchanged reviewed mesh binaries and ABI support this fixed
-    // depth state; there are no new resources, shader accesses or capabilities.
+    // SAFETY: This graph-only descriptor supplies no executable binaries and
+    // declares a valid raster layout with no resource or inline parameters.
     let program = unsafe { ManagedRasterProgram::from_trusted_descriptor(&REQUIRED) };
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();
