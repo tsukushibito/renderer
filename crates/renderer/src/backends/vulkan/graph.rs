@@ -363,6 +363,31 @@ pub struct VulkanRuntime {
     resources_reused: usize,
 }
 
+fn validate_raster_shader_formats(
+    programs: &[impl Copy + Into<crate::program::RasterPipelineRequest>],
+) -> Result<(), RuntimeError> {
+    if programs
+        .iter()
+        .any(|&request| request.into().program.spirv().is_none())
+    {
+        return Err(RuntimeError::unsupported(
+            "Raster Program has no SPIR-V shaders",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_compute_shader_formats(
+    programs: &[crate::program::ManagedProgram],
+) -> Result<(), RuntimeError> {
+    if programs.iter().any(|program| program.spirv().is_none()) {
+        return Err(RuntimeError::unsupported(
+            "Compute Program has no SPIR-V shader",
+        ));
+    }
+    Ok(())
+}
+
 impl VulkanRuntime {
     fn capture_ranges(&self, ranges: &[Range<u64>]) -> Result<ImportRanges, RuntimeError> {
         self.import_ranges
@@ -411,6 +436,8 @@ impl VulkanRuntime {
                 ),
             )
         })?;
+        validate_raster_shader_formats(working_set.raster)?;
+        validate_compute_shader_formats(working_set.compute)?;
         self.prepare_working_set_with(
             capacity,
             working_set.resources,
@@ -671,6 +698,7 @@ impl VulkanRuntime {
                 ),
             ));
         }
+        validate_raster_shader_formats(programs)?;
         let descriptors = self
             .entries
             .iter()
@@ -731,6 +759,7 @@ impl VulkanRuntime {
                 ),
             ));
         }
+        validate_compute_shader_formats(programs)?;
         let prepared = self.stage_compute_programs(programs)?;
         self.compute_programs = Some(prepared);
         Ok(())

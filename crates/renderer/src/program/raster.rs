@@ -1,6 +1,6 @@
 //! Immutable graphics shader contracts retained by owned Raster commands.
 
-use super::{BindingLayout, BindingType, ShaderStages};
+use super::{BindingLayout, BindingType, ShaderBinaries, ShaderStages, embedded_raster_shaders};
 use crate::ImageFormat;
 
 /// Maximum distinct assets in one prepared Raster working set.
@@ -37,13 +37,32 @@ pub struct VertexAttribute {
 }
 
 /// Inline words begin at byte offset zero in each selected shader stage.
-/// D3D12 maps this block to the specified CBV register and register space.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RasterParameterLayout {
     pub size: u32,
     pub stages: ShaderStages,
-    pub dxil_register: u32,
-    pub dxil_space: u32,
+}
+
+/// The shader stages for one raster backend. A depth-only program may omit
+/// its fragment stage or supply one for alpha discard.
+#[derive(Clone, Copy)]
+pub struct RasterShaderStages {
+    pub vertex: &'static [u8],
+    pub fragment: Option<&'static [u8]>,
+}
+
+/// Shader stages and the root-constant binding for a D3D12 raster program.
+#[derive(Clone, Copy)]
+pub struct D3D12RasterShaders {
+    pub stages: RasterShaderStages,
+    pub inline_constants: Option<D3D12InlineConstantBinding>,
+}
+
+/// CBV register and register space used for D3D12 root constants.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct D3D12InlineConstantBinding {
+    pub register: u32,
+    pub space: u32,
 }
 
 /// Fixed blending shared by Vulkan and D3D12, with all color channels writable.
@@ -127,10 +146,7 @@ pub struct RasterProgramDescriptor {
     pub sampling_pairs: &'static [SampledImageSamplerPair],
     pub blend: BlendState,
     pub depth: DepthState,
-    pub vertex_spirv: &'static [u8],
-    pub fragment_spirv: &'static [u8],
-    pub vertex_dxil: &'static [u8],
-    pub fragment_dxil: &'static [u8],
+    pub shaders: ShaderBinaries<RasterShaderStages, D3D12RasterShaders>,
 }
 
 /// An immutable trusted vertex/fragment shader pair, independent of a native
@@ -175,8 +191,6 @@ static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 80,
         stages: ShaderStages::VERTEX,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba8Unorm],
     bindings: &[],
@@ -187,16 +201,18 @@ static MESH: RasterProgramDescriptor = RasterProgramDescriptor {
         compare: CompareOp::Less,
         write: true,
     },
-    vertex_spirv: include_bytes!("../../shaders/mesh.vert.spv"),
-    fragment_spirv: include_bytes!("../../shaders/mesh.frag.spv"),
-    vertex_dxil: include_bytes!("../../shaders/dxil/mesh.vert.dxil"),
-    fragment_dxil: include_bytes!("../../shaders/dxil/mesh.frag.dxil"),
+    shaders: embedded_raster_shaders!(
+        "../../shaders/mesh.vert.spv",
+        Some(include_bytes!("../../shaders/mesh.frag.spv")),
+        "../../shaders/dxil/mesh.vert.dxil",
+        Some(include_bytes!("../../shaders/dxil/mesh.frag.dxil")),
+        Some(D3D12InlineConstantBinding {
+            register: 0,
+            space: 0
+        }),
+    ),
 };
 static TEXTURED_MESH: RasterProgramDescriptor = RasterProgramDescriptor {
-    parameters: RasterParameterLayout {
-        dxil_register: 1,
-        ..MESH.parameters
-    },
     bindings: &[
         BindingLayout {
             group: 0,
@@ -227,10 +243,16 @@ static TEXTURED_MESH: RasterProgramDescriptor = RasterProgramDescriptor {
         sampler_group: 1,
         sampler_binding: 1,
     }],
-    vertex_spirv: include_bytes!("../../shaders/textured.vert.spv"),
-    fragment_spirv: include_bytes!("../../shaders/textured.frag.spv"),
-    vertex_dxil: include_bytes!("../../shaders/dxil/textured.vert.dxil"),
-    fragment_dxil: include_bytes!("../../shaders/dxil/textured.frag.dxil"),
+    shaders: embedded_raster_shaders!(
+        "../../shaders/textured.vert.spv",
+        Some(include_bytes!("../../shaders/textured.frag.spv")),
+        "../../shaders/dxil/textured.vert.dxil",
+        Some(include_bytes!("../../shaders/dxil/textured.frag.dxil")),
+        Some(D3D12InlineConstantBinding {
+            register: 1,
+            space: 0
+        }),
+    ),
     ..MESH
 };
 static MESH_HDR: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -248,8 +270,16 @@ static DEPTH_ONLY: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    fragment_spirv: &[],
-    fragment_dxil: &[],
+    shaders: embedded_raster_shaders!(
+        "../../shaders/mesh.vert.spv",
+        None,
+        "../../shaders/dxil/mesh.vert.dxil",
+        None,
+        Some(D3D12InlineConstantBinding {
+            register: 0,
+            space: 0
+        }),
+    ),
     ..MESH
 };
 static MESH_PREPASSED: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -281,9 +311,9 @@ impl ManagedRasterProgram {
     /// Import a statically owned graphics asset without Renderer effect variants.
     ///
     /// # Safety
-    /// Both shader pairs must be valid Vulkan 1.3/SPIR-V 1.3 and D3D12 SM6.0
-    /// vertex/fragment programs for `entry = "main"`, using only enabled backend
-    /// features. Their stage interfaces, descriptor slots, vertex attributes,
+    /// Each supplied backend must have valid Vulkan 1.3/SPIR-V 1.3 or D3D12 SM6.0
+    /// vertex and optional fragment shaders for `entry = "main"`, as selected by
+    /// its slot, using only enabled backend features. Stage interfaces, descriptor slots, vertex attributes,
     /// inline parameters and outputs must exactly match this complete descriptor.
     /// For indexed draws there is one per-vertex stream with a nonzero,
     /// four-byte-aligned stride and at most 16 unique locations below 16,
@@ -303,15 +333,17 @@ impl ManagedRasterProgram {
     /// [`MAX_RASTER_COLOR_ATTACHMENTS`]. Each format is RGBA8_UNORM or RGBA16_FLOAT.
     /// Blend state applies uniformly to every color target. With no color outputs
     /// a fragment shader is optional and may discard fragments, but has no outputs.
-    /// An absent stage has empty binaries for both backends and no stage inputs,
-    /// bindings or inline parameters declared for it.
+    /// An omitted fragment stage is `None` in the stage collection of each
+    /// supplied format, with no inputs, bindings or inline parameters for it.
     /// Fragment depth, stencil, sample-mask writes, sample shading, storage writes,
     /// atomics, input attachments and attachment feedback are unsupported.
     ///
     /// Parameters have a four-byte multiple size at most 128 bytes, start at
     /// offset zero, and are used only in the nonempty declared Vertex/Fragment
-    /// stages (zero size requires EMPTY stages). DXIL represents this block as
-    /// the specified CBV register/space, with no overlapping Uniform binding.
+    /// stages (zero size requires EMPTY stages). When supplying D3D12 shaders,
+    /// specify `inline_constants` if the size is nonzero and leave it `None`
+    /// otherwise. DXIL represents this block as that CBV register and space,
+    /// with no overlapping Uniform binding.
     /// Inline members must not be dynamically indexed: D3D12 root constants
     /// permit only static/literal indexing. Use Uniform/StorageRead for arrays
     /// that require dynamic indexing.
@@ -456,20 +488,12 @@ impl ManagedRasterProgram {
         self.requires_depth_load()
     }
     #[cfg(feature = "vulkan")]
-    pub(crate) fn vertex_spirv(&self) -> &'static [u8] {
-        self.manifest.vertex_spirv
-    }
-    #[cfg(feature = "vulkan")]
-    pub(crate) fn fragment_spirv(&self) -> &'static [u8] {
-        self.manifest.fragment_spirv
+    pub(crate) fn spirv(&self) -> Option<RasterShaderStages> {
+        self.manifest.shaders.vulkan
     }
     #[cfg(all(feature = "d3d12", windows))]
-    pub(crate) fn vertex_dxil(&self) -> &'static [u8] {
-        self.manifest.vertex_dxil
-    }
-    #[cfg(all(feature = "d3d12", windows))]
-    pub(crate) fn fragment_dxil(&self) -> &'static [u8] {
-        self.manifest.fragment_dxil
+    pub(crate) fn dxil(&self) -> Option<D3D12RasterShaders> {
+        self.manifest.shaders.d3d12
     }
 }
 
@@ -515,13 +539,25 @@ mod tests {
             assert_eq!(program.binding_bytes(), original.binding_bytes());
             #[cfg(feature = "vulkan")]
             {
-                assert_eq!(program.vertex_spirv(), original.vertex_spirv());
-                assert_eq!(program.fragment_spirv(), original.fragment_spirv());
+                assert_eq!(
+                    program.spirv().unwrap().vertex,
+                    original.spirv().unwrap().vertex
+                );
+                assert_eq!(
+                    program.spirv().unwrap().fragment,
+                    original.spirv().unwrap().fragment
+                );
             }
             #[cfg(all(feature = "d3d12", windows))]
             {
-                assert_eq!(program.vertex_dxil(), original.vertex_dxil());
-                assert_eq!(program.fragment_dxil(), original.fragment_dxil());
+                assert_eq!(
+                    program.dxil().unwrap().stages.vertex,
+                    original.dxil().unwrap().stages.vertex
+                );
+                assert_eq!(
+                    program.dxil().unwrap().stages.fragment,
+                    original.dxil().unwrap().stages.fragment
+                );
             }
         }
     }
@@ -548,13 +584,25 @@ mod tests {
             assert!(!program.is_depth_only());
             #[cfg(feature = "vulkan")]
             {
-                assert_eq!(program.vertex_spirv(), original.vertex_spirv());
-                assert_eq!(program.fragment_spirv(), original.fragment_spirv());
+                assert_eq!(
+                    program.spirv().unwrap().vertex,
+                    original.spirv().unwrap().vertex
+                );
+                assert_eq!(
+                    program.spirv().unwrap().fragment,
+                    original.spirv().unwrap().fragment
+                );
             }
             #[cfg(all(feature = "d3d12", windows))]
             {
-                assert_eq!(program.vertex_dxil(), original.vertex_dxil());
-                assert_eq!(program.fragment_dxil(), original.fragment_dxil());
+                assert_eq!(
+                    program.dxil().unwrap().stages.vertex,
+                    original.dxil().unwrap().stages.vertex
+                );
+                assert_eq!(
+                    program.dxil().unwrap().stages.fragment,
+                    original.dxil().unwrap().stages.fragment
+                );
             }
         }
         let program = ManagedRasterProgram::depth_only();
@@ -569,13 +617,19 @@ mod tests {
         assert_eq!(program.parameter_size(), mesh.parameter_size());
         #[cfg(feature = "vulkan")]
         {
-            assert_eq!(program.vertex_spirv(), mesh.vertex_spirv());
-            assert!(program.fragment_spirv().is_empty());
+            assert_eq!(
+                program.spirv().unwrap().vertex,
+                mesh.spirv().unwrap().vertex
+            );
+            assert!(program.spirv().unwrap().fragment.is_none());
         }
         #[cfg(all(feature = "d3d12", windows))]
         {
-            assert_eq!(program.vertex_dxil(), mesh.vertex_dxil());
-            assert!(program.fragment_dxil().is_empty());
+            assert_eq!(
+                program.dxil().unwrap().stages.vertex,
+                mesh.dxil().unwrap().stages.vertex
+            );
+            assert!(program.dxil().unwrap().stages.fragment.is_none());
         }
     }
 
@@ -772,12 +826,12 @@ mod tests {
     fn mesh_native_assets_are_the_reviewed_vertex_and_fragment_pair() {
         let program = ManagedRasterProgram::mesh();
         assert_eq!(
-            program.vertex_spirv(),
+            program.spirv().unwrap().vertex,
             include_bytes!("../../shaders/mesh.vert.spv")
         );
         assert_eq!(
-            program.fragment_spirv(),
-            include_bytes!("../../shaders/mesh.frag.spv")
+            program.spirv().unwrap().fragment,
+            Some(include_bytes!("../../shaders/mesh.frag.spv").as_slice())
         );
     }
 
@@ -786,20 +840,20 @@ mod tests {
     fn textured_native_assets_are_distinct_from_the_mesh_pipeline() {
         let program = ManagedRasterProgram::textured_mesh();
         assert_eq!(
-            program.vertex_spirv(),
+            program.spirv().unwrap().vertex,
             include_bytes!("../../shaders/textured.vert.spv")
         );
         assert_eq!(
-            program.fragment_spirv(),
-            include_bytes!("../../shaders/textured.frag.spv")
+            program.spirv().unwrap().fragment,
+            Some(include_bytes!("../../shaders/textured.frag.spv").as_slice())
         );
         assert_ne!(
-            program.vertex_spirv(),
-            ManagedRasterProgram::mesh().vertex_spirv()
+            program.spirv().unwrap().vertex,
+            ManagedRasterProgram::mesh().spirv().unwrap().vertex
         );
         assert_ne!(
-            program.fragment_spirv(),
-            ManagedRasterProgram::mesh().fragment_spirv()
+            program.spirv().unwrap().fragment,
+            ManagedRasterProgram::mesh().spirv().unwrap().fragment
         );
     }
 }

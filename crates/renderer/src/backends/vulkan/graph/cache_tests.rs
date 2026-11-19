@@ -225,7 +225,10 @@ fn vulkan_graph_working_set_failure_preserves_committed_resources() {
 #[test]
 #[ignore = "explicit real-GPU transaction covering an invalid Raster working-set replacement"]
 fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
-    use crate::program::{MAX_RASTER_PROGRAMS, ManagedRasterProgram, RasterProgramDescriptor};
+    use crate::program::{
+        ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups, MAX_RASTER_PROGRAMS,
+        ManagedProgram, ManagedRasterProgram, RasterProgramDescriptor, ShaderBinaries,
+    };
 
     static DESCRIPTORS: [RasterProgramDescriptor; MAX_RASTER_PROGRAMS + 1] = [const {
         let original = ManagedRasterProgram::mesh().descriptor();
@@ -240,13 +243,24 @@ fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
             sampling_pairs: original.sampling_pairs,
             blend: original.blend,
             depth: original.depth,
-            vertex_spirv: original.vertex_spirv,
-            fragment_spirv: original.fragment_spirv,
-            vertex_dxil: original.vertex_dxil,
-            fragment_dxil: original.fragment_dxil,
+            shaders: original.shaders,
         }
     };
         MAX_RASTER_PROGRAMS + 1];
+    static RASTER_METADATA: RasterProgramDescriptor = RasterProgramDescriptor {
+        shaders: ShaderBinaries::metadata_only(),
+        ..*ManagedRasterProgram::mesh().descriptor()
+    };
+    static COMPUTE_METADATA: ComputeProgramDescriptor = ComputeProgramDescriptor {
+        entry: "main",
+        workgroup_size: [1; 3],
+        bindings: &[],
+        dispatch: DispatchContract {
+            workgroups: DispatchWorkgroups::Fixed([1; 3]),
+            bytes: &[],
+        },
+        shaders: ShaderBinaries::metadata_only(),
+    };
 
     real_gpu(4, 1, ValidationMode::default(), |runtime| {
         let class = |size| ResourceClass::Image {
@@ -271,6 +285,54 @@ fn vulkan_graph_working_set_program_failure_rolls_back_resources() {
         let raster = Arc::clone(runtime.programs.as_ref().unwrap());
         let before = runtime.stats();
         let memory = runtime.memory_stats().unwrap();
+        // SAFETY: These descriptors carry only immutable CPU Graph metadata.
+        let missing_raster =
+            unsafe { ManagedRasterProgram::from_trusted_descriptor(&RASTER_METADATA) };
+        // SAFETY: The immutable metadata describes a one-workgroup dispatch with no resources.
+        let missing_compute = unsafe { ManagedProgram::from_trusted_descriptor(&COMPUTE_METADATA) };
+        let compute = Arc::clone(runtime.compute_programs.as_ref().unwrap());
+        let missing_raster_request = missing_raster.into();
+        for error in [
+            runtime
+                .prepare_raster_programs(&[missing_raster])
+                .unwrap_err(),
+            runtime
+                .prepare_compute_programs(&[missing_compute])
+                .unwrap_err(),
+            runtime
+                .prepare_graph_working_set(
+                    None,
+                    WorkingSet {
+                        resources: &[class(8)],
+                        raster: &[missing_raster_request],
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err(),
+            runtime
+                .prepare_graph_working_set(
+                    None,
+                    WorkingSet {
+                        resources: &[class(8)],
+                        compute: &[missing_compute],
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), RuntimeErrorKind::Unsupported);
+            assert!(error.to_string().contains("has no SPIR-V"), "{error}");
+        }
+        assert!(Arc::ptr_eq(&raster, runtime.programs.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(
+            &compute,
+            runtime.compute_programs.as_ref().unwrap()
+        ));
+        assert_eq!(runtime.stats().resources_created, before.resources_created);
+        assert_eq!(
+            runtime.memory_stats().unwrap().vma_allocation_count,
+            memory.vma_allocation_count
+        );
         let invalid = DESCRIPTORS.each_ref().map(|descriptor| {
             // SAFETY: Each descriptor reproduces the complete immutable
             // built-in mesh Program byte-for-byte, differing in identity only.

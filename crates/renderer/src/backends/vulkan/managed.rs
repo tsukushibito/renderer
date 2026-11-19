@@ -167,7 +167,9 @@ impl ComputePipeline {
         managed: &ManagedProgram,
         group_count: u32,
     ) -> Result<(), RuntimeError> {
-        let bytes = managed.spirv();
+        let bytes = managed
+            .spirv()
+            .ok_or_else(|| RuntimeError::unsupported("Compute Program has no SPIR-V shader"))?;
         let entry = CString::new(managed.entry_point())
             .map_err(|_| RuntimeError::invalid("Compute entry point contains NUL"))?;
         if bytes.len() < 20 || !bytes.len().is_multiple_of(4) {

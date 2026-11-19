@@ -535,6 +535,22 @@ impl FramePool {
         programs: &[RasterPipelineRequest],
         compute_programs: &[crate::program::ManagedProgram],
     ) -> Result<Arc<Self>, D3D12RuntimeError> {
+        if compute_programs
+            .iter()
+            .any(|program| program.dxil().is_none())
+        {
+            return Err(D3D12RuntimeError::unsupported(
+                "Compute Program has no DXIL shader",
+            ));
+        }
+        if programs
+            .iter()
+            .any(|request| request.program.dxil().is_none())
+        {
+            return Err(D3D12RuntimeError::unsupported(
+                "Raster Program has no DXIL shaders",
+            ));
+        }
         let mut unique_programs =
             [None::<ManagedRasterProgram>; crate::program::MAX_RASTER_PROGRAMS];
         let mut program_count = 0;
@@ -1437,8 +1453,27 @@ mod tests {
     #[ignore = "requires real D3D12 hardware; root serializes native acceptance"]
     fn d3d12_global_buffer_classes_preserve_capacity_after_smaller_reuse() {
         use crate::graph::{BufferDesc, GraphCapacity, GraphPool};
+        use crate::program::{
+            ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups, ManagedProgram,
+            ManagedRasterProgram, RasterProgramDescriptor, ShaderBinaries,
+        };
         use crate::{D3D12Runtime, D3D12RuntimeConfig, D3D12ValidationMode};
         use std::time::Duration;
+
+        static RASTER_METADATA: RasterProgramDescriptor = RasterProgramDescriptor {
+            shaders: ShaderBinaries::metadata_only(),
+            ..*ManagedRasterProgram::mesh().descriptor()
+        };
+        static COMPUTE_METADATA: ComputeProgramDescriptor = ComputeProgramDescriptor {
+            entry: "main",
+            workgroup_size: [1; 3],
+            bindings: &[],
+            dispatch: DispatchContract {
+                workgroups: DispatchWorkgroups::Fixed([1; 3]),
+                bytes: &[],
+            },
+            shaders: ShaderBinaries::metadata_only(),
+        };
 
         let strict = cfg!(feature = "d3d12-diagnostics");
         let mut runtime = D3D12Runtime::new_with_working_set(
@@ -1478,6 +1513,25 @@ mod tests {
         // Three physical buffers fit a three-entry registry despite three
         // execution slots; uniform per-slot allocation would require nine.
         let monitor = runtime.validation_monitor();
+        // SAFETY: These descriptors carry only immutable CPU Graph metadata.
+        let missing_raster =
+            unsafe { ManagedRasterProgram::from_trusted_descriptor(&RASTER_METADATA) };
+        // SAFETY: The immutable metadata describes a one-workgroup dispatch with no resources.
+        let missing_compute = unsafe { ManagedProgram::from_trusted_descriptor(&COMPUTE_METADATA) };
+        let before = std::sync::Arc::as_ptr(&runtime.pool);
+        let missing_raster_request = missing_raster.into();
+        for error in [
+            runtime
+                .prepare_graph_working_set(None, &[], &[missing_raster_request], &[])
+                .unwrap_err(),
+            runtime
+                .prepare_graph_working_set(None, &[], &[], &[missing_compute])
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), crate::D3D12RuntimeErrorKind::Unsupported);
+            assert!(error.to_string().contains("has no DXIL"), "{error}");
+        }
+        assert_eq!(std::sync::Arc::as_ptr(&runtime.pool), before);
         for (cycle, sizes) in [[4, 32, 512], [8, 64, 4096], [4, 32, 512], [8, 64, 4096]]
             .into_iter()
             .enumerate()

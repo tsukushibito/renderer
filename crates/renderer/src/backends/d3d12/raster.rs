@@ -4,8 +4,8 @@ use crate::{ImageFormat, graph::SampleCount};
 use std::mem::ManuallyDrop;
 
 use crate::program::{
-    BindingType, BlendState, CompareOp, INDIRECT_COMMAND_BYTES, MAX_RASTER_COLOR_ATTACHMENTS,
-    ManagedRasterProgram, ShaderStages, VertexFormat,
+    BindingType, BlendState, CompareOp, D3D12InlineConstantBinding, INDIRECT_COMMAND_BYTES,
+    MAX_RASTER_COLOR_ATTACHMENTS, ManagedRasterProgram, ShaderStages, VertexFormat,
 };
 
 use super::{
@@ -166,6 +166,7 @@ fn require_format(
 fn signature(
     owner: &DeviceOwner,
     managed: &ManagedRasterProgram,
+    inline_binding: Option<D3D12InlineConstantBinding>,
 ) -> Result<NativeObject<ID3D12RootSignature>, D3D12RuntimeError> {
     let inline = managed.parameter_layout();
     let cost = managed
@@ -205,13 +206,13 @@ fn signature(
         .collect();
     let mut parameters =
         Vec::with_capacity(managed.bindings().len() + usize::from(inline.size != 0));
-    if inline.size != 0 {
+    if let Some(binding) = inline_binding {
         parameters.push(D3D12_ROOT_PARAMETER {
             ParameterType: D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS,
             Anonymous: D3D12_ROOT_PARAMETER_0 {
                 Constants: D3D12_ROOT_CONSTANTS {
-                    ShaderRegister: inline.dxil_register,
-                    RegisterSpace: inline.dxil_space,
+                    ShaderRegister: binding.register,
+                    RegisterSpace: binding.space,
                     Num32BitValues: inline.size / 4,
                 },
             },
@@ -340,6 +341,14 @@ impl RasterPipeline {
         clear: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
+        let shaders = managed
+            .dxil()
+            .ok_or_else(|| D3D12RuntimeError::unsupported("Raster Program has no DXIL shaders"))?;
+        if (managed.parameter_size() != 0) != shaders.inline_constants.is_some() {
+            return Err(D3D12RuntimeError::unsupported(
+                "Raster Program inline constants and DXIL binding must agree",
+            ));
+        }
         for slot in managed.bindings() {
             let maximum = match slot.kind {
                 BindingType::Uniform => 65_536,
@@ -424,7 +433,7 @@ impl RasterPipeline {
             )?;
             super::raster_storage::require_multisample(owner, *destination, sample_count)?;
         }
-        let signature = signature(owner, managed)?;
+        let signature = signature(owner, managed, shaders.inline_constants)?;
         let target_blend = blend(if clear {
             BlendState::Replace
         } else {
@@ -436,22 +445,24 @@ impl RasterPipeline {
             StencilPassOp: D3D12_STENCIL_OP_KEEP,
             StencilFunc: D3D12_COMPARISON_FUNC_ALWAYS,
         };
-        let vertex = managed.vertex_dxil();
-        let fragment = managed.fragment_dxil();
+        let vertex = shaders.stages.vertex;
+        let fragment =
+            shaders
+                .stages
+                .fragment
+                .map_or_else(D3D12_SHADER_BYTECODE::default, |bytes| {
+                    D3D12_SHADER_BYTECODE {
+                        pShaderBytecode: bytes.as_ptr().cast(),
+                        BytecodeLength: bytes.len(),
+                    }
+                });
         let mut desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC {
             pRootSignature: ManuallyDrop::new(Some(signature.clone())),
             VS: D3D12_SHADER_BYTECODE {
                 pShaderBytecode: vertex.as_ptr().cast(),
                 BytecodeLength: vertex.len(),
             },
-            PS: if fragment.is_empty() {
-                D3D12_SHADER_BYTECODE::default()
-            } else {
-                D3D12_SHADER_BYTECODE {
-                    pShaderBytecode: fragment.as_ptr().cast(),
-                    BytecodeLength: fragment.len(),
-                }
-            },
+            PS: fragment,
             BlendState: D3D12_BLEND_DESC {
                 AlphaToCoverageEnable: false.into(),
                 IndependentBlendEnable: false.into(),
