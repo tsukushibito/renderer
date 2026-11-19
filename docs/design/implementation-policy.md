@@ -920,7 +920,8 @@ YAMLは順序付きのRaster／Computeパス、名前付き資源・描画リス
 毎フレームはアプリが提供したGraph上の外部資源と描画候補を使う。
 名前付きビュー内の候補をqueueで選び、複数パスで共有される描画リストも一度構築する。
 可変のハンドル・候補数は各フレームで確認し、上限内の入力には予約済み領域を使う。
-Graphを消費する`build`が成功したら、利用側が返された出力画像のexport、readback、後段パスなどを選ぶ。
+Graphを消費する`build`が成功したら、利用側は`FrameOutput`から最終画像と同じGraphの名前付き中間画像を取得し、
+export、readback、後段パスなどを追加できる。
 
 indexed Rasterは`shader_template`と材質型を宣言できる。アセットビルドがパスのHLSLテンプレートと
 材質関数を組み合わせ、バイナリと反射情報を出力する。アプリが対応するABIを確認して管理下Programを提供する。
@@ -933,12 +934,14 @@ indexed Rasterは`shader_template`と材質型を宣言できる。アセット�
 構成の差し替えは、新しい`PreparedPipeline`を作り、以前のフレームと結果の貸し出しを返却してから
 実RuntimeのWorkingSetを更新する。更新が成功した版で後続フレームを組み立てる。
 YAMLで宣言する資源はbufferと1×・単一mip／layerの2D画像で、材質のbindingには複数mipを含むGraphのsampled Viewも渡せる。
-画像寸法は固定値の組か`extent: frame`で指定する。後者は呼出側が準備時に渡す描画寸法に解決し、
-サイズ変更時には新しいWorkingSetとGraph容量を準備する。
+画像寸法は固定値の組か`extent: frame`で指定する。後者は呼出側が準備時に渡す描画寸法に解決する。
+`divisor`を指定した場合は各軸の除算結果を切り上げる。サイズ変更時は新しい寸法でWorkingSetを準備する。
 Rasterはindexed draw listまたは全画面三角形、ComputeはProgramのdispatch契約に従う。
-Bistroの[ポスト処理](../guides/tooling.md#bistro-post-pipeline)では、既存GraphにあるBloom後のHDRを読み取り専用の外部入力とし、
-YAMLがトーンマッピングとSDRパス、および最終画像を定義する。Bistroは出力を既存のキャプチャ／Presenterに渡す。
+Bistroの[ポスト処理](../guides/tooling.md#bistro-post-pipeline)では、既存GraphにあるシーンHDRを読み取り専用の外部入力とし、
+YAMLがBloomのComputeパスと一時画像、トーンマッピング、SDR出力を定義する。Bistroは最終画像を既存のキャプチャ／Presenterに渡し、
+Bloomが有効なときは同じGraphから`bloom_hdr`をキャプチャする。
 同じGraph内で接続するため、HDRを渡すための転送や同期は追加せず、既存のGraphとRuntimeで寿命、hazardとGPU同期を扱う。
+Bistroは準備済みのパス数と描画数を使い、Vulkanのdescriptor予約にComputeのdispatch分を含める。
 操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
 
 ## 12. エンジン統合とPresentation

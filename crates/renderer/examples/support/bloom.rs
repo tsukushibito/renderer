@@ -40,7 +40,7 @@ const COMBINE_BINDINGS: &[BindingLayout] = &[
 
 macro_rules! bloom_program {
     ($name:ident, $shader:literal, $bindings:ident, $bytes:expr) => {
-        const $name: ManagedProgram = {
+        pub(super) const $name: ManagedProgram = {
             static DESCRIPTOR: ComputeProgramDescriptor = ComputeProgramDescriptor {
                 entry: "main",
                 workgroup_size: [GROUP_SIZE, GROUP_SIZE, 1],

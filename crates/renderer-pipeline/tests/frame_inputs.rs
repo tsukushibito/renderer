@@ -2,10 +2,10 @@ use renderer::capacity::ResourceClass;
 use renderer::graph::{
     BufferDesc, GraphCapacity, GraphPool, ImageDesc, RasterDraw, RasterParameters,
 };
-use renderer::program::ManagedRasterProgram;
+use renderer::program::{ManagedProgram, ManagedRasterProgram};
 use renderer_pipeline::{
-    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, FullscreenRequirements,
-    PrepareOptions, PreparedPipeline, Program, ResourceDesc,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, PrepareOptions,
+    PreparedPipeline, Program, ResourceDesc, ShaderRequest, StaticRequirements,
 };
 
 const PIPELINE: &str = "
@@ -36,7 +36,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
         |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
     )
     .unwrap();
-    assert!(pipeline.fullscreen_requirements().is_none());
+    assert!(pipeline.static_requirements().is_none());
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let view = FrameView {
         name: "main",
@@ -100,8 +100,10 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
             },
         )
         .unwrap();
-    assert_eq!(output, image);
-    graph.export_image(output).unwrap();
+    assert_eq!(output.image(), image);
+    assert_eq!(output.named_image("output"), Some(image));
+    assert_eq!(output.named_image("undeclared"), None);
+    graph.export_image(output.image()).unwrap();
     assert_eq!(
         graph
             .compile()
@@ -113,7 +115,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
 }
 
 #[test]
-fn fullscreen_requirements_and_descriptors_resolve_for_each_extent() {
+fn static_requirements_and_descriptors_resolve_for_each_extent() {
     let yaml = "
 version: 1
 resources:
@@ -165,22 +167,89 @@ output: mapped
         assert_eq!(working_set.raster.len(), 1);
         assert!(working_set.compute.is_empty());
         assert_eq!(
-            pipeline.fullscreen_requirements(),
-            Some(FullscreenRequirements {
+            pipeline.static_requirements(),
+            Some(StaticRequirements {
                 resources: 1,
                 passes: 1,
+                draws: 1,
                 bindings: 2,
                 attachments: 1,
                 raster_constant_words: 1,
                 name_bytes: "mapped".len() + "neutral".len(),
-                writes_external_attachments: false,
+                writes_external_resources: false,
             }),
         );
         assert!(
             prepare(&external_output)
-                .fullscreen_requirements()
+                .static_requirements()
                 .unwrap()
-                .writes_external_attachments
+                .writes_external_resources
+        );
+    }
+}
+
+#[test]
+fn static_mixed_pipeline_accounts_for_compute_writes_and_scaled_images() {
+    let yaml = "
+version: 1
+resources:
+  - {id: hdr, kind: image, source: external, extent: frame, format: rgba16_float}
+  - {id: probe, kind: buffer, source: external, bytes: 64}
+  - {id: mapped, kind: image, extent: frame, divisor: 4, format: rgba16_float}
+passes:
+  - id: sample
+    kind: compute
+    shader: sample
+    bindings:
+      - {group: 0, binding: 0, kind: image, resource: hdr}
+      - {group: 0, binding: 1, kind: sampler, sampler: nearest_clamp}
+      - {group: 1, binding: 0, kind: buffer, resource: probe, offset: 0, size: 64}
+  - id: neutral
+    kind: raster
+    shader: tone
+    constants: [1073741824]
+    colors: [{image: mapped, load: clear, clear: [0, 0, 0, 0]}]
+    bindings:
+      - {group: 0, binding: 0, kind: image, resource: hdr}
+      - {group: 0, binding: 1, kind: sampler, sampler: nearest_clamp}
+output: mapped
+";
+    for (frame_extent, scaled) in [([16, 12], [4, 3]), ([17, 11], [5, 3]), ([1, 2], [1, 1])] {
+        let pipeline = PreparedPipeline::from_yaml(
+            yaml,
+            PrepareOptions {
+                frame_extent: Some(frame_extent),
+                frames_in_flight: 1,
+                max_draws_per_list: 0,
+                max_materials: 0,
+            },
+            |request| match request {
+                ShaderRequest::Program("sample") => {
+                    Ok(Program::Compute(ManagedProgram::sampled_float_readback()))
+                }
+                ShaderRequest::Program("tone") => Ok(Program::Raster(
+                    renderer::standard::passes::tone_map_neutral_pipeline().program,
+                )),
+                _ => unreachable!(),
+            },
+        )
+        .unwrap();
+        let output = ImageDesc::rgba16_float(scaled[0], scaled[1]);
+        assert_eq!(pipeline.image_resource("mapped"), Some(output));
+        assert_eq!(pipeline.image_resource("probe"), None);
+        assert_eq!(pipeline.output_resource(), ("mapped", output));
+        assert_eq!(
+            pipeline.static_requirements(),
+            Some(StaticRequirements {
+                resources: 1,
+                passes: 2,
+                draws: 1,
+                bindings: 5,
+                attachments: 1,
+                raster_constant_words: 1,
+                name_bytes: "mappedsampleneutral".len(),
+                writes_external_resources: true,
+            }),
         );
     }
 }

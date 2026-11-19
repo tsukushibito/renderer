@@ -41,10 +41,13 @@ fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<Rast
     let sdr = options.sdr_output();
     if let Some(post) = post {
         requests.extend_from_slice(post.working_set().raster);
-        if !options.windowed && options.aa {
+        if options.captures_aa_off() || options.capture_bloom_bypass {
             requests.push(tone_map_neutral_pipeline());
         }
-        if !options.windowed && (options.aa || options.resource_checks) {
+        if options.capture_bloom_bypass {
+            requests.push(sdr.pipeline());
+        }
+        if options.captures_aa_off() || options.resource_checks {
             // The AA-off diagnostic and the replacement mip probe use this.
             requests.push(renderer::standard::passes::SdrOutput { fxaa: false, ..sdr }.pipeline());
         }
@@ -64,11 +67,12 @@ fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<Rast
     requests
 }
 
-pub(super) fn compute_requests(options: &Options) -> Vec<ManagedProgram> {
-    options
-        .bloom
+fn compute_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<ManagedProgram> {
+    let configured = post.map_or(&[][..], |post| post.working_set().compute);
+    post::builtin_bloom(options, post)
         .programs()
         .iter()
+        .chain(configured)
         .cloned()
         .chain(
             (options.pipeline == PipelineMode::ForwardPlus)
@@ -94,7 +98,7 @@ fn config(options: &Options, budget: &Budget) -> Result<RuntimeConfig, Error> {
         "vulkan" => Ok(RuntimeConfig::Vulkan(renderer::runtime::VulkanConfig {
             staging_bytes: budget.vulkan_staging_bytes(options.inflight),
             staging_ranges: budget.vulkan_staging_ranges(options.inflight),
-            max_shader_bindings: budget.graph.draws as u32,
+            max_shader_bindings: budget.vulkan_shader_bindings,
             ..Default::default()
         })),
         #[cfg(all(windows, feature = "d3d12"))]
@@ -145,7 +149,7 @@ fn with_working_set<T>(
     Ok(prepare(WorkingSet {
         resources: &resources,
         raster: &raster_requests(options, post),
-        compute: &compute_requests(options),
+        compute: &compute_requests(options, post),
     })?)
 }
 

@@ -282,6 +282,7 @@ fn run_frame(
             materials: &materials,
         },
     )?;
+    let output = output.image();
     assert_eq!(output, target);
     let readback = graph.readback_image("application output readback", output)?;
     let plan = graph.compile()?;

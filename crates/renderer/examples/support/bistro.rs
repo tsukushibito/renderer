@@ -212,6 +212,10 @@ impl Options {
         }
     }
 
+    fn captures_aa_off(&self) -> bool {
+        !self.windowed && self.aa
+    }
+
     fn validate_lighting_extent(&self) -> Result<(), Error> {
         if self.pipeline.uses_local_lights() {
             program::forward_plus::active_tile_count(self.width, self.height)?;
@@ -508,7 +512,7 @@ Rendering
   --pipeline forward|forward-plus|forward-reference|deferred
   --shader-pipeline YAML --shader-manifest JSON
                                  Forward 1x with direct submission
-  --post-pipeline YAML           Post-Bloom HDR to SDR pass graph
+  --post-pipeline YAML           Scene HDR to SDR pass graph, including Bloom
   --msaa 1|4
   --bloom off|tent|box
   --instances off|individual|instanced

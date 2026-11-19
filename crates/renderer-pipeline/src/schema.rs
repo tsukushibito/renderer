@@ -61,6 +61,7 @@ pub(super) enum ResourceSpec {
         width: Option<u32>,
         height: Option<u32>,
         extent: Option<ImageExtent>,
+        divisor: Option<u32>,
         format: Format,
     },
     Buffer {

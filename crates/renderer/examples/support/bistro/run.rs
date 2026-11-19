@@ -266,7 +266,7 @@ fn identity(
             }},
         "lighting":"B3 GGX sun + static split-sum IBL; four stable CSM cascades with manual 3x3 PCF",
         "output":if options.post_pipeline.is_some() {
-            "linear RGBA16F -> optional Bloom -> YAML post graph -> RGBA8 UNORM"
+            "linear RGBA16F -> YAML post graph -> RGBA8 UNORM"
         } else {
             "linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1"
         },
@@ -430,8 +430,20 @@ fn capture(
             backend, resident, scene, &bypass, conditions, pool, workspace, frame, true,
         )?;
         report["captures"]["bloom_bypass"] = reference["captures"]["sdr"].take();
+        if let Some(hash) = reference.get("post_pipeline_sha256") {
+            report["bloom_bypass_post_pipeline_sha256"] = hash.clone();
+        }
     }
     Ok(report)
+}
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn copy_post_capture_metadata(report: &mut Value, capture: &Value) {
+    for field in ["post_pipeline_sha256", "bloom_bypass_post_pipeline_sha256"] {
+        if let Some(value) = capture.get(field) {
+            report[field] = value.clone();
+        }
+    }
 }
 
 fn measurement(
@@ -797,7 +809,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     if let Some(hits) = captured.get("shadow_reuse_hits") {
         measured["shadow_reuse"]["output_capture_hits"] = hits.clone();
     }
-    let aa_off = if options.aa {
+    let aa_off = if options.captures_aa_off() {
         let mut diagnostic = options.clone();
         diagnostic.aa = false;
         diagnostic.capture_bloom_bypass = false;
@@ -833,7 +845,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
                 &mut workspace,
                 0,
             )?;
-            let aa_off = if view.aa {
+            let aa_off = if view.captures_aa_off() {
                 let mut diagnostic = view.clone();
                 diagnostic.aa = false;
                 diagnostic.capture_bloom_bypass = false;
@@ -852,10 +864,11 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             } else {
                 None
             };
-            let report = json!({"schema_version":1,"identity":identity(&view,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
+            let mut report = json!({"schema_version":1,"identity":identity(&view,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
                 "scene":counts,"capture_only":true,"measurement":Value::Null,"captures":captured_view["captures"],
                 "shadow_captures":captured_view["shadow_captures"],"aa_off":aa_off,
                 "depth_coverage_pixels":captured_view["depth_coverage_pixels"],"draw_count":captured_view["draw_count"],"readback_outside_measurement":true});
+            copy_post_capture_metadata(&mut report, &captured_view);
             captured_views.push((name.clone(), view.output, report));
         }
     }
@@ -930,7 +943,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "scope":"Graph build/compile/submit/poll/retire/result return; no capture/file I/O; setup/shutdown separate positive controls"});
     #[cfg(not(feature = "memory-profiling"))]
     let memory_json = Value::Null;
-    let report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
+    let mut report = json!({"schema_version":1,"identity":identity(options,&cook_hash,&conditions_hash,&environment_identity),"runtime":runtime,
         "scene":counts,"prepared":prepared,"setup_ns":setup_ns,
         "setup_phases_ns":{"asset_load":asset_load_ns,"budget":budget_ns,"native_prepare":native_prepare_ns,"upload":upload_ns,
             "frame_storage_and_profiling_prepare":frame_storage_and_profiling_prepare_ns,"warmup":warmup_ns},
@@ -941,13 +954,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
         "views":view_reports,"route_samples":route_reports,"readback_outside_measurement":true,
         "limits":"Whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
-    let report = if options.post_pipeline.is_some() {
-        let mut report = report;
-        report["post_pipeline_sha256"] = captured["post_pipeline_sha256"].clone();
-        report
-    } else {
-        report
-    };
+    copy_post_capture_metadata(&mut report, &captured);
     #[cfg(feature = "tracy")]
     let report = {
         let mut report = report;

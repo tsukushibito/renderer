@@ -3,6 +3,7 @@
 use super::{
     Error, Options, PipelineMode, SubmissionMode,
     asset::Scene,
+    bloom::Bloom,
     camera::{Camera, Frustum},
     deferred, forward_lighting, ibl, instancing, post,
     program::{self, forward_plus},
@@ -32,6 +33,8 @@ mod indirect;
 
 pub(super) struct Budget {
     pub graph: GraphCapacity,
+    #[cfg(feature = "vulkan")]
+    pub vulkan_shader_bindings: u32,
     pub buffers: Vec<(u64, usize)>,
     pub images: Vec<(ImageDesc, usize)>,
     pub buffer_count: usize,
@@ -62,6 +65,14 @@ fn environment_desc(image: &ibl::Image) -> ImageDesc {
     ImageDesc {
         mip_levels: image.mips.len() as u32,
         ..ImageDesc::rgba16_float(image.width, image.height)
+    }
+}
+
+fn add_image_class(images: &mut Vec<(ImageDesc, usize)>, desc: ImageDesc, count: usize) {
+    if let Some((_, available)) = images.iter_mut().find(|(item, _)| *item == desc) {
+        *available += count;
+    } else {
+        images.push((desc, count));
     }
 }
 
@@ -136,27 +147,41 @@ impl Budget {
         post: Option<&post::Prepared>,
     ) -> Vec<(ImageDesc, usize)> {
         let mut images = Vec::new();
-        let mut add = |desc, count| {
-            if let Some((_, available)) = images.iter_mut().find(|(item, _)| *item == desc) {
-                *available += count;
-            } else {
-                images.push((desc, count));
-            }
-        };
+        let mut add = |desc, count| add_image_class(&mut images, desc, count);
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
         let sdr = ImageDesc::rgba8(options.width, options.height);
         add(hdr, options.inflight);
         if let Some(post) = post {
-            let mut has_tone_class = false;
-            for &class in post.working_set().resources {
-                if let ResourceClass::Image { desc, count } = class {
-                    add(desc, count);
-                    has_tone_class |= desc == hdr;
+            let mut requirements: Vec<_> = post
+                .working_set()
+                .resources
+                .iter()
+                .filter_map(|&class| match class {
+                    ResourceClass::Image { desc, count } => Some((desc, count)),
+                    ResourceClass::Buffer { .. } => None,
+                })
+                .collect();
+            if options.captures_aa_off() || options.capture_bloom_bypass {
+                // Supplemental captures run after the measured frames drain.
+                // Each class serves either route, with capacity for the larger demand.
+                let mut reference = vec![(hdr, options.inflight), (sdr, options.inflight)];
+                if let Some(bloom) = post::builtin_bloom(options, Some(post)).images(hdr) {
+                    for desc in bloom {
+                        add_image_class(&mut reference, desc, options.inflight);
+                    }
+                }
+                for (desc, count) in reference {
+                    if let Some((_, configured)) =
+                        requirements.iter_mut().find(|(image, _)| *image == desc)
+                    {
+                        *configured = (*configured).max(count);
+                    } else {
+                        requirements.push((desc, count));
+                    }
                 }
             }
-            if !has_tone_class && !options.windowed && options.aa {
-                // The separate AA-off diagnostic uses the builtin tone target.
-                add(hdr, options.inflight);
+            for (desc, count) in requirements {
+                add(desc, count);
             }
         } else {
             add(hdr, options.inflight);
@@ -167,7 +192,9 @@ impl Budget {
         if options.sample_count == SampleCount::X4 {
             add(hdr.with_sample_count(SampleCount::X4), options.inflight);
         }
-        if let Some(extra) = options.bloom.images(hdr) {
+        if post.is_none()
+            && let Some(extra) = options.bloom.images(hdr)
+        {
             for desc in extra {
                 add(desc, options.inflight);
             }
@@ -313,11 +340,8 @@ impl Budget {
                 check_images += 1;
             }
         }
-        let bloom_passes = if options.bloom == super::bloom::Bloom::Off {
-            0
-        } else {
-            5
-        };
+        let bloom_passes = usize::from(post::builtin_bloom(options, post) != Bloom::Off) * 5;
+        let capture_bloom = options.bloom != Bloom::Off;
         let mut frame_instances = 0;
         for (desc, count) in Self::frame_images(options, post) {
             add_image(desc, count);
@@ -327,13 +351,12 @@ impl Budget {
         let resources = buffer_count
             + scene.images.len()
             + 11
-            + bloom_passes
+            + bloom_passes.max(post.map_or(0, |graph| graph.resources))
             + deferred * (1 + deferred::PLANES.len())
             + local_lights
             + tiled_lights
             + usize::from(options.sample_count == SampleCount::X4)
-            + indirect_passes
-            + post.map_or(0, |graph| graph.resources);
+            + indirect_passes;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
@@ -345,9 +368,8 @@ impl Budget {
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
         let accesses = scene.primitives.len() * 64
             + 256
-            + bloom_bindings
-            + 8 * groups
-            + post.map_or(0, |graph| graph.accesses);
+            + bloom_bindings.max(post.map_or(0, |graph| graph.accesses))
+            + 8 * groups;
         let shadow_words = scene
             .primitives
             .len()
@@ -371,13 +393,12 @@ impl Budget {
         let graph = GraphCapacity {
             resources,
             passes: 24
-                + bloom_passes
-                + usize::from(bloom_passes != 0)
+                + bloom_passes.max(post.map_or(0, |graph| graph.passes))
+                + usize::from(capture_bloom)
                 + deferred * 2
                 + local_lights
                 + tiled_lights
-                + indirect_passes
-                + post.map_or(0, |graph| graph.passes),
+                + indirect_passes,
             accesses,
             draws: scene.primitives.len() * 5
                 + 2
@@ -387,13 +408,12 @@ impl Budget {
             raster_constant_words: Some(raster_constant_words),
             bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
                 + 4
-                + bloom_bindings
+                + bloom_bindings.max(post.map_or(0, |graph| graph.bindings))
                 + deferred * 16
                 + tiled_lights * 3
                 + usize::from(options.instances.enabled()) * 16
                 + 3 * groups
-                + 3 * usize::from(groups != 0)
-                + post.map_or(0, |graph| graph.bindings),
+                + 3 * usize::from(groups != 0),
             attachments: 24
                 + deferred * deferred::PLANES.len()
                 + post.map_or(0, |graph| graph.attachments),
@@ -406,6 +426,14 @@ impl Budget {
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
+        };
+        #[cfg(feature = "vulkan")]
+        let vulkan_shader_bindings = {
+            // Vulkan counts each Compute dispatch in the same budget as Raster bindings.
+            let yaml_dispatches = post.map_or(0, |graph| graph.passes - graph.draws);
+            u32::try_from(
+                graph.draws + bloom_passes.max(yaml_dispatches) + tiled_lights + indirect_passes,
+            )?
         };
         // Reserve the conservative D3D12 row/placement-aligned copy footprint,
         // not merely packed asset bytes. Vulkan can use the same bounded budget.
@@ -456,7 +484,7 @@ impl Budget {
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
-        let hdr_captures = if bloom_passes == 0 { 1 } else { 2 };
+        let hdr_captures = if capture_bloom { 2 } else { 1 };
         let mut frame_readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
             * hdr_captures
             + (u64::from(options.width) * 4).next_multiple_of(256) * 2)
@@ -481,6 +509,8 @@ impl Budget {
         };
         Ok(Self {
             graph,
+            #[cfg(feature = "vulkan")]
+            vulkan_shader_bindings,
             buffers,
             images,
             buffer_count: buffer_count + frame_buffers + tiled_lights,
@@ -1663,10 +1693,10 @@ pub(super) fn build(
             0,
         )
     });
-    let bloom = options.bloom.append(&mut graph, color)?;
-    let (mut graph, output) = match post_route {
-        PostRoute::Yaml(post) => post.append(graph, bloom)?,
+    let (mut graph, output, bloom) = match post_route {
+        PostRoute::Yaml(post) => post.append(graph, color, capture && !options.windowed)?,
         PostRoute::Builtin(output) => {
+            let bloom = options.bloom.append(&mut graph, color)?;
             let tone = graph.image(
                 "Neutral display linear",
                 ImageDesc::rgba16_float(options.width, options.height),
@@ -1691,7 +1721,7 @@ pub(super) fn build(
                 output,
                 options.sdr_output(),
             )?;
-            (graph, output)
+            (graph, output, (bloom != color).then_some(bloom))
         }
     };
     graph.export_image(output)?;
@@ -1715,8 +1745,10 @@ pub(super) fn build(
     } else {
         None
     };
-    let bloom_capture = if capture && bloom != color {
-        Some(graph.readback_image("capture post-Bloom HDR", bloom)?)
+    let bloom_capture = if capture {
+        bloom
+            .map(|image| graph.readback_image("capture post-Bloom HDR", image))
+            .transpose()?
     } else {
         None
     };

@@ -14,11 +14,12 @@ use std::{error::Error, fmt};
 use renderer::capacity::{ResourceClass, WorkingSet};
 use renderer::graph::{BufferDesc, GraphError, ImageDesc, LoadOp, RasterConstants, StoreOp};
 use renderer::program::{
-    ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
+    BindingType, ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
 };
 
 pub use frame::{
-    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, MaterialBinding,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameView,
+    MaterialBinding,
 };
 
 use frame::FrameScratch;
@@ -44,7 +45,7 @@ pub enum Program {
 /// Limits determined at an application preparation boundary.
 #[derive(Clone, Copy, Debug)]
 pub struct PrepareOptions {
-    /// Width and height for images declared with `extent: frame`.
+    /// Base width and height for images declared with `extent: frame`.
     pub frame_extent: Option<[u32; 2]>,
     /// Maximum concurrent frames using the transient classes in this configuration.
     pub frames_in_flight: usize,
@@ -54,24 +55,25 @@ pub struct PrepareOptions {
     pub max_materials: usize,
 }
 
-/// Graph declarations added by a pipeline of fullscreen Raster passes.
+/// Graph declarations added by a pipeline of fullscreen Raster and Compute
+/// passes with no draw list inputs.
 ///
-/// Each pass adds one draw. Size Graph analysis and app-owned resources and
-/// passes separately from these declaration counts.
+/// Size Graph analysis and app-owned resources and passes separately from
+/// these declaration counts.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct FullscreenRequirements {
+pub struct StaticRequirements {
     /// Transient resource declarations.
     pub resources: usize,
     pub passes: usize,
+    pub draws: usize,
     pub bindings: usize,
     pub attachments: usize,
     pub raster_constant_words: usize,
     /// UTF-8 bytes of pass names and transient resource names.
     pub name_bytes: usize,
-    /// An external image is declared as a color or depth attachment.
-    /// The Graph treats attachments as writes regardless of load/store ops
-    /// or depth state. This includes passes that the Graph may cull.
-    pub writes_external_attachments: bool,
+    /// An external resource is declared as a Raster attachment or Compute
+    /// storage write. Includes passes that the Graph may cull.
+    pub writes_external_resources: bool,
 }
 
 /// The source of a pipeline preparation or per-frame construction error.
@@ -150,42 +152,78 @@ impl PreparedPipeline {
         (&output.id, desc)
     }
 
-    /// Count Graph declarations for a pipeline containing only fullscreen
-    /// Raster passes, with no draw list inputs.
-    pub fn fullscreen_requirements(&self) -> Option<FullscreenRequirements> {
+    /// Look up the prepared descriptor of a named image.
+    pub fn image_resource(&self, name: &str) -> Option<ImageDesc> {
+        let resource = self.resources.iter().find(|resource| resource.id == name)?;
+        let ResourceDesc::Image(desc) = resource.desc else {
+            return None;
+        };
+        Some(desc)
+    }
+
+    /// Count Graph declarations for a pipeline of fullscreen Raster and Compute
+    /// passes with no draw list inputs.
+    pub fn static_requirements(&self) -> Option<StaticRequirements> {
         if !self.draw_lists.is_empty() {
             return None;
         }
 
-        let mut requirements = FullscreenRequirements {
+        let mut requirements = StaticRequirements {
             passes: self.passes.len(),
-            ..FullscreenRequirements::default()
+            ..StaticRequirements::default()
         };
         for resource in self.resources.iter().filter(|resource| !resource.external) {
             requirements.resources += 1;
             requirements.name_bytes += resource.id.len();
         }
         for pass in &self.passes {
-            let PassKind::Raster {
-                colors,
-                depth,
-                draw: RasterDrawKind::Fullscreen(constants),
-                ..
-            } = &pass.kind
-            else {
-                return None;
-            };
             requirements.bindings += pass.bindings.len();
-            requirements.attachments += colors.len() + usize::from(depth.is_some());
-            requirements.raster_constant_words += constants.words().len();
             requirements.name_bytes += pass.id.len();
-            requirements.writes_external_attachments |= colors
-                .iter()
-                .map(|color| color.resource)
-                .chain(depth.iter().map(|depth| depth.resource))
-                .any(|resource| self.resources[resource].external);
+            match &pass.kind {
+                PassKind::Raster {
+                    colors,
+                    depth,
+                    draw: RasterDrawKind::Fullscreen(constants),
+                    ..
+                } => {
+                    requirements.draws += 1;
+                    requirements.attachments += colors.len() + usize::from(depth.is_some());
+                    requirements.raster_constant_words += constants.words().len();
+                    requirements.writes_external_resources |= colors
+                        .iter()
+                        .map(|color| color.resource)
+                        .chain(depth.iter().map(|depth| depth.resource))
+                        .any(|resource| self.resources[resource].external);
+                }
+                PassKind::Raster { .. } => return None,
+                PassKind::Compute { program, .. } => {
+                    requirements.writes_external_resources |=
+                        self.compute_writes_external(&self.compute[*program], &pass.bindings);
+                }
+            }
         }
         Some(requirements)
+    }
+
+    fn compute_writes_external(
+        &self,
+        program: &ManagedProgram,
+        bindings: &[PreparedBinding],
+    ) -> bool {
+        bindings.iter().any(|binding| {
+            let resource = match binding.source {
+                BindingSource::Image(resource) | BindingSource::Buffer { resource, .. } => resource,
+                _ => return false,
+            };
+            self.resources[resource].external
+                && program.bindings().iter().any(|slot| {
+                    (slot.group, slot.binding) == (binding.group, binding.binding)
+                        && matches!(
+                            slot.kind,
+                            BindingType::StorageWrite | BindingType::StorageImageWrite(_)
+                        )
+                })
+        })
     }
 
     /// Look up a prepared Raster Program for application-owned Graph assembly.

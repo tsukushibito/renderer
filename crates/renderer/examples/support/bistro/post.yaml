@@ -1,4 +1,4 @@
-# Bistro supplies the scene-linear HDR after Bloom. The recipe owns the SDR output.
+# Use with Bloom disabled. Bistro supplies scene-linear HDR and the recipe owns the SDR output.
 version: 1
 resources:
   - { id: hdr, kind: image, source: external, extent: frame, format: rgba16_float }

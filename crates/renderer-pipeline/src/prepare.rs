@@ -166,12 +166,25 @@ fn prepare_resource(
             width,
             height,
             extent,
+            divisor,
             format,
         } => {
+            if divisor.is_some() && extent.is_none() {
+                return Err(invalid(format!(
+                    "image {id:?} divisor requires extent: frame"
+                )));
+            }
             let [width, height] = match (width, height, extent) {
                 (Some(width), Some(height), None) => [width, height],
-                (None, None, Some(schema::ImageExtent::Frame)) => frame_extent
-                    .ok_or_else(|| invalid(format!("image {id:?} requires a frame_extent")))?,
+                (None, None, Some(schema::ImageExtent::Frame)) => {
+                    let divisor = divisor.unwrap_or(1);
+                    if divisor == 0 {
+                        return Err(invalid(format!("image {id:?} divisor must be nonzero")));
+                    }
+                    frame_extent
+                        .ok_or_else(|| invalid(format!("image {id:?} requires a frame_extent")))?
+                        .map(|dimension| dimension.div_ceil(divisor))
+                }
                 _ => {
                     return Err(invalid(format!(
                         "image {id:?} requires either width and height or extent: frame"
@@ -855,6 +868,16 @@ output: final
         for (declaration, frame_extent, reason) in [
             ("extent: frame", None, "requires a frame_extent"),
             ("extent: frame", Some([2, 0]), "invalid dimensions"),
+            (
+                "extent: frame, divisor: 0",
+                Some([2, 2]),
+                "divisor must be nonzero",
+            ),
+            (
+                "width: 2, height: 2, divisor: 2",
+                None,
+                "divisor requires extent: frame",
+            ),
             ("width: 2", None, "requires either"),
             (
                 "width: 2, height: 2, extent: frame",

@@ -150,7 +150,7 @@ YAMLのキーの重複、未知の項目、アンカー、エイリアス、merg
 
 | 項目 | 書式 |
 |---|---|
-| `resources` | 名前`id`付きのリスト。`kind: image`は`width`と`height`の組、または`extent: frame`を指定する。`format`は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
+| `resources` | 名前`id`付きのリスト。`kind: image`は`width`と`height`の組、または`extent: frame`を指定する。`extent: frame`には正の整数`divisor`を追加でき、幅と高さをそれぞれ除算して端数を切り上げる（既定は1）。`format`は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
 | `draw_lists` | 任意のリスト。各項目に`id`、`view`、`queue`を指定する。対応するビューの候補からqueueが一致する描画を入力順で選ぶ。 |
 | `passes` | 宣言順のパス列。各項目に`id`と`kind`を指定する。`kind: raster`は`shader`か`shader_template`の一方と、色・深度のattachmentを指定する。テンプレート指定には`draw_list`と必要な`material_types`の一覧を与える。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`は`shader`を指定し、呼出側指定のbuffer gridを持つProgramには`grid: [x, y]`を与える。 |
 | attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。 |
@@ -196,8 +196,9 @@ output: final
    材質を使う描画候補には`DrawCandidate::material`に`FrameInputs::materials`の添字を指定する。
    各`FrameMaterial`の`material_type`をテンプレートパスの宣言に合わせ、`MaterialBinding`でGraph上の資源を名前付きで渡す。
    材質のtextureは`Graph::sampled_image_view`で複数mipを参照できる。
-3. `pipeline.build(graph, inputs)`でパスを追加する。成功時の戻り値はGraphと出力の`ImageHandle`である。
-   出力を使用する後段、export、readbackなどを追加し、`Graph::compile`とRuntimeへの投入を行う。
+3. `pipeline.build(graph, inputs)`でパスを追加し、Graphと`FrameOutput`を受け取る。
+   `image()`で`output`の画像、`named_image(id)`で同じGraphにある名前付きの画像を取得できる。
+   必要な後段、export、readbackなどを追加し、`Graph::compile`とRuntimeへの投入を行う。
    構成を変更するときは新しいYAML／Programから新たに準備し、Runtimeの貸し出しを返却してWorkingSetを更新する。
    `extent: frame`を使う構成は、描画サイズが変わるときも新しい寸法で準備する。
 
@@ -213,24 +214,28 @@ cargo run --locked --release -p renderer-pipeline --no-default-features --featur
 
 ### BistroのHDRからSDRをYAMLでつなぐ
 
-Bistroの`--post-pipeline PATH`に[ポスト処理のYAML](../../crates/renderer/examples/support/bistro/post.yaml)を渡す。
-BistroはBloom後のシーン線形RGBA16F画像を唯一の外部入力`hdr`として渡し、YAMLの`output`に指定されたフレーム寸法の
-RGBA8 UNORM画像をキャプチャまたは表示に使う。Bloomを無効にした場合はシーンのHDRが`hdr`になる。
-サンプルは`post/neutral`で露出倍率2.0とPBR Neutralを適用し、その中間画像を`post/sdr`で処理する。
-中間画像、パス順、attachment、画像とサンプラーのbindingはYAML内で編集できる。
-この例は全画面Rasterを対象にし、YAML resolverはこの2つの組み込みProgramを解決する。`post/sdr`はオフスクリーンではsRGB、
-ウィンドウではPresenterで一度だけsRGBへ変換するための線形出力を使う。
-FXAAを外す場合は`--aa-off`と[最近傍サンプリング用のYAML](../../crates/renderer/examples/support/bistro/post-aa-off.yaml)を使う。
-通常のキャプチャが追加で保存する`aa-off`診断画像は従来のRust構成を使う。編集したYAMLでFXAAの差を比較する場合は別々に実行する。
+Bistroの`--post-pipeline PATH`に下表のYAMLを渡す。Bistroはシーンの線形RGBA16F画像を読み取り専用の外部入力`hdr`として渡し、
+YAMLの`output`に指定されたフレーム寸法のRGBA8 UNORM画像をキャプチャまたは表示に使う。
+
+| Bloom | FXAAあり | `--aa-off` |
+|---|---|---|
+| `--bloom tent` または `--bloom box` | [post-bloom.yaml](../../crates/renderer/examples/support/bistro/post-bloom.yaml) | [post-bloom-aa-off.yaml](../../crates/renderer/examples/support/bistro/post-bloom-aa-off.yaml) |
+| `--bloom off`（既定） | [post.yaml](../../crates/renderer/examples/support/bistro/post.yaml) | [post-aa-off.yaml](../../crates/renderer/examples/support/bistro/post-aa-off.yaml) |
+
+Bloom付きの構成は、抽出、半分・1/4への縮小、ぼかし、原画像との合成をComputeで宣言する。
+`--bloom tent|box`は`bloom/blur`に使う組み込みProgramを選び、フレームサイズの`bloom_hdr`をキャプチャ対象にする。
+全画面Rasterの`post/neutral`は露出倍率2.0とPBR Neutralを適用する。`post/sdr`はオフスクリーンではsRGB、
+ウィンドウではPresenterで一度だけsRGBへ変換するための線形出力を使う。中間画像、パス順、attachment、画像とサンプラーのbindingはYAML内で編集できる。
 YAMLファイルは起動時に読み込み、ウィンドウのサイズ変更には同じ定義を新しい描画寸法で準備する。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation --example bistro -- --api vulkan --fixture --bloom tent --post-pipeline crates/renderer/examples/support/bistro/post.yaml --output .tools/bistro-post-vulkan
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation --example bistro -- --api vulkan --fixture --bloom tent --post-pipeline crates/renderer/examples/support/bistro/post-bloom.yaml --output .tools/bistro-post-vulkan
 ```
 
 D3D12で実行する場合は`--api d3d12`を指定する。同じAPI・描画条件で`--post-pipeline`を省略すると、従来のRust構成と比較できる。
-YAMLで接続を変更するには、たとえば`post/sdr`の画像bindingを`neutral`から`hdr`に変更し、`tone_map`パスと`neutral`の宣言を除く。
-この構成ではBloom後のHDRが直接SDRパスに入る。結果は[二APIでの検証](../verification/current.md#bistro-post-pipeline-verification)を参照する。
+追加の`aa-off`診断画像と`--capture-bloom-bypass`の参照画像は従来のRust構成で描画する。
+たとえばYAMLの`combine`で`(group: 0, binding: 1)`の参照を`bloom_blurred`から`bloom_quarter`に変えると、未ぼかしの縮小画像が合成される。
+[二APIでの検証](../verification/current.md#bistro-post-pipeline-verification)を参照する。
 
 <a id="material-shader-build"></a>
 

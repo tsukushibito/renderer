@@ -9,30 +9,29 @@
 
 ## BistroのHDRからSDRをつなぐYAML
 
-`renderer-ttx`。BistroからBloom後のHDRを名前付きの外部画像として渡し、`PreparedPipeline::build`で
-トーンマッピングとSDR出力を同じGraphに追加した。起動時とサイズ変更時に寸法を解決し、必要な一時画像とProgramを
-準備した。CPU試験で付属YAMLの準備を2つの寸法で確認し、入力HDRを書き換える定義が準備時に拒否されることを確認した。
+`renderer-15t`。BistroのシーンHDRを外部画像として渡し、Bloom 5パス、トーンマッピング、SDR出力を同じGraphに追加した。
+BloomのSPIR-V／DXILとABIは従来と同じ版を使用した。準備時のCPU試験では、奇数寸法と1×1で縮小画像の寸法と資源予約、
+入力HDRを書き換えるCompute／Raster定義の拒否、VulkanのComputeを含むdescriptor予約を確認した。
 
-WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化済み製品・厳格構成を比較した。
-厳格構成は同じ実行ファイルで従来とYAMLを切り替え、製品構成は変更前の実行ファイルを比較元に使った。
+WindowsのRTX 3060（610.88）で、Vulkan／D3D12それぞれの最適化済み製品・厳格構成を変更前の`dd4ab1e`と比較した。
 
 | 条件 | 各API・構成での比較結果 |
 |---|---|
-| 全量Bistro `full-a3`／`ibl-final`、street、640×480、tent Bloom、FXAA、シャドウ再描画 | HDR、Bloom後HDR、sRGB SDR、D32深度がすべてバイト一致。追加の従来AA-off診断画像も一致。 |
-| 128×96 fixture、BloomとFXAAを無効化 | HDR、sRGB SDR、D32深度がすべてバイト一致。 |
-| ウィンドウの800×600 fixture、tent Bloom、FXAA | 初回の線形RGBA8画像がバイト一致。YAMLで各24フレームを表示し、リサイズ・最小化・復帰後も描画。 |
+| 全量Bistro `full-a3`／`ibl-final`、street、640×480、Tent／Box、FXAA、シャドウ再描画 | シーンHDR、Bloom後HDR、sRGB SDR、D32深度がバイト一致。追加のAA-offとTentのBloomバイパスの参照画像も一致。 |
+| 131×97 fixture、Tent／Box／Bloom無効、1×1 fixture、Box | 取得した全画像がバイト一致。 |
+| ウィンドウの801×601 fixture、Tent | 初回の線形RGBA8画像がバイト一致。各24フレームを表示し、リサイズ・最小化・復帰後も描画。 |
 
-オフスクリーンとウィンドウを合わせた48画像比較が一致した。別の128×96 fixtureでは、YAMLだけを編集してSDRの入力を
-Bloom後HDRに直結すると、両API・構成でSDRの12,288画素が変化し、HDR・Bloom後HDR・深度は一致した。さらにYAMLから
-トーンマッピングパスと中間画像を除いても、直結時の全出力と一致した。
+補助画像を含む152画像の比較が一致した。321×241の全量Bistroでは、YAMLの合成入力をぼかし後から未ぼかしの1/4画像へ変更した。
+シーンHDRと深度は同じで、VulkanではBloom後HDRの10,491画素とSDRの2,611画素、D3D12では10,499画素と2,625画素が変化した。
 
-オフスクリーンでは各条件4 warm-up＋4通常フレームを同時2枠で実行した。付属YAMLと接続変更を合わせた80通常フレームで、
-観測したRust／VMA hostの確保・再確保・解放、Renderer発行のnative作成・破棄とdescriptorの確保・解放は0件だった。
-Vulkan Core／SyncVal、D3D12 Debug Layer／GBVの警告とエラーは0件だった。メモリ計測の対象はオフスクリーンの通常フレーム。
-ウィンドウの比較画像は初回の表示元であり、サイズ変更後は描画の継続を確認した。
-製品D3D12のYAML側で初回だけ終了時の未完了フレームが0件となり、既存のスモーク条件を満たさなかった。
-同じ条件の再実行では両経路とも未完了が1件の状態から終了し、表示元画像の一致とスモークの成功を確認した。
-ログとキャプチャは`.tools/bistro-post-validation/`、[YAMLと実行手順](../guides/tooling.md#bistro-post-pipeline)を参照する。
+オフスクリーンは各条件4 warm-up＋4通常フレームを同時2枠で実行した。付属YAMLと接続変更を合わせた128通常フレームで、
+観測したRust／VMA hostの確保・再確保・解放、Renderer発行のnative作成・破棄、descriptorの確保・解放は0件だった。
+1×1のBox構成に96パスのぼかしを追加した101 Computeパスの容量試験でも、両API・構成の16画像比較が一致し、
+追加16通常フレームの該当イベントは0件だった。
+厳格構成のVulkan Core／SyncVal、D3D12 Debug Layer／GBVの警告とエラーは0件だった。
+ウィンドウの比較画像は初回の表示元で、サイズ変更後は描画の継続を確認した。変更前の製品D3D12で終了時の未完了フレームが
+0件となる既存スモーク条件を再現し、同条件の再実行は成功した。YAML経路は各構成で初回に通過した。
+ログとキャプチャは`.tools/bistro-yaml-bloom-validation/`、[YAMLと実行手順](../guides/tooling.md#bistro-post-pipeline)を参照する。
 
 <a id="material-shader-verification"></a>
 

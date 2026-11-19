@@ -57,6 +57,33 @@ pub struct FrameInputs<'a> {
     pub materials: &'a [FrameMaterial<'a>],
 }
 
+/// Image handles declared in one successfully built Graph. The handles belong
+/// to that Graph; consumers add their own uses before compiling it.
+pub struct FrameOutput<'a> {
+    primary: ImageHandle,
+    resources: &'a [Resource],
+    handles: &'a [ResourceHandle],
+}
+
+impl FrameOutput<'_> {
+    /// The image selected by the YAML `output` field.
+    pub fn image(&self) -> ImageHandle {
+        self.primary
+    }
+
+    /// Look up a graph-local image by its YAML resource name.
+    pub fn named_image(&self, name: &str) -> Option<ImageHandle> {
+        let index = self
+            .resources
+            .iter()
+            .position(|resource| resource.id == name)?;
+        match self.handles[index] {
+            ResourceHandle::Image(image) => Some(image),
+            ResourceHandle::Buffer(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SelectedDraw {
     draw: RasterDraw,
@@ -328,15 +355,15 @@ fn reserve<T>(count: usize) -> Result<Vec<T>, PipelineError> {
 }
 
 impl PreparedPipeline {
-    /// Add this pipeline's passes to an existing Graph and return its output
-    /// image. On error the Graph is consumed and its storage can be reused by
+    /// Add this pipeline's passes to an existing Graph and return the frame's
+    /// declared images. On error the Graph is consumed and its storage can be reused by
     /// the pool. The same prepared pipeline can build a new frame after failure.
     /// The caller chooses how to consume the output before compiling the Graph.
     pub fn build(
         &mut self,
         mut graph: Graph,
         inputs: FrameInputs<'_>,
-    ) -> Result<(Graph, ImageHandle), PipelineError> {
+    ) -> Result<(Graph, FrameOutput<'_>), PipelineError> {
         let scratch = &mut self.scratch;
         if inputs.materials.len() > scratch.max_materials {
             return Err(PipelineError::Invalid(format!(
@@ -394,8 +421,14 @@ impl PreparedPipeline {
                     other => other,
                 })?;
         }
-        let output = scratch.image(self.output);
-        Ok((graph, output))
+        Ok((
+            graph,
+            FrameOutput {
+                primary: scratch.image(self.output),
+                resources: &self.resources,
+                handles: &scratch.handles,
+            },
+        ))
     }
 }
 

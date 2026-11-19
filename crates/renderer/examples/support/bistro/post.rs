@@ -1,4 +1,4 @@
-//! Configured fullscreen processing for Bistro's post-Bloom HDR image.
+//! Configured Bloom and fullscreen processing for Bistro's scene-linear HDR.
 
 use std::{fs, path::Path, sync::Arc};
 
@@ -11,11 +11,17 @@ use renderer::{
     standard::passes::tone_map_neutral_pipeline,
 };
 use renderer_pipeline::{
-    FrameInputs, FrameResource, PrepareOptions, PreparedPipeline, Program, ResourceDesc,
-    ShaderRequest,
+    FrameInputs, FrameOutput, FrameResource, PrepareOptions, PreparedPipeline, Program,
+    ResourceDesc, ShaderRequest,
 };
 
-use super::{Error, Options, digest};
+use super::{
+    Error, Options,
+    bloom::{self, Bloom},
+    digest,
+};
+
+const BLOOM_HDR: &str = "bloom_hdr";
 
 struct Source {
     yaml: String,
@@ -27,6 +33,7 @@ pub(super) struct Prepared {
     pipeline: PreparedPipeline,
     graph: GraphCapacity,
     aa: bool,
+    bloom: Bloom,
 }
 
 impl Prepared {
@@ -69,6 +76,20 @@ impl Prepared {
                 ShaderRequest::Program("post/sdr") => {
                     Ok(Program::Raster(options.sdr_output().pipeline().program))
                 }
+                ShaderRequest::Program(name) if name.starts_with("bloom/") => {
+                    if options.bloom == Bloom::Off {
+                        return Err("Bloom Programs require --bloom tent or --bloom box".into());
+                    }
+                    let program = match (name, options.bloom) {
+                        ("bloom/extract", _) => bloom::EXTRACT,
+                        ("bloom/downsample", _) => bloom::DOWNSAMPLE,
+                        ("bloom/blur", Bloom::Tent) => bloom::BLUR_TENT,
+                        ("bloom/blur", Bloom::Box) => bloom::BLUR_BOX,
+                        ("bloom/combine", _) => bloom::COMBINE,
+                        _ => return Err(format!("unknown Bistro post Program {name:?}").into()),
+                    };
+                    Ok(Program::Compute(program))
+                }
                 _ => Err(format!("unknown Bistro post Program {request:?}").into()),
             },
         )?;
@@ -84,10 +105,14 @@ impl Prepared {
         if pipeline.output_resource().1 != sdr {
             return Err("Bistro post YAML output must be a frame-size RGBA8 UNORM image".into());
         }
+        let has_bloom = options.bloom != Bloom::Off;
+        if has_bloom && pipeline.image_resource(BLOOM_HDR) != Some(hdr) {
+            return Err("Bistro post YAML with Bloom enabled requires a frame-size RGBA16F image named 'bloom_hdr' as in post-bloom.yaml".into());
+        }
         let requirements = pipeline
-            .fullscreen_requirements()
-            .ok_or("Bistro post YAML requires fullscreen Raster passes")?;
-        if requirements.writes_external_attachments {
+            .static_requirements()
+            .ok_or("Bistro post YAML requires Compute or fullscreen Raster passes")?;
+        if requirements.writes_external_resources {
             return Err("Bistro post YAML must treat external HDR as read-only".into());
         }
         if pipeline
@@ -104,7 +129,7 @@ impl Prepared {
             resources: requirements.resources,
             passes: requirements.passes,
             accesses,
-            draws: requirements.passes,
+            draws: requirements.draws,
             raster_constant_words: Some(requirements.raster_constant_words),
             bindings: requirements.bindings,
             attachments: requirements.attachments,
@@ -116,12 +141,13 @@ impl Prepared {
             segments: accesses * 2,
             readers: accesses * 4,
         };
-        validate_graph(&mut pipeline, graph, hdr)?;
+        validate_graph(&mut pipeline, graph, hdr, has_bloom)?;
         Ok(Self {
             source,
             pipeline,
             graph,
             aa: options.aa,
+            bloom: options.bloom,
         })
     }
 
@@ -130,9 +156,8 @@ impl Prepared {
     }
 
     pub fn uses_options(&self, options: &Options) -> bool {
-        // The automatic AA-off captures use the builtin diagnostic for the
-        // other AA mode. An explicit --aa-off run can select its own YAML.
-        self.aa == options.aa
+        // Automatic AA-off and Bloom-bypass captures use the builtin reference.
+        self.aa == options.aa && self.bloom == options.bloom
     }
 
     pub fn graph_capacity(&self) -> GraphCapacity {
@@ -147,9 +172,26 @@ impl Prepared {
         &mut self,
         graph: Graph,
         hdr: ImageHandle,
-    ) -> Result<(Graph, ImageHandle), Error> {
-        Ok(append(&mut self.pipeline, graph, hdr)?)
+        capture: bool,
+    ) -> Result<(Graph, ImageHandle, Option<ImageHandle>), Error> {
+        let (graph, output) = append(&mut self.pipeline, graph, hdr)?;
+        let bloom = (capture && self.bloom != Bloom::Off).then(|| bloom_image(&output));
+        Ok((graph, output.image(), bloom))
     }
+}
+
+pub(super) fn builtin_bloom(options: &Options, post: Option<&Prepared>) -> Bloom {
+    if post.is_none() || options.captures_aa_off() {
+        options.bloom
+    } else {
+        Bloom::Off
+    }
+}
+
+fn bloom_image(output: &FrameOutput<'_>) -> ImageHandle {
+    output
+        .named_image(BLOOM_HDR)
+        .expect("prepared Bloom HDR image")
 }
 
 fn path_error(path: &Path, error: impl std::fmt::Display) -> Error {
@@ -160,7 +202,7 @@ fn append(
     pipeline: &mut PreparedPipeline,
     graph: Graph,
     hdr: ImageHandle,
-) -> Result<(Graph, ImageHandle), renderer_pipeline::PipelineError> {
+) -> Result<(Graph, FrameOutput<'_>), renderer_pipeline::PipelineError> {
     pipeline.build(
         graph,
         FrameInputs {
@@ -179,6 +221,7 @@ fn validate_graph(
     pipeline: &mut PreparedPipeline,
     mut capacity: GraphCapacity,
     hdr_desc: ImageDesc,
+    has_bloom: bool,
 ) -> Result<(), Error> {
     const INPUT: &str = "Bistro post validation HDR";
     capacity.resources += 1;
@@ -206,7 +249,10 @@ fn validate_graph(
         },
     )?;
     let (mut graph, output) = append(pipeline, graph, hdr)?;
-    graph.export_image(output)?;
+    graph.export_image(output.image())?;
+    if has_bloom {
+        graph.export_image(bloom_image(&output))?;
+    }
     graph.compile()?;
     Ok(())
 }
@@ -218,6 +264,8 @@ mod tests {
 
     const FXAA: &str = include_str!("post.yaml");
     const NO_FXAA: &str = include_str!("post-aa-off.yaml");
+    const BLOOM_FXAA: &str = include_str!("post-bloom.yaml");
+    const BLOOM_NO_FXAA: &str = include_str!("post-bloom-aa-off.yaml");
 
     fn source(yaml: &str) -> Arc<Source> {
         Arc::new(Source {
@@ -232,11 +280,19 @@ mod tests {
 
     #[test]
     fn shipped_graphs_prepare_at_frame_extent_and_keep_the_stock_image_budget() {
-        for (yaml, aa) in [(FXAA, true), (NO_FXAA, false)] {
+        for (yaml, aa, bloom) in [
+            (FXAA, true, Bloom::Off),
+            (NO_FXAA, false, Bloom::Off),
+            (BLOOM_FXAA, true, Bloom::Tent),
+            (BLOOM_FXAA, true, Bloom::Box),
+            (BLOOM_NO_FXAA, false, Bloom::Tent),
+            (BLOOM_NO_FXAA, false, Bloom::Box),
+        ] {
             let mut options = fixture_options();
             options.aa = aa;
+            options.bloom = bloom;
             let source = source(yaml);
-            for (width, height, windowed) in [(256, 144, false), (321, 199, true)] {
+            for (width, height, windowed) in [(1, 1, false), (256, 144, false), (321, 199, true)] {
                 options.width = width;
                 options.height = height;
                 options.windowed = windowed;
@@ -262,6 +318,43 @@ mod tests {
         assert_eq!(
             result.err().unwrap().to_string(),
             "Bistro post YAML must treat external HDR as read-only"
+        );
+    }
+
+    #[test]
+    fn bloom_recipe_requires_an_enabled_mode_and_read_only_input() {
+        let mut options = fixture_options();
+        let result = Prepared::prepare(source(BLOOM_FXAA), &options);
+        assert!(result.err().unwrap().to_string().contains("bloom/extract"));
+
+        options.bloom = Bloom::Tent;
+        let result = Prepared::prepare(source(FXAA), &options);
+        assert!(result.err().unwrap().to_string().contains("bloom_hdr"));
+
+        let writes_hdr = BLOOM_FXAA.replace(
+            "group: 1, binding: 0, resource: bloom_hdr",
+            "group: 1, binding: 0, resource: hdr",
+        );
+        let result = Prepared::prepare(source(&writes_hdr), &options);
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Bistro post YAML must treat external HDR as read-only"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "vulkan")]
+    fn vulkan_budget_includes_configured_dispatches_without_builtin_diagnostics() {
+        let mut options = fixture_options();
+        options.bloom = Bloom::Tent;
+        options.windowed = true;
+        let prepared = Prepared::prepare(source(BLOOM_FXAA), &options).unwrap();
+        let scene = crate::bistro::asset::Scene::fixture(false);
+        let environment = crate::bistro::ibl::Environment::fixture();
+        let budget = Budget::new(&scene, &environment, &options, Some(&prepared)).unwrap();
+        assert_eq!(
+            budget.vulkan_shader_bindings as usize,
+            budget.graph.draws + 5
         );
     }
 }
