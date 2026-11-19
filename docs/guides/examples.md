@@ -44,6 +44,25 @@ cargo run --locked -p renderer --no-default-features --features d3d12,presentati
 cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro -- --api vulkan --fixture --output .tools/bistro-fixture-vulkan
 ```
 
+## Windows版に含めるバックエンドを選ぶ
+
+配布ビルドでは、アプリのCargo featureで利用できるバックエンドを指定します。
+`windowed`をVulkan専用、D3D12専用、両対応でビルドする例です。
+`--target-dir`で各構成の出力を個別に保持します。
+
+```powershell
+cargo build --locked --release -p renderer --no-default-features --features vulkan,presentation --example windowed --target-dir target/dist-vulkan
+cargo build --locked --release -p renderer --no-default-features --features d3d12,presentation --example windowed --target-dir target/dist-d3d12
+cargo build --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation --example windowed --target-dir target/dist-dual
+
+& ./target/dist-dual/release/examples/windowed.exe --api vulkan
+& ./target/dist-dual/release/examples/windowed.exe --api d3d12
+```
+
+単独版は対応形式のシェーダーを埋め込みます。両対応版は同じ実行ファイルで起動時にAPIを選びます。
+`--api`を省略するとVulkanが利用可能なビルドではVulkanを、D3D12専用ビルドではD3D12を選びます。
+ここでの利用可否はビルド構成に基づき、実機への適合は起動時に確認します。
+
 ## ターゲット一覧
 
 | ターゲット | 確認できること | 実行条件 |

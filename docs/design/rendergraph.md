@@ -431,7 +431,7 @@ Programバッチの開始位置とProgram ABIの固定幅で定数を参照す�
 公開iteratorのsize_hintやExactSizeIteratorの長さを容量の保証には使わず、実際の要素ごとに準備済みdraw容量を確認する。
 
 `renderer-7ft.2.2.4`で公開の単一drawとEngine専用batchを同じowned命令列へ統合した。
-`ManagedRasterProgram::mesh()`は実在する両APIのmesh VS/FSに結び付き、static descriptorが
+`ManagedRasterProgram::mesh()`はビルドに含まれるAPIのmesh VS/FSに結び付き、static descriptorが
 頂点stride 28、vertex段のcolumn-major行列＋tint 80 byte、fragment出力location 0を定める。
 これはnative PSO作成やDevice能力の保証ではない。独自shaderはComputeと同じ
 `unsafe from_trusted_descriptor(&'static RasterProgramDescriptor)`で取り込む。

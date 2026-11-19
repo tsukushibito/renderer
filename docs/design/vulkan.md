@@ -235,6 +235,9 @@ VMAの配置は実測のbufferImageGranularityを満たしており、原因をa
 固定SDKでVulkan 1.3をtargetにし、SPIR-V 1.3を明示する。
 Deviceで有効にしていない`maintenance4`の`LocalSizeId`へ暗黙に依存しない。
 再生成とbinary一致確認は[開発手順](../guides/development.md)に従う。
+Vulkanの準備では、要求した各ProgramがSPIR-Vを持つことをネイティブpipelineの生成前に確認する。
+Rasterのfragmentなしは深度専用パスの一形態であり、Vulkan用バイナリ一式の有無と独立に扱う。
+通常フレームでは、対応形式を確認した準備済みpipelineを使う。
 
 Examplesの画像変換は、各8×8のlocal sizeと型付きRGBA8 storage imageを持つ利用側Programを明示準備し、
 `Graph::dispatch`で実行する。端数のinvocationはshader内で除外し、実Deviceのdispatch・descriptor上限を確認する。
