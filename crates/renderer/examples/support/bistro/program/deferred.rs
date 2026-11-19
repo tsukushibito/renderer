@@ -1,3 +1,4 @@
+use super::packaged_shaders;
 use super::{
     BindingLayout, BindingType, CAMERA, CAMERA_BYTES, ImageFormat, MATERIAL, MATERIAL_BYTES,
     ManagedRasterProgram, NO_PARAMETERS, OPAQUE, RasterProgramDescriptor, ShaderStages, image,
@@ -22,10 +23,17 @@ static GBUFFER: RasterProgramDescriptor = RasterProgramDescriptor {
     ],
     binding_bytes: &[CAMERA_BYTES as u64, MATERIAL_BYTES as u64, 0, 0, 0, 0, 0],
     sampling_pairs: &[pair(1, 0, 4), pair(1, 1, 4), pair(1, 2, 4), pair(1, 3, 4)],
-    vertex_spirv: include_bytes!("../shaders/gbuffer.vert.spv"),
-    fragment_spirv: include_bytes!("../shaders/gbuffer.frag.spv"),
-    vertex_dxil: include_bytes!("../shaders/dxil/gbuffer.vert.dxil"),
-    fragment_dxil: include_bytes!("../shaders/dxil/gbuffer.frag.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (
+            include_bytes!("../shaders/gbuffer.vert.spv"),
+            Some(include_bytes!("../shaders/gbuffer.frag.spv")),
+        ),
+        d3d12: (
+            include_bytes!("../shaders/dxil/gbuffer.vert.dxil"),
+            Some(include_bytes!("../shaders/dxil/gbuffer.frag.dxil")),
+        ),
+        inline_constants: None,
+    ),
     ..OPAQUE
 };
 
@@ -89,16 +97,23 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(3, 2, 4),
         pair(3, 3, 4),
     ],
-    fragment_spirv: include_bytes!("../shaders/deferred_lighting.frag.spv"),
-    fragment_dxil: include_bytes!("../shaders/dxil/deferred_lighting.frag.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (
+            include_bytes!("../../../../shaders/composite.vert.spv"),
+            Some(include_bytes!("../shaders/deferred_lighting.frag.spv")),
+        ),
+        d3d12: (
+            include_bytes!("../../../../shaders/dxil/composite.vert.dxil"),
+            Some(include_bytes!("../shaders/dxil/deferred_lighting.frag.dxil")),
+        ),
+        inline_constants: None,
+    ),
     entry: "main",
     vertex_stride: 0,
     vertex_attributes: &[],
     parameters: NO_PARAMETERS,
     blend: renderer::program::BlendState::Replace,
     depth: renderer::program::DepthState::Disabled,
-    vertex_spirv: include_bytes!("../../../../shaders/composite.vert.spv"),
-    vertex_dxil: include_bytes!("../../../../shaders/dxil/composite.vert.dxil"),
 };
 
 pub const fn gbuffer_program() -> ManagedRasterProgram {

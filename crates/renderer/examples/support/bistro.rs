@@ -69,6 +69,12 @@ use std::{path::PathBuf, time::Duration};
 
 type Error = Box<dyn std::error::Error>;
 
+const DEFAULT_API: &str = if cfg!(all(windows, feature = "d3d12", not(feature = "vulkan"))) {
+    "d3d12"
+} else {
+    "vulkan"
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineMode {
     Forward,
@@ -183,7 +189,7 @@ impl Options {
 
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, Error> {
         let mut result = Self {
-            api: "vulkan".into(),
+            api: DEFAULT_API.into(),
             manifest: None,
             ibl_manifest: None,
             fixture: false,
@@ -421,7 +427,7 @@ fn print_help() {
         "bistro (--fixture | --manifest FILE --ibl-manifest FILE) [OPTIONS]
 
 Scenes and output
-  --api vulkan|d3d12             Default: vulkan
+  --api vulkan|d3d12             Default: {DEFAULT_API}
   --output DIR                   Default: .tools/bistro-runtime
   --view street|overview|material-detail|glass-detail|label-detail|street-mid|street-end|route
   --width N --height N
@@ -502,6 +508,14 @@ mod tests {
     fn options(values: &[&str]) -> Result<Options, Error> {
         Options::parse(values.iter().map(|value| value.to_string()))
     }
+
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    #[test]
+    fn default_api_is_compiled_into_the_example() {
+        let defaults = options(&["--fixture"]).unwrap();
+        require_backend(&defaults.api).unwrap();
+    }
+
     #[test]
     fn source_and_capacity_options_are_explicit() {
         assert!(options(&[]).is_err());

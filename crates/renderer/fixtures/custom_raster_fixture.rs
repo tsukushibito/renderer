@@ -10,8 +10,9 @@ use renderer::graph::{
     RasterParameters, StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterProgramDescriptor, SamplerDescriptor, ShaderStages,
+    BindingLayout, BindingType, BlendState, CompareOp, D3D12InlineConstantBinding,
+    D3D12RasterShaders, DepthState, ManagedRasterProgram, RasterParameterLayout,
+    RasterProgramDescriptor, RasterShaderStages, SamplerDescriptor, ShaderBinaries, ShaderStages,
     VertexAttribute, VertexFormat,
 };
 use renderer::standard::{graphs, passes};
@@ -39,8 +40,6 @@ static ALPHA: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 32,
         stages: ShaderStages::VERTEX.union(ShaderStages::FRAGMENT),
-        dxil_register: 7,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba16Float],
     bindings: &[
@@ -86,10 +85,26 @@ static ALPHA: RasterProgramDescriptor = RasterProgramDescriptor {
         write: false,
         require_load: true,
     },
-    vertex_spirv: include_bytes!("../tests/support/shaders/custom_raster.vert.spv"),
-    fragment_spirv: include_bytes!("../tests/support/shaders/custom_raster.frag.spv"),
-    vertex_dxil: include_bytes!("../tests/support/shaders/dxil/custom_raster.vert.dxil"),
-    fragment_dxil: include_bytes!("../tests/support/shaders/dxil/custom_raster.frag.dxil"),
+    shaders: ShaderBinaries::both(
+        RasterShaderStages {
+            vertex: include_bytes!("../tests/support/shaders/custom_raster.vert.spv"),
+            fragment: Some(include_bytes!(
+                "../tests/support/shaders/custom_raster.frag.spv"
+            )),
+        },
+        D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: include_bytes!("../tests/support/shaders/dxil/custom_raster.vert.dxil"),
+                fragment: Some(include_bytes!(
+                    "../tests/support/shaders/dxil/custom_raster.frag.dxil"
+                )),
+            },
+            inline_constants: Some(D3D12InlineConstantBinding {
+                register: 7,
+                space: 0,
+            }),
+        },
+    ),
 };
 static PREMULTIPLIED: RasterProgramDescriptor = RasterProgramDescriptor {
     blend: BlendState::PremultipliedAlpha,

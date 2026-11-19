@@ -1,3 +1,4 @@
+use super::packaged_shaders;
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
     ManagedProgram, ShaderStages,
@@ -50,8 +51,10 @@ static VISIBILITY: ComputeProgramDescriptor = ComputeProgramDescriptor {
             MASK_GROUP_BYTES,
         ],
     },
-    spirv: include_bytes!("../shaders/frustum_visibility.comp.spv"),
-    dxil: include_bytes!("../shaders/dxil/frustum_visibility.comp.dxil"),
+    shaders: packaged_shaders!(
+        include_bytes!("../shaders/frustum_visibility.comp.spv"),
+        include_bytes!("../shaders/dxil/frustum_visibility.comp.dxil"),
+    ),
 };
 
 pub const fn visibility_program() -> ManagedProgram {

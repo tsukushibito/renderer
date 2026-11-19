@@ -5,7 +5,7 @@ use renderer::{
     graph::{Binding, BindingResource, Graph, GraphError, ImageHandle, PassHandle},
     program::{
         BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
-        ManagedProgram, ShaderStages,
+        ManagedProgram, ShaderBinaries, ShaderStages,
     },
 };
 
@@ -50,8 +50,7 @@ const fn descriptor(spirv: &'static [u8], dxil: &'static [u8]) -> ComputeProgram
             },
             bytes: &[0, 0],
         },
-        spirv,
-        dxil,
+        shaders: ShaderBinaries::both(spirv, dxil),
     }
 }
 

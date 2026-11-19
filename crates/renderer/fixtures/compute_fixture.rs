@@ -8,7 +8,7 @@ use renderer::graph::{
 };
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
-    ManagedProgram, SamplerDescriptor, ShaderStages,
+    ManagedProgram, SamplerDescriptor, ShaderBinaries, ShaderStages,
 };
 
 pub const WIDTH: u32 = 3;
@@ -39,14 +39,16 @@ static SAMPLED: ComputeProgramDescriptor = ComputeProgramDescriptor {
         },
         bytes: &[0, 0, 16, 0],
     },
-    spirv: include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/shaders/compute_hdr_sampled.comp.spv"
-    )),
-    dxil: include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/shaders/dxil/compute_hdr_sampled.comp.dxil"
-    )),
+    shaders: ShaderBinaries::both(
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/shaders/compute_hdr_sampled.comp.spv"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/shaders/dxil/compute_hdr_sampled.comp.dxil"
+        )),
+    ),
 };
 
 static STORAGE: ComputeProgramDescriptor = ComputeProgramDescriptor {
@@ -74,14 +76,16 @@ static STORAGE: ComputeProgramDescriptor = ComputeProgramDescriptor {
         },
         bytes: &[0, 16, 0],
     },
-    spirv: include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/shaders/compute_hdr_storage.comp.spv"
-    )),
-    dxil: include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/support/shaders/dxil/compute_hdr_storage.comp.dxil"
-    )),
+    shaders: ShaderBinaries::both(
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/shaders/compute_hdr_storage.comp.spv"
+        )),
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/shaders/dxil/compute_hdr_storage.comp.dxil"
+        )),
+    ),
 };
 
 const fn slot(group: u32, binding: u32, kind: BindingType, min_size: u64) -> BindingLayout {

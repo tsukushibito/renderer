@@ -5,8 +5,9 @@ use renderer::graph::{
     RasterConstants, RasterDraw, SampleCount, StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterProgramDescriptor, ShaderStages,
+    BindingLayout, BindingType, BlendState, D3D12RasterShaders, DepthState, ManagedRasterProgram,
+    RasterParameterLayout, RasterProgramDescriptor, RasterShaderStages, ShaderBinaries,
+    ShaderStages,
 };
 
 const COLOR: BufferDesc = BufferDesc { size: 16 };
@@ -27,8 +28,6 @@ static FULLSCREEN: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 0,
         stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba8Unorm],
     bindings: &[BindingLayout {
@@ -42,10 +41,19 @@ static FULLSCREEN: RasterProgramDescriptor = RasterProgramDescriptor {
     sampling_pairs: &[],
     blend: BlendState::Additive,
     depth: DepthState::Disabled,
-    vertex_spirv: include_bytes!("support/shaders/fullscreen_uniform.vert.spv"),
-    fragment_spirv: include_bytes!("../shaders/mesh.frag.spv"),
-    vertex_dxil: include_bytes!("support/shaders/dxil/fullscreen_uniform.vert.dxil"),
-    fragment_dxil: include_bytes!("../shaders/dxil/mesh.frag.dxil"),
+    shaders: ShaderBinaries::both(
+        RasterShaderStages {
+            vertex: include_bytes!("support/shaders/fullscreen_uniform.vert.spv"),
+            fragment: Some(include_bytes!("../shaders/mesh.frag.spv")),
+        },
+        D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: include_bytes!("support/shaders/dxil/fullscreen_uniform.vert.dxil"),
+                fragment: Some(include_bytes!("../shaders/dxil/mesh.frag.dxil")),
+            },
+            inline_constants: None,
+        },
+    ),
 };
 
 fn program() -> ManagedRasterProgram {

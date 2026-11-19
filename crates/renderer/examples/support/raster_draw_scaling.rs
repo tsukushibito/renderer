@@ -20,9 +20,9 @@ use renderer::{
         RasterAttachments, RasterConstants, RasterDraw, RasterParameters, ResourceKey, StoreOp,
     },
     program::{
-        BindingLayout, BindingType, BlendState, DepthState, ManagedRasterProgram,
-        RasterParameterLayout, RasterProgramDescriptor, ShaderStages, VertexAttribute,
-        VertexFormat,
+        BindingLayout, BindingType, BlendState, D3D12RasterShaders, DepthState,
+        ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor, RasterShaderStages,
+        ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
     },
 };
 use serde_json::{Value, json};
@@ -49,8 +49,6 @@ static UNIFORM_PROGRAM: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 0,
         stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba8Unorm, ImageFormat::Rgba8Unorm],
     bindings: &[BindingLayout {
@@ -64,11 +62,22 @@ static UNIFORM_PROGRAM: RasterProgramDescriptor = RasterProgramDescriptor {
     sampling_pairs: &[],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
-    vertex_spirv: include_bytes!("../../tests/support/shaders/raster_batches.vert.spv"),
-    vertex_dxil: include_bytes!("../../tests/support/shaders/dxil/raster_batches.vert.dxil"),
-    fragment_spirv: include_bytes!("../../tests/support/shaders/raster_batches_uniform.frag.spv"),
-    fragment_dxil: include_bytes!(
-        "../../tests/support/shaders/dxil/raster_batches_uniform.frag.dxil"
+    shaders: ShaderBinaries::both(
+        RasterShaderStages {
+            vertex: include_bytes!("../../tests/support/shaders/raster_batches.vert.spv"),
+            fragment: Some(include_bytes!(
+                "../../tests/support/shaders/raster_batches_uniform.frag.spv"
+            )),
+        },
+        D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: include_bytes!("../../tests/support/shaders/dxil/raster_batches.vert.dxil"),
+                fragment: Some(include_bytes!(
+                    "../../tests/support/shaders/dxil/raster_batches_uniform.frag.dxil"
+                )),
+            },
+            inline_constants: None,
+        },
     ),
 };
 

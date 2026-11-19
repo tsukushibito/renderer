@@ -52,7 +52,7 @@ impl Api {
         }
     }
 
-    fn config(self) -> Result<RuntimeConfig> {
+    pub fn config(self) -> Result<RuntimeConfig> {
         match self {
             #[cfg(feature = "vulkan")]
             Self::Vulkan => Ok(RuntimeConfig::Vulkan(renderer::runtime::VulkanConfig {
