@@ -2,6 +2,8 @@
 
 #[path = "../examples/support/bloom.rs"]
 mod bloom;
+#[path = "../examples/support/shader_binaries.rs"]
+mod shader_binaries;
 
 use bloom::Bloom;
 use renderer::graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, PassHandle};

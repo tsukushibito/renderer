@@ -1,6 +1,6 @@
 //! Forward+ tile culling and the shared point-light buffer layout.
 
-use super::super::packaged_shaders;
+use crate::shader_binaries::packaged_shaders;
 use renderer::graph::{Binding, BindingResource, BufferHandle, Graph, GraphError, PassHandle};
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,

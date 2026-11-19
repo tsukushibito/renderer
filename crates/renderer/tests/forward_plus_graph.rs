@@ -2,6 +2,8 @@
 
 #[path = "../examples/support/bistro/program/forward_plus/culling.rs"]
 mod culling;
+#[path = "../examples/support/shader_binaries.rs"]
+mod shader_binaries;
 
 use culling::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, PointLight, TILE_BYTES, TILES_PER_GROUP, active_tile_count,

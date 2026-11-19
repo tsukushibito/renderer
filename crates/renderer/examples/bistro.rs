@@ -2,6 +2,8 @@
 
 #[path = "support/bistro.rs"]
 mod bistro;
+#[path = "support/shader_binaries.rs"]
+mod shader_binaries;
 
 #[cfg(feature = "memory-profiling")]
 #[global_allocator]

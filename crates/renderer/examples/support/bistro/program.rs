@@ -28,10 +28,7 @@ pub mod forward_plus;
 #[path = "program/visibility.rs"]
 pub mod visibility;
 
-#[path = "../shader_binaries.rs"]
-mod shader_binaries;
-
-use shader_binaries::packaged_shaders;
+use crate::shader_binaries::packaged_shaders;
 
 use renderer::ImageFormat;
 use renderer::program::{
