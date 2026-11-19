@@ -10,11 +10,108 @@ use crate::ImageFormat;
 mod raster;
 
 pub use raster::{
-    BlendState, CompareOp, DepthState, MAX_RASTER_ATTRIBUTES, MAX_RASTER_BIND_GROUPS,
-    MAX_RASTER_BINDINGS, MAX_RASTER_COLOR_ATTACHMENTS, MAX_RASTER_PROGRAMS, ManagedRasterProgram,
-    RasterParameterLayout, RasterPipelineRequest, RasterProgramDescriptor, SampledImageSamplerPair,
+    BlendState, CompareOp, D3D12InlineConstantBinding, D3D12RasterShaders, DepthState,
+    MAX_RASTER_ATTRIBUTES, MAX_RASTER_BIND_GROUPS, MAX_RASTER_BINDINGS,
+    MAX_RASTER_COLOR_ATTACHMENTS, MAX_RASTER_PROGRAMS, ManagedRasterProgram, RasterParameterLayout,
+    RasterPipelineRequest, RasterProgramDescriptor, RasterShaderStages, SampledImageSamplerPair,
     VertexAttribute, VertexFormat,
 };
+
+/// Backend-specific binaries for one immutable Program contract.
+///
+/// Supply the formats available in the application build. Each runtime uses
+/// its own format and reports an unsupported Program during preparation if
+/// that format is unavailable.
+#[derive(Clone, Copy)]
+pub struct ShaderBinaries<V, D = V> {
+    #[cfg_attr(
+        not(feature = "vulkan"),
+        expect(dead_code, reason = "Vulkan preparation is disabled")
+    )]
+    vulkan: Option<V>,
+    #[cfg_attr(
+        not(all(feature = "d3d12", windows)),
+        expect(dead_code, reason = "D3D12 preparation is disabled")
+    )]
+    d3d12: Option<D>,
+}
+
+impl<V, D> ShaderBinaries<V, D> {
+    pub const fn vulkan(spirv: V) -> Self {
+        Self {
+            vulkan: Some(spirv),
+            d3d12: None,
+        }
+    }
+
+    pub const fn d3d12(dxil: D) -> Self {
+        Self {
+            vulkan: None,
+            d3d12: Some(dxil),
+        }
+    }
+
+    pub const fn both(spirv: V, dxil: D) -> Self {
+        Self {
+            vulkan: Some(spirv),
+            d3d12: Some(dxil),
+        }
+    }
+
+    /// Policy and ABI metadata for CPU-only Graph construction.
+    pub const fn metadata_only() -> Self {
+        Self {
+            vulkan: None,
+            d3d12: None,
+        }
+    }
+}
+
+// Attribute gates omit the inactive include_bytes! expression from the build.
+macro_rules! embedded_shader_binaries {
+    ($spirv:expr, $dxil:expr $(,)?) => {{
+        #[cfg(all(feature = "vulkan", feature = "d3d12", windows))]
+        {
+            $crate::program::ShaderBinaries::both($spirv, $dxil)
+        }
+        #[cfg(all(feature = "vulkan", not(all(feature = "d3d12", windows))))]
+        {
+            $crate::program::ShaderBinaries::vulkan($spirv)
+        }
+        #[cfg(all(not(feature = "vulkan"), feature = "d3d12", windows))]
+        {
+            $crate::program::ShaderBinaries::d3d12($dxil)
+        }
+        #[cfg(not(any(feature = "vulkan", all(feature = "d3d12", windows))))]
+        {
+            $crate::program::ShaderBinaries::metadata_only()
+        }
+    }};
+}
+pub(crate) use embedded_shader_binaries;
+
+macro_rules! embedded_raster_shaders {
+    (
+        $vertex_spirv:literal, $fragment_spirv:expr,
+        $vertex_dxil:literal, $fragment_dxil:expr,
+        $inline_constants:expr $(,)?
+    ) => {
+        $crate::program::embedded_shader_binaries!(
+            $crate::program::RasterShaderStages {
+                vertex: include_bytes!($vertex_spirv),
+                fragment: $fragment_spirv,
+            },
+            $crate::program::D3D12RasterShaders {
+                stages: $crate::program::RasterShaderStages {
+                    vertex: include_bytes!($vertex_dxil),
+                    fragment: $fragment_dxil,
+                },
+                inline_constants: $inline_constants,
+            },
+        )
+    };
+}
+pub(crate) use embedded_raster_shaders;
 
 /// Access derived from the trusted shader. Write access alone is not a promise
 /// that every byte of a descriptor range will be initialized by a dispatch.
@@ -123,15 +220,14 @@ pub struct ManagedProgram {
 }
 
 /// Immutable compute asset inputs. The constructor's safety contract establishes
-/// the relationship between these metadata and both native shader binaries.
+/// the relationship between these metadata and each supplied shader binary.
 /// The slices must be static so frame plans retain them without allocating.
 pub struct ComputeProgramDescriptor {
     pub entry: &'static str,
     pub workgroup_size: [u32; 3],
     pub bindings: &'static [BindingLayout],
     pub dispatch: DispatchContract,
-    pub spirv: &'static [u8],
-    pub dxil: &'static [u8],
+    pub shaders: ShaderBinaries<&'static [u8]>,
 }
 
 /// Reviewed execution footprint, separate from the ABI's minimum descriptor
@@ -203,8 +299,10 @@ static UNIFORM_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
             min_size: 16,
         },
     ],
-    spirv: include_bytes!("../shaders/uniform.comp.spv"),
-    dxil: include_bytes!("../shaders/dxil/uniform.comp.dxil"),
+    shaders: embedded_shader_binaries!(
+        include_bytes!("../shaders/uniform.comp.spv"),
+        include_bytes!("../shaders/dxil/uniform.comp.dxil"),
+    ),
 };
 
 static STORAGE_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
@@ -230,8 +328,10 @@ static STORAGE_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
             min_size: 16,
         },
     ],
-    spirv: include_bytes!("../shaders/storage_read.comp.spv"),
-    dxil: include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
+    shaders: embedded_shader_binaries!(
+        include_bytes!("../shaders/storage_read.comp.spv"),
+        include_bytes!("../shaders/dxil/storage_read.comp.dxil"),
+    ),
 };
 
 pub(crate) const INDIRECT_GROUP_SIZE: u32 = 64;
@@ -279,8 +379,10 @@ static INDEXED_INDIRECT_ENCODER: ComputeProgramDescriptor = ComputeProgramDescri
             min_size: INDIRECT_COMMAND_BYTES * INDIRECT_GROUP_SIZE as u64,
         },
     ],
-    spirv: include_bytes!("../shaders/indexed_indirect.comp.spv"),
-    dxil: include_bytes!("../shaders/dxil/indexed_indirect.comp.dxil"),
+    shaders: embedded_shader_binaries!(
+        include_bytes!("../shaders/indexed_indirect.comp.spv"),
+        include_bytes!("../shaders/dxil/indexed_indirect.comp.dxil"),
+    ),
 };
 
 static SAMPLED_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
@@ -313,8 +415,10 @@ static SAMPLED_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
             min_size: 16,
         },
     ],
-    spirv: include_bytes!("../shaders/sampled.comp.spv"),
-    dxil: include_bytes!("../shaders/dxil/sampled.comp.dxil"),
+    shaders: embedded_shader_binaries!(
+        include_bytes!("../shaders/sampled.comp.spv"),
+        include_bytes!("../shaders/dxil/sampled.comp.dxil"),
+    ),
 };
 
 static SAMPLED_FLOAT_READBACK: ComputeProgramDescriptor = ComputeProgramDescriptor {
@@ -347,8 +451,10 @@ static SAMPLED_FLOAT_READBACK: ComputeProgramDescriptor = ComputeProgramDescript
             min_size: 64,
         },
     ],
-    spirv: include_bytes!("../shaders/sampled_float.comp.spv"),
-    dxil: include_bytes!("../shaders/dxil/sampled_float.comp.dxil"),
+    shaders: embedded_shader_binaries!(
+        include_bytes!("../shaders/sampled_float.comp.spv"),
+        include_bytes!("../shaders/dxil/sampled_float.comp.dxil"),
+    ),
 };
 
 impl ManagedProgram {
@@ -357,9 +463,9 @@ impl ManagedProgram {
     ///
     /// # Safety
     ///
-    /// Both binaries must be valid Vulkan 1.3/SPIR-V 1.3 and D3D12 SM6.0 compute
-    /// shaders, respectively, for `entry = "main"` and exactly the declared nonzero local
-    /// size. Their complete descriptor interfaces must match the unique,
+    /// Each supplied binary must be a valid Vulkan 1.3/SPIR-V 1.3 or D3D12 SM6.0
+    /// compute shader, as selected by its slot, for `entry = "main"` and exactly
+    /// the declared nonzero local size. Its complete descriptor interface must match the unique,
     /// manifest-ordered `bindings`; descriptor arrays, push constants and
     /// undeclared resources or side effects are not permitted. Buffer minimum
     /// sizes and `dispatch.bytes` must have one entry per binding, with a nonzero
@@ -480,13 +586,13 @@ impl ManagedProgram {
     }
 
     #[cfg(feature = "vulkan")]
-    pub(crate) fn spirv(&self) -> &'static [u8] {
-        self.manifest.spirv
+    pub(crate) fn spirv(&self) -> Option<&'static [u8]> {
+        self.manifest.shaders.vulkan
     }
 
     #[cfg(all(feature = "d3d12", windows))]
-    pub(crate) fn dxil(&self) -> &'static [u8] {
-        self.manifest.dxil
+    pub(crate) fn dxil(&self) -> Option<&'static [u8]> {
+        self.manifest.shaders.d3d12
     }
 }
 

@@ -6,7 +6,7 @@ use crate::graph::{
 use crate::program::{
     BindingLayout, BindingType, BlendState, DepthState, ManagedRasterProgram,
     RasterParameterLayout, RasterPipelineRequest, RasterProgramDescriptor, SampledImageSamplerPair,
-    SamplerDescriptor, ShaderStages,
+    SamplerDescriptor, ShaderStages, embedded_raster_shaders,
 };
 
 /// Encoding written to the RGBA8 UNORM output image.
@@ -185,6 +185,18 @@ fn append(
     )
 }
 
+macro_rules! output_shaders {
+    ($spirv:literal, $dxil:literal, $inline_constants:expr) => {
+        embedded_raster_shaders!(
+            "../../../shaders/composite.vert.spv",
+            Some(include_bytes!($spirv)),
+            "../../../shaders/dxil/composite.vert.dxil",
+            Some(include_bytes!($dxil)),
+            $inline_constants,
+        )
+    };
+}
+
 static SDR_SRGB: RasterProgramDescriptor = RasterProgramDescriptor {
     entry: "main",
     vertex_stride: 0,
@@ -192,8 +204,6 @@ static SDR_SRGB: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 0,
         stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba8Unorm],
     bindings: &[
@@ -221,35 +231,49 @@ static SDR_SRGB: RasterProgramDescriptor = RasterProgramDescriptor {
     }],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
-    vertex_spirv: include_bytes!("../../../shaders/composite.vert.spv"),
-    fragment_spirv: include_bytes!("../../../shaders/sdr.frag.spv"),
-    vertex_dxil: include_bytes!("../../../shaders/dxil/composite.vert.dxil"),
-    fragment_dxil: include_bytes!("../../../shaders/dxil/sdr.frag.dxil"),
+    shaders: output_shaders!(
+        "../../../shaders/sdr.frag.spv",
+        "../../../shaders/dxil/sdr.frag.dxil",
+        None
+    ),
 };
 static SDR_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
-    fragment_spirv: include_bytes!("../../../shaders/sdr_linear.frag.spv"),
-    fragment_dxil: include_bytes!("../../../shaders/dxil/sdr_linear.frag.dxil"),
+    shaders: output_shaders!(
+        "../../../shaders/sdr_linear.frag.spv",
+        "../../../shaders/dxil/sdr_linear.frag.dxil",
+        None
+    ),
     ..SDR_SRGB
 };
 static SDR_FXAA_SRGB: RasterProgramDescriptor = RasterProgramDescriptor {
-    fragment_spirv: include_bytes!("../../../shaders/sdr_fxaa.frag.spv"),
-    fragment_dxil: include_bytes!("../../../shaders/dxil/sdr_fxaa.frag.dxil"),
+    shaders: output_shaders!(
+        "../../../shaders/sdr_fxaa.frag.spv",
+        "../../../shaders/dxil/sdr_fxaa.frag.dxil",
+        None
+    ),
     ..SDR_SRGB
 };
 static SDR_FXAA_LINEAR: RasterProgramDescriptor = RasterProgramDescriptor {
-    fragment_spirv: include_bytes!("../../../shaders/sdr_fxaa_linear.frag.spv"),
-    fragment_dxil: include_bytes!("../../../shaders/dxil/sdr_fxaa_linear.frag.dxil"),
+    shaders: output_shaders!(
+        "../../../shaders/sdr_fxaa_linear.frag.spv",
+        "../../../shaders/dxil/sdr_fxaa_linear.frag.dxil",
+        None
+    ),
     ..SDR_SRGB
 };
 static TONE_NEUTRAL: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 4,
         stages: ShaderStages::FRAGMENT,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba16Float],
-    fragment_spirv: include_bytes!("../../../shaders/tone_neutral.frag.spv"),
-    fragment_dxil: include_bytes!("../../../shaders/dxil/tone_neutral.frag.dxil"),
+    shaders: output_shaders!(
+        "../../../shaders/tone_neutral.frag.spv",
+        "../../../shaders/dxil/tone_neutral.frag.dxil",
+        Some(crate::program::D3D12InlineConstantBinding {
+            register: 0,
+            space: 0
+        })
+    ),
     ..SDR_SRGB
 };

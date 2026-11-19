@@ -435,16 +435,14 @@ impl Program {
             *destination = super::super::resources::image_format(format);
         }
         let color_count = outputs.len();
-        let vertex = ShaderModule::new(Arc::clone(&self.owner), program.vertex_spirv())?;
-        let has_fragment = !program.fragment_spirv().is_empty();
-        let fragment = if has_fragment {
-            Some(ShaderModule::new(
-                Arc::clone(&self.owner),
-                program.fragment_spirv(),
-            )?)
-        } else {
-            None
-        };
+        let shaders = program
+            .spirv()
+            .ok_or_else(|| RuntimeError::unsupported("Raster Program has no SPIR-V shaders"))?;
+        let vertex = ShaderModule::new(Arc::clone(&self.owner), shaders.vertex)?;
+        let fragment = shaders
+            .fragment
+            .map(|bytes| ShaderModule::new(Arc::clone(&self.owner), bytes))
+            .transpose()?;
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
@@ -459,7 +457,7 @@ impl Program {
                 )
                 .name(c"main"),
         ];
-        let stages = if !has_fragment {
+        let stages = if fragment.is_none() {
             &stages[..1]
         } else {
             &stages[..]

@@ -39,6 +39,9 @@ impl ComputePipeline {
         #[cfg(test)] fail_after_signature: bool,
     ) -> Result<Self, D3D12RuntimeError> {
         owner.ensure_active()?;
+        let shader = managed
+            .dxil()
+            .ok_or_else(|| D3D12RuntimeError::unsupported("Compute Program has no DXIL shader"))?;
         if owner.info.shader_model < D3D_SHADER_MODEL_6_0 as u32 {
             return Err(D3D12RuntimeError::unsupported(
                 "managed compute Program requires Shader Model 6.0",
@@ -87,7 +90,6 @@ impl ComputePipeline {
                 windows_core::Error::from_hresult(windows_core::HRESULT(0x8007_000eu32 as i32)),
             ));
         }
-        let shader = managed.dxil();
         let mut pipeline_desc = D3D12_COMPUTE_PIPELINE_STATE_DESC {
             pRootSignature: ManuallyDrop::new(Some(signature.clone())),
             CS: D3D12_SHADER_BYTECODE {
