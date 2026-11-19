@@ -6,8 +6,9 @@ use renderer::graph::{
     StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterProgramDescriptor, ShaderStages, VertexAttribute, VertexFormat,
+    BindingLayout, BindingType, BlendState, D3D12InlineConstantBinding, D3D12RasterShaders,
+    DepthState, ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor,
+    RasterShaderStages, ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer::{
     D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
@@ -63,8 +64,6 @@ static SHADER: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 4,
         stages: ShaderStages::VERTEX,
-        dxil_register: 7,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba8Unorm],
     bindings: &[BindingLayout {
@@ -78,10 +77,28 @@ static SHADER: RasterProgramDescriptor = RasterProgramDescriptor {
     sampling_pairs: &[],
     blend: BlendState::Replace,
     depth: DepthState::Disabled,
-    vertex_spirv: include_bytes!("../tests/support/shaders/indexed_instancing.vert.spv"),
-    vertex_dxil: include_bytes!("../tests/support/shaders/dxil/indexed_instancing.vert.dxil"),
-    fragment_spirv: include_bytes!("../tests/support/shaders/indexed_instancing.frag.spv"),
-    fragment_dxil: include_bytes!("../tests/support/shaders/dxil/indexed_instancing.frag.dxil"),
+    shaders: ShaderBinaries::both(
+        RasterShaderStages {
+            vertex: include_bytes!("../tests/support/shaders/indexed_instancing.vert.spv"),
+            fragment: Some(include_bytes!(
+                "../tests/support/shaders/indexed_instancing.frag.spv"
+            )),
+        },
+        D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: include_bytes!(
+                    "../tests/support/shaders/dxil/indexed_instancing.vert.dxil"
+                ),
+                fragment: Some(include_bytes!(
+                    "../tests/support/shaders/dxil/indexed_instancing.frag.dxil"
+                )),
+            },
+            inline_constants: Some(D3D12InlineConstantBinding {
+                register: 7,
+                space: 0,
+            }),
+        },
+    ),
 };
 
 fn program() -> ManagedRasterProgram {

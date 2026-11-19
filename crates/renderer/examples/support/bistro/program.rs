@@ -28,6 +28,11 @@ pub mod forward_plus;
 #[path = "program/visibility.rs"]
 pub mod visibility;
 
+#[path = "../shader_binaries.rs"]
+mod shader_binaries;
+
+use shader_binaries::packaged_shaders;
+
 use renderer::ImageFormat;
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
@@ -82,9 +87,15 @@ const fn pair(group: u32, image: u32, sampler: u32) -> SampledImageSamplerPair {
 const NO_PARAMETERS: RasterParameterLayout = RasterParameterLayout {
     size: 0,
     stages: ShaderStages::EMPTY,
-    dxil_register: 0,
-    dxil_space: 0,
 };
+#[cfg(feature = "vulkan")]
+static PBR_VERTEX_SPIRV: &[u8] = include_bytes!("shaders/pbr.vert.spv");
+#[cfg(feature = "vulkan")]
+static PBR_FRAGMENT_SPIRV: &[u8] = include_bytes!("shaders/pbr.frag.spv");
+#[cfg(all(windows, feature = "d3d12"))]
+static PBR_VERTEX_DXIL: &[u8] = include_bytes!("shaders/dxil/pbr.vert.dxil");
+#[cfg(all(windows, feature = "d3d12"))]
+static PBR_FRAGMENT_DXIL: &[u8] = include_bytes!("shaders/dxil/pbr.frag.dxil");
 const PBR_ATTRIBUTES: &[VertexAttribute] = &[
     VertexAttribute {
         location: 0,
@@ -168,10 +179,11 @@ static OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    vertex_spirv: include_bytes!("shaders/pbr.vert.spv"),
-    fragment_spirv: include_bytes!("shaders/pbr.frag.spv"),
-    vertex_dxil: include_bytes!("shaders/dxil/pbr.vert.dxil"),
-    fragment_dxil: include_bytes!("shaders/dxil/pbr.frag.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (PBR_VERTEX_SPIRV, Some(PBR_FRAGMENT_SPIRV)),
+        d3d12: (PBR_VERTEX_DXIL, Some(PBR_FRAGMENT_DXIL)),
+        inline_constants: None,
+    ),
 };
 pub(super) const INSTANCE_INLINE_BYTES: u32 = 68;
 
@@ -179,11 +191,18 @@ static INSTANCING: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: INSTANCE_INLINE_BYTES,
         stages: ShaderStages::VERTEX,
-        dxil_register: 7,
-        dxil_space: 0,
     },
-    vertex_spirv: include_bytes!("shaders/pbr_instancing.vert.spv"),
-    vertex_dxil: include_bytes!("shaders/dxil/pbr_instancing.vert.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (
+            include_bytes!("shaders/pbr_instancing.vert.spv"),
+            Some(PBR_FRAGMENT_SPIRV),
+        ),
+        d3d12: (
+            include_bytes!("shaders/dxil/pbr_instancing.vert.dxil"),
+            Some(PBR_FRAGMENT_DXIL),
+        ),
+        inline_constants: Some(renderer::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+    ),
     ..OPAQUE
 };
 static BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -213,8 +232,6 @@ static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 4,
         stages: ShaderStages::VERTEX,
-        dxil_register: 7,
-        dxil_space: 0,
     },
     color_outputs: &[],
     bindings: &[
@@ -234,10 +251,17 @@ static SHADOW: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    vertex_spirv: include_bytes!("shaders/shadow.vert.spv"),
-    fragment_spirv: include_bytes!("shaders/shadow.frag.spv"),
-    vertex_dxil: include_bytes!("shaders/dxil/shadow.vert.dxil"),
-    fragment_dxil: include_bytes!("shaders/dxil/shadow.frag.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (
+            include_bytes!("shaders/shadow.vert.spv"),
+            Some(include_bytes!("shaders/shadow.frag.spv")),
+        ),
+        d3d12: (
+            include_bytes!("shaders/dxil/shadow.vert.dxil"),
+            Some(include_bytes!("shaders/dxil/shadow.frag.dxil")),
+        ),
+        inline_constants: Some(renderer::program::D3D12InlineConstantBinding { register: 7, space: 0 }),
+    ),
 };
 pub const fn opaque_program() -> ManagedRasterProgram {
     // SAFETY: Pinned modules/reflection exactly match the declared 48-byte stream,

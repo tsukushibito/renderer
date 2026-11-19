@@ -11,8 +11,9 @@ use renderer::graph::{
 };
 use renderer::program::{
     BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedProgram,
-    ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor, SampledImageSamplerPair,
-    SamplerDescriptor, ShaderStages, VertexAttribute, VertexFormat,
+    ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor, RasterShaderStages,
+    SampledImageSamplerPair, SamplerDescriptor, ShaderBinaries, ShaderStages, VertexAttribute,
+    VertexFormat,
 };
 use renderer::{
     FrameCapacity, ImageFormat, ResourceClass, RuntimeConfig, Submission, ValidationMode,
@@ -52,8 +53,6 @@ static ALPHA_MASK: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 0,
         stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[],
     bindings: &[
@@ -85,10 +84,12 @@ static ALPHA_MASK: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    vertex_spirv: include_bytes!("support/shaders/depth_sampling.vert.spv"),
-    fragment_spirv: include_bytes!("support/shaders/depth_sampling_mask.frag.spv"),
-    vertex_dxil: include_bytes!("support/shaders/dxil/depth_sampling.vert.dxil"),
-    fragment_dxil: include_bytes!("support/shaders/dxil/depth_sampling_mask.frag.dxil"),
+    shaders: ShaderBinaries::vulkan(RasterShaderStages {
+        vertex: include_bytes!("support/shaders/depth_sampling.vert.spv"),
+        fragment: Some(include_bytes!(
+            "support/shaders/depth_sampling_mask.frag.spv"
+        )),
+    }),
 };
 
 fn sample_bindings(graph: &Graph, texture: ImageHandle) -> [Binding; 2] {

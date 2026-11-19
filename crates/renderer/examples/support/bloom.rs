@@ -1,5 +1,10 @@
 //! Consumer-owned scene-linear HDR post processing.
 
+#[path = "shader_binaries.rs"]
+mod shader_binaries;
+
+use shader_binaries::packaged_shaders;
+
 use renderer::ImageFormat;
 use renderer::graph::{Binding, BindingResource, Graph, GraphError, ImageDesc, ImageHandle};
 use renderer::program::{
@@ -50,8 +55,10 @@ macro_rules! bloom_program {
                     },
                     bytes: $bytes,
                 },
-                spirv: include_bytes!(concat!("bistro/shaders/", $shader, ".spv")),
-                dxil: include_bytes!(concat!("bistro/shaders/dxil/", $shader, ".dxil")),
+                shaders: packaged_shaders!(
+                    include_bytes!(concat!("bistro/shaders/", $shader, ".spv")),
+                    include_bytes!(concat!("bistro/shaders/dxil/", $shader, ".dxil")),
+                ),
             };
             // SAFETY: The paired artifacts implement the declared ABI. Each invocation
             // guards its destination coordinate, reads only clamped coordinates in

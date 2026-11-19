@@ -22,9 +22,10 @@ use renderer::graph::{
     ImageDesc, LoadOp, PassHandle, RasterAttachments, RasterConstants, RasterDraw, StoreOp,
 };
 use renderer::program::{
-    BindingLayout, BindingType, BlendState, CompareOp, DepthState, ManagedRasterProgram,
-    RasterParameterLayout, RasterProgramDescriptor, SampledImageSamplerPair, SamplerDescriptor,
-    ShaderStages, VertexAttribute, VertexFormat,
+    BindingLayout, BindingType, BlendState, CompareOp, D3D12InlineConstantBinding,
+    D3D12RasterShaders, DepthState, ManagedRasterProgram, RasterParameterLayout,
+    RasterProgramDescriptor, RasterShaderStages, SampledImageSamplerPair, SamplerDescriptor,
+    ShaderBinaries, ShaderStages, VertexAttribute, VertexFormat,
 };
 use renderer::{
     D3D12BufferClass, D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig,
@@ -64,8 +65,6 @@ static MASK: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 0,
         stages: ShaderStages::EMPTY,
-        dxil_register: 0,
-        dxil_space: 0,
     },
     color_outputs: &[],
     bindings: &[IMAGE, SAMPLER],
@@ -77,17 +76,28 @@ static MASK: RasterProgramDescriptor = RasterProgramDescriptor {
         write: true,
         require_load: false,
     },
-    vertex_spirv: include_bytes!("support/shaders/depth_sampling.vert.spv"),
-    fragment_spirv: include_bytes!("support/shaders/depth_sampling_mask.frag.spv"),
-    vertex_dxil: include_bytes!("support/shaders/dxil/depth_sampling.vert.dxil"),
-    fragment_dxil: include_bytes!("support/shaders/dxil/depth_sampling_mask.frag.dxil"),
+    shaders: ShaderBinaries::both(
+        RasterShaderStages {
+            vertex: include_bytes!("support/shaders/depth_sampling.vert.spv"),
+            fragment: Some(include_bytes!(
+                "support/shaders/depth_sampling_mask.frag.spv"
+            )),
+        },
+        D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: include_bytes!("support/shaders/dxil/depth_sampling.vert.dxil"),
+                fragment: Some(include_bytes!(
+                    "support/shaders/dxil/depth_sampling_mask.frag.dxil"
+                )),
+            },
+            inline_constants: None,
+        },
+    ),
 };
 static SAMPLE: RasterProgramDescriptor = RasterProgramDescriptor {
     parameters: RasterParameterLayout {
         size: 16,
         stages: ShaderStages::FRAGMENT,
-        dxil_register: 7,
-        dxil_space: 0,
     },
     color_outputs: &[ImageFormat::Rgba16Float],
     bindings: &[
@@ -112,8 +122,26 @@ static SAMPLE: RasterProgramDescriptor = RasterProgramDescriptor {
         },
     ],
     depth: DepthState::Disabled,
-    fragment_spirv: include_bytes!("support/shaders/depth_sampling_color.frag.spv"),
-    fragment_dxil: include_bytes!("support/shaders/dxil/depth_sampling_color.frag.dxil"),
+    shaders: ShaderBinaries::both(
+        RasterShaderStages {
+            vertex: include_bytes!("support/shaders/depth_sampling.vert.spv"),
+            fragment: Some(include_bytes!(
+                "support/shaders/depth_sampling_color.frag.spv"
+            )),
+        },
+        D3D12RasterShaders {
+            stages: RasterShaderStages {
+                vertex: include_bytes!("support/shaders/dxil/depth_sampling.vert.dxil"),
+                fragment: Some(include_bytes!(
+                    "support/shaders/dxil/depth_sampling_color.frag.dxil"
+                )),
+            },
+            inline_constants: Some(D3D12InlineConstantBinding {
+                register: 7,
+                space: 0,
+            }),
+        },
+    ),
     ..MASK
 };
 

@@ -1,5 +1,6 @@
 //! Forward+ tile culling and the shared point-light buffer layout.
 
+use super::super::packaged_shaders;
 use renderer::graph::{Binding, BindingResource, BufferHandle, Graph, GraphError, PassHandle};
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
@@ -138,8 +139,10 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
         },
         bytes: &[CULL_CAMERA_BYTES, LIGHT_BUFFER_BYTES, GROUP_BYTES],
     },
-    spirv: include_bytes!("../../shaders/forward_plus.comp.spv"),
-    dxil: include_bytes!("../../shaders/dxil/forward_plus.comp.dxil"),
+    shaders: packaged_shaders!(
+        include_bytes!("../../shaders/forward_plus.comp.spv"),
+        include_bytes!("../../shaders/dxil/forward_plus.comp.dxil"),
+    ),
 };
 
 pub const fn compute_program() -> ManagedProgram {

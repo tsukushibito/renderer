@@ -3,6 +3,7 @@
 #[path = "forward_plus/culling.rs"]
 mod culling;
 
+use super::packaged_shaders;
 use renderer::graph::{Binding, BufferHandle};
 use renderer::program::{
     BindingLayout, BindingType, ManagedRasterProgram, RasterProgramDescriptor, ShaderStages,
@@ -68,8 +69,17 @@ const fn pbr_bytes<const N: usize>() -> [u64; N] {
 static REFERENCE_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &pbr_bindings::<17>(),
     binding_bytes: &pbr_bytes::<17>(),
-    fragment_spirv: include_bytes!("../shaders/pbr_all_lights.frag.spv"),
-    fragment_dxil: include_bytes!("../shaders/dxil/pbr_all_lights.frag.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (
+            super::PBR_VERTEX_SPIRV,
+            Some(include_bytes!("../shaders/pbr_all_lights.frag.spv")),
+        ),
+        d3d12: (
+            super::PBR_VERTEX_DXIL,
+            Some(include_bytes!("../shaders/dxil/pbr_all_lights.frag.dxil")),
+        ),
+        inline_constants: None,
+    ),
     ..OPAQUE
 };
 static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
@@ -80,8 +90,17 @@ static REFERENCE_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
 static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     bindings: &pbr_bindings::<18>(),
     binding_bytes: &pbr_bytes::<18>(),
-    fragment_spirv: include_bytes!("../shaders/pbr_forward_plus.frag.spv"),
-    fragment_dxil: include_bytes!("../shaders/dxil/pbr_forward_plus.frag.dxil"),
+    shaders: packaged_shaders!(
+        vulkan: (
+            super::PBR_VERTEX_SPIRV,
+            Some(include_bytes!("../shaders/pbr_forward_plus.frag.spv")),
+        ),
+        d3d12: (
+            super::PBR_VERTEX_DXIL,
+            Some(include_bytes!("../shaders/dxil/pbr_forward_plus.frag.dxil")),
+        ),
+        inline_constants: None,
+    ),
     ..OPAQUE
 };
 static TILED_BLEND: RasterProgramDescriptor = RasterProgramDescriptor {
