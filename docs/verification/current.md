@@ -20,7 +20,7 @@ Vulkan専用、D3D12専用、両対応で作成した。EXE中の既知のSPIR-V
 Window作成前に拒否した。両対応の厳格構成でも両APIで成功し、各runは24フレームと6遷移、
 最終解放後のVulkan Core／SyncVal、D3D12 Debug Layer／GBVのwarningとerrorは0だった。
 APIごとに単独版・両対応版・厳格版の24サンプルの寸法、出力digest、geometry画素数は一致した。
-Vulkan専用の`headless`と`frame_loop`も各2本のSPIR-Vと0本のDXILを確認した。
+Vulkan専用の`headless`と`frame_loop`も各4本のSPIR-Vと0本のDXILを確認した。
 D3D12専用の`bistro --fixture`は`--api`なしでD3D12を選び、64×48の描画を2フレーム完了した。
 
 選択した形式がないCompute・Rasterを準備時に拒否し、既存の作業セットを維持することを両APIで確認した。
