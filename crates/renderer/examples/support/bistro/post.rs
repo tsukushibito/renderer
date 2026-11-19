@@ -302,8 +302,8 @@ mod tests {
                     prepared.pipeline.output_resource().1,
                     ImageDesc::rgba8(width, height)
                 );
-                let builtin = Budget::frame_images(&options, None, None);
-                let configured = Budget::frame_images(&options, Some(&prepared), None);
+                let builtin = Budget::frame_images(&options, None, None, None);
+                let configured = Budget::frame_images(&options, Some(&prepared), None, None);
                 assert_eq!(builtin.len(), configured.len());
                 for class in &builtin {
                     assert!(configured.contains(class));

@@ -43,6 +43,8 @@ mod scene_pipeline;
 mod shader_assets;
 #[path = "bistro/shadow.rs"]
 mod shadow;
+#[path = "bistro/shadow_pipeline.rs"]
+mod shadow_pipeline;
 #[cfg(feature = "tracy")]
 #[path = "bistro/trace.rs"]
 mod trace;
@@ -160,6 +162,7 @@ struct Options {
     pipeline: PipelineMode,
     shader_assets: Option<shader_assets::Selection>,
     scene_pipeline: Option<PathBuf>,
+    shadow_pipeline: Option<PathBuf>,
     post_pipeline: Option<PathBuf>,
     instances: instancing::Mode,
     submission: SubmissionMode,
@@ -255,6 +258,7 @@ impl Options {
             pipeline: PipelineMode::Forward,
             shader_assets: None,
             scene_pipeline: None,
+            shadow_pipeline: None,
             post_pipeline: None,
             instances: instancing::Mode::Off,
             submission: SubmissionMode::Direct,
@@ -335,6 +339,10 @@ impl Options {
                 "--scene-pipeline" => {
                     result.scene_pipeline =
                         Some(args.next().ok_or("--scene-pipeline needs a path")?.into());
+                }
+                "--shadow-pipeline" => {
+                    result.shadow_pipeline =
+                        Some(args.next().ok_or("--shadow-pipeline needs a path")?.into());
                 }
                 "--post-pipeline" => {
                     result.post_pipeline =
@@ -442,6 +450,9 @@ impl Options {
                 "--scene-pipeline requires Forward 1x, direct submission and instancing off".into(),
             );
         }
+        if result.shadow_pipeline.is_some() {
+            result.reuse_shadows = false;
+        }
         if result.pipeline == PipelineMode::Deferred
             && result.sample_count != renderer::graph::SampleCount::X1
         {
@@ -531,6 +542,7 @@ Rendering
   --shader-pipeline YAML --shader-manifest JSON
                                  Forward 1x with direct submission
   --scene-pipeline YAML          Forward 1x pass graph with direct submission
+  --shadow-pipeline YAML         Four shadow cascades, redrawn every frame
   --post-pipeline YAML           Scene HDR to SDR pass graph, including Bloom
   --msaa 1|4
   --bloom off|tent|box
@@ -622,6 +634,11 @@ mod tests {
         assert!(options(&["--fixture", "--manifest", "x"]).is_err());
         assert!(options(&["--fixture", "--inflight", "0"]).is_err());
         assert!(options(&["--fixture"]).unwrap().reuse_shadows);
+        assert!(
+            !options(&["--fixture", "--shadow-pipeline", "shadows.yaml"])
+                .unwrap()
+                .reuse_shadows
+        );
         assert!(
             !options(&["--fixture", "--redraw-shadows"])
                 .unwrap()

@@ -225,7 +225,12 @@ impl State {
         backend.set_profiling(options.gpu_timing)?;
         surface.set_profiling(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-        let mut workspace = Workspace::new(scene, post, budget.scene_pipeline.take());
+        let mut workspace = Workspace::new(
+            scene,
+            post,
+            budget.scene_pipeline.take(),
+            budget.shadow_pipeline.take(),
+        );
         workspace.placements = placements;
         if options.reuse_shadows && options.shadows {
             workspace.enable_shadow_reuse();
@@ -470,6 +475,7 @@ impl State {
                 .map(|pipeline| pipeline.resize(options, scene))
                 .transpose()?;
             let budget = &self.budget;
+            let shadow_pipeline = self.workspace.shadow_pipeline.as_ref();
             self.resident = Some(self.resident.take().unwrap().reprepare(
                 &mut self.backend,
                 |backend| {
@@ -479,6 +485,7 @@ impl State {
                         budget,
                         post.as_ref(),
                         scene_pipeline.as_ref(),
+                        shadow_pipeline,
                     )
                 },
             )?);
@@ -674,6 +681,10 @@ impl State {
         if let Some(pipeline) = &self.workspace.scene_pipeline {
             report["scene_pipeline"] = json!(options.scene_pipeline);
             report["scene_pipeline_sha256"] = json!(pipeline.sha256());
+        }
+        if let Some(pipeline) = &self.workspace.shadow_pipeline {
+            report["shadow_pipeline"] = json!(options.shadow_pipeline);
+            report["shadow_pipeline_sha256"] = json!(pipeline.sha256());
         }
         super::run::write_report(&options.output, &report)?;
         if options.window_smoke && !smoke_passed {

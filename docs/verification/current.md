@@ -7,16 +7,33 @@
 
 <a id="bistro-scene-pipeline-verification"></a>
 
-## BistroのForwardを組み立てるYAML
+## BistroのForwardとシャドウを組み立てるYAML
 
 `renderer-a95`。Forward 1×の不透明・透過パスをYAMLで組み立て、カメラと複数mipのIBL View、既存の4カスケードを入力した。
 シーンHDRを同じGraphのBloomからSDRまでにつないだ。共有Viewのmip全域が読み取り範囲となることと、別GraphのView、
 不正な材質binding範囲、初期化されない出力を拒否することをCPU試験で確認した。
 
-RTX 3060（610.88）のVulkan／D3D12厳格構成で、131×97 fixtureのシャドウ再利用／再描画と、640×480全量Bistroの
-再描画を`d19a02a`と比較した。HDR、Bloom後HDR、SDR、D32深度と4枚のカスケード、追加のAA-off画像が各APIでバイト一致した。
-通常フレームの観測対象となる確保・解放とネイティブ資源の作成・破棄、厳格検証の警告・エラーは0件だった。
-[YAMLと実行手順](../guides/tooling.md#bistro-scene-pipeline)を参照する。
+Windows RTX 3060（610.88）のVulkan／D3D12で、最適化した製品・厳格構成を`d19a02a`と比較した。
+131×97 fixtureのシャドウ再利用／再描画、640×480全量Bistro（street、可視1,092 draw）の再描画、801×601のウィンドウを対象にした。
+シーンHDR、Bloom後HDR、SDR、D32深度、4枚のカスケード、追加AA-off画像、初回の線形表示元を合わせた132画像比較が一致した。
+両APIの厳格fixtureで材質シェーダーマニフェストも併用し、追加の24画像比較が一致した。
+全量BistroでYAMLの`irradiance`と`reflection`の接続を入れ替えると、両APIでシーンHDR、Bloom後HDR、SDRが変化し、深度と4枚のカスケードは一致した。
+これらのオフスクリーン72通常フレームは観測対象となる確保・解放とネイティブ資源の作成・破棄が0件だった。
+厳格検証の警告・エラーは0件だった。
+
+`renderer-y41`。4つのD32画像と各カスケードの深度パスを別のYAMLで準備した。Bistroは既存のカスケード行列とカリングを使い、
+同じGraphのForwardが生成された画像を読む。候補が0件でも4画像を初期化することを準備時に確認した。
+最終版を両APIの製品・厳格構成で同じ`d19a02a`と比較し、fixture／全量、AA-off、初回の線形表示元を含む100画像が一致した。
+シャドウだけをYAMLで組む構成は24画像、従来の影キャッシュを使うForward YAMLは32画像、`--shadows-off`は24画像が一致した。
+影を無効にした構成の4画像は全画素クリア値だった。追加のオフスクリーン72通常フレームも観測対象とした確保・解放、
+ネイティブ作成・破棄が0件で、厳格検証の警告・エラーも0件だった。
+全量Bistroの厳格構成でYAMLだけを編集し、カスケード0の描画リストを空にした。両APIでカスケード0が全画素クリア値になり、
+ほかの3カスケードとカメラ深度は一致し、シーンHDRの66,316画素、Bloom後HDR、SDRが変化した。
+
+両段階ともウィンドウで各構成24フレームの表示とリサイズ・最小化・復帰が成功した。画素比較は初回の表示元で、
+比較元の製品D3D12だけが終了時の既存未完了フレーム条件で再試行を要した。
+
+ログとキャプチャは`.tools/bistro-yaml-forward-validation/`、[YAMLと実行手順](../guides/tooling.md#bistro-scene-pipeline)を参照する。
 
 <a id="bistro-post-pipeline-verification"></a>
 

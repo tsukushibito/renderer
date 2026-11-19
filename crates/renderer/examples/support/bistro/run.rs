@@ -240,7 +240,7 @@ fn identity(
     environment: &Value,
 ) -> Value {
     let shadow = super::shadow::Parameters::default();
-    let identity = json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
+    let mut identity = json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
         "shaders_sha256":super::digest(include_bytes!("shaders/manifest.json")),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
@@ -272,6 +272,9 @@ fn identity(
             "linear RGBA16F -> optional Bloom -> EV+1 -> Khronos PBR Neutral -> optional FXAA -> single sRGB OETF -> RGBA8 UNORM; alpha 1"
         },
         "completion":"nonblocking backend poll with thread::yield_now on not-ready; no VSync/presentation"});
+    if let Some(path) = &options.shadow_pipeline {
+        identity["shadow_pipeline"] = json!(path);
+    }
     #[cfg(feature = "development-validation")]
     let identity = {
         let mut identity = identity;
@@ -392,6 +395,9 @@ fn capture_planes(
     if let Some(scene_pipeline) = &workspace.scene_pipeline {
         report["scene_pipeline_sha256"] = json!(scene_pipeline.sha256());
     }
+    if let Some(shadow_pipeline) = &workspace.shadow_pipeline {
+        report["shadow_pipeline_sha256"] = json!(shadow_pipeline.sha256());
+    }
     if options.post_pipeline.is_some() {
         report["post_pipeline_sha256"] = json!(
             workspace
@@ -445,6 +451,7 @@ fn capture(
 fn copy_pipeline_capture_metadata(report: &mut Value, capture: &Value) {
     for field in [
         "scene_pipeline_sha256",
+        "shadow_pipeline_sha256",
         "post_pipeline_sha256",
         "bloom_bypass_post_pipeline_sha256",
     ] {
@@ -649,7 +656,12 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     // One additional Graph backing covers the latest mutable camera provenance
     // when all execution slots have otherwise completed (including inflight=1).
     let mut pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-    let mut workspace = Workspace::new(&scene, post, budget.scene_pipeline.take());
+    let mut workspace = Workspace::new(
+        &scene,
+        post,
+        budget.scene_pipeline.take(),
+        budget.shadow_pipeline.take(),
+    );
     workspace.placements = placements;
     if options.reuse_shadows && options.shadows {
         workspace.enable_shadow_reuse();
@@ -921,6 +933,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             &budget,
             workspace.post.take(),
             workspace.scene_pipeline.take(),
+            workspace.shadow_pipeline.take(),
             resource_stages,
         )?
     } else {

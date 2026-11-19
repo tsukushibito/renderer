@@ -284,6 +284,14 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 
 D3D12では`--api d3d12`を指定する。`--scene-pipeline`を省略した同じ描画条件で、従来のシーン構成と比較できる。
 
+4つのシャドウパスもYAMLで組み立てる場合は、さらに`--shadow-pipeline`に
+[scene-shadows.yaml](../../crates/renderer/examples/support/bistro/scene-shadows.yaml)を指定する。
+このファイルは4枚の2048×2048 D32画像と、その深度パスを宣言する。各パスの候補はBistroが`sun_0`から`sun_3`へ渡し、
+生成した`cascade_0`から`cascade_3`のViewは同じGraphでForwardが読み取る。
+`--shadow-pipeline`だけを選び、生成した影を従来のForwardへ渡す構成も使える。
+YAMLのカスケードは毎フレーム描画する。従来のシーンと比較するときは、従来側に`--redraw-shadows`を指定する。
+[二APIでの検証](../verification/current.md#bistro-scene-pipeline-verification)を参照する。
+
 <a id="bistro-tools"></a>
 
 ## Bistroのcook・材質shader・比較

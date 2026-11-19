@@ -941,6 +941,7 @@ YAMLで宣言する資源はbufferと1×・単一mip／layerの2D画像で、材
 Rasterはindexed draw listまたは全画面三角形、ComputeはProgramのdispatch契約に従う。
 Bistroの[シーン描画](../guides/tooling.md#bistro-scene-pipeline)では、Forward 1×のアタッチメントとパス間接続をYAMLで指定する。
 Bistroはカメラ、可視判定・ソート済み描画候補、材質、照明のViewを供給する。
+カスケードをYAMLで描く構成では、光源ビューごとの描画候補をシャドウパスに渡し、生成した4枚の深度画像を同じGraphのForwardが参照する。
 Bistroの[ポスト処理](../guides/tooling.md#bistro-post-pipeline)では、既存GraphにあるシーンHDRを読み取り専用の外部入力とし、
 YAMLがBloomのComputeパスと一時画像、トーンマッピング、SDR出力を定義する。Bistroは最終画像を既存のキャプチャ／Presenterに渡し、
 Bloomが有効なときは同じGraphから`bloom_hdr`をキャプチャする。
