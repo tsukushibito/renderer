@@ -154,7 +154,7 @@ YAMLのキーの重複、未知の項目、アンカー、エイリアス、merg
 | `draw_lists` | 任意のリスト。各項目に`id`、`view`、`queue`を指定する。対応するビューの候補からqueueが一致する描画を入力順で選ぶ。 |
 | `passes` | 宣言順のパス列。各項目に`id`と`kind`を指定する。`kind: raster`は`shader`か`shader_template`の一方と、色・深度のattachmentを指定する。テンプレート指定には`draw_list`と必要な`material_types`の一覧を与える。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`は`shader`を指定し、呼出側指定のbuffer gridを持つProgramには`grid: [x, y]`を与える。 |
 | attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。 |
-| `bindings` | 各パスで、Programが要求する`group`と`binding`に`kind`を指定する。`image`は`resource`、`buffer`は`resource`、`offset`、`size`を指定する。`sampler`は`sampler`に`nearest_clamp`、`linear_clamp`、`linear_repeat`、`linear_repeat_u_clamp_v`のいずれかを指定する。indexed Rasterの`kind: material`は`resource`でフレームの材質binding名を指定する。 |
+| `bindings` | 各パスで、Programが要求する`group`と`binding`に`kind`を指定する。`image`はYAML画像の`resource`、`sampled_view`はアプリが渡すsampled Viewの名前を`resource`に指定する。`buffer`は`resource`、`offset`、`size`を指定する。`sampler`は`sampler`に`nearest_clamp`、`linear_clamp`、`linear_repeat`、`linear_repeat_u_clamp_v`のいずれかを指定する。indexed Rasterの`kind: material`は`resource`でフレームの材質binding名を指定する。 |
 | `output` | 出力する画像の`id`。 |
 
 たとえば、アプリが供給するRGBA8画像にComputeを掛け、全画面Rasterへつなぐ構成を次のように書ける。
@@ -187,14 +187,16 @@ output: final
 1. `pipeline.working_set()`で必要なtransient資源とProgramを取得し、`Runtime::new`または
    `Runtime::prepare_working_set`へ渡す。アプリ側でGraphに作る外部入力やジオメトリのtransient資源は、
    その要求を合わせて準備する。永続的な外部深度画像は、深度付きRasterの最終WorkingSet準備までにRuntimeへ登録する。
-   Graph本体はアプリが十分な`GraphCapacity`とslotを備えた`GraphPool`で用意する。
+   `pipeline.requirements()`のパス・描画・binding数などの上限とアプリ側の処理量を使い、`GraphCapacity`とslotを備えた`GraphPool`を用意する。
 2. 毎フレーム、`GraphPool::begin`でGraphを取得し、入力のimportやuploadを追加する。`FrameInputs::resources`に
    `source: external`の名前と同じGraphのハンドルを`FrameResource`で渡す。資源の記述子はYAMLの宣言と一致させる。
    `FrameInputs::views`には`FrameView`で名前付きビューと候補を渡す。各`DrawCandidate`に`queue`とジオメトリ・
    定数を持つ`RasterDraw`を指定し、その`bindings`は`None`にする。同じリストを使うパスは候補のジオメトリと定数のABIを共有する。
    パス別のbindingはYAMLが指定する。宣言した外部資源とビューは名前ごとに一つずつ渡す。
+   `kind: sampled_view`の入力は`FrameInputs::sampled_views`に`FrameSampledView`で渡す。IBLなどのパス共通入力には複数mipを含むViewを使える。
    材質を使う描画候補には`DrawCandidate::material`に`FrameInputs::materials`の添字を指定する。
-   各`FrameMaterial`の`material_type`をテンプレートパスの宣言に合わせ、`MaterialBinding`でGraph上の資源を名前付きで渡す。
+   各`FrameMaterial`の`material_type`をテンプレートパスの宣言に合わせ、`bindings`に`FrameInputs::material_bindings`上の範囲を指定する。
+   各`MaterialBinding`でGraph上の資源を名前付きで渡す。
    材質のtextureは`Graph::sampled_image_view`で複数mipを参照できる。
 3. `pipeline.build(graph, inputs)`でパスを追加し、Graphと`FrameOutput`を受け取る。
    `image()`で`output`の画像、`named_image(id)`で同じGraphにある名前付きの画像を取得できる。
@@ -266,6 +268,21 @@ cargo run --locked --release -p renderer --no-default-features --features vulkan
 ```
 
 D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加の表示手順は[開発ガイド](development.md#bistro-b5)を参照する。
+
+<a id="bistro-scene-pipeline"></a>
+
+### BistroのForwardをYAMLで構成する
+
+`--scene-pipeline PATH`に[scene-forward.yaml](../../crates/renderer/examples/support/bistro/scene-forward.yaml)を渡す。
+Forward 1×の直接描画で、YAMLが不透明パスと透明パス、HDR・深度画像、共有／材質bindingを定義する。
+Bistroはカメラ定数、3つのIBL View、4つのシャドウマップ、可視判定と並び替えを行った描画候補を渡す。
+サンプルの背景色は最初のカラーパスの`clear`に指定する。`output`のHDRは同じGraphの[BloomとSDR](#bistro-post-pipeline)に接続する。
+
+```powershell
+cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation --example bistro -- --api vulkan --fixture --scene-pipeline crates/renderer/examples/support/bistro/scene-forward.yaml --bloom tent --post-pipeline crates/renderer/examples/support/bistro/post-bloom.yaml --output .tools/bistro-scene-vulkan
+```
+
+D3D12では`--api d3d12`を指定する。`--scene-pipeline`を省略した同じ描画条件で、従来のシーン構成と比較できる。
 
 <a id="bistro-tools"></a>
 

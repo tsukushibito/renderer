@@ -168,6 +168,11 @@ pub(super) enum BindingSpec {
         binding: u32,
         resource: String,
     },
+    SampledView {
+        group: u32,
+        binding: u32,
+        resource: String,
+    },
     Buffer {
         group: u32,
         binding: u32,

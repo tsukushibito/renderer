@@ -5,6 +5,19 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+<a id="bistro-scene-pipeline-verification"></a>
+
+## BistroのForwardを組み立てるYAML
+
+`renderer-a95`。Forward 1×の不透明・透過パスをYAMLで組み立て、カメラと複数mipのIBL View、既存の4カスケードを入力した。
+シーンHDRを同じGraphのBloomからSDRまでにつないだ。共有Viewのmip全域が読み取り範囲となることと、別GraphのView、
+不正な材質binding範囲、初期化されない出力を拒否することをCPU試験で確認した。
+
+RTX 3060（610.88）のVulkan／D3D12厳格構成で、131×97 fixtureのシャドウ再利用／再描画と、640×480全量Bistroの
+再描画を`d19a02a`と比較した。HDR、Bloom後HDR、SDR、D32深度と4枚のカスケード、追加のAA-off画像が各APIでバイト一致した。
+通常フレームの観測対象となる確保・解放とネイティブ資源の作成・破棄、厳格検証の警告・エラーは0件だった。
+[YAMLと実行手順](../guides/tooling.md#bistro-scene-pipeline)を参照する。
+
 <a id="bistro-post-pipeline-verification"></a>
 
 ## BistroのHDRからSDRをつなぐYAML

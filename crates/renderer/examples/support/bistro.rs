@@ -37,6 +37,8 @@ mod post;
 mod program;
 #[path = "bistro/run.rs"]
 mod run;
+#[path = "bistro/scene_pipeline.rs"]
+mod scene_pipeline;
 #[path = "bistro/shader_assets.rs"]
 mod shader_assets;
 #[path = "bistro/shadow.rs"]
@@ -157,6 +159,7 @@ struct Options {
     sample_count: renderer::graph::SampleCount,
     pipeline: PipelineMode,
     shader_assets: Option<shader_assets::Selection>,
+    scene_pipeline: Option<PathBuf>,
     post_pipeline: Option<PathBuf>,
     instances: instancing::Mode,
     submission: SubmissionMode,
@@ -251,6 +254,7 @@ impl Options {
             sample_count: renderer::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
             shader_assets: None,
+            scene_pipeline: None,
             post_pipeline: None,
             instances: instancing::Mode::Off,
             submission: SubmissionMode::Direct,
@@ -327,6 +331,10 @@ impl Options {
                 "--shader-manifest" => {
                     shader_manifest =
                         Some(args.next().ok_or("--shader-manifest needs a path")?.into());
+                }
+                "--scene-pipeline" => {
+                    result.scene_pipeline =
+                        Some(args.next().ok_or("--scene-pipeline needs a path")?.into());
                 }
                 "--post-pipeline" => {
                     result.post_pipeline =
@@ -424,6 +432,16 @@ impl Options {
                 );
             }
         };
+        if result.scene_pipeline.is_some()
+            && (result.pipeline != PipelineMode::Forward
+                || result.sample_count != renderer::graph::SampleCount::X1
+                || result.submission != SubmissionMode::Direct
+                || result.instances.enabled())
+        {
+            return Err(
+                "--scene-pipeline requires Forward 1x, direct submission and instancing off".into(),
+            );
+        }
         if result.pipeline == PipelineMode::Deferred
             && result.sample_count != renderer::graph::SampleCount::X1
         {
@@ -512,6 +530,7 @@ Rendering
   --pipeline forward|forward-plus|forward-reference|deferred
   --shader-pipeline YAML --shader-manifest JSON
                                  Forward 1x with direct submission
+  --scene-pipeline YAML          Forward 1x pass graph with direct submission
   --post-pipeline YAML           Scene HDR to SDR pass graph, including Bloom
   --msaa 1|4
   --bloom off|tent|box

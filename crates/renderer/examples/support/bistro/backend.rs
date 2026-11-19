@@ -199,11 +199,12 @@ pub(super) fn resize(
     options: &Options,
     budget: &Budget,
     post: Option<&post::Prepared>,
+    scene_pipeline: Option<&super::scene_pipeline::Prepared>,
 ) -> Result<(), Error> {
     with_working_set(
         options,
         &budget.resized_buffers(options),
-        &Budget::frame_images(options, post),
+        &Budget::frame_images(options, post, scene_pipeline),
         post,
         |set| runtime.prepare_working_set(set),
     )

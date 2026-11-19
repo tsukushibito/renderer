@@ -7,7 +7,7 @@ use super::{
     camera::{Camera, Frustum},
     deferred, forward_lighting, ibl, instancing, post,
     program::{self, forward_plus},
-    shadow,
+    scene_pipeline, shadow,
 };
 use renderer::{
     ImageFormat,
@@ -26,6 +26,7 @@ use renderer::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
+use renderer_pipeline::DrawCandidate;
 use std::sync::Arc;
 
 #[path = "pipeline/indirect.rs"]
@@ -33,6 +34,7 @@ mod indirect;
 
 pub(super) struct Budget {
     pub graph: GraphCapacity,
+    pub scene_pipeline: Option<scene_pipeline::Prepared>,
     #[cfg(feature = "vulkan")]
     pub vulkan_shader_bindings: u32,
     pub buffers: Vec<(u64, usize)>,
@@ -145,12 +147,22 @@ impl Budget {
     pub fn frame_images(
         options: &Options,
         post: Option<&post::Prepared>,
+        scene_pipeline: Option<&scene_pipeline::Prepared>,
     ) -> Vec<(ImageDesc, usize)> {
         let mut images = Vec::new();
         let mut add = |desc, count| add_image_class(&mut images, desc, count);
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
         let sdr = ImageDesc::rgba8(options.width, options.height);
-        add(hdr, options.inflight);
+        if let Some(scene_pipeline) = scene_pipeline {
+            for &class in scene_pipeline.resources() {
+                let ResourceClass::Image { desc, count } = class else {
+                    unreachable!("Bistro scene preparation accepts only transient images");
+                };
+                add(desc, count);
+            }
+        } else {
+            add(hdr, options.inflight);
+        }
         if let Some(post) = post {
             let mut requirements: Vec<_> = post
                 .working_set()
@@ -199,11 +211,13 @@ impl Budget {
                 add(desc, options.inflight);
             }
         }
-        add(
-            ImageDesc::depth32(options.width, options.height)
-                .with_sample_count(options.sample_count),
-            options.inflight,
-        );
+        if scene_pipeline.is_none() {
+            add(
+                ImageDesc::depth32(options.width, options.height)
+                    .with_sample_count(options.sample_count),
+                options.inflight,
+            );
+        }
         // Presented images remain owned by the Presenter after Graph completion.
         let sdr_slots = usize::from(post.is_none()) + usize::from(options.windowed);
         if sdr_slots != 0 {
@@ -221,6 +235,10 @@ impl Budget {
         post: Option<&post::Prepared>,
     ) -> Result<Self, Error> {
         options.validate_lighting_extent()?;
+        let scene_pipeline = scene_pipeline::Prepared::load(options, scene)?;
+        let scene_requirements = scene_pipeline
+            .as_ref()
+            .map(scene_pipeline::Prepared::requirements);
         let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
         let local_lights = usize::from(options.pipeline.uses_local_lights());
         let tiled_lights = usize::from(options.pipeline == PipelineMode::ForwardPlus);
@@ -343,14 +361,15 @@ impl Budget {
         let bloom_passes = usize::from(post::builtin_bloom(options, post) != Bloom::Off) * 5;
         let capture_bloom = options.bloom != Bloom::Off;
         let mut frame_instances = 0;
-        for (desc, count) in Self::frame_images(options, post) {
+        for (desc, count) in Self::frame_images(options, post, scene_pipeline.as_ref()) {
             add_image(desc, count);
             frame_instances += count;
         }
         let post = post.map(post::Prepared::graph_capacity);
         let resources = buffer_count
             + scene.images.len()
-            + 11
+            + 9
+            + scene_requirements.map_or(2, |scene| scene.resources)
             + bloom_passes.max(post.map_or(0, |graph| graph.resources))
             + deferred * (1 + deferred::PLANES.len())
             + local_lights
@@ -368,6 +387,7 @@ impl Budget {
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
         let accesses = scene.primitives.len() * 64
             + 256
+            + scene_requirements.map_or(0, |scene| scene.accesses)
             + bloom_bindings.max(post.map_or(0, |graph| graph.accesses))
             + 8 * groups;
         let shadow_words = scene
@@ -384,15 +404,17 @@ impl Budget {
             .checked_add(instance_words)
             .and_then(|words| {
                 words.checked_add(
-                    1 + post
-                        .and_then(|graph| graph.raster_constant_words)
-                        .unwrap_or(0),
+                    1 + scene_requirements.map_or(0, |scene| scene.raster_constant_words)
+                        + post
+                            .and_then(|graph| graph.raster_constant_words)
+                            .unwrap_or(0),
                 )
             })
             .ok_or("Raster constant budget overflow")?;
         let graph = GraphCapacity {
             resources,
             passes: 24
+                + scene_requirements.map_or(0, |scene| scene.passes)
                 + bloom_passes.max(post.map_or(0, |graph| graph.passes))
                 + usize::from(capture_bloom)
                 + deferred * 2
@@ -400,13 +422,15 @@ impl Budget {
                 + tiled_lights
                 + indirect_passes,
             accesses,
-            draws: scene.primitives.len() * 5
+            draws: scene.primitives.len() * 4
+                + scene_requirements.map_or(scene.primitives.len(), |scene| scene.draws)
                 + 2
                 + deferred
                 + options.instances.draws()
                 + post.map_or(0, |graph| graph.draws),
             raster_constant_words: Some(raster_constant_words),
-            bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
+            bindings: scene.materials.len() * (4 + local_lights + tiled_lights)
+                + scene_requirements.map_or(scene.materials.len() * 16, |scene| scene.bindings)
                 + 4
                 + bloom_bindings.max(post.map_or(0, |graph| graph.bindings))
                 + deferred * 16
@@ -415,11 +439,15 @@ impl Budget {
                 + 3 * groups
                 + 3 * usize::from(groups != 0),
             attachments: 24
+                + scene_requirements.map_or(0, |scene| scene.attachments)
                 + deferred * deferred::PLANES.len()
                 + post.map_or(0, |graph| graph.attachments),
             dependencies: 32,
             initial_ranges: resources * 2,
-            name_bytes: resources * 32 + 2048 + post.map_or(0, |graph| graph.name_bytes),
+            name_bytes: resources * 32
+                + 2048
+                + post.map_or(0, |graph| graph.name_bytes)
+                + scene_requirements.map_or(0, |scene| scene.name_bytes),
             upload_bytes: program::CAMERA_BYTES
                 + deferred * program::deferred::DEFERRED_RECONSTRUCTION_BYTES
                 + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize,
@@ -509,6 +537,7 @@ impl Budget {
         };
         Ok(Self {
             graph,
+            scene_pipeline,
             #[cfg(feature = "vulkan")]
             vulkan_shader_bindings,
             buffers,
@@ -901,6 +930,9 @@ pub(super) struct Workspace {
     shadow_cache: Option<ShadowCache>,
     pub(super) placements: Option<instancing::Placements>,
     pub(super) post: Option<post::Prepared>,
+    pub(super) scene_pipeline: Option<scene_pipeline::Prepared>,
+    pub(super) scene_materials: Option<scene_pipeline::Materials>,
+    scene_candidates: Vec<DrawCandidate<'static>>,
     opaque: Vec<usize>,
     indirect: Vec<IndexedIndirectArgs>,
     blended: Vec<usize>,
@@ -943,7 +975,17 @@ struct ShadowCache {
 }
 
 impl Workspace {
-    pub fn new(scene: &Scene, post: Option<post::Prepared>) -> Self {
+    pub fn new(
+        scene: &Scene,
+        post: Option<post::Prepared>,
+        scene_pipeline: Option<scene_pipeline::Prepared>,
+    ) -> Self {
+        let scene_materials = scene_pipeline
+            .as_ref()
+            .map(|_| scene_pipeline::Materials::new(scene.materials.len()));
+        let scene_draws = scene_pipeline
+            .as_ref()
+            .map_or(0, |_| scene.primitives.len());
         Self {
             vertices: Vec::with_capacity(scene.primitives.len()),
             indices: Vec::with_capacity(scene.primitives.len()),
@@ -954,6 +996,9 @@ impl Workspace {
             shadow_cache: None,
             placements: None,
             post,
+            scene_pipeline,
+            scene_materials,
+            scene_candidates: Vec::with_capacity(scene_draws),
             opaque: Vec::with_capacity(scene.primitives.len()),
             indirect: Vec::with_capacity(scene.materials.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
@@ -1153,6 +1198,9 @@ pub(super) fn build(
         graph.export_buffer(uniform)?;
         uniform
     };
+    if let Some(materials) = &mut workspace.scene_materials {
+        materials.populate(&graph, scene, &workspace.materials, &workspace.images)?;
+    }
     let mut local_light_bindings = [None; 2];
     let mut tile_update = None;
     if let Some(preset) = &resident.local_lights {
@@ -1293,33 +1341,105 @@ pub(super) fn build(
             |raster| raster.draw(&shadow_program, draws),
         )?;
     }
+    let camera_matrix =
+        std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
+    let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
+    let include_material = |index: usize| {
+        #[cfg(feature = "development-validation")]
+        if options.omit_material == Some(index) {
+            return false;
+        }
+        !options.alpha_only || scene.materials[index].alpha_zero
+    };
+    for (index, primitive) in scene.primitives.iter().enumerate() {
+        let material = &scene.materials[primitive.material];
+        if (resident.packed.is_some() && !material.blend) || !include_material(primitive.material) {
+            continue;
+        }
+        if frustum.overlaps(resident.primitive_bounds[index]) {
+            if material.blend {
+                workspace.blended.push(index);
+            } else {
+                workspace.opaque.push(index);
+            }
+        }
+    }
+    let lighting_views = [
+        graph.sampled_image_view(environment[0], 0, resident.environment_mips[0])?,
+        graph.sampled_image_view(environment[1], 0, resident.environment_mips[1])?,
+        graph.sampled_image_view(environment[2], 0, resident.environment_mips[2])?,
+    ];
+    if let Some(scene_pipeline) = &mut workspace.scene_pipeline {
+        sort_blended(&mut workspace.blended, scene, camera);
+        workspace.scene_candidates.clear();
+        for (queue, visible) in [
+            ("opaque", &workspace.opaque),
+            ("transparent", &workspace.blended),
+        ] {
+            workspace
+                .scene_candidates
+                .extend(visible.iter().map(|&index| {
+                    let primitive = &scene.primitives[index];
+                    DrawCandidate {
+                        queue,
+                        material: Some(primitive.material),
+                        draw: RasterDraw {
+                            bindings: None,
+                            vertices: workspace.vertices[index],
+                            indices: workspace.indices[index],
+                            first_index: 0,
+                            index_count: primitive.index_count,
+                            instance_count: 1,
+                            parameters: RasterConstants::default(),
+                        },
+                    }
+                }));
+        }
+        let route = post_route(&mut graph, workspace.post.as_mut(), options)?;
+        let (graph, color, depth) = scene_pipeline.append(
+            graph,
+            uniform,
+            lighting_views,
+            shadow_views,
+            &workspace.scene_candidates,
+            workspace
+                .scene_materials
+                .as_ref()
+                .expect("prepared scene material storage"),
+        )?;
+        return finish_frame(
+            graph,
+            route,
+            SceneImages {
+                color,
+                depth,
+                shadows,
+            },
+            BufferUpdates {
+                camera: uniform,
+                tiles: tile_update,
+            },
+            shadow_updates,
+            (capture && !options.windowed).then_some(workspace.scene_candidates.len()),
+            options,
+            capture,
+        );
+    }
     let lighting_bindings = [
         Binding {
             group: 2,
             binding: 0,
-            resource: BindingResource::ImageView(graph.sampled_image_view(
-                environment[0],
-                0,
-                resident.environment_mips[0],
-            )?),
+            resource: BindingResource::ImageView(lighting_views[0]),
         },
         Binding {
             group: 2,
             binding: 1,
-            resource: BindingResource::ImageView(graph.sampled_image_view(
-                environment[1],
-                0,
-                resident.environment_mips[1],
-            )?),
+            resource: BindingResource::ImageView(lighting_views[1]),
         },
         Binding {
             group: 2,
             binding: 2,
-            resource: BindingResource::ImageView(graph.sampled_image_view(
-                environment[2],
-                0,
-                resident.environment_mips[2],
-            )?),
+            resource: BindingResource::ImageView(lighting_views[2]),
         },
         Binding {
             group: 2,
@@ -1448,10 +1568,6 @@ pub(super) fn build(
     }
     let multisampled = options.sample_count == SampleCount::X4;
     let scene_clear = [background[0], background[1], background[2], 1.0];
-    enum PostRoute<'a> {
-        Yaml(&'a mut post::Prepared),
-        Builtin(ImageHandle),
-    }
     let (color, depth, post_route, color_view, depth_view, resolve_view) = {
         #[cfg(feature = "tracy")]
         let _targets = tracy_client::Client::running()
@@ -1475,18 +1591,7 @@ pub(super) fn build(
             ImageDesc::depth32(options.width, options.height)
                 .with_sample_count(options.sample_count),
         )?;
-        let post_route = if let Some(post) = workspace
-            .post
-            .as_mut()
-            .filter(|post| post.uses_options(options))
-        {
-            PostRoute::Yaml(post)
-        } else {
-            PostRoute::Builtin(graph.image(
-                "B2 sRGB output",
-                ImageDesc::rgba8(options.width, options.height),
-            )?)
-        };
+        let post_route = post_route(&mut graph, workspace.post.as_mut(), options)?;
         let depth_view = graph.image_view(depth, 0, 0)?;
         if !multisampled && !deferred {
             graph.attachment_pass(
@@ -1515,34 +1620,11 @@ pub(super) fn build(
             resolve_view,
         )
     };
-    let camera_matrix =
-        std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
-    let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
-    let include_material = |index: usize| {
-        #[cfg(feature = "development-validation")]
-        if options.omit_material == Some(index) {
-            return false;
-        }
-        !options.alpha_only || scene.materials[index].alpha_zero
-    };
     let packed = resident
         .packed
         .as_ref()
         .map(|packed| packed.prepare_frame(&mut graph, uniform, &mut workspace.indirect))
         .transpose()?;
-    for (index, primitive) in scene.primitives.iter().enumerate() {
-        let material = &scene.materials[primitive.material];
-        if (packed.is_some() && !material.blend) || !include_material(primitive.material) {
-            continue;
-        }
-        if frustum.overlaps(resident.primitive_bounds[index]) {
-            if material.blend {
-                workspace.blended.push(index);
-            } else {
-                workspace.opaque.push(index);
-            }
-        }
-    }
     let draw = |index: usize| {
         let primitive = &scene.primitives[index];
         RasterDraw {
@@ -1639,20 +1721,7 @@ pub(super) fn build(
             },
         )?;
     }
-    {
-        #[cfg(feature = "tracy")]
-        let _sort = tracy_client::Client::running().map(|client| {
-            client.span(tracy_client::span_location!("bistro.build.blended_sort"), 0)
-        });
-        // A deterministic far-to-near primitive order. This is ordinary alpha
-        // blending, not order-independent transparency or per-triangle sorting.
-        workspace.blended.sort_unstable_by(|&a, &b| {
-            camera
-                .distance_squared(scene.primitives[b].center)
-                .total_cmp(&camera.distance_squared(scene.primitives[a].center))
-                .then(a.cmp(&b))
-        });
-    }
+    sort_blended(&mut workspace.blended, scene, camera);
     {
         #[cfg(feature = "tracy")]
         let _blended = tracy_client::Client::running().map(|client| {
@@ -1686,6 +1755,93 @@ pub(super) fn build(
             )?;
         }
     }
+    let opaque_draws = match (capture && !options.windowed, &packed) {
+        (true, Some(packed)) => {
+            packed.visible_direct_draws(&frustum, &resident.primitive_bounds, include_material)
+        }
+        (true, None) => Some(workspace.opaque.len()),
+        (false, _) => None,
+    };
+    let draws =
+        opaque_draws.map(|count| count + workspace.blended.len() + options.instances.draws());
+    finish_frame(
+        graph,
+        post_route,
+        SceneImages {
+            color,
+            depth,
+            shadows,
+        },
+        BufferUpdates {
+            camera: uniform,
+            tiles: tile_update,
+        },
+        shadow_updates,
+        draws,
+        options,
+        capture,
+    )
+}
+
+enum PostRoute<'a> {
+    Yaml(&'a mut post::Prepared),
+    Builtin(ImageHandle),
+}
+
+fn post_route<'a>(
+    graph: &mut Graph,
+    post: Option<&'a mut post::Prepared>,
+    options: &Options,
+) -> Result<PostRoute<'a>, Error> {
+    if let Some(post) = post.filter(|post| post.uses_options(options)) {
+        return Ok(PostRoute::Yaml(post));
+    }
+    Ok(PostRoute::Builtin(graph.image(
+        "B2 sRGB output",
+        ImageDesc::rgba8(options.width, options.height),
+    )?))
+}
+
+fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
+    #[cfg(feature = "tracy")]
+    let _sort = tracy_client::Client::running()
+        .map(|client| client.span(tracy_client::span_location!("bistro.build.blended_sort"), 0));
+    // A deterministic far-to-near primitive order. This is ordinary alpha
+    // blending, not order-independent transparency or per-triangle sorting.
+    blended.sort_unstable_by(|&a, &b| {
+        camera
+            .distance_squared(scene.primitives[b].center)
+            .total_cmp(&camera.distance_squared(scene.primitives[a].center))
+            .then(a.cmp(&b))
+    });
+}
+
+struct SceneImages {
+    color: ImageHandle,
+    depth: ImageHandle,
+    shadows: [ImageHandle; shadow::CASCADE_COUNT],
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "both scene routes hand existing frame state to the same post and capture path"
+)]
+fn finish_frame(
+    mut graph: Graph,
+    post_route: PostRoute<'_>,
+    images: SceneImages,
+    updates: BufferUpdates,
+    shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
+    draws: Option<usize>,
+    options: &Options,
+    capture: bool,
+) -> Result<Built, Error> {
+    let SceneImages {
+        color,
+        depth,
+        shadows,
+    } = images;
+    let multisampled = options.sample_count == SampleCount::X4;
     #[cfg(feature = "tracy")]
     let _resolve = tracy_client::Client::running().map(|client| {
         client.span(
@@ -1762,22 +1918,10 @@ pub(super) fn build(
     } else {
         None
     };
-    let opaque_draws = match (capture, &packed) {
-        (true, Some(packed)) => {
-            packed.visible_direct_draws(&frustum, &resident.primitive_bounds, include_material)
-        }
-        (true, None) => Some(workspace.opaque.len()),
-        (false, _) => None,
-    };
-    let draws =
-        opaque_draws.map(|count| count + workspace.blended.len() + options.instances.draws());
     Ok(Built {
         graph,
         output,
-        updates: BufferUpdates {
-            camera: uniform,
-            tiles: tile_update,
-        },
+        updates,
         captures,
         bloom_capture,
         #[cfg(all(windows, feature = "presentation"))]

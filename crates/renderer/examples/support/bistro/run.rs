@@ -248,6 +248,7 @@ fn identity(
         "samples":options.sample_count.as_u32(),"pipeline":options.pipeline.name(),
         "shader_pipeline":options.shader_assets.as_ref().map(|selection| &selection.pipeline),
         "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
+        "scene_pipeline":options.scene_pipeline,
         "post_pipeline":options.post_pipeline,
         "local_lights":options.pipeline.uses_local_lights()
             .then(|| super::forward_lighting::identity(options.fixture)),
@@ -388,6 +389,9 @@ fn capture_planes(
     }
     let mut report = json!({"captures":captures,"shadow_captures":shadow_captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
         "readback_outside_measurement":true});
+    if let Some(scene_pipeline) = &workspace.scene_pipeline {
+        report["scene_pipeline_sha256"] = json!(scene_pipeline.sha256());
+    }
     if options.post_pipeline.is_some() {
         report["post_pipeline_sha256"] = json!(
             workspace
@@ -438,8 +442,12 @@ fn capture(
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-fn copy_post_capture_metadata(report: &mut Value, capture: &Value) {
-    for field in ["post_pipeline_sha256", "bloom_bypass_post_pipeline_sha256"] {
+fn copy_pipeline_capture_metadata(report: &mut Value, capture: &Value) {
+    for field in [
+        "scene_pipeline_sha256",
+        "post_pipeline_sha256",
+        "bloom_bypass_post_pipeline_sha256",
+    ] {
         if let Some(value) = capture.get(field) {
             report[field] = value.clone();
         }
@@ -591,7 +599,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "alpha_zero_materials":scene.materials.iter().filter(|material|material.alpha_zero).count()});
     let stage = Instant::now();
     let post = post::Prepared::load(options)?;
-    let budget = Budget::new(&scene, &environment, options, post.as_ref())?;
+    let mut budget = Budget::new(&scene, &environment, options, post.as_ref())?;
     let budget_ns = stage.elapsed().as_nanos() as u64;
     let (first_camera, first_uniform) = uniform(&conditions, options, 0)?;
     eprintln!(
@@ -641,7 +649,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
     // One additional Graph backing covers the latest mutable camera provenance
     // when all execution slots have otherwise completed (including inflight=1).
     let mut pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-    let mut workspace = Workspace::new(&scene, post);
+    let mut workspace = Workspace::new(&scene, post, budget.scene_pipeline.take());
     workspace.placements = placements;
     if options.reuse_shadows && options.shadows {
         workspace.enable_shadow_reuse();
@@ -868,7 +876,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
                 "scene":counts,"capture_only":true,"measurement":Value::Null,"captures":captured_view["captures"],
                 "shadow_captures":captured_view["shadow_captures"],"aa_off":aa_off,
                 "depth_coverage_pixels":captured_view["depth_coverage_pixels"],"draw_count":captured_view["draw_count"],"readback_outside_measurement":true});
-            copy_post_capture_metadata(&mut report, &captured_view);
+            copy_pipeline_capture_metadata(&mut report, &captured_view);
             captured_views.push((name.clone(), view.output, report));
         }
     }
@@ -912,6 +920,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
             &conditions,
             &budget,
             workspace.post.take(),
+            workspace.scene_pipeline.take(),
             resource_stages,
         )?
     } else {
@@ -954,7 +963,7 @@ pub(super) fn execute(options: &Options) -> Result<(), Error> {
         "shadow_captures":captured["shadow_captures"],"aa_off":aa_off,
         "views":view_reports,"route_samples":route_reports,"readback_outside_measurement":true,
         "limits":"Whole primitives sorted for transparency; Godot AgX, native IBL/filter and presentation differ from this Neutral pipeline"});
-    copy_post_capture_metadata(&mut report, &captured);
+    copy_pipeline_capture_metadata(&mut report, &captured);
     #[cfg(feature = "tracy")]
     let report = {
         let mut report = report;

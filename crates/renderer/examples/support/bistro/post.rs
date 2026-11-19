@@ -109,9 +109,10 @@ impl Prepared {
         if has_bloom && pipeline.image_resource(BLOOM_HDR) != Some(hdr) {
             return Err("Bistro post YAML with Bloom enabled requires a frame-size RGBA16F image named 'bloom_hdr' as in post-bloom.yaml".into());
         }
-        let requirements = pipeline
-            .static_requirements()
-            .ok_or("Bistro post YAML requires Compute or fullscreen Raster passes")?;
+        let requirements = pipeline.requirements();
+        if requirements.draw_lists > 0 {
+            return Err("Bistro post YAML requires Compute or fullscreen Raster passes".into());
+        }
         if requirements.writes_external_resources {
             return Err("Bistro post YAML must treat external HDR as read-only".into());
         }
@@ -124,7 +125,7 @@ impl Prepared {
             return Err("Bistro post YAML resources must be images".into());
         }
 
-        let accesses = requirements.bindings + 2 * requirements.attachments;
+        let accesses = requirements.accesses;
         let graph = GraphCapacity {
             resources: requirements.resources,
             passes: requirements.passes,
@@ -301,8 +302,8 @@ mod tests {
                     prepared.pipeline.output_resource().1,
                     ImageDesc::rgba8(width, height)
                 );
-                let builtin = Budget::frame_images(&options, None);
-                let configured = Budget::frame_images(&options, Some(&prepared));
+                let builtin = Budget::frame_images(&options, None, None);
+                let configured = Budget::frame_images(&options, Some(&prepared), None);
                 assert_eq!(builtin.len(), configured.len());
                 for class in &builtin {
                     assert!(configured.contains(class));

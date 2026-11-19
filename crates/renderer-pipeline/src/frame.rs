@@ -1,6 +1,8 @@
+use std::ops::Range;
+
 use renderer::graph::{
-    Attachment, Binding, BindingResource, Graph, GraphError, ImageHandle, RasterAttachments,
-    RasterBindings, RasterDraw, ResourceHandle,
+    Attachment, Binding, BindingResource, Graph, GraphError, ImageHandle, ImageView,
+    RasterAttachments, RasterBindings, RasterDraw, ResourceHandle,
 };
 use renderer::program::{ManagedProgram, RasterPipelineRequest};
 
@@ -14,6 +16,14 @@ use crate::{
 pub struct FrameResource<'a> {
     pub name: &'a str,
     pub resource: ResourceHandle,
+}
+
+/// A graph-local View for a shared `kind: sampled_view` binding.
+/// The View retains its supplied mip range.
+#[derive(Clone, Copy)]
+pub struct FrameSampledView<'a> {
+    pub name: &'a str,
+    pub view: ImageView,
 }
 
 /// Indexed geometry and per-draw constants for a view. Leave `draw.bindings`
@@ -42,19 +52,22 @@ pub struct MaterialBinding<'a> {
 }
 
 /// Resources of a single material instance for this frame.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct FrameMaterial<'a> {
     /// The name declared in the template pass's `material_types`.
     pub material_type: &'a str,
-    pub bindings: &'a [MaterialBinding<'a>],
+    /// A range in [`FrameInputs::material_bindings`].
+    pub bindings: Range<usize>,
 }
 
 /// Borrowed inputs for one Graph checkout. Supply each required name once.
 #[derive(Clone, Copy, Default)]
 pub struct FrameInputs<'a> {
     pub resources: &'a [FrameResource<'a>],
+    pub sampled_views: &'a [FrameSampledView<'a>],
     pub views: &'a [FrameView<'a>],
     pub materials: &'a [FrameMaterial<'a>],
+    pub material_bindings: &'a [MaterialBinding<'a>],
 }
 
 /// Image handles declared in one successfully built Graph. The handles belong
@@ -98,6 +111,7 @@ struct MaterialSet {
 
 pub(super) struct FrameScratch {
     handles: Vec<ResourceHandle>,
+    sampled_views: Vec<ImageView>,
     draws: Vec<Vec<SelectedDraw>>,
     max_draws_per_list: usize,
     bindings: Vec<Binding>,
@@ -110,6 +124,7 @@ pub(super) struct FrameScratch {
 impl FrameScratch {
     pub(super) fn new(
         resources: usize,
+        sampled_views: usize,
         draw_lists: usize,
         max_draws_per_list: usize,
         max_bindings: usize,
@@ -122,6 +137,7 @@ impl FrameScratch {
         }
         Ok(Self {
             handles: reserve(resources)?,
+            sampled_views: reserve(sampled_views)?,
             draws,
             max_draws_per_list,
             bindings: reserve(max_bindings)?,
@@ -142,13 +158,16 @@ impl FrameScratch {
         pass: &Pass,
         raster: &[RasterPipelineRequest],
         compute: &[ManagedProgram],
-        materials: &[FrameMaterial<'_>],
+        inputs: FrameInputs<'_>,
     ) -> Result<(), PipelineError> {
         self.bindings.clear();
         for binding in &pass.bindings {
             let resource = match binding.source {
                 BindingSource::Image(resource) => {
                     BindingResource::ImageView(graph.image_view(self.image(resource), 0, 0)?)
+                }
+                BindingSource::SampledView(index) => {
+                    BindingResource::ImageView(self.sampled_views[index])
                 }
                 BindingSource::Buffer {
                     resource,
@@ -194,7 +213,7 @@ impl FrameScratch {
                     let RasterDrawKind::Indexed(list) = draw else {
                         unreachable!("prepared material draws are indexed")
                     };
-                    self.select_material_draws(graph, pass, *list, program, raster, materials)?;
+                    self.select_material_draws(graph, pass, *list, program, raster, inputs)?;
                 }
                 self.colors.clear();
                 for color in colors {
@@ -260,16 +279,16 @@ impl FrameScratch {
         list: usize,
         programs: &RasterPrograms,
         raster: &[RasterPipelineRequest],
-        materials: &[FrameMaterial<'_>],
+        inputs: FrameInputs<'_>,
     ) -> Result<(), PipelineError> {
         self.material_draws.clear();
         self.material_sets.clear();
-        self.material_sets.resize(materials.len(), None);
+        self.material_sets.resize(inputs.materials.len(), None);
         let shared_bindings = self.bindings.len();
         for selected in &self.draws[list] {
             let index = selected
                 .material
-                .filter(|&index| index < materials.len())
+                .filter(|&index| index < inputs.materials.len())
                 .ok_or_else(|| {
                     PipelineError::Invalid(format!(
                         "pass '{}': draw has no valid material index",
@@ -279,17 +298,26 @@ impl FrameScratch {
             let set = match self.material_sets[index] {
                 Some(set) => set,
                 None => {
-                    let material = materials[index];
+                    let material = &inputs.materials[index];
                     let program = programs.select(material.material_type).ok_or_else(|| {
                         PipelineError::Invalid(format!(
                             "pass '{}': material type '{}' has no prepared Program",
                             pass.id, material.material_type
                         ))
                     })?;
+                    let material_bindings = inputs
+                        .material_bindings
+                        .get(material.bindings.clone())
+                        .ok_or_else(|| {
+                            PipelineError::Invalid(format!(
+                                "pass '{}', material {index} ('{}'): binding range is outside the frame material bindings",
+                                pass.id, material.material_type,
+                            ))
+                        })?;
                     for binding in &pass.bindings {
                         if let BindingSource::Material(ref name) = binding.source {
                             let resource =
-                                named(material.bindings, name, "material binding", |b| b.name)
+                                named(material_bindings, name, "material binding", |b| b.name)
                                     .map_err(|error| {
                                         PipelineError::Invalid(format!(
                                             "pass '{}', material {index} ('{}'): {error}",
@@ -378,6 +406,17 @@ impl PreparedPipeline {
                 .handles
                 .push(bind_resource(&mut graph, resource, inputs.resources)?);
         }
+        scratch.sampled_views.clear();
+        for name in &self.sampled_views {
+            let view = named(inputs.sampled_views, name, "sampled view", |input| {
+                input.name
+            })?
+            .view;
+            // A Graph owns the image identity behind each View. Range and
+            // sample compatibility at a binding stay with the Graph.
+            graph.image_desc(view.image())?;
+            scratch.sampled_views.push(view);
+        }
         for (spec, draws) in self.draw_lists.iter().zip(&mut scratch.draws) {
             let view = named(inputs.views, &spec.view, "view", |view| view.name)?;
             draws.clear();
@@ -406,13 +445,7 @@ impl PreparedPipeline {
         }
         for pass in &self.passes {
             scratch
-                .append_pass(
-                    &mut graph,
-                    pass,
-                    &self.raster,
-                    &self.compute,
-                    inputs.materials,
-                )
+                .append_pass(&mut graph, pass, &self.raster, &self.compute, inputs)
                 .map_err(|error| match error {
                     PipelineError::Graph(source) => PipelineError::PassGraph {
                         id: pass.id.clone(),

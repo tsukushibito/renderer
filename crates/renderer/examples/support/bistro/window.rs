@@ -198,7 +198,7 @@ impl State {
         options.width = size.width;
         options.height = size.height;
         let post = post::Prepared::load(options)?;
-        let budget = Budget::new(scene, environment, options, post.as_ref())?;
+        let mut budget = Budget::new(scene, environment, options, post.as_ref())?;
         let config = PresentationConfig {
             max_frames: options.inflight,
             vsync: options.vsync,
@@ -225,7 +225,7 @@ impl State {
         backend.set_profiling(options.gpu_timing)?;
         surface.set_profiling(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-        let mut workspace = Workspace::new(scene, post);
+        let mut workspace = Workspace::new(scene, post, budget.scene_pipeline.take());
         workspace.placements = placements;
         if options.reuse_shadows && options.shadows {
             workspace.enable_shadow_reuse();
@@ -463,16 +463,27 @@ impl State {
                 .as_ref()
                 .map(|post| post.resize(options))
                 .transpose()?;
+            let scene_pipeline = self
+                .workspace
+                .scene_pipeline
+                .as_ref()
+                .map(|pipeline| pipeline.resize(options, scene))
+                .transpose()?;
             let budget = &self.budget;
-            self.resident = Some(
-                self.resident
-                    .take()
-                    .unwrap()
-                    .reprepare(&mut self.backend, |backend| {
-                        backend::resize(backend, options, budget, post.as_ref())
-                    })?,
-            );
+            self.resident = Some(self.resident.take().unwrap().reprepare(
+                &mut self.backend,
+                |backend| {
+                    backend::resize(
+                        backend,
+                        options,
+                        budget,
+                        post.as_ref(),
+                        scene_pipeline.as_ref(),
+                    )
+                },
+            )?);
             self.workspace.post = post;
+            self.workspace.scene_pipeline = scene_pipeline;
             if options.reuse_shadows && options.shadows {
                 self.workspace.enable_shadow_reuse();
             }
@@ -626,7 +637,7 @@ impl State {
                 &self.smoke.replay.first_pixels,
             )?;
         }
-        let report = json!({
+        let mut report = json!({
             "schema_version": 1, "presentation": true, "runtime": runtime, "validation": validation,
             "inputs": inputs,
             "initial_width": self.seed_dimensions.0, "initial_height": self.seed_dimensions.1,
@@ -660,6 +671,10 @@ impl State {
                 "scope": "window event-loop and native pacing; accepted present is not display scanout",
             },
         });
+        if let Some(pipeline) = &self.workspace.scene_pipeline {
+            report["scene_pipeline"] = json!(options.scene_pipeline);
+            report["scene_pipeline_sha256"] = json!(pipeline.sha256());
+        }
         super::run::write_report(&options.output, &report)?;
         if options.window_smoke && !smoke_passed {
             return Err("Bistro Window smoke acceptance failed".into());

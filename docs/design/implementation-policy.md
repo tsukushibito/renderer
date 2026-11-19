@@ -920,13 +920,15 @@ YAMLは順序付きのRaster／Computeパス、名前付き資源・描画リス
 毎フレームはアプリが提供したGraph上の外部資源と描画候補を使う。
 名前付きビュー内の候補をqueueで選び、複数パスで共有される描画リストも一度構築する。
 可変のハンドル・候補数は各フレームで確認し、上限内の入力には予約済み領域を使う。
+`sampled_view`は同じGraphの名前付き画像ViewをProgramのsampled imageに接続する。複数mipを含むViewでは、
+GraphがView全体の読取り範囲とGPU寿命を扱う。準備済み構成は描画リスト上限を含むGraphの宣言数を利用側に渡す。
 Graphを消費する`build`が成功したら、利用側は`FrameOutput`から最終画像と同じGraphの名前付き中間画像を取得し、
 export、readback、後段パスなどを追加できる。
 
 indexed Rasterは`shader_template`と材質型を宣言できる。アセットビルドがパスのHLSLテンプレートと
 材質関数を組み合わせ、バイナリと反射情報を出力する。アプリが対応するABIを確認して管理下Programを提供する。
 テンプレートの各Programは準備時にパスのattachmentとbindingに照合し、WorkingSetに含める。
-フレーム入力は材質インスタンスの型とGraph上の資源を渡す。パス共通のbindingと材質ごとのbindingを合わせ、
+フレーム入力は材質インスタンスの型と、共通スライス上のbinding範囲を渡す。パス共通のbindingと材質ごとのbindingを合わせ、
 使用された材質インスタンスごとにGraph内のbinding setを再利用する。Programを切り替える場合も入力の描画順を保持し、
 連続する同一Programの描画をまとめる。通常フレームでは予約済み領域で選択し、コード生成とGPUパイプライン作成は準備境界で行う。
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
@@ -937,6 +939,8 @@ YAMLで宣言する資源はbufferと1×・単一mip／layerの2D画像で、材
 画像寸法は固定値の組か`extent: frame`で指定する。後者は呼出側が準備時に渡す描画寸法に解決する。
 `divisor`を指定した場合は各軸の除算結果を切り上げる。サイズ変更時は新しい寸法でWorkingSetを準備する。
 Rasterはindexed draw listまたは全画面三角形、ComputeはProgramのdispatch契約に従う。
+Bistroの[シーン描画](../guides/tooling.md#bistro-scene-pipeline)では、Forward 1×のアタッチメントとパス間接続をYAMLで指定する。
+Bistroはカメラ、可視判定・ソート済み描画候補、材質、照明のViewを供給する。
 Bistroの[ポスト処理](../guides/tooling.md#bistro-post-pipeline)では、既存GraphにあるシーンHDRを読み取り専用の外部入力とし、
 YAMLがBloomのComputeパスと一時画像、トーンマッピング、SDR出力を定義する。Bistroは最終画像を既存のキャプチャ／Presenterに渡し、
 Bloomが有効なときは同じGraphから`bloom_hdr`をキャプチャする。

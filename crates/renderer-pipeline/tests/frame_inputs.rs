@@ -1,11 +1,13 @@
 use renderer::capacity::ResourceClass;
 use renderer::graph::{
-    BufferDesc, GraphCapacity, GraphPool, ImageDesc, RasterDraw, RasterParameters,
+    Attachment, BufferDesc, GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, LoadOp,
+    RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram};
 use renderer_pipeline::{
-    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameView, PrepareOptions,
-    PreparedPipeline, Program, ResourceDesc, ShaderRequest, StaticRequirements,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameResource, FrameSampledView, FrameView,
+    PipelineError, PipelineRequirements, PrepareOptions, PreparedPipeline, Program, ResourceDesc,
+    ShaderRequest,
 };
 
 const PIPELINE: &str = "
@@ -36,7 +38,7 @@ fn wrong_input_and_duplicate_view_return_the_graph_slot() {
         |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
     )
     .unwrap();
-    assert!(pipeline.static_requirements().is_none());
+    assert_eq!(pipeline.requirements().draw_lists, 1);
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let view = FrameView {
         name: "main",
@@ -167,22 +169,24 @@ output: mapped
         assert_eq!(working_set.raster.len(), 1);
         assert!(working_set.compute.is_empty());
         assert_eq!(
-            pipeline.static_requirements(),
-            Some(StaticRequirements {
+            pipeline.requirements(),
+            PipelineRequirements {
                 resources: 1,
                 passes: 1,
+                compute_dispatches: 0,
+                draw_lists: 0,
                 draws: 1,
                 bindings: 2,
+                accesses: 4,
                 attachments: 1,
                 raster_constant_words: 1,
                 name_bytes: "mapped".len() + "neutral".len(),
                 writes_external_resources: false,
-            }),
+            },
         );
         assert!(
             prepare(&external_output)
-                .static_requirements()
-                .unwrap()
+                .requirements()
                 .writes_external_resources
         );
     }
@@ -239,17 +243,20 @@ output: mapped
         assert_eq!(pipeline.image_resource("probe"), None);
         assert_eq!(pipeline.output_resource(), ("mapped", output));
         assert_eq!(
-            pipeline.static_requirements(),
-            Some(StaticRequirements {
+            pipeline.requirements(),
+            PipelineRequirements {
                 resources: 1,
                 passes: 2,
+                compute_dispatches: 1,
+                draw_lists: 0,
                 draws: 1,
                 bindings: 5,
+                accesses: 7,
                 attachments: 1,
                 raster_constant_words: 1,
                 name_bytes: "mappedsampleneutral".len(),
                 writes_external_resources: true,
-            }),
+            },
         );
     }
 }
@@ -325,54 +332,230 @@ fn missing_material_binding_identifies_the_pass_and_releases_the_slot() {
         PrepareOptions {
             frame_extent: Some([8, 4]),
             frames_in_flight: 1,
-            max_draws_per_list: 1,
-            max_materials: 1,
+            max_draws_per_list: 4,
+            max_materials: 2,
         },
         |_| Ok(Program::Raster(ManagedRasterProgram::textured_mesh())),
     )
     .unwrap();
+    let requirements = pipeline.requirements();
+    assert_eq!(requirements.draws, 4);
+    assert_eq!(requirements.bindings, 6);
+    assert_eq!(requirements.accesses, 16);
+    assert_eq!(requirements.raster_constant_words, 80);
+
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    for (bindings, reason) in [
+        (0..0, "missing material binding 'offset'"),
+        (0..1, "binding range is outside the frame material bindings"),
+    ] {
+        let mut graph = pool.begin().unwrap();
+        let geometry = graph.buffer("geometry", BufferDesc { size: 16 }).unwrap();
+        let image = graph.image("output", ImageDesc::rgba8(8, 4)).unwrap();
+        let candidate = DrawCandidate {
+            queue: "opaque",
+            material: Some(0),
+            draw: RasterDraw {
+                bindings: None,
+                vertices: geometry,
+                indices: geometry,
+                first_index: 0,
+                index_count: 3,
+                instance_count: 1,
+                parameters: RasterParameters::default().into(),
+            },
+        };
+        let result = pipeline.build(
+            graph,
+            FrameInputs {
+                resources: &[FrameResource {
+                    name: "output",
+                    resource: image.into(),
+                }],
+                views: &[FrameView {
+                    name: "main",
+                    candidates: &[candidate],
+                }],
+                materials: &[FrameMaterial {
+                    material_type: "paint",
+                    bindings,
+                }],
+                ..FrameInputs::default()
+            },
+        );
+        let message = result.err().unwrap().to_string();
+        assert!(
+            message.contains("pass 'opaque', material 0 ('paint')"),
+            "{message}"
+        );
+        assert!(message.contains(reason), "{message}");
+    }
+    assert!(pool.begin().is_ok());
+}
+
+const SAMPLED_VIEW_PIPELINE: &str = "
+version: 1
+resources:
+  - {id: mapped, kind: image, width: 4, height: 4, format: rgba16_float}
+passes:
+  - id: neutral
+    kind: raster
+    shader: tone
+    constants: [1073741824]
+    colors: [{image: mapped, load: clear, clear: [0, 0, 0, 0]}]
+    bindings:
+      - {group: 0, binding: 0, kind: sampled_view, resource: hdr}
+      - {group: 0, binding: 1, kind: sampler, sampler: nearest_clamp}
+output: mapped
+";
+
+fn prepare_tone_pipeline(yaml: &str) -> Result<PreparedPipeline, PipelineError> {
+    PreparedPipeline::from_yaml(
+        yaml,
+        PrepareOptions {
+            frame_extent: None,
+            frames_in_flight: 1,
+            max_draws_per_list: 0,
+            max_materials: 0,
+        },
+        |_| {
+            Ok(Program::Raster(
+                renderer::standard::passes::tone_map_neutral_pipeline().program,
+            ))
+        },
+    )
+}
+
+#[test]
+fn shared_sampled_view_retains_every_mip_in_the_graph_read() {
+    let mut pipeline = prepare_tone_pipeline(SAMPLED_VIEW_PIPELINE).unwrap();
+    assert!(pipeline.sampled_view_names().eq(["hdr"]));
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    for initialize_all in [false, true] {
+        let mut graph = pool.begin().unwrap();
+        let image = graph
+            .image(
+                "scene reflection",
+                ImageDesc {
+                    mip_levels: 2,
+                    ..ImageDesc::rgba16_float(4, 4)
+                },
+            )
+            .unwrap();
+        if initialize_all {
+            graph.upload_image("all mips", image, &[0; 160]).unwrap();
+        } else {
+            let base = graph.image_view(image, 0, 0).unwrap();
+            graph
+                .attachment_pass(
+                    "base mip",
+                    RasterAttachments {
+                        colors: &[Attachment {
+                            view: base,
+                            load: LoadOp::Clear([0.0; 4]),
+                            store: StoreOp::Store,
+                        }],
+                        color_resolves: &[],
+                        depth: None,
+                    },
+                )
+                .unwrap();
+        }
+        let view = graph.sampled_image_view(image, 0, 2).unwrap();
+        let (mut graph, output) = pipeline
+            .build(
+                graph,
+                FrameInputs {
+                    sampled_views: &[FrameSampledView { name: "hdr", view }],
+                    ..FrameInputs::default()
+                },
+            )
+            .unwrap();
+        graph.export_image(output.image()).unwrap();
+        let plan = graph.compile();
+        if initialize_all {
+            assert_eq!(
+                plan.unwrap().ordered_pass_names().collect::<Vec<_>>(),
+                ["all mips", "neutral"]
+            );
+        } else {
+            assert_eq!(
+                plan.err().unwrap().kind(),
+                GraphErrorKind::UninitializedRead
+            );
+        }
+    }
+}
+
+#[test]
+fn shared_sampled_view_requires_unique_local_input_and_sampled_abi() {
+    let wrong_abi = SAMPLED_VIEW_PIPELINE.replace(
+        "kind: sampler, sampler: nearest_clamp",
+        "kind: sampled_view, resource: hdr",
+    );
+    let error = prepare_tone_pipeline(&wrong_abi).err().unwrap();
+    assert!(error.to_string().contains("resource kind differs"));
+
+    let mut pipeline = prepare_tone_pipeline(SAMPLED_VIEW_PIPELINE).unwrap();
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let error = pipeline
+        .build(pool.begin().unwrap(), FrameInputs::default())
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("missing sampled view 'hdr'"));
     let mut graph = pool.begin().unwrap();
-    let geometry = graph.buffer("geometry", BufferDesc { size: 16 }).unwrap();
-    let image = graph.image("output", ImageDesc::rgba8(8, 4)).unwrap();
-    let candidate = DrawCandidate {
-        queue: "opaque",
-        material: Some(0),
-        draw: RasterDraw {
-            bindings: None,
-            vertices: geometry,
-            indices: geometry,
-            first_index: 0,
-            index_count: 3,
-            instance_count: 1,
-            parameters: RasterParameters::default().into(),
-        },
+    let image = graph
+        .image("source", ImageDesc::rgba16_float(4, 4))
+        .unwrap();
+    let view = FrameSampledView {
+        name: "hdr",
+        view: graph.image_view(image, 0, 0).unwrap(),
     };
-    let result = pipeline.build(
-        graph,
-        FrameInputs {
-            resources: &[FrameResource {
-                name: "output",
-                resource: image.into(),
-            }],
-            views: &[FrameView {
-                name: "main",
-                candidates: &[candidate],
-            }],
-            materials: &[FrameMaterial {
-                material_type: "paint",
-                bindings: &[],
-            }],
-        },
-    );
-    let message = result.err().unwrap().to_string();
+    let error = pipeline
+        .build(
+            graph,
+            FrameInputs {
+                sampled_views: &[view, view],
+                ..FrameInputs::default()
+            },
+        )
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("duplicate sampled view 'hdr'"));
+
+    let error = pipeline
+        .build(
+            pool.begin().unwrap(),
+            FrameInputs {
+                sampled_views: &[view],
+                ..FrameInputs::default()
+            },
+        )
+        .err()
+        .unwrap();
     assert!(
-        message.contains("pass 'opaque', material 0 ('paint')"),
-        "{message}"
-    );
-    assert!(
-        message.contains("missing material binding 'offset'"),
-        "{message}"
+        matches!(error, PipelineError::Graph(error) if error.kind() == GraphErrorKind::WrongOwner)
     );
     assert!(pool.begin().is_ok());
+}
+
+#[test]
+fn indexed_capacity_overflow_precedes_frame_scratch_reservation() {
+    let error = PreparedPipeline::from_yaml(
+        PIPELINE,
+        PrepareOptions {
+            frame_extent: Some([8, 4]),
+            frames_in_flight: 1,
+            max_draws_per_list: usize::MAX,
+            max_materials: 0,
+        },
+        |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
+    )
+    .err()
+    .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("Graph declaration limits overflow")
+    );
 }

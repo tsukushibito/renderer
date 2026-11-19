@@ -14,12 +14,12 @@ use std::{error::Error, fmt};
 use renderer::capacity::{ResourceClass, WorkingSet};
 use renderer::graph::{BufferDesc, GraphError, ImageDesc, LoadOp, RasterConstants, StoreOp};
 use renderer::program::{
-    BindingType, ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
+    ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
 };
 
 pub use frame::{
-    DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameView,
-    MaterialBinding,
+    DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameSampledView,
+    FrameView, MaterialBinding,
 };
 
 use frame::FrameScratch;
@@ -55,18 +55,20 @@ pub struct PrepareOptions {
     pub max_materials: usize,
 }
 
-/// Graph declarations added by a pipeline of fullscreen Raster and Compute
-/// passes with no draw list inputs.
+/// Upper bounds on Graph declarations added by a prepared pipeline.
 ///
-/// Size Graph analysis and app-owned resources and passes separately from
-/// these declaration counts.
+/// Indexed pass bounds use the configured draw and material capacities.
+/// Size Graph analysis and app-owned declarations separately.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct StaticRequirements {
+pub struct PipelineRequirements {
     /// Transient resource declarations.
     pub resources: usize,
     pub passes: usize,
+    pub compute_dispatches: usize,
+    pub draw_lists: usize,
     pub draws: usize,
     pub bindings: usize,
+    pub accesses: usize,
     pub attachments: usize,
     pub raster_constant_words: usize,
     /// UTF-8 bytes of pass names and transient resource names.
@@ -125,12 +127,14 @@ impl From<GraphError> for PipelineError {
 /// Resolved passes, resources, Program versions and reusable construction storage.
 pub struct PreparedPipeline {
     resources: Vec<Resource>,
+    sampled_views: Vec<String>,
     passes: Vec<Pass>,
     draw_lists: Vec<schema::DrawListSpec>,
     output: usize,
     raster: Vec<RasterPipelineRequest>,
     compute: Vec<ManagedProgram>,
     classes: Vec<ResourceClass>,
+    requirements: PipelineRequirements,
     scratch: FrameScratch,
 }
 
@@ -141,6 +145,11 @@ impl PreparedPipeline {
             .iter()
             .filter(|resource| resource.external)
             .map(|resource| (resource.id.as_str(), resource.desc))
+    }
+
+    /// Unique names required in [`FrameInputs::sampled_views`].
+    pub fn sampled_view_names(&self) -> impl Iterator<Item = &str> {
+        self.sampled_views.iter().map(String::as_str)
     }
 
     /// The declared output image name and its prepared descriptor.
@@ -161,69 +170,9 @@ impl PreparedPipeline {
         Some(desc)
     }
 
-    /// Count Graph declarations for a pipeline of fullscreen Raster and Compute
-    /// passes with no draw list inputs.
-    pub fn static_requirements(&self) -> Option<StaticRequirements> {
-        if !self.draw_lists.is_empty() {
-            return None;
-        }
-
-        let mut requirements = StaticRequirements {
-            passes: self.passes.len(),
-            ..StaticRequirements::default()
-        };
-        for resource in self.resources.iter().filter(|resource| !resource.external) {
-            requirements.resources += 1;
-            requirements.name_bytes += resource.id.len();
-        }
-        for pass in &self.passes {
-            requirements.bindings += pass.bindings.len();
-            requirements.name_bytes += pass.id.len();
-            match &pass.kind {
-                PassKind::Raster {
-                    colors,
-                    depth,
-                    draw: RasterDrawKind::Fullscreen(constants),
-                    ..
-                } => {
-                    requirements.draws += 1;
-                    requirements.attachments += colors.len() + usize::from(depth.is_some());
-                    requirements.raster_constant_words += constants.words().len();
-                    requirements.writes_external_resources |= colors
-                        .iter()
-                        .map(|color| color.resource)
-                        .chain(depth.iter().map(|depth| depth.resource))
-                        .any(|resource| self.resources[resource].external);
-                }
-                PassKind::Raster { .. } => return None,
-                PassKind::Compute { program, .. } => {
-                    requirements.writes_external_resources |=
-                        self.compute_writes_external(&self.compute[*program], &pass.bindings);
-                }
-            }
-        }
-        Some(requirements)
-    }
-
-    fn compute_writes_external(
-        &self,
-        program: &ManagedProgram,
-        bindings: &[PreparedBinding],
-    ) -> bool {
-        bindings.iter().any(|binding| {
-            let resource = match binding.source {
-                BindingSource::Image(resource) | BindingSource::Buffer { resource, .. } => resource,
-                _ => return false,
-            };
-            self.resources[resource].external
-                && program.bindings().iter().any(|slot| {
-                    (slot.group, slot.binding) == (binding.group, binding.binding)
-                        && matches!(
-                            slot.kind,
-                            BindingType::StorageWrite | BindingType::StorageImageWrite(_)
-                        )
-                })
-        })
+    /// Graph declaration bounds against the limits supplied at preparation.
+    pub fn requirements(&self) -> PipelineRequirements {
+        self.requirements
     }
 
     /// Look up a prepared Raster Program for application-owned Graph assembly.
@@ -326,6 +275,7 @@ struct PreparedBinding {
 
 enum BindingSource {
     Image(usize),
+    SampledView(usize),
     Buffer {
         resource: usize,
         offset: u64,

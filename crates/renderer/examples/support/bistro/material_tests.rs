@@ -611,7 +611,7 @@ fn capture_lighting(
     )
     .unwrap();
     let mut pool = renderer::graph::GraphPool::new(budget.graph, 2).unwrap();
-    let mut workspace = pipeline::Workspace::new(scene, None);
+    let mut workspace = pipeline::Workspace::new(scene, None, None);
     let built = pipeline::build(
         &mut pool,
         &mut workspace,

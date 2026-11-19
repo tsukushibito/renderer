@@ -1,0 +1,60 @@
+# Forward 1× direct draw. Bistro supplies scene data and four shadow views.
+version: 1
+resources:
+  - { id: hdr, kind: image, extent: frame, format: rgba16_float }
+  - { id: depth, kind: image, extent: frame, format: depth32_float }
+  - { id: camera, kind: buffer, source: external, bytes: 464 }
+draw_lists:
+  - { id: main_opaque, view: main, queue: opaque }
+  - { id: main_transparent, view: main, queue: transparent }
+passes:
+  - id: forward
+    kind: raster
+    shader_template: bistro/forward
+    material_types: [bistro/pbr]
+    draw_list: main_opaque
+    colors:
+      - { image: hdr, load: clear, clear: [0.18, 0.18, 0.18, 1.0] }
+    depth: { image: depth, load: clear, clear: 1.0 }
+    bindings:
+      - { kind: buffer, group: 0, binding: 0, resource: camera, offset: 0, size: 464 }
+      - { kind: material, group: 0, binding: 1, resource: factors }
+      - { kind: material, group: 1, binding: 0, resource: base_color }
+      - { kind: material, group: 1, binding: 1, resource: normal }
+      - { kind: material, group: 1, binding: 2, resource: orm }
+      - { kind: material, group: 1, binding: 3, resource: emissive }
+      - { kind: sampler, group: 1, binding: 4, sampler: linear_repeat }
+      - { kind: sampled_view, group: 2, binding: 0, resource: irradiance }
+      - { kind: sampled_view, group: 2, binding: 1, resource: reflection }
+      - { kind: sampled_view, group: 2, binding: 2, resource: brdf }
+      - { kind: sampler, group: 2, binding: 3, sampler: linear_repeat_u_clamp_v }
+      - { kind: sampled_view, group: 3, binding: 0, resource: cascade_0 }
+      - { kind: sampled_view, group: 3, binding: 1, resource: cascade_1 }
+      - { kind: sampled_view, group: 3, binding: 2, resource: cascade_2 }
+      - { kind: sampled_view, group: 3, binding: 3, resource: cascade_3 }
+      - { kind: sampler, group: 3, binding: 4, sampler: nearest_clamp }
+  - id: forward_blend
+    kind: raster
+    shader: bistro/forward-blend
+    draw_list: main_transparent
+    colors:
+      - { image: hdr, load: load }
+    depth: { image: depth, load: load }
+    bindings:
+      - { kind: buffer, group: 0, binding: 0, resource: camera, offset: 0, size: 464 }
+      - { kind: material, group: 0, binding: 1, resource: factors }
+      - { kind: material, group: 1, binding: 0, resource: base_color }
+      - { kind: material, group: 1, binding: 1, resource: normal }
+      - { kind: material, group: 1, binding: 2, resource: orm }
+      - { kind: material, group: 1, binding: 3, resource: emissive }
+      - { kind: sampler, group: 1, binding: 4, sampler: linear_repeat }
+      - { kind: sampled_view, group: 2, binding: 0, resource: irradiance }
+      - { kind: sampled_view, group: 2, binding: 1, resource: reflection }
+      - { kind: sampled_view, group: 2, binding: 2, resource: brdf }
+      - { kind: sampler, group: 2, binding: 3, sampler: linear_repeat_u_clamp_v }
+      - { kind: sampled_view, group: 3, binding: 0, resource: cascade_0 }
+      - { kind: sampled_view, group: 3, binding: 1, resource: cascade_1 }
+      - { kind: sampled_view, group: 3, binding: 2, resource: cascade_2 }
+      - { kind: sampled_view, group: 3, binding: 3, resource: cascade_3 }
+      - { kind: sampler, group: 3, binding: 4, sampler: nearest_clamp }
+output: hdr

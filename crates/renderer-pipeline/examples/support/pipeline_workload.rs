@@ -262,7 +262,7 @@ fn run_frame(
     let (offset, bindings) = material_resources(&mut graph)?;
     let materials: [_; MATERIAL_TYPES.len()] = std::array::from_fn(|index| FrameMaterial {
         material_type: MATERIAL_TYPES[index],
-        bindings: std::slice::from_ref(&bindings[index]),
+        bindings: index..index + 1,
     });
     let target = graph.image("application target", target_desc())?;
     let variant = frame % FRAME_VARIANTS;
@@ -280,6 +280,8 @@ fn run_frame(
             resources: &[target_resource, offset],
             views: &[view],
             materials: &materials,
+            material_bindings: &bindings,
+            ..FrameInputs::default()
         },
     )?;
     let output = output.image();

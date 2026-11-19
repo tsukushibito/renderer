@@ -13,9 +13,9 @@ use crate::schema::{
     self, AttachmentSpec, BindingSpec, Config, LoadAction, PassSpec, ResourceSource, ResourceSpec,
 };
 use crate::{
-    BindingSource, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError, PrepareOptions,
-    PreparedAttachment, PreparedBinding, PreparedPipeline, Program, RasterDrawKind, RasterPrograms,
-    Resource, ResourceDesc, ShaderRequest,
+    BindingSource, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError,
+    PipelineRequirements, PrepareOptions, PreparedAttachment, PreparedBinding, PreparedPipeline,
+    Program, RasterDrawKind, RasterPrograms, Resource, ResourceDesc, ShaderRequest,
 };
 
 type ResolverError = Box<dyn Error + Send + Sync>;
@@ -79,6 +79,7 @@ impl PreparedPipeline {
         }
 
         let mut pass_ids = HashSet::with_capacity(passes.len());
+        let mut sampled_views = Vec::new();
         let mut programs = Programs::default();
         let mut resolve = resolve;
         let mut max_bindings = 0;
@@ -99,6 +100,7 @@ impl PreparedPipeline {
                     &resources,
                     &resource_ids,
                     &draw_list_ids,
+                    &mut sampled_views,
                     &mut programs,
                     &mut resolve,
                 )?;
@@ -109,8 +111,11 @@ impl PreparedPipeline {
                 Ok(pass)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let requirements =
+            measure_requirements(&resources, &passes, draw_lists.len(), &programs, options)?;
         let scratch = FrameScratch::new(
             resources.len(),
+            sampled_views.len(),
             draw_lists.len(),
             options.max_draws_per_list,
             max_bindings,
@@ -121,15 +126,131 @@ impl PreparedPipeline {
 
         Ok(Self {
             resources,
+            sampled_views,
             passes,
             draw_lists,
             output,
             raster: programs.raster,
             compute: programs.compute,
             classes,
+            requirements,
             scratch,
         })
     }
+}
+
+fn measure_requirements(
+    resources: &[Resource],
+    passes: &[Pass],
+    draw_lists: usize,
+    programs: &Programs,
+    options: PrepareOptions,
+) -> Result<PipelineRequirements, PipelineError> {
+    let mut requirements = PipelineRequirements {
+        passes: passes.len(),
+        draw_lists,
+        ..PipelineRequirements::default()
+    };
+    for resource in resources.iter().filter(|resource| !resource.external) {
+        requirements.resources += 1;
+        requirements.name_bytes += resource.id.len();
+    }
+
+    let overflow = || invalid("pipeline Graph declaration limits overflow");
+    let mut indexed_draws = 0usize;
+    for pass in passes {
+        requirements.name_bytes += pass.id.len();
+        let (draws, binding_sets, words) = match &pass.kind {
+            PassKind::Compute { program, .. } => {
+                requirements.compute_dispatches += 1;
+                requirements.writes_external_resources |=
+                    compute_writes_external(&programs.compute[*program], &pass.bindings, resources);
+                (0, 1, 0)
+            }
+            PassKind::Raster {
+                program,
+                colors,
+                depth,
+                draw,
+                uses_materials,
+            } => {
+                requirements.attachments += colors.len() + usize::from(depth.is_some());
+                requirements.writes_external_resources |= colors
+                    .iter()
+                    .map(|color| color.resource)
+                    .chain(depth.iter().map(|depth| depth.resource))
+                    .any(|resource| resources[resource].external);
+                match draw {
+                    RasterDrawKind::Fullscreen(constants) => (1, 1, constants.words().len()),
+                    RasterDrawKind::Indexed(_) => {
+                        let draw_limit = options.max_draws_per_list;
+                        indexed_draws =
+                            indexed_draws.checked_add(draw_limit).ok_or_else(overflow)?;
+                        let sets = if *uses_materials {
+                            options.max_materials.min(draw_limit)
+                        } else {
+                            usize::from(draw_limit > 0)
+                        };
+                        let words_per_draw = |index: usize| {
+                            programs.raster[index].program.parameter_size() as usize
+                                / size_of::<u32>()
+                        };
+                        let max_words = match program {
+                            RasterPrograms::Fixed(index) => words_per_draw(*index),
+                            RasterPrograms::Material(variants) => variants
+                                .iter()
+                                .map(|variant| words_per_draw(variant.program))
+                                .max()
+                                .unwrap_or(0),
+                        };
+                        let words = draw_limit.checked_mul(max_words).ok_or_else(overflow)?;
+                        (draw_limit, sets, words)
+                    }
+                }
+            }
+        };
+        let bindings = binding_sets
+            .checked_mul(pass.bindings.len())
+            .ok_or_else(overflow)?;
+        requirements.bindings = requirements
+            .bindings
+            .checked_add(bindings)
+            .ok_or_else(overflow)?;
+        requirements.draws = requirements.draws.checked_add(draws).ok_or_else(overflow)?;
+        requirements.raster_constant_words = requirements
+            .raster_constant_words
+            .checked_add(words)
+            .ok_or_else(overflow)?;
+    }
+    // A binding can read or write one contiguous range. Each indexed draw
+    // can add vertex and index reads; attachments can add reads and writes.
+    requirements.accesses = indexed_draws
+        .checked_add(requirements.attachments)
+        .and_then(|count| count.checked_mul(2))
+        .and_then(|count| count.checked_add(requirements.bindings))
+        .ok_or_else(overflow)?;
+    Ok(requirements)
+}
+
+fn compute_writes_external(
+    program: &ManagedProgram,
+    bindings: &[PreparedBinding],
+    resources: &[Resource],
+) -> bool {
+    bindings.iter().any(|binding| {
+        let resource = match binding.source {
+            BindingSource::Image(resource) | BindingSource::Buffer { resource, .. } => resource,
+            _ => return false,
+        };
+        resources[resource].external
+            && program.bindings().iter().any(|slot| {
+                (slot.group, slot.binding) == (binding.group, binding.binding)
+                    && matches!(
+                        slot.kind,
+                        BindingType::StorageWrite | BindingType::StorageImageWrite(_)
+                    )
+            })
+    })
 }
 
 fn invalid(message: impl Into<String>) -> PipelineError {
@@ -294,6 +415,7 @@ fn prepare_pass(
     resources: &[Resource],
     resource_ids: &HashMap<&str, usize>,
     draw_list_ids: &HashMap<&str, usize>,
+    sampled_views: &mut Vec<String>,
     programs: &mut Programs,
     resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
 ) -> Result<Pass, PipelineError> {
@@ -317,7 +439,7 @@ fn prepare_pass(
                         .ok_or_else(|| pass_error(&id, format!("unknown draw list {list:?}")))
                 })
                 .transpose()?;
-            let bindings = prepare_bindings(&id, bindings, resource_ids)?;
+            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views)?;
             let has_material_bindings = bindings
                 .iter()
                 .any(|binding| matches!(binding.source, BindingSource::Material(_)));
@@ -458,7 +580,7 @@ fn prepare_pass(
                 ));
             };
             let program = &programs.compute[index];
-            let bindings = prepare_bindings(&id, bindings, resource_ids)?;
+            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views)?;
             if bindings
                 .iter()
                 .any(|binding| matches!(binding.source, BindingSource::Material(_)))
@@ -605,6 +727,7 @@ fn prepare_bindings(
     pass: &str,
     bindings: Vec<BindingSpec>,
     resource_ids: &HashMap<&str, usize>,
+    sampled_views: &mut Vec<String>,
 ) -> Result<Vec<PreparedBinding>, PipelineError> {
     bindings
         .into_iter()
@@ -619,6 +742,21 @@ fn prepare_bindings(
                     binding,
                     BindingSource::Image(resource_index(pass, &resource, resource_ids)?),
                 ),
+                BindingSpec::SampledView {
+                    group,
+                    binding,
+                    resource,
+                } => {
+                    if resource.trim().is_empty() {
+                        return Err(pass_error(pass, "sampled view name must be nonempty"));
+                    }
+                    let index = sampled_views.iter().position(|view| *view == resource);
+                    let index = index.unwrap_or_else(|| {
+                        sampled_views.push(resource);
+                        sampled_views.len() - 1
+                    });
+                    (group, binding, BindingSource::SampledView(index))
+                }
                 BindingSpec::Buffer {
                     group,
                     binding,
@@ -780,7 +918,8 @@ fn validate_bindings(
                     storage_extent = Some(dimensions);
                 }
             }
-            (BindingSource::Sampler(_), BindingType::Sampler) => {}
+            (BindingSource::SampledView(_), BindingType::SampledImage)
+            | (BindingSource::Sampler(_), BindingType::Sampler) => {}
             // Graph validates the concrete material operand when the frame is built.
             (BindingSource::Material(_), _) => {}
             _ => return Err(error("resource kind differs from the Program slot")),
