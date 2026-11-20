@@ -29,22 +29,16 @@ mod instancing;
 mod lifecycle;
 #[path = "bistro/memory.rs"]
 mod memory;
+#[path = "bistro/output.rs"]
+mod output;
 #[path = "bistro/pipeline.rs"]
 mod pipeline;
-#[path = "bistro/post.rs"]
-mod post;
 #[path = "bistro/program.rs"]
 mod program;
 #[path = "bistro/run.rs"]
 mod run;
-#[path = "bistro/scene_pipeline.rs"]
-mod scene_pipeline;
-#[path = "bistro/shader_assets.rs"]
-mod shader_assets;
 #[path = "bistro/shadow.rs"]
 mod shadow;
-#[path = "bistro/shadow_pipeline.rs"]
-mod shadow_pipeline;
 #[cfg(feature = "tracy")]
 #[path = "bistro/trace.rs"]
 mod trace;
@@ -73,7 +67,7 @@ mod window_camera;
 mod window_input;
 
 use sha2::{Digest, Sha256};
-use std::{borrow::Cow, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 type Error = Box<dyn std::error::Error>;
 
@@ -160,10 +154,6 @@ struct Options {
     bloom: bloom::Bloom,
     sample_count: renderer::graph::SampleCount,
     pipeline: PipelineMode,
-    shader_assets: Option<shader_assets::Selection>,
-    scene_pipeline: Option<PathBuf>,
-    shadow_pipeline: Option<PathBuf>,
-    post_pipeline: Option<PathBuf>,
     instances: instancing::Mode,
     submission: SubmissionMode,
     #[cfg(feature = "development-validation")]
@@ -180,34 +170,8 @@ struct Options {
 }
 
 impl Options {
-    fn forward_program(&self, blend: bool) -> Cow<'_, renderer::program::ManagedRasterProgram> {
-        match self
-            .shader_assets
-            .as_ref()
-            .and_then(|assets| assets.programs.as_ref())
-        {
-            Some(programs) => Cow::Borrowed(if blend {
-                &programs.blend
-            } else {
-                &programs.forward
-            }),
-            None => Cow::Owned(self.pipeline.forward_program(blend)),
-        }
-    }
-
-    fn shadow_program(&self) -> Cow<'_, renderer::program::ManagedRasterProgram> {
-        match self
-            .shader_assets
-            .as_ref()
-            .and_then(|assets| assets.programs.as_ref())
-        {
-            Some(programs) => Cow::Borrowed(&programs.shadow),
-            None => Cow::Owned(program::shadow_program()),
-        }
-    }
-
-    fn sdr_output(&self) -> renderer_pipeline::standard::passes::SdrOutput {
-        use renderer_pipeline::standard::passes::{SdrEncoding, SdrOutput};
+    fn sdr_output(&self) -> output::SdrOutput {
+        use output::{SdrEncoding, SdrOutput};
         SdrOutput {
             encoding: if self.windowed {
                 SdrEncoding::Linear
@@ -216,10 +180,6 @@ impl Options {
             },
             fxaa: self.aa,
         }
-    }
-
-    fn captures_aa_off(&self) -> bool {
-        !self.windowed && self.aa
     }
 
     fn validate_lighting_extent(&self) -> Result<(), Error> {
@@ -256,10 +216,6 @@ impl Options {
             bloom: bloom::Bloom::Off,
             sample_count: renderer::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
-            shader_assets: None,
-            scene_pipeline: None,
-            shadow_pipeline: None,
-            post_pipeline: None,
             instances: instancing::Mode::Off,
             submission: SubmissionMode::Direct,
             #[cfg(feature = "development-validation")]
@@ -276,8 +232,6 @@ impl Options {
         };
         let mut args = arguments.into_iter();
         let mut specified_size = false;
-        let mut shader_pipeline = None;
-        let mut shader_manifest = None;
         while let Some(argument) = args.next() {
             match argument.as_str() {
                 "--fixture" => result.fixture = true,
@@ -327,26 +281,6 @@ impl Options {
                                 .into(),
                         ),
                     };
-                }
-                "--shader-pipeline" => {
-                    shader_pipeline =
-                        Some(args.next().ok_or("--shader-pipeline needs a path")?.into());
-                }
-                "--shader-manifest" => {
-                    shader_manifest =
-                        Some(args.next().ok_or("--shader-manifest needs a path")?.into());
-                }
-                "--scene-pipeline" => {
-                    result.scene_pipeline =
-                        Some(args.next().ok_or("--scene-pipeline needs a path")?.into());
-                }
-                "--shadow-pipeline" => {
-                    result.shadow_pipeline =
-                        Some(args.next().ok_or("--shadow-pipeline needs a path")?.into());
-                }
-                "--post-pipeline" => {
-                    result.post_pipeline =
-                        Some(args.next().ok_or("--post-pipeline needs a path")?.into());
                 }
                 "--submission" => {
                     result.submission = match args.next().as_deref() {
@@ -417,41 +351,6 @@ impl Options {
         }
         if result.fixture == result.manifest.is_some() {
             return Err("select exactly one of --fixture or --manifest".into());
-        }
-        result.shader_assets = match (shader_pipeline, shader_manifest) {
-            (None, None) => None,
-            (Some(pipeline), Some(manifest)) => {
-                if result.pipeline != PipelineMode::Forward
-                    || result.sample_count != renderer::graph::SampleCount::X1
-                    || result.submission != SubmissionMode::Direct
-                    || result.instances.enabled()
-                {
-                    return Err("the shader pipeline example requires Forward 1x, direct submission and instancing off".into());
-                }
-                Some(shader_assets::Selection {
-                    pipeline,
-                    manifest,
-                    programs: None,
-                })
-            }
-            _ => {
-                return Err(
-                    "--shader-pipeline and --shader-manifest must be provided together".into(),
-                );
-            }
-        };
-        if result.scene_pipeline.is_some()
-            && (result.pipeline != PipelineMode::Forward
-                || result.sample_count != renderer::graph::SampleCount::X1
-                || result.submission != SubmissionMode::Direct
-                || result.instances.enabled())
-        {
-            return Err(
-                "--scene-pipeline requires Forward 1x, direct submission and instancing off".into(),
-            );
-        }
-        if result.shadow_pipeline.is_some() {
-            result.reuse_shadows = false;
         }
         if result.pipeline == PipelineMode::Deferred
             && result.sample_count != renderer::graph::SampleCount::X1
@@ -539,11 +438,6 @@ Scenes and output
 
 Rendering
   --pipeline forward|forward-plus|forward-reference|deferred
-  --shader-pipeline YAML --shader-manifest JSON
-                                 Forward 1x with direct submission
-  --scene-pipeline YAML          Forward 1x pass graph with direct submission
-  --shadow-pipeline YAML         Four shadow cascades, redrawn every frame
-  --post-pipeline YAML           Scene HDR to SDR pass graph, including Bloom
   --msaa 1|4
   --bloom off|tent|box
   --instances off|individual|instanced
@@ -581,11 +475,7 @@ pub fn main() -> Result<(), Error> {
         print_help();
         return Ok(());
     }
-    let mut options = Options::parse(arguments)?;
-    if let Some(shader_assets) = &mut options.shader_assets {
-        require_backend(&options.api)?;
-        shader_assets.prepare(&options.api, options.inflight)?;
-    }
+    let options = Options::parse(arguments)?;
     #[cfg(feature = "tracy")]
     let _client = tracy_client::Client::start();
     #[cfg(feature = "tracy")]
@@ -635,11 +525,6 @@ mod tests {
         assert!(options(&["--fixture", "--inflight", "0"]).is_err());
         assert!(options(&["--fixture"]).unwrap().reuse_shadows);
         assert!(
-            !options(&["--fixture", "--shadow-pipeline", "shadows.yaml"])
-                .unwrap()
-                .reuse_shadows
-        );
-        assert!(
             !options(&["--fixture", "--redraw-shadows"])
                 .unwrap()
                 .reuse_shadows
@@ -652,23 +537,6 @@ mod tests {
             (128, 96, 2)
         );
         assert!(fixture.gpu_timing);
-    }
-
-    #[test]
-    fn shader_selection_has_explicit_input_paths_and_forward_route() {
-        assert!(options(&["--fixture", "--shader-manifest", "bundle.json"]).is_err());
-        let with_yaml = [
-            "--fixture",
-            "--shader-pipeline",
-            "passes.yaml",
-            "--shader-manifest",
-            "bundle.json",
-        ];
-        let selected = options(&with_yaml).unwrap().shader_assets.unwrap();
-        assert_eq!(selected.pipeline, PathBuf::from("passes.yaml"));
-        assert_eq!(selected.manifest, PathBuf::from("bundle.json"));
-        assert!(options(&[with_yaml.as_slice(), &["--msaa", "4"]].concat()).is_err());
-        assert!(options(&[with_yaml.as_slice(), &["--pipeline", "deferred"]].concat()).is_err());
     }
 
     #[test]

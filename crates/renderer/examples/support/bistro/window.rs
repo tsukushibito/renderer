@@ -7,7 +7,6 @@ use super::{
     camera::{Camera, Conditions},
     ibl::Environment,
     pipeline::{self, Budget, Resident, Workspace},
-    post,
     window_camera::Motion,
     window_input::{CameraInput, REPLAY_DT, REPLAY_STEPS},
 };
@@ -197,8 +196,7 @@ impl State {
         let size = window.inner_size();
         options.width = size.width;
         options.height = size.height;
-        let post = post::Prepared::load(options)?;
-        let mut budget = Budget::new(scene, environment, options, post.as_ref())?;
+        let budget = Budget::new(scene, environment, options)?;
         let config = PresentationConfig {
             max_frames: options.inflight,
             vsync: options.vsync,
@@ -206,7 +204,7 @@ impl State {
         };
         let started = Instant::now();
         let (mut backend, mut surface) =
-            backend::open(options, &budget, post.as_ref(), Arc::clone(&window), config)?;
+            backend::open(options, &budget, Arc::clone(&window), config)?;
         let preparation_ns = ns(started.elapsed());
         let seed = camera_seed(conditions, options)?;
         let initial = uniform(seed, conditions, options)?;
@@ -225,12 +223,7 @@ impl State {
         backend.set_profiling(options.gpu_timing)?;
         surface.set_profiling(options.gpu_timing)?;
         let pool = GraphPool::new(budget.graph, options.inflight + 1)?;
-        let mut workspace = Workspace::new(
-            scene,
-            post,
-            budget.scene_pipeline.take(),
-            budget.shadow_pipeline.take(),
-        );
+        let mut workspace = Workspace::new(scene);
         workspace.placements = placements;
         if options.reuse_shadows && options.shadows {
             workspace.enable_shadow_reuse();
@@ -462,35 +455,15 @@ impl State {
             self.workspace.clear_shadow_reuse(&mut self.backend)?;
             (options.width, options.height) = extent;
             options.validate_lighting_extent()?;
-            let post = self
-                .workspace
-                .post
-                .as_ref()
-                .map(|post| post.resize(options))
-                .transpose()?;
-            let scene_pipeline = self
-                .workspace
-                .scene_pipeline
-                .as_ref()
-                .map(|pipeline| pipeline.resize(options, scene))
-                .transpose()?;
             let budget = &self.budget;
-            let shadow_pipeline = self.workspace.shadow_pipeline.as_ref();
-            self.resident = Some(self.resident.take().unwrap().reprepare(
-                &mut self.backend,
-                |backend| {
-                    backend::resize(
-                        backend,
-                        options,
-                        budget,
-                        post.as_ref(),
-                        scene_pipeline.as_ref(),
-                        shadow_pipeline,
-                    )
-                },
-            )?);
-            self.workspace.post = post;
-            self.workspace.scene_pipeline = scene_pipeline;
+            self.resident = Some(
+                self.resident
+                    .take()
+                    .unwrap()
+                    .reprepare(&mut self.backend, |backend| {
+                        backend::resize(backend, options, budget)
+                    })?,
+            );
             if options.reuse_shadows && options.shadows {
                 self.workspace.enable_shadow_reuse();
             }
@@ -644,16 +617,12 @@ impl State {
                 &self.smoke.replay.first_pixels,
             )?;
         }
-        let mut report = json!({
+        let report = json!({
             "schema_version": 1, "presentation": true, "runtime": runtime, "validation": validation,
             "inputs": inputs,
             "initial_width": self.seed_dimensions.0, "initial_height": self.seed_dimensions.1,
             "bloom": options.bloom.name(), "vsync": options.vsync, "aa": options.aa,
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
-            "shader_pipeline":options.shader_assets.as_ref().map(|selection| &selection.pipeline),
-            "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
-            "post_pipeline":options.post_pipeline,
-            "post_pipeline_sha256":self.workspace.post.as_ref().map(post::Prepared::sha256),
             "local_lights":options.pipeline.uses_local_lights()
                 .then(|| super::forward_lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
@@ -678,14 +647,6 @@ impl State {
                 "scope": "window event-loop and native pacing; accepted present is not display scanout",
             },
         });
-        if let Some(pipeline) = &self.workspace.scene_pipeline {
-            report["scene_pipeline"] = json!(options.scene_pipeline);
-            report["scene_pipeline_sha256"] = json!(pipeline.sha256());
-        }
-        if let Some(pipeline) = &self.workspace.shadow_pipeline {
-            report["shadow_pipeline"] = json!(options.shadow_pipeline);
-            report["shadow_pipeline_sha256"] = json!(pipeline.sha256());
-        }
         super::run::write_report(&options.output, &report)?;
         if options.window_smoke && !smoke_passed {
             return Err("Bistro Window smoke acceptance failed".into());

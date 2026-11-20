@@ -590,7 +590,7 @@ fn capture_lighting(
     options.aa = lighting.aa;
     options.shadows = lighting.shadows;
     options.capture_shadows = lighting.capture_shadows;
-    let budget = pipeline::Budget::new(scene, &lighting.environment, &options, None).unwrap();
+    let budget = pipeline::Budget::new(scene, &lighting.environment, &options).unwrap();
     let camera = Camera::fixture();
     let uniform = camera
         .uniform(
@@ -601,7 +601,7 @@ fn capture_lighting(
             lighting.light_color,
         )
         .unwrap();
-    let mut backend = backend::create(&options, &budget, None).unwrap();
+    let mut backend = backend::create(&options, &budget).unwrap();
     let resident = pipeline::Resident::upload(
         &mut backend,
         scene,
@@ -611,7 +611,7 @@ fn capture_lighting(
     )
     .unwrap();
     let mut pool = renderer::graph::GraphPool::new(budget.graph, 2).unwrap();
-    let mut workspace = pipeline::Workspace::new(scene, None, None, None);
+    let mut workspace = pipeline::Workspace::new(scene);
     let built = pipeline::build(
         &mut pool,
         &mut workspace,

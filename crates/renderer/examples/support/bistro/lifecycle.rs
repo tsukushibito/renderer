@@ -9,8 +9,9 @@ use super::{Error, asset::Scene};
 use super::{
     Options, backend,
     camera::{Camera, Conditions},
+    output::{SdrEncoding, SdrOutput, write_sdr},
     pipeline::{self, Budget, Captures, Resident, Workspace},
-    post, program, scene_pipeline, shadow_pipeline,
+    program,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
@@ -18,8 +19,6 @@ use renderer::{
     graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
     runtime::{ExecutionErrorKind, FrameId, Runtime},
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::standard::passes::{SdrEncoding, SdrOutput, write_sdr};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use serde_json::{Value, json};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -328,9 +327,6 @@ pub(super) fn execute(
     options: &Options,
     conditions: &Conditions,
     budget: &Budget,
-    post: Option<post::Prepared>,
-    scene_pipeline: Option<scene_pipeline::Prepared>,
-    shadow_pipeline: Option<shadow_pipeline::Prepared>,
     stages: Value,
 ) -> Result<Value, Error> {
     let directory = options.output.join("resource-checks");
@@ -351,7 +347,7 @@ pub(super) fn execute(
         ["street", "material-detail"]
     };
     let mut pool = GraphPool::new(budget.graph, options.inflight + 3)?;
-    let mut workspace = Workspace::new(scene, post, scene_pipeline, shadow_pipeline);
+    let mut workspace = Workspace::new(scene);
     let mut references = Vec::new();
     let mut reference_reports = Vec::new();
     for index in 0..2 {

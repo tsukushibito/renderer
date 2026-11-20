@@ -1,17 +1,18 @@
 //! Explicit preparation budgets and backend-specific acceptance diagnostics.
 
-use super::{Error, Options, PipelineMode, SubmissionMode, pipeline::Budget, post, program};
+use super::{
+    Error, Options, PipelineMode, SubmissionMode, output::SdrOutput, pipeline::Budget, program,
+};
 use renderer::{
     graph::{BufferDesc, ImageDesc, PassHandle},
-    program::{ManagedProgram, RasterPipelineRequest},
+    program::{ManagedProgram, ManagedRasterProgram, RasterPipelineRequest},
     runtime::{
         ExecutionError, FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeConfig,
         RuntimeLimits, WorkingSet,
     },
 };
-use renderer_pipeline::standard::passes::{SdrOutput, tone_map_neutral_pipeline};
 
-fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<RasterPipelineRequest> {
+pub(super) fn raster_requests(options: &Options) -> Vec<RasterPipelineRequest> {
     let mut requests = Vec::with_capacity(7 + usize::from(options.instances.enabled()));
     if options.pipeline == PipelineMode::Deferred {
         requests.extend(
@@ -23,12 +24,12 @@ fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<Rast
         );
     } else {
         requests.push(RasterPipelineRequest {
-            program: options.forward_program(false).into_owned(),
+            program: options.pipeline.forward_program(false),
             sample_count: options.sample_count,
         });
     }
     requests.push(RasterPipelineRequest {
-        program: options.forward_program(true).into_owned(),
+        program: options.pipeline.forward_program(true),
         sample_count: options.sample_count,
     });
     if options.instances.enabled() {
@@ -37,42 +38,29 @@ fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<Rast
             sample_count: options.sample_count,
         });
     }
-    requests.push(options.shadow_program().into_owned().into());
+    requests.push(program::shadow_program().into());
+    requests.push(ManagedRasterProgram::tone_map_neutral().into());
     let sdr = options.sdr_output();
-    if let Some(post) = post {
-        requests.extend_from_slice(post.working_set().raster);
-        if options.captures_aa_off() || options.capture_bloom_bypass {
-            requests.push(tone_map_neutral_pipeline());
-        }
-        if options.capture_bloom_bypass {
-            requests.push(sdr.pipeline());
-        }
-        if options.captures_aa_off() || options.resource_checks {
-            // The AA-off diagnostic and the replacement mip probe use this.
-            requests.push(SdrOutput { fxaa: false, ..sdr }.pipeline());
-        }
-    } else {
-        requests.push(tone_map_neutral_pipeline());
-        requests.push(sdr.pipeline());
-        if !options.windowed {
-            requests.push(
-                SdrOutput {
-                    fxaa: !sdr.fxaa,
-                    ..sdr
-                }
-                .pipeline(),
-            );
-        }
+    requests.push(sdr.program().into());
+    if !options.windowed {
+        // Offscreen capture includes an AA-off diagnostic.
+        requests.push(
+            SdrOutput {
+                fxaa: !sdr.fxaa,
+                ..sdr
+            }
+            .program()
+            .into(),
+        );
     }
     requests
 }
 
-fn compute_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<ManagedProgram> {
-    let configured = post.map_or(&[][..], |post| post.working_set().compute);
-    post::builtin_bloom(options, post)
+pub(super) fn compute_requests(options: &Options) -> Vec<ManagedProgram> {
+    options
+        .bloom
         .programs()
         .iter()
-        .chain(configured)
         .cloned()
         .chain(
             (options.pipeline == PipelineMode::ForwardPlus)
@@ -98,7 +86,7 @@ fn config(options: &Options, budget: &Budget) -> Result<RuntimeConfig, Error> {
         "vulkan" => Ok(RuntimeConfig::Vulkan(renderer::runtime::VulkanConfig {
             staging_bytes: budget.vulkan_staging_bytes(options.inflight),
             staging_ranges: budget.vulkan_staging_ranges(options.inflight),
-            max_shader_bindings: budget.vulkan_shader_bindings,
+            max_shader_bindings: budget.graph.draws as u32,
             ..Default::default()
         })),
         #[cfg(all(windows, feature = "d3d12"))]
@@ -131,7 +119,6 @@ fn with_working_set<T>(
     options: &Options,
     buffers: &[(u64, usize)],
     images: &[(ImageDesc, usize)],
-    post: Option<&post::Prepared>,
     prepare: impl FnOnce(WorkingSet<'_>) -> Result<T, ExecutionError>,
 ) -> Result<T, Error> {
     let resources = buffers
@@ -148,8 +135,8 @@ fn with_working_set<T>(
         .collect::<Vec<_>>();
     Ok(prepare(WorkingSet {
         resources: &resources,
-        raster: &raster_requests(options, post),
-        compute: &compute_requests(options, post),
+        raster: &raster_requests(options),
+        compute: &compute_requests(options),
     })?)
 }
 
@@ -163,13 +150,9 @@ fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
     Ok(())
 }
 
-pub(super) fn create(
-    options: &Options,
-    budget: &Budget,
-    post: Option<&post::Prepared>,
-) -> Result<Runtime, Error> {
+pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Error> {
     let config = config(options, budget)?;
-    let runtime = with_working_set(options, &budget.buffers, &budget.images, post, |set| {
+    let runtime = with_working_set(options, &budget.buffers, &budget.images, |set| {
         Runtime::new(config, limits(options, budget), set)
     })?;
     require_hardware(&runtime)?;
@@ -180,15 +163,13 @@ pub(super) fn create(
 pub(super) fn open(
     options: &Options,
     budget: &Budget,
-    post: Option<&post::Prepared>,
     window: std::sync::Arc<winit::window::Window>,
     presentation: renderer::PresentationConfig,
 ) -> Result<(Runtime, renderer::runtime::WindowPresenter), Error> {
     let config = config(options, budget)?;
-    let (runtime, presenter) =
-        with_working_set(options, &budget.buffers, &budget.images, post, |set| {
-            Runtime::for_window(config, limits(options, budget), set, window, presentation)
-        })?;
+    let (runtime, presenter) = with_working_set(options, &budget.buffers, &budget.images, |set| {
+        Runtime::for_window(config, limits(options, budget), set, window, presentation)
+    })?;
     require_hardware(&runtime)?;
     Ok((runtime, presenter))
 }
@@ -198,15 +179,11 @@ pub(super) fn resize(
     runtime: &mut Runtime,
     options: &Options,
     budget: &Budget,
-    post: Option<&post::Prepared>,
-    scene_pipeline: Option<&super::scene_pipeline::Prepared>,
-    shadow_pipeline: Option<&super::shadow_pipeline::Prepared>,
 ) -> Result<(), Error> {
     with_working_set(
         options,
         &budget.resized_buffers(options),
-        &Budget::frame_images(options, post, scene_pipeline, shadow_pipeline),
-        post,
+        &Budget::frame_images(options),
         |set| runtime.prepare_working_set(set),
     )
 }

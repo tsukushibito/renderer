@@ -3,20 +3,19 @@
 use super::{
     Error, Options, PipelineMode, SubmissionMode,
     asset::Scene,
-    bloom::Bloom,
     camera::{Camera, Frustum},
-    deferred, forward_lighting, ibl, instancing, post,
+    deferred, forward_lighting, ibl, instancing,
+    output::{tone_map_neutral, write_sdr},
     program::{self, forward_plus},
-    scene_pipeline, shadow, shadow_pipeline,
+    shadow,
 };
 use renderer::{
     ImageFormat,
-    capacity::ResourceClass,
     graph::{
         Attachment, Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphPool,
-        ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp,
-        PassHandle, RasterAttachments, RasterBindings, RasterConstants, RasterDraw, RasterPass,
-        SampleCount, StoreOp,
+        ImageDesc, ImageHandle, ImportBuffer, ImportImage, IndexedIndirectArgs, LoadOp, PassHandle,
+        RasterAttachments, RasterBindings, RasterConstants, RasterDraw, RasterPass, SampleCount,
+        StoreOp,
     },
     program::{ManagedRasterProgram, SamplerDescriptor},
 };
@@ -25,10 +24,6 @@ use renderer::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
-use renderer_pipeline::{
-    DrawCandidate,
-    standard::passes::{tone_map_neutral, write_sdr},
-};
 use std::sync::Arc;
 
 #[path = "pipeline/indirect.rs"]
@@ -36,10 +31,6 @@ mod indirect;
 
 pub(super) struct Budget {
     pub graph: GraphCapacity,
-    pub scene_pipeline: Option<scene_pipeline::Prepared>,
-    pub shadow_pipeline: Option<shadow_pipeline::Prepared>,
-    #[cfg(feature = "vulkan")]
-    pub vulkan_shader_bindings: u32,
     pub buffers: Vec<(u64, usize)>,
     pub images: Vec<(ImageDesc, usize)>,
     pub buffer_count: usize,
@@ -70,14 +61,6 @@ fn environment_desc(image: &ibl::Image) -> ImageDesc {
     ImageDesc {
         mip_levels: image.mips.len() as u32,
         ..ImageDesc::rgba16_float(image.width, image.height)
-    }
-}
-
-fn add_image_class(images: &mut Vec<(ImageDesc, usize)>, desc: ImageDesc, count: usize) {
-    if let Some((_, available)) = images.iter_mut().find(|(item, _)| *item == desc) {
-        *available += count;
-    } else {
-        images.push((desc, count));
     }
 }
 
@@ -147,100 +130,45 @@ impl Budget {
         64 + inflight * (4 + indirect_groups)
     }
 
-    pub fn frame_images(
-        options: &Options,
-        post: Option<&post::Prepared>,
-        scene_pipeline: Option<&scene_pipeline::Prepared>,
-        shadow_pipeline: Option<&shadow_pipeline::Prepared>,
-    ) -> Vec<(ImageDesc, usize)> {
+    pub fn frame_images(options: &Options) -> Vec<(ImageDesc, usize)> {
         let mut images = Vec::new();
-        let mut add = |desc, count| add_image_class(&mut images, desc, count);
+        let mut add = |desc, count| {
+            if let Some((_, available)) = images.iter_mut().find(|(item, _)| *item == desc) {
+                *available += count;
+            } else {
+                images.push((desc, count));
+            }
+        };
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
-        let sdr = ImageDesc::rgba8(options.width, options.height);
-        for classes in [
-            scene_pipeline.map(scene_pipeline::Prepared::resources),
-            shadow_pipeline.map(shadow_pipeline::Prepared::resources),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            for &class in classes {
-                let ResourceClass::Image { desc, count } = class else {
-                    unreachable!("Bistro pipeline preparation accepts only transient images");
-                };
-                add(desc, count);
-            }
-        }
-        if scene_pipeline.is_none() {
-            add(hdr, options.inflight);
-        }
-        if let Some(post) = post {
-            let mut requirements: Vec<_> = post
-                .working_set()
-                .resources
-                .iter()
-                .filter_map(|&class| match class {
-                    ResourceClass::Image { desc, count } => Some((desc, count)),
-                    ResourceClass::Buffer { .. } => None,
-                })
-                .collect();
-            if options.captures_aa_off() || options.capture_bloom_bypass {
-                // Supplemental captures run after the measured frames drain.
-                // Each class serves either route, with capacity for the larger demand.
-                let mut reference = vec![(hdr, options.inflight), (sdr, options.inflight)];
-                if let Some(bloom) = post::builtin_bloom(options, Some(post)).images(hdr) {
-                    for desc in bloom {
-                        add_image_class(&mut reference, desc, options.inflight);
-                    }
-                }
-                for (desc, count) in reference {
-                    if let Some((_, configured)) =
-                        requirements.iter_mut().find(|(image, _)| *image == desc)
-                    {
-                        *configured = (*configured).max(count);
-                    } else {
-                        requirements.push((desc, count));
-                    }
-                }
-            }
-            for (desc, count) in requirements {
-                add(desc, count);
-            }
-        } else {
-            add(hdr, options.inflight);
-        }
+        add(hdr, options.inflight * 2);
         if options.pipeline == PipelineMode::Deferred {
             add(hdr, options.inflight * deferred::PLANES.len());
         }
         if options.sample_count == SampleCount::X4 {
             add(hdr.with_sample_count(SampleCount::X4), options.inflight);
         }
-        if post.is_none()
-            && let Some(extra) = options.bloom.images(hdr)
-        {
+        if let Some(extra) = options.bloom.images(hdr) {
             for desc in extra {
                 add(desc, options.inflight);
             }
         }
-        if scene_pipeline.is_none() {
-            add(
-                ImageDesc::depth32(options.width, options.height)
-                    .with_sample_count(options.sample_count),
-                options.inflight,
-            );
-        }
+        add(
+            ImageDesc::depth32(options.width, options.height)
+                .with_sample_count(options.sample_count),
+            options.inflight,
+        );
         // Presented images remain owned by the Presenter after Graph completion.
-        let sdr_slots = usize::from(post.is_none()) + usize::from(options.windowed);
-        if sdr_slots != 0 {
-            add(sdr, sdr_slots * options.inflight);
-        }
-        if shadow_pipeline.is_none() {
-            let resolution = shadow::Parameters::default().resolution;
-            add(
-                ImageDesc::depth32(resolution, resolution),
-                options.inflight * shadow::CASCADE_COUNT,
-            );
-        }
+        let presentation_slots = if options.windowed {
+            options.inflight
+        } else {
+            0
+        };
+        add(
+            ImageDesc::rgba8(options.width, options.height),
+            options.inflight + presentation_slots,
+        );
+        let shadow = shadow::Parameters::default().resolution;
+        add(ImageDesc::depth32(shadow, shadow), options.inflight * 4);
         images
     }
 
@@ -248,17 +176,8 @@ impl Budget {
         scene: &Scene,
         environment: &ibl::Environment,
         options: &Options,
-        post: Option<&post::Prepared>,
     ) -> Result<Self, Error> {
         options.validate_lighting_extent()?;
-        let scene_pipeline = scene_pipeline::Prepared::load(options, scene)?;
-        let scene_requirements = scene_pipeline
-            .as_ref()
-            .map(scene_pipeline::Prepared::requirements);
-        let shadow_pipeline = shadow_pipeline::Prepared::load(options, scene)?;
-        let shadow_requirements = shadow_pipeline
-            .as_ref()
-            .map(shadow_pipeline::Prepared::requirements);
         let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
         let local_lights = usize::from(options.pipeline.uses_local_lights());
         let tiled_lights = usize::from(options.pipeline == PipelineMode::ForwardPlus);
@@ -378,25 +297,20 @@ impl Budget {
                 check_images += 1;
             }
         }
-        let bloom_passes = usize::from(post::builtin_bloom(options, post) != Bloom::Off) * 5;
-        let capture_bloom = options.bloom != Bloom::Off;
+        let bloom_passes = if options.bloom == super::bloom::Bloom::Off {
+            0
+        } else {
+            5
+        };
         let mut frame_instances = 0;
-        for (desc, count) in Self::frame_images(
-            options,
-            post,
-            scene_pipeline.as_ref(),
-            shadow_pipeline.as_ref(),
-        ) {
+        for (desc, count) in Self::frame_images(options) {
             add_image(desc, count);
             frame_instances += count;
         }
-        let post = post.map(post::Prepared::graph_capacity);
         let resources = buffer_count
             + scene.images.len()
-            + 5
-            + shadow_requirements.map_or(shadow::CASCADE_COUNT, |shadow| shadow.resources)
-            + scene_requirements.map_or(2, |scene| scene.resources)
-            + bloom_passes.max(post.map_or(0, |graph| graph.resources))
+            + 11
+            + bloom_passes
             + deferred * (1 + deferred::PLANES.len())
             + local_lights
             + tiled_lights
@@ -411,19 +325,12 @@ impl Budget {
             + check_images
             + usize::from(options.resource_checks);
         let bloom_bindings = bloom_passes * 2 + usize::from(bloom_passes != 0);
-        let accesses = scene.primitives.len() * 64
-            + 256
-            + scene_requirements.map_or(0, |scene| scene.accesses)
-            + shadow_requirements.map_or(0, |shadow| shadow.accesses)
-            + bloom_bindings.max(post.map_or(0, |graph| graph.accesses))
-            + 8 * groups;
-        let builtin_shadow_draws = scene
+        let accesses = scene.primitives.len() * 64 + 256 + bloom_bindings + 8 * groups;
+        let shadow_words = scene
             .primitives
             .len()
             .checked_mul(shadow::CASCADE_COUNT)
             .ok_or("Raster shadow constant budget overflow")?;
-        let shadow_words =
-            shadow_requirements.map_or(builtin_shadow_draws, |shadow| shadow.raster_constant_words);
         let instance_words = options
             .instances
             .draws()
@@ -431,70 +338,38 @@ impl Budget {
             .ok_or("Raster instance constant budget overflow")?;
         let raster_constant_words = shadow_words
             .checked_add(instance_words)
-            .and_then(|words| {
-                words.checked_add(
-                    1 + scene_requirements.map_or(0, |scene| scene.raster_constant_words)
-                        + post
-                            .and_then(|graph| graph.raster_constant_words)
-                            .unwrap_or(0),
-                )
-            })
+            .and_then(|words| words.checked_add(1))
             .ok_or("Raster constant budget overflow")?;
         let graph = GraphCapacity {
             resources,
-            passes: 20
-                + shadow_requirements.map_or(shadow::CASCADE_COUNT, |shadow| shadow.passes)
-                + scene_requirements.map_or(0, |scene| scene.passes)
-                + bloom_passes.max(post.map_or(0, |graph| graph.passes))
-                + usize::from(capture_bloom)
+            passes: 24
+                + bloom_passes
+                + usize::from(bloom_passes != 0)
                 + deferred * 2
                 + local_lights
                 + tiled_lights
                 + indirect_passes,
             accesses,
-            draws: shadow_requirements.map_or(builtin_shadow_draws, |shadow| shadow.draws)
-                + scene_requirements.map_or(scene.primitives.len(), |scene| scene.draws)
-                + 2
-                + deferred
-                + options.instances.draws()
-                + post.map_or(0, |graph| graph.draws),
+            draws: scene.primitives.len() * 5 + 2 + deferred + options.instances.draws(),
             raster_constant_words: Some(raster_constant_words),
-            bindings: scene.materials.len() * (local_lights + tiled_lights)
-                + shadow_requirements.map_or(scene.materials.len() * 4, |shadow| shadow.bindings)
-                + scene_requirements.map_or(scene.materials.len() * 16, |scene| scene.bindings)
+            bindings: scene.materials.len() * (20 + local_lights + tiled_lights)
                 + 4
-                + bloom_bindings.max(post.map_or(0, |graph| graph.bindings))
+                + bloom_bindings
                 + deferred * 16
                 + tiled_lights * 3
                 + usize::from(options.instances.enabled()) * 16
                 + 3 * groups
                 + 3 * usize::from(groups != 0),
-            attachments: 20
-                + shadow_requirements.map_or(shadow::CASCADE_COUNT, |shadow| shadow.attachments)
-                + scene_requirements.map_or(0, |scene| scene.attachments)
-                + deferred * deferred::PLANES.len()
-                + post.map_or(0, |graph| graph.attachments),
+            attachments: 24 + deferred * deferred::PLANES.len(),
             dependencies: 32,
             initial_ranges: resources * 2,
-            name_bytes: resources * 32
-                + 2048
-                + post.map_or(0, |graph| graph.name_bytes)
-                + scene_requirements.map_or(0, |scene| scene.name_bytes)
-                + shadow_requirements.map_or(0, |shadow| shadow.name_bytes),
+            name_bytes: resources * 32 + 2048,
             upload_bytes: program::CAMERA_BYTES
                 + deferred * program::deferred::DEFERRED_RECONSTRUCTION_BYTES
                 + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize,
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
-        };
-        #[cfg(feature = "vulkan")]
-        let vulkan_shader_bindings = {
-            // Vulkan counts each Compute dispatch in the same budget as Raster bindings.
-            let yaml_dispatches = post.map_or(0, |graph| graph.passes - graph.draws);
-            u32::try_from(
-                graph.draws + bloom_passes.max(yaml_dispatches) + tiled_lights + indirect_passes,
-            )?
         };
         // Reserve the conservative D3D12 row/placement-aligned copy footprint,
         // not merely packed asset bytes. Vulkan can use the same bounded budget.
@@ -545,7 +420,7 @@ impl Budget {
             .max(4096)
             .checked_add(4096)
             .ok_or("upload byte overflow")?;
-        let hdr_captures = if capture_bloom { 2 } else { 1 };
+        let hdr_captures = if bloom_passes == 0 { 1 } else { 2 };
         let mut frame_readback_bytes = ((u64::from(options.width) * 8).next_multiple_of(256)
             * hdr_captures
             + (u64::from(options.width) * 4).next_multiple_of(256) * 2)
@@ -570,10 +445,6 @@ impl Budget {
         };
         Ok(Self {
             graph,
-            scene_pipeline,
-            shadow_pipeline,
-            #[cfg(feature = "vulkan")]
-            vulkan_shader_bindings,
             buffers,
             images,
             buffer_count: buffer_count + frame_buffers + tiled_lights,
@@ -963,11 +834,6 @@ pub(super) struct Workspace {
     shadow_bindings: Vec<RasterBindings>,
     shadow_cache: Option<ShadowCache>,
     pub(super) placements: Option<instancing::Placements>,
-    pub(super) post: Option<post::Prepared>,
-    pub(super) scene_pipeline: Option<scene_pipeline::Prepared>,
-    pub(super) shadow_pipeline: Option<shadow_pipeline::Prepared>,
-    pub(super) scene_materials: Option<scene_pipeline::Materials>,
-    scene_candidates: Vec<DrawCandidate<'static>>,
     opaque: Vec<usize>,
     indirect: Vec<IndexedIndirectArgs>,
     blended: Vec<usize>,
@@ -1010,17 +876,7 @@ struct ShadowCache {
 }
 
 impl Workspace {
-    pub fn new(
-        scene: &Scene,
-        post: Option<post::Prepared>,
-        scene_pipeline: Option<scene_pipeline::Prepared>,
-        shadow_pipeline: Option<shadow_pipeline::Prepared>,
-    ) -> Self {
-        let scene_materials = (scene_pipeline.is_some() || shadow_pipeline.is_some())
-            .then(|| scene_pipeline::Materials::new(scene.materials.len()));
-        let scene_draws = scene_pipeline
-            .as_ref()
-            .map_or(0, |_| scene.primitives.len());
+    pub fn new(scene: &Scene) -> Self {
         Self {
             vertices: Vec::with_capacity(scene.primitives.len()),
             indices: Vec::with_capacity(scene.primitives.len()),
@@ -1030,11 +886,6 @@ impl Workspace {
             shadow_bindings: Vec::with_capacity(scene.materials.len()),
             shadow_cache: None,
             placements: None,
-            post,
-            scene_pipeline,
-            shadow_pipeline,
-            scene_materials,
-            scene_candidates: Vec::with_capacity(scene_draws),
             opaque: Vec::with_capacity(scene.primitives.len()),
             indirect: Vec::with_capacity(scene.materials.len()),
             blended: Vec::with_capacity(scene.primitives.len()),
@@ -1151,163 +1002,6 @@ pub(super) struct Captures {
     pub depth: Option<PassHandle>,
 }
 
-struct ShadowFrame {
-    images: [ImageHandle; shadow::CASCADE_COUNT],
-    views: [ImageView; shadow::CASCADE_COUNT],
-    updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
-}
-
-impl ShadowFrame {
-    fn new(
-        graph: &Graph,
-        images: [ImageHandle; shadow::CASCADE_COUNT],
-        updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
-    ) -> Result<Self, Error> {
-        let views = [
-            graph.image_view(images[0], 0, 0)?,
-            graph.image_view(images[1], 0, 0)?,
-            graph.image_view(images[2], 0, 0)?,
-            graph.image_view(images[3], 0, 0)?,
-        ];
-        Ok(Self {
-            images,
-            views,
-            updates,
-        })
-    }
-}
-
-fn shadow_casters<'a>(
-    scene: &'a Scene,
-    resident: &'a Resident,
-    options: &'a Options,
-    clip: shadow::CascadeClip,
-) -> impl Iterator<Item = usize> + 'a {
-    (0..scene.primitives.len()).filter(move |&index| {
-        let material = &scene.materials[scene.primitives[index].material];
-        options.shadows
-            && !material.blend
-            && (!options.alpha_only || material.alpha_zero)
-            && clip.overlaps(resident.primitive_bounds[index])
-    })
-}
-
-fn append_builtin_shadows(
-    graph: &mut Graph,
-    workspace: &mut Workspace,
-    resident: &Resident,
-    scene: &Scene,
-    options: &Options,
-    uniform: BufferHandle,
-    shadow_data: &shadow::ShadowData,
-) -> Result<ShadowFrame, Error> {
-    let resolution = resident.shadow_parameters.resolution;
-    let shadow_desc = ImageDesc::depth32(resolution, resolution);
-    let shadow_cache = workspace.shadow_cache.as_ref();
-    let mut shadow_updates = shadow_cache.map(|_| [None; shadow::CASCADE_COUNT]);
-    let mut redraw = [true; shadow::CASCADE_COUNT];
-    let mut make_shadow = |cascade: usize| -> Result<ImageHandle, Error> {
-        let (Some(cache), Some(updates)) = (shadow_cache, &mut shadow_updates) else {
-            return Ok(graph.image("sun cascade", shadow_desc)?);
-        };
-        let key = ShadowKey::new(shadow_data.matrices[cascade], options.alpha_only);
-        let old = cache.entries[cascade].as_ref();
-        let handle = match old {
-            Some(entry) => graph.import_image("sun cascade", &entry.image)?,
-            None => graph.image("sun cascade", shadow_desc)?,
-        };
-        if old.is_some_and(|entry| entry.key == key) {
-            redraw[cascade] = false;
-        } else {
-            graph.export_image(handle)?;
-            updates[cascade] = Some(ShadowUpdate { key, handle });
-        }
-        Ok(handle)
-    };
-    let shadows = [
-        make_shadow(0)?,
-        make_shadow(1)?,
-        make_shadow(2)?,
-        make_shadow(3)?,
-    ];
-    let shadow_frame = ShadowFrame::new(graph, shadows, shadow_updates)?;
-    let shadow_program = options.shadow_program();
-    let redraw_any = redraw.into_iter().any(|value| value);
-    for (index, material) in scene.materials.iter().enumerate().filter(|_| redraw_any) {
-        let base = material.textures[0];
-        let bindings = [
-            Binding {
-                group: 0,
-                binding: 0,
-                resource: BindingResource::Buffer {
-                    buffer: uniform,
-                    offset: 0,
-                    size: program::CAMERA_BYTES as u64,
-                },
-            },
-            Binding {
-                group: 0,
-                binding: 1,
-                resource: BindingResource::Buffer {
-                    buffer: workspace.materials[index],
-                    offset: 0,
-                    size: 64,
-                },
-            },
-            Binding {
-                group: 1,
-                binding: 0,
-                resource: BindingResource::ImageView(graph.sampled_image_view(
-                    workspace.images[base],
-                    0,
-                    scene.images[base].mips.len() as u32,
-                )?),
-            },
-            Binding {
-                group: 1,
-                binding: 4,
-                resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
-            },
-        ];
-        workspace
-            .shadow_bindings
-            .push(graph.raster_bindings(&shadow_program, &bindings)?);
-    }
-    for (cascade, view) in shadow_frame.views.into_iter().enumerate() {
-        if !redraw[cascade] {
-            continue;
-        }
-        let parameters = RasterConstants::new(&[cascade as u32])?;
-        let clip = shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.scene_bounds);
-        let draws = shadow_casters(scene, resident, options, clip).map(|index| {
-            let primitive = &scene.primitives[index];
-            RasterDraw {
-                bindings: Some(workspace.shadow_bindings[primitive.material]),
-                vertices: workspace.vertices[index],
-                indices: workspace.indices[index],
-                first_index: 0,
-                index_count: primitive.index_count,
-                instance_count: 1,
-                parameters,
-            }
-        });
-        graph.raster(
-            "sun shadow depth",
-            RasterAttachments {
-                color_resolves: &[],
-                colors: &[],
-                depth: Some(Attachment {
-                    view,
-                    load: LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
-                }),
-            },
-            |raster| raster.draw(&shadow_program, draws),
-        )?;
-    }
-    Ok(shadow_frame)
-}
-
 #[allow(
     clippy::too_many_arguments,
     reason = "explicit consumer frame inputs share no additional ownership"
@@ -1391,9 +1085,6 @@ pub(super) fn build(
         graph.export_buffer(uniform)?;
         uniform
     };
-    if let Some(materials) = &mut workspace.scene_materials {
-        materials.populate(&graph, scene, &workspace.materials, &workspace.images)?;
-    }
     let mut local_light_bindings = [None; 2];
     let mut tile_update = None;
     if let Some(preset) = &resident.local_lights {
@@ -1417,150 +1108,150 @@ pub(super) fn build(
         graph.import_image("specular environment", &resident.environment[1])?,
         graph.import_image("BRDF integration", &resident.environment[2])?,
     ];
-    let ShadowFrame {
-        images: shadows,
-        views: shadow_views,
-        updates: shadow_updates,
-    } = if let Some(shadow_pipeline) = &mut workspace.shadow_pipeline {
-        let materials = workspace
-            .scene_materials
-            .as_ref()
-            .expect("shadow pipeline material storage was prepared");
-        for (cascade, candidates) in shadow_pipeline.candidates.iter_mut().enumerate() {
-            candidates.clear();
-            let parameters = RasterConstants::new(&[cascade as u32])?;
-            let clip =
-                shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.scene_bounds);
-            candidates.extend(shadow_casters(scene, resident, options, clip).map(|index| {
-                let primitive = &scene.primitives[index];
-                DrawCandidate {
-                    queue: "shadow",
-                    material: Some(primitive.material),
-                    draw: RasterDraw {
-                        bindings: None,
-                        vertices: workspace.vertices[index],
-                        indices: workspace.indices[index],
-                        first_index: 0,
-                        index_count: primitive.index_count,
-                        instance_count: 1,
-                        parameters,
-                    },
-                }
-            }));
+    let resolution = resident.shadow_parameters.resolution;
+    let shadow_desc = ImageDesc::depth32(resolution, resolution);
+    let shadow_cache = workspace.shadow_cache.as_ref();
+    let mut shadow_updates = shadow_cache.map(|_| [None; shadow::CASCADE_COUNT]);
+    let mut redraw = [true; shadow::CASCADE_COUNT];
+    let mut make_shadow = |cascade: usize| -> Result<ImageHandle, Error> {
+        let (Some(cache), Some(updates)) = (shadow_cache, &mut shadow_updates) else {
+            return Ok(graph.image("sun cascade", shadow_desc)?);
+        };
+        let key = ShadowKey::new(shadow_data.matrices[cascade], options.alpha_only);
+        let old = cache.entries[cascade].as_ref();
+        let handle = match old {
+            Some(entry) => graph.import_image("sun cascade", &entry.image)?,
+            None => graph.image("sun cascade", shadow_desc)?,
+        };
+        if old.is_some_and(|entry| entry.key == key) {
+            redraw[cascade] = false;
+        } else {
+            graph.export_image(handle)?;
+            updates[cascade] = Some(ShadowUpdate { key, handle });
         }
-        let (built_graph, shadows) = shadow_pipeline.append(graph, uniform, materials)?;
-        graph = built_graph;
-        ShadowFrame::new(&graph, shadows, None)?
-    } else {
-        append_builtin_shadows(
-            &mut graph,
-            workspace,
-            resident,
-            scene,
-            options,
-            uniform,
-            &shadow_data,
-        )?
+        Ok(handle)
     };
-    let camera_matrix =
-        std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
-    let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
-    let include_material = |index: usize| {
-        #[cfg(feature = "development-validation")]
-        if options.omit_material == Some(index) {
-            return false;
-        }
-        !options.alpha_only || scene.materials[index].alpha_zero
-    };
-    for (index, primitive) in scene.primitives.iter().enumerate() {
-        let material = &scene.materials[primitive.material];
-        if (resident.packed.is_some() && !material.blend) || !include_material(primitive.material) {
+    let shadows = [
+        make_shadow(0)?,
+        make_shadow(1)?,
+        make_shadow(2)?,
+        make_shadow(3)?,
+    ];
+    let shadow_views = [
+        graph.image_view(shadows[0], 0, 0)?,
+        graph.image_view(shadows[1], 0, 0)?,
+        graph.image_view(shadows[2], 0, 0)?,
+        graph.image_view(shadows[3], 0, 0)?,
+    ];
+    let shadow_program = program::shadow_program();
+    let redraw_any = redraw.into_iter().any(|value| value);
+    for (index, material) in scene.materials.iter().enumerate().filter(|_| redraw_any) {
+        let base = material.textures[0];
+        let bindings = [
+            Binding {
+                group: 0,
+                binding: 0,
+                resource: BindingResource::Buffer {
+                    buffer: uniform,
+                    offset: 0,
+                    size: program::CAMERA_BYTES as u64,
+                },
+            },
+            Binding {
+                group: 0,
+                binding: 1,
+                resource: BindingResource::Buffer {
+                    buffer: workspace.materials[index],
+                    offset: 0,
+                    size: 64,
+                },
+            },
+            Binding {
+                group: 1,
+                binding: 0,
+                resource: BindingResource::ImageView(graph.sampled_image_view(
+                    workspace.images[base],
+                    0,
+                    scene.images[base].mips.len() as u32,
+                )?),
+            },
+            Binding {
+                group: 1,
+                binding: 4,
+                resource: BindingResource::Sampler(SamplerDescriptor::LinearRepeat),
+            },
+        ];
+        workspace
+            .shadow_bindings
+            .push(graph.raster_bindings(&shadow_program, &bindings)?);
+    }
+    for (cascade, view) in shadow_views.into_iter().enumerate() {
+        if !redraw[cascade] {
             continue;
         }
-        if frustum.overlaps(resident.primitive_bounds[index]) {
-            if material.blend {
-                workspace.blended.push(index);
-            } else {
-                workspace.opaque.push(index);
-            }
-        }
-    }
-    let lighting_views = [
-        graph.sampled_image_view(environment[0], 0, resident.environment_mips[0])?,
-        graph.sampled_image_view(environment[1], 0, resident.environment_mips[1])?,
-        graph.sampled_image_view(environment[2], 0, resident.environment_mips[2])?,
-    ];
-    if let Some(scene_pipeline) = &mut workspace.scene_pipeline {
-        sort_blended(&mut workspace.blended, scene, camera);
-        workspace.scene_candidates.clear();
-        for (queue, visible) in [
-            ("opaque", &workspace.opaque),
-            ("transparent", &workspace.blended),
-        ] {
-            workspace
-                .scene_candidates
-                .extend(visible.iter().map(|&index| {
-                    let primitive = &scene.primitives[index];
-                    DrawCandidate {
-                        queue,
-                        material: Some(primitive.material),
-                        draw: RasterDraw {
-                            bindings: None,
-                            vertices: workspace.vertices[index],
-                            indices: workspace.indices[index],
-                            first_index: 0,
-                            index_count: primitive.index_count,
-                            instance_count: 1,
-                            parameters: RasterConstants::default(),
-                        },
-                    }
-                }));
-        }
-        let route = post_route(&mut graph, workspace.post.as_mut(), options)?;
-        let (graph, color, depth) = scene_pipeline.append(
-            graph,
-            uniform,
-            lighting_views,
-            shadow_views,
-            &workspace.scene_candidates,
-            workspace
-                .scene_materials
-                .as_ref()
-                .expect("prepared scene material storage"),
+        let parameters = RasterConstants::new(&[cascade as u32])?;
+        let clip = shadow::CascadeClip::new(&shadow_data.matrices[cascade], resident.scene_bounds);
+        let draws = (0..scene.primitives.len())
+            .filter(|&index| {
+                let material = &scene.materials[scene.primitives[index].material];
+                options.shadows
+                    && !material.blend
+                    && (!options.alpha_only || material.alpha_zero)
+                    && clip.overlaps(resident.primitive_bounds[index])
+            })
+            .map(|index| {
+                let primitive = &scene.primitives[index];
+                RasterDraw {
+                    bindings: Some(workspace.shadow_bindings[primitive.material]),
+                    vertices: workspace.vertices[index],
+                    indices: workspace.indices[index],
+                    first_index: 0,
+                    index_count: primitive.index_count,
+                    instance_count: 1,
+                    parameters,
+                }
+            });
+        graph.raster(
+            "sun shadow depth",
+            RasterAttachments {
+                color_resolves: &[],
+                colors: &[],
+                depth: Some(Attachment {
+                    view,
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
+                }),
+            },
+            |raster| raster.draw(&shadow_program, draws),
         )?;
-        return finish_frame(
-            graph,
-            route,
-            SceneImages {
-                color,
-                depth,
-                shadows,
-            },
-            BufferUpdates {
-                camera: uniform,
-                tiles: tile_update,
-            },
-            shadow_updates,
-            (capture && !options.windowed).then_some(workspace.scene_candidates.len()),
-            options,
-            capture,
-        );
     }
     let lighting_bindings = [
         Binding {
             group: 2,
             binding: 0,
-            resource: BindingResource::ImageView(lighting_views[0]),
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[0],
+                0,
+                resident.environment_mips[0],
+            )?),
         },
         Binding {
             group: 2,
             binding: 1,
-            resource: BindingResource::ImageView(lighting_views[1]),
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[1],
+                0,
+                resident.environment_mips[1],
+            )?),
         },
         Binding {
             group: 2,
             binding: 2,
-            resource: BindingResource::ImageView(lighting_views[2]),
+            resource: BindingResource::ImageView(graph.sampled_image_view(
+                environment[2],
+                0,
+                resident.environment_mips[2],
+            )?),
         },
         Binding {
             group: 2,
@@ -1599,8 +1290,6 @@ pub(super) fn build(
         .placements
         .as_ref()
         .map(|placement| placement.material);
-    let opaque_program = options.forward_program(false);
-    let blend_program = options.forward_program(true);
     {
         #[cfg(feature = "tracy")]
         let _bindings = tracy_client::Client::running()
@@ -1661,11 +1350,7 @@ pub(super) fn build(
             let bindings = if deferred && !material.blend {
                 graph.raster_bindings(&program::deferred::gbuffer_program(), &material_bindings)?
             } else {
-                let program = if material.blend {
-                    &blend_program
-                } else {
-                    &opaque_program
-                };
+                let program = options.pipeline.forward_program(material.blend);
                 let mut bindings = [material_bindings[0]; renderer::program::MAX_RASTER_BINDINGS];
                 let shared = material_bindings.len() + lighting_bindings.len();
                 bindings[..material_bindings.len()].copy_from_slice(&material_bindings);
@@ -1682,14 +1367,14 @@ pub(super) fn build(
                             .raster_bindings(&program::instancing_program(), &bindings[..shared])?,
                     );
                 }
-                graph.raster_bindings(program, &bindings[..program.bindings().len()])?
+                graph.raster_bindings(&program, &bindings[..program.bindings().len()])?
             };
             workspace.bindings.push(bindings);
         }
     }
     let multisampled = options.sample_count == SampleCount::X4;
     let scene_clear = [background[0], background[1], background[2], 1.0];
-    let (color, depth, post_route, color_view, depth_view, resolve_view) = {
+    let (color, depth, output, color_view, depth_view, resolve_view) = {
         #[cfg(feature = "tracy")]
         let _targets = tracy_client::Client::running()
             .map(|client| client.span(tracy_client::span_location!("bistro.build.targets"), 0));
@@ -1712,7 +1397,10 @@ pub(super) fn build(
             ImageDesc::depth32(options.width, options.height)
                 .with_sample_count(options.sample_count),
         )?;
-        let post_route = post_route(&mut graph, workspace.post.as_mut(), options)?;
+        let output = graph.image(
+            "B2 sRGB output",
+            ImageDesc::rgba8(options.width, options.height),
+        )?;
         let depth_view = graph.image_view(depth, 0, 0)?;
         if !multisampled && !deferred {
             graph.attachment_pass(
@@ -1732,20 +1420,36 @@ pub(super) fn build(
                 },
             )?;
         }
-        (
-            color,
-            depth,
-            post_route,
-            color_view,
-            depth_view,
-            resolve_view,
-        )
+        (color, depth, output, color_view, depth_view, resolve_view)
+    };
+    let camera_matrix =
+        std::array::from_fn(|column| std::array::from_fn(|row| read_word(column * 4 + row)));
+    let frustum = Frustum::new(camera_matrix, resident.scene_bounds);
+    let include_material = |index: usize| {
+        #[cfg(feature = "development-validation")]
+        if options.omit_material == Some(index) {
+            return false;
+        }
+        !options.alpha_only || scene.materials[index].alpha_zero
     };
     let packed = resident
         .packed
         .as_ref()
         .map(|packed| packed.prepare_frame(&mut graph, uniform, &mut workspace.indirect))
         .transpose()?;
+    for (index, primitive) in scene.primitives.iter().enumerate() {
+        let material = &scene.materials[primitive.material];
+        if (packed.is_some() && !material.blend) || !include_material(primitive.material) {
+            continue;
+        }
+        if frustum.overlaps(resident.primitive_bounds[index]) {
+            if material.blend {
+                workspace.blended.push(index);
+            } else {
+                workspace.opaque.push(index);
+            }
+        }
+    }
     let draw = |index: usize| {
         let primitive = &scene.primitives[index];
         RasterDraw {
@@ -1827,7 +1531,7 @@ pub(super) fn build(
                 }),
             },
             |raster| {
-                record_opaque(raster, &opaque_program)?;
+                record_opaque(raster, &options.pipeline.forward_program(false))?;
                 if let Some(placements) = &workspace.placements {
                     let instance = RasterDraw {
                         bindings: instance_bindings,
@@ -1842,7 +1546,20 @@ pub(super) fn build(
             },
         )?;
     }
-    sort_blended(&mut workspace.blended, scene, camera);
+    {
+        #[cfg(feature = "tracy")]
+        let _sort = tracy_client::Client::running().map(|client| {
+            client.span(tracy_client::span_location!("bistro.build.blended_sort"), 0)
+        });
+        // A deterministic far-to-near primitive order. This is ordinary alpha
+        // blending, not order-independent transparency or per-triangle sorting.
+        workspace.blended.sort_unstable_by(|&a, &b| {
+            camera
+                .distance_squared(scene.primitives[b].center)
+                .total_cmp(&camera.distance_squared(scene.primitives[a].center))
+                .then(a.cmp(&b))
+        });
+    }
     {
         #[cfg(feature = "tracy")]
         let _blended = tracy_client::Client::running().map(|client| {
@@ -1872,97 +1589,15 @@ pub(super) fn build(
                         store,
                     }),
                 },
-                |raster| raster.draw(&blend_program, workspace.blended.iter().copied().map(draw)),
+                |raster| {
+                    raster.draw(
+                        &options.pipeline.forward_program(true),
+                        workspace.blended.iter().copied().map(draw),
+                    )
+                },
             )?;
         }
     }
-    let opaque_draws = match (capture && !options.windowed, &packed) {
-        (true, Some(packed)) => {
-            packed.visible_direct_draws(&frustum, &resident.primitive_bounds, include_material)
-        }
-        (true, None) => Some(workspace.opaque.len()),
-        (false, _) => None,
-    };
-    let draws =
-        opaque_draws.map(|count| count + workspace.blended.len() + options.instances.draws());
-    finish_frame(
-        graph,
-        post_route,
-        SceneImages {
-            color,
-            depth,
-            shadows,
-        },
-        BufferUpdates {
-            camera: uniform,
-            tiles: tile_update,
-        },
-        shadow_updates,
-        draws,
-        options,
-        capture,
-    )
-}
-
-enum PostRoute<'a> {
-    Yaml(&'a mut post::Prepared),
-    Builtin(ImageHandle),
-}
-
-fn post_route<'a>(
-    graph: &mut Graph,
-    post: Option<&'a mut post::Prepared>,
-    options: &Options,
-) -> Result<PostRoute<'a>, Error> {
-    if let Some(post) = post.filter(|post| post.uses_options(options)) {
-        return Ok(PostRoute::Yaml(post));
-    }
-    Ok(PostRoute::Builtin(graph.image(
-        "B2 sRGB output",
-        ImageDesc::rgba8(options.width, options.height),
-    )?))
-}
-
-fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
-    #[cfg(feature = "tracy")]
-    let _sort = tracy_client::Client::running()
-        .map(|client| client.span(tracy_client::span_location!("bistro.build.blended_sort"), 0));
-    // A deterministic far-to-near primitive order. This is ordinary alpha
-    // blending, not order-independent transparency or per-triangle sorting.
-    blended.sort_unstable_by(|&a, &b| {
-        camera
-            .distance_squared(scene.primitives[b].center)
-            .total_cmp(&camera.distance_squared(scene.primitives[a].center))
-            .then(a.cmp(&b))
-    });
-}
-
-struct SceneImages {
-    color: ImageHandle,
-    depth: ImageHandle,
-    shadows: [ImageHandle; shadow::CASCADE_COUNT],
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "both scene routes hand existing frame state to the same post and capture path"
-)]
-fn finish_frame(
-    mut graph: Graph,
-    post_route: PostRoute<'_>,
-    images: SceneImages,
-    updates: BufferUpdates,
-    shadow_updates: Option<[Option<ShadowUpdate>; shadow::CASCADE_COUNT]>,
-    draws: Option<usize>,
-    options: &Options,
-    capture: bool,
-) -> Result<Built, Error> {
-    let SceneImages {
-        color,
-        depth,
-        shadows,
-    } = images;
-    let multisampled = options.sample_count == SampleCount::X4;
     #[cfg(feature = "tracy")]
     let _resolve = tracy_client::Client::running().map(|client| {
         client.span(
@@ -1970,37 +1605,25 @@ fn finish_frame(
             0,
         )
     });
-    let (mut graph, output, bloom) = match post_route {
-        PostRoute::Yaml(post) => post.append(graph, color, capture && !options.windowed)?,
-        PostRoute::Builtin(output) => {
-            let bloom = options.bloom.append(&mut graph, color)?;
-            let tone = graph.image(
-                "Neutral display linear",
-                ImageDesc::rgba16_float(options.width, options.height),
-            )?;
-            let bloom_view = graph.image_view(bloom, 0, 0)?;
-            tone_map_neutral(
-                &mut graph,
-                "fixed exposure and PBR Neutral",
-                bloom_view,
-                tone,
-                2.0,
-            )?;
-            let tone_view = graph.image_view(tone, 0, 0)?;
-            write_sdr(
-                &mut graph,
-                if options.windowed {
-                    "FXAA and linear presentation source"
-                } else {
-                    "FXAA and single sRGB encode"
-                },
-                tone_view,
-                output,
-                options.sdr_output(),
-            )?;
-            (graph, output, (bloom != color).then_some(bloom))
-        }
-    };
+    let bloom = options.bloom.append(&mut graph, color)?;
+    let tone = graph.image(
+        "Neutral display linear",
+        ImageDesc::rgba16_float(options.width, options.height),
+    )?;
+    let bloom_view = graph.image_view(bloom, 0, 0)?;
+    tone_map_neutral(&mut graph, bloom_view, tone)?;
+    let tone_view = graph.image_view(tone, 0, 0)?;
+    write_sdr(
+        &mut graph,
+        if options.windowed {
+            "FXAA and linear presentation source"
+        } else {
+            "FXAA and single sRGB encode"
+        },
+        tone_view,
+        output,
+        options.sdr_output(),
+    )?;
     graph.export_image(output)?;
     #[cfg(all(windows, feature = "presentation"))]
     let present_capture = if capture && options.windowed {
@@ -2022,10 +1645,8 @@ fn finish_frame(
     } else {
         None
     };
-    let bloom_capture = if capture {
-        bloom
-            .map(|image| graph.readback_image("capture post-Bloom HDR", image))
-            .transpose()?
+    let bloom_capture = if capture && bloom != color {
+        Some(graph.readback_image("capture post-Bloom HDR", bloom)?)
     } else {
         None
     };
@@ -2039,10 +1660,22 @@ fn finish_frame(
     } else {
         None
     };
+    let opaque_draws = match (capture, &packed) {
+        (true, Some(packed)) => {
+            packed.visible_direct_draws(&frustum, &resident.primitive_bounds, include_material)
+        }
+        (true, None) => Some(workspace.opaque.len()),
+        (false, _) => None,
+    };
+    let draws =
+        opaque_draws.map(|count| count + workspace.blended.len() + options.instances.draws());
     Ok(Built {
         graph,
         output,
-        updates,
+        updates: BufferUpdates {
+            camera: uniform,
+            tiles: tile_update,
+        },
         captures,
         bloom_capture,
         #[cfg(all(windows, feature = "presentation"))]
@@ -2079,9 +1712,9 @@ mod tests {
         .unwrap();
         options.inflight = 1;
         let environment = ibl::Environment::fixture();
-        let one = Budget::new(&scene, &environment, &options, None).unwrap();
+        let one = Budget::new(&scene, &environment, &options).unwrap();
         options.inflight = 4;
-        let four = Budget::new(&scene, &environment, &options, None).unwrap();
+        let four = Budget::new(&scene, &environment, &options).unwrap();
         assert_eq!(one.buffers, four.buffers);
         assert_eq!(four.physical_resources - one.physical_resources, 24);
         assert_eq!(four.graph.resources, one.graph.resources);
@@ -2090,7 +1723,7 @@ mod tests {
             "odd output rows need padding beyond packed texels"
         );
         options.sample_count = SampleCount::X4;
-        let multisampled = Budget::new(&scene, &environment, &options, None).unwrap();
+        let multisampled = Budget::new(&scene, &environment, &options).unwrap();
         assert_eq!(multisampled.physical_resources - four.physical_resources, 4);
         for format in [ImageFormat::Rgba16Float, ImageFormat::Depth32Float] {
             assert!(multisampled.images.iter().any(|&(desc, count)| {
@@ -2099,7 +1732,7 @@ mod tests {
         }
         options.sample_count = SampleCount::X1;
         options.pipeline = PipelineMode::Deferred;
-        let deferred = Budget::new(&scene, &environment, &options, None).unwrap();
+        let deferred = Budget::new(&scene, &environment, &options).unwrap();
         assert_eq!(deferred.physical_resources - four.physical_resources, 16);
         assert_eq!(deferred.graph.resources - four.graph.resources, 4);
         assert_eq!(deferred.graph.upload_bytes - four.graph.upload_bytes, 64);
@@ -2154,14 +1787,9 @@ mod tests {
             "the second stream exceeds ordinary alignment slack"
         );
         assert!(
-            Budget::new(
-                &scene,
-                &ibl::Environment::fixture(),
-                &tiny_output_options(),
-                None
-            )
-            .unwrap()
-            .upload_bytes
+            Budget::new(&scene, &ibl::Environment::fixture(), &tiny_output_options())
+                .unwrap()
+                .upload_bytes
                 >= pair_bytes
         );
     }
@@ -2174,8 +1802,8 @@ mod tests {
         let mut options = tiny_output_options();
         options.api = "d3d12".into();
         let environment = ibl::Environment::fixture();
-        let budget = Budget::new(&scene, &environment, &options, None).unwrap();
-        let mut backend = super::super::backend::create(&options, &budget, None).unwrap();
+        let budget = Budget::new(&scene, &environment, &options).unwrap();
+        let mut backend = super::super::backend::create(&options, &budget).unwrap();
         let resident =
             Resident::upload(&mut backend, &scene, &environment, &budget, &[0; 128]).unwrap();
         drop(resident);
