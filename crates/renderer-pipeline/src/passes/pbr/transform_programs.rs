@@ -55,12 +55,12 @@ macro_rules! descriptor {
             binding_bytes: &appended::<_, $bindings>($base.binding_bytes, $tier.bytes() as u64),
             shaders: packaged_shaders!(
                 vulkan: (
-                    include_bytes!(concat!($vertex, ".vert.spv")),
-                    Some(include_bytes!(concat!($fragment, ".frag.spv"))),
+                    include_bytes!(concat!("../../../shaders/", $vertex, ".vert.spv")),
+                    Some(include_bytes!(concat!("../../../shaders/", $fragment, ".frag.spv"))),
                 ),
                 d3d12: (
-                    include_bytes!(concat!("dxil/", $vertex, ".vert.dxil")),
-                    Some(include_bytes!(concat!("dxil/", $fragment, ".frag.dxil"))),
+                    include_bytes!(concat!("../../../shaders/dxil/", $vertex, ".vert.dxil")),
+                    Some(include_bytes!(concat!("../../../shaders/dxil/", $fragment, ".frag.dxil"))),
                 ),
                 inline_constants: Some(D3D12InlineConstantBinding { register: 7, space: 0 }),
             ),
