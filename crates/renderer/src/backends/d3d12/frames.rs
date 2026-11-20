@@ -16,6 +16,10 @@ pub(crate) struct QueuedFrameSubmission {
 }
 
 impl QueuedFrameSubmission {
+    pub(crate) fn graph_id(&self) -> u64 {
+        self.graph
+    }
+
     fn exports(&self, graph: u64) -> Result<&ExportLease, Error> {
         // An existing export lease checks its own Graph. With no exports, keep
         // wrong-owner distinct from a missing export on the correct Graph.

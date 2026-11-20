@@ -108,6 +108,11 @@ impl std::fmt::Debug for Graph {
     }
 }
 impl Graph {
+    /// Identity retained by this Graph's compiled plan and submission.
+    pub fn graph_id(&self) -> u64 {
+        self.id
+    }
+
     /// Correctness-test preparation only. Allocation acceptance must keep an
     /// explicit prepared pool alive across every measured frame and return.
     #[cfg(all(test, any(feature = "vulkan", all(feature = "d3d12", windows))))]

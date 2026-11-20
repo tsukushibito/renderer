@@ -29,6 +29,10 @@ impl FrameSubmission {
         self.id
     }
 
+    pub(crate) fn graph_id(&self) -> u64 {
+        self.graph
+    }
+
     pub fn export_buffer(&self, handle: BufferHandle) -> Result<ImportBuffer, RuntimeError> {
         if handle.graph != self.graph {
             return Err(RuntimeError::wrong_owner("foreign graph export handle"));

@@ -8,8 +8,9 @@ use renderer::graph::{
 };
 use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
 use renderer_pipeline::pbr_forward::{
-    Bounds, Camera, Config, Draw, Environment, Frame, Material, MaterialFactors, Prepared,
-    PreparedView, SceneLimits, ShadowSettings, ShadowSource, Sun, prepare,
+    Bounds, CASCADE_COUNT, Camera, Config, Draw, Environment, Frame, Material, MaterialFactors,
+    Prepared, PreparedView, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings, ShadowSource,
+    Sun, add_shadow_pass, prepare,
 };
 
 const EXTENT: [u32; 2] = [7, 5];
@@ -226,6 +227,45 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     let position = |name| names.iter().position(|&pass| pass == name).unwrap();
     assert!(position("custom HDR pass") < position("tone_map"));
     assert!(position("tone_map") < position("write_sdr"));
+}
+
+#[test]
+fn abandoned_shadow_frame_releases_history_without_publishing() {
+    let history = ShadowHistory::default();
+    let mut pool = GraphPool::new(GraphCapacity::default(), 2).unwrap();
+    let mut graph = pool.begin().unwrap();
+    let mut other = pool.begin().unwrap();
+    let keys = [ShadowKey::new([[0.0; 4]; 4], 0); CASCADE_COUNT];
+
+    let frame = history.begin_frame(&mut graph, SHADOW_SIZE, keys).unwrap();
+    assert!(history.begin_frame(&mut other, SHADOW_SIZE, keys).is_err());
+    assert!(frame.export(&mut other).is_err());
+
+    let frame = history.begin_frame(&mut other, SHADOW_SIZE, keys).unwrap();
+    for cascade in 0..CASCADE_COUNT {
+        assert!(matches!(
+            frame.source(cascade, &[]),
+            ShadowSource::Render { target: Some(target), casters: [] } if target == frame.target(cascade)
+        ));
+    }
+    let updates = frame.export(&mut other).unwrap();
+    assert_eq!(updates.reused(), [false; CASCADE_COUNT]);
+    assert!(
+        other.compile().is_err(),
+        "an undrawn export has no valid contents"
+    );
+    drop(updates);
+
+    let mut next = pool.begin().unwrap();
+    let frame = history.begin_frame(&mut next, SHADOW_SIZE, keys).unwrap();
+    for cascade in 0..CASCADE_COUNT {
+        let view = next.image_view(frame.target(cascade), 0, 0).unwrap();
+        add_shadow_pass(&mut next, cascade, view, |_| Ok(())).unwrap();
+    }
+    let updates = frame.export(&mut next).unwrap();
+    assert_eq!(updates.reused(), [false; CASCADE_COUNT]);
+    let plan = next.compile().unwrap();
+    assert_eq!(plan.ordered_pass_names().count(), CASCADE_COUNT);
 }
 
 #[test]
