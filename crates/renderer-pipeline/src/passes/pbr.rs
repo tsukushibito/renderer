@@ -15,4 +15,5 @@ mod transform_programs;
 pub use pbr_programs::{
     CAMERA_BYTES, MATERIAL_BYTES, VERTEX_BYTES, blend_program, opaque_program, shadow_program,
 };
+pub(crate) use pbr_programs::{deferred, forward_plus};
 pub use transform_programs::{transformed_opaque_program, transformed_shadow_program};

@@ -1,6 +1,6 @@
 //! Consumer-owned light lists with an independent orthographic reference.
 
-#[path = "../examples/support/bistro/program/forward_plus/culling.rs"]
+#[path = "../../renderer-pipeline/shaders/pbr_programs/forward_plus/culling.rs"]
 mod culling;
 #[path = "../examples/support/shader_binaries.rs"]
 mod shader_binaries;
