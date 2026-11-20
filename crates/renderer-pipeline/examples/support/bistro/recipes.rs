@@ -117,10 +117,7 @@ impl Prepared {
                 clear_color,
                 samples: options.sample_count,
                 camera_storage,
-                shadows: pbr::ShadowSettings {
-                    enabled: options.shadows,
-                    ..pbr::ShadowSettings::default()
-                },
+                shadows: options.shadows.then(pbr::ShadowSettings::default),
                 output: Some(options.sdr_output()),
             };
             let primitives = scene.primitives.len();
@@ -169,6 +166,24 @@ impl Prepared {
                 standard.preparation().graph_requirements(),
                 standard.preparation().working_set(),
             )?;
+            if !options.shadows {
+                pbr::Unshadowed::reserve(&mut preparation)?;
+                if options.capture_shadows && !options.windowed {
+                    let resolution = shadow::Parameters::default().resolution;
+                    preparation.reserve_image(
+                        ImageDesc::depth32(resolution, resolution),
+                        pbr::CASCADE_COUNT,
+                    )?;
+                    preparation.add_graph_requirements(GraphRequirements {
+                        resources: pbr::CASCADE_COUNT,
+                        passes: pbr::CASCADE_COUNT,
+                        accesses: pbr::CASCADE_COUNT,
+                        attachments: pbr::CASCADE_COUNT,
+                        name_bytes: 128,
+                        ..GraphRequirements::default()
+                    })?;
+                }
+            }
             if camera_storage == pbr::CameraStorage::PreUploaded {
                 preparation.add_graph_requirements(GraphRequirements {
                     passes: 1,

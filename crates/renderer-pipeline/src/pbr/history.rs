@@ -26,21 +26,15 @@ use super::{CASCADE_COUNT, Draw, PreparedView, ShadowSource, raster::SHADOW_IMAG
 pub struct ShadowKey {
     matrix: [[u32; 4]; 4],
     caster_revision: u64,
-    enabled: bool,
 }
 
 impl ShadowKey {
     /// Key for an application-defined cascade using exact float bits. Include
     /// changes in the clear or draw policy in `caster_revision`.
     pub fn new(matrix: [[f32; 4]; 4], caster_revision: u64) -> Self {
-        Self::for_view(matrix, caster_revision, true)
-    }
-
-    pub(super) fn for_view(matrix: [[f32; 4]; 4], caster_revision: u64, enabled: bool) -> Self {
         Self {
             matrix: matrix.map(|row| row.map(f32::to_bits)),
             caster_revision,
-            enabled,
         }
     }
 }
@@ -207,11 +201,13 @@ impl ShadowHistory {
         view: &PreparedView,
         caster_revisions: [u64; CASCADE_COUNT],
     ) -> Result<ShadowFrame, GraphError> {
-        self.begin_frame(
-            graph,
-            view.shadows.resolution,
-            view.shadow_keys(caster_revisions),
-        )
+        let (Some(settings), Some(keys)) = (view.shadows, view.shadow_keys(caster_revisions))
+        else {
+            return Err(GraphError::invalid_input(
+                "a view without shadows has no cascade history",
+            ));
+        };
+        self.begin_frame(graph, settings.resolution, keys)
     }
 
     /// Import prior maps or declare new targets. A matching key skips drawing

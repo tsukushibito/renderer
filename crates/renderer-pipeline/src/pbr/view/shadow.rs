@@ -52,7 +52,6 @@ impl Bounds {
 /// are measured in world-space texels at the current cascade.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShadowSettings {
-    pub enabled: bool,
     pub resolution: u32,
     pub distance: f32,
     pub split_lambda: f32,
@@ -67,7 +66,6 @@ pub struct ShadowSettings {
 impl Default for ShadowSettings {
     fn default() -> Self {
         Self {
-            enabled: true,
             resolution: 2048,
             distance: 120.0,
             split_lambda: 0.6,

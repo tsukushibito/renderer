@@ -12,7 +12,7 @@ use super::{
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::runtime::Runtime;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::pbr::{self, Frame, IndexedDraw, ShadowSource};
+use renderer_pipeline::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
 
 pub(super) struct Inputs {
     materials: Vec<Material>,
@@ -172,56 +172,69 @@ pub(super) fn build(
         .transparent
         .extend(workspace.blended.iter().copied().map(draw));
 
-    let history_frame = workspace
-        .shadow_reuse
-        .as_ref()
-        .map(|reuse| {
-            // This workspace retains the same immutable scene and instance grid.
-            reuse.history.begin_view(
-                &mut graph,
-                &view,
-                [caster_revision(options); pbr::CASCADE_COUNT],
-            )
-        })
-        .transpose()?;
-    for (cascade, casters) in inputs.casters.iter_mut().enumerate() {
-        casters.clear();
-        if !history_frame
+    let history_frame = if options.shadows {
+        let history_frame = workspace
+            .shadow_reuse
             .as_ref()
-            .is_some_and(|frame| frame.is_reused(cascade))
-        {
-            casters.extend(
-                shadow_casters(scene, options, |index| {
-                    view.cascade_overlaps(cascade, resident.standard_primitive_bounds[index])
-                        .unwrap_or(true)
-                })
-                .map(draw),
-            );
-            // Both fixture modes submit the same caster geometry. The grid is
-            // small enough to submit to each cascade without filtering batches.
-            if options.shadows
-                && let Some(placements) = &workspace.placements
+            .map(|reuse| {
+                // The workspace retains the same scene and instance grid.
+                reuse.history.begin_view(
+                    &mut graph,
+                    &view,
+                    [caster_revision(options); pbr::CASCADE_COUNT],
+                )
+            })
+            .transpose()?;
+        for (cascade, casters) in inputs.casters.iter_mut().enumerate() {
+            casters.clear();
+            if !history_frame
+                .as_ref()
+                .is_some_and(|frame| frame.is_reused(cascade))
             {
-                placements.append_draws(
-                    options.instances,
-                    geometry(placements.fixture.primitive),
-                    casters,
+                casters.extend(
+                    shadow_casters(scene, options, |index| {
+                        view.cascade_overlaps(cascade, resident.standard_primitive_bounds[index])
+                            .unwrap_or(true)
+                    })
+                    .map(draw),
                 );
+                // Both fixture modes submit the same caster geometry.
+                if let Some(placements) = &workspace.placements {
+                    placements.append_draws(
+                        options.instances,
+                        geometry(placements.fixture.primitive),
+                        casters,
+                    );
+                }
             }
         }
-    }
-    let frame = Frame {
-        view: &view,
-        materials: &inputs.materials,
-        opaque: &inputs.opaque,
-        transparent: &inputs.transparent,
-        shadows: std::array::from_fn(|cascade| match &history_frame {
+        history_frame
+    } else {
+        None
+    };
+    let shadows = if options.shadows {
+        FrameShadows::Cascades(std::array::from_fn(|cascade| match &history_frame {
             Some(frame) => frame.source(cascade, &inputs.casters[cascade]),
             None => ShadowSource::Render {
                 target: None,
                 casters: &inputs.casters[cascade],
             },
-        }),
+        }))
+    } else {
+        FrameShadows::Disabled(
+            resident
+                .unshadowed
+                .as_ref()
+                .ok_or("unshadowed Bistro needs its prepared placeholder")?
+                .import(&mut graph)?,
+        )
+    };
+    let frame = Frame {
+        view: &view,
+        materials: &inputs.materials,
+        opaque: &inputs.opaque,
+        transparent: &inputs.transparent,
+        shadows,
         camera_target: Some(camera_target),
         transforms: workspace
             .placements

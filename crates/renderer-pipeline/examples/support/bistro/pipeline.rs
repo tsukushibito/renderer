@@ -127,6 +127,7 @@ pub(super) struct Budget {
     pub readback_bytes: u64,
     pub ranges: usize,
     pipeline: PipelineMode,
+    unshadowed: bool,
     fixture: bool,
     packed: Option<Arc<indirect::Layout>>,
     indirect: bool,
@@ -267,6 +268,7 @@ impl Budget {
         };
         let indirect = options.submission == SubmissionMode::Indirect;
         let prepared = PreparedSet::new(options, scene, packed.as_deref(), background)?;
+        let unshadowed = !options.shadows && prepared.main.uses_standard();
         let packed_buffers = packed.as_ref().map_or(0, |_| 2 + usize::from(indirect));
         let buffer_count = scene
             .primitives
@@ -505,6 +507,7 @@ impl Budget {
             readback_bytes,
             ranges: resources * (options.inflight + 3) + 32,
             pipeline: options.pipeline,
+            unshadowed,
             fixture: options.fixture,
             packed,
             indirect,
@@ -549,6 +552,7 @@ pub(super) struct Resident {
     pub camera: ImportBuffer,
     local_lights: Option<lighting::Preset>,
     tiles: Option<pbr_forward_plus::Tiles>,
+    unshadowed: Option<pbr::Unshadowed>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -823,6 +827,13 @@ impl Resident {
         let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
             .then(|| lighting::initialize_tiles(backend, &camera))
             .transpose()?;
+        let unshadowed = if budget.unshadowed {
+            let (placeholder, startup) = pbr::Unshadowed::initialize(backend)?;
+            drop(super::backend::wait_for(backend, startup)?);
+            Some(placeholder)
+        } else {
+            None
+        };
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
             // This is the immutable publication boundary. Read/hash one chain,
@@ -895,6 +906,7 @@ impl Resident {
             camera,
             local_lights,
             tiles,
+            unshadowed,
             packed,
             upload_owners,
         })
@@ -1592,7 +1604,7 @@ pub(super) fn build(
             depth,
             output,
             bloom: (processed != hdr).then_some(processed),
-            shadows: shadow.views.map(ImageView::image),
+            shadows: Some(shadow.views.map(ImageView::image)),
         },
         uniform,
         shadow.updates,
@@ -1691,7 +1703,7 @@ struct SceneImages {
     depth: Option<ImageHandle>,
     output: renderer_pipeline::passes::output::SdrImage,
     bloom: Option<ImageHandle>,
-    shadows: [ImageHandle; shadow::CASCADE_COUNT],
+    shadows: Option<[ImageHandle; shadow::CASCADE_COUNT]>,
 }
 
 fn finish_frame(
@@ -1752,12 +1764,29 @@ fn finish_frame(
         None
     };
     let shadow_captures = if capture && options.capture_shadows {
-        Some([
-            graph.readback_image("capture cascade 0", shadows[0])?,
-            graph.readback_image("capture cascade 1", shadows[1])?,
-            graph.readback_image("capture cascade 2", shadows[2])?,
-            graph.readback_image("capture cascade 3", shadows[3])?,
-        ])
+        let mut captures = [None; shadow::CASCADE_COUNT];
+        let names = [
+            "capture cascade 0",
+            "capture cascade 1",
+            "capture cascade 2",
+            "capture cascade 3",
+        ];
+        let resolution = shadow::Parameters::default().resolution;
+        for (cascade, capture) in captures.iter_mut().enumerate() {
+            let image = if let Some(shadows) = shadows {
+                shadows[cascade]
+            } else {
+                let image = graph.image(
+                    "diagnostic disabled cascade",
+                    ImageDesc::depth32(resolution, resolution),
+                )?;
+                let view = graph.image_view(image, 0, 0)?;
+                pbr_forward::add_shadow_pass(&mut graph, cascade, view, |_| Ok(()))?;
+                image
+            };
+            *capture = Some(graph.readback_image(names[cascade], image)?);
+        }
+        Some(captures.map(Option::unwrap))
     } else {
         None
     };

@@ -337,8 +337,8 @@ RGBA8／RGBA16Fの値を同descriptionの別画像へ保存する場合は、同
 `passes::bloom`は準備済みの一時画像とCompute Programを使い、各dispatchの書き込みから後続のsampleへの依存を通常のGraph宣言で導く。
 `pbr::ShadowHistory`は明示したexportと受理済みFrameSubmissionから画像の版を保持する。
 次フレームでのimport、再描画とsample間の依存、登録解除後のGPU完了までの保持には、同じGraphとRuntimeの契約を使う。
-影を無効にしたレシピは起動時にクリアした1×1 D32を既存の4バインディングへ供給する。
-カスケードの計算、一時画像、毎フレームのクリア、履歴の更新は省く。
+標準PBRで影を無効にすると、Runtimeの準備時に一度だけclearした1×1のD32を全shadow bindingで共有する。
+Graphがこの画像の初期化とsampleの依存を保持し、通常フレームではcascade計算、履歴、cascade画像の予約・clearを省く。
 Forward系の4×では既存のカラーresolveを使い、最終描画区間で4×の色と深度を破棄する。
 後段の画像処理は単一サンプルHDRを受け取り、シーン深度を使う構成は1×を選ぶ。
 1× Forwardも不透明パスのattachment loadで色と深度を初期化する。空の描画列は同じattachment操作だけを実行する。

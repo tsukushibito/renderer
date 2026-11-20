@@ -4,7 +4,7 @@ use super::Bounds;
 #[derive(Clone, Copy, Debug)]
 pub struct ViewCulling {
     frustum: Frustum,
-    cascades: [CascadeClip; 4],
+    cascades: Option<[CascadeClip; 4]>,
 }
 
 impl ViewCulling {
@@ -12,12 +12,13 @@ impl ViewCulling {
     /// shaders and the world bounds used to establish the error margins.
     pub fn new(
         matrix: [[f32; 4]; 4],
-        cascade_matrices: &[[[f32; 4]; 4]; 4],
+        cascade_matrices: Option<&[[[f32; 4]; 4]; 4]>,
         scene: Bounds,
     ) -> Self {
         Self {
             frustum: Frustum::new(matrix, scene),
-            cascades: cascade_matrices.map(|matrix| CascadeClip::new(&matrix, scene)),
+            cascades: cascade_matrices
+                .map(|matrices| matrices.map(|matrix| CascadeClip::new(&matrix, scene))),
         }
     }
 
@@ -27,9 +28,12 @@ impl ViewCulling {
     }
 
     /// Return whether the geometry may overlap the cascade's shadow map.
-    /// Returns `None` for a cascade index outside the four prepared maps.
+    /// Returns `None` for an index outside the prepared maps.
     pub fn cascade_overlaps(&self, cascade: usize, bounds: Bounds) -> Option<bool> {
-        self.cascades.get(cascade).map(|clip| clip.overlaps(bounds))
+        self.cascades
+            .as_ref()?
+            .get(cascade)
+            .map(|clip| clip.overlaps(bounds))
     }
 }
 
@@ -249,7 +253,7 @@ mod tests {
         perspective[2][3] = 1.0;
         let view = ViewCulling::new(
             IDENTITY,
-            &[IDENTITY, IDENTITY, IDENTITY, perspective],
+            Some(&[IDENTITY, IDENTITY, IDENTITY, perspective]),
             scene,
         );
         let caster = point([1.0, 0.0, -3.0]);
