@@ -174,6 +174,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn transformed_forward_plus_dxil_links_position_and_mirror_at_matching_registers() {
+        fn signature_register(
+            reflection: &str,
+            heading: &str,
+            semantic: &str,
+            semantic_index: &str,
+        ) -> u32 {
+            reflection
+                .split_once(heading)
+                .unwrap()
+                .1
+                .lines()
+                .skip_while(|line| !line.starts_with("; --------------------"))
+                .skip(1)
+                .take_while(|line| line.trim() != ";")
+                .find_map(|line| {
+                    let mut columns = line.trim_start_matches(';').split_whitespace();
+                    let name = columns.next()?;
+                    let index = columns.next()?;
+                    (name == semantic && index == semantic_index)
+                        .then(|| columns.nth(1).unwrap().parse().unwrap())
+                })
+                .expect("reflected shader signature contains the semantic")
+        }
+
+        let fragment = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/shaders/dxil/pbr_forward_plus_transformed.frag.reflection.txt"
+        ));
+        for vertex in [
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/shaders/dxil/pbr_transformed_small.vert.reflection.txt"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/shaders/dxil/pbr_transformed.vert.reflection.txt"
+            )),
+        ] {
+            for (semantic, index) in [("TEXCOORD", "4"), ("SV_Position", "0")] {
+                assert_eq!(
+                    signature_register(vertex, "; Output signature:", semantic, index),
+                    signature_register(fragment, "; Input signature:", semantic, index),
+                    "{semantic}{index} uses a different DXIL register",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn transformed_vertex_programs_match_reflection() {
         for (program, spirv, dxil, offsets, tier) in [
             (

@@ -7,9 +7,9 @@
 ; TEXCOORD                 1   xyz         1     NONE   float   xyz
 ; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
 ; TEXCOORD                 3   xy          3     NONE   float   xy
-; SV_Position              0   xyzw        4      POS   float   xy
-; TEXCOORD                 4   x           5     NONE    uint   x
-; SV_IsFrontFace           0    y          5    FFACE    uint    y
+; TEXCOORD                 4   x           4     NONE    uint   x
+; SV_IsFrontFace           0    y          4    FFACE    uint    y
+; SV_Position              0   xyzw        5      POS   float   xy
 ;
 ;
 ; Output signature:
@@ -18,7 +18,7 @@
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; SV_Target                0   xyzw        0   TARGET   float   xyzw
 ;
-; shader hash: 54401a88b5dba9c578530d3c86235377
+; shader hash: 863c392fc59d1cf65827732b3916a162
 ;
 ; Pipeline Runtime Information:
 ;
@@ -48,8 +48,8 @@
 ; TEXCOORD                 1                 linear
 ; TEXCOORD                 2                 linear
 ; TEXCOORD                 3                 linear
-; SV_Position              0          noperspective
 ; TEXCOORD                 4        nointerpolation
+; SV_Position              0          noperspective
 ; SV_IsFrontFace           0        nointerpolation
 ;
 ; Output signature:
@@ -136,7 +136,7 @@
 ;
 ; ViewId state:
 ;
-; Number of inputs: 22, outputs: 4
+; Number of inputs: 24, outputs: 4
 ; Outputs dependent on ViewId: {  }
 ; Inputs contributing to computation of Outputs:
 ;   output 0 depends on inputs: { 0, 1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 16, 17, 20, 21 }

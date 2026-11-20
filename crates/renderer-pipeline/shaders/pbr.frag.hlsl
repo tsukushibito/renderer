@@ -13,11 +13,13 @@ struct PixelInput {
     BISTRO_LOCATION(1) float3 world_normal : TEXCOORD1;
     BISTRO_LOCATION(2) float4 world_tangent : TEXCOORD2;
     BISTRO_LOCATION(3) float2 texcoord : TEXCOORD3;
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    // Keep this ahead of SV_Position, as in the vertex output. DXIL links
+    // position and the mirror flag at the registers assigned by this order.
+    BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
+#endif
 #if BISTRO_LOCAL_LIGHTS == 2
     float4 pixel : SV_Position;
-#endif
-#ifdef BISTRO_TRANSFORMED_DIRECTIONS
-    BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
 #endif
     bool front_facing : SV_IsFrontFace;
 };
