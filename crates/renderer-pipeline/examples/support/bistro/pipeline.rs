@@ -1052,7 +1052,7 @@ impl Workspace {
 }
 pub(super) struct Built {
     pub graph: Graph,
-    pub output: ImageHandle,
+    pub output: renderer_pipeline::passes::output::SdrImage,
     pub camera_update: BufferHandle,
     pub captures: Option<Captures>,
     pub bloom_capture: Option<PassHandle>,
@@ -1689,7 +1689,7 @@ fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
 struct SceneImages {
     hdr: ImageHandle,
     depth: Option<ImageHandle>,
-    output: ImageHandle,
+    output: renderer_pipeline::passes::output::SdrImage,
     bloom: Option<ImageHandle>,
     shadows: [ImageHandle; shadow::CASCADE_COUNT],
 }
@@ -1717,10 +1717,15 @@ fn finish_frame(
             0,
         )
     });
-    graph.export_image(output)?;
+    if let Some(display) = output.display() {
+        display.export(&mut graph)?;
+    } else {
+        // The headless benchmark also tracks when this registration retires.
+        graph.export_image(output.raw_image())?;
+    }
     #[cfg(all(windows, feature = "presentation"))]
     let present_capture = if capture && options.windowed {
-        Some(graph.readback_image("capture linear presentation source", output)?)
+        Some(graph.readback_image("capture linear presentation source", output.raw_image())?)
     } else {
         None
     };
@@ -1728,7 +1733,10 @@ fn finish_frame(
     let captures = if capture {
         Some(Captures {
             hdr: graph.readback_image("capture linear HDR", hdr)?,
-            sdr: graph.readback_image("capture sRGB", output)?,
+            sdr: output
+                .capture()
+                .ok_or("headless Bistro requires sRGB capture output")?
+                .readback(&mut graph, "capture sRGB")?,
             depth: depth
                 .map(|depth| graph.readback_image("capture depth", depth))
                 .transpose()?,

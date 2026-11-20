@@ -12,7 +12,7 @@ use renderer::graph::{
 };
 use renderer::program::{ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor};
 
-use crate::passes::output::{OutputImages, PreparedOutput, SdrOutput};
+use crate::passes::output::{Exposure, OutputImages, PreparedOutput, SdrOutput};
 use crate::passes::pbr::{
     CAMERA_BYTES, blend_program, opaque_program, shadow_program, transformed_opaque_program,
     transformed_shadow_program,
@@ -30,7 +30,8 @@ pub struct Config {
     pub extent: [u32; 2],
     pub clear_color: [f32; 4],
     pub shadows: ShadowSettings,
-    pub output: SdrOutput,
+    /// Standard SDR output. Omit it for HDR-only or application-defined output.
+    pub output: Option<SdrOutput>,
     pub samples: SampleCount,
     pub camera_storage: CameraStorage,
 }
@@ -72,7 +73,7 @@ pub struct Prepared {
     config: Config,
     limits: SceneLimits,
     preparation: Preparation,
-    output: PreparedOutput,
+    output: Option<PreparedOutput>,
     programs: Programs,
     opaque_uses_lighting: bool,
     mode: DrawMode,
@@ -227,7 +228,7 @@ fn prepare_variant(
     preparation.add_requirements(
         GraphRequirements {
             resources: CASCADE_COUNT + 2 + usize::from(transient_camera) + usize::from(msaa),
-            passes: CASCADE_COUNT + 3 + usize::from(upload_camera),
+            passes: CASCADE_COUNT + 2 + usize::from(upload_camera),
             accesses: checked(accesses.checked_add(16))?,
             draws: checked(limits.max_draws.checked_add(shadow_draws))?,
             raster_constant_words: if transforms {
@@ -240,7 +241,7 @@ fn prepare_variant(
                 shadow_draws
             },
             bindings: checked(limits.max_materials.checked_mul(material_bindings))?,
-            attachments: 10 + usize::from(msaa),
+            attachments: 8 + usize::from(msaa),
             name_bytes: 256,
             upload_bytes: if upload_camera { CAMERA_BYTES } else { 0 },
             ..Default::default()
@@ -250,7 +251,10 @@ fn prepare_variant(
             ..Default::default()
         },
     )?;
-    let output = PreparedOutput::prepare(&mut preparation, config.extent, config.output)?;
+    let output = config
+        .output
+        .map(|output| PreparedOutput::prepare(&mut preparation, config.extent, output))
+        .transpose()?;
     Ok(Prepared {
         config,
         limits,
@@ -324,16 +328,18 @@ impl Prepared {
         )
     }
 
-    /// Build shadows, scene and SDR output. Discard the Graph on declaration
-    /// failure and start the next attempt with a reset Graph.
+    /// Build shadows, scene and SDR output. Missing output or invalid exposure
+    /// is rejected before declaring any work. For later declaration failures,
+    /// discard this frame's Graph and start the next attempt with a reset Graph.
     pub fn add_passes(
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
     ) -> Result<FrameImages, GraphError> {
-        let exposure = frame.exposure;
+        let (output, exposure) = self.checked_output(frame.exposure)?;
         let scene = self.add_scene(graph, frame)?;
-        let output = self.add_output(graph, scene.hdr, exposure)?;
+        let output =
+            output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;
         Ok(FrameImages {
             hdr: scene.hdr,
             depth: scene.depth,
@@ -465,8 +471,18 @@ impl Prepared {
         hdr: ImageHandle,
         exposure: f32,
     ) -> Result<OutputImages, GraphError> {
-        let input = graph.image_view(hdr, 0, 0)?;
-        self.output.add_passes(graph, input, exposure)
+        let (output, exposure) = self.checked_output(exposure)?;
+        output.append_validated(graph, graph.image_view(hdr, 0, 0)?, exposure)
+    }
+
+    pub(crate) fn checked_output(
+        &self,
+        exposure: f32,
+    ) -> Result<(PreparedOutput, Exposure), GraphError> {
+        let output = self
+            .output
+            .ok_or_else(|| GraphError::invalid_input("standard SDR output was not prepared"))?;
+        Ok((output, PreparedOutput::validate_exposure(exposure)?))
     }
 
     fn check_frame(&self, graph: &Graph, frame: &Frame<'_>) -> Result<(), GraphError> {

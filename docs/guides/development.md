@@ -404,7 +404,8 @@ python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 
 シーンのHDRにアプリ側のBloomをつなぎ、`renderer_pipeline::passes::output`のNeutralとSDR変換を適用する。
 WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexportして渡す。
-オフスクリーンでは`SdrEncoding::Srgb`を選ぶ。ウィンドウでは`SdrEncoding::Linear`を選び、PresenterのsRGB targetで変換する。
+オフスクリーンでは`SdrOutput::capture`を選んでsRGBのバイト列を読み戻す。ウィンドウでは`SdrOutput::display`で線形出力を準備し、
+投入受理済みの表示画像をPresenterへ渡す。sRGBへの変換はPresenterの描画先が行う。
 
 ```powershell
 cargo run --locked --release -p renderer-pipeline --example bistro --no-default-features --features vulkan,d3d12,presentation -- --api vulkan --manifest $manifest --ibl-manifest $iblManifest --bloom tent --windowed --output .tools/bistro-window

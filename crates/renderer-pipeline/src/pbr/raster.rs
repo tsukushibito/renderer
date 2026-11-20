@@ -82,52 +82,31 @@ pub fn add_scene_passes(
         ..clear_depth
     };
 
-    if let Some(resolve) = resolve {
-        let final_opaque = !has_transparency;
-        let store = if final_opaque {
-            StoreOp::Discard
-        } else {
-            StoreOp::Store
-        };
-        let resolves = [Some(resolve)];
-        graph.raster(
-            if final_opaque {
-                "scene_opaque_resolve"
-            } else {
-                "scene_opaque"
-            },
-            RasterAttachments {
-                color_resolves: if final_opaque { &resolves } else { &[] },
-                colors: &[Attachment {
-                    store,
-                    ..clear_color
-                }],
-                depth: Some(Attachment {
-                    store,
-                    ..clear_depth
-                }),
-            },
-            opaque_draws,
-        )?;
+    let opaque_resolve = resolve.filter(|_| !has_transparency).map(Some);
+    let store = if opaque_resolve.is_some() {
+        StoreOp::Discard
     } else {
-        graph.attachment_pass(
-            "scene_clears",
-            RasterAttachments {
-                color_resolves: &[],
-                colors: &[clear_color],
-                depth: Some(clear_depth),
-            },
-        )?;
-        graph.raster(
-            "scene_opaque",
-            RasterAttachments {
-                color_resolves: &[],
-                colors: &[load_color],
-                depth: Some(load_depth),
-            },
-            opaque_draws,
-        )?;
-    }
+        StoreOp::Store
+    };
+    graph.raster(
+        if opaque_resolve.is_some() {
+            "scene_opaque_resolve"
+        } else {
+            "scene_opaque"
+        },
+        RasterAttachments {
+            color_resolves: opaque_resolve.as_slice(),
+            colors: &[Attachment {
+                store,
+                ..clear_color
+            }],
+            depth: Some(Attachment {
+                store,
+                ..clear_depth
+            }),
+        },
+        opaque_draws,
+    )?;
     if has_transparency {
         let store = if resolve.is_some() {
             StoreOp::Discard
