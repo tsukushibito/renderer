@@ -2,16 +2,15 @@
 
 use std::num::NonZeroUsize;
 
-use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::{
-    capacity::{ResourceClass, WorkingSet},
+    capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{
         Attachment, Binding, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle,
         ImageView, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
     },
     program::{MAX_RASTER_BINDINGS, ManagedProgram, ManagedRasterProgram, RasterPipelineRequest},
 };
-use renderer_pipeline::passes::output::PreparedOutput;
+use renderer_pipeline::{passes::output::PreparedOutput, pbr_forward};
 
 use super::{
     Error, Options, PipelineMode, SubmissionMode, asset::Scene, bloom::Bloom, deferred,
@@ -20,7 +19,7 @@ use super::{
 
 pub(super) struct Prepared {
     preparation: Preparation,
-    output: PreparedOutput,
+    recipe: Recipe,
     hdr: ImageDesc,
     depth: ImageDesc,
     bloom: Bloom,
@@ -30,6 +29,23 @@ pub(super) struct Prepared {
     pub transparent: ManagedRasterProgram,
     pub instances: Option<ManagedRasterProgram>,
     pub shadow: ManagedRasterProgram,
+}
+
+enum Recipe {
+    Forward(Box<pbr_forward::Prepared>),
+    Comparison(PreparedOutput),
+}
+
+fn uses_standard_forward(options: &Options) -> bool {
+    #[cfg(feature = "development-validation")]
+    if options.offset_shadow_receiver {
+        return false;
+    }
+    options.pipeline == PipelineMode::Forward
+        && options.sample_count == SampleCount::X1
+        && options.submission == SubmissionMode::Direct
+        && !options.instances.enabled()
+        && options.shader_assets.is_none()
 }
 
 impl Prepared {
@@ -48,13 +64,63 @@ impl Prepared {
         let shadow_extent = shadow::Parameters::default().resolution;
         let is_deferred = options.pipeline == PipelineMode::Deferred;
         let is_msaa = options.sample_count == SampleCount::X4;
-        let mut targets = shadow::CASCADE_COUNT + 2;
-        preparation.reserve_image(
-            ImageDesc::depth32(shadow_extent, shadow_extent),
-            shadow::CASCADE_COUNT,
-        )?;
-        preparation.reserve_image(hdr, 1)?;
-        preparation.reserve_image(depth, 1)?;
+        let primitives = scene.primitives.len();
+        let standard = if uses_standard_forward(options) {
+            let forward = pbr_forward::prepare(
+                pbr_forward::Config {
+                    extent: [width, height],
+                    clear_color: clear,
+                    shadows: pbr_forward::ShadowSettings {
+                        enabled: options.shadows,
+                        ..pbr_forward::ShadowSettings::default()
+                    },
+                    output: options.sdr_output(),
+                },
+                pbr_forward::SceneLimits {
+                    frames_in_flight: concurrent,
+                    max_draws: primitives,
+                    max_materials: scene.materials.len(),
+                    max_casters_per_cascade: primitives,
+                },
+            )?;
+            let requirements = forward.preparation();
+            let working_set = requirements.working_set();
+            let declaration = requirements.graph_requirements();
+            // Bistro supplies its existing canonical camera target on each
+            // frame, including frames whose shadow maps are reused.
+            let images: Vec<_> = working_set
+                .resources
+                .iter()
+                .copied()
+                .filter(|class| matches!(class, ResourceClass::Image { .. }))
+                .collect();
+            preparation.add_requirements(
+                GraphRequirements {
+                    // The imported camera already counts among Bistro's
+                    // resident buffers when sizing the complete Graph.
+                    resources: declaration.resources - 1,
+                    ..declaration
+                },
+                WorkingSet {
+                    resources: &images,
+                    ..working_set
+                },
+            )?;
+            Some(forward)
+        } else {
+            preparation.reserve_image(
+                ImageDesc::depth32(shadow_extent, shadow_extent),
+                shadow::CASCADE_COUNT,
+            )?;
+            preparation.reserve_image(hdr, 1)?;
+            preparation.reserve_image(depth, 1)?;
+            None
+        };
+        let mut targets = if standard.is_some() {
+            0
+        } else {
+            shadow::CASCADE_COUNT + 2
+        };
         if is_msaa {
             preparation.reserve_image(hdr.with_sample_count(options.sample_count), 1)?;
             targets += 1;
@@ -70,30 +136,40 @@ impl Prepared {
             targets += images.len();
         }
 
-        let opaque = if is_deferred {
-            program::deferred::gbuffer_program()
+        let (opaque, transparent, shadow) = if standard.is_some() {
+            use renderer_pipeline::passes::pbr::{blend_program, opaque_program, shadow_program};
+            (opaque_program(), blend_program(), shadow_program())
         } else {
-            options.forward_program(false).into_owned()
+            let opaque = if is_deferred {
+                program::deferred::gbuffer_program()
+            } else {
+                options.forward_program(false).into_owned()
+            };
+            (
+                opaque,
+                options.forward_program(true).into_owned(),
+                options.shadow_program().into_owned(),
+            )
         };
-        let transparent = options.forward_program(true).into_owned();
         let instances = options
             .instances
             .enabled()
             .then(program::instancing_program);
-        let shadow = options.shadow_program().into_owned();
         let mut raster = Vec::with_capacity(5);
-        raster.push(shadow.clone().into());
-        for program in [&opaque, &transparent]
-            .into_iter()
-            .chain(instances.as_ref())
-        {
-            raster.push(RasterPipelineRequest {
-                program: program.clone(),
-                sample_count: options.sample_count,
-            });
-        }
-        if is_deferred {
-            raster.push(program::deferred::deferred_lighting_program().into());
+        if standard.is_none() {
+            raster.push(shadow.clone().into());
+            for program in [&opaque, &transparent]
+                .into_iter()
+                .chain(instances.as_ref())
+            {
+                raster.push(RasterPipelineRequest {
+                    program: program.clone(),
+                    sample_count: options.sample_count,
+                });
+            }
+            if is_deferred {
+                raster.push(program::deferred::deferred_lighting_program().into());
+            }
         }
         let mut compute = options.bloom.programs().to_vec();
         let mut dispatches = options.bloom.images(hdr).map_or(0, |images| images.len());
@@ -127,40 +203,54 @@ impl Prepared {
             compute: &compute,
         })?;
 
-        let primitives = scene.primitives.len();
-        let instance_draws = options.instances.draws();
-        let shadow_draws = primitives
-            .checked_mul(shadow::CASCADE_COUNT)
-            .ok_or("Bistro shadow draw capacity overflow")?;
-        let instance_words = instance_draws
-            .checked_mul(program::INSTANCE_INLINE_BYTES as usize / size_of::<u32>())
-            .ok_or("Bistro instance constant capacity overflow")?;
-        // In addition to one main draw per primitive, budget every shadow
-        // cascade and every potentially enabled indirect group. The access
-        // arena also needs space for duplicate draw accesses before compression.
-        let draws = primitives + shadow_draws + groups + instance_draws + usize::from(is_deferred);
-        let extra_buffers = usize::from(groups != 0) + groups * 2;
-        // Each encoder dispatch also uploads its validated command template.
-        let passes = shadow::CASCADE_COUNT + 3 + dispatches + groups;
-        preparation.add_graph_requirements(GraphRequirements {
-            resources: targets + extra_buffers,
-            passes,
-            compute_dispatches: dispatches,
-            draws,
-            bindings: scene.materials.len() * (MAX_RASTER_BINDINGS + 4)
-                + usize::from(instance_draws != 0) * MAX_RASTER_BINDINGS
-                + dispatches * 4
-                + 16,
-            accesses: draws * (MAX_RASTER_BINDINGS + 2) + 4 * dispatches + groups + 32,
-            attachments: shadow::CASCADE_COUNT + 8,
-            raster_constant_words: shadow_draws + instance_words,
-            name_bytes: (targets + extra_buffers + passes) * 48,
-        })?;
-        let output =
-            PreparedOutput::prepare(&mut preparation, [width, height], options.sdr_output())?;
+        let recipe = if let Some(forward) = standard {
+            preparation.add_graph_requirements(GraphRequirements {
+                resources: targets,
+                passes: dispatches,
+                compute_dispatches: dispatches,
+                bindings: 4 * dispatches,
+                accesses: 4 * dispatches,
+                name_bytes: (targets + dispatches) * 48,
+                ..GraphRequirements::default()
+            })?;
+            Recipe::Forward(Box::new(forward))
+        } else {
+            let instance_draws = options.instances.draws();
+            let shadow_draws = primitives
+                .checked_mul(shadow::CASCADE_COUNT)
+                .ok_or("Bistro shadow draw capacity overflow")?;
+            let instance_words = instance_draws
+                .checked_mul(program::INSTANCE_INLINE_BYTES as usize / size_of::<u32>())
+                .ok_or("Bistro instance constant capacity overflow")?;
+            // Budget every potential declaration, before Graph compression.
+            let draws =
+                primitives + shadow_draws + groups + instance_draws + usize::from(is_deferred);
+            let extra_buffers = usize::from(groups != 0) + groups * 2;
+            // Each encoder also uploads its validated command template.
+            let passes = shadow::CASCADE_COUNT + 3 + dispatches + groups;
+            preparation.add_graph_requirements(GraphRequirements {
+                resources: targets + extra_buffers,
+                passes,
+                compute_dispatches: dispatches,
+                draws,
+                bindings: scene.materials.len() * (MAX_RASTER_BINDINGS + 4)
+                    + usize::from(instance_draws != 0) * MAX_RASTER_BINDINGS
+                    + dispatches * 4
+                    + 16,
+                accesses: draws * (MAX_RASTER_BINDINGS + 2) + 4 * dispatches + groups + 32,
+                attachments: shadow::CASCADE_COUNT + 8,
+                raster_constant_words: shadow_draws + instance_words,
+                name_bytes: (targets + extra_buffers + passes) * 48,
+            })?;
+            Recipe::Comparison(PreparedOutput::prepare(
+                &mut preparation,
+                [width, height],
+                options.sdr_output(),
+            )?)
+        };
         Ok(Self {
             preparation,
-            output,
+            recipe,
             hdr,
             depth,
             bloom: options.bloom,
@@ -181,6 +271,21 @@ impl Prepared {
         self.preparation.working_set()
     }
 
+    pub fn uses_standard_forward(&self) -> bool {
+        matches!(self.recipe, Recipe::Forward(_))
+    }
+
+    pub fn standard_forward(&mut self) -> &mut pbr_forward::Prepared {
+        match &mut self.recipe {
+            Recipe::Forward(forward) => forward,
+            Recipe::Comparison(_) => unreachable!("not the standard Bistro path"),
+        }
+    }
+
+    pub fn bloom(&self) -> Bloom {
+        self.bloom
+    }
+
     pub fn scene(
         &self,
         graph: &mut Graph,
@@ -188,117 +293,48 @@ impl Prepared {
         opaque_draws: impl FnOnce(&mut RasterPass<'_, '_>) -> Result<(), GraphError>,
         transparent_draws: impl FnOnce(&mut RasterPass<'_, '_>) -> Result<(), GraphError>,
     ) -> Result<(ImageHandle, ImageHandle), Error> {
+        if self.mode != PipelineMode::Deferred {
+            return Ok(pbr_forward::add_scene_passes(
+                graph,
+                [self.hdr.width, self.hdr.height],
+                self.clear,
+                self.depth.sample_count,
+                frame.has_transparency,
+                opaque_draws,
+                transparent_draws,
+            )?);
+        }
+
         let hdr = graph.image("hdr", self.hdr)?;
         let depth = graph.image("depth", self.depth)?;
         let depth_view = graph.image_view(depth, 0, 0)?;
         let hdr_view = graph.image_view(hdr, 0, 0)?;
-        let samples = self.depth.sample_count;
-        let (color_view, resolve) = if samples == SampleCount::X4 {
-            let msaa = graph.image("hdr_msaa", self.hdr.with_sample_count(samples))?;
-            (graph.image_view(msaa, 0, 0)?, Some(hdr_view))
-        } else {
-            (hdr_view, None)
-        };
-        let clear_color = Attachment {
-            view: color_view,
-            load: LoadOp::Clear(self.clear),
-            store: StoreOp::Store,
-        };
-        let clear_depth = Attachment {
-            view: depth_view,
-            load: LoadOp::Clear(1.0),
-            store: StoreOp::Store,
-        };
-        let load_color = Attachment {
-            load: LoadOp::Load,
-            ..clear_color
-        };
-        let load_depth = Attachment {
-            load: LoadOp::Load,
-            ..clear_depth
-        };
-
-        if self.mode == PipelineMode::Deferred {
-            deferred::append(
-                graph,
-                deferred::Inputs {
-                    hdr: hdr_view,
-                    depth: depth_view,
-                    clear: self.clear,
-                    camera: frame.camera,
-                    view_projection: frame.view_projection,
-                    lighting: frame.lighting,
-                },
-                |raster, _| opaque_draws(raster),
-            )?;
-        } else if let Some(resolve) = resolve {
-            let final_opaque = !frame.has_transparency;
-            let store = if final_opaque {
-                StoreOp::Discard
-            } else {
-                StoreOp::Store
-            };
-            let resolves = [Some(resolve)];
-            graph.raster(
-                if final_opaque {
-                    "scene_opaque_resolve"
-                } else {
-                    "scene_opaque"
-                },
-                RasterAttachments {
-                    color_resolves: if final_opaque { &resolves } else { &[] },
-                    colors: &[Attachment {
-                        store,
-                        ..clear_color
-                    }],
-                    depth: Some(Attachment {
-                        store,
-                        ..clear_depth
-                    }),
-                },
-                opaque_draws,
-            )?;
-        } else {
-            graph.attachment_pass(
-                "scene_clears",
-                RasterAttachments {
-                    color_resolves: &[],
-                    colors: &[clear_color],
-                    depth: Some(clear_depth),
-                },
-            )?;
-            graph.raster(
-                "scene_opaque",
-                RasterAttachments {
-                    color_resolves: &[],
-                    colors: &[load_color],
-                    depth: Some(load_depth),
-                },
-                opaque_draws,
-            )?;
-        }
+        deferred::append(
+            graph,
+            deferred::Inputs {
+                hdr: hdr_view,
+                depth: depth_view,
+                clear: self.clear,
+                camera: frame.camera,
+                view_projection: frame.view_projection,
+                lighting: frame.lighting,
+            },
+            |raster, _| opaque_draws(raster),
+        )?;
         if frame.has_transparency {
-            let store = if resolve.is_some() {
-                StoreOp::Discard
-            } else {
-                StoreOp::Store
-            };
-            let resolves = resolve.map(Some);
             graph.raster(
-                if resolve.is_some() {
-                    "scene_transparent_resolve"
-                } else {
-                    "scene_transparent"
-                },
+                "scene_transparent",
                 RasterAttachments {
-                    color_resolves: resolves.as_slice(),
+                    color_resolves: &[],
                     colors: &[Attachment {
-                        store,
-                        ..load_color
+                        view: hdr_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
                     }],
                     depth: Some(Attachment {
-                        store,
-                        ..load_depth
+                        view: depth_view,
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
                     }),
                 },
                 transparent_draws,
@@ -314,7 +350,10 @@ impl Prepared {
     ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError> {
         let color = self.bloom.append(graph, hdr)?;
         let source: ImageView = graph.image_view(color, 0, 0)?;
-        let output = self.output.add_passes(graph, source, 2.0)?;
+        let Recipe::Comparison(output) = &self.recipe else {
+            unreachable!("the standard recipe owns its output")
+        };
+        let output = output.add_passes(graph, source, 2.0)?;
         Ok((output.sdr, (color != hdr).then_some(color)))
     }
 }
@@ -385,6 +424,12 @@ mod tests {
                                     "{mode:?}/{samples:?}/{submission:?}/{bloom:?}/{aa}: {error}"
                                 )
                             });
+                            assert_eq!(
+                                prepared.uses_standard_forward(),
+                                mode == PipelineMode::Forward
+                                    && samples == SampleCount::X1
+                                    && submission == SubmissionMode::Direct
+                            );
                             let set = prepared.working_set();
                             let reserves = |expected| {
                                 set.resources.iter().any(|class| {
