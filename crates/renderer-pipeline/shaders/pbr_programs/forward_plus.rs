@@ -12,7 +12,6 @@ use renderer::program::{
 use super::{BLEND, OPAQUE};
 use culling::{LIGHTS, TILES, buffer_binding, buffer_slot};
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub use culling::compute_program;
 pub use culling::{
     LIGHT_BUFFER_BYTES, MAX_LIGHTS, MAX_TILES, PointLight, TILE_SIZE, active_tile_count,
@@ -31,6 +30,13 @@ pub fn raster_bindings(
 ) -> impl Iterator<Item = Binding> {
     std::iter::once(buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES))
         .chain(tiles.map(|buffer| buffer_binding(TILES, buffer, TILE_BUFFER_BYTES)))
+}
+
+pub fn tiled_raster_bindings(lights: BufferHandle, tiles: BufferHandle) -> [Binding; 2] {
+    [
+        buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES),
+        buffer_binding(TILES, tiles, TILE_BUFFER_BYTES),
+    ]
 }
 
 const fn pbr_bindings<const N: usize>() -> [BindingLayout; N] {
@@ -76,11 +82,11 @@ static REFERENCE_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: packaged_shaders!(
         vulkan: (
             super::PBR_VERTEX_SPIRV,
-            Some(include_bytes!("../../../../../renderer-pipeline/shaders/pbr_all_lights.frag.spv")),
+            Some(include_bytes!("../pbr_all_lights.frag.spv")),
         ),
         d3d12: (
             super::PBR_VERTEX_DXIL,
-            Some(include_bytes!("../../../../../renderer-pipeline/shaders/dxil/pbr_all_lights.frag.dxil")),
+            Some(include_bytes!("../dxil/pbr_all_lights.frag.dxil")),
         ),
         inline_constants: None,
     ),
@@ -97,11 +103,11 @@ static TILED_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: packaged_shaders!(
         vulkan: (
             super::PBR_VERTEX_SPIRV,
-            Some(include_bytes!("../../../../../renderer-pipeline/shaders/pbr_forward_plus.frag.spv")),
+            Some(include_bytes!("../pbr_forward_plus.frag.spv")),
         ),
         d3d12: (
             super::PBR_VERTEX_DXIL,
-            Some(include_bytes!("../../../../../renderer-pipeline/shaders/dxil/pbr_forward_plus.frag.dxil")),
+            Some(include_bytes!("../dxil/pbr_forward_plus.frag.dxil")),
         ),
         inline_constants: None,
     ),
@@ -136,21 +142,13 @@ mod tests {
         for (tiled, spirv, dxil) in [
             (
                 false,
-                include_str!(
-                    "../../../../../renderer-pipeline/shaders/dxil/pbr_all_lights.frag.spirv-reflection.json"
-                ),
-                include_str!(
-                    "../../../../../renderer-pipeline/shaders/dxil/pbr_all_lights.frag.reflection.txt"
-                ),
+                include_str!("../dxil/pbr_all_lights.frag.spirv-reflection.json"),
+                include_str!("../dxil/pbr_all_lights.frag.reflection.txt"),
             ),
             (
                 true,
-                include_str!(
-                    "../../../../../renderer-pipeline/shaders/dxil/pbr_forward_plus.frag.spirv-reflection.json"
-                ),
-                include_str!(
-                    "../../../../../renderer-pipeline/shaders/dxil/pbr_forward_plus.frag.reflection.txt"
-                ),
+                include_str!("../dxil/pbr_forward_plus.frag.spirv-reflection.json"),
+                include_str!("../dxil/pbr_forward_plus.frag.reflection.txt"),
             ),
         ] {
             let module: serde_json::Value = serde_json::from_str(spirv).unwrap();

@@ -1,9 +1,6 @@
 //! Bistro-specific Program variants and the shared Forward PBR ABI.
 
-#[path = "program/deferred.rs"]
-pub mod deferred;
-#[path = "program/forward_plus.rs"]
-pub mod forward_plus;
+pub use pbr_programs::{deferred, forward_plus};
 #[path = "../../../../renderer-pipeline/shaders/pbr_programs.rs"]
 mod pbr_programs;
 
@@ -12,15 +9,11 @@ pub mod visibility;
 
 use crate::shader_binaries::packaged_shaders;
 
-use renderer::{
-    ImageFormat,
-    program::{
-        BindingLayout, BindingType, ManagedRasterProgram, RasterParameterLayout,
-        RasterProgramDescriptor, ShaderStages,
-    },
+use renderer::program::{
+    ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor, ShaderStages,
 };
 
-use pbr_programs::{BLEND, CAMERA, MATERIAL, NO_PARAMETERS, OPAQUE, image, pair, sampler};
+use pbr_programs::OPAQUE;
 pub use pbr_programs::{
     CAMERA_BYTES, MATERIAL_BYTES, VERTEX_BYTES, blend_program, opaque_program, shadow_program,
 };

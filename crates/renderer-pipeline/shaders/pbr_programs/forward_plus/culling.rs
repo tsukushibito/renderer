@@ -33,7 +33,7 @@ pub fn active_tile_count(width: u32, height: u32) -> Result<u32, GraphError> {
         .saturating_mul(height.div_ceil(TILE_SIZE));
     // A single invocation owns each packed tile record.
     if cells == 0 || cells > MAX_TILES || width > MAX_EXTENT || height > MAX_EXTENT {
-        return Err(GraphError::custom(
+        return Err(GraphError::invalid_input(
             "Forward+ requires a nonempty extent with at most 65536 tiles",
         ));
     }
@@ -55,7 +55,9 @@ pub fn light_bytes(
 ) -> Result<[u8; LIGHT_BUFFER_BYTES as usize], GraphError> {
     active_tile_count(width, height)?;
     if lights.len() > MAX_LIGHTS {
-        return Err(GraphError::custom("Forward+ point-light capacity exceeded"));
+        return Err(GraphError::invalid_input(
+            "Forward+ point-light capacity exceeded",
+        ));
     }
     let mut bytes = [0; LIGHT_BUFFER_BYTES as usize];
     for (destination, word) in
@@ -83,7 +85,7 @@ pub fn light_bytes(
             || light.color.iter().any(|value| *value < 0.0)
             || light.intensity < 0.0
         {
-            return Err(GraphError::custom("invalid Forward+ point light"));
+            return Err(GraphError::invalid_input("invalid Forward+ point light"));
         }
         for (destination, word) in record.as_chunks_mut::<4>().0.iter_mut().zip(values) {
             *destination = word.to_le_bytes();
@@ -140,8 +142,8 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
         bytes: &[CULL_CAMERA_BYTES, LIGHT_BUFFER_BYTES, GROUP_BYTES],
     },
     shaders: packaged_shaders!(
-        include_bytes!("../../../../../../renderer-pipeline/shaders/forward_plus.comp.spv"),
-        include_bytes!("../../../../../../renderer-pipeline/shaders/dxil/forward_plus.comp.dxil"),
+        include_bytes!("../../forward_plus.comp.spv"),
+        include_bytes!("../../dxil/forward_plus.comp.dxil"),
     ),
 };
 
@@ -198,7 +200,7 @@ mod tests {
     #[test]
     fn culling_reflection_matches_the_host_layout() {
         let cull: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../../renderer-pipeline/shaders/dxil/forward_plus.comp.spirv-reflection.json"
+            "../../dxil/forward_plus.comp.spirv-reflection.json"
         ))
         .unwrap();
         assert_eq!(cull["ubos"][0]["block_size"], CULL_CAMERA_BYTES);
@@ -209,9 +211,7 @@ mod tests {
         assert_eq!(cull["ssbos"][1]["writeonly"], true);
         let module_type = cull["ssbos"][1]["type"].as_str().unwrap();
         assert_eq!(cull["types"][module_type]["members"][0]["array_stride"], 4);
-        let dxil = include_str!(
-            "../../../../../../renderer-pipeline/shaders/dxil/forward_plus.comp.reflection.txt"
-        );
+        let dxil = include_str!("../../dxil/forward_plus.comp.reflection.txt");
         assert!(dxil.split_whitespace().any(|word| word == "t2"));
         assert!(dxil.split_whitespace().any(|word| word == "u3"));
     }
