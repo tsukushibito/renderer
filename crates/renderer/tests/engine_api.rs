@@ -7,6 +7,7 @@ use renderer::engine::{
     Vertex, View,
 };
 use renderer::graph::{GraphCapacity, GraphPool};
+use renderer_pipeline::standard::snapshot::build_graph;
 
 #[test]
 fn owned_frame_inputs_need_no_gpu_or_window() {
@@ -47,28 +48,27 @@ fn owned_frame_inputs_need_no_gpu_or_window() {
     engine.delete_material(material).unwrap();
     assert_eq!(captured.draw_count(), 1);
     assert_eq!(*captured.view(), view);
-    let frame = captured
-        .build_graph(&mut graphs, true, |graph, color| {
-            let desc = graph.image_desc(color)?;
-            let transformed = graph.image("external custom output", desc)?;
-            image_transform::dispatch(
-                graph,
-                "external custom transform",
-                color,
-                transformed,
-                Transform::SwapRedBlue,
-            )?;
-            let unused = graph.image("unused custom output", desc)?;
-            image_transform::dispatch(
-                graph,
-                "unused custom branch",
-                color,
-                unused,
-                Transform::Invert,
-            )?;
-            Ok(transformed)
-        })
-        .unwrap();
+    let frame = build_graph(&captured, &mut graphs, true, |graph, color| {
+        let desc = graph.image_desc(color)?;
+        let transformed = graph.image("external custom output", desc)?;
+        image_transform::dispatch(
+            graph,
+            "external custom transform",
+            color,
+            transformed,
+            Transform::SwapRedBlue,
+        )?;
+        let unused = graph.image("unused custom output", desc)?;
+        image_transform::dispatch(
+            graph,
+            "unused custom branch",
+            color,
+            unused,
+            Transform::Invert,
+        )?;
+        Ok(transformed)
+    })
+    .unwrap();
     let output = frame.output();
     frame.readback().expect("requested final output readback");
     assert_eq!(
@@ -123,12 +123,11 @@ fn identity_extension_exports_its_input_without_a_copy() {
     };
     let snapshot = engine.snapshot(&snapshots, &view, &[]).unwrap();
     let mut returned = None;
-    let frame = snapshot
-        .build_graph(&mut graphs, false, |_, color| {
-            returned = Some(color);
-            Ok(color)
-        })
-        .unwrap();
+    let frame = build_graph(&snapshot, &mut graphs, false, |_, color| {
+        returned = Some(color);
+        Ok(color)
+    })
+    .unwrap();
     assert_eq!(frame.output(), returned.unwrap());
     assert_eq!(frame.output_ownership(), FrameOutputOwnership::Frame);
     let plan = frame.compile().unwrap();

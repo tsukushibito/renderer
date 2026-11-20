@@ -206,8 +206,8 @@ impl Options {
         }
     }
 
-    fn sdr_output(&self) -> renderer::standard::passes::SdrOutput {
-        use renderer::standard::passes::{SdrEncoding, SdrOutput};
+    fn sdr_output(&self) -> renderer_pipeline::standard::passes::SdrOutput {
+        use renderer_pipeline::standard::passes::{SdrEncoding, SdrOutput};
         SdrOutput {
             encoding: if self.windowed {
                 SdrEncoding::Linear

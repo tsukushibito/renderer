@@ -14,12 +14,12 @@ use renderer::engine::{
 use renderer::graph::{Attachment, ImageDesc, LoadOp, PassHandle, StoreOp};
 use renderer::measurement::{HostEvent, NativeEvent, RustEvent, Snapshot};
 use renderer::program::ManagedRasterProgram;
-use renderer::standard::{graphs, passes};
 use renderer::{
     EngineFrameCapacity, EngineRenderError, FrameCapacity, FrameCompletion, MeshCacheConfig,
     MeshPreparationError, MeshUploadState, PreparedEngineFrame, RenderedFrame, ResourceClass,
     RuntimeConfig, ValidationMode, VulkanEngine, VulkanRuntime,
 };
+use renderer_pipeline::standard::{graphs, passes};
 use std::time::{Duration, Instant};
 
 const IN_FLIGHT: usize = 3;

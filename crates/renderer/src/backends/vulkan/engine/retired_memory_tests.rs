@@ -1,5 +1,6 @@
 //! A prior explicit unload must not cause delayed destruction in normal frames.
 
+use super::test_input::{build_snapshot, render_snapshot};
 use super::*;
 use crate::{
     FrameCapacity, ResourceClass, RuntimeConfig,
@@ -120,17 +121,13 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
     // Warm the ordinary frame resource/result paths before the old version is
     // marked obsolete. The test still rebuilds and compiles every measured frame.
     for _ in 0..3 {
-        let frame = renderer
-            .render_snapshot(&current_snapshot, true, |_, color| Ok(color))
-            .unwrap();
+        let frame =
+            render_snapshot(&mut renderer, &current_snapshot, true, |_, color| Ok(color)).unwrap();
         consume(&mut renderer, frame);
     }
-    let pinned = renderer
-        .build_snapshot(&old_snapshot, false, |_, color| Ok(color))
-        .unwrap();
-    let pending = renderer
-        .render_snapshot(&old_snapshot, true, |_, color| Ok(color))
-        .unwrap();
+    let pinned = build_snapshot(&mut renderer, &old_snapshot, false, |_, color| Ok(color)).unwrap();
+    let pending =
+        render_snapshot(&mut renderer, &old_snapshot, true, |_, color| Ok(color)).unwrap();
     renderer.unload_mesh(old);
     assets.delete_mesh(old).unwrap();
     assert_eq!(renderer.mesh_cache_stats().prepared_retained_meshes, 1);
@@ -148,9 +145,7 @@ fn vulkan_engine_retired_pending_mesh_is_collected_only_at_maintenance() {
         let draws = [draw(current); 2];
         let snapshot = assets.snapshot(&snapshots, &view, &draws[..count]).unwrap();
         renderer.prepare_snapshot(&snapshot, 2).unwrap();
-        let frame = renderer
-            .render_snapshot(&snapshot, true, |_, color| Ok(color))
-            .unwrap();
+        let frame = render_snapshot(&mut renderer, &snapshot, true, |_, color| Ok(color)).unwrap();
         consume(&mut renderer, frame);
         drop(snapshot);
     }

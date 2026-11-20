@@ -28,7 +28,6 @@ pub use profiling::{GpuTiming, PresentationMetrics, SubmissionMetrics};
 pub mod program;
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub mod runtime;
-pub mod standard;
 
 #[cfg(feature = "presentation")]
 pub mod presentation;

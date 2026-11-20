@@ -6,6 +6,8 @@ use super::{
 };
 use crate::ImageFormat;
 
+mod output;
+
 /// Maximum distinct assets in one prepared Raster working set.
 pub const MAX_RASTER_PROGRAMS: usize = 64;
 /// Baseline descriptor-set/register-space limit shared by both backends.

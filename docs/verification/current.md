@@ -1825,6 +1825,29 @@ Vulkan／VMA一般推奨からの新たな例外は設けていない。
 
 ## 公開標準パスと標準グラフ
 
+`renderer-abr`で標準パス、Forwardレシピ、snapshotの標準描画ヘルパーを`renderer-pipeline::standard`へ移した。
+組み込みProgramの信頼境界とバイナリ、資源の所有、Graphの解析とnative実行は`renderer`が担う。
+CPUとVulkanは出力確定を共有し、Graphの置換、互換性のない出力と未初期化の読み取りを引き続き拒否する。
+入力接続のscratchは拡張callbackの前に返し、Vulkanの常駐入力pinは従来どおり投入または取消まで保持する。
+YAMLは独立featureで、既定の型付きRust APIの通常依存は`renderer`だけである。
+
+型付きAPI単体14件とworkspace CPU301件が成功した。全feature／全targetのClippy、全featureのRustdoc、fmt、
+固定ツールによるSPIR-V／DXILの再生成照合とABI検証、mdBookとChromiumのMermaid検査も成功した。
+
+RTX 3060のVulkan／D3D12で、最適化した厳格・製品の各構成を実行した。各API・構成で3回、
+1回あたり33 readback・4,096 byteを照合し、標準レシピと直接合成の出力が一致した。
+BistroのHDR、Neutral、sRGB、FXAA、IBLと影を両API・構成で確認し、厳格構成の検証警告・エラーは0件だった。
+VulkanのEngine回帰では常駐版の保持と退役、Graph置換拒否、出力の登録所有を確認した。
+
+通常フレームの計測はCPUの24フレーム、両APIの標準合成を厳格・製品で各24フレーム、
+Vulkanの常駐入力・画像出力を厳格・製品で各48フレーム実行した。Rustの確保・再確保・解放、
+VMAのhost確保・再確保・解放、Renderer発行のnative資源・メモリの作成・破棄はすべて0件だった。
+枠のresetは別に計上した。YAML featureの有効時には付属例で両APIの出力も照合した。
+実GPUの範囲はオフスクリーンで、driver内部の確保は計測対象外とした。Vulkan／VMA一般推奨からの例外はない。
+ログは`.tools/renderer-abr/`と`.tools/renderer-abr-gpu/`に保存した。
+
+以下は移動前の公開標準部品の受入結果である。
+
 `renderer-7ft.2.7.3`。公開`standard::passes::{opaque, depth_prepass, output}`と
 `standard::graphs::{forward, forward_with_post}`を追加した。標準層は公開Graph／Program／copy APIだけを使い、
 Engineの便利経路も公開forwardを呼ぶ。任意depthとcaller指定attachment・Clear／Load／Store、

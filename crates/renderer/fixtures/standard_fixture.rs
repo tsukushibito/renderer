@@ -8,7 +8,7 @@ use renderer::graph::{
     GraphPool, ImageDesc, ImageHandle, LoadOp, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
-use renderer::standard::{graphs, passes};
+use renderer_pipeline::standard::{graphs, passes};
 
 pub const READBACK_BYTES: usize = READBACKS * IMAGE_BYTES;
 pub const BUFFER_SIZES: [u64; 4] = [84, 12, 512, 64];

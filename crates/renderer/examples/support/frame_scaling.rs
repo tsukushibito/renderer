@@ -134,8 +134,8 @@ mod tests {
     use renderer::{
         engine::{Engine, EngineCapacity, Material, SnapshotPool},
         graph::{GraphCapacity, GraphPool, ImageDesc},
-        standard::graphs::{self, ForwardConfig},
     };
+    use renderer_pipeline::standard::graphs::{self, ForwardConfig};
 
     #[test]
     fn grid_draws_share_assets_and_samples_cover_every_draw_and_empty_cell() {

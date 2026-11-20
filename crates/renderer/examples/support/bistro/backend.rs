@@ -8,8 +8,8 @@ use renderer::{
         ExecutionError, FrameCompletion, FrameId, ResourceClass, Runtime, RuntimeConfig,
         RuntimeLimits, WorkingSet,
     },
-    standard::passes::tone_map_neutral_pipeline,
 };
+use renderer_pipeline::standard::passes::{SdrOutput, tone_map_neutral_pipeline};
 
 fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<RasterPipelineRequest> {
     let mut requests = Vec::with_capacity(7 + usize::from(options.instances.enabled()));
@@ -49,14 +49,14 @@ fn raster_requests(options: &Options, post: Option<&post::Prepared>) -> Vec<Rast
         }
         if options.captures_aa_off() || options.resource_checks {
             // The AA-off diagnostic and the replacement mip probe use this.
-            requests.push(renderer::standard::passes::SdrOutput { fxaa: false, ..sdr }.pipeline());
+            requests.push(SdrOutput { fxaa: false, ..sdr }.pipeline());
         }
     } else {
         requests.push(tone_map_neutral_pipeline());
         requests.push(sdr.pipeline());
         if !options.windowed {
             requests.push(
-                renderer::standard::passes::SdrOutput {
+                SdrOutput {
                     fxaa: !sdr.fxaa,
                     ..sdr
                 }

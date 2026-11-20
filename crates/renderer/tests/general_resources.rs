@@ -486,7 +486,7 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
     let i = graph.import_buffer("indices", &indices).unwrap();
     let target = graph.import_image("attachment Load", &color).unwrap();
     let view = graph.image_view(target, 0, 0).unwrap();
-    renderer::standard::passes::opaque(
+    renderer_pipeline::standard::passes::opaque(
         &mut graph,
         "imported draw",
         [RasterDraw {
@@ -504,7 +504,7 @@ fn raster_imports<B: Backend>(backend: &mut B, reconfigure: bool) {
             store: StoreOp::Store,
         },
         None,
-        renderer::standard::passes::OpaqueDepth::Write,
+        renderer_pipeline::standard::passes::OpaqueDepth::Write,
     )
     .unwrap();
     let pass = graph.readback_image("draw pixels", target).unwrap();

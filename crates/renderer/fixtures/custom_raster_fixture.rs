@@ -16,7 +16,7 @@ use renderer::program::{
     RasterParameterLayout, RasterProgramDescriptor, SamplerDescriptor, ShaderStages,
     VertexAttribute, VertexFormat,
 };
-use renderer::standard::{graphs, passes};
+use renderer_pipeline::standard::{graphs, passes};
 
 pub const CASES: usize = 8;
 pub const READBACK_BYTES: usize = IMAGE_BYTES * 3 + PIXELS * 4;

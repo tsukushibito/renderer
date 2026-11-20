@@ -17,8 +17,9 @@ use renderer::{
     capacity::CapacityRecovery,
     graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
     runtime::{ExecutionErrorKind, FrameId, Runtime},
-    standard::passes::{SdrEncoding, SdrOutput, write_sdr},
 };
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use renderer_pipeline::standard::passes::{SdrEncoding, SdrOutput, write_sdr};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use serde_json::{Value, json};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]

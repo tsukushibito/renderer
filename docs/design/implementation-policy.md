@@ -648,22 +648,29 @@ pipeline初回作成と定常状態を分離する。現行共通領域の予約
 
 **採用方針:** 次の三層を公開し、標準機能の利用と利用側によるパス定義を同じ基盤で成立させる。
 以下は採用した契約であり、実装済みの範囲は[公開標準部品](rendergraph.md#公開標準パスと標準グラフ)と作業順序を参照する。
-現在のEngineによる固定構成は[現行契約](rendergraph.md#エンジン入力と標準描画)、移行は[作業順序](#public-api-migration)を参照する。
+snapshotを使う標準描画の入口は[現行契約](rendergraph.md#エンジン入力と標準描画)、移行は[作業順序](#public-api-migration)を参照する。
 
 | 公開する層 | 責務と利用方法 |
 |---|---|
-| 汎用Graph API | 利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。標準機能を使わないGraphも構築・実行できる。 |
-| 標準パス | 同じ公開APIで定義した再利用部品。不透明描画、半透明描画、ポスト処理等を機能の実装に合わせて追加し、利用側が必要な部品を直接組み合わせられる。 |
-| 標準グラフ | 公開標準パスを組み合わせる任意の構築レシピ。標準機能だけを使う場合の入口とし、意味を定めた箇所では利用側の処理へ交換・追加できる。 |
+| 汎用Graph API | `renderer`で提供する。利用側がProgram/pipeline、binding、draw/dispatch/copy、資源と接続を定義する。独自のGraphも構築・実行できる。 |
+| 標準パス | `renderer-pipeline`で提供する、公開Graph APIを使った再利用部品。利用側が不透明描画やポスト処理など必要な部品を直接組み合わせられる。 |
+| 標準グラフ | `renderer-pipeline`で提供する、公開標準パスを組み合わせる構築レシピ。意味を定めた箇所で利用側の処理を交換・追加できる。 |
 
-依存は標準グラフから標準パスへ、標準パスから汎用Graph APIへ向ける。
+依存は`アプリ → renderer-pipeline → renderer`の向きとする。Graph、Program、snapshotの入力接続、GPU実行は`renderer`が担う。
+描画方式に応じたパスの選択・合成を`renderer-pipeline`に置くことで、独自構成は`renderer`だけに依存できる。
+共用する組み込みシェーダーとそのABIは、管理下Programとして`renderer`が提供する。
+Rustの標準パスとレシピは既定の構成で使え、YAMLでの合成は`yaml` featureで選ぶ。
+標準グラフは標準パスを組み合わせ、各パスは通常の構築関数と型付き入出力で公開Graph APIを呼ぶ。
 Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加することを通常の拡張手順にしない。
-三層は責務の区分であり、三つのcrate、新しい共通Pass trait、plugin registryの導入を要求しない。
-最初は通常の構築関数と必要な型付き入出力を使い、module名・型名は実利用例から決める。
+
+ここで描画パイプラインとは、ある出力を得るための描画構成を指す。レシピは、その一部または全体を
+レンダーグラフへ組み立てる定義である。レンダーグラフはフレームごとのパスと資源の依存関係を表し、
+各パスはRaster、Compute、copyなどの処理単位となる。
 
 Engineはasset管理や不変なframe入力のcaptureを提供できる。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
 入力のGraph接続自体が標準opaqueを追加する設計にはしない。
-Engineの便利APIが公開標準グラフを呼ぶことは許容するが、利用側は同じ資源接続・実行経路で別のGraphを選べる。
+`renderer_pipeline::standard::snapshot`は、Engineの入力接続と標準forwardを組み合わせた便利APIを提供する。
+利用側は同じ資源接続・実行経路で独自のGraphを構築できる。
 snapshotを使わないCompute-only、複数View、必要な数の画像・buffer出力も基本APIの設計対象とし、
 単一RGBA8画像やView寸法をすべてのGraphへ強制しない。nativeの対応範囲とPresentation固有の形式条件は別に維持する。
 
@@ -692,7 +699,7 @@ Graph内の出力handleを返すことと、Graph外へ保持するexportは区�
 一つの処理を複数ノードのmoduleへ置き換えられる一方、ForwardからDeferredへの変更等では、
 公開標準パスと独自パスを使って利用側がGraphを構築する。
 完成Graphのnode名・番号を検索して差し替える方式や、あらゆる構造変更を受け持つhook群を標準契約の前提にしない。
-7.4節の標準HDR挿入点は移行後の契約であり、現行Engineのopaque後・同寸RGBA8拡張点とは区別する。
+`standard::snapshot`の拡張点はopaque後の同寸RGBA8を扱う。7.4節の標準HDR挿入点はHDR構成側の契約である。
 
 #### 定義の再利用と毎フレームの入力
 
@@ -740,7 +747,7 @@ Compute/copyの二API受入`.2.4`は完了した。公開APIの構成変更は�
 |---|---|
 | `.2.7.1` 方針・計画 | 本節と現行契約・導入文書を整合させ、実装課題と依存、受入条件を登録する。 |
 | `.2.7.2` 入力接続・出力所有 | `connect_graph`／`begin_graph`／`connect_snapshot`で固定描画を追加せず入力接続し、任意構成でも所有と生成時保証を引き継ぐ。出力は合成後に選び、詳細と実証範囲は[現行契約](rendergraph.md#利用側からの入力接続と出力選択)と[検証](../verification/current.md#利用側graphへの入力接続と出力選択)を参照する。 |
-| `.2.7.3` 標準部品 | `standard::passes`のopaque／depth prepass／color出力copyと、`standard::graphs`のforward／post境界を公開する。callerの描画先・Load/Storeと任意depthを扱い、Engineの便利経路も公開recipeを呼ぶ。初期版はunlit linear colorで、同geometry prepassの限定Programを含む。 |
+| `.2.7.3` 標準部品 | opaque／depth prepass／color出力copyとforward／post境界の初版を公開した。callerの描画先・Load/Storeと任意depthを扱い、初期版はunlit linear colorで、同geometry prepassの限定Programを含む。現在の配置は[三層の公開方針](#public-api-layers)に従う。 |
 | `.2.7.4` consumer・基準受入 | 標準forward・利用側多段Computeのpost交換／追加／無効化・標準パス直接合成を二APIで照合し、frame_loop／engine_workloadsと文書を移行した。旧描画の同等性、任意HDR出力、容量・所有・混合frameメモリを確認する。 |
 | `.2.5` 一般import・寿命 | `.2.7`の境界へcanonical identity/revision、更新・pending退役、履歴・失敗を接続する。既存受入を保持し、新課題へ重複実装しない。 |
 | `.2.8` 利用側Raster | `.2.7`と`.2.5`の後、独自graphics shader/ABIと必要なblend/depth設定を公開する。最小alpha fixtureで三経路を二API実証し、固定Program群の公開だけで自由なRaster対応を主張しない。 |
@@ -883,7 +890,7 @@ pipeline、binding layout、sampler、ImageViewなどは、それぞれを導入
 実行ファイルを再ビルドせず、起動や明示的な構成変更でRasterとComputeのシェーダーを選べる。
 アプリがロードしたバイナリとABIは`ManagedRasterProgram::from_trusted_owned_descriptor`と
 `ManagedProgram::from_trusted_owned_descriptor`で取り込む。埋め込みアセットと同じ
-GraphとWorkingSetを使う。構成をYAMLで記述する場合は同じワークスペースの`renderer-pipeline`を使う。
+GraphとWorkingSetを使う。構成をYAMLで記述する場合は`renderer-pipeline`の`yaml` featureを有効にする。
 [外部取込の利用例](../guides/tooling.md#runtime-shader-import)と
 [Program契約](rendergraph.md#program由来bindingとshader-stageのowned計画)を参照する。
 
@@ -891,7 +898,7 @@ GraphとWorkingSetを使う。構成をYAMLで記述する場合は同じワー�
 |---|---|
 | シェーダーのアセットビルド | HLSLなどのソースを配布対象に応じてSPIR-V、DXIL、または両方へコンパイルする。entry point、stage、bindingとアクセス契約などのメタデータを対応するバイナリと組にして配布する。 |
 | アプリのアセット層 | 起動時にアプリが選んだバックエンドに対し、シェーダーの論理名を対応するアセットへ解決する。両形式を配布した場合も、選択したバックエンド用のバイナリと対応するメタデータを読む。 |
-| `renderer-pipeline` | YAMLのパス、描画リスト、リソース接続を解決する。準備時に`shader`の論理名または`shader_template`と材質型の組をアプリに渡し、型付きProgramを受け取る。毎フレームはアプリから渡された名前付きビューの候補を選び、公開Graph APIでパスを追加する。 |
+| `renderer-pipeline`の`yaml` feature | YAMLのパス、描画リスト、リソース接続を解決する。準備時に`shader`の論理名または`shader_template`と材質型の組をアプリに渡し、型付きProgramを受け取る。毎フレームはアプリから渡された名前付きビューの候補を選び、公開Graph APIでパスを追加する。 |
 | `renderer` | 読み込み済みのバイト列とメタデータを受け取り、不変のProgramとして扱う。実Deviceとの適合を確認し、`WorkingSet`の準備でネイティブのレイアウトとパイプラインを作る。 |
 
 取込時に、バイナリ形式・版・サイズ・ステージと、記述子の構造・宣言したABIの整合を確認する。

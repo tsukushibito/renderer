@@ -94,6 +94,11 @@ impl GraphError {
         Self::new(GraphErrorKind::Custom, message)
     }
 
+    /// Creates a validation error for an invalid graph-builder input.
+    pub fn invalid_input(message: impl Into<Cow<'static, str>>) -> Self {
+        Self::new(GraphErrorKind::InvalidInput, message)
+    }
+
     pub fn kind(&self) -> GraphErrorKind {
         self.kind
     }
@@ -173,7 +178,9 @@ impl GraphError {
         }
         self
     }
-    pub(crate) fn with_pass_name(mut self, name: &str) -> Self {
+    /// Adds the name of a pass being built for error reporting. Capacity
+    /// errors remain unchanged so reporting them requires no allocation.
+    pub fn with_pass_name(mut self, name: &str) -> Self {
         if self.kind == GraphErrorKind::CapacityExhausted {
             return self;
         }

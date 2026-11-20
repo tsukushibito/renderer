@@ -10,9 +10,11 @@ use renderer::{
         ManagedProgram, ManagedRasterProgram, RasterProgramDescriptor, RasterShaderStages,
         ShaderBinaries, ShaderStages,
     },
+};
+use renderer_pipeline::{
+    Program, ShaderRequest,
     standard::passes::{SdrEncoding, SdrOutput},
 };
-use renderer_pipeline::{Program, ShaderRequest};
 
 type AssetError = Box<dyn Error + Send + Sync>;
 

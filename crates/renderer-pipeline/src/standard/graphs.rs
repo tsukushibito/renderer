@@ -1,12 +1,12 @@
 //! Optional forward recipes assembled from public standard passes.
 
-use crate::ImageFormat;
 use std::borrow::Borrow;
 
-use crate::graph::{
+use crate::standard::passes::{self, OpaqueDepth};
+use renderer::ImageFormat;
+use renderer::graph::{
     Attachment, Graph, GraphError, ImageDesc, ImageHandle, LoadOp, RasterDraw, SampleCount, StoreOp,
 };
-use crate::standard::passes::{self, OpaqueDepth};
 
 /// Per-construction target and clear choices. The recipe creates a single
 /// subresource RGBA8 or RGBA16F color target and, when requested, matching D32

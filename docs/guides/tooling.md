@@ -135,7 +135,8 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
 
 ## YAMLで描画パイプラインを組み立てる
 
-アプリから`renderer-pipeline`に依存し、実行するバックエンドに応じて`vulkan`または`d3d12` featureを選ぶ。
+アプリから`renderer-pipeline`に依存し、YAMLを使う場合は`yaml` featureを有効にする。
+実行するバックエンドに応じて`vulkan`または`d3d12` featureを選ぶ。標準パスとレシピのRust APIは既定の構成で利用できる。
 YAMLのテキストを`PreparedPipeline::from_yaml`に渡す。第2引数の`PrepareOptions`で、同時処理する最大フレーム数
 `frames_in_flight`、各描画リストの選別後の上限`max_draws_per_list`、フレームの材質インスタンス数上限`max_materials`を指定する。
 `extent: frame`の画像がある場合は、`frame_extent`に準備対象の`[width, height]`を渡す。
@@ -209,7 +210,7 @@ Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リスト�
 `development-validation`を追加するとネイティブ検証を有効にできる。
 
 ```powershell
-cargo run --locked --release -p renderer-pipeline --no-default-features --features vulkan,d3d12,memory-profiling --example yaml_pipeline
+cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan,d3d12,memory-profiling --example yaml_pipeline
 ```
 
 <a id="bistro-post-pipeline"></a>

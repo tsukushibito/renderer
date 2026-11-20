@@ -139,7 +139,7 @@ output: mapped
         "id: mapped, kind: image, source: external,",
     );
     for [width, height] in [[8, 4], [17, 11]] {
-        let tone = renderer::standard::passes::tone_map_neutral_pipeline();
+        let tone = renderer_pipeline::standard::passes::tone_map_neutral_pipeline();
         let prepare = |yaml: &str| {
             PreparedPipeline::from_yaml(
                 yaml,
@@ -232,7 +232,7 @@ output: mapped
                     Ok(Program::Compute(ManagedProgram::sampled_float_readback()))
                 }
                 ShaderRequest::Program("tone") => Ok(Program::Raster(
-                    renderer::standard::passes::tone_map_neutral_pipeline().program,
+                    renderer_pipeline::standard::passes::tone_map_neutral_pipeline().program,
                 )),
                 _ => unreachable!(),
             },
@@ -420,7 +420,7 @@ fn prepare_tone_pipeline(yaml: &str) -> Result<PreparedPipeline, PipelineError> 
         },
         |_| {
             Ok(Program::Raster(
-                renderer::standard::passes::tone_map_neutral_pipeline().program,
+                renderer_pipeline::standard::passes::tone_map_neutral_pipeline().program,
             ))
         },
     )

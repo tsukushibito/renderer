@@ -37,7 +37,7 @@ winit = { version = "0.30", optional = true, default-features = false, features 
 [dev-dependencies]
 criterion.workspace = true
 tracing-subscriber.workspace = true
-renderer-pipeline = { version = "0.1.0", path = "../renderer-pipeline" }
+renderer-pipeline = { version = "0.1.0", path = "../renderer-pipeline", features = ["yaml"] }
 serde_json = "1.0"
 sha2 = "0.10.9"
 

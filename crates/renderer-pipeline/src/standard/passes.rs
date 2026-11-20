@@ -4,11 +4,11 @@ mod output;
 
 pub use output::{SdrEncoding, SdrOutput, tone_map_neutral, tone_map_neutral_pipeline, write_sdr};
 
-use crate::ImageFormat;
 use std::borrow::Borrow;
 
-use crate::graph::{Attachment, Graph, GraphError, PassHandle, RasterAttachments, RasterDraw};
-use crate::program::ManagedRasterProgram;
+use renderer::ImageFormat;
+use renderer::graph::{Attachment, Graph, GraphError, PassHandle, RasterAttachments, RasterDraw};
+use renderer::program::ManagedRasterProgram;
 
 /// Normal-Z depth behavior for standard opaque drawing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,7 +16,7 @@ pub enum OpaqueDepth {
     /// Use LESS and write passing depth values when a depth target is present.
     Write,
     /// Use LESS_OR_EQUAL without depth writes, loading a preceding depth pass.
-    /// The caller must provide a depth attachment with [`crate::graph::LoadOp::Load`].
+    /// The caller must provide a depth attachment with [`renderer::graph::LoadOp::Load`].
     Prepassed,
 }
 

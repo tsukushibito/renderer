@@ -5,3 +5,4 @@
 
 pub mod graphs;
 pub mod passes;
+pub mod snapshot;

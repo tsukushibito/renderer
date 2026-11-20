@@ -13,7 +13,7 @@ use renderer::graph::{
 };
 use renderer::measurement::Snapshot;
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
-use renderer::standard::graphs;
+use renderer_pipeline::standard::graphs;
 
 const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;

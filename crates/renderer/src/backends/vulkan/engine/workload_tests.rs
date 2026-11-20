@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::test_input::{Assets as Engine, graph};
+use super::test_input::{Assets as Engine, build_snapshot, graph, render_snapshot};
 use super::{EngineFrameCapacity, MeshCacheConfig, MeshUploadState, MeshVersionKey, VulkanEngine};
 use crate::{
     RuntimeConfig, ValidationMode, VulkanRuntime,
@@ -377,9 +377,7 @@ fn vulkan_engine_ready_mesh_can_draw_before_upload_completion_observation() {
     );
     // Do not wait/poll the final upload. A queue-accepted content version is
     // usable by the next Graph; native synchronization supplies visibility.
-    let mut frame = renderer
-        .render_snapshot(&snapshot, true, |_, image| Ok(image))
-        .unwrap();
+    let mut frame = render_snapshot(&mut renderer, &snapshot, true, |_, image| Ok(image)).unwrap();
     let pass = frame.readback.unwrap();
     renderer.release_output(&mut frame).unwrap();
     let mut completion = renderer
@@ -481,11 +479,10 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
             &[],
         )
         .unwrap();
-    let mut borrowed = renderer
-        .render_snapshot(&snapshot, true, |graph, _| {
-            graph.import_image("external completed output", &caller)
-        })
-        .unwrap();
+    let mut borrowed = render_snapshot(&mut renderer, &snapshot, true, |graph, _| {
+        graph.import_image("external completed output", &caller)
+    })
+    .unwrap();
     assert_eq!(
         borrowed.output_ownership(),
         crate::engine::FrameOutputOwnership::Caller
@@ -504,9 +501,7 @@ fn vulkan_engine_output_release_respects_original_registration_ownership() {
         caller_bytes
     );
     drop(completed);
-    let mut owned = renderer
-        .render_snapshot(&snapshot, true, |_, image| Ok(image))
-        .unwrap();
+    let mut owned = render_snapshot(&mut renderer, &snapshot, true, |_, image| Ok(image)).unwrap();
     assert_eq!(
         owned.output_ownership(),
         crate::engine::FrameOutputOwnership::Frame
@@ -652,9 +647,8 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
         // Switching the admitted asset is an explicit maintenance boundary.
         renderer.collect_retired_meshes(Some(&assets)).unwrap();
         ready(&mut renderer, snapshot);
-        let mut frame = renderer
-            .render_snapshot(snapshot, true, |_, image| Ok(image))
-            .unwrap();
+        let mut frame =
+            render_snapshot(&mut renderer, snapshot, true, |_, image| Ok(image)).unwrap();
         let pass = frame.readback.unwrap();
         renderer.release_output(&mut frame).unwrap();
         let mut completed = renderer
@@ -678,9 +672,7 @@ fn vulkan_engine_streams_cpu_assets_with_a_four_resource_runtime() {
     }
     renderer.collect_retired_meshes(Some(&assets)).unwrap();
     ready(&mut renderer, &snapshots[0]);
-    let pinned = renderer
-        .build_snapshot(&snapshots[0], false, |_, image| Ok(image))
-        .unwrap();
+    let pinned = build_snapshot(&mut renderer, &snapshots[0], false, |_, image| Ok(image)).unwrap();
     assert!(matches!(
         renderer.prepare_snapshot(&snapshots[1], 2),
         Err(super::EngineRenderError::Preparation(

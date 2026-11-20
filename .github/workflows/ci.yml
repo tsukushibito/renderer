@@ -189,6 +189,14 @@ jobs:
             cargo test --locked --workspace --release --no-default-features --features $features
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Test typed pipelines with and without YAML
+        if: matrix.backend == 'cpu'
+        shell: pwsh
+        run: |
+          cargo test --locked -p renderer-pipeline --no-default-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p renderer-pipeline --no-default-features --features yaml --test frame_inputs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the CPU Graph composition example
         if: matrix.backend == 'cpu'
         shell: pwsh

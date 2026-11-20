@@ -179,7 +179,8 @@ impl ImageDesc {
         self.mip_levels == 1 && self.array_layers == 1
     }
 
-    pub(crate) fn mip_extent(self, mip: u32) -> Option<[u32; 2]> {
+    /// Returns the width and height at a valid mip level.
+    pub fn mip_extent(self, mip: u32) -> Option<[u32; 2]> {
         if self.width == 0
             || self.height == 0
             || mip >= self.mip_levels
@@ -436,6 +437,26 @@ impl Graph {
     pub fn image_desc(&self, image: ImageHandle) -> Result<ImageDesc, GraphError> {
         self.image_desc_at(self.image_id(image)?)
     }
+
+    /// Require an image to have the exact description expected by a caller.
+    /// A mismatch reports the local image and both descriptions.
+    pub fn require_image_desc(
+        &self,
+        image: ImageHandle,
+        expected: ImageDesc,
+    ) -> Result<(), GraphError> {
+        let id = self.image_id(image)?;
+        let actual = self.image_desc_at(id)?;
+        if actual != expected {
+            return Err(self.resource_error(
+                GraphErrorKind::InvalidInput,
+                format!("expected image description {expected:?}; got {actual:?}"),
+                id,
+            ));
+        }
+        Ok(())
+    }
+
     /// Select one complete mip/layer without registering or allocating another
     /// resource. The aspect follows the image format and cannot be overridden.
     pub fn image_view(

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use super::{FrameCapacity, ResourceClass, RuntimeConfig, VulkanRuntime};
 use crate::backends::vulkan::engine::{
     EngineFrameCapacity,
-    test_input::{Assets as Engine, graph},
+    test_input::{Assets as Engine, build_snapshot, graph, render_snapshot},
 };
 use crate::{
     EngineRenderError, FrameId, MeshCacheConfig, MeshUploadState, PreparedEngineFrame,
@@ -129,7 +129,7 @@ fn build_frame(
 ) -> Result<PreparedEngineFrame, EngineRenderError> {
     let snapshot = assets.snapshot(view, draws)?;
     prepare_meshes(engine, &snapshot);
-    engine.build_snapshot(&snapshot, readback, extension)
+    build_snapshot(engine, &snapshot, readback, extension)
 }
 
 fn render_frame(
@@ -430,12 +430,8 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
         };
         let captured = assets.snapshot(&black_view, &[draw]).unwrap();
         prepare_meshes(engine, &captured);
-        let old_a = engine
-            .build_snapshot(&captured, true, |_, c| Ok(c))
-            .unwrap();
-        let old_b = engine
-            .build_snapshot(&captured, true, |_, c| Ok(c))
-            .unwrap();
+        let old_a = build_snapshot(engine, &captured, true, |_, c| Ok(c)).unwrap();
+        let old_b = build_snapshot(engine, &captured, true, |_, c| Ok(c)).unwrap();
         let old_a = old_a.compile().unwrap();
         let old_b = old_b.compile().unwrap();
         // Both prepared graphs pin the same resident old version. Later CPU
@@ -500,9 +496,7 @@ fn vulkan_engine_custom_empty_view_and_prepared_frame_failures() {
             )],
         );
         prepare_meshes(engine, &captured);
-        let mut old = engine
-            .render_snapshot(&captured, true, |_, c| Ok(c))
-            .unwrap();
+        let mut old = render_snapshot(engine, &captured, true, |_, c| Ok(c)).unwrap();
         engine.release_output(&mut old).unwrap();
         assert_eq!(engine.runtime().stats().registered_resources, 2);
         collect(
@@ -584,9 +578,7 @@ fn vulkan_shipping_mesh_guarantees_preserve_pixels_without_cpu_retention() {
     };
     let snapshot = assets.snapshot(&view, &[draw]).unwrap();
     prepare_meshes(&mut engine, &snapshot);
-    let prepared = engine
-        .build_snapshot(&snapshot, true, |_, color| Ok(color))
-        .unwrap();
+    let prepared = build_snapshot(&mut engine, &snapshot, true, |_, color| Ok(color)).unwrap();
     let prepared = prepared.compile().unwrap();
     drop(snapshot);
     assets.delete_mesh(mesh_handle).unwrap();

@@ -952,7 +952,8 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 
 ## 公開標準パスと標準グラフ
 
-`standard::passes`は公開Graph操作だけを使う構築関数、`standard::graphs`はそれらを組み合わせる任意のrecipeである。
+`renderer_pipeline::standard::passes`は公開Graph操作を使う構築関数、
+`renderer_pipeline::standard::graphs`はそれらを組み合わせるレシピである。これらのRust APIは既定の構成で利用できる。
 Engineやsnapshotを必須にせず、`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取る。
 標準グラフもGraphを借用してその場で構築し、`SceneColor { color, depth }`というGraph内のhandleを返す。
 export、readback、compile、submit、presentと、その結果の所有は呼び出し側が選ぶ。
@@ -992,8 +993,8 @@ trusted Raster descriptorと`Graph::raster`で独自の描画部品を定義す�
 ここで`graph`は利用側が準備したGraph、`inputs`は任意のsnapshot接続である。
 
 ```rust,ignore
-use renderer::standard::graphs;
 use renderer::graph::ImageDesc;
+use renderer_pipeline::standard::graphs;
 
 let config = graphs::ForwardConfig {
     color: ImageDesc::rgba8(1280, 720),
@@ -1028,8 +1029,8 @@ callbackは保持せず、完成命令は入力を所有する。準備済み容
 ## エンジン入力と標準描画
 
 **現行実装:** 利用側がGraphから構築を始め、必要なsnapshotだけを接続できる。
-Engine層には標準opaque・出力・readbackを構築する便利経路も残る。
-そのRGBA8・View寸法・単一出力の契約は便利経路に限り、入力接続そのものには課さない。
+`renderer_pipeline::standard::snapshot`は標準opaque、単一出力と任意のreadbackを構築する便利経路を提供する。
+そのRGBA8・View寸法の契約は標準描画の便利経路で適用する。入力接続は利用側の任意の構成で使える。
 [公開標準パスと標準グラフ](#公開標準パスと標準グラフ)を同じ入力接続から選択できる。
 
 GPU非依存の`engine::Engine`は`EngineCapacity { meshes, materials, retired_mesh_versions }`で
@@ -1092,10 +1093,13 @@ GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame m
 
 ### 現行の標準描画便利経路
 
-snapshotの`build_graph(&mut graph_pool, readback, extension)`はGPU・windowなしで標準Graphを構築できる。
+`renderer_pipeline::standard::snapshot::build_graph(&snapshot, &mut graph_pool, readback, extension)`は
+GPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
 mesh解決はsnapshot slotの予約済み配列とsort/index検索で行い、frameごとの一時BTreeMapを作らない。
-`FrameGraph`は標準recipeの最終出力・export・任意readback・登録解除責任を確定した値である。
+`renderer::engine::FrameGraph::select_output(graph, output, readback)`は、使用するGraphと画像から
+最終出力・export・任意readback・登録解除責任を確定する。`readback`には必要な場合だけパス名を渡す。
+任意の描画構成でこのAPIを使える。
 `graph()`は読み取り専用で、`output()`／`readback()`／`output_ownership()`も確定時の対応を保つ。
 拡張と出力の選択は`build_graph`のcallback内で済ませる。任意の後続構築が必要なら
 `connect_graph`と通常のGraph APIを使う。公開fieldの差し替えで所有情報だけが古く残る経路は設けない。
@@ -1144,7 +1148,8 @@ frame・execution・readbackのleaseを従来どおり返すが、旧assetを最
 内容の版ごとに元のimmutableな入力を共有し、chunkごとのCPUコピーを永続的な鏡像として保持しない。
 同じqueueの後続描画はCPU完了待ちを要求しない。通常の準備・poll・build・submitに暗黙waitを入れず、
 明示的な待機には`wait_uploads(timeout)`を使う。uploadの回収が別の描画frameの結果を消費しないよう、
-所有するsubmissionを分ける。`build_snapshot`は準備済み常駐を使い、uploadや待機を隠して実行しない。
+所有するsubmissionを分ける。`renderer_pipeline::standard::snapshot::build_vulkan`は準備済み常駐を使う。
+同モジュールの`render_vulkan`は構築・compile・submitまで扱い、uploadと待機は明示した準備経路で行う。
 Fence完了後の結果・計測取得だけが失敗した場合も、退役済みuploadを回収して元のエラーを返す。
 完了不明のFenceエラーやtimeoutは同じ回収扱いにせず、所有を維持する。
 標準の不透明描画は管理下mesh Programとowned draw listを一つの`Raster`操作にする。

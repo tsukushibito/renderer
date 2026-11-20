@@ -6,7 +6,7 @@ use renderer::graph::{
 };
 use renderer::program::{ManagedProgram, RasterPipelineRequest};
 
-use crate::{
+use super::{
     BindingSource, Pass, PassKind, PipelineError, PreparedAttachment, PreparedPipeline,
     RasterDrawKind, RasterPrograms, Resource, ResourceDesc,
 };

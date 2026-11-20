@@ -3,7 +3,7 @@ use renderer::graph::{
     ImageDesc, ImageHandle, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::ManagedRasterProgram;
-use renderer::standard::{
+use renderer_pipeline::standard::{
     graphs::{self, ForwardConfig},
     passes::{self, OpaqueDepth},
 };

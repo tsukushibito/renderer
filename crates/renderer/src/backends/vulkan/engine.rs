@@ -3,7 +3,8 @@
 use super::graph::{FrameSubmission, RuntimeError, Submission, VulkanRuntime};
 use crate::{
     engine::{
-        EngineError, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle, SnapshotInputs,
+        EngineError, FrameGraph, FrameOutputOwnership, FrameSnapshot, MeshData, MeshHandle,
+        SnapshotInputs,
     },
     graph::{
         CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageHandle, ImportImage,
@@ -217,26 +218,26 @@ impl PreparedEngineGraph {
     /// Any supported extent/format is accepted. General multiple-image/buffer
     /// exports use Graph's export methods and submit_graph instead.
     pub fn select_output(
-        mut self,
+        self,
         output: ImageHandle,
         readback: bool,
     ) -> Result<PreparedEngineFrame, GraphError> {
-        self.graph.image_desc(output)?;
-        let output_ownership = if self.graph.resources[output.index].import.is_some() {
-            FrameOutputOwnership::Caller
-        } else {
-            FrameOutputOwnership::Frame
-        };
-        self.graph.export_image(output)?;
-        let readback = if readback {
-            Some(self.graph.readback_image("frame output readback", output)?)
-        } else {
-            None
-        };
+        if self.source_graph != self.graph.id {
+            return Err(GraphError::new(
+                crate::graph::GraphErrorKind::WrongOwner,
+                "replaced prepared Graph",
+            ));
+        }
+        let frame = FrameGraph::select_output(
+            self.graph,
+            output,
+            readback.then_some("frame output readback"),
+        )?;
+        let (graph, output, readback, output_ownership) = frame.into_parts();
         Ok(PreparedEngineFrame {
             source_graph: self.source_graph,
             source_output: output,
-            graph: self.graph,
+            graph,
             output,
             readback,
             owner: self.owner,
@@ -404,15 +405,6 @@ impl VulkanEngine {
         self.graph_pool.release_idle() + self.upload_graphs.release_idle()
     }
 
-    pub fn render_snapshot(
-        &mut self,
-        snapshot: &FrameSnapshot,
-        readback: bool,
-        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-    ) -> Result<RenderedFrame, EngineRenderError> {
-        let prepared = self.build_snapshot(snapshot, readback, extension)?;
-        self.submit_frame(prepared.compile()?)
-    }
     /// Start a caller-composed Graph, including snapshot-free Compute/copy work.
     pub fn begin_graph(&mut self) -> Result<PreparedEngineGraph, EngineRenderError> {
         let scratch = self.frame_scratch.acquire()?;
@@ -505,29 +497,6 @@ impl VulkanEngine {
         Ok(submission)
     }
 
-    /// Construct the current standard recipe using the same input connection.
-    pub fn build_snapshot(
-        &mut self,
-        snapshot: &FrameSnapshot,
-        readback: bool,
-        extension: impl FnOnce(&mut Graph, ImageHandle) -> Result<ImageHandle, GraphError>,
-    ) -> Result<PreparedEngineFrame, EngineRenderError> {
-        let mut prepared = self.begin_graph()?;
-        let inputs = self.connect_snapshot(&mut prepared, snapshot)?;
-        let frame =
-            snapshot.build_graph_with_inputs(prepared.graph, inputs, readback, extension)?;
-        let (graph, output, readback, output_ownership) = frame.into_parts();
-        Ok(PreparedEngineFrame {
-            source_graph: graph.id,
-            source_output: output,
-            graph,
-            output,
-            readback,
-            owner: prepared.owner,
-            output_ownership,
-            scratch: prepared.scratch,
-        })
-    }
     pub fn submit_frame(
         &mut self,
         prepared: CompiledEngineFrame,
