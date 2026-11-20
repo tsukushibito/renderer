@@ -19,11 +19,13 @@ use crate::{
             shadow_program,
         },
     },
-    pbr::{Bounds, Environment, Frame, PreparedView, SceneLimits, Sun, ViewInput},
-    pbr_forward::{self, Programs, prepare_recipe},
+    pbr::{
+        Bounds, Environment, Frame, PreparedView, SceneLimits, Sun, ViewInput,
+        scene::{DrawMode, PreparedScene, Programs},
+    },
 };
 
-pub use crate::pbr_forward::Config;
+pub use crate::pbr::Config;
 pub use passes::GBuffer;
 
 /// The HDR scene and retained, Graph-local material planes.
@@ -41,8 +43,7 @@ pub struct FrameImages {
 
 /// Prepared Deferred programs, frame capacities and PBR scratch.
 pub struct Prepared {
-    common: pbr_forward::Prepared,
-    config: Config,
+    common: PreparedScene,
 }
 
 /// Prepare a 1× Deferred scene with a three-plane RGBA16F G-buffer and D32
@@ -59,7 +60,7 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         blend: blend_program(),
         shadow: shadow_program(),
     };
-    let mut common = prepare_recipe(config, limits, programs, false)?;
+    let mut common = PreparedScene::new(config, limits, programs, false, DrawMode::Indirect)?;
     let preparation = common.preparation_mut();
     let [width, height] = config.extent;
     let frames = preparation.frames_in_flight().get();
@@ -100,7 +101,7 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
             ..WorkingSet::default()
         },
     )?;
-    Ok(Prepared { common, config })
+    Ok(Prepared { common })
 }
 
 impl Prepared {
@@ -125,7 +126,7 @@ impl Prepared {
         graph: &mut Graph,
         frame: Frame<'_>,
     ) -> Result<SceneImages, GraphError> {
-        let config = self.config;
+        let config = self.common.config();
         let [width, height] = config.extent;
         let view_projection = *frame.view.matrix();
         let mut gbuffer = None;

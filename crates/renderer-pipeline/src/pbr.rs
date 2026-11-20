@@ -7,6 +7,7 @@ mod history;
 pub(crate) mod instances;
 mod material;
 pub(crate) mod raster;
+pub(crate) mod scene;
 mod unshadowed;
 mod vertex;
 mod view;
@@ -20,18 +21,18 @@ pub use draw::{Draw, IndexedDraw, Material};
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
-pub use material::{MaterialUniform, ResidentMaterial};
+pub use material::{AlphaMode, MaterialFactors, MaterialUniform, ResidentMaterial};
 pub use unshadowed::{Unshadowed, UnshadowedView};
 pub use vertex::PbrVertex;
-pub use view::{AlphaMode, Bounds, MaterialFactors, Projection, ShadowSettings, Sun, ViewInput};
+pub use view::{Bounds, Projection, ShadowSettings, Sun, ViewInput};
 
 pub(crate) use instances::PreparedInstances;
 
 use std::num::NonZeroUsize;
 
-use renderer::graph::{BufferHandle, GraphError, ImageHandle, ImageView};
+use renderer::graph::{BufferHandle, GraphError, ImageHandle, ImageView, SampleCount};
 
-use crate::passes::pbr::CAMERA_BYTES;
+use crate::passes::{output::SdrOutput, pbr::CAMERA_BYTES};
 
 pub const CASCADE_COUNT: usize = 4;
 
@@ -49,6 +50,19 @@ pub enum CameraStorage {
     /// Consume the view from a caller-supplied buffer populated earlier in
     /// this Graph. Upload the same view before any visibility dispatch.
     PreUploaded,
+}
+
+/// Render targets, view storage and optional outputs for a standard PBR recipe.
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    pub extent: [u32; 2],
+    pub clear_color: [f32; 4],
+    /// Directional cascade settings. `None` selects unshadowed shading.
+    pub shadows: Option<ShadowSettings>,
+    /// Standard SDR output. Omit it for HDR-only or application-defined output.
+    pub output: Option<SdrOutput>,
+    pub samples: SampleCount,
+    pub camera_storage: CameraStorage,
 }
 
 /// Upper bounds for frame construction. The scene draw count combines opaque
