@@ -599,7 +599,7 @@ PDBが存在しても行情報を得られるとは限らない。両構成を�
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
 manifestにはCargoパッケージとexample、source/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
 `--package renderer-pipeline`を選ぶと両crateのソースを記録する。
-Bistroが共用する`crates/renderer-pipeline/shaders/`は両パッケージの記録に含まれる。
+Bistroが共用する`crates/renderer-pipeline/shaders/`とBloomの実装ソースは両パッケージの記録に含まれる。
 BistroのRustレシピと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 

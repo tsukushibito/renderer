@@ -130,8 +130,9 @@ def source_snapshot(package="renderer"):
     if package == "renderer-pipeline":
         sources.append("crates/renderer-pipeline")
     else:
-        # The standalone renderer Bistro embeds the shared shader assets.
-        sources.append("crates/renderer-pipeline/shaders")
+        # The standalone renderer Bistro shares the Bloom implementation and shader assets.
+        sources.extend(["crates/renderer-pipeline/src/passes/bloom",
+                        "crates/renderer-pipeline/shaders"])
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
                 "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", *sources,
                 "tools/cpu_profile", "tools/tracy", "tools/bistro/conditions.json",

@@ -17,7 +17,9 @@ class BuildTests(unittest.TestCase):
         self.assertIn("tools/bistro/ibl.py", snapshot)
         for name in ("tools/bistro/conditions.json",
                      "crates/renderer-pipeline/shaders/pbr.frag.spv",
-                     "crates/renderer-pipeline/shaders/pbr_programs.rs"):
+                     "crates/renderer-pipeline/shaders/pbr_programs.rs",
+                     "crates/renderer-pipeline/src/passes/bloom/effect.rs",
+                     "crates/renderer-pipeline/src/passes/bloom/programs.rs"):
             with self.subTest(name=name):
                 self.assertEqual(snapshot[name]["raw_sha256"],
                                  hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
