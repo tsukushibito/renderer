@@ -8,8 +8,9 @@
 //!
 //! # Choosing a PBR recipe
 //!
-//! Indexed draws are supported by each recipe. The table shows the additional
-//! draw forms, MSAA and Program options available at preparation time.
+//! Select the standard technique through [`pbr::Prepared::new`] and reuse
+//! the same frame API. Indexed draws are supported by each recipe. The table
+//! shows the additional draw forms, MSAA and Program options.
 //!
 //! | Recipe | Samples | Opaque and masked | Shadow casters | Transparent | Programs |
 //! | --- | --- | --- | --- | --- | --- |

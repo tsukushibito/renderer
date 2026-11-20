@@ -6,7 +6,7 @@ use renderer::{
 };
 use renderer_pipeline::{
     passes::bloom::Bloom,
-    pbr::{CASCADE_COUNT, DefaultResources, ShadowHistory},
+    pbr::{CASCADE_COUNT, ShadowHistory},
 };
 
 #[cfg(test)]
@@ -92,7 +92,7 @@ pub fn render(
         return Err("the Vulkan example requires a hardware adapter".into());
     }
     // Upload the shared 1×1 images at startup and import them each frame.
-    let (mut defaults, initialize) = DefaultResources::initialize(&mut runtime)?;
+    let (mut defaults, initialize) = post.defaults.initialize(&mut runtime)?;
     drop(
         runtime
             .wait_for_frame(initialize, Duration::from_secs(10))?

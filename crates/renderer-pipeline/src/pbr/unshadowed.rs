@@ -1,25 +1,16 @@
 //! Initialized placeholder for recipes prepared without shadow cascades.
 
 use renderer::{
-    capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
+    capacity::GraphRequirements,
     graph::{
-        Attachment, Graph, GraphError, ImageDesc, ImageView, ImportImage, LoadOp,
-        RasterAttachments, StoreOp,
+        Attachment, Graph, GraphError, ImageDesc, ImageView, LoadOp, RasterAttachments, StoreOp,
     },
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
-    graph::{GraphCapacity, GraphPool},
-    runtime::{ExecutionError, FrameId, Runtime},
-};
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use super::DefaultResourceError;
-
-const NAME: &str = "pbr disabled shadows";
+pub(super) const NAME: &str = "pbr disabled shadows";
 const CLEAR: &str = "initialize disabled shadows";
 
-fn desc() -> ImageDesc {
+pub(super) fn desc() -> ImageDesc {
     ImageDesc::depth32(1, 1)
 }
 
@@ -61,81 +52,11 @@ impl UnshadowedView {
         Ok(Self(view))
     }
 
+    pub(super) fn from_view(view: ImageView) -> Self {
+        Self(view)
+    }
+
     pub(crate) fn view(self) -> ImageView {
         self.0
-    }
-}
-
-/// One prepared shadow placeholder that can be imported by multiple views.
-pub struct Unshadowed {
-    image: Option<ImportImage>,
-}
-
-impl Unshadowed {
-    /// Register one physical image and room for its import in a frame Graph.
-    /// The Runtime must also have room for the startup clear Graph.
-    pub fn reserve(preparation: &mut Preparation) -> Result<(), GraphError> {
-        preparation.add_requirements(
-            GraphRequirements {
-                resources: 1,
-                name_bytes: NAME.len(),
-                ..GraphRequirements::default()
-            },
-            WorkingSet {
-                resources: &[ResourceClass::Image {
-                    desc: desc(),
-                    count: 1,
-                }],
-                ..WorkingSet::default()
-            },
-        )
-    }
-
-    /// Submit the clear once. The same Runtime can accept a Graph importing
-    /// the scheduled contents while the clear is pending, subject to capacity.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn initialize(runtime: &mut Runtime) -> Result<(Self, FrameId), DefaultResourceError> {
-        let requirements = UnshadowedView::requirements();
-        let mut pool = GraphPool::new(
-            GraphCapacity {
-                resources: requirements.resources,
-                passes: requirements.passes,
-                accesses: requirements.accesses,
-                attachments: requirements.attachments,
-                name_bytes: requirements.name_bytes,
-                ..GraphCapacity::default()
-            },
-            1,
-        )?;
-        let mut graph = pool.begin()?;
-        let target = UnshadowedView::append(&mut graph)?.view().image();
-        graph.export_image(target)?;
-        let submitted = runtime.submit(&graph.compile()?)?;
-        Ok((
-            Self {
-                image: Some(submitted.export_image(target)?),
-            },
-            submitted.id(),
-        ))
-    }
-
-    /// Import the immutable clear into the current Graph.
-    pub fn import(&self, graph: &mut Graph) -> Result<UnshadowedView, GraphError> {
-        let snapshot = self
-            .image
-            .as_ref()
-            .ok_or_else(|| GraphError::invalid_input("the shadow placeholder has been released"))?;
-        let image = graph.import_image(NAME, snapshot)?;
-        Ok(UnshadowedView(graph.image_view(image, 0, 0)?))
-    }
-
-    /// Release the registration. Accepted work retains its leases.
-    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn clear(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
-        if let Some(image) = &self.image {
-            runtime.delete(image.key())?;
-            self.image = None;
-        }
-        Ok(())
     }
 }

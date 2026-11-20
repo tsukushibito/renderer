@@ -10,7 +10,9 @@ use super::{
     select_draws, shadow_casters,
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::pbr::{self, Frame, FrameShadows, IndexedDraw, ShadowSource};
+use renderer_pipeline::pbr::{
+    self, Frame, FrameShadows, IndexedDraw, MaterialTextures, ShadowSource,
+};
 
 pub(super) struct Inputs {
     materials: Vec<Material>,
@@ -134,12 +136,12 @@ pub(super) fn build(
         };
         inputs.materials.push(Material::new(
             factors,
-            [
-                texture(base)?,
-                texture(normal)?,
-                texture(orm)?,
-                texture(emissive)?,
-            ],
+            MaterialTextures {
+                base_color: texture(base)?,
+                normal: texture(normal)?,
+                orm: texture(orm)?,
+                emissive: texture(emissive)?,
+            },
         ));
     }
     let geometry = |index: usize| IndexedDraw {
@@ -224,10 +226,11 @@ pub(super) fn build(
     } else {
         FrameShadows::Disabled(
             resident
-                .unshadowed
+                .defaults
                 .as_ref()
-                .ok_or("unshadowed Bistro needs its prepared placeholder")?
-                .import(&mut graph)?,
+                .ok_or("unshadowed Bistro needs its prepared defaults")?
+                .import(&mut graph)?
+                .unshadowed()?,
         )
     };
     let frame = Frame {

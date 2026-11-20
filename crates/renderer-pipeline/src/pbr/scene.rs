@@ -340,6 +340,7 @@ impl PreparedScene {
             depth,
             shadows: shadow_images,
             camera,
+            gbuffer: None,
         })
     }
 
