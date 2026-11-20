@@ -40,19 +40,42 @@ where
     I: IntoIterator<Item = D>,
     D: Borrow<RasterDraw>,
 {
-    let program = match (graph.image_desc(color.view.image())?.format, depth_mode) {
+    let format = graph.image_desc(color.view.image())?.format;
+    let program = opaque_program(format, depth_mode).ok_or_else(|| {
+        GraphError::custom(format!(
+            "standard opaque '{name}': color target must use RGBA8 or RGBA16F"
+        ))
+    })?;
+    draw_opaque(graph, name, draws, color, depth, &program)
+}
+
+pub(super) fn opaque_program(
+    format: ImageFormat,
+    depth_mode: OpaqueDepth,
+) -> Option<ManagedRasterProgram> {
+    Some(match (format, depth_mode) {
         (ImageFormat::Rgba8Unorm, OpaqueDepth::Write) => ManagedRasterProgram::mesh(),
         (ImageFormat::Rgba16Float, OpaqueDepth::Write) => ManagedRasterProgram::mesh_hdr(),
         (ImageFormat::Rgba8Unorm, OpaqueDepth::Prepassed) => ManagedRasterProgram::mesh_prepassed(),
         (ImageFormat::Rgba16Float, OpaqueDepth::Prepassed) => {
             ManagedRasterProgram::mesh_hdr_prepassed()
         }
-        (ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb, _) => {
-            return Err(GraphError::custom(format!(
-                "standard opaque '{name}': color target must use RGBA8 or RGBA16F"
-            )));
-        }
-    };
+        (ImageFormat::Depth32Float | ImageFormat::Rgba8Srgb, _) => return None,
+    })
+}
+
+pub(super) fn draw_opaque<I, D>(
+    graph: &mut Graph,
+    name: &str,
+    draws: I,
+    color: Attachment<[f32; 4]>,
+    depth: Option<Attachment<f32>>,
+    program: &ManagedRasterProgram,
+) -> Result<PassHandle, GraphError>
+where
+    I: IntoIterator<Item = D>,
+    D: Borrow<RasterDraw>,
+{
     graph.raster(
         name,
         RasterAttachments {
@@ -60,7 +83,7 @@ where
             colors: &[color],
             depth,
         },
-        |raster| raster.draw(&program, draws),
+        |raster| raster.draw(program, draws),
     )
 }
 
