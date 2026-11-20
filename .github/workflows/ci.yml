@@ -240,7 +240,10 @@ jobs:
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
-        run: cargo test --locked -p renderer-pipeline --example pbr_forward --no-default-features --features $env:BACKEND
+        run: |
+          cargo check --locked -p renderer-pipeline --example pbr_forward --no-default-features --features $env:BACKEND
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p renderer-pipeline --test pbr_gpu --no-default-features --features $env:BACKEND
       - name: Test Bistro sample contracts once without GPU access
         if: matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
