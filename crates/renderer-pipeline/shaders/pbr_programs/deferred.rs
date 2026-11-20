@@ -4,7 +4,7 @@ use super::{
     ManagedRasterProgram, NO_PARAMETERS, OPAQUE, RasterProgramDescriptor, ShaderStages, image,
     pair, sampler,
 };
-use renderer::program::BindingType;
+use renderer::program::{BindingType, fullscreen_triangle_shaders};
 
 pub const DEFERRED_RECONSTRUCTION_BYTES: usize = 64;
 
@@ -98,16 +98,12 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
         pair(3, 2, 4),
         pair(3, 3, 4),
     ],
-    shaders: packaged_shaders!(
-        vulkan: (
-            include_bytes!("../../../renderer/shaders/composite.vert.spv"),
-            Some(include_bytes!("../deferred_lighting.frag.spv")),
+    shaders: fullscreen_triangle_shaders(
+        packaged_shaders!(
+            include_bytes!("../deferred_lighting.frag.spv"),
+            include_bytes!("../dxil/deferred_lighting.frag.dxil"),
         ),
-        d3d12: (
-            include_bytes!("../../../renderer/shaders/dxil/composite.vert.dxil"),
-            Some(include_bytes!("../dxil/deferred_lighting.frag.dxil")),
-        ),
-        inline_constants: None,
+        None,
     ),
     entry: "main",
     vertex_stride: 0,

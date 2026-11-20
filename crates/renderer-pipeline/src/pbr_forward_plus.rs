@@ -9,7 +9,10 @@ use renderer::{
 use crate::{
     passes::{
         output::OutputImages,
-        pbr::{forward_plus::tiled_raster_bindings, shadow_program},
+        pbr::{
+            forward_plus::{CULL_PASS, tiled_raster_bindings},
+            shadow_program,
+        },
     },
     pbr::{
         Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
@@ -28,6 +31,9 @@ pub use crate::pbr::Config;
 const LIGHTS: BufferDesc = BufferDesc {
     size: LIGHT_BUFFER_BYTES,
 };
+const LIGHTS_BUFFER: &str = "local point lights";
+const LIGHTS_UPLOAD: &str = "local point light update";
+const TILE_MASKS: &str = "tile light masks";
 
 /// Prepared Forward+ programs, frame capacities and PBR scratch.
 pub struct Prepared {
@@ -56,17 +62,19 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
             sample_count: config.samples,
         }
     });
+    let culling = compute_program();
+    let cull_bindings = culling.bindings().len();
     preparation.add_requirements(
         GraphRequirements {
             resources: 2,
             passes: 2,
             compute_dispatches: 1,
-            accesses: 4,
-            bindings: 3,
-            name_bytes: "local point lights".len()
-                + "local point light update".len()
-                + "tile light masks".len()
-                + "Forward+ tile light masks".len(),
+            accesses: cull_bindings + 1,
+            bindings: cull_bindings,
+            name_bytes: LIGHTS_BUFFER.len()
+                + LIGHTS_UPLOAD.len()
+                + TILE_MASKS.len()
+                + CULL_PASS.len(),
             upload_bytes: LIGHT_BUFFER_BYTES as usize,
             ..GraphRequirements::default()
         },
@@ -82,7 +90,7 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
                 },
             ],
             raster: &fallback,
-            compute: &[compute_program()],
+            compute: &[culling],
         },
     )?;
     Ok(Prepared {
@@ -144,7 +152,7 @@ impl Prepared {
             frame,
             |graph, camera| {
                 let lights = upload_lights(graph, &bytes)?;
-                let mask = graph.image("tile light masks", mask_desc)?;
+                let mask = graph.image(TILE_MASKS, mask_desc)?;
                 let mask = graph.image_view(mask, 0, 0)?;
                 append_culling(graph, camera, lights, mask)?;
                 Ok(tiled_raster_bindings(lights, mask))
@@ -188,7 +196,7 @@ fn upload_lights(
     graph: &mut Graph,
     bytes: &[u8; LIGHT_BUFFER_BYTES as usize],
 ) -> Result<BufferHandle, GraphError> {
-    let lights = graph.buffer("local point lights", LIGHTS)?;
-    graph.upload_buffer("local point light update", lights, 0, bytes)?;
+    let lights = graph.buffer(LIGHTS_BUFFER, LIGHTS)?;
+    graph.upload_buffer(LIGHTS_UPLOAD, lights, 0, bytes)?;
     Ok(lights)
 }

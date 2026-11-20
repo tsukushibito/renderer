@@ -4,11 +4,13 @@ use super::{
     CAMERA_BYTES, DEFERRED_RECONSTRUCTION_BYTES, deferred_lighting_program, gbuffer_program,
 };
 use renderer::{
+    capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{
         Attachment, Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError,
-        ImageHandle, ImageView, LoadOp, RasterAttachments, RasterConstants, RasterPass, StoreOp,
+        ImageDesc, ImageHandle, ImageView, LoadOp, RasterAttachments, RasterConstants, RasterPass,
+        StoreOp,
     },
-    program::{ManagedRasterProgram, SamplerDescriptor},
+    program::{BindingType, ManagedRasterProgram, SamplerDescriptor},
 };
 
 /// Names of the transient G-buffer material planes.
@@ -18,9 +20,19 @@ pub const PLANES: [&str; 3] = [
     "G-buffer emissive and AO",
 ];
 
+const GEOMETRY_PASS: &str = "G-buffer opaque and mask";
+const INVERSE_VIEW_PROJECTION: &str = "deferred inverse view projection";
+const UPDATE_PASS: &str = "deferred reconstruction update";
+const LIGHTING_PASS: &str = "deferred PBR lighting";
+const RECONSTRUCTION: BufferDesc = BufferDesc {
+    size: DEFERRED_RECONSTRUCTION_BYTES as u64,
+};
+
 /// Targets and shader inputs for G-buffer raster and full-screen lighting.
 pub struct Inputs {
+    /// A 1×, single-mip, single-layer RGBA16F image.
     pub hdr: ImageView,
+    /// A 1×, single-mip, single-layer D32 image matching the HDR extent.
     pub depth: ImageView,
     pub clear: [f32; 4],
     pub camera: BufferHandle,
@@ -40,17 +52,90 @@ pub struct GBuffer {
     pub depth: ImageHandle,
 }
 
+/// Reserve the built-in Programs, transient resources and fixed declarations
+/// for one invocation per frame. Reserve the targets, camera and lighting
+/// inputs, and any geometry draw and binding declarations separately.
+pub fn reserve(preparation: &mut Preparation, extent: [u32; 2]) -> Result<(), GraphError> {
+    reserve_passes(preparation, extent, false)
+}
+
+pub(super) fn reserve_passes(
+    preparation: &mut Preparation,
+    [width, height]: [u32; 2],
+    opaque_pass_reserved: bool,
+) -> Result<(), GraphError> {
+    let frames = preparation.frames_in_flight().get();
+    let planes = PLANES.len();
+    let plane_count = frames
+        .checked_mul(planes)
+        .ok_or_else(|| GraphError::invalid_input("Deferred G-buffer reservation overflow"))?;
+    let lighting = deferred_lighting_program();
+    let lighting_accesses = lighting
+        .bindings()
+        .iter()
+        .filter(|binding| binding.kind != BindingType::Sampler)
+        .count();
+    let attachments = planes + 2;
+    let passes = [GEOMETRY_PASS, UPDATE_PASS, LIGHTING_PASS];
+    preparation.add_requirements(
+        GraphRequirements {
+            resources: planes + 1,
+            passes: passes.len() - usize::from(opaque_pass_reserved),
+            // Count all deferred attachment accesses and the uniform upload.
+            accesses: attachments + lighting_accesses + 1,
+            draws: 1,
+            bindings: lighting.bindings().len(),
+            // The standard scene budget includes color and depth for opaque.
+            attachments: attachments - 2 * usize::from(opaque_pass_reserved),
+            name_bytes: PLANES
+                .into_iter()
+                .chain(passes)
+                .chain([INVERSE_VIEW_PROJECTION])
+                .map(str::len)
+                .sum(),
+            upload_bytes: DEFERRED_RECONSTRUCTION_BYTES,
+            ..GraphRequirements::default()
+        },
+        WorkingSet {
+            resources: &[
+                ResourceClass::Image {
+                    desc: ImageDesc::rgba16_float(width, height),
+                    count: plane_count,
+                },
+                ResourceClass::Buffer {
+                    desc: RECONSTRUCTION,
+                    count: frames,
+                },
+            ],
+            raster: &[gbuffer_program().into(), lighting.into()],
+            ..WorkingSet::default()
+        },
+    )
+}
+
 /// Declare G-buffer raster and deferred lighting for an application-built Graph.
 ///
-/// Reserve the two audited Deferred Programs and matching G-buffer image classes
-/// at preparation time. If a declaration fails, discard this frame's Graph.
+/// Use [`reserve`] at preparation time. Both targets must belong to the current
+/// Graph. Their formats, dimensions and single-subresource layout are checked
+/// before declaring work. If a later declaration fails, discard this frame's Graph.
 pub fn append(
     graph: &mut Graph,
     scene: Inputs,
     draws: impl FnOnce(&mut RasterPass<'_, '_>, &ManagedRasterProgram) -> Result<(), GraphError>,
 ) -> Result<GBuffer, GraphError> {
+    let hdr = graph.image_desc(scene.hdr.image())?;
+    let desc = ImageDesc::rgba16_float(hdr.width, hdr.height);
+    if hdr != desc {
+        return Err(GraphError::invalid_input(
+            "Deferred HDR target requires a 1× single-mip, single-layer RGBA16F image",
+        ));
+    }
+    if graph.image_desc(scene.depth.image())? != ImageDesc::depth32(desc.width, desc.height) {
+        return Err(GraphError::invalid_input(
+            "Deferred depth requires a 1× single-mip, single-layer D32 image matching the HDR extent",
+        ));
+    }
     let reconstruction_bytes = inverse_bytes(scene.view_projection)?;
-    let desc = graph.image_desc(scene.hdr.image())?;
     let base = graph.image(PLANES[0], desc)?;
     let normals = graph.image(PLANES[1], desc)?;
     let emissive = graph.image(PLANES[2], desc)?;
@@ -65,7 +150,7 @@ pub fn append(
         store: StoreOp::Store,
     });
     graph.raster(
-        "G-buffer opaque and mask",
+        GEOMETRY_PASS,
         RasterAttachments {
             color_resolves: &[],
             colors: &colors,
@@ -78,18 +163,8 @@ pub fn append(
         |raster| draws(raster, &gbuffer_program()),
     )?;
 
-    let reconstruction = graph.buffer(
-        "deferred inverse view projection",
-        BufferDesc {
-            size: DEFERRED_RECONSTRUCTION_BYTES as u64,
-        },
-    )?;
-    graph.upload_buffer(
-        "deferred reconstruction update",
-        reconstruction,
-        0,
-        &reconstruction_bytes,
-    )?;
+    let reconstruction = graph.buffer(INVERSE_VIEW_PROJECTION, RECONSTRUCTION)?;
+    graph.upload_buffer(UPDATE_PASS, reconstruction, 0, &reconstruction_bytes)?;
     let inverse = uniform(1, reconstruction, DEFERRED_RECONSTRUCTION_BYTES);
     let gbuffer = [
         uniform(0, scene.camera, CAMERA_BYTES),
@@ -109,7 +184,7 @@ pub fn append(
     bindings[gbuffer.len()..].copy_from_slice(&scene.lighting);
     let program = deferred_lighting_program();
     graph.raster(
-        "deferred PBR lighting",
+        LIGHTING_PASS,
         RasterAttachments {
             color_resolves: &[],
             colors: &[Attachment {

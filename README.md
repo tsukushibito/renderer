@@ -9,12 +9,12 @@ WindowsのD3D12による実行を提供します。両バックエンドでbuffe
 indexed meshと深度、利用側shaderによるRaster/Compute、import/export・履歴、readback、
 上限付きの資源再利用とWindows表示を扱います。各バックエンドは単一キューで実行します。
 
-`renderer-pipeline`は`pbr_forward`と`unlit_forward`の描画レシピ、再利用できる`passes`を提供します。
+`renderer-pipeline`はUnlit Forward、PBR Forward、Forward+、Deferredの描画レシピと、再利用できる`passes`を提供します。
 `renderer::capacity`でレシピと独自パスの要求を集約し、同じ`renderer::graph`に[Rustで合成](docs/guides/tooling.md#rust-pipeline)できます。
 同期、資源の寿命、不要パスの除去はGraphが扱います。
-PBR ForwardはIBL、4カスケードの影、HDRとSDR出力を構築します。
-`renderer-bistro`の`bistro`はこのレシピを使う描画に加え、
-Forward+、Deferred、MSAA、Bloomなどの比較構成をVulkanとD3D12で実行します。
+PBRレシピはIBL、任意の4カスケードの影、HDRと任意のSDR出力を構築します。
+PBR Forward／Forward+は1×と4×、Deferredは1×に対応します。
+`renderer-bistro`の`bistro`は標準レシピを使い、MSAAやBloomなどの構成をVulkanとD3D12で実行します。
 同じパッケージの`bistro-graph`は公開Graph APIでパスを組み立てます。
 native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md#対応範囲と処理の境界)、
 実行済みの確認と未確認範囲は[検証状況](docs/verification/current.md)を参照してください。

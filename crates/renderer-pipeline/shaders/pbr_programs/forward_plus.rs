@@ -12,6 +12,7 @@ use renderer::program::{
 use super::{BLEND, OPAQUE};
 use culling::{LIGHTS, TILES, buffer_binding, buffer_slot, tile_binding};
 
+pub(crate) use culling::CULL_PASS;
 #[allow(
     unused_imports,
     reason = "the raw Bistro tests assert the public tile limit"

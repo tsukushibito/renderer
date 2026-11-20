@@ -1,11 +1,13 @@
 //! Trusted fullscreen output programs shared by the public Graph builders.
 
 use super::{
-    BlendState, DepthState, ManagedRasterProgram, RasterParameterLayout, RasterProgramDescriptor,
-    SampledImageSamplerPair,
+    BlendState, D3D12InlineConstantBinding, D3D12RasterShaders, DepthState, ManagedRasterProgram,
+    RasterParameterLayout, RasterProgramDescriptor, RasterShaderStages, SampledImageSamplerPair,
 };
 use crate::ImageFormat;
-use crate::program::{BindingLayout, BindingType, ShaderStages, embedded_raster_shaders};
+use crate::program::{
+    BindingLayout, BindingType, ShaderBinaries, ShaderStages, embedded_shader_binaries,
+};
 
 impl ManagedRasterProgram {
     /// Fullscreen program applying exposure and Khronos PBR Neutral tone mapping.
@@ -36,13 +38,43 @@ impl ManagedRasterProgram {
     }
 }
 
+/// Pair Renderer's built-in fullscreen triangle vertex shader with fragment
+/// binaries. The vertex shader uses vertex IDs 0–2, no inputs or bindings, and
+/// entry point `main`. Only enabled backends with supplied fragments are kept.
+///
+/// The returned binaries still need a descriptor that matches their actual
+/// behavior before they can be [imported as a Program](ManagedRasterProgram::from_trusted_descriptor).
+pub const fn fullscreen_triangle_shaders(
+    fragments: ShaderBinaries<&'static [u8]>,
+    d3d12_inline_constants: Option<D3D12InlineConstantBinding>,
+) -> ShaderBinaries<RasterShaderStages, D3D12RasterShaders> {
+    ShaderBinaries {
+        vulkan: match fragments.vulkan {
+            #[cfg(feature = "vulkan")]
+            Some(fragment) => Some(RasterShaderStages {
+                vertex: include_bytes!("../../../shaders/composite.vert.spv"),
+                fragment: Some(fragment),
+            }),
+            _ => None,
+        },
+        d3d12: match (fragments.d3d12, d3d12_inline_constants) {
+            #[cfg(all(feature = "d3d12", windows))]
+            (Some(fragment), inline_constants) => Some(D3D12RasterShaders {
+                stages: RasterShaderStages {
+                    vertex: include_bytes!("../../../shaders/dxil/composite.vert.dxil"),
+                    fragment: Some(fragment),
+                },
+                inline_constants,
+            }),
+            _ => None,
+        },
+    }
+}
+
 macro_rules! output_shaders {
     ($spirv:literal, $dxil:literal, $inline_constants:expr) => {
-        embedded_raster_shaders!(
-            "../../../shaders/composite.vert.spv",
-            Some(include_bytes!($spirv)),
-            "../../../shaders/dxil/composite.vert.dxil",
-            Some(include_bytes!($dxil)),
+        fullscreen_triangle_shaders(
+            embedded_shader_binaries!(include_bytes!($spirv), include_bytes!($dxil)),
             $inline_constants,
         )
     };

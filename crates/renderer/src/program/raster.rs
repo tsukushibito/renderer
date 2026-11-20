@@ -7,6 +7,7 @@ use super::{
 use crate::ImageFormat;
 
 mod output;
+pub use output::fullscreen_triangle_shaders;
 
 /// Maximum distinct assets in one prepared Raster working set.
 pub const MAX_RASTER_PROGRAMS: usize = 64;
