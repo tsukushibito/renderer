@@ -23,6 +23,17 @@ def manifest():
 
 
 class ProfileTests(unittest.TestCase):
+    def test_archive_accepts_both_bistro_binaries(self):
+        for name in ("bistro", "bistro-graph"):
+            value = manifest()
+            value["build"].pop("example")
+            value["build"].update(package="renderer-bistro", bin=name)
+            with self.subTest(name=name):
+                profile.check_instrumented(value)
+                value["build"]["bin"] = "other"
+                with self.assertRaisesRegex(ValueError, "explicitly archived"):
+                    profile.check_instrumented(value)
+
     def test_normal_artifacts_cannot_be_relabelled_and_forbidden_client_features_fail(self):
         value = manifest()
         profile.check_instrumented(value)
