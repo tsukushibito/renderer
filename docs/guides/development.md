@@ -441,6 +441,7 @@ python -B tools/bistro/compare_runtime.py $tiledReport $allLightReport --profile
 
 `--instances individual` と `--instances instanced` は、Forwardの同じBistro小物を24か所に同じ条件で配置して、
 24回の直接描画と1回のインスタンス描画を比較する。既定値は `off` で、比較時も `--msaa 1|4` を使える。
+`renderer-pipeline`のBistroでは、同じモデル変換をシーンの描画と4カスケードのシャドウに使う。
 `--submission packed` と `--submission indirect` は、同じ共有頂点・インデックスと同じ不透明／MASKの材質グループを使う。
 `packed` ではCPU、`indirect` ではGPUが可視性を判定する。間接経路でも半透明はCPUが奥から手前に並べる。
 オフスクリーンの `prepared.packed_opaque` とWindowの `packed_opaque` は、準備したグループ数とプリミティブ候補数を示す。
