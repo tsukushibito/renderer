@@ -12,15 +12,18 @@ use renderer_pipeline::pbr::Transform;
 use renderer_pipeline::{
     passes::{
         bloom::{Bloom, PreparedBloom},
-        output::{SdrEncoding, SdrOutput},
+        output::{OutputImages, SdrOutput},
         pbr::{MATERIAL_BYTES, VERTEX_BYTES},
     },
     pbr::{
-        Bounds, CASCADE_COUNT, Camera, CameraStorage, DefaultResources, DefaultViews, Draw, Frame,
-        IndexedDraw, Material, MaterialFactors, PbrVertex, SceneLimits, ShadowHistory,
-        ShadowSettings, ShadowUpdates, Sun,
+        Bounds, CASCADE_COUNT, CameraStorage, DefaultResources, DefaultViews, Draw, Environment,
+        Frame, FrameImages, FrameShadows, IndexedDraw, Material, MaterialFactors, MaterialUniform,
+        PbrVertex, PreparedView, Projection, SceneImages, SceneLimits, ShadowHistory,
+        ShadowSettings, ShadowUpdates, Sun, ViewInput,
     },
-    pbr_forward::{self, Config, Prepared},
+    pbr_deferred,
+    pbr_forward::{self, Config},
+    pbr_forward_plus::{self, PointLight},
 };
 
 pub const EXTENT: [u32; 2] = [64, 48];
@@ -29,11 +32,21 @@ pub const COPY_PASS: &str = "application HDR copy";
 
 pub struct Triangle {
     geometry: GeometryData,
-    material: [u8; MATERIAL_BYTES],
+    material: MaterialFactors,
+    view: ViewFixture,
 }
 
 impl Triangle {
+    #[cfg(test)]
     pub fn new(glowing: bool, placement: Placement) -> Result<Self, GraphError> {
+        Self::for_view(glowing, placement, ViewFixture::Centered)
+    }
+
+    pub fn for_view(
+        glowing: bool,
+        placement: Placement,
+        view: ViewFixture,
+    ) -> Result<Self, GraphError> {
         let (normal, tangent, object_scale) = match placement {
             #[cfg(test)]
             Placement::Tilted(scale_exponent) => (
@@ -43,6 +56,9 @@ impl Triangle {
             ),
             _ => ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], 1.0),
         };
+        let normal = view.orient(normal);
+        let [tx, ty, tz] = view.orient([tangent[0], tangent[1], tangent[2]]);
+        let tangent = [tx, ty, tz, tangent[3]];
         let positions = [
             ([-0.8_f32, -0.7, 0.0], [0.0, 1.0]),
             ([0.8, -0.7, 0.0], [1.0, 1.0]),
@@ -51,7 +67,7 @@ impl Triangle {
         let mut vertices = [0; 3 * VERTEX_BYTES];
         for ((position, uv), bytes) in positions.into_iter().zip(vertices.as_chunks_mut().0) {
             let position = position.map(|value| value * object_scale);
-            *bytes = PbrVertex::new(position, normal, tangent, uv)?.encode();
+            *bytes = PbrVertex::new(view.orient(position), normal, tangent, uv)?.encode();
         }
         Ok(Self {
             geometry: GeometryData::new(VERTEX_BYTES as u32, &vertices, &[0, 1, 2])?,
@@ -59,8 +75,8 @@ impl Triangle {
                 base_color: [0.75, 0.015, 0.009, 1.0],
                 emissive: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
                 ..MaterialFactors::default()
-            }
-            .encode()?,
+            },
+            view,
         })
     }
 
@@ -68,7 +84,7 @@ impl Triangle {
         [
             self.geometry.vertex_byte_len(),
             self.geometry.index_byte_len(),
-            self.material.len() as u64,
+            MATERIAL_BYTES as u64,
         ]
         .map(|size| BufferDesc { size })
     }
@@ -88,15 +104,14 @@ impl Triangle {
         graph: &mut Graph,
         defaults: &DefaultViews,
     ) -> Result<(IndexedDraw, [Material; 1]), GraphError> {
-        let [vertex_desc, index_desc, material_desc] = self.buffer_descs();
+        let [vertex_desc, index_desc, _] = self.buffer_descs();
         let vertices = graph.buffer("triangle vertices", vertex_desc)?;
         let indices = graph.buffer("triangle indices", index_desc)?;
-        let factors = graph.buffer("triangle material factors", material_desc)?;
         self.geometry
             .upload_vertices(graph, "upload vertices", vertices)?;
         self.geometry
             .upload_indices(graph, "upload indices", indices)?;
-        graph.upload_buffer("upload material factors", factors, 0, &self.material)?;
+        let factors = MaterialUniform::upload(graph, "triangle material factors", self.material)?;
 
         Ok((
             IndexedDraw {
@@ -106,11 +121,10 @@ impl Triangle {
                 index_count: self.geometry.index_count(),
                 material: 0,
             },
-            [Material {
+            [Material::new(
                 factors,
-                factor_offset: 0,
-                textures: defaults.material_textures([None; 4]),
-            }],
+                defaults.material_textures([None; 4]),
+            )],
         ))
     }
 }
@@ -142,18 +156,174 @@ impl Placement {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum Technique {
+    Forward,
+    ForwardPlus,
+    Deferred,
+}
+
 #[derive(Clone, Copy)]
 pub struct Settings {
+    pub technique: Technique,
     pub samples: SampleCount,
     pub placement: Placement,
+    pub view: ViewFixture,
 }
 
 impl Settings {
     pub fn new(samples: SampleCount) -> Self {
         Self {
+            technique: Technique::Forward,
             samples,
             placement: Placement::Single,
+            view: ViewFixture::Centered,
         }
+    }
+}
+
+pub enum Prepared {
+    Forward(pbr_forward::Prepared),
+    ForwardPlus(pbr_forward_plus::Prepared),
+    Deferred(pbr_deferred::Prepared),
+}
+
+const POINT_LIGHTS: [PointLight; 1] = [PointLight {
+    position: [0.1, 0.3, 1.5],
+    radius: 3.0,
+    color: [0.9, 0.6, 0.2],
+    intensity: 2.0,
+}];
+
+impl Prepared {
+    fn preparation(&self) -> &Preparation {
+        match self {
+            Self::Forward(recipe) => recipe.preparation(),
+            Self::ForwardPlus(recipe) => recipe.preparation(),
+            Self::Deferred(recipe) => recipe.preparation(),
+        }
+    }
+
+    fn prepare_view(
+        &self,
+        fixture: ViewFixture,
+        environment: Environment,
+    ) -> Result<PreparedView, GraphError> {
+        let view = fixture.input()?;
+        let sun = Sun::new(fixture.orient([0.0, 0.0, 1.0]), [1.5; 3])?;
+        let half_extents = fixture.orient([1.0, 0.7, 0.01]).map(f32::abs);
+        let bounds = Bounds::new(half_extents.map(|value| -value), half_extents)?;
+        match self {
+            Self::Forward(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+            Self::ForwardPlus(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+            Self::Deferred(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+        }
+    }
+
+    fn add_scene(
+        &mut self,
+        graph: &mut Graph,
+        frame: Frame<'_>,
+    ) -> Result<SceneImages, GraphError> {
+        match self {
+            Self::Forward(recipe) => recipe.add_scene(graph, frame),
+            Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame, &POINT_LIGHTS),
+            Self::Deferred(recipe) => Ok(recipe.add_scene(graph, frame)?.scene),
+        }
+    }
+
+    fn add_passes(
+        &mut self,
+        graph: &mut Graph,
+        frame: Frame<'_>,
+    ) -> Result<FrameImages, GraphError> {
+        match self {
+            Self::Forward(recipe) => recipe.add_passes(graph, frame),
+            Self::ForwardPlus(recipe) => recipe.add_passes(graph, frame, &POINT_LIGHTS),
+            Self::Deferred(recipe) => Ok(recipe.add_passes(graph, frame)?.scene),
+        }
+    }
+
+    fn add_output(
+        &self,
+        graph: &mut Graph,
+        hdr: renderer::graph::ImageHandle,
+    ) -> Result<OutputImages, GraphError> {
+        match self {
+            Self::Forward(recipe) => recipe.add_output(graph, hdr, 1.0),
+            Self::ForwardPlus(recipe) => recipe.add_output(graph, hdr, 1.0),
+            Self::Deferred(recipe) => recipe.add_output(graph, hdr, 1.0),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum ViewFixture {
+    Centered,
+    #[cfg(test)]
+    OverheadOrthographic,
+    #[cfg(test)]
+    OffsetPerspective,
+}
+
+impl ViewFixture {
+    fn orient(self, value: [f32; 3]) -> [f32; 3] {
+        match self {
+            #[cfg(test)]
+            Self::OverheadOrthographic => [value[0], value[2], -value[1]],
+            _ => value,
+        }
+    }
+
+    // The app supplies its projection and camera pose. This fixture is
+    // aligned to the camera axes and only composes a Z translation.
+    fn input(self) -> Result<ViewInput, GraphError> {
+        let near = 0.1_f32;
+        let far = 10.0_f32;
+        let aspect = EXTENT[0] as f32 / EXTENT[1] as f32;
+        #[cfg(test)]
+        if let Self::OverheadOrthographic = self {
+            let depth = (near - far).recip();
+            return ViewInput::new(
+                [
+                    [1.0 / aspect, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, depth, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, (near - 3.0) * depth, 1.0],
+                ],
+                [0.0, 3.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [near, far],
+                Projection::Orthographic,
+            );
+        }
+        let eye = [0.0, 0.0, 3.0];
+        let vertical_fov_degrees = 55.0_f32;
+        let scale = (vertical_fov_degrees.to_radians() * 0.5).tan().recip();
+        let depth = far / (near - far);
+        let (shift, projection) = match self {
+            #[cfg(test)]
+            Self::OffsetPerspective => (0.45, Projection::Perspective),
+            _ => (
+                0.0,
+                Projection::SymmetricPerspective {
+                    vertical_fov_degrees,
+                    aspect,
+                },
+            ),
+        };
+        ViewInput::new(
+            [
+                [scale / aspect, 0.0, 0.0, 0.0],
+                [0.0, -scale, 0.0, 0.0],
+                [-shift, 0.0, depth, -1.0],
+                [shift * eye[2], 0.0, near * depth - depth * eye[2], eye[2]],
+            ],
+            eye,
+            [0.0, 0.0, -1.0],
+            [near, far],
+            projection,
+        )
     }
 }
 
@@ -161,14 +331,11 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
     let config = Config {
         extent: EXTENT,
         clear_color: [0.0, 0.0, 0.0, 1.0],
-        shadows: ShadowSettings {
+        shadows: Some(ShadowSettings {
             resolution: SHADOW_RESOLUTION,
             ..ShadowSettings::default()
-        },
-        output: SdrOutput {
-            encoding: SdrEncoding::Srgb,
-            fxaa: false,
-        },
+        }),
+        output: Some(SdrOutput::capture(false)),
         samples: settings.samples,
         camera_storage: CameraStorage::Transient,
     };
@@ -183,10 +350,15 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         max_materials: 1,
         max_casters_per_cascade: count,
     };
-    if settings.placement.uses_transforms() {
-        pbr_forward::prepare_with_transforms(config, limits)
-    } else {
-        pbr_forward::prepare(config, limits)
+    match settings.technique {
+        Technique::Forward if settings.placement.uses_transforms() => Ok(Prepared::Forward(
+            pbr_forward::prepare_with_transforms(config, limits)?,
+        )),
+        Technique::Forward => Ok(Prepared::Forward(pbr_forward::prepare(config, limits)?)),
+        Technique::ForwardPlus => Ok(Prepared::ForwardPlus(pbr_forward_plus::prepare(
+            config, limits,
+        )?)),
+        Technique::Deferred => Ok(Prepared::Deferred(pbr_deferred::prepare(config, limits)?)),
     }
 }
 
@@ -259,18 +431,7 @@ pub fn build_graph(
         #[cfg(test)]
         Placement::Tilted(None) => &single[..],
     };
-    let view = prepared.prepare_view(
-        Camera {
-            position: [0.0, 0.0, 3.0],
-            target: [0.0; 3],
-            fov_y_degrees: 55.0,
-            near: 0.1,
-            far: 10.0,
-        },
-        Sun::new([0.0, 0.0, 1.0], [1.5; 3])?,
-        Bounds::new([-1.0, -0.7, -0.01], [1.0, 0.7, 0.01])?,
-        defaults.environment(),
-    )?;
+    let view = prepared.prepare_view(triangle.view, defaults.environment())?;
     let shadows = shadow_history
         .map(|(history, revisions)| history.begin_view(&mut graph, &view, revisions))
         .transpose()?;
@@ -280,7 +441,9 @@ pub fn build_graph(
         frame.transforms = &transforms;
     }
     if let Some(shadows) = &shadows {
-        frame.shadows = std::array::from_fn(|cascade| shadows.source(cascade, draws));
+        frame.shadows = FrameShadows::Cascades(std::array::from_fn(|cascade| {
+            shadows.source(cascade, draws)
+        }));
     }
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
         let scene = prepared.add_scene(&mut graph, frame)?;
@@ -294,7 +457,7 @@ pub fn build_graph(
             hdr = bloom.add_passes(&mut graph, hdr)?;
         }
         (
-            prepared.add_output(&mut graph, hdr, 1.0)?.sdr,
+            prepared.add_output(&mut graph, hdr)?.sdr,
             scene.depth,
             scene.shadows,
         )
@@ -306,14 +469,20 @@ pub fn build_graph(
     let mut shadow_maps = [None; CASCADE_COUNT];
     #[cfg(test)]
     if placement != Placement::Single {
-        for (target, image) in shadow_maps.iter_mut().zip(shadow_images) {
+        for (target, image) in shadow_maps
+            .iter_mut()
+            .zip(shadow_images.expect("the fixture renders all cascades"))
+        {
             *target = Some(graph.readback_image("read cascade", image)?);
         }
     }
     #[cfg(not(test))]
     let _ = shadow_images;
     let readbacks = Readbacks {
-        sdr: graph.readback_image("read SDR", sdr)?,
+        sdr: sdr
+            .capture()
+            .expect("the fixture selects capture output")
+            .readback(&mut graph, "read SDR")?,
         depth: scene_depth
             .map(|depth| graph.readback_image("read depth", depth))
             .transpose()?,

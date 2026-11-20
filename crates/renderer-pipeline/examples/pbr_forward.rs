@@ -1,4 +1,6 @@
 //! Draw a small offscreen scene with typed PBR vertices and material defaults.
+//! Select Forward, Forward+, or Deferred with --technique.
+//! The public-recipe setup and Graph construction are in support/pbr_scene.rs.
 //! Use `--copy-hdr` to compose a custom Graph pass before SDR conversion.
 //! Use `--bloom` to add Bloom and `--reuse-shadows` to draw two frames using
 //! the first frame's accepted shadow maps. Use `--msaa 4` to resolve the color
@@ -25,7 +27,7 @@ mod cli {
 
     use super::{
         runtime::{Api, probe, render},
-        scene::{EXTENT, Settings},
+        scene::{EXTENT, Settings, Technique},
     };
 
     fn write_ppm(path: &Path, rgba: &[u8]) -> Result<(), std::io::Error> {
@@ -44,19 +46,32 @@ mod cli {
         let mut output = None;
         let mut copy_hdr = false;
         let mut samples = SampleCount::X1;
+        let mut technique = Technique::Forward;
         let mut bloom = Bloom::Off;
         let mut reuse_shadows = false;
         while let Some(argument) = args.next() {
             match argument.to_str() {
                 Some("--help" | "-h") => {
                     println!(
-                        "pbr_forward [--api vulkan|d3d12] [--msaa 1|4] [--copy-hdr] [--bloom] [--reuse-shadows] [--output FILE.ppm]"
+                        "pbr_forward [--api vulkan|d3d12] [--technique forward|forward-plus|deferred] [--msaa 1|4] [--copy-hdr] [--bloom] [--reuse-shadows] [--output FILE.ppm]"
                     );
                     return Ok(());
                 }
                 Some("--api") => {
                     let name = args.next().ok_or("expected an API name")?;
                     api = Some(Api::parse(name.to_str().ok_or("API name must be UTF-8")?)?);
+                }
+                Some("--technique") => {
+                    technique = match args.next().as_deref().and_then(|value| value.to_str()) {
+                        Some("forward") => Technique::Forward,
+                        Some("forward-plus") => Technique::ForwardPlus,
+                        Some("deferred") => Technique::Deferred,
+                        _ => {
+                            return Err(
+                                "--technique requires forward, forward-plus, or deferred".into()
+                            );
+                        }
+                    };
                 }
                 Some("--copy-hdr") => copy_hdr = true,
                 Some("--msaa") => {
@@ -81,7 +96,14 @@ mod cli {
         let api = api.unwrap_or(default);
         let revisions = [[0; CASCADE_COUNT]; 2];
         let revisions = if reuse_shadows { &revisions[..] } else { &[] };
-        let rendered = render(api, Settings::new(samples), copy_hdr, bloom, revisions)?;
+        if matches!(technique, Technique::Deferred) && samples != SampleCount::X1 {
+            return Err("deferred uses --msaa 1".into());
+        }
+        let settings = Settings {
+            technique,
+            ..Settings::new(samples)
+        };
+        let rendered = render(api, settings, copy_hdr, bloom, revisions)?;
         if reuse_shadows {
             for (index, frame) in rendered.iter().enumerate() {
                 let count = frame.reused.into_iter().filter(|&hit| hit).count();
@@ -97,9 +119,9 @@ mod cli {
             write_ppm(&path, &output_frame.sdr)?;
         }
         if let Some(depth) = depth {
-            println!("{api:?} center SDR {rgba:?} and depth {depth:.6}");
+            println!("{api:?} {technique:?} center SDR {rgba:?} and depth {depth:.6}");
         } else {
-            println!("{api:?} center SDR {rgba:?} after 4× MSAA resolve");
+            println!("{api:?} {technique:?} center SDR {rgba:?} after 4× MSAA resolve");
         }
         Ok(())
     }
