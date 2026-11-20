@@ -1,5 +1,7 @@
 //! Draw a small offscreen scene with the public PBR Forward recipe.
 //! Use `--copy-hdr` to compose a custom Graph pass before SDR conversion.
+//! Use `--bloom` to add Bloom and `--reuse-shadows` to draw two frames using
+//! the first frame's accepted shadow maps.
 
 #[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
 mod scene {
@@ -15,16 +17,19 @@ mod scene {
     };
     use renderer_pipeline::{
         passes::{
+            bloom::{Bloom, PreparedBloom},
             output::{SdrEncoding, SdrOutput},
             pbr::{MATERIAL_BYTES, VERTEX_BYTES},
         },
         pbr_forward::{
-            self, Bounds, Camera, Config, Draw, Environment, Frame, Material, MaterialFactors,
-            Prepared, SceneLimits, ShadowSettings, Sun,
+            self, Bounds, CASCADE_COUNT, Camera, Config, Draw, Environment, Frame, Material,
+            MaterialFactors, Prepared, SceneLimits, ShadowHistory, ShadowSettings, ShadowUpdates,
+            Sun,
         },
     };
 
     pub const EXTENT: [u32; 2] = [64, 48];
+    const SHADOW_RESOLUTION: u32 = 64;
     const COPY_PASS: &str = "application HDR copy";
 
     pub struct Triangle {
@@ -33,7 +38,7 @@ mod scene {
     }
 
     impl Triangle {
-        pub fn new() -> Result<Self, GraphError> {
+        pub fn new(glowing: bool) -> Result<Self, GraphError> {
             let vertices = [
                 ([-0.8_f32, -0.7, 0.0], [0.0, 1.0]),
                 ([0.8, -0.7, 0.0], [1.0, 1.0]),
@@ -51,7 +56,11 @@ mod scene {
             .collect::<Vec<_>>();
             Ok(Self {
                 geometry: GeometryData::new(VERTEX_BYTES as u32, &vertices, &[0, 1, 2])?,
-                material: MaterialFactors::default().encode()?,
+                material: MaterialFactors {
+                    emissive: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
+                    ..MaterialFactors::default()
+                }
+                .encode()?,
             })
         }
 
@@ -106,7 +115,7 @@ mod scene {
                     linear,
                     &[255, 180, 0, 255],
                 )?,
-                upload_pixel(graph, "emissive", srgb, &[0, 0, 0, 255])?,
+                upload_pixel(graph, "emissive", srgb, &[255, 0, 0, 255])?,
             ];
             let ibl = half_pixel([0x3400, 0x3400, 0x3400, 0x3c00]);
             let brdf = half_pixel([0x3800, 0x3000, 0, 0x3c00]);
@@ -164,13 +173,13 @@ mod scene {
         ImageDesc::rgba16_float(EXTENT[0], EXTENT[1])
     }
 
-    pub fn prepare() -> Result<Prepared, GraphError> {
+    pub fn prepare(frames_in_flight: NonZeroUsize) -> Result<Prepared, GraphError> {
         pbr_forward::prepare(
             Config {
                 extent: EXTENT,
                 clear_color: [0.0, 0.0, 0.0, 1.0],
                 shadows: ShadowSettings {
-                    resolution: 64,
+                    resolution: SHADOW_RESOLUTION,
                     ..ShadowSettings::default()
                 },
                 output: SdrOutput {
@@ -179,7 +188,7 @@ mod scene {
                 },
             },
             SceneLimits {
-                frames_in_flight: NonZeroUsize::MIN,
+                frames_in_flight,
                 max_draws: 1,
                 max_materials: 1,
                 max_casters_per_cascade: 1,
@@ -187,16 +196,27 @@ mod scene {
         )
     }
 
+    pub struct PostProcess {
+        copy_hdr: bool,
+        bloom: Option<PreparedBloom>,
+    }
+
     pub fn reserve(
         prepared: &Prepared,
         triangle: &Triangle,
         copy_hdr: bool,
-    ) -> Result<Preparation, GraphError> {
+        bloom: Bloom,
+    ) -> Result<(Preparation, PostProcess), GraphError> {
         let recipe = prepared.preparation();
         let mut preparation = Preparation::new(recipe.frames_in_flight());
         preparation.add_requirements(recipe.graph_requirements(), recipe.working_set())?;
         triangle.reserve(&mut preparation, copy_hdr)?;
-        Ok(preparation)
+        let bloom = if bloom == Bloom::Off {
+            None
+        } else {
+            Some(bloom.prepare(&mut preparation, hdr_desc())?)
+        };
+        Ok((preparation, PostProcess { copy_hdr, bloom }))
     }
 
     pub fn resource_count(preparation: &Preparation) -> usize {
@@ -219,8 +239,9 @@ mod scene {
         pool: &mut GraphPool,
         prepared: &mut Prepared,
         triangle: &Triangle,
-        copy_hdr: bool,
-    ) -> Result<(CompiledGraph, Readbacks), GraphError> {
+        post: &PostProcess,
+        shadow_history: Option<(&ShadowHistory, [u64; CASCADE_COUNT])>,
+    ) -> Result<(CompiledGraph, Readbacks, Option<ShadowUpdates>), GraphError> {
         let mut graph = pool.begin()?;
         let (draws, materials, environment) = triangle.upload(&mut graph)?;
         let view = prepared.prepare_view(
@@ -235,15 +256,25 @@ mod scene {
             Bounds::new([-0.8, -0.7, -0.01], [0.8, 0.7, 0.01])?,
             environment,
         )?;
-        let frame = Frame::new(&view, &materials, &draws, &[], &draws);
-        let (sdr, depth) = if copy_hdr {
+        let shadows = shadow_history
+            .map(|(history, revisions)| history.begin_view(&mut graph, &view, revisions))
+            .transpose()?;
+        let mut frame = Frame::new(&view, &materials, &draws, &[], &draws);
+        if let Some(shadows) = &shadows {
+            frame.shadows = std::array::from_fn(|cascade| shadows.source(cascade, &draws));
+        }
+        let (sdr, depth) = if post.copy_hdr || post.bloom.is_some() {
             let scene = prepared.add_scene(&mut graph, frame)?;
-            let target = graph.image("copied HDR", hdr_desc())?;
-            graph.copy_image(COPY_PASS, scene.hdr, target)?;
-            (
-                prepared.add_output(&mut graph, target, 1.0)?.sdr,
-                scene.depth,
-            )
+            let mut hdr = scene.hdr;
+            if post.copy_hdr {
+                let target = graph.image("copied HDR", hdr_desc())?;
+                graph.copy_image(COPY_PASS, hdr, target)?;
+                hdr = target;
+            }
+            if let Some(bloom) = &post.bloom {
+                hdr = bloom.add_passes(&mut graph, hdr)?;
+            }
+            (prepared.add_output(&mut graph, hdr, 1.0)?.sdr, scene.depth)
         } else {
             let images = prepared.add_passes(&mut graph, frame)?;
             (images.sdr, images.depth)
@@ -252,7 +283,10 @@ mod scene {
             sdr: graph.readback_image("read SDR", sdr)?,
             depth: graph.readback_image("read depth", depth)?,
         };
-        Ok((graph.compile()?, readbacks))
+        let updates = shadows
+            .map(|shadows| shadows.export(&mut graph))
+            .transpose()?;
+        Ok((graph.compile()?, readbacks, updates))
     }
 
     #[cfg(test)]
@@ -262,17 +296,18 @@ mod scene {
 
         #[test]
         fn application_copy_is_between_shading_and_sdr_conversion() {
-            let triangle = Triangle::new().unwrap();
-            let mut prepared = prepare().unwrap();
-            let preparation = reserve(&prepared, &triangle, true).unwrap();
-            assert!(resource_count(&preparation) >= 10);
-            let capacity = preparation
-                .graph_capacity(GraphCapacity::default())
-                .unwrap();
-            let mut pool = GraphPool::new(capacity, 1).unwrap();
-            for copy_hdr in [false, true] {
-                let (compiled, readbacks) =
-                    build_graph(&mut pool, &mut prepared, &triangle, copy_hdr).unwrap();
+            let triangle = Triangle::new(false).unwrap();
+            let mut prepared = prepare(NonZeroUsize::MIN).unwrap();
+            for (copy_hdr, bloom) in [(false, Bloom::Off), (true, Bloom::Off), (true, Bloom::Tent)]
+            {
+                let (preparation, post) = reserve(&prepared, &triangle, copy_hdr, bloom).unwrap();
+                assert!(resource_count(&preparation) >= 10);
+                let capacity = preparation
+                    .graph_capacity(GraphCapacity::default())
+                    .unwrap();
+                let mut pool = GraphPool::new(capacity, 1).unwrap();
+                let (compiled, readbacks, _) =
+                    build_graph(&mut pool, &mut prepared, &triangle, &post, None).unwrap();
                 assert_ne!(readbacks.sdr, readbacks.depth);
                 let passes = compiled.ordered_pass_names().collect::<Vec<_>>();
                 let tone_map = passes.iter().position(|&name| name == "tone_map").unwrap();
@@ -281,6 +316,13 @@ mod scene {
                 if copy_hdr {
                     let position = passes.iter().position(|&name| name == COPY_PASS).unwrap();
                     assert!(position < tone_map);
+                    if bloom != Bloom::Off {
+                        let combine = passes
+                            .iter()
+                            .position(|&name| name == "Bloom combine")
+                            .unwrap();
+                        assert!(position < combine && combine < tone_map);
+                    }
                 } else {
                     assert!(!passes.contains(&COPY_PASS));
                 }
@@ -296,6 +338,7 @@ mod native {
         error::Error,
         fs::File,
         io::{BufWriter, Write},
+        num::NonZeroUsize,
         path::{Path, PathBuf},
         time::Duration,
     };
@@ -303,6 +346,10 @@ mod native {
     use renderer::{
         graph::{GraphCapacity, GraphPool},
         runtime::{Runtime, RuntimeConfig, RuntimeLimits},
+    };
+    use renderer_pipeline::{
+        passes::bloom::Bloom,
+        pbr_forward::{CASCADE_COUNT, ShadowHistory},
     };
 
     use super::scene::{self, EXTENT, Triangle};
@@ -342,20 +389,34 @@ mod native {
         depth: Vec<u8>,
     }
 
-    fn render(api: Api, copy_hdr: bool) -> Result<Output, Box<dyn Error>> {
-        let triangle = Triangle::new()?;
-        let mut prepared = scene::prepare()?;
-        let preparation = scene::reserve(&prepared, &triangle, copy_hdr)?;
+    struct CapturedFrame {
+        output: Output,
+        reused: [bool; CASCADE_COUNT],
+        #[cfg(test)]
+        shadow_passes: usize,
+    }
+
+    fn render(
+        api: Api,
+        copy_hdr: bool,
+        bloom: Bloom,
+        caster_revisions: &[[u64; CASCADE_COUNT]],
+    ) -> Result<Vec<CapturedFrame>, Box<dyn Error>> {
+        let frames = caster_revisions.len().max(1);
+        // Give enabled Bloom an emitter above its scene-linear threshold.
+        let triangle = Triangle::new(bloom != Bloom::Off)?;
+        let mut prepared = scene::prepare(NonZeroUsize::new(frames).unwrap())?;
+        let (preparation, post) = scene::reserve(&prepared, &triangle, copy_hdr, bloom)?;
         // Graph declarations include initialization uploads and readbacks in
-        // this one-shot example. The WorkingSet reserves physical resources.
+        // this example. The WorkingSet reserves physical resources per slot.
         let graph = preparation.graph_capacity(GraphCapacity::default())?;
-        let mut pool = GraphPool::new(graph, 1)?;
+        let mut pool = GraphPool::new(graph, frames)?;
         let mut runtime = Runtime::new(
             api.config(),
             RuntimeLimits {
                 graph,
-                frames: 1,
-                results: 1,
+                frames,
+                results: frames,
                 resource_capacity: scene::resource_count(&preparation),
                 ..RuntimeLimits::default()
             },
@@ -367,20 +428,50 @@ mod native {
         {
             return Err("the Vulkan example requires a hardware adapter".into());
         }
-        let (compiled, readbacks) =
-            scene::build_graph(&mut pool, &mut prepared, &triangle, copy_hdr)?;
-        let submission = runtime.submit(&compiled)?;
-        let mut completed = runtime
-            .wait_for_frame(submission.id(), Duration::from_secs(10))?
-            .ok_or("GPU completion timed out")?;
-        let mut sdr = vec![0; completed.readback_len(readbacks.sdr)?];
-        let mut depth = vec![0; completed.readback_len(readbacks.depth)?];
-        completed.readback_into(readbacks.sdr, &mut sdr)?;
-        completed.readback_into(readbacks.depth, &mut depth)?;
-        drop(completed);
-        drop(submission);
+        let [width, height] = EXTENT.map(|dimension| dimension as usize);
+        let mut captured: Vec<_> = (0..frames)
+            .map(|_| CapturedFrame {
+                output: Output {
+                    sdr: vec![0; width * height * 4],
+                    depth: vec![0; width * height * 4],
+                },
+                reused: [false; CASCADE_COUNT],
+                #[cfg(test)]
+                shadow_passes: 0,
+            })
+            .collect();
+        let mut pending = Vec::with_capacity(frames);
+        let mut history = ShadowHistory::default();
+        for (index, captured) in captured.iter_mut().enumerate() {
+            let shadow_history = caster_revisions.get(index).map(|&keys| (&history, keys));
+            let (compiled, readbacks, updates) =
+                scene::build_graph(&mut pool, &mut prepared, &triangle, &post, shadow_history)?;
+            #[cfg(test)]
+            {
+                captured.shadow_passes = compiled
+                    .ordered_pass_names()
+                    .filter(|name| name.starts_with("shadow_"))
+                    .count();
+            }
+            let submission = if let Some(mut updates) = updates {
+                captured.reused = updates.reused();
+                history.submit(&mut runtime, &compiled, &mut updates)?
+            } else {
+                runtime.submit(&compiled)?
+            };
+            // Accepted snapshots are available to the next Graph immediately.
+            pending.push((submission.id(), readbacks));
+        }
+        for (captured, (id, readbacks)) in captured.iter_mut().zip(pending) {
+            let mut completed = runtime
+                .wait_for_frame(id, Duration::from_secs(10))?
+                .ok_or("GPU completion timed out")?;
+            completed.readback_into(readbacks.sdr, &mut captured.output.sdr)?;
+            completed.readback_into(readbacks.depth, &mut captured.output.depth)?;
+        }
+        history.clear(&mut runtime)?;
         check_validation(runtime)?;
-        Ok(Output { sdr, depth })
+        Ok(captured)
     }
 
     fn check_validation(runtime: Runtime) -> Result<(), Box<dyn Error>> {
@@ -453,10 +544,14 @@ mod native {
         let mut api = None;
         let mut output = None;
         let mut copy_hdr = false;
+        let mut bloom = Bloom::Off;
+        let mut reuse_shadows = false;
         while let Some(argument) = args.next() {
             match argument.to_str() {
                 Some("--help" | "-h") => {
-                    println!("pbr_forward [--api vulkan|d3d12] [--copy-hdr] [--output FILE.ppm]");
+                    println!(
+                        "pbr_forward [--api vulkan|d3d12] [--copy-hdr] [--bloom] [--reuse-shadows] [--output FILE.ppm]"
+                    );
                     return Ok(());
                 }
                 Some("--api") => {
@@ -464,6 +559,8 @@ mod native {
                     api = Some(Api::parse(name.to_str().ok_or("API name must be UTF-8")?)?);
                 }
                 Some("--copy-hdr") => copy_hdr = true,
+                Some("--bloom") => bloom = Bloom::Tent,
+                Some("--reuse-shadows") => reuse_shadows = true,
                 Some("--output") => {
                     output = Some(PathBuf::from(args.next().ok_or("expected an output path")?))
                 }
@@ -475,10 +572,22 @@ mod native {
         #[cfg(all(not(feature = "vulkan"), windows, feature = "d3d12"))]
         let default = Api::D3D12;
         let api = api.unwrap_or(default);
-        let rendered = render(api, copy_hdr)?;
-        let (rgba, depth) = probe(&rendered)?;
+        let revisions = [[0; CASCADE_COUNT]; 2];
+        let revisions = if reuse_shadows { &revisions[..] } else { &[] };
+        let rendered = render(api, copy_hdr, bloom, revisions)?;
+        if reuse_shadows {
+            for (index, frame) in rendered.iter().enumerate() {
+                let count = frame.reused.into_iter().filter(|&hit| hit).count();
+                println!(
+                    "Frame {} reused {count}/{CASCADE_COUNT} shadow maps",
+                    index + 1
+                );
+            }
+        }
+        let output_frame = &rendered.last().unwrap().output;
+        let (rgba, depth) = probe(output_frame)?;
         if let Some(path) = output {
-            write_ppm(&path, &rendered.sdr)?;
+            write_ppm(&path, &output_frame.sdr)?;
         }
         println!("{api:?} center SDR {rgba:?} and depth {depth:.6}");
         Ok(())
@@ -489,10 +598,37 @@ mod native {
         use super::*;
 
         fn compare(api: Api) {
-            let full = render(api, false).unwrap();
-            let split = render(api, true).unwrap();
-            probe(&full).unwrap();
-            assert_eq!(full, split);
+            let full = render(api, false, Bloom::Off, &[]).unwrap();
+            let split = render(api, true, Bloom::Off, &[]).unwrap();
+            probe(&full[0].output).unwrap();
+            assert_eq!(full[0].output, split[0].output);
+        }
+
+        fn bloom_and_history(api: Api) {
+            let draws = render(api, true, Bloom::Tent, &[[0; 4], [0; 4], [0, 0, 1, 0]]).unwrap();
+            assert_eq!(draws[0].reused, [false; 4]);
+            assert_eq!(draws[1].reused, [true; 4]);
+            assert_eq!(draws[2].reused, [true, true, false, true]);
+            assert_eq!(draws[0].shadow_passes, 4);
+            assert_eq!(draws[1].shadow_passes, 0);
+            assert_eq!(draws[2].shadow_passes, 1);
+            assert_eq!(draws[0].output, draws[1].output);
+            assert_eq!(draws[0].output, draws[2].output);
+
+            let image = &draws[0].output;
+            probe(image).unwrap();
+            // The HDR emitter spreads color into at least one background pixel.
+            assert!(
+                image
+                    .sdr
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(image.depth.as_chunks::<4>().0)
+                    .any(|(effect, depth)| *depth == 1.0_f32.to_le_bytes()
+                        && effect[0] > 0
+                        && effect[3] == 255)
+            );
         }
 
         #[cfg(feature = "vulkan")]
@@ -507,6 +643,20 @@ mod native {
         #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
         fn d3d12_full_and_split_recipes_match() {
             compare(Api::D3D12);
+        }
+
+        #[cfg(feature = "vulkan")]
+        #[test]
+        #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+        fn vulkan_bloom_and_shadow_history() {
+            bloom_and_history(Api::Vulkan);
+        }
+
+        #[cfg(all(windows, feature = "d3d12"))]
+        #[test]
+        #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+        fn d3d12_bloom_and_shadow_history() {
+            bloom_and_history(Api::D3D12);
         }
     }
 }
