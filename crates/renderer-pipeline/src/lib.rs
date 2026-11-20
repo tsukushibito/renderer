@@ -9,4 +9,5 @@
 #![deny(unsafe_code)]
 
 pub mod passes;
+pub mod pbr_forward;
 pub mod unlit_forward;
