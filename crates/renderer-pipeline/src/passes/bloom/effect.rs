@@ -7,7 +7,7 @@ mod programs;
 use renderer::graph::{Binding, BindingResource, Graph, GraphError, ImageDesc, ImageHandle};
 use renderer::program::ManagedProgram;
 
-use programs::{BLUR_BOX, BLUR_TENT, COMBINE, DOWNSAMPLE, EXTRACT};
+use programs::{BLUR_BOX, BLUR_TENT, COMBINE, DOWNSAMPLE, EXTRACT_DOWNSAMPLE};
 
 /// Choose the quarter-resolution Bloom blur kernel, or bypass Bloom.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -18,9 +18,8 @@ pub enum Bloom {
     Box,
 }
 
-pub(super) const FILTER_PASSES: [&str; 4] = [
-    "Bloom extract",
-    "Bloom downsample half",
+pub(super) const FILTER_PASSES: [&str; 3] = [
+    "Bloom extract and downsample half",
     "Bloom downsample quarter",
     "Bloom blur",
 ];
@@ -39,8 +38,8 @@ impl Bloom {
 
     /// Audited Programs needed by the selected Bloom kernel.
     pub fn programs(self) -> &'static [ManagedProgram] {
-        static TENT: [ManagedProgram; 4] = [EXTRACT, DOWNSAMPLE, BLUR_TENT, COMBINE];
-        static BOX: [ManagedProgram; 4] = [EXTRACT, DOWNSAMPLE, BLUR_BOX, COMBINE];
+        static TENT: [ManagedProgram; 4] = [EXTRACT_DOWNSAMPLE, DOWNSAMPLE, BLUR_TENT, COMBINE];
+        static BOX: [ManagedProgram; 4] = [EXTRACT_DOWNSAMPLE, DOWNSAMPLE, BLUR_BOX, COMBINE];
         match self {
             Self::Off => &[],
             Self::Tent => &TENT,
@@ -50,13 +49,13 @@ impl Bloom {
 
     /// Extra scratch images per execution, in declaration order. Equal descriptions
     /// can occur at small sizes and still consume separate slots.
-    pub fn images(self, input: ImageDesc) -> Option<[ImageDesc; 5]> {
+    pub fn images(self, input: ImageDesc) -> Option<[ImageDesc; 4]> {
         if self == Self::Off {
             return None;
         }
         let half = ImageDesc::rgba16_float(input.width.div_ceil(2), input.height.div_ceil(2));
         let quarter = ImageDesc::rgba16_float(input.width.div_ceil(4), input.height.div_ceil(4));
-        Some([input, half, quarter, quarter, input])
+        Some([half, quarter, quarter, input])
     }
 
     /// Declare Bloom for a caller-prepared Graph. Use [\`Self::prepare\`] to
@@ -82,11 +81,10 @@ impl Bloom {
         self,
         graph: &mut Graph,
         input: ImageHandle,
-        [full, half, quarter, blur, output]: [ImageDesc; 5],
+        [half, quarter, blur, output]: [ImageDesc; 4],
     ) -> Result<ImageHandle, GraphError> {
-        let [extract_name, half_name, quarter_name, blur_name] = FILTER_PASSES;
-        let extract = filter(graph, extract_name, EXTRACT, full, input)?;
-        let down_half = filter(graph, half_name, DOWNSAMPLE, half, extract)?;
+        let [half_name, quarter_name, blur_name] = FILTER_PASSES;
+        let down_half = filter(graph, half_name, EXTRACT_DOWNSAMPLE, half, input)?;
         let down_quarter = filter(graph, quarter_name, DOWNSAMPLE, quarter, down_half)?;
         let kernel = if self == Self::Tent {
             BLUR_TENT

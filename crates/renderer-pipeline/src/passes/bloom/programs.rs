@@ -57,7 +57,12 @@ macro_rules! bloom_program {
     };
 }
 
-bloom_program!(EXTRACT, "bloom_extract.comp", FILTER_BINDINGS, &[0, 0]);
+bloom_program!(
+    EXTRACT_DOWNSAMPLE,
+    "bloom_extract_downsample.comp",
+    FILTER_BINDINGS,
+    &[0, 0]
+);
 bloom_program!(
     DOWNSAMPLE,
     "bloom_downsample.comp",

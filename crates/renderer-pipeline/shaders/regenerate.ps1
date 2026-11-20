@@ -98,7 +98,7 @@ try {
         if ($file.Extension -ceq '.hlsli') { $includes[$file.Name] = Hash $canonical }
     }
     $shaders = @(
-        'pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract.comp',
+        'pbr.vert', 'pbr.frag', 'shadow.vert', 'shadow.frag', 'bloom_extract_downsample.comp',
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
         'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
@@ -110,6 +110,7 @@ try {
         $shaderSource = $name
         $defines = @()
         switch -CaseSensitive ($name) {
+            'bloom_extract_downsample.comp' { $shaderSource = 'bloom_downsample.comp'; $defines = @('BLOOM_EXTRACT=1') }
             'pbr_all_lights.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
             'pbr_forward_plus.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2') }
             'pbr_instancing.vert' { $shaderSource = 'pbr.vert'; $defines = @('BISTRO_INSTANCING=1') }

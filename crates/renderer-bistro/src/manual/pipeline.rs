@@ -299,7 +299,7 @@ impl Budget {
         let bloom_passes = if options.bloom == super::bloom::Bloom::Off {
             0
         } else {
-            5
+            4
         };
         let mut frame_instances = 0;
         for (desc, count) in Self::frame_images(options) {
