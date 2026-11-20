@@ -107,6 +107,24 @@ impl Placements {
         Ok(Self { primitive, layout })
     }
 
+    /// Affine rows for the same camera-relative fixture grid.
+    #[allow(dead_code, reason = "used by the renderer-pipeline Bistro adapter")]
+    pub fn affine_rows(&self, index: usize) -> [[f32; 4]; 3] {
+        let scale = f32::from_bits(self.layout[3]);
+        let column = (index % COLUMNS) as f32;
+        let row = (index / COLUMNS) as f32;
+        std::array::from_fn(|axis| {
+            let origin = f32::from_bits(self.layout[4 + axis]);
+            let right = f32::from_bits(self.layout[8 + axis]);
+            let up = f32::from_bits(self.layout[12 + axis]);
+            let mut affine = [0.0; 4];
+            affine[axis] = scale;
+            let center = f32::from_bits(self.layout[axis]);
+            affine[3] = origin + column * right + row * up - scale * center;
+            affine
+        })
+    }
+
     pub fn draws(&self, mode: Mode, draw: RasterDraw) -> impl Iterator<Item = RasterDraw> + '_ {
         (0..mode.draws()).map(move |offset| {
             let mut words = self.layout;

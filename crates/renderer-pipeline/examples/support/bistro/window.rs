@@ -497,6 +497,7 @@ impl State {
             let replay = options.window_smoke && self.accepted < REPLAY_STEPS;
             let started = Instant::now();
             let built = pipeline::build(
+                &self.backend,
                 &mut self.pool,
                 &mut self.workspace,
                 resident,
@@ -518,7 +519,7 @@ impl State {
             };
             self.workspace
                 .accept_shadow_updates(&pending, built.shadow_updates)?;
-            resident.accept_buffer_updates(&pending, built.updates)?;
+            resident.accept_camera(&pending, built.camera_update)?;
             let image = pending.export_image(built.output)?;
             let id = pending.id();
             drop(pending);
@@ -627,7 +628,7 @@ impl State {
             "samples":options.sample_count.as_u32(), "pipeline":options.pipeline.name(),
             "shader_manifest":options.shader_assets.as_ref().map(|selection| &selection.manifest),
             "local_lights":options.pipeline.uses_local_lights()
-                .then(|| super::forward_lighting::identity(options.fixture)),
+                .then(|| super::lighting::identity(options.fixture)),
             "instances": options.instances.name(), "instance_draws": options.instances.draws(),
             "submission": options.submission.name(),
             "packed_opaque": self.budget.packed_counts().map(|(groups, draws)| json!({"groups":groups,"primitives":draws})),

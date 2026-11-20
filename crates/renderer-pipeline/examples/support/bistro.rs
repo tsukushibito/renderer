@@ -16,24 +16,29 @@ mod camera;
 #[path = "../../../renderer/examples/support/profile_workload/clock.rs"]
 mod clock;
 #[path = "../../../renderer/examples/support/bistro/deferred.rs"]
-mod deferred;
-#[path = "../../../renderer/examples/support/bistro/forward_lighting.rs"]
 #[allow(
     dead_code,
-    reason = "shares light presets and tile initialization with the Rust example"
+    reason = "the comparison uses shared G-buffer stages internally"
 )]
-mod forward_lighting;
+mod deferred;
 #[path = "../../../renderer/examples/support/bistro/ibl.rs"]
 mod ibl;
 #[path = "../../../renderer/examples/support/bistro/instancing.rs"]
 mod instancing;
 #[path = "bistro/lifecycle.rs"]
 mod lifecycle;
+#[path = "bistro/lighting.rs"]
+mod lighting;
 #[path = "../../../renderer/examples/support/bistro/memory.rs"]
 mod memory;
 #[path = "bistro/pipeline.rs"]
 mod pipeline;
 #[path = "../../../renderer/examples/support/bistro/program.rs"]
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "shares reference Programs with the standalone example"
+)]
 mod program;
 #[path = "bistro/recipes.rs"]
 mod recipes;
@@ -600,6 +605,7 @@ mod tests {
             budget.prepared.take().expect("prepared fixture pipeline"),
         );
         let built = pipeline::build(
+            &backend,
             &mut pool,
             &mut workspace,
             &resident,

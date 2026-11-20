@@ -1,23 +1,20 @@
 //! Packed opaque geometry and fixed native indirect command slots.
 
-use super::super::{
-    Error, Options, SubmissionMode, asset::Scene, camera::Frustum, program, shadow::Bounds,
-};
+use super::super::{Error, asset::Scene, camera::Frustum, program, shadow::Bounds};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{upload_buffer, upload_geometry};
-use program::visibility::{
-    VISIBILITY_AABB_BYTES, VISIBILITY_CAMERA_BYTES, VISIBILITY_MASK_BYTES, VISIBILITY_THREADS,
-    visibility_program,
-};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::graph::GraphPool;
 use renderer::{
     graph::{
-        Binding, BindingResource, BufferDesc, BufferHandle, Graph, GraphError, ImportBuffer,
-        IndexedIndirectArgs, IndexedIndirectTable, IndexedIndirectTemplate, RasterBindings,
-        RasterConstants, RasterDraw, RasterPass,
+        BufferHandle, Graph, GraphError, ImportBuffer, IndexedIndirectArgs, IndexedIndirectTable,
+        IndexedIndirectTemplate, RasterBindings, RasterConstants, RasterDraw, RasterPass,
     },
     program::ManagedRasterProgram,
+};
+use renderer_pipeline::{
+    passes::visibility::{IndexedGeometry, PreparedVisibility, WorldBounds},
+    pbr,
 };
 use std::sync::Arc;
 
@@ -29,27 +26,24 @@ struct Draw {
 struct Group {
     material: usize,
     draws: Vec<Draw>,
-    table: IndexedIndirectTable,
-    mask_offset: u32,
 }
 
 impl Group {
     fn visible_draws<'a>(
         &'a self,
-        frustum: &'a Frustum,
-        bounds: &'a [Bounds],
+        visible: impl Fn(usize) -> bool + 'a,
     ) -> impl Iterator<Item = &'a Draw> {
         self.draws
             .iter()
-            .filter(|draw| frustum.overlaps(bounds[draw.primitive]))
+            .filter(move |draw| visible(draw.primitive))
     }
 }
 
 pub(in super::super) struct Layout {
     groups: Vec<Group>,
+    visibility: PreparedVisibility,
     pub vertex_bytes: usize,
     pub index_count: u32,
-    padded_count: u32,
 }
 
 impl Layout {
@@ -61,9 +55,9 @@ impl Layout {
             }
         }
         let mut groups = Vec::new();
+        let mut tables = Vec::new();
         let mut vertex_bytes = 0usize;
         let mut index_count = 0u32;
-        let mut padded_count = 0u32;
         for (material, members) in by_material.into_iter().enumerate() {
             if members.is_empty() {
                 continue;
@@ -84,25 +78,19 @@ impl Layout {
                 draws.push(Draw { primitive, range });
             }
             let templates = draws.iter().map(|draw| draw.range).collect::<Vec<_>>();
-            let table = IndexedIndirectTable::new(&templates)?;
-            let next_offset = padded_count
-                .checked_add(table.padded_count())
-                .filter(|count| count / VISIBILITY_THREADS <= 65_535)
-                .ok_or("packed visibility exceeds the supported dispatch count")?;
-            groups.push(Group {
-                material,
-                draws,
-                table,
-                mask_offset: padded_count,
-            });
-            padded_count = next_offset;
+            tables.push(IndexedIndirectTable::new(&templates)?);
+            groups.push(Group { material, draws });
         }
         let _ = usize::try_from(u64::from(index_count) * size_of::<u32>() as u64)?;
-        Ok((!groups.is_empty()).then_some(Self {
+        if groups.is_empty() {
+            return Ok(None);
+        }
+        let visibility = PreparedVisibility::new(&tables)?;
+        Ok(Some(Self {
             groups,
+            visibility,
             vertex_bytes,
             index_count,
-            padded_count,
         }))
     }
 
@@ -119,69 +107,15 @@ impl Layout {
     }
 
     pub fn aabb_bytes(&self) -> usize {
-        self.padded_count as usize * VISIBILITY_AABB_BYTES
+        self.visibility.bounds_desc().size as usize
     }
 
-    pub fn mask_bytes(&self) -> u64 {
-        u64::from(self.padded_count) * VISIBILITY_MASK_BYTES as u64
-    }
-
-    pub fn dispatch_groups(&self) -> u32 {
-        self.padded_count / VISIBILITY_THREADS
+    pub fn visibility(&self) -> &PreparedVisibility {
+        &self.visibility
     }
 
     pub fn template_upload_bytes(&self) -> usize {
-        self.groups
-            .iter()
-            .map(|group| group.table.template_buffer_desc().size as usize)
-            .sum()
-    }
-
-    pub fn transient_buffers(&self, options: &Options) -> impl Iterator<Item = (u64, usize)> + '_ {
-        let indirect = options.submission == SubmissionMode::Indirect;
-        let inflight = options.inflight;
-        indirect
-            .then_some((self.mask_bytes(), inflight))
-            .into_iter()
-            .chain(
-                self.groups
-                    .iter()
-                    .filter(move |_| indirect)
-                    .flat_map(move |group| {
-                        [
-                            (group.table.template_buffer_desc().size, inflight),
-                            (group.table.command_buffer_desc().size, inflight),
-                        ]
-                    }),
-            )
-    }
-
-    fn encode_groups(
-        &self,
-        graph: &mut Graph,
-        vertices: BufferHandle,
-        indices: BufferHandle,
-        visibility: BufferHandle,
-        arguments: &mut Vec<Option<IndexedIndirectArgs>>,
-        include_material: impl Fn(usize) -> bool,
-    ) -> Result<(), GraphError> {
-        // The Workspace reserves one slot per material, which bounds groups.
-        for group in &self.groups {
-            let args = if include_material(group.material) {
-                Some(graph.encode_indexed_indirect(
-                    "encode packed opaque draws",
-                    &group.table,
-                    vertices,
-                    indices,
-                    visibility,
-                    u64::from(group.mask_offset) * VISIBILITY_MASK_BYTES as u64,
-                )?)
-            } else {
-                None
-            };
-            arguments.push(args);
-        }
-        Ok(())
+        self.visibility.template_transfer_bytes() as usize
     }
 
     fn pack(&self, scene: &Scene) -> Result<(Vec<u8>, Vec<u32>), Error> {
@@ -202,26 +136,17 @@ impl Layout {
         Ok((vertices, indices))
     }
 
-    fn aabbs(&self, bounds: &[Bounds]) -> Vec<u8> {
+    fn aabbs(&self, bounds: &[Bounds]) -> Result<Vec<u8>, GraphError> {
         let mut bytes = vec![0; self.aabb_bytes()];
-        for group in &self.groups {
-            let offset = group.mask_offset as usize;
-            for (index, draw) in group.draws.iter().enumerate() {
-                let item = bounds[draw.primitive];
-                let start = (offset + index) * VISIBILITY_AABB_BYTES;
-                let words = bytes[start..start + VISIBILITY_AABB_BYTES]
-                    .as_chunks_mut::<4>()
-                    .0;
-                for (destination, value) in words[..3].iter_mut().zip(item.min) {
-                    *destination = value.to_le_bytes();
-                }
-                words[3] = 1u32.to_le_bytes();
-                for (destination, value) in words[4..7].iter_mut().zip(item.max) {
-                    *destination = value.to_le_bytes();
-                }
+        self.visibility.encode_bounds(&mut bytes, |group, draw| {
+            let item = bounds[self.groups[group].draws[draw].primitive];
+            WorldBounds {
+                min: item.min,
+                max: item.max,
+                enabled: true,
             }
-        }
-        bytes
+        })?;
+        Ok(bytes)
     }
 }
 
@@ -255,7 +180,7 @@ impl Resident {
             Some(upload_buffer(
                 backend,
                 upload_owners,
-                &layout.aabbs(bounds),
+                &layout.aabbs(bounds)?,
             )?)
         } else {
             None
@@ -282,36 +207,21 @@ impl Resident {
         &'a self,
         graph: &mut Graph,
         camera: BufferHandle,
-        arguments: &'a mut Vec<Option<IndexedIndirectArgs>>,
+        arguments: &'a mut [Option<IndexedIndirectArgs>],
         include_material: impl Fn(usize) -> bool,
     ) -> Result<Frame<'a>, GraphError> {
         let vertices = graph.import_buffer("packed opaque vertices", &self.vertices)?;
         let indices = graph.import_buffer("packed opaque indices", &self.indices)?;
-        arguments.clear();
         let commands = if let Some(aabbs) = &self.aabbs {
             let aabbs = graph.import_buffer("packed opaque bounds", aabbs)?;
-            let mask_bytes = self.layout.mask_bytes();
-            let visibility =
-                graph.buffer("opaque visibility mask", BufferDesc { size: mask_bytes })?;
-            graph.dispatch_buffer_grid(
-                "cull packed opaque draws",
-                &visibility_program(),
-                &[
-                    binding(0, camera, VISIBILITY_CAMERA_BYTES as u64),
-                    binding(1, aabbs, self.layout.aabb_bytes() as u64),
-                    binding(2, visibility, mask_bytes),
-                ],
-                [self.layout.dispatch_groups(), 1],
-            )?;
-            self.layout.encode_groups(
-                graph,
-                vertices,
-                indices,
-                visibility,
-                arguments,
-                include_material,
-            )?;
-            Some(arguments.as_slice())
+            let frame =
+                self.layout
+                    .visibility
+                    .add_passes(graph, camera, aabbs, arguments, |group| {
+                        include_material(self.layout.groups[group].material)
+                            .then_some(IndexedGeometry { vertices, indices })
+                    })?;
+            Some(frame.arguments)
         } else {
             None
         };
@@ -321,18 +231,6 @@ impl Resident {
             indices,
             commands,
         })
-    }
-}
-
-fn binding(binding: u32, buffer: BufferHandle, size: u64) -> Binding {
-    Binding {
-        group: 0,
-        binding,
-        resource: BindingResource::Buffer {
-            buffer,
-            offset: 0,
-            size,
-        },
     }
 }
 
@@ -383,9 +281,53 @@ impl Frame<'_> {
                 .groups
                 .iter()
                 .filter(|group| include_material(group.material))
-                .map(|group| group.visible_draws(frustum, bounds).count())
+                .map(|group| {
+                    group
+                        .visible_draws(|index| frustum.overlaps(bounds[index]))
+                        .count()
+                })
                 .sum()
         })
+    }
+
+    pub fn append_pbr_draws(
+        &self,
+        out: &mut Vec<pbr::Draw>,
+        visible: impl Fn(usize) -> bool,
+        include_material: impl Fn(usize) -> bool,
+    ) {
+        if let Some(commands) = self.commands {
+            out.extend(
+                self.layout
+                    .groups
+                    .iter()
+                    .zip(commands)
+                    .filter_map(|(group, args)| {
+                        args.map(|args| pbr::Draw::Indirect {
+                            args,
+                            material: group.material,
+                        })
+                    }),
+            );
+        } else {
+            out.extend(
+                self.layout
+                    .groups
+                    .iter()
+                    .filter(|group| include_material(group.material))
+                    .flat_map(|group| {
+                        group.visible_draws(&visible).map(move |draw| {
+                            pbr::Draw::Indexed(pbr::IndexedDraw {
+                                vertices: self.vertices,
+                                indices: self.indices,
+                                first_index: draw.range.first_index,
+                                index_count: draw.range.index_count,
+                                material: group.material,
+                            })
+                        })
+                    }),
+            );
+        }
     }
 
     pub fn draw(
@@ -416,7 +358,7 @@ impl Frame<'_> {
                 .filter(|group| include_material(group.material))
                 .flat_map(|group| {
                     group
-                        .visible_draws(frustum, bounds)
+                        .visible_draws(|index| frustum.overlaps(bounds[index]))
                         .map(move |draw| RasterDraw {
                             bindings: Some(bindings[group.material]),
                             vertices: self.vertices,
@@ -451,10 +393,8 @@ mod tests {
                 .eq([0, 2, 3, 4, 6])
         );
         let first = &layout.groups[0];
-        assert_eq!(first.mask_offset, 0);
-        assert_eq!(first.table.command_count(), 2);
+        assert_eq!(first.draws.len(), 2);
         assert_eq!(first.draws[1].range.first_index, 6);
-        assert_eq!(layout.groups[1].mask_offset, VISIBILITY_THREADS);
         assert_eq!(layout.groups[1].draws[0].range.first_index, 12);
 
         let (vertices, indices) = layout.pack(&scene).unwrap();
@@ -468,93 +408,15 @@ mod tests {
                 max: [index as f32 + 1.0, 2.0, 3.0],
             })
             .collect::<Vec<_>>();
-        let records = layout.aabbs(&bounds);
-        assert_eq!(
-            records.len(),
-            5 * VISIBILITY_THREADS as usize * VISIBILITY_AABB_BYTES
-        );
-        let (records, tail) = records.as_chunks::<VISIBILITY_AABB_BYTES>();
+        let records = layout.aabbs(&bounds).unwrap();
+        let (records, tail) = records.as_chunks::<32>();
+        assert_eq!(records.len(), 5 * 64);
         assert!(tail.is_empty());
         assert_eq!(&records[1][0..4], &1.0f32.to_le_bytes());
         assert_eq!(&records[1][12..16], &1u32.to_le_bytes());
-        assert_eq!(records[2], [0; VISIBILITY_AABB_BYTES]);
-        let second_group = VISIBILITY_THREADS as usize;
+        assert_eq!(records[2], [0; 32]);
+        let second_group = 64;
         assert_eq!(&records[second_group][0..4], &2.0f32.to_le_bytes());
         assert_eq!(&records[second_group][12..16], &1u32.to_le_bytes());
-    }
-
-    #[test]
-    fn indirect_budget_keeps_temporaries_per_in_flight_graph() {
-        let scene = Scene::fixture(false);
-        let layout = Layout::new(&scene).unwrap().unwrap();
-        let mut options = Options::parse(["--fixture".to_owned()]).unwrap();
-        assert_eq!(layout.transient_buffers(&options).count(), 0);
-        options.submission = SubmissionMode::Indirect;
-        options.inflight = 3;
-        let sizes = layout.transient_buffers(&options).collect::<Vec<_>>();
-        assert_eq!(sizes[0], (layout.mask_bytes(), 3));
-        assert_eq!(sizes.len(), 1 + layout.group_count() * 2);
-        assert!(sizes.iter().all(|&(_, count)| count == 3));
-    }
-
-    #[test]
-    fn disabled_groups_fit_a_graph_budgeted_for_one_encoder() {
-        use renderer::graph::{GraphCapacity, GraphPool};
-
-        let scene = Scene::fixture(false);
-        let layout = Layout::new(&scene).unwrap().unwrap();
-        let selected = 1;
-        let mut pool = GraphPool::new(
-            GraphCapacity {
-                resources: 5, // geometry and visibility, plus two encoder buffers
-                passes: 2,    // one template upload and one encoder dispatch
-                ..GraphCapacity::default()
-            },
-            1,
-        )
-        .unwrap();
-        let mut graph = pool.begin().unwrap();
-        let vertices = graph
-            .buffer(
-                "vertices",
-                BufferDesc {
-                    size: layout.vertex_bytes as u64,
-                },
-            )
-            .unwrap();
-        let indices = graph
-            .buffer(
-                "indices",
-                BufferDesc {
-                    size: layout.index_bytes() as u64,
-                },
-            )
-            .unwrap();
-        let visibility = graph
-            .buffer(
-                "visibility",
-                BufferDesc {
-                    size: layout.mask_bytes(),
-                },
-            )
-            .unwrap();
-        let mut arguments = Vec::with_capacity(layout.group_count());
-        layout
-            .encode_groups(
-                &mut graph,
-                vertices,
-                indices,
-                visibility,
-                &mut arguments,
-                |material| material == layout.groups[selected].material,
-            )
-            .unwrap();
-        assert_eq!(arguments.len(), layout.group_count());
-        assert!(
-            arguments
-                .iter()
-                .enumerate()
-                .all(|(index, args)| args.is_some() == (index == selected))
-        );
     }
 }

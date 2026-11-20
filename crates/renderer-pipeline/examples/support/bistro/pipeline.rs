@@ -1,12 +1,10 @@
 //! Public Graph composition and explicit working-set budgets for this consumer.
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+use super::camera::Frustum;
 use super::{
-    Bloom, Error, Options, PipelineMode, SubmissionMode,
-    asset::Scene,
-    camera::{Camera, Frustum},
-    forward_lighting, ibl, instancing,
-    program::{self, forward_plus},
-    recipes, shadow,
+    Bloom, Error, Options, PipelineMode, SubmissionMode, asset::Scene, camera::Camera, ibl,
+    instancing, lighting, program, recipes, shadow,
 };
 use renderer::{
     ImageFormat,
@@ -14,7 +12,7 @@ use renderer::{
     graph::{
         Binding, BindingResource, BufferHandle, Graph, GraphCapacity, GraphError, GraphPool,
         ImageDesc, ImageHandle, ImageView, ImportBuffer, ImportImage, IndexedIndirectArgs,
-        PassHandle, RasterBindings, RasterConstants, RasterDraw, SampleCount,
+        PassHandle, RasterBindings, RasterConstants, RasterDraw,
     },
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, SamplerDescriptor},
 };
@@ -23,7 +21,10 @@ use renderer::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
-use renderer_pipeline::pbr_forward::{self, ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
+use renderer_pipeline::{
+    pbr::{self, ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates},
+    pbr_forward, pbr_forward_plus,
+};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -39,6 +40,8 @@ pub(super) struct PreparedSet {
     main: recipes::Prepared,
     aa_off: Option<recipes::Prepared>,
     bloom_bypass: Option<recipes::Prepared>,
+    reservation: Preparation,
+    instance_draws: usize,
 }
 
 impl PreparedSet {
@@ -74,21 +77,25 @@ impl PreparedSet {
                 prepare(&diagnostic)
             })
             .transpose()?;
+        // Diagnostic captures begin after the measured frames drain.
+        let mut reservation = Preparation::new(main.preparation().frames_in_flight());
+        let alternatives = [Some(&main), aa_off.as_ref(), bloom_bypass.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(recipes::Prepared::preparation)
+            .collect::<Vec<_>>();
+        reservation.add_alternatives(&alternatives)?;
         Ok(Self {
             main,
             aa_off,
             bloom_bypass,
+            reservation,
+            instance_draws: options.instances.draws(),
         })
     }
 
-    fn variants(&self) -> impl Iterator<Item = &recipes::Prepared> {
-        std::iter::once(&self.main)
-            .chain(self.aa_off.as_ref())
-            .chain(self.bloom_bypass.as_ref())
-    }
-
-    pub fn working_sets(&self) -> impl Iterator<Item = WorkingSet<'_>> {
-        self.variants().map(recipes::Prepared::working_set)
+    pub fn working_set(&self) -> WorkingSet<'_> {
+        self.reservation.working_set()
     }
 
     fn select(&mut self, options: &Options) -> &mut recipes::Prepared {
@@ -152,40 +159,30 @@ fn add_instances<T: PartialEq>(classes: &mut Vec<(T, usize)>, desc: T, count: us
     }
 }
 
-fn reserve_max<T: PartialEq>(classes: &mut Vec<(T, usize)>, desc: T, count: usize) {
-    if let Some((_, available)) = classes.iter_mut().find(|(item, _)| *item == desc) {
-        *available = (*available).max(count);
-    } else {
-        classes.push((desc, count));
-    }
-}
-
 impl Budget {
-    fn frame_buffers(options: &Options, prepared: &PreparedSet) -> Vec<(u64, usize)> {
-        let mut classes = Vec::new();
-        for set in prepared.working_sets() {
-            for &class in set.resources {
-                if let ResourceClass::Buffer { desc, count } = class {
-                    reserve_max(&mut classes, desc.size, count);
-                }
-            }
-        }
-        let bytes = match options.pipeline {
-            PipelineMode::Deferred => Some(program::deferred::DEFERRED_RECONSTRUCTION_BYTES as u64),
-            PipelineMode::ForwardPlus | PipelineMode::ForwardReference => {
-                Some(forward_plus::LIGHT_BUFFER_BYTES)
-            }
-            PipelineMode::Forward => None,
-        };
-        if let Some(size) = bytes {
-            add_instances(&mut classes, size, options.inflight);
-        }
-        classes
+    fn frame_buffers(prepared: &PreparedSet) -> impl Iterator<Item = (u64, usize)> + '_ {
+        prepared
+            .working_set()
+            .resources
+            .iter()
+            .filter_map(|class| match *class {
+                ResourceClass::Buffer { desc, count } => Some((desc.size, count)),
+                ResourceClass::Image { .. } => None,
+            })
     }
 
     #[cfg(all(windows, feature = "presentation"))]
-    pub fn resized_buffers(&self, options: &Options, prepared: &PreparedSet) -> Vec<(u64, usize)> {
-        Self::frame_buffers(options, prepared)
+    pub fn resized_buffers(&self, prepared: &PreparedSet) -> Vec<(u64, usize)> {
+        Self::frame_buffers(prepared)
+            .filter_map(|(size, count)| {
+                // The startup tile range remains registered across a resize.
+                // Working-set replacement describes only unregistered slots.
+                let retained = self.pipeline == PipelineMode::ForwardPlus
+                    && size == pbr_forward_plus::TILE_BUFFER_BYTES;
+                let count = count - usize::from(retained);
+                (count != 0).then_some((size, count))
+            })
+            .collect()
     }
 
     #[cfg(all(windows, feature = "presentation"))]
@@ -236,15 +233,15 @@ impl Budget {
     }
 
     pub fn frame_images(options: &Options, prepared: &PreparedSet) -> Vec<(ImageDesc, usize)> {
-        let mut classes = Vec::new();
-        // Supplemental capture profiles run after the measured frames drain.
-        for set in prepared.working_sets() {
-            for &class in set.resources {
-                if let ResourceClass::Image { desc, count } = class {
-                    reserve_max(&mut classes, desc, count);
-                }
-            }
-        }
+        let mut classes = prepared
+            .working_set()
+            .resources
+            .iter()
+            .filter_map(|class| match *class {
+                ResourceClass::Image { desc, count } => Some((desc, count)),
+                ResourceClass::Buffer { .. } => None,
+            })
+            .collect::<Vec<_>>();
         if options.windowed {
             // Images accepted by the Presenter can outlive the submitted Graph.
             add_instances(
@@ -262,8 +259,6 @@ impl Budget {
         options: &Options,
         background: [f32; 3],
     ) -> Result<Self, Error> {
-        let deferred = usize::from(options.pipeline == PipelineMode::Deferred);
-        let local_lights = usize::from(options.pipeline.uses_local_lights());
         let tiled_lights = usize::from(options.pipeline == PipelineMode::ForwardPlus);
         let packed = if options.submission == SubmissionMode::Direct {
             None
@@ -303,7 +298,7 @@ impl Budget {
             }
         }
         let mut frame_buffers = 0;
-        for (size, count) in Self::frame_buffers(options, &prepared) {
+        for (size, count) in Self::frame_buffers(&prepared) {
             for _ in 0..count {
                 add(size);
             }
@@ -313,11 +308,6 @@ impl Budget {
             // Explicit change-boundary overlap: the old material can still be
             // referenced by a submission while its new version is uploaded.
             add(program::MATERIAL_BYTES as u64);
-        }
-        if tiled_lights != 0 {
-            // The one shared list is fully initialized by an explicit
-            // preparation dispatch. In-flight frames share one ordered queue.
-            add(forward_plus::TILE_BUFFER_BYTES);
         }
         let max_buffer_bytes = buffers
             .iter()
@@ -380,44 +370,31 @@ impl Budget {
             add_image(desc, count);
             frame_instances += count;
         }
-        let requirements = |field: fn(GraphRequirements) -> usize| {
-            prepared
-                .variants()
-                .map(|recipe| field(recipe.requirements()))
-                .max()
-                .unwrap_or(0)
-        };
+        let requirements = prepared.reservation.graph_requirements();
         let resources = buffer_count
             + scene.images.len()
             + 3 // IBL
             + shadow::CASCADE_COUNT // cached imports
-            + local_lights
-            + tiled_lights
-            + deferred
-            + requirements(|graph| graph.resources);
+            + requirements.resources;
         let physical_resources = buffer_count
             + scene.images.len()
             + 3
             + frame_instances
             + frame_buffers
-            + tiled_lights
             + check_images
             + usize::from(options.resource_checks);
-        let accesses = requirements(|graph| graph.accesses) + 256;
+        let accesses = requirements.accesses + 256;
         let mut preparation = Preparation::new(
             NonZeroUsize::new(options.inflight).ok_or("Bistro needs a frame slot")?,
         );
         preparation.add_graph_requirements(GraphRequirements {
             resources,
-            passes: requirements(|graph| graph.passes) + 20,
-            compute_dispatches: requirements(|graph| graph.compute_dispatches),
+            passes: requirements.passes + 20,
             accesses,
-            draws: requirements(|graph| graph.draws),
-            raster_constant_words: requirements(|graph| graph.raster_constant_words),
-            bindings: requirements(|graph| graph.bindings) + 16,
-            attachments: requirements(|graph| graph.attachments) + 4,
-            name_bytes: resources * 32 + 2048 + requirements(|graph| graph.name_bytes),
-            upload_bytes: requirements(|graph| graph.upload_bytes),
+            bindings: requirements.bindings + 16,
+            attachments: requirements.attachments + 4,
+            name_bytes: resources * 32 + 2048 + requirements.name_bytes,
+            ..requirements
         })?;
         let graph = preparation.graph_capacity(GraphCapacity {
             resources: 0,
@@ -430,9 +407,7 @@ impl Budget {
             dependencies: 32,
             initial_ranges: resources * 2,
             name_bytes: 0,
-            upload_bytes: program::CAMERA_BYTES
-                + deferred * program::deferred::DEFERRED_RECONSTRUCTION_BYTES
-                + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize,
+            upload_bytes: 0,
             edges: accesses * 4,
             segments: accesses * 2,
             readers: accesses * 4,
@@ -440,7 +415,7 @@ impl Budget {
         #[cfg(feature = "vulkan")]
         let vulkan_shader_bindings = {
             // Vulkan budgets each Compute dispatch in addition to Raster draw bindings.
-            let dispatches = requirements(|graph| graph.compute_dispatches);
+            let dispatches = requirements.compute_dispatches;
             // Asset replacement, diagnostic captures and tile initialization use
             // separately submitted Graphs sharing the runtime limits.
             u32::try_from((graph.draws + dispatches).max(1))?
@@ -484,7 +459,7 @@ impl Budget {
             } else {
                 // The tile-list class is large, but its contents are written by
                 // compute. Geometry streams above still size cold CPU uploads.
-                forward_plus::LIGHT_BUFFER_BYTES as usize
+                pbr_forward_plus::LIGHT_BUFFER_BYTES as usize
             })
             .max(packed.as_ref().filter(|_| indirect).map_or(0, |layout| {
                 let frame_bytes = layout.template_upload_bytes() + graph.upload_bytes;
@@ -523,7 +498,7 @@ impl Budget {
             vulkan_shader_bindings,
             buffers,
             images,
-            buffer_count: buffer_count + frame_buffers + tiled_lights,
+            buffer_count: buffer_count + frame_buffers,
             physical_resources,
             max_buffer_bytes,
             upload_bytes,
@@ -567,12 +542,13 @@ pub(super) struct Resident {
     pub environment_mips: [u32; 3],
     pub environment_parameters: [f32; 3],
     scene_bounds: shadow::Bounds,
-    standard_bounds: pbr_forward::Bounds,
+    standard_bounds: pbr::Bounds,
     primitive_bounds: Vec<shadow::Bounds>,
+    standard_primitive_bounds: Vec<pbr::Bounds>,
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
-    local_lights: Option<forward_lighting::LightBytes>,
-    tiles: Option<ImportBuffer>,
+    local_lights: Option<lighting::Preset>,
+    tiles: Option<pbr_forward_plus::Tiles>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -669,19 +645,39 @@ impl Resident {
         options: &Options,
         camera: Camera,
         near_far: [f32; 2],
-    ) -> Result<Option<instancing::Placements>, Error> {
+    ) -> Result<Option<InstancePlacements>, Error> {
         options
             .instances
             .enabled()
-            .then(|| {
-                instancing::Placements::new(
+            .then(|| -> Result<_, Error> {
+                let fixture = instancing::Placements::new(
                     scene,
                     &self.primitive_bounds,
                     camera,
                     options.width as f32 / options.height as f32,
                     near_far[0],
                     near_far[1],
-                )
+                )?;
+                let mut transforms = [pbr::Transform::IDENTITY; instancing::COUNT];
+                let source = self.primitive_bounds[fixture.primitive];
+                let mut caster_bounds = self.scene_bounds;
+                for (index, transform) in transforms.iter_mut().enumerate() {
+                    let rows = fixture.affine_rows(index);
+                    *transform = pbr::Transform::new(rows)?;
+                    caster_bounds = caster_bounds.union(shadow::Bounds::new(
+                        std::array::from_fn(|axis| {
+                            rows[axis][axis] * source.min[axis] + rows[axis][3]
+                        }),
+                        std::array::from_fn(|axis| {
+                            rows[axis][axis] * source.max[axis] + rows[axis][3]
+                        }),
+                    )?);
+                }
+                Ok(InstancePlacements {
+                    fixture,
+                    transforms,
+                    shadow_bounds: pbr::Bounds::new(caster_bounds.min, caster_bounds.max)?,
+                })
             })
             .transpose()
     }
@@ -706,7 +702,6 @@ impl Resident {
         let indices = take_keys(&mut self.indices);
         let materials = take_keys(&mut self.materials);
         let camera = self.camera.key();
-        let tiles = self.tiles.take().map(|tiles| tiles.key());
         let packed = self.packed.take().map(indirect::Resident::release);
         drop(self.camera);
         prepare(backend)?;
@@ -719,7 +714,6 @@ impl Resident {
         self.indices = refresh(indices)?;
         self.materials = refresh(materials)?;
         self.camera = backend.refresh_buffer(camera)?;
-        self.tiles = tiles.map(|key| backend.refresh_buffer(key)).transpose()?;
         self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
     }
@@ -825,10 +819,9 @@ impl Resident {
         let local_lights = budget
             .pipeline
             .uses_local_lights()
-            .then(|| forward_lighting::preset(budget.fixture))
-            .transpose()?;
+            .then(|| lighting::preset(budget.fixture));
         let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
-            .then(|| forward_lighting::initialize_tiles(backend, &camera))
+            .then(|| lighting::initialize_tiles(backend, &camera))
             .transpose()?;
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
@@ -874,6 +867,10 @@ impl Resident {
                 min: [-1.0; 3],
                 max: [1.0; 3],
             });
+        let standard_primitive_bounds = primitive_bounds
+            .iter()
+            .map(|bounds| pbr::Bounds::new(bounds.min, bounds.max))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             vertices,
             indices,
@@ -891,8 +888,9 @@ impl Resident {
                 environment.max_prefilter_lod as f32,
             ],
             scene_bounds,
-            standard_bounds: pbr_forward::Bounds::new(scene_bounds.min, scene_bounds.max)?,
+            standard_bounds: pbr::Bounds::new(scene_bounds.min, scene_bounds.max)?,
             primitive_bounds,
+            standard_primitive_bounds,
             shadow_parameters: shadow::Parameters::default(),
             camera,
             local_lights,
@@ -900,6 +898,34 @@ impl Resident {
             packed,
             upload_owners,
         })
+    }
+}
+
+pub(super) struct InstancePlacements {
+    fixture: instancing::Placements,
+    transforms: [pbr::Transform; instancing::COUNT],
+    shadow_bounds: pbr::Bounds,
+}
+
+impl InstancePlacements {
+    fn append_draws(
+        &self,
+        mode: instancing::Mode,
+        geometry: pbr::IndexedDraw,
+        out: &mut Vec<pbr::Draw>,
+    ) {
+        let instance_count = if mode == instancing::Mode::Instanced {
+            instancing::COUNT as u32
+        } else {
+            1
+        };
+        out.extend(
+            (0..mode.draws()).map(|first_transform| pbr::Draw::Instanced {
+                geometry,
+                first_transform: first_transform as u32,
+                instance_count,
+            }),
+        );
     }
 }
 
@@ -911,7 +937,7 @@ pub(super) struct Workspace {
     bindings: Vec<RasterBindings>,
     shadow_bindings: Vec<Option<RasterBindings>>,
     shadow_reuse: Option<ShadowReuse>,
-    pub(super) placements: Option<instancing::Placements>,
+    pub(super) placements: Option<InstancePlacements>,
     pub(super) prepared: PreparedSet,
     opaque: Vec<usize>,
     blended: Vec<usize>,
@@ -923,7 +949,9 @@ pub(super) struct Workspace {
 fn caster_revision(options: &Options) -> u64 {
     // Geometry, material coverage and the shadow program stay fixed while
     // history is enabled. These controls can change the draw list.
-    u64::from(options.alpha_only) | (u64::from(options.shadows) << 1)
+    u64::from(options.alpha_only)
+        | (u64::from(options.shadows) << 1)
+        | (u64::from(options.instances.enabled()) << 2)
 }
 
 #[derive(Default)]
@@ -954,8 +982,8 @@ impl Workspace {
         let primitives = scene.primitives.len();
         let standard_inputs = prepared
             .main
-            .uses_standard_forward()
-            .then(|| standard_forward::Inputs::new(scene));
+            .uses_standard()
+            .then(|| standard_forward::Inputs::new(scene, prepared.instance_draws));
         Self {
             vertices: Vec::with_capacity(primitives),
             indices: Vec::with_capacity(primitives),
@@ -969,7 +997,7 @@ impl Workspace {
             opaque: Vec::with_capacity(primitives),
             blended: Vec::with_capacity(primitives),
             casters: Vec::with_capacity(primitives),
-            indirect: Vec::with_capacity(scene.materials.len()),
+            indirect: vec![None; scene.materials.len()],
             standard_inputs,
         }
     }
@@ -1025,7 +1053,7 @@ impl Workspace {
 pub(super) struct Built {
     pub graph: Graph,
     pub output: ImageHandle,
-    pub updates: BufferUpdates,
+    pub camera_update: BufferHandle,
     pub captures: Option<Captures>,
     pub bloom_capture: Option<PassHandle>,
     #[cfg(all(windows, feature = "presentation"))]
@@ -1035,26 +1063,14 @@ pub(super) struct Built {
     pub draws: Option<usize>,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct BufferUpdates {
-    camera: BufferHandle,
-    tiles: Option<BufferHandle>,
-}
-
 impl Resident {
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn accept_buffer_updates(
+    pub fn accept_camera(
         &mut self,
         pending: &FrameSubmission,
-        updates: BufferUpdates,
+        camera: BufferHandle,
     ) -> Result<(), Error> {
-        let camera = pending.export_buffer(updates.camera)?;
-        let tiles = updates
-            .tiles
-            .map(|handle| pending.export_buffer(handle))
-            .transpose()?;
-        self.camera = camera;
-        self.tiles = tiles;
+        self.camera = pending.export_buffer(camera)?;
         Ok(())
     }
 }
@@ -1067,16 +1083,15 @@ pub(super) struct Captures {
 
 fn shadow_casters<'a>(
     scene: &'a Scene,
-    resident: &'a Resident,
     options: &'a Options,
-    clip: shadow::CascadeClip,
+    overlaps: impl Fn(usize) -> bool + 'a,
 ) -> impl Iterator<Item = usize> + 'a {
     (0..scene.primitives.len()).filter(move |&index| {
         let material = &scene.materials[scene.primitives[index].material];
         options.shadows
             && !material.blend
             && (!options.alpha_only || material.alpha_zero)
-            && clip.overlaps(resident.primitive_bounds[index])
+            && overlaps(index)
     })
 }
 
@@ -1210,7 +1225,9 @@ fn append_shadows(
         let clip = shadow::CascadeClip::new(&matrix, resident.scene_bounds);
         let parameters = RasterConstants::new(&[cascade as u32])?;
         casters.clear();
-        for index in shadow_casters(scene, resident, options, clip) {
+        for index in shadow_casters(scene, options, |index| {
+            clip.overlaps(resident.primitive_bounds[index])
+        }) {
             let material = scene.primitives[index].material;
             let slot = &mut shadow_bindings[material];
             let bindings = match *slot {
@@ -1248,8 +1265,10 @@ struct FrameLights {
     tiles: Option<BufferHandle>,
 }
 
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn frame_lights(
     graph: &mut Graph,
+    runtime: &Runtime,
     resident: &Resident,
     options: &Options,
     camera: BufferHandle,
@@ -1257,8 +1276,9 @@ fn frame_lights(
     let Some(preset) = &resident.local_lights else {
         return Ok(None);
     };
-    let (lights, tiles) = forward_lighting::append(
+    let (lights, tiles) = lighting::append_reference(
         graph,
+        runtime,
         [options.width, options.height],
         camera,
         preset,
@@ -1306,7 +1326,7 @@ fn lighting_bindings(
 fn scene_bindings(
     graph: &mut Graph,
     scene: &Scene,
-    prepared: &recipes::Prepared,
+    prepared: &recipes::Reference,
     materials: MaterialBindings<'_>,
     lighting: &[Binding; 9],
     local: Option<FrameLights>,
@@ -1321,7 +1341,7 @@ fn scene_bindings(
     if let Some(local) = local {
         for (slot, binding) in local_bindings
             .iter_mut()
-            .zip(forward_plus::raster_bindings(local.lights, local.tiles))
+            .zip(pbr_forward_plus::raster_bindings(local.lights, local.tiles))
         {
             *slot = Some(binding);
         }
@@ -1367,7 +1387,9 @@ fn scene_bindings(
     clippy::too_many_arguments,
     reason = "explicit per-frame inputs share no additional ownership"
 )]
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn build(
+    runtime: &Runtime,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
     resident: &Resident,
@@ -1377,8 +1399,9 @@ pub(super) fn build(
     camera_bytes: &[u8; 128],
     capture: bool,
 ) -> Result<Built, Error> {
-    if workspace.prepared.select(options).uses_standard_forward() {
+    if workspace.prepared.select(options).uses_standard() {
         return standard_forward::build(
+            runtime,
             pool,
             workspace,
             resident,
@@ -1424,8 +1447,8 @@ pub(super) fn build(
     let uniform = import_frame(&mut graph, workspace, resident)?;
     graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
     graph.export_buffer(uniform)?;
-    let prepared = workspace.prepared.select(options);
-    let lighting = frame_lights(&mut graph, resident, options, uniform)?;
+    let (prepared, bloom) = workspace.prepared.select(options).reference();
+    let lighting = frame_lights(&mut graph, runtime, resident, options, uniform)?;
     let materials = MaterialBindings {
         uniform,
         factors: &workspace.materials,
@@ -1451,7 +1474,7 @@ pub(super) fn build(
     let instance_material = workspace
         .placements
         .as_ref()
-        .map(|placements| scene.primitives[placements.primitive].material);
+        .map(|placements| scene.primitives[placements.fixture.primitive].material);
     let instance_bindings = scene_bindings(
         &mut graph,
         scene,
@@ -1486,7 +1509,7 @@ pub(super) fn build(
         resident,
         options,
         camera,
-        &frustum,
+        |index| frustum.overlaps(resident.primitive_bounds[index]),
     );
 
     let geometry = Geometry {
@@ -1544,9 +1567,12 @@ pub(super) fn build(
             {
                 let prototype = RasterDraw {
                     bindings: instance_bindings,
-                    ..draw(placements.primitive)
+                    ..draw(placements.fixture.primitive)
                 };
-                raster.draw(program, placements.draws(options.instances, prototype))?;
+                raster.draw(
+                    program,
+                    placements.fixture.draws(options.instances, prototype),
+                )?;
             }
             Ok(())
         },
@@ -1557,20 +1583,18 @@ pub(super) fn build(
             )
         },
     )?;
-    let (output, bloom) = prepared.post_process(&mut graph, hdr)?;
+    let processed = bloom.add_passes(&mut graph, hdr)?;
+    let output = prepared.add_output(&mut graph, processed)?;
     finish_frame(
         graph,
         SceneImages {
             hdr,
             depth,
             output,
-            bloom,
+            bloom: (processed != hdr).then_some(processed),
             shadows: shadow.views.map(ImageView::image),
         },
-        BufferUpdates {
-            camera: uniform,
-            tiles: lighting.and_then(|item| item.tiles),
-        },
+        uniform,
         shadow.updates,
         draws,
         options,
@@ -1627,7 +1651,7 @@ fn select_draws(
     resident: &Resident,
     options: &Options,
     camera: Camera,
-    frustum: &Frustum,
+    visible: impl Fn(usize) -> bool,
 ) {
     opaque.clear();
     blended.clear();
@@ -1635,7 +1659,7 @@ fn select_draws(
         let material = &scene.materials[primitive.material];
         if (resident.packed.is_some() && !material.blend)
             || !material_visible(options, scene, primitive.material)
-            || !frustum.overlaps(resident.primitive_bounds[index])
+            || !visible(index)
         {
             continue;
         }
@@ -1664,7 +1688,7 @@ fn sort_blended(blended: &mut [usize], scene: &Scene, camera: Camera) {
 
 struct SceneImages {
     hdr: ImageHandle,
-    depth: ImageHandle,
+    depth: Option<ImageHandle>,
     output: ImageHandle,
     bloom: Option<ImageHandle>,
     shadows: [ImageHandle; shadow::CASCADE_COUNT],
@@ -1673,7 +1697,7 @@ struct SceneImages {
 fn finish_frame(
     mut graph: Graph,
     images: SceneImages,
-    updates: BufferUpdates,
+    camera_update: BufferHandle,
     shadow_updates: Option<ShadowUpdates>,
     draws: Option<usize>,
     options: &Options,
@@ -1686,7 +1710,6 @@ fn finish_frame(
         bloom,
         shadows,
     } = images;
-    let multisampled = options.sample_count == SampleCount::X4;
     #[cfg(feature = "tracy")]
     let _resolve = tracy_client::Client::running().map(|client| {
         client.span(
@@ -1706,11 +1729,9 @@ fn finish_frame(
         Some(Captures {
             hdr: graph.readback_image("capture linear HDR", hdr)?,
             sdr: graph.readback_image("capture sRGB", output)?,
-            depth: if multisampled {
-                None
-            } else {
-                Some(graph.readback_image("capture depth", depth)?)
-            },
+            depth: depth
+                .map(|depth| graph.readback_image("capture depth", depth))
+                .transpose()?,
         })
     } else {
         None
@@ -1735,7 +1756,7 @@ fn finish_frame(
     Ok(Built {
         graph,
         output,
-        updates,
+        camera_update,
         captures,
         bloom_capture,
         #[cfg(all(windows, feature = "presentation"))]
@@ -1749,6 +1770,7 @@ fn finish_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use renderer::graph::SampleCount;
 
     #[test]
     fn shadow_caster_policy_changes_the_revision() {
