@@ -102,7 +102,8 @@ try {
         'bloom_downsample.comp', 'bloom_blur_tent.comp', 'bloom_blur_box.comp', 'bloom_combine.comp',
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
         'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
-        'frustum_visibility.comp', 'pbr_instancing.vert'
+        'frustum_visibility.comp', 'pbr_instancing.vert',
+        'pbr_transformed.vert', 'shadow_transformed.vert'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
@@ -147,7 +148,9 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        $hasInline = $name -cin @('shadow.vert', 'pbr_instancing.vert')
+        $hasInline = $name -cin @(
+            'shadow.vert', 'pbr_instancing.vert', 'pbr_transformed.vert', 'shadow_transformed.vert'
+        )
         if (($reflection -match '\bcb7\b') -ne $hasInline) {
             throw "Unexpected inline cbuffer contract in $name reflection"
         }
