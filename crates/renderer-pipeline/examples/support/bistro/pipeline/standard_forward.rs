@@ -135,16 +135,15 @@ pub(super) fn build(
                 scene.images[index].mips.len() as u32,
             )
         };
-        inputs.materials.push(Material {
+        inputs.materials.push(Material::new(
             factors,
-            factor_offset: 0,
-            textures: [
+            [
                 texture(base)?,
                 texture(normal)?,
                 texture(orm)?,
                 texture(emissive)?,
             ],
-        });
+        ));
     }
     let geometry = |index: usize| IndexedDraw {
         vertices: workspace.vertices[index],

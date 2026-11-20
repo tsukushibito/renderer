@@ -19,10 +19,13 @@ use renderer::{
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     graph::BufferDesc,
-    runtime::{FrameSubmission, Runtime},
+    runtime::{ExecutionError, FrameSubmission, Runtime},
 };
 use renderer_pipeline::{
-    pbr::{self, ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates},
+    pbr::{
+        self, MaterialUniform, ResidentMaterial, ShadowFrame, ShadowHistory, ShadowKey,
+        ShadowUpdates,
+    },
     pbr_forward, pbr_forward_plus,
 };
 use std::num::NonZeroUsize;
@@ -539,7 +542,7 @@ impl Budget {
 pub(super) struct Resident {
     pub vertices: Vec<ImportBuffer>,
     pub indices: Vec<ImportBuffer>,
-    pub materials: Vec<ImportBuffer>,
+    pub materials: Vec<ResidentMaterial>,
     pub images: Vec<ImportImage>,
     pub environment: [ImportImage; 3],
     pub environment_mips: [u32; 3],
@@ -605,6 +608,52 @@ pub(super) fn upload_buffer(
     owners: &mut Vec<GraphPool>,
     bytes: &[u8],
 ) -> Result<ImportBuffer, Error> {
+    upload_asset(
+        backend,
+        owners,
+        bytes.len(),
+        |graph| {
+            let buffer = graph.buffer(
+                "immutable asset buffer",
+                BufferDesc {
+                    size: bytes.len() as u64,
+                },
+            )?;
+            graph.upload_buffer("asset import boundary", buffer, 0, bytes)?;
+            graph.export_buffer(buffer)?;
+            Ok(buffer)
+        },
+        |buffer, submission| submission.export_buffer(buffer),
+    )
+}
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+pub(super) fn upload_material(
+    backend: &mut Runtime,
+    owners: &mut Vec<GraphPool>,
+    bytes: &[u8; program::MATERIAL_BYTES],
+) -> Result<ResidentMaterial, Error> {
+    upload_asset(
+        backend,
+        owners,
+        bytes.len(),
+        |graph| {
+            let material = MaterialUniform::upload_encoded(graph, "material factors", bytes)?;
+            material.export(graph)?;
+            Ok(material)
+        },
+        MaterialUniform::accept,
+    )
+}
+
+#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+fn upload_asset<D, T>(
+    backend: &mut Runtime,
+    owners: &mut Vec<GraphPool>,
+    byte_count: usize,
+    declare: impl FnOnce(&mut Graph) -> Result<D, GraphError>,
+    accept: impl FnOnce(D, &FrameSubmission) -> Result<T, ExecutionError>,
+) -> Result<T, Error> {
     let mut pool = GraphPool::new(
         GraphCapacity {
             resources: 1,
@@ -617,7 +666,7 @@ pub(super) fn upload_buffer(
             dependencies: 0,
             initial_ranges: 1,
             name_bytes: 64,
-            upload_bytes: bytes.len(),
+            upload_bytes: byte_count,
             edges: 2,
             segments: 2,
             readers: 2,
@@ -625,17 +674,10 @@ pub(super) fn upload_buffer(
         1,
     )?;
     let mut graph = pool.begin()?;
-    let buffer = graph.buffer(
-        "immutable asset buffer",
-        BufferDesc {
-            size: bytes.len() as u64,
-        },
-    )?;
-    graph.upload_buffer("asset import boundary", buffer, 0, bytes)?;
-    graph.export_buffer(buffer)?;
+    let resource = declare(&mut graph)?;
     let plan = graph.compile()?;
     let pending = backend.submit(&plan)?;
-    let imported = pending.export_buffer(buffer)?;
+    let imported = accept(resource, &pending)?;
     drop(super::backend::wait_for(backend, pending.id())?);
     drop((pending, plan));
     owners.push(pool);
@@ -704,7 +746,9 @@ impl Resident {
         };
         let vertices = take_keys(&mut self.vertices);
         let indices = take_keys(&mut self.indices);
-        let materials = take_keys(&mut self.materials);
+        for material in &mut self.materials {
+            material.release_snapshot();
+        }
         let camera = self.camera.key();
         let packed = self.packed.take().map(indirect::Resident::release);
         drop(self.camera);
@@ -716,7 +760,9 @@ impl Resident {
         };
         self.vertices = refresh(vertices)?;
         self.indices = refresh(indices)?;
-        self.materials = refresh(materials)?;
+        for material in &mut self.materials {
+            material.refresh_snapshot(backend)?;
+        }
         self.camera = backend.refresh_buffer(camera)?;
         self.packed = packed.map(|packed| packed.refresh(backend)).transpose()?;
         Ok(self)
@@ -811,7 +857,7 @@ impl Resident {
             })
             .transpose()?;
         for material in &scene.materials {
-            materials.push(upload_buffer(
+            materials.push(upload_material(
                 backend,
                 &mut upload_owners,
                 &material.uniform,
@@ -944,7 +990,7 @@ impl InstancePlacements {
 pub(super) struct Workspace {
     vertices: Vec<BufferHandle>,
     indices: Vec<BufferHandle>,
-    materials: Vec<BufferHandle>,
+    materials: Vec<MaterialUniform>,
     images: Vec<ImageHandle>,
     bindings: Vec<RasterBindings>,
     shadow_bindings: Vec<Option<RasterBindings>>,
@@ -1136,7 +1182,7 @@ impl Geometry<'_> {
 #[derive(Clone, Copy)]
 struct MaterialBindings<'a> {
     uniform: BufferHandle,
-    factors: &'a [BufferHandle],
+    factors: &'a [MaterialUniform],
     images: &'a [ImageHandle],
 }
 
@@ -1145,8 +1191,8 @@ impl MaterialBindings<'_> {
         buffer_binding(0, self.uniform, program::CAMERA_BYTES as u64)
     }
 
-    fn factors(self, material: usize) -> Binding {
-        buffer_binding(1, self.factors[material], program::MATERIAL_BYTES as u64)
+    fn factors(self, material: usize) -> MaterialUniform {
+        self.factors[material]
     }
 
     fn texture(
@@ -1246,11 +1292,11 @@ fn append_shadows(
                 Some(bindings) => bindings,
                 None => {
                     let base_color = scene.materials[material].textures[0];
-                    let bindings = graph.raster_bindings(
+                    let bindings = materials.factors(material).raster_bindings(
+                        graph,
                         program,
                         &[
                             materials.camera(),
-                            materials.factors(material),
                             materials.texture(graph, scene, base_color, 0)?,
                             sampler_binding(1, 4, SamplerDescriptor::LinearRepeat),
                         ],
@@ -1368,7 +1414,6 @@ fn scene_bindings(
         let [base, normal, orm, emissive] = material.textures;
         let material_bindings = [
             materials.camera(),
-            materials.factors(index),
             materials.texture(graph, scene, base, 0)?,
             materials.texture(graph, scene, normal, 1)?,
             materials.texture(graph, scene, orm, 2)?,
@@ -1388,9 +1433,17 @@ fn scene_bindings(
         if instance_material == Some(index)
             && let Some(instances) = &prepared.instances
         {
-            instance_bindings = Some(graph.raster_bindings(instances, &all[..shared])?);
+            instance_bindings = Some(materials.factors(index).raster_bindings(
+                graph,
+                instances,
+                &all[..shared],
+            )?);
         }
-        bindings.push(graph.raster_bindings(program, &all[..program.bindings().len()])?);
+        bindings.push(materials.factors(index).raster_bindings(
+            graph,
+            program,
+            &all[..program.bindings().len() - 1],
+        )?);
     }
     Ok(instance_bindings)
 }
@@ -1639,7 +1692,7 @@ fn import_frame(
     for value in &resident.materials {
         workspace
             .materials
-            .push(graph.import_buffer("material factors", value)?);
+            .push(value.import(graph, "material factors")?);
     }
     for value in &resident.images {
         workspace

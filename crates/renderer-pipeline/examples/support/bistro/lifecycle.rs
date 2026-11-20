@@ -15,7 +15,7 @@ use super::{
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     capacity::CapacityRecovery,
-    graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportBuffer, ImportImage},
+    graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, ImportImage},
     runtime::{ExecutionErrorKind, FrameId, Runtime},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -194,7 +194,7 @@ fn require_stale(backend: &mut Runtime, plan: &CompiledGraph) -> Result<(), Erro
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn stale_plans(
     image: &ImportImage,
-    buffer: &ImportBuffer,
+    buffer: &renderer_pipeline::pbr::ResidentMaterial,
 ) -> Result<(GraphPool, CompiledGraph, CompiledGraph), Error> {
     let mut pool = GraphPool::new(GraphCapacity::default(), 2)?;
     let mut graph = pool.begin()?;
@@ -203,8 +203,9 @@ fn stale_plans(
     graph.export_image(source)?;
     let image = graph.compile()?;
     let mut graph = pool.begin()?;
-    let source = graph.import_buffer("old material factors", buffer)?;
-    graph.readback_buffer("old factors", source, 0, program::MATERIAL_BYTES as u64)?;
+    buffer
+        .import(&mut graph, "old material factors")?
+        .readback(&mut graph, "old factors")?;
     let buffer = graph.compile()?;
     Ok((pool, image, buffer))
 }
@@ -458,8 +459,8 @@ pub(super) fn execute(
         )?;
         let old_frame = accept_frame(backend, resident, built)?;
         let old_image = resident.images[image_index].clone();
-        let old_buffer = resident.materials[material_index].clone();
-        let (stale_pool, stale_image, stale_buffer) = stale_plans(&old_image, &old_buffer)?;
+        let (stale_pool, stale_image, stale_buffer) =
+            stale_plans(&old_image, &resident.materials[material_index])?;
         backend.delete(old_image.key())?;
         resident.images[image_index] =
             upload_texture(backend, &mut upload_pool, desc, &changed_texture)?;
@@ -485,13 +486,11 @@ pub(super) fn execute(
             &directory.join(format!("cycle-{cycle}-texture-only")),
             options,
         )?;
-        backend.delete(old_buffer.key())?;
+        resident.materials[material_index].release(backend)?;
         let mut new_owners = Vec::new();
         resident.materials[material_index] =
-            pipeline::upload_buffer(backend, &mut new_owners, &changed_material)?;
+            pipeline::upload_material(backend, &mut new_owners, &changed_material)?;
         require_stale(backend, &stale_buffer)?;
-        resident.materials[material_index] =
-            backend.refresh_buffer(resident.materials[material_index].key())?;
         let pending_memory = backend::memory_snapshot(backend)?;
         let expected_retained_bytes = desc
             .byte_len()
@@ -510,7 +509,7 @@ pub(super) fn execute(
         if !old_capture.matches(&references[1]) {
             return Err("pending old View did not retain the old material and texture".into());
         }
-        drop((stale_image, stale_buffer, stale_pool, old_image, old_buffer));
+        drop((stale_image, stale_buffer, stale_pool, old_image));
         let built = build_frame(
             backend, resident, scene, options, conditions, cameras[1], &mut pool, workspace,
         )?;
@@ -540,12 +539,12 @@ pub(super) fn execute(
         let changed_report =
             changed.save(&directory.join(format!("cycle-{cycle}-changed")), options)?;
         backend.delete(resident.images[image_index].key())?;
-        backend.delete(resident.materials[material_index].key())?;
+        resident.materials[material_index].release(backend)?;
         resident.images[image_index] =
             upload_texture(backend, &mut upload_pool, desc, &original_texture)?;
         let mut restored_owners = Vec::new();
         resident.materials[material_index] =
-            pipeline::upload_buffer(backend, &mut restored_owners, &original_material)?;
+            pipeline::upload_material(backend, &mut restored_owners, &original_material)?;
         // The current material's original owner is released only at this change
         // boundary. Pending work retained its own immutable provenance as needed.
         resident.upload_owners[material_index] = restored_owners.remove(0);
