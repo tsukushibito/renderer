@@ -12,7 +12,7 @@ use renderer::{
 use crate::{
     passes::{
         output::OutputImages,
-        pbr::{blend_program, opaque_program, shadow_program},
+        pbr::{TransformTechnique, blend_program, opaque_program, shadow_program},
     },
     pbr::{
         Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
@@ -68,15 +68,6 @@ pub fn prepare_with_programs(
     prepare_variant(config, limits, programs, DrawMode::Direct)
 }
 
-/// Prepare both ordinary indexed geometry and model-space instance ranges in
-/// the opaque and shadow passes. The transparent pass uses ordinary draws.
-pub fn prepare_with_transforms(
-    config: Config,
-    limits: SceneLimits,
-) -> Result<Prepared, GraphError> {
-    prepare_variant(config, limits, Programs::default(), DrawMode::Transformed)
-}
-
 fn prepare_variant(
     config: Config,
     limits: SceneLimits,
@@ -84,7 +75,14 @@ fn prepare_variant(
     mode: DrawMode,
 ) -> Result<Prepared, GraphError> {
     Ok(Prepared {
-        common: PreparedScene::new(config, limits, programs, true, mode)?,
+        common: PreparedScene::new(
+            config,
+            limits,
+            programs,
+            true,
+            mode,
+            (mode == DrawMode::Indirect).then_some(TransformTechnique::Forward),
+        )?,
     })
 }
 

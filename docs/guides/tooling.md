@@ -244,24 +244,22 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 
 | レシピ | MSAA | 不透明・マスク | 影 | 半透明 | Program |
 | --- | --- | --- | --- | --- | --- |
-| Forward | 1×／4× | Indexed／Indirect | Indexed | Indexed | 組み込み |
-| Forward（変換付き） | 1×／4× | Indexed／Instanced | Indexed／Instanced | Indexed | 組み込み |
+| Forward | 1×／4× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
 | Forward（カスタム Program） | 1× | Indexed | Indexed | Indexed | Forward ABI |
-| Forward+ | 1×／4× | Indexed／Indirect | Indexed | Indexed | 組み込み |
-| Deferred | 1× | Indexed／Indirect | Indexed | Indexed | 組み込み |
+| Forward+ | 1×／4× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
+| Deferred | 1× | Indexed／Indirect／Instanced | Indexed／Instanced | Indexed／Instanced | 組み込み |
 
 - `pbr_forward_plus`へビューごとに最大64件の点光源を渡す。16×16画素のタイルは最大65,536個。
   `prepare`は描画寸法ごとの一時タイルマスクを予約する。`add_scene`または`add_passes`に光源を渡すと、
   Graph内でマスク生成と描画を接続する。光源0件の呼び出しは通常Forwardを使う。
 - `pbr_deferred`は1×のG-bufferにベースカラー／メタリック、法線／粗さ、発光／AOとD32深度を保持する。
   照明後に、アプリが並べた半透明描画をHDRに合成する。
-- `pbr_forward::prepare_with_transforms`で組み込みForwardの変換付き直接描画を準備し、
-  `pbr::Transform`とその範囲を参照する`Draw::Instanced`を渡す。
-  1ビューにつき最大1,024件で、各アフィン変換は有限、可逆、行列式が正であることを要求する。
-  不透明・アルファマスクのシーン描画とカスケードの影は同じ変換を使う。
-- CPU側で描画リストを絞る場合は、`PreparedView::visible`と`cascade_overlaps`でワールド空間のAABBを判定する。
-  `passes::visibility`でGPU可視判定する場合は、アプリがパックしたジオメトリと材質グループから可視マスクと間接引数を作り、
-  不透明・アルファマスク描画へ渡す。
+- 標準の3方式では、`SceneLimits::max_transforms`を正の値にするとモデル空間の`Draw::Instanced`と
+  `Draw::TransformedIndirect`を利用できる。通常のIndexedとIndirectはワールド空間のまま使える。
+  変換の上限は1ビューにつき1,024件で、準備時に64件用または1,024件用の固定テーブルを選ぶ。
+  変換は有限かつ可逆で、負の行列式も受け付ける。鏡映は表裏判定と接線フレームへ反映する。
+  半透明のインスタンスと描画は利用側の指定順に並べる。影を描く不透明・マスクの形状にはシーンと同じ変換を渡す。
+  間接描画の一つのグループは一つの変換を使い、可視判定には変換済みのワールド空間の境界を渡す。
 
 ライブラリに渡すレシピの組み合わせと実シーンでの使い方は[Bistroの描画パイプライン](#bistro-scene-pipeline)を参照する。
 
@@ -314,7 +312,7 @@ cargo run --locked --release -p renderer-bistro --no-default-features --features
 
 D3D12では`--api d3d12`を指定する。
 点光源を含む構成は`--pipeline forward-plus --msaa 4`、G-bufferを使う構成は`--pipeline deferred`を指定する。
-`--submission indirect`でGPU可視判定と不透明の間接描画、Forwardの`--instances instanced`で直接インスタンシングを確認できる。
+`--submission indirect`でGPU可視判定と不透明の間接描画、標準3方式の`--instances instanced`で直接インスタンシングを確認できる。
 
 Bistroは公開の`ShadowHistory`に遮蔽物の描画条件と光源行列を渡す。再利用できるカスケードの画像は
 前のフレームから取り込み、更新が必要なカスケードだけ深度パスを追加する。後続の照明パスは

@@ -103,7 +103,11 @@ try {
         'gbuffer.vert', 'gbuffer.frag', 'deferred_lighting.frag',
         'forward_plus.comp', 'pbr_all_lights.frag', 'pbr_forward_plus.frag',
         'frustum_visibility.comp', 'pbr_instancing.vert',
-        'pbr_transformed.vert', 'pbr_transformed.frag', 'shadow_transformed.vert'
+        'pbr_transformed.vert', 'pbr_transformed_small.vert',
+        'gbuffer_transformed.vert', 'gbuffer_transformed_small.vert',
+        'shadow_transformed.vert', 'shadow_transformed_small.vert',
+        'pbr_transformed.frag', 'pbr_forward_plus_transformed.frag',
+        'gbuffer_transformed.frag', 'shadow_transformed.frag'
     )
     foreach ($name in $shaders) {
         $stage = $name.Split('.')[-1]
@@ -114,7 +118,14 @@ try {
             'pbr_all_lights.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=1') }
             'pbr_forward_plus.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2') }
             'pbr_instancing.vert' { $shaderSource = 'pbr.vert'; $defines = @('BISTRO_INSTANCING=1') }
+            'pbr_transformed_small.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_TRANSFORM_RECORDS=64') }
+            'gbuffer_transformed.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_GBUFFER_VERTEX=1') }
+            'gbuffer_transformed_small.vert' { $shaderSource = 'pbr_transformed.vert'; $defines = @('RENDERER_GBUFFER_VERTEX=1', 'RENDERER_TRANSFORM_RECORDS=64') }
+            'shadow_transformed_small.vert' { $shaderSource = 'shadow_transformed.vert'; $defines = @('RENDERER_TRANSFORM_RECORDS=64') }
             'pbr_transformed.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
+            'pbr_forward_plus_transformed.frag' { $shaderSource = 'pbr.frag'; $defines = @('BISTRO_LOCAL_LIGHTS=2', 'BISTRO_TRANSFORMED_DIRECTIONS=1') }
+            'gbuffer_transformed.frag' { $shaderSource = 'gbuffer.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
+            'shadow_transformed.frag' { $shaderSource = 'shadow.frag'; $defines = @('BISTRO_TRANSFORMED_DIRECTIONS=1') }
         }
         $shaderSource += '.hlsl'
         $source = Join-Path $sourceDir $shaderSource
@@ -150,9 +161,8 @@ try {
         $reflection = [regex]::Replace($dump.Substring(0, $end), '(?m)[ \t]+$', '')
         $reflectionPath = Join-Path $temporaryRoot ($name + '.reflection.txt')
         Write-Text $reflectionPath $reflection
-        $hasInline = $name -cin @(
-            'shadow.vert', 'pbr_instancing.vert', 'pbr_transformed.vert', 'shadow_transformed.vert'
-        )
+        $hasInline = $name -cin @('shadow.vert', 'pbr_instancing.vert') -or
+            ($stage -ceq 'vert' -and $name.Contains('_transformed'))
         if (($reflection -match '\bcb7\b') -ne $hasInline) {
             throw "Unexpected inline cbuffer contract in $name reflection"
         }

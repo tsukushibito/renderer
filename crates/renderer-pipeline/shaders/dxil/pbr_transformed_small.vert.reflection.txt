@@ -1,0 +1,146 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 1   xyz         1     NONE   float   xyz
+; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
+; TEXCOORD                 3   xy          3     NONE   float   xy
+; SV_InstanceID            0   x           4   INSTID    uint   x
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 1   xyz         1     NONE   float   xyz
+; TEXCOORD                 2   xyzw        2     NONE   float   xyzw
+; TEXCOORD                 3   xy          3     NONE   float   xy
+; TEXCOORD                 4   x           4     NONE    uint   x
+; SV_Position              0   xyzw        5      POS   float   xyzw
+;
+; shader hash: 03ccc11a2d2fc1d1c8813d9cd91be9da
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 5
+; SigOutputElements: 6
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 5
+; SigOutputVectors[0]: 6
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 1
+; TEXCOORD                 2
+; TEXCOORD                 3
+; SV_InstanceID            0
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; TEXCOORD                 1                 linear
+; TEXCOORD                 2                 linear
+; TEXCOORD                 3                 linear
+; TEXCOORD                 4        nointerpolation
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer camera
+; {
+;
+;   struct hostlayout.camera
+;   {
+;
+;       struct hostlayout.struct.CameraData
+;       {
+;
+;           row_major float4x4 view_projection;       ; Offset:    0
+;           float4 eye;                               ; Offset:   64
+;           float4 light_direction;                   ; Offset:   80
+;           float4 light_color;                       ; Offset:   96
+;           float4 environment;                       ; Offset:  112
+;           row_major float4x4 shadow_view_projection[4];; Offset:  128
+;           float4 shadow_splits;                     ; Offset:  384
+;           float4 shadow_texel_world;                ; Offset:  400
+;           float4 shadow_depth_scale;                ; Offset:  416
+;           float4 camera_forward_blend;              ; Offset:  432
+;           float4 shadow_bias;                       ; Offset:  448
+;
+;       } camera;                                     ; Offset:    0
+;
+;
+;   } camera;                                         ; Offset:    0 Size:   464
+;
+; }
+;
+; cbuffer parameters
+; {
+;
+;   struct parameters
+;   {
+;
+;       struct struct.Parameters
+;       {
+;
+;           uint first_transform;                     ; Offset:    0
+;
+;       } parameters;                                 ; Offset:    0
+;
+;
+;   } parameters;                                     ; Offset:    0 Size:     4
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; camera                            cbuffer      NA          NA     CB0            cb0     1
+; parameters                        cbuffer      NA          NA     CB1            cb7     1
+; transform_table                   texture    byte         r/o      T0             t4     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 17, outputs: 24
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 0, 1, 2, 16 }
+;   output 1 depends on inputs: { 0, 1, 2, 16 }
+;   output 2 depends on inputs: { 0, 1, 2, 16 }
+;   output 4 depends on inputs: { 4, 5, 6, 16 }
+;   output 5 depends on inputs: { 4, 5, 6, 16 }
+;   output 6 depends on inputs: { 4, 5, 6, 16 }
+;   output 8 depends on inputs: { 8, 9, 10, 16 }
+;   output 9 depends on inputs: { 8, 9, 10, 16 }
+;   output 10 depends on inputs: { 8, 9, 10, 16 }
+;   output 11 depends on inputs: { 11, 16 }
+;   output 12 depends on inputs: { 12 }
+;   output 13 depends on inputs: { 13 }
+;   output 16 depends on inputs: { 16 }
+;   output 20 depends on inputs: { 0, 1, 2, 16 }
+;   output 21 depends on inputs: { 0, 1, 2, 16 }
+;   output 22 depends on inputs: { 0, 1, 2, 16 }
+;   output 23 depends on inputs: { 0, 1, 2, 16 }
+;

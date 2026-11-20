@@ -9,14 +9,15 @@ use renderer::program::{ManagedRasterProgram, RasterPipelineRequest, SamplerDesc
 
 use crate::passes::{
     output::{Exposure, OutputImages, PreparedOutput},
-    pbr::{CAMERA_BYTES, transformed_opaque_program, transformed_shadow_program},
+    pbr::{CAMERA_BYTES, TransformTechnique, transformed_programs},
 };
 
 use super::{
     AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Config, Draw, Environment, Frame,
-    FrameShadows, MAX_TRANSFORMS, PreparedInstances, PreparedView, SceneImages, SceneLimits,
-    ShadowSettings, ShadowSource, Sun, ViewInput,
+    FrameShadows, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
+    ShadowSource, Sun, ViewInput,
     draw::{Batch, Bindings, image_binding, sampler_binding},
+    instances::{InstanceBuffer, InstanceTier},
     raster::{SHADOW_IMAGES, add_shadow_pass},
 };
 
@@ -28,17 +29,42 @@ pub struct Programs {
     pub shadow: ManagedRasterProgram,
 }
 
-struct InstancePrograms {
-    opaque: ManagedRasterProgram,
-    shadow: ManagedRasterProgram,
-    table: PreparedInstances,
+pub(crate) struct ScenePrograms {
+    world: Programs,
+    model: Option<Programs>,
+}
+
+impl ScenePrograms {
+    pub(crate) fn new(world: Programs, model: Option<(InstanceTier, TransformTechnique)>) -> Self {
+        Self {
+            world,
+            model: model.map(|(tier, technique)| transformed_programs(tier, technique)),
+        }
+    }
+
+    pub(crate) fn raster_requests(
+        &self,
+        samples: SampleCount,
+        include_shadows: bool,
+    ) -> Vec<RasterPipelineRequest> {
+        let mut raster = Vec::with_capacity(
+            (2 + usize::from(include_shadows)) * (1 + usize::from(self.model.is_some())),
+        );
+        for programs in std::iter::once(&self.world).chain(self.model.iter()) {
+            raster.push(pipeline(programs.opaque.clone(), samples));
+            raster.push(pipeline(programs.blend.clone(), samples));
+            if include_shadows {
+                raster.push(pipeline(programs.shadow.clone(), SampleCount::X1));
+            }
+        }
+        raster
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DrawMode {
     Direct,
     Indirect,
-    Transformed,
 }
 
 /// Immutable recipe settings and scratch reused when declaring frames. The
@@ -48,10 +74,10 @@ pub(crate) struct PreparedScene {
     limits: SceneLimits,
     preparation: Preparation,
     output: Option<PreparedOutput>,
-    programs: Programs,
+    programs: ScenePrograms,
     opaque_uses_lighting: bool,
     mode: DrawMode,
-    instances: Option<InstancePrograms>,
+    instances: Option<PreparedInstances>,
     opaque: Batch,
     transparent: Batch,
     shadow: Batch,
@@ -64,7 +90,15 @@ impl PreparedScene {
         programs: Programs,
         opaque_uses_lighting: bool,
         mode: DrawMode,
+        model_technique: Option<TransformTechnique>,
     ) -> Result<Self, GraphError> {
+        let tier = InstanceTier::for_limit(limits.max_transforms)?;
+        if tier.is_some() && model_technique.is_none() {
+            return Err(GraphError::invalid_input(
+                "custom PBR Programs support only world-space indexed draws",
+            ));
+        }
+        let programs = ScenePrograms::new(programs, tier.zip(model_technique));
         let [width, height] = config.extent;
         if !config.clear_color.into_iter().all(f32::is_finite) {
             return Err(GraphError::invalid_input("PBR clear color must be finite"));
@@ -90,62 +124,56 @@ impl PreparedScene {
             preparation.reserve_image(shadow_desc(settings), CASCADE_COUNT)?;
         }
 
-        let mut raster = Vec::with_capacity(5);
-        raster.push(pipeline(programs.opaque.clone(), config.samples));
-        raster.push(pipeline(programs.blend.clone(), config.samples));
-
         let render_shadows = config.shadows.is_some();
+        let raster = programs.raster_requests(config.samples, render_shadows);
         let cascades = if render_shadows { CASCADE_COUNT } else { 0 };
         let casters = if render_shadows {
             limits.max_casters_per_cascade
         } else {
             0
         };
-        if render_shadows {
-            raster.push(pipeline(programs.shadow.clone(), SampleCount::X1));
-        }
-        let transforms = mode == DrawMode::Transformed;
-        let instances = if transforms {
-            let opaque = transformed_opaque_program();
-            let shadow = transformed_shadow_program();
-            raster.push(pipeline(opaque.clone(), config.samples));
-            if render_shadows {
-                raster.push(pipeline(shadow.clone(), SampleCount::X1));
-            }
-            Some(InstancePrograms {
-                opaque,
-                shadow,
-                table: PreparedInstances::reserve(&mut preparation)?,
-            })
-        } else {
-            None
-        };
+        let transforms = tier.is_some();
+        let instances = tier
+            .map(|tier| PreparedInstances::reserve(&mut preparation, tier))
+            .transpose()?;
 
         let shadow_draws = checked(casters.checked_mul(CASCADE_COUNT))?;
-        let scene_accesses = programs
-            .opaque
+        let scene_accesses = std::iter::once(&programs.world)
+            .chain(programs.model.iter())
+            .map(|programs| {
+                programs
+                    .opaque
+                    .bindings()
+                    .len()
+                    .max(programs.blend.bindings().len())
+            })
+            .max()
+            .expect("the world-space Programs are always prepared")
+            + 2
+            + usize::from(mode == DrawMode::Indirect);
+        let shadow_accesses = programs
+            .model
+            .as_ref()
+            .unwrap_or(&programs.world)
+            .shadow
             .bindings()
             .len()
-            .max(programs.blend.bindings().len())
-            + 2
-            + usize::from(mode != DrawMode::Direct);
-        let shadow_accesses = programs.shadow.bindings().len() + 2 + usize::from(transforms);
+            + 2;
         let accesses = checked(limits.max_draws.checked_mul(scene_accesses))?;
         let accesses =
             checked(accesses.checked_add(checked(shadow_draws.checked_mul(shadow_accesses))?))?;
-        let shadow_bindings = if render_shadows {
-            programs.shadow.bindings().len()
-        } else {
-            0
-        };
-        let mut material_bindings =
-            programs.opaque.bindings().len() + programs.blend.bindings().len() + shadow_bindings;
-        if let Some(instances) = &instances {
-            material_bindings += instances.opaque.bindings().len();
-            if render_shadows {
-                material_bindings += instances.shadow.bindings().len();
-            }
-        }
+        let material_bindings: usize = std::iter::once(&programs.world)
+            .chain(programs.model.iter())
+            .map(|programs| {
+                programs.opaque.bindings().len()
+                    + programs.blend.bindings().len()
+                    + if render_shadows {
+                        programs.shadow.bindings().len()
+                    } else {
+                        0
+                    }
+            })
+            .sum();
 
         preparation.add_requirements(
             GraphRequirements {
@@ -187,7 +215,7 @@ impl PreparedScene {
             mode,
             instances,
             opaque: Batch::prepare(limits.max_materials, limits.max_draws, transforms)?,
-            transparent: Batch::prepare(limits.max_materials, limits.max_draws, false)?,
+            transparent: Batch::prepare(limits.max_materials, limits.max_draws, transforms)?,
             shadow: Batch::prepare(
                 if render_shadows {
                     limits.max_materials
@@ -247,14 +275,14 @@ impl PreparedScene {
         &mut self,
         graph: &mut Graph,
         frame: Frame<'_>,
-        programs: Option<&Programs>,
+        programs: Option<&ScenePrograms>,
         additional: impl FnOnce(&mut Graph, BufferHandle) -> Result<[Binding; N], GraphError>,
         append_scene: impl FnOnce(
             &mut Graph,
             RasterScene<'_>,
         ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
     ) -> Result<SceneImages, GraphError> {
-        self.check_frame(graph, &frame)?;
+        let transform_end = self.check_frame(graph, &frame)?;
         let camera = match frame.camera_target {
             Some(buffer) => buffer,
             None => graph.buffer("pbr camera", camera_desc())?,
@@ -263,8 +291,8 @@ impl PreparedScene {
             graph.upload_buffer("pbr camera upload", camera, 0, frame.view.uniform_bytes())?;
         }
         let transforms = match &mut self.instances {
-            Some(instances) if !frame.transforms.is_empty() => {
-                Some(instances.table.append(graph, frame.transforms)?)
+            Some(instances) if transform_end != 0 => {
+                Some(instances.append(graph, &frame.transforms[..transform_end])?)
             }
             _ => None,
         };
@@ -304,24 +332,25 @@ impl PreparedScene {
             camera,
             lighting: &extended[..count],
         };
-        let instanced_program = self.instances.as_ref().map(|instances| &instances.opaque);
+        let opaque_model = programs.model.as_ref().map(|model| &model.opaque);
+        let blend_model = programs.model.as_ref().map(|model| &model.blend);
         self.opaque.reset_bindings(frame.materials.len());
         self.transparent.reset_bindings(frame.materials.len());
         self.opaque.record(
             graph,
-            &programs.opaque,
+            &programs.world.opaque,
             opaque_bindings,
             frame.materials,
             frame.opaque,
-            instanced_program.zip(transforms),
+            opaque_model.zip(transforms),
         )?;
         self.transparent.record(
             graph,
-            &programs.blend,
+            &programs.world.blend,
             transparent_bindings,
             frame.materials,
             frame.transparent,
-            None,
+            blend_model.zip(transforms),
         )?;
         let (hdr, depth) = append_scene(
             graph,
@@ -332,7 +361,6 @@ impl PreparedScene {
                 opaque: &self.opaque,
                 transparent: &self.transparent,
                 programs,
-                instanced: instanced_program,
             },
         )?;
         Ok(SceneImages {
@@ -366,7 +394,7 @@ impl PreparedScene {
         Ok((output, PreparedOutput::validate_exposure(exposure)?))
     }
 
-    fn check_frame(&self, graph: &Graph, frame: &Frame<'_>) -> Result<(), GraphError> {
+    fn check_frame(&self, graph: &Graph, frame: &Frame<'_>) -> Result<usize, GraphError> {
         if !frame.view.matches(self.config.extent, self.config.shadows) {
             return Err(GraphError::invalid_input(
                 "PBR view is incompatible with the prepared recipe",
@@ -392,23 +420,21 @@ impl PreparedScene {
             self.limits.max_draws,
             frame.opaque.len().checked_add(frame.transparent.len()),
         )?;
-        let transform_limit = if self.mode == DrawMode::Transformed {
-            MAX_TRANSFORMS
-        } else {
-            0
-        };
         check_limit(
             GraphCapacityKind::Draws,
-            transform_limit,
+            self.limits.max_transforms,
             Some(frame.transforms.len()),
         )?;
-        validate_draws(frame.opaque, self.mode, frame, DrawPass::Opaque)?;
-        validate_draws(
+        let has_model = self.instances.is_some();
+        let mut transform_end =
+            validate_draws(frame.opaque, self.mode, has_model, frame, DrawPass::Opaque)?;
+        transform_end = transform_end.max(validate_draws(
             frame.transparent,
             DrawMode::Direct,
+            has_model,
             frame,
             DrawPass::Transparent,
-        )?;
+        )?);
         match (self.config.shadows, frame.shadows) {
             (Some(settings), FrameShadows::Cascades(sources)) => {
                 validate_shadow_sources(graph, sources, shadow_desc(settings))?;
@@ -419,12 +445,13 @@ impl PreparedScene {
                             self.limits.max_casters_per_cascade,
                             Some(casters.len()),
                         )?;
-                        let mode = if self.mode == DrawMode::Transformed {
-                            self.mode
-                        } else {
-                            DrawMode::Direct
-                        };
-                        validate_draws(casters, mode, frame, DrawPass::Shadow(cascade))?;
+                        transform_end = transform_end.max(validate_draws(
+                            casters,
+                            DrawMode::Direct,
+                            has_model,
+                            frame,
+                            DrawPass::Shadow(cascade),
+                        )?);
                     }
                 }
             }
@@ -437,7 +464,7 @@ impl PreparedScene {
                 ));
             }
         }
-        Ok(())
+        Ok(transform_end)
     }
 
     fn add_shadows(
@@ -447,11 +474,11 @@ impl PreparedScene {
         materials: &[crate::pbr::Material],
         settings: ShadowSettings,
         sources: [ShadowSource<'_>; CASCADE_COUNT],
-        transforms: Option<BufferHandle>,
+        transforms: Option<InstanceBuffer>,
     ) -> Result<[ImageView; CASCADE_COUNT], GraphError> {
         let desc = shadow_desc(settings);
-        let program = &self.programs.shadow;
-        let instanced = self.instances.as_ref().map(|instances| &instances.shadow);
+        let program = &self.programs.world.shadow;
+        let instanced = self.programs.model.as_ref().map(|model| &model.shadow);
         self.shadow.reset_bindings(materials.len());
         let mut views = [None; CASCADE_COUNT];
         for (cascade, source) in sources.into_iter().enumerate() {
@@ -491,18 +518,24 @@ pub(crate) struct RasterScene<'a> {
     pub(crate) has_transparency: bool,
     opaque: &'a Batch,
     transparent: &'a Batch,
-    programs: &'a Programs,
-    instanced: Option<&'a ManagedRasterProgram>,
+    programs: &'a ScenePrograms,
 }
 
 impl RasterScene<'_> {
     pub(crate) fn draw_opaque(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
-        self.opaque
-            .draw(pass, &self.programs.opaque, self.instanced)
+        self.opaque.draw(
+            pass,
+            &self.programs.world.opaque,
+            self.programs.model.as_ref().map(|model| &model.opaque),
+        )
     }
 
     pub(crate) fn draw_transparent(&self, pass: &mut RasterPass<'_, '_>) -> Result<(), GraphError> {
-        self.transparent.draw(pass, &self.programs.blend, None)
+        self.transparent.draw(
+            pass,
+            &self.programs.world.blend,
+            self.programs.model.as_ref().map(|model| &model.blend),
+        )
     }
 }
 
@@ -543,32 +576,29 @@ impl DrawPass {
 fn validate_draws(
     draws: &[Draw],
     mode: DrawMode,
+    has_model: bool,
     frame: &Frame<'_>,
     pass: DrawPass,
-) -> Result<(), GraphError> {
+) -> Result<usize, GraphError> {
     let wants_blend = matches!(pass, DrawPass::Transparent);
+    let mut transform_end = 0;
     for (index, draw) in draws.iter().enumerate() {
-        let material = match *draw {
-            Draw::Indexed(draw) => draw.material,
-            Draw::Indirect { material, .. } if mode == DrawMode::Indirect => material,
+        let (material, range) = match *draw {
+            Draw::Indexed(draw) => (draw.material, None),
+            Draw::Indirect { material, .. } if mode == DrawMode::Indirect => (material, None),
+            Draw::TransformedIndirect {
+                material,
+                transform,
+                ..
+            } if has_model && mode == DrawMode::Indirect => (material, Some((transform, 1))),
             Draw::Instanced {
                 geometry,
                 first_transform,
                 instance_count,
-            } if mode == DrawMode::Transformed => {
-                let range_end = first_transform
-                    .checked_add(instance_count)
-                    .and_then(|end| usize::try_from(end).ok());
-                if instance_count == 0 || range_end.is_none_or(|end| end > frame.transforms.len()) {
-                    return Err(GraphError::invalid_input(
-                        "PBR instance range exceeds the transform table",
-                    ));
-                }
-                geometry.material
-            }
-            Draw::Indirect { .. } | Draw::Instanced { .. } => {
+            } if has_model => (geometry.material, Some((first_transform, instance_count))),
+            _ => {
                 let kind = match draw {
-                    Draw::Indirect { .. } => "indirect",
+                    Draw::Indirect { .. } | Draw::TransformedIndirect { .. } => "indirect",
                     _ => "instanced",
                 };
                 return Err(GraphError::invalid_input(format!(
@@ -578,6 +608,17 @@ fn validate_draws(
                 .with_pass_name(pass.name()));
             }
         };
+        if let Some((first, count)) = range {
+            let end = first
+                .checked_add(count)
+                .and_then(|end| usize::try_from(end).ok())
+                .filter(|&end| count != 0 && end <= frame.transforms.len())
+                .ok_or_else(|| {
+                    GraphError::invalid_input("PBR instance range exceeds the transform table")
+                        .with_pass_name(pass.name())
+                })?;
+            transform_end = transform_end.max(end);
+        }
         let factors = frame.materials.get(material).ok_or_else(|| {
             GraphError::invalid_input(format!(
                 "PBR draw {index} has out-of-bounds material index {material}"
@@ -593,7 +634,7 @@ fn validate_draws(
             .with_pass_name(pass.name()));
         }
     }
-    Ok(())
+    Ok(transform_end)
 }
 
 fn validate_shadow_sources(

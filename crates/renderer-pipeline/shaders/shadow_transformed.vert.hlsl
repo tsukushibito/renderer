@@ -15,6 +15,7 @@ ConstantBuffer<Parameters> parameters : register(b7, space0);
 
 struct ShadowVertex {
     BISTRO_LOCATION(0) float2 texcoord : TEXCOORD0;
+    BISTRO_LOCATION(1) nointerpolation uint mirrored : TEXCOORD1;
     float4 clip_position : SV_Position;
 };
 
@@ -29,5 +30,7 @@ ShadowVertex main(
     ShadowVertex output;
     output.clip_position = project_vertex(camera.shadow_view_projection[cascade], world);
     output.texcoord = uv;
+    // Parity occupies the fourth float of the first normal row.
+    output.mirrored = transform_is_mirrored(asfloat(transform_table.Load(address + 60u)));
     return output;
 }

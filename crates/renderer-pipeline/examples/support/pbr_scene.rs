@@ -21,7 +21,6 @@ use renderer_pipeline::{
         MaterialUniform, PbrVertex, PointLight, Prepared, PreparedDefaults, Projection,
         SceneLimits, ShadowHistory, ShadowSettings, ShadowUpdates, Sun, ViewInput,
     },
-    pbr_forward,
 };
 
 pub use renderer_pipeline::pbr::Technique;
@@ -56,9 +55,14 @@ impl Triangle {
             ),
             _ => ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], 1.0),
         };
-        let normal = view.orient(normal);
-        let [tx, ty, tz] = view.orient([tangent[0], tangent[1], tangent[2]]);
-        let tangent = [tx, ty, tz, tangent[3] * view.z_axis()];
+        #[cfg(test)]
+        let baked_mirror = matches!(placement, Placement::Mirrored { baked: true, .. });
+        #[cfg(not(test))]
+        let baked_mirror = false;
+        let mirror = if baked_mirror { -1.0 } else { 1.0 };
+        let normal = view.orient([normal[0] * mirror, normal[1], normal[2]]);
+        let [tx, ty, tz] = view.orient([tangent[0] * mirror, tangent[1], tangent[2]]);
+        let tangent = [tx, ty, tz, tangent[3] * mirror * view.z_axis()];
         let positions = [
             ([-0.8_f32, -0.7, 0.0], [0.0, 1.0]),
             ([0.8, -0.7, 0.0], [1.0, 1.0]),
@@ -66,27 +70,40 @@ impl Triangle {
         ];
         let mut vertices = [0; 3 * VERTEX_BYTES];
         for ((position, uv), bytes) in positions.into_iter().zip(vertices.as_chunks_mut().0) {
-            let position = position.map(|value| value * object_scale);
+            let [x, y, z] = position.map(|value| value * object_scale);
+            let position = [x * mirror, y, z];
             *bytes = PbrVertex::new(view.orient(position), normal, tangent, uv)?.encode();
         }
-        Ok(Self {
-            geometry: GeometryData::new(VERTEX_BYTES as u32, &vertices, &[0, 1, 2])?,
-            material: MaterialFactors {
-                base_color: [0.75, 0.015, 0.009, 1.0],
-                emissive: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
-                #[cfg(test)]
-                alpha_mode: if matches!(view, ViewFixture::LeftHandedPerspective { .. }) {
-                    AlphaMode::Mask
-                } else {
-                    AlphaMode::Opaque
-                },
-                #[cfg(test)]
-                double_sided: matches!(
-                    view,
-                    ViewFixture::LeftHandedPerspective { double_sided: true }
-                ),
-                ..MaterialFactors::default()
+        let indices = if baked_mirror { [0, 2, 1] } else { [0, 1, 2] };
+        let material = MaterialFactors {
+            base_color: [0.75, 0.015, 0.009, 1.0],
+            emissive: [if glowing { 2.0 } else { 0.0 }, 0.0, 0.0],
+            #[cfg(test)]
+            alpha_mode: if matches!(view, ViewFixture::LeftHandedPerspective { .. }) {
+                AlphaMode::Mask
+            } else {
+                AlphaMode::Opaque
             },
+            #[cfg(test)]
+            double_sided: matches!(
+                view,
+                ViewFixture::LeftHandedPerspective { double_sided: true }
+            ),
+            ..MaterialFactors::default()
+        };
+        #[cfg(test)]
+        let material = if matches!(placement, Placement::Mirrored { blend: true, .. }) {
+            MaterialFactors {
+                base_color: [0.75, 0.015, 0.009, 0.5],
+                alpha_mode: AlphaMode::Blend,
+                ..material
+            }
+        } else {
+            material
+        };
+        Ok(Self {
+            geometry: GeometryData::new(VERTEX_BYTES as u32, &vertices, &indices)?,
+            material,
             view,
         })
     }
@@ -153,6 +170,11 @@ pub enum Placement {
     Instanced,
     #[cfg(test)]
     Tilted(Option<i32>),
+    #[cfg(test)]
+    Mirrored {
+        baked: bool,
+        blend: bool,
+    },
 }
 
 impl Placement {
@@ -161,6 +183,8 @@ impl Placement {
             Self::Single => false,
             #[cfg(test)]
             Self::Tilted(exponent) => exponent.is_some(),
+            #[cfg(test)]
+            Self::Mirrored { baked, .. } => !baked,
             #[cfg(test)]
             Self::Individual | Self::Instanced => true,
         }
@@ -300,10 +324,12 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         max_draws: count,
         max_materials: 1,
         max_casters_per_cascade: count,
+        max_transforms: if settings.placement.uses_transforms() {
+            count
+        } else {
+            0
+        },
     };
-    if settings.technique == Technique::Forward && settings.placement.uses_transforms() {
-        return pbr_forward::prepare_with_transforms(config, limits).map(Prepared::Forward);
-    }
     Prepared::new(settings.technique, config, limits)
 }
 
@@ -380,9 +406,11 @@ pub fn build_graph(
         #[cfg(test)]
         Placement::Individual => &test_draws[..],
         #[cfg(test)]
-        Placement::Instanced | Placement::Tilted(Some(_)) => &test_draws[..1],
+        Placement::Instanced
+        | Placement::Tilted(Some(_))
+        | Placement::Mirrored { baked: false, .. } => &test_draws[..1],
         #[cfg(test)]
-        Placement::Tilted(None) => &single[..],
+        Placement::Tilted(None) | Placement::Mirrored { baked: true, .. } => &single[..],
     };
     let fixture = triangle.view;
     let sun = Sun::new(fixture.orient([0.0, 0.0, 1.0]), [1.5; 3])?;
@@ -392,14 +420,22 @@ pub fn build_graph(
     let shadows = shadow_history
         .map(|(history, revisions)| history.begin_view(&mut graph, &view, revisions))
         .transpose()?;
-    let mut frame = Frame::with_defaults(&view, &materials, draws, &[], draws, defaults)?;
+    let (opaque, transparent) = if matches!(
+        materials[0].alpha_mode(),
+        renderer_pipeline::pbr::AlphaMode::Blend
+    ) {
+        (&[][..], draws)
+    } else {
+        (draws, &[][..])
+    };
+    let mut frame = Frame::with_defaults(&view, &materials, opaque, transparent, opaque, defaults)?;
     #[cfg(test)]
     if placement.uses_transforms() {
         frame.transforms = &transforms;
     }
     if let Some(shadows) = &shadows {
         frame.shadows = FrameShadows::Cascades(std::array::from_fn(|cascade| {
-            shadows.source(cascade, draws)
+            shadows.source(cascade, opaque)
         }));
     }
     let lights = if prepared.technique().supports_point_lights() {
@@ -469,6 +505,19 @@ fn placed_draws(
             [scale, 0.0, 0.0, 0.0],
             [0.0, scale, 0.0, 0.0],
             [0.0, 0.0, scale, 0.0],
+        ])?;
+        let draw = Draw::Instanced {
+            geometry: indexed,
+            first_transform: 0,
+            instance_count: 1,
+        };
+        return Ok(([draw; 2], [transform, Transform::IDENTITY]));
+    }
+    if let Placement::Mirrored { .. } = placement {
+        let transform = Transform::new([
+            [-1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
         ])?;
         let draw = Draw::Instanced {
             geometry: indexed,

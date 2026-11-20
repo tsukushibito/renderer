@@ -400,13 +400,13 @@ impl Options {
             return Err("the deferred pipeline requires --msaa 1".into());
         }
         if result.instances.enabled()
-            && (result.pipeline != PipelineMode::Forward
+            && (result.pipeline == PipelineMode::ForwardReference
                 || result.submission != SubmissionMode::Direct
                 || result.alpha_only
                 || result.force_opaque
                 || result.resource_checks)
         {
-            return Err("--instances requires Forward, direct submission and original material inputs without resource probes".into());
+            return Err("--instances requires a standard PBR technique, direct submission and original material inputs without resource probes".into());
         }
         #[cfg(feature = "development-validation")]
         if result.instances.enabled() && result.omit_material.is_some() {
@@ -665,14 +665,34 @@ mod tests {
     }
 
     #[test]
-    fn instance_comparison_is_opt_in_and_runs_in_multisampled_forward() {
+    fn instance_comparison_is_opt_in_and_runs_in_standard_recipes() {
         assert_eq!(options(&["--fixture"]).unwrap().instances.draws(), 0);
         for (mode, draws) in [("individual", instancing::COUNT), ("instanced", 1)] {
             let chosen = options(&["--fixture", "--instances", mode, "--msaa", "4"]).unwrap();
             assert_eq!(chosen.instances.draws(), draws);
             assert_eq!(chosen.instances.name(), mode);
+            assert!(options(&["--fixture", "--instances", mode, "--pipeline", "deferred"]).is_ok());
             assert!(
-                options(&["--fixture", "--instances", mode, "--pipeline", "deferred"]).is_err()
+                options(&[
+                    "--fixture",
+                    "--instances",
+                    mode,
+                    "--pipeline",
+                    "forward-plus",
+                    "--msaa",
+                    "4"
+                ])
+                .is_ok()
+            );
+            assert!(
+                options(&[
+                    "--fixture",
+                    "--instances",
+                    mode,
+                    "--pipeline",
+                    "forward-reference"
+                ])
+                .is_err()
             );
         }
         assert!(options(&["--fixture", "--instances", "wrong"]).is_err());

@@ -1,0 +1,84 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; TEXCOORD                 1   x           1     NONE    uint   x
+; SV_IsFrontFace           0    y          1    FFACE    uint    y
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; no parameters
+; shader hash: 38e9596a296e94d03b45ea07b1feef34
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Pixel Shader
+; DepthOutput=0
+; SampleFrequency=0
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 3
+; SigOutputElements: 0
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 2
+; SigOutputVectors[0]: 0
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; TEXCOORD                 1        nointerpolation
+; SV_IsFrontFace           0        nointerpolation
+;
+; Buffer Definitions:
+;
+; cbuffer material
+; {
+;
+;   struct material
+;   {
+;
+;       struct struct.MaterialData
+;       {
+;
+;           float4 base_factor;                       ; Offset:    0
+;           float4 emissive_normal_scale;             ; Offset:   16
+;           float4 metallic_roughness_occlusion_cutoff;; Offset:   32
+;           uint4 flags;                              ; Offset:   48
+;
+;       } material;                                   ; Offset:    0
+;
+;
+;   } material;                                       ; Offset:    0 Size:    64
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; material                          cbuffer      NA          NA     CB0            cb1     1
+; material_sampler                  sampler      NA          NA      S0      s4,space1     1
+; base_image                        texture     f32          2d      T0      t0,space1     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 6, outputs: 0
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;

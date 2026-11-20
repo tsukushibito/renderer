@@ -5,6 +5,9 @@ struct PixelInput {
     BISTRO_LOCATION(1) float3 world_normal : TEXCOORD1;
     BISTRO_LOCATION(2) float4 world_tangent : TEXCOORD2;
     BISTRO_LOCATION(3) float2 texcoord : TEXCOORD3;
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
+#endif
     bool front_facing : SV_IsFrontFace;
 };
 
@@ -15,6 +18,9 @@ struct GBuffer {
 };
 
 GBuffer main(PixelInput input) {
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    input.front_facing = input.front_facing != (input.mirrored != 0u);
+#endif
     Surface surface = sample_material(
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing).surface;
     GBuffer result;

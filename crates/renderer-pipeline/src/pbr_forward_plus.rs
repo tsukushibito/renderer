@@ -3,13 +3,13 @@
 use renderer::{
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
     graph::{BufferDesc, BufferHandle, Graph, GraphError, ImageDesc},
-    program::RasterPipelineRequest,
 };
 
 use crate::{
     passes::{
         output::OutputImages,
         pbr::{
+            TransformTechnique,
             forward_plus::{CULL_PASS, tiled_raster_bindings},
             shadow_program,
         },
@@ -17,8 +17,9 @@ use crate::{
     pbr::{
         Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
         ViewInput,
+        instances::InstanceTier,
         raster::add_scene_passes,
-        scene::{DrawMode, PreparedScene, Programs, RasterScene},
+        scene::{DrawMode, PreparedScene, Programs, RasterScene, ScenePrograms},
     },
 };
 
@@ -39,7 +40,7 @@ const TILE_MASKS: &str = "tile light masks";
 pub struct Prepared {
     common: PreparedScene,
     mask_desc: ImageDesc,
-    fallback_programs: Programs,
+    fallback_programs: ScenePrograms,
 }
 
 /// Prepare a 1× or 4× Forward+ recipe and its transient tile masks.
@@ -52,16 +53,22 @@ pub fn prepare(config: Config, limits: SceneLimits) -> Result<Prepared, GraphErr
         blend: raster_program(true, true),
         shadow: shadow_program(),
     };
-    let mut common = PreparedScene::new(config, limits, programs, true, DrawMode::Indirect)?;
+    let mut common = PreparedScene::new(
+        config,
+        limits,
+        programs,
+        true,
+        DrawMode::Indirect,
+        Some(TransformTechnique::ForwardPlus),
+    )?;
     let preparation = common.preparation_mut();
     let count = preparation.frames_in_flight().get();
-    let fallback_programs = Programs::default();
-    let fallback = [&fallback_programs.opaque, &fallback_programs.blend].map(|program| {
-        RasterPipelineRequest {
-            program: program.clone(),
-            sample_count: config.samples,
-        }
-    });
+    let fallback_programs = ScenePrograms::new(
+        Programs::default(),
+        InstanceTier::for_limit(limits.max_transforms)?
+            .map(|tier| (tier, TransformTechnique::Forward)),
+    );
+    let fallback = fallback_programs.raster_requests(config.samples, false);
     let culling = compute_program();
     let cull_bindings = culling.bindings().len();
     preparation.add_requirements(

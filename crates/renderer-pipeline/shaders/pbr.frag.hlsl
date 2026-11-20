@@ -16,10 +16,16 @@ struct PixelInput {
 #if BISTRO_LOCAL_LIGHTS == 2
     float4 pixel : SV_Position;
 #endif
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    BISTRO_LOCATION(4) nointerpolation uint mirrored : TEXCOORD4;
+#endif
     bool front_facing : SV_IsFrontFace;
 };
 
 float4 main(PixelInput input) : SV_Target0 {
+#ifdef BISTRO_TRANSFORMED_DIRECTIONS
+    input.front_facing = input.front_facing != (input.mirrored != 0u);
+#endif
     MaterialSample sampled = sample_material(
         input.world_normal, input.world_tangent, input.texcoord, input.front_facing);
     Surface surface = sampled.surface;

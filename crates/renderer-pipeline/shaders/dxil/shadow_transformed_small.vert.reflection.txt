@@ -1,0 +1,127 @@
+;
+; Input signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xyz         0     NONE   float   xyz
+; TEXCOORD                 3   xy          1     NONE   float   xy
+; SV_InstanceID            0   x           2   INSTID    uint   x
+;
+;
+; Output signature:
+;
+; Name                 Index   Mask Register SysValue  Format   Used
+; -------------------- ----- ------ -------- -------- ------- ------
+; TEXCOORD                 0   xy          0     NONE   float   xy
+; TEXCOORD                 1   x           1     NONE    uint   x
+; SV_Position              0   xyzw        2      POS   float   xyzw
+;
+; shader hash: 20eadb5b8a647a8715805619d5eae144
+;
+; Pipeline Runtime Information:
+;
+;PSVRuntimeInfo:
+; Vertex Shader
+; OutputPositionPresent=1
+; MinimumExpectedWaveLaneCount: 0
+; MaximumExpectedWaveLaneCount: 4294967295
+; UsesViewID: false
+; SigInputElements: 3
+; SigOutputElements: 3
+; SigPatchConstOrPrimElements: 0
+; SigInputVectors: 3
+; SigOutputVectors[0]: 3
+; SigOutputVectors[1]: 0
+; SigOutputVectors[2]: 0
+; SigOutputVectors[3]: 0
+; EntryFunctionName: main
+;
+;
+; Input signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0
+; TEXCOORD                 3
+; SV_InstanceID            0
+;
+; Output signature:
+;
+; Name                 Index             InterpMode DynIdx
+; -------------------- ----- ---------------------- ------
+; TEXCOORD                 0                 linear
+; TEXCOORD                 1        nointerpolation
+; SV_Position              0          noperspective
+;
+; Buffer Definitions:
+;
+; cbuffer camera
+; {
+;
+;   struct hostlayout.camera
+;   {
+;
+;       struct hostlayout.struct.CameraData
+;       {
+;
+;           row_major float4x4 view_projection;       ; Offset:    0
+;           float4 eye;                               ; Offset:   64
+;           float4 light_direction;                   ; Offset:   80
+;           float4 light_color;                       ; Offset:   96
+;           float4 environment;                       ; Offset:  112
+;           row_major float4x4 shadow_view_projection[4];; Offset:  128
+;           float4 shadow_splits;                     ; Offset:  384
+;           float4 shadow_texel_world;                ; Offset:  400
+;           float4 shadow_depth_scale;                ; Offset:  416
+;           float4 camera_forward_blend;              ; Offset:  432
+;           float4 shadow_bias;                       ; Offset:  448
+;
+;       } camera;                                     ; Offset:    0
+;
+;
+;   } camera;                                         ; Offset:    0 Size:   464
+;
+; }
+;
+; cbuffer parameters
+; {
+;
+;   struct parameters
+;   {
+;
+;       struct struct.Parameters
+;       {
+;
+;           uint cascade_index;                       ; Offset:    0
+;           uint first_transform;                     ; Offset:    4
+;
+;       } parameters;                                 ; Offset:    0
+;
+;
+;   } parameters;                                     ; Offset:    0 Size:     8
+;
+; }
+;
+;
+; Resource Bindings:
+;
+; Name                                 Type  Format         Dim      ID      HLSL Bind  Count
+; ------------------------------ ---------- ------- ----------- ------- -------------- ------
+; camera                            cbuffer      NA          NA     CB0            cb0     1
+; parameters                        cbuffer      NA          NA     CB1            cb7     1
+; transform_table                   texture    byte         r/o      T0             t4     1
+;
+;
+; ViewId state:
+;
+; Number of inputs: 9, outputs: 12
+; Outputs dependent on ViewId: {  }
+; Inputs contributing to computation of Outputs:
+;   output 0 depends on inputs: { 4 }
+;   output 1 depends on inputs: { 5 }
+;   output 4 depends on inputs: { 8 }
+;   output 8 depends on inputs: { 0, 1, 2, 8 }
+;   output 9 depends on inputs: { 0, 1, 2, 8 }
+;   output 10 depends on inputs: { 0, 1, 2, 8 }
+;   output 11 depends on inputs: { 0, 1, 2, 8 }
+;
