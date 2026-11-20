@@ -166,28 +166,45 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 
 <a id="pbr-forward-recipe"></a>
 
-### PBR Forwardの標準レシピを使う
+### PBRの標準レシピを使う
 
-`renderer_pipeline::pbr_forward::prepare(config, scene_limits)`は、1×／4× PBR Forward、4カスケードの影、
-HDRとSDR出力に必要なProgramと一時資源を集める。描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードの
-キャスターの上限を渡す。返された準備済みレシピの`preparation()`を使い、`Runtime`と`GraphPool`を準備する。
-追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量も、アプリの構成に沿って指定する。
+`renderer_pipeline::pbr::Prepared::new(technique, config, scene_limits)`でForward、Forward+、Deferredから選ぶ。
+描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードのキャスターの上限を渡す。
+`Technique`のメソッドで使用できるサンプル数や点光源、深度、G-bufferの有無を確認できる。
+`add_passes`と`add_scene`は共通の入力・出力型を使い、Forward+では点光源のスライスを受け取る。
+ForwardとDeferredには空のスライスを渡す。点光源を渡すとGraphへの追記前にエラーになる。
 
-共通モジュールの`renderer_pipeline::pbr`で`PbrVertex`をエンコードし、
-`MaterialUniform::upload`で`MaterialFactors`をアップロードする。`Material::new`はその係数と4枚の画像ビューを組み合わせる。
+準備済みレシピと必要な既定画像の要求を`Preparation`へ集約し、`Runtime`と`GraphPool`を作る。
+追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量もアプリの構成に沿って指定する。
+
+```rust
+use renderer::capacity::Preparation;
+use renderer_pipeline::pbr::{Defaults, Prepared, Technique};
+
+let mut preparation = Preparation::new(scene_limits.frames_in_flight);
+let recipe = Prepared::new(Technique::Forward, config, scene_limits)?;
+let requests = recipe.preparation();
+preparation.add_requirements(requests.graph_requirements(), requests.working_set())?;
+let defaults = Defaults::for_recipe(config).prepare(&mut preparation)?;
+```
+
+Runtime作成後に`defaults.initialize`を一度呼び、アプリのフレーム枠を使い切る構成では返された初期化IDを最初の描画前に回収する。
+各Graphには`DefaultResources::import`で共有画像を取り込む。`Defaults::Unshadowed`は独自の材質と環境画像を用意する場合に、影を無効にした深度だけを登録する。
+既定画像を使い終えたら`DefaultResources::clear`で登録を解除する。
+
+`PbrVertex`をエンコードし、`MaterialUniform::upload`で`MaterialFactors`をアップロードする。
+`Material::new`へ係数と、`MaterialTextures`の名前付きベースカラー・法線・ORM・発光ビューを渡す。
+省略したマップは`DefaultViews::material_textures`で補え、`environment`でIBLの寄与を無効にできる。
+標準材質は全マップで一つのサンプラーを共有する。既定は`LinearRepeat`で、`with_sampler`により`LinearClamp`などの既存設定を選べる。
+マスク材質が影を描くときも、同じサンプラーでベースカラーのアルファを読む。
 同じ係数から得たアルファ分類に従い、Opaque／Maskは不透明・影リストへ、Blendは奥から手前に並べた半透明リストへ入れる。
-法線・AOの既定強度は1で、省略したマップは平坦な法線・白のORMに置き換わる。
-`DefaultResources::reserve`を既存の準備に加え、Runtime作成後に`initialize`を一度呼ぶ。
-フレーム枠を使い切る構成では、返された初期化IDを最初の描画前に回収する。
-各Graphへ`import`したビューから、`material_textures`でチャンネルごとの省略を補い、
-`environment`でIBLを省いた太陽光のみの構成を作れる。
 毎フレーム、アプリ側でカメラを更新し、最終的なビュー投影行列と視点・投影情報を`pbr::ViewInput`で渡す。
-`prepare_view`でその入力と太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::Frame::new`に
-Graph内の材質と描画スライスを渡す。カメラバッファは準備時に`CameraStorage`で選ぶ。
+`prepare_view`でその入力と太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::Frame::with_defaults`に
+Graph内の材質、描画スライスと既定画像のビューを渡す。カメラバッファは準備時に`CameraStorage`で選ぶ。
 `External`では呼び出し側が渡したバッファへレシピが更新を書き込み、`PreUploaded`では可視判定などの前に
 呼び出し側がビューのバイト列をアップロードする。
-`add_passes`はシャドウ、シーン描画、出力を追加し、HDR・SDRと任意のシーン深度を返す。
-深度は1×で単一サンプルD32、4×では`None`となる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
+`add_passes`はシャドウ、シーン描画、出力を追加し、HDR・SDRと利用できるシーン深度、G-bufferを返す。
+深度は1×で単一サンプルD32、4×では`None`となる。G-bufferはDeferredで得られる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
 HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
 その出力を`add_output`へ渡す。`output: None`で準備すればHDR専用になり、標準の出力画像とProgramを予約しない。
 出力未準備や不正な露出は`add_passes`がGraphへの追記前に拒否する。

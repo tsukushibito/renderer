@@ -9,25 +9,49 @@ use crate::passes::pbr::CAMERA_BYTES;
 use super::instances::TRANSFORM_TABLE_BYTES;
 use super::{AlphaMode, MaterialUniform};
 
-/// Graph-local factors and texture views in base color, normal, ORM and
-/// emissive order. Base and emissive color use sRGB views. The alpha mode
-/// comes from the same upload that supplies the shader factors.
+/// The standard material maps. Base color and emissive use sRGB views for
+/// sRGB-encoded assets. Normal and ORM use linear views. ORM stores occlusion,
+/// roughness and metallic in the red, green and blue channels.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MaterialTextures<T = ImageView> {
+    pub base_color: T,
+    pub normal: T,
+    pub orm: T,
+    pub emissive: T,
+}
+
+/// Graph-local factors and texture views. The alpha mode comes from the same
+/// upload that supplies the shader factors.
 #[derive(Clone, Copy, Debug)]
 pub struct Material {
     factors: MaterialUniform,
-    textures: [ImageView; 4],
+    textures: MaterialTextures,
+    sampler: SamplerDescriptor,
 }
 
 impl Material {
-    pub const fn new(factors: MaterialUniform, textures: [ImageView; 4]) -> Self {
-        Self { factors, textures }
+    /// Use linear filtering and repeat addressing on all material maps.
+    pub const fn new(factors: MaterialUniform, textures: MaterialTextures) -> Self {
+        Self {
+            factors,
+            textures,
+            sampler: SamplerDescriptor::LinearRepeat,
+        }
+    }
+
+    /// Use one sampler for all maps in scene drawing, including the base-color
+    /// alpha sample used by the shadow pass.
+    #[must_use]
+    pub const fn with_sampler(mut self, sampler: SamplerDescriptor) -> Self {
+        self.sampler = sampler;
+        self
     }
 
     pub const fn alpha_mode(self) -> AlphaMode {
         self.factors.alpha_mode()
     }
 
-    pub const fn textures(self) -> [ImageView; 4] {
+    pub const fn textures(self) -> MaterialTextures {
         self.textures
     }
 }
@@ -298,9 +322,9 @@ impl Bindings<'_> {
         let camera = buffer_binding(0, camera, 0, CAMERA_BYTES as u64);
         material.factors.check_graph(graph)?;
         let factors = material.factors.binding();
-        let [base, normal, orm, emissive] = material.textures;
-        let base = image_binding(1, 0, base);
-        let sampler = sampler_binding(1, 4, SamplerDescriptor::LinearRepeat);
+        let textures = material.textures;
+        let base = image_binding(1, 0, textures.base_color);
+        let sampler = sampler_binding(1, 4, material.sampler);
         let mut bindings = [camera; MAX_RASTER_BINDINGS];
         let mut count = match self {
             Self::Scene { lighting, .. } => {
@@ -308,9 +332,9 @@ impl Bindings<'_> {
                     camera,
                     factors,
                     base,
-                    image_binding(1, 1, normal),
-                    image_binding(1, 2, orm),
-                    image_binding(1, 3, emissive),
+                    image_binding(1, 1, textures.normal),
+                    image_binding(1, 2, textures.orm),
+                    image_binding(1, 3, textures.emissive),
                     sampler,
                 ]);
                 let count = 7 + lighting.len();

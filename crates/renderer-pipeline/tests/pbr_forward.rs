@@ -6,12 +6,13 @@ use renderer::graph::{
     Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool,
     ImageDesc, LoadOp, RasterAttachments, SampleCount, StoreOp,
 };
+use renderer::program::SamplerDescriptor;
 use renderer_pipeline::passes::output::SdrOutput;
 use renderer_pipeline::pbr::{
-    AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Draw, Environment, Frame, FrameShadows,
-    IndexedDraw, Material, MaterialFactors, MaterialUniform, PreparedView, Projection, SceneLimits,
-    ShadowHistory, ShadowKey, ShadowSettings, ShadowSource, Sun, Transform, Unshadowed,
-    UnshadowedView, VIEW_BYTES, ViewInput,
+    self, AlphaMode, Bounds, CASCADE_COUNT, CameraStorage, Defaults, Draw, Environment, Frame,
+    FrameShadows, IndexedDraw, Material, MaterialFactors, MaterialTextures, MaterialUniform,
+    PreparedView, Projection, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings, ShadowSource,
+    Sun, Transform, VIEW_BYTES, ViewInput,
 };
 use renderer_pipeline::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
@@ -154,7 +155,15 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
             },
         )
         .unwrap();
-    let material = Material::new(factors, [color, linear, linear, color]);
+    let material = Material::new(
+        factors,
+        MaterialTextures {
+            base_color: color,
+            normal: linear,
+            orm: linear,
+            emissive: color,
+        },
+    );
     let draw = IndexedDraw {
         vertices,
         indices,
@@ -182,7 +191,7 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
             recipe.preparation().working_set(),
         )
         .unwrap();
-    Unshadowed::reserve(&mut preparation).unwrap();
+    Defaults::Unshadowed.prepare(&mut preparation).unwrap();
     let depth_classes: Vec<_> = preparation
         .working_set()
         .resources
@@ -227,11 +236,11 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
         .unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
 
-    let placeholder = UnshadowedView::append(&mut graph).unwrap();
+    let defaults = Defaults::Unshadowed.upload(&mut graph).unwrap();
     let scene = recipe
         .add_scene(
             &mut graph,
-            Frame::unshadowed(&view, &materials, &draws, &[], placeholder),
+            Frame::with_defaults(&view, &materials, &draws, &[], &draws, defaults).unwrap(),
         )
         .unwrap();
     assert!(scene.shadows.is_none());
@@ -242,6 +251,65 @@ fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
     let names: Vec<_> = graph.ordered_pass_names().collect();
     assert!(names.contains(&"initialize disabled shadows"));
     assert!(names.iter().all(|name| !name.starts_with("shadow_")));
+}
+
+#[test]
+fn standard_techniques_share_output_and_reject_unsupported_lights() {
+    let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+    let lights = [pbr::PointLight {
+        position: [0.0, 0.0, 1.0],
+        radius: 2.0,
+        color: [1.0; 3],
+        intensity: 1.0,
+    }];
+    for technique in [
+        pbr::Technique::Forward,
+        pbr::Technique::ForwardPlus,
+        pbr::Technique::Deferred,
+    ] {
+        let mut prepared = pbr::Prepared::new(technique, config(), limits()).unwrap();
+        let mut graph = pool.begin().unwrap();
+        let (view, material, draw) = inputs(&recipe(), &mut graph);
+        let materials = [material.with_sampler(SamplerDescriptor::NearestClamp)];
+        let draws = [Draw::Indexed(draw)];
+        let frame = || Frame::new(&view, &materials, &draws, &[], &draws);
+        let supported_lights = if technique.supports_point_lights() {
+            lights.as_slice()
+        } else {
+            let error = prepared
+                .add_scene(&mut graph, frame(), &lights)
+                .unwrap_err();
+            assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+            &[]
+        };
+        let images = prepared
+            .add_passes(&mut graph, frame(), supported_lights)
+            .unwrap();
+        assert_eq!(images.gbuffer.is_some(), technique.provides_gbuffer());
+        assert_eq!(
+            images.depth.is_some(),
+            technique.provides_scene_depth(SampleCount::X1)
+        );
+        if let Some(gbuffer) = images.gbuffer {
+            assert_eq!(Some(gbuffer.depth), images.depth);
+        }
+        images
+            .sdr
+            .capture()
+            .unwrap()
+            .readback(&mut graph, "test output")
+            .unwrap();
+        let graph = graph.compile().unwrap();
+        let names = || graph.ordered_pass_names();
+        assert_eq!(
+            names().any(|name| name == "Forward+ tile light masks"),
+            technique.supports_point_lights(),
+        );
+        assert_eq!(
+            names().filter(|name| *name == "pbr camera upload").count(),
+            1
+        );
+    }
 }
 
 #[test]

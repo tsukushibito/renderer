@@ -7,6 +7,7 @@ mod history;
 pub(crate) mod instances;
 mod material;
 pub(crate) mod raster;
+mod recipe;
 pub(crate) mod scene;
 mod unshadowed;
 mod vertex;
@@ -15,14 +16,15 @@ mod view;
 pub use culling::{CascadeClip, Frustum, ViewCulling};
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use defaults::DefaultResourceError;
-pub use defaults::{DefaultResources, DefaultViews};
-pub use draw::{Draw, IndexedDraw, Material};
+pub use defaults::{DefaultResources, DefaultViews, Defaults, PreparedDefaults};
+pub use draw::{Draw, IndexedDraw, Material, MaterialTextures};
 #[cfg(any(feature = "vulkan", all(feature = "d3d12", windows)))]
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
 pub use material::{AlphaMode, MaterialFactors, MaterialUniform, ResidentMaterial};
-pub use unshadowed::{Unshadowed, UnshadowedView};
+pub use recipe::{Prepared, Technique};
+pub use unshadowed::UnshadowedView;
 pub use vertex::PbrVertex;
 pub use view::{Bounds, Projection, ShadowSettings, Sun, ViewInput};
 
@@ -33,6 +35,8 @@ use std::num::NonZeroUsize;
 use renderer::graph::{BufferHandle, GraphError, ImageHandle, ImageView, SampleCount};
 
 use crate::passes::{output::SdrOutput, pbr::CAMERA_BYTES};
+
+pub use crate::{pbr_deferred::GBuffer, pbr_forward_plus::PointLight};
 
 pub const CASCADE_COUNT: usize = 4;
 
@@ -217,6 +221,29 @@ pub struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
+    /// Select shadow input from the prepared view. Enabled shadows use a
+    /// common caster list. Disabled shadows use the shared default depth.
+    pub fn with_defaults(
+        view: &'a PreparedView,
+        materials: &'a [Material],
+        opaque: &'a [Draw],
+        transparent: &'a [Draw],
+        casters: &'a [Draw],
+        defaults: DefaultViews,
+    ) -> Result<Self, GraphError> {
+        if view.shadow_matrices().is_some() {
+            Ok(Self::new(view, materials, opaque, transparent, casters))
+        } else {
+            Ok(Self::unshadowed(
+                view,
+                materials,
+                opaque,
+                transparent,
+                defaults.unshadowed()?,
+            ))
+        }
+    }
+
     /// Use a common caster list for all cascades, transient targets and unit
     /// exposure. Change `shadows` to supply per-cascade culling or reuse.
     pub fn new(
@@ -266,6 +293,8 @@ pub struct SceneImages {
     pub depth: Option<ImageHandle>,
     pub shadows: Option<[ImageHandle; CASCADE_COUNT]>,
     pub camera: BufferHandle,
+    /// Material planes when using the Deferred technique.
+    pub gbuffer: Option<GBuffer>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -276,4 +305,6 @@ pub struct FrameImages {
     pub sdr: crate::passes::output::SdrImage,
     pub shadows: Option<[ImageHandle; CASCADE_COUNT]>,
     pub camera: BufferHandle,
+    /// Material planes when using the Deferred technique.
+    pub gbuffer: Option<GBuffer>,
 }

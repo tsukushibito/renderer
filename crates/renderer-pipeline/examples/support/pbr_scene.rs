@@ -12,19 +12,19 @@ use renderer_pipeline::pbr::Transform;
 use renderer_pipeline::{
     passes::{
         bloom::{Bloom, PreparedBloom},
-        output::{OutputImages, SdrOutput},
+        output::SdrOutput,
         pbr::{MATERIAL_BYTES, VERTEX_BYTES},
     },
     pbr::{
-        Bounds, CASCADE_COUNT, CameraStorage, DefaultResources, DefaultViews, Draw, Environment,
-        Frame, FrameImages, FrameShadows, IndexedDraw, Material, MaterialFactors, MaterialUniform,
-        PbrVertex, PreparedView, Projection, SceneImages, SceneLimits, ShadowHistory,
-        ShadowSettings, ShadowUpdates, Sun, ViewInput,
+        Bounds, CASCADE_COUNT, CameraStorage, Config, DefaultResources, DefaultViews, Defaults,
+        Draw, Frame, FrameShadows, IndexedDraw, Material, MaterialFactors, MaterialTextures,
+        MaterialUniform, PbrVertex, PointLight, Prepared, PreparedDefaults, Projection,
+        SceneLimits, ShadowHistory, ShadowSettings, ShadowUpdates, Sun, ViewInput,
     },
-    pbr_deferred,
-    pbr_forward::{self, Config},
-    pbr_forward_plus::{self, PointLight},
+    pbr_forward,
 };
+
+pub use renderer_pipeline::pbr::Technique;
 
 pub const EXTENT: [u32; 2] = [64, 48];
 pub const SHADOW_RESOLUTION: u32 = 64;
@@ -123,7 +123,7 @@ impl Triangle {
             },
             [Material::new(
                 factors,
-                defaults.material_textures([None; 4]),
+                defaults.material_textures(MaterialTextures::default())?,
             )],
         ))
     }
@@ -156,13 +156,6 @@ impl Placement {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Technique {
-    Forward,
-    ForwardPlus,
-    Deferred,
-}
-
 #[derive(Clone, Copy)]
 pub struct Settings {
     pub technique: Technique,
@@ -182,80 +175,12 @@ impl Settings {
     }
 }
 
-pub enum Prepared {
-    Forward(pbr_forward::Prepared),
-    ForwardPlus(pbr_forward_plus::Prepared),
-    Deferred(pbr_deferred::Prepared),
-}
-
 const POINT_LIGHTS: [PointLight; 1] = [PointLight {
     position: [0.1, 0.3, 1.5],
     radius: 3.0,
     color: [0.9, 0.6, 0.2],
     intensity: 2.0,
 }];
-
-impl Prepared {
-    fn preparation(&self) -> &Preparation {
-        match self {
-            Self::Forward(recipe) => recipe.preparation(),
-            Self::ForwardPlus(recipe) => recipe.preparation(),
-            Self::Deferred(recipe) => recipe.preparation(),
-        }
-    }
-
-    fn prepare_view(
-        &self,
-        fixture: ViewFixture,
-        environment: Environment,
-    ) -> Result<PreparedView, GraphError> {
-        let view = fixture.input()?;
-        let sun = Sun::new(fixture.orient([0.0, 0.0, 1.0]), [1.5; 3])?;
-        let half_extents = fixture.orient([1.0, 0.7, 0.01]).map(f32::abs);
-        let bounds = Bounds::new(half_extents.map(|value| -value), half_extents)?;
-        match self {
-            Self::Forward(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-            Self::ForwardPlus(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-            Self::Deferred(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-        }
-    }
-
-    fn add_scene(
-        &mut self,
-        graph: &mut Graph,
-        frame: Frame<'_>,
-    ) -> Result<SceneImages, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.add_scene(graph, frame),
-            Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame, &POINT_LIGHTS),
-            Self::Deferred(recipe) => Ok(recipe.add_scene(graph, frame)?.scene),
-        }
-    }
-
-    fn add_passes(
-        &mut self,
-        graph: &mut Graph,
-        frame: Frame<'_>,
-    ) -> Result<FrameImages, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.add_passes(graph, frame),
-            Self::ForwardPlus(recipe) => recipe.add_passes(graph, frame, &POINT_LIGHTS),
-            Self::Deferred(recipe) => Ok(recipe.add_passes(graph, frame)?.scene),
-        }
-    }
-
-    fn add_output(
-        &self,
-        graph: &mut Graph,
-        hdr: renderer::graph::ImageHandle,
-    ) -> Result<OutputImages, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.add_output(graph, hdr, 1.0),
-            Self::ForwardPlus(recipe) => recipe.add_output(graph, hdr, 1.0),
-            Self::Deferred(recipe) => recipe.add_output(graph, hdr, 1.0),
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 pub enum ViewFixture {
@@ -350,21 +275,16 @@ pub fn prepare(frames_in_flight: NonZeroUsize, settings: Settings) -> Result<Pre
         max_materials: 1,
         max_casters_per_cascade: count,
     };
-    match settings.technique {
-        Technique::Forward if settings.placement.uses_transforms() => Ok(Prepared::Forward(
-            pbr_forward::prepare_with_transforms(config, limits)?,
-        )),
-        Technique::Forward => Ok(Prepared::Forward(pbr_forward::prepare(config, limits)?)),
-        Technique::ForwardPlus => Ok(Prepared::ForwardPlus(pbr_forward_plus::prepare(
-            config, limits,
-        )?)),
-        Technique::Deferred => Ok(Prepared::Deferred(pbr_deferred::prepare(config, limits)?)),
+    if settings.technique == Technique::Forward && settings.placement.uses_transforms() {
+        return pbr_forward::prepare_with_transforms(config, limits).map(Prepared::Forward);
     }
+    Prepared::new(settings.technique, config, limits)
 }
 
 pub struct PostProcess {
     copy_hdr: bool,
     bloom: Option<PreparedBloom>,
+    pub(super) defaults: PreparedDefaults,
 }
 
 pub fn reserve(
@@ -376,14 +296,21 @@ pub fn reserve(
     let recipe = prepared.preparation();
     let mut preparation = Preparation::new(recipe.frames_in_flight());
     preparation.add_requirements(recipe.graph_requirements(), recipe.working_set())?;
-    DefaultResources::reserve(&mut preparation)?;
+    let defaults = Defaults::Materials.prepare(&mut preparation)?;
     triangle.reserve(&mut preparation, copy_hdr)?;
     let bloom = if bloom == Bloom::Off {
         None
     } else {
         Some(bloom.prepare(&mut preparation, hdr_desc())?)
     };
-    Ok((preparation, PostProcess { copy_hdr, bloom }))
+    Ok((
+        preparation,
+        PostProcess {
+            copy_hdr,
+            bloom,
+            defaults,
+        },
+    ))
 }
 
 pub fn resource_count(preparation: &Preparation) -> usize {
@@ -416,7 +343,7 @@ pub fn build_graph(
     let mut graph = pool.begin()?;
     let defaults = match defaults {
         Some(defaults) => defaults.import(&mut graph)?,
-        None => DefaultViews::upload(&mut graph)?,
+        None => post.defaults.selection().upload(&mut graph)?,
     };
     let (indexed, materials) = triangle.upload(&mut graph, &defaults)?;
     let single = [Draw::Indexed(indexed)];
@@ -431,11 +358,15 @@ pub fn build_graph(
         #[cfg(test)]
         Placement::Tilted(None) => &single[..],
     };
-    let view = prepared.prepare_view(triangle.view, defaults.environment())?;
+    let fixture = triangle.view;
+    let sun = Sun::new(fixture.orient([0.0, 0.0, 1.0]), [1.5; 3])?;
+    let half_extents = fixture.orient([1.0, 0.7, 0.01]).map(f32::abs);
+    let bounds = Bounds::new(half_extents.map(|value| -value), half_extents)?;
+    let view = prepared.prepare_view(fixture.input()?, sun, bounds, defaults.environment()?)?;
     let shadows = shadow_history
         .map(|(history, revisions)| history.begin_view(&mut graph, &view, revisions))
         .transpose()?;
-    let mut frame = Frame::new(&view, &materials, draws, &[], draws);
+    let mut frame = Frame::with_defaults(&view, &materials, draws, &[], draws, defaults)?;
     #[cfg(test)]
     if placement.uses_transforms() {
         frame.transforms = &transforms;
@@ -445,8 +376,14 @@ pub fn build_graph(
             shadows.source(cascade, draws)
         }));
     }
+    let lights = if prepared.technique().supports_point_lights() {
+        POINT_LIGHTS.as_slice()
+    } else {
+        &[]
+    };
     let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
-        let scene = prepared.add_scene(&mut graph, frame)?;
+        let exposure = frame.exposure;
+        let scene = prepared.add_scene(&mut graph, frame, lights)?;
         let mut hdr = scene.hdr;
         if post.copy_hdr {
             let target = graph.image("copied HDR", hdr_desc())?;
@@ -457,12 +394,12 @@ pub fn build_graph(
             hdr = bloom.add_passes(&mut graph, hdr)?;
         }
         (
-            prepared.add_output(&mut graph, hdr)?.sdr,
+            prepared.add_output(&mut graph, hdr, exposure)?.sdr,
             scene.depth,
             scene.shadows,
         )
     } else {
-        let images = prepared.add_passes(&mut graph, frame)?;
+        let images = prepared.add_passes(&mut graph, frame, lights)?;
         (images.sdr, images.depth, images.shadows)
     };
     #[cfg(test)]

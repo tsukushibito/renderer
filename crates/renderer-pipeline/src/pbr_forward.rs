@@ -145,6 +145,7 @@ impl Prepared {
             sdr: output.sdr,
             shadows: scene.shadows,
             camera: scene.camera,
+            gbuffer: scene.gbuffer,
         })
     }
 

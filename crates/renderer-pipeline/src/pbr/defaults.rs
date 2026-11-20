@@ -1,24 +1,31 @@
+//! Preparation and reuse of the standard PBR fallback images.
+
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub use native::DefaultResourceError;
 #[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::graph::{GraphCapacity, GraphPool};
+use renderer::graph::{GraphCapacity, GraphPool, ImageHandle};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::runtime::{ExecutionError, FrameId, Runtime};
 use renderer::{
     capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet},
-    graph::{Graph, GraphError, ImageDesc, ImageHandle, ImageView, ImportImage},
+    graph::{Graph, GraphError, ImageDesc, ImageView, ImportImage},
 };
 
-use super::Environment;
+use super::{
+    Config, Environment, MaterialTextures, UnshadowedView,
+    unshadowed::{NAME as SHADOW_NAME, desc as shadow_desc},
+};
 
-const NAMES: [&str; 4] = [
+const MATERIAL_NAMES: [&str; 4] = [
     "PBR default sRGB white",
     "PBR default normal",
     "PBR default ORM",
     "PBR disabled IBL",
 ];
-
-const NAME_BYTES: usize = NAMES[0].len() + NAMES[1].len() + NAMES[2].len() + NAMES[3].len();
+const MATERIAL_NAME_BYTES: usize = MATERIAL_NAMES[0].len()
+    + MATERIAL_NAMES[1].len()
+    + MATERIAL_NAMES[2].len()
+    + MATERIAL_NAMES[3].len();
 const PIXELS: [&[u8]; 4] = [
     &[255, 255, 255, 255],
     // RGBA16F encodes a flat normal exactly: (0.5, 0.5, 1.0, 1.0).
@@ -27,7 +34,7 @@ const PIXELS: [&[u8]; 4] = [
     &[0, 0, 0, 0, 0, 0, 0, 0x3c],
 ];
 
-fn image_descriptions() -> [ImageDesc; 4] {
+fn material_descriptions() -> [ImageDesc; 4] {
     [
         ImageDesc::rgba8_srgb(1, 1),
         ImageDesc::rgba16_float(1, 1),
@@ -36,166 +43,251 @@ fn image_descriptions() -> [ImageDesc; 4] {
     ]
 }
 
-/// Views of the common PBR defaults in the current Graph.
-#[derive(Clone, Copy, Debug)]
-pub struct DefaultViews {
-    srgb_white: ImageView,
-    normal: ImageView,
-    orm: ImageView,
-    black_ibl: ImageView,
+/// Which images to share across standard PBR views. Use
+/// [`Self::for_recipe`] for scenes using the standard material or IBL defaults.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Defaults {
+    /// Fallback material maps and a disabled IBL environment.
+    Materials,
+    /// Cleared depth for draws with directional shadows disabled.
+    Unshadowed,
+    /// All material, environment and depth defaults in one startup submission.
+    MaterialsAndUnshadowed,
 }
 
-impl DefaultViews {
-    /// Graph declaration requirements of [`Self::upload`], including its four
-    /// images. Use this for startup or single-Graph rendering.
-    pub fn upload_requirements() -> GraphRequirements {
-        GraphRequirements {
-            resources: 4,
-            passes: 4,
-            accesses: 4,
-            name_bytes: 2 * NAME_BYTES,
-            upload_bytes: PIXELS.iter().map(|pixel| pixel.len()).sum(),
-            ..GraphRequirements::default()
+impl Defaults {
+    pub const fn for_recipe(config: Config) -> Self {
+        if config.shadows.is_some() {
+            Self::Materials
+        } else {
+            Self::MaterialsAndUnshadowed
         }
     }
 
-    /// Declare and initialize four 1×1 images. Use this when the defaults are
-    /// consumed by the same Graph, or prepare [`DefaultResources`] once to
-    /// reuse the images across frames.
-    pub fn upload(graph: &mut Graph) -> Result<Self, GraphError> {
-        let mut images = [None; 4];
-        for (index, desc) in image_descriptions().into_iter().enumerate() {
-            let image = graph.image(NAMES[index], desc)?;
-            graph.upload_image(NAMES[index], image, PIXELS[index])?;
-            images[index] = Some(image);
-        }
-        Self::from_images(
-            graph,
-            images.map(|image| image.expect("each default image was uploaded")),
-        )
+    const fn materials(self) -> bool {
+        matches!(self, Self::Materials | Self::MaterialsAndUnshadowed)
     }
 
-    fn from_images(graph: &Graph, images: [ImageHandle; 4]) -> Result<Self, GraphError> {
-        let [white, normal, orm, black_ibl] = images;
-        Ok(Self {
-            srgb_white: graph.image_view(white, 0, 0)?,
-            normal: graph.image_view(normal, 0, 0)?,
-            orm: graph.image_view(orm, 0, 0)?,
-            black_ibl: graph.image_view(black_ibl, 0, 0)?,
-        })
+    const fn unshadowed(self) -> bool {
+        matches!(self, Self::Unshadowed | Self::MaterialsAndUnshadowed)
     }
 
-    /// Supply absent maps from the default views. Inputs and outputs are in
-    /// base-color, normal, ORM and emissive order. Supplied maps must refer
-    /// to the same Graph and satisfy the material binding contract.
-    pub fn material_textures(self, textures: [Option<ImageView>; 4]) -> [ImageView; 4] {
-        let defaults = [self.srgb_white, self.normal, self.orm, self.srgb_white];
-        std::array::from_fn(|index| textures[index].unwrap_or(defaults[index]))
-    }
-
-    /// An environment with IBL disabled. All three image bindings share the
-    /// same black view, so a directly lit scene needs no other IBL assets.
-    pub fn environment(self) -> Environment {
-        Environment {
-            irradiance: self.black_ibl,
-            reflection: self.black_ibl,
-            brdf_lut: self.black_ibl,
-            strength: 0.0,
-            yaw_radians: 0.0,
-            max_prefilter_lod: 0,
-        }
-    }
-}
-
-/// Four prepared, resident PBR default images. Call `clear` when
-/// the application no longer needs their runtime registrations.
-pub struct DefaultResources {
-    images: [Option<ImportImage>; 4],
-}
-
-impl DefaultResources {
-    /// Reserve one shared physical set and four possible imports in each
-    /// frame's Graph. The runtime limits must include the image registrations
-    /// and the startup upload Graph described by [`DefaultViews::upload_requirements`].
-    pub fn reserve(preparation: &mut Preparation) -> Result<(), GraphError> {
-        let [srgb, hdr, linear, _] = image_descriptions();
-        let resources = [
-            ResourceClass::Image {
-                desc: srgb,
-                count: 1,
-            },
-            ResourceClass::Image {
-                desc: linear,
-                count: 1,
-            },
-            ResourceClass::Image {
-                desc: hdr,
-                count: 2,
-            },
-        ];
+    /// Reserve one shared resident set and its imports in the frame Graph.
+    /// Runtime limits must include all registrations and the startup work
+    /// described by [`Self::upload_requirements`].
+    pub fn prepare(self, preparation: &mut Preparation) -> Result<PreparedDefaults, GraphError> {
+        let [color, normal, orm, ibl] = material_descriptions();
+        let resources = [color, normal, orm, ibl, shadow_desc()]
+            .map(|desc| ResourceClass::Image { desc, count: 1 });
+        let resources = match self {
+            Self::Materials => &resources[..4],
+            Self::Unshadowed => &resources[4..],
+            Self::MaterialsAndUnshadowed => &resources[..],
+        };
+        let name_bytes = usize::from(self.materials()) * MATERIAL_NAME_BYTES
+            + usize::from(self.unshadowed()) * SHADOW_NAME.len();
         preparation.add_requirements(
             GraphRequirements {
-                resources: 4,
-                name_bytes: NAME_BYTES,
+                resources: resources.len(),
+                name_bytes,
                 ..GraphRequirements::default()
             },
             WorkingSet {
-                resources: &resources,
+                resources,
                 ..WorkingSet::default()
             },
-        )
+        )?;
+        Ok(PreparedDefaults(self))
     }
 
-    /// Submit the startup uploads and capture their scheduled contents. The
-    /// same runtime can accept following Graphs importing these views while
-    /// the startup upload is pending, subject to runtime capacity. Use the
-    /// returned frame ID to drain the exact upload before a steady-state
-    /// frame window.
+    /// Graph declaration requirements of [`Self::upload`], including images.
+    pub fn upload_requirements(self) -> GraphRequirements {
+        let shadows = if self.unshadowed() {
+            UnshadowedView::requirements()
+        } else {
+            GraphRequirements::default()
+        };
+        if !self.materials() {
+            return shadows;
+        }
+        GraphRequirements {
+            resources: shadows.resources + MATERIAL_NAMES.len(),
+            passes: shadows.passes + MATERIAL_NAMES.len(),
+            accesses: shadows.accesses + MATERIAL_NAMES.len(),
+            name_bytes: shadows.name_bytes + 2 * MATERIAL_NAME_BYTES,
+            upload_bytes: PIXELS.iter().map(|pixel| pixel.len()).sum(),
+            ..shadows
+        }
+    }
+
+    /// Initialize the selected images in a one-off Graph. Reserve their image
+    /// classes for the submissions that may overlap when using this route.
+    pub fn upload(self, graph: &mut Graph) -> Result<DefaultViews, GraphError> {
+        let materials = if self.materials() {
+            let mut images = [None; 4];
+            for (index, desc) in material_descriptions().into_iter().enumerate() {
+                let image = graph.image(MATERIAL_NAMES[index], desc)?;
+                graph.upload_image(MATERIAL_NAMES[index], image, PIXELS[index])?;
+                images[index] = Some(graph.image_view(image, 0, 0)?);
+            }
+            Some(images.map(|view| view.expect("each default material image was initialized")))
+        } else {
+            None
+        };
+        let unshadowed = self
+            .unshadowed()
+            .then(|| UnshadowedView::append(graph))
+            .transpose()?;
+        Ok(DefaultViews {
+            materials,
+            unshadowed,
+        })
+    }
+}
+
+/// Views of the defaults selected for the current Graph.
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultViews {
+    materials: Option<[ImageView; 4]>,
+    unshadowed: Option<UnshadowedView>,
+}
+
+impl DefaultViews {
+    /// Fill missing maps. Provided views must belong to the current Graph.
+    pub fn material_textures(
+        self,
+        textures: MaterialTextures<Option<ImageView>>,
+    ) -> Result<MaterialTextures, GraphError> {
+        let [white, normal, orm, _] = self.material_maps()?;
+        Ok(MaterialTextures {
+            base_color: textures.base_color.unwrap_or(white),
+            normal: textures.normal.unwrap_or(normal),
+            orm: textures.orm.unwrap_or(orm),
+            emissive: textures.emissive.unwrap_or(white),
+        })
+    }
+
+    /// Build a disabled IBL environment for a directly lit scene.
+    pub fn environment(self) -> Result<Environment, GraphError> {
+        let [_, _, _, black] = self.material_maps()?;
+        Ok(Environment {
+            irradiance: black,
+            reflection: black,
+            brdf_lut: black,
+            strength: 0.0,
+            yaw_radians: 0.0,
+            max_prefilter_lod: 0,
+        })
+    }
+
+    /// Use the initialized depth for a view with shadow cascades disabled.
+    pub fn unshadowed(self) -> Result<UnshadowedView, GraphError> {
+        self.unshadowed
+            .ok_or_else(|| GraphError::invalid_input("unshadowed PBR defaults were not prepared"))
+    }
+
+    fn material_maps(self) -> Result<[ImageView; 4], GraphError> {
+        self.materials
+            .ok_or_else(|| GraphError::invalid_input("PBR material defaults were not prepared"))
+    }
+
+    #[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
+    fn images(self) -> [Option<ImageHandle>; 5] {
+        let [white, normal, orm, ibl] = self
+            .materials
+            .map_or([None; 4], |views| views.map(|view| Some(view.image())));
+        [
+            white,
+            normal,
+            orm,
+            ibl,
+            self.unshadowed.map(|view| view.view().image()),
+        ]
+    }
+}
+
+/// Reservation for a shared, immutable set of default images.
+#[derive(Clone, Copy)]
+pub struct PreparedDefaults(Defaults);
+
+impl PreparedDefaults {
+    pub const fn selection(&self) -> Defaults {
+        self.0
+    }
+
+    /// Submit one startup Graph and retain its scheduled images. The Runtime
+    /// can accept consumers while initialization is pending if a frame slot
+    /// is available. Wait for the returned frame at the startup boundary
+    /// when all prepared slots are needed for normal frames.
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-    pub fn initialize(runtime: &mut Runtime) -> Result<(Self, FrameId), DefaultResourceError> {
-        let mut pool = GraphPool::new(upload_graph_capacity(), 1)?;
+    pub fn initialize(
+        &self,
+        runtime: &mut Runtime,
+    ) -> Result<(DefaultResources, FrameId), DefaultResourceError> {
+        let mut pool = GraphPool::new(upload_graph_capacity(self.0), 1)?;
         let mut graph = pool.begin()?;
-        let views = DefaultViews::upload(&mut graph)?;
-        let images =
-            [views.srgb_white, views.normal, views.orm, views.black_ibl].map(ImageView::image);
-        for image in images {
+        let images = self.0.upload(&mut graph)?.images();
+        for image in images.into_iter().flatten() {
             graph.export_image(image)?;
         }
         let compiled = graph.compile()?;
         let submitted = runtime.submit(&compiled)?;
-        let resources = Self {
+        let resources = DefaultResources {
+            selection: self.0,
             images: images.map(|image| {
-                // These handles belong to the accepted Graph and were all
-                // declared as image exports before its compilation.
-                Some(
+                image.map(|image| {
                     submitted
                         .export_image(image)
-                        .expect("accepted PBR default export"),
-                )
+                        .expect("accepted PBR default export")
+                })
             }),
         };
         Ok((resources, submitted.id()))
     }
+}
 
-    /// Import this immutable set of images into the current Graph.
+/// Registered defaults shared by frame Graphs. Call `clear` when the
+/// application no longer needs the Runtime registrations.
+pub struct DefaultResources {
+    selection: Defaults,
+    images: [Option<ImportImage>; 5],
+}
+
+impl DefaultResources {
+    /// Import the selected immutable defaults into this Graph.
     pub fn import(&self, graph: &mut Graph) -> Result<DefaultViews, GraphError> {
-        let [Some(white), Some(normal), Some(orm), Some(black_ibl)] = &self.images else {
-            return Err(GraphError::invalid_input(
-                "PBR default resources have been released",
-            ));
+        let [white, normal, orm, ibl, shadow] = &self.images;
+        let missing = || GraphError::invalid_input("PBR default resources have been released");
+        let materials = if self.selection.materials() {
+            let [Some(white), Some(normal), Some(orm), Some(ibl)] = [white, normal, orm, ibl]
+            else {
+                return Err(missing());
+            };
+            let mut views = [None; 4];
+            for (index, snapshot) in [white, normal, orm, ibl].into_iter().enumerate() {
+                let handle = graph.import_image(MATERIAL_NAMES[index], snapshot)?;
+                views[index] = Some(graph.image_view(handle, 0, 0)?);
+            }
+            Some(views.map(|view| view.expect("each default material image was imported")))
+        } else {
+            None
         };
-        let images = [
-            graph.import_image(NAMES[0], white)?,
-            graph.import_image(NAMES[1], normal)?,
-            graph.import_image(NAMES[2], orm)?,
-            graph.import_image(NAMES[3], black_ibl)?,
-        ];
-        DefaultViews::from_images(graph, images)
+        let unshadowed = if self.selection.unshadowed() {
+            let snapshot = shadow.as_ref().ok_or_else(missing)?;
+            let handle = graph.import_image(SHADOW_NAME, snapshot)?;
+            Some(UnshadowedView::from_view(graph.image_view(handle, 0, 0)?))
+        } else {
+            None
+        };
+        Ok(DefaultViews {
+            materials,
+            unshadowed,
+        })
     }
 
     /// Release the registrations at a change boundary. Accepted work keeps
-    /// its leases until retirement. If a deletion fails, this method can be
-    /// retried for the remaining registrations.
+    /// its leases until retirement. If a deletion fails, retry this method
+    /// to release the remaining registrations.
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     pub fn clear(&mut self, runtime: &mut Runtime) -> Result<(), ExecutionError> {
         for image in &mut self.images {
@@ -209,8 +301,8 @@ impl DefaultResources {
 }
 
 #[cfg(any(test, feature = "vulkan", all(windows, feature = "d3d12")))]
-fn upload_graph_capacity() -> GraphCapacity {
-    let requirements = DefaultViews::upload_requirements();
+fn upload_graph_capacity(selection: Defaults) -> GraphCapacity {
+    let requirements = selection.upload_requirements();
     GraphCapacity {
         resources: requirements.resources,
         passes: requirements.passes,
@@ -218,7 +310,7 @@ fn upload_graph_capacity() -> GraphCapacity {
         draws: 0,
         raster_constant_words: Some(0),
         bindings: 0,
-        attachments: 0,
+        attachments: requirements.attachments,
         dependencies: 0,
         initial_ranges: 0,
         name_bytes: requirements.name_bytes,
@@ -278,24 +370,47 @@ mod tests {
 
     #[test]
     fn upload_preserves_defaults_and_overrides_each_channel_independently() {
-        let mut pool = GraphPool::new(upload_graph_capacity(), 1).unwrap();
+        let selection = Defaults::MaterialsAndUnshadowed;
+        let mut pool = GraphPool::new(upload_graph_capacity(selection), 1).unwrap();
         let mut graph = pool.begin().unwrap();
-        let views = DefaultViews::upload(&mut graph).unwrap();
-        let [white, normal, orm, emissive] = views.material_textures([None; 4]);
+        let views = selection.upload(&mut graph).unwrap();
+        let textures = views
+            .material_textures(MaterialTextures::default())
+            .unwrap();
+        let MaterialTextures {
+            base_color: white,
+            normal,
+            orm,
+            emissive,
+        } = textures;
         assert_eq!(white, emissive);
         assert_ne!(normal, orm);
         assert_eq!(
-            views.material_textures([None, None, Some(normal), None]),
-            [white, normal, normal, emissive]
+            views
+                .material_textures(MaterialTextures {
+                    orm: Some(normal),
+                    ..Default::default()
+                })
+                .unwrap(),
+            MaterialTextures {
+                orm: normal,
+                ..textures
+            }
         );
-        let environment = views.environment();
+        let environment = views.environment().unwrap();
         assert_eq!(environment.irradiance, environment.reflection);
         assert_eq!(environment.irradiance, environment.brdf_lut);
         assert_eq!(environment.strength, 0.0);
-        for image in [white, normal, orm, environment.irradiance] {
-            graph.export_image(image.image()).unwrap();
+        assert_eq!(
+            graph
+                .image_desc(views.unshadowed().unwrap().view().image())
+                .unwrap(),
+            shadow_desc(),
+        );
+        for image in views.images().into_iter().flatten() {
+            graph.export_image(image).unwrap();
         }
-        assert!(graph.compile().is_ok());
+        assert_eq!(graph.compile().unwrap().pass_count(), 5);
     }
 
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -305,7 +420,9 @@ mod tests {
 
         let limits = GraphCapacity::default();
         let mut preparation = Preparation::new(NonZeroUsize::MIN);
-        DefaultResources::reserve(&mut preparation).unwrap();
+        let defaults = Defaults::MaterialsAndUnshadowed
+            .prepare(&mut preparation)
+            .unwrap();
         let mut runtime = Runtime::new(
             config,
             RuntimeLimits {
@@ -319,12 +436,16 @@ mod tests {
         if let Some(vulkan) = runtime.as_vulkan() {
             assert_ne!(vulkan.device_info().device_type, "CPU");
         }
-        let (mut resources, startup) = DefaultResources::initialize(&mut runtime).unwrap();
+        let (mut resources, startup) = defaults.initialize(&mut runtime).unwrap();
         let mut pool = GraphPool::new(limits, 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let view = resources.import(&mut graph).unwrap();
+        let textures = view.material_textures(MaterialTextures::default()).unwrap();
         let readback = graph
-            .readback_image("Default normal", view.normal.image())
+            .readback_image("Default normal", textures.normal.image())
+            .unwrap();
+        let depth = graph
+            .readback_image("Default depth", view.unshadowed().unwrap().view().image())
             .unwrap();
         let sent = runtime.submit(&graph.compile().unwrap()).unwrap();
         resources.clear(&mut runtime).unwrap();
@@ -341,6 +462,9 @@ mod tests {
         let mut pixel = [0; 8];
         completion.readback_into(readback, &mut pixel).unwrap();
         assert_eq!(pixel.as_slice(), PIXELS[1]);
+        let mut value = [0; 4];
+        completion.readback_into(depth, &mut value).unwrap();
+        assert_eq!(f32::from_le_bytes(value), 1.0);
         drop(completion);
 
         let strict = cfg!(feature = "development-validation");

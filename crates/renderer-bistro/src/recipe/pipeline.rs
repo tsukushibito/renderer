@@ -129,7 +129,7 @@ pub(super) struct Budget {
     pub readback_bytes: u64,
     pub ranges: usize,
     pipeline: PipelineMode,
-    unshadowed: bool,
+    defaults: Option<pbr::PreparedDefaults>,
     fixture: bool,
     packed: Option<Arc<indirect::Layout>>,
     indirect: bool,
@@ -261,7 +261,7 @@ impl Budget {
         };
         let indirect = options.submission == SubmissionMode::Indirect;
         let prepared = PreparedSet::new(options, scene, packed.as_deref(), background)?;
-        let unshadowed = !options.shadows && prepared.main.uses_standard();
+        let defaults = prepared.main.defaults();
         let packed_buffers = packed.as_ref().map_or(0, |_| 2 + usize::from(indirect));
         let buffer_count = scene
             .primitives
@@ -500,7 +500,7 @@ impl Budget {
             readback_bytes,
             ranges: resources * (options.inflight + 3) + 32,
             pipeline: options.pipeline,
-            unshadowed,
+            defaults,
             fixture: options.fixture,
             packed,
             indirect,
@@ -544,7 +544,7 @@ pub(super) struct Resident {
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     local_lights: Option<lighting::Preset>,
-    unshadowed: Option<pbr::Unshadowed>,
+    defaults: Option<pbr::DefaultResources>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -859,10 +859,10 @@ impl Resident {
             .pipeline
             .uses_local_lights()
             .then(|| lighting::preset(budget.fixture));
-        let unshadowed = if budget.unshadowed {
-            let (placeholder, startup) = pbr::Unshadowed::initialize(backend)?;
+        let defaults = if let Some(defaults) = budget.defaults {
+            let (resources, startup) = defaults.initialize(backend)?;
             drop(super::backend::wait_for(backend, startup)?);
-            Some(placeholder)
+            Some(resources)
         } else {
             None
         };
@@ -937,7 +937,7 @@ impl Resident {
             shadow_parameters: shadow::Parameters::default(),
             camera,
             local_lights,
-            unshadowed,
+            defaults,
             packed,
             upload_owners,
         })

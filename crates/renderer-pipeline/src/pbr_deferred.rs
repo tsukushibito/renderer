@@ -20,26 +20,14 @@ use crate::{
         },
     },
     pbr::{
-        Bounds, Environment, Frame, PreparedView, SceneLimits, Sun, ViewInput,
+        Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
+        ViewInput,
         scene::{DrawMode, PreparedScene, Programs},
     },
 };
 
 pub use crate::pbr::Config;
 pub use passes::GBuffer;
-
-/// The HDR scene and retained, Graph-local material planes.
-#[derive(Clone, Copy, Debug)]
-pub struct SceneImages {
-    pub scene: crate::pbr::SceneImages,
-    pub gbuffer: GBuffer,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FrameImages {
-    pub scene: crate::pbr::FrameImages,
-    pub gbuffer: GBuffer,
-}
 
 /// Prepared Deferred programs, frame capacities and PBR scratch.
 pub struct Prepared {
@@ -174,10 +162,7 @@ impl Prepared {
                 Ok((hdr, Some(depth)))
             },
         )?;
-        Ok(SceneImages {
-            scene,
-            gbuffer: gbuffer.expect("the scene callback records its G-buffer"),
-        })
+        Ok(SceneImages { gbuffer, ..scene })
     }
 
     pub fn add_output(
@@ -197,18 +182,16 @@ impl Prepared {
         frame: Frame<'_>,
     ) -> Result<FrameImages, GraphError> {
         let (output, exposure) = self.common.checked_output(frame.exposure)?;
-        let SceneImages { scene, gbuffer } = self.add_scene(graph, frame)?;
+        let scene = self.add_scene(graph, frame)?;
         let output =
             output.append_validated(graph, graph.image_view(scene.hdr, 0, 0)?, exposure)?;
         Ok(FrameImages {
-            scene: crate::pbr::FrameImages {
-                hdr: scene.hdr,
-                depth: scene.depth,
-                sdr: output.sdr,
-                shadows: scene.shadows,
-                camera: scene.camera,
-            },
-            gbuffer,
+            hdr: scene.hdr,
+            depth: scene.depth,
+            sdr: output.sdr,
+            shadows: scene.shadows,
+            camera: scene.camera,
+            gbuffer: scene.gbuffer,
         })
     }
 }

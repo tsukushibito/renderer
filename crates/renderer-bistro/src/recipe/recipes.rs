@@ -13,9 +13,9 @@ use renderer::{
 use renderer_pipeline::{
     passes::{
         bloom::PreparedBloom,
-        output::{OutputImages, PreparedOutput, SdrImage},
+        output::{PreparedOutput, SdrImage},
     },
-    pbr, pbr_deferred, pbr_forward, pbr_forward_plus,
+    pbr, pbr_forward, pbr_forward_plus,
 };
 
 use super::{
@@ -27,67 +27,12 @@ pub(super) struct Prepared {
     preparation: Preparation,
     recipe: Recipe,
     bloom: PreparedBloom,
+    defaults: Option<pbr::PreparedDefaults>,
 }
 
 enum Recipe {
-    Standard(Standard),
+    Standard(Box<pbr::Prepared>),
     Reference(Box<Reference>),
-}
-
-pub(super) enum Standard {
-    Forward(Box<pbr_forward::Prepared>),
-    ForwardPlus(Box<pbr_forward_plus::Prepared>),
-    Deferred(Box<pbr_deferred::Prepared>),
-}
-
-impl Standard {
-    fn preparation(&self) -> &Preparation {
-        match self {
-            Self::Forward(recipe) => recipe.preparation(),
-            Self::ForwardPlus(recipe) => recipe.preparation(),
-            Self::Deferred(recipe) => recipe.preparation(),
-        }
-    }
-
-    pub fn prepare_view(
-        &self,
-        view: pbr::ViewInput,
-        sun: pbr::Sun,
-        bounds: pbr::Bounds,
-        environment: pbr::Environment,
-    ) -> Result<pbr::PreparedView, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-            Self::ForwardPlus(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-            Self::Deferred(recipe) => recipe.prepare_view(view, sun, bounds, environment),
-        }
-    }
-
-    pub fn add_scene(
-        &mut self,
-        graph: &mut Graph,
-        frame: pbr::Frame<'_>,
-        lights: &[pbr_forward_plus::PointLight],
-    ) -> Result<pbr::SceneImages, Error> {
-        Ok(match self {
-            Self::Forward(recipe) => recipe.add_scene(graph, frame)?,
-            Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame, lights)?,
-            Self::Deferred(recipe) => recipe.add_scene(graph, frame)?.scene,
-        })
-    }
-
-    pub fn add_output(
-        &self,
-        graph: &mut Graph,
-        hdr: ImageHandle,
-        exposure: f32,
-    ) -> Result<OutputImages, GraphError> {
-        match self {
-            Self::Forward(recipe) => recipe.add_output(graph, hdr, exposure),
-            Self::ForwardPlus(recipe) => recipe.add_output(graph, hdr, exposure),
-            Self::Deferred(recipe) => recipe.add_output(graph, hdr, exposure),
-        }
-    }
 }
 
 impl Prepared {
@@ -100,6 +45,7 @@ impl Prepared {
         let concurrent = NonZeroUsize::new(options.inflight).ok_or("Bistro needs a frame slot")?;
         let mut preparation = Preparation::new(concurrent);
         let hdr = ImageDesc::rgba16_float(options.width, options.height);
+        let mut defaults = None;
         let recipe = if standard_pipeline(options) {
             let camera_storage = if options.submission == SubmissionMode::Indirect {
                 pbr::CameraStorage::PreUploaded
@@ -127,12 +73,12 @@ impl Prepared {
             };
             let standard = match options.pipeline {
                 PipelineMode::Forward => {
-                    let recipe = if let Some(programs) = options
+                    if let Some(programs) = options
                         .shader_assets
                         .as_ref()
                         .and_then(|assets| assets.programs.as_ref())
                     {
-                        pbr_forward::prepare_with_programs(
+                        pbr::Prepared::Forward(pbr_forward::prepare_with_programs(
                             config,
                             limits,
                             pbr_forward::Programs {
@@ -140,19 +86,20 @@ impl Prepared {
                                 blend: programs.blend.clone(),
                                 shadow: programs.shadow.clone(),
                             },
-                        )?
+                        )?)
                     } else if options.instances.enabled() {
-                        pbr_forward::prepare_with_transforms(config, limits)?
+                        pbr::Prepared::Forward(pbr_forward::prepare_with_transforms(
+                            config, limits,
+                        )?)
                     } else {
-                        pbr_forward::prepare(config, limits)?
-                    };
-                    Standard::Forward(Box::new(recipe))
+                        pbr::Prepared::new(pbr::Technique::Forward, config, limits)?
+                    }
                 }
                 PipelineMode::ForwardPlus => {
-                    Standard::ForwardPlus(Box::new(pbr_forward_plus::prepare(config, limits)?))
+                    pbr::Prepared::new(pbr::Technique::ForwardPlus, config, limits)?
                 }
                 PipelineMode::Deferred => {
-                    Standard::Deferred(Box::new(pbr_deferred::prepare(config, limits)?))
+                    pbr::Prepared::new(pbr::Technique::Deferred, config, limits)?
                 }
                 PipelineMode::ForwardReference => unreachable!("the comparison has its own recipe"),
             };
@@ -161,7 +108,7 @@ impl Prepared {
                 standard.preparation().working_set(),
             )?;
             if !options.shadows {
-                pbr::Unshadowed::reserve(&mut preparation)?;
+                defaults = Some(pbr::Defaults::Unshadowed.prepare(&mut preparation)?);
                 if options.capture_shadows && !options.windowed {
                     let resolution = shadow::Parameters::default().resolution;
                     preparation.reserve_image(
@@ -187,7 +134,7 @@ impl Prepared {
                     ..Default::default()
                 })?;
             }
-            Recipe::Standard(standard)
+            Recipe::Standard(Box::new(standard))
         } else {
             Recipe::Reference(Box::new(Reference::prepare(
                 options,
@@ -206,6 +153,7 @@ impl Prepared {
             preparation,
             recipe,
             bloom,
+            defaults,
         })
     }
 
@@ -217,7 +165,11 @@ impl Prepared {
         matches!(self.recipe, Recipe::Standard(_))
     }
 
-    pub fn standard(&mut self) -> (&mut Standard, &PreparedBloom) {
+    pub fn defaults(&self) -> Option<pbr::PreparedDefaults> {
+        self.defaults
+    }
+
+    pub fn standard(&mut self) -> (&mut pbr::Prepared, &PreparedBloom) {
         match &mut self.recipe {
             Recipe::Standard(recipe) => (recipe, &self.bloom),
             Recipe::Reference(_) => unreachable!("expected a public recipe"),
