@@ -21,7 +21,7 @@ writer数4/5の境界、元の宣言順の競合pair、全access容量、read属
 [現在のGraph構築比較](../verification/current.md#rendergraph-hotspot-optimization)はsource/EXE/PDBのidentity、
 全独立process、個別sampleのp95、一般入力の交換条件、未実行範囲を記録している。
 
-標準recipeの`FrameGraph`は確定済み出力を持つ。拡張と出力選択は`build_graph`のcallback内で行い、
+`FrameGraph`は確定済み出力を持つ。標準snapshotの拡張と出力選択は`renderer_pipeline::standard::snapshot::build_graph`のcallback内で行い、
 `output()`／`readback()`のhandleを保存してから`compile()`へ渡す。任意の構築を続ける場合は
 `connect_graph`と通常のGraphを使い、確定済みの出力・所有情報を個別に変更しない。
 
@@ -398,7 +398,7 @@ python -B tools/bistro/bloom_acceptance.py $cohortDirectory
 
 ### 全Bistroの表示と統合受入
 
-アプリ側でBistroのHDR描画と外部Bloomを組み立て、公開`standard::passes`のNeutralとSDR変換をつなぐ。
+アプリ側でBistroのHDR描画と外部Bloomを組み立て、`renderer_pipeline::standard::passes`のNeutralとSDR変換をつなぐ。
 WindowsのPresenterには、swapchainと同寸法のlinear RGBA8画像をexportして渡す。
 オフスクリーンでは`SdrEncoding::Srgb`を選ぶ。ウィンドウでは`SdrEncoding::Linear`を選び、PresenterのsRGB targetで変換する。
 
@@ -1350,11 +1350,13 @@ graph.raster("opaque", attachments, |raster| {
 ```
 
 mesh inputは読み取り専用で直接exportできません。必要な変更・exportは独立bufferへのcopy後に行います。
-`standard::graphs::forward`の出力を標準または独自の後処理へ直接つなげます。`standard::passes`を直接組み合わせることもできます。
-opaque、depth prepass、同formatのcolor出力copyを公開Graph APIで構築し、出力handleから必要な消費方法を選びます。
+`renderer_pipeline::standard::graphs::forward`の出力を標準または独自の後処理へ直接つなげます。
+`renderer_pipeline::standard::passes`のopaqueやdepth prepassを直接組み合わせることもできます。
+出力handleから必要な消費方法を選び、同formatの別画像に保存する場合は`Graph::copy_image`を使います。
 API例・Load/Store・任意depth・色／深度規約は[標準部品の契約](../design/rendergraph.md#公開標準パスと標準グラフ)を参照してください。
 同geometry prepass後には`OpaqueDepth::Prepassed`とdepth Loadを使い、`mesh_prepassed`／`mesh_hdr_prepassed`も明示準備します。
-既存の`build_snapshot`の便利経路も公開forwardを呼び、custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
+`renderer_pipeline::standard::snapshot::build_vulkan`も公開forwardを呼び、
+custom passは描画後の同寸linear RGBA8画像にGraph操作を追加する構築時の拡張です。
 返した画像を直接exportし、無変換の全画面copyを追加しません。
 出力はconsumer投入後に`release_output`で解放します。callerがimportした出力の登録は維持します。
 任意shaderや生CommandBufferを受け取るAPIではありません。
@@ -1405,7 +1407,7 @@ VSyncは既定ON。`--vsync on|off`で起動時に選び、Vキーで変更し�
 OFFにはVulkanのIMMEDIATE、DXGIのtearing capabilityが必要で、未対応要求は既存設定を維持して失敗します。
 タイトルの要求設定と、prepare後に反映されるnative状態、実際のcompositor／driverの表示挙動は区別します。
 
-同じ常駐cube meshと入力行列から、`--graph standard`は公開`standard::graphs::forward`、
+同じ常駐cube meshと入力行列から、`--graph standard`は`renderer_pipeline::standard::graphs::forward`、
 `--graph custom`は利用側のRasterと明示的な出力copyを使います。backendごとにGraphを実装し直しません。
 操作はWASDで前後左右、Q／Eで上下、Shiftで加速、右mouseで視点操作、Tで固定巡回、Escで終了です。
 focusを失うと押下状態とmouse操作を解除し、復帰直後の長いdeltaを移動へそのまま適用しません。
