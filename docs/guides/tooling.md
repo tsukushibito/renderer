@@ -169,22 +169,29 @@ HDRとSDR出力に必要なProgramと一時資源を集める。描画寸法・�
 キャスターの上限を渡す。返された準備済みレシピの`preparation()`を使い、`Runtime`と`GraphPool`を準備する。
 追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量も、アプリの構成に沿って指定する。
 
-共通モジュールの`renderer_pipeline::pbr`で`PbrVertex`と`MaterialFactors`をエンコードできる。
+共通モジュールの`renderer_pipeline::pbr`で`PbrVertex`をエンコードし、
+`MaterialUniform::upload`で`MaterialFactors`をアップロードする。`Material::new`はその係数と4枚の画像ビューを組み合わせる。
+同じ係数から得たアルファ分類に従い、Opaque／Maskは不透明・影リストへ、Blendは奥から手前に並べた半透明リストへ入れる。
+法線・AOの既定強度は1で、省略したマップは平坦な法線・白のORMに置き換わる。
 `DefaultResources::reserve`を既存の準備に加え、Runtime作成後に`initialize`を一度呼ぶ。
 フレーム枠を使い切る構成では、返された初期化IDを最初の描画前に回収する。
 各Graphへ`import`したビューから、`material_textures`でチャンネルごとの省略を補い、
 `environment`でIBLを省いた太陽光のみの構成を作れる。
-毎フレーム、`prepare_view`でカメラ・太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::Frame::new`に
+毎フレーム、アプリ側でカメラを更新し、最終的なビュー投影行列と視点・投影情報を`pbr::ViewInput`で渡す。
+`prepare_view`でその入力と太陽光・シーンの範囲・環境照明を組み合わせ、`pbr::Frame::new`に
 Graph内の材質と描画スライスを渡す。カメラバッファは準備時に`CameraStorage`で選ぶ。
 `External`では呼び出し側が渡したバッファへレシピが更新を書き込み、`PreUploaded`では可視判定などの前に
 呼び出し側がビューのバイト列をアップロードする。
 `add_passes`はシャドウ、シーン描画、出力を追加し、HDR・SDRと任意のシーン深度を返す。
 深度は1×で単一サンプルD32、4×では`None`となる。4カスケードのシャドウマップは双方で単一サンプルD32を使う。
 HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
-その出力を`add_output`へ渡す。画像のexportやreadback、GPUへの投入は必要に応じてアプリが行う。
+その出力を`add_output`へ渡す。`output: None`で準備すればHDR専用になり、標準の出力画像とProgramを予約しない。
+表示用の線形SDRはexportして受理済みフレームから表示し、保存用のsRGBはreadbackする。
+Graphへのレシピ追加が途中で失敗した場合は、そのフレームのGraphを破棄して作り直す。
 
 シャドウの既定経路では共通のキャスターリストから4枚のD32画像を描く。
 アプリはカスケードごとにキャスターを変えたり、取り込んだ画像を`ShadowSource::Reuse`で渡したりできる。
+`shadows: None`では共有のクリア済み1×1深度を取り込み、カスケードの投影・描画・履歴を省く。
 
 #### 標準 Bloom を追加する
 
@@ -213,9 +220,16 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 
 #### 照明方式と描画リストを選ぶ
 
-- `pbr_forward_plus`へビューごとに最大64件の点光源を渡す。16×16画素のタイルは最大65,536個。
-  最初に`append_tile_initialization`で初期化を宣言し、Runtimeが投入を受理してから登録する。
-  描画時は最新の受理済みタイルバッファを取り込み、描画寸法に必要な範囲を更新する。
+| レシピ | MSAA | 不透明・マスク | 影 | 半透明 | Program |
+| --- | --- | --- | --- | --- | --- |
+| Forward | 1×／4× | Indexed／Indirect | Indexed | Indexed | 組み込み |
+| Forward（変換付き） | 1×／4× | Indexed／Instanced | Indexed／Instanced | Indexed | 組み込み |
+| Forward（カスタム Program） | 1× | Indexed | Indexed | Indexed | Forward ABI |
+| Forward+ | 1×／4× | Indexed／Indirect | Indexed | Indexed | 組み込み |
+| Deferred | 1× | Indexed／Indirect | Indexed | Indexed | 組み込み |
+
+- `pbr_forward_plus`へビューごとに最大64件の点光源を渡す。点光源があれば16×16画素単位の照明マスクを
+  ビュー寸法に合った一時画像に構築する。空のリストなら通常のForward Programを使う。
 - `pbr_deferred`は1×のG-bufferにベースカラー／メタリック、法線／粗さ、発光／AOとD32深度を保持する。
   照明後に、アプリが並べた半透明描画をHDRに合成する。
 - `pbr_forward::prepare_with_transforms`で組み込みForwardの変換付き直接描画を準備し、
