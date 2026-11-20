@@ -346,6 +346,10 @@ RGBA8／RGBA16Fの値を同descriptionの別画像へ保存する場合は、同
 部品やpost境界がexport/readback/submitを暗黙に追加することはない。
 `passes::bloom`は準備済みの一時画像とCompute Programを使い、各dispatchの書き込みから後続のsampleへの依存を通常のGraph宣言で導く。
 最初の半解像度passはclampした4 tapから個別に明部を抽出し、従来のRGBA16Fへの丸めを各tapに適用してから平均する。
+抽出結果をFP32の演算でbinary16の表現値へ0方向に丸める。RTX 3060のVulkan／D3D12で旧passの格納値から得た結果と照合した。
+Vulkanは画像形式への変換と`PackHalf2x16`の丸め方向を実装に委ねており、旧passとのバイト一致の確認範囲は実測した環境である。
+[画像形式の浮動小数点変換](https://docs.vulkan.org/spec/latest/chapters/fundamentals.html#fundamentals-floating-point-format-conversions)・
+[SPIR-V演算の精度](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html#spirvenv-precision-operation)。
 フル解像度の抽出画像を経由せず、半解像度、1/4解像度、blur、合成の4 dispatchで元のalphaを保持する。
 共通PBR照明は環境光強度が0なら環境画像とBRDF LUTのsampleを省く。既存のbinding ABIとGraphのsample範囲宣言は維持する。
 

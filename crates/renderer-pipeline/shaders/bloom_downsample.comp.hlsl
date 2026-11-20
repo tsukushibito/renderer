@@ -1,13 +1,26 @@
 #include "bloom.hlsli"
 
+#ifdef BLOOM_EXTRACT
+float3 truncate_to_half_grid(float3 value) {
+    // The nonnegative finite extraction result fits binary16. Drop the
+    // extra FP32 significand bits, using the fixed binary16 subnormal step
+    // below its smallest normal. This keeps the previous target's
+    // round-toward-zero result on both backends.
+    const float minimum_normal = 1.0 / 16384.0;
+    const float subnormal_scale = 16777216.0;
+    float3 normal = asfloat(asuint(value) & 0xffffe000u);
+    float3 subnormal = trunc(value * subnormal_scale) / subnormal_scale;
+    return select(value < minimum_normal, subnormal, normal);
+}
+#endif
+
 float3 color_at(int2 pixel) {
     float3 color = source_image.Load(int3(pixel, 0)).rgb;
 #ifdef BLOOM_EXTRACT
     color = max(color, 0.0);
     float peak = max(max(color.r, color.g), color.b);
     float contribution = max(peak - 1.0, 0.0) / max(peak, 1.0);
-    // Preserve the RGBA16F extraction store's rounding before averaging.
-    color = f16tof32(f32tof16(color * contribution));
+    color = truncate_to_half_grid(color * contribution);
 #endif
     return color;
 }

@@ -234,10 +234,11 @@ mod native {
             if standard || effect == Bloom::Off {
                 assert_eq!(read(1), source[1], "{effect:?} {x},{y} green");
             } else if effect == Bloom::Tent && [x, y] == [4, 0] {
-                // The first cell averages alternating extracted green values.
-                // Rounding the extraction to FP16 before averaging yields
-                // 0x235c here. Averaging the unrounded taps yields 0x235a.
-                assert_eq!(read(1), 0x235c);
+                // The old extraction image stored both alternating tap
+                // values with round-toward-zero binary16 conversion. Their
+                // contribution here is 0x2359 instead of 0x235a from
+                // averaging the unrounded FP32 taps.
+                assert_eq!(read(1), 0x2359);
             }
             let red = read(0);
             if effect == Bloom::Off || standard {
