@@ -8,7 +8,7 @@ use renderer::graph::{
     RasterDraw,
 };
 use renderer::program::SamplerDescriptor;
-use renderer::standard::graphs::{self, ForwardConfig};
+use renderer_pipeline::standard::graphs::{self, ForwardConfig};
 
 #[test]
 fn consumer_owned_hdr_programs_form_a_changing_multistage_graph() {

@@ -24,8 +24,8 @@ use renderer::{
         Engine, EngineCapacity, FrameSnapshot, Material, MaterialHandle, MeshHandle, SnapshotPool,
     },
     graph::{GraphCapacity, ImageDesc, ImportImage, PassHandle},
-    standard::graphs::{self, ForwardConfig},
 };
+use renderer_pipeline::standard::graphs::{self, ForwardConfig};
 
 #[path = "support/frame_report.rs"]
 mod frame_report;

@@ -19,14 +19,16 @@ use renderer::{
         SampleCount, StoreOp,
     },
     program::{ManagedRasterProgram, SamplerDescriptor},
-    standard::passes::{tone_map_neutral, write_sdr},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
-use renderer_pipeline::DrawCandidate;
+use renderer_pipeline::{
+    DrawCandidate,
+    standard::passes::{tone_map_neutral, write_sdr},
+};
 use std::sync::Arc;
 
 #[path = "pipeline/indirect.rs"]

@@ -32,12 +32,12 @@ use renderer::graph::{
     RasterParameters, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, SamplerDescriptor};
-use renderer::standard::{graphs, passes};
 use renderer::{
     D3D12FrameCapacity, D3D12ImageClass, D3D12Runtime, D3D12RuntimeConfig, D3D12RuntimeErrorKind,
     D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind,
     ValidationMode, VulkanRuntime,
 };
+use renderer_pipeline::standard::{graphs, passes};
 use serde_json::{Value, json};
 
 const WAIT: Duration = Duration::from_secs(30);

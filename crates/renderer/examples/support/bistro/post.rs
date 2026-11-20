@@ -8,11 +8,10 @@ use renderer::{
         Attachment, Graph, GraphCapacity, GraphPool, ImageDesc, ImageHandle, LoadOp,
         RasterAttachments, StoreOp,
     },
-    standard::passes::tone_map_neutral_pipeline,
 };
 use renderer_pipeline::{
     FrameInputs, FrameOutput, FrameResource, PrepareOptions, PreparedPipeline, Program,
-    ResourceDesc, ShaderRequest,
+    ResourceDesc, ShaderRequest, standard::passes::tone_map_neutral_pipeline,
 };
 
 use super::{

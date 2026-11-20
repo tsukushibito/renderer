@@ -20,8 +20,8 @@ use renderer::{
         View,
     },
     graph::{ImageDesc, PassHandle},
-    standard::graphs::{self, ForwardConfig},
 };
+use renderer_pipeline::standard::graphs::{self, ForwardConfig};
 
 use super::engine_geometry::{grid, rectangle};
 

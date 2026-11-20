@@ -7,8 +7,8 @@ use renderer::{
         StoreOp,
     },
     program::ManagedRasterProgram,
-    standard::graphs,
 };
+use renderer_pipeline::standard::graphs;
 
 pub const VERTEX_BYTES: u64 = 224;
 pub const INDEX_BYTES: u64 = 144;

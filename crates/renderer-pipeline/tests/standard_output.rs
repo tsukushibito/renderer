@@ -1,7 +1,5 @@
-use renderer::{
-    graph::{GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, SampleCount},
-    standard::passes::{SdrEncoding, SdrOutput, tone_map_neutral, write_sdr},
-};
+use renderer::graph::{GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, SampleCount};
+use renderer_pipeline::standard::passes::{SdrEncoding, SdrOutput, tone_map_neutral, write_sdr};
 
 const SDR: SdrOutput = SdrOutput {
     encoding: SdrEncoding::Srgb,
