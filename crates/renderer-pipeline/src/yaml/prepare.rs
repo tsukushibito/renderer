@@ -1,23 +1,25 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 
 use renderer::ImageFormat;
 use renderer::capacity::ResourceClass;
 use renderer::graph::{BufferDesc, ImageDesc, LoadOp, RasterConstants, SampleCount};
 use renderer::program::{
-    BindingLayout, BindingType, DispatchContract, DispatchWorkgroups, ManagedProgram,
-    ManagedRasterProgram, RasterPipelineRequest,
+    BindingLayout, BindingType, DispatchContract, DispatchWorkgroups, MAX_RASTER_COLOR_ATTACHMENTS,
+    ManagedProgram, ManagedRasterProgram, RasterPipelineRequest,
 };
 
 use super::assembly::{ParameterType, Parameters, assemble};
+use super::frame::RasterScratchLimits;
 use super::schema::{
-    self, AttachmentSpec, BindingSpec, Config, LoadAction, PassSpec, ResourceSource, ResourceSpec,
+    self, AttachmentSpec, BindingSpec, Config, DrawListConditionSpec, LoadAction, PassSpec,
+    RasterBatchSpec, RasterBatchesSpec, ResourceSource, ResourceSpec,
 };
 use super::{
-    BindingSource, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError,
-    PipelineRequirements, PrepareInputs, PrepareOptions, PreparedAttachment, PreparedBinding,
-    PreparedPipeline, Program, RasterDrawKind, RasterPrograms, Resource, ResourceDesc,
-    ShaderRequest,
+    BindingSource, DrawListCondition, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError,
+    PipelineRequirements, PrepareInputs, PrepareOptions, PreparedAttachment, PreparedAttachments,
+    PreparedBinding, PreparedPipeline, PreparedRasterBatch, Program, RasterDrawKind,
+    RasterPrograms, Resource, ResourceDesc, ShaderRequest,
 };
 
 type ResolverError = Box<dyn Error + Send + Sync>;
@@ -61,6 +63,7 @@ impl PreparedPipeline {
         let Config {
             resources,
             draw_lists,
+            raster_batches,
             passes,
             output,
             ..
@@ -102,16 +105,32 @@ impl PreparedPipeline {
             )));
         }
 
+        if raster_batches
+            .iter()
+            .any(|(name, batches)| name.trim().is_empty() || batches.is_empty())
+        {
+            return Err(invalid(
+                "raster_batches requires nonempty names and batch lists",
+            ));
+        }
+        let declarations = PassDeclarations {
+            resources: &resources,
+            resource_ids: &resource_ids,
+            draw_list_ids: &draw_list_ids,
+            raster_batches: &raster_batches,
+            params: &params,
+        };
         let mut pass_ids = HashSet::with_capacity(passes.len());
         let mut sampled_views = Vec::new();
         let mut programs = Programs::default();
-        let mut max_bindings = 0;
-        let mut max_colors = 0;
+        let mut scratch_limits = RasterScratchLimits::default();
         let passes = passes
             .into_iter()
             .map(|pass| {
                 let id = match &pass {
-                    PassSpec::Raster { id, .. } | PassSpec::Compute { id, .. } => id,
+                    PassSpec::Raster { id, .. }
+                    | PassSpec::Attachment { id, .. }
+                    | PassSpec::Compute { id, .. } => id,
                 };
                 if id.trim().is_empty() || !pass_ids.insert(id.clone()) {
                     return Err(invalid(format!(
@@ -120,18 +139,12 @@ impl PreparedPipeline {
                 }
                 let pass = prepare_pass(
                     pass,
-                    &resources,
-                    &resource_ids,
-                    &draw_list_ids,
-                    &params,
+                    &declarations,
                     &mut sampled_views,
                     &mut programs,
                     &mut resolve,
                 )?;
-                max_bindings = max_bindings.max(pass.bindings.len());
-                if let PassKind::Raster { colors, .. } = &pass.kind {
-                    max_colors = max_colors.max(colors.len());
-                }
+                scratch_limits.include(&pass);
                 Ok(pass)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -142,8 +155,8 @@ impl PreparedPipeline {
             sampled_views.len(),
             draw_lists.len(),
             options.max_draws_per_list,
-            max_bindings,
-            max_colors,
+            passes.len(),
+            scratch_limits,
             options.max_materials,
         )?;
         let classes = prepare_classes(&resources, options.frames_in_flight)?;
@@ -154,7 +167,7 @@ impl PreparedPipeline {
             passes,
             draw_lists,
             output,
-            raster: programs.raster,
+            raster: programs.raster_requests,
             compute: programs.compute,
             classes,
             requirements,
@@ -184,68 +197,76 @@ fn measure_requirements(
     let mut indexed_draws = 0usize;
     for pass in passes {
         requirements.name_bytes += pass.id.len();
-        let (draws, binding_sets, words) = match &pass.kind {
+        if let Some(attachments) = pass.kind.attachments() {
+            requirements.attachments +=
+                attachments.colors.len() + usize::from(attachments.depth.is_some());
+            let targets = attachments
+                .colors
+                .iter()
+                .flat_map(|color| [Some(color.resource), color.resolve].into_iter().flatten());
+            requirements.writes_external_resources |= targets
+                .chain(attachments.depth.iter().map(|depth| depth.resource))
+                .any(|resource| resources[resource].external);
+        }
+        match &pass.kind {
             PassKind::Compute { program, .. } => {
                 requirements.compute_dispatches += 1;
                 requirements.writes_external_resources |=
                     compute_writes_external(&programs.compute[*program], &pass.bindings, resources);
-                (0, 1, 0)
+                requirements.bindings = requirements
+                    .bindings
+                    .checked_add(pass.bindings.len())
+                    .ok_or_else(overflow)?;
             }
-            PassKind::Raster {
-                program,
-                colors,
-                depth,
-                draw,
-                uses_materials,
-            } => {
-                requirements.attachments += colors.len() + usize::from(depth.is_some());
-                requirements.writes_external_resources |= colors
-                    .iter()
-                    .map(|color| color.resource)
-                    .chain(depth.iter().map(|depth| depth.resource))
-                    .any(|resource| resources[resource].external);
-                match draw {
-                    RasterDrawKind::Fullscreen(constants) => (1, 1, constants.words().len()),
-                    RasterDrawKind::Indexed(_) => {
-                        let draw_limit = options.max_draws_per_list;
-                        indexed_draws =
-                            indexed_draws.checked_add(draw_limit).ok_or_else(overflow)?;
-                        let sets = if *uses_materials {
-                            options.max_materials.min(draw_limit)
-                        } else {
-                            usize::from(draw_limit > 0)
-                        };
-                        let words_per_draw = |index: usize| {
-                            programs.raster[index].program.parameter_size() as usize
-                                / size_of::<u32>()
-                        };
-                        let max_words = match program {
-                            RasterPrograms::Fixed(index) => words_per_draw(*index),
-                            RasterPrograms::Material(variants) => variants
-                                .iter()
-                                .map(|variant| words_per_draw(variant.program))
-                                .max()
-                                .unwrap_or(0),
-                        };
-                        let words = draw_limit.checked_mul(max_words).ok_or_else(overflow)?;
-                        (draw_limit, sets, words)
-                    }
+            PassKind::Raster { batches, .. } => {
+                for batch in batches {
+                    let (draws, binding_sets, words) = match &batch.draw {
+                        RasterDrawKind::Fullscreen(constants) => (1, 1, constants.words().len()),
+                        RasterDrawKind::Indexed(_) => {
+                            let draw_limit = options.max_draws_per_list;
+                            indexed_draws =
+                                indexed_draws.checked_add(draw_limit).ok_or_else(overflow)?;
+                            let sets = if batch.uses_materials {
+                                options.max_materials.min(draw_limit)
+                            } else {
+                                usize::from(draw_limit > 0)
+                            };
+                            let words_per_draw = |index: usize| {
+                                programs.raster_requests[index].program.parameter_size() as usize
+                                    / size_of::<u32>()
+                            };
+                            let max_words = match &batch.program {
+                                RasterPrograms::Fixed(index) => words_per_draw(*index),
+                                RasterPrograms::Material(variants) => variants
+                                    .iter()
+                                    .map(|variant| words_per_draw(variant.program))
+                                    .max()
+                                    .unwrap_or(0),
+                            };
+                            let words = draw_limit.checked_mul(max_words).ok_or_else(overflow)?;
+                            (draw_limit, sets, words)
+                        }
+                    };
+                    let bindings = binding_sets
+                        .checked_mul(batch.bindings.len())
+                        .ok_or_else(overflow)?;
+                    requirements.bindings = requirements
+                        .bindings
+                        .checked_add(bindings)
+                        .ok_or_else(overflow)?;
+                    requirements.draws =
+                        requirements.draws.checked_add(draws).ok_or_else(overflow)?;
+                    requirements.raster_constant_words = requirements
+                        .raster_constant_words
+                        .checked_add(words)
+                        .ok_or_else(overflow)?;
                 }
             }
-        };
-        let bindings = binding_sets
-            .checked_mul(pass.bindings.len())
-            .ok_or_else(overflow)?;
-        requirements.bindings = requirements
-            .bindings
-            .checked_add(bindings)
-            .ok_or_else(overflow)?;
-        requirements.draws = requirements.draws.checked_add(draws).ok_or_else(overflow)?;
-        requirements.raster_constant_words = requirements
-            .raster_constant_words
-            .checked_add(words)
-            .ok_or_else(overflow)?;
+            PassKind::Attachment(_) => {}
+        }
     }
+    // A resolve can add a write. An attachment with a resolve uses at most
+    // two graph accesses: its attachment access can also represent a load.
     // A binding can read or write one contiguous range. Each indexed draw
     // can add vertex and index reads; attachments can add reads and writes.
     requirements.accesses = indexed_draws
@@ -314,6 +335,7 @@ fn prepare_resource(
             extent,
             divisor,
             format,
+            samples,
         } => {
             if divisor.is_some() && extent.is_none() {
                 return Err(invalid(format!(
@@ -337,13 +359,18 @@ fn prepare_resource(
                     )));
                 }
             };
+            let sample_count = match samples.unwrap_or(1) {
+                1 => SampleCount::X1,
+                4 => SampleCount::X4,
+                _ => return Err(invalid(format!("image {id:?} samples must be 1 or 4"))),
+            };
             let desc = ImageDesc {
                 width,
                 height,
                 format: format.into(),
                 mip_levels: 1,
                 array_layers: 1,
-                sample_count: SampleCount::X1,
+                sample_count,
             };
             if desc.byte_len().is_none() {
                 return Err(invalid(format!("image {id:?} has invalid dimensions")));
@@ -385,11 +412,27 @@ enum ProgramKey {
 #[derive(Default)]
 struct Programs {
     by_key: HashMap<ProgramKey, ProgramRef>,
-    raster: Vec<RasterPipelineRequest>,
+    raster: Vec<ManagedRasterProgram>,
+    raster_requests: Vec<RasterPipelineRequest>,
+    raster_variants: HashMap<(usize, SampleCount), usize>,
     compute: Vec<ManagedProgram>,
 }
 
 impl Programs {
+    fn raster_variant(&mut self, index: usize, sample_count: SampleCount) -> usize {
+        *self
+            .raster_variants
+            .entry((index, sample_count))
+            .or_insert_with(|| {
+                let variant = self.raster_requests.len();
+                self.raster_requests.push(RasterPipelineRequest {
+                    program: self.raster[index].clone(),
+                    sample_count,
+                });
+                variant
+            })
+    }
+
     fn resolve(
         &mut self,
         pass: &str,
@@ -424,7 +467,7 @@ impl Programs {
         })? {
             Program::Raster(program) => {
                 let index = self.raster.len();
-                self.raster.push(program.into());
+                self.raster.push(program);
                 ProgramRef::Raster(index)
             }
             Program::Compute(program) => {
@@ -438,16 +481,28 @@ impl Programs {
     }
 }
 
+struct PassDeclarations<'a> {
+    resources: &'a [Resource],
+    resource_ids: &'a HashMap<&'a str, usize>,
+    draw_list_ids: &'a HashMap<&'a str, usize>,
+    raster_batches: &'a BTreeMap<String, Vec<RasterBatchSpec>>,
+    params: &'a Parameters<'a>,
+}
+
 fn prepare_pass(
     spec: PassSpec,
-    resources: &[Resource],
-    resource_ids: &HashMap<&str, usize>,
-    draw_list_ids: &HashMap<&str, usize>,
-    params: &Parameters<'_>,
+    declarations: &PassDeclarations<'_>,
     sampled_views: &mut Vec<String>,
     programs: &mut Programs,
     resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
 ) -> Result<Pass, PipelineError> {
+    let PassDeclarations {
+        resources,
+        resource_ids,
+        draw_list_ids,
+        raster_batches,
+        params,
+    } = declarations;
     match spec {
         PassSpec::Raster {
             id,
@@ -456,142 +511,85 @@ fn prepare_pass(
             material_types,
             colors,
             depth,
+            when,
+            batches,
             draw_list,
             constants,
             bindings,
         } => {
-            let draw_list = draw_list
-                .map(|list| {
-                    draw_list_ids
-                        .get(list.as_str())
-                        .copied()
-                        .ok_or_else(|| pass_error(&id, format!("unknown draw list {list:?}")))
-                })
-                .transpose()?;
-            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views, params)?;
-            let has_material_bindings = bindings
-                .iter()
-                .any(|binding| matches!(binding.source, BindingSource::Material(_)));
-            if draw_list.is_none() && has_material_bindings {
-                return Err(pass_error(
-                    &id,
-                    "material bindings require an indexed Raster pass",
-                ));
-            }
-            let colors = colors
-                .into_iter()
-                .map(|attachment| prepare_attachment(&id, attachment, resource_ids, params))
-                .collect::<Result<Vec<_>, _>>()?;
-            let depth = depth
-                .map(|attachment| prepare_attachment(&id, attachment, resource_ids, params))
-                .transpose()?;
-            let program = match (shader, shader_template) {
-                (Some(shader), None) => {
-                    if !material_types.is_empty() {
-                        return Err(pass_error(&id, "material_types requires shader_template"));
-                    }
-                    let ProgramRef::Raster(index) =
-                        programs.resolve(&id, ProgramKey::Program(shader), resolve)?
-                    else {
-                        return Err(pass_error(
-                            &id,
-                            "shader is a Compute Program, expected Raster",
-                        ));
-                    };
-                    RasterPrograms::Fixed(index)
-                }
-                (None, Some(template)) => {
-                    if draw_list.is_none() {
-                        return Err(pass_error(
-                            &id,
-                            "shader_template requires an indexed draw list",
-                        ));
-                    }
-                    if template.trim().is_empty() || material_types.is_empty() {
-                        return Err(pass_error(
-                            &id,
-                            "shader_template and material_types must be nonempty",
-                        ));
-                    }
-                    index_names(material_types.iter().map(String::as_str), "material type")
-                        .map_err(|error| pass_error(&id, error))?;
-                    let variants = material_types
-                        .into_iter()
-                        .map(|name| {
-                            let key = ProgramKey::Template {
-                                template: template.clone(),
-                                material_type: name.clone(),
-                            };
-                            let ProgramRef::Raster(index) = programs.resolve(&id, key, resolve)? else {
-                                return Err(pass_error(&id, format!("template {template:?} with material type {name:?} resolved to a Compute Program")));
-                            };
-                            Ok(MaterialVariant { name, program: index })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    RasterPrograms::Material(variants)
-                }
-                _ => {
-                    return Err(pass_error(
-                        &id,
-                        "specify exactly one of shader and shader_template",
-                    ));
-                }
-            };
-            let uses_materials =
-                has_material_bindings || matches!(&program, RasterPrograms::Material(_));
-            let validate_program = |label: &str, index: usize| {
-                let program = &programs.raster[index].program;
-                validate_bindings(
-                    label,
-                    resources,
-                    &bindings,
-                    program.bindings(),
-                    program.binding_bytes(),
-                    None,
-                )?;
-                validate_attachments(label, resources, program, &colors, depth.as_ref())?;
-                if draw_list.is_some() {
-                    if program.vertex_stride() == 0 || !constants.is_empty() {
-                        return Err(pass_error(
-                            label,
-                            "indexed Raster requires a vertex stream and draw-list constants",
-                        ));
-                    }
-                } else if program.vertex_stride() != 0
-                    || size_of_val(constants.as_slice()) != program.parameter_size() as usize
+            let when = prepare_condition(&id, when, draw_list_ids)?;
+            let attachments = prepare_attachments(&id, colors, depth, declarations)?;
+            let batches = if let Some(batches) = batches {
+                if shader.is_some()
+                    || shader_template.is_some()
+                    || draw_list.is_some()
+                    || !material_types.is_empty()
+                    || !constants.is_empty()
+                    || !bindings.is_empty()
                 {
                     return Err(pass_error(
-                        label,
-                        "fullscreen Raster requires a generated-vertex program and matching inline constants",
+                        &id,
+                        "batches cannot be combined with flat Raster draw fields",
                     ));
                 }
-                Ok(())
-            };
-            match &program {
-                RasterPrograms::Fixed(index) => validate_program(&id, *index)?,
-                RasterPrograms::Material(variants) => {
-                    for variant in variants {
-                        validate_program(
-                            &format!("{id} (material type {:?})", variant.name),
-                            variant.program,
-                        )?;
+                match batches {
+                    RasterBatchesSpec::Inline(batches) => batches,
+                    RasterBatchesSpec::Named(name) => {
+                        raster_batches.get(&name).cloned().ok_or_else(|| {
+                            pass_error(&id, format!("unknown raster batch list {name:?}"))
+                        })?
                     }
                 }
-            }
-            let draw = match draw_list {
-                Some(index) => RasterDrawKind::Indexed(index),
-                None => RasterDrawKind::Fullscreen(RasterConstants::new(&constants)?),
+            } else {
+                vec![RasterBatchSpec {
+                    shader,
+                    shader_template,
+                    material_types,
+                    draw_list,
+                    constants,
+                    bindings,
+                }]
             };
+            if batches.is_empty() {
+                return Err(pass_error(&id, "Raster pass requires at least one batch"));
+            }
+            let batches = batches
+                .into_iter()
+                .map(|batch| {
+                    prepare_raster_batch(
+                        &id,
+                        batch,
+                        &attachments,
+                        declarations,
+                        sampled_views,
+                        programs,
+                        resolve,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(Pass {
                 id,
-                bindings,
+                bindings: Vec::new(),
                 kind: PassKind::Raster {
-                    program,
-                    colors,
-                    depth,
-                    draw,
-                    uses_materials,
+                    attachments,
+                    batches,
                 },
+                when,
+            })
+        }
+        PassSpec::Attachment {
+            id,
+            colors,
+            depth,
+            when,
+        } => {
+            let when = prepare_condition(&id, when, draw_list_ids)?;
+            let attachments = prepare_attachments(&id, colors, depth, declarations)?;
+            Ok(Pass {
+                id,
+                bindings: Vec::new(),
+                kind: PassKind::Attachment(attachments),
+                when,
             })
         }
         PassSpec::Compute {
@@ -639,9 +637,175 @@ fn prepare_pass(
                     program: index,
                     grid,
                 },
+                when: None,
             })
         }
     }
+}
+
+fn prepare_raster_batch(
+    id: &str,
+    spec: RasterBatchSpec,
+    attachments: &PreparedAttachments,
+    declarations: &PassDeclarations<'_>,
+    sampled_views: &mut Vec<String>,
+    programs: &mut Programs,
+    resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
+) -> Result<PreparedRasterBatch, PipelineError> {
+    let RasterBatchSpec {
+        shader,
+        shader_template,
+        material_types,
+        draw_list,
+        constants,
+        bindings,
+    } = spec;
+    let PassDeclarations {
+        resources,
+        resource_ids,
+        draw_list_ids,
+        params,
+        ..
+    } = declarations;
+    let draw_list = draw_list
+        .map(|list| {
+            draw_list_ids
+                .get(list.as_str())
+                .copied()
+                .ok_or_else(|| pass_error(id, format!("unknown draw list {list:?}")))
+        })
+        .transpose()?;
+    let bindings = prepare_bindings(id, bindings, resource_ids, sampled_views, params)?;
+    let has_material_bindings = bindings
+        .iter()
+        .any(|binding| matches!(binding.source, BindingSource::Material(_)));
+    if draw_list.is_none() && has_material_bindings {
+        return Err(pass_error(
+            id,
+            "material bindings require an indexed Raster pass",
+        ));
+    }
+    let program = match (shader, shader_template) {
+        (Some(shader), None) => {
+            if !material_types.is_empty() {
+                return Err(pass_error(id, "material_types requires shader_template"));
+            }
+            let ProgramRef::Raster(index) =
+                programs.resolve(id, ProgramKey::Program(shader), resolve)?
+            else {
+                return Err(pass_error(
+                    id,
+                    "shader is a Compute Program, expected Raster",
+                ));
+            };
+            RasterPrograms::Fixed(programs.raster_variant(index, attachments.samples))
+        }
+        (None, Some(template)) => {
+            if draw_list.is_none() {
+                return Err(pass_error(
+                    id,
+                    "shader_template requires an indexed draw list",
+                ));
+            }
+            if template.trim().is_empty() || material_types.is_empty() {
+                return Err(pass_error(
+                    id,
+                    "shader_template and material_types must be nonempty",
+                ));
+            }
+            index_names(material_types.iter().map(String::as_str), "material type")
+                .map_err(|error| pass_error(id, error))?;
+            let variants = material_types
+                .into_iter()
+                .map(|name| {
+                    let key = ProgramKey::Template {
+                        template: template.clone(),
+                        material_type: name.clone(),
+                    };
+                    let ProgramRef::Raster(index) = programs.resolve(id, key, resolve)? else {
+                        return Err(pass_error(id, format!("template {template:?} with material type {name:?} resolved to a Compute Program")));
+                    };
+                    let program = programs.raster_variant(index, attachments.samples);
+                    Ok(MaterialVariant { name, program })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            RasterPrograms::Material(variants)
+        }
+        _ => {
+            return Err(pass_error(
+                id,
+                "specify exactly one of shader and shader_template",
+            ));
+        }
+    };
+    let uses_materials = has_material_bindings || matches!(&program, RasterPrograms::Material(_));
+    let validate_program = |label: &str, index: usize| {
+        let program = &programs.raster_requests[index].program;
+        validate_bindings(
+            label,
+            resources,
+            &bindings,
+            program.bindings(),
+            program.binding_bytes(),
+            None,
+        )?;
+        validate_raster_program(label, resources, program, attachments)?;
+        if draw_list.is_some() {
+            if program.vertex_stride() == 0 || !constants.is_empty() {
+                return Err(pass_error(
+                    label,
+                    "indexed Raster requires a vertex stream and draw-list constants",
+                ));
+            }
+        } else if program.vertex_stride() != 0
+            || size_of_val(constants.as_slice()) != program.parameter_size() as usize
+        {
+            return Err(pass_error(
+                label,
+                "fullscreen Raster requires a generated-vertex program and matching inline constants",
+            ));
+        }
+        Ok(())
+    };
+    match &program {
+        RasterPrograms::Fixed(index) => validate_program(id, *index)?,
+        RasterPrograms::Material(variants) => {
+            for variant in variants {
+                validate_program(
+                    &format!("{id} (material type {:?})", variant.name),
+                    variant.program,
+                )?;
+            }
+        }
+    }
+    let draw = match draw_list {
+        Some(index) => RasterDrawKind::Indexed(index),
+        None => RasterDrawKind::Fullscreen(RasterConstants::new(&constants)?),
+    };
+    Ok(PreparedRasterBatch {
+        program,
+        bindings,
+        draw,
+        uses_materials,
+    })
+}
+
+fn prepare_condition(
+    pass: &str,
+    spec: Option<DrawListConditionSpec>,
+    draw_list_ids: &HashMap<&str, usize>,
+) -> Result<Option<DrawListCondition>, PipelineError> {
+    spec.map(|spec| {
+        let draw_list = draw_list_ids
+            .get(spec.draw_list.as_str())
+            .copied()
+            .ok_or_else(|| pass_error(pass, format!("unknown draw list {:?}", spec.draw_list)))?;
+        Ok(DrawListCondition {
+            draw_list,
+            empty: spec.empty,
+        })
+    })
+    .transpose()
 }
 
 fn resource_index(
@@ -681,82 +845,173 @@ fn prepare_attachment<T: ParameterType>(
     };
     Ok(PreparedAttachment {
         resource: resource_index(pass, &spec.image, resource_ids)?,
+        resolve: spec
+            .resolve
+            .as_deref()
+            .map(|name| resource_index(pass, name, resource_ids))
+            .transpose()?,
         load,
         store: spec.store.into(),
     })
 }
 
-fn validate_attachments(
+fn prepare_attachments(
     pass: &str,
-    resources: &[Resource],
-    program: &ManagedRasterProgram,
-    colors: &[PreparedAttachment<[f32; 4]>],
-    depth: Option<&PreparedAttachment<f32>>,
-) -> Result<(), PipelineError> {
-    if colors.len() != program.color_outputs().len() || (colors.is_empty() && depth.is_none()) {
+    colors: Vec<AttachmentSpec<[f32; 4]>>,
+    depth: Option<AttachmentSpec<f32>>,
+    declarations: &PassDeclarations<'_>,
+) -> Result<PreparedAttachments, PipelineError> {
+    if colors.len() > MAX_RASTER_COLOR_ATTACHMENTS || (colors.is_empty() && depth.is_none()) {
         return Err(pass_error(
             pass,
-            "attachments must match the Program color output count and include at least one target",
+            "attachment count must be nonzero and within the common Raster limit",
         ));
     }
-    if program.requires_depth() && depth.is_none() {
-        return Err(pass_error(pass, "program requires a depth attachment"));
-    }
-    let mut extent = None;
+    let colors = colors
+        .into_iter()
+        .map(|attachment| {
+            prepare_attachment(
+                pass,
+                attachment,
+                declarations.resource_ids,
+                declarations.params,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let depth = depth
+        .map(|attachment| {
+            prepare_attachment(
+                pass,
+                attachment,
+                declarations.resource_ids,
+                declarations.params,
+            )
+        })
+        .transpose()?;
+    let mut shape = None;
     let mut seen = HashSet::new();
-    let mut check_image = |index: usize, format| {
-        let resource = &resources[index];
+    let mut check_image = |index: usize| {
+        let resource = &declarations.resources[index];
         let ResourceDesc::Image(desc) = resource.desc else {
             return Err(pass_error(
                 pass,
                 format!("attachment {:?} must be an image", resource.id),
             ));
         };
-        let shape = [desc.width, desc.height];
-        if desc.format != format || extent.is_some_and(|extent| extent != shape) {
-            return Err(pass_error(
-                pass,
-                format!(
-                    "attachment {:?} format or extent differs from the Raster targets",
-                    resource.id
-                ),
-            ));
-        }
         if !seen.insert(index) {
             return Err(pass_error(
                 pass,
                 format!("duplicate attachment {:?}", resource.id),
             ));
         }
-        extent = Some(shape);
+        Ok(desc)
+    };
+    let mut check_shape = |desc: ImageDesc| {
+        let actual = (desc.width, desc.height, desc.sample_count);
+        if shape.is_some_and(|shape| shape != actual) {
+            return Err(pass_error(
+                pass,
+                "attachment extents and sample counts must match",
+            ));
+        }
+        shape = Some(actual);
         Ok(())
     };
-    for (attachment, &format) in colors.iter().zip(program.color_outputs()) {
-        check_image(attachment.resource, format)?;
+    for attachment in &colors {
+        let desc = check_image(attachment.resource)?;
+        if !matches!(
+            desc.format,
+            ImageFormat::Rgba8Unorm | ImageFormat::Rgba16Float
+        ) {
+            return Err(pass_error(
+                pass,
+                "color attachments require rgba8_unorm or rgba16_float",
+            ));
+        }
+        check_shape(desc)?;
         if let LoadOp::Clear(value) = attachment.load
             && !value.iter().all(|value| value.is_finite())
         {
             return Err(pass_error(pass, "color clear values must be finite"));
         }
-    }
-    if let Some(attachment) = depth {
-        check_image(attachment.resource, ImageFormat::Depth32Float)?;
-        match attachment.load {
-            LoadOp::Load => {}
-            _ if program.requires_depth_load() => {
+        if let Some(resolve) = attachment.resolve {
+            let destination = check_image(resolve)?;
+            if desc.sample_count != SampleCount::X4
+                || matches!(attachment.load, LoadOp::Discard)
+                || destination != desc.with_sample_count(SampleCount::X1)
+            {
                 return Err(pass_error(
                     pass,
-                    "program requires loading the depth attachment",
+                    "color resolve requires initialized 4x color and a matching 1x destination",
                 ));
             }
-            LoadOp::Clear(value) if !(0.0..=1.0).contains(&value) || value.is_subnormal() => {
-                return Err(pass_error(
-                    pass,
-                    "depth clear must be zero or a normal value within zero and one",
-                ));
-            }
-            _ => {}
         }
+    }
+    if let Some(depth) = &depth {
+        let desc = check_image(depth.resource)?;
+        if desc.format != ImageFormat::Depth32Float || depth.resolve.is_some() {
+            return Err(pass_error(
+                pass,
+                "depth attachments require depth32_float and cannot resolve",
+            ));
+        }
+        check_shape(desc)?;
+        if let LoadOp::Clear(value) = depth.load
+            && (!(0.0..=1.0).contains(&value) || value.is_subnormal())
+        {
+            return Err(pass_error(
+                pass,
+                "depth clear must be zero or a normal value within zero and one",
+            ));
+        }
+    }
+    let (_, _, samples) = shape.expect("at least one prepared attachment");
+    Ok(PreparedAttachments {
+        colors,
+        depth,
+        samples,
+    })
+}
+
+fn validate_raster_program(
+    pass: &str,
+    resources: &[Resource],
+    program: &ManagedRasterProgram,
+    attachments: &PreparedAttachments,
+) -> Result<(), PipelineError> {
+    if attachments.colors.len() != program.color_outputs().len() {
+        return Err(pass_error(
+            pass,
+            "attachments must match the Program color output count",
+        ));
+    }
+    for (attachment, &format) in attachments.colors.iter().zip(program.color_outputs()) {
+        let ResourceDesc::Image(desc) = resources[attachment.resource].desc else {
+            unreachable!("checked attachment image")
+        };
+        if desc.format != format {
+            return Err(pass_error(
+                pass,
+                format!(
+                    "attachment {:?} format differs from the Raster targets",
+                    resources[attachment.resource].id
+                ),
+            ));
+        }
+    }
+    if program.requires_depth() && attachments.depth.is_none() {
+        return Err(pass_error(pass, "program requires a depth attachment"));
+    }
+    if program.requires_depth_load()
+        && !attachments
+            .depth
+            .as_ref()
+            .is_some_and(|depth| matches!(depth.load, LoadOp::Load))
+    {
+        return Err(pass_error(
+            pass,
+            "program requires loading the depth attachment",
+        ));
     }
     Ok(())
 }
@@ -938,6 +1193,9 @@ fn validate_bindings(
                 let ResourceDesc::Image(desc) = resources[*resource].desc else {
                     return Err(error("resource must be an image"));
                 };
+                if desc.sample_count != SampleCount::X1 {
+                    return Err(error("shader image bindings require a single-sample image"));
+                }
                 if let BindingType::StorageImageRead(format)
                 | BindingType::StorageImageWrite(format) = slot.kind
                 {
@@ -1168,7 +1426,7 @@ output: final"#,
             Ok(Program::Raster(program))
         });
         assert!(
-            matches!(result, Err(PipelineError::Invalid(message)) if message.contains("material type") && message.contains("leaf") && message.contains("format or extent"))
+            matches!(result, Err(PipelineError::Invalid(message)) if message.contains("material type") && message.contains("leaf") && message.contains("format differs"))
         );
     }
 
@@ -1239,10 +1497,7 @@ output: final"#,
             PreparedPipeline::from_yaml_fragments(
                 fragments,
                 OPTIONS,
-                PrepareInputs {
-                    values,
-                    ..Default::default()
-                },
+                PrepareInputs { values },
                 |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
             )
         };
@@ -1285,7 +1540,7 @@ output: final"#,
                 "unknown draw list",
             ),
             ("image: final", "image: missing", "unknown resource"),
-            ("rgba8_unorm", "rgba16_float", "format or extent"),
+            ("rgba8_unorm", "rgba16_float", "format differs"),
         ] {
             let yaml = DRAW_PIPELINE.replace(from, to);
             assert!(
