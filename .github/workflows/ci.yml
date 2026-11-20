@@ -195,7 +195,7 @@ jobs:
         run: |
           cargo test --locked -p renderer-pipeline --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p renderer-pipeline --no-default-features --features yaml --test frame_inputs
+          cargo test --locked -p renderer-pipeline --no-default-features --features yaml --lib --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the CPU Graph composition example
         if: matrix.backend == 'cpu'
@@ -215,6 +215,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p renderer --example frame_loop --release --no-default-features --features vulkan
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check and test the YAML Bistro example separately
+        if: contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')
+        shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
+          CARGO_TARGET_DIR: target/yaml-bistro
+        run: |
+          foreach ($features in @("yaml,$env:BACKEND", "yaml,$env:BACKEND,development-validation,graph-diagnostics")) {
+            cargo clippy --locked -p renderer-pipeline --example bistro --no-default-features --features $features -- -D warnings
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo test --locked -p renderer-pipeline --example bistro --release --no-default-features --features $features
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Exercise the CPU frame-memory workload
         if: matrix.backend == 'cpu'
         run: cargo run --locked -p renderer --example frame_memory --release --no-default-features --features memory-profiling -- cpu
@@ -247,5 +260,7 @@ jobs:
             cargo test --locked --workspace --release --no-default-features --features $features
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked -p renderer --example bistro --release --no-default-features --features $features
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo test --locked -p renderer-pipeline --example bistro --release --no-default-features --features "yaml,$features" --target-dir target/yaml-bistro
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

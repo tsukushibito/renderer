@@ -39,7 +39,7 @@ native実行のmip/layer等の制約は[対応範囲](docs/design/rendergraph.md
 cargo run --locked -p renderer --no-default-features --example graph_composition
 ```
 
-ヘッドレス描画、Windows表示、Bistroの小さなfixtureは[Examplesガイド](docs/guides/examples.md)から実行できます。
+ヘッドレス描画、Windows表示、BistroのRust版とYAML版は[Examplesガイド](docs/guides/examples.md)から実行できます。
 
 課題管理には [Beads](https://github.com/gastownhall/beads) を使用します。
 導入・日常操作・同期の手順は [.beads/README.md](.beads/README.md) を参照してください。

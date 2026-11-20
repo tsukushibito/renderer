@@ -125,9 +125,12 @@ def profile_settings(root, name):
     return {**release, **selected}
 
 
-def source_snapshot():
+def source_snapshot(package="renderer"):
+    crates = ["crates/renderer"]
+    if package == "renderer-pipeline":
+        crates.append("crates/renderer-pipeline")
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
-                "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", "crates/renderer",
+                "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", *crates,
                 "tools/cpu_profile", "tools/tracy", "tools/bistro/conditions.json",
                 "tools/bistro/ibl.py").split("\0")
     result = {}
@@ -200,15 +203,21 @@ def check_artifact(artifact, settings, instrumentation="none"):
 
 
 def instrumentation_dependencies(messages, instrumentation):
-    """Record features actually compiled, rather than Cargo's dev-unified graph."""
+    """Check renderer diagnostics and record the Tracy features actually compiled."""
     result = []
     for line in messages.splitlines():
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if (item.get("reason") == "compiler-artifact"
-                and item.get("target", {}).get("name") in ("tracy_client", "tracy_client_sys")):
+        if item.get("reason") != "compiler-artifact":
+            continue
+        target = item.get("target", {})
+        if target.get("name") == "renderer" and "lib" in target.get("kind", []):
+            forbidden = DIAGNOSTICS.intersection(item.get("features", []))
+            if forbidden:
+                raise BuildError("Renderer enabled diagnostics transitively: " + ", ".join(sorted(forbidden)))
+        if target.get("name") in ("tracy_client", "tracy_client_sys"):
             record = {"package_id": item["package_id"], "target": item["target"]["name"],
                       "features": sorted(item.get("features", []))}
             if record not in result:
@@ -247,11 +256,11 @@ def build(args):
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
         raise BuildError("Archive output must be a new or empty directory")
     output.mkdir(parents=True, exist_ok=True)
-    sources = source_snapshot()
+    sources = source_snapshot(args.package)
     commit = git("rev-parse", "HEAD")
     instrumentation = getattr(args, "instrumentation", "none")
     features = parse_features(args.features, instrumentation)
-    command = ["cargo", "build", "--locked", "-p", "renderer", "--no-default-features",
+    command = ["cargo", "build", "--locked", "-p", args.package, "--no-default-features",
                "--profile", args.profile, "--example", args.example,
                "--features", ",".join(features), "--message-format=json"]
     # Cargo's JSON reports an artifact path, not its byte hash. A shared target
@@ -269,7 +278,7 @@ def build(args):
     artifact = select_artifact(messages, args.example)
     check_artifact(artifact, settings, instrumentation)
     dependencies = instrumentation_dependencies(messages, instrumentation)
-    if sources != source_snapshot() or config != configuration_snapshot(ROOT, os.environ):
+    if sources != source_snapshot(args.package) or config != configuration_snapshot(ROOT, os.environ):
         raise BuildError("Source or Cargo configuration changed during the build; no manifest was written")
     binary = Path(artifact["executable"])
     pdb = find_pdb(binary)
@@ -288,7 +297,8 @@ def build(args):
                           "instrumentation": instrumentation,
                           "artifact_class": "normal" if instrumentation == "none" else "tracy-instrumented",
                           "instrumentation_dependencies": dependencies,
-                          "effective_features": artifact.get("features", []), "example": args.example,
+                          "effective_features": artifact.get("features", []), "package": args.package,
+                          "example": args.example,
                           "command": command, "rustc": run(["rustc", "-vV"], capture_output=True).stdout.strip(),
                           "cargo": run(["cargo", "-V"], capture_output=True).stdout.strip(),
                           "host": platform.platform(), "cargo_profile": artifact["profile"],
@@ -305,6 +315,7 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("profiling", "release"), default="profiling")
+    parser.add_argument("--package", choices=("renderer", "renderer-pipeline"), default="renderer")
     parser.add_argument("--example", default="windowed")
     parser.add_argument("--features", default="vulkan,d3d12,presentation")
     parser.add_argument("--instrumentation", choices=("none", "tracy"), default="none",

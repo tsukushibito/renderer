@@ -148,15 +148,22 @@ YAMLのテキストを`PreparedPipeline::from_yaml`に渡す。第2引数の`Pre
 
 `version: 1`は最大1 MiBの単一文書で次の項目を受け付ける。
 YAMLのキーの重複、未知の項目、アンカー、エイリアス、merge keyは構成エラーになる。
+`PreparedPipeline::from_yaml_fragments`では複数の`version: 1`文書を指定順に合成できる。
+`resources`、`draw_lists`、`raster_batches`、`passes`を必要な文書に置き、`output`は構成全体で一度指定する。
 
 | 項目 | 書式 |
 |---|---|
-| `resources` | 名前`id`付きのリスト。`kind: image`は`width`と`height`の組、または`extent: frame`を指定する。`extent: frame`には正の整数`divisor`を追加でき、幅と高さをそれぞれ除算して端数を切り上げる（既定は1）。`format`は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。 |
+| `resources` | 名前`id`付きのリスト。`kind: image`は`width`と`height`の組、または`extent: frame`を指定する。`extent: frame`には正の整数`divisor`を追加でき、幅と高さをそれぞれ除算して端数を切り上げる（既定は1）。`samples`は1（既定）または4。`format`は`rgba8_unorm`、`rgba8_srgb`、`rgba16_float`、`depth32_float`。`kind: buffer`は`bytes`を宣言する。`source`は`transient`（既定）または`external`。画像には[フレームごとに供給元を選ぶ形式](#yaml-image-sources)も使える。 |
 | `draw_lists` | 任意のリスト。各項目に`id`、`view`、`queue`を指定する。対応するビューの候補からqueueが一致する描画を入力順で選ぶ。 |
-| `passes` | 宣言順のパス列。各項目に`id`と`kind`を指定する。`kind: raster`は`shader`か`shader_template`の一方と、色・深度のattachmentを指定する。テンプレート指定には`draw_list`と必要な`material_types`の一覧を与える。`draw_list`を省略すると全画面三角形になり、必要に応じて`constants`に32-bitの語を並べる。`kind: compute`は`shader`を指定し、呼出側指定のbuffer gridを持つProgramには`grid: [x, y]`を与える。 |
-| attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。 |
+| `passes` | 宣言順のパス列。各項目に`id`と`kind`を指定する。`kind: raster`は色・深度のattachmentと、一つの描画定義または順序付きの`batches`を指定する。`kind: attachment`は描画を伴わないattachment操作を宣言する。RasterとAttachmentは`when: {draw_list: 名前, empty: true}`で描画リストが空のときだけ追加でき、`empty: false`は描画がある場合に追加する。`kind: compute`は`shader`を指定し、呼出側指定のbuffer gridを持つProgramには`grid: [x, y]`を与える。`kind: encode_indexed_indirect`は準備済みの描画テーブルを間接描画用にエンコードする。 |
+| Rasterの描画定義 | `shader`か`shader_template`の一方を指定する。テンプレートには必要な`material_types`の一覧を与える。描画元に`draw_list`または`indirect`を指定し、どちらも省略すると全画面三角形を描く。必要に応じて`constants`に32-bitの語を並べる。`batches`は描画定義のリストか、トップレベルの`raster_batches`でリストに付けた名前を指定する。 |
+| attachment | `image`、`load`を指定する。`load`が`clear`なら`clear`にRGBA配列または深度値を与える。ほかに`load`と`discard`を選べる。`store`は`store`（既定）または`discard`。4×のcolor attachmentには`resolve`で同一形式・寸法の1×画像を指定できる。 |
 | `bindings` | 各パスで、Programが要求する`group`と`binding`に`kind`を指定する。`image`はYAML画像の`resource`、`sampled_view`はアプリが渡すsampled Viewの名前を`resource`に指定する。`buffer`は`resource`、`offset`、`size`を指定する。`sampler`は`sampler`に`nearest_clamp`、`linear_clamp`、`linear_repeat`、`linear_repeat_u_clamp_v`のいずれかを指定する。indexed Rasterの`kind: material`は`resource`でフレームの材質binding名を指定する。 |
 | `output` | 出力する画像の`id`。 |
+
+`from_yaml_fragments`の`PrepareInputs::values`に`PrepareParameter`を渡すと、
+バッファの`bytes`とbindingの`size`、Computeの`grid`、attachmentの`clear`を`{param: 名前}`で参照できる。
+対応する`PrepareValue`は`Size`、`Grid`、`Color`、`Depth`で、準備時に解決する。
 
 たとえば、アプリが供給するRGBA8画像にComputeを掛け、全画面Rasterへつなぐ構成を次のように書ける。
 この例の論理名を解決するアセット層は、`post/invert`に入力と出力のstorage画像、`post/display`にsampled画像とsamplerを持つProgramを返す。
@@ -199,6 +206,7 @@ output: final
    各`FrameMaterial`の`material_type`をテンプレートパスの宣言に合わせ、`bindings`に`FrameInputs::material_bindings`上の範囲を指定する。
    各`MaterialBinding`でGraph上の資源を名前付きで渡す。
    材質のtextureは`Graph::sampled_image_view`で複数mipを参照できる。
+   選択式画像には`FrameInputs::image_sources`を、間接描画には`FrameInputs::indirect_lists`を渡す。
 3. `pipeline.build(graph, inputs)`でパスを追加し、Graphと`FrameOutput`を受け取る。
    `image()`で`output`の画像、`named_image(id)`で同じGraphにある名前付きの画像を取得できる。
    必要な後段、export、readbackなどを追加し、`Graph::compile`とRuntimeへの投入を行う。
@@ -213,32 +221,60 @@ Windowsで動く`yaml_pipeline`は同じアプリで、不透明描画リスト�
 cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan,d3d12,memory-profiling --example yaml_pipeline
 ```
 
+<a id="yaml-image-sources"></a>
+
+### 画像を生成するか、フレーム入力を使うか選ぶ
+
+たとえば`shadow_2`が書く画像を次のように宣言する。後続パスはどちらの場合も`cascade_2`を参照する。
+
+```yaml
+resources:
+  - id: cascade_2
+    kind: image
+    width: 2048
+    height: 2048
+    format: depth32_float
+    source: { render: shadow_2, reuse: frame_input }
+```
+
+準備時に`PreparedPipeline::selectable_images()`で画像の宣言名と記述子を取得できる。
+アプリは宣言名を`FrameImageSource::name`に指定し、各フレームの供給元を`FrameInputs::image_sources`で渡す。
+`ImageSource::Reuse(image)`は同じGraphに取り込んだ初期化済み画像をつなぎ、`shadow_2`を省く。
+`ImageSource::Render { target: None }`は準備済みの一時画像を使う。
+再描画する永続画像を取り込んでいる場合は`target: Some(image)`で渡せる。
+生成パスはその画像を単独で書き、attachmentをclearして保存する。
+
+### 間接描画をYAMLでつなぐ
+
+次のパスは、先行パスまたは入力が供給する`visibility_mask`を参照する。
+Rasterの描画定義で`indirect: encode_opaque`を指定すると、ここで生成した引数を使う。
+
+```yaml
+passes:
+  - { id: encode_opaque, kind: encode_indexed_indirect, visibility: visibility_mask, table_list: opaque_indirect }
+```
+
+`PrepareInputs::indirect_lists`に名前付きの`PrepareIndirectList`を渡す。
+各`IndirectTable`は事前検証済みの`IndexedIndirectTable`と可視性バッファ内のバイトオフセットを持つ。
+`FrameInputs::indirect_lists`の`FrameIndirectList`にはテーブル順にgeometryと材質を渡す。
+`FrameIndirectGroup::enabled`で、フレーム内のエンコードとその描画を一緒に省ける。
+
 <a id="bistro-post-pipeline"></a>
 
 ### BistroのHDRからSDRをYAMLでつなぐ
 
-Bistroの`--post-pipeline PATH`に下表のYAMLを渡す。Bistroはシーンの線形RGBA16F画像を読み取り専用の外部入力`hdr`として渡し、
-YAMLの`output`に指定されたフレーム寸法のRGBA8 UNORM画像をキャプチャまたは表示に使う。
-
-| Bloom | FXAAあり | `--aa-off` |
-|---|---|---|
-| `--bloom tent` または `--bloom box` | [post-bloom.yaml](../../crates/renderer/examples/support/bistro/post-bloom.yaml) | [post-bloom-aa-off.yaml](../../crates/renderer/examples/support/bistro/post-bloom-aa-off.yaml) |
-| `--bloom off`（既定） | [post.yaml](../../crates/renderer/examples/support/bistro/post.yaml) | [post-aa-off.yaml](../../crates/renderer/examples/support/bistro/post-aa-off.yaml) |
-
-Bloom付きの構成は、抽出、半分・1/4への縮小、ぼかし、原画像との合成をComputeで宣言する。
-`--bloom tent|box`は`bloom/blur`に使う組み込みProgramを選び、フレームサイズの`bloom_hdr`をキャプチャ対象にする。
-全画面Rasterの`post/neutral`は露出倍率2.0とPBR Neutralを適用する。`post/sdr`はオフスクリーンではsRGB、
-ウィンドウではPresenterで一度だけsRGBへ変換するための線形出力を使う。中間画像、パス順、attachment、画像とサンプラーのbindingはYAML内で編集できる。
-YAMLファイルは起動時に読み込み、ウィンドウのサイズ変更には同じ定義を新しい描画寸法で準備する。
+BistroのYAML版は同じGraphのシーンHDRを後処理へつなぐ。`--bloom tent`または`--bloom box`では
+[Bloomの抽出・縮小](../../crates/renderer-pipeline/examples/support/bistro/recipes/bloom-prefilter.yaml)とフィルター別の定義を組み込み、
+抽出、縮小、ぼかし、合成をComputeで行う。`--bloom off`が既定である。
+トーンマッピングはPBR Neutralと露出倍率2.0を適用し、`--aa-off`を指定するとFXAAを省く。
+最終画像はオフスクリーンではsRGB、ウィンドウではPresenterがsRGBへ変換するための線形出力になる。
+AA-offの診断画像と`--capture-bloom-bypass`の参照画像にも対応するYAML定義を使う。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation --example bistro -- --api vulkan --fixture --bloom tent --post-pipeline crates/renderer/examples/support/bistro/post-bloom.yaml --output .tools/bistro-post-vulkan
+cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --bloom tent --output .tools/bistro-post-vulkan
 ```
 
-D3D12で実行する場合は`--api d3d12`を指定する。同じAPI・描画条件で`--post-pipeline`を省略すると、従来のRust構成と比較できる。
-追加の`aa-off`診断画像と`--capture-bloom-bypass`の参照画像は従来のRust構成で描画する。
-たとえばYAMLの`combine`で`(group: 0, binding: 1)`の参照を`bloom_blurred`から`bloom_quarter`に変えると、未ぼかしの縮小画像が合成される。
-[二APIでの検証](../verification/current.md#bistro-post-pipeline-verification)を参照する。
+D3D12で実行する場合は`--api d3d12`を指定する。
 
 <a id="material-shader-build"></a>
 
@@ -260,38 +296,39 @@ python -B tools/shaders/build_material_programs.py --manifest crates/renderer/ex
 テンプレートや材質の変更時は該当する組をビルドし直す。実行時のresolverはその組のバイナリと、レビュー済みの
 頂点・定数・リソースのABIおよびアクセス契約を[既存の取込境界](#runtime-shader-import)で照合してProgramを返す。
 
-Bistroの検証経路では、[YAML](../../crates/renderer/examples/support/bistro/forward-shadow.yaml)からForward不透明描画とシャドウの
-テンプレートを選び、半透明には完成済みProgramを指定する。既存のBistro Graphが材質資源、描画順、4つのシャドウカスケードを構築する。
+BistroのYAML版では、[シェーダー選択用のYAML](../../crates/renderer-pipeline/examples/support/bistro/recipes/forward-shadow.yaml)から
+Forward不透明描画とシャドウのテンプレートを選び、半透明には完成済みProgramを指定する。
+この指定で選んだProgramは[描画パイプライン全体を定義するYAML](#bistro-scene-pipeline)から使われる。
 サンプルのresolverはForward 1×、直接描画、インスタンシングなしを対象とし、ビルドしたバイト列をレビュー済みのBistroバイナリと照合する。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --capture-shadow-maps --shader-pipeline crates/renderer/examples/support/bistro/forward-shadow.yaml --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
+cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --capture-shadow-maps --shader-pipeline crates/renderer-pipeline/examples/support/bistro/recipes/forward-shadow.yaml --shader-manifest .tools/bistro-material-programs/manifest.json --output .tools/bistro-fixture-material-vulkan
 ```
 
 D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加の表示手順は[開発ガイド](development.md#bistro-b5)を参照する。
 
 <a id="bistro-scene-pipeline"></a>
 
-### BistroのForwardをYAMLで構成する
+### Bistroの描画パイプラインをYAMLで構成する
 
-`--scene-pipeline PATH`に[scene-forward.yaml](../../crates/renderer/examples/support/bistro/scene-forward.yaml)を渡す。
-Forward 1×の直接描画で、YAMLが不透明パスと透明パス、HDR・深度画像、共有／材質bindingを定義する。
-Bistroはカメラ定数、3つのIBL View、4つのシャドウマップ、可視判定と並び替えを行った描画候補を渡す。
-サンプルの背景色は最初のカラーパスの`clear`に指定する。`output`のHDRは同じGraphの[BloomとSDR](#bistro-post-pipeline)に接続する。
+`renderer-pipeline`の`bistro`は[同梱のYAML](../../crates/renderer-pipeline/examples/support/bistro/recipes)を準備時に合成する。
+`--pipeline`でForward、Forward+、Forward-reference、Deferredを選び、対応するMSAAや描画形式を指定できる。
+シャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)まで、パス、画像、パス間の接続をYAMLが定義する。
+Bistroはカメラ、IBL、材質、可視判定と並び替えを行った描画候補を供給し、最終画像をキャプチャまたは表示する。
+描画寸法が変わると同じレシピを新しい寸法で準備する。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan,d3d12,presentation,development-validation --example bistro -- --api vulkan --fixture --scene-pipeline crates/renderer/examples/support/bistro/scene-forward.yaml --bloom tent --post-pipeline crates/renderer/examples/support/bistro/post-bloom.yaml --output .tools/bistro-scene-vulkan
+cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan,d3d12,development-validation --example bistro -- --api vulkan --fixture --frames 8 --warmup 2 --capture-shadow-maps --output .tools/bistro-scene-vulkan
 ```
 
-D3D12では`--api d3d12`を指定する。`--scene-pipeline`を省略した同じ描画条件で、従来のシーン構成と比較できる。
+D3D12では`--api d3d12`を指定する。
 
-4つのシャドウパスもYAMLで組み立てる場合は、さらに`--shadow-pipeline`に
-[scene-shadows.yaml](../../crates/renderer/examples/support/bistro/scene-shadows.yaml)を指定する。
-このファイルは4枚の2048×2048 D32画像と、その深度パスを宣言する。各パスの候補はBistroが`sun_0`から`sun_3`へ渡し、
-生成した`cascade_0`から`cascade_3`のViewは同じGraphでForwardが読み取る。
-`--shadow-pipeline`だけを選び、生成した影を従来のForwardへ渡す構成も使える。
-YAMLのカスケードは毎フレーム描画する。従来のシーンと比較するときは、従来側に`--redraw-shadows`を指定する。
-[二APIでの検証](../verification/current.md#bistro-scene-pipeline-verification)を参照する。
+[シャドウの定義](../../crates/renderer-pipeline/examples/support/bistro/recipes/shadows.yaml)は4枚のD32画像と、その生成パスを宣言する。
+Bistroは固定の遮蔽物を使い、毎フレームの光源行列と描画条件をカスケードごとに比較する。
+たとえばカスケード2のキャッシュが有効なら、前回の画像をGraphに取り込み、`cascade_2`へ`Reuse`として渡す。
+更新が必要なら`Render`を渡し、同じ`cascade_2`を深度パスで描画する。
+後続のパスは常に`cascade_2`を読む。`--redraw-shadows`は各カスケードを毎フレーム更新する。
+[YAML上の宣言とRustの入力型](#yaml-image-sources)を参照する。
 
 <a id="bistro-tools"></a>
 
@@ -490,8 +527,8 @@ portable版を`.tools/tracy-0.14.1/bin/`へ展開し、通常権限のPowerShell
 OSのUAC・ETW・kernel設定やsampling intervalは変更しない。
 
 ```powershell
-python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
-python -B tools/cpu_profile/build.py --example bistro --features vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
+python -B tools/cpu_profile/build.py --package renderer-pipeline --example bistro --features yaml,vulkan,d3d12 --profile release --output .tools/tracy/builds/normal
+python -B tools/cpu_profile/build.py --package renderer-pipeline --example bistro --features yaml,vulkan,d3d12 --profile release --instrumentation tracy --output .tools/tracy/builds/instrumented
 ```
 
 `--instrumentation tracy`がfeatureを追加し、manifestの`artifact_class`を`tracy-instrumented`として、
@@ -628,11 +665,11 @@ python -B tools/cpu_profile/build.py --profile release --example profile_workloa
 full debug情報とstripなしだけを変更する。`release`は通常構成との費用比較用で、
 PDBが存在しても行情報を得られるとは限らない。両構成を同条件で測り、debug情報を加えた差も記録する。
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
-manifestにはsource/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
-Bistroの埋込固定条件`tools/bistro/conditions.json`もsource hashに含め、camera/描画条件をEXEのidentityへ結び付ける。
+manifestにはCargoパッケージとexample、source/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
+`--package renderer-pipeline`を選ぶと両crateのソースを記録する。Bistroが埋め込むYAMLと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 
-既定のexampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
+既定のパッケージは`renderer`、exampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、
 上のヘッドレス用指定を省略しない。変更中のsourceは既定で拒否し、
 調査上必要なときだけ`--allow-dirty`で実際のhashを記録する。
 profile/rustflags/compilerの環境・Cargo設定による上書き、

@@ -19,6 +19,11 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(snapshot[name]["raw_sha256"],
                          hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
 
+    def test_pipeline_archive_binds_the_workload_and_renderer_dependency(self):
+        snapshot = source_snapshot("renderer-pipeline")
+        self.assertIn("crates/renderer-pipeline/Cargo.toml", snapshot)
+        self.assertIn("crates/renderer/Cargo.toml", snapshot)
+
     def test_shipping_features_reject_direct_diagnostics(self):
         self.assertEqual(parse_features("vulkan,d3d12 vulkan,presentation"),
                          ["d3d12", "presentation", "vulkan"])
@@ -84,6 +89,13 @@ class BuildTests(unittest.TestCase):
             instrumentation_dependencies(messages, "none")
         with self.assertRaisesRegex(BuildError, "missing actual"):
             instrumentation_dependencies("", "tracy")
+
+    def test_pipeline_archive_rejects_diagnostics_in_renderer_dependency(self):
+        message = json.dumps({"reason": "compiler-artifact",
+                              "target": {"name": "renderer", "kind": ["lib"]},
+                              "features": ["memory-profiling"]})
+        with self.assertRaisesRegex(BuildError, "Renderer enabled diagnostics transitively"):
+            instrumentation_dependencies(message, "none")
 
 
 if __name__ == "__main__":

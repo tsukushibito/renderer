@@ -920,13 +920,18 @@ GPUが使うパイプラインと対応するProgramは既存の実行所有者�
 依存は`アプリ → renderer-pipeline → renderer`の向きとする。アプリがYAMLとバックエンドを選び、
 シェーダーの取込時にコードとABIの一致を保証する。`renderer-pipeline`が扱うのは論理名と信頼済みProgramである。
 YAMLは順序付きのRaster／Computeパス、名前付き資源・描画リスト、出力画像を宣言する。
-パスは宣言順でGraphへ追加し、producer・hazard・初期化の解析とGPU同期は[RenderGraph](rendergraph.md)に委ねる。
+複数のYAML文書を準備時に合成できる。宣言順は文書の指定順と各文書内の順序で決まる。
+そのフレームで有効なパスを宣言順でGraphへ追加し、producer・hazard・初期化の解析とGPU同期は[RenderGraph](rendergraph.md)に委ねる。
 
 構成の準備時にYAMLを解析し、参照・Programの種別・binding・attachmentを照合して、Graphへ渡す順序と引数を確定する。
 `PreparedPipeline`が同じProgram版を`WorkingSet`とGraph構築の両方に使い、transient資源の枠数と作業領域を予約する。
 毎フレームはアプリが提供したGraph上の外部資源と描画候補を使う。
 名前付きビュー内の候補をqueueで選び、複数パスで共有される描画リストも一度構築する。
 可変のハンドル・候補数は各フレームで確認し、上限内の入力には予約済み領域を使う。
+[供給元を選べる画像](../guides/tooling.md#yaml-image-sources)は、初期化済みの外部画像を選ぶと生成パスを省く。
+生成を選んだ場合は一時画像を使うか、既存の外部画像を描画先として渡せる。
+準備時に各選択式画像の生成パスと記述子を確定し、フレーム構築時に選択とハンドルを検査する。
+どの供給元を選んでも後続パスは同じ論理画像を参照する。
 `sampled_view`は同じGraphの名前付き画像ViewをProgramのsampled imageに接続する。複数mipを含むViewでは、
 GraphがView全体の読取り範囲とGPU寿命を扱う。準備済み構成は描画リスト上限を含むGraphの宣言数を利用側に渡す。
 Graphを消費する`build`が成功したら、利用側は`FrameOutput`から最終画像と同じGraphの名前付き中間画像を取得し、
@@ -942,18 +947,19 @@ indexed Rasterは`shader_template`と材質型を宣言できる。アセット�
 
 構成の差し替えは、新しい`PreparedPipeline`を作り、以前のフレームと結果の貸し出しを返却してから
 実RuntimeのWorkingSetを更新する。更新が成功した版で後続フレームを組み立てる。
-YAMLで宣言する資源はbufferと1×・単一mip／layerの2D画像で、材質のbindingには複数mipを含むGraphのsampled Viewも渡せる。
+YAMLで宣言する資源はbufferと1×または4×・単一mip／layerの2D画像で、材質のbindingには複数mipを含むGraphのsampled Viewも渡せる。
 画像寸法は固定値の組か`extent: frame`で指定する。後者は呼出側が準備時に渡す描画寸法に解決する。
 `divisor`を指定した場合は各軸の除算結果を切り上げる。サイズ変更時は新しい寸法でWorkingSetを準備する。
-Rasterはindexed draw listまたは全画面三角形、ComputeはProgramのdispatch契約に従う。
-Bistroの[シーン描画](../guides/tooling.md#bistro-scene-pipeline)では、Forward 1×のアタッチメントとパス間接続をYAMLで指定する。
-Bistroはカメラ、可視判定・ソート済み描画候補、材質、照明のViewを供給する。
-カスケードをYAMLで描く構成では、光源ビューごとの描画候補をシャドウパスに渡し、生成した4枚の深度画像を同じGraphのForwardが参照する。
-Bistroの[ポスト処理](../guides/tooling.md#bistro-post-pipeline)では、既存GraphにあるシーンHDRを読み取り専用の外部入力とし、
-YAMLがBloomのComputeパスと一時画像、トーンマッピング、SDR出力を定義する。Bistroは最終画像を既存のキャプチャ／Presenterに渡し、
-Bloomが有効なときは同じGraphから`bloom_hdr`をキャプチャする。
-同じGraph内で接続するため、HDRを渡すための転送や同期は追加せず、既存のGraphとRuntimeで寿命、hazardとGPU同期を扱う。
-Bistroは準備済みのパス数と描画数を使い、Vulkanのdescriptor予約にComputeのdispatch分を含める。
+Rasterはindexed draw list、間接描画、または全画面三角形を使い、複数の描画定義を同じattachmentで順に実行できる。
+4×カラーのresolveは一致する形式・寸法の1×画像に書く。ComputeはProgramのdispatch契約に従う。
+間接描画は準備時に検証済みのテーブルを受け取り、引数の生成、読み取り、寿命をGraphに宣言する。
+
+`renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)ではシャドウ、シーン描画、Bloom、トーンマッピング、
+SDR出力のパスと接続をYAMLで定義する。サンプル側はカメラ、描画候補、材質、照明のViewを供給し、出力をキャプチャ／Presenterに渡す。
+シャドウの有効性はアプリがカスケードごとに判定する。画像の版とキャッシュキーは投入が受理された後に公開し、
+次フレームでは既存のGraphのimport、依存とGPU寿命の契約に従って参照する。
+シーンHDRとポスト処理の各中間画像は同じGraphに接続する。Bistroは準備済みのパス数と描画数を使い、
+Vulkanのdescriptor予約にComputeのdispatch分を含める。公開Graph APIによるRust版のBistroは`renderer`に置く。
 操作、書式、入力例は[利用ガイド](../guides/tooling.md#yaml-pipeline)を参照する。
 
 ## 12. エンジン統合とPresentation
@@ -1411,7 +1417,7 @@ ModelをRendererへ持ち込まず、取込/作成/更新境界の保証を保�
 
 #### 実行用cookとForward PBRの境界
 
-`.3.1`のcookと`.3.2`の`examples/bistro`はRenderer外の利用側処理とする。
+実行用cookと`renderer-pipeline`の`examples/bistro`はRenderer外の利用側処理とする。
 全1,296 mesh・132材質・405画像をmanifestへ対応付け、glTFのnode transformをgeometryへ反映する。
 頂点はposition、normal、tangentとhandedness、UVを持つ48-byte stream、indexはlittle-endian u32とする。
 normalを正規化してMikkTSpaceを実行し、退化UV/geometry、またはfloat32の角度重みの

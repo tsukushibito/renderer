@@ -37,12 +37,16 @@ cargo run --locked -p renderer --no-default-features --features d3d12,presentati
 
 **Bistroの小さなシーンを描画する**
 
-`bistro --fixture`は外部素材を取得せず、レポートとキャプチャを出力します。実行ごとに新しい出力先を指定します。
-全シーンを使う場合は[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
+`renderer`の`bistro`は公開Graph APIを使い、Rustでパスを定義して描画パイプラインを組み立てます。
+`renderer-pipeline`の`bistro`は描画パイプライン全体をYAMLで定義します。どちらも`--fixture`で小さなシーンを描画し、
+レポートとキャプチャを出力します。実行ごとに新しい出力先を指定し、ビルド成果物もパッケージごとに保存します。
 
 ```powershell
-cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro -- --api vulkan --fixture --output .tools/bistro-fixture-vulkan
+cargo run --locked --release -p renderer --no-default-features --features vulkan --example bistro --target-dir target/bistro-rust -- --api vulkan --fixture --output .tools/bistro-rust-fixture
+cargo run --locked --release -p renderer-pipeline --no-default-features --features yaml,vulkan --example bistro --target-dir target/bistro-yaml -- --api vulkan --fixture --output .tools/bistro-yaml-fixture
 ```
+
+YAML版で全シーンを描画するには[Bistroのcook・描画手順](development.md#bistro-pbr)を参照してください。
 
 ## Windows版に含めるバックエンドを選ぶ
 
@@ -71,7 +75,8 @@ cargo build --locked --release -p renderer --no-default-features --features vulk
 | `yaml_pipeline` | [YAMLでのパス合成](tooling.md#yaml-pipeline)、描画リストの共有、外部Computeの差し替え、材質別Programとbindingの切り替え | Windows。`renderer-pipeline`の`yaml,vulkan,d3d12`。フレーム計測には`memory-profiling`を追加 |
 | `headless` | offscreen描画とPPMへの書き出し | `vulkan` |
 | `windowed` | Windowsの表示ループ、標準／独自Graph、カメラ操作 | Windows、`presentation` と `vulkan` または `d3d12` |
-| `bistro` | 利用側のPBR、IBL、影、トーンマッピング、Bloomの合成と、[Forward・シャドウのテンプレート選択](tooling.md#material-shader-build) | `vulkan` またはWindowsの `d3d12`。ウィンドウ表示はWindowsと `presentation`。全シーンはcook済み素材とIBLが必要 |
+| `renderer`の`bistro` | 公開Graph APIを使ったRustのパス定義と合成 | `vulkan` またはWindowsの`d3d12` |
+| `renderer-pipeline`の`bistro` | [YAMLでのシーン描画とシャドウ再利用](tooling.md#bistro-scene-pipeline)、Bloom、トーンマッピング、SDR出力、[材質Programの切り替え](tooling.md#material-shader-build) | `yaml`と`vulkan`、または`yaml`とWindowsの`d3d12`。表示はWindowsと`presentation`。全シーンはcook済み素材とIBLが必要 |
 | `frame_loop` | [フレーム進行、履歴、アセット更新](development.md#frame-loop) | `vulkan`。計測モードはrelease |
 | `engine_workloads` | [大メッシュ、マルチView、アセット差し替え](development.md#engine-workloads) | `vulkan`。計測モードはrelease |
 | `profile_workload` | [CPUプロファイル用のヘッドレス転送負荷](development.md#cpu-profile-workload) | Windows、`vulkan` または `d3d12` |
@@ -86,5 +91,5 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 二APIの受入条件と測定コマンドは[開発手順](development.md)に、
 実行済みの結果は[検証状況](../verification/current.md)に置いています。
 
-`yaml_pipeline`の入口と設定は`crates/renderer-pipeline/examples/`にあります。
+`yaml_pipeline`とYAML版`bistro`の入口と設定は`crates/renderer-pipeline/examples/`にあります。
 ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。

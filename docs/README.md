@@ -24,6 +24,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 | GPU上の実行を知りたい | [Vulkanの設計](design/vulkan.md)と[D3D12の設計](design/implementation-policy.md#d3d12-runtime)：同期、実行枠、資源管理、投入・完了 |
 | 二APIのWindows表示を使いたい | [表示の共通契約](design/rendergraph.md#windows-presentation)と[操作・受入・計測](guides/development.md#windows-presentation)：自由camera、resize、VSync、pending終了 |
 | Bistroを二APIで描画・計測したい | [cookとForward PBR](guides/development.md#bistro-pbr)：MikkTSpace、DDS mip、材質・alpha、画像比較と通常releaseの計測 |
+| BistroのRust版とYAML版を試したい | [サンプルの起動](guides/examples.md#最初に動かす)、[YAMLの描画構成とシャドウ再利用](guides/tooling.md#bistro-scene-pipeline) |
 | IBL・影・HDRを含むBistroを比較したい | [B3の再現手順](guides/development.md#bistro-b3)、[受入・Godot比較](verification/current.md#bistro-lighting)、[120 FPS目標の実測](verification/current.md#bistro-120-performance) |
 | 外部Bloomを含むBistroを表示・検証したい | [B5の操作・再現手順](guides/development.md#bistro-b5)、[統合受入の結果](verification/current.md#bistro-b5-acceptance)、[外部Bloomの実証](verification/current.md#bistro-bloom-fixture) |
 | 非管理者でCPU処理の内訳を調べたい | [Tracyの手動zone](guides/tooling.md#tracy-profiling)：既定offの計装、Bistroの測定窓、[実トレースと費用・hotspot](verification/current.md#bistro-tracy) |
