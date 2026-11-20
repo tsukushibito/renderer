@@ -1,4 +1,4 @@
-//! A YAML rendering pipeline consuming Bistro scene and material data.
+//! A Rust rendering pipeline consuming Bistro scene and material data.
 
 #![cfg_attr(
     not(any(feature = "vulkan", all(windows, feature = "d3d12"))),
@@ -21,6 +21,8 @@ mod camera;
 #[cfg(windows)]
 #[path = "../../../renderer/examples/support/profile_workload/clock.rs"]
 mod clock;
+#[path = "../../../renderer/examples/support/bistro/deferred.rs"]
+mod deferred;
 #[path = "../../../renderer/examples/support/bistro/forward_lighting.rs"]
 #[allow(
     dead_code,
@@ -272,7 +274,6 @@ impl Options {
         };
         let mut args = arguments.into_iter();
         let mut specified_size = false;
-        let mut shader_pipeline = None;
         let mut shader_manifest = None;
         while let Some(argument) = args.next() {
             match argument.as_str() {
@@ -323,10 +324,6 @@ impl Options {
                                 .into(),
                         ),
                     };
-                }
-                "--shader-pipeline" => {
-                    shader_pipeline =
-                        Some(args.next().ok_or("--shader-pipeline needs a path")?.into());
                 }
                 "--shader-manifest" => {
                     shader_manifest =
@@ -402,28 +399,22 @@ impl Options {
         if result.fixture == result.manifest.is_some() {
             return Err("select exactly one of --fixture or --manifest".into());
         }
-        result.shader_assets = match (shader_pipeline, shader_manifest) {
-            (None, None) => None,
-            (Some(pipeline), Some(manifest)) => {
-                if result.pipeline != PipelineMode::Forward
-                    || result.sample_count != renderer::graph::SampleCount::X1
-                    || result.submission != SubmissionMode::Direct
-                    || result.instances.enabled()
-                {
-                    return Err("the shader pipeline example requires Forward 1x, direct submission and instancing off".into());
-                }
-                Some(shader_assets::Selection {
-                    pipeline,
-                    manifest,
-                    programs: None,
-                })
-            }
-            _ => {
+        if let Some(manifest) = shader_manifest {
+            if result.pipeline != PipelineMode::Forward
+                || result.sample_count != renderer::graph::SampleCount::X1
+                || result.submission != SubmissionMode::Direct
+                || result.instances.enabled()
+            {
                 return Err(
-                    "--shader-pipeline and --shader-manifest must be provided together".into(),
+                    "--shader-manifest requires Forward 1x, direct submission and instancing off"
+                        .into(),
                 );
             }
-        };
+            result.shader_assets = Some(shader_assets::Selection {
+                manifest,
+                programs: None,
+            });
+        }
         if result.pipeline == PipelineMode::Deferred
             && result.sample_count != renderer::graph::SampleCount::X1
         {
@@ -510,9 +501,7 @@ Scenes and output
 
 Rendering
   --pipeline forward|forward-plus|forward-reference|deferred
-                                 Selects the complete YAML rendering pipeline
-  --shader-pipeline YAML --shader-manifest JSON
-                                 Forward 1x with direct submission
+  --shader-manifest JSON         Reviewed shader bundle for Forward 1x, direct submission
   --msaa 1|4
   --bloom off|tent|box
   --instances off|individual|instanced
@@ -553,7 +542,7 @@ pub fn main() -> Result<(), Error> {
     let mut options = Options::parse(arguments)?;
     if let Some(shader_assets) = &mut options.shader_assets {
         require_backend(&options.api)?;
-        shader_assets.prepare(&options.api, options.inflight)?;
+        shader_assets.prepare(&options.api)?;
     }
     #[cfg(feature = "tracy")]
     let _client = tracy_client::Client::start();
@@ -613,10 +602,7 @@ mod tests {
         let mut pool = renderer::graph::GraphPool::new(budget.graph, 2)?;
         let mut workspace = pipeline::Workspace::new(
             scene,
-            budget
-                .prepared
-                .take()
-                .expect("prepared YAML fixture pipeline"),
+            budget.prepared.take().expect("prepared fixture pipeline"),
         );
         let built = pipeline::build(
             &mut pool,
@@ -660,28 +646,32 @@ mod tests {
     }
 
     #[test]
-    fn all_drawing_stages_use_yaml_without_stage_flags() {
-        for flag in ["--scene-pipeline", "--shadow-pipeline", "--post-pipeline"] {
-            let error = options(&["--fixture", flag, "stage.yaml"]).unwrap_err();
+    fn rejects_retired_pipeline_flags() {
+        for flag in [
+            "--scene-pipeline",
+            "--shadow-pipeline",
+            "--post-pipeline",
+            "--shader-pipeline",
+        ] {
+            let error = options(&["--fixture", flag, "pipeline.yaml"]).unwrap_err();
             assert!(error.to_string().contains(flag));
         }
     }
 
     #[test]
-    fn shader_selection_has_explicit_input_paths_and_forward_route() {
-        assert!(options(&["--fixture", "--shader-manifest", "bundle.json"]).is_err());
-        let with_yaml = [
-            "--fixture",
-            "--shader-pipeline",
-            "passes.yaml",
-            "--shader-manifest",
-            "bundle.json",
-        ];
-        let selected = options(&with_yaml).unwrap().shader_assets.unwrap();
-        assert_eq!(selected.pipeline, PathBuf::from("passes.yaml"));
+    fn shader_manifest_requires_single_sample_direct_forward_without_instancing() {
+        assert!(options(&["--fixture", "--shader-manifest"]).is_err());
+        let with_bundle = ["--fixture", "--shader-manifest", "bundle.json"];
+        let selected = options(&with_bundle).unwrap().shader_assets.unwrap();
         assert_eq!(selected.manifest, PathBuf::from("bundle.json"));
-        assert!(options(&[with_yaml.as_slice(), &["--msaa", "4"]].concat()).is_err());
-        assert!(options(&[with_yaml.as_slice(), &["--pipeline", "deferred"]].concat()).is_err());
+        for conflict in [
+            ["--msaa", "4"],
+            ["--pipeline", "deferred"],
+            ["--submission", "indirect"],
+            ["--instances", "instanced"],
+        ] {
+            assert!(options(&[with_bundle.as_slice(), &conflict].concat()).is_err());
+        }
     }
 
     #[test]

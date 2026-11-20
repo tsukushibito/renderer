@@ -19,10 +19,7 @@ use renderer::{
     runtime::{ExecutionErrorKind, FrameId, Runtime},
 };
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::{
-    FrameInputs, FrameSampledView, PrepareOptions, PreparedPipeline, Program, ShaderRequest,
-    standard::passes::{SdrEncoding, SdrOutput},
-};
+use renderer_pipeline::standard::passes::{SdrEncoding, SdrOutput, write_sdr};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use serde_json::{Value, json};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -264,32 +261,9 @@ fn mip_probes(
         let mut graph = pool.begin()?;
         let source = graph.import_image("replacement mip chain", &resident.images[image_index])?;
         let source = graph.image_view(source, mip, 0)?;
-        let mut probe = PreparedPipeline::from_yaml(
-            include_str!("mip-probe.yaml"),
-            PrepareOptions {
-                frame_extent: Some([width, height]),
-                frames_in_flight: 1,
-                max_draws_per_list: 0,
-                max_materials: 0,
-            },
-            |request| match request {
-                ShaderRequest::Program("probe/sdr") => {
-                    Ok(Program::Raster(MIP_PROBE_SDR.pipeline().program))
-                }
-                _ => Err(format!("unexpected mip probe shader {request:?}").into()),
-            },
-        )?;
-        let (mut graph, output) = probe.build(
-            graph,
-            FrameInputs {
-                sampled_views: &[FrameSampledView {
-                    name: "mip",
-                    view: source,
-                }],
-                ..FrameInputs::default()
-            },
-        )?;
-        let pass = graph.readback_image("mip texels", output.image())?;
+        let output = graph.image("mip probe output", ImageDesc::rgba8(width, height))?;
+        write_sdr(&mut graph, "sample_mip", source, output, MIP_PROBE_SDR)?;
+        let pass = graph.readback_image("mip texels", output)?;
         let plan = graph.compile()?;
         let pending = backend.submit(&plan)?;
         let mut completed = backend::wait_for(backend, pending.id())?;
