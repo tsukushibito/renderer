@@ -1,5 +1,9 @@
 //! Fixed shader programs for Forward PBR and directional shadow maps.
 
+#[path = "../../shaders/packaged.rs"]
+mod packaging;
+use packaging::packaged_shaders;
+
 // Only the reviewed immutable asset declarations may use renderer's trusted
 // shader import. All bindings and graph construction use safe APIs.
 #[allow(unsafe_code)]
