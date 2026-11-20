@@ -19,7 +19,7 @@ use crate::{
             shadow_program,
         },
     },
-    pbr::{Bounds, Camera, Environment, Frame, PreparedView, SceneLimits, Sun},
+    pbr::{Bounds, Environment, Frame, PreparedView, SceneLimits, Sun, ViewInput},
     pbr_forward::{self, Programs, prepare_recipe},
 };
 
@@ -110,12 +110,12 @@ impl Prepared {
 
     pub fn prepare_view(
         &self,
-        camera: Camera,
+        view: ViewInput,
         sun: Sun,
         bounds: Bounds,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
-        self.common.prepare_view(camera, sun, bounds, environment)
+        self.common.prepare_view(view, sun, bounds, environment)
     }
 
     /// Declare the shadows, G-buffer, full-screen lighting and transparent

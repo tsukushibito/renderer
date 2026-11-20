@@ -19,7 +19,7 @@ pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
 pub use vertex::PbrVertex;
-pub use view::{AlphaMode, Bounds, Camera, MaterialFactors, ShadowSettings, Sun};
+pub use view::{AlphaMode, Bounds, MaterialFactors, Projection, ShadowSettings, Sun, ViewInput};
 
 pub(crate) use instances::PreparedInstances;
 
@@ -82,7 +82,7 @@ pub struct PreparedView {
 
 impl PreparedView {
     pub(crate) fn prepare(
-        camera: Camera,
+        view: ViewInput,
         sun: Sun,
         bounds: Bounds,
         environment: Environment,
@@ -95,10 +95,9 @@ impl PreparedView {
             ));
         }
         let data = view::prepare(
-            camera,
+            view,
             sun,
             bounds,
-            extent,
             shadows,
             [
                 environment.strength,

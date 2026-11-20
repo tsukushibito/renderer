@@ -2,7 +2,10 @@
 
 use renderer::graph::GraphError;
 
-use super::Camera;
+use super::{
+    ViewInput,
+    input::{Shape, add_scaled, cross, dot},
+};
 
 const CASCADE_COUNT: usize = 4;
 const PCF_MARGIN_TEXELS: f64 = 2.0;
@@ -129,18 +132,6 @@ impl ShadowData {
     }
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a.into_iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
 fn normalize(a: [f64; 3]) -> Result<[f64; 3], GraphError> {
     let length = dot(a, a).sqrt();
     if !length.is_finite() || length < 1e-12 {
@@ -149,12 +140,6 @@ fn normalize(a: [f64; 3]) -> Result<[f64; 3], GraphError> {
         ));
     }
     Ok(a.map(|component| component / length))
-}
-
-fn camera_forward(camera: Camera) -> Result<[f64; 3], GraphError> {
-    normalize(std::array::from_fn(|axis| {
-        f64::from(camera.target[axis]) - f64::from(camera.position[axis])
-    }))
 }
 
 fn split_near(splits: [f32; CASCADE_COUNT], near: f64, blend: f64, index: usize) -> f64 {
@@ -172,28 +157,53 @@ fn split_near(splits: [f32; CASCADE_COUNT], near: f64, blend: f64, index: usize)
     }
 }
 
+fn slice_sphere(view: ViewInput, start: f64, end: f64) -> ([f64; 3], f64) {
+    let position = view.eye.map(f64::from);
+    let (corners, perspective) = match view.shape {
+        Shape::Symmetric(corner_slope_squared) => {
+            // Retain the stable analytic sphere for symmetric perspectives.
+            let center_distance = ((start + end) * (1.0 + corner_slope_squared) * 0.5).min(end);
+            let radius =
+                ((end - center_distance).powi(2) + corner_slope_squared * end * end).sqrt();
+            return (add_scaled(position, view.forward, center_distance), radius);
+        }
+        Shape::Perspective(corners) => (corners, true),
+        Shape::Orthographic(corners) => (corners, false),
+    };
+    let points = [start, end].map(|distance| {
+        let center = view.forward.map(|component| component * distance);
+        let scale = if perspective { distance } else { 1.0 };
+        corners.map(|corner| add_scaled(center, corner, scale))
+    });
+    let points = points.as_flattened();
+    let center = std::array::from_fn(|axis| points.iter().map(|p| p[axis]).sum::<f64>() / 8.0);
+    let radius_squared = points
+        .iter()
+        .map(|&point| {
+            let ray = add_scaled(point, center, -1.0);
+            dot(ray, ray)
+        })
+        .fold(0.0, f64::max);
+    (add_scaled(position, center, 1.0), radius_squared.sqrt())
+}
+
 /// Calculate four immutable shadow cameras using only stack-sized workspaces.
 ///
 /// `direction_to_light` has the same meaning as the PBR sun vector. Geometry
 /// closest to the light receives the smallest shadow depth. The last split is
 /// min(main far, shadow distance); no shadow is implied beyond that distance.
 pub(super) fn calculate(
-    camera: Camera,
-    aspect: f32,
+    view: ViewInput,
     direction_to_light: [f32; 3],
     bounds: Bounds,
     settings: ShadowSettings,
 ) -> Result<ShadowData, GraphError> {
-    let near = camera.near;
-    let far = camera.far;
+    let [near, far] = view.near_far;
     if settings.distance <= near {
         return Err(GraphError::invalid_input(
             "shadow distance must exceed the camera near plane",
         ));
     }
-    let forward = camera_forward(camera)?;
-    // Match the main camera's world-up basis and reject its degenerate poles.
-    normalize(cross(forward, [0.0, 1.0, 0.0]))?;
     let light_z = normalize(direction_to_light.map(f64::from))?;
     let reference_up = if light_z[1].abs() < 0.99 {
         [0.0, 1.0, 0.0]
@@ -235,19 +245,16 @@ pub(super) fn calculate(
         }
         previous = f64::from(split);
     }
-    let position = camera.position.map(f64::from);
     let resolution = f64::from(settings.resolution);
-    let tangent = (f64::from(camera.fov_y_degrees).to_radians() * 0.5).tan();
-    let corner_slope_squared = tangent * tangent * (1.0 + f64::from(aspect).powi(2));
     let mut output = ShadowData {
         matrices: [[[0.0; 4]; 4]; CASCADE_COUNT],
         splits,
         texel_world: [0.0; CASCADE_COUNT],
         depth_scale: [inverse_depth as f32; CASCADE_COUNT],
         camera_forward_blend: [
-            forward[0] as f32,
-            forward[1] as f32,
-            forward[2] as f32,
+            view.forward[0] as f32,
+            view.forward[1] as f32,
+            view.forward[2] as f32,
             settings.blend_fraction,
         ],
         bias: [
@@ -260,10 +267,7 @@ pub(super) fn calculate(
     for index in 0..CASCADE_COUNT {
         let start = split_near(splits, near, f64::from(settings.blend_fraction), index);
         let end = f64::from(splits[index]);
-        // Analytic bounding sphere of this symmetric perspective frustum. Its
-        // radius depends on FOV/aspect/splits, never the camera's orientation.
-        let center_distance = ((start + end) * (1.0 + corner_slope_squared) * 0.5).min(end);
-        let radius = ((end - center_distance).powi(2) + corner_slope_squared * end * end).sqrt();
+        let (center, radius) = slice_sphere(view, start, end);
         // Two texels cover one PCF tap plus the half-texel center snap and leave
         // room at the image edge. The receiver's geometric-normal offset may
         // also move in XY, so reserve its maximum displacement before solving
@@ -271,7 +275,6 @@ pub(super) fn calculate(
         let margin = PCF_MARGIN_TEXELS + f64::from(settings.normal_offset_texels);
         let half_extent = radius / (1.0 - 2.0 * margin / resolution);
         let texel = 2.0 * half_extent / resolution;
-        let center = std::array::from_fn(|axis| position[axis] + forward[axis] * center_distance);
         let center_x = (dot(light_x, center) / texel).round() * texel;
         let center_y = (dot(light_y, center) / texel).round() * texel;
         let inverse_xy = 1.0 / half_extent;
@@ -315,17 +318,10 @@ mod tests {
 
     #[test]
     fn light_depth_retains_offscreen_casters_and_grows_away_from_the_sun() {
-        let camera = Camera {
-            position: [0.0, 0.0, 4.0],
-            target: [0.0; 3],
-            fov_y_degrees: 60.0,
-            near: 1.0,
-            far: 100.0,
-        };
+        let view = super::super::test_perspective([1.0, 100.0]);
         let bounds = Bounds::new([-300.0, -100.0, -300.0], [300.0, 150.0, 300.0]).unwrap();
         let result = calculate(
-            camera,
-            1.0,
+            view,
             [0.0, 0.0, 1.0],
             bounds,
             ShadowSettings {

@@ -15,8 +15,8 @@ use crate::{
         pbr::{forward_plus::tiled_raster_bindings, shadow_program},
     },
     pbr::{
-        Bounds, Camera, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits,
-        Sun,
+        Bounds, Environment, Frame, FrameImages, PreparedView, SceneImages, SceneLimits, Sun,
+        ViewInput,
     },
     pbr_forward::{self, Programs, add_scene_passes, prepare_recipe},
 };
@@ -224,12 +224,12 @@ impl Prepared {
 
     pub fn prepare_view(
         &self,
-        camera: Camera,
+        view: ViewInput,
         sun: Sun,
         bounds: Bounds,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
-        self.common.prepare_view(camera, sun, bounds, environment)
+        self.common.prepare_view(view, sun, bounds, environment)
     }
 
     /// Add culling, shadows and scene draws. Use the latest scheduled tile

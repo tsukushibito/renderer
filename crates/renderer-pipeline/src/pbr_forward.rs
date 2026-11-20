@@ -18,9 +18,9 @@ use crate::passes::pbr::{
     transformed_shadow_program,
 };
 use crate::pbr::{
-    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, FrameImages,
-    MAX_TRANSFORMS, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
-    ShadowSource, Sun,
+    Bounds, CASCADE_COUNT, CameraStorage, Draw, Environment, Frame, FrameImages, MAX_TRANSFORMS,
+    PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings, ShadowSource, Sun,
+    ViewInput,
     draw::{Batch, Bindings, image_binding, sampler_binding},
     raster::SHADOW_IMAGES,
 };
@@ -309,13 +309,13 @@ impl Prepared {
     /// Calculate view and cascade projections before selecting draws.
     pub fn prepare_view(
         &self,
-        camera: Camera,
+        view: ViewInput,
         sun: Sun,
         bounds: Bounds,
         environment: Environment,
     ) -> Result<PreparedView, GraphError> {
         PreparedView::prepare(
-            camera,
+            view,
             sun,
             bounds,
             environment,

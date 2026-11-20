@@ -1,76 +1,13 @@
 //! Typed inputs and host packing for the reviewed Forward shader ABI.
 
+mod input;
 mod shadow;
 
 use crate::passes::pbr::{CAMERA_BYTES, MATERIAL_BYTES};
 use renderer::graph::GraphError;
 
+pub use input::{Projection, ViewInput};
 pub use shadow::{Bounds, ShadowSettings};
-
-/// Y-up perspective camera. Angles are in degrees and depth uses [0, 1].
-#[derive(Clone, Copy, Debug)]
-pub struct Camera {
-    pub position: [f32; 3],
-    pub target: [f32; 3],
-    pub fov_y_degrees: f32,
-    pub near: f32,
-    pub far: f32,
-}
-
-impl Camera {
-    fn matrix(self, aspect: f32) -> Result<[[f32; 4]; 4], GraphError> {
-        if !aspect.is_finite()
-            || aspect <= 0.0
-            || !self.near.is_finite()
-            || self.near <= 0.0
-            || !self.far.is_finite()
-            || self.far <= self.near
-            || !self.fov_y_degrees.is_finite()
-            || self.fov_y_degrees <= 0.0
-            || self.fov_y_degrees >= 179.0
-            || self
-                .position
-                .into_iter()
-                .chain(self.target)
-                .any(|v| !v.is_finite())
-        {
-            return Err(GraphError::invalid_input("invalid PBR perspective camera"));
-        }
-
-        let away = std::array::from_fn(|axis| self.position[axis] - self.target[axis]);
-        let z = normalize(away, "degenerate PBR camera basis")?;
-        let x = normalize(cross([0.0, 1.0, 0.0], z), "degenerate PBR camera basis")?;
-        let y = cross(z, x);
-        let view = [
-            [x[0], y[0], z[0], 0.0],
-            [x[1], y[1], z[1], 0.0],
-            [x[2], y[2], z[2], 0.0],
-            [
-                -dot(x, self.position),
-                -dot(y, self.position),
-                -dot(z, self.position),
-                1.0,
-            ],
-        ];
-        let scale = 1.0 / (self.fov_y_degrees.to_radians() * 0.5).tan();
-        // Negative clip-Y matches the Vulkan viewport and DXIL vertex flip.
-        let projection = [
-            [scale / aspect, 0.0, 0.0, 0.0],
-            [0.0, -scale, 0.0, 0.0],
-            [0.0, 0.0, self.far / (self.near - self.far), -1.0],
-            [0.0, 0.0, self.near * self.far / (self.near - self.far), 0.0],
-        ];
-        let matrix: [[f32; 4]; 4] = std::array::from_fn(|column| {
-            std::array::from_fn(|row| (0..4).map(|i| projection[i][row] * view[column][i]).sum())
-        });
-        if matrix.as_flattened().iter().any(|value| !value.is_finite()) {
-            return Err(GraphError::invalid_input(
-                "PBR camera matrix exceeds finite FP32 range",
-            ));
-        }
-        Ok(matrix)
-    }
-}
 
 /// Directional light pointing from the scene toward the sun, with linear RGB.
 #[derive(Clone, Copy, Debug)]
@@ -106,14 +43,6 @@ impl Sun {
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a.into_iter().zip(b).map(|(a, b)| a * b).sum()
-}
-
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 fn normalize(vector: [f32; 3], message: &'static str) -> Result<[f32; 3], GraphError> {
@@ -156,10 +85,9 @@ impl ViewData {
 }
 
 pub(super) fn prepare(
-    camera: Camera,
+    view: ViewInput,
     sun: Sun,
     bounds: Bounds,
-    extent: [u32; 2],
     settings: ShadowSettings,
     environment: [f32; 3],
 ) -> Result<ViewData, GraphError> {
@@ -171,21 +99,24 @@ pub(super) fn prepare(
             "invalid PBR environment parameters",
         ));
     }
-    let aspect = extent[0] as f32 / extent[1] as f32;
-    let matrix = camera.matrix(aspect)?;
-    let shadow = shadow::calculate(camera, aspect, sun.direction, bounds, settings)?;
+    let shadow = shadow::calculate(view, sun.direction, bounds, settings)?;
     // The eye and light occupy three vec4s, with near/far in their w words.
     // The fourth vec4 carries IBL sampling parameters and a shadow flag.
     let mut camera_words = [0.0; 16];
-    camera_words[..3].copy_from_slice(&camera.position);
-    camera_words[3] = camera.near;
+    camera_words[..3].copy_from_slice(&view.eye);
+    camera_words[3] = view.near_far[0];
     camera_words[4..7].copy_from_slice(&sun.direction);
-    camera_words[7] = camera.far;
+    camera_words[7] = view.near_far[1];
     camera_words[8..11].copy_from_slice(&sun.color);
+    camera_words[11] = if matches!(view.shape, input::Shape::Orthographic(_)) {
+        1.0
+    } else {
+        0.0
+    };
     camera_words[12..15].copy_from_slice(&environment);
     camera_words[15] = if settings.enabled { 1.0 } else { 0.0 };
     Ok(ViewData {
-        matrix,
+        matrix: view.matrix,
         camera_words,
         shadow,
     })
@@ -272,22 +203,36 @@ impl MaterialFactors {
 }
 
 #[cfg(test)]
+fn test_perspective([near, far]: [f32; 2]) -> ViewInput {
+    let aspect = 4.0 / 3.0;
+    let scale = 1.0 / (60.0_f32.to_radians() * 0.5).tan();
+    let z_scale = far / (near - far);
+    let z_offset = near * far / (near - far);
+    ViewInput::new(
+        [
+            [scale / aspect, 0.0, 0.0, 0.0],
+            [0.0, -scale, 0.0, 0.0],
+            [0.0, 0.0, z_scale, -1.0],
+            [0.0, 0.0, z_scale * -4.0 + z_offset, 4.0],
+        ],
+        [0.0, 0.0, 4.0],
+        [0.0, 0.0, -1.0],
+        [near, far],
+        Projection::SymmetricPerspective {
+            vertical_fov_degrees: 60.0,
+            aspect,
+        },
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn camera() -> Camera {
-        Camera {
-            position: [0.0, 0.0, 4.0],
-            target: [0.0; 3],
-            fov_y_degrees: 60.0,
-            near: 0.02,
-            far: 500.0,
-        }
-    }
-
     #[test]
     fn view_packs_projection_sun_ibl_and_each_cascade_in_shader_order() {
-        let camera = camera();
+        let input = test_perspective([0.02, 500.0]);
         let sun = Sun::new([1.0, 2.0, 3.0], [0.5, 1.0, 4.0]).unwrap();
         let reused = Sun::from_normalized(sun.direction, sun.color).unwrap();
         assert_eq!(
@@ -295,10 +240,9 @@ mod tests {
             sun.direction.map(f32::to_bits)
         );
         let view = prepare(
-            camera,
+            input,
             reused,
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
-            [128, 96],
             ShadowSettings::default(),
             [0.7, -0.2, 3.0],
         )
@@ -382,21 +326,6 @@ mod tests {
 
     #[test]
     fn rejects_invalid_input_before_upload() {
-        let mut camera = camera();
-        camera.target = camera.position;
-        let sun = Sun::new([0.0, 1.0, 0.0], [1.0; 3]).unwrap();
-        let bounds = Bounds::new([0.0; 3], [0.0; 3]).unwrap();
-        assert!(
-            prepare(
-                camera,
-                sun,
-                bounds,
-                [128, 96],
-                ShadowSettings::default(),
-                [0.0; 3]
-            )
-            .is_err()
-        );
         assert!(Sun::from_normalized([0.0, 2.0, 0.0], [1.0; 3]).is_err());
         assert!(Bounds::new([1.0; 3], [0.0; 3]).is_err());
         assert!(
@@ -407,5 +336,39 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn orthographic_overhead_view_retains_direction_and_covers_shadow_receivers() {
+        let input = ViewInput::new(
+            [
+                [0.5, 0.0, 0.0, 0.0],
+                [0.0, 0.0, -0.25, 0.0],
+                [0.0, 0.5, 0.0, 0.0],
+                [0.0, 0.0, 0.75, 1.0],
+            ],
+            [0.0, 4.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 5.0],
+            Projection::Orthographic,
+        )
+        .unwrap();
+        let data = prepare(
+            input,
+            Sun::new([0.0, 1.0, 0.0], [1.0; 3]).unwrap(),
+            Bounds::new([-2.0, -1.0, -2.0], [2.0, 3.0, 2.0]).unwrap(),
+            ShadowSettings::default(),
+            [0.0; 3],
+        )
+        .unwrap();
+        let bytes = data.uniform_bytes();
+        let words = bytes.as_chunks::<4>().0;
+        assert_eq!(f32::from_le_bytes(words[27]), 1.0);
+        assert_eq!(words[108..111], [0.0_f32, -1.0, 0.0].map(f32::to_le_bytes));
+        let first_cascade = data.shadow_matrices()[0];
+        for [x, z] in [[-2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [2.0, 2.0]] {
+            assert!((first_cascade[0][0] * x + first_cascade[3][0]).abs() < 1.0);
+            assert!((first_cascade[2][1] * z + first_cascade[3][1]).abs() < 1.0);
+        }
     }
 }
