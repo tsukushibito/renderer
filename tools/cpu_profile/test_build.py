@@ -31,6 +31,10 @@ class BuildTests(unittest.TestCase):
         self.assertIn("crates/renderer-pipeline/Cargo.toml", snapshot)
         self.assertIn("crates/renderer/Cargo.toml", snapshot)
 
+    def test_renderer_example_archive_binds_its_pipeline_dependency(self):
+        snapshot = source_snapshot()
+        self.assertIn("crates/renderer-pipeline/src/unlit_forward.rs", snapshot)
+
     def test_shipping_features_reject_direct_diagnostics(self):
         self.assertEqual(parse_features("vulkan,d3d12 vulkan,presentation"),
                          ["d3d12", "presentation", "vulkan"])

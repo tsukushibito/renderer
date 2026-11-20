@@ -126,11 +126,10 @@ def profile_settings(root, name):
 
 
 def source_snapshot(package="renderer"):
-    sources = ["crates/renderer"]
+    # Renderer examples use renderer-pipeline as a dev-dependency.
+    sources = ["crates/renderer", "crates/renderer-pipeline"]
     if package in ("renderer", "renderer-bistro"):
         sources.append("crates/renderer-example-support")
-    if package in ("renderer-pipeline", "renderer-bistro"):
-        sources.append("crates/renderer-pipeline")
     if package == "renderer-bistro":
         sources.extend(["crates/renderer-bistro", "tools/bistro/conditions.json", "tools/bistro/ibl.py"])
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
