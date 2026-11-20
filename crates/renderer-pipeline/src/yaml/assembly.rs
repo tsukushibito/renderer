@@ -2,12 +2,13 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
-use super::{PipelineError, schema};
+use super::{PipelineError, PrepareIndirectList, schema};
 
 /// Application values fixed at a pipeline preparation boundary.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PrepareInputs<'a> {
     pub values: &'a [PrepareParameter<'a>],
+    pub indirect_lists: &'a [PrepareIndirectList<'a>],
 }
 
 /// A value supplied for a YAML field written as `{param: name}`.

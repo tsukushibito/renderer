@@ -11,15 +11,17 @@ use renderer::program::{
 
 use super::assembly::{ParameterType, Parameters, assemble};
 use super::frame::RasterScratchLimits;
+use super::indirect::IndirectEncoders;
 use super::schema::{
     self, AttachmentSpec, BindingSpec, Config, DrawListConditionSpec, LoadAction, PassSpec,
     RasterBatchSpec, RasterBatchesSpec, ResourceSource, ResourceSpec,
 };
 use super::{
     BindingSource, DrawListCondition, FrameScratch, ImageSources, MaterialVariant, Pass, PassKind,
-    PipelineError, PipelineRequirements, PrepareInputs, PrepareOptions, PreparedAttachment,
-    PreparedAttachments, PreparedBinding, PreparedPipeline, PreparedRasterBatch, Program,
-    RasterDrawKind, RasterPrograms, Resource, ResourceDesc, ShaderRequest,
+    PipelineError, PipelineRequirements, PrepareIndirectList, PrepareInputs, PrepareOptions,
+    PreparedAttachment, PreparedAttachments, PreparedBinding, PreparedPipeline,
+    PreparedRasterBatch, Program, RasterDrawKind, RasterPrograms, Resource, ResourceDesc,
+    ShaderRequest,
 };
 
 type ResolverError = Box<dyn Error + Send + Sync>;
@@ -118,12 +120,14 @@ impl PreparedPipeline {
                 "raster_batches requires nonempty names and batch lists",
             ));
         }
-        let declarations = PassDeclarations {
+        let mut declarations = PassDeclarations {
             resources: &resources,
             resource_ids: &resource_ids,
             draw_list_ids: &draw_list_ids,
             raster_batches: &raster_batches,
             params: &params,
+            indirect_lists: inputs.indirect_lists,
+            indirect_encoders: IndirectEncoders::default(),
         };
         let mut pass_ids = HashSet::with_capacity(passes.len());
         let mut sampled_views = Vec::new();
@@ -135,7 +139,8 @@ impl PreparedPipeline {
                 let id = match &pass {
                     PassSpec::Raster { id, .. }
                     | PassSpec::Attachment { id, .. }
-                    | PassSpec::Compute { id, .. } => id,
+                    | PassSpec::Compute { id, .. }
+                    | PassSpec::EncodeIndexedIndirect { id, .. } => id,
                 };
                 if id.trim().is_empty() || !pass_ids.insert(id.clone()) {
                     return Err(invalid(format!(
@@ -144,12 +149,12 @@ impl PreparedPipeline {
                 }
                 let pass = prepare_pass(
                     pass,
-                    &declarations,
+                    &mut declarations,
                     &mut sampled_views,
                     &mut programs,
                     &mut resolve,
                 )?;
-                scratch_limits.include(&pass);
+                scratch_limits.include(&pass)?;
                 Ok(pass)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -158,6 +163,7 @@ impl PreparedPipeline {
         let mut requirements =
             measure_requirements(&resources, &passes, draw_lists.len(), &programs, options)?;
         requirements.writes_external_resources |= image_sources.producers().next().is_some();
+        scratch_limits.encoded_groups = declarations.indirect_encoders.groups();
         let scratch = FrameScratch::new(
             resources.len(),
             sampled_views.len(),
@@ -167,7 +173,12 @@ impl PreparedPipeline {
             scratch_limits,
             options.max_materials,
         )?;
-        let classes = prepare_classes(&resources, options.frames_in_flight)?;
+        let classes = prepare_classes(&resources, &passes, options.frames_in_flight)?;
+        if declarations.indirect_encoders.groups() != 0 {
+            programs
+                .compute
+                .push(ManagedProgram::indexed_indirect_encoder());
+        }
 
         Ok(Self {
             resources,
@@ -193,7 +204,6 @@ fn measure_requirements(
     options: PrepareOptions,
 ) -> Result<PipelineRequirements, PipelineError> {
     let mut requirements = PipelineRequirements {
-        passes: passes.len(),
         draw_lists,
         ..PipelineRequirements::default()
     };
@@ -204,8 +214,15 @@ fn measure_requirements(
 
     let overflow = || invalid("pipeline Graph declaration limits overflow");
     let mut indexed_draws = 0usize;
+    let mut indirect_draws = 0usize;
     for pass in passes {
-        requirements.name_bytes += pass.id.len();
+        if !matches!(pass.kind, PassKind::EncodeIndexedIndirect(_)) {
+            requirements.passes = requirements.passes.checked_add(1).ok_or_else(overflow)?;
+            requirements.name_bytes = requirements
+                .name_bytes
+                .checked_add(pass.id.len())
+                .ok_or_else(overflow)?;
+        }
         if let Some(attachments) = pass.kind.attachments() {
             requirements.attachments +=
                 attachments.colors.len() + usize::from(attachments.depth.is_some());
@@ -218,6 +235,9 @@ fn measure_requirements(
                 .any(|resource| resources[resource].external);
         }
         match &pass.kind {
+            PassKind::EncodeIndexedIndirect(encoder) => {
+                encoder.measure(&pass.id, &mut requirements)?;
+            }
             PassKind::Compute { program, .. } => {
                 requirements.compute_dispatches += 1;
                 requirements.writes_external_resources |=
@@ -231,6 +251,23 @@ fn measure_requirements(
                 for batch in batches {
                     let (draws, binding_sets, words) = match &batch.draw {
                         RasterDrawKind::Fullscreen(constants) => (1, 1, constants.words().len()),
+                        RasterDrawKind::Indirect { groups, constants } => {
+                            let draw_limit = groups.len();
+                            indexed_draws =
+                                indexed_draws.checked_add(draw_limit).ok_or_else(overflow)?;
+                            indirect_draws = indirect_draws
+                                .checked_add(draw_limit)
+                                .ok_or_else(overflow)?;
+                            let sets = if batch.uses_materials {
+                                options.max_materials.min(draw_limit)
+                            } else {
+                                usize::from(draw_limit > 0)
+                            };
+                            let words = draw_limit
+                                .checked_mul(constants.words().len())
+                                .ok_or_else(overflow)?;
+                            (draw_limit, sets, words)
+                        }
                         RasterDrawKind::Indexed(_) => {
                             let draw_limit = options.max_draws_per_list;
                             indexed_draws =
@@ -282,6 +319,8 @@ fn measure_requirements(
         .checked_add(requirements.attachments)
         .and_then(|count| count.checked_mul(2))
         .and_then(|count| count.checked_add(requirements.bindings))
+        .and_then(|count| count.checked_add(indirect_draws))
+        .and_then(|count| count.checked_add(requirements.accesses))
         .ok_or_else(overflow)?;
     Ok(requirements)
 }
@@ -511,11 +550,13 @@ struct PassDeclarations<'a> {
     draw_list_ids: &'a HashMap<&'a str, usize>,
     raster_batches: &'a BTreeMap<String, Vec<RasterBatchSpec>>,
     params: &'a Parameters<'a>,
+    indirect_lists: &'a [PrepareIndirectList<'a>],
+    indirect_encoders: IndirectEncoders,
 }
 
 fn prepare_pass(
     spec: PassSpec,
-    declarations: &PassDeclarations<'_>,
+    declarations: &mut PassDeclarations<'_>,
     sampled_views: &mut Vec<String>,
     programs: &mut Programs,
     resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
@@ -526,7 +567,8 @@ fn prepare_pass(
         draw_list_ids,
         raster_batches,
         params,
-    } = declarations;
+        ..
+    } = &*declarations;
     match spec {
         PassSpec::Raster {
             id,
@@ -538,6 +580,7 @@ fn prepare_pass(
             when,
             batches,
             draw_list,
+            indirect,
             constants,
             bindings,
         } => {
@@ -547,6 +590,7 @@ fn prepare_pass(
                 if shader.is_some()
                     || shader_template.is_some()
                     || draw_list.is_some()
+                    || indirect.is_some()
                     || !material_types.is_empty()
                     || !constants.is_empty()
                     || !bindings.is_empty()
@@ -570,6 +614,7 @@ fn prepare_pass(
                     shader_template,
                     material_types,
                     draw_list,
+                    indirect,
                     constants,
                     bindings,
                 }]
@@ -599,6 +644,26 @@ fn prepare_pass(
                     batches,
                 },
                 when,
+            })
+        }
+        PassSpec::EncodeIndexedIndirect {
+            id,
+            visibility,
+            table_list,
+        } => {
+            let visibility = resource_index(&id, &visibility, declarations.resource_ids)?;
+            let encoder = declarations.indirect_encoders.prepare(
+                &id,
+                visibility,
+                table_list,
+                declarations.resources,
+                declarations.indirect_lists,
+            )?;
+            Ok(Pass {
+                id,
+                bindings: Vec::new(),
+                kind: PassKind::EncodeIndexedIndirect(encoder),
+                when: None,
             })
         }
         PassSpec::Attachment {
@@ -681,6 +746,7 @@ fn prepare_raster_batch(
         shader_template,
         material_types,
         draw_list,
+        indirect,
         constants,
         bindings,
     } = spec;
@@ -699,11 +765,18 @@ fn prepare_raster_batch(
                 .ok_or_else(|| pass_error(id, format!("unknown draw list {list:?}")))
         })
         .transpose()?;
+    let indirect = indirect
+        .map(|encoder| declarations.indirect_encoders.range(id, &encoder))
+        .transpose()?;
+    if draw_list.is_some() && indirect.is_some() {
+        return Err(pass_error(id, "specify only one of draw_list and indirect"));
+    }
+    let is_indexed = draw_list.is_some() || indirect.is_some();
     let bindings = prepare_bindings(id, bindings, resource_ids, sampled_views, params)?;
     let has_material_bindings = bindings
         .iter()
         .any(|binding| matches!(binding.source, BindingSource::Material(_)));
-    if draw_list.is_none() && has_material_bindings {
+    if !is_indexed && has_material_bindings {
         return Err(pass_error(
             id,
             "material bindings require an indexed Raster pass",
@@ -725,10 +798,10 @@ fn prepare_raster_batch(
             RasterPrograms::Fixed(programs.raster_variant(index, attachments.samples))
         }
         (None, Some(template)) => {
-            if draw_list.is_none() {
+            if !is_indexed {
                 return Err(pass_error(
                     id,
-                    "shader_template requires an indexed draw list",
+                    "shader_template requires an indexed draw list or indirect encoder",
                 ));
             }
             if template.trim().is_empty() || material_types.is_empty() {
@@ -781,6 +854,15 @@ fn prepare_raster_batch(
                     "indexed Raster requires a vertex stream and draw-list constants",
                 ));
             }
+        } else if indirect.is_some() {
+            if program.vertex_stride() == 0
+                || size_of_val(constants.as_slice()) != program.parameter_size() as usize
+            {
+                return Err(pass_error(
+                    label,
+                    "indirect Raster requires a vertex stream and matching inline constants",
+                ));
+            }
         } else if program.vertex_stride() != 0
             || size_of_val(constants.as_slice()) != program.parameter_size() as usize
         {
@@ -802,9 +884,13 @@ fn prepare_raster_batch(
             }
         }
     }
-    let draw = match draw_list {
-        Some(index) => RasterDrawKind::Indexed(index),
-        None => RasterDrawKind::Fullscreen(RasterConstants::new(&constants)?),
+    let draw = match (draw_list, indirect) {
+        (Some(index), _) => RasterDrawKind::Indexed(index),
+        (_, Some(groups)) => RasterDrawKind::Indirect {
+            groups,
+            constants: RasterConstants::new(&constants)?,
+        },
+        (None, None) => RasterDrawKind::Fullscreen(RasterConstants::new(&constants)?),
     };
     Ok(PreparedRasterBatch {
         program,
@@ -1253,31 +1339,40 @@ fn validate_bindings(
 
 fn prepare_classes(
     resources: &[Resource],
+    passes: &[Pass],
     frames: usize,
 ) -> Result<Vec<ResourceClass>, PipelineError> {
     let mut classes: Vec<ResourceClass> = Vec::new();
-    for resource in resources.iter().filter(|resource| !resource.external) {
-        let existing = classes
-            .iter_mut()
-            .find_map(|class| match (class, &resource.desc) {
-                (ResourceClass::Buffer { desc, count }, ResourceDesc::Buffer(other))
-                    if desc == other =>
-                {
-                    Some(count)
-                }
-                (ResourceClass::Image { desc, count }, ResourceDesc::Image(other))
-                    if desc == other =>
-                {
-                    Some(count)
-                }
-                _ => None,
-            });
+    let declared = resources
+        .iter()
+        .filter(|resource| !resource.external)
+        .map(|resource| resource.desc);
+    let indirect = passes
+        .iter()
+        .filter_map(|pass| match &pass.kind {
+            PassKind::EncodeIndexedIndirect(encoder) => Some(encoder),
+            _ => None,
+        })
+        .flat_map(|encoder| encoder.transient_buffers())
+        .map(ResourceDesc::Buffer);
+    for desc in declared.chain(indirect) {
+        let existing = classes.iter_mut().find_map(|class| match (class, &desc) {
+            (ResourceClass::Buffer { desc, count }, ResourceDesc::Buffer(other))
+                if desc == other =>
+            {
+                Some(count)
+            }
+            (ResourceClass::Image { desc, count }, ResourceDesc::Image(other)) if desc == other => {
+                Some(count)
+            }
+            _ => None,
+        });
         if let Some(count) = existing {
             *count = count
                 .checked_add(frames)
                 .ok_or_else(|| invalid("transient working-set count overflow"))?;
         } else {
-            classes.push(match resource.desc {
+            classes.push(match desc {
                 ResourceDesc::Buffer(desc) => ResourceClass::Buffer {
                     desc,
                     count: frames,
@@ -1521,7 +1616,10 @@ output: final"#,
             PreparedPipeline::from_yaml_fragments(
                 fragments,
                 OPTIONS,
-                PrepareInputs { values },
+                PrepareInputs {
+                    values,
+                    ..PrepareInputs::default()
+                },
                 |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
             )
         };
