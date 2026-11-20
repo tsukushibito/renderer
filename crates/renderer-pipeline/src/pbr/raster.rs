@@ -3,7 +3,7 @@ use renderer::graph::{
     RasterPass, SampleCount, StoreOp,
 };
 
-pub(super) const SHADOW_IMAGES: [&str; 4] = ["cascade_0", "cascade_1", "cascade_2", "cascade_3"];
+pub(crate) const SHADOW_IMAGES: [&str; 4] = ["cascade_0", "cascade_1", "cascade_2", "cascade_3"];
 const SHADOW_PASSES: [&str; 4] = ["shadow_0", "shadow_1", "shadow_2", "shadow_3"];
 
 /// Add a depth-only clear and the draws for a single shadow cascade.
@@ -37,10 +37,9 @@ pub fn add_shadow_pass(
 
 /// Add Forward attachment operations and caller-provided Raster draws.
 ///
-/// The first handle is the single-sample HDR result. The second is the depth
-/// attachment. Under 4× MSAA the final scope resolves color and discards depth,
-/// so only the color result can be used by later passes. Transparent draws
-/// must already be ordered by the caller.
+/// Return single-sample HDR and, at 1×, single-sample depth. Under 4× MSAA
+/// the final scope resolves color and discards depth. Transparent draws must
+/// already be ordered by the caller.
 pub fn add_scene_passes(
     graph: &mut Graph,
     [width, height]: [u32; 2],
@@ -49,7 +48,7 @@ pub fn add_scene_passes(
     has_transparency: bool,
     opaque_draws: impl FnOnce(&mut RasterPass<'_, '_>) -> Result<(), GraphError>,
     transparent_draws: impl FnOnce(&mut RasterPass<'_, '_>) -> Result<(), GraphError>,
-) -> Result<(ImageHandle, ImageHandle), GraphError> {
+) -> Result<(ImageHandle, Option<ImageHandle>), GraphError> {
     let color_desc = ImageDesc::rgba16_float(width, height);
     let hdr = graph.image("hdr", color_desc)?;
     let depth = graph.image(
@@ -156,5 +155,5 @@ pub fn add_scene_passes(
             transparent_draws,
         )?;
     }
-    Ok((hdr, depth))
+    Ok((hdr, (samples == SampleCount::X1).then_some(depth)))
 }

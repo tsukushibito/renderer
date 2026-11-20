@@ -27,6 +27,14 @@ impl Bounds {
         Ok(Self { min, max })
     }
 
+    pub fn min(self) -> [f32; 3] {
+        self.min
+    }
+
+    pub fn max(self) -> [f32; 3] {
+        self.max
+    }
+
     fn corners(self) -> [[f64; 3]; 8] {
         std::array::from_fn(|index| {
             std::array::from_fn(|axis| {
@@ -73,7 +81,7 @@ impl Default for ShadowSettings {
 }
 
 impl ShadowSettings {
-    pub(in crate::pbr_forward) fn validate(&self) -> Result<(), GraphError> {
+    pub(crate) fn validate(&self) -> Result<(), GraphError> {
         if self.resolution < 8
             || !self.distance.is_finite()
             || self.distance <= 0.0
