@@ -7,7 +7,7 @@ mod shader_binaries;
 
 use bloom::Bloom;
 use renderer::graph::{CompiledGraph, GraphCapacity, GraphPool, ImageDesc, PassHandle};
-use renderer_pipeline::standard::graphs::{ForwardConfig, forward};
+use renderer_pipeline::unlit_forward::{ForwardConfig, forward};
 
 const WIDTH: u32 = 9;
 const HEIGHT: u32 = 5;

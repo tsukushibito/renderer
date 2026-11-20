@@ -16,7 +16,7 @@ use renderer::program::{
     RasterParameterLayout, RasterProgramDescriptor, SamplerDescriptor, ShaderStages,
     VertexAttribute, VertexFormat,
 };
-use renderer_pipeline::standard::{graphs, passes};
+use renderer_pipeline::{passes, unlit_forward};
 
 pub const CASES: usize = 8;
 pub const READBACK_BYTES: usize = IMAGE_BYTES * 3 + PIXELS * 4;
@@ -425,7 +425,7 @@ pub fn overlay_draws(inputs: &Inputs, frame: usize) -> [RasterDraw; 3] {
 
 pub fn overlay(
     graph: &mut Graph,
-    scene: graphs::SceneColor,
+    scene: unlit_forward::SceneColor,
     inputs: &Inputs,
     frame: usize,
     name: &str,
@@ -502,13 +502,13 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
 pub fn append(graph: &mut Graph, frame: usize) -> Expected {
     let inputs = inputs(graph, frame);
     let opaque = &inputs.opaque[..draw_count(frame)];
-    let config = graphs::ForwardConfig {
+    let config = unlit_forward::ForwardConfig {
         color: hdr(),
         clear_color: [0.25, 0.5, 0.75, 1.0],
         depth: true,
     };
-    let direct = graphs::forward(graph, "standard direct", opaque, config).unwrap();
-    let scene = graphs::forward(graph, "standard post base", opaque, config).unwrap();
+    let direct = unlit_forward::forward(graph, "standard direct", opaque, config).unwrap();
+    let scene = unlit_forward::forward(graph, "standard post base", opaque, config).unwrap();
     let selected = overlay(graph, scene, &inputs, frame, "consumer post raster");
     let color = graph.image("independent color", hdr()).unwrap();
     let depth = graph
@@ -525,7 +525,7 @@ pub fn append(graph: &mut Graph, frame: usize) -> Expected {
     .unwrap();
     let composed = overlay(
         graph,
-        graphs::SceneColor {
+        unlit_forward::SceneColor {
             color,
             depth: Some(depth),
         },

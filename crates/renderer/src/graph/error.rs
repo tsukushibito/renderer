@@ -147,11 +147,9 @@ impl GraphError {
             capacity: None,
         }
     }
-    pub(crate) fn capacity_error(
-        kind: GraphCapacityKind,
-        limit: usize,
-        required: Option<usize>,
-    ) -> Self {
+    /// Creates an allocation-free error for a prepared Graph construction
+    /// limit, including a bound enforced by a caller's graph builder.
+    pub fn capacity_error(kind: GraphCapacityKind, limit: usize, required: Option<usize>) -> Self {
         Self {
             capacity: Some(GraphCapacityError {
                 kind,

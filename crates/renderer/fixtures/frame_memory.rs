@@ -13,7 +13,7 @@ use renderer::graph::{
 };
 use renderer::measurement::Snapshot;
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
-use renderer_pipeline::standard::graphs;
+use renderer_pipeline::unlit_forward;
 
 const IN_FLIGHT: usize = 3;
 const WARMUP: usize = 12;
@@ -153,11 +153,11 @@ fn cpu_frames(
         let graph = phase(&mut phases[1], || {
             let mut graph = pool.begin().unwrap();
             let inputs = captured.connect_graph(&mut graph).unwrap();
-            let scene = graphs::forward(
+            let scene = unlit_forward::forward(
                 &mut graph,
                 "memory forward",
                 inputs.draws(),
-                graphs::ForwardConfig {
+                unlit_forward::ForwardConfig {
                     color: ImageDesc::rgba8(16, 16),
                     clear_color: view.clear_color,
                     depth: frame.is_multiple_of(2),

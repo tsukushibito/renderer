@@ -3,9 +3,9 @@ use renderer::graph::{
     ImageDesc, ImageHandle, LoadOp, RasterAttachments, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::ManagedRasterProgram;
-use renderer_pipeline::standard::{
-    graphs::{self, ForwardConfig},
+use renderer_pipeline::{
     passes::{self, OpaqueDepth},
+    unlit_forward::{self, ForwardConfig},
 };
 
 fn config(color: ImageDesc, depth: bool) -> ForwardConfig {
@@ -63,7 +63,7 @@ fn forward_can_be_used_directly_without_implicit_consumers_or_a_depth_target() {
         let mut graph = pool.begin().unwrap();
         let mut settings = config(desc, false);
         settings.clear_color[0] = frame as f32;
-        let result = graphs::forward(
+        let result = unlit_forward::forward(
             &mut graph,
             "empty forward",
             std::iter::empty::<RasterDraw>(),
@@ -96,7 +96,7 @@ fn forward_color_and_depth_can_feed_explicit_composition() {
         let mut graph = pool.begin().unwrap();
         let draw = mesh(&mut graph);
         let settings = config(desc, true);
-        let scene = graphs::forward(&mut graph, "opaque", [draw], settings).unwrap();
+        let scene = unlit_forward::forward(&mut graph, "opaque", [draw], settings).unwrap();
         let depth = scene.depth.unwrap();
         assert_eq!(graph.image_desc(scene.color).unwrap(), desc);
         assert_eq!(
@@ -264,7 +264,7 @@ fn load_and_discard_keep_the_ordinary_graph_initialization_contract() {
     for discard in [false, true] {
         let mut graph = pool.begin().unwrap();
         let settings = config(ImageDesc::rgba8(4, 3), false);
-        let scene = graphs::forward(
+        let scene = unlit_forward::forward(
             &mut graph,
             "scene",
             std::iter::empty::<RasterDraw>(),
@@ -303,14 +303,14 @@ fn unused_standard_graph_and_post_branches_are_culled_normally() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();
     let settings = config(ImageDesc::rgba8(4, 3), true);
-    graphs::forward(
+    unlit_forward::forward(
         &mut graph,
         "unused recipe",
         std::iter::empty::<RasterDraw>(),
         settings,
     )
     .unwrap();
-    let scene = graphs::forward(
+    let scene = unlit_forward::forward(
         &mut graph,
         "selected recipe",
         std::iter::empty::<RasterDraw>(),
@@ -377,7 +377,7 @@ fn standard_parts_keep_capacity_errors_and_return_failed_draw_capacity() {
     )
     .unwrap();
     let mut graph = tiny.begin().unwrap();
-    let error = graphs::forward(
+    let error = unlit_forward::forward(
         &mut graph,
         "capacity",
         std::iter::empty::<RasterDraw>(),
@@ -404,7 +404,7 @@ fn invalid_forward_configuration_is_rejected_before_declaring_passes() {
     ] {
         let mut graph = pool.begin().unwrap();
         assert_eq!(
-            graphs::forward(
+            unlit_forward::forward(
                 &mut graph,
                 "bad config",
                 std::iter::empty::<RasterDraw>(),

@@ -19,7 +19,7 @@ use renderer::{
     MeshPreparationError, MeshUploadState, PreparedEngineFrame, RenderedFrame, ResourceClass,
     RuntimeConfig, ValidationMode, VulkanEngine, VulkanRuntime,
 };
-use renderer_pipeline::standard::{graphs, passes};
+use renderer_pipeline::{passes, unlit_forward};
 use std::time::{Duration, Instant};
 
 const IN_FLIGHT: usize = 3;
@@ -106,11 +106,11 @@ fn build(
         .unwrap();
         color
     } else {
-        graphs::forward(
+        unlit_forward::forward(
             graph,
             "memory forward",
             inputs.draws(),
-            graphs::ForwardConfig {
+            unlit_forward::ForwardConfig {
                 color: ImageDesc::rgba8(WIDTH, HEIGHT),
                 clear_color: snapshot.view().clear_color,
                 depth: true,

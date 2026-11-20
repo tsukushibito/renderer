@@ -1,22 +1,18 @@
-//! Optional drawing recipes assembled from public standard passes.
+//! An unlit Forward recipe assembled from the common raster passes.
+
+pub mod snapshot;
 
 use std::borrow::Borrow;
 
-use crate::preparation::checked_mul;
-use crate::standard::passes::{self, OpaqueDepth, SdrOutput};
-use crate::{GraphRequirements, Preparation};
+use crate::passes::{self, OpaqueDepth};
+use renderer::capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet};
 use renderer::graph::{
-    Attachment, Graph, GraphError, ImageDesc, ImageHandle, ImageView, LoadOp, RasterDraw,
-    SampleCount, StoreOp,
+    Attachment, Graph, GraphError, ImageDesc, ImageHandle, LoadOp, RasterDraw, SampleCount, StoreOp,
 };
 use renderer::program::ManagedRasterProgram;
 
 const FORWARD_COLOR: &str = "forward color";
 const FORWARD_DEPTH: &str = "forward depth";
-const DISPLAY_LINEAR: &str = "display linear";
-const SDR_COLOR: &str = "sdr";
-const TONE_MAP: &str = "tone_map";
-const WRITE_SDR: &str = "write_sdr";
 
 /// Per-construction target and clear choices. The recipe creates a single
 /// subresource RGBA8 or RGBA16F color target and, when requested, matching D32
@@ -61,30 +57,37 @@ impl PreparedForward {
         let program = forward_program(name, config)?;
         let depth = forward_depth(config);
         let attachments = 1 + usize::from(depth.is_some());
-        let images = [config.color, depth.unwrap_or(config.color)];
-        let accesses = checked_mul(max_draws, 2)?
-            .checked_add(attachments)
+        let count = preparation.frames_in_flight().get();
+        let resources = [config.color, depth.unwrap_or(config.color)]
+            .map(|desc| ResourceClass::Image { desc, count });
+        let accesses = max_draws
+            .checked_mul(2)
+            .and_then(|draw_accesses| draw_accesses.checked_add(attachments))
             .ok_or_else(|| GraphError::invalid_input("forward access capacity overflow"))?;
         let name_bytes = name
             .len()
             .checked_add(FORWARD_COLOR.len() + depth.map_or(0, |_| FORWARD_DEPTH.len()))
             .ok_or_else(|| GraphError::invalid_input("forward name capacity overflow"))?;
-        preparation.add_recipe(
+        preparation.add_requirements(
             GraphRequirements {
                 resources: attachments,
                 passes: 1,
                 accesses,
                 draws: max_draws,
-                raster_constant_words: checked_mul(
-                    max_draws,
-                    program.parameter_size() as usize / size_of::<u32>(),
-                )?,
+                raster_constant_words: max_draws
+                    .checked_mul(program.parameter_size() as usize / size_of::<u32>())
+                    .ok_or_else(|| {
+                        GraphError::invalid_input("forward constant capacity overflow")
+                    })?,
                 attachments,
                 name_bytes,
                 ..GraphRequirements::default()
             },
-            &images[..attachments],
-            &[program.clone().into()],
+            WorkingSet {
+                resources: &resources[..attachments],
+                raster: &[program.clone().into()],
+                compute: &[],
+            },
         )?;
         Ok(Self {
             name: name.into(),
@@ -188,77 +191,4 @@ where
         program,
     )?;
     Ok(SceneColor { color, depth })
-}
-
-/// Output images belonging to the Graph that produced them.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OutputImages {
-    pub display_linear: ImageHandle,
-    pub sdr: ImageHandle,
-}
-
-/// Tone mapping and SDR output with fixed extent, encoding and FXAA choice.
-pub struct PreparedOutput {
-    display_linear: ImageDesc,
-    sdr: ImageDesc,
-    output: SdrOutput,
-}
-
-impl PreparedOutput {
-    pub fn prepare(
-        preparation: &mut Preparation,
-        [width, height]: [u32; 2],
-        output: SdrOutput,
-    ) -> Result<Self, GraphError> {
-        let display_linear = ImageDesc::rgba16_float(width, height);
-        let sdr = ImageDesc::rgba8(width, height);
-        let tone_map = passes::tone_map_neutral_pipeline();
-        let write_sdr = output.pipeline();
-        preparation.add_recipe(
-            GraphRequirements {
-                resources: 2,
-                passes: 2,
-                accesses: 4,
-                draws: 2,
-                raster_constant_words: (tone_map.program.parameter_size()
-                    + write_sdr.program.parameter_size())
-                    as usize
-                    / size_of::<u32>(),
-                bindings: tone_map.program.bindings().len() + write_sdr.program.bindings().len(),
-                attachments: 2,
-                name_bytes: TONE_MAP.len()
-                    + WRITE_SDR.len()
-                    + DISPLAY_LINEAR.len()
-                    + SDR_COLOR.len(),
-                ..GraphRequirements::default()
-            },
-            &[display_linear, sdr],
-            &[tone_map, write_sdr],
-        )?;
-        Ok(Self {
-            display_linear,
-            sdr,
-            output,
-        })
-    }
-
-    /// Append Neutral tone mapping and SDR encoding to the same Graph.
-    /// The source is a scene-linear, matching extent 1× RGBA16F mip.
-    /// On error, abandon this frame's Graph to return its slot.
-    pub fn add_passes(
-        &self,
-        graph: &mut Graph,
-        source: ImageView,
-        exposure: f32,
-    ) -> Result<OutputImages, GraphError> {
-        let display_linear = graph.image(DISPLAY_LINEAR, self.display_linear)?;
-        passes::tone_map_neutral(graph, TONE_MAP, source, display_linear, exposure)?;
-        let sdr = graph.image(SDR_COLOR, self.sdr)?;
-        let linear_view = graph.image_view(display_linear, 0, 0)?;
-        passes::write_sdr(graph, WRITE_SDR, linear_view, sdr, self.output)?;
-        Ok(OutputImages {
-            display_linear,
-            sdr,
-        })
-    }
 }

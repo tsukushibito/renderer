@@ -239,7 +239,7 @@ fn identity(
 ) -> Value {
     let shadow = super::shadow::Parameters::default();
     let identity = json!({"cook_manifest_sha256":cook_hash,"conditions_sha256":conditions_hash,
-        "shaders_sha256":super::digest(include_bytes!("shaders/manifest.json")),
+        "shaders_sha256":super::digest(include_bytes!("../../../../renderer-pipeline/shaders/manifest.json")),
         "view":if options.fixture {"fixture"}else{options.view.as_str()},"width":options.width,"height":options.height,
         "inflight":options.inflight,"alpha_only":options.alpha_only,"alpha_override":options.force_opaque,
         "environment":environment,"shadows":options.shadows,"aa":options.aa,"bloom":options.bloom.name(),

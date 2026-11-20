@@ -9,6 +9,7 @@ use super::{
     program::{self, forward_plus},
     recipes, shadow,
 };
+use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::{
     ImageFormat,
     capacity::{ResourceClass, WorkingSet},
@@ -25,7 +26,6 @@ use renderer::{
     graph::BufferDesc,
     runtime::{FrameSubmission, Runtime},
 };
-use renderer_pipeline::{GraphRequirements, Preparation};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 

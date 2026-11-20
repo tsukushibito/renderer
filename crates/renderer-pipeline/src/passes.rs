@@ -1,8 +1,7 @@
 //! Reusable mesh drawing and scene output declarations.
 
-mod output;
-
-pub use output::{SdrEncoding, SdrOutput, tone_map_neutral, tone_map_neutral_pipeline, write_sdr};
+pub mod output;
+pub mod pbr;
 
 use std::borrow::Borrow;
 

@@ -3,14 +3,14 @@
 
 use std::num::NonZeroUsize;
 
+use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::graph::{
     CompiledGraph, Graph, GraphCapacity, GraphError, GraphPool, ImageDesc, ImageHandle,
 };
-use renderer_pipeline::standard::{
-    graphs::{ForwardConfig, PreparedForward, PreparedOutput},
-    passes::{SdrEncoding, SdrOutput},
+use renderer_pipeline::{
+    passes::output::{PreparedOutput, SdrEncoding, SdrOutput},
+    unlit_forward::{ForwardConfig, PreparedForward},
 };
-use renderer_pipeline::{GraphRequirements, Preparation};
 
 const COPY_TARGET: &str = "effect output";
 const COPY_PASS: &str = "application HDR copy";

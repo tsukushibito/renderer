@@ -8,7 +8,7 @@ use renderer::{
     },
     program::ManagedRasterProgram,
 };
-use renderer_pipeline::standard::graphs;
+use renderer_pipeline::unlit_forward;
 
 pub const VERTEX_BYTES: u64 = 224;
 pub const INDEX_BYTES: u64 = 144;
@@ -129,11 +129,11 @@ pub fn build(
     let color_desc = ImageDesc::rgba8(extent.0, extent.1);
     let color = match composition {
         Composition::Standard => {
-            graphs::forward(
+            unlit_forward::forward(
                 graph,
                 "standard forward scene",
                 draws,
-                graphs::ForwardConfig {
+                unlit_forward::ForwardConfig {
                     color: color_desc,
                     clear_color: CLEAR,
                     depth: true,

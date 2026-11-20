@@ -13,11 +13,11 @@
 /crates/renderer/tests/support/shaders/dxil/*.reflection.txt text eol=lf
 /crates/renderer/tests/support/shaders/dxil/*.json text eol=lf
 /crates/renderer/tests/support/shaders/*-manifest.json text eol=lf
-/crates/renderer/examples/support/bistro/shaders/*.hlsl text eol=lf
-/crates/renderer/examples/support/bistro/shaders/*.hlsli text eol=lf
-/crates/renderer/examples/support/bistro/shaders/dxil/*.reflection.txt text eol=lf
-/crates/renderer/examples/support/bistro/shaders/dxil/*.json text eol=lf
-/crates/renderer/examples/support/bistro/shaders/manifest.json text eol=lf
+/crates/renderer-pipeline/shaders/*.hlsl text eol=lf
+/crates/renderer-pipeline/shaders/*.hlsli text eol=lf
+/crates/renderer-pipeline/shaders/dxil/*.reflection.txt text eol=lf
+/crates/renderer-pipeline/shaders/dxil/*.json text eol=lf
+/crates/renderer-pipeline/shaders/manifest.json text eol=lf
 
 # Bistro source, verified interchange assets, and comparison image.
 /assets/bistro/source/*.zip filter=lfs diff=lfs merge=lfs -text
