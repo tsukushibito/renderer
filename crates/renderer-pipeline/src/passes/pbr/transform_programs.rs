@@ -178,29 +178,33 @@ mod tests {
         for (program, spirv, dxil, offsets, tier) in [
             (
                 transformed_programs(InstanceTier::Small, TransformTechnique::ForwardPlus).opaque,
-                include_str!("dxil/pbr_transformed_small.vert.spirv-reflection.json"),
-                include_str!("dxil/pbr_transformed_small.vert.reflection.txt"),
+                include_str!(
+                    "../../../shaders/dxil/pbr_transformed_small.vert.spirv-reflection.json"
+                ),
+                include_str!("../../../shaders/dxil/pbr_transformed_small.vert.reflection.txt"),
                 &[0][..],
                 InstanceTier::Small,
             ),
             (
                 transformed_programs(InstanceTier::Small, TransformTechnique::Deferred).opaque,
-                include_str!("dxil/gbuffer_transformed_small.vert.spirv-reflection.json"),
-                include_str!("dxil/gbuffer_transformed_small.vert.reflection.txt"),
+                include_str!(
+                    "../../../shaders/dxil/gbuffer_transformed_small.vert.spirv-reflection.json"
+                ),
+                include_str!("../../../shaders/dxil/gbuffer_transformed_small.vert.reflection.txt"),
                 &[0][..],
                 InstanceTier::Small,
             ),
             (
                 transformed_opaque_program(),
-                include_str!("dxil/pbr_transformed.vert.spirv-reflection.json"),
-                include_str!("dxil/pbr_transformed.vert.reflection.txt"),
+                include_str!("../../../shaders/dxil/pbr_transformed.vert.spirv-reflection.json"),
+                include_str!("../../../shaders/dxil/pbr_transformed.vert.reflection.txt"),
                 &[0][..],
                 InstanceTier::Full,
             ),
             (
                 transformed_shadow_program(),
-                include_str!("dxil/shadow_transformed.vert.spirv-reflection.json"),
-                include_str!("dxil/shadow_transformed.vert.reflection.txt"),
+                include_str!("../../../shaders/dxil/shadow_transformed.vert.spirv-reflection.json"),
+                include_str!("../../../shaders/dxil/shadow_transformed.vert.reflection.txt"),
                 &[0, 4][..],
                 InstanceTier::Full,
             ),

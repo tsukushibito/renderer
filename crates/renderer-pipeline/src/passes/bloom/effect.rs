@@ -1,13 +1,9 @@
 //! Shared Graph declarations for the standard HDR Bloom effect.
 
-#[allow(unsafe_code)]
-#[path = "programs.rs"]
-mod programs;
-
 use renderer::graph::{Binding, BindingResource, Graph, GraphError, ImageDesc, ImageHandle};
 use renderer::program::ManagedProgram;
 
-use programs::{BLUR_BOX, BLUR_TENT, COMBINE, DOWNSAMPLE, EXTRACT_DOWNSAMPLE};
+use super::programs::{BLUR_BOX, BLUR_TENT, COMBINE, DOWNSAMPLE, EXTRACT_DOWNSAMPLE};
 
 /// Choose the quarter-resolution Bloom blur kernel, or bypass Bloom.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

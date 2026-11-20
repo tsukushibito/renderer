@@ -1,7 +1,6 @@
 //! GPU frustum culling and indexed indirect argument generation.
 
 #[allow(unsafe_code)]
-#[path = "../../shaders/frustum_visibility_program.rs"]
 mod program;
 
 use renderer::capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet};

@@ -53,8 +53,8 @@ static VISIBILITY: ComputeProgramDescriptor = ComputeProgramDescriptor {
         ],
     },
     shaders: packaged_shaders!(
-        include_bytes!("frustum_visibility.comp.spv"),
-        include_bytes!("dxil/frustum_visibility.comp.dxil"),
+        include_bytes!("../../../shaders/frustum_visibility.comp.spv"),
+        include_bytes!("../../../shaders/dxil/frustum_visibility.comp.dxil"),
     ),
 };
 
@@ -74,7 +74,7 @@ mod tests {
     #[test]
     fn frustum_visibility_reflection_matches_packed_shader_inputs_and_output() {
         let spirv: serde_json::Value = serde_json::from_str(include_str!(
-            "dxil/frustum_visibility.comp.spirv-reflection.json"
+            "../../../shaders/dxil/frustum_visibility.comp.spirv-reflection.json"
         ))
         .unwrap();
         let entry = &spirv["entryPoints"][0];
@@ -126,7 +126,7 @@ mod tests {
             }
         }
 
-        let dxil = include_str!("dxil/frustum_visibility.comp.reflection.txt");
+        let dxil = include_str!("../../../shaders/dxil/frustum_visibility.comp.reflection.txt");
         assert!(dxil.contains("; NumThreads=(64,1,1)"));
         assert!(
             dxil.lines().any(|line| line.ends_with("Size:    64")),

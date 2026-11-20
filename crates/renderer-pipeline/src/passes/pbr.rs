@@ -5,11 +5,9 @@ use crate::shader_binaries::packaged_shaders;
 // Only the reviewed immutable asset declarations may use renderer's trusted
 // shader import. All bindings and graph construction use safe APIs.
 #[allow(unsafe_code)]
-#[path = "../../shaders/pbr_programs.rs"]
 mod pbr_programs;
 
 #[allow(unsafe_code)]
-#[path = "../../shaders/pbr_transform_programs.rs"]
 mod transform_programs;
 
 pub(crate) use pbr_programs::forward_plus;

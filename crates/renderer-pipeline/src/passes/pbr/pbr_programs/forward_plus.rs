@@ -1,6 +1,5 @@
 //! Forward+ and all-light reference raster programs.
 
-#[path = "forward_plus/culling.rs"]
 mod culling;
 
 use super::packaged_shaders;
@@ -91,11 +90,11 @@ static REFERENCE_OPAQUE: RasterProgramDescriptor = RasterProgramDescriptor {
     shaders: packaged_shaders!(
         vulkan: (
             super::PBR_VERTEX_SPIRV,
-            Some(include_bytes!("../pbr_all_lights.frag.spv")),
+            Some(include_bytes!("../../../../shaders/pbr_all_lights.frag.spv")),
         ),
         d3d12: (
             super::PBR_VERTEX_DXIL,
-            Some(include_bytes!("../dxil/pbr_all_lights.frag.dxil")),
+            Some(include_bytes!("../../../../shaders/dxil/pbr_all_lights.frag.dxil")),
         ),
         inline_constants: None,
     ),
@@ -112,11 +111,11 @@ pub(in crate::passes::pbr) static TILED_OPAQUE: RasterProgramDescriptor = Raster
     shaders: packaged_shaders!(
         vulkan: (
             super::PBR_VERTEX_SPIRV,
-            Some(include_bytes!("../pbr_forward_plus.frag.spv")),
+            Some(include_bytes!("../../../../shaders/pbr_forward_plus.frag.spv")),
         ),
         d3d12: (
             super::PBR_VERTEX_DXIL,
-            Some(include_bytes!("../dxil/pbr_forward_plus.frag.dxil")),
+            Some(include_bytes!("../../../../shaders/dxil/pbr_forward_plus.frag.dxil")),
         ),
         inline_constants: None,
     ),
@@ -151,13 +150,15 @@ mod tests {
         for (tiled, spirv, dxil) in [
             (
                 false,
-                include_str!("../dxil/pbr_all_lights.frag.spirv-reflection.json"),
-                include_str!("../dxil/pbr_all_lights.frag.reflection.txt"),
+                include_str!("../../../../shaders/dxil/pbr_all_lights.frag.spirv-reflection.json"),
+                include_str!("../../../../shaders/dxil/pbr_all_lights.frag.reflection.txt"),
             ),
             (
                 true,
-                include_str!("../dxil/pbr_forward_plus.frag.spirv-reflection.json"),
-                include_str!("../dxil/pbr_forward_plus.frag.reflection.txt"),
+                include_str!(
+                    "../../../../shaders/dxil/pbr_forward_plus.frag.spirv-reflection.json"
+                ),
+                include_str!("../../../../shaders/dxil/pbr_forward_plus.frag.reflection.txt"),
             ),
         ] {
             let module: serde_json::Value = serde_json::from_str(spirv).unwrap();

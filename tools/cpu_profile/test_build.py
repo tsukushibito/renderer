@@ -20,8 +20,8 @@ class BuildTests(unittest.TestCase):
                      "tools/bistro/conditions.json",
                      "tools/bistro/ibl.py",
                      "crates/renderer-pipeline/shaders/pbr.frag.spv",
-                     "crates/renderer-pipeline/shaders/pbr_programs.rs",
-                     "crates/renderer-pipeline/shaders/frustum_visibility_program.rs"):
+                     "crates/renderer-pipeline/src/passes/pbr/pbr_programs.rs",
+                     "crates/renderer-pipeline/src/passes/visibility/program.rs"):
             with self.subTest(name=name):
                 self.assertEqual(snapshot[name]["raw_sha256"],
                                  hashlib.sha256((ROOT / name).read_bytes()).hexdigest())

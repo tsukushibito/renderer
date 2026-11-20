@@ -144,8 +144,8 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
         bytes: &[CULL_CAMERA_BYTES, LIGHT_BUFFER_BYTES, 0],
     },
     shaders: packaged_shaders!(
-        include_bytes!("../../forward_plus.comp.spv"),
-        include_bytes!("../../dxil/forward_plus.comp.dxil"),
+        include_bytes!("../../../../../shaders/forward_plus.comp.spv"),
+        include_bytes!("../../../../../shaders/dxil/forward_plus.comp.dxil"),
     ),
 };
 
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn culling_reflection_matches_the_host_layout() {
         let cull: serde_json::Value = serde_json::from_str(include_str!(
-            "../../dxil/forward_plus.comp.spirv-reflection.json"
+            "../../../../../shaders/dxil/forward_plus.comp.spirv-reflection.json"
         ))
         .unwrap();
         assert_eq!(cull["ubos"][0]["block_size"], CULL_CAMERA_BYTES);
@@ -218,7 +218,7 @@ mod tests {
             cull["entryPoints"][0]["workgroup_size"],
             serde_json::json!(WORKGROUP)
         );
-        let dxil = include_str!("../../dxil/forward_plus.comp.reflection.txt");
+        let dxil = include_str!("../../../../../shaders/dxil/forward_plus.comp.reflection.txt");
         assert!(dxil.split_whitespace().any(|word| word == "t2"));
         assert!(dxil.split_whitespace().any(|word| word == "u3"));
     }

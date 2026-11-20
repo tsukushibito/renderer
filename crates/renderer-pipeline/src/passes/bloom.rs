@@ -1,6 +1,8 @@
 //! Bloom for scene-linear HDR color before exposure and tone mapping.
 
 mod effect;
+#[allow(unsafe_code)]
+mod programs;
 
 pub use effect::Bloom;
 use effect::{COMBINE_PASS, FILTER_PASSES, RESULT_IMAGE};

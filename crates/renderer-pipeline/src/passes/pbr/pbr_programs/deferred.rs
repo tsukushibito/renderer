@@ -26,12 +26,12 @@ pub(in crate::passes::pbr) static GBUFFER: RasterProgramDescriptor = RasterProgr
     sampling_pairs: &[pair(1, 0, 4), pair(1, 1, 4), pair(1, 2, 4), pair(1, 3, 4)],
     shaders: packaged_shaders!(
         vulkan: (
-            include_bytes!("../gbuffer.vert.spv"),
-            Some(include_bytes!("../gbuffer.frag.spv")),
+            include_bytes!("../../../../shaders/gbuffer.vert.spv"),
+            Some(include_bytes!("../../../../shaders/gbuffer.frag.spv")),
         ),
         d3d12: (
-            include_bytes!("../dxil/gbuffer.vert.dxil"),
-            Some(include_bytes!("../dxil/gbuffer.frag.dxil")),
+            include_bytes!("../../../../shaders/dxil/gbuffer.vert.dxil"),
+            Some(include_bytes!("../../../../shaders/dxil/gbuffer.frag.dxil")),
         ),
         inline_constants: None,
     ),
@@ -100,8 +100,8 @@ static LIGHTING: RasterProgramDescriptor = RasterProgramDescriptor {
     ],
     shaders: fullscreen_triangle_shaders(
         packaged_shaders!(
-            include_bytes!("../deferred_lighting.frag.spv"),
-            include_bytes!("../dxil/deferred_lighting.frag.dxil"),
+            include_bytes!("../../../../shaders/deferred_lighting.frag.spv"),
+            include_bytes!("../../../../shaders/dxil/deferred_lighting.frag.dxil"),
         ),
         None,
     ),
@@ -228,20 +228,20 @@ mod tests {
         check_reflection(
             gbuffer_program(),
             ShaderStages::VERTEX,
-            include_str!("../dxil/gbuffer.vert.spirv-reflection.json"),
-            include_str!("../dxil/gbuffer.vert.reflection.txt"),
+            include_str!("../../../../shaders/dxil/gbuffer.vert.spirv-reflection.json"),
+            include_str!("../../../../shaders/dxil/gbuffer.vert.reflection.txt"),
         );
         check_reflection(
             gbuffer_program(),
             ShaderStages::FRAGMENT,
-            include_str!("../dxil/gbuffer.frag.spirv-reflection.json"),
-            include_str!("../dxil/gbuffer.frag.reflection.txt"),
+            include_str!("../../../../shaders/dxil/gbuffer.frag.spirv-reflection.json"),
+            include_str!("../../../../shaders/dxil/gbuffer.frag.reflection.txt"),
         );
         check_reflection(
             deferred_lighting_program(),
             ShaderStages::FRAGMENT,
-            include_str!("../dxil/deferred_lighting.frag.spirv-reflection.json"),
-            include_str!("../dxil/deferred_lighting.frag.reflection.txt"),
+            include_str!("../../../../shaders/dxil/deferred_lighting.frag.spirv-reflection.json"),
+            include_str!("../../../../shaders/dxil/deferred_lighting.frag.reflection.txt"),
         );
     }
 }
