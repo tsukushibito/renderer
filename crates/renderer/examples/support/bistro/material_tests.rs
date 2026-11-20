@@ -10,7 +10,7 @@
 use super::{Material, Pixels, Primitive, Scene, TextureImage, fallback_images, material};
 use crate::bistro::camera::Camera;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use crate::bistro::{backend, pipeline};
+use crate::bistro::{backend, tests::build_material_test_frame};
 
 const WIDTH: u32 = 256;
 const HEIGHT: u32 = 256;
@@ -590,7 +590,6 @@ fn capture_lighting(
     options.aa = lighting.aa;
     options.shadows = lighting.shadows;
     options.capture_shadows = lighting.capture_shadows;
-    let budget = pipeline::Budget::new(scene, &lighting.environment, &options).unwrap();
     let camera = Camera::fixture();
     let uniform = camera
         .uniform(
@@ -601,27 +600,13 @@ fn capture_lighting(
             lighting.light_color,
         )
         .unwrap();
-    let mut backend = backend::create(&options, &budget).unwrap();
-    let resident = pipeline::Resident::upload(
-        &mut backend,
+    let (mut backend, resident, built) = build_material_test_frame(
         scene,
         &lighting.environment,
-        &budget,
-        &uniform,
-    )
-    .unwrap();
-    let mut pool = renderer::graph::GraphPool::new(budget.graph, 2).unwrap();
-    let mut workspace = pipeline::Workspace::new(scene);
-    let built = pipeline::build(
-        &mut pool,
-        &mut workspace,
-        &resident,
-        scene,
         &options,
         camera,
         &uniform,
         BACKGROUND,
-        true,
     )
     .unwrap();
     assert_eq!(built.draws, Some(scene.primitives.len()));
@@ -647,10 +632,9 @@ fn capture_lighting(
             bytes
         })
     });
-    drop((completed, pending, plan, resident, workspace));
+    drop((completed, pending, plan, resident));
     let validation = backend::close(backend).unwrap();
     assert_eq!(validation["clean"], true);
-    drop(pool);
     Capture {
         main: [hdr, sdr, depth],
         shadows,

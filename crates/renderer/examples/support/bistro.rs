@@ -512,6 +512,42 @@ mod tests {
     }
 
     #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
+    pub(super) fn build_material_test_frame(
+        scene: &asset::Scene,
+        environment: &ibl::Environment,
+        options: &Options,
+        camera: camera::Camera,
+        uniform: &[u8; 128],
+        background: [f32; 3],
+    ) -> Result<
+        (
+            renderer::runtime::Runtime,
+            pipeline::Resident,
+            pipeline::Built,
+        ),
+        Error,
+    > {
+        let budget = pipeline::Budget::new(scene, environment, options)?;
+        let mut backend = backend::create(options, &budget)?;
+        let resident =
+            pipeline::Resident::upload(&mut backend, scene, environment, &budget, uniform)?;
+        let mut pool = renderer::graph::GraphPool::new(budget.graph, 2)?;
+        let mut workspace = pipeline::Workspace::new(scene);
+        let built = pipeline::build(
+            &mut pool,
+            &mut workspace,
+            &resident,
+            scene,
+            options,
+            camera,
+            uniform,
+            background,
+            true,
+        )?;
+        Ok((backend, resident, built))
+    }
+
+    #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
     #[test]
     fn default_api_is_compiled_into_the_example() {
         let defaults = options(&["--fixture"]).unwrap();
