@@ -11,6 +11,8 @@ use renderer::{
         RuntimeLimits, WorkingSet,
     },
 };
+use renderer_pipeline::Preparation;
+use std::num::NonZeroUsize;
 
 fn config(options: &Options, budget: &Budget) -> Result<RuntimeConfig, Error> {
     match options.api.as_str() {
@@ -66,20 +68,27 @@ fn with_working_set<T>(
                 .map(|&(desc, count)| ResourceClass::Image { desc, count }),
         )
         .collect::<Vec<_>>();
-    let mut raster = Vec::new();
-    let mut compute = Vec::new();
+    // Budget already computed global class counts across the frames and
+    // presentation references that can overlap.
+    let mut preparation = Preparation::new(NonZeroUsize::MIN);
+    preparation.add_working_set(WorkingSet {
+        resources: &resources,
+        ..WorkingSet::default()
+    })?;
     for set in prepared.working_sets() {
-        raster.extend_from_slice(set.raster);
-        compute.extend_from_slice(set.compute);
+        preparation.add_working_set(WorkingSet {
+            resources: &[],
+            raster: set.raster,
+            compute: set.compute,
+        })?;
     }
     if resource_checks {
-        raster.push(lifecycle::MIP_PROBE_SDR.pipeline());
+        preparation.add_working_set(WorkingSet {
+            raster: &[lifecycle::MIP_PROBE_SDR.pipeline()],
+            ..WorkingSet::default()
+        })?;
     }
-    Ok(prepare(WorkingSet {
-        resources: &resources,
-        raster: &raster,
-        compute: &compute,
-    })?)
+    Ok(prepare(preparation.working_set())?)
 }
 
 fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
@@ -94,7 +103,7 @@ fn require_hardware(_runtime: &Runtime) -> Result<(), Error> {
 
 pub(super) fn create(options: &Options, budget: &Budget) -> Result<Runtime, Error> {
     let config = config(options, budget)?;
-    let prepared = budget.prepared.as_ref().expect("prepared YAML pipeline");
+    let prepared = budget.prepared.as_ref().expect("prepared Bistro pipeline");
     let runtime = with_working_set(
         options.resource_checks,
         &budget.buffers,
@@ -114,7 +123,7 @@ pub(super) fn open(
     presentation: renderer::PresentationConfig,
 ) -> Result<(Runtime, renderer::runtime::WindowPresenter), Error> {
     let config = config(options, budget)?;
-    let prepared = budget.prepared.as_ref().expect("prepared YAML pipeline");
+    let prepared = budget.prepared.as_ref().expect("prepared Bistro pipeline");
     let (runtime, presenter) = with_working_set(
         options.resource_checks,
         &budget.buffers,

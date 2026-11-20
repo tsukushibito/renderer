@@ -1,29 +1,34 @@
-﻿//! Prepare the complete Bistro frame from embedded YAML fragments.
+//! Prepared Bistro scene, lighting and output passes.
+
+use std::num::NonZeroUsize;
 
 use renderer::{
-    capacity::WorkingSet,
-    graph::{Graph, SampleCount},
+    capacity::{ResourceClass, WorkingSet},
+    graph::{
+        Attachment, Binding, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle,
+        ImageView, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
+    },
+    program::{MAX_RASTER_BINDINGS, ManagedProgram, ManagedRasterProgram, RasterPipelineRequest},
 };
-use renderer_pipeline::{
-    FrameInputs, FrameOutput, PipelineRequirements, PrepareInputs, PrepareOptions,
-    PrepareParameter, PrepareValue, PreparedPipeline, Program, ShaderRequest,
-    standard::passes::tone_map_neutral_pipeline,
-};
+use renderer_pipeline::{GraphRequirements, Preparation, standard::graphs::PreparedOutput};
 
 use super::{
-    Error, Options, PipelineMode, SubmissionMode,
-    asset::Scene,
-    bloom::{self, Bloom},
-    digest,
-    pipeline::indirect::Layout,
-    program,
+    Error, Options, PipelineMode, SubmissionMode, asset::Scene, bloom::Bloom, deferred,
+    pipeline::indirect::Layout, program, shadow,
 };
 
-const MATERIAL: &str = "bistro/pbr";
-
 pub(super) struct Prepared {
-    pipeline: PreparedPipeline,
-    sha256: String,
+    preparation: Preparation,
+    output: PreparedOutput,
+    hdr: ImageDesc,
+    depth: ImageDesc,
+    bloom: Bloom,
+    clear: [f32; 4],
+    mode: PipelineMode,
+    pub opaque: ManagedRasterProgram,
+    pub transparent: ManagedRasterProgram,
+    pub instances: Option<ManagedRasterProgram>,
+    pub shadow: ManagedRasterProgram,
 }
 
 impl Prepared {
@@ -31,250 +36,320 @@ impl Prepared {
         options: &Options,
         scene: &Scene,
         layout: Option<&Layout>,
-        background: [f32; 4],
+        clear: [f32; 4],
     ) -> Result<Self, Error> {
-        let indirect = layout.filter(|_| options.submission == SubmissionMode::Indirect);
-        let fragments = fragments(options, indirect.is_some());
-        let mut parameters = vec![PrepareParameter {
-            name: "background",
-            value: PrepareValue::Color(background),
-        }];
-        if options.pipeline == PipelineMode::ForwardPlus {
-            prepare_tiles(options, &mut parameters)?;
-        }
-        let tables = if let Some(layout) = indirect {
-            parameters.extend([
-                PrepareParameter {
-                    name: "bounds_bytes",
-                    value: PrepareValue::Size(layout.aabb_bytes() as u64),
-                },
-                PrepareParameter {
-                    name: "visibility_bytes",
-                    value: PrepareValue::Size(layout.mask_bytes()),
-                },
-                PrepareParameter {
-                    name: "visibility_grid",
-                    value: PrepareValue::Grid([layout.dispatch_groups(), 1]),
-                },
-            ]);
-            layout.indirect_tables().collect()
-        } else {
-            Vec::new()
-        };
-        let indirect_lists = [renderer_pipeline::PrepareIndirectList {
-            name: "packed_opaque",
-            tables: &tables,
-        }];
-        let pipeline = PreparedPipeline::from_yaml_fragments(
-            &fragments,
-            PrepareOptions {
-                frame_extent: Some([options.width, options.height]),
-                frames_in_flight: options.inflight,
-                max_draws_per_list: scene.primitives.len().max(options.instances.draws()),
-                max_materials: scene.materials.len(),
-            },
-            PrepareInputs {
-                values: &parameters,
-                indirect_lists: if indirect.is_some() {
-                    &indirect_lists
-                } else {
-                    &[]
-                },
-            },
-            |request| resolve(options, request),
+        options.validate_lighting_extent()?;
+        let concurrent = NonZeroUsize::new(options.inflight).ok_or("Bistro needs a frame slot")?;
+        let mut preparation = Preparation::new(concurrent);
+        let [width, height] = [options.width, options.height];
+        let hdr = ImageDesc::rgba16_float(width, height);
+        let depth = ImageDesc::depth32(width, height).with_sample_count(options.sample_count);
+        let shadow_extent = shadow::Parameters::default().resolution;
+        let is_deferred = options.pipeline == PipelineMode::Deferred;
+        let is_msaa = options.sample_count == SampleCount::X4;
+        let mut targets = shadow::CASCADE_COUNT + 2;
+        preparation.reserve_image(
+            ImageDesc::depth32(shadow_extent, shadow_extent),
+            shadow::CASCADE_COUNT,
         )?;
-        let sha256 = digest(fragments.concat().as_bytes());
-        Ok(Self { pipeline, sha256 })
+        preparation.reserve_image(hdr, 1)?;
+        preparation.reserve_image(depth, 1)?;
+        if is_msaa {
+            preparation.reserve_image(hdr.with_sample_count(options.sample_count), 1)?;
+            targets += 1;
+        }
+        if is_deferred {
+            preparation.reserve_image(hdr, deferred::PLANES.len())?;
+            targets += deferred::PLANES.len();
+        }
+        if let Some(images) = options.bloom.images(hdr) {
+            for desc in images {
+                preparation.reserve_image(desc, 1)?;
+            }
+            targets += images.len();
+        }
+
+        let opaque = if is_deferred {
+            program::deferred::gbuffer_program()
+        } else {
+            options.forward_program(false).into_owned()
+        };
+        let transparent = options.forward_program(true).into_owned();
+        let instances = options
+            .instances
+            .enabled()
+            .then(program::instancing_program);
+        let shadow = options.shadow_program().into_owned();
+        let mut raster = Vec::with_capacity(5);
+        raster.push(shadow.clone().into());
+        for program in [&opaque, &transparent]
+            .into_iter()
+            .chain(instances.as_ref())
+        {
+            raster.push(RasterPipelineRequest {
+                program: program.clone(),
+                sample_count: options.sample_count,
+            });
+        }
+        if is_deferred {
+            raster.push(program::deferred::deferred_lighting_program().into());
+        }
+        let mut compute = options.bloom.programs().to_vec();
+        let mut dispatches = options.bloom.images(hdr).map_or(0, |images| images.len());
+        if options.pipeline == PipelineMode::ForwardPlus {
+            add_tile_program(&mut compute)?;
+            dispatches += 1;
+        }
+        let mut groups = 0;
+        if let Some(layout) = layout.filter(|_| options.submission == SubmissionMode::Indirect) {
+            groups = layout.group_count();
+            let resources: Vec<_> = layout
+                .transient_buffers(options)
+                .map(|(size, count)| ResourceClass::Buffer {
+                    desc: BufferDesc { size },
+                    count,
+                })
+                .collect();
+            preparation.add_working_set(WorkingSet {
+                resources: &resources,
+                ..WorkingSet::default()
+            })?;
+            compute.extend([
+                program::visibility::visibility_program(),
+                ManagedProgram::indexed_indirect_encoder(),
+            ]);
+            dispatches += 1 + groups;
+        }
+        preparation.add_working_set(WorkingSet {
+            resources: &[],
+            raster: &raster,
+            compute: &compute,
+        })?;
+
+        let primitives = scene.primitives.len();
+        let instance_draws = options.instances.draws();
+        let shadow_draws = primitives
+            .checked_mul(shadow::CASCADE_COUNT)
+            .ok_or("Bistro shadow draw capacity overflow")?;
+        let instance_words = instance_draws
+            .checked_mul(program::INSTANCE_INLINE_BYTES as usize / size_of::<u32>())
+            .ok_or("Bistro instance constant capacity overflow")?;
+        // In addition to one main draw per primitive, budget every shadow
+        // cascade and every potentially enabled indirect group. The access
+        // arena also needs space for duplicate draw accesses before compression.
+        let draws = primitives + shadow_draws + groups + instance_draws + usize::from(is_deferred);
+        let extra_buffers = usize::from(groups != 0) + groups * 2;
+        // Each encoder dispatch also uploads its validated command template.
+        let passes = shadow::CASCADE_COUNT + 3 + dispatches + groups;
+        preparation.add_graph_requirements(GraphRequirements {
+            resources: targets + extra_buffers,
+            passes,
+            compute_dispatches: dispatches,
+            draws,
+            bindings: scene.materials.len() * (MAX_RASTER_BINDINGS + 4)
+                + usize::from(instance_draws != 0) * MAX_RASTER_BINDINGS
+                + dispatches * 4
+                + 16,
+            accesses: draws * (MAX_RASTER_BINDINGS + 2) + 4 * dispatches + groups + 32,
+            attachments: shadow::CASCADE_COUNT + 8,
+            raster_constant_words: shadow_draws + instance_words,
+            name_bytes: (targets + extra_buffers + passes) * 48,
+        })?;
+        let output =
+            PreparedOutput::prepare(&mut preparation, [width, height], options.sdr_output())?;
+        Ok(Self {
+            preparation,
+            output,
+            hdr,
+            depth,
+            bloom: options.bloom,
+            clear,
+            mode: options.pipeline,
+            opaque,
+            transparent,
+            instances,
+            shadow,
+        })
     }
 
-    pub fn build(
-        &mut self,
-        graph: Graph,
-        inputs: FrameInputs<'_>,
-    ) -> Result<(Graph, FrameOutput<'_>), Error> {
-        Ok(self.pipeline.build(graph, inputs)?)
-    }
-
-    pub fn requirements(&self) -> PipelineRequirements {
-        self.pipeline.requirements()
+    pub fn requirements(&self) -> GraphRequirements {
+        self.preparation.graph_requirements()
     }
 
     pub fn working_set(&self) -> WorkingSet<'_> {
-        self.pipeline.working_set()
+        self.preparation.working_set()
     }
 
-    pub fn sha256(&self) -> &str {
-        &self.sha256
+    pub fn scene(
+        &self,
+        graph: &mut Graph,
+        frame: SceneFrame,
+        opaque_draws: impl FnOnce(&mut RasterPass<'_, '_>) -> Result<(), GraphError>,
+        transparent_draws: impl FnOnce(&mut RasterPass<'_, '_>) -> Result<(), GraphError>,
+    ) -> Result<(ImageHandle, ImageHandle), Error> {
+        let hdr = graph.image("hdr", self.hdr)?;
+        let depth = graph.image("depth", self.depth)?;
+        let depth_view = graph.image_view(depth, 0, 0)?;
+        let hdr_view = graph.image_view(hdr, 0, 0)?;
+        let samples = self.depth.sample_count;
+        let (color_view, resolve) = if samples == SampleCount::X4 {
+            let msaa = graph.image("hdr_msaa", self.hdr.with_sample_count(samples))?;
+            (graph.image_view(msaa, 0, 0)?, Some(hdr_view))
+        } else {
+            (hdr_view, None)
+        };
+        let clear_color = Attachment {
+            view: color_view,
+            load: LoadOp::Clear(self.clear),
+            store: StoreOp::Store,
+        };
+        let clear_depth = Attachment {
+            view: depth_view,
+            load: LoadOp::Clear(1.0),
+            store: StoreOp::Store,
+        };
+        let load_color = Attachment {
+            load: LoadOp::Load,
+            ..clear_color
+        };
+        let load_depth = Attachment {
+            load: LoadOp::Load,
+            ..clear_depth
+        };
+
+        if self.mode == PipelineMode::Deferred {
+            deferred::append(
+                graph,
+                deferred::Inputs {
+                    hdr: hdr_view,
+                    depth: depth_view,
+                    clear: self.clear,
+                    camera: frame.camera,
+                    view_projection: frame.view_projection,
+                    lighting: frame.lighting,
+                },
+                |raster, _| opaque_draws(raster),
+            )?;
+        } else if let Some(resolve) = resolve {
+            let final_opaque = !frame.has_transparency;
+            let store = if final_opaque {
+                StoreOp::Discard
+            } else {
+                StoreOp::Store
+            };
+            let resolves = [Some(resolve)];
+            graph.raster(
+                if final_opaque {
+                    "scene_opaque_resolve"
+                } else {
+                    "scene_opaque"
+                },
+                RasterAttachments {
+                    color_resolves: if final_opaque { &resolves } else { &[] },
+                    colors: &[Attachment {
+                        store,
+                        ..clear_color
+                    }],
+                    depth: Some(Attachment {
+                        store,
+                        ..clear_depth
+                    }),
+                },
+                opaque_draws,
+            )?;
+        } else {
+            graph.attachment_pass(
+                "scene_clears",
+                RasterAttachments {
+                    color_resolves: &[],
+                    colors: &[clear_color],
+                    depth: Some(clear_depth),
+                },
+            )?;
+            graph.raster(
+                "scene_opaque",
+                RasterAttachments {
+                    color_resolves: &[],
+                    colors: &[load_color],
+                    depth: Some(load_depth),
+                },
+                opaque_draws,
+            )?;
+        }
+        if frame.has_transparency {
+            let store = if resolve.is_some() {
+                StoreOp::Discard
+            } else {
+                StoreOp::Store
+            };
+            let resolves = resolve.map(Some);
+            graph.raster(
+                if resolve.is_some() {
+                    "scene_transparent_resolve"
+                } else {
+                    "scene_transparent"
+                },
+                RasterAttachments {
+                    color_resolves: resolves.as_slice(),
+                    colors: &[Attachment {
+                        store,
+                        ..load_color
+                    }],
+                    depth: Some(Attachment {
+                        store,
+                        ..load_depth
+                    }),
+                },
+                transparent_draws,
+            )?;
+        }
+        Ok((hdr, depth))
+    }
+
+    pub fn post_process(
+        &self,
+        graph: &mut Graph,
+        hdr: ImageHandle,
+    ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError> {
+        let color = self.bloom.append(graph, hdr)?;
+        let source: ImageView = graph.image_view(color, 0, 0)?;
+        let output = self.output.add_passes(graph, source, 2.0)?;
+        Ok((output.sdr, (color != hdr).then_some(color)))
     }
 }
 
-struct DrawRecipes {
-    indexed: &'static str,
-    indirect: &'static str,
-    transparent: &'static str,
-}
-
-fn fragments(options: &Options, indirect: bool) -> Vec<&'static str> {
-    let mut fragments = vec![include_str!("recipes/shadows.yaml")];
-    let draw_recipes = match options.pipeline {
-        PipelineMode::Forward => DrawRecipes {
-            indexed: include_str!("recipes/draw-forward-indexed.yaml"),
-            indirect: include_str!("recipes/draw-forward-indirect.yaml"),
-            transparent: include_str!("recipes/draw-forward-transparent.yaml"),
-        },
-        PipelineMode::ForwardPlus => {
-            fragments.push(include_str!("recipes/lighting-tiled.yaml"));
-            DrawRecipes {
-                indexed: include_str!("recipes/draw-forward-plus-indexed.yaml"),
-                indirect: include_str!("recipes/draw-forward-plus-indirect.yaml"),
-                transparent: include_str!("recipes/draw-forward-plus-transparent.yaml"),
-            }
-        }
-        PipelineMode::ForwardReference => {
-            fragments.push(include_str!("recipes/lighting-reference.yaml"));
-            DrawRecipes {
-                indexed: include_str!("recipes/draw-forward-reference-indexed.yaml"),
-                indirect: include_str!("recipes/draw-forward-reference-indirect.yaml"),
-                transparent: include_str!("recipes/draw-forward-reference-transparent.yaml"),
-            }
-        }
-        PipelineMode::Deferred => DrawRecipes {
-            indexed: include_str!("recipes/draw-deferred-indexed.yaml"),
-            indirect: include_str!("recipes/draw-deferred-indirect.yaml"),
-            transparent: include_str!("recipes/draw-forward-transparent.yaml"),
-        },
-    };
-    let opaque = if indirect {
-        fragments.push(include_str!("recipes/visibility.yaml"));
-        draw_recipes.indirect
-    } else if options.instances.enabled() {
-        include_str!("recipes/draw-forward-instances.yaml")
-    } else {
-        draw_recipes.indexed
-    };
-    let scene = match (options.pipeline, options.sample_count) {
-        (PipelineMode::Deferred, _) => include_str!("recipes/scene-deferred.yaml"),
-        (_, SampleCount::X1) => include_str!("recipes/scene-forward.yaml"),
-        (_, SampleCount::X4) => include_str!("recipes/scene-forward-msaa.yaml"),
-    };
-    fragments.extend([opaque, draw_recipes.transparent, scene]);
-    let blur = match options.bloom {
-        Bloom::Off => None,
-        Bloom::Tent => Some(include_str!("recipes/bloom-tent.yaml")),
-        Bloom::Box => Some(include_str!("recipes/bloom-box.yaml")),
-    };
-    if let Some(blur) = blur {
-        fragments.extend([
-            include_str!("recipes/bloom-prefilter.yaml"),
-            blur,
-            include_str!("recipes/tone-map-bloom.yaml"),
-        ]);
-    } else {
-        fragments.push(include_str!("recipes/tone-map.yaml"));
-    }
-    fragments.push(if options.aa {
-        include_str!("recipes/output-fxaa.yaml")
-    } else {
-        include_str!("recipes/output.yaml")
-    });
-    fragments
+pub(super) struct SceneFrame {
+    pub camera: BufferHandle,
+    pub view_projection: [[f32; 4]; 4],
+    pub lighting: [Binding; 9],
+    pub has_transparency: bool,
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-fn prepare_tiles(
-    options: &Options,
-    parameters: &mut Vec<PrepareParameter<'static>>,
-) -> Result<(), Error> {
-    let compute = program::forward_plus::compute_program();
-    let tiles = program::forward_plus::active_tile_count(options.width, options.height)?;
-    let groups = tiles.div_ceil(compute.workgroup_size()[0]);
-    let bytes_per_group = compute.dispatch_contract().bytes[2];
-    parameters.extend([
-        PrepareParameter {
-            name: "tile_grid",
-            value: PrepareValue::Grid([groups, 1]),
-        },
-        PrepareParameter {
-            name: "tile_write_bytes",
-            value: PrepareValue::Size(u64::from(groups) * bytes_per_group),
-        },
-    ]);
+fn add_tile_program(compute: &mut Vec<ManagedProgram>) -> Result<(), GraphError> {
+    compute.push(program::forward_plus::compute_program());
     Ok(())
 }
 
 #[cfg(not(any(feature = "vulkan", all(windows, feature = "d3d12"))))]
-fn prepare_tiles(_: &Options, _: &mut Vec<PrepareParameter<'static>>) -> Result<(), Error> {
-    Err("Bistro Forward+ requires a native Renderer backend feature".into())
-}
-
-fn resolve(
-    options: &Options,
-    request: ShaderRequest<'_>,
-) -> Result<Program, Box<dyn std::error::Error + Send + Sync>> {
-    use ShaderRequest::{Program as Named, Template};
-
-    Ok(match request {
-        Template {
-            template: "bistro/shadow",
-            material_type: MATERIAL,
-        } => Program::Raster(options.shadow_program().into_owned()),
-        Template {
-            template: "bistro/forward",
-            material_type: MATERIAL,
-        } => Program::Raster(options.forward_program(false).into_owned()),
-        Named("bistro/forward-blend") => {
-            Program::Raster(options.forward_program(true).into_owned())
-        }
-        Named("bistro/forward-plus") => {
-            Program::Raster(program::forward_plus::raster_program(true, false))
-        }
-        Named("bistro/forward-plus-blend") => {
-            Program::Raster(program::forward_plus::raster_program(true, true))
-        }
-        Named("bistro/forward-reference") => {
-            Program::Raster(program::forward_plus::raster_program(false, false))
-        }
-        Named("bistro/forward-reference-blend") => {
-            Program::Raster(program::forward_plus::raster_program(false, true))
-        }
-        Named("bistro/instancing") => Program::Raster(program::instancing_program()),
-        Named("bistro/gbuffer") => Program::Raster(program::deferred::gbuffer_program()),
-        Named("bistro/deferred-lighting") => {
-            Program::Raster(program::deferred::deferred_lighting_program())
-        }
-        #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-        Named("bistro/cull-local-lights") => {
-            Program::Compute(program::forward_plus::compute_program())
-        }
-        Named("bistro/frustum-visibility") => {
-            Program::Compute(program::visibility::visibility_program())
-        }
-        Named("bloom/extract") => Program::Compute(bloom::EXTRACT),
-        Named("bloom/downsample") => Program::Compute(bloom::DOWNSAMPLE),
-        Named("bloom/blur-tent") => Program::Compute(bloom::BLUR_TENT),
-        Named("bloom/blur-box") => Program::Compute(bloom::BLUR_BOX),
-        Named("bloom/combine") => Program::Compute(bloom::COMBINE),
-        Named("post/neutral") => Program::Raster(tone_map_neutral_pipeline().program),
-        Named("post/sdr" | "post/fxaa") => {
-            let mut output = options.sdr_output();
-            output.fxaa = matches!(request, Named("post/fxaa"));
-            Program::Raster(output.pipeline().program)
-        }
-        _ => return Err(format!("unknown Bistro shader {request:?}").into()),
-    })
+fn add_tile_program(_: &mut Vec<ManagedProgram>) -> Result<(), GraphError> {
+    Err(GraphError::invalid_input(
+        "Bistro Forward+ requires a native Renderer backend feature",
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use renderer::graph::ImageDesc;
+    use renderer::graph::{GraphCapacity, GraphPool};
 
     #[test]
-    fn declared_recipes_cover_the_supported_bistro_profiles() {
+    fn prepared_recipes_cover_supported_bistro_profiles() {
         let scene = Scene::fixture(false);
         let layout = Layout::new(&scene).unwrap();
         let mut options = Options::parse([String::from("--fixture")]).unwrap();
-        let extent = [options.width, options.height];
+        let width = options.width;
+        let height = options.height;
         for mode in [
             PipelineMode::Forward,
             #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
@@ -298,7 +373,7 @@ mod tests {
                         options.bloom = bloom;
                         for aa in [false, true] {
                             options.aa = aa;
-                            let recipe = Prepared::new(
+                            let prepared = Prepared::new(
                                 &options,
                                 &scene,
                                 layout.as_ref(),
@@ -309,23 +384,33 @@ mod tests {
                                     "{mode:?}/{samples:?}/{submission:?}/{bloom:?}/{aa}: {error}"
                                 )
                             });
-                            let [width, height] = extent;
-                            assert_eq!(
-                                recipe.pipeline.output_resource(),
-                                ("sdr", ImageDesc::rgba8(width, height))
-                            );
-                            assert_eq!(
-                                recipe.pipeline.image_resource("hdr"),
-                                Some(ImageDesc::rgba16_float(width, height))
-                            );
-                            assert_eq!(
-                                recipe.pipeline.image_resource("depth"),
-                                Some(ImageDesc::depth32(width, height).with_sample_count(samples))
-                            );
-                            assert_eq!(
-                                recipe.pipeline.image_resource("bloom_hdr").is_some(),
-                                bloom != Bloom::Off
-                            );
+                            let set = prepared.working_set();
+                            let reserves = |expected| {
+                                set.resources.iter().any(|class| {
+                                matches!(class, ResourceClass::Image { desc, count } if *desc == expected && *count >= options.inflight)
+                            })
+                            };
+                            assert!(reserves(ImageDesc::rgba8(width, height)));
+                            assert!(reserves(ImageDesc::rgba16_float(width, height)));
+                            assert!(reserves(
+                                ImageDesc::depth32(width, height).with_sample_count(samples)
+                            ));
+                            assert!(set.raster.iter().any(|request| {
+                                request.program.same(&prepared.opaque)
+                                    && request.sample_count == samples
+                            }));
+                            assert!(set.raster.iter().any(|request| {
+                                request
+                                    .program
+                                    .same(&options.sdr_output().pipeline().program)
+                            }));
+                            if bloom != Bloom::Off {
+                                assert_eq!(prepared.bloom, bloom);
+                                assert!(reserves(ImageDesc::rgba16_float(
+                                    width.div_ceil(4),
+                                    height.div_ceil(4)
+                                )));
+                            }
                         }
                     }
                 }
@@ -341,14 +426,53 @@ mod tests {
         for samples in [SampleCount::X1, SampleCount::X4] {
             options.sample_count = samples;
             let recipe = Prepared::new(&options, &scene, None, [0.18, 0.18, 0.18, 1.0]).unwrap();
-            assert!(
-                recipe
-                    .pipeline
-                    .working_set()
-                    .raster
-                    .iter()
-                    .any(|request| request.program.parameter_size()
-                        == program::INSTANCE_INLINE_BYTES)
+            assert!(recipe.working_set().raster.iter().any(|request| {
+                request.sample_count == samples
+                    && request.program.parameter_size() == program::INSTANCE_INLINE_BYTES
+            }));
+        }
+    }
+
+    #[test]
+    fn empty_opaque_batch_resolves_in_both_msaa_branches() {
+        let scene = Scene::fixture(false);
+        let mut options = Options::parse(["--fixture", "--msaa", "4"].map(str::to_owned)).unwrap();
+        options.width = 9;
+        options.height = 5;
+        let prepared = Prepared::new(&options, &scene, None, [0.18, 0.18, 0.18, 1.0]).unwrap();
+        let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
+        for has_transparency in [false, true] {
+            let mut graph = pool.begin().unwrap();
+            let camera = graph
+                .buffer("unused camera", BufferDesc { size: 464 })
+                .unwrap();
+            let (hdr, _) = prepared
+                .scene(
+                    &mut graph,
+                    SceneFrame {
+                        camera,
+                        view_projection: [[0.0; 4]; 4],
+                        lighting: [Binding {
+                            group: 0,
+                            binding: 0,
+                            resource: renderer::graph::BindingResource::Sampler(
+                                renderer::program::SamplerDescriptor::NearestClamp,
+                            ),
+                        }; 9],
+                        has_transparency,
+                    },
+                    |_| Ok(()),
+                    |_| Ok(()),
+                )
+                .unwrap();
+            assert_eq!(
+                graph.image_desc(hdr).unwrap(),
+                ImageDesc::rgba16_float(9, 5)
+            );
+            graph.export_image(hdr).unwrap();
+            assert_eq!(
+                graph.compile().unwrap().pass_count(),
+                if has_transparency { 2 } else { 1 }
             );
         }
     }
