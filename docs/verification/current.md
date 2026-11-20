@@ -5,6 +5,35 @@
 全体範囲は[実装方針](../design/implementation-policy.md)を参照する。
 過去の検証表・比較はGit履歴に残し、この文書は現在の確認範囲を示す。
 
+## 標準 PBR Forward の公開レシピ
+
+`renderer-aqe`。容量集約は`renderer::capacity`で行い、`renderer-pipeline`の`pbr_forward`が
+1×のPBR・4カスケード・HDR／SDR出力を公開Graph APIで構成する。
+CPUテストで予約登録の原子性、最大描画数と容量超過後の再試行、既存の影画像の再利用、既存ターゲットへの描画、
+書き込み先の重複拒否を確認した。影の依存・資源の版・GPU完了までの所有は既存のGraphとRuntimeの契約を使う。
+シェーダーは固定DXCで17バリアント、材質バンドルの8バイナリを既存資産と照合した。
+
+Bistro素材を使わない64×48の小シーンで、同じ公開レシピから完成経路と独自HDRコピーを挟む経路を構築した。
+Vulkan／D3D12それぞれの最適化製品・厳格構成で、SDRとD32は両経路でバイト一致し、
+三角形の内外の画素・深度と、ネイティブ検証が有効な構成での正常な解放も確認した。
+
+WindowsのRTX 3060（610.88）で、`renderer-pipeline`のBistroを移行前`c152abb`と同一API・構成内で比較した。
+129×97 fixtureでForward系3モード、Deferred、1×／4× MSAA、直接／packed／間接描画、インスタンス、Bloom、FXAAを実行し、
+`full-a3`／`ibl-final`の全量シーンで36フレームの巡回を行った。HDR、SDR、D32、4カスケードと診断画像は
+移行前との364比較、再利用と強制再描画の324比較でバイト一致した。固定視点では全カスケードが5回、巡回では順に3、15、24、32回ヒットした。
+影を無効にした4枚は全画素がクリア値だった。個別にビルドした`renderer`のBistroのfixtureも従来の48出力と一致した。
+
+3 warm-upフレーム・同時投入3枠の通常588フレームで、Graph構築から投入・退役・結果返却までを計測した。
+Rust／VMA hostの確保・再確保・解放、Rendererによるネイティブ資源・メモリの作成・破棄、descriptorの確保・解放は0件だった。
+厳格構成ではVulkan Core／SyncValとD3D12 Debug Layer／GBVが有効で、警告・エラーは0件だった。
+
+全4構成で、作り直した外部材質バンドルと組み込みProgramの画像、容量不足からの再試行、資源の入れ替え、mip診断を照合した。
+表示では24フレームとリサイズ、最小化、復帰、カメラ操作、未退役フレームを残した終了を確認した。
+Vulkanは128×96のfixture、D3D12厳格は801×601のfixture、D3D12製品は801×601の全量シーンで影を毎frame再描画する設定を使った。
+
+画像のチェックサムと計測ログを`.tools/renderer-aqe/`に保存した。
+[標準 PBR Forward の起動と使い方](../guides/tooling.md#pbr-forward-recipe)を参照する。
+
 ## Rustレシピの合成とBistroの移行
 
 `renderer-32c`。`Preparation`がパスの宣言上限、同時frameを含む一時資源、Programを準備時に集計する。
