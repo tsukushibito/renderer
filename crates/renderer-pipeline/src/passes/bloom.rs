@@ -11,7 +11,8 @@ use renderer::graph::{Graph, GraphError, ImageDesc, ImageHandle};
 /// Bloom configured for a specific HDR extent and blur kernel.
 pub struct PreparedBloom {
     mode: Bloom,
-    images: Option<[ImageDesc; 5]>,
+    input: ImageDesc,
+    images: Option<[ImageDesc; 4]>,
 }
 
 impl Bloom {
@@ -36,7 +37,7 @@ impl Bloom {
             let count = preparation.frames_in_flight().get();
             let resources = images.map(|desc| ResourceClass::Image { desc, count });
             let passes = FILTER_PASSES.len() + 1;
-            // Four filters each sample and write one image. Combine reads two
+            // Each filter samples and writes one image. Combine reads two
             // source images and writes one. Each binding is one image access.
             let bindings = 2 * FILTER_PASSES.len() + 3;
             let name_bytes = 2 * FILTER_PASSES.iter().map(|name| name.len()).sum::<usize>()
@@ -59,7 +60,11 @@ impl Bloom {
                 },
             )?;
         }
-        Ok(PreparedBloom { mode: self, images })
+        Ok(PreparedBloom {
+            mode: self,
+            input,
+            images,
+        })
     }
 }
 
@@ -77,7 +82,7 @@ impl PreparedBloom {
         input: ImageHandle,
     ) -> Result<ImageHandle, GraphError> {
         if let Some(images) = self.images {
-            if graph.image_desc(input)? != images[0] {
+            if graph.image_desc(input)? != self.input {
                 return Err(GraphError::invalid_input(
                     "Bloom input must match the prepared 1× RGBA16F image",
                 ));

@@ -113,23 +113,29 @@ float3 evaluate_lighting(float3 position, Surface surface, BrdfInputs brdf_input
     float3 diffuse_color = brdf_inputs.diffuse_color;
     float roughness = surface.roughness;
     float3 direct_brdf = evaluate_brdf(nl, nv, nh, vh, f0, diffuse_color, roughness);
-    float3 irradiance = irradiance_image.SampleLevel(environment_sampler, environment_uv(n), 0.0).rgb;
-    float3 reflected = reflect(-v, n);
-    float reflection_lod = roughness * max(camera.environment.z, 0.0);
-    float3 prefiltered = reflection_image.SampleLevel(
-        environment_sampler, environment_uv(reflected), reflection_lod).rgb;
-    // BRDF and environment share one sampler to stay within the common 16-slot
-    // contract. Explicit LOD0 and half-texel interior UVs implement LUT clamp.
-    float2 lut_size = texture_size(brdf_image);
-    float2 lut_uv = clamp(float2(nv, roughness), 0.5 / lut_size, 1.0 - 0.5 / lut_size);
-    float2 brdf = brdf_image.SampleLevel(environment_sampler, lut_uv, 0.0).rg;
-    // AO attenuates only diffuse environment light.
-    float3 indirect_diffuse = irradiance * diffuse_color / PI * surface.occlusion;
-    float3 indirect_specular = prefiltered * (f0 * brdf.x + brdf.y);
+    float environment_strength = max(camera.environment.x, 0.0);
+    float3 indirect = 0.0;
+    [branch]
+    if (environment_strength > 0.0) {
+        float3 irradiance =
+            irradiance_image.SampleLevel(environment_sampler, environment_uv(n), 0.0).rgb;
+        float3 reflected = reflect(-v, n);
+        float reflection_lod = roughness * max(camera.environment.z, 0.0);
+        float3 prefiltered = reflection_image.SampleLevel(
+            environment_sampler, environment_uv(reflected), reflection_lod).rgb;
+        // BRDF and environment share one sampler. Explicit LOD0 and
+        // half-texel interior UVs implement LUT clamp.
+        float2 lut_size = texture_size(brdf_image);
+        float2 lut_uv = clamp(float2(nv, roughness), 0.5 / lut_size, 1.0 - 0.5 / lut_size);
+        float2 brdf = brdf_image.SampleLevel(environment_sampler, lut_uv, 0.0).rg;
+        // AO attenuates only diffuse environment light.
+        float3 indirect_diffuse = irradiance * diffuse_color / PI * surface.occlusion;
+        float3 indirect_specular = prefiltered * (f0 * brdf.x + brdf.y);
+        indirect = (indirect_diffuse + indirect_specular) * environment_strength;
+    }
     // At exactly zero N dot L, finite shadow visibility can only multiply
     // zero. Shadow sampling uses explicit LOD, so this branch needs no gradients.
     float shadow_visibility = 1.0;
     if (nl != 0.0) { shadow_visibility = sun_visibility(position, surface.geometric_normal, l); }
-    return direct_brdf * camera.light_color.rgb * nl * shadow_visibility
-        + (indirect_diffuse + indirect_specular) * max(camera.environment.x, 0.0) + surface.emissive;
+    return direct_brdf * camera.light_color.rgb * nl * shadow_visibility + indirect + surface.emissive;
 }

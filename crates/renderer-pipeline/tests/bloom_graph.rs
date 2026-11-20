@@ -54,7 +54,16 @@ fn input_pixel(x: u32, y: u32, standard: bool) -> [u16; 4] {
     } else {
         0x3800 // 0.5
     };
-    [red, 0, 0, 0x3a00] // alpha 0.75
+    let green = if !standard && x < 4 && y < 4 {
+        if (x + y).is_multiple_of(2) {
+            0x39f0
+        } else {
+            0x387b
+        }
+    } else {
+        0
+    };
+    [red, green, 0, 0x3a00] // alpha 0.75
 }
 
 fn fixture(
@@ -118,8 +127,7 @@ fn bloom_composes_through_public_graphs_and_unused_passes_are_culled() {
                     assert_eq!(
                         passes,
                         [
-                            "Bloom extract",
-                            "Bloom downsample half",
+                            "Bloom extract and downsample half",
                             "Bloom downsample quarter",
                             "Bloom blur",
                             "Bloom combine"
@@ -216,12 +224,20 @@ mod native {
             let read =
                 |channel: usize| u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]);
             let source = input_pixel(x, y, standard);
-            for (channel, expected) in source.into_iter().enumerate().skip(1) {
+            for (channel, expected) in source.into_iter().enumerate().skip(2) {
                 assert_eq!(
                     read(channel),
                     expected,
                     "{effect:?} {x},{y} channel {channel}"
                 );
+            }
+            if standard || effect == Bloom::Off {
+                assert_eq!(read(1), source[1], "{effect:?} {x},{y} green");
+            } else if effect == Bloom::Tent && [x, y] == [4, 0] {
+                // The first cell averages alternating extracted green values.
+                // Rounding the extraction to FP16 before averaging yields
+                // 0x235c here. Averaging the unrounded taps yields 0x235a.
+                assert_eq!(read(1), 0x235c);
             }
             let red = read(0);
             if effect == Bloom::Off || standard {
