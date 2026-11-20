@@ -9,10 +9,10 @@ use renderer::program::{
     ManagedRasterProgram, RasterPipelineRequest,
 };
 
-use crate::schema::{
+use super::schema::{
     self, AttachmentSpec, BindingSpec, Config, LoadAction, PassSpec, ResourceSource, ResourceSpec,
 };
-use crate::{
+use super::{
     BindingSource, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError,
     PipelineRequirements, PrepareOptions, PreparedAttachment, PreparedBinding, PreparedPipeline,
     Program, RasterDrawKind, RasterPrograms, Resource, ResourceDesc, ShaderRequest,

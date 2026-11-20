@@ -3,7 +3,7 @@ use renderer::graph::StoreOp;
 use renderer::program::SamplerDescriptor;
 use serde::Deserialize;
 
-use crate::PipelineError;
+use super::PipelineError;
 
 pub(super) fn parse(yaml: &str) -> Result<Config, PipelineError> {
     if yaml.len() > 1024 * 1024 {

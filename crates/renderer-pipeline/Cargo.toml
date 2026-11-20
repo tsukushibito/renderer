@@ -4,23 +4,29 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Declarative RenderGraph composition for renderer"
+description = "Reusable RenderGraph composition for renderer"
 
 [features]
 default = []
+yaml = ["dep:serde", "dep:serde-saphyr"]
 vulkan = ["renderer/vulkan"]
 d3d12 = ["renderer/d3d12"]
 development-validation = ["renderer/development-validation"]
+graph-diagnostics = ["renderer/graph-diagnostics"]
 memory-profiling = ["renderer/memory-profiling"]
 
 [dependencies]
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
-serde = { version = "1", features = ["derive"] }
-serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"] }
+serde = { version = "1", features = ["derive"], optional = true }
+serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"], optional = true }
 
 [lints]
 workspace = true
 
 [[example]]
 name = "yaml_pipeline"
-required-features = ["vulkan", "d3d12"]
+required-features = ["yaml", "vulkan", "d3d12"]
+
+[[test]]
+name = "frame_inputs"
+required-features = ["yaml"]

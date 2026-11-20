@@ -179,7 +179,8 @@ impl ImageDesc {
         self.mip_levels == 1 && self.array_layers == 1
     }
 
-    pub(crate) fn mip_extent(self, mip: u32) -> Option<[u32; 2]> {
+    /// Returns the width and height at a valid mip level.
+    pub fn mip_extent(self, mip: u32) -> Option<[u32; 2]> {
         if self.width == 0
             || self.height == 0
             || mip >= self.mip_levels
