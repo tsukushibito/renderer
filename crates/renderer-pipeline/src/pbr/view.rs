@@ -128,7 +128,7 @@ fn normalize(vector: [f32; 3], message: &'static str) -> Result<[f32; 3], GraphE
 pub(super) struct ViewData {
     matrix: [[f32; 4]; 4],
     camera_words: [f32; 16],
-    shadow: shadow::ShadowData,
+    shadow: Option<shadow::ShadowData>,
 }
 
 impl ViewData {
@@ -136,8 +136,8 @@ impl ViewData {
         &self.matrix
     }
 
-    pub(super) fn shadow_matrices(&self) -> &[[[f32; 4]; 4]; 4] {
-        &self.shadow.matrices
+    pub(super) fn shadow_matrices(&self) -> Option<&[[[f32; 4]; 4]; 4]> {
+        self.shadow.as_ref().map(|shadow| &shadow.matrices)
     }
 
     pub(super) fn uniform_bytes(&self) -> [u8; CAMERA_BYTES] {
@@ -147,7 +147,7 @@ impl ViewData {
             .as_flattened()
             .iter()
             .chain(&self.camera_words)
-            .chain(self.shadow.words());
+            .chain(self.shadow.iter().flat_map(shadow::ShadowData::words));
         for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *out = value.to_le_bytes();
         }
@@ -160,7 +160,7 @@ pub(super) fn prepare(
     sun: Sun,
     bounds: Bounds,
     extent: [u32; 2],
-    settings: ShadowSettings,
+    settings: Option<ShadowSettings>,
     environment: [f32; 3],
 ) -> Result<ViewData, GraphError> {
     if environment.into_iter().any(|value| !value.is_finite())
@@ -173,7 +173,9 @@ pub(super) fn prepare(
     }
     let aspect = extent[0] as f32 / extent[1] as f32;
     let matrix = camera.matrix(aspect)?;
-    let shadow = shadow::calculate(camera, aspect, sun.direction, bounds, settings)?;
+    let shadow = settings
+        .map(|settings| shadow::calculate(camera, aspect, sun.direction, bounds, settings))
+        .transpose()?;
     // The eye and light occupy three vec4s, with near/far in their w words.
     // The fourth vec4 carries IBL sampling parameters and a shadow flag.
     let mut camera_words = [0.0; 16];
@@ -183,7 +185,7 @@ pub(super) fn prepare(
     camera_words[7] = camera.far;
     camera_words[8..11].copy_from_slice(&sun.color);
     camera_words[12..15].copy_from_slice(&environment);
-    camera_words[15] = if settings.enabled { 1.0 } else { 0.0 };
+    camera_words[15] = if shadow.is_some() { 1.0 } else { 0.0 };
     Ok(ViewData {
         matrix,
         camera_words,
@@ -299,7 +301,7 @@ mod tests {
             reused,
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
             [128, 96],
-            ShadowSettings::default(),
+            Some(ShadowSettings::default()),
             [0.7, -0.2, 3.0],
         )
         .unwrap();
@@ -338,6 +340,7 @@ mod tests {
         assert!(
             words[32..96].iter().copied().eq(view
                 .shadow_matrices()
+                .unwrap()
                 .as_flattened()
                 .as_flattened()
                 .iter()
@@ -381,6 +384,20 @@ mod tests {
     }
 
     #[test]
+    fn disabled_shadows_do_not_require_cascade_splits() {
+        let camera = Camera {
+            near: 200.0,
+            ..camera()
+        };
+        let sun = Sun::new([0.0, 1.0, 0.0], [1.0; 3]).unwrap();
+        let bounds = Bounds::new([0.0; 3], [0.0; 3]).unwrap();
+        let view = prepare(camera, sun, bounds, [128, 96], None, [0.0; 3]).unwrap();
+        assert!(view.shadow_matrices().is_none());
+        // The disabled shadow flag and all unused cascade fields are zero.
+        assert!(view.uniform_bytes()[124..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn rejects_invalid_input_before_upload() {
         let mut camera = camera();
         camera.target = camera.position;
@@ -392,7 +409,7 @@ mod tests {
                 sun,
                 bounds,
                 [128, 96],
-                ShadowSettings::default(),
+                Some(ShadowSettings::default()),
                 [0.0; 3]
             )
             .is_err()

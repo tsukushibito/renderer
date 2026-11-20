@@ -177,10 +177,10 @@ mod scene {
         let config = Config {
             extent: EXTENT,
             clear_color: [0.0, 0.0, 0.0, 1.0],
-            shadows: ShadowSettings {
+            shadows: Some(ShadowSettings {
                 resolution: SHADOW_RESOLUTION,
                 ..ShadowSettings::default()
-            },
+            }),
             output: SdrOutput {
                 encoding: SdrEncoding::Srgb,
                 fxaa: false,
@@ -296,7 +296,10 @@ mod scene {
             frame.transforms = &transforms;
         }
         if let Some(shadows) = &shadows {
-            frame.shadows = std::array::from_fn(|cascade| shadows.source(cascade, draws));
+            frame.shadows =
+                renderer_pipeline::pbr::FrameShadows::Cascades(std::array::from_fn(|cascade| {
+                    shadows.source(cascade, draws)
+                }));
         }
         let (sdr, scene_depth, shadow_images) = if post.copy_hdr || post.bloom.is_some() {
             let scene = prepared.add_scene(&mut graph, frame)?;
@@ -322,7 +325,10 @@ mod scene {
         let mut shadow_maps = [None; CASCADE_COUNT];
         #[cfg(test)]
         if placement != Placement::Single {
-            for (target, image) in shadow_maps.iter_mut().zip(shadow_images) {
+            for (target, image) in shadow_maps
+                .iter_mut()
+                .zip(shadow_images.expect("shadow setup"))
+            {
                 *target = Some(graph.readback_image("read cascade", image)?);
             }
         }

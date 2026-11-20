@@ -19,8 +19,8 @@ use crate::passes::pbr::{
 };
 use crate::pbr::{
     Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, FrameImages,
-    MAX_TRANSFORMS, PreparedInstances, PreparedView, SceneImages, SceneLimits, ShadowSettings,
-    ShadowSource, Sun,
+    FrameShadows, MAX_TRANSFORMS, PreparedInstances, PreparedView, SceneImages, SceneLimits,
+    ShadowSettings, ShadowSource, Sun,
     draw::{Batch, Bindings, image_binding, sampler_binding},
     raster::SHADOW_IMAGES,
 };
@@ -29,7 +29,8 @@ use crate::pbr::{
 pub struct Config {
     pub extent: [u32; 2],
     pub clear_color: [f32; 4],
-    pub shadows: ShadowSettings,
+    /// Directional cascade settings. `None` selects unshadowed shading.
+    pub shadows: Option<ShadowSettings>,
     pub output: SdrOutput,
     pub samples: SampleCount,
     pub camera_storage: CameraStorage,
@@ -145,7 +146,6 @@ fn prepare_variant(
     opaque_uses_lighting: bool,
     mode: DrawMode,
 ) -> Result<Prepared, GraphError> {
-    config.shadows.validate()?;
     let [width, height] = config.extent;
     if !config.clear_color.into_iter().all(f32::is_finite) {
         return Err(GraphError::invalid_input("PBR clear color must be finite"));
@@ -166,13 +166,17 @@ fn prepare_variant(
         ImageDesc::depth32(width, height).with_sample_count(config.samples),
         1,
     )?;
-    preparation.reserve_image(shadow_desc(config.shadows), CASCADE_COUNT)?;
+    if let Some(settings) = config.shadows {
+        settings.validate()?;
+        preparation.reserve_image(shadow_desc(settings), CASCADE_COUNT)?;
+    }
 
     let mut raster = Vec::with_capacity(5);
     raster.push(pipeline(programs.opaque.clone(), config.samples));
     raster.push(pipeline(programs.blend.clone(), config.samples));
 
-    let render_shadows = config.shadows.enabled;
+    let render_shadows = config.shadows.is_some();
+    let cascades = if render_shadows { CASCADE_COUNT } else { 0 };
     let casters = if render_shadows {
         limits.max_casters_per_cascade
     } else {
@@ -226,9 +230,9 @@ fn prepare_variant(
 
     preparation.add_requirements(
         GraphRequirements {
-            resources: CASCADE_COUNT + 2 + usize::from(transient_camera) + usize::from(msaa),
-            passes: CASCADE_COUNT + 3 + usize::from(upload_camera),
-            accesses: checked(accesses.checked_add(16))?,
+            resources: cascades + 2 + usize::from(transient_camera) + usize::from(msaa),
+            passes: cascades + 3 + usize::from(upload_camera),
+            accesses: checked(accesses.checked_add(cascades + 12))?,
             draws: checked(limits.max_draws.checked_add(shadow_draws))?,
             raster_constant_words: if transforms {
                 checked(
@@ -240,7 +244,7 @@ fn prepare_variant(
                 shadow_draws
             },
             bindings: checked(limits.max_materials.checked_mul(material_bindings))?,
-            attachments: 10 + usize::from(msaa),
+            attachments: cascades + 6 + usize::from(msaa),
             name_bytes: 256,
             upload_bytes: if upload_camera { CAMERA_BYTES } else { 0 },
             ..Default::default()
@@ -384,7 +388,6 @@ impl Prepared {
         ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
     ) -> Result<SceneImages, GraphError> {
         self.check_frame(graph, &frame)?;
-        validate_shadow_sources(graph, frame.shadows, shadow_desc(self.config.shadows))?;
         let camera = match frame.camera_target {
             Some(buffer) => buffer,
             None => graph.buffer("pbr camera", camera_desc())?,
@@ -398,8 +401,23 @@ impl Prepared {
             }
             _ => None,
         };
-        let shadow_views =
-            self.add_shadows(graph, camera, frame.materials, frame.shadows, transforms)?;
+        let (shadow_views, shadow_images) = match (self.config.shadows, frame.shadows) {
+            (Some(settings), FrameShadows::Cascades(sources)) => {
+                let views = self.add_shadows(
+                    graph,
+                    camera,
+                    frame.materials,
+                    settings,
+                    sources,
+                    transforms,
+                )?;
+                (views, Some(views.map(ImageView::image)))
+            }
+            (None, FrameShadows::Disabled(placeholder)) => {
+                ([placeholder.view(); CASCADE_COUNT], None)
+            }
+            _ => unreachable!("shadow inputs were checked before graph mutation"),
+        };
         let lighting = lighting_bindings(frame.view.environment(), shadow_views);
         let extra = additional(graph, camera)?;
         let mut extended = [lighting[0]; renderer::program::MAX_RASTER_BINDINGS - 7];
@@ -452,7 +470,7 @@ impl Prepared {
         Ok(SceneImages {
             hdr,
             depth,
-            shadows: shadow_views.map(ImageView::image),
+            shadows: shadow_images,
             camera,
         })
     }
@@ -507,21 +525,32 @@ impl Prepared {
         )?;
         validate_draws(frame.opaque, self.mode, frame)?;
         validate_draws(frame.transparent, DrawMode::Direct, frame)?;
-        if self.config.shadows.enabled {
-            for source in frame.shadows {
-                if let ShadowSource::Render { casters, .. } = source {
-                    check_limit(
-                        GraphCapacityKind::Draws,
-                        self.limits.max_casters_per_cascade,
-                        Some(casters.len()),
-                    )?;
-                    let mode = if self.mode == DrawMode::Transformed {
-                        self.mode
-                    } else {
-                        DrawMode::Direct
-                    };
-                    validate_draws(casters, mode, frame)?;
+        match (self.config.shadows, frame.shadows) {
+            (Some(settings), FrameShadows::Cascades(sources)) => {
+                validate_shadow_sources(graph, sources, shadow_desc(settings))?;
+                for source in sources {
+                    if let ShadowSource::Render { casters, .. } = source {
+                        check_limit(
+                            GraphCapacityKind::Draws,
+                            self.limits.max_casters_per_cascade,
+                            Some(casters.len()),
+                        )?;
+                        let mode = if self.mode == DrawMode::Transformed {
+                            self.mode
+                        } else {
+                            DrawMode::Direct
+                        };
+                        validate_draws(casters, mode, frame)?;
+                    }
                 }
+            }
+            (None, FrameShadows::Disabled(placeholder)) => {
+                graph.image_desc(placeholder.view().image())?;
+            }
+            _ => {
+                return Err(GraphError::invalid_input(
+                    "PBR shadow inputs do not match the prepared shadow setting",
+                ));
             }
         }
         Ok(())
@@ -532,16 +561,14 @@ impl Prepared {
         graph: &mut Graph,
         camera: BufferHandle,
         materials: &[crate::pbr::Material],
+        settings: ShadowSettings,
         sources: [ShadowSource<'_>; CASCADE_COUNT],
         transforms: Option<BufferHandle>,
     ) -> Result<[ImageView; CASCADE_COUNT], GraphError> {
-        let settings = self.config.shadows;
         let desc = shadow_desc(settings);
         let program = &self.programs.shadow;
         let instanced = self.instances.as_ref().map(|instances| &instances.shadow);
-        if settings.enabled {
-            self.shadow.reset_bindings(materials.len());
-        }
+        self.shadow.reset_bindings(materials.len());
         let mut views = [None; CASCADE_COUNT];
         for (cascade, source) in sources.into_iter().enumerate() {
             let image = match source {
@@ -556,21 +583,17 @@ impl Prepared {
             };
             let view = graph.image_view(image, 0, 0)?;
             if let ShadowSource::Render { casters, .. } = source {
-                if settings.enabled {
-                    self.shadow.record(
-                        graph,
-                        program,
-                        Bindings::Shadow { camera, cascade },
-                        materials,
-                        casters,
-                        instanced.zip(transforms),
-                    )?;
-                    add_shadow_pass(graph, cascade, view, |pass| {
-                        self.shadow.draw(pass, program, instanced)
-                    })?;
-                } else {
-                    add_shadow_pass(graph, cascade, view, |_| Ok(()))?;
-                }
+                self.shadow.record(
+                    graph,
+                    program,
+                    Bindings::Shadow { camera, cascade },
+                    materials,
+                    casters,
+                    instanced.zip(transforms),
+                )?;
+                add_shadow_pass(graph, cascade, view, |pass| {
+                    self.shadow.draw(pass, program, instanced)
+                })?;
             }
             views[cascade] = Some(view);
         }

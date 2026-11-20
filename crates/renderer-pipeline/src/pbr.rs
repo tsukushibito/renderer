@@ -6,6 +6,7 @@ pub(crate) mod draw;
 mod history;
 pub(crate) mod instances;
 pub(crate) mod raster;
+mod unshadowed;
 mod vertex;
 mod view;
 
@@ -18,6 +19,7 @@ pub use draw::{Draw, IndexedDraw, Material};
 pub use history::ShadowHistoryError;
 pub use history::{ShadowFrame, ShadowHistory, ShadowKey, ShadowUpdates};
 pub use instances::{MAX_TRANSFORMS, Transform};
+pub use unshadowed::{Unshadowed, UnshadowedView};
 pub use vertex::PbrVertex;
 pub use view::{AlphaMode, Bounds, Camera, MaterialFactors, ShadowSettings, Sun};
 
@@ -77,7 +79,7 @@ pub struct PreparedView {
     uniform: [u8; CAMERA_BYTES],
     environment: Environment,
     extent: [u32; 2],
-    shadows: ShadowSettings,
+    shadows: Option<ShadowSettings>,
 }
 
 impl PreparedView {
@@ -87,7 +89,7 @@ impl PreparedView {
         bounds: Bounds,
         environment: Environment,
         extent: [u32; 2],
-        shadows: ShadowSettings,
+        shadows: Option<ShadowSettings>,
     ) -> Result<Self, GraphError> {
         if environment.max_prefilter_lod >= environment.reflection.mip_level_count() {
             return Err(GraphError::invalid_input(
@@ -116,7 +118,7 @@ impl PreparedView {
         })
     }
 
-    pub(crate) fn matches(&self, extent: [u32; 2], shadows: ShadowSettings) -> bool {
+    pub(crate) fn matches(&self, extent: [u32; 2], shadows: Option<ShadowSettings>) -> bool {
         self.extent == extent && self.shadows == shadows
     }
 
@@ -128,7 +130,8 @@ impl PreparedView {
         self.data.matrix()
     }
 
-    pub fn shadow_matrices(&self) -> &[[[f32; 4]; 4]; CASCADE_COUNT] {
+    /// The cascade projections, if the recipe uses directional shadows.
+    pub fn shadow_matrices(&self) -> Option<&[[[f32; 4]; 4]; CASCADE_COUNT]> {
         self.data.shadow_matrices()
     }
 
@@ -138,24 +141,21 @@ impl PreparedView {
     }
 
     /// Whether this world-space box may contribute to a cascade.
-    /// Returns `None` for indices outside the four cascades.
+    /// Returns `None` for indices outside the prepared maps.
     pub fn cascade_overlaps(&self, cascade: usize, bounds: Bounds) -> Option<bool> {
         self.culling.cascade_overlaps(cascade, bounds)
     }
 
-    /// Key each cascade by its projection, whether shadows are enabled, and
-    /// the caller's revision for its caster inputs, including transforms.
+    /// Key each enabled cascade by its projection and the caller's revision
+    /// for caster inputs, including transforms.
     pub fn shadow_keys(
         &self,
         caster_revisions: [u64; CASCADE_COUNT],
-    ) -> [ShadowKey; CASCADE_COUNT] {
-        std::array::from_fn(|cascade| {
-            ShadowKey::for_view(
-                self.shadow_matrices()[cascade],
-                caster_revisions[cascade],
-                self.shadows.enabled,
-            )
-        })
+    ) -> Option<[ShadowKey; CASCADE_COUNT]> {
+        let matrices = self.shadow_matrices()?;
+        Some(std::array::from_fn(|cascade| {
+            ShadowKey::new(matrices[cascade], caster_revisions[cascade])
+        }))
     }
 
     pub fn uniform_bytes(&self) -> &[u8; CAMERA_BYTES] {
@@ -177,6 +177,13 @@ pub enum ShadowSource<'a> {
     Reuse(ImageHandle),
 }
 
+/// Graph-local shadow inputs matching the prepared recipe's shadow setting.
+#[derive(Clone, Copy, Debug)]
+pub enum FrameShadows<'a> {
+    Cascades([ShadowSource<'a>; CASCADE_COUNT]),
+    Disabled(UnshadowedView),
+}
+
 pub struct Frame<'a> {
     pub view: &'a PreparedView,
     pub materials: &'a [Material],
@@ -184,7 +191,7 @@ pub struct Frame<'a> {
     pub opaque: &'a [Draw],
     /// Indexed alpha-blended draws, already ordered back to front.
     pub transparent: &'a [Draw],
-    pub shadows: [ShadowSource<'a>; CASCADE_COUNT],
+    pub shadows: FrameShadows<'a>,
     /// Supply a graph-local target for [`CameraStorage::External`] or
     /// [`CameraStorage::PreUploaded`].
     pub camera_target: Option<BufferHandle>,
@@ -209,13 +216,29 @@ impl<'a> Frame<'a> {
             materials,
             opaque,
             transparent,
-            shadows: [ShadowSource::Render {
-                target: None,
-                casters,
-            }; CASCADE_COUNT],
+            shadows: FrameShadows::Cascades(
+                [ShadowSource::Render {
+                    target: None,
+                    casters,
+                }; CASCADE_COUNT],
+            ),
             camera_target: None,
             transforms: &[],
             exposure: 1.0,
+        }
+    }
+
+    /// Construct a frame for a recipe prepared without shadow settings.
+    pub fn unshadowed(
+        view: &'a PreparedView,
+        materials: &'a [Material],
+        opaque: &'a [Draw],
+        transparent: &'a [Draw],
+        placeholder: UnshadowedView,
+    ) -> Self {
+        Self {
+            shadows: FrameShadows::Disabled(placeholder),
+            ..Self::new(view, materials, opaque, transparent, &[])
         }
     }
 }
@@ -226,7 +249,7 @@ pub struct SceneImages {
     pub hdr: ImageHandle,
     /// Single-sample D32 at 1×. The 4× path resolves only color.
     pub depth: Option<ImageHandle>,
-    pub shadows: [ImageHandle; CASCADE_COUNT],
+    pub shadows: Option<[ImageHandle; CASCADE_COUNT]>,
     pub camera: BufferHandle,
 }
 
@@ -236,6 +259,6 @@ pub struct FrameImages {
     /// Single-sample D32 at 1×. The 4× path resolves only color.
     pub depth: Option<ImageHandle>,
     pub sdr: ImageHandle,
-    pub shadows: [ImageHandle; CASCADE_COUNT],
+    pub shadows: Option<[ImageHandle; CASCADE_COUNT]>,
     pub camera: BufferHandle,
 }

@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use renderer::capacity::{GraphRequirements, Preparation};
+use renderer::capacity::{GraphRequirements, Preparation, ResourceClass};
 use renderer::geometry::GeometryData;
 use renderer::graph::{
     Attachment, BufferDesc, Graph, GraphCapacity, GraphCapacityKind, GraphErrorKind, GraphPool,
@@ -8,9 +8,9 @@ use renderer::graph::{
 };
 use renderer_pipeline::passes::output::{SdrEncoding, SdrOutput};
 use renderer_pipeline::pbr::{
-    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, IndexedDraw, Material,
-    MaterialFactors, PreparedView, SceneLimits, ShadowHistory, ShadowKey, ShadowSettings,
-    ShadowSource, Sun, Transform, VIEW_BYTES,
+    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, FrameShadows,
+    IndexedDraw, Material, MaterialFactors, PreparedView, SceneLimits, ShadowHistory, ShadowKey,
+    ShadowSettings, ShadowSource, Sun, Transform, Unshadowed, UnshadowedView, VIEW_BYTES,
 };
 use renderer_pipeline::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
@@ -24,10 +24,10 @@ fn config() -> Config {
     Config {
         extent: EXTENT,
         clear_color: [0.1, 0.2, 0.3, 1.0],
-        shadows: ShadowSettings {
+        shadows: Some(ShadowSettings {
             resolution: SHADOW_SIZE,
             ..Default::default()
-        },
+        }),
         output: SdrOutput {
             encoding: SdrEncoding::Srgb,
             fxaa: false,
@@ -168,6 +168,85 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
 }
 
 #[test]
+fn disabled_shadows_omit_maps_and_reject_cascade_inputs() {
+    let mut recipe = prepare(
+        Config {
+            shadows: None,
+            ..config()
+        },
+        limits(),
+    )
+    .unwrap();
+    let mut preparation = Preparation::new(NonZeroUsize::MIN);
+    preparation
+        .add_requirements(
+            recipe.preparation().graph_requirements(),
+            recipe.preparation().working_set(),
+        )
+        .unwrap();
+    Unshadowed::reserve(&mut preparation).unwrap();
+    let depth_classes: Vec<_> = preparation
+        .working_set()
+        .resources
+        .iter()
+        .filter_map(|class| match class {
+            ResourceClass::Image { desc, count }
+                if desc.format == renderer::ImageFormat::Depth32Float =>
+            {
+                Some((*desc, *count))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(depth_classes.len(), 2);
+    assert!(depth_classes.contains(&(ImageDesc::depth32(1, 1), 1)));
+    assert!(depth_classes.contains(&(ImageDesc::depth32(7, 5), 1)));
+
+    let mut pool = graph_pool(&recipe);
+    let mut graph = pool.begin().unwrap();
+    let (view, material, draw) = inputs(&recipe, &mut graph);
+    let history = ShadowHistory::default();
+    assert_eq!(
+        history
+            .begin_view(&mut graph, &view, [0; CASCADE_COUNT])
+            .err()
+            .unwrap()
+            .kind(),
+        GraphErrorKind::InvalidInput
+    );
+    assert!(view.shadow_matrices().is_none());
+    assert!(
+        view.cascade_overlaps(0, Bounds::new([0.0; 3], [0.0; 3]).unwrap())
+            .is_none()
+    );
+    let materials = [material];
+    let draws = [Draw::Indexed(draw)];
+    let error = recipe
+        .add_scene(
+            &mut graph,
+            Frame::new(&view, &materials, &draws, &[], &draws),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
+
+    let placeholder = UnshadowedView::append(&mut graph).unwrap();
+    let scene = recipe
+        .add_scene(
+            &mut graph,
+            Frame::unshadowed(&view, &materials, &draws, &[], placeholder),
+        )
+        .unwrap();
+    assert!(scene.shadows.is_none());
+    graph
+        .readback_image("capture unshadowed HDR", scene.hdr)
+        .unwrap();
+    let graph = graph.compile().unwrap();
+    let names: Vec<_> = graph.ordered_pass_names().collect();
+    assert!(names.contains(&"initialize disabled shadows"));
+    assert!(names.iter().all(|name| !name.starts_with("shadow_")));
+}
+
+#[test]
 fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     let mut recipe = recipe();
     let mut pool = graph_pool(&recipe);
@@ -194,22 +273,29 @@ fn maximum_frame_can_reuse_one_cascade_and_insert_an_hdr_pass() {
     let materials = [material];
     let draws = [Draw::Indexed(draw)];
     let mut frame = Frame::new(&view, &materials, &draws, &draws, &draws);
-    frame.shadows[0] = ShadowSource::Render {
+    let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
+        unreachable!()
+    };
+    cascades[0] = ShadowSource::Render {
         target: Some(reused),
         casters: &draws,
     };
-    frame.shadows[2] = ShadowSource::Reuse(reused);
+    cascades[2] = ShadowSource::Reuse(reused);
     let error = recipe.add_scene(&mut graph, frame).unwrap_err();
     assert_eq!(error.kind(), GraphErrorKind::InvalidInput);
     let mut frame = Frame::new(&view, &materials, &draws, &draws, &draws);
-    frame.shadows[1] = ShadowSource::Render {
+    let FrameShadows::Cascades(cascades) = &mut frame.shadows else {
+        unreachable!()
+    };
+    cascades[1] = ShadowSource::Render {
         target: Some(redraw),
         casters: &draws,
     };
-    frame.shadows[2] = ShadowSource::Reuse(reused);
+    cascades[2] = ShadowSource::Reuse(reused);
     let scene = recipe.add_scene(&mut graph, frame).unwrap();
-    assert_eq!(scene.shadows[1], redraw);
-    assert_eq!(scene.shadows[2], reused);
+    let shadows = scene.shadows.unwrap();
+    assert_eq!(shadows[1], redraw);
+    assert_eq!(shadows[2], reused);
     assert_eq!(
         graph.image_desc(scene.depth.unwrap()).unwrap(),
         ImageDesc::depth32(7, 5)
