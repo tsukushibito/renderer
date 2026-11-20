@@ -153,7 +153,7 @@ fn frames(
             let _build = tracy_client::Client::running()
                 .map(|client| client.span(tracy_client::span_location!("bistro.build"), 0));
             pipeline::build(
-                backend, pool, workspace, resident, scene, options, camera, &bytes, false,
+                pool, workspace, resident, scene, options, camera, &bytes, false,
             )?
         };
         let build = stage.elapsed().as_nanos() as u64;
@@ -294,7 +294,7 @@ fn capture_planes(
     std::fs::create_dir_all(&options.output)?;
     let (camera, bytes) = uniform(conditions, options, frame)?;
     let built = pipeline::build(
-        backend, pool, workspace, resident, scene, options, camera, &bytes, true,
+        pool, workspace, resident, scene, options, camera, &bytes, true,
     )?;
     let shadow_reuse_hits = built
         .shadow_updates

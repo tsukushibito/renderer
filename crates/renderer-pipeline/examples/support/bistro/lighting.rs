@@ -3,14 +3,9 @@
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::Error;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::{
-    graph::{BufferDesc, BufferHandle, Graph, GraphPool, ImportBuffer},
-    runtime::Runtime,
-};
+use renderer::graph::{BufferDesc, BufferHandle, Graph, ImageView};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12"), test))]
 use renderer_pipeline::pbr_forward_plus;
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer_pipeline::pbr_forward_plus::Tiles;
 use renderer_pipeline::pbr_forward_plus::{MAX_LIGHTS, PointLight, TILE_SIZE};
 
 pub(super) type Preset = [PointLight; MAX_LIGHTS];
@@ -51,37 +46,13 @@ pub(super) fn preset(fixture: bool) -> Preset {
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-pub(super) fn initialize_tiles(
-    runtime: &mut Runtime,
-    camera: &ImportBuffer,
-) -> Result<Tiles, Error> {
-    let mut pool = GraphPool::new(pbr_forward_plus::TILE_INITIALIZATION_CAPACITY, 1)?;
-    let mut graph = pool.begin()?;
-    let camera = graph.import_buffer("tile initialization camera", camera)?;
-    let mut initialization = pbr_forward_plus::append_tile_initialization(&mut graph, camera)?;
-    let pending = runtime.submit(&graph.compile()?)?;
-    let tiles = initialization.accept(&pending)?;
-    drop(super::backend::wait_for(runtime, pending.id())?);
-    Ok(tiles)
-}
-
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-pub(super) fn snapshot(
-    runtime: &Runtime,
-    tiles: Option<&Tiles>,
-) -> Result<Option<ImportBuffer>, Error> {
-    Ok(tiles.map(|tiles| tiles.snapshot(runtime)).transpose()?)
-}
-
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn append_reference(
     graph: &mut Graph,
-    runtime: &Runtime,
     extent: [u32; 2],
     camera: BufferHandle,
     preset: &Preset,
-    tiles: Option<&Tiles>,
-) -> Result<(BufferHandle, Option<BufferHandle>), Error> {
+    tiled: bool,
+) -> Result<(BufferHandle, Option<ImageView>), Error> {
     let [width, height] = extent;
     let bytes = pbr_forward_plus::light_bytes(width, height, preset)?;
     let lights = graph.buffer(
@@ -91,13 +62,17 @@ pub(super) fn append_reference(
         },
     )?;
     graph.upload_buffer("local point light update", lights, 0, &bytes)?;
-    let tiles = snapshot(runtime, tiles)?
-        .map(|tiles| -> Result<_, Error> {
-            let tiles = graph.import_buffer("persistent tile light lists", &tiles)?;
-            pbr_forward_plus::append_culling(graph, width, height, camera, lights, tiles)?;
-            Ok(tiles)
-        })
-        .transpose()?;
+    let tiles = if tiled {
+        let image = graph.image(
+            "tile light masks",
+            pbr_forward_plus::tile_mask_desc(width, height)?,
+        )?;
+        let view = graph.image_view(image, 0, 0)?;
+        pbr_forward_plus::append_culling(graph, camera, lights, view)?;
+        Some(view)
+    } else {
+        None
+    };
     Ok((lights, tiles))
 }
 

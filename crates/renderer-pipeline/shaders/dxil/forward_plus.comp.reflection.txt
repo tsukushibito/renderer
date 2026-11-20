@@ -10,13 +10,13 @@
 ; Name                 Index   Mask Register SysValue  Format   Used
 ; -------------------- ----- ------ -------- -------- ------- ------
 ; no parameters
-; shader hash: bde54517bd0a5a1a4fb155d8244c7482
+; shader hash: 0d5d6093934edc17aa39cff301ce5841
 ;
 ; Pipeline Runtime Information:
 ;
 ;PSVRuntimeInfo:
 ; Compute Shader
-; NumThreads=(32,1,1)
+; NumThreads=(8,4,1)
 ; NumBytesGroupSharedMemory: 0
 ; MinimumExpectedWaveLaneCount: 0
 ; MaximumExpectedWaveLaneCount: 4294967295
@@ -53,5 +53,5 @@
 ; ------------------------------ ---------- ------- ----------- ------- -------------- ------
 ; CullCamera                        cbuffer      NA          NA     CB0            cb0     1
 ; local_lights                      texture    byte         r/o      T0             t2     1
-; tile_lists                            UAV    byte         r/w      U0             u3     1
+; tile_masks                            UAV     f32          2d      U0             u3     1
 ;

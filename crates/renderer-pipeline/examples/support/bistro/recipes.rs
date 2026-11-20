@@ -6,7 +6,7 @@ use renderer::{
     capacity::{GraphRequirements, Preparation, WorkingSet},
     graph::{
         Attachment, Binding, BufferDesc, BufferHandle, Graph, GraphError, ImageDesc, ImageHandle,
-        ImageView, ImportBuffer, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
+        ImageView, LoadOp, RasterAttachments, RasterPass, SampleCount, StoreOp,
     },
     program::{MAX_RASTER_BINDINGS, ManagedRasterProgram, RasterPipelineRequest},
 };
@@ -68,16 +68,10 @@ impl Standard {
         graph: &mut Graph,
         frame: pbr::Frame<'_>,
         lights: &[pbr_forward_plus::PointLight],
-        tiles: Option<&ImportBuffer>,
     ) -> Result<pbr::SceneImages, Error> {
         Ok(match self {
             Self::Forward(recipe) => recipe.add_scene(graph, frame)?,
-            Self::ForwardPlus(recipe) => recipe.add_scene(
-                graph,
-                frame,
-                lights,
-                tiles.ok_or("Forward+ needs initialized tile storage")?,
-            )?,
+            Self::ForwardPlus(recipe) => recipe.add_scene(graph, frame, lights)?,
             Self::Deferred(recipe) => recipe.add_scene(graph, frame)?.scene,
         })
     }
@@ -321,15 +315,10 @@ impl Reference {
             .into_iter()
             .collect::<Vec<_>>();
         if tiled {
-            preparation.add_working_set(WorkingSet {
-                resources: &[renderer::capacity::ResourceClass::Buffer {
-                    desc: BufferDesc {
-                        size: pbr_forward_plus::TILE_BUFFER_BYTES,
-                    },
-                    count: 1,
-                }],
-                ..Default::default()
-            })?;
+            preparation.reserve_image(
+                pbr_forward_plus::tile_mask_desc(options.width, options.height)?,
+                1,
+            )?;
             targets += 1;
         }
         let local_lights = options.pipeline.uses_local_lights();

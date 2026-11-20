@@ -498,7 +498,6 @@ impl State {
             let replay = options.window_smoke && self.accepted < REPLAY_STEPS;
             let started = Instant::now();
             let built = pipeline::build(
-                &self.backend,
                 &mut self.pool,
                 &mut self.workspace,
                 resident,

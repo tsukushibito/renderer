@@ -1,9 +1,7 @@
 //! A deterministic point-light workload shared by tiled and all-light Bistro.
 
 use super::{Error, program::forward_plus};
-use renderer::graph::{BufferDesc, BufferHandle, Graph, ImportBuffer};
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::graph::{GraphCapacity, GraphPool};
+use renderer::graph::{BufferDesc, BufferHandle, Graph, ImageView};
 
 pub(super) type LightBytes = [u8; forward_plus::LIGHT_BUFFER_BYTES as usize];
 
@@ -54,75 +52,25 @@ fn light_upload(graph: &mut Graph, bytes: &LightBytes) -> Result<BufferHandle, E
     Ok(lights)
 }
 
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-pub(super) fn initialize_tiles(
-    backend: &mut renderer::runtime::Runtime,
-    camera: &ImportBuffer,
-) -> Result<ImportBuffer, Error> {
-    const INITIAL_EXTENT: u32 = 4096;
-    let mut pool = GraphPool::new(
-        GraphCapacity {
-            resources: 3,
-            passes: 2,
-            accesses: 4,
-            draws: 0,
-            raster_constant_words: Some(0),
-            bindings: 3,
-            attachments: 0,
-            dependencies: 0,
-            initial_ranges: 1,
-            name_bytes: 192,
-            upload_bytes: forward_plus::LIGHT_BUFFER_BYTES as usize,
-            edges: 8,
-            segments: 8,
-            readers: 8,
-        },
-        1,
-    )?;
-    // The zero-light dispatch spans all 65,536 tile records. Later frames only
-    // overwrite the prefix required by their active extent.
-    let mut graph = pool.begin()?;
-    let camera = graph.import_buffer("tile initialization camera", camera)?;
-    let empty = forward_plus::light_bytes(INITIAL_EXTENT, INITIAL_EXTENT, &[])?;
-    let lights = light_upload(&mut graph, &empty)?;
-    let tiles = graph.buffer(
-        "persistent tile light lists",
-        BufferDesc {
-            size: forward_plus::TILE_BUFFER_BYTES,
-        },
-    )?;
-    forward_plus::append_culling(
-        &mut graph,
-        INITIAL_EXTENT,
-        INITIAL_EXTENT,
-        camera,
-        lights,
-        tiles,
-    )?;
-    graph.export_buffer(tiles)?;
-    let plan = graph.compile()?;
-    let pending = backend.submit(&plan)?;
-    let imported = pending.export_buffer(tiles)?;
-    drop(super::backend::wait_for(backend, pending.id())?);
-    Ok(imported)
-}
-
 pub(super) fn append(
     graph: &mut Graph,
     extent: [u32; 2],
     camera: BufferHandle,
     preset: &LightBytes,
-    tiles: Option<&ImportBuffer>,
-) -> Result<(BufferHandle, Option<BufferHandle>), Error> {
+    tiled: bool,
+) -> Result<(BufferHandle, Option<ImageView>), Error> {
     let [width, height] = extent;
     let mut bytes = *preset;
     bytes[..4].copy_from_slice(&width.to_le_bytes());
     bytes[4..8].copy_from_slice(&height.to_le_bytes());
     let lights = light_upload(graph, &bytes)?;
-    let tiles = if let Some(tiles) = tiles {
-        let tiles = graph.import_buffer("persistent tile light lists", tiles)?;
-        forward_plus::append_culling(graph, width, height, camera, lights, tiles)?;
-        graph.export_buffer(tiles)?;
+    let tiles = if tiled {
+        let image = graph.image(
+            "tile light masks",
+            forward_plus::tile_mask_desc(width, height)?,
+        )?;
+        let tiles = graph.image_view(image, 0, 0)?;
+        forward_plus::append_culling(graph, camera, lights, tiles)?;
         Some(tiles)
     } else {
         None
