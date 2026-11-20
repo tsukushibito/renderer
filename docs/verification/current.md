@@ -51,6 +51,7 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 
 `renderer-d72`ではYAMLの回帰テストを小さなCPU fixtureで行い、releaseのフレーム構築テスト11件を追加のCIゲートにした。
 Windowsの二API・表示構成で両BistroのClippyが通り、Tracyと開発診断を有効にしたサンプルのCPUテストはRust版75件、YAML版79件が通った。
+workspaceのテストは`--tests`と`--doc`を個別に実行し、同名のBistroバイナリを生成するサンプルは個別にビルドする。
 今回の変更はCIの実行範囲に限り、実GPUの受入は上記の検証記録に従う。
 
 <a id="material-shader-verification"></a>

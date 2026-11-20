@@ -169,7 +169,10 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo clippy --locked --workspace --all-targets @featureArgs -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked --workspace @featureArgs
+            # Select test targets so Cargo does not link the two examples named bistro together.
+            cargo test --locked --workspace --tests @featureArgs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo test --locked --workspace --doc @featureArgs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             if ($env:BACKEND -like '*presentation*') {
               cargo test --locked -p renderer --example windowed @featureArgs
@@ -186,7 +189,9 @@ jobs:
           CARGO_INCREMENTAL: "0"
         run: |
           foreach ($features in @($env:BACKEND, "$($env:BACKEND),development-validation,graph-diagnostics")) {
-            cargo test --locked --workspace --release --no-default-features --features $features
+            cargo test --locked --workspace --release --no-default-features --features $features --tests
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo test --locked --workspace --release --no-default-features --features $features --doc
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
       - name: Test typed pipelines with and without YAML
@@ -268,6 +273,8 @@ jobs:
           foreach ($features in @("$($env:BACKEND),tracy", "$($env:BACKEND),tracy,development-validation,graph-diagnostics")) {
             cargo clippy --locked --workspace --all-targets --no-default-features --features $features -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked --workspace --release --no-default-features --features $features
+            cargo test --locked --workspace --release --no-default-features --features $features --tests
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            cargo test --locked --workspace --release --no-default-features --features $features --doc
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
