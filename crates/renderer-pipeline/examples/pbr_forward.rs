@@ -42,7 +42,16 @@ mod scene {
     }
 
     impl Triangle {
-        pub fn new(glowing: bool) -> Result<Self, GraphError> {
+        pub fn new(glowing: bool, placement: Placement) -> Result<Self, GraphError> {
+            let (normal, tangent, object_scale) = match placement {
+                #[cfg(test)]
+                Placement::Tilted(scale_exponent) => (
+                    [0.8, 0.0, 0.6],
+                    [0.0, 1.0, 0.0, 1.0],
+                    scale_exponent.map_or(1.0, |exponent| 2.0_f32.powi(-exponent)),
+                ),
+                _ => ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], 1.0),
+            };
             let positions = [
                 ([-0.8_f32, -0.7, 0.0], [0.0, 1.0]),
                 ([0.8, -0.7, 0.0], [1.0, 1.0]),
@@ -50,8 +59,8 @@ mod scene {
             ];
             let mut vertices = [0; 3 * VERTEX_BYTES];
             for ((position, uv), bytes) in positions.into_iter().zip(vertices.as_chunks_mut().0) {
-                *bytes =
-                    PbrVertex::new(position, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], uv)?.encode();
+                let position = position.map(|value| value * object_scale);
+                *bytes = PbrVertex::new(position, normal, tangent, uv)?.encode();
             }
             Ok(Self {
                 geometry: GeometryData::new(VERTEX_BYTES as u32, &vertices, &[0, 1, 2])?,
@@ -130,6 +139,20 @@ mod scene {
         Individual,
         #[cfg(test)]
         Instanced,
+        #[cfg(test)]
+        Tilted(Option<i32>),
+    }
+
+    impl Placement {
+        fn uses_transforms(self) -> bool {
+            match self {
+                Self::Single => false,
+                #[cfg(test)]
+                Self::Tilted(exponent) => exponent.is_some(),
+                #[cfg(test)]
+                Self::Individual | Self::Instanced => true,
+            }
+        }
     }
 
     #[derive(Clone, Copy)]
@@ -176,10 +199,10 @@ mod scene {
             max_materials: 1,
             max_casters_per_cascade: count,
         };
-        if settings.placement == Placement::Single {
-            pbr_forward::prepare(config, limits)
-        } else {
+        if settings.placement.uses_transforms() {
             pbr_forward::prepare_with_transforms(config, limits)
+        } else {
+            pbr_forward::prepare(config, limits)
         }
     }
 
@@ -248,7 +271,9 @@ mod scene {
             #[cfg(test)]
             Placement::Individual => &test_draws[..],
             #[cfg(test)]
-            Placement::Instanced => &test_draws[..1],
+            Placement::Instanced | Placement::Tilted(Some(_)) => &test_draws[..1],
+            #[cfg(test)]
+            Placement::Tilted(None) => &single[..],
         };
         let view = prepared.prepare_view(
             Camera {
@@ -267,7 +292,7 @@ mod scene {
             .transpose()?;
         let mut frame = Frame::new(&view, &materials, draws, &[], draws);
         #[cfg(test)]
-        if placement != Placement::Single {
+        if placement.uses_transforms() {
             frame.transforms = &transforms;
         }
         if let Some(shadows) = &shadows {
@@ -322,6 +347,20 @@ mod scene {
         indexed: IndexedDraw,
         placement: Placement,
     ) -> Result<([Draw; 2], [Transform; 2]), GraphError> {
+        if let Placement::Tilted(Some(exponent)) = placement {
+            let scale = 2.0_f32.powi(exponent);
+            let transform = Transform::new([
+                [scale, 0.0, 0.0, 0.0],
+                [0.0, scale, 0.0, 0.0],
+                [0.0, 0.0, scale, 0.0],
+            ])?;
+            let draw = Draw::Instanced {
+                geometry: indexed,
+                first_transform: 0,
+                instance_count: 1,
+            };
+            return Ok(([draw; 2], [transform, Transform::IDENTITY]));
+        }
         let place = |x| {
             Transform::new([
                 [0.5, 0.0, 0.0, x],
@@ -357,7 +396,7 @@ mod scene {
 
         #[test]
         fn application_copy_is_between_shading_and_sdr_conversion() {
-            let triangle = Triangle::new(false).unwrap();
+            let triangle = Triangle::new(false, Placement::Single).unwrap();
             let mut prepared = prepare(NonZeroUsize::MIN, Settings::new(SampleCount::X1)).unwrap();
             for (copy_hdr, bloom) in [(false, Bloom::Off), (true, Bloom::Off), (true, Bloom::Tent)]
             {
@@ -402,7 +441,7 @@ mod scene {
 
         #[test]
         fn four_samples_resolve_color_without_a_depth_readback() {
-            let triangle = Triangle::new(false).unwrap();
+            let triangle = Triangle::new(false, Placement::Single).unwrap();
             let mut prepared = prepare(NonZeroUsize::MIN, Settings::new(SampleCount::X4)).unwrap();
             let (preparation, post) = reserve(&prepared, &triangle, false, Bloom::Off).unwrap();
             let capacity = preparation
@@ -425,35 +464,37 @@ mod scene {
 
         #[test]
         fn transformed_scene_declares_all_cascades() {
-            let triangle = Triangle::new(false).unwrap();
-            let settings = Settings {
-                samples: SampleCount::X1,
-                placement: Placement::Individual,
-            };
-            let mut prepared = prepare(NonZeroUsize::MIN, settings).unwrap();
-            let (preparation, post) = reserve(&prepared, &triangle, false, Bloom::Off).unwrap();
-            let capacity = preparation
-                .graph_capacity(GraphCapacity::default())
+            for placement in [Placement::Individual, Placement::Tilted(Some(-40))] {
+                let settings = Settings {
+                    samples: SampleCount::X1,
+                    placement,
+                };
+                let triangle = Triangle::new(false, placement).unwrap();
+                let mut prepared = prepare(NonZeroUsize::MIN, settings).unwrap();
+                let (preparation, post) = reserve(&prepared, &triangle, false, Bloom::Off).unwrap();
+                let capacity = preparation
+                    .graph_capacity(GraphCapacity::default())
+                    .unwrap();
+                let mut pool = GraphPool::new(capacity, 1).unwrap();
+                let (compiled, readbacks, _) = build_graph(
+                    &mut pool,
+                    &mut prepared,
+                    &triangle,
+                    None,
+                    &post,
+                    placement,
+                    None,
+                )
                 .unwrap();
-            let mut pool = GraphPool::new(capacity, 1).unwrap();
-            let (compiled, readbacks, _) = build_graph(
-                &mut pool,
-                &mut prepared,
-                &triangle,
-                None,
-                &post,
-                settings.placement,
-                None,
-            )
-            .unwrap();
-            assert!(readbacks.shadow_maps.iter().all(Option::is_some));
-            assert_eq!(
-                compiled
-                    .ordered_pass_names()
-                    .filter(|name| name.starts_with("shadow_"))
-                    .count(),
-                CASCADE_COUNT,
-            );
+                assert!(readbacks.shadow_maps.iter().all(Option::is_some));
+                assert_eq!(
+                    compiled
+                        .ordered_pass_names()
+                        .filter(|name| name.starts_with("shadow_"))
+                        .count(),
+                    CASCADE_COUNT,
+                );
+            }
         }
     }
 }
@@ -535,7 +576,7 @@ mod native {
     ) -> Result<Vec<CapturedFrame>, Box<dyn Error>> {
         let frames = caster_revisions.len().max(1);
         // Give enabled Bloom an emitter above its scene-linear threshold.
-        let triangle = Triangle::new(bloom != Bloom::Off)?;
+        let triangle = Triangle::new(bloom != Bloom::Off, settings.placement)?;
         let mut prepared = scene::prepare(NonZeroUsize::new(frames).unwrap(), settings)?;
         let (preparation, post) = scene::reserve(&prepared, &triangle, copy_hdr, bloom)?;
         // Graph declarations include initialization uploads and readbacks in
@@ -868,6 +909,45 @@ mod native {
             }));
         }
 
+        fn extreme_scales_preserve_normal_direction(api: Api) {
+            let capture = |placement| {
+                let settings = Settings {
+                    samples: SampleCount::X1,
+                    placement,
+                };
+                render(api, settings, false, Bloom::Off, &[])
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+                    .output
+            };
+            let center = ((EXTENT[1] / 2) * EXTENT[0] + EXTENT[0] / 2) as usize * 4;
+            let upright = capture(Placement::Single);
+            let reference = capture(Placement::Tilted(None));
+            assert!(reference.sdr[center] > 60);
+            assert!(reference.sdr[center].abs_diff(upright.sdr[center]) > 8);
+
+            // Inverse powers of two preserve the world-space vertex positions
+            // exactly while the transformed normal crosses the length limits.
+            for exponent in [-40, 40] {
+                let scaled = capture(Placement::Tilted(Some(exponent)));
+                assert_eq!(reference.depth, scaled.depth, "scale 2^{exponent}");
+                assert_eq!(
+                    reference.shadow_maps, scaled.shadow_maps,
+                    "scale 2^{exponent}"
+                );
+                let expected = &reference.sdr[center..center + 4];
+                let actual = &scaled.sdr[center..center + 4];
+                assert!(
+                    expected
+                        .iter()
+                        .zip(actual)
+                        .all(|(&a, &b)| a.abs_diff(b) <= 1),
+                    "scale 2^{exponent}: expected {expected:?}, got {actual:?}",
+                );
+            }
+        }
+
         #[cfg(feature = "vulkan")]
         #[test]
         #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
@@ -908,6 +988,20 @@ mod native {
         #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
         fn d3d12_transformed_casters_match_instancing() {
             transformed_instances_match_individual_draws(Api::D3D12);
+        }
+
+        #[cfg(feature = "vulkan")]
+        #[test]
+        #[ignore = "requires a hardware Vulkan adapter and requested native validation"]
+        fn vulkan_extreme_scales_preserve_normal_direction() {
+            extreme_scales_preserve_normal_direction(Api::Vulkan);
+        }
+
+        #[cfg(all(windows, feature = "d3d12"))]
+        #[test]
+        #[ignore = "requires a hardware D3D12 adapter and requested native validation"]
+        fn d3d12_extreme_scales_preserve_normal_direction() {
+            extreme_scales_preserve_normal_direction(Api::D3D12);
         }
     }
 }
