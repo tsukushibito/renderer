@@ -7,9 +7,9 @@ use renderer::graph::{
 use renderer::program::{ManagedProgram, RasterPipelineRequest};
 
 use super::{
-    BindingSource, Pass, PassKind, PipelineError, PreparedAttachment, PreparedAttachments,
-    PreparedBinding, PreparedPipeline, PreparedRasterBatch, RasterDrawKind, RasterPrograms,
-    Resource, ResourceDesc,
+    BindingSource, FrameImageSource, ImageSource, Pass, PassKind, PipelineError,
+    PreparedAttachment, PreparedAttachments, PreparedBinding, PreparedPipeline,
+    PreparedRasterBatch, RasterDrawKind, RasterPrograms, Resource, ResourceDesc,
 };
 
 /// A graph-local image or buffer for one `source: external` declaration.
@@ -65,6 +65,8 @@ pub struct FrameMaterial<'a> {
 #[derive(Clone, Copy, Default)]
 pub struct FrameInputs<'a> {
     pub resources: &'a [FrameResource<'a>],
+    /// Exactly one source for each image declared as selectable.
+    pub image_sources: &'a [FrameImageSource<'a>],
     pub sampled_views: &'a [FrameSampledView<'a>],
     pub views: &'a [FrameView<'a>],
     pub materials: &'a [FrameMaterial<'a>],
@@ -552,11 +554,20 @@ impl PreparedPipeline {
                 scratch.max_materials
             )));
         }
+        scratch.active_passes.fill(true);
+        self.image_sources.select(
+            &self.resources,
+            inputs.image_sources,
+            &mut scratch.active_passes,
+        )?;
         scratch.handles.clear();
-        for resource in &self.resources {
-            scratch
-                .handles
-                .push(bind_resource(&mut graph, resource, inputs.resources)?);
+        for (index, resource) in self.resources.iter().enumerate() {
+            scratch.handles.push(bind_resource(
+                &mut graph,
+                resource,
+                inputs.resources,
+                self.image_sources.choice(index),
+            )?);
         }
         scratch.sampled_views.clear();
         for name in &self.sampled_views {
@@ -569,10 +580,12 @@ impl PreparedPipeline {
             graph.image_desc(view.image())?;
             scratch.sampled_views.push(view);
         }
-        scratch.active_passes.fill(true);
         scratch.active_draw_lists.fill(false);
         scratch.draw_list_empty.fill(None);
         for (index, pass) in self.passes.iter().enumerate() {
+            if !scratch.active_passes[index] {
+                continue;
+            }
             if let Some(condition) = &pass.when {
                 let empty = match scratch.draw_list_empty[condition.draw_list] {
                     Some(empty) => empty,
@@ -655,18 +668,28 @@ fn bind_resource(
     graph: &mut Graph,
     resource: &Resource,
     inputs: &[FrameResource<'_>],
+    source: Option<ImageSource>,
 ) -> Result<ResourceHandle, PipelineError> {
-    if !resource.external {
-        return Ok(match resource.desc {
-            ResourceDesc::Image(desc) => graph.image(&resource.id, desc)?.into(),
-            ResourceDesc::Buffer(desc) => graph.buffer(&resource.id, desc)?.into(),
-        });
-    }
-
-    let handle = named(inputs, &resource.id, "external resource", |input| {
-        input.name
-    })?
-    .resource;
+    let handle = match source {
+        Some(
+            ImageSource::Reuse(image)
+            | ImageSource::Render {
+                target: Some(image),
+            },
+        ) => image.into(),
+        _ if resource.external => {
+            named(inputs, &resource.id, "external resource", |input| {
+                input.name
+            })?
+            .resource
+        }
+        _ => {
+            return Ok(match resource.desc {
+                ResourceDesc::Image(desc) => graph.image(&resource.id, desc)?.into(),
+                ResourceDesc::Buffer(desc) => graph.buffer(&resource.id, desc)?.into(),
+            });
+        }
+    };
     let actual = match handle {
         ResourceHandle::Image(image) => ResourceDesc::Image(graph.image_desc(image)?),
         ResourceHandle::Buffer(buffer) => ResourceDesc::Buffer(graph.buffer_desc(buffer)?),

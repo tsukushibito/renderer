@@ -16,10 +16,10 @@ use super::schema::{
     RasterBatchSpec, RasterBatchesSpec, ResourceSource, ResourceSpec,
 };
 use super::{
-    BindingSource, DrawListCondition, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError,
-    PipelineRequirements, PrepareInputs, PrepareOptions, PreparedAttachment, PreparedAttachments,
-    PreparedBinding, PreparedPipeline, PreparedRasterBatch, Program, RasterDrawKind,
-    RasterPrograms, Resource, ResourceDesc, ShaderRequest,
+    BindingSource, DrawListCondition, FrameScratch, ImageSources, MaterialVariant, Pass, PassKind,
+    PipelineError, PipelineRequirements, PrepareInputs, PrepareOptions, PreparedAttachment,
+    PreparedAttachments, PreparedBinding, PreparedPipeline, PreparedRasterBatch, Program,
+    RasterDrawKind, RasterPrograms, Resource, ResourceDesc, ShaderRequest,
 };
 
 type ResolverError = Box<dyn Error + Send + Sync>;
@@ -61,7 +61,7 @@ impl PreparedPipeline {
         mut resolve: impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
     ) -> Result<Self, PipelineError> {
         let Config {
-            resources,
+            resources: resource_specs,
             draw_lists,
             raster_batches,
             passes,
@@ -76,10 +76,15 @@ impl PreparedPipeline {
         }
 
         let params = Parameters::new(inputs.values)?;
-        let resources = resources
-            .into_iter()
-            .map(|spec| prepare_resource(spec, options.frame_extent, &params))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut resources = Vec::with_capacity(resource_specs.len());
+        let mut render_passes = Vec::new();
+        for spec in resource_specs {
+            let (resource, producer) = prepare_resource(spec, options.frame_extent, &params)?;
+            if let Some(producer) = producer {
+                render_passes.push((resources.len(), producer));
+            }
+            resources.push(resource);
+        }
         let resource_ids = index_names(
             resources.iter().map(|resource| resource.id.as_str()),
             "resource",
@@ -148,8 +153,11 @@ impl PreparedPipeline {
                 Ok(pass)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let requirements =
+        let image_sources =
+            ImageSources::prepare(&resources, render_passes, &passes, &programs.compute)?;
+        let mut requirements =
             measure_requirements(&resources, &passes, draw_lists.len(), &programs, options)?;
+        requirements.writes_external_resources |= image_sources.producers().next().is_some();
         let scratch = FrameScratch::new(
             resources.len(),
             sampled_views.len(),
@@ -163,6 +171,7 @@ impl PreparedPipeline {
 
         Ok(Self {
             resources,
+            image_sources,
             sampled_views,
             passes,
             draw_lists,
@@ -325,8 +334,8 @@ fn prepare_resource(
     spec: ResourceSpec,
     frame_extent: Option<[u32; 2]>,
     params: &Parameters<'_>,
-) -> Result<Resource, PipelineError> {
-    let (id, source, desc) = match spec {
+) -> Result<(Resource, Option<String>), PipelineError> {
+    let (id, source, desc, render_pass) = match spec {
         ResourceSpec::Image {
             id,
             source,
@@ -375,7 +384,14 @@ fn prepare_resource(
             if desc.byte_len().is_none() {
                 return Err(invalid(format!("image {id:?} has invalid dimensions")));
             }
-            (id, source, ResourceDesc::Image(desc))
+            let (source, render_pass) = match source {
+                schema::ImageSourceSpec::Fixed(source) => (source, None),
+                schema::ImageSourceSpec::Selectable(schema::SelectableImageSource {
+                    render,
+                    reuse: schema::ReuseSource::FrameInput,
+                }) => (ResourceSource::Transient, Some(render)),
+            };
+            (id, source, ResourceDesc::Image(desc), render_pass)
         }
         ResourceSpec::Buffer { id, source, bytes } => {
             let bytes = params
@@ -384,14 +400,22 @@ fn prepare_resource(
             if bytes == 0 {
                 return Err(invalid(format!("buffer {id:?} must have nonzero size")));
             }
-            (id, source, ResourceDesc::Buffer(BufferDesc { size: bytes }))
+            (
+                id,
+                source,
+                ResourceDesc::Buffer(BufferDesc { size: bytes }),
+                None,
+            )
         }
     };
-    Ok(Resource {
-        id,
-        external: source == ResourceSource::External,
-        desc,
-    })
+    Ok((
+        Resource {
+            id,
+            external: source == ResourceSource::External,
+            desc,
+        },
+        render_pass,
+    ))
 }
 
 #[derive(Clone, Copy)]
