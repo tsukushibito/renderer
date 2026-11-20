@@ -1332,7 +1332,7 @@ pub(super) fn build(
         });
     }
     let sampled_views = environment.map(Option::unwrap);
-    let (image_sources, shadow_keys) = shadow_inputs(
+    let shadows = shadow_inputs(
         &mut graph,
         workspace,
         resident,
