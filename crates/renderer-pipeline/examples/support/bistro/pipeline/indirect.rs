@@ -279,10 +279,10 @@ pub(super) struct Frame<'a> {
 }
 
 impl Frame<'_> {
-    pub fn indirect_groups(
-        &self,
-        include_material: impl Fn(usize) -> bool,
-    ) -> impl Iterator<Item = FrameIndirectGroup> + '_ {
+    pub fn indirect_groups<'a>(
+        &'a self,
+        include_material: impl Fn(usize) -> bool + 'a,
+    ) -> impl Iterator<Item = FrameIndirectGroup> + 'a {
         self.layout
             .groups
             .iter()

@@ -483,9 +483,8 @@ impl Budget {
                 forward_plus::LIGHT_BUFFER_BYTES as usize
             })
             .max(packed.as_ref().filter(|_| indirect).map_or(0, |layout| {
-                layout.template_upload_bytes()
-                    + program::CAMERA_BYTES
-                    + local_lights * forward_plus::LIGHT_BUFFER_BYTES as usize
+                let frame_bytes = layout.template_upload_bytes() + graph.upload_bytes;
+                layout.aabb_bytes().max(frame_bytes)
             }))
             .max(4096)
             .checked_add(4096)
@@ -1159,6 +1158,11 @@ fn shadow_casters<'a>(
     })
 }
 
+struct ShadowInputs {
+    sources: [FrameImageSource<'static>; shadow::CASCADE_COUNT],
+    updates: [Option<ShadowKey>; shadow::CASCADE_COUNT],
+}
+
 fn shadow_inputs(
     graph: &mut Graph,
     workspace: &mut Workspace,
@@ -1166,13 +1170,7 @@ fn shadow_inputs(
     scene: &Scene,
     options: &Options,
     shadow_data: &shadow::ShadowData,
-) -> Result<
-    (
-        [FrameImageSource<'static>; shadow::CASCADE_COUNT],
-        [Option<ShadowKey>; shadow::CASCADE_COUNT],
-    ),
-    Error,
-> {
+) -> Result<ShadowInputs, Error> {
     let mut keys = [None; shadow::CASCADE_COUNT];
     let mut sources = CASCADES.map(|name| FrameImageSource {
         name,
@@ -1209,7 +1207,10 @@ fn shadow_inputs(
             )
         }));
     }
-    Ok((sources, keys))
+    Ok(ShadowInputs {
+        sources,
+        updates: keys,
+    })
 }
 
 fn candidate(
@@ -1459,7 +1460,7 @@ pub(super) fn build(
         graph,
         FrameInputs {
             resources: &resources[..resource_count],
-            image_sources: &image_sources,
+            image_sources: &shadows.sources,
             sampled_views: &sampled_views,
             views: &views,
             indirect_lists: indirect_list.as_slice(),
@@ -1480,7 +1481,7 @@ pub(super) fn build(
         .as_ref()
         .map(|_| [None; shadow::CASCADE_COUNT]);
     if let Some(updates) = &mut shadow_updates {
-        for (cascade, key) in shadow_keys.into_iter().enumerate() {
+        for (cascade, key) in shadows.updates.into_iter().enumerate() {
             if let Some(key) = key {
                 let handle = images.shadows[cascade];
                 graph.export_image(handle)?;
