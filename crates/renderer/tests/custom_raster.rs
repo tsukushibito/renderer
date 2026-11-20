@@ -317,11 +317,11 @@ mod native {
     ) -> (CompiledGraph, BufferHandle, ImageHandle, PassHandle) {
         let mut graph = pool.begin().unwrap();
         let inputs = fixture::inputs(&mut graph, 2);
-        let scene = renderer_pipeline::standard::graphs::forward(
+        let scene = renderer_pipeline::unlit_forward::forward(
             &mut graph,
             "pending input base",
             inputs.opaque,
-            renderer_pipeline::standard::graphs::ForwardConfig {
+            renderer_pipeline::unlit_forward::ForwardConfig {
                 color: fixture::hdr(),
                 clear_color: [0.25, 0.5, 0.75, 1.0],
                 depth: true,

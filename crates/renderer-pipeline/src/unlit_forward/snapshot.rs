@@ -6,7 +6,7 @@ use renderer::{EngineRenderError, PreparedEngineFrame, RenderedFrame, VulkanEngi
 use renderer::engine::{FrameGraph, FrameSnapshot, SnapshotInputs};
 use renderer::graph::{Graph, GraphError, GraphPool, ImageDesc, ImageHandle};
 
-use super::graphs::{ForwardConfig, forward};
+use super::{ForwardConfig, forward};
 
 /// Connect snapshot inputs, add the standard Forward recipe, and select one
 /// exported output and optional readback. The extension can add work before

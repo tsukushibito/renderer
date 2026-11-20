@@ -37,7 +37,7 @@ use renderer::{
     D3D12ValidationMode, FrameCapacity, ResourceClass, RuntimeConfig, RuntimeErrorKind,
     ValidationMode, VulkanRuntime,
 };
-use renderer_pipeline::standard::{graphs, passes};
+use renderer_pipeline::{passes, unlit_forward};
 use serde_json::{Value, json};
 
 const WAIT: Duration = Duration::from_secs(30);
@@ -248,12 +248,12 @@ fn prepass_continuations(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec
 }
 
 fn standard_recipes(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expected>) {
-    let config = graphs::ForwardConfig {
+    let config = unlit_forward::ForwardConfig {
         color: ImageDesc::rgba8(4, 4),
         clear_color: [1.0, 0.0, 0.0, 1.0],
         depth: false,
     };
-    let empty = graphs::forward(
+    let empty = unlit_forward::forward(
         graph,
         "standard empty",
         std::iter::empty::<RasterDraw>(),
@@ -267,7 +267,7 @@ fn standard_recipes(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expe
         "standard empty clear",
         pixels(|_, _| [255, 0, 0, 255]),
     ));
-    let scene = graphs::forward(
+    let scene = unlit_forward::forward(
         graph,
         "standard forward",
         [placed(quad, false, 0.5, [1.0, 0.0, 0.0, 1.0])],
@@ -286,11 +286,11 @@ fn standard_recipes(graph: &mut Graph, quad: RasterDraw, expected: &mut Vec<Expe
         "standard two-node post",
         pixels(|_, _| [255, 0, 0, 255]),
     ));
-    let hdr = graphs::forward(
+    let hdr = unlit_forward::forward(
         graph,
         "standard HDR",
         [placed(quad, false, 0.5, [2.0, -0.5, 0.25, 1.0])],
-        graphs::ForwardConfig {
+        unlit_forward::ForwardConfig {
             color: ImageDesc::rgba16_float(4, 4),
             ..config
         },
