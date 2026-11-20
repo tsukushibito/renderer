@@ -1,5 +1,5 @@
-# Bistro consumes the shader selections below. The existing Bistro graph supplies
-# the runtime attachment extents, imported Views, and individual shadow cascades.
+﻿# Startup shader selection for the offline material bundle.
+# Bistro frame recipes use the selected Forward and shadow Programs.
 version: 1
 resources:
   - { id: hdr, kind: image, width: 1, height: 1, format: rgba16_float }
