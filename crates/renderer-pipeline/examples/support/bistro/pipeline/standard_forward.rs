@@ -3,9 +3,9 @@
 use renderer_pipeline::pbr_forward::{self, Draw, Frame, Material, ShadowSource};
 
 use super::{
-    Bloom, BufferUpdates, Built, CASCADES, Camera, Error, Frustum, GraphPool, Options, Resident,
-    Scene, SceneImages, ShadowKey, ShadowUpdate, Workspace, finish_frame, import_environment,
-    import_frame, select_draws, shadow, shadow_casters,
+    Bloom, BufferUpdates, Built, Camera, Error, Frustum, GraphPool, Options, Resident, Scene,
+    SceneImages, Workspace, begin_shadow_frame, finish_frame, import_environment, import_frame,
+    select_draws, shadow, shadow_casters,
 };
 
 pub(super) struct Inputs {
@@ -46,8 +46,7 @@ pub(super) fn build(
     let [irradiance, reflection, brdf_lut] = import_environment(&mut graph, resident)?;
     let [strength, yaw_radians, max_prefilter_lod] = resident.environment_parameters;
     let composition = workspace.prepared.select(options);
-    let bloom = composition.bloom();
-    let recipe = composition.standard_forward();
+    let (recipe, bloom) = composition.standard_forward();
     let word = |index: usize| {
         f32::from_le_bytes(camera_bytes[index * 4..index * 4 + 4].try_into().unwrap())
     };
@@ -125,20 +124,19 @@ pub(super) fn build(
         .extend(workspace.blended.iter().copied().map(draw));
 
     let matrices = view.shadow_matrices();
-    let keys = matrices.map(|matrix| ShadowKey::new(matrix, options.alpha_only, options.shadows));
-    let mut targets = [None; shadow::CASCADE_COUNT];
-    let mut reused = [false; shadow::CASCADE_COUNT];
+    let history_frame = begin_shadow_frame(
+        workspace.shadow_reuse.as_ref(),
+        &mut graph,
+        resident.shadow_parameters.resolution,
+        matrices,
+        options,
+    )?;
     for (cascade, casters) in inputs.casters.iter_mut().enumerate() {
         casters.clear();
-        if let Some(old) = workspace
-            .shadow_cache
+        if !history_frame
             .as_ref()
-            .and_then(|cache| cache.entries[cascade].as_ref())
+            .is_some_and(|frame| frame.is_reused(cascade))
         {
-            targets[cascade] = Some(graph.import_image(CASCADES[cascade], &old.image)?);
-            reused[cascade] = old.key == keys[cascade];
-        }
-        if !reused[cascade] {
             let clip = shadow::CascadeClip::new(&matrices[cascade], resident.scene_bounds);
             casters.extend(shadow_casters(scene, resident, options, clip).map(draw));
         }
@@ -149,20 +147,17 @@ pub(super) fn build(
         materials: &inputs.materials,
         opaque: &inputs.opaque,
         transparent: &inputs.transparent,
-        shadows: std::array::from_fn(|cascade| {
-            if reused[cascade] {
-                ShadowSource::Reuse(targets[cascade].unwrap())
-            } else {
-                ShadowSource::Render {
-                    target: targets[cascade],
-                    casters: &inputs.casters[cascade],
-                }
-            }
+        shadows: std::array::from_fn(|cascade| match &history_frame {
+            Some(frame) => frame.source(cascade, &inputs.casters[cascade]),
+            None => ShadowSource::Render {
+                target: None,
+                casters: &inputs.casters[cascade],
+            },
         }),
         camera_target: Some(camera_target),
         exposure: 2.0,
     };
-    let (images, camera) = if bloom == Bloom::Off {
+    let (images, camera) = if options.bloom == Bloom::Off {
         let frame = recipe.add_passes(&mut graph, frame)?;
         (
             SceneImages {
@@ -176,7 +171,7 @@ pub(super) fn build(
         )
     } else {
         let scene = recipe.add_scene(&mut graph, frame)?;
-        let enhanced = bloom.append(&mut graph, scene.hdr)?;
+        let enhanced = bloom.add_passes(&mut graph, scene.hdr)?;
         let output = recipe.add_output(&mut graph, enhanced, 2.0)?;
         (
             SceneImages {
@@ -189,21 +184,9 @@ pub(super) fn build(
             scene.camera,
         )
     };
-    let mut updates = workspace
-        .shadow_cache
-        .as_ref()
-        .map(|_| [None; shadow::CASCADE_COUNT]);
-    if let Some(updates) = &mut updates {
-        for (cascade, image) in images.shadows.into_iter().enumerate() {
-            if !reused[cascade] {
-                graph.export_image(image)?;
-                updates[cascade] = Some(ShadowUpdate {
-                    key: keys[cascade],
-                    handle: image,
-                });
-            }
-        }
-    }
+    let updates = history_frame
+        .map(|frame| frame.export(&mut graph))
+        .transpose()?;
     graph.export_buffer(camera)?;
     let draws =
         (capture && !options.windowed).then_some(inputs.opaque.len() + inputs.transparent.len());

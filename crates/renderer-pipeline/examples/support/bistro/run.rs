@@ -177,8 +177,8 @@ fn frames(
             let _export = tracy_client::Client::running().map(|client| {
                 client.span(tracy_client::span_location!("bistro.export_and_delete"), 0)
             });
-            resident.accept_buffer_updates(&work, built.updates)?;
             workspace.accept_shadow_updates(&work, built.shadow_updates)?;
+            resident.accept_buffer_updates(&work, built.updates)?;
             let output = work.export_image(built.output)?;
             // Keep the Graph live without a mandatory readback. Deleting a registry
             // name is not early GPU release: pending work owns its prepared lease.
@@ -296,10 +296,14 @@ fn capture_planes(
     let built = pipeline::build(
         pool, workspace, resident, scene, options, camera, &bytes, true,
     )?;
+    let shadow_reuse_hits = built
+        .shadow_updates
+        .as_ref()
+        .map(|updates| updates.reused());
     let plan = built.graph.compile()?;
     let pending = backend.submit(&plan)?;
-    resident.accept_buffer_updates(&pending, built.updates)?;
     workspace.accept_shadow_updates(&pending, built.shadow_updates)?;
+    resident.accept_buffer_updates(&pending, built.updates)?;
     let output = pending.export_image(built.output)?;
     backend.delete(output.key())?;
     let mut completed = backend::wait_for(backend, pending.id())?;
@@ -360,8 +364,8 @@ fn capture_planes(
     }
     let mut report = json!({"captures":captures,"shadow_captures":shadow_captures,"draw_count":built.draws,"depth_coverage_pixels":depth_coverage,
         "readback_outside_measurement":true});
-    if let Some(updates) = built.shadow_updates {
-        report["shadow_reuse_hits"] = json!(updates.map(|update| update.is_none()));
+    if let Some(hits) = shadow_reuse_hits {
+        report["shadow_reuse_hits"] = json!(hits);
     }
     Ok(report)
 }
@@ -386,7 +390,7 @@ fn capture(
     )?;
     if options.capture_bloom_bypass {
         let mut bypass = options.clone();
-        bypass.bloom = super::bloom::Bloom::Off;
+        bypass.bloom = super::Bloom::Off;
         bypass.capture_shadows = false;
         bypass.output = options.output.join("bloom-bypass");
         let mut reference = capture_planes(

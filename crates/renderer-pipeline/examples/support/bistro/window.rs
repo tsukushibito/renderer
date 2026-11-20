@@ -516,9 +516,9 @@ impl State {
                 Err(error) if backpressure(&error) => return Ok(()),
                 Err(error) => return Err(error.into()),
             };
-            resident.accept_buffer_updates(&pending, built.updates)?;
             self.workspace
                 .accept_shadow_updates(&pending, built.shadow_updates)?;
+            resident.accept_buffer_updates(&pending, built.updates)?;
             let image = pending.export_image(built.output)?;
             let id = pending.id();
             drop(pending);
