@@ -39,7 +39,6 @@ impl Mode {
 
 pub(super) struct Placements {
     pub primitive: usize,
-    pub material: usize,
     layout: [u32; (program::INSTANCE_INLINE_BYTES / 4) as usize],
 }
 
@@ -60,7 +59,7 @@ impl Placements {
         let distance = (near * 16.0).max(0.5).min(near + (far - near) * 0.25);
         let half_height = distance * half_angle;
         let spacing = 1.6 * half_height * (aspect / COLUMNS as f32).min(1.0 / ROWS as f32);
-        let (primitive, material, source, diameter) = scene
+        let (primitive, source, diameter) = scene
             .primitives
             .iter()
             .zip(bounds)
@@ -78,9 +77,9 @@ impl Placements {
                     .sum::<f32>()
                     .sqrt();
                 (diameter.is_finite() && diameter > 0.01 && front_facing(scene, mesh, forward))
-                    .then_some((index, mesh.material, *bound, diameter))
+                    .then_some((index, *bound, diameter))
             })
-            .min_by(|(_, _, _, a), (_, _, _, b)| a.total_cmp(b))
+            .min_by(|(_, _, a), (_, _, b)| a.total_cmp(b))
             .ok_or("instance comparison needs a visible opaque triangle")?;
         let center: [f32; 3] = std::array::from_fn(|i| source.min[i] * 0.5 + source.max[i] * 0.5);
         let origin: [f32; 3] = std::array::from_fn(|i| {
@@ -105,11 +104,7 @@ impl Placements {
             }
             *word = value.to_bits();
         }
-        Ok(Self {
-            primitive,
-            material,
-            layout,
-        })
+        Ok(Self { primitive, layout })
     }
 
     pub fn draws(&self, mode: Mode, draw: RasterDraw) -> impl Iterator<Item = RasterDraw> + '_ {
@@ -178,7 +173,8 @@ mod tests {
             .collect::<Vec<_>>();
         let placements =
             Placements::new(&scene, &bounds, Camera::fixture(), 16.0 / 9.0, 0.02, 100.0).unwrap();
-        assert_eq!(scene.materials[placements.material].uniform[48..52], [0; 4]);
+        let material = scene.primitives[placements.primitive].material;
+        assert_eq!(scene.materials[material].uniform[48..52], [0; 4]);
         let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
         let mut graph = pool.begin().unwrap();
         let draw = RasterDraw {

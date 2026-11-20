@@ -21,6 +21,10 @@ pub use culling::{
 
 pub const TILE_BUFFER_BYTES: u64 = MAX_TILES as u64 * culling::TILE_BYTES;
 
+#[allow(
+    dead_code,
+    reason = "the Rust Bistro builds these bindings from the shared shader ABI"
+)]
 pub fn raster_bindings(
     lights: BufferHandle,
     tiles: Option<BufferHandle>,

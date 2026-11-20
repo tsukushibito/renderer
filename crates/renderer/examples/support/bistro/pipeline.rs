@@ -1289,7 +1289,7 @@ pub(super) fn build(
     let instance_material = workspace
         .placements
         .as_ref()
-        .map(|placement| placement.material);
+        .map(|placement| scene.primitives[placement.primitive].material);
     {
         #[cfg(feature = "tracy")]
         let _bindings = tracy_client::Client::running()
