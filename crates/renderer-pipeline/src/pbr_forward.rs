@@ -383,6 +383,20 @@ impl Prepared {
             RasterScene<'_>,
         ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
     ) -> Result<SceneImages, GraphError> {
+        self.add_scene_using_programs(graph, frame, None, additional, append_scene)
+    }
+
+    pub(crate) fn add_scene_using_programs<const N: usize>(
+        &mut self,
+        graph: &mut Graph,
+        frame: Frame<'_>,
+        programs: Option<&Programs>,
+        additional: impl FnOnce(&mut Graph, BufferHandle) -> Result<[Binding; N], GraphError>,
+        append_scene: impl FnOnce(
+            &mut Graph,
+            RasterScene<'_>,
+        ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError>,
+    ) -> Result<SceneImages, GraphError> {
         self.check_frame(graph, &frame)?;
         validate_shadow_sources(graph, frame.shadows, shadow_desc(self.config.shadows))?;
         let camera = match frame.camera_target {
@@ -400,6 +414,7 @@ impl Prepared {
         };
         let shadow_views =
             self.add_shadows(graph, camera, frame.materials, frame.shadows, transforms)?;
+        let programs = programs.unwrap_or(&self.programs);
         let lighting = lighting_bindings(frame.view.environment(), shadow_views);
         let extra = additional(graph, camera)?;
         let mut extended = [lighting[0]; renderer::program::MAX_RASTER_BINDINGS - 7];
@@ -423,7 +438,7 @@ impl Prepared {
         self.transparent.reset_bindings(frame.materials.len());
         self.opaque.record(
             graph,
-            &self.programs.opaque,
+            &programs.opaque,
             opaque_bindings,
             frame.materials,
             frame.opaque,
@@ -431,7 +446,7 @@ impl Prepared {
         )?;
         self.transparent.record(
             graph,
-            &self.programs.blend,
+            &programs.blend,
             transparent_bindings,
             frame.materials,
             frame.transparent,
@@ -445,7 +460,7 @@ impl Prepared {
                 has_transparency: !frame.transparent.is_empty(),
                 opaque: &self.opaque,
                 transparent: &self.transparent,
-                programs: &self.programs,
+                programs,
                 instanced: instanced_program,
             },
         )?;

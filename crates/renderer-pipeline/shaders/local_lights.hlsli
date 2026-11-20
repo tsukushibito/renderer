@@ -3,8 +3,6 @@
 
 static const uint LOCAL_LIGHT_TILE_SIZE = 16u;
 static const uint MAX_LOCAL_LIGHTS = 64u;
-static const uint MAX_LOCAL_LIGHT_TILES = 65536u;
-static const uint LOCAL_LIGHT_TILE_WORDS = MAX_LOCAL_LIGHTS + 1u;
 
 struct PointLight {
     float4 position_radius;
@@ -47,10 +45,6 @@ PointLight load_point_light(uint index) {
 
 uint2 local_light_extent() {
     return clamp(local_light_header().xy, 1u, 65535u);
-}
-
-uint local_light_columns(uint2 extent) {
-    return (extent.x + LOCAL_LIGHT_TILE_SIZE - 1u) / LOCAL_LIGHT_TILE_SIZE;
 }
 
 uint local_light_count() {

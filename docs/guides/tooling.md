@@ -214,8 +214,8 @@ Runtimeが投入を受理した時点で履歴が反映される。アプリが�
 #### 照明方式と描画リストを選ぶ
 
 - `pbr_forward_plus`へビューごとに最大64件の点光源を渡す。16×16画素のタイルは最大65,536個。
-  最初に`append_tile_initialization`で初期化を宣言し、Runtimeが投入を受理してから登録する。
-  描画時は最新の受理済みタイルバッファを取り込み、描画寸法に必要な範囲を更新する。
+  `prepare`は描画寸法ごとの一時タイルマスクを予約する。`add_scene`または`add_passes`に光源を渡すと、
+  Graph内でマスク生成と描画を接続する。光源0件の呼び出しは通常Forwardを使う。
 - `pbr_deferred`は1×のG-bufferにベースカラー／メタリック、法線／粗さ、発光／AOとD32深度を保持する。
   照明後に、アプリが並べた半透明描画をHDRに合成する。
 - `pbr_forward::prepare_with_transforms`で組み込みForwardの変換付き直接描画を準備し、

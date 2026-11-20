@@ -1,7 +1,10 @@
 //! Forward+ tile culling and the shared point-light buffer layout.
 
 use crate::shader_binaries::packaged_shaders;
-use renderer::graph::{Binding, BindingResource, BufferHandle, Graph, GraphError, PassHandle};
+use renderer::ImageFormat;
+use renderer::graph::{
+    Binding, BindingResource, BufferHandle, Graph, GraphError, ImageDesc, ImageView, PassHandle,
+};
 use renderer::program::{
     BindingLayout, BindingType, ComputeProgramDescriptor, DispatchContract, DispatchWorkgroups,
     ManagedProgram, ShaderStages,
@@ -10,10 +13,8 @@ use renderer::program::{
 pub const TILE_SIZE: u32 = 16;
 pub const MAX_LIGHTS: usize = 64;
 pub const MAX_TILES: u32 = 65_536;
-pub const TILES_PER_GROUP: u32 = 32;
 pub const LIGHT_BUFFER_BYTES: u64 = 16 + MAX_LIGHTS as u64 * 32;
-pub const TILE_BYTES: u64 = (1 + MAX_LIGHTS as u64) * 4;
-const GROUP_BYTES: u64 = TILES_PER_GROUP as u64 * TILE_BYTES;
+const WORKGROUP: [u32; 3] = [8, 4, 1];
 const CULL_CAMERA_BYTES: u64 = 64;
 const MAX_EXTENT: u32 = 65_535;
 pub(super) const LIGHTS: u32 = 2;
@@ -33,7 +34,6 @@ pub fn active_tile_count(width: u32, height: u32) -> Result<u32, GraphError> {
     let cells = width
         .div_ceil(TILE_SIZE)
         .saturating_mul(height.div_ceil(TILE_SIZE));
-    // A single invocation owns each packed tile record.
     if cells == 0 || cells > MAX_TILES || width > MAX_EXTENT || height > MAX_EXTENT {
         return Err(GraphError::invalid_input(
             "Forward+ requires a nonempty extent with at most 65536 tiles",
@@ -42,12 +42,13 @@ pub fn active_tile_count(width: u32, height: u32) -> Result<u32, GraphError> {
     Ok(cells)
 }
 
-/// Round to a full workgroup. Its padding invocations also initialize records.
-pub fn workgroups(width: u32, height: u32) -> Result<[u32; 2], GraphError> {
-    Ok([
-        active_tile_count(width, height)?.div_ceil(TILES_PER_GROUP),
-        1,
-    ])
+/// Two RGBA16F texels per tile encode the 64 possible light IDs.
+pub fn tile_mask_desc(width: u32, height: u32) -> Result<ImageDesc, GraphError> {
+    active_tile_count(width, height)?;
+    Ok(ImageDesc::rgba16_float(
+        2 * width.div_ceil(TILE_SIZE),
+        height.div_ceil(TILE_SIZE),
+    ))
 }
 
 pub fn light_bytes(
@@ -113,7 +114,7 @@ pub(super) const fn buffer_slot(
 
 static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
     entry: "main",
-    workgroup_size: [TILES_PER_GROUP, 1, 1],
+    workgroup_size: WORKGROUP,
     bindings: &[
         buffer_slot(
             0,
@@ -129,19 +130,17 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
         ),
         buffer_slot(
             TILES,
-            BindingType::StorageWrite,
+            BindingType::StorageImageWrite(ImageFormat::Rgba16Float),
             ShaderStages::COMPUTE,
-            GROUP_BYTES,
+            0,
         ),
     ],
     dispatch: DispatchContract {
-        workgroups: DispatchWorkgroups::BufferGrid2d {
+        workgroups: DispatchWorkgroups::Image2d {
             group: 0,
             binding: TILES,
-            max_workgroups: [MAX_TILES / TILES_PER_GROUP, 1],
-            read_bindings: &[],
         },
-        bytes: &[CULL_CAMERA_BYTES, LIGHT_BUFFER_BYTES, GROUP_BYTES],
+        bytes: &[CULL_CAMERA_BYTES, LIGHT_BUFFER_BYTES, 0],
     },
     shaders: packaged_shaders!(
         include_bytes!("../../forward_plus.comp.spv"),
@@ -150,11 +149,9 @@ static CULL_PROGRAM: ComputeProgramDescriptor = ComputeProgramDescriptor {
 };
 
 pub const fn compute_program() -> ManagedProgram {
-    // SAFETY: Each GlobalInvocationID.x writes all TILE_BYTES at its unique
-    // index, including unused words and any padding tiles in its workgroup.
-    // The grid contract proves the resulting prefix fits the descriptor.
-    // The clamped light count and arbitrary header values and matrices can
-    // change membership, while output addresses and coverage are invariant.
+    // SAFETY: Image2d covers the bound view. Each in-range invocation writes
+    // exactly its own texel. The shader clamps the light count to the fixed
+    // buffer ABI; arbitrary header values and matrices affect only membership.
     unsafe { ManagedProgram::from_trusted_descriptor(&CULL_PROGRAM) }
 }
 
@@ -170,28 +167,29 @@ pub(super) fn buffer_binding(binding: u32, buffer: BufferHandle, size: u64) -> B
     }
 }
 
-/// Append tile culling from the PBR camera matrix prefix and local lights.
-///
-/// The inactive tile records are preserved. A later Raster binding of the
-/// full buffer requires all records to have been initialized once beforehand.
+pub(super) fn tile_binding(view: ImageView) -> Binding {
+    Binding {
+        group: 0,
+        binding: TILES,
+        resource: BindingResource::ImageView(view),
+    }
+}
+
+/// Initialize the complete tile mask view from the camera and light buffer.
 pub fn append_culling(
     graph: &mut Graph,
-    width: u32,
-    height: u32,
     camera: BufferHandle,
     lights: BufferHandle,
-    tiles: BufferHandle,
+    tiles: ImageView,
 ) -> Result<PassHandle, GraphError> {
-    let workgroups = workgroups(width, height)?;
-    graph.dispatch_buffer_grid(
-        "Forward+ tile light lists",
+    graph.dispatch(
+        "Forward+ tile light masks",
         &compute_program(),
         &[
             buffer_binding(0, camera, CULL_CAMERA_BYTES),
             buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES),
-            buffer_binding(TILES, tiles, u64::from(workgroups[0]) * GROUP_BYTES),
+            tile_binding(tiles),
         ],
-        workgroups,
     )
 }
 
@@ -209,10 +207,16 @@ mod tests {
         assert_eq!(cull["ssbos"][0]["binding"], LIGHTS);
         assert_eq!(cull["ssbos"][0]["block_size"], LIGHT_BUFFER_BYTES);
         assert_eq!(cull["ssbos"][0]["readonly"], true);
-        assert_eq!(cull["ssbos"][1]["binding"], TILES);
-        assert_eq!(cull["ssbos"][1]["writeonly"], true);
-        let module_type = cull["ssbos"][1]["type"].as_str().unwrap();
-        assert_eq!(cull["types"][module_type]["members"][0]["array_stride"], 4);
+        assert_eq!(cull["ssbos"].as_array().unwrap().len(), 1);
+        assert_eq!(cull["images"][0]["binding"], TILES);
+        assert_eq!(cull["images"][0]["set"], 0);
+        assert_eq!(cull["images"][0]["type"], "image2D");
+        assert_eq!(cull["images"][0]["format"], "rgba16f");
+        assert_eq!(cull["images"][0]["writeonly"], true);
+        assert_eq!(
+            cull["entryPoints"][0]["workgroup_size"],
+            serde_json::json!(WORKGROUP)
+        );
         let dxil = include_str!("../../dxil/forward_plus.comp.reflection.txt");
         assert!(dxil.split_whitespace().any(|word| word == "t2"));
         assert!(dxil.split_whitespace().any(|word| word == "u3"));

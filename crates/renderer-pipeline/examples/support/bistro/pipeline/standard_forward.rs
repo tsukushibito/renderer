@@ -6,11 +6,9 @@ use renderer_pipeline::pbr::{Draw, Material};
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use super::{
     Built, Camera, Error, GraphPool, Options, Resident, SceneImages, SubmissionMode, Workspace,
-    caster_revision, finish_frame, import_environment, import_frame, lighting, material_visible,
+    caster_revision, finish_frame, import_environment, import_frame, material_visible,
     select_draws, shadow_casters,
 };
-#[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
-use renderer::runtime::Runtime;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 use renderer_pipeline::pbr::{self, Frame, IndexedDraw, ShadowSource};
 
@@ -39,7 +37,6 @@ impl Inputs {
 )]
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn build(
-    runtime: &Runtime,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
     resident: &Resident,
@@ -229,12 +226,11 @@ pub(super) fn build(
             .map_or(&[], |placements| &placements.transforms[..]),
         exposure: 2.0,
     };
-    let tiles = lighting::snapshot(runtime, resident.tiles.as_ref())?;
     let lights = resident
         .local_lights
         .as_ref()
         .map_or(&[][..], |preset| &preset[..]);
-    let images = recipe.add_scene(&mut graph, frame, lights, tiles.as_ref())?;
+    let images = recipe.add_scene(&mut graph, frame, lights)?;
     let processed = bloom.add_passes(&mut graph, images.hdr)?;
     let output = recipe.add_output(&mut graph, processed, 2.0)?;
     let updates = history_frame

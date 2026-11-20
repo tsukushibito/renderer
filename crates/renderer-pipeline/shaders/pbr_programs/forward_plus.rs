@@ -4,14 +4,19 @@
 mod culling;
 
 use super::packaged_shaders;
-use renderer::graph::{Binding, BufferHandle};
+use renderer::graph::{Binding, BufferHandle, ImageView};
 use renderer::program::{
     BindingLayout, BindingType, ManagedRasterProgram, RasterProgramDescriptor, ShaderStages,
 };
 
 use super::{BLEND, OPAQUE};
-use culling::{LIGHTS, TILES, buffer_binding, buffer_slot};
+use culling::{LIGHTS, TILES, buffer_binding, buffer_slot, tile_binding};
 
+#[allow(
+    unused_imports,
+    reason = "the raw Bistro tests assert the public tile limit"
+)]
+pub use culling::MAX_TILES;
 #[cfg_attr(
     not(any(feature = "vulkan", all(windows, feature = "d3d12"))),
     allow(
@@ -21,11 +26,9 @@ use culling::{LIGHTS, TILES, buffer_binding, buffer_slot};
 )]
 pub use culling::compute_program;
 pub use culling::{
-    LIGHT_BUFFER_BYTES, MAX_LIGHTS, MAX_TILES, PointLight, TILE_SIZE, active_tile_count,
-    append_culling, light_bytes,
+    LIGHT_BUFFER_BYTES, MAX_LIGHTS, PointLight, TILE_SIZE, active_tile_count, append_culling,
+    light_bytes, tile_mask_desc,
 };
-
-pub const TILE_BUFFER_BYTES: u64 = MAX_TILES as u64 * culling::TILE_BYTES;
 
 #[allow(
     dead_code,
@@ -33,7 +36,7 @@ pub const TILE_BUFFER_BYTES: u64 = MAX_TILES as u64 * culling::TILE_BYTES;
 )]
 pub fn raster_bindings(
     lights: BufferHandle,
-    tiles: Option<BufferHandle>,
+    tiles: Option<ImageView>,
 ) -> impl Iterator<Item = Binding> {
     let bindings = match tiles {
         Some(tiles) => tiled_raster_bindings(lights, tiles).map(Some),
@@ -45,10 +48,10 @@ pub fn raster_bindings(
     bindings.into_iter().flatten()
 }
 
-pub fn tiled_raster_bindings(lights: BufferHandle, tiles: BufferHandle) -> [Binding; 2] {
+pub fn tiled_raster_bindings(lights: BufferHandle, tiles: ImageView) -> [Binding; 2] {
     [
         buffer_binding(LIGHTS, lights, LIGHT_BUFFER_BYTES),
-        buffer_binding(TILES, tiles, TILE_BUFFER_BYTES),
+        tile_binding(tiles),
     ]
 }
 
@@ -65,12 +68,7 @@ const fn pbr_bindings<const N: usize>() -> [BindingLayout; N] {
         index += 1;
     }
     if N == 18 {
-        bindings[17] = buffer_slot(
-            TILES,
-            BindingType::StorageRead,
-            ShaderStages::FRAGMENT,
-            TILE_BUFFER_BYTES,
-        );
+        bindings[17] = buffer_slot(TILES, BindingType::SampledImage, ShaderStages::FRAGMENT, 0);
     }
     bindings
 }
@@ -83,9 +81,6 @@ const fn pbr_bytes<const N: usize>() -> [u64; N] {
         index += 1;
     }
     bytes[16] = LIGHT_BUFFER_BYTES;
-    if N == 18 {
-        bytes[17] = TILE_BUFFER_BYTES;
-    }
     bytes
 }
 
@@ -140,9 +135,9 @@ pub const fn raster_program(tiled: bool, blend: bool) -> ManagedRasterProgram {
         (true, true) => &TILED_BLEND,
     };
     // SAFETY: Original Bistro PBR slots and side effects are unchanged.
-    // Additional slots are bounded read-only storage. The fragment shader
-    // clamps tile index and list count, rejects IDs beyond the light count,
-    // and bounds the fragment-coordinate conversion before integer indexing.
+    // The fragment shader bounds image loads by the actual view dimensions.
+    // It confines conversions of arbitrary float pixels to [0, 255] and
+    // bounds all light-buffer indices by the clamped light count.
     unsafe { ManagedRasterProgram::from_trusted_descriptor(descriptor) }
 }
 
@@ -151,7 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn raster_reflection_agrees_on_light_data_and_tile_list_slots() {
+    fn raster_reflection_agrees_on_light_data_and_tile_mask_slots() {
         for (tiled, spirv, dxil) in [
             (
                 false,
@@ -168,13 +163,26 @@ mod tests {
             let buffers = module["ssbos"].as_array().unwrap();
             let program = raster_program(tiled, false);
             let slots = &program.bindings()[OPAQUE.bindings.len()..];
-            assert_eq!(buffers.len(), slots.len());
-            for (buffer, slot) in buffers.iter().zip(slots) {
-                assert_eq!(buffer["binding"], slot.binding);
-                assert_eq!(buffer["set"], slot.group);
-                assert_eq!(buffer["readonly"], true);
-                let register = format!("t{}", slot.binding);
-                assert!(dxil.split_whitespace().any(|word| word == register));
+            assert_eq!(buffers.len(), 1);
+            let light = &buffers[0];
+            assert_eq!(light["binding"], slots[0].binding);
+            assert_eq!(light["set"], slots[0].group);
+            assert_eq!(light["readonly"], true);
+            assert_eq!(light["block_size"], LIGHT_BUFFER_BYTES);
+            assert!(dxil.split_whitespace().any(|word| word == "t2"));
+            let mask = module["separate_images"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|image| image["name"] == "tile_masks");
+            if tiled {
+                let mask = mask.unwrap();
+                assert_eq!(mask["binding"], slots[1].binding);
+                assert_eq!(mask["set"], slots[1].group);
+                assert_eq!(mask["type"], "texture2D");
+                assert_eq!(slots[1].kind, BindingType::SampledImage);
+            } else {
+                assert!(mask.is_none());
             }
             assert_eq!(dxil.split_whitespace().any(|word| word == "t3"), tiled);
         }

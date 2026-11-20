@@ -173,16 +173,7 @@ impl Budget {
 
     #[cfg(all(windows, feature = "presentation"))]
     pub fn resized_buffers(&self, prepared: &PreparedSet) -> Vec<(u64, usize)> {
-        Self::frame_buffers(prepared)
-            .filter_map(|(size, count)| {
-                // The startup tile range remains registered across a resize.
-                // Working-set replacement describes only unregistered slots.
-                let retained = self.pipeline == PipelineMode::ForwardPlus
-                    && size == pbr_forward_plus::TILE_BUFFER_BYTES;
-                let count = count - usize::from(retained);
-                (count != 0).then_some((size, count))
-            })
-            .collect()
+        Self::frame_buffers(prepared).collect()
     }
 
     #[cfg(all(windows, feature = "presentation"))]
@@ -548,7 +539,6 @@ pub(super) struct Resident {
     pub shadow_parameters: shadow::Parameters,
     pub camera: ImportBuffer,
     local_lights: Option<lighting::Preset>,
-    tiles: Option<pbr_forward_plus::Tiles>,
     packed: Option<indirect::Resident>,
     // Only small general Uniform uploads retain byte provenance. Geometry uses
     // typed immutable bounds and releases all upload CPU streams before frames.
@@ -820,9 +810,6 @@ impl Resident {
             .pipeline
             .uses_local_lights()
             .then(|| lighting::preset(budget.fixture));
-        let tiles = (budget.pipeline == PipelineMode::ForwardPlus)
-            .then(|| lighting::initialize_tiles(backend, &camera))
-            .transpose()?;
         let mut images = Vec::with_capacity(scene.images.len());
         for (index, image) in scene.images.iter().enumerate() {
             // This is the immutable publication boundary. Read/hash one chain,
@@ -894,7 +881,6 @@ impl Resident {
             shadow_parameters: shadow::Parameters::default(),
             camera,
             local_lights,
-            tiles,
             packed,
             upload_owners,
         })
@@ -1262,13 +1248,12 @@ fn append_shadows(
 #[derive(Clone, Copy)]
 struct FrameLights {
     lights: BufferHandle,
-    tiles: Option<BufferHandle>,
+    tiles: Option<ImageView>,
 }
 
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 fn frame_lights(
     graph: &mut Graph,
-    runtime: &Runtime,
     resident: &Resident,
     options: &Options,
     camera: BufferHandle,
@@ -1278,11 +1263,10 @@ fn frame_lights(
     };
     let (lights, tiles) = lighting::append_reference(
         graph,
-        runtime,
         [options.width, options.height],
         camera,
         preset,
-        resident.tiles.as_ref(),
+        options.pipeline == PipelineMode::ForwardPlus,
     )?;
     Ok(Some(FrameLights { lights, tiles }))
 }
@@ -1389,7 +1373,6 @@ fn scene_bindings(
 )]
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 pub(super) fn build(
-    runtime: &Runtime,
     pool: &mut GraphPool,
     workspace: &mut Workspace,
     resident: &Resident,
@@ -1401,7 +1384,6 @@ pub(super) fn build(
 ) -> Result<Built, Error> {
     if workspace.prepared.select(options).uses_standard() {
         return standard_forward::build(
-            runtime,
             pool,
             workspace,
             resident,
@@ -1448,7 +1430,7 @@ pub(super) fn build(
     graph.upload_buffer("camera update boundary", uniform, 0, &frame_uniform)?;
     graph.export_buffer(uniform)?;
     let (prepared, bloom) = workspace.prepared.select(options).reference();
-    let lighting = frame_lights(&mut graph, runtime, resident, options, uniform)?;
+    let lighting = frame_lights(&mut graph, resident, options, uniform)?;
     let materials = MaterialBindings {
         uniform,
         factors: &workspace.materials,
