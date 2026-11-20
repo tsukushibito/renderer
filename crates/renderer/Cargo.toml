@@ -82,4 +82,4 @@ test = true
 
 [[example]]
 name = "bistro"
-test = true
+test = false

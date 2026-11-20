@@ -42,7 +42,7 @@ required-features = ["yaml", "vulkan", "d3d12"]
 [[example]]
 name = "bistro"
 required-features = ["yaml"]
-test = true
+test = false
 
 [[test]]
 name = "frame_inputs"

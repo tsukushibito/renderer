@@ -49,6 +49,10 @@ Renderer発行のネイティブ資源・メモリの作成・破棄、descripto
 実行手順は[2つのBistroサンプル](../guides/examples.md)と[YAMLの記述](../guides/tooling.md#bistro-scene-pipeline)を参照する。
 ログとキャプチャは`.tools/renderer-12t/`に保存した。
 
+`renderer-d72`ではYAMLの回帰テストを小さなCPU fixtureで行い、releaseのフレーム構築テスト11件を追加のCIゲートにした。
+Windowsの二API・表示構成で両BistroのClippyが通り、Tracyと開発診断を有効にしたサンプルのCPUテストはRust版75件、YAML版79件が通った。
+今回の変更はCIの実行範囲に限り、実GPUの受入は上記の検証記録に従う。
+
 <a id="material-shader-verification"></a>
 
 ## 材質テンプレートとBistroのForward・シャドウ

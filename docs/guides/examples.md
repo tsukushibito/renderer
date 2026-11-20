@@ -91,5 +91,10 @@ Bistroの全シーン以外の実行には、リポジトリに含まれる小�
 二APIの受入条件と測定コマンドは[開発手順](development.md)に、
 実行済みの結果は[検証状況](../verification/current.md)に置いています。
 
+通常のCIでは、小さなCPU fixtureで型付きAPIとYAMLによるGraph構築を検証します。
+BistroのRust版とYAML版はLinuxのVulkan構成とWindowsの二API・表示構成でビルドを確認し、
+CLI、シェーダーとの接続、レシピなどのサンプル固有のCPUテストはWindowsで各版を一度ずつ明示実行します。
+実GPUテストは`cargo test -p <package> --example bistro`に対象のfeatureと`-- --ignored`を指定して実行します。
+
 `yaml_pipeline`とYAML版`bistro`の入口と設定は`crates/renderer-pipeline/examples/`にあります。
 ほかの入口は`crates/renderer/examples/`にあり、試験や計測と共用するfixtureのRustコードは`crates/renderer/fixtures/`にあります。

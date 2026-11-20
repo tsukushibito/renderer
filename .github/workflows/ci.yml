@@ -197,6 +197,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p renderer-pipeline --no-default-features --features yaml --lib --tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test optimized YAML frame assembly with CPU fixtures
+        if: runner.os == 'Linux' && matrix.backend == 'cpu'
+        run: cargo test --locked --release -p renderer-pipeline --no-default-features --features yaml --test frame_inputs
       - name: Exercise the CPU Graph composition example
         if: matrix.backend == 'cpu'
         shell: pwsh
@@ -215,19 +218,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p renderer --example frame_loop --release --no-default-features --features vulkan
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check and test the YAML Bistro example separately
-        if: contains(matrix.backend, 'vulkan') || contains(matrix.backend, 'd3d12')
+      - name: Check both Bistro demos on representative platforms
+        if: (runner.os == 'Linux' && matrix.backend == 'vulkan') || matrix.backend == 'vulkan,d3d12,presentation'
         shell: pwsh
         env:
           BACKEND: ${{ matrix.backend }}
-          CARGO_TARGET_DIR: target/yaml-bistro
         run: |
-          foreach ($features in @("yaml,$env:BACKEND", "yaml,$env:BACKEND,development-validation,graph-diagnostics")) {
-            cargo clippy --locked -p renderer-pipeline --example bistro --no-default-features --features $features -- -D warnings
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked -p renderer-pipeline --example bistro --release --no-default-features --features $features
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          cargo clippy --locked -p renderer --example bistro --no-default-features --features $env:BACKEND -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked -p renderer-pipeline --example bistro --no-default-features --features "yaml,$env:BACKEND" -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test Bistro sample contracts once without GPU access
+        if: matrix.backend == 'vulkan,d3d12,presentation'
+        shell: pwsh
+        env:
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          $features = "$env:BACKEND,tracy,development-validation,graph-diagnostics"
+          cargo test --locked -p renderer --example bistro --no-default-features --features $features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p renderer-pipeline --example bistro --no-default-features --features "yaml,$features"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise the CPU frame-memory workload
         if: matrix.backend == 'cpu'
         run: cargo run --locked -p renderer --example frame_memory --release --no-default-features --features memory-profiling -- cpu
@@ -258,9 +269,5 @@ jobs:
             cargo clippy --locked --workspace --all-targets --no-default-features --features $features -- -D warnings
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             cargo test --locked --workspace --release --no-default-features --features $features
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked -p renderer --example bistro --release --no-default-features --features $features
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            cargo test --locked -p renderer-pipeline --example bistro --release --no-default-features --features "yaml,$features" --target-dir target/yaml-bistro
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
