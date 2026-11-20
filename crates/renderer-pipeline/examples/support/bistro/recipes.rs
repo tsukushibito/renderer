@@ -51,15 +51,15 @@ impl Standard {
 
     pub fn prepare_view(
         &self,
-        camera: pbr::Camera,
+        view: pbr::ViewInput,
         sun: pbr::Sun,
         bounds: pbr::Bounds,
         environment: pbr::Environment,
     ) -> Result<pbr::PreparedView, GraphError> {
         match self {
-            Self::Forward(recipe) => recipe.prepare_view(camera, sun, bounds, environment),
-            Self::ForwardPlus(recipe) => recipe.prepare_view(camera, sun, bounds, environment),
-            Self::Deferred(recipe) => recipe.prepare_view(camera, sun, bounds, environment),
+            Self::Forward(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+            Self::ForwardPlus(recipe) => recipe.prepare_view(view, sun, bounds, environment),
+            Self::Deferred(recipe) => recipe.prepare_view(view, sun, bounds, environment),
         }
     }
 

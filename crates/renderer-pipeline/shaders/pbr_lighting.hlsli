@@ -92,7 +92,9 @@ struct BrdfInputs {
 
 BrdfInputs make_brdf_inputs(float3 position, Surface surface) {
     BrdfInputs result;
-    result.view = unit_or(camera.eye.xyz - position, surface.normal);
+    float3 to_eye = camera.light_color.w > 0.0
+        ? -camera.camera_forward_blend.xyz : camera.eye.xyz - position;
+    result.view = unit_or(to_eye, surface.normal);
     result.f0 = lerp(0.04, surface.base_color, surface.metallic);
     result.diffuse_color = surface.base_color * (1.0 - surface.metallic);
     return result;

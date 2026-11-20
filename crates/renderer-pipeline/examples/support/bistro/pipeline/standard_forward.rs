@@ -58,13 +58,18 @@ pub(super) fn build(
         f32::from_le_bytes(camera_bytes[index * 4..index * 4 + 4].try_into().unwrap())
     };
     let view = recipe.prepare_view(
-        pbr::Camera {
-            position: camera.position,
-            target: camera.target,
-            fov_y_degrees: camera.fov,
-            near: word(19),
-            far: word(23),
-        },
+        pbr::ViewInput::new(
+            std::array::from_fn(|column| std::array::from_fn(|row| word(column * 4 + row))),
+            camera.position,
+            std::array::from_fn(|axis| {
+                f64::from(camera.target[axis]) - f64::from(camera.position[axis])
+            }),
+            [word(19), word(23)],
+            pbr::Projection::SymmetricPerspective {
+                vertical_fov_degrees: camera.fov,
+                aspect: options.width as f32 / options.height as f32,
+            },
+        )?,
         pbr::Sun::from_normalized(
             [word(20), word(21), word(22)],
             [word(24), word(25), word(26)],

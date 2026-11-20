@@ -8,9 +8,10 @@ use renderer::graph::{
 };
 use renderer_pipeline::passes::output::SdrOutput;
 use renderer_pipeline::pbr::{
-    Bounds, CASCADE_COUNT, Camera, CameraStorage, Draw, Environment, Frame, FrameShadows,
-    IndexedDraw, Material, MaterialFactors, PreparedView, SceneLimits, ShadowHistory, ShadowKey,
+    Bounds, CASCADE_COUNT, CameraStorage, Draw, Environment, Frame, FrameShadows, IndexedDraw,
+    Material, MaterialFactors, PreparedView, Projection, SceneLimits, ShadowHistory, ShadowKey,
     ShadowSettings, ShadowSource, Sun, Transform, Unshadowed, UnshadowedView, VIEW_BYTES,
+    ViewInput,
 };
 use renderer_pipeline::pbr_forward::{
     Config, Prepared, Programs, add_shadow_pass, prepare, prepare_with_programs,
@@ -128,15 +129,27 @@ fn inputs(recipe: &Prepared, graph: &mut Graph) -> (PreparedView, Material, Inde
         .upload_image("upload environment", environment, &[0; 8])
         .unwrap();
     let environment = graph.image_view(environment, 0, 0).unwrap();
+    let near = 0.1;
+    let far = 40.0;
+    let z_scale = far / (near - far);
+    let scale = 1.0 / (55.0_f32.to_radians() * 0.5).tan();
+    let aspect = EXTENT[0] as f32 / EXTENT[1] as f32;
+    let input = ViewInput::new(
+        [
+            [scale / aspect, 0.0, 0.0, 0.0],
+            [0.0, -scale, 0.0, 0.0],
+            [0.0, 0.0, z_scale, -1.0],
+            [0.0, 0.0, -4.0 * z_scale + near * far / (near - far), 4.0],
+        ],
+        [0.0, 0.0, 4.0],
+        [0.0, 0.0, -1.0],
+        [near, far],
+        Projection::Perspective,
+    )
+    .unwrap();
     let view = recipe
         .prepare_view(
-            Camera {
-                position: [0.0, 0.0, 4.0],
-                target: [0.0; 3],
-                fov_y_degrees: 55.0,
-                near: 0.1,
-                far: 40.0,
-            },
+            input,
             Sun::new([0.4, 1.0, 0.3], [1.0; 3]).unwrap(),
             Bounds::new([-1.0; 3], [1.0; 3]).unwrap(),
             Environment {
