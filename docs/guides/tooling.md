@@ -317,6 +317,8 @@ ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
+CIでは`python -B tools/shaders/verify_pipeline_manifest.py`を実行し、SDKなしでHLSL、include、バイナリ、
+反射情報、ツールチェーン定義とRenderer側manifestのhashを照合する。Pipeline資産の欠落と未登録ファイルも検出する。
 UTF-8/BOMなし・LFへ揃えたHLSLとincludeを両ターゲットで使い、同じbyte列をhashへ使う。
 両形式のentry pointは`main`、shader modelは6.0、HLSLは2021、最適化は`-O3`。
 `BISTRO_LOCAL_LIGHTS`と`BISTRO_INSTANCING`でバリアントを選ぶ。SPIR-V 1.3の出力に
