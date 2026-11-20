@@ -13,6 +13,6 @@ mod yaml;
 #[cfg(feature = "yaml")]
 pub use yaml::{
     DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameSampledView,
-    FrameView, MaterialBinding, PipelineError, PipelineRequirements, PrepareOptions,
-    PreparedPipeline, Program, ResourceDesc, ShaderRequest,
+    FrameView, MaterialBinding, PipelineError, PipelineRequirements, PrepareInputs, PrepareOptions,
+    PrepareParameter, PrepareValue, PreparedPipeline, Program, ResourceDesc, ShaderRequest,
 };

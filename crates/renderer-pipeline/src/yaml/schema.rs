@@ -4,11 +4,11 @@ use renderer::program::SamplerDescriptor;
 use serde::Deserialize;
 
 use super::PipelineError;
+use super::assembly::Parameter;
+
+pub(super) const MAX_YAML_BYTES: usize = 1024 * 1024;
 
 pub(super) fn parse(yaml: &str) -> Result<Config, PipelineError> {
-    if yaml.len() > 1024 * 1024 {
-        return Err(PipelineError::Invalid("YAML exceeds 1 MiB".into()));
-    }
     let options = serde_saphyr::options! {
         strict_booleans: true,
         merge_keys: serde_saphyr::MergeKeyPolicy::Error,
@@ -24,15 +24,17 @@ pub(super) fn parse(yaml: &str) -> Result<Config, PipelineError> {
         .map_err(|error| PipelineError::Yaml(Box::new(error)))
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
     pub version: u32,
+    #[serde(default)]
     pub resources: Vec<ResourceSpec>,
     #[serde(default)]
     pub draw_lists: Vec<DrawListSpec>,
+    #[serde(default)]
     pub passes: Vec<PassSpec>,
-    pub output: String,
+    pub output: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -68,7 +70,7 @@ pub(super) enum ResourceSpec {
         id: String,
         #[serde(default)]
         source: ResourceSource,
-        bytes: u64,
+        bytes: Parameter<u64>,
     },
 }
 
@@ -121,7 +123,7 @@ pub(super) enum PassSpec {
         shader: String,
         #[serde(default)]
         bindings: Vec<BindingSpec>,
-        grid: Option<[u32; 2]>,
+        grid: Option<Parameter<[u32; 2]>>,
     },
 }
 
@@ -130,7 +132,7 @@ pub(super) enum PassSpec {
 pub(super) struct AttachmentSpec<T> {
     pub image: String,
     pub load: LoadAction,
-    pub clear: Option<T>,
+    pub clear: Option<Parameter<T>>,
     #[serde(default)]
     pub store: StoreAction,
 }
@@ -178,7 +180,7 @@ pub(super) enum BindingSpec {
         binding: u32,
         resource: String,
         offset: u64,
-        size: u64,
+        size: Parameter<u64>,
     },
     Sampler {
         group: u32,

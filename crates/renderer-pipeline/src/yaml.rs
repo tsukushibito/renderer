@@ -1,3 +1,4 @@
+mod assembly;
 mod frame;
 mod prepare;
 mod schema;
@@ -10,6 +11,7 @@ use renderer::program::{
     ManagedProgram, ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor,
 };
 
+pub use assembly::{PrepareInputs, PrepareParameter, PrepareValue};
 pub use frame::{
     DrawCandidate, FrameInputs, FrameMaterial, FrameOutput, FrameResource, FrameSampledView,
     FrameView, MaterialBinding,

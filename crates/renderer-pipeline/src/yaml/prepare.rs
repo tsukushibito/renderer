@@ -9,13 +9,15 @@ use renderer::program::{
     ManagedRasterProgram, RasterPipelineRequest,
 };
 
+use super::assembly::{ParameterType, Parameters, assemble};
 use super::schema::{
     self, AttachmentSpec, BindingSpec, Config, LoadAction, PassSpec, ResourceSource, ResourceSpec,
 };
 use super::{
     BindingSource, FrameScratch, MaterialVariant, Pass, PassKind, PipelineError,
-    PipelineRequirements, PrepareOptions, PreparedAttachment, PreparedBinding, PreparedPipeline,
-    Program, RasterDrawKind, RasterPrograms, Resource, ResourceDesc, ShaderRequest,
+    PipelineRequirements, PrepareInputs, PrepareOptions, PreparedAttachment, PreparedBinding,
+    PreparedPipeline, Program, RasterDrawKind, RasterPrograms, Resource, ResourceDesc,
+    ShaderRequest,
 };
 
 type ResolverError = Box<dyn Error + Send + Sync>;
@@ -33,16 +35,36 @@ impl PreparedPipeline {
         options: PrepareOptions,
         resolve: impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
     ) -> Result<Self, PipelineError> {
+        Self::from_yaml_fragments(&[yaml], options, PrepareInputs::default(), resolve)
+    }
+
+    /// Prepare an ordered set of version 1 YAML fragments as one pipeline.
+    ///
+    /// Resources, draw lists and passes share one namespace per kind across
+    /// the fragments. Declare the output once. All parameters are resolved
+    /// during preparation, before the pipeline can build a frame.
+    pub fn from_yaml_fragments(
+        fragments: &[&str],
+        options: PrepareOptions,
+        inputs: PrepareInputs<'_>,
+        resolve: impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
+    ) -> Result<Self, PipelineError> {
+        Self::prepare(assemble(fragments)?, options, inputs, resolve)
+    }
+
+    fn prepare(
+        config: Config,
+        options: PrepareOptions,
+        inputs: PrepareInputs<'_>,
+        mut resolve: impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
+    ) -> Result<Self, PipelineError> {
         let Config {
-            version,
             resources,
             draw_lists,
             passes,
             output,
-        } = schema::parse(yaml)?;
-        if version != 1 {
-            return Err(invalid(format!("unsupported pipeline version {version}")));
-        }
+            ..
+        } = config;
         if options.frames_in_flight == 0 {
             return Err(invalid("frames_in_flight must be nonzero"));
         }
@@ -50,9 +72,10 @@ impl PreparedPipeline {
             return Err(invalid("a pipeline requires at least one pass"));
         }
 
+        let params = Parameters::new(inputs.values)?;
         let resources = resources
             .into_iter()
-            .map(|spec| prepare_resource(spec, options.frame_extent))
+            .map(|spec| prepare_resource(spec, options.frame_extent, &params))
             .collect::<Result<Vec<_>, _>>()?;
         let resource_ids = index_names(
             resources.iter().map(|resource| resource.id.as_str()),
@@ -68,6 +91,7 @@ impl PreparedPipeline {
                 )));
             }
         }
+        let output = output.ok_or_else(|| invalid("pipeline must declare an output"))?;
         let output = *resource_ids
             .get(output.as_str())
             .ok_or_else(|| invalid(format!("unknown output resource {output:?}")))?;
@@ -81,7 +105,6 @@ impl PreparedPipeline {
         let mut pass_ids = HashSet::with_capacity(passes.len());
         let mut sampled_views = Vec::new();
         let mut programs = Programs::default();
-        let mut resolve = resolve;
         let mut max_bindings = 0;
         let mut max_colors = 0;
         let passes = passes
@@ -100,6 +123,7 @@ impl PreparedPipeline {
                     &resources,
                     &resource_ids,
                     &draw_list_ids,
+                    &params,
                     &mut sampled_views,
                     &mut programs,
                     &mut resolve,
@@ -279,6 +303,7 @@ fn index_names<'a>(
 fn prepare_resource(
     spec: ResourceSpec,
     frame_extent: Option<[u32; 2]>,
+    params: &Parameters<'_>,
 ) -> Result<Resource, PipelineError> {
     let (id, source, desc) = match spec {
         ResourceSpec::Image {
@@ -326,6 +351,9 @@ fn prepare_resource(
             (id, source, ResourceDesc::Image(desc))
         }
         ResourceSpec::Buffer { id, source, bytes } => {
+            let bytes = params
+                .resolve(bytes)
+                .map_err(|error| invalid(format!("buffer {id:?}: {error}")))?;
             if bytes == 0 {
                 return Err(invalid(format!("buffer {id:?} must have nonzero size")));
             }
@@ -415,6 +443,7 @@ fn prepare_pass(
     resources: &[Resource],
     resource_ids: &HashMap<&str, usize>,
     draw_list_ids: &HashMap<&str, usize>,
+    params: &Parameters<'_>,
     sampled_views: &mut Vec<String>,
     programs: &mut Programs,
     resolve: &mut impl FnMut(ShaderRequest<'_>) -> Result<Program, ResolverError>,
@@ -439,7 +468,7 @@ fn prepare_pass(
                         .ok_or_else(|| pass_error(&id, format!("unknown draw list {list:?}")))
                 })
                 .transpose()?;
-            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views)?;
+            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views, params)?;
             let has_material_bindings = bindings
                 .iter()
                 .any(|binding| matches!(binding.source, BindingSource::Material(_)));
@@ -451,10 +480,10 @@ fn prepare_pass(
             }
             let colors = colors
                 .into_iter()
-                .map(|attachment| prepare_attachment(&id, attachment, resource_ids))
+                .map(|attachment| prepare_attachment(&id, attachment, resource_ids, params))
                 .collect::<Result<Vec<_>, _>>()?;
             let depth = depth
-                .map(|attachment| prepare_attachment(&id, attachment, resource_ids))
+                .map(|attachment| prepare_attachment(&id, attachment, resource_ids, params))
                 .transpose()?;
             let program = match (shader, shader_template) {
                 (Some(shader), None) => {
@@ -580,7 +609,11 @@ fn prepare_pass(
                 ));
             };
             let program = &programs.compute[index];
-            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views)?;
+            let bindings = prepare_bindings(&id, bindings, resource_ids, sampled_views, params)?;
+            let grid = grid
+                .map(|grid| params.resolve(grid))
+                .transpose()
+                .map_err(|error| pass_error(&id, error))?;
             if bindings
                 .iter()
                 .any(|binding| matches!(binding.source, BindingSource::Material(_)))
@@ -622,14 +655,19 @@ fn resource_index(
         .ok_or_else(|| pass_error(pass, format!("unknown resource {name:?}")))
 }
 
-fn prepare_attachment<T>(
+fn prepare_attachment<T: ParameterType>(
     pass: &str,
     spec: AttachmentSpec<T>,
     resource_ids: &HashMap<&str, usize>,
+    params: &Parameters<'_>,
 ) -> Result<PreparedAttachment<T>, PipelineError> {
     let load = match (spec.load, spec.clear) {
         (LoadAction::Load, None) => LoadOp::Load,
-        (LoadAction::Clear, Some(value)) => LoadOp::Clear(value),
+        (LoadAction::Clear, Some(value)) => LoadOp::Clear(
+            params
+                .resolve(value)
+                .map_err(|error| pass_error(pass, error))?,
+        ),
         (LoadAction::Discard, None) => LoadOp::Discard,
         _ => {
             return Err(pass_error(
@@ -728,6 +766,7 @@ fn prepare_bindings(
     bindings: Vec<BindingSpec>,
     resource_ids: &HashMap<&str, usize>,
     sampled_views: &mut Vec<String>,
+    params: &Parameters<'_>,
 ) -> Result<Vec<PreparedBinding>, PipelineError> {
     bindings
         .into_iter()
@@ -769,7 +808,9 @@ fn prepare_bindings(
                     BindingSource::Buffer {
                         resource: resource_index(pass, &resource, resource_ids)?,
                         offset,
-                        size,
+                        size: params
+                            .resolve(size)
+                            .map_err(|error| pass_error(pass, error))?,
                     },
                 ),
                 BindingSpec::Sampler {
@@ -1172,6 +1213,65 @@ output: final"#,
         let yaml = DRAW_PIPELINE.replace("version: 1", "version: 2");
         assert!(
             matches!(prepare_draw(&yaml), Err(PipelineError::Invalid(message)) if message.contains("version 2"))
+        );
+    }
+
+    #[test]
+    fn fragments_resolve_typed_values_and_share_connections() {
+        let (declarations, passes) = DRAW_PIPELINE.split_once("passes:").unwrap();
+        let declarations = declarations.replace(
+            "draw_lists:",
+            "  - {id: scratch, kind: buffer, bytes: {param: scratch_size}}\ndraw_lists:",
+        );
+        let passes = format!("version: 1\npasses:{passes}")
+            .replace("clear: [0, 0, 0, 1]", "clear: {param: background}");
+        let values = [
+            super::super::PrepareParameter {
+                name: "scratch_size",
+                value: super::super::PrepareValue::Size(16),
+            },
+            super::super::PrepareParameter {
+                name: "background",
+                value: super::super::PrepareValue::Color([0.3, 0.6, 0.9, 1.0]),
+            },
+        ];
+        let prepare = |fragments: &[&str], values| {
+            PreparedPipeline::from_yaml_fragments(
+                fragments,
+                OPTIONS,
+                PrepareInputs {
+                    values,
+                    ..Default::default()
+                },
+                |_| Ok(Program::Raster(ManagedRasterProgram::mesh())),
+            )
+        };
+        let fragments = [declarations.as_str(), passes.as_str()];
+        prepare(&fragments, &values).unwrap();
+        for (fragments, values, expected) in [
+            (
+                fragments.as_slice(),
+                &values[..1],
+                "missing preparation parameter \"background\"",
+            ),
+            (
+                &[
+                    declarations.as_str(),
+                    passes.as_str(),
+                    "version: 1\noutput: final",
+                ],
+                values.as_slice(),
+                "exactly one output",
+            ),
+        ] {
+            assert!(
+                matches!(prepare(fragments, values), Err(PipelineError::Invalid(message)) if message.contains(expected))
+            );
+        }
+        let mut wrong = values;
+        wrong[1].value = super::super::PrepareValue::Grid([1, 1]);
+        assert!(
+            matches!(prepare(&fragments, &wrong), Err(PipelineError::Invalid(message)) if message.contains("wrong type"))
         );
     }
 
