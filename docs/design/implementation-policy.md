@@ -656,10 +656,11 @@ snapshotを使う標準描画の入口は[現行契約](rendergraph.md#エンジ
 | 標準パス | `renderer-pipeline`で提供する、公開Graph APIを使った再利用部品。利用側が不透明描画やポスト処理など必要な部品を直接組み合わせられる。 |
 | 標準グラフ | `renderer-pipeline`で提供する、公開標準パスを組み合わせる構築レシピ。意味を定めた箇所で利用側の処理を交換・追加できる。 |
 
-依存は`アプリ → renderer-pipeline → renderer`の向きとする。Graph、Program、snapshotの入力接続、GPU実行は`renderer`が担う。
+依存は`アプリ → renderer-pipeline → renderer`の向きとする。Graph、Program、snapshotの入力接続、容量の集約、GPU実行は`renderer`が担う。
 描画方式に応じたパスの選択・合成を`renderer-pipeline`に置くことで、独自構成は`renderer`だけに依存できる。
-共用する組み込みシェーダーとそのABIは、管理下Programとして`renderer`が提供する。
-Rustの標準パス、レシピと準備APIは既定の構成で利用できる。
+`renderer`は共通の組み込みProgramとABI、`renderer-pipeline`は標準レシピ固有の監査済みシェーダーとABIを所有する。
+Rustの標準パス、レシピと準備APIは既定の構成で利用できる。GPUで使うProgramは選んだバックエンドの形式だけを埋め込み、
+パイプラインの作成と資源の予約は使用するレシピの`WorkingSet`に従う。
 標準グラフは標準パスを組み合わせ、各パスは通常の構築関数と型付き入出力で公開Graph APIを呼ぶ。
 Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加することを通常の拡張手順にしない。
 
@@ -669,7 +670,7 @@ Graphの共通解析・backendへ、opaqueやBloom等の効果選択を追加す
 
 Engineはasset管理や不変なframe入力のcaptureを提供できる。runtimeは資源の常駐、同期、投入、GPU完了と退役を担う。
 入力のGraph接続自体が標準opaqueを追加する設計にはしない。
-`renderer_pipeline::standard::snapshot`は、Engineの入力接続と標準forwardを組み合わせた便利APIを提供する。
+`renderer_pipeline::unlit_forward::snapshot`は、Engineの入力接続とunlit Forwardを組み合わせた便利APIを提供する。
 利用側は同じ資源接続・実行経路で独自のGraphを構築できる。
 snapshotを使わないCompute-only、複数View、必要な数の画像・buffer出力も基本APIの設計対象とし、
 単一RGBA8画像やView寸法をすべてのGraphへ強制しない。nativeの対応範囲とPresentation固有の形式条件は別に維持する。
@@ -699,7 +700,7 @@ Graph内の出力handleを返すことと、Graph外へ保持するexportは区�
 一つの処理を複数ノードのmoduleへ置き換えられる一方、ForwardからDeferredへの変更等では、
 公開標準パスと独自パスを使って利用側がGraphを構築する。
 完成Graphのnode名・番号を検索して差し替える方式や、あらゆる構造変更を受け持つhook群を標準契約の前提にしない。
-`standard::snapshot`の拡張点はopaque後の同寸RGBA8を扱う。7.4節の標準HDR挿入点はHDR構成側の契約である。
+`unlit_forward::snapshot`の拡張点はopaque後の同寸RGBA8を扱う。7.4節の標準HDR挿入点はHDR構成側の契約である。
 
 #### 定義の再利用と毎フレームの入力
 
@@ -920,8 +921,9 @@ GPUが使うパイプラインと対応するProgramは既存の実行所有者�
 レシピは公開Graphを借用し、パスを追加して後段で使うハンドルを返す。構成やフレーム入力に応じた分岐は
 Rustで行う。producer、hazard、初期化、GPU同期と寿命には[RenderGraph](rendergraph.md)の契約を適用する。
 
-`renderer-pipeline`の`Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
+`renderer::capacity::Preparation`は、起動・構成変更時に標準レシピと独自パスの要求をまとめる。
 同一フレームで同時に宣言する数を合算し、同時フレーム数を考慮して一時画像とバッファの個数を予約する。
+Graphの宣言上限と`WorkingSet`を一括で加える場合は、すべての上限・資源の検査が通った時点で要求を更新する。
 実行用`WorkingSet`には使うProgramの版とRasterのsample数を含める。Graphの解析とアップロードに必要な上限を
 利用側から渡して`GraphCapacity`を確定する。通常フレームはこの容量を再利用し、上限を超えた場合は容量不足を返す。
 手順とコード例は[Rustのパイプライン構築](../guides/tooling.md#rust-pipeline)を参照する。
@@ -930,8 +932,10 @@ Rustで行う。producer、hazard、初期化、GPU同期と寿命には[RenderG
 管理下Programへ取り込み、その版を使う。フレーム内は公開Graphでbindingを指定し、描画順に合わせてRaster batchへ渡す。
 [テンプレートのビルド手順](../guides/tooling.md#material-shader-build)を参照する。
 
-`renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)では専用のシャドウ、照明、Bloomを標準の
-トーンマッピングとSDR出力につなぐ。シャドウはカスケードごとに判定し、更新した画像の版とキャッシュキーは
+`renderer_pipeline::pbr_forward`は1× PBR Forward、4カスケードの影、HDRとSDR出力のレシピを提供する。
+同じ公開パスを個別に呼べるため、アプリはHDRの加工を合成できる。
+`renderer-pipeline`の[Bistro](../guides/tooling.md#bistro-scene-pipeline)は標準レシピと比較用の描画構成を使う。
+シャドウはカスケードごとに判定し、更新した画像の版とキャッシュキーは
 submit受理後に公開する。次フレームは既存のGraphのimportとGPU寿命の契約に従って画像を参照する。
 Vulkanのdescriptor予約はComputeのdispatch分を含める。`renderer`のBistroは公開Graph APIを直接使う例である。
 
@@ -1426,12 +1430,15 @@ B2の照明はsunと明示した一定ambientであり、B3のIBL・影・固定
 SDR確認用のclampとsRGB OETFは利用側の別passで一度だけ行う。
 標準forwardのunlit recipeへPBR固有のeffect列挙やasset読込を追加しない。
 
-Bistro専用shaderはHLSLを正本とし、固定版DXCの同じ入力からSPIR-V 1.3とDXILを生成する。
+Bistroと標準PBRで使うshaderのHLSLは`crates/renderer-pipeline/shaders/`を正本とし、
+固定版DXCの同じ入力からSPIR-V 1.3とDXILを生成する。
 同じソースで二APIの材質処理・Compute・頂点変換を保守し、手書きのregisterとspaceをRust descriptorの
 bindingとgroupに対応させる。API固有の宣言とclip出力Yの符号はHLSLの`__spirv__`分岐に置く。
 影cascade番号とinstance配置はそれぞれ4／68 byteで、Vulkanのpush constantとD3D12の`b7, space0`のroot constantsに対応する。
 既存の生成スクリプトでソース・include・バリアント・出力を固定し、SPIRV-Crossはreflectionに使う。
 Vulkanのbuffer配置はDXCの既定規則を使い、追加Device featureを前提にしない。
+標準PBRと影の取り込みに限り、`renderer-pipeline`の非公開モジュールが固定のバイナリとdescriptorの契約を保証する。
+そのモジュールで既存のtrusted Program入口を使い、公開レシピはGraphの安全な型付き資源とbindingを受け取る。
 生成compilerの変更は描画の丸めにも影響するため、ABI、両APIの画像、同じAPIの移行前後を
 [既存の比較閾値](../guides/development.md#bistro-pbr)で再確認する。
 
@@ -1722,7 +1729,7 @@ D3D12での表示経路を、共通契約の検証に先立つ必須条件には
 shaderは既存GLSL／SPIR-VからSPIRV-CrossでHLSLを生成し、DXCでDXILへ変換する経路を採用した。[^spirvcross][^dxc]
 固定5種類の再生成一致とreflectionを確認し、tool版・hash・引数・ABIを[ツールガイド](../guides/tooling.md#d3d12の固定shader生成)と管理下metadataに記す。
 binding、combined sampler、行列・座標・データ配置の等価性は生成成功だけで判断せず、実出力と照合する。
-この初期経路は標準shaderとfixtureで使う。Bistro専用shaderの現行経路は[利用側のshader設計](#bistro-runtime-cook)を参照する。
+この初期経路は標準shaderとfixtureで使う。標準PBRとBistroで共用するHLSLの生成は[shader設計](#bistro-runtime-cook)を参照する。
 Rust bindingsはMicrosoftの`windows-bindgen`によるbackend-private生成を採用する。
 D3D12・DXGIと必要なWin32 APIだけを生成し、生成型はD3D12バックエンド内部に閉じる。
 準備範囲ではDXCのnative APIを使わず、固定CLIでshaderを事前生成する。

@@ -14,6 +14,7 @@ RenderGraph は[図で読む設計ガイド](design/rendergraph-overview.md)か�
 |---|---|
 | Examplesを動かしたい | [Examplesの実行と選び方](guides/examples.md) |
 | Rustで標準パスやレシピを使いたい | [`renderer-pipeline`の標準部品](design/rendergraph.md#公開標準パスと標準グラフ) |
+| PBR Forwardを小さなシーンで試したい | [サンプルの起動](guides/examples.md#pbr-forward-example)、[標準レシピとHDRへのパスの追加](guides/tooling.md#pbr-forward-recipe) |
 | Rustで独自パスを組み合わせたい | [パイプラインの準備と合成](guides/tooling.md#rust-pipeline) |
 | 全体像をつかみたい | [図で読むRenderGraph](design/rendergraph-overview.md)：短いコード例、依存関係の図、処理と資源の寿命 |
 | 型や処理の関係を図で追いたい | [設計図集](design/rendergraph-diagrams.md)：型の関係、owned命令、compile、producer/hazard、範囲、投入・完了、import、容量 |

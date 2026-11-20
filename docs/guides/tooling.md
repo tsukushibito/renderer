@@ -139,11 +139,12 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
 利用側は標準パスと独自のRaster、Compute、copyを同じGraphに登録する。
 独自のShader Programは[外部取込](#runtime-shader-import)の契約に従って用意し、標準部品と同じように準備する。
 
-1. 起動または構成変更時に、同時処理する上限から`Preparation`を作る。`PreparedForward::prepare`に
+1. 独自構成を起動するときは、同時処理する上限から`renderer::capacity::Preparation`を作る。`unlit_forward::PreparedForward::prepare`に
    描画先の`ForwardConfig`と最大draw数を渡し、`PreparedOutput::prepare`に出力寸法と`SdrOutput`を渡す。
    各レシピが必要な一時画像、Program、Graph宣言数を登録する。
 2. 独自パスの一時画像やバッファを`reserve_image`／`reserve_buffer`で登録する。個数は1フレーム当たりで指定する。
    `add_graph_requirements`で独自パスの宣言数を加え、`add_working_set`でProgramなどを取り込む。
+   宣言数と資源をまとめて登録する場合は`add_requirements`を使う。
    `add_working_set`に渡す`ResourceClass`の個数は同時に保持する全フレーム分で指定する。
    `working_set()`をRuntimeに渡し、`graph_capacity`で求めた容量で`GraphPool`を作る。`graph_capacity`は集計値と
    基準値の大きい方を宣言容量に使う。依存・範囲解析やアップロードの上限は基準となる`GraphCapacity`で指定する。
@@ -152,12 +153,32 @@ Computeは`WorkingSet::compute`へ渡す。起動時の`Runtime::new`または�
    `OutputImages`の`display_linear`や`sdr`を使って後段、export、readbackを指定し、Graphをcompileする。
    GPUへの投入と表示はアプリが選ぶ。寸法、設定、アセット版が変わるときは変更境界で再準備する。
 
-[`rust_pipeline`のソース](../../crates/renderer-pipeline/examples/rust_pipeline.rs)では、Forwardと標準出力の間に
+[`rust_pipeline`のソース](../../crates/renderer-pipeline/examples/rust_pipeline.rs)では、unlit Forwardと標準出力の間に
 HDR画像のコピーパスを挟んだGraphをCPUで構築・compileする。
 
 ```sh
 cargo run --locked -p renderer-pipeline --no-default-features --example rust_pipeline
 ```
+
+<a id="pbr-forward-recipe"></a>
+
+### PBR Forwardの標準レシピを使う
+
+`renderer_pipeline::pbr_forward::prepare(config, scene_limits)`は、1× PBR Forward、4カスケードの影、
+HDRとSDR出力に必要なProgramと一時資源を集める。描画寸法・出力条件と、同時フレーム・材質・描画・各カスケードの
+キャスターの上限を渡す。返された準備済みレシピの`preparation()`を使い、`Runtime`と`GraphPool`を準備する。
+追加パスの宣言、アップロード、表示やGPUの完了待ちまで保持する資源の容量も、アプリの構成に沿って指定する。
+
+毎フレーム、`prepare_view`でカメラ・太陽光・シーンの範囲・IBLを組み合わせ、`Frame::new`にGraph内の材質と描画スライスを渡す。
+`add_passes`はシャドウ、シーン描画、出力を追加し、HDR・D32深度・SDRを返す。
+HDRを加工したい場合は`add_scene`で照明済みのHDRを受け取り、同じGraphに独自パスを追加して、
+その出力を`add_output`へ渡す。画像のexportやreadback、GPUへの投入は必要に応じてアプリが行う。
+
+シャドウの既定経路では共通のキャスターリストから4枚のD32画像を描く。
+アプリはカスケードごとにキャスターを変えたり、取り込んだ画像を`ShadowSource::Reuse`で渡したりできる。
+有効な履歴を選び、更新を投入受理後に公開するのはアプリの責務である。
+準備と入力アップロード、通常の描画、HDR加工の両経路は[`pbr_forward`のソース](../../crates/renderer-pipeline/examples/pbr_forward.rs)で確認できる。
+実行方法は[小さなPBRシーン](examples.md#pbr-forward-example)を参照する。
 
 <a id="material-shader-build"></a>
 
@@ -168,11 +189,11 @@ cargo run --locked -p renderer-pipeline --no-default-features --example rust_pip
 ビルド入力はJSONで、`schema_version: 1`、名前付きの`templates`と`materials`、コンパイルする組を並べた`programs`を指定する。
 ソースと任意の`include_dirs`は入力ファイルからの相対パスで指定できる。
 
-Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/renderer/examples/support/bistro/shaders/material-programs.json)を次のようにビルドする。
+Python 3.11以降と固定版Vulkan SDKを使い、たとえば[Bistroのビルド入力](../../crates/renderer-pipeline/shaders/material-programs.json)を次のようにビルドする。
 出力先には新しいディレクトリを指定する。SDKの場所は`VULKAN_SDK`または`--sdk-root`で指定できる。
 
 ```powershell
-python -B tools/shaders/build_material_programs.py --manifest crates/renderer/examples/support/bistro/shaders/material-programs.json --output .tools/bistro-material-programs
+python -B tools/shaders/build_material_programs.py --manifest crates/renderer-pipeline/shaders/material-programs.json --output .tools/bistro-material-programs
 ```
 
 `manifest.json`はテンプレート・材質型の組と、各ステージのSPIR-V／DXIL、反射情報とhashを結ぶ。
@@ -193,9 +214,10 @@ D3D12では`--api d3d12`を指定する。全シーンの素材準備と追加�
 
 ### Bistroの描画パイプラインを組み立てる
 
-`renderer-pipeline`の`bistro`は、シャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)までを
-同じGraphへ追加する。`--pipeline`でForward、Forward+、Forward-reference、Deferredを選び、
-対応するMSAAや描画形式を指定できる。Bistroはカメラ、IBL、材質、可視判定と並び替えを行った描画候補を供給し、
+`renderer-pipeline`の`bistro`は、Forward 1×の直接描画で標準 PBR レシピを使う。
+`--pipeline`でForward、Forward+、Forward-reference、Deferredを選び、対応するMSAAや描画形式を指定できる。
+比較用の経路はサンプルが共通パスから構成し、シャドウからシーンのHDR、[BloomとSDR](#bistro-post-pipeline)までを
+同じGraphへ追加する。Bistroはカメラ、IBL、材質、可視判定と並び替えを行った描画候補を供給し、
 最終画像をキャプチャまたは表示する。描画寸法が変わるとレシピと一時画像を新しい寸法で準備する。
 
 ```powershell
@@ -228,17 +250,17 @@ Bistroは遮蔽物の描画条件と光源行列を4枚のD32画像ごとに比�
 zlib-style licenseの所在は[provenance](../../tools/bistro/mikktspace/provenance.json)へ記録する。
 ClangやMikk shared libraryをRendererのruntime依存へ追加しない。
 
-利用側のPBR、影、Bloom、Deferred、Forward+、可視性判定の正本は
-`crates/renderer/examples/support/bistro/shaders/`の`.hlsl`と共通`.hlsli`に置く。
-既存の[生成スクリプト](../../crates/renderer/examples/support/bistro/shaders/regenerate.ps1)から
+標準PBRと影、BistroのBloom、Deferred、Forward+、可視性判定の正本は
+`crates/renderer-pipeline/shaders/`の`.hlsl`と共通`.hlsli`に置く。両方のBistroサンプルもこの資産を参照する。
+[生成スクリプト](../../crates/renderer-pipeline/shaders/regenerate.ps1)から
 固定版DXCを呼び、同じ正本をSPIR-VとDXILに直接コンパイルする。
 標準のNeutral・FXAA・SDR出力shaderとライセンスは`crates/renderer/shaders/`に置く。
 通常buildは生成済みSPIR-V／DXILを使う。標準shaderを変更したときは共通のSPIR-V／DXILを再生成してから、
 それらのmanifestを参照するBistroのmanifestも再生成する。
 
 ```powershell
-& ./crates/renderer/examples/support/bistro/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
-& ./crates/renderer/examples/support/bistro/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
+& ./crates/renderer-pipeline/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1
+& ./crates/renderer-pipeline/shaders/regenerate.ps1 -SdkRoot C:/VulkanSDK/1.4.341.1 -Verify
 ```
 
 `-Verify`は一時directoryで再生成し、checkoutを書き換えずbinary・reflection・manifestを照合する。
@@ -316,7 +338,7 @@ COM ABIが同じでも、他の`windows` crateの型とprivate生成型のRust�
 ## D3D12の固定shader生成
 
 標準shaderとfixtureのうちtoolchain定義に列挙した管理下GLSL／SPIR-Vから、SPIRV-CrossでHLSL、DXCでDXILを生成する。
-Bistro専用shaderは[HLSLからの直接生成](#bistro-tools)を使う。
+標準PBRとBistroのshaderは[HLSLからの直接生成](#bistro-tools)を使う。
 入力のSPIR-Vは既存のVulkan基準を維持し、この手順では書き換えない。
 通常のRustビルドは管理下のbinaryを利用し、shader compilerやSDKを要求しない。
 
@@ -554,7 +576,9 @@ full debug情報とstripなしだけを変更する。`release`は通常構成�
 PDBが存在しても行情報を得られるとは限らない。両構成を同条件で測り、debug情報を加えた差も記録する。
 helperは専用のCargo出力領域を作り、実行ファイル、対応するPDB、`manifest.json`を保存する。
 manifestにはCargoパッケージとexample、source/lock/toolchain、要求・実効feature、観測したCargo profile、EXE/PDBのhashとGUID/ageを含める。
-`--package renderer-pipeline`を選ぶと両crateのソースを記録する。BistroのRustレシピと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
+`--package renderer-pipeline`を選ぶと両crateのソースを記録する。
+Bistroが共用する`crates/renderer-pipeline/shaders/`は両パッケージの記録に含まれる。
+BistroのRustレシピと固定条件`tools/bistro/conditions.json`もsource hashの対象になる。
 capture/export/行解決は保存したbytesを再検証し、後のCargo buildで置換される`target/`のEXEを直接使わない。
 
 既定のパッケージは`renderer`、exampleは`windowed`、featuresは`vulkan,d3d12,presentation`であるため、

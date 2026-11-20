@@ -952,23 +952,25 @@ depth-only／color-only、HDR、MRT／mip等の契約を検討するもので、
 
 ## 公開標準パスと標準グラフ
 
-`renderer_pipeline::standard::passes`は公開Graph操作を使う構築関数、
-`renderer_pipeline::standard::graphs`はそれらを組み合わせるレシピである。これらのRust APIは既定の構成で利用できる。
-Engineやsnapshotを必須にせず、`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取る。
-レシピもGraphを借用してその場で構築する。標準Forwardは`SceneColor { color, depth }`というGraph内のhandleを返す。
+`renderer_pipeline::passes`は公開Graph操作を使う構築関数を提供する。
+`renderer_pipeline::pbr_forward`と`renderer_pipeline::unlit_forward`は公開パスを組み合わせるレシピである。
+レシピはGraphを借用してパスを追加する。unlit Forwardの入口は`RasterPass::draw`と同じowned／borrowed `RasterDraw`のiteratorを受け取り、
+`SceneColor { color, depth }`というGraph内のhandleを返す。
 export、readback、compile、submit、presentと、その結果の所有は呼び出し側が選ぶ。
 
 | 部品 | 入出力と意味 |
 |---|---|
 | `passes::opaque` | callerのcolor attachmentと任意depthへ頂点色×tintを描く。RGBA8／RGBA16Fから公開mesh Programを選び、Clear／Load／Storeを引き継ぐ |
 | `passes::depth_prepass` | callerのD32 attachmentへ同じ頂点変換の深度だけを描く。colorを確保しない |
-| `graphs::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
-| `graphs::PreparedForward` | `ForwardConfig`と最大draw数に応じた要求を`Preparation`へ登録し、フレームごとに`SceneColor`を構築する |
-| `passes::tone_map_neutral` | scene-linear RGBA16Fに露出倍率とKhronos Neutralを適用し、同寸のdisplay-linear RGBA16Fへ書く |
-| `passes::write_sdr` | 指定したcolor viewから同寸のRGBA8_UNORMへ書く。`SdrOutput`でFXAAの有無と出力encodingを選ぶ |
-| `graphs::PreparedOutput` | 寸法と`SdrOutput`に応じた要求を登録し、HDR入力にトーンマッピングとSDR変換を追加する。トーンマッピング後の線形画像とSDR画像を返す |
+| `unlit_forward::forward` | 指定したcolorと必要ならD32を作り、clearとopaqueを追加する。`ForwardConfig`はframeをまたいで再利用できる |
+| `unlit_forward::PreparedForward` | `ForwardConfig`と最大draw数に応じた要求を`Preparation`へ登録し、フレームごとに`SceneColor`を構築する |
+| `pbr_forward::prepare` | 材質、太陽光、IBLを使う1×レシピを準備する。4カスケードの影、RGBA16FのHDR、D32深度、SDR出力を構築する |
+| `passes::output::tone_map_neutral` | scene-linear RGBA16Fに露出倍率とKhronos Neutralを適用し、同寸のdisplay-linear RGBA16Fへ書く |
+| `passes::output::write_sdr` | 指定したcolor viewから同寸のRGBA8_UNORMへ書く。`SdrOutput`でFXAAの有無と出力encodingを選ぶ |
+| `passes::output::PreparedOutput` | 寸法と`SdrOutput`に応じた要求を登録し、HDR入力にトーンマッピングとSDR変換を追加する。トーンマッピング後の線形画像とSDR画像を返す |
 
-準備済みレシピは一時資源とProgram、Graph宣言数を`Preparation`へ登録する。独自パスの要求も同じ準備に加えられる。
+準備済みレシピは一時資源とProgram、Graph宣言数を`renderer::capacity::Preparation`へ登録する。
+独自パスの要求も同じ準備に加えられる。
 [準備と使い方](../guides/tooling.md#rust-pipeline)を参照する。
 
 両出力パスは`RasterPass::draw_fullscreen`を使う。頂点入力のないtrusted Programが3頂点を生成し、Graphは頂点・インデックスbufferへの依存を追加しない。
@@ -976,9 +978,9 @@ export、readback、compile、submit、presentと、その結果の所有は呼�
 ウィンドウには`SdrEncoding::Linear`で書いた画像を渡し、PresenterがsRGB変換を行う。オフスクリーンのSDRデータには`SdrEncoding::Srgb`を選ぶ。
 Bloomなど露出前の効果はscene-linear画像に接続し、トーンマッピングとSDR変換の間にも任意のGraph処理を組み込める。
 
-初期標準描画は照明を計算しない。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
+unlit Forwardは頂点色とtintから出力色を求める。入力のlinear色をRGBA8_UNORMへ書く場合は0〜1へ量子化し、
 RGBA16Fでは1超や負値も保持する。HDR形式を選ぶだけでPBR、露出、tone mappingやHDR表示を実装したことにはならない。
-標準Forward recipeは2D・mip/layer各1・sample数1の通常Zを扱う。4× MSAAを組むときは公開Graphでアタッチメントとresolve先を指定する。
+両Forwardレシピは2D・mip/layer各1・sample数1の通常Zを扱う。4× MSAAを組むときは公開Graphでアタッチメントとresolve先を指定する。
 `opaque`単体はcolor-onlyも許す。recipeの`depth: false`ならdepthは作らず、post入力のdepthも`None`となる。
 必要なdepthがなければ利用側は明示的に拒否するか別の処理を選び、暗黙の代用画像を作らない。
 
@@ -989,9 +991,9 @@ Graphのdepthアクセスは保守的なattachment read/writeのままであり�
 Loadは初期化済み内容を保持し、Clearは0 drawでも初期化する。Discardや不十分な描画被覆を初期化済みにはしない。
 未初期化LoadとStore Discard後のreadは通常のGraph構築／compile契約で拒否する。
 
-現在の標準opaqueにはalpha blendと透明ソートがない。渡されたdraw順を維持し、alphaは出力へ格納するだけである。
-半透明を合成する場合の並べ替えとblend・depth設定は利用側の責務であり、
-trusted Raster descriptorと`Graph::raster`で独自の描画部品を定義する。
+`passes::opaque`は渡されたdraw順を維持し、alphaは出力へ格納する。
+PBR Forwardは不透明・マスク描画の後にalpha blendを行い、透明な描画の順序は入力に従う。
+独自のblend・depth設定を使う描画部品は、trusted Raster descriptorと`Graph::raster`で定義できる。
 独自graphics shaderや任意stateの提供を、固定Program群や標準部品の公開だけで完成扱いにしない。
 
 `forward`が返すscene-linear colorやdepthを入力にして、追加のパスを同じGraphに構築できる。
@@ -999,14 +1001,14 @@ trusted Raster descriptorと`Graph::raster`で独自の描画部品を定義す�
 
 ```rust,ignore
 use renderer::graph::ImageDesc;
-use renderer_pipeline::standard::graphs;
+use renderer_pipeline::unlit_forward;
 
-let config = graphs::ForwardConfig {
+let config = unlit_forward::ForwardConfig {
     color: ImageDesc::rgba8(1280, 720),
     clear_color: [0.0, 0.0, 0.0, 1.0],
     depth: true,
 };
-let scene = graphs::forward(&mut graph, "forward", inputs.draws(), config)?;
+let scene = unlit_forward::forward(&mut graph, "forward", inputs.draws(), config)?;
 let output = if let Some(effect) = effect {
     effect.append(&mut graph, scene.color)?
 } else {
@@ -1034,7 +1036,7 @@ callbackは保持せず、完成命令は入力を所有する。準備済み容
 ## エンジン入力と標準描画
 
 **現行実装:** 利用側がGraphから構築を始め、必要なsnapshotだけを接続できる。
-`renderer_pipeline::standard::snapshot`は標準opaque、単一出力と任意のreadbackを構築する便利経路を提供する。
+`renderer_pipeline::unlit_forward::snapshot`は標準opaque、単一出力と任意のreadbackを構築する便利経路を提供する。
 そのRGBA8・View寸法の契約は標準描画の便利経路で適用する。入力接続は利用側の任意の構成で使える。
 [公開標準パスと標準グラフ](#公開標準パスと標準グラフ)を同じ入力接続から選択できる。
 
@@ -1098,7 +1100,7 @@ GPU完了後までのnative保持は通常のRuntimeの仕事であり、frame m
 
 ### 現行の標準描画便利経路
 
-`renderer_pipeline::standard::snapshot::build_graph(&snapshot, &mut graph_pool, readback, extension)`は
+`renderer_pipeline::unlit_forward::snapshot::build_graph(&snapshot, &mut graph_pool, readback, extension)`は
 GPU・windowなしで標準Graphを構築できる。
 この単独経路はmeshをGraph内でuploadするため、小さい入力やCPU解析用とする。
 mesh解決はsnapshot slotの予約済み配列とsort/index検索で行い、frameごとの一時BTreeMapを作らない。
@@ -1153,7 +1155,7 @@ frame・execution・readbackのleaseを従来どおり返すが、旧assetを最
 内容の版ごとに元のimmutableな入力を共有し、chunkごとのCPUコピーを永続的な鏡像として保持しない。
 同じqueueの後続描画はCPU完了待ちを要求しない。通常の準備・poll・build・submitに暗黙waitを入れず、
 明示的な待機には`wait_uploads(timeout)`を使う。uploadの回収が別の描画frameの結果を消費しないよう、
-所有するsubmissionを分ける。`renderer_pipeline::standard::snapshot::build_vulkan`は準備済み常駐を使う。
+所有するsubmissionを分ける。`renderer_pipeline::unlit_forward::snapshot::build_vulkan`は準備済み常駐を使う。
 同モジュールの`render_vulkan`は構築・compile・submitまで扱い、uploadと待機は明示した準備経路で行う。
 Fence完了後の結果・計測取得だけが失敗した場合も、退役済みuploadを回収して元のエラーを返す。
 完了不明のFenceエラーやtimeoutは同じ回収扱いにせず、所有を維持する。
