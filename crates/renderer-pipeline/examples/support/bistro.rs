@@ -10,12 +10,6 @@ mod asset;
 #[cfg(any(feature = "vulkan", all(windows, feature = "d3d12")))]
 #[path = "bistro/backend.rs"]
 mod backend;
-#[path = "../../../renderer/examples/support/bloom.rs"]
-#[allow(
-    dead_code,
-    reason = "shares shader programs and Bloom modes with Rust examples"
-)]
-mod bloom;
 #[path = "../../../renderer/examples/support/bistro/camera.rs"]
 mod camera;
 #[cfg(windows)]
@@ -76,6 +70,7 @@ mod window_camera;
 #[allow(dead_code, reason = "shared with the smaller windowed example")]
 mod window_input;
 
+use renderer_pipeline::passes::bloom::Bloom;
 use sha2::{Digest, Sha256};
 use std::{borrow::Cow, path::PathBuf, time::Duration};
 
@@ -161,7 +156,7 @@ struct Options {
     frame_limit: Option<usize>,
     vsync: bool,
     resource_checks: bool,
-    bloom: bloom::Bloom,
+    bloom: Bloom,
     sample_count: renderer::graph::SampleCount,
     pipeline: PipelineMode,
     shader_assets: Option<shader_assets::Selection>,
@@ -254,7 +249,7 @@ impl Options {
             frame_limit: None,
             vsync: true,
             resource_checks: false,
-            bloom: bloom::Bloom::Off,
+            bloom: Bloom::Off,
             sample_count: renderer::graph::SampleCount::X1,
             pipeline: PipelineMode::Forward,
             shader_assets: None,
@@ -306,9 +301,9 @@ impl Options {
                 "--resource-checks" => result.resource_checks = true,
                 "--bloom" => {
                     result.bloom = match args.next().as_deref() {
-                        Some("off") => bloom::Bloom::Off,
-                        Some("tent") => bloom::Bloom::Tent,
-                        Some("box") => bloom::Bloom::Box,
+                        Some("off") => Bloom::Off,
+                        Some("tent") => Bloom::Tent,
+                        Some("box") => Bloom::Box,
                         _ => return Err("--bloom needs off, tent or box".into()),
                     };
                 }
@@ -455,7 +450,7 @@ impl Options {
         if result.capture_route_samples && result.fixture {
             return Err("route samples require a cooked Bistro scene".into());
         }
-        if result.capture_bloom_bypass && result.bloom == bloom::Bloom::Off {
+        if result.capture_bloom_bypass && result.bloom == Bloom::Off {
             return Err("Bloom bypass capture requires an active Bloom mode".into());
         }
         if result.windowed

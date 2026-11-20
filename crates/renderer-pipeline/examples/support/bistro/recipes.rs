@@ -10,10 +10,13 @@ use renderer::{
     },
     program::{MAX_RASTER_BINDINGS, ManagedProgram, ManagedRasterProgram, RasterPipelineRequest},
 };
-use renderer_pipeline::{passes::output::PreparedOutput, pbr_forward};
+use renderer_pipeline::{
+    passes::{bloom::PreparedBloom, output::PreparedOutput},
+    pbr_forward,
+};
 
 use super::{
-    Error, Options, PipelineMode, SubmissionMode, asset::Scene, bloom::Bloom, deferred,
+    Error, Options, PipelineMode, SubmissionMode, asset::Scene, deferred,
     pipeline::indirect::Layout, program, shadow,
 };
 
@@ -22,7 +25,7 @@ pub(super) struct Prepared {
     recipe: Recipe,
     hdr: ImageDesc,
     depth: ImageDesc,
-    bloom: Bloom,
+    bloom: PreparedBloom,
     clear: [f32; 4],
     mode: PipelineMode,
     pub opaque: ManagedRasterProgram,
@@ -129,12 +132,7 @@ impl Prepared {
             preparation.reserve_image(hdr, deferred::PLANES.len())?;
             targets += deferred::PLANES.len();
         }
-        if let Some(images) = options.bloom.images(hdr) {
-            for desc in images {
-                preparation.reserve_image(desc, 1)?;
-            }
-            targets += images.len();
-        }
+        let bloom = options.bloom.prepare(&mut preparation, hdr)?;
 
         let (opaque, transparent, shadow) = if standard.is_some() {
             use renderer_pipeline::passes::pbr::{blend_program, opaque_program, shadow_program};
@@ -171,8 +169,8 @@ impl Prepared {
                 raster.push(program::deferred::deferred_lighting_program().into());
             }
         }
-        let mut compute = options.bloom.programs().to_vec();
-        let mut dispatches = options.bloom.images(hdr).map_or(0, |images| images.len());
+        let mut compute = Vec::new();
+        let mut dispatches = 0;
         if options.pipeline == PipelineMode::ForwardPlus {
             add_tile_program(&mut compute)?;
             dispatches += 1;
@@ -204,15 +202,6 @@ impl Prepared {
         })?;
 
         let recipe = if let Some(forward) = standard {
-            preparation.add_graph_requirements(GraphRequirements {
-                resources: targets,
-                passes: dispatches,
-                compute_dispatches: dispatches,
-                bindings: 4 * dispatches,
-                accesses: 4 * dispatches,
-                name_bytes: (targets + dispatches) * 48,
-                ..GraphRequirements::default()
-            })?;
             Recipe::Forward(Box::new(forward))
         } else {
             let instance_draws = options.instances.draws();
@@ -253,7 +242,7 @@ impl Prepared {
             recipe,
             hdr,
             depth,
-            bloom: options.bloom,
+            bloom,
             clear,
             mode: options.pipeline,
             opaque,
@@ -275,15 +264,11 @@ impl Prepared {
         matches!(self.recipe, Recipe::Forward(_))
     }
 
-    pub fn standard_forward(&mut self) -> &mut pbr_forward::Prepared {
+    pub fn standard_forward(&mut self) -> (&mut pbr_forward::Prepared, &PreparedBloom) {
         match &mut self.recipe {
-            Recipe::Forward(forward) => forward,
+            Recipe::Forward(forward) => (forward, &self.bloom),
             Recipe::Comparison(_) => unreachable!("not the standard Bistro path"),
         }
-    }
-
-    pub fn bloom(&self) -> Bloom {
-        self.bloom
     }
 
     pub fn scene(
@@ -348,7 +333,7 @@ impl Prepared {
         graph: &mut Graph,
         hdr: ImageHandle,
     ) -> Result<(ImageHandle, Option<ImageHandle>), GraphError> {
-        let color = self.bloom.append(graph, hdr)?;
+        let color = self.bloom.add_passes(graph, hdr)?;
         let source: ImageView = graph.image_view(color, 0, 0)?;
         let Recipe::Comparison(output) = &self.recipe else {
             unreachable!("the standard recipe owns its output")
@@ -382,6 +367,7 @@ fn add_tile_program(_: &mut Vec<ManagedProgram>) -> Result<(), GraphError> {
 mod tests {
     use super::*;
     use renderer::graph::{GraphCapacity, GraphPool};
+    use renderer_pipeline::passes::bloom::Bloom;
 
     #[test]
     fn prepared_recipes_cover_supported_bistro_profiles() {
@@ -451,7 +437,6 @@ mod tests {
                                     .same(&options.sdr_output().pipeline().program)
                             }));
                             if bloom != Bloom::Off {
-                                assert_eq!(prepared.bloom, bloom);
                                 assert!(reserves(ImageDesc::rgba16_float(
                                     width.div_ceil(4),
                                     height.div_ceil(4)
