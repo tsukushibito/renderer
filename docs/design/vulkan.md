@@ -335,6 +335,10 @@ prepassedのshader深度writeを止めてもGraphのattachment accessは保守�
 RGBA8／RGBA16Fの値を同descriptionの別画像へ保存する場合は、同じ公開Graphの画像copyを使う。
 部品やpost境界がexport/readback/submitを暗黙に追加することはない。
 `passes::bloom`は準備済みの一時画像とCompute Programを使い、各dispatchの書き込みから後続のsampleへの依存を通常のGraph宣言で導く。
+
+標準PBRの`ViewInput`は、上原点・通常Zの規約を満たす右手系と左手系の投影を受け付ける。
+投影後の画面上の反時計回りを表面とし、座標系の変換に伴う頂点順や接線の向きはアプリ側で揃える。
+マスク材質のシャドウは各カスケードの投影で別々に表裏を判定する。
 `pbr::ShadowHistory`は明示したexportと受理済みFrameSubmissionから画像の版を保持する。
 次フレームでのimport、再描画とsample間の依存、登録解除後のGPU完了までの保持には、同じGraphとRuntimeの契約を使う。
 標準PBRで影を無効にすると、Runtimeの準備時に一度だけclearした1×1のD32を全shadow bindingで共有する。
