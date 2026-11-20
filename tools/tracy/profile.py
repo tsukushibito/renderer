@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools/cpu_profile"))
 sys.path.insert(0, str(ROOT / "tools/bistro"))
 from identity import sha256, verify_manifest
-from measure_runtime import validate_report
+from measure_runtime import is_bistro_build, validate_report
 from windows import hidden_console, owned_listener, require_nonadmin
 from zone_analysis import analyze_zones
 
@@ -75,7 +75,7 @@ def check_instrumented(manifest):
     build = manifest["build"]
     features = set(build.get("effective_features", []))
     if (build.get("instrumentation") != "tracy" or build.get("artifact_class") != "tracy-instrumented"
-            or "tracy" not in features or build.get("example") != "bistro"):
+            or "tracy" not in features or not is_bistro_build(build)):
         raise ValueError("Tracy requires an explicitly archived instrumented Bistro build")
     if build.get("profile") not in ("release", "profiling") or features & DIAGNOSTICS:
         raise ValueError("Tracy requires release-derived optimization without validation diagnostics")

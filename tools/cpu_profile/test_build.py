@@ -13,15 +13,15 @@ from build import (BuildError, RELEASE_DEFAULTS, check_artifact, check_configura
 
 class BuildTests(unittest.TestCase):
     def test_renderer_bistro_embedded_inputs_are_bound_to_the_build_source(self):
-        snapshot = source_snapshot()
-        self.assertIn("tools/bistro/ibl.py", snapshot)
-        for name in ("tools/bistro/conditions.json",
+        snapshot = source_snapshot("renderer-bistro")
+        for name in ("crates/renderer-bistro/Cargo.toml",
+                     "crates/renderer-bistro/src/shared/ibl-fixture-brdf.rgba16f",
+                     "crates/renderer-example-support/Cargo.toml",
+                     "tools/bistro/conditions.json",
+                     "tools/bistro/ibl.py",
                      "crates/renderer-pipeline/shaders/pbr.frag.spv",
                      "crates/renderer-pipeline/shaders/pbr_programs.rs",
-                     "crates/renderer-pipeline/shaders/frustum_visibility_program.rs",
-                     "crates/renderer-pipeline/src/passes/bloom/effect.rs",
-                     "crates/renderer-pipeline/src/passes/bloom/programs.rs",
-                     "crates/renderer-pipeline/src/pbr_deferred/passes.rs"):
+                     "crates/renderer-pipeline/shaders/frustum_visibility_program.rs"):
             with self.subTest(name=name):
                 self.assertEqual(snapshot[name]["raw_sha256"],
                                  hashlib.sha256((ROOT / name).read_bytes()).hexdigest())
@@ -30,6 +30,10 @@ class BuildTests(unittest.TestCase):
         snapshot = source_snapshot("renderer-pipeline")
         self.assertIn("crates/renderer-pipeline/Cargo.toml", snapshot)
         self.assertIn("crates/renderer/Cargo.toml", snapshot)
+
+    def test_renderer_example_archive_binds_its_pipeline_dependency(self):
+        snapshot = source_snapshot()
+        self.assertIn("crates/renderer-pipeline/src/unlit_forward.rs", snapshot)
 
     def test_shipping_features_reject_direct_diagnostics(self):
         self.assertEqual(parse_features("vulkan,d3d12 vulkan,presentation"),
@@ -86,6 +90,18 @@ class BuildTests(unittest.TestCase):
         artifact["profile"]["debuginfo"] = 0
         with self.assertRaisesRegex(BuildError, "debug information"):
             check_artifact(artifact, {**RELEASE_DEFAULTS, "debug": 2})
+
+    def test_select_binary_by_name_and_cargo_target_kind(self):
+        binary = {"reason": "compiler-artifact", "target": {"name": "bistro", "kind": ["bin"]},
+                  "executable": "bistro.exe"}
+        example = {**binary, "target": {"name": "bistro", "kind": ["example"]}}
+        manual = {**binary, "target": {"name": "bistro-graph", "kind": ["bin"]}}
+        messages = "\n".join(map(json.dumps, (example, manual, binary)))
+        self.assertEqual(select_artifact(messages, "bistro", "bin"), binary)
+        self.assertEqual(select_artifact(messages, "bistro-graph", "bin"), manual)
+        self.assertEqual(select_artifact(messages, "bistro"), example)
+        with self.assertRaisesRegex(BuildError, "found 0"):
+            select_artifact(messages, "bistro-graph", "example")
 
     def test_instrumented_dependency_proof_uses_actual_compiled_artifacts(self):
         messages = "\n".join(json.dumps({"reason": "compiler-artifact", "package_id": "registry#" + name,

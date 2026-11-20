@@ -66,10 +66,18 @@ def verified_release(path):
     return manifest, binary
 
 
+def is_bistro_build(build):
+    if "bin" in build:
+        return ("example" not in build and build.get("package") == "renderer-bistro"
+                and build["bin"] in ("bistro", "bistro-graph"))
+    return (build.get("example") == "bistro"
+            and build.get("package", "renderer") in ("renderer", "renderer-pipeline"))
+
+
 def check_release_manifest(manifest):
     build = manifest["build"]
     features = set(build.get("effective_features", build.get("features", [])))
-    if build["profile"] != "release" or build["example"] != "bistro":
+    if build["profile"] != "release" or not is_bistro_build(build):
         raise MeasurementError("Measurements require an archived bistro normal-release build")
     if features & DIAGNOSTICS:
         raise MeasurementError("Normal-release measurements must compile out diagnostic features")

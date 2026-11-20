@@ -126,18 +126,15 @@ def profile_settings(root, name):
 
 
 def source_snapshot(package="renderer"):
-    sources = ["crates/renderer"]
-    if package == "renderer-pipeline":
-        sources.append("crates/renderer-pipeline")
-    else:
-        # The standalone Bistro shares these pass sources and the shader assets.
-        sources.extend(["crates/renderer-pipeline/src/passes/bloom",
-                        "crates/renderer-pipeline/src/pbr_deferred/passes.rs",
-                        "crates/renderer-pipeline/shaders"])
+    # Renderer examples use renderer-pipeline as a dev-dependency.
+    sources = ["crates/renderer", "crates/renderer-pipeline"]
+    if package in ("renderer", "renderer-bistro"):
+        sources.append("crates/renderer-example-support")
+    if package == "renderer-bistro":
+        sources.extend(["crates/renderer-bistro", "tools/bistro/conditions.json", "tools/bistro/ibl.py"])
     names = git("ls-files", "--cached", "--others", "--exclude-standard", "-z", "--",
                 "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo", *sources,
-                "tools/cpu_profile", "tools/tracy", "tools/bistro/conditions.json",
-                "tools/bistro/ibl.py").split("\0")
+                "tools/cpu_profile", "tools/tracy").split("\0")
     result = {}
     for name in sorted(set(filter(None, names))):
         path = ROOT / name
@@ -156,18 +153,19 @@ def source_snapshot(package="renderer"):
     return result
 
 
-def select_artifact(messages, example):
+def select_artifact(messages, name, kind="example"):
     matches = []
     for line in messages.splitlines():
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if (item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == example
-                and "example" in item.get("target", {}).get("kind", []) and item.get("executable")):
+        target = item.get("target", {})
+        if (item.get("reason") == "compiler-artifact" and target.get("name") == name
+                and kind in target.get("kind", []) and item.get("executable")):
             matches.append(item)
     if len(matches) != 1:
-        raise BuildError(f"Expected one Cargo executable artifact for {example}; found {len(matches)}")
+        raise BuildError(f"Expected one Cargo {kind} executable artifact for {name}; found {len(matches)}")
     return matches[0]
 
 
@@ -265,8 +263,12 @@ def build(args):
     commit = git("rev-parse", "HEAD")
     instrumentation = getattr(args, "instrumentation", "none")
     features = parse_features(args.features, instrumentation)
+    if args.bin is not None or (args.example is None and args.package == "renderer-bistro"):
+        kind, name = "bin", args.bin or "bistro"
+    else:
+        kind, name = "example", args.example or "windowed"
     command = ["cargo", "build", "--locked", "-p", args.package, "--no-default-features",
-               "--profile", args.profile, "--example", args.example,
+               "--profile", args.profile, f"--{kind}", name,
                "--features", ",".join(features), "--message-format=json"]
     # Cargo's JSON reports an artifact path, not its byte hash. A shared target
     # directory could be replaced by another Cargo build after ours exits. Own
@@ -280,14 +282,14 @@ def build(args):
     target.mkdir(parents=True, exist_ok=False)
     environment = dict(os.environ, CARGO_INCREMENTAL="0", CARGO_TARGET_DIR=str(target))
     messages = cargo_build(command, environment)
-    artifact = select_artifact(messages, args.example)
+    artifact = select_artifact(messages, name, kind)
     check_artifact(artifact, settings, instrumentation)
     dependencies = instrumentation_dependencies(messages, instrumentation)
     if sources != source_snapshot(args.package) or config != configuration_snapshot(ROOT, os.environ):
         raise BuildError("Source or Cargo configuration changed during the build; no manifest was written")
     binary = Path(artifact["executable"])
     pdb = find_pdb(binary)
-    binary_copy, pdb_copy = output / f"{args.example}.exe", output / f"{args.example}.pdb"
+    binary_copy, pdb_copy = output / f"{name}.exe", output / f"{name}.pdb"
     shutil.copy2(binary, binary_copy)
     shutil.copy2(pdb, pdb_copy)
     pair = inspect_pair(binary_copy, pdb_copy)
@@ -303,7 +305,7 @@ def build(args):
                           "artifact_class": "normal" if instrumentation == "none" else "tracy-instrumented",
                           "instrumentation_dependencies": dependencies,
                           "effective_features": artifact.get("features", []), "package": args.package,
-                          "example": args.example,
+                          kind: name,
                           "command": command, "rustc": run(["rustc", "-vV"], capture_output=True).stdout.strip(),
                           "cargo": run(["cargo", "-V"], capture_output=True).stdout.strip(),
                           "host": platform.platform(), "cargo_profile": artifact["profile"],
@@ -320,8 +322,11 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=("profiling", "release"), default="profiling")
-    parser.add_argument("--package", choices=("renderer", "renderer-pipeline"), default="renderer")
-    parser.add_argument("--example", default="windowed")
+    parser.add_argument("--package", choices=("renderer", "renderer-pipeline", "renderer-bistro"),
+                        default="renderer")
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--example", help="Cargo example (defaults to windowed for renderer)")
+    target.add_argument("--bin", help="Cargo binary (defaults to bistro for renderer-bistro)")
     parser.add_argument("--features", default="vulkan,d3d12,presentation")
     parser.add_argument("--instrumentation", choices=("none", "tracy"), default="none",
                         help="Explicit opt-in; Tracy archives are never normal measurement artifacts")
