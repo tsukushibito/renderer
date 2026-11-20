@@ -1,0 +1,25 @@
+# Extract bright scene values and downsample to half and quarter resolution.
+version: 1
+resources:
+  - { id: bloom_extract, kind: image, extent: frame, format: rgba16_float }
+  - { id: bloom_half, kind: image, extent: frame, divisor: 2, format: rgba16_float }
+  - { id: bloom_quarter, kind: image, extent: frame, divisor: 4, format: rgba16_float }
+passes:
+  - id: bloom_extract
+    kind: compute
+    shader: bloom/extract
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: hdr }
+      - { kind: image, group: 1, binding: 0, resource: bloom_extract }
+  - id: bloom_downsample_half
+    kind: compute
+    shader: bloom/downsample
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: bloom_extract }
+      - { kind: image, group: 1, binding: 0, resource: bloom_half }
+  - id: bloom_downsample_quarter
+    kind: compute
+    shader: bloom/downsample
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: bloom_half }
+      - { kind: image, group: 1, binding: 0, resource: bloom_quarter }

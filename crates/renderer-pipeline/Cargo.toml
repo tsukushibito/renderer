@@ -12,6 +12,10 @@ yaml = ["dep:serde", "dep:serde-saphyr"]
 vulkan = ["renderer/vulkan"]
 d3d12 = ["renderer/d3d12"]
 development-validation = ["renderer/development-validation"]
+vulkan-diagnostics = ["renderer/vulkan-diagnostics"]
+d3d12-diagnostics = ["renderer/d3d12-diagnostics"]
+presentation = ["renderer/presentation", "dep:winit"]
+tracy = ["renderer/tracy", "dep:tracy-client"]
 graph-diagnostics = ["renderer/graph-diagnostics"]
 memory-profiling = ["renderer/memory-profiling"]
 
@@ -19,6 +23,14 @@ memory-profiling = ["renderer/memory-profiling"]
 renderer = { version = "0.1.0", path = "../renderer", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
 serde-saphyr = { version = "2.2", default-features = false, features = ["deserialize"], optional = true }
+tracy-client = { workspace = true, optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winit = { version = "0.30", optional = true, default-features = false, features = ["rwh_06"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+sha2 = "0.10.9"
 
 [lints]
 workspace = true
@@ -26,6 +38,11 @@ workspace = true
 [[example]]
 name = "yaml_pipeline"
 required-features = ["yaml", "vulkan", "d3d12"]
+
+[[example]]
+name = "bistro"
+required-features = ["yaml"]
+test = true
 
 [[test]]
 name = "frame_inputs"

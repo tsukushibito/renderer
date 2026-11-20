@@ -1,0 +1,27 @@
+# Forward+ opaque batches with indexed submission.
+version: 1
+draw_lists:
+  - { id: main_opaque, view: main, queue: opaque }
+raster_batches:
+  opaque:
+    - shader: bistro/forward-plus
+      draw_list: main_opaque
+      bindings:
+        - { kind: buffer, group: 0, binding: 0, resource: camera, offset: 0, size: 464 }
+        - { kind: material, group: 0, binding: 1, resource: factors }
+        - { kind: material, group: 1, binding: 0, resource: base_color }
+        - { kind: material, group: 1, binding: 1, resource: normal }
+        - { kind: material, group: 1, binding: 2, resource: orm }
+        - { kind: material, group: 1, binding: 3, resource: emissive }
+        - { kind: sampler, group: 1, binding: 4, sampler: linear_repeat }
+        - { kind: sampled_view, group: 2, binding: 0, resource: irradiance }
+        - { kind: sampled_view, group: 2, binding: 1, resource: reflection }
+        - { kind: sampled_view, group: 2, binding: 2, resource: brdf }
+        - { kind: sampler, group: 2, binding: 3, sampler: linear_repeat_u_clamp_v }
+        - { kind: image, group: 3, binding: 0, resource: cascade_0 }
+        - { kind: image, group: 3, binding: 1, resource: cascade_1 }
+        - { kind: image, group: 3, binding: 2, resource: cascade_2 }
+        - { kind: image, group: 3, binding: 3, resource: cascade_3 }
+        - { kind: sampler, group: 3, binding: 4, sampler: nearest_clamp }
+        - { kind: buffer, group: 0, binding: 2, resource: lights, offset: 0, size: 2064 }
+        - { kind: buffer, group: 0, binding: 3, resource: tiles, offset: 0, size: 17039360 }

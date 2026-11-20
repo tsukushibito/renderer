@@ -1,0 +1,14 @@
+# Deferred opaque batches with indirect submission.
+version: 1
+raster_batches:
+  opaque:
+    - shader: bistro/gbuffer
+      indirect: encode_packed_draws
+      bindings:
+        - { kind: buffer, group: 0, binding: 0, resource: camera, offset: 0, size: 464 }
+        - { kind: material, group: 0, binding: 1, resource: factors }
+        - { kind: material, group: 1, binding: 0, resource: base_color }
+        - { kind: material, group: 1, binding: 1, resource: normal }
+        - { kind: material, group: 1, binding: 2, resource: orm }
+        - { kind: material, group: 1, binding: 3, resource: emissive }
+        - { kind: sampler, group: 1, binding: 4, sampler: linear_repeat }

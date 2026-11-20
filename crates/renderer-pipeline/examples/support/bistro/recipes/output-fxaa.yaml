@@ -1,0 +1,14 @@
+# Write the captured or presented SDR image with FXAA.
+version: 1
+resources:
+  - { id: sdr, kind: image, extent: frame, format: rgba8_unorm }
+passes:
+  - id: write_sdr
+    kind: raster
+    shader: post/fxaa
+    bindings:
+      - { kind: image, group: 0, binding: 0, resource: neutral }
+      - { kind: sampler, group: 0, binding: 1, sampler: linear_clamp }
+    colors:
+      - { image: sdr, load: clear, clear: [0, 0, 0, 0] }
+output: sdr

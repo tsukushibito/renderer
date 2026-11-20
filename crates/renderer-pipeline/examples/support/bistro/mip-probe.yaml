@@ -1,0 +1,14 @@
+# Sample the caller-selected mip of a replaced material texture.
+version: 1
+resources:
+  - { id: output, kind: image, extent: frame, format: rgba8_unorm }
+passes:
+  - id: sample_mip
+    kind: raster
+    shader: probe/sdr
+    bindings:
+      - { kind: sampled_view, group: 0, binding: 0, resource: mip }
+      - { kind: sampler, group: 0, binding: 1, sampler: nearest_clamp }
+    colors:
+      - { image: output, load: clear, clear: [0, 0, 0, 0] }
+output: output
