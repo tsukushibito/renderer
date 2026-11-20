@@ -1,9 +1,17 @@
+//! Tone mapping and SDR output passes and recipe.
+
 use renderer::ImageFormat;
+use renderer::capacity::{GraphRequirements, Preparation, ResourceClass, WorkingSet};
 use renderer::graph::{
-    Attachment, Binding, BindingResource, Graph, GraphError, ImageHandle, ImageView, LoadOp,
-    PassHandle, RasterAttachments, RasterConstants, SampleCount, StoreOp,
+    Attachment, Binding, BindingResource, Graph, GraphError, ImageDesc, ImageHandle, ImageView,
+    LoadOp, PassHandle, RasterAttachments, RasterConstants, SampleCount, StoreOp,
 };
 use renderer::program::{ManagedRasterProgram, RasterPipelineRequest, SamplerDescriptor};
+
+const DISPLAY_LINEAR: &str = "display linear";
+const SDR_COLOR: &str = "sdr";
+const TONE_MAP: &str = "tone_map";
+const WRITE_SDR: &str = "write_sdr";
 
 /// Encoding written to the RGBA8 UNORM output image.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -168,4 +176,82 @@ fn append(
         },
         |raster| raster.draw_fullscreen(&program, &bindings, parameters),
     )
+}
+
+/// Output images belonging to the Graph that produced them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OutputImages {
+    pub display_linear: ImageHandle,
+    pub sdr: ImageHandle,
+}
+
+/// Tone mapping and SDR output with fixed extent, encoding and FXAA choice.
+pub struct PreparedOutput {
+    display_linear: ImageDesc,
+    sdr: ImageDesc,
+    output: SdrOutput,
+}
+
+impl PreparedOutput {
+    pub fn prepare(
+        preparation: &mut Preparation,
+        [width, height]: [u32; 2],
+        output: SdrOutput,
+    ) -> Result<Self, GraphError> {
+        let display_linear = ImageDesc::rgba16_float(width, height);
+        let sdr = ImageDesc::rgba8(width, height);
+        let count = preparation.frames_in_flight().get();
+        let resources = [display_linear, sdr].map(|desc| ResourceClass::Image { desc, count });
+        let tone_map = tone_map_neutral_pipeline();
+        let write_sdr = output.pipeline();
+        preparation.add_requirements(
+            GraphRequirements {
+                resources: 2,
+                passes: 2,
+                accesses: 4,
+                draws: 2,
+                raster_constant_words: (tone_map.program.parameter_size()
+                    + write_sdr.program.parameter_size())
+                    as usize
+                    / size_of::<u32>(),
+                bindings: tone_map.program.bindings().len() + write_sdr.program.bindings().len(),
+                attachments: 2,
+                name_bytes: TONE_MAP.len()
+                    + WRITE_SDR.len()
+                    + DISPLAY_LINEAR.len()
+                    + SDR_COLOR.len(),
+                ..GraphRequirements::default()
+            },
+            WorkingSet {
+                resources: &resources,
+                raster: &[tone_map, write_sdr],
+                compute: &[],
+            },
+        )?;
+        Ok(Self {
+            display_linear,
+            sdr,
+            output,
+        })
+    }
+
+    /// Append Neutral tone mapping and SDR encoding to the same Graph.
+    /// The source is a scene-linear, matching extent 1× RGBA16F mip.
+    /// On error, abandon this frame's Graph to return its slot.
+    pub fn add_passes(
+        &self,
+        graph: &mut Graph,
+        source: ImageView,
+        exposure: f32,
+    ) -> Result<OutputImages, GraphError> {
+        let display_linear = graph.image(DISPLAY_LINEAR, self.display_linear)?;
+        tone_map_neutral(graph, TONE_MAP, source, display_linear, exposure)?;
+        let sdr = graph.image(SDR_COLOR, self.sdr)?;
+        let linear_view = graph.image_view(display_linear, 0, 0)?;
+        write_sdr(graph, WRITE_SDR, linear_view, sdr, self.output)?;
+        Ok(OutputImages {
+            display_linear,
+            sdr,
+        })
+    }
 }

@@ -1,10 +1,10 @@
-//! Aggregate recipe reservations at a configuration change boundary.
+//! Aggregate reservations at a configuration change boundary.
 
 use std::num::NonZeroUsize;
 
-use renderer::capacity::{ResourceClass, WorkingSet};
-use renderer::graph::{BufferDesc, GraphCapacity, GraphError, ImageDesc};
-use renderer::program::{ManagedProgram, RasterPipelineRequest};
+use super::{ResourceClass, WorkingSet};
+use crate::graph::{BufferDesc, GraphCapacity, GraphError, ImageDesc};
+use crate::program::{ManagedProgram, RasterPipelineRequest};
 
 /// Upper bounds for Graph declarations in one frame, including declarations
 /// later culled by compilation. Sum requirements for parts in the same Graph.
@@ -66,6 +66,11 @@ impl Preparation {
             compute: Vec::new(),
             requirements: GraphRequirements::default(),
         }
+    }
+
+    /// Concurrent frame count used to scale per-frame reservations.
+    pub fn frames_in_flight(&self) -> NonZeroUsize {
+        self.frames_in_flight
     }
 
     /// Reserve this many buffers per in-flight frame.
@@ -156,25 +161,16 @@ impl Preparation {
         }
     }
 
-    /// Add a standard recipe atomically. Each image in the recipe has one
-    /// instance per in-flight frame.
-    pub(crate) fn add_recipe(
+    /// Add declaration bounds and a working set as one operation. Resource class
+    /// counts in `working_set` are totals across concurrent frames. On error
+    /// neither the declaration bounds nor the working set change.
+    pub fn add_requirements(
         &mut self,
         requirements: GraphRequirements,
-        images: &[ImageDesc],
-        raster: &[RasterPipelineRequest],
+        working_set: WorkingSet<'_>,
     ) -> Result<(), GraphError> {
         let total = self.requirements.checked_add(requirements)?;
-        let count = self.frames_in_flight.get();
-        let resources: Vec<_> = images
-            .iter()
-            .map(|&desc| ResourceClass::Image { desc, count })
-            .collect();
-        self.add_working_set(WorkingSet {
-            resources: &resources,
-            raster,
-            compute: &[],
-        })?;
+        self.add_working_set(working_set)?;
         self.requirements = total;
         Ok(())
     }
@@ -184,7 +180,7 @@ impl Preparation {
     }
 }
 
-pub(crate) fn checked_mul(left: usize, right: usize) -> Result<usize, GraphError> {
+fn checked_mul(left: usize, right: usize) -> Result<usize, GraphError> {
     left.checked_mul(right).ok_or_else(overflow)
 }
 
@@ -239,4 +235,138 @@ fn add_class(classes: &mut Vec<ResourceClass>, class: ResourceClass) -> Result<(
         classes.push(class);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::SampleCount;
+    use crate::program::ManagedRasterProgram;
+
+    #[test]
+    fn physical_reservations_include_concurrency_and_share_exact_raster_variants() {
+        let mut preparation = Preparation::new(NonZeroUsize::new(2).unwrap());
+        let color = ImageDesc::rgba16_float(4, 3);
+        let globals = [
+            ResourceClass::Image {
+                desc: color,
+                count: 3,
+            },
+            ResourceClass::Buffer {
+                desc: BufferDesc { size: 32 },
+                count: 4,
+            },
+        ];
+        let program = ManagedRasterProgram::mesh_hdr();
+        let raster = [
+            program.clone().into(),
+            program.clone().into(),
+            RasterPipelineRequest {
+                program,
+                sample_count: SampleCount::X4,
+            },
+        ];
+        preparation.reserve_image(color, 1).unwrap();
+        preparation
+            .reserve_buffer(BufferDesc { size: 32 }, 2)
+            .unwrap();
+        preparation
+            .add_working_set(WorkingSet {
+                resources: &globals,
+                raster: &raster,
+                compute: &[],
+            })
+            .unwrap();
+
+        let set = preparation.working_set();
+        assert!(matches!(
+            set.resources,
+            [ResourceClass::Image { desc, count: 5 }, ResourceClass::Buffer { count: 8, .. }]
+                if *desc == color
+        ));
+        assert_eq!(set.raster.len(), 2);
+        assert_eq!(set.raster[0].sample_count, SampleCount::X1);
+        assert_eq!(set.raster[1].sample_count, SampleCount::X4);
+    }
+
+    #[test]
+    fn failed_requirement_registration_keeps_resources_programs_and_bounds_available_for_retry() {
+        let mut preparation = Preparation::new(NonZeroUsize::MIN);
+        let hdr = ImageDesc::rgba16_float(4, 3);
+        preparation.reserve_image(hdr, usize::MAX).unwrap();
+        let failed = [
+            ResourceClass::Buffer {
+                desc: BufferDesc { size: 8 },
+                count: 1,
+            },
+            ResourceClass::Image {
+                desc: hdr,
+                count: 1,
+            },
+        ];
+        let raster = [ManagedRasterProgram::sdr_linear(false).into()];
+        let bounds = GraphRequirements {
+            passes: 2,
+            ..GraphRequirements::default()
+        };
+        assert!(
+            preparation
+                .add_requirements(
+                    bounds,
+                    WorkingSet {
+                        resources: &failed,
+                        raster: &raster,
+                        compute: &[],
+                    },
+                )
+                .is_err()
+        );
+        assert_eq!(preparation.working_set().resources.len(), 1);
+
+        assert!(preparation.working_set().raster.is_empty());
+        assert_eq!(
+            preparation.graph_requirements(),
+            GraphRequirements::default()
+        );
+
+        preparation
+            .add_requirements(
+                bounds,
+                WorkingSet {
+                    resources: &failed[..1],
+                    raster: &raster,
+                    compute: &[],
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            preparation.working_set().resources[1],
+            ResourceClass::Buffer { count: 1, .. }
+        ));
+        assert_eq!(preparation.working_set().raster.len(), 1);
+        assert_eq!(preparation.graph_requirements(), bounds);
+
+        let unread_program = [ManagedRasterProgram::sdr_srgb(false).into()];
+        assert!(
+            preparation
+                .add_requirements(
+                    GraphRequirements {
+                        passes: usize::MAX,
+                        ..GraphRequirements::default()
+                    },
+                    WorkingSet {
+                        resources: &failed[..1],
+                        raster: &unread_program,
+                        compute: &[],
+                    },
+                )
+                .is_err()
+        );
+        assert!(matches!(
+            preparation.working_set().resources[1],
+            ResourceClass::Buffer { count: 1, .. }
+        ));
+        assert_eq!(preparation.working_set().raster.len(), 1);
+        assert_eq!(preparation.graph_requirements(), bounds);
+    }
 }

@@ -7,7 +7,7 @@ use renderer::engine::{
     Vertex, View,
 };
 use renderer::graph::{GraphCapacity, GraphPool};
-use renderer_pipeline::standard::snapshot::build_graph;
+use renderer_pipeline::unlit_forward::snapshot::build_graph;
 
 #[test]
 fn owned_frame_inputs_need_no_gpu_or_window() {

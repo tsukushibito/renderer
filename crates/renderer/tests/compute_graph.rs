@@ -8,7 +8,7 @@ use renderer::graph::{
     RasterDraw,
 };
 use renderer::program::SamplerDescriptor;
-use renderer_pipeline::standard::graphs::{self, ForwardConfig};
+use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
 #[test]
 fn consumer_owned_hdr_programs_form_a_changing_multistage_graph() {
@@ -54,7 +54,7 @@ fn consumer_owned_hdr_programs_form_a_changing_multistage_graph() {
 fn forward_color_can_feed_a_pass_with_a_different_format_and_extent() {
     let mut pool = GraphPool::new(GraphCapacity::default(), 1).unwrap();
     let mut graph = pool.begin().unwrap();
-    let scene = graphs::forward(
+    let scene = unlit_forward::forward(
         &mut graph,
         "standard scene",
         std::iter::empty::<RasterDraw>(),

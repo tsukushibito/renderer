@@ -8,7 +8,7 @@ use renderer::graph::{
     GraphPool, ImageDesc, ImageHandle, LoadOp, RasterDraw, RasterParameters, StoreOp,
 };
 use renderer::program::{ManagedProgram, ManagedRasterProgram, SamplerDescriptor};
-use renderer_pipeline::standard::{graphs, passes};
+use renderer_pipeline::{passes, unlit_forward};
 
 pub const READBACK_BYTES: usize = READBACKS * IMAGE_BYTES;
 pub const BUFFER_SIZES: [u64; 4] = [84, 12, 512, 64];
@@ -302,22 +302,23 @@ pub fn build(pool: &mut GraphPool, frame: usize) -> (Graph, Expected) {
 pub fn append(graph: &mut Graph, frame: usize) -> Expected {
     let draws = draws(graph, frame);
     let draws = &draws[..draw_count(frame)];
-    let settings = graphs::ForwardConfig {
+    let settings = unlit_forward::ForwardConfig {
         color: hdr(),
         clear_color: [-0.25, 0.5, 1.0, 1.0],
         depth: false,
     };
     let inputs = post_inputs(graph, frame);
-    let direct = graphs::forward(graph, "standard direct route", draws, settings).unwrap();
-    let identity = graphs::forward(graph, "standard identity route", draws, settings).unwrap();
+    let direct = unlit_forward::forward(graph, "standard direct route", draws, settings).unwrap();
+    let identity =
+        unlit_forward::forward(graph, "standard identity route", draws, settings).unwrap();
     let identity_color = post(graph, identity.color, inputs, PostMode::Disabled);
     assert_eq!(identity_color, identity.color);
     let mode = post_mode(frame);
-    let scene = graphs::forward(
+    let scene = unlit_forward::forward(
         graph,
         "standard consumer post route",
         draws,
-        graphs::ForwardConfig {
+        unlit_forward::ForwardConfig {
             depth: frame.is_multiple_of(2),
             ..settings
         },

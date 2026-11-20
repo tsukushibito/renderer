@@ -25,7 +25,7 @@ use renderer::{
     },
     graph::{GraphCapacity, ImageDesc, ImportImage, PassHandle},
 };
-use renderer_pipeline::standard::graphs::{self, ForwardConfig};
+use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
 #[path = "support/frame_report.rs"]
 mod frame_report;
@@ -646,7 +646,7 @@ fn run(options: &Options) -> Result<RunReport, Box<dyn Error>> {
         let build_start = Instant::now();
         let mut prepared = engine.begin_graph()?;
         let inputs = engine.connect_snapshot(&mut prepared, &snapshot)?;
-        let scene_color = graphs::forward(
+        let scene_color = unlit_forward::forward(
             &mut prepared.graph,
             if snapshot.draw_count() == 0 {
                 "view clear"

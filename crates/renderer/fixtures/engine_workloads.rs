@@ -21,7 +21,7 @@ use renderer::{
     },
     graph::{ImageDesc, PassHandle},
 };
-use renderer_pipeline::standard::graphs::{self, ForwardConfig};
+use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
 use super::engine_geometry::{grid, rectangle};
 
@@ -208,7 +208,7 @@ impl Driver {
         let mut prepared = self.renderer.begin_graph()?;
         let inputs = self.renderer.connect_snapshot(&mut prepared, snapshot)?;
         let view = inputs.view();
-        let scene = graphs::forward(
+        let scene = unlit_forward::forward(
             &mut prepared.graph,
             if snapshot.draw_count() == 0 {
                 "view clear"

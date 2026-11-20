@@ -5,7 +5,7 @@ use renderer::engine::{
 use renderer::graph::{
     GraphCapacity, GraphErrorKind, GraphPool, ImageDesc, ImageHandle, ResourceHandle,
 };
-use renderer_pipeline::standard::snapshot::build_graph;
+use renderer_pipeline::unlit_forward::snapshot::build_graph;
 
 fn graph_pool() -> GraphPool {
     GraphPool::new(

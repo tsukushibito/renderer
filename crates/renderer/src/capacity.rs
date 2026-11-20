@@ -6,6 +6,10 @@
 use crate::graph::{BufferDesc, ImageDesc};
 use crate::program::{ManagedProgram, RasterPipelineRequest};
 
+mod preparation;
+
+pub use preparation::{GraphRequirements, Preparation};
+
 /// A resource class and its globally reserved instance count. The count
 /// already includes the caller's needed concurrency across all frames.
 #[derive(Clone, Copy, Debug)]

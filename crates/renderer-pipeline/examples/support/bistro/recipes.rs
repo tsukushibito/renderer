@@ -2,6 +2,7 @@
 
 use std::num::NonZeroUsize;
 
+use renderer::capacity::{GraphRequirements, Preparation};
 use renderer::{
     capacity::{ResourceClass, WorkingSet},
     graph::{
@@ -10,7 +11,7 @@ use renderer::{
     },
     program::{MAX_RASTER_BINDINGS, ManagedProgram, ManagedRasterProgram, RasterPipelineRequest},
 };
-use renderer_pipeline::{GraphRequirements, Preparation, standard::graphs::PreparedOutput};
+use renderer_pipeline::passes::output::PreparedOutput;
 
 use super::{
     Error, Options, PipelineMode, SubmissionMode, asset::Scene, bloom::Bloom, deferred,

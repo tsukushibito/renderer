@@ -135,7 +135,7 @@ mod tests {
         engine::{Engine, EngineCapacity, Material, SnapshotPool},
         graph::{GraphCapacity, GraphPool, ImageDesc},
     };
-    use renderer_pipeline::standard::graphs::{self, ForwardConfig};
+    use renderer_pipeline::unlit_forward::{self, ForwardConfig};
 
     #[test]
     fn grid_draws_share_assets_and_samples_cover_every_draw_and_empty_cell() {
@@ -207,7 +207,7 @@ mod tests {
             let snapshot = assets.snapshot(&snapshots, &view, &distinct).unwrap();
             let mut graph = graph_pool.begin().unwrap();
             let inputs = snapshot.connect_graph(&mut graph).unwrap();
-            let scene = graphs::forward(
+            let scene = unlit_forward::forward(
                 &mut graph,
                 "distinct mesh draw order",
                 inputs.draws(),

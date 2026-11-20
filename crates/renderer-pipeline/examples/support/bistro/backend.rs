@@ -4,6 +4,7 @@ use super::{
     Error, Options, lifecycle,
     pipeline::{Budget, PreparedSet},
 };
+use renderer::capacity::Preparation;
 use renderer::{
     graph::{BufferDesc, ImageDesc, PassHandle},
     runtime::{
@@ -11,7 +12,6 @@ use renderer::{
         RuntimeLimits, WorkingSet,
     },
 };
-use renderer_pipeline::Preparation;
 use std::num::NonZeroUsize;
 
 fn config(options: &Options, budget: &Budget) -> Result<RuntimeConfig, Error> {
