@@ -1,0 +1,34 @@
+# Resolve color in the final active raster pass and discard multisampled attachments.
+version: 1
+resources:
+  - { id: hdr, kind: image, extent: frame, format: rgba16_float }
+  - { id: hdr_msaa, kind: image, extent: frame, format: rgba16_float, samples: 4 }
+  - { id: depth, kind: image, extent: frame, format: depth32_float, samples: 4 }
+draw_lists:
+  - { id: main_transparent, view: transparent, queue: transparent }
+passes:
+  - id: scene_opaque_resolve
+    kind: raster
+    when: { draw_list: main_transparent, empty: true }
+    batches: opaque
+    colors:
+      - image: hdr_msaa
+        load: clear
+        clear: { param: background }
+        store: discard
+        resolve: hdr
+    depth: { image: depth, load: clear, clear: 1.0, store: discard }
+  - id: scene_opaque
+    kind: raster
+    when: { draw_list: main_transparent, empty: false }
+    batches: opaque
+    colors:
+      - { image: hdr_msaa, load: clear, clear: { param: background } }
+    depth: { image: depth, load: clear, clear: 1.0 }
+  - id: scene_transparent_resolve
+    kind: raster
+    when: { draw_list: main_transparent, empty: false }
+    batches: transparent
+    colors:
+      - { image: hdr_msaa, load: load, store: discard, resolve: hdr }
+    depth: { image: depth, load: load, store: discard }

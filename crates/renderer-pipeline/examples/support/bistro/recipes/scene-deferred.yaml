@@ -1,0 +1,49 @@
+# Single-sample G-buffer, fullscreen lighting, and forward transparency.
+version: 1
+resources:
+  - { id: hdr, kind: image, extent: frame, format: rgba16_float }
+  - { id: depth, kind: image, extent: frame, format: depth32_float }
+  - { id: gbuffer_base, kind: image, extent: frame, format: rgba16_float }
+  - { id: gbuffer_normal, kind: image, extent: frame, format: rgba16_float }
+  - { id: gbuffer_emissive, kind: image, extent: frame, format: rgba16_float }
+  - { id: reconstruction, kind: buffer, source: external, bytes: 64 }
+draw_lists:
+  - { id: main_transparent, view: transparent, queue: transparent }
+passes:
+  - id: gbuffer
+    kind: raster
+    batches: opaque
+    colors:
+      - { image: gbuffer_base, load: clear, clear: [0, 0, 0, 0] }
+      - { image: gbuffer_normal, load: clear, clear: [0, 0, 0, 0] }
+      - { image: gbuffer_emissive, load: clear, clear: [0, 0, 0, 0] }
+    depth: { image: depth, load: clear, clear: 1.0 }
+  - id: deferred_lighting
+    kind: raster
+    shader: bistro/deferred-lighting
+    colors:
+      - { image: hdr, load: clear, clear: { param: background } }
+    bindings:
+      - { kind: buffer, group: 0, binding: 0, resource: camera, offset: 0, size: 464 }
+      - { kind: buffer, group: 0, binding: 1, resource: reconstruction, offset: 0, size: 64 }
+      - { kind: image, group: 1, binding: 0, resource: gbuffer_base }
+      - { kind: image, group: 1, binding: 1, resource: gbuffer_normal }
+      - { kind: image, group: 1, binding: 2, resource: gbuffer_emissive }
+      - { kind: image, group: 1, binding: 3, resource: depth }
+      - { kind: sampler, group: 1, binding: 4, sampler: nearest_clamp }
+      - { kind: sampled_view, group: 2, binding: 0, resource: irradiance }
+      - { kind: sampled_view, group: 2, binding: 1, resource: reflection }
+      - { kind: sampled_view, group: 2, binding: 2, resource: brdf }
+      - { kind: sampler, group: 2, binding: 3, sampler: linear_repeat_u_clamp_v }
+      - { kind: image, group: 3, binding: 0, resource: cascade_0 }
+      - { kind: image, group: 3, binding: 1, resource: cascade_1 }
+      - { kind: image, group: 3, binding: 2, resource: cascade_2 }
+      - { kind: image, group: 3, binding: 3, resource: cascade_3 }
+      - { kind: sampler, group: 3, binding: 4, sampler: nearest_clamp }
+  - id: scene_transparent
+    kind: raster
+    when: { draw_list: main_transparent, empty: false }
+    batches: transparent
+    colors:
+      - { image: hdr, load: load }
+    depth: { image: depth, load: load }
